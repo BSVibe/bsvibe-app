@@ -1,0 +1,73 @@
+# BSVibe Phase 0 — local docker compose stack.
+# Ports match the bsvibe-app slot in ~/Works/_infra-phase0/port-map.md:
+#   APP=8700 · FRONTEND=3700 · PG=5442 · REDIS=6387
+# Run from the repo root: `docker compose -f deploy/compose.yaml up -d`
+
+name: bsvibe-app
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: bsvibe
+      POSTGRES_PASSWORD: bsvibe
+      POSTGRES_DB: bsvibe
+    ports:
+      - "5442:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bsvibe -d bsvibe"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - "6387:6379"
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  backend:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.backend
+      args:
+        GIT_SHA: ${GIT_SHA:-dev}
+    restart: unless-stopped
+    environment:
+      BSVIBE_DATABASE_URL: postgresql+asyncpg://bsvibe:bsvibe@postgres:5432/bsvibe
+      BSVIBE_REDIS_URL: redis://redis:6379/0
+      BSVIBE_ENVIRONMENT: dev
+      BSVIBE_GIT_SHA: ${GIT_SHA:-dev}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "8700:8000"
+
+  pwa:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.pwa
+    restart: unless-stopped
+    environment:
+      NEXT_PUBLIC_BACKEND_URL: http://backend:8000
+    depends_on:
+      - backend
+    ports:
+      - "3700:3700"
+
+volumes:
+  pgdata:
+  redisdata:

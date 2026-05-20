@@ -1,0 +1,48 @@
+:root {
+  color-scheme: light dark;
+  font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: #fbfbfa;
+  color: #1f1f1f;
+}
+
+main.login {
+  max-width: 360px;
+  margin: 12vh auto 0;
+  padding: 2rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+main.login h1 {
+  margin: 0;
+  font-size: 1.5rem;
+  font-weight: 600;
+}
+
+main.login form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+main.login input,
+main.login button {
+  padding: 0.5rem 0.75rem;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  font: inherit;
+}
+
+main.login .placeholder {
+  color: #888;
+  font-size: 0.8rem;
+}
