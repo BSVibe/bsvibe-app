@@ -1,0 +1,40 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    volumes:
+      - ../..:/workspace:cached
+    working_dir: /workspace
+    command: sleep infinity
+    networks:
+      - default
+
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: bsvibe
+      POSTGRES_PASSWORD: bsvibe
+      POSTGRES_DB: bsvibe
+    ports:
+      - "15442:5432"
+    volumes:
+      - devpgdata:/var/lib/postgresql/data
+    networks:
+      - default
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - "16387:6379"
+    networks:
+      - default
+
+volumes:
+  devpgdata:
+
+networks:
+  default:
+    name: bsvibe-app-devcontainer

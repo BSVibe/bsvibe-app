@@ -1,0 +1,24 @@
+FROM python:3.11-slim AS base
+
+# uv from the official distroless-style image
+COPY --from=ghcr.io/astral-sh/uv:0.5.4 /uv /uvx /usr/local/bin/
+
+ENV UV_LINK_MODE=copy \
+    UV_COMPILE_BYTECODE=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
+WORKDIR /app
+
+# Cache deps separately from source.
+COPY pyproject.toml uv.lock ./
+COPY backend/ ./backend/
+RUN uv sync --no-dev --frozen
+
+ARG GIT_SHA=dev
+ENV BSVIBE_GIT_SHA=${GIT_SHA}
+
+EXPOSE 8000
+
+CMD ["uv", "run", "uvicorn", "backend.api.main:create_app", \
+     "--factory", "--host", "0.0.0.0", "--port", "8000"]

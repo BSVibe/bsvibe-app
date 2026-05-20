@@ -1,0 +1,148 @@
+# BSVibe Authorization Permission Matrix — single source of truth.
+#
+# Tier 5 (2026-05-16). The `.fga` schema (schema/bsvibe.fga) is GENERATED
+# from this file — never hand-edit the two divergently.
+#
+# Each entry maps a `<product>.<resource>.<action>` permission to the
+# minimum tenant role required. Roles are hierarchical:
+#
+#     owner  >  admin  >  member  >  viewer
+#
+# A role grants its own permissions plus every lower role's. So a row
+# `min_role: member` means member + admin + owner all pass; viewer 403s.
+#
+# Default rule applied below (tune any row):
+#   - read              -> viewer
+#   - write / create    -> member
+#   - delete            -> admin
+#   - execute           -> member
+#   - admin-surface resources (audit, config, settings, tenants, workers,
+#     integrations, executor_config, repo_*) -> admin for ALL actions
+#   - billing / plan / tenant lifecycle -> owner
+#
+# DEVIATIONS from the pure default are marked `# deviation:` and reflect
+# an existing require_admin gate in the product code today.
+
+roles: [owner, admin, member, viewer]
+
+products:
+
+  # ─── BSGateway ──────────────────────────────────────────────────────
+  bsgateway:
+    audit:                       # admin-surface
+      read: admin
+    routes:                      # routing rules (rules.py)
+      read: viewer
+      create: member
+      write: member
+    routing:                     # intents + presets (intents.py)
+      read: viewer
+      write: member
+    presets:
+      read: viewer
+      write: member
+    models:                      # model registry
+      read: viewer
+      write: member
+    tenants:                     # admin-surface
+      read: admin
+      write: admin
+    workers:                     # admin-surface (executor fleet)
+      read: admin
+      write: admin
+    usage:
+      read: viewer
+    feedback:
+      read: viewer
+      write: member
+    execute:                     # dispatch an executor task
+      write: member
+
+  # ─── BSage ──────────────────────────────────────────────────────────
+  # Founder decision (2026-05-16): member CAN write in bsage. This is a
+  # deliberate LOOSENING vs the current code, which gates every bsage
+  # mutation with require_admin. config + canon.apply + plugins.install
+  # stay admin (config-/install-class admin surfaces).
+  bsage:
+    knowledge:
+      read: viewer
+      write: member               # loosened from require_admin
+    vault:
+      read: viewer
+      write: member               # loosened from require_admin
+    config:                       # admin-surface — stays admin
+      read: admin
+      write: admin
+    plugins:
+      read: viewer
+      execute: member             # loosened from require_admin
+      install: admin              # install is config-class — stays admin
+    canonicalization:
+      read: viewer
+      draft: member               # loosened from require_admin
+      apply: admin                # apply mutates the graph — stays admin
+    chat:
+      write: member               # loosened from require_admin
+    decisions:
+      write: member               # loosened from require_admin
+    notify:
+      write: member               # loosened from require_admin
+
+  # ─── BSNexus ────────────────────────────────────────────────────────
+  # bsnexus has ZERO authz today — all rows below are NEW gates.
+  bsnexus:
+    projects:
+      read: viewer
+      write: member
+      delete: admin
+    requests:
+      read: viewer
+      write: member
+    directions:
+      read: viewer
+      write: member
+    decisions:
+      read: viewer
+      write: member               # resolving a decision is a founder action
+    deliverables:
+      read: viewer
+      write: member
+      delete: admin
+    brief:
+      read: viewer
+    events:                       # SSE stream
+      read: viewer
+    workspace_files:
+      read: viewer
+      write: member
+    integrations:                 # admin-surface (encrypted API keys)
+      read: admin
+      write: admin
+      delete: admin
+    executor_config:              # admin-surface
+      read: admin
+      write: admin
+    repo_config:                  # admin-surface
+      read: admin
+      write: admin
+      delete: admin
+    repo_branch:                  # admin-surface (git ops)
+      read: admin
+    repo_pull_request:            # admin-surface (git ops)
+      read: admin
+      write: admin
+
+  # ─── BSupervisor ────────────────────────────────────────────────────
+  # bsupervisor gates rule/settings mutations with require_admin today.
+  bsupervisor:
+    agents:                       # rules + rule engine
+      read: viewer
+      write: admin                # deviation: bsupervisor rules write = require_admin
+    incidents:
+      read: viewer
+      write: admin                # deviation: incident ack/resolve = require_admin
+    audit:                        # admin-surface
+      read: admin
+    settings:                     # admin-surface
+      read: admin
+      write: admin

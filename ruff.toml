@@ -1,0 +1,32 @@
+line-length = 100
+target-version = "py311"
+
+[lint]
+select = [
+    "E",     # pycodestyle errors
+    "W",     # pycodestyle warnings
+    "F",     # pyflakes
+    "I",     # isort
+    "UP",    # pyupgrade
+    "B",     # bugbear
+    "ASYNC", # async
+    "PL",    # pylint
+    "S",     # bandit (security)
+]
+ignore = [
+    "E501",   # line length (formatter handles)
+    "PLR0913", # too many args
+    "PLR2004", # magic value
+    "S101",    # asserts (we want them in tests)
+]
+
+[lint.per-file-ignores]
+"tests/**/*.py" = ["S", "PL", "B008"]
+"backend/data/migrations/**" = ["E", "F", "I", "UP", "B"]
+# Lifted shared libraries: idiomatic FastAPI/settings patterns
+"backend/shared/**" = ["B008", "PLW0603", "PLR0911", "PLR0912", "PLR0915"]
+
+[format]
+quote-style = "double"
+indent-style = "space"
+line-ending = "lf"

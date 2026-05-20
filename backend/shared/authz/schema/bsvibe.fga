@@ -1,0 +1,120 @@
+model
+  schema 1.1
+
+# BSVibe Authorization Model — GENERATED FILE, do not hand-edit.
+#
+# Source: schema/permission_matrix.yaml. Regenerate with
+#   uv run --with pyyaml python scripts/gen_fga.py
+#
+# Tier 5 (2026-05-16): per-resource granularity. Each
+# `<product>.<resource>.<action>` permission is a distinct relation on
+# the `tenant` type, mapped to a minimum role. Resource-instance types
+# (project/task/vault/note/rule/apikey/cost_report/alert) were removed —
+# no route did instance-scoped checks.
+
+# ─── Identity types ───────────────────────────────────────────────
+type user
+
+type service
+
+# ─── Platform-wide ────────────────────────────────────────────────
+type system
+  relations
+    define admin: [user]
+    define audit_reader: [user] or admin
+    define support: [user] or admin
+
+# ─── Subscription plan ────────────────────────────────────────────
+type plan
+  relations
+    define subscriber: [tenant]
+    define read: subscriber
+
+# ─── Feature gating (caveat-based) ────────────────────────────────
+type feature
+  relations
+    define enabled_for: [plan]
+    define read: enabled_for
+
+# ─── Tenant ───────────────────────────────────────────────────────
+# 4 fixed roles, hierarchical: owner ⊃ admin ⊃ member ⊃ viewer.
+# Per-resource relations below are generated from permission_matrix.yaml;
+# each is a thin alias over the role hierarchy.
+type tenant
+  relations
+    define owner: [user]
+    define admin: [user] or owner
+    define member: [user, service] or admin
+    define viewer: [user, service] or member
+    define plan: [plan]
+    # bsage
+    define bsage_canonicalization_apply: admin
+    define bsage_canonicalization_draft: member
+    define bsage_canonicalization_read: viewer
+    define bsage_chat_write: member
+    define bsage_config_read: admin
+    define bsage_config_write: admin
+    define bsage_decisions_write: member
+    define bsage_knowledge_read: viewer
+    define bsage_knowledge_write: member
+    define bsage_notify_write: member
+    define bsage_plugins_execute: member
+    define bsage_plugins_install: admin
+    define bsage_plugins_read: viewer
+    define bsage_vault_read: viewer
+    define bsage_vault_write: member
+    # bsgateway
+    define bsgateway_audit_read: admin
+    define bsgateway_execute_write: member
+    define bsgateway_feedback_read: viewer
+    define bsgateway_feedback_write: member
+    define bsgateway_models_read: viewer
+    define bsgateway_models_write: member
+    define bsgateway_presets_read: viewer
+    define bsgateway_presets_write: member
+    define bsgateway_routes_create: member
+    define bsgateway_routes_read: viewer
+    define bsgateway_routes_write: member
+    define bsgateway_routing_read: viewer
+    define bsgateway_routing_write: member
+    define bsgateway_tenants_read: admin
+    define bsgateway_tenants_write: admin
+    define bsgateway_usage_read: viewer
+    define bsgateway_workers_read: admin
+    define bsgateway_workers_write: admin
+    # bsnexus
+    define bsnexus_brief_read: viewer
+    define bsnexus_decisions_read: viewer
+    define bsnexus_decisions_write: member
+    define bsnexus_deliverables_delete: admin
+    define bsnexus_deliverables_read: viewer
+    define bsnexus_deliverables_write: member
+    define bsnexus_directions_read: viewer
+    define bsnexus_directions_write: member
+    define bsnexus_events_read: viewer
+    define bsnexus_executor_config_read: admin
+    define bsnexus_executor_config_write: admin
+    define bsnexus_integrations_delete: admin
+    define bsnexus_integrations_read: admin
+    define bsnexus_integrations_write: admin
+    define bsnexus_projects_delete: admin
+    define bsnexus_projects_read: viewer
+    define bsnexus_projects_write: member
+    define bsnexus_repo_branch_read: admin
+    define bsnexus_repo_config_delete: admin
+    define bsnexus_repo_config_read: admin
+    define bsnexus_repo_config_write: admin
+    define bsnexus_repo_pull_request_read: admin
+    define bsnexus_repo_pull_request_write: admin
+    define bsnexus_requests_read: viewer
+    define bsnexus_requests_write: member
+    define bsnexus_workspace_files_read: viewer
+    define bsnexus_workspace_files_write: member
+    # bsupervisor
+    define bsupervisor_agents_read: viewer
+    define bsupervisor_agents_write: admin
+    define bsupervisor_audit_read: admin
+    define bsupervisor_incidents_read: viewer
+    define bsupervisor_incidents_write: admin
+    define bsupervisor_settings_read: admin
+    define bsupervisor_settings_write: admin
