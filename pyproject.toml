@@ -17,6 +17,7 @@ dependencies = [
     "alembic>=1.13",
     "asyncpg>=0.29",
     "redis>=5",
+    "jsonschema>=4",
 ]
 
 [project.optional-dependencies]
@@ -28,6 +29,7 @@ dev = [
     "pytest-cov>=5",
     "anyio>=4",
     "respx>=0.21",
+    "types-jsonschema>=4",
 ]
 
 [build-system]
