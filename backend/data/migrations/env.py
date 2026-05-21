@@ -30,6 +30,7 @@ from backend.knowledge.ingest.db import IngestBase
 from backend.knowledge.retrieval.db import RetrievalBase
 from backend.supervisor.audit.models import AuditOutboxBase, SupervisorBase
 from backend.workers.db import WorkersBase
+from backend.workspaces.db import WorkspacesBase
 
 config = context.config
 
@@ -83,6 +84,7 @@ target_metadata = _MergedMetadata(
         IntakeBase,
         DeliveryBase,
         WorkersBase,
+        WorkspacesBase,
     ]
 )
 

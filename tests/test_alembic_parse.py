@@ -30,11 +30,12 @@ def test_alembic_history_loads():
         "bundle_k_knowledge",
         "bundle_x_execution",
         "bundle_g_glue",
+        "bundle_h_workspaces",
     ):
         assert rev in result.stdout, f"missing revision {rev} in:\n{result.stdout}"
 
 
-def test_alembic_head_is_bundle_g_glue():
+def test_alembic_head_is_bundle_h_workspaces():
     repo = Path(__file__).parent.parent
     result = subprocess.run(
         [sys.executable, "-m", "alembic", "heads"],
@@ -43,7 +44,7 @@ def test_alembic_head_is_bundle_g_glue():
         text=True,
     )
     assert result.returncode == 0
-    assert "bundle_g_glue" in result.stdout
+    assert "bundle_h_workspaces" in result.stdout
 
 
 def test_target_metadata_covers_all_bases():
@@ -62,6 +63,7 @@ def test_target_metadata_covers_all_bases():
     from backend.knowledge.retrieval.db import RetrievalBase
     from backend.supervisor.audit.models import AuditOutboxBase, SupervisorBase
     from backend.workers.db import WorkersBase
+    from backend.workspaces.db import WorkspacesBase
 
     expected_tables = {
         # Bundle 1
@@ -104,6 +106,9 @@ def test_target_metadata_covers_all_bases():
         "workers",
         "worker_install_tokens",
         "audit_relay_state",
+        # Bundle H
+        "workspaces",
+        "products",
     }
     actual_tables = (
         set(AccountsBase.metadata.tables)
@@ -120,6 +125,7 @@ def test_target_metadata_covers_all_bases():
         | set(IntakeBase.metadata.tables)
         | set(DeliveryBase.metadata.tables)
         | set(WorkersBase.metadata.tables)
+        | set(WorkspacesBase.metadata.tables)
     )
     assert expected_tables.issubset(actual_tables), (
         f"Missing tables: {expected_tables - actual_tables}"

@@ -1,4 +1,10 @@
-"""Smoke + route-presence tests for /api/v1/* skeleton."""
+"""Route-presence + payload-validation smoke for /api/v1/*.
+
+These tests run without DB / auth — they verify the route surface is
+declared (OpenAPI) and that Pydantic validation fires before any handler
+body runs. End-to-end tests against a real DB live in the
+test_v1_*_routes / test_v1_accounts_decisions / test_v1_skills modules.
+"""
 
 from __future__ import annotations
 
@@ -22,6 +28,7 @@ def test_openapi_advertises_all_v1_routes() -> None:
         "/api/v1/rules",
         "/api/v1/intents",
         "/api/v1/presets",
+        "/api/v1/presets/{preset_name}/apply",
         "/api/v1/skills",
         "/api/v1/decisions",
         "/api/v1/settings",
@@ -30,21 +37,14 @@ def test_openapi_advertises_all_v1_routes() -> None:
         assert route in paths, f"missing {route} in OpenAPI"
 
 
-def test_chat_completions_returns_501() -> None:
-    r = _client().post(
-        "/api/v1/chat/completions",
-        json={"model": "openai/gpt-4o", "messages": [{"role": "user", "content": "hi"}]},
-    )
-    assert r.status_code == 501
-    assert "not yet wired" in r.json()["detail"]
-
-
-def test_chat_completions_rejects_invalid_payload() -> None:
-    r = _client().post("/api/v1/chat/completions", json={"model": "x"})  # missing messages
+def test_chat_completions_validates_payload() -> None:
+    # Missing messages → 422 before any auth / DB.
+    r = _client().post("/api/v1/chat/completions", json={"model": "x"})
     assert r.status_code == 422
 
 
 def test_chat_completions_accepts_metadata_passthrough() -> None:
+    # Metadata accepted; full handler still raises (no auth wired here).
     r = _client().post(
         "/api/v1/chat/completions",
         json={
@@ -53,20 +53,26 @@ def test_chat_completions_accepts_metadata_passthrough() -> None:
             "metadata": {"bsvibe_account_id": "11111111-1111-1111-1111-111111111111"},
         },
     )
-    # Pydantic accepts the metadata; dispatch returns 501 (not wired).
+    # 501 because chat dispatch path is still a stub at the HTTP layer
+    # (LiteLLMHook construction happens above this handler in Bundle G).
     assert r.status_code == 501
 
 
-def test_workspaces_list_is_skeleton() -> None:
-    r = _client().get("/api/v1/workspaces")
-    assert r.status_code == 501
+def test_settings_is_unauthenticated() -> None:
+    """Settings is a read-only operator view — no auth dependency."""
+    r = _client().get("/api/v1/settings")
+    assert r.status_code == 200
+    body = r.json()
+    assert "environment" in body
+    assert "knowledge_vault_root" in body
 
 
-def test_skills_list_is_skeleton() -> None:
-    r = _client().get("/api/v1/skills")
-    assert r.status_code == 501
-
-
-def test_runs_list_is_skeleton() -> None:
-    r = _client().get("/api/v1/runs")
-    assert r.status_code == 501
+def test_presets_list_is_unauthenticated() -> None:
+    """Built-in preset templates don't require auth — they're catalog data."""
+    r = _client().get("/api/v1/presets")
+    assert r.status_code == 200
+    body = r.json()
+    assert isinstance(body, list)
+    names = {p["name"] for p in body}
+    # Bundle 1.5e ships these four built-ins.
+    assert {"coding-assistant", "customer-support", "translation-summary", "general"} <= names

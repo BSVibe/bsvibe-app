@@ -50,6 +50,7 @@ ignore = [
 "backend/delivery/**" = ["PLW0108"]
 "backend/orchestrator/**" = ["PLW0108"]
 "backend/workers/**" = ["PLW0108"]
+"backend/workspaces/**" = ["PLW0108"]
 "backend/execution/**" = [
     "F821",
     "PLC0415",
