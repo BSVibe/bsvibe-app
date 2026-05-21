@@ -1,19 +1,47 @@
 """OpenAI-compatible chat completions endpoint.
 
-Wires :mod:`backend.gateway.dispatch` into HTTP. The LiteLLM
-``async_pre_call_hook`` (Bundle 1.5c) fires before the upstream call to
-evaluate routing rules, budget caps, and account resolution.
+Wires :class:`backend.api.litellm_hook.chat_service.ChatService` against the
+existing :class:`backend.gateway.dispatch.GatewayDispatcher`. The dispatcher
+itself is constructed per-request from the request-scoped AsyncSession +
+the workspace's ModelAccountService + Classifier + BudgetPolicyService +
+LlmClient.
 
-POST /api/v1/chat/completions — OpenAI shape (+ optional ``metadata``
-with ``bsvibe_account_id`` / ``bsvibe_project_id``). Streaming SSE.
+The endpoint surface:
+
+    POST /api/v1/chat/completions
+    Body: OpenAI-shape + optional ``metadata.bsvibe_account_id`` +
+          ``metadata.bsvibe_model_account_id``
+    Returns: OpenAI-shape completion + ``bsvibe`` metadata
+
+Auth dependency (workspace_id) intentionally fails fast with 501 until
+Bundle G wires backend.shared.authz; that's how the route signals "real
+backend wired, but auth path not yet productionized."
 """
 
 from __future__ import annotations
 
-from typing import Any
+import uuid
+from typing import Annotated, Any
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from backend.accounts.crypto import CredentialCipher, _key_from_settings
+from backend.accounts.service import ModelAccountService
+from backend.api.deps import get_db_session, get_workspace_id, require_account_id
+from backend.api.litellm_hook.chat_service import ChatCompletionContext, ChatService
+from backend.gateway.budget.policy import BudgetPolicyService
+from backend.gateway.budget.repository import BudgetPolicyRepository
+from backend.gateway.budget.tracker import BudgetTracker, InMemoryBudgetStore
+from backend.gateway.classifier.local_vs_cloud import LocalVsCloudClassifier
+from backend.gateway.classifier.static import StaticClassifier
+from backend.gateway.dispatch import (
+    DispatchError,
+    GatewayDispatcher,
+    ModelAccountNotFound,
+)
+from backend.gateway.llm_client import LlmClient
 
 router = APIRouter()
 
@@ -21,13 +49,13 @@ router = APIRouter()
 class ChatMessage(BaseModel):
     model_config = ConfigDict(extra="allow")
     role: str = Field(..., description="system | user | assistant | tool")
-    content: str | list[dict[str, Any]]
+    content: Any
 
 
 class ChatCompletionMetadata(BaseModel):
     model_config = ConfigDict(extra="allow")
-    bsvibe_account_id: str | None = None
-    bsvibe_project_id: str | None = None
+    bsvibe_account_id: uuid.UUID | None = None
+    bsvibe_model_account_id: uuid.UUID | None = None
 
 
 class ChatCompletionRequest(BaseModel):
@@ -38,19 +66,56 @@ class ChatCompletionRequest(BaseModel):
     metadata: ChatCompletionMetadata | None = None
 
 
-@router.post("/completions")
-async def chat_completions(payload: ChatCompletionRequest) -> dict[str, Any]:
-    """OpenAI-shape chat completions — dispatches via backend.gateway."""
-    # TODO(bundle-api-integration): wire to backend.api.litellm_hook.chat_service.
-    # Flow (per plan §4):
-    # 1. Extract (workspace_id, account_id) from JWT + metadata
-    # 2. async_pre_call_hook → RuleEngine.evaluate → budget check → account resolve
-    # 3. classifier.classify (informational tier hint)
-    # 4. backend.gateway.dispatch.GatewayDispatcher.dispatch
-    # 5. Stream via SSE
-    # 6. RoutingLogsRepository.insert_routing_log
-    # 7. supervisor.audit.safe_emit
-    raise HTTPException(
-        status_code=status.HTTP_501_NOT_IMPLEMENTED,
-        detail="chat completions dispatch not yet wired (Bundle API skeleton)",
+def _build_dispatcher(session: AsyncSession) -> GatewayDispatcher:
+    cipher = CredentialCipher(_key_from_settings())
+    accounts = ModelAccountService(session, cipher=cipher)
+    budget_repo = BudgetPolicyRepository(session)
+    tracker = BudgetTracker(InMemoryBudgetStore())
+    budget = BudgetPolicyService(repository=budget_repo, tracker=tracker)
+    from backend.config import get_settings  # noqa: PLC0415
+
+    settings = get_settings()
+    classifier = LocalVsCloudClassifier(
+        local_score_max=settings.gateway_local_score_max,
+        cloud_score_min=settings.gateway_cloud_score_min,
+        static=StaticClassifier(
+            local_score_max=settings.gateway_local_score_max,
+            cloud_score_min=settings.gateway_cloud_score_min,
+        ),
     )
+    llm = LlmClient()
+    return GatewayDispatcher(accounts=accounts, classifier=classifier, budget=budget, llm=llm)
+
+
+@router.post("/completions")
+async def chat_completions(
+    payload: ChatCompletionRequest,
+    workspace_id: Annotated[uuid.UUID, Depends(get_workspace_id)],
+    account_id: Annotated[uuid.UUID, Depends(require_account_id)],
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+) -> dict[str, Any]:
+    """OpenAI-shape chat completions — dispatches via backend.gateway."""
+    md = payload.metadata or ChatCompletionMetadata()
+    model_account_id = md.bsvibe_model_account_id
+    if model_account_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="metadata.bsvibe_model_account_id required (no provider auto-select in Phase 1)",
+        )
+
+    service = ChatService(dispatcher=_build_dispatcher(session))
+    ctx = ChatCompletionContext(
+        workspace_id=workspace_id,
+        account_id=account_id,
+        trace_id=str(uuid.uuid4()),
+        stream=payload.stream,
+        model_account_id=model_account_id,
+        estimated_cost_cents=0,
+    )
+    body = payload.model_dump()
+    try:
+        return await service.complete(context=ctx, payload=body)
+    except ModelAccountNotFound as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except DispatchError as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc

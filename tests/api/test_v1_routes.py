@@ -37,24 +37,14 @@ def test_openapi_advertises_all_v1_routes() -> None:
         assert route in paths, f"missing {route} in OpenAPI"
 
 
-def test_chat_completions_validates_payload() -> None:
-    # Missing messages → 422 before any auth / DB.
-    r = _client().post("/api/v1/chat/completions", json={"model": "x"})
-    assert r.status_code == 422
-
-
-def test_chat_completions_accepts_metadata_passthrough() -> None:
-    # Metadata accepted; full handler still raises (no auth wired here).
+def test_chat_completions_requires_auth() -> None:
+    # Auth dependency fires before Pydantic validation — Phase 1 auth
+    # raises 501 until backend.shared.authz is wired into the v1 dep
+    # chain.
     r = _client().post(
         "/api/v1/chat/completions",
-        json={
-            "model": "openai/gpt-4o",
-            "messages": [{"role": "user", "content": "hi"}],
-            "metadata": {"bsvibe_account_id": "11111111-1111-1111-1111-111111111111"},
-        },
+        json={"model": "openai/gpt-4o", "messages": [{"role": "user", "content": "hi"}]},
     )
-    # 501 because chat dispatch path is still a stub at the HTTP layer
-    # (LiteLLMHook construction happens above this handler in Bundle G).
     assert r.status_code == 501
 
 
