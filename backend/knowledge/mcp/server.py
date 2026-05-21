@@ -33,8 +33,17 @@ from mcp.types import TextContent, Tool
 
 # TODO(bundle-k-integration): rewire canon MCP tools (originally bsage.garden.canonicalization.mcp_tools; dropped in lift, will land via backend/api in Bundle API)
 canon_mcp_tools = None  # type: ignore[assignment]
-# TODO(bundle-k-integration): out-of-scope source dep -- original: from bsage.mcp import plugin_bridge
+# TODO(bundle-k-integration): rewire plugin_bridge — Bundle API will inject the
+# plugin dispatch surface. Stubbed to None so the module imports cleanly.
+plugin_bridge = None  # type: ignore[assignment]
 # TODO(bundle-k-integration): wire to dev/transport (out of scope) -- original: from bsage.mcp.admin_tools import register_admin_tools
+
+
+def get_request_principal() -> Any:
+    """Stub — Bundle API will replace with the streamable-HTTP principal extractor."""
+    return None
+
+
 from backend.knowledge.mcp.api import ToolContext, ToolError, ToolRegistry
 from backend.knowledge.mcp.domain_tools import register_domain_tools
 

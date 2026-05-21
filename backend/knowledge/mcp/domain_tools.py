@@ -27,7 +27,14 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-# TODO(bundle-k-integration): out-of-scope source dep -- original: from bsage.gateway import mcp_tools as service
+# TODO(bundle-k-integration): rewire ``service`` to a Bundle-API-supplied
+# MCP service layer. The original ``bsage.gateway.mcp_tools`` is out of
+# scope here — the knowledge module owns the tool *registrations* but the
+# host process provides the concrete service implementation. ``service``
+# is ``None`` so the module imports; tool call-sites will raise
+# AttributeError at runtime until the host wires a real implementation.
+service: Any = None  # type: ignore[assignment]
+
 from backend.knowledge.mcp.api import Tool, ToolContext, ToolRegistry
 
 

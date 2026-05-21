@@ -9,10 +9,10 @@ import structlog
 from backend.knowledge.ingest.index_reader import NoteSummary
 
 if TYPE_CHECKING:
-    # TODO(bundle-k-integration): wire to backend.gateway.embedding -- original: from bsage.garden.embedder import Embedder
-    from backend.knowledge.retrieval.graph_retriever import GraphRetriever
-    from backend.knowledge.ingest.index_reader import IndexReader
     from backend.knowledge.graph.vault import Vault
+    from backend.knowledge.ingest.index_reader import IndexReader
+    from backend.knowledge.retrieval.embedder import Embedder
+    from backend.knowledge.retrieval.graph_retriever import GraphRetriever
     from backend.knowledge.retrieval.vector_store import VectorStore
 
 logger = structlog.get_logger(__name__)

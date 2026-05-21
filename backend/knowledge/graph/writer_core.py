@@ -39,12 +39,13 @@ from backend.knowledge.graph.vault import Vault
 
 if TYPE_CHECKING:
     from backend.knowledge._internal.events import EventBus
+
     # TODO(bundle-k-integration): out-of-scope source dep -- original: from bsage.core.skill_context import GraphInterface
     GraphInterface = Any
     # TODO(bundle-k-integration): wire to backend.supervisor.audit -- original: from bsage.garden.audit_outbox import AiosqliteAuditOutbox
     AiosqliteAuditOutbox = Any
-    from backend.knowledge.retrieval.ontology import OntologyRegistry
     from backend.knowledge.graph.sync import SyncManager
+    from backend.knowledge.retrieval.ontology import OntologyRegistry
 
 logger = structlog.get_logger(__name__)
 
@@ -1017,62 +1018,11 @@ class GardenWriter(_WriterIOMixin, _WriterMutationMixin, _WriterToolHandlersMixi
         Failures here NEVER raise — audit observability must not break a
         successful vault write. The handler logs and continues.
         """
-        if self._audit_outbox is None or not self._audit_outbox.is_open:
-            return
-        try:
-            from bsvibe_audit import AuditActor, AuditResource
-            from bsvibe_audit.events.sage import (
-                KnowledgeEntryUpdated,
-                VaultFileModified,
-            )
-
-            # TODO(bundle-k-integration): wire to backend.supervisor.audit -- original: from bsage.garden.audit_outbox import safe_emit
-
-            try:
-                rel_path = str(path.relative_to(self._vault.root))
-            except (ValueError, AttributeError):
-                rel_path = str(path)
-
-            actor = AuditActor(type="system", id="bsage")
-            effective_tenant = tenant_id or self._default_tenant_id
-
-            await safe_emit(
-                self._audit_outbox,
-                VaultFileModified(
-                    actor=actor,
-                    tenant_id=effective_tenant,
-                    resource=AuditResource(type="vault_file", id=rel_path),
-                    data={
-                        "operation": operation,
-                        "source": source,
-                        "note_type": note_type,
-                    },
-                ),
-            )
-
-            # Knowledge-entry update lifecycle: only fire for in-place
-            # mutations on garden notes (skip seed/action/input-log writes).
-            mutation_ops = {"note_updated", "note_appended", "note_deleted"}
-            non_knowledge_prefixes = ("seeds/", "actions/", ".bsage/")
-            if operation in mutation_ops and not any(
-                rel_path.startswith(p) for p in non_knowledge_prefixes
-            ):
-                note_id = Path(rel_path).stem
-                await safe_emit(
-                    self._audit_outbox,
-                    KnowledgeEntryUpdated(
-                        actor=actor,
-                        tenant_id=effective_tenant,
-                        resource=AuditResource(type="knowledge_entry", id=note_id),
-                        data={
-                            "operation": operation,
-                            "source": source,
-                            "path": rel_path,
-                        },
-                    ),
-                )
-        except Exception:  # noqa: BLE001 — audit must never break a write
-            logger.warning("vault_audit_emit_failed", path=str(path), exc_info=True)
+        # TODO(bundle-k-integration): rewire to backend.supervisor.audit.safe_emit.
+        # The BSVibe surface needs an AsyncSession + AuditEventBase shape that
+        # GardenWriter does not yet thread through. Audit emission is therefore
+        # a no-op for Phase 1 — Bundle G (request-handler glue) will wire it.
+        del path, operation, source, note_type, tenant_id  # noqa: ERA001
 
     @staticmethod
     def _find_dedup_path(directory: Path, slug: str) -> Path:

@@ -10,12 +10,12 @@ from typing import TYPE_CHECKING
 import structlog
 import yaml
 
-from backend.knowledge.ingest.index_reader import NoteSummary
 from backend.knowledge.graph.markdown_utils import extract_frontmatter, extract_title
+from backend.knowledge.ingest.index_reader import NoteSummary
 
 if TYPE_CHECKING:
-    from backend.knowledge.retrieval.ontology import OntologyRegistry
     from backend.knowledge.graph.vault import Vault
+    from backend.knowledge.retrieval.ontology import OntologyRegistry
 
 logger = structlog.get_logger(__name__)
 

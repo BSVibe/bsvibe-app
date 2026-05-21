@@ -19,11 +19,12 @@ from backend.knowledge.graph.writer import GardenNote
 
 if TYPE_CHECKING:
     from backend.knowledge._internal.events import EventBus
+
     # TODO(bundle-k-integration): out-of-scope source dep -- original: from bsage.core.skill_context import LLMClient
     LLMClient = Any
     from backend.knowledge.canonicalization.service import CanonicalizationService
-    from backend.knowledge.retrieval.retriever import VaultRetriever
     from backend.knowledge.graph.writer import GardenWriter
+    from backend.knowledge.retrieval.retriever import VaultRetriever
 
 logger = structlog.get_logger(__name__)
 

@@ -22,9 +22,9 @@ from backend.knowledge.graph.markdown_utils import extract_frontmatter, extract_
 from backend.knowledge.graph.writer import GardenNote
 
 if TYPE_CHECKING:
-    from backend.knowledge.retrieval.ontology import OntologyRegistry
     from backend.knowledge.graph.vault import Vault
     from backend.knowledge.graph.writer import GardenWriter
+    from backend.knowledge.retrieval.ontology import OntologyRegistry
 
 logger = structlog.get_logger(__name__)
 

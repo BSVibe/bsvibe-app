@@ -51,6 +51,11 @@ class Settings(BaseSettings):
     gateway_local_score_max: int = 40
     gateway_cloud_score_min: int = 60
 
+    # Knowledge settings (backend.knowledge) — vault FS root + region.
+    # Per-workspace vault lives at ``<knowledge_vault_root>/<region>/<workspace_id>/``.
+    knowledge_vault_root: str = "var/vault"
+    knowledge_default_region: str = "us-1"
+
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:

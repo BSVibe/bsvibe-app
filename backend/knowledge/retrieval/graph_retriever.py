@@ -17,8 +17,8 @@ from backend.knowledge.graph.graph_models import ConfidenceLevel
 if TYPE_CHECKING:
     from backend.knowledge.graph.graph_backend import GraphBackend
     from backend.knowledge.graph.graph_models import GraphEntity
-    from backend.knowledge.retrieval.ontology import OntologyRegistry
     from backend.knowledge.graph.vault import Vault
+    from backend.knowledge.retrieval.ontology import OntologyRegistry
 
 logger = structlog.get_logger(__name__)
 

@@ -10,8 +10,8 @@ from backend.knowledge._internal.events import Event, EventType
 from backend.knowledge.graph.markdown_utils import body_after_frontmatter, extract_frontmatter
 
 if TYPE_CHECKING:
-    # TODO(bundle-k-integration): wire to backend.gateway.embedding -- original: from bsage.garden.embedder import Embedder
     from backend.knowledge.graph.vault import Vault
+    from backend.knowledge.retrieval.embedder import Embedder
     from backend.knowledge.retrieval.vector_store import VectorStore
 
 logger = structlog.get_logger(__name__)
