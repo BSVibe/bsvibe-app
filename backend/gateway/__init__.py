@@ -9,7 +9,7 @@ now scoped to ``(workspace_id, account_id)`` instead of just
 Public surface for Bundle 1 is the dispatch entry point plus the four
 sub-packages it composes:
 
-- :mod:`backend.gateway.accounts` — ``ModelAccount`` entity + CRUD.
+- :mod:`backend.accounts` — ``ModelAccount`` entity + CRUD.
 - :mod:`backend.gateway.budget`   — ``BudgetPolicyService`` + tracker.
 - :mod:`backend.gateway.classifier` — static + 2-tier (local vs cloud).
 - :mod:`backend.gateway.llm_client` — folded ``bsvibe-llm`` wrapper.
@@ -22,7 +22,7 @@ caller surface needs to look like inside the monorepo.
 
 from __future__ import annotations
 
-from backend.gateway import accounts, budget, classifier
+from backend.gateway import budget, classifier
 from backend.gateway.dispatch import (
     DispatchError,
     DispatchRequest,
@@ -40,7 +40,6 @@ __all__ = [
     "LlmClient",
     "LlmResponse",
     "ModelAccountNotFound",
-    "accounts",
     "budget",
     "classifier",
 ]

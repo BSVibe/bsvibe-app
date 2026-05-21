@@ -4,6 +4,7 @@ from __future__ import annotations
 
 
 def test_all_three_modules_import():
+    import backend.accounts
     import backend.gateway
     import backend.plugins
     import backend.supervisor
@@ -21,7 +22,7 @@ def test_all_three_modules_import():
 
     assert backend.gateway.GatewayDispatcher is not None
     assert backend.gateway.LlmClient is not None
-    assert backend.gateway.accounts.ModelAccountService is not None
+    assert backend.accounts.ModelAccountService is not None
     assert backend.gateway.budget.BudgetPolicyService is not None
     assert backend.gateway.classifier.LocalVsCloudClassifier is not None
 

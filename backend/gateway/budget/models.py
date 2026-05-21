@@ -10,16 +10,20 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 from enum import StrEnum
-from typing import TYPE_CHECKING
 
 from sqlalchemy import DateTime, Integer, UniqueConstraint
 from sqlalchemy import Enum as SAEnum
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
-if TYPE_CHECKING:
-    from backend.gateway.accounts.models import GatewayBase  # noqa: F401
 
-from backend.gateway.accounts.models import GatewayBase
+class GatewayBudgetBase(DeclarativeBase):
+    """Declarative base for budget-enforcement tables.
+
+    Separate from :class:`backend.accounts.models.AccountsBase` because
+    budget caps are a gateway-domain enforcement policy attached to an
+    ``account_id`` scope — the ``ModelAccount`` row itself lives at the
+    workspace layer.
+    """
 
 
 class BudgetScope(StrEnum):
@@ -33,7 +37,7 @@ class BudgetEnforcement(StrEnum):
     LOG = "log"
 
 
-class AccountBudgetPolicy(GatewayBase):
+class AccountBudgetPolicy(GatewayBudgetBase):
     __tablename__ = "account_budget_policies"
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)

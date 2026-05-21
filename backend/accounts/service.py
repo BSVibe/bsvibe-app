@@ -11,10 +11,10 @@ import uuid
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.gateway.accounts.crypto import CredentialCipher
-from backend.gateway.accounts.models import ModelAccount
-from backend.gateway.accounts.repository import ModelAccountRepository
-from backend.gateway.accounts.schemas import (
+from backend.accounts.crypto import CredentialCipher
+from backend.accounts.models import ModelAccount
+from backend.accounts.repository import ModelAccountRepository
+from backend.accounts.schemas import (
     ModelAccountCreate,
     ModelAccountOut,
     ModelAccountUpdate,

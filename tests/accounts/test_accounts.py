@@ -7,12 +7,12 @@ import uuid
 import pytest
 from pydantic import ValidationError
 
-from backend.gateway.accounts.crypto import CredentialCipher
-from backend.gateway.accounts.schemas import (
+from backend.accounts.crypto import CredentialCipher
+from backend.accounts.schemas import (
     ModelAccountCreate,
     ModelAccountUpdate,
 )
-from backend.gateway.accounts.service import ModelAccountService
+from backend.accounts.service import ModelAccountService
 
 
 @pytest.fixture

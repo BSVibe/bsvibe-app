@@ -16,11 +16,11 @@ from sqlalchemy import JSON, Boolean, DateTime, Index, String, UniqueConstraint
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
-class GatewayBase(DeclarativeBase):
-    """Declarative base for gateway-owned tables."""
+class AccountsBase(DeclarativeBase):
+    """Declarative base for workspace-account tables."""
 
 
-class ModelAccount(GatewayBase):
+class ModelAccount(AccountsBase):
     __tablename__ = "model_accounts"
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)

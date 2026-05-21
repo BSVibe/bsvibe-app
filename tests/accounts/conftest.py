@@ -1,4 +1,4 @@
-"""Shared gateway fixtures — in-memory sqlite + deterministic crypto key."""
+"""Shared accounts fixtures — in-memory sqlite + deterministic crypto key."""
 
 from __future__ import annotations
 
@@ -12,12 +12,11 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 from backend.accounts.crypto import CredentialCipher
 from backend.accounts.models import AccountsBase
-from backend.gateway.budget.models import GatewayBudgetBase
 
 
 @pytest.fixture
 def cipher_key() -> bytes:
-    return b"a" * 32  # deterministic; tests do not need real entropy
+    return b"a" * 32
 
 
 @pytest.fixture
@@ -30,7 +29,6 @@ async def session() -> AsyncIterator[AsyncSession]:
     engine = create_async_engine("sqlite+aiosqlite:///:memory:", future=True)
     async with engine.begin() as conn:
         await conn.run_sync(AccountsBase.metadata.create_all)
-        await conn.run_sync(GatewayBudgetBase.metadata.create_all)
     maker = async_sessionmaker(engine, expire_on_commit=False)
     async with maker() as s:
         yield s
@@ -39,7 +37,6 @@ async def session() -> AsyncIterator[AsyncSession]:
 
 @pytest.fixture(autouse=True)
 def _gateway_kms_key_env(monkeypatch: pytest.MonkeyPatch, cipher_key: bytes) -> None:
-    """Set BSVIBE_GATEWAY_KMS_KEY_B64 so module-level encrypt helpers work."""
     monkeypatch.setenv(
         "BSVIBE_GATEWAY_KMS_KEY_B64",
         base64.urlsafe_b64encode(cipher_key).decode("ascii"),
@@ -49,5 +46,4 @@ def _gateway_kms_key_env(monkeypatch: pytest.MonkeyPatch, cipher_key: bytes) -> 
     get_settings.cache_clear()
     yield
     get_settings.cache_clear()
-    # Don't leak the env var into other test modules.
     os.environ.pop("BSVIBE_GATEWAY_KMS_KEY_B64", None)

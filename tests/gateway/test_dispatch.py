@@ -7,9 +7,9 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from backend.gateway.accounts.crypto import CredentialCipher
-from backend.gateway.accounts.schemas import ModelAccountCreate
-from backend.gateway.accounts.service import ModelAccountService
+from backend.accounts.crypto import CredentialCipher
+from backend.accounts.schemas import ModelAccountCreate
+from backend.accounts.service import ModelAccountService
 from backend.gateway.budget.errors import BudgetExceeded
 from backend.gateway.budget.models import BudgetEnforcement, BudgetScope
 from backend.gateway.budget.policy import BudgetPolicyService
@@ -188,7 +188,7 @@ class TestErrors:
     ):
         accounts = ModelAccountService(session, cipher=cipher)
         ma = await _make_account(accounts, workspace_id, account_id)
-        from backend.gateway.accounts.schemas import ModelAccountUpdate
+        from backend.accounts.schemas import ModelAccountUpdate
 
         await accounts.update(
             workspace_id=workspace_id,

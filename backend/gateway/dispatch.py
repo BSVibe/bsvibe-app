@@ -23,7 +23,7 @@ from dataclasses import dataclass
 
 import structlog
 
-from backend.gateway.accounts.service import ModelAccountService
+from backend.accounts.service import ModelAccountService
 from backend.gateway.budget.errors import BudgetExceeded
 from backend.gateway.budget.policy import BudgetPolicyService
 from backend.gateway.classifier.base import (

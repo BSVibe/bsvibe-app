@@ -1,4 +1,4 @@
-"""Tests for backend.gateway.accounts.crypto — AES-256-GCM round-trip."""
+"""Tests for backend.accounts.crypto — AES-256-GCM round-trip."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ import base64
 
 import pytest
 
-from backend.gateway.accounts.crypto import (
+from backend.accounts.crypto import (
     CredentialCipher,
     decrypt_credentials,
     encrypt_credentials,

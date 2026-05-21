@@ -14,6 +14,7 @@ from backend.gateway.budget.models import (
     AccountBudgetPolicy,
     BudgetEnforcement,
     BudgetScope,
+    GatewayBudgetBase,
 )
 from backend.gateway.budget.policy import BudgetCheckResult, BudgetPolicyService
 from backend.gateway.budget.repository import BudgetPolicyRepository
@@ -28,4 +29,5 @@ __all__ = [
     "BudgetPolicyService",
     "BudgetScope",
     "BudgetTracker",
+    "GatewayBudgetBase",
 ]

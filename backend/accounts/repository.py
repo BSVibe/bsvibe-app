@@ -9,7 +9,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.gateway.accounts.models import ModelAccount
+from backend.accounts.models import ModelAccount
 
 
 class ModelAccountRepository:
