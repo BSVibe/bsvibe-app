@@ -120,16 +120,30 @@ class CanonicalizationProposal(CanonicalizationBase):
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
     workspace_id: Mapped[uuid.UUID] = mapped_column(nullable=False, index=True)
     proposal_kind: Mapped[ProposalKind] = mapped_column(
-        SAEnum(ProposalKind, name="canonicalization_proposal_kind_enum"), nullable=False
+        SAEnum(
+            ProposalKind,
+            name="canonicalization_proposal_kind_enum",
+            values_callable=lambda ec: [m.value for m in ec],
+        ),
+        nullable=False,
     )
     action_kind: Mapped[ActionKind] = mapped_column(
-        SAEnum(ActionKind, name="canonicalization_action_kind_enum"), nullable=False
+        SAEnum(
+            ActionKind,
+            name="canonicalization_action_kind_enum",
+            values_callable=lambda ec: [m.value for m in ec],
+        ),
+        nullable=False,
     )
     action_path: Mapped[str] = mapped_column(String(512), nullable=False)
     payload: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     evidence: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     status: Mapped[ProposalStatus] = mapped_column(
-        SAEnum(ProposalStatus, name="canonicalization_proposal_status_enum"),
+        SAEnum(
+            ProposalStatus,
+            name="canonicalization_proposal_status_enum",
+            values_callable=lambda ec: [m.value for m in ec],
+        ),
         nullable=False,
         default=ProposalStatus.PENDING,
     )
@@ -156,7 +170,12 @@ class CanonicalizationDecision(CanonicalizationBase):
         ForeignKey("canonicalization_proposals.id", ondelete="SET NULL"), nullable=True
     )
     decision_kind: Mapped[DecisionKind] = mapped_column(
-        SAEnum(DecisionKind, name="canonicalization_decision_kind_enum"), nullable=False
+        SAEnum(
+            DecisionKind,
+            name="canonicalization_decision_kind_enum",
+            values_callable=lambda ec: [m.value for m in ec],
+        ),
+        nullable=False,
     )
     actor_id: Mapped[uuid.UUID | None] = mapped_column(nullable=True)
     rationale: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -179,7 +198,12 @@ class CanonicalizationPolicy(CanonicalizationBase):
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
     workspace_id: Mapped[uuid.UUID] = mapped_column(nullable=False, index=True)
     policy_kind: Mapped[PolicyKind] = mapped_column(
-        SAEnum(PolicyKind, name="canonicalization_policy_kind_enum"), nullable=False
+        SAEnum(
+            PolicyKind,
+            name="canonicalization_policy_kind_enum",
+            values_callable=lambda ec: [m.value for m in ec],
+        ),
+        nullable=False,
     )
     config: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     created_at: Mapped[datetime] = mapped_column(

@@ -70,7 +70,12 @@ class TriggerEventRow(IntakeBase):
     product_id: Mapped[uuid.UUID | None] = mapped_column(nullable=True, index=True)
     source: Mapped[str] = mapped_column(String(255), nullable=False)
     trigger_kind: Mapped[TriggerKind] = mapped_column(
-        SAEnum(TriggerKind, name="intake_trigger_kind_enum"), nullable=False
+        SAEnum(
+            TriggerKind,
+            name="intake_trigger_kind_enum",
+            values_callable=lambda enum_cls: [m.value for m in enum_cls],
+        ),
+        nullable=False,
     )
     idempotency_key: Mapped[str] = mapped_column(String(255), nullable=False)
     payload: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
@@ -100,7 +105,11 @@ class RequestRow(IntakeBase):
         ForeignKey("trigger_events.id", ondelete="CASCADE"), nullable=False
     )
     status: Mapped[RequestStatus] = mapped_column(
-        SAEnum(RequestStatus, name="intake_request_status_enum"),
+        SAEnum(
+            RequestStatus,
+            name="intake_request_status_enum",
+            values_callable=lambda enum_cls: [m.value for m in enum_cls],
+        ),
         nullable=False,
         default=RequestStatus.OPEN,
     )

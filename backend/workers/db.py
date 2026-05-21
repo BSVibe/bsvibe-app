@@ -38,7 +38,11 @@ class WorkerRow(WorkersBase):
     workspace_id: Mapped[uuid.UUID] = mapped_column(nullable=False, index=True)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     status: Mapped[WorkerStatus] = mapped_column(
-        SAEnum(WorkerStatus, name="workers_worker_status_enum"),
+        SAEnum(
+            WorkerStatus,
+            name="workers_worker_status_enum",
+            values_callable=lambda ec: [m.value for m in ec],
+        ),
         nullable=False,
         default=WorkerStatus.IDLE,
     )

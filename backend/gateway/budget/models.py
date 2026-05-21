@@ -44,11 +44,18 @@ class AccountBudgetPolicy(GatewayBudgetBase):
     workspace_id: Mapped[uuid.UUID] = mapped_column(nullable=False, index=True)
     account_id: Mapped[uuid.UUID] = mapped_column(nullable=False, index=True)
     scope: Mapped[BudgetScope] = mapped_column(
-        SAEnum(BudgetScope, name="budget_scope_enum"), nullable=False
+        SAEnum(
+            BudgetScope, name="budget_scope_enum", values_callable=lambda ec: [m.value for m in ec]
+        ),
+        nullable=False,
     )
     cost_cap_cents: Mapped[int] = mapped_column(Integer, nullable=False)
     enforcement: Mapped[BudgetEnforcement] = mapped_column(
-        SAEnum(BudgetEnforcement, name="budget_enforcement_enum"),
+        SAEnum(
+            BudgetEnforcement,
+            name="budget_enforcement_enum",
+            values_callable=lambda ec: [m.value for m in ec],
+        ),
         nullable=False,
         default=BudgetEnforcement.BLOCK,
     )

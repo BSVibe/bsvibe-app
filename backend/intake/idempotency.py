@@ -3,6 +3,10 @@
 Workflow §12.5 #8 (Bundle G — Intake / Triggers). The
 ``(workspace_id, source, idempotency_key)`` composite is the canonical
 de-dup key for every TriggerEvent we accept.
+
+Persistence is via :class:`backend.intake.db.TriggerEventRow` and its
+unique constraint ``uq_trigger_events_ws_src_key`` — the DB is the source
+of truth, this module just exposes the read + write surface.
 """
 
 from __future__ import annotations
@@ -10,51 +14,50 @@ from __future__ import annotations
 import uuid
 
 import structlog
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from backend.intake.db import TriggerEventRow
 
 logger = structlog.get_logger(__name__)
 
 
 async def is_duplicate(
+    session: AsyncSession,
     *,
     workspace_id: uuid.UUID,
     source: str,
     idempotency_key: str,
 ) -> bool:
-    """Return ``True`` if this trigger was already seen.
-
-    Lookup is by the composite ``(workspace_id, source, idempotency_key)``
-    unique index on :class:`backend.intake.db.TriggerEventRow`.
-    """
-    # TODO(bundle-g-integration): SELECT 1 FROM trigger_events WHERE ...
-    # — see backend/intake/db.py uq_trigger_events_ws_src_key.
-    logger.debug(
-        "idempotency_check_stub",
-        workspace_id=str(workspace_id),
-        source=source,
-        key=idempotency_key,
+    """Return ``True`` if a row with this triple already exists."""
+    stmt = select(TriggerEventRow.id).where(
+        TriggerEventRow.workspace_id == workspace_id,
+        TriggerEventRow.source == source,
+        TriggerEventRow.idempotency_key == idempotency_key,
     )
-    raise NotImplementedError("is_duplicate pending Bundle G integration")
+    result = await session.execute(stmt)
+    return result.scalar_one_or_none() is not None
 
 
 async def record(
+    session: AsyncSession,
     *,
-    workspace_id: uuid.UUID,
-    source: str,
-    idempotency_key: str,
-    trigger_event_id: uuid.UUID,
+    row: TriggerEventRow,
 ) -> None:
-    """Persist the idempotency marker. Called inside the intake
-    transaction so duplicate rows fail at the DB unique constraint."""
-    # TODO(bundle-g-integration): INSERT INTO trigger_events ... ON CONFLICT
-    # DO NOTHING and propagate the conflict back to the caller.
+    """Add ``row`` to the session. Caller flushes/commits the transaction.
+
+    Conflicts surface as :class:`sqlalchemy.exc.IntegrityError` at flush
+    time — callers should catch and treat as duplicate.
+    """
+    session.add(row)
+    await session.flush()
     logger.debug(
-        "idempotency_record_stub",
-        workspace_id=str(workspace_id),
-        source=source,
-        key=idempotency_key,
-        trigger_event_id=str(trigger_event_id),
+        "idempotency_recorded",
+        workspace_id=str(row.workspace_id),
+        source=row.source,
+        idempotency_key=row.idempotency_key,
+        trigger_event_id=str(row.id),
     )
-    raise NotImplementedError("record pending Bundle G integration")
 
 
 __all__ = ["is_duplicate", "record"]

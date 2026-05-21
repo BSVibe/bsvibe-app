@@ -56,6 +56,10 @@ class Settings(BaseSettings):
     knowledge_vault_root: str = "var/vault"
     knowledge_default_region: str = "us-1"
 
+    # Skills settings (backend.skills) — per-workspace skill directory.
+    # Layout: ``<skills_root>/<workspace_id>/*.md`` per Workflow §6 #5.
+    skills_root: str = "var/skills"
+
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:

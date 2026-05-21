@@ -97,7 +97,11 @@ class ExecutionRun(ExecutionBase):
     # Logical Request id from Bundle G (intake). FK added in Bundle G's migration.
     request_id: Mapped[uuid.UUID | None] = mapped_column(nullable=True, index=True)
     status: Mapped[RunStatus] = mapped_column(
-        SAEnum(RunStatus, name="execution_run_status_enum"),
+        SAEnum(
+            RunStatus,
+            name="execution_run_status_enum",
+            values_callable=lambda ec: [m.value for m in ec],
+        ),
         nullable=False,
         default=RunStatus.OPEN,
     )
@@ -125,11 +129,21 @@ class ExecutionRunHistory(ExecutionBase):
     )
     workspace_id: Mapped[uuid.UUID] = mapped_column(nullable=False, index=True)
     from_status: Mapped[RunStatus | None] = mapped_column(
-        SAEnum(RunStatus, name="execution_run_status_enum", create_type=False),
+        SAEnum(
+            RunStatus,
+            name="execution_run_status_enum",
+            create_type=False,
+            values_callable=lambda ec: [m.value for m in ec],
+        ),
         nullable=True,
     )
     to_status: Mapped[RunStatus] = mapped_column(
-        SAEnum(RunStatus, name="execution_run_status_enum", create_type=False),
+        SAEnum(
+            RunStatus,
+            name="execution_run_status_enum",
+            create_type=False,
+            values_callable=lambda ec: [m.value for m in ec],
+        ),
         nullable=False,
     )
     reason: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -208,12 +222,18 @@ class WorkStep(ExecutionBase):
     workspace_id: Mapped[uuid.UUID] = mapped_column(nullable=False, index=True)
     title: Mapped[str] = mapped_column(String(512), nullable=False)
     status: Mapped[WorkStepStatus] = mapped_column(
-        SAEnum(WorkStepStatus, name="work_step_status_enum"),
+        SAEnum(
+            WorkStepStatus,
+            name="work_step_status_enum",
+            values_callable=lambda ec: [m.value for m in ec],
+        ),
         nullable=False,
         default=WorkStepStatus.PENDING,
     )
     proof_state: Mapped[ProofState] = mapped_column(
-        SAEnum(ProofState, name="proof_state_enum"),
+        SAEnum(
+            ProofState, name="proof_state_enum", values_callable=lambda ec: [m.value for m in ec]
+        ),
         nullable=False,
         default=ProofState.UNTESTED,
     )
@@ -241,7 +261,11 @@ class RunAttempt(ExecutionBase):
     )
     workspace_id: Mapped[uuid.UUID] = mapped_column(nullable=False, index=True)
     phase: Mapped[RunAttemptPhase] = mapped_column(
-        SAEnum(RunAttemptPhase, name="run_attempt_phase_enum"),
+        SAEnum(
+            RunAttemptPhase,
+            name="run_attempt_phase_enum",
+            values_callable=lambda ec: [m.value for m in ec],
+        ),
         nullable=False,
         default=RunAttemptPhase.PLANNING,
     )
@@ -267,7 +291,12 @@ class Deliverable(ExecutionBase):
     )
     workspace_id: Mapped[uuid.UUID] = mapped_column(nullable=False, index=True)
     deliverable_type: Mapped[DeliverableType] = mapped_column(
-        SAEnum(DeliverableType, name="deliverable_type_enum"), nullable=False
+        SAEnum(
+            DeliverableType,
+            name="deliverable_type_enum",
+            values_callable=lambda ec: [m.value for m in ec],
+        ),
+        nullable=False,
     )
     artifact_uri: Mapped[str | None] = mapped_column(Text, nullable=True)
     diff_url: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -312,7 +341,12 @@ class VerificationResult(ExecutionBase):
     )
     workspace_id: Mapped[uuid.UUID] = mapped_column(nullable=False, index=True)
     outcome: Mapped[VerificationOutcome] = mapped_column(
-        SAEnum(VerificationOutcome, name="verification_outcome_enum"), nullable=False
+        SAEnum(
+            VerificationOutcome,
+            name="verification_outcome_enum",
+            values_callable=lambda ec: [m.value for m in ec],
+        ),
+        nullable=False,
     )
     contract: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     result: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)

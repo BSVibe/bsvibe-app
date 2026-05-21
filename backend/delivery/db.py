@@ -70,7 +70,11 @@ class SafeModeQueueItemRow(DeliveryBase):
     workspace_id: Mapped[uuid.UUID] = mapped_column(nullable=False, index=True)
     deliverable_id: Mapped[uuid.UUID] = mapped_column(nullable=False)
     status: Mapped[SafeModeStatus] = mapped_column(
-        SAEnum(SafeModeStatus, name="delivery_safe_mode_status_enum"),
+        SAEnum(
+            SafeModeStatus,
+            name="delivery_safe_mode_status_enum",
+            values_callable=lambda ec: [m.value for m in ec],
+        ),
         nullable=False,
         default=SafeModeStatus.PENDING,
     )
