@@ -52,37 +52,40 @@ async def test_pg_and_redis_roundtrip() -> None:
     if not await _redis_reachable(redis_url):
         pytest.skip(f"Redis not reachable at {redis_url}")
 
-    # --- PG: create table on demand, insert a workspace row, read it back ---
+    # --- PG: create a dedicated smoke table, insert + read back ---
+    # Use a smoke-only table to avoid colliding with the real ``workspaces``
+    # schema (which Bundle H expanded with NOT NULL ``name`` / ``region``).
+    # The point of this test is PG round-trip connectivity, not schema fidelity.
     engine = create_async_engine(pg_url, future=True)
-    workspace_id = uuid.uuid4()
+    row_id = uuid.uuid4()
     try:
         async with engine.begin() as conn:
             await conn.execute(
                 text(
-                    "CREATE TABLE IF NOT EXISTS workspaces ("
+                    "CREATE TABLE IF NOT EXISTS smoke_pg_roundtrip ("
                     "id UUID PRIMARY KEY, "
                     "created_at TIMESTAMPTZ NOT NULL DEFAULT now()"
                     ")"
                 )
             )
             await conn.execute(
-                text("INSERT INTO workspaces (id) VALUES (:id)"),
-                {"id": str(workspace_id)},
+                text("INSERT INTO smoke_pg_roundtrip (id) VALUES (:id)"),
+                {"id": str(row_id)},
             )
 
         async with engine.connect() as conn:
             result = await conn.execute(
-                text("SELECT id FROM workspaces WHERE id = :id"),
-                {"id": str(workspace_id)},
+                text("SELECT id FROM smoke_pg_roundtrip WHERE id = :id"),
+                {"id": str(row_id)},
             )
             row = result.first()
         assert row is not None
-        assert str(row[0]) == str(workspace_id)
+        assert str(row[0]) == str(row_id)
     finally:
         async with engine.begin() as conn:
             await conn.execute(
-                text("DELETE FROM workspaces WHERE id = :id"),
-                {"id": str(workspace_id)},
+                text("DELETE FROM smoke_pg_roundtrip WHERE id = :id"),
+                {"id": str(row_id)},
             )
         await engine.dispose()
 
