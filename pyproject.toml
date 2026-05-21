@@ -18,6 +18,7 @@ dependencies = [
     "asyncpg>=0.29",
     "redis>=5",
     "jsonschema>=4",
+    "cryptography>=42",
 ]
 
 [project.optional-dependencies]

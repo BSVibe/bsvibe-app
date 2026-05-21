@@ -42,6 +42,15 @@ class Settings(BaseSettings):
     sandbox_idle_reap_seconds: int = 1800
     sandbox_max_concurrent: int = 2
 
+    # Gateway settings (backend.gateway)
+    # 32-byte AES-256-GCM key, base64-url-encoded. Generate with:
+    # `python -c "import os,base64; print(base64.urlsafe_b64encode(os.urandom(32)).decode())"`.
+    gateway_kms_key_b64: str = ""
+    # Default 2-tier classifier thresholds (used by LocalVsCloudClassifier
+    # when no override is supplied).
+    gateway_local_score_max: int = 40
+    gateway_cloud_score_min: int = 60
+
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:

@@ -173,6 +173,7 @@ source = { editable = "." }
 dependencies = [
     { name = "alembic" },
     { name = "asyncpg" },
+    { name = "cryptography" },
     { name = "fastapi" },
     { name = "httpx" },
     { name = "jsonschema" },
@@ -205,6 +206,7 @@ requires-dist = [
     { name = "alembic", specifier = ">=1.13" },
     { name = "anyio", marker = "extra == 'dev'", specifier = ">=4" },
     { name = "asyncpg", specifier = ">=0.29" },
+    { name = "cryptography", specifier = ">=42" },
     { name = "fastapi", specifier = ">=0.110" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "jsonschema", specifier = ">=4" },
