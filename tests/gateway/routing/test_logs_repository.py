@@ -52,9 +52,9 @@ class TestInsert:
             original_model="gpt-4o",
             resolved_model="ollama/qwen2.5",
             embedding=None,
-            nexus_task_type=None,
-            nexus_priority=None,
-            nexus_complexity_hint=None,
+            bsvibe_task_type=None,
+            bsvibe_priority=None,
+            bsvibe_complexity_hint=None,
             decision_source="rule",
         )
         # Recent rows surface via the aggregate path.
@@ -87,9 +87,9 @@ class TestAccountScoping:
                 original_model="m",
                 resolved_model="m",
                 embedding=None,
-                nexus_task_type=None,
-                nexus_priority=None,
-                nexus_complexity_hint=None,
+                bsvibe_task_type=None,
+                bsvibe_priority=None,
+                bsvibe_complexity_hint=None,
                 decision_source=None,
             )
         own = await repo.usage_total(
@@ -119,9 +119,9 @@ class TestUsageByModel:
                 original_model=model,
                 resolved_model=model,
                 embedding=None,
-                nexus_task_type=None,
-                nexus_priority=None,
-                nexus_complexity_hint=None,
+                bsvibe_task_type=None,
+                bsvibe_priority=None,
+                bsvibe_complexity_hint=None,
                 decision_source=None,
             )
         rows = await repo.usage_by_model(

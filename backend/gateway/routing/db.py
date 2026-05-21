@@ -4,9 +4,13 @@
 Renamed to disambiguate from :class:`ModelAccount` (credentials) vs.
 catalog entries (which model names are available to dispatch).
 
-``routing_logs`` keeps the verbatim ``nexus_*`` column names from
-BSGateway — those columns mirror BSNexus' task taxonomy and we
-preserve the wire format for log analytics pipelines.
+``routing_logs.bsvibe_task_*`` mirror BSGateway's
+``nexus_task_*`` columns (task taxonomy carried alongside the
+routing decision). The prefix was renamed: a sweep across the
+monorepo (bsvibe-app, BSNexus, BSupervisor) + ``~/Docs`` found zero
+external readers, so retaining the BSNexus-era prefix would be
+dead semantics. Fresh deploy → rename happens directly in the
+1.5b migration; no compat layer needed.
 """
 
 from __future__ import annotations
@@ -104,7 +108,7 @@ class RoutingLogRow(GatewayRoutingBase):
     original_model: Mapped[str | None] = mapped_column(String(200), nullable=True)
     resolved_model: Mapped[str | None] = mapped_column(String(200), nullable=True)
     embedding: Mapped[list[float] | None] = mapped_column(EmbeddingVector(), nullable=True)
-    nexus_task_type: Mapped[str | None] = mapped_column(String(80), nullable=True)
-    nexus_priority: Mapped[str | None] = mapped_column(String(20), nullable=True)
-    nexus_complexity_hint: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    bsvibe_task_type: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    bsvibe_priority: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    bsvibe_complexity_hint: Mapped[int | None] = mapped_column(Integer, nullable=True)
     decision_source: Mapped[str | None] = mapped_column(String(40), nullable=True)

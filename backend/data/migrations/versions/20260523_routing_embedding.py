@@ -162,9 +162,9 @@ def upgrade() -> None:
         sa.Column("original_model", sa.String(200), nullable=True),
         sa.Column("resolved_model", sa.String(200), nullable=True),
         sa.Column("embedding", Vector(None), nullable=True),
-        sa.Column("nexus_task_type", sa.String(80), nullable=True),
-        sa.Column("nexus_priority", sa.String(20), nullable=True),
-        sa.Column("nexus_complexity_hint", sa.Integer(), nullable=True),
+        sa.Column("bsvibe_task_type", sa.String(80), nullable=True),
+        sa.Column("bsvibe_priority", sa.String(20), nullable=True),
+        sa.Column("bsvibe_complexity_hint", sa.Integer(), nullable=True),
         sa.Column("decision_source", sa.String(40), nullable=True),
         sa.PrimaryKeyConstraint("id"),
     )

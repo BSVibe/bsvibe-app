@@ -53,9 +53,9 @@ class RoutingLogsRepository:
         original_model: str,
         resolved_model: str,
         embedding: list[float] | None,
-        nexus_task_type: str | None,
-        nexus_priority: str | None,
-        nexus_complexity_hint: int | None,
+        bsvibe_task_type: str | None,
+        bsvibe_priority: str | None,
+        bsvibe_complexity_hint: int | None,
         decision_source: str | None,
     ) -> None:
         row = RoutingLogRow(
@@ -76,9 +76,9 @@ class RoutingLogsRepository:
             original_model=original_model,
             resolved_model=resolved_model,
             embedding=embedding,
-            nexus_task_type=nexus_task_type,
-            nexus_priority=nexus_priority,
-            nexus_complexity_hint=nexus_complexity_hint,
+            bsvibe_task_type=bsvibe_task_type,
+            bsvibe_priority=bsvibe_priority,
+            bsvibe_complexity_hint=bsvibe_complexity_hint,
             decision_source=decision_source,
         )
         self._session.add(row)
