@@ -46,6 +46,10 @@ ignore = [
 # F821 from the stubbed src.models / src.queue / src.storage / etc. imports
 # (TODO(bundle-x-integration) sites). When Bundle G / Bundle API land those
 # integrations, F821 can be re-enabled on a per-file basis.
+"backend/intake/**" = ["PLW0108"]
+"backend/delivery/**" = ["PLW0108"]
+"backend/orchestrator/**" = ["PLW0108"]
+"backend/workers/**" = ["PLW0108"]
 "backend/execution/**" = [
     "F821",
     "PLC0415",

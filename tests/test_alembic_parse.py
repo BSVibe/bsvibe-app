@@ -29,11 +29,12 @@ def test_alembic_history_loads():
         "bundle1_5b_routing_embed",
         "bundle_k_knowledge",
         "bundle_x_execution",
+        "bundle_g_glue",
     ):
         assert rev in result.stdout, f"missing revision {rev} in:\n{result.stdout}"
 
 
-def test_alembic_head_is_bundle_x_execution():
+def test_alembic_head_is_bundle_g_glue():
     repo = Path(__file__).parent.parent
     result = subprocess.run(
         [sys.executable, "-m", "alembic", "heads"],
@@ -42,22 +43,25 @@ def test_alembic_head_is_bundle_x_execution():
         text=True,
     )
     assert result.returncode == 0
-    assert "bundle_x_execution" in result.stdout
+    assert "bundle_g_glue" in result.stdout
 
 
 def test_target_metadata_covers_all_bases():
     """Reach into env.py module to confirm the merged metadata sees
     every base we expect — Bundle 1 + Bundle 1.5a/1.5b + Bundle K + Bundle X."""
     from backend.accounts.models import AccountsBase
+    from backend.delivery.db import DeliveryBase
     from backend.execution.db import ExecutionBase
     from backend.gateway.budget.models import GatewayBudgetBase
     from backend.gateway.embedding.db import GatewayEmbeddingBase
     from backend.gateway.routing.db import GatewayRoutingBase
     from backend.gateway.rules.db import GatewayRulesBase
+    from backend.intake.db import IntakeBase
     from backend.knowledge.canonicalization.db import CanonicalizationBase
     from backend.knowledge.ingest.db import IngestBase
     from backend.knowledge.retrieval.db import RetrievalBase
     from backend.supervisor.audit.models import AuditOutboxBase, SupervisorBase
+    from backend.workers.db import WorkersBase
 
     expected_tables = {
         # Bundle 1
@@ -92,6 +96,14 @@ def test_target_metadata_covers_all_bases():
         "deliverables",
         "execution_decisions",
         "verification_results",
+        # Bundle G
+        "trigger_events",
+        "requests",
+        "delivery_events",
+        "safe_mode_queue_items",
+        "workers",
+        "worker_install_tokens",
+        "audit_relay_state",
     }
     actual_tables = (
         set(AccountsBase.metadata.tables)
@@ -105,6 +117,9 @@ def test_target_metadata_covers_all_bases():
         | set(IngestBase.metadata.tables)
         | set(RetrievalBase.metadata.tables)
         | set(ExecutionBase.metadata.tables)
+        | set(IntakeBase.metadata.tables)
+        | set(DeliveryBase.metadata.tables)
+        | set(WorkersBase.metadata.tables)
     )
     assert expected_tables.issubset(actual_tables), (
         f"Missing tables: {expected_tables - actual_tables}"

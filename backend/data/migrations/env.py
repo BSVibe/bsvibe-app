@@ -22,11 +22,14 @@ from backend.gateway.budget.models import GatewayBudgetBase
 from backend.gateway.embedding.db import GatewayEmbeddingBase
 from backend.gateway.routing.db import GatewayRoutingBase
 from backend.gateway.rules.db import GatewayRulesBase
+from backend.delivery.db import DeliveryBase
 from backend.execution.db import ExecutionBase
+from backend.intake.db import IntakeBase
 from backend.knowledge.canonicalization.db import CanonicalizationBase
 from backend.knowledge.ingest.db import IngestBase
 from backend.knowledge.retrieval.db import RetrievalBase
 from backend.supervisor.audit.models import AuditOutboxBase, SupervisorBase
+from backend.workers.db import WorkersBase
 
 config = context.config
 
@@ -77,6 +80,9 @@ target_metadata = _MergedMetadata(
         IngestBase,
         RetrievalBase,
         ExecutionBase,
+        IntakeBase,
+        DeliveryBase,
+        WorkersBase,
     ]
 )
 
