@@ -13,6 +13,8 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from backend.accounts.crypto import CredentialCipher
 from backend.accounts.models import AccountsBase
 from backend.gateway.budget.models import GatewayBudgetBase
+from backend.gateway.embedding.db import GatewayEmbeddingBase
+from backend.gateway.routing.db import GatewayRoutingBase
 from backend.gateway.rules.db import GatewayRulesBase
 
 
@@ -33,6 +35,8 @@ async def session() -> AsyncIterator[AsyncSession]:
         await conn.run_sync(AccountsBase.metadata.create_all)
         await conn.run_sync(GatewayBudgetBase.metadata.create_all)
         await conn.run_sync(GatewayRulesBase.metadata.create_all)
+        await conn.run_sync(GatewayEmbeddingBase.metadata.create_all)
+        await conn.run_sync(GatewayRoutingBase.metadata.create_all)
     maker = async_sessionmaker(engine, expire_on_commit=False)
     async with maker() as s:
         yield s

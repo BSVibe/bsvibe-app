@@ -30,7 +30,7 @@ class LlmResponse:
 
 
 def _lazy_litellm_completion() -> CompletionFn:
-    import litellm  # type: ignore[import-not-found]  # noqa: PLC0415 — optional dep, lazy
+    import litellm  # noqa: PLC0415 — optional dep, lazy
 
     return litellm.acompletion  # type: ignore[no-any-return]
 
