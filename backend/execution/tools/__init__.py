@@ -136,6 +136,21 @@ class ToolRegistry:
     def has(self, name: str) -> bool:
         return name in self._tools
 
+    def register(self, definition: ToolDefinition) -> None:
+        """Add a custom tool to the registry.
+
+        Used by Bundle S to register ``invoke_skill`` after the registry is
+        constructed (the skill loader is per-workspace and lives outside
+        this module). Re-registering an existing name raises ``ToolError``.
+        """
+        if definition.name in self._tools:
+            raise ToolError(f"tool already registered: {definition.name!r}")
+        self._tools[definition.name] = definition
+
+    def names(self) -> list[str]:
+        """All registered tool names — for ``schema_for(names())`` callers."""
+        return list(self._tools.keys())
+
     def _register_defaults(self) -> None:
         self._tools["file_read"] = ToolDefinition(
             name="file_read",

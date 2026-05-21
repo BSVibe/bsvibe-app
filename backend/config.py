@@ -60,6 +60,20 @@ class Settings(BaseSettings):
     # Layout: ``<skills_root>/<workspace_id>/*.md`` per Workflow §6 #5.
     skills_root: str = "var/skills"
 
+    # Execution settings — agent loop budgets per Workflow §3 + memory
+    # ``bsnexus-budget-handoff-design``. Operator may tune for local-LLM
+    # vs frontier-model deployments; defaults match Cycle 7-14 dogfood
+    # telemetry on qwen3-coder:30b.
+    execution_work_round_budget: int = 48
+    execution_prepare_round_budget: int = 3
+    execution_verify_round_budget: int = 1
+    execution_summarize_round_budget: int = 2
+    # Soft-pressure handoff trigger: how many rounds before the
+    # ``work`` budget cap the agent should be nudged toward summarize.
+    execution_soft_pressure_headroom: int = 6
+    # Decomposer cycle cap — caps planning/decomposer.py CoT depth.
+    decomposer_cycle_cap: int = 14
+
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:

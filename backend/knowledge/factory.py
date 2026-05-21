@@ -27,7 +27,9 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from backend.knowledge.graph.restricted import RestrictedPluginGarden
     from backend.knowledge.graph.vault import Vault
+    from backend.knowledge.graph.writer import GardenWriter
 
 
 @dataclass(frozen=True, slots=True)
@@ -48,7 +50,7 @@ class KnowledgeFactory:
     in the integration phase).
     """
 
-    __slots__ = ("_context", "_vault_root", "_vault")
+    __slots__ = ("_context", "_vault_root", "_vault", "_writer")
 
     def __init__(
         self,
@@ -60,6 +62,7 @@ class KnowledgeFactory:
         self._context = WorkspaceContext(region=region, workspace_id=workspace_id)
         self._vault_root = vault_root / region / workspace_id
         self._vault: Vault | None = None
+        self._writer: GardenWriter | None = None
 
     @property
     def context(self) -> WorkspaceContext:
@@ -73,8 +76,35 @@ class KnowledgeFactory:
     def vault(self) -> Vault:
         """Return (or construct) the workspace-scoped ``Vault``."""
         if self._vault is None:
-            from backend.knowledge.graph.vault import Vault as _Vault
+            from backend.knowledge.graph.vault import Vault as _Vault  # noqa: PLC0415
 
             self._vault_root.mkdir(parents=True, exist_ok=True)
             self._vault = _Vault(self._vault_root)
         return self._vault
+
+    def writer(self) -> GardenWriter:
+        """Return (or construct) a workspace-scoped :class:`GardenWriter`.
+
+        The writer hangs off the same Vault as :meth:`vault`, so paths are
+        already constrained to ``<vault_root>/<region>/<workspace_id>/``.
+        Audit emit + sync_manager + ontology + event_bus default to None;
+        request-handler glue injects them when needed.
+        """
+        if self._writer is None:
+            from backend.knowledge.graph.writer import GardenWriter as _GW  # noqa: PLC0415
+
+            self._writer = _GW(vault=self.vault())
+        return self._writer
+
+    def restricted_garden(self) -> RestrictedPluginGarden:
+        """Return a read+seed-only wrapper for plugin/MCP callers.
+
+        Per Workflow §6 #2 + §6 #5: external surfaces never see the raw
+        ``GardenWriter`` — they get this wrapper so they can't mutate
+        garden notes without going through ``IngestCompiler``.
+        """
+        from backend.knowledge.graph.restricted import (  # noqa: PLC0415
+            RestrictedPluginGarden as _R,
+        )
+
+        return _R(writer=self.writer())

@@ -30,7 +30,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.accounts.crypto import CredentialCipher, _key_from_settings
 from backend.accounts.service import ModelAccountService
 from backend.api.deps import get_db_session, get_workspace_id, require_account_id
+from backend.api.litellm_hook.audit_events import (
+    GatewayCompletionDispatched,
+    GatewayCompletionFailed,
+)
 from backend.api.litellm_hook.chat_service import ChatCompletionContext, ChatService
+from backend.gateway.budget.errors import BudgetExceeded
 from backend.gateway.budget.policy import BudgetPolicyService
 from backend.gateway.budget.repository import BudgetPolicyRepository
 from backend.gateway.budget.tracker import BudgetTracker, InMemoryBudgetStore
@@ -42,6 +47,8 @@ from backend.gateway.dispatch import (
     ModelAccountNotFound,
 )
 from backend.gateway.llm_client import LlmClient
+from backend.supervisor.audit.events import AuditActor, AuditResource
+from backend.supervisor.audit.service import safe_emit
 
 router = APIRouter()
 
@@ -113,9 +120,63 @@ async def chat_completions(
         estimated_cost_cents=0,
     )
     body = payload.model_dump()
+    actor = AuditActor(type="user", id=str(account_id))
+    resource = AuditResource(type="model_account", id=str(model_account_id))
     try:
-        return await service.complete(context=ctx, payload=body)
+        completion = await service.complete(context=ctx, payload=body)
     except ModelAccountNotFound as exc:
+        await safe_emit(
+            GatewayCompletionFailed(
+                actor=actor,
+                workspace_id=str(workspace_id),
+                trace_id=ctx.trace_id,
+                resource=resource,
+                data={"error": "model_account_not_found", "detail": str(exc)},
+            ),
+            session=session,
+        )
+        await session.commit()
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except BudgetExceeded as exc:
+        await safe_emit(
+            GatewayCompletionFailed(
+                actor=actor,
+                workspace_id=str(workspace_id),
+                trace_id=ctx.trace_id,
+                resource=resource,
+                data={"error": "budget_exceeded", "detail": str(exc)},
+            ),
+            session=session,
+        )
+        await session.commit()
+        raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=str(exc)) from exc
     except DispatchError as exc:
+        await safe_emit(
+            GatewayCompletionFailed(
+                actor=actor,
+                workspace_id=str(workspace_id),
+                trace_id=ctx.trace_id,
+                resource=resource,
+                data={"error": "dispatch_error", "detail": str(exc)},
+            ),
+            session=session,
+        )
+        await session.commit()
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+
+    await safe_emit(
+        GatewayCompletionDispatched(
+            actor=actor,
+            workspace_id=str(workspace_id),
+            trace_id=ctx.trace_id,
+            resource=resource,
+            data={
+                "model": completion.get("model"),
+                "actual_cost_cents": completion.get("bsvibe", {}).get("actual_cost_cents"),
+                "classification_tier": completion.get("bsvibe", {}).get("classification_tier"),
+            },
+        ),
+        session=session,
+    )
+    await session.commit()
+    return completion

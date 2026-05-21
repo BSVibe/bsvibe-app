@@ -59,3 +59,30 @@ def test_restricted_plugin_garden_reexported_from_graph() -> None:
     from backend.knowledge.graph import RestrictedPluginGarden
 
     assert RestrictedPluginGarden.__name__ == "RestrictedPluginGarden"
+
+
+def test_factory_writer_is_workspace_scoped(vault_root: Path) -> None:
+    """GardenWriter from factory writes inside the workspace's vault path."""
+    factory = KnowledgeFactory(region="us-1", workspace_id=str(uuid.uuid4()), vault_root=vault_root)
+    writer = factory.writer()
+    assert writer is factory.writer()  # memoized
+    # The bound vault must point at the workspace-scoped path
+    assert writer._vault.root == factory.vault_path  # noqa: SLF001 — invariant assert
+
+
+def test_factory_restricted_garden_uses_writer(vault_root: Path) -> None:
+    factory = KnowledgeFactory(region="us-1", workspace_id=str(uuid.uuid4()), vault_root=vault_root)
+    rpg = factory.restricted_garden()
+    # Blocked methods raise PermissionError
+    import pytest as _pytest
+
+    with _pytest.raises(PermissionError):
+        rpg.write_garden  # noqa: B018 — attribute access triggers __getattr__
+
+
+def test_factory_writer_is_isolated_per_workspace(vault_root: Path) -> None:
+    a = KnowledgeFactory(region="us-1", workspace_id="aa" * 16, vault_root=vault_root)
+    b = KnowledgeFactory(region="us-1", workspace_id="bb" * 16, vault_root=vault_root)
+    wa, wb = a.writer(), b.writer()
+    # Each writer's vault root is distinct
+    assert wa._vault.root != wb._vault.root  # noqa: SLF001
