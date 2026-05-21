@@ -35,6 +35,13 @@ class Settings(BaseSettings):
     git_sha: str = "dev"
     version: str = _resolve_version()
 
+    # Sandbox settings (backend.supervisor.sandbox)
+    sandbox_enabled: bool = False
+    docker_host: str = ""
+    sandbox_image: str = "bsvibe-sandbox:latest"
+    sandbox_idle_reap_seconds: int = 1800
+    sandbox_max_concurrent: int = 2
+
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
