@@ -17,8 +17,7 @@ groups by Request.
 
 Public API:
 
-    ctx = await build_project_context(request=…, session=…,
-                                       knowledge_client=…)
+    ctx = await build_project_context(request=…, session=…)
     steps = await decompose_request(ctx, executor=…, model=…)
 """
 
