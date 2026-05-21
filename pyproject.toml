@@ -30,6 +30,7 @@ dev = [
     "anyio>=4",
     "respx>=0.21",
     "types-jsonschema>=4",
+    "aiosqlite>=0.20",
 ]
 
 [build-system]
