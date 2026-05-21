@@ -47,20 +47,21 @@ async def _can_reach_pg() -> bool:
 
 @pytest_asyncio.fixture
 async def db(monkeypatch):
-    if not await _can_reach_pg():
-        pytest.skip(f"Postgres not reachable at {PG_URL}")
     # Provide a deterministic KMS key for the cipher init.
     monkeypatch.setenv("BSVIBE_GATEWAY_KMS_KEY_B64", base64.urlsafe_b64encode(b"0" * 32).decode())
     get_settings.cache_clear()
-    engine = create_async_engine(PG_URL, future=True)
+    use_pg = os.environ.get("BSVIBE_DATABASE_URL") and await _can_reach_pg()
+    url = PG_URL if use_pg else "sqlite+aiosqlite:///:memory:"
+    engine = create_async_engine(url, future=True)
     async with engine.begin() as conn:
         for base in (AccountsBase, CanonicalizationBase):
             await conn.run_sync(base.metadata.create_all)
     sm = async_sessionmaker(engine, expire_on_commit=False)
     yield sm
-    async with engine.begin() as conn:
-        for base in (CanonicalizationBase, AccountsBase):
-            await conn.run_sync(base.metadata.drop_all)
+    if use_pg:
+        async with engine.begin() as conn:
+            for base in (CanonicalizationBase, AccountsBase):
+                await conn.run_sync(base.metadata.drop_all)
     await engine.dispose()
     get_settings.cache_clear()
 

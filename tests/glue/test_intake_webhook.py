@@ -33,16 +33,17 @@ async def _can_reach_pg() -> bool:
 
 @pytest_asyncio.fixture
 async def session() -> AsyncSession:
-    if not await _can_reach_pg():
-        pytest.skip(f"Postgres not reachable at {PG_URL}")
-    engine = create_async_engine(PG_URL, future=True)
+    use_pg = os.environ.get("BSVIBE_DATABASE_URL") and await _can_reach_pg()
+    url = PG_URL if use_pg else "sqlite+aiosqlite:///:memory:"
+    engine = create_async_engine(url, future=True)
     async with engine.begin() as conn:
         await conn.run_sync(IntakeBase.metadata.create_all)
     sm = async_sessionmaker(engine, expire_on_commit=False)
     async with sm() as s:
         yield s
-    async with engine.begin() as conn:
-        await conn.run_sync(IntakeBase.metadata.drop_all)
+    if use_pg:
+        async with engine.begin() as conn:
+            await conn.run_sync(IntakeBase.metadata.drop_all)
     await engine.dispose()
 
 

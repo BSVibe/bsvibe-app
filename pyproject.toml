@@ -56,4 +56,30 @@ source = ["backend"]
 omit = [
     "backend/*/migrations/*",
     "backend/workers/*",
+    # Deferred lift modules — see mypy.ini header for the Bundle ↔ file
+    # mapping. These reference domain types not in Bundle 1's lift envelope
+    # (Request / Direction / Project / WorkPlan / RunAttempt /
+    # VerificationAspect / Decision / Deliverable / Vault primitives) and
+    # are NOT reachable from any HTTP route / worker / test in this PR.
+    # They re-enter coverage measurement per-module as Bundle G / Bundle K
+    # land their lifts.
+    "backend/execution/orchestrator.py",
+    "backend/execution/brief.py",
+    "backend/execution/run_attempt_executor.py",
+    "backend/execution/run_attempts.py",
+    "backend/execution/work_steps.py",
+    "backend/execution/verification.py",
+    "backend/execution/directions.py",
+    "backend/execution/deliverables.py",
+    "backend/execution/repo_deps.py",
+    "backend/execution/advisory_lock.py",
+    "backend/execution/planning/context.py",
+    "backend/execution/planning/decomposer.py",
+    "backend/execution/planning/prompts.py",
+    "backend/execution/verifier/judge.py",
+    "backend/execution/verifier/contract.py",
+    "backend/knowledge/graph/graph_store.py",
+    "backend/knowledge/graph/writer_core.py",
+    "backend/knowledge/graph/vault_backend.py",
+    "backend/knowledge/graph/restricted.py",
 ]

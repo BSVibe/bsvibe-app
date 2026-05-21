@@ -38,17 +38,27 @@ async def _can_reach_pg() -> bool:
 
 @pytest_asyncio.fixture
 async def session() -> AsyncSession:
-    if not await _can_reach_pg():
-        pytest.skip(f"Postgres not reachable at {PG_URL}")
-    engine = create_async_engine(PG_URL, future=True)
+    # Bundle 1 test pattern — in-memory SQLite by default; opt into PG by
+    # setting ``BSVIBE_DATABASE_URL`` to a reachable Postgres DSN.
+    use_pg = os.environ.get("BSVIBE_DATABASE_URL") and await _can_reach_pg()
+    url = PG_URL if use_pg else "sqlite+aiosqlite:///:memory:"
+    engine = create_async_engine(url, future=True)
     async with engine.begin() as conn:
         await conn.run_sync(DeliveryBase.metadata.create_all)
     sm = async_sessionmaker(engine, expire_on_commit=False)
     async with sm() as s:
         yield s
-    async with engine.begin() as conn:
-        await conn.run_sync(DeliveryBase.metadata.drop_all)
+    if use_pg:
+        async with engine.begin() as conn:
+            await conn.run_sync(DeliveryBase.metadata.drop_all)
     await engine.dispose()
+
+
+def _as_aware(dt: datetime) -> datetime:
+    """SQLite drops tz info on ``DateTime(timezone=True)`` round-trips; treat
+    naive values as UTC so the comparison against ``now(tz=UTC)`` works on
+    both PG and SQLite."""
+    return dt if dt.tzinfo is not None else dt.replace(tzinfo=UTC)
 
 
 async def test_enqueue_creates_pending(session: AsyncSession) -> None:
@@ -61,7 +71,7 @@ async def test_enqueue_creates_pending(session: AsyncSession) -> None:
     assert row is not None
     assert row.status is SafeModeStatus.PENDING
     # ~90 days from now, allow 1s tolerance
-    delta = row.expires_at - datetime.now(tz=UTC)
+    delta = _as_aware(row.expires_at) - datetime.now(tz=UTC)
     assert timedelta(days=INITIAL_TTL_DAYS) - delta < timedelta(seconds=5)
 
 
