@@ -1,0 +1,36 @@
+# bsvibe-sandbox — toolchain image for per-project work sandboxes.
+#
+# The work LLM's shell_exec and the verifier's declared `command`
+# checks run inside a container built from this image, not in
+# bsvibe-app (which lacks the project toolchain). A toolchain this
+# image lacks → the declared check is `skipped`, never a false fail.
+#
+# Built + loaded INTO the DinD sidecar by tools/build-sandbox-image.sh
+# (a plain `docker build` is not visible inside the DinD).
+FROM python:3.11-slim-bookworm
+
+# uv — Python package manager.
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /usr/local/bin/
+
+# System basics + Go (apt) + Node 22 (NodeSource — bookworm's apt Node
+# is 18, too old for current pnpm). Per-project custom images are a
+# later refinement.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ca-certificates curl git build-essential golang \
+    && curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
+    && apt-get install -y --no-install-recommends nodejs \
+    && rm -rf /var/lib/apt/lists/* \
+    && npm install -g pnpm \
+    && useradd -m -u 1000 sandbox
+
+# Baseline Python test/lint toolchain so the common Python path works
+# the moment a sandbox starts. Projects may still pin their own via uv.
+RUN uv pip install --system --no-cache pytest ruff
+
+USER sandbox
+WORKDIR /work
+
+# Long-lived idle process: the container stays up so the per-project
+# lifecycle can `docker exec` into it across runs; the manager reaps
+# it on idle.
+CMD ["sleep", "infinity"]
