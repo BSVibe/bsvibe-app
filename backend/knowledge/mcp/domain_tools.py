@@ -33,7 +33,7 @@ from pydantic import BaseModel, ConfigDict, Field
 # host process provides the concrete service implementation. ``service``
 # is ``None`` so the module imports; tool call-sites will raise
 # AttributeError at runtime until the host wires a real implementation.
-service: Any = None  # type: ignore[assignment]
+service: Any = None
 
 from backend.knowledge.mcp.api import Tool, ToolContext, ToolRegistry
 
@@ -65,7 +65,7 @@ class SearchKnowledgeOutput(_PermissiveModel):
     results: list[SearchHit]
 
 
-async def _h_search_knowledge(args: SearchKnowledgeInput, ctx: ToolContext) -> dict[str, Any]:
+async def _h_search_knowledge(args: SearchKnowledgeInput, ctx: ToolContext) -> Any:
     return await service.search_knowledge(ctx.state, args.model_dump())
 
 
@@ -81,7 +81,7 @@ class GetNoteOutput(BaseModel):
     content: str
 
 
-async def _h_get_note(args: GetNoteInput, ctx: ToolContext) -> dict[str, Any]:
+async def _h_get_note(args: GetNoteInput, ctx: ToolContext) -> Any:
     return await service.get_note(ctx.state, args.model_dump())
 
 
@@ -100,7 +100,7 @@ class GetGraphContextOutput(BaseModel):
     has_results: bool
 
 
-async def _h_get_graph_context(args: GetGraphContextInput, ctx: ToolContext) -> dict[str, Any]:
+async def _h_get_graph_context(args: GetGraphContextInput, ctx: ToolContext) -> Any:
     return await service.get_graph_context(ctx.state, args.model_dump())
 
 
@@ -118,7 +118,7 @@ class ListRecentOutput(_PermissiveModel):
     categories: dict[str, list[dict[str, Any]]]
 
 
-async def _h_list_recent(args: ListRecentInput, ctx: ToolContext) -> dict[str, Any]:
+async def _h_list_recent(args: ListRecentInput, ctx: ToolContext) -> Any:
     return await service.list_recent(ctx.state, args.model_dump())
 
 
@@ -138,7 +138,7 @@ class ListByTagOutput(_PermissiveModel):
     results: list[dict[str, Any]]
 
 
-async def _h_list_by_tag(args: ListByTagInput, ctx: ToolContext) -> dict[str, Any]:
+async def _h_list_by_tag(args: ListByTagInput, ctx: ToolContext) -> Any:
     return await service.list_by_tag(ctx.state, args.model_dump())
 
 
@@ -156,7 +156,7 @@ class ListTagsOutput(_PermissiveModel):
     total_unique: int
 
 
-async def _h_list_tags(args: ListTagsInput, ctx: ToolContext) -> dict[str, Any]:
+async def _h_list_tags(args: ListTagsInput, ctx: ToolContext) -> Any:
     return await service.list_tags(ctx.state, args.model_dump())
 
 
@@ -172,7 +172,7 @@ class BrowseCommunitiesOutput(_PermissiveModel):
     total: int
 
 
-async def _h_browse_communities(args: BrowseCommunitiesInput, ctx: ToolContext) -> dict[str, Any]:
+async def _h_browse_communities(args: BrowseCommunitiesInput, ctx: ToolContext) -> Any:
     return await service.browse_communities(ctx.state, args.model_dump())
 
 
@@ -188,7 +188,7 @@ class BrowseEntityOutput(_PermissiveModel):
     found: bool
 
 
-async def _h_browse_entity(args: BrowseEntityInput, ctx: ToolContext) -> dict[str, Any]:
+async def _h_browse_entity(args: BrowseEntityInput, ctx: ToolContext) -> Any:
     return await service.browse_entity(ctx.state, args.model_dump())
 
 
@@ -212,7 +212,7 @@ class CreateNoteOutput(_PermissiveModel):
     compiler_available: bool
 
 
-async def _h_create_note(args: CreateNoteInput, ctx: ToolContext) -> dict[str, Any]:
+async def _h_create_note(args: CreateNoteInput, ctx: ToolContext) -> Any:
     return await service.create_note(ctx.state, args.model_dump(), principal=ctx.user)
 
 

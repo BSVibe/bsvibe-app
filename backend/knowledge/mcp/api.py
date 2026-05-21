@@ -107,7 +107,9 @@ class ToolContext:
     request_id: str | None = None
 
 
-ToolHandler = Callable[[BaseModel, ToolContext], Awaitable[BaseModel]]
+# Handlers may return a ``BaseModel`` or a plain ``dict`` — the dispatcher
+# (``model_validate``) accepts both, so the contract is intentionally permissive.
+ToolHandler = Callable[[Any, ToolContext], Awaitable[Any]]
 
 
 @dataclass
@@ -265,7 +267,7 @@ def _resolve_authz(ctx: ToolContext) -> tuple[Any, Any, Any]:
     dependency uses, so MCP and REST share one OpenFGA client and one
     30s permission cache per process.
     """
-    from bsvibe_authz import get_openfga_client, get_permission_cache, get_settings
+    from backend.shared.authz import get_openfga_client, get_permission_cache, get_settings
 
     settings = ctx.settings
     if settings is None or not hasattr(settings, "openfga_api_url"):
@@ -306,7 +308,7 @@ async def _enforce_permission(tool: Tool, ctx: ToolContext) -> None:
     if user is None:
         raise ToolScopeDenied(f"tool {tool.name!r} requires authentication")
 
-    from bsvibe_authz import check_tenant_permission
+    from backend.shared.authz import check_tenant_permission
 
     settings, fga, cache = _resolve_authz(ctx)
     allowed = await check_tenant_permission(
@@ -338,8 +340,7 @@ async def _safe_audit_emit(tool: Tool, ctx: ToolContext) -> None:
     if outbox is None or not getattr(outbox, "is_open", False):
         return
     try:
-        from bsvibe_audit import AuditActor, AuditResource
-        from bsvibe_audit.events import AuditEventBase
+        from backend.supervisor.audit.events import AuditActor, AuditEventBase, AuditResource
 
         actor = _actor_from_user(ctx.user, AuditActor)
         event = AuditEventBase(

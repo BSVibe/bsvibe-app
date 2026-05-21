@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
+from typing import Any
 
 from sqlalchemy import JSON, DateTime, Index, Integer, String
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
@@ -22,7 +23,7 @@ class IngestBatch(IngestBase):
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
     workspace_id: Mapped[uuid.UUID] = mapped_column(nullable=False, index=True)
     seed_count: Mapped[int] = mapped_column(Integer, nullable=False)
-    decisions: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    decisions: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
     elapsed_ms: Mapped[int] = mapped_column(Integer, nullable=False)
     model_used: Mapped[str | None] = mapped_column(String(255), nullable=True)
     created_at: Mapped[datetime] = mapped_column(

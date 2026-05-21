@@ -15,6 +15,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 from enum import StrEnum
+from typing import Any
 
 from sqlalchemy import JSON, DateTime, ForeignKey, Index, Integer, String, Text
 from sqlalchemy import Enum as SAEnum
@@ -105,7 +106,7 @@ class ExecutionRun(ExecutionBase):
         nullable=False,
         default=RunStatus.OPEN,
     )
-    payload: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=lambda: datetime.now()
     )
@@ -164,7 +165,7 @@ class ExecutionRunActivity(ExecutionBase):
     )
     workspace_id: Mapped[uuid.UUID] = mapped_column(nullable=False, index=True)
     activity_type: Mapped[str] = mapped_column(String(64), nullable=False)
-    payload: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=lambda: datetime.now()
     )
@@ -181,7 +182,7 @@ class CompositionSnapshot(ExecutionBase):
         ForeignKey("execution_runs.id", ondelete="CASCADE"), nullable=False
     )
     workspace_id: Mapped[uuid.UUID] = mapped_column(nullable=False, index=True)
-    composition: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    composition: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=lambda: datetime.now()
     )
@@ -200,7 +201,7 @@ class DecomposerStep(ExecutionBase):
     workspace_id: Mapped[uuid.UUID] = mapped_column(nullable=False, index=True)
     order_idx: Mapped[int] = mapped_column(Integer, nullable=False)
     description: Mapped[str] = mapped_column(Text, nullable=False)
-    payload: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=lambda: datetime.now()
     )
@@ -237,7 +238,7 @@ class WorkStep(ExecutionBase):
         nullable=False,
         default=ProofState.UNTESTED,
     )
-    payload: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=lambda: datetime.now()
     )
@@ -269,7 +270,7 @@ class RunAttempt(ExecutionBase):
         nullable=False,
         default=RunAttemptPhase.PLANNING,
     )
-    payload: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
     started_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=lambda: datetime.now()
     )
@@ -300,7 +301,7 @@ class Deliverable(ExecutionBase):
     )
     artifact_uri: Mapped[str | None] = mapped_column(Text, nullable=True)
     diff_url: Mapped[str | None] = mapped_column(Text, nullable=True)
-    payload: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=lambda: datetime.now()
     )
@@ -320,7 +321,7 @@ class Decision(ExecutionBase):
     decision: Mapped[str] = mapped_column(String(64), nullable=False)
     actor_id: Mapped[uuid.UUID | None] = mapped_column(nullable=True)
     rationale: Mapped[str | None] = mapped_column(Text, nullable=True)
-    payload: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=lambda: datetime.now()
     )
@@ -348,8 +349,8 @@ class VerificationResult(ExecutionBase):
         ),
         nullable=False,
     )
-    contract: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
-    result: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    contract: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    result: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=lambda: datetime.now()
     )

@@ -13,12 +13,19 @@ tests can run against a mocked dependency override.
 from __future__ import annotations
 
 import uuid
-from typing import Annotated
+from collections.abc import AsyncIterator
+from typing import Annotated, Any
 
 from fastapi import Depends, HTTPException, status
+from sqlalchemy.ext.asyncio import (
+    AsyncEngine,
+    AsyncSession,
+    async_sessionmaker,
+    create_async_engine,
+)
 
 
-async def get_current_user() -> dict:
+async def get_current_user() -> dict[str, Any]:
     """Stub — Bundle G replaces with backend.shared.authz.deps."""
     # TODO(bundle-api-integration): wire via backend.shared.authz.deps.dispatch_pat_jwt
     raise HTTPException(
@@ -28,7 +35,7 @@ async def get_current_user() -> dict:
 
 
 async def get_workspace_id(
-    user: Annotated[dict, Depends(get_current_user)],
+    user: Annotated[dict[str, Any], Depends(get_current_user)],
 ) -> uuid.UUID:
     """Pull workspace_id from JWT app_metadata."""
     ws = user.get("workspace_id")
@@ -41,14 +48,14 @@ async def get_workspace_id(
 
 
 async def get_account_id(
-    user: Annotated[dict, Depends(get_current_user)],
+    user: Annotated[dict[str, Any], Depends(get_current_user)],
 ) -> uuid.UUID | None:
     """Pull optional account_id from JWT or request metadata."""
     return uuid.UUID(str(user["account_id"])) if "account_id" in user else None
 
 
 async def require_account_id(
-    user: Annotated[dict, Depends(get_current_user)],
+    user: Annotated[dict[str, Any], Depends(get_current_user)],
 ) -> uuid.UUID:
     """Same as :func:`get_account_id` but 400s if missing — for account-scoped endpoints."""
     if "account_id" not in user:
@@ -59,16 +66,15 @@ async def require_account_id(
     return uuid.UUID(str(user["account_id"]))
 
 
-_async_engine: object | None = None
-_session_factory: object | None = None
+_async_engine: AsyncEngine | None = None
+_session_factory: async_sessionmaker[AsyncSession] | None = None
 
 
-def _get_session_factory():
+def _get_session_factory() -> async_sessionmaker[AsyncSession]:
     """Lazily build a process-wide ``async_sessionmaker`` from settings."""
     global _async_engine, _session_factory  # noqa: PLW0603 — module-level singleton intentional
     if _session_factory is not None:
         return _session_factory
-    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine  # noqa: PLC0415
 
     from backend.config import get_settings  # noqa: PLC0415
 
@@ -78,7 +84,7 @@ def _get_session_factory():
     return _session_factory
 
 
-async def get_db_session():
+async def get_db_session() -> AsyncIterator[AsyncSession]:
     """Yield a request-scoped ``AsyncSession``.
 
     Tests override this dep to inject the test session factory; production

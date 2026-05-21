@@ -74,10 +74,12 @@ class ChatService:
             classification_tier=result.classification.tier,
             actual_cost_cents=result.actual_cost_cents,
         )
+        prompt_tokens = result.response.usage_prompt_tokens
+        completion_tokens = result.response.usage_completion_tokens
         return {
             "id": f"chatcmpl-{uuid.uuid4().hex[:24]}",
             "object": "chat.completion",
-            "model": result.response.model,
+            "model": payload.get("model", ""),
             "choices": [
                 {
                     "index": 0,
@@ -86,9 +88,9 @@ class ChatService:
                 }
             ],
             "usage": {
-                "prompt_tokens": result.response.prompt_tokens,
-                "completion_tokens": result.response.completion_tokens,
-                "total_tokens": result.response.prompt_tokens + result.response.completion_tokens,
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": completion_tokens,
+                "total_tokens": prompt_tokens + completion_tokens,
             },
             "bsvibe": {
                 "classification_tier": result.classification.tier,

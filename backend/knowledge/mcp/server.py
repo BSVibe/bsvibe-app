@@ -32,10 +32,10 @@ from mcp.server import Server
 from mcp.types import TextContent, Tool
 
 # TODO(bundle-k-integration): rewire canon MCP tools (originally bsage.garden.canonicalization.mcp_tools; dropped in lift, will land via backend/api in Bundle API)
-canon_mcp_tools = None  # type: ignore[assignment]
+canon_mcp_tools: Any = None
 # TODO(bundle-k-integration): rewire plugin_bridge — Bundle API will inject the
 # plugin dispatch surface. Stubbed to None so the module imports cleanly.
-plugin_bridge = None  # type: ignore[assignment]
+plugin_bridge: Any = None
 # TODO(bundle-k-integration): wire to dev/transport (out of scope) -- original: from bsage.mcp.admin_tools import register_admin_tools
 
 
@@ -107,14 +107,15 @@ def build_server(state: Any) -> Server:
     server: Server = Server(SERVER_NAME)
     registry = _build_registry(state)
 
-    @server.list_tools()
+    @server.list_tools()  # type: ignore[no-untyped-call,untyped-decorator]
     async def _list_tools() -> list[Tool]:
         tools: list[Tool] = list(registry.list_tools())
-        plugin_tools = await plugin_bridge.list_plugins_as_tools(state)
-        tools.extend(_dict_to_tool(t) for t in plugin_tools)
+        if plugin_bridge is not None:
+            plugin_tools = await plugin_bridge.list_plugins_as_tools(state)
+            tools.extend(_dict_to_tool(t) for t in plugin_tools)
         return tools
 
-    @server.call_tool()
+    @server.call_tool()  # type: ignore[untyped-decorator]
     async def _call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
         result = await _dispatch_via_registry(state, registry, name, arguments or {})
         return [TextContent(type="text", text=json.dumps(result, default=str))]
@@ -167,7 +168,7 @@ def _authz_context() -> tuple[Any, Any, Any]:
     process-wide singletons the REST ``require_permission`` dependency
     uses so MCP and REST share one OpenFGA client + one 30s cache.
     """
-    from bsvibe_authz import get_openfga_client, get_permission_cache, get_settings
+    from backend.shared.authz import get_openfga_client, get_permission_cache, get_settings
 
     authz_settings = get_settings()
     return (
@@ -229,6 +230,8 @@ async def _dispatch_via_registry(
             # the MCP framework's call_tool wrapper can render it as
             # error content.
             raise
+    if plugin_bridge is None:
+        raise ToolError(f"tool {name!r} not registered and plugin_bridge unwired")
     return await plugin_bridge.invoke_plugin_as_tool(state, name, arguments)
 
 

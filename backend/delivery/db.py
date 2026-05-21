@@ -10,6 +10,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 from enum import StrEnum
+from typing import Any
 
 from sqlalchemy import JSON, DateTime, Index, String
 from sqlalchemy import Enum as SAEnum
@@ -51,7 +52,7 @@ class DeliveryEventRow(DeliveryBase):
     workspace_id: Mapped[uuid.UUID] = mapped_column(nullable=False, index=True)
     deliverable_id: Mapped[uuid.UUID] = mapped_column(nullable=False)
     artifact_type: Mapped[str] = mapped_column(String(64), nullable=False)
-    payload: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=lambda: datetime.now()
     )

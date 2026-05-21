@@ -16,6 +16,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 from enum import StrEnum
+from typing import Any
 
 from sqlalchemy import JSON, DateTime, ForeignKey, Index, String, Text, UniqueConstraint
 from sqlalchemy import Enum as SAEnum
@@ -136,8 +137,8 @@ class CanonicalizationProposal(CanonicalizationBase):
         nullable=False,
     )
     action_path: Mapped[str] = mapped_column(String(512), nullable=False)
-    payload: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
-    evidence: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    evidence: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     status: Mapped[ProposalStatus] = mapped_column(
         SAEnum(
             ProposalStatus,
@@ -205,7 +206,7 @@ class CanonicalizationPolicy(CanonicalizationBase):
         ),
         nullable=False,
     )
-    config: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    config: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=lambda: datetime.now()
     )

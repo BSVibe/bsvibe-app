@@ -48,7 +48,7 @@ class AuditEventBase(BaseModel):
     DEFAULT_EVENT_TYPE: ClassVar[str | None] = None
 
     event_id: UUID = Field(default_factory=uuid4)
-    event_type: str
+    event_type: str = ""
     occurred_at: datetime = Field(default_factory=_utcnow)
     actor: AuditActor
     tenant_id: str | None = None
