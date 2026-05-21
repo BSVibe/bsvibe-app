@@ -19,6 +19,7 @@ from sqlalchemy.ext.asyncio import async_engine_from_config
 from backend.accounts.models import AccountsBase
 from backend.config import get_settings
 from backend.gateway.budget.models import GatewayBudgetBase
+from backend.gateway.rules.db import GatewayRulesBase
 from backend.supervisor.audit.models import AuditOutboxBase, SupervisorBase
 
 config = context.config
@@ -58,7 +59,13 @@ class _MergedMetadata:
 
 
 target_metadata = _MergedMetadata(
-    [AccountsBase, GatewayBudgetBase, SupervisorBase, AuditOutboxBase]
+    [
+        AccountsBase,
+        GatewayBudgetBase,
+        GatewayRulesBase,
+        SupervisorBase,
+        AuditOutboxBase,
+    ]
 )
 
 
