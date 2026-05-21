@@ -11,7 +11,9 @@ services:
       - default
 
   postgres:
-    image: postgres:16-alpine
+    # pgvector/pgvector:pg16 = postgres:16 + pgvector extension preinstalled.
+    # Required for `CREATE EXTENSION vector` in the 1.5b migration.
+    image: pgvector/pgvector:pg16
     restart: unless-stopped
     environment:
       POSTGRES_USER: bsvibe

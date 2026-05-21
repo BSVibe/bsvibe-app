@@ -15,7 +15,9 @@ jobs:
 
     services:
       postgres:
-        image: postgres:16-alpine
+        # pgvector/pgvector:pg16 = postgres:16 + pgvector extension.
+        # Required by the 1.5b migration's `CREATE EXTENSION vector`.
+        image: pgvector/pgvector:pg16
         env:
           POSTGRES_USER: bsvibe
           POSTGRES_PASSWORD: bsvibe
@@ -66,6 +68,9 @@ jobs:
 
       - name: mypy --strict (backend/)
         run: uv run mypy backend/
+
+      - name: alembic upgrade head (fresh-PG migration smoke)
+        run: uv run alembic upgrade head
 
       - name: pytest with coverage (smoke + unit)
         run: uv run pytest --cov=backend --cov-fail-under=80 -v
