@@ -83,9 +83,9 @@ class CanonicalizationIndexSubscriber:
 
         # External vault edits — only canon-rooted paths matter to us.
         if event.event_type in (EventType.NOTE_UPDATED, EventType.NOTE_DELETED):
-            path = payload.get("path")
-            if isinstance(path, str):
-                normalized = _normalize_canon_path(path)
+            raw_path = payload.get("path")
+            if isinstance(raw_path, str):
+                normalized = _normalize_canon_path(raw_path)
                 if normalized is not None:
                     await self._safe_invalidate(normalized)
 

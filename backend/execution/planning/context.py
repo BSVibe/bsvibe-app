@@ -61,11 +61,12 @@ async def build_project_context(
     direction_id = getattr(request, "origin_direction_id", None)
     if direction_id is not None:
         try:
-            from backend.execution.directions import Direction  # noqa: PLC0415
-
-            direction = await session.get(Direction, direction_id)
-            if direction is not None:
-                direction_body = getattr(direction, "body", None)
+            direction_mod = __import__("backend.execution.directions", fromlist=["Direction"])
+            direction_cls = getattr(direction_mod, "Direction", None)
+            if direction_cls is not None:
+                direction = await session.get(direction_cls, direction_id)
+                if direction is not None:
+                    direction_body = getattr(direction, "body", None)
         except Exception as exc:  # noqa: BLE001 — degrade context, never block dispatch
             logger.warning(
                 "project_context_direction_lookup_failed",

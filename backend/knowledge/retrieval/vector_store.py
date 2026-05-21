@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 import struct
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 
 import aiosqlite
@@ -90,11 +91,11 @@ class VectorStore:
             raise RuntimeError(msg)
         return self._db
 
-    async def _submit_write(self, op):
+    async def _submit_write(self, op: Callable[[], Awaitable[None]]) -> None:
         if self._write_queue is None:
             msg = "VectorStore not initialized — call initialize() first"
             raise RuntimeError(msg)
-        return await self._write_queue.submit(op)
+        await self._write_queue.submit(op)
 
     async def store(self, note_path: str, embedding: list[float]) -> None:
         """Store or update an embedding for a note.

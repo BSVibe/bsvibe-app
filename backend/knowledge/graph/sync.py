@@ -70,7 +70,7 @@ class PluginSyncAdapter:
 
     @property
     def name(self) -> str:
-        return self._meta.name
+        return str(self._meta.name)
 
     async def sync(self, event: WriteEvent) -> None:
         event_data = {

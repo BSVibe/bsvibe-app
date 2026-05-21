@@ -160,7 +160,8 @@ class OntologyRegistry:
         def _read() -> dict[str, Any] | None:
             if self._path.exists():
                 with open(self._path) as f:
-                    return yaml.safe_load(f)
+                    loaded = yaml.safe_load(f)
+                    return loaded if isinstance(loaded, dict) else None
             return None
 
         loaded = await asyncio.to_thread(_read)
@@ -236,7 +237,8 @@ class OntologyRegistry:
         types = self._data.get("relation_types", {})
         entry = types.get(rel_type)
         if entry:
-            return entry.get("inverse")
+            inverse = entry.get("inverse")
+            return str(inverse) if inverse is not None else None
         return None
 
     # ------------------------------------------------------------------

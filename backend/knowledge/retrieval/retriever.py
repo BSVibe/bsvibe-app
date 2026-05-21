@@ -300,7 +300,10 @@ class VaultRetriever:
         """Full reindex of vault notes via FileIndexReader."""
         if self._index_reader is None:
             raise RuntimeError("Index reader not configured")
-        await self._index_reader.rebuild_all()
+        rebuild_all = getattr(self._index_reader, "rebuild_all", None)
+        if rebuild_all is None:
+            raise RuntimeError("Configured IndexReader does not support rebuild_all()")
+        await rebuild_all()
         summaries = await self._index_reader.get_all_summaries()
         logger.info("reindex_complete", total=len(summaries))
         return len(summaries)

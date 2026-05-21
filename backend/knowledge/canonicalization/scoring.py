@@ -132,7 +132,8 @@ class CanonicalizationScorer:
         if policy is None:
             return None
         caps = policy.params.get("safe_mode_on", {}).get("max_affected_paths", {})
-        return caps.get(action_kind)
+        value = caps.get(action_kind)
+        return int(value) if value is not None else None
 
     @staticmethod
     def _cannot_link_threshold(policy: models.PolicyEntry | None) -> float:

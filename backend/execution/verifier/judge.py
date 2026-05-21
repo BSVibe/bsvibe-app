@@ -22,9 +22,7 @@ from typing import Any
 import structlog
 
 from backend.execution._domain import ProofAspectStatus
-
-# TODO(bundle-x-integration): out-of-scope source dep -- backend.src.core.executor_config.protocol
-# from backend.src.core.executor_config.protocol import ExecutorClient
+from backend.execution._executor_protocol import ExecutorClient
 
 logger = structlog.get_logger(__name__)
 

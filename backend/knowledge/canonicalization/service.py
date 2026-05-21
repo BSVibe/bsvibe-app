@@ -193,13 +193,13 @@ class CanonicalizationService:
             if not paths.is_valid_concept_id(concept):
                 msg = f"create-concept needs valid 'concept' param: {concept!r}"
                 raise ValueError(msg)
-            return concept
+            return str(concept)
         if kind == "merge-concepts":
             canonical = params.get("canonical", "")
             if not paths.is_valid_concept_id(canonical):
                 msg = f"merge-concepts needs valid 'canonical' param: {canonical!r}"
                 raise ValueError(msg)
-            return canonical
+            return str(canonical)
         if kind == "create-decision":
             # Slug derived from decision_path stem (after the timestamp).
             dp = params.get("decision_path", "")
@@ -217,7 +217,7 @@ class CanonicalizationService:
                 # Fallback: use first subject if extraction fails
                 subjects = params.get("subjects") or []
                 stem = "-".join(s for s in subjects if isinstance(s, str)) or "decision"
-            return stem
+            return str(stem)
         # retag-notes / other kinds: caller must supply slug
         msg = f"slug required for action kind {kind!r}"
         raise ValueError(msg)
@@ -306,6 +306,8 @@ class CanonicalizationService:
         """
         result = models.ExpireResult()
         cutoff = _aware_dt(now or self._clock())
+        if self._index is None:
+            return result
 
         # Actions
         for entry in await self._index.list_actions():

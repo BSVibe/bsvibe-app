@@ -93,7 +93,7 @@ def slugify(title: str) -> str:
     return slug
 
 
-def build_frontmatter(metadata: dict) -> str:
+def build_frontmatter(metadata: dict[str, Any]) -> str:
     """Build YAML frontmatter block from a dict."""
     dumped = yaml.dump(metadata, default_flow_style=False, allow_unicode=True).strip()
     return f"---\n{dumped}\n---\n"

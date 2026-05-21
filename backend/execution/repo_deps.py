@@ -175,11 +175,11 @@ async def ensure_repo_dependencies(
             status="installed", detail="; ".join(devcontainer_commands), source="devcontainer"
         )
 
-    command = _heuristic_install_command(root)
-    if command is None:
+    heuristic_command = _heuristic_install_command(root)
+    if heuristic_command is None:
         return InstallResult(status="skipped", detail="no devcontainer and no dependency manifest")
 
-    ok, detail = await _run_setup(sandbox_session, command)
+    ok, detail = await _run_setup(sandbox_session, heuristic_command)
     if not ok:
         return InstallResult(status="failed", detail=detail, source="heuristic")
     logger.info("repo_env_ready", source="heuristic", command=command)

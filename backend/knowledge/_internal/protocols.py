@@ -13,13 +13,13 @@ from typing import Any, Protocol
 class RunnerLike(Protocol):
     """Protocol for objects that can execute plugins or skills."""
 
-    async def run(self, meta: Any, context: Any) -> dict: ...
+    async def run(self, meta: Any, context: Any) -> dict[str, Any]: ...
 
 
 class NotifyRunnerLike(Protocol):
     """Protocol for runners that support notification entrypoints."""
 
-    async def run_notify(self, meta: Any, context: Any) -> dict: ...
+    async def run_notify(self, meta: Any, context: Any) -> dict[str, Any]: ...
 
 
 class ContextBuilderLike(Protocol):

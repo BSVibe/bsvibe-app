@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import dataclasses
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import structlog
 
@@ -101,7 +101,7 @@ class GraphSubscriber:
             logger.warning("graph_on_write_failed", path=path_str, exc_info=True)
 
     @staticmethod
-    def _check_fact_conflicts(rel_path: str, content: str, entities: list) -> None:
+    def _check_fact_conflicts(rel_path: str, content: str, entities: list[Any]) -> None:
         """Log potential conflicts when a fact note is indexed."""
         from backend.knowledge.graph.markdown_utils import extract_frontmatter
 

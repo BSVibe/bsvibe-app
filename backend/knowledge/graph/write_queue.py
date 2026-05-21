@@ -80,8 +80,8 @@ _STOP = object()
 
 @dataclass
 class _PendingOp:
-    op: WriteOp
-    future: asyncio.Future = field(repr=False)
+    op: WriteOp[Any]
+    future: asyncio.Future[Any] = field(repr=False)
 
 
 class SQLiteWriteQueue:
@@ -179,7 +179,8 @@ class SQLiteWriteQueue:
         # ``_pending_put`` state to race.
         assert self._queue is not None
         await self._queue.put(pending)
-        return await pending.future
+        result: T = await pending.future
+        return result
 
     async def try_submit(self, op: WriteOp[T]) -> asyncio.Future[T]:
         """Enqueue ``op`` without blocking; raise if the queue is full.

@@ -23,6 +23,7 @@ from typing import Any
 import structlog
 
 from backend.knowledge.canonicalization import models, paths
+from backend.knowledge.canonicalization.evidence import EvidenceSource
 from backend.knowledge.canonicalization.evidence import envelope as _evidence_envelope
 from backend.knowledge.canonicalization.index import CanonicalizationIndex
 from backend.knowledge.canonicalization.store import NoteStore
@@ -351,7 +352,7 @@ def _envelope(
     schema_version: str,
     payload: dict[str, Any],
     observed_at: datetime,
-    source: str = "deterministic",
+    source: EvidenceSource = "deterministic",
     producer: str = _GENERATOR_NAME,
 ) -> dict[str, Any]:
     """Thin wrapper over evidence.envelope() — kept positional-arg
@@ -483,7 +484,8 @@ class BalancedProposer(DeterministicProposer):
             for j in range(i + 1, len(ids)):
                 cos = _cosine_similarity(vectors[i], vectors[j])
                 if cos >= self._embedding_threshold:
-                    key = tuple(sorted((ids[i], ids[j])))
+                    sorted_ids = sorted((ids[i], ids[j]))
+                    key = (sorted_ids[0], sorted_ids[1])
                     pairs[key] = cos
         self._embedding_pairs = pairs
         return pairs
@@ -524,7 +526,8 @@ class BalancedProposer(DeterministicProposer):
 
         # Embedding KNN evidence (source=model — embedding output is model-derived)
         for old_id in merge:
-            key = tuple(sorted((canonical, old_id)))
+            sorted_pair = sorted((canonical, old_id))
+            key = (sorted_pair[0], sorted_pair[1])
             cosine = self._embedding_pairs.get(key)
             if cosine is None:
                 continue

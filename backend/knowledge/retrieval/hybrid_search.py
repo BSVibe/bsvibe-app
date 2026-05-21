@@ -215,10 +215,19 @@ async def hybrid_search(
     if embed_fn is not None:
         tasks.append(_vector_search(backend, query, embed_fn, limit=limit * 2))
 
-    lists = await asyncio.gather(*tasks, return_exceptions=True)
-    bm25_list = lists[0] if not isinstance(lists[0], Exception) else []
-    graph_list = lists[1] if not isinstance(lists[1], Exception) else []
-    vector_list = lists[2] if len(lists) > 2 and not isinstance(lists[2], Exception) else []
+    raw_lists = await asyncio.gather(*tasks, return_exceptions=True)
+
+    def _ok(idx: int) -> list[GraphEntity]:
+        if idx >= len(raw_lists):
+            return []
+        value = raw_lists[idx]
+        if isinstance(value, BaseException):
+            return []
+        return value
+
+    bm25_list = _ok(0)
+    graph_list = _ok(1)
+    vector_list = _ok(2)
 
     # RRF fusion
     scores: dict[str, float] = {}

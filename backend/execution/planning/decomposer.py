@@ -20,8 +20,9 @@ from typing import Any
 
 import structlog
 
-# TODO(bundle-x-integration): out-of-scope source dep -- backend.src.core.executor_config.protocol
-# from backend.src.core.executor_config.protocol import ExecutorClient
+# Narrow Protocol stub until BSNexus' full ExecutorClient lands. See
+# backend.execution._executor_protocol for the contract.
+from backend.execution._executor_protocol import ExecutorClient
 from backend.execution.planning.context import ProjectContext
 from backend.execution.planning.prompts import render_decomposer_messages
 from backend.execution.work_steps import WorkStepDraft
