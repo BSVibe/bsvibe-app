@@ -155,7 +155,7 @@ def _execution_deps(
     llm = _scripted_verified_run()
     return AgentExecutionDeps(
         skill_loader=SkillLoader(workspace_root / "skills"),
-        orchestrator_factory=lambda session: RunOrchestrator(
+        orchestrator_factory=lambda session, _run: RunOrchestrator(
             session=session, llm=llm, sandbox_manager=NoopSandboxManager()
         ),
         workspace_root=workspace_root,

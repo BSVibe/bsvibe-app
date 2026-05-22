@@ -58,6 +58,28 @@ services:
     ports:
       - "8700:8000"
 
+  worker:
+    # The production worker daemon — runs every DB-polling worker with real
+    # dependencies (intake → agent → delivery → settle → relay). Same image +
+    # env as the API service; just a different entrypoint command.
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.backend
+      args:
+        GIT_SHA: ${GIT_SHA:-dev}
+    restart: unless-stopped
+    command: ["uv", "run", "python", "-m", "backend.workers"]
+    environment:
+      BSVIBE_DATABASE_URL: postgresql+asyncpg://bsvibe:bsvibe@postgres:5432/bsvibe
+      BSVIBE_REDIS_URL: redis://redis:6379/0
+      BSVIBE_ENVIRONMENT: dev
+      BSVIBE_GIT_SHA: ${GIT_SHA:-dev}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
   pwa:
     build:
       context: ..

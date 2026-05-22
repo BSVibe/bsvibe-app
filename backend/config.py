@@ -68,6 +68,11 @@ class Settings(BaseSettings):
     # Layout: ``<skills_root>/<workspace_id>/*.md`` per Workflow §6 #5.
     skills_root: str = "var/skills"
 
+    # Worker runtime (backend.workers.run) — each ExecutionRun drives inside
+    # ``<run_workspace_root>/<run_id>/``. The agent loop mounts this dir into
+    # the sandbox; the work LLM's file writes land here.
+    run_workspace_root: str = "var/runs"
+
     # Execution settings — agent loop budgets per Workflow §3 + memory
     # ``bsnexus-budget-handoff-design``. Operator may tune for local-LLM
     # vs frontier-model deployments; defaults match Cycle 7-14 dogfood
