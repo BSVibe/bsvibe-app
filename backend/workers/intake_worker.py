@@ -1,32 +1,98 @@
 """IntakeWorker — drain TriggerEvents into Requests.
 
-Workflow §12.5 #8 (Bundle G — Workers). Consumes the ``intake`` Redis
-Stream (which the API surface pushes :class:`TriggerEvent` deliveries
-into) and creates the matching :class:`RequestRow`.
+Workflow §12.5 #8 (Bundle G — Workers). DB-polling implementation (not
+Redis Streams) — pulls :class:`TriggerEventRow` rows that have no paired
+:class:`RequestRow` yet, claims them via row-update, and mints the
+matching ``Request`` (status ``OPEN``) so the :class:`AgentWorker` can
+pick it up.
+
+The Redis Streams variant (consumer-group + XACK) remains a TODO — for
+Phase 1 the DB-polling path is simpler to reason about and
+integration-test, mirroring :mod:`backend.workers.agent_worker`. A
+TriggerEvent is "drained" exactly once because the unprocessed query is
+``NOT EXISTS (request with this trigger_event_id)``; once the Request is
+committed the event no longer matches.
 """
 
 from __future__ import annotations
 
+import uuid
+from collections.abc import AsyncIterator
+from dataclasses import dataclass
+from datetime import UTC, datetime
+
 import structlog
+from sqlalchemy import exists, select
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+from backend.intake.db import RequestRow, RequestStatus, TriggerEventRow
+from backend.workers.base import BaseWorker
 
 logger = structlog.get_logger(__name__)
 
 
-class IntakeWorker:
-    """Consumer-group worker for the ``intake`` Redis Stream."""
-
-    async def start(self) -> None:
-        """For each TriggerEvent: idempotency check → RequestRow insert."""
-        # TODO(bundle-g-integration): lift from BSNexus
-        # backend/workers/request_worker.py (RequestWorker rename).
-        logger.debug("intake_worker_start_stub")
-        raise NotImplementedError("IntakeWorker.start pending Bundle G integration")
-
-    async def stop(self) -> None:
-        """Graceful drain."""
-        # TODO(bundle-g-integration): cancel + close.
-        logger.debug("intake_worker_stop_stub")
-        raise NotImplementedError("IntakeWorker.stop pending Bundle G integration")
+@dataclass(slots=True)
+class IntakeWorkerConfig:
+    batch_size: int = 50
+    poll_interval_s: float = 5.0
 
 
-__all__ = ["IntakeWorker"]
+class IntakeWorker(BaseWorker):
+    """DB-polling worker that turns un-drained TriggerEvents into Requests."""
+
+    def __init__(
+        self,
+        *,
+        session_factory: async_sessionmaker[AsyncSession],
+        config: IntakeWorkerConfig | None = None,
+    ) -> None:
+        self._cfg = config or IntakeWorkerConfig()
+        super().__init__(name="intake_worker", poll_interval_s=self._cfg.poll_interval_s)
+        self._session_factory = session_factory
+
+    async def _tick(self) -> int:
+        return await self.drain_once()
+
+    async def drain_once(self) -> int:
+        """Drain one batch of un-drained TriggerEvents into Requests. Returns count."""
+        count = 0
+        async with self._session_factory() as session:
+            async for trig in self._claim_batch(session):
+                now = datetime.now(tz=UTC)
+                session.add(
+                    RequestRow(
+                        id=uuid.uuid4(),
+                        workspace_id=trig.workspace_id,
+                        trigger_event_id=trig.id,
+                        status=RequestStatus.OPEN,
+                        payload=dict(trig.payload or {}),
+                        created_at=now,
+                        updated_at=now,
+                    )
+                )
+                logger.info(
+                    "intake_worker_request_created",
+                    trigger_event_id=str(trig.id),
+                    workspace_id=str(trig.workspace_id),
+                    source=trig.source,
+                )
+                count += 1
+            await session.commit()
+        return count
+
+    async def _claim_batch(self, session: AsyncSession) -> AsyncIterator[TriggerEventRow]:
+        """Yield up to ``batch_size`` TriggerEvents that have no Request yet."""
+        already_drained = exists().where(RequestRow.trigger_event_id == TriggerEventRow.id)
+        stmt = (
+            select(TriggerEventRow)
+            .where(~already_drained)
+            .order_by(TriggerEventRow.received_at.asc())
+            .limit(self._cfg.batch_size)
+            .with_for_update(skip_locked=True)
+        )
+        rows = (await session.execute(stmt)).scalars().all()
+        for r in rows:
+            yield r
+
+
+__all__ = ["IntakeWorker", "IntakeWorkerConfig"]

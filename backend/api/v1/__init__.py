@@ -10,6 +10,7 @@ from backend.api.v1 import (
     chat,
     decisions,
     intents,
+    messages,
     presets,
     products,
     rules,
@@ -37,5 +38,6 @@ router.include_router(skills.router, prefix="/skills", tags=["skills"])
 router.include_router(decisions.router, prefix="/decisions", tags=["decisions"])
 router.include_router(api_settings.router, prefix="/settings", tags=["settings"])
 router.include_router(runs.router, prefix="/runs", tags=["runs"])
+router.include_router(messages.router, prefix="/messages", tags=["messages"])
 
 __all__ = ["router"]
