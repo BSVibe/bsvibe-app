@@ -18,7 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from backend.execution.db import ExecutionRun, RunStatus
 from backend.identity.db import MembershipRow, UserRow
-from backend.workspaces.db import ProductRow
+from backend.workspaces.db import ProductRow, WorkspaceRow
 
 from .conftest import seed_user_workspace
 
@@ -161,6 +161,35 @@ async def test_workspaces_list_only_my_memberships(
         # B's workspace is not directly readable by A.
         r = await c.get(f"/api/v1/workspaces/{ws_b.id}")
         assert r.status_code == 404, r.text
+
+
+async def test_delete_workspace_is_soft_delete(
+    authed_client_factory, session_factory: async_sessionmaker[AsyncSession]
+) -> None:
+    """§10.7 — delete is soft (deleted_at), not a hard row removal."""
+    async with session_factory() as s:
+        _u, ws, _m = await seed_user_workspace(s, supabase_user_id="user-a")
+
+    async with authed_client_factory("user-a") as c:
+        r = await c.delete(f"/api/v1/workspaces/{ws.id}")
+        assert r.status_code == 204, r.text
+        # Gone from the caller's view.
+        r = await c.get("/api/v1/workspaces")
+        assert r.json() == []
+        r = await c.get(f"/api/v1/workspaces/{ws.id}")
+        assert r.status_code == 404
+
+    # Row still present, stamped deleted_at; the owner's membership ended.
+    async with session_factory() as s:
+        row = await s.get(WorkspaceRow, ws.id)
+        assert row is not None
+        assert row.deleted_at is not None
+        membership = (
+            (await s.execute(select(MembershipRow).where(MembershipRow.workspace_id == ws.id)))
+            .scalars()
+            .one()
+        )
+        assert membership.left_at is not None
 
 
 async def test_create_workspace_grants_owner_membership(

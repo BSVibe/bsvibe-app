@@ -27,6 +27,13 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
+    # Workflow §10.7 — workspace soft delete. Nullable; no backfill needed
+    # (NULL = active).
+    op.add_column(
+        "workspaces",
+        sa.Column("deleted_at", sa.DateTime(timezone=True), nullable=True),
+    )
+
     op.create_table(
         "users",
         sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True),
@@ -68,3 +75,4 @@ def downgrade() -> None:
     op.drop_table("memberships")
     op.drop_index("ix_users_supabase_user_id", table_name="users")
     op.drop_table("users")
+    op.drop_column("workspaces", "deleted_at")

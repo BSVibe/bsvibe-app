@@ -32,6 +32,9 @@ class WorkspaceRow(WorkspacesBase):
         default=lambda: datetime.now(),
         onupdate=lambda: datetime.now(),
     )
+    # Soft delete (Workflow §10.7): set on delete; the 30-day-window hard
+    # purge + full cascade is a retention-infra follow-up.
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class ProductRow(WorkspacesBase):

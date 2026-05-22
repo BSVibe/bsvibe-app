@@ -11,7 +11,7 @@ appears — every operation is gated on the caller having an active
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -53,14 +53,10 @@ class WorkspaceResponse(BaseModel):
     updated_at: datetime
 
 
-async def _owned_workspace(
+async def _active_membership(
     session: AsyncSession, user: UserRow, workspace_id: uuid.UUID
-) -> WorkspaceRow:
-    """Return the workspace iff the caller has an active membership, else 404.
-
-    404 (not 403) so a non-member cannot probe which workspace ids exist.
-    """
-    membership = (
+) -> MembershipRow | None:
+    return (
         (
             await session.execute(
                 select(MembershipRow).where(
@@ -73,8 +69,19 @@ async def _owned_workspace(
         .scalars()
         .first()
     )
+
+
+async def _owned_workspace(
+    session: AsyncSession, user: UserRow, workspace_id: uuid.UUID
+) -> WorkspaceRow:
+    """Return the live workspace iff the caller has an active membership, else 404.
+
+    404 (not 403) so a non-member cannot probe which workspace ids exist.
+    Soft-deleted workspaces (``deleted_at`` set) are treated as gone.
+    """
+    membership = await _active_membership(session, user, workspace_id)
     row = await session.get(WorkspaceRow, workspace_id) if membership is not None else None
-    if row is None:
+    if row is None or row.deleted_at is not None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail=f"Workspace {workspace_id} not found"
         )
@@ -91,7 +98,11 @@ async def list_workspaces(
             await session.execute(
                 select(WorkspaceRow)
                 .join(MembershipRow, MembershipRow.workspace_id == WorkspaceRow.id)
-                .where(MembershipRow.user_id == user.id, MembershipRow.left_at.is_(None))
+                .where(
+                    MembershipRow.user_id == user.id,
+                    MembershipRow.left_at.is_(None),
+                    WorkspaceRow.deleted_at.is_(None),
+                )
                 .order_by(WorkspaceRow.created_at.desc())
             )
         )
@@ -152,6 +163,13 @@ async def delete_workspace(
     user: Annotated[UserRow, Depends(get_current_user_row)],
     session: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> None:
+    # Workflow §10.7 — soft delete: stamp deleted_at and end the caller's
+    # membership. Row is retained for the 30-day window; the hard purge +
+    # full cascade is a retention-infra follow-up.
     row = await _owned_workspace(session, user, workspace_id)
-    await session.delete(row)
+    now = datetime.now(UTC)
+    row.deleted_at = now
+    membership = await _active_membership(session, user, workspace_id)
+    if membership is not None:
+        membership.left_at = now
     await session.commit()

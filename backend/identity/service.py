@@ -12,6 +12,7 @@ from __future__ import annotations
 import uuid
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.identity.db import MembershipRow, UserRow
@@ -51,6 +52,35 @@ async def resolve_workspace_id(session: AsyncSession, *, supabase_user_id: str) 
     return membership.workspace_id if membership is not None else None
 
 
+async def _get_or_create_user(
+    session: AsyncSession, supabase_user_id: str, email: str | None
+) -> UserRow:
+    """Return the user row, creating it if absent.
+
+    On a concurrent first-login the insert may collide with the unique
+    ``supabase_user_id``; that ``IntegrityError`` is caught and the row the
+    winner created is re-fetched and reused. The rollback is safe because
+    bootstrap is the first DB work in the request transaction.
+    """
+    user = await get_user_by_supabase_id(session, supabase_user_id)
+    if user is not None:
+        if email and user.email != email:
+            user.email = email
+        return user
+
+    user = UserRow(id=uuid.uuid4(), supabase_user_id=supabase_user_id, email=email)
+    session.add(user)
+    try:
+        await session.flush()
+    except IntegrityError:
+        await session.rollback()
+        existing = await get_user_by_supabase_id(session, supabase_user_id)
+        if existing is None:  # pragma: no cover — a unique violation implies it exists
+            raise
+        return existing
+    return user
+
+
 async def ensure_user_bootstrapped(
     session: AsyncSession,
     *,
@@ -63,14 +93,19 @@ async def ensure_user_bootstrapped(
     Idempotent: a returning user with an existing membership keeps it; only a
     brand-new or workspace-less user gets a fresh Workspace + owner Membership.
     Commits before returning.
+
+    Concurrency-safe for the first-login race: a duplicate user insert is
+    caught + re-resolved, and the membership bootstrap is serialized with a
+    ``SELECT … FOR UPDATE`` on the user row (a no-op on SQLite, where the test
+    suite runs single-connection). Two simultaneous first-logins therefore
+    converge on one user + one workspace.
     """
-    user = await get_user_by_supabase_id(session, supabase_user_id)
-    if user is None:
-        user = UserRow(id=uuid.uuid4(), supabase_user_id=supabase_user_id, email=email)
-        session.add(user)
-        await session.flush()
-    elif email and user.email != email:
-        user.email = email
+    user = await _get_or_create_user(session, supabase_user_id, email)
+
+    # Serialize the membership bootstrap on the user row: the second of two
+    # racing logins blocks here until the first commits, then sees its
+    # membership and skips creating a duplicate workspace.
+    await session.execute(select(UserRow).where(UserRow.id == user.id).with_for_update())
 
     membership = await active_membership_for_user(session, user.id)
     if membership is None:

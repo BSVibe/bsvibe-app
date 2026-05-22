@@ -7,6 +7,7 @@ import uuid
 import pytest
 from sqlalchemy import select
 
+from backend.identity import service
 from backend.identity.db import MembershipRow, UserRow
 from backend.identity.service import (
     active_membership_for_user,
@@ -88,6 +89,39 @@ async def test_resolve_workspace_id_none_when_user_has_no_membership() -> None:
         s.add(UserRow(id=uuid.uuid4(), supabase_user_id="lonely", email=None))
         await s.commit()
         assert await resolve_workspace_id(s, supabase_user_id="lonely") is None
+
+
+async def test_bootstrap_recovers_from_concurrent_user_insert(monkeypatch) -> None:
+    """Simulate a racing first-login: the user row already exists (the other
+    txn won) but our first lookup misses, so the insert hits the unique
+    constraint. Bootstrap must recover (re-fetch + reuse), not crash, and not
+    create a duplicate user/workspace.
+    """
+    async with memory_session() as s:
+        s.add(UserRow(id=uuid.uuid4(), supabase_user_id="sb-1", email="a@x.io"))
+        await s.commit()
+
+        real = service.get_user_by_supabase_id
+        calls = {"n": 0}
+
+        async def flaky_lookup(session, supabase_user_id):  # type: ignore[no-untyped-def]
+            calls["n"] += 1
+            if calls["n"] == 1:
+                return None  # first lookup misses → forces the insert path
+            return await real(session, supabase_user_id)
+
+        monkeypatch.setattr(service, "get_user_by_supabase_id", flaky_lookup)
+
+        user, membership = await ensure_user_bootstrapped(
+            s, supabase_user_id="sb-1", email="a@x.io"
+        )
+        assert user.supabase_user_id == "sb-1"
+        assert membership.role == "owner"
+
+        # One user, one workspace, one membership — no duplicates from the race.
+        assert len((await s.execute(select(UserRow))).scalars().all()) == 1
+        assert len((await s.execute(select(WorkspaceRow))).scalars().all()) == 1
+        assert len((await s.execute(select(MembershipRow))).scalars().all()) == 1
 
 
 async def test_helpers_lookup() -> None:
