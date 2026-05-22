@@ -8,9 +8,10 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, Protocol, runtime_checkable
 
 import structlog
 
@@ -19,14 +20,49 @@ from backend.knowledge.graph.writer import GardenNote
 
 if TYPE_CHECKING:
     from backend.knowledge._internal.events import EventBus
-
-    # TODO(bundle-k-integration): out-of-scope source dep -- original: from bsage.core.skill_context import LLMClient
-    LLMClient = Any
     from backend.knowledge.canonicalization.service import CanonicalizationService
     from backend.knowledge.graph.writer import GardenWriter
     from backend.knowledge.retrieval.retriever import VaultRetriever
 
 logger = structlog.get_logger(__name__)
+
+
+@runtime_checkable
+class CompileLlm(Protocol):
+    """The single LLM dispatch seam :class:`IngestCompiler` depends on.
+
+    The compile path asks the model for ONE structured plan (a JSON array
+    of garden actions) per chunk — no tool calls, no multi-turn loop. This
+    Protocol pins exactly that call shape, mirroring how
+    :class:`backend.execution.orchestrator.LoopLlm` is the loop's one seam
+    (one Protocol, never a Union of concretes — per the
+    ``bsvibe-llm-wrapper-not-raw-litellm`` rule).
+
+    Production backs this with a thin adapter over ``bsvibe_llm.LlmClient``
+    / the GatewayDispatcher (wired by request-handler glue in a later
+    chunk); tests inject a deterministic scripted extractor. Nothing here
+    imports litellm or any concrete provider.
+
+    ``suppress_reasoning`` asks reasoning models to skip the chain-of-thought
+    preamble that would corrupt the JSON parse; ``timeout_s`` bounds a slow
+    local-LLM call (``None`` defers to the backend default).
+    """
+
+    async def chat(
+        self,
+        *,
+        system: str,
+        messages: list[dict[str, Any]],
+        suppress_reasoning: bool = False,
+        timeout_s: float | None = None,
+    ) -> str: ...
+
+
+# Replaces the ``bundle-k-integration`` ``LLMClient = Any`` stub: the
+# compile path's LLM dependency is now the narrow :class:`CompileLlm`
+# seam above. Kept as an alias so the constructor parameter name and any
+# external annotations stay stable.
+LLMClient = CompileLlm
 
 # Conservative fallback when nothing better is known about the model
 # (no probe, no override). Tuned for small local LLMs — large frontier
@@ -171,6 +207,47 @@ class CompileResult:
     notes_created: int
     seed_path: str = ""
     llm_calls: int = 1
+    # Telemetry for the ``ingest_batches`` analytics row (see
+    # :class:`backend.knowledge.ingest.db.IngestBatch`). ``seed_count`` is
+    # the number of input :class:`BatchItem`s; ``elapsed_ms`` the wall-clock
+    # cost of the whole batch compile. Populated by ``compile_batch``.
+    seed_count: int = 0
+    elapsed_ms: int = 0
+
+
+@dataclass(frozen=True)
+class IngestBatchRecord:
+    """The data needed to persist one ``ingest_batches`` analytics row.
+
+    Decouples :class:`IngestCompiler` from the DB: the compiler hands this
+    plain record to an optional :class:`IngestBatchRecorder` seam, and the
+    request-handler glue (a later chunk) backs that seam with a SQLAlchemy
+    writer. Keeping the row write behind a Protocol means the compiler core
+    imports no session machinery and stays unit-testable with a fake.
+    """
+
+    seed_source: str
+    seed_count: int
+    notes_created: int
+    notes_updated: int
+    llm_calls: int
+    chunk_count: int
+    chunk_failures: int
+    elapsed_ms: int
+
+
+@runtime_checkable
+class IngestBatchRecorder(Protocol):
+    """Persists an :class:`IngestBatchRecord` (the per-batch analytics row).
+
+    Production binds this to a writer over
+    :class:`backend.knowledge.ingest.db.IngestBatch` (workspace_id + region
+    come from the same :class:`~backend.knowledge.factory.KnowledgeFactory`
+    boundary that scoped the vault). ``None`` keeps the row write optional —
+    a missing recorder must never break ingest.
+    """
+
+    async def record(self, record: IngestBatchRecord) -> None: ...
 
 
 @dataclass
@@ -206,12 +283,17 @@ class IngestCompiler:
         batch_char_budget: int | None = None,
         chunk_timeout_s: float | None = 300.0,
         canonicalization_service: CanonicalizationService | None = None,
+        batch_recorder: IngestBatchRecorder | None = None,
     ) -> None:
         self._writer = garden_writer
         self._llm = llm_client
         self._retriever = retriever
         self._event_bus = event_bus
         self._max_updates = max_updates
+        # Optional analytics seam — when wired, every batch emits one
+        # ``ingest_batches`` row. ``None`` (the default) is a no-op so the
+        # compiler stays usable without any DB session.
+        self._batch_recorder = batch_recorder
         # ``None`` → conservative default; callers that know the model
         # (AppState construction) should pass a probed value.
         self._batch_char_budget = batch_char_budget or _DEFAULT_BATCH_CHAR_BUDGET
@@ -242,6 +324,7 @@ class IngestCompiler:
         if not items:
             return _empty_compile_result()
 
+        start = time.perf_counter()
         chunks = _chunk_batch(items, self._batch_char_budget)
         await emit_event(
             self._event_bus,
@@ -333,6 +416,7 @@ class IngestCompiler:
             },
         )
 
+        elapsed_ms = int((time.perf_counter() - start) * 1000)
         logger.info(
             "ingest_compile_batch_complete",
             source=seed_source,
@@ -341,13 +425,46 @@ class IngestCompiler:
             updated=notes_updated,
             created=notes_created,
             chunk_failures=chunk_failures,
+            elapsed_ms=elapsed_ms,
         )
+
+        # Record the per-batch analytics row via the optional seam. Failures
+        # here are swallowed: an analytics-row write must never turn a
+        # successful ingest into an error (the notes are already on disk).
+        await self._record_batch(
+            IngestBatchRecord(
+                seed_source=seed_source,
+                seed_count=len(items),
+                notes_created=notes_created,
+                notes_updated=notes_updated,
+                llm_calls=llm_calls,
+                chunk_count=len(chunks),
+                chunk_failures=chunk_failures,
+                elapsed_ms=elapsed_ms,
+            )
+        )
+
         return CompileResult(
             actions_taken=actions_taken,
             notes_updated=notes_updated,
             notes_created=notes_created,
             llm_calls=llm_calls,
+            seed_count=len(items),
+            elapsed_ms=elapsed_ms,
         )
+
+    async def _record_batch(self, record: IngestBatchRecord) -> None:
+        """Best-effort persist of the ``ingest_batches`` analytics row."""
+        if self._batch_recorder is None:
+            return
+        try:
+            await self._batch_recorder.record(record)
+        except Exception as exc:  # noqa: BLE001 — analytics must never break ingest
+            logger.warning(
+                "ingest_compile_batch_record_failed",
+                source=record.seed_source,
+                error=str(exc),
+            )
 
     async def _find_related(self, seed_content: str) -> str:
         """Search vault for notes related to seed content."""
