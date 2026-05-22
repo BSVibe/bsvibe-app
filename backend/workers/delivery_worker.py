@@ -8,7 +8,15 @@ This worker:
    via a paired ``processed_at`` column would be ideal; for Phase 1 we
    simply delete the row after dispatch — the schema is append-only on
    the orchestrator side, but the worker treats it as a queue).
-2. Hands each event to a caller-supplied :class:`PluginDispatchAdapter`
+2. Consults the deliverable's workspace Safe Mode (Workflow §10.5). When
+   ``workspaces.safe_mode`` is True the delivery is **enqueued** into the
+   :class:`backend.delivery.safe_mode_queue.SafeModeQueue` (status
+   ``pending``) instead of dispatching — the founder approves/denies via
+   the ``/api/v1/safemode`` routes, and approval re-uses the *same*
+   :func:`dispatch_delivery` helper this worker calls. When Safe Mode is
+   off (or no workspace row exists — e.g. an unseeded test workspace) the
+   delivery dispatches straight out exactly as before.
+3. Hands each event to a caller-supplied :class:`PluginDispatchAdapter`
    so the test sink + the real PluginRunner share one shape.
 
 DB-polling, not Redis Streams. Same justification as AgentWorker.
@@ -26,8 +34,10 @@ from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from backend.delivery.db import DeliveryEventRow
+from backend.delivery.safe_mode_queue import SafeModeQueue
 from backend.delivery.schema import DeliveryResult
 from backend.workers.base import BaseWorker
+from backend.workspaces.db import WorkspaceRow
 
 logger = structlog.get_logger(__name__)
 
@@ -45,6 +55,45 @@ class PluginDispatchAdapter(Protocol):
         context: object = None,
         event: object = None,
     ) -> DeliveryResult: ...
+
+
+async def _workspace_safe_mode(session: AsyncSession, workspace_id: uuid.UUID) -> bool:
+    """Return the workspace's Safe Mode flag.
+
+    Policy v1 (Workflow §10.5): the gate is purely ``workspace.safe_mode``.
+    Trigger-source is intentionally NOT threaded through — founder-direct
+    bypass is a later refinement. A missing workspace row defaults to direct
+    dispatch (``False``) so an unseeded test workspace behaves as today.
+    """
+    row = await session.get(WorkspaceRow, workspace_id)
+    return bool(row.safe_mode) if row is not None else False
+
+
+async def dispatch_delivery(
+    dispatcher: PluginDispatchAdapter,
+    *,
+    workspace_id: uuid.UUID,
+    deliverable_id: uuid.UUID,
+    artifact_type: str,
+) -> DeliveryResult:
+    """The single outbound-dispatch code path shared by the worker + approve.
+
+    Extracted so :meth:`DeliveryWorker.drain_once` (Safe Mode off) and the
+    ``POST /api/v1/safemode/{item_id}/approve`` route dispatch through one
+    helper rather than duplicating the call shape.
+    """
+    result = await dispatcher.dispatch(
+        workspace_id=workspace_id,
+        deliverable_id=deliverable_id,
+        artifact_type=artifact_type,
+    )
+    logger.info(
+        "delivery_dispatched",
+        deliverable_id=str(deliverable_id),
+        workspace_id=str(workspace_id),
+        actions=len(result.actions),
+    )
+    return result
 
 
 @dataclass(slots=True)
@@ -82,14 +131,30 @@ class DeliveryWorker(BaseWorker):
             rows = (await session.execute(stmt)).scalars().all()
             if not rows:
                 return 0
+            queue = SafeModeQueue(session)
             processed = 0
             for row in rows:
                 try:
-                    result = await self._dispatcher.dispatch(
-                        workspace_id=row.workspace_id,
-                        deliverable_id=row.deliverable_id,
-                        artifact_type=row.artifact_type,
-                    )
+                    if await _workspace_safe_mode(session, row.workspace_id):
+                        # Safe Mode ON — hold for founder approval instead of
+                        # dispatching. The /api/v1/safemode routes drive it the
+                        # rest of the way.
+                        await queue.enqueue(
+                            workspace_id=row.workspace_id,
+                            deliverable_id=row.deliverable_id,
+                        )
+                        logger.info(
+                            "delivery_worker_enqueued_safe_mode",
+                            event_id=str(row.id),
+                            deliverable_id=str(row.deliverable_id),
+                        )
+                    else:
+                        await dispatch_delivery(
+                            self._dispatcher,
+                            workspace_id=row.workspace_id,
+                            deliverable_id=row.deliverable_id,
+                            artifact_type=row.artifact_type,
+                        )
                 except Exception:  # noqa: BLE001 — record + move on
                     logger.exception(
                         "delivery_worker_dispatch_failed",
@@ -97,19 +162,17 @@ class DeliveryWorker(BaseWorker):
                         deliverable_id=str(row.deliverable_id),
                     )
                     continue
-                logger.info(
-                    "delivery_worker_dispatched",
-                    event_id=str(row.id),
-                    deliverable_id=str(row.deliverable_id),
-                    actions=len(result.actions),
-                )
                 processed += 1
-            if rows:
-                await session.execute(
-                    delete(DeliveryEventRow).where(DeliveryEventRow.id.in_([r.id for r in rows]))
-                )
-                await session.commit()
+            await session.execute(
+                delete(DeliveryEventRow).where(DeliveryEventRow.id.in_([r.id for r in rows]))
+            )
+            await session.commit()
             return processed
 
 
-__all__ = ["DeliveryWorker", "DeliveryWorkerConfig", "PluginDispatchAdapter"]
+__all__ = [
+    "DeliveryWorker",
+    "DeliveryWorkerConfig",
+    "PluginDispatchAdapter",
+    "dispatch_delivery",
+]
