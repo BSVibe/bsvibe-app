@@ -75,7 +75,6 @@ def verify_user_jwt(token: str, settings: Settings) -> dict[str, Any]:
     Validates: signature, expiration (exp), audience, issuer (if configured).
     Raises `AuthError` on any failure.
     """
-    options = {"require": ["exp", "iat", "sub"]}
     try:
         payload = jwt.decode(
             token,
@@ -83,7 +82,7 @@ def verify_user_jwt(token: str, settings: Settings) -> dict[str, Any]:
             algorithms=[settings.user_jwt_algorithm],
             audience=settings.user_jwt_audience,
             issuer=settings.user_jwt_issuer,
-            options=options,
+            options={"require": ["exp", "iat", "sub"]},
         )
     except jwt.PyJWTError as exc:
         logger.warning("user_jwt_invalid", error=str(exc))

@@ -19,7 +19,7 @@ from __future__ import annotations
 import uuid
 
 import structlog
-from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.requests import Request
 from starlette.responses import Response
 from starlette.types import ASGIApp
@@ -41,7 +41,7 @@ class RequestIdMiddleware(BaseHTTPMiddleware):
     async def dispatch(
         self,
         request: Request,
-        call_next,
+        call_next: RequestResponseEndpoint,
     ) -> Response:
         incoming = request.headers.get(REQUEST_ID_HEADER, "")
         request_id = incoming.strip() or uuid.uuid4().hex

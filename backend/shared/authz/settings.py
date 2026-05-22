@@ -106,7 +106,7 @@ class Settings(BaseSettings):
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
     """Return the process-wide Settings singleton (cached)."""
-    return Settings()  # type: ignore[call-arg]
+    return Settings()
 
 
 def reset_settings_cache() -> None:
