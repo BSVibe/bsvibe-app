@@ -15,7 +15,7 @@ by the ``X-BSVibe-Account-Id`` request header.
 from __future__ import annotations
 
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Annotated
 
 from fastapi import Depends, Header, HTTPException, status
@@ -28,8 +28,13 @@ from sqlalchemy.ext.asyncio import (
 
 # Importing scoping installs the do_orm_execute auto-filter listener.
 from backend.data.scoping import set_current_workspace_id
-from backend.identity.db import UserRow
-from backend.identity.service import get_user_by_supabase_id, resolve_workspace_id
+from backend.identity.db import MembershipRow, UserRow
+from backend.identity.roles import role_satisfies
+from backend.identity.service import (
+    active_membership_for_user,
+    get_user_by_supabase_id,
+    resolve_workspace_id,
+)
 from backend.shared.authz.deps import get_current_user
 from backend.shared.authz.types import User
 
@@ -39,11 +44,13 @@ CurrentUser = Annotated[User, Depends(get_current_user)]
 __all__ = [
     "CurrentUser",
     "get_account_id",
+    "get_current_membership",
     "get_current_user",
     "get_current_user_row",
     "get_db_session",
     "get_workspace_id",
     "require_account_id",
+    "require_role",
 ]
 
 
@@ -123,6 +130,55 @@ async def get_workspace_id(
         )
     set_current_workspace_id(workspace_id)
     return workspace_id
+
+
+# ---------------------------------------------------------------------------
+# RBAC — authorization on Membership.role (the third orthogonal axis, after
+# authentication via Supabase JWT and isolation via workspace_id scoping).
+# ---------------------------------------------------------------------------
+async def get_current_membership(
+    user: CurrentUser,
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+) -> MembershipRow:
+    """Resolve the caller's active ``Membership`` in their resolved workspace.
+
+    Also publishes the workspace into the scoping contextvar so a route that
+    depends only on this (e.g. via :func:`require_role`) still gets the ORM
+    auto-filter. 403 when the caller has no active membership.
+    """
+    row = await get_user_by_supabase_id(session, user.id)
+    membership = await active_membership_for_user(session, row.id) if row is not None else None
+    if membership is None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="no workspace membership for principal",
+        )
+    set_current_workspace_id(membership.workspace_id)
+    return membership
+
+
+def require_role(minimum: str) -> Callable[..., Awaitable[MembershipRow]]:
+    """Build a dependency asserting the caller's role ranks at/above ``minimum``.
+
+    Reads ``Membership.role`` for the caller's resolved workspace and 403s
+    when it is below the threshold (``owner > admin > editor > viewer``).
+    Returns the membership so a route can reuse it. Authentication is
+    unchanged — an unauthenticated caller is still 401'd upstream by
+    :func:`get_current_user`; a member-less caller is 403'd by
+    :func:`get_current_membership`.
+    """
+
+    async def _dep(
+        membership: Annotated[MembershipRow, Depends(get_current_membership)],
+    ) -> MembershipRow:
+        if not role_satisfies(membership.role, minimum):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"role {minimum!r} or higher required",
+            )
+        return membership
+
+    return _dep
 
 
 # ---------------------------------------------------------------------------

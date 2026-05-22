@@ -72,11 +72,21 @@ async def client_with_ws(db):
     app.dependency_overrides[get_workspace_id] = _ws
     app.dependency_overrides[get_db_session] = _session
 
-    # Seed the workspace row so /api/v1/products has a parent.
+    # Seed the workspace row so /api/v1/products has a parent, plus an owner
+    # membership for the fake principal so role-gated routes (product DELETE
+    # requires admin+) resolve a real Membership.role.
     from backend.workspaces.db import WorkspaceRow
 
     async with db() as s:
         s.add(WorkspaceRow(id=workspace_id, name="test", region="us-1", safe_mode=True))
+        user = UserRow(id=uuid.uuid4(), supabase_user_id="test-user", email="t@example.com")
+        s.add(user)
+        await s.flush()
+        s.add(
+            MembershipRow(
+                id=uuid.uuid4(), user_id=user.id, workspace_id=workspace_id, role="owner"
+            )
+        )
         await s.commit()
 
     transport = httpx.ASGITransport(app=app)
