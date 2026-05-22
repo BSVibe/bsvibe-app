@@ -8,7 +8,7 @@ all module tables register on ``backend.data.Base.metadata``, so a single
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
@@ -35,4 +35,21 @@ async def memory_session() -> AsyncIterator[AsyncSession]:
         await engine.dispose()
 
 
-__all__ = ["memory_session"]
+def fake_current_user(
+    supabase_user_id: str = "test-user", email: str | None = "t@example.com"
+) -> Callable[[], object]:
+    """Dependency override returning an authenticated authz ``User``.
+
+    Lets API tests satisfy the v1 router-level auth dependency without a real
+    JWT. Pair with an explicit ``get_workspace_id`` override (these tests scope
+    via that, not membership resolution).
+    """
+    from backend.shared.authz.types import User
+
+    def _user() -> User:
+        return User(id=supabase_user_id, email=email)
+
+    return _user
+
+
+__all__ = ["fake_current_user", "memory_session"]

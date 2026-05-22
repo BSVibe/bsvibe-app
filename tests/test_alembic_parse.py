@@ -31,11 +31,12 @@ def test_alembic_history_loads():
         "bundle_x_execution",
         "bundle_g_glue",
         "bundle_h_workspaces",
+        "phase1_auth_identity",
     ):
         assert rev in result.stdout, f"missing revision {rev} in:\n{result.stdout}"
 
 
-def test_alembic_head_is_bundle_h_workspaces():
+def test_alembic_head_is_phase1_auth_identity():
     repo = Path(__file__).parent.parent
     result = subprocess.run(
         [sys.executable, "-m", "alembic", "heads"],
@@ -44,7 +45,7 @@ def test_alembic_head_is_bundle_h_workspaces():
         text=True,
     )
     assert result.returncode == 0
-    assert "bundle_h_workspaces" in result.stdout
+    assert "phase1_auth_identity" in result.stdout
 
 
 def test_target_metadata_covers_all_bases():
@@ -57,6 +58,7 @@ def test_target_metadata_covers_all_bases():
     from backend.gateway.embedding.db import GatewayEmbeddingBase
     from backend.gateway.routing.db import GatewayRoutingBase
     from backend.gateway.rules.db import GatewayRulesBase
+    from backend.identity.db import IdentityBase
     from backend.intake.db import IntakeBase
     from backend.knowledge.canonicalization.db import CanonicalizationBase
     from backend.knowledge.ingest.db import IngestBase
@@ -109,6 +111,9 @@ def test_target_metadata_covers_all_bases():
         # Bundle H
         "workspaces",
         "products",
+        # Phase 1 auth — identity
+        "users",
+        "memberships",
     }
     actual_tables = (
         set(AccountsBase.metadata.tables)
@@ -126,6 +131,7 @@ def test_target_metadata_covers_all_bases():
         | set(DeliveryBase.metadata.tables)
         | set(WorkersBase.metadata.tables)
         | set(WorkspacesBase.metadata.tables)
+        | set(IdentityBase.metadata.tables)
     )
     assert expected_tables.issubset(actual_tables), (
         f"Missing tables: {expected_tables - actual_tables}"

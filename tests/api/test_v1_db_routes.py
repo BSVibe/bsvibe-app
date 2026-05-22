@@ -11,11 +11,18 @@ import pytest
 import pytest_asyncio
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from backend.api.deps import get_db_session, get_workspace_id, require_account_id
+from backend.api.deps import (
+    get_current_user,
+    get_db_session,
+    get_workspace_id,
+    require_account_id,
+)
 from backend.api.main import create_app
 from backend.execution.db import ExecutionBase, ExecutionRun, RunStatus
 from backend.gateway.embedding.db import GatewayEmbeddingBase, IntentDefinitionRow
 from backend.gateway.rules.db import GatewayRulesBase, RoutingRuleRow
+
+from .._support import fake_current_user
 
 PG_URL = os.environ.get(
     "BSVIBE_DATABASE_URL", "postgresql+asyncpg://bsvibe:bsvibe@localhost:5442/bsvibe"
@@ -77,6 +84,7 @@ async def configured_client(db, workspace_id: uuid.UUID, account_id: uuid.UUID):
         async with db() as s:
             yield s
 
+    app.dependency_overrides[get_current_user] = fake_current_user()
     app.dependency_overrides[get_workspace_id] = _ws
     app.dependency_overrides[require_account_id] = _acct
     app.dependency_overrides[get_db_session] = _session

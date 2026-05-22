@@ -10,9 +10,16 @@ import pytest
 import pytest_asyncio
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from backend.api.deps import get_db_session, get_workspace_id
+from backend.api.deps import (
+    get_current_user,
+    get_db_session,
+    get_workspace_id,
+)
 from backend.api.main import create_app
+from backend.identity.db import MembershipRow, UserRow  # noqa: F401 — register tables
 from backend.workspaces.db import WorkspacesBase
+
+from .._support import fake_current_user
 
 PG_URL = os.environ.get(
     "BSVIBE_DATABASE_URL", "postgresql+asyncpg://bsvibe:bsvibe@localhost:5442/bsvibe"
@@ -61,6 +68,7 @@ async def client_with_ws(db):
         async with db() as s:
             yield s
 
+    app.dependency_overrides[get_current_user] = fake_current_user()
     app.dependency_overrides[get_workspace_id] = _ws
     app.dependency_overrides[get_db_session] = _session
 
@@ -83,7 +91,14 @@ async def test_workspaces_full_lifecycle(db) -> None:
         async with db() as s:
             yield s
 
+    # Seed a real user row so the FK from memberships → users holds on PG
+    # (SQLite doesn't enforce it, but real Postgres does).
+    async with db() as s:
+        s.add(UserRow(id=uuid.uuid4(), supabase_user_id="test-user", email="t@x"))
+        await s.commit()
+
     app.dependency_overrides[get_db_session] = _session
+    app.dependency_overrides[get_current_user] = fake_current_user("test-user")
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
         # Initially empty
@@ -169,6 +184,7 @@ async def test_product_workspace_isolation(db) -> None:
             yield s
 
     app.dependency_overrides[get_db_session] = _session
+    app.dependency_overrides[get_current_user] = fake_current_user()
     from backend.workspaces.db import ProductRow, WorkspaceRow
 
     product_id = uuid.uuid4()

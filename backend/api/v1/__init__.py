@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 
+from backend.api.deps import get_current_user
 from backend.api.v1 import (
     accounts,
     chat,
@@ -20,7 +21,11 @@ from backend.api.v1 import (
     settings as api_settings,
 )
 
-router = APIRouter(prefix="/v1")
+# Every v1 route requires a verified principal. The per-route workspace
+# resolution (get_workspace_id) layers on top; this router-level dependency
+# guarantees even routes without it (settings, presets list) return 401 when
+# unauthenticated.
+router = APIRouter(prefix="/v1", dependencies=[Depends(get_current_user)])
 router.include_router(chat.router, prefix="/chat", tags=["chat"])
 router.include_router(workspaces.router, prefix="/workspaces", tags=["workspaces"])
 router.include_router(products.router, prefix="/products", tags=["products"])

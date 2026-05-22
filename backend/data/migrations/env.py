@@ -29,6 +29,7 @@ import backend.gateway.budget.models  # noqa: F401, E402
 import backend.gateway.embedding.db  # noqa: F401, E402
 import backend.gateway.routing.db  # noqa: F401, E402
 import backend.gateway.rules.db  # noqa: F401, E402
+import backend.identity.db  # noqa: F401, E402
 import backend.intake.db  # noqa: F401, E402
 import backend.knowledge.canonicalization.db  # noqa: F401, E402
 import backend.knowledge.ingest.db  # noqa: F401, E402

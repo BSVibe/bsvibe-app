@@ -1,22 +1,24 @@
 """FastAPI dependencies for v1 routes.
 
-Workspace + account scoping is extracted from the verified Supabase JWT
-(raw ES256, post-Tier 3.2 — no wrapped JWT). Most routes call
-``Depends(get_workspace_id)`` so the dependency tree fails fast when
-either auth or workspace membership is missing.
+Authentication resolves the verified Supabase principal via
+:func:`backend.shared.authz.deps.get_current_user` (raw ES256 JWT, JWKS).
+That principal's Supabase subject is mapped to a first-class ``UserRow`` and,
+through ``MembershipRow``, to the workspace the request operates within
+(Workflow §3). :func:`get_workspace_id` publishes that workspace into the
+:data:`backend.data.scoping.current_workspace_id` contextvar so the global
+ORM auto-filter (defense layer 2) scopes every SELECT.
 
-All concrete auth resolution lands in Bundle G integration; for now the
-dependencies return placeholders so the route surface can be wired and
-tests can run against a mocked dependency override.
+The billing ``account_id`` axis is orthogonal to the workspace and is carried
+by the ``X-BSVibe-Account-Id`` request header.
 """
 
 from __future__ import annotations
 
 import uuid
 from collections.abc import AsyncIterator
-from typing import Annotated, Any
+from typing import Annotated
 
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, Header, HTTPException, status
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -24,48 +26,30 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 
+# Importing scoping installs the do_orm_execute auto-filter listener.
+from backend.data.scoping import set_current_workspace_id
+from backend.identity.db import UserRow
+from backend.identity.service import get_user_by_supabase_id, resolve_workspace_id
+from backend.shared.authz.deps import get_current_user
+from backend.shared.authz.types import User
 
-async def get_current_user() -> dict[str, Any]:
-    """Stub — Bundle G replaces with backend.shared.authz.deps."""
-    # TODO(bundle-api-integration): wire via backend.shared.authz.deps.dispatch_pat_jwt
-    raise HTTPException(
-        status_code=status.HTTP_501_NOT_IMPLEMENTED,
-        detail="auth dependency not wired (Bundle API skeleton)",
-    )
+# Re-export so routes / tests refer to one canonical auth dependency.
+CurrentUser = Annotated[User, Depends(get_current_user)]
 
-
-async def get_workspace_id(
-    user: Annotated[dict[str, Any], Depends(get_current_user)],
-) -> uuid.UUID:
-    """Pull workspace_id from JWT app_metadata."""
-    ws = user.get("workspace_id")
-    if ws is None:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="JWT missing workspace_id",
-        )
-    return uuid.UUID(str(ws))
+__all__ = [
+    "CurrentUser",
+    "get_account_id",
+    "get_current_user",
+    "get_current_user_row",
+    "get_db_session",
+    "get_workspace_id",
+    "require_account_id",
+]
 
 
-async def get_account_id(
-    user: Annotated[dict[str, Any], Depends(get_current_user)],
-) -> uuid.UUID | None:
-    """Pull optional account_id from JWT or request metadata."""
-    return uuid.UUID(str(user["account_id"])) if "account_id" in user else None
-
-
-async def require_account_id(
-    user: Annotated[dict[str, Any], Depends(get_current_user)],
-) -> uuid.UUID:
-    """Same as :func:`get_account_id` but 400s if missing — for account-scoped endpoints."""
-    if "account_id" not in user:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="account_id required (pass via metadata.bsvibe_account_id)",
-        )
-    return uuid.UUID(str(user["account_id"]))
-
-
+# ---------------------------------------------------------------------------
+# Database session
+# ---------------------------------------------------------------------------
 _async_engine: AsyncEngine | None = None
 _session_factory: async_sessionmaker[AsyncSession] | None = None
 
@@ -96,3 +80,76 @@ async def get_db_session() -> AsyncIterator[AsyncSession]:
             yield session
         finally:
             await session.close()
+
+
+# ---------------------------------------------------------------------------
+# Identity → workspace resolution
+# ---------------------------------------------------------------------------
+async def get_current_user_row(
+    user: CurrentUser,
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+) -> UserRow:
+    """Resolve the authenticated principal to its first-class ``UserRow``.
+
+    403 when the verified subject has no row — i.e. a principal that never
+    completed login bootstrap (§10.1). Used by the workspaces router, which
+    scopes by the caller's memberships rather than a single active workspace.
+    """
+    row = await get_user_by_supabase_id(session, user.id)
+    if row is None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="no user record for principal",
+        )
+    return row
+
+
+async def get_workspace_id(
+    user: CurrentUser,
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+) -> uuid.UUID:
+    """Resolve + publish the caller's active workspace (defense layers 1+2).
+
+    Maps the Supabase subject → ``UserRow`` → active ``Membership`` →
+    ``workspace_id``, sets the request-context contextvar (so the ORM
+    auto-filter engages), and returns the id for routes that need it as a
+    value. 403 when the caller has no active membership.
+    """
+    workspace_id = await resolve_workspace_id(session, supabase_user_id=user.id)
+    if workspace_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="no workspace membership for principal",
+        )
+    set_current_workspace_id(workspace_id)
+    return workspace_id
+
+
+# ---------------------------------------------------------------------------
+# Billing account axis (orthogonal to workspace)
+# ---------------------------------------------------------------------------
+async def get_account_id(
+    x_bsvibe_account_id: Annotated[str | None, Header()] = None,
+) -> uuid.UUID | None:
+    """Optional billing account id from the ``X-BSVibe-Account-Id`` header."""
+    if not x_bsvibe_account_id:
+        return None
+    try:
+        return uuid.UUID(x_bsvibe_account_id)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="invalid X-BSVibe-Account-Id",
+        ) from exc
+
+
+async def require_account_id(
+    account_id: Annotated[uuid.UUID | None, Depends(get_account_id)],
+) -> uuid.UUID:
+    """Same as :func:`get_account_id` but 400s if missing — account-scoped routes."""
+    if account_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="account_id required (pass via X-BSVibe-Account-Id header)",
+        )
+    return account_id
