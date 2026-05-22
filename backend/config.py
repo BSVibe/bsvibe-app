@@ -35,6 +35,14 @@ class Settings(BaseSettings):
     git_sha: str = "dev"
     version: str = _resolve_version()
 
+    # Supabase IdP (Workflow §2.1) — the backend calls GoTrue directly for
+    # login / OAuth code exchange / refresh / logout. JWT *verification* is
+    # configured separately in backend.shared.authz.settings (USER_JWT_*).
+    supabase_url: str = ""
+    supabase_anon_key: str = ""
+    # Default region stamped onto workspaces created at signup (§10.2).
+    default_workspace_region: str = "us-1"
+
     # Sandbox settings (backend.supervisor.sandbox)
     sandbox_enabled: bool = False
     docker_host: str = ""

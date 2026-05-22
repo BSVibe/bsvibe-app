@@ -38,31 +38,22 @@ def test_openapi_advertises_all_v1_routes() -> None:
 
 
 def test_chat_completions_requires_auth() -> None:
-    # Auth dependency fires before Pydantic validation — Phase 1 auth
-    # raises 501 until backend.shared.authz is wired into the v1 dep
-    # chain.
+    # The v1 router-level auth dependency fires before Pydantic validation;
+    # an unauthenticated request is rejected with 401.
     r = _client().post(
         "/api/v1/chat/completions",
         json={"model": "openai/gpt-4o", "messages": [{"role": "user", "content": "hi"}]},
     )
-    assert r.status_code == 501
+    assert r.status_code == 401
 
 
-def test_settings_is_unauthenticated() -> None:
-    """Settings is a read-only operator view — no auth dependency."""
+def test_settings_requires_auth() -> None:
+    """Settings exposes deployment config — gated behind auth (all v1 routers)."""
     r = _client().get("/api/v1/settings")
-    assert r.status_code == 200
-    body = r.json()
-    assert "environment" in body
-    assert "knowledge_vault_root" in body
+    assert r.status_code == 401
 
 
-def test_presets_list_is_unauthenticated() -> None:
-    """Built-in preset templates don't require auth — they're catalog data."""
+def test_presets_list_requires_auth() -> None:
+    """Even the preset catalog requires a verified principal (all v1 routers)."""
     r = _client().get("/api/v1/presets")
-    assert r.status_code == 200
-    body = r.json()
-    assert isinstance(body, list)
-    names = {p["name"] for p in body}
-    # Bundle 1.5e ships these four built-ins.
-    assert {"coding-assistant", "customer-support", "translation-summary", "general"} <= names
+    assert r.status_code == 401

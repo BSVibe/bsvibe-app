@@ -8,9 +8,11 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from backend.api.deps import get_workspace_id
+from backend.api.deps import get_current_user, get_workspace_id
 from backend.api.main import create_app
 from backend.config import get_settings
+
+from .._support import fake_current_user
 
 
 @pytest.fixture
@@ -26,6 +28,7 @@ def configured_app(tmp_path: Path, workspace_id: uuid.UUID):
     def _ws() -> uuid.UUID:
         return workspace_id
 
+    app.dependency_overrides[get_current_user] = fake_current_user()
     app.dependency_overrides[get_workspace_id] = _ws
     get_settings.cache_clear()  # ensure our env overrides take effect
     app.state._skills_root_override = tmp_path  # for test introspection if needed
