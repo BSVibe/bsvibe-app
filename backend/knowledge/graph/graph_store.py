@@ -7,8 +7,9 @@ import dataclasses
 import hashlib
 import json
 import sqlite3
+from collections.abc import Awaitable, Callable
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, TypeVar
 
 import aiosqlite
 import networkx as nx
@@ -26,7 +27,10 @@ from backend.knowledge.graph.write_queue import SQLiteWriteQueue
 
 if TYPE_CHECKING:
     from backend.knowledge.graph.graph_extractor import GraphExtractor
+    from backend.knowledge.graph.storage import StorageBackend
     from backend.knowledge.graph.vault import Vault
+
+_T = TypeVar("_T")
 
 logger = structlog.get_logger(__name__)
 
@@ -167,6 +171,7 @@ class GraphStore(GraphBackend):
         self._rebuild_lock: asyncio.Lock = asyncio.Lock()
         self._write_queue: SQLiteWriteQueue | None = None
         self._write_queue_maxsize = write_queue_maxsize
+        self._nx_cache: nx.MultiDiGraph | None = None
 
     async def initialize(self) -> None:
         """Open connection, enable WAL mode, create tables, start writer."""
@@ -249,7 +254,7 @@ class GraphStore(GraphBackend):
             raise RuntimeError(msg)
         return self._db
 
-    async def _submit_write(self, op):
+    async def _submit_write(self, op: Callable[[], Awaitable[_T]]) -> _T:
         """Submit ``op`` to the write queue, awaiting its result.
 
         Used as the single entry point for every mutating SQLite call,
@@ -258,7 +263,8 @@ class GraphStore(GraphBackend):
         if self._write_queue is None:
             msg = "GraphStore not initialized — call initialize() first"
             raise RuntimeError(msg)
-        return await self._write_queue.submit(op)
+        result: _T = await self._write_queue.submit(op)
+        return result
 
     # ------------------------------------------------------------------
     # Entity CRUD
@@ -282,7 +288,7 @@ class GraphStore(GraphBackend):
             (norm, entity.entity_type),
         )
         if row:
-            existing_id = row[0]
+            existing_id = str(row[0])
             await self._conn.execute(
                 """UPDATE entities
                    SET source_path = ?, properties = ?, confidence = ?,
@@ -341,7 +347,7 @@ class GraphStore(GraphBackend):
             (rel.source_id, rel.target_id, rel.rel_type),
         )
         if row:
-            return row[0]
+            return str(row[0])
 
         await self._conn.execute(
             """INSERT INTO relationships
@@ -599,14 +605,14 @@ class GraphStore(GraphBackend):
             (entity_name,),
         )
         if row and row[0]:
-            return row[0]
+            return int(row[0])
         row = await self._fetchone(
             """SELECT COUNT(DISTINCT p.source_path) FROM provenance p
                JOIN entities e ON e.id = p.entity_id
                WHERE e.name_normalized = ?""",
             (norm,),
         )
-        return row[0] if row else 0
+        return int(row[0]) if row else 0
 
     async def get_entity_updated_at(self, entity_name: str) -> str | None:
         """Return the updated_at timestamp for an entity."""
@@ -616,12 +622,12 @@ class GraphStore(GraphBackend):
             (entity_name,),
         )
         if row:
-            return row[0]
+            return str(row[0])
         row = await self._fetchone(
             "SELECT updated_at FROM entities WHERE name_normalized = ? LIMIT 1",
             (norm,),
         )
-        return row[0] if row else None
+        return str(row[0]) if row else None
 
     # ------------------------------------------------------------------
     # Source of Truth — confirmation
@@ -692,7 +698,9 @@ class GraphStore(GraphBackend):
     # Vault rebuild
     # ------------------------------------------------------------------
 
-    async def rebuild_from_vault(self, vault: Vault, extractor: GraphExtractor) -> dict[str, int]:
+    async def rebuild_from_vault(
+        self, storage: StorageBackend, extractor: object
+    ) -> dict[str, int]:
         """Rebuild graph from vault notes, skipping unchanged content.
 
         Returns a dict with ``notes_updated``, ``notes_skipped``,
@@ -700,8 +708,11 @@ class GraphStore(GraphBackend):
 
         Uses ``_rebuild_lock`` to prevent concurrent rebuilds.
         """
+        if TYPE_CHECKING:
+            assert isinstance(storage, Vault)
+            assert isinstance(extractor, GraphExtractor)
         async with self._rebuild_lock:
-            return await self._rebuild_from_vault_locked(vault, extractor)
+            return await self._rebuild_from_vault_locked(storage, extractor)
 
     async def _rebuild_from_vault_locked(
         self, vault: Vault, extractor: GraphExtractor
@@ -783,12 +794,12 @@ class GraphStore(GraphBackend):
     # Helpers
     # ------------------------------------------------------------------
 
-    async def query(self, sql: str, params: tuple = ()) -> list[aiosqlite.Row]:
+    async def query(self, sql: str, params: tuple[Any, ...] = ()) -> list[aiosqlite.Row]:
         """Execute a read query and return all result rows."""
         return await self._fetchall(sql, params)
 
     async def execute_batch(
-        self, statements: list[tuple[str, tuple]], *, commit: bool = True
+        self, statements: list[tuple[str, tuple[Any, ...]]], *, commit: bool = True
     ) -> int:
         """Execute multiple write statements through the write queue.
 
@@ -806,11 +817,11 @@ class GraphStore(GraphBackend):
 
         return await self._submit_write(_op)
 
-    async def _fetchone(self, sql: str, params: tuple = ()) -> aiosqlite.Row | None:
+    async def _fetchone(self, sql: str, params: tuple[Any, ...] = ()) -> aiosqlite.Row | None:
         cursor = await self._conn.execute(sql, params)
         return await cursor.fetchone()
 
-    async def _fetchall(self, sql: str, params: tuple = ()) -> list[aiosqlite.Row]:
+    async def _fetchall(self, sql: str, params: tuple[Any, ...] = ()) -> list[aiosqlite.Row]:
         cursor = await self._conn.execute(sql, params)
         return list(await cursor.fetchall())
 
@@ -846,7 +857,7 @@ class GraphStore(GraphBackend):
         Callers that need fresh data should use ``to_networkx_snapshot()``
         (async, rebuilds from SQLite).
         """
-        if not hasattr(self, "_nx_cache") or self._nx_cache is None:
+        if self._nx_cache is None:
             self._nx_cache = nx.MultiDiGraph()
         return self._nx_cache
 

@@ -78,8 +78,4 @@ omit = [
     "backend/execution/planning/prompts.py",
     "backend/execution/verifier/judge.py",
     "backend/execution/verifier/contract.py",
-    "backend/knowledge/graph/graph_store.py",
-    "backend/knowledge/graph/writer_core.py",
-    "backend/knowledge/graph/vault_backend.py",
-    "backend/knowledge/graph/restricted.py",
 ]

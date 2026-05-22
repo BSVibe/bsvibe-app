@@ -95,7 +95,7 @@ class _WriterIOMixin:
     def _find_dedup_path(
         directory: Path, slug: str
     ) -> Path:  # pragma: no cover - implemented in GardenWriter
-        ...
+        raise NotImplementedError
 
     def _resolve_folder(self, note: GardenNote | None = None) -> str:
         """Resolve the vault folder for a note from its maturity.
@@ -136,7 +136,7 @@ class _WriterIOMixin:
         """
         return self._vault.resolve_path(f"seeds/{plugin_name}/{subpath}")
 
-    async def write_seed(self, source: str, data: dict) -> Path:
+    async def write_seed(self, source: str, data: dict[str, Any]) -> Path:
         """Write raw collected data as a seed note.
 
         Creates a file at seeds/{source}/{YYYY-MM-DD_HHMM}.md with
@@ -160,7 +160,7 @@ class _WriterIOMixin:
         source_dir = self._vault.resolve_path(f"seeds/{source}")
         source_dir.mkdir(parents=True, exist_ok=True)
 
-        metadata: dict = {
+        metadata: dict[str, Any] = {
             "type": "seed",
             "source": source,
             "captured_at": date_str,
@@ -199,7 +199,7 @@ class _WriterIOMixin:
         )
         return file_path
 
-    async def write_garden(self, note: GardenNote | dict) -> Path:
+    async def write_garden(self, note: GardenNote | dict[str, Any]) -> Path:
         """Write a processed garden note with deduplication.
 
         v2.2: Uses the ontology folder mapping (e.g. ``ideas/``, ``events/``)
@@ -233,7 +233,7 @@ class _WriterIOMixin:
 
             related_links = [f"[[{r}]]" for r in note.related]
 
-            metadata: dict = {
+            metadata: dict[str, Any] = {
                 "status": "seed",
                 "source": note.source,
                 "maturity": note.maturity,
@@ -444,6 +444,14 @@ class _WriterMutationMixin:
     _event_bus: EventBus | None
     _audit_outbox: AiosqliteAuditOutbox | None
     _default_tenant_id: str | None
+    # Provided by _WriterIOMixin once composed into GardenWriter.
+    _garden_lock: asyncio.Lock
+
+    @staticmethod
+    def _find_dedup_path(
+        directory: Path, slug: str
+    ) -> Path:  # pragma: no cover - implemented in GardenWriter
+        raise NotImplementedError
 
     async def _notify_sync(
         self, event_type_str: str, path: Path, source: str
@@ -834,21 +842,25 @@ class _WriterToolHandlersMixin:
 
     _vault: Vault
 
-    async def write_garden(self, note: GardenNote | dict) -> Path:  # pragma: no cover - in IO mixin
-        ...
+    async def write_garden(
+        self, note: GardenNote | dict[str, Any]
+    ) -> Path:  # pragma: no cover - in IO mixin
+        raise NotImplementedError
 
-    async def write_seed(self, source: str, data: dict) -> Path:  # pragma: no cover - in IO mixin
-        ...
+    async def write_seed(
+        self, source: str, data: dict[str, Any]
+    ) -> Path:  # pragma: no cover - in IO mixin
+        raise NotImplementedError
 
     async def update_note(
         self, path: str, content: str, *, preserve_frontmatter: bool = True
     ) -> Path:  # pragma: no cover - in mutation mixin
-        ...
+        raise NotImplementedError
 
     async def append_to_note(
         self, path: str, text: str
     ) -> Path:  # pragma: no cover - in mutation mixin
-        ...
+        raise NotImplementedError
 
     async def delete_note(self, path: str) -> None:  # pragma: no cover - in mutation mixin
         ...
@@ -1110,7 +1122,7 @@ def _update_entity_stub_mentions(file_path: Path, mention: str) -> None:
     file_path.write_text(build_frontmatter(fm) + body, encoding="utf-8")
 
 
-def _split_frontmatter(raw: str) -> tuple[dict, str]:
+def _split_frontmatter(raw: str) -> tuple[dict[str, Any], str]:
     """Split a markdown file with leading ``---`` frontmatter into (dict, body)."""
     if not raw.startswith("---\n"):
         return {}, raw

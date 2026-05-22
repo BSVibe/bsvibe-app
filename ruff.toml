@@ -21,7 +21,9 @@ ignore = [
 ]
 
 [lint.per-file-ignores]
-"tests/**/*.py" = ["S", "PL", "B008"]
+# Test code legitimately uses pathlib.Path methods inside async test
+# functions (ASYNC240) — the synchronous FS hit is fine in a test.
+"tests/**/*.py" = ["S", "PL", "B008", "ASYNC240"]
 "backend/data/migrations/**" = ["E", "F", "I", "UP", "B"]
 # Lifted shared libraries: idiomatic FastAPI/settings patterns
 "backend/shared/**" = ["B008", "PLW0603", "PLR0911", "PLR0912", "PLR0915"]

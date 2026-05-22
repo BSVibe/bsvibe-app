@@ -174,7 +174,7 @@ class VaultBackend(GraphBackend):
                                 "recorded_at": recorded,
                             }
                         )
-                        return key
+                        return str(key)
 
             self._G.add_edge(
                 rel.source_id,
@@ -306,10 +306,10 @@ class VaultBackend(GraphBackend):
     # -- Counts -----------------------------------------------------------
 
     async def count_entities(self) -> int:
-        return self._G.number_of_nodes()
+        return int(self._G.number_of_nodes())
 
     async def count_relationships(self) -> int:
-        return self._G.number_of_edges()
+        return int(self._G.number_of_edges())
 
     async def count_entities_of_type(self, entity_type: str) -> int:
         return sum(1 for _, d in self._G.nodes(data=True) if d.get("entity_type") == entity_type)
@@ -318,7 +318,7 @@ class VaultBackend(GraphBackend):
         entity = await self.get_entity_by_name(entity_name)
         if not entity:
             return 0
-        return self._G.degree(entity.id)
+        return int(self._G.degree(entity.id))
 
     async def count_distinct_sources(self, entity_name: str) -> int:
         entity = await self.get_entity_by_name(entity_name)
@@ -331,7 +331,8 @@ class VaultBackend(GraphBackend):
         if not entity:
             return None
         attrs = self._G.nodes.get(entity.id, {})
-        return attrs.get("updated_at")
+        updated_at = attrs.get("updated_at")
+        return str(updated_at) if updated_at is not None else None
 
     # -- Source hashing ---------------------------------------------------
 

@@ -51,11 +51,11 @@ class RestrictedPluginGarden:
     async def write_seed(self, source: str, data: dict[str, Any]) -> Path:
         return await self._writer.write_seed(source, data)
 
-    async def write_input_log(self, source: str, raw_summary: str) -> Path:
-        return await self._writer.write_input_log(source, raw_summary)
+    async def write_input_log(self, source: str, raw_summary: str) -> None:
+        await self._writer.write_input_log(source, raw_summary)
 
-    async def write_action(self, name: str, summary: str) -> Path:
-        return await self._writer.write_action(name, summary)
+    async def write_action(self, name: str, summary: str) -> None:
+        await self._writer.write_action(name, summary)
 
     async def read_notes(self, subdir: str) -> list[Path]:
         return await self._writer.read_notes(subdir)
