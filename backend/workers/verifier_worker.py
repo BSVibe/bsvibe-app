@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Any, Protocol
 
 import structlog
 from sqlalchemy import select
@@ -35,7 +35,9 @@ logger = structlog.get_logger(__name__)
 class VerifierAdapter(Protocol):
     """Run a single verification check for ``work_step``."""
 
-    async def verify(self, *, work_step: WorkStep) -> tuple[VerificationOutcome, dict]: ...
+    async def verify(
+        self, *, work_step: WorkStep
+    ) -> tuple[VerificationOutcome, dict[str, Any]]: ...
 
 
 @dataclass(slots=True)

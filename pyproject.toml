@@ -55,5 +55,4 @@ addopts = "-ra"
 source = ["backend"]
 omit = [
     "backend/*/migrations/*",
-    "backend/workers/*",
 ]
