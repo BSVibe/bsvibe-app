@@ -44,6 +44,10 @@ class DispatchRequest:
     messages: list[dict[str, object]]
     features: ClassificationFeatures
     projected_cost_cents: int
+    # Optional OpenAI-style tool schema — forwarded to the provider so
+    # the agent loop's tool calls round-trip. ``None`` for the plain
+    # chat-completion path.
+    tools: list[dict[str, object]] | None = None
 
 
 @dataclass(frozen=True)
@@ -110,6 +114,7 @@ class GatewayDispatcher:
             api_base=row.api_base,
             api_key=api_key,
             extra_params=dict(row.extra_params),
+            tools=[dict(t) for t in req.tools] if req.tools else None,
         )
 
         # 5. Record the actual cost (rounded to nearest cent).
