@@ -32,11 +32,12 @@ def test_alembic_history_loads():
         "bundle_g_glue",
         "bundle_h_workspaces",
         "phase1_auth_identity",
+        "settle_drains",
     ):
         assert rev in result.stdout, f"missing revision {rev} in:\n{result.stdout}"
 
 
-def test_alembic_head_is_phase1_auth_identity():
+def test_alembic_head_is_settle_drains():
     repo = Path(__file__).parent.parent
     result = subprocess.run(
         [sys.executable, "-m", "alembic", "heads"],
@@ -45,7 +46,7 @@ def test_alembic_head_is_phase1_auth_identity():
         text=True,
     )
     assert result.returncode == 0
-    assert "phase1_auth_identity" in result.stdout
+    assert "settle_drains" in result.stdout
 
 
 def test_target_metadata_covers_all_bases():
@@ -114,6 +115,8 @@ def test_target_metadata_covers_all_bases():
         # Phase 1 auth — identity
         "users",
         "memberships",
+        # Settle drain marker (worker-settle BSage write subscriber)
+        "settle_drains",
     }
     actual_tables = (
         set(AccountsBase.metadata.tables)
