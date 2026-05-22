@@ -214,7 +214,11 @@ def build_agent_execution_deps(
     * sandbox = the resolved :class:`SandboxManager` — :class:`DockerSandboxManager`
       when ``sandbox_enabled``, else :class:`NoopSandboxManager` so dev runs
       without Docker (the orchestrator requires a non-None manager).
-    * skill_loader = :class:`SkillLoader` rooted at ``skills_root``.
+    * skill_loader_for = a per-workspace factory ``workspace_id ->
+      SkillLoader`` rooted at ``<skills_root>/<workspace_id>/`` (Workflow §6
+      #5 — skills are per-workspace). The returned loader is already
+      ``load_all()``-ed so :class:`FrameStage` frames against that workspace's
+      skills only, never a single shared root-level set.
     * run workspace = ``run_workspace_root/<run_id>`` (per
       :meth:`AgentWorker._frame_and_drive`).
 
@@ -223,6 +227,12 @@ def build_agent_execution_deps(
     """
     settings = settings or get_settings()
     box: SandboxManager = sandbox_manager or build_sandbox_manager() or NoopSandboxManager()
+    skills_root = Path(settings.skills_root)
+
+    def _skill_loader_for(workspace_id: uuid.UUID) -> SkillLoader:
+        loader = SkillLoader(skills_root / str(workspace_id))
+        loader.load_all()
+        return loader
 
     async def _factory(session: AsyncSession, run: ExecutionRun) -> RunOrchestrator | None:
         account = await resolve_workspace_model_account(session, run)
@@ -238,7 +248,7 @@ def build_agent_execution_deps(
         return RunOrchestrator(session=session, llm=llm, sandbox_manager=box)
 
     return AgentExecutionDeps(
-        skill_loader=SkillLoader(Path(settings.skills_root)),
+        skill_loader_for=_skill_loader_for,
         orchestrator_factory=_factory,
         workspace_root=Path(settings.run_workspace_root),
     )

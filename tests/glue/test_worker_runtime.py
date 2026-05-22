@@ -372,6 +372,97 @@ async def test_ambiguous_active_accounts_creates_decision(
 
 
 # --------------------------------------------------------------------------
+# Per-workspace skill scoping — two workspaces resolve to two skill roots
+# --------------------------------------------------------------------------
+
+
+def _write_skill(root: Path, name: str, description: str) -> None:
+    """Write a minimal Workflow §6 #5 skill manifest under ``root``."""
+    root.mkdir(parents=True, exist_ok=True)
+    (root / f"{name}.md").write_text(
+        f"---\nname: {name}\nversion: 1\ndescription: {description}\n---\nbody",
+        encoding="utf-8",
+    )
+
+
+async def test_skill_loader_for_resolves_per_workspace_roots(
+    tmp_path: Path,
+) -> None:
+    """The production factory roots each workspace at ``<skills_root>/<ws>/``.
+
+    Seed a skill in workspace A's dir, none in B's — A's loader sees the skill,
+    B's loader sees an empty registry. Proves skill loading is per-workspace,
+    not a single shared root-level set. (``async`` only to satisfy the module's
+    ``pytestmark = pytest.mark.asyncio``; the body is synchronous.)
+    """
+    skills_root = tmp_path / "skills"
+    ws_a = uuid.uuid4()
+    ws_b = uuid.uuid4()
+    _write_skill(skills_root / str(ws_a), "weekly-digest", "Generate a weekly digest")
+
+    settings = get_settings().model_copy(update={"skills_root": str(skills_root)})
+    deps = runtime.build_agent_execution_deps(
+        settings=settings, sandbox_manager=NoopSandboxManager()
+    )
+
+    loader_a = deps.skill_loader_for(ws_a)
+    loader_b = deps.skill_loader_for(ws_b)
+
+    # Distinct roots, scoped by workspace_id.
+    assert loader_a._skill_dir == skills_root / str(ws_a)
+    assert loader_b._skill_dir == skills_root / str(ws_b)
+    assert loader_a._skill_dir != loader_b._skill_dir
+    # A sees its seeded skill; B (no dir seeded) sees nothing.
+    assert set(loader_a.registry) == {"weekly-digest"}
+    assert loader_b.registry == {}
+
+
+async def test_drive_frames_against_only_the_runs_workspace_skills(
+    client: httpx.AsyncClient,
+    sf: async_sessionmaker[AsyncSession],
+    workspace_id: uuid.UUID,
+    account_id: uuid.UUID,
+    kms_key: None,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """End-to-end: a run for workspace A frames against A's skill only.
+
+    Seed a skill in workspace A's skills dir and NONE in another workspace's
+    dir. Drive an A run; its ``frame.skill_match`` resolves to A's skill —
+    proving the worker uses a SkillLoader rooted at the run's own workspace.
+    """
+    skills_root = tmp_path / "skills"
+    other_ws = uuid.uuid4()
+    # Skill in A's dir; the request text references it so FrameStage matches.
+    _write_skill(skills_root / str(workspace_id), "weekly-digest", "Generate a weekly digest")
+    # An UNRELATED workspace's dir exists with a different skill — must NOT leak.
+    _write_skill(skills_root / str(other_ws), "groceries", "Buy groceries from the store")
+
+    await _seed_active_account(sf, workspace_id=workspace_id, account_id=account_id)
+    _patch_scripted_llm(monkeypatch, _verified_script())
+
+    resp = await client.post("/api/v1/messages", json={"text": "please run the weekly digest now"})
+    assert resp.status_code == 202, resp.text
+    assert await IntakeWorker(session_factory=sf).drain_once() == 1
+
+    settings = get_settings().model_copy(update={"skills_root": str(skills_root)})
+    deps = runtime.build_agent_execution_deps(
+        settings=settings, sandbox_manager=NoopSandboxManager()
+    )
+    deps.workspace_root = tmp_path / "runs"
+    agent = AgentWorker(session_factory=sf, execution=deps)
+    assert await agent.claim_once() == 1
+    assert await agent.drive_once() == 1
+
+    async with sf() as s:
+        run = (await s.execute(select(ExecutionRun))).scalar_one()
+        # Framed against workspace A's skills only — sees A's "weekly-digest",
+        # never the other workspace's "groceries".
+        assert run.payload["frame"]["skill_match"] == "weekly-digest"
+
+
+# --------------------------------------------------------------------------
 # Runtime construction — the worker set is built + shuts down gracefully
 # --------------------------------------------------------------------------
 
