@@ -9,6 +9,7 @@ from __future__ import annotations
 from backend.workers.agent_worker import AgentWorker
 from backend.workers.db import (
     AuditRelayStateRow,
+    SettleDrainRow,
     WorkerInstallTokenRow,
     WorkerRow,
     WorkersBase,
@@ -18,7 +19,13 @@ from backend.workers.delivery_worker import DeliveryWorker
 from backend.workers.executor_dispatch import ExecutorDispatchWorker
 from backend.workers.intake_worker import IntakeWorker
 from backend.workers.relay_worker import RelayWorker
-from backend.workers.settle_worker import SettleWorker
+from backend.workers.settle_worker import (
+    KnowledgeSettleSink,
+    Settlement,
+    SettleSink,
+    SettleWorker,
+    SettleWorkerConfig,
+)
 from backend.workers.streams import RedisStreamConsumer, StreamHandler
 from backend.workers.verifier_worker import VerifierWorker
 
@@ -28,9 +35,14 @@ __all__ = [
     "DeliveryWorker",
     "ExecutorDispatchWorker",
     "IntakeWorker",
+    "KnowledgeSettleSink",
     "RedisStreamConsumer",
     "RelayWorker",
+    "SettleDrainRow",
+    "SettleSink",
     "SettleWorker",
+    "SettleWorkerConfig",
+    "Settlement",
     "StreamHandler",
     "VerifierWorker",
     "WorkerInstallTokenRow",
