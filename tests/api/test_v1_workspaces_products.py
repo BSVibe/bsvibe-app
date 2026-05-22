@@ -83,9 +83,7 @@ async def client_with_ws(db):
         s.add(user)
         await s.flush()
         s.add(
-            MembershipRow(
-                id=uuid.uuid4(), user_id=user.id, workspace_id=workspace_id, role="owner"
-            )
+            MembershipRow(id=uuid.uuid4(), user_id=user.id, workspace_id=workspace_id, role="owner")
         )
         await s.commit()
 
