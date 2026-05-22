@@ -153,8 +153,14 @@ def _execution_deps(
     sf_: async_sessionmaker[AsyncSession], workspace_root: Path
 ) -> AgentExecutionDeps:
     llm = _scripted_verified_run()
+
+    def _skill_loader_for(ws_id: uuid.UUID) -> SkillLoader:
+        loader = SkillLoader(workspace_root / "skills" / str(ws_id))
+        loader.load_all()
+        return loader
+
     return AgentExecutionDeps(
-        skill_loader=SkillLoader(workspace_root / "skills"),
+        skill_loader_for=_skill_loader_for,
         orchestrator_factory=lambda session, _run: RunOrchestrator(
             session=session, llm=llm, sandbox_manager=NoopSandboxManager()
         ),
