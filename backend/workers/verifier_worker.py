@@ -6,8 +6,8 @@ Workflow §12.5 #8 (Bundle G — Workers). Pulls WorkStep rows in the
 and writes a VerificationResult row + flips WorkStep.proof_state.
 
 The verifier adapter is a Protocol so tests can pass a fake; production
-wiring (Bundle G) constructs the real
-``backend.execution.verifier.judge.LlmJudge`` etc.
+wiring (Bundle G) constructs the real verifier from a parsed
+``backend.execution.verifier.contract.VerificationContract``.
 """
 
 from __future__ import annotations

@@ -1,18 +1,21 @@
-"""BSNexus execution core lifted into the BSVibe monorepo.
+"""Execution core for the BSVibe monorepo.
 
-This bundle holds the state machine, orchestrator, run-attempt executor,
-verifier, planning decomposer, and tool registry that drive a Request
-through its lifecycle (open → running → review_ready → shipped).
+Holds the pieces the live orchestration path depends on: the state
+machine, advisory run-dispatch lock, verification-contract parser, and
+the tool registry. The canonical orchestration schema lives in
+``backend.execution.db`` (ExecutionRun-centric, payload-JSON) and is
+driven by ``backend.orchestrator.agent_runner`` + the Bundle G workers.
 
-Imports that crossed Bundle boundaries (gateway dispatch, delivery git
-ops, intake workspace seeding, supervisor sandbox, etc.) are marked
-with ``# TODO(bundle-x-integration):`` comments at their original call
-sites and will be wired during Bundle G/X integration.
+The BSNexus orchestrator lift (orchestrator / work_steps /
+run_attempt_executor / brief / directions / deliverables / verification /
+run_attempts / planning / verifier.judge) was removed — the monorepo
+re-implemented that surface greenfield in ``execution.db`` +
+``orchestrator.agent_runner``, and the lifted modules were a dead
+parallel implementation referencing a conflicting (BSNexus tenant_id)
+schema. Re-lift from BSNexus if a future bundle needs that logic.
 
 Internal domain enums (RequestStatus, WorkStepStatus, ProofState, …)
-live in ``backend.execution._domain`` — lifted from BSNexus
-``core/domain.py`` since they are execution-internal runtime values,
-not Bundle G shared schemas.
+live in ``backend.execution._domain``.
 """
 
 from backend.execution.advisory_lock import (
