@@ -24,9 +24,11 @@ from collections.abc import Callable
 from typing import Any
 
 from backend.plugins.base import (
+    VALID_COMPENSATION_TIERS,
     VALID_JURISDICTIONS,
     VALID_TRIGGER_TYPES,
     ActionCapability,
+    CompensateCapability,
     InboundCapability,
     OutboundCapability,
     PluginMeta,
@@ -93,11 +95,20 @@ class PluginBuilder:
         return register
 
     def outbound(
-        self, *, artifact_types: list[str]
+        self,
+        *,
+        artifact_types: list[str],
+        compensation_tier: str | None = None,
+        compensation_supported: bool = False,
     ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
         if not artifact_types:
             raise PluginRegistrationError(
                 f"Plugin {self.meta.name!r}: @outbound artifact_types must be non-empty"
+            )
+        if compensation_tier is not None and compensation_tier not in VALID_COMPENSATION_TIERS:
+            raise PluginRegistrationError(
+                f"Plugin {self.meta.name!r}: invalid compensation_tier {compensation_tier!r}; "
+                f"must be one of {sorted(VALID_COMPENSATION_TIERS)}"
             )
         ats = tuple(artifact_types)
         existing = {t for cap in self.meta.outbounds for t in cap.artifact_types}
@@ -108,7 +119,42 @@ class PluginBuilder:
             )
 
         def register(fn: Callable[..., Any]) -> Callable[..., Any]:
-            self.meta.outbounds.append(OutboundCapability(fn=fn, artifact_types=ats))
+            self.meta.outbounds.append(
+                OutboundCapability(
+                    fn=fn,
+                    artifact_types=ats,
+                    compensation_tier=compensation_tier,
+                    compensation_supported=compensation_supported,
+                )
+            )
+            return fn
+
+        return register
+
+    def compensate(
+        self, *, artifact_types: list[str]
+    ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
+        """Register an undo handler for one or more delivered artifact_types.
+
+        Workflow §9.2 — pairs with ``@p.outbound`` for tiers T1-T3. The
+        handler receives ``(context, handle)`` where ``handle`` is the
+        ``compensation_handle`` dict the matching outbound returned, and must
+        be idempotent (re-call after success is a silent no-op).
+        """
+        if not artifact_types:
+            raise PluginRegistrationError(
+                f"Plugin {self.meta.name!r}: @compensate artifact_types must be non-empty"
+            )
+        ats = tuple(artifact_types)
+        existing = {t for cap in self.meta.compensates for t in cap.artifact_types}
+        overlap = existing & set(ats)
+        if overlap:
+            raise PluginRegistrationError(
+                f"Plugin {self.meta.name!r}: @compensate artifact_type overlap: {sorted(overlap)}"
+            )
+
+        def register(fn: Callable[..., Any]) -> Callable[..., Any]:
+            self.meta.compensates.append(CompensateCapability(fn=fn, artifact_types=ats))
             return fn
 
         return register

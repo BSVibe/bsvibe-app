@@ -62,6 +62,26 @@ class PluginRunner:
             f"Plugin {meta.name!r}: no outbound for artifact_type {artifact_type!r}"
         )
 
+    async def dispatch_compensate(
+        self,
+        meta: PluginMeta,
+        *,
+        artifact_type: str,
+        context: Any,
+        handle: Any,
+    ) -> Any:
+        """Run the ``@p.compensate`` handler whose artifact_types match.
+
+        Workflow §9 — ``handle`` is the ``compensation_handle`` dict the
+        original outbound returned. Handlers must be idempotent.
+        """
+        for cap in meta.compensates:
+            if artifact_type in cap.artifact_types:
+                return await self._call(meta, cap.fn, context, handle)
+        raise PluginRunError(
+            f"Plugin {meta.name!r}: no compensate for artifact_type {artifact_type!r}"
+        )
+
     async def dispatch_action(
         self,
         meta: PluginMeta,
