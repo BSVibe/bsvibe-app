@@ -27,6 +27,12 @@ class LlmResponse:
     usage_prompt_tokens: int
     usage_completion_tokens: int
     raw: Any | None = None
+    # OpenAI-shaped tool calls the model emitted, normalized to plain
+    # dicts: ``{"id", "type", "function": {"name", "arguments"}}``. Empty
+    # when the caller passed no ``tools`` or the model returned none. The
+    # agent loop (backend.execution.orchestrator) consumes these; the
+    # plain chat path ignores them.
+    tool_calls: tuple[dict[str, Any], ...] = ()
 
 
 def _lazy_litellm_completion() -> CompletionFn:
@@ -47,6 +53,7 @@ class LlmClient:
         api_base: str | None = None,
         api_key: str | None = None,
         extra_params: dict[str, Any] | None = None,
+        tools: list[dict[str, Any]] | None = None,
     ) -> LlmResponse:
         kwargs: dict[str, Any] = {
             "model": model,
@@ -56,6 +63,8 @@ class LlmClient:
             kwargs["api_base"] = api_base
         if api_key:
             kwargs["api_key"] = api_key
+        if tools:
+            kwargs["tools"] = tools
         if extra_params:
             kwargs.update(extra_params)
 
@@ -76,6 +85,7 @@ class LlmClient:
             usage_prompt_tokens=prompt_tokens,
             usage_completion_tokens=completion_tokens,
             raw=raw,
+            tool_calls=_normalize_tool_calls(_attr_or_key(message, "tool_calls")),
         )
 
 
@@ -87,3 +97,24 @@ def _attr_or_key(obj: Any, name: str) -> Any:
     if isinstance(obj, dict):
         return obj.get(name)
     return None
+
+
+def _normalize_tool_calls(raw: Any) -> tuple[dict[str, Any], ...]:
+    """Coerce litellm/OpenAI tool_calls (objects or dicts) into plain
+    ``{"id", "type", "function": {"name", "arguments"}}`` dicts."""
+    if not raw:
+        return ()
+    normalized: list[dict[str, Any]] = []
+    for call in raw:
+        function = _attr_or_key(call, "function") or {}
+        normalized.append(
+            {
+                "id": str(_attr_or_key(call, "id") or ""),
+                "type": str(_attr_or_key(call, "type") or "function"),
+                "function": {
+                    "name": str(_attr_or_key(function, "name") or ""),
+                    "arguments": str(_attr_or_key(function, "arguments") or ""),
+                },
+            }
+        )
+    return tuple(normalized)

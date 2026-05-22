@@ -6,22 +6,30 @@ bridge between the workflow state machine and the execution layer
 ``open → running → review_ready → shipped`` lifecycle, and surfaces
 the resulting run_id.
 
-Phase 1 implementation: persists the run skeleton + transitions through
-the lifecycle stages. The actual LLM tool loop / verification execution
-is the next layer down (``backend.execution.orchestrator.RunOrchestrator``);
-this module owns the *transactional* lifecycle, that module owns the
-*compute* lifecycle.
+It opens the run, then delegates the compute loop to
+``backend.execution.orchestrator.RunOrchestrator`` and maps the loop's
+terminal outcome back onto the run status:
+
+* ``verified`` → ``review_ready`` (work done, awaiting ship/delivery).
+* ``needs_decision`` → run stays ``running`` (paused on a Decision row;
+  resolution re-enters the loop — not a DB terminal).
+* ``system_error`` → ``failed``.
+
+This module owns the *transactional* lifecycle; ``RunOrchestrator`` owns
+the *compute* lifecycle.
 """
 
 from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime
+from pathlib import Path
 
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.execution.db import ExecutionRun, ExecutionRunHistory, RunStatus
+from backend.execution.orchestrator import LoopResult, RunOrchestrator
 from backend.intake.db import RequestRow
 
 logger = structlog.get_logger(__name__)
@@ -72,6 +80,47 @@ class AgentRunner:
             run_id=str(run.id),
         )
         return run.id
+
+    async def drive(
+        self,
+        *,
+        run_id: uuid.UUID,
+        orchestrator: RunOrchestrator,
+        workspace_dir: Path,
+    ) -> LoopResult:
+        """Run the compute loop for ``run_id`` and reconcile its outcome
+        with the transactional run status.
+
+        Transitions ``open → running`` before the loop, then maps the
+        terminal outcome: ``verified → review_ready``, ``system_error →
+        failed``, ``needs_decision`` leaves the run ``running`` (paused).
+        """
+        run = await self._session.get(ExecutionRun, run_id)
+        if run is None:
+            raise ValueError(f"ExecutionRun {run_id} not found")
+
+        await self.transition(
+            run_id=run_id, to_status=RunStatus.RUNNING, reason="agent loop started"
+        )
+        result = await orchestrator.run(run=run, workspace_dir=workspace_dir)
+
+        if result.outcome == "verified":
+            await self.transition(
+                run_id=run_id, to_status=RunStatus.REVIEW_READY, reason="agent loop verified"
+            )
+        elif result.outcome == "system_error":
+            await self.transition(
+                run_id=run_id,
+                to_status=RunStatus.FAILED,
+                reason=result.summary or "agent loop system error",
+            )
+        # needs_decision: run stays RUNNING (paused on a Decision row).
+        logger.info(
+            "agent_runner_loop_complete",
+            run_id=str(run_id),
+            outcome=result.outcome,
+        )
+        return result
 
     async def transition(
         self,
