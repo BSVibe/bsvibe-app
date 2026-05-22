@@ -8,7 +8,9 @@
     "start": "next start --port 3700",
     "lint": "biome check .",
     "lint:fix": "biome check --write .",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "dependencies": {
     "next": "16.2.6",
@@ -17,9 +19,18 @@
   },
   "devDependencies": {
     "@biomejs/biome": "1.9.4",
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/react": "^16.3.2",
+    "@testing-library/user-event": "^14.6.1",
     "@types/node": "22.9.0",
     "@types/react": "19.2.0",
     "@types/react-dom": "19.2.0",
-    "typescript": "5.6.3"
+    "@vitejs/plugin-react": "^4.7.0",
+    "jsdom": "^25.0.1",
+    "typescript": "5.6.3",
+    "vitest": "^3.2.4"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": ["@biomejs/biome", "esbuild", "sharp"]
   }
 }
