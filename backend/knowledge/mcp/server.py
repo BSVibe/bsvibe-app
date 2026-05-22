@@ -158,26 +158,6 @@ def _canon_mutation_enabled(state: Any) -> bool:
 # ---------------------------------------------------------------------------
 # Dispatch helpers — first-class registry, then plugin bridge fallback.
 # ---------------------------------------------------------------------------
-def _authz_context() -> tuple[Any, Any, Any]:
-    """Resolve ``(authz_settings, fga, cache)`` for the MCP tool dispatcher.
-
-    Tier 5 Phase 3a — the dispatcher's ``required_permission`` check runs
-    through ``bsvibe_authz.check_tenant_permission``, which needs the
-    ``bsvibe_authz.Settings`` (``openfga_api_url`` decides permissive
-    mode), the OpenFGA client, and the permission cache. We resolve the
-    process-wide singletons the REST ``require_permission`` dependency
-    uses so MCP and REST share one OpenFGA client + one 30s cache.
-    """
-    from backend.shared.authz import get_openfga_client, get_permission_cache, get_settings
-
-    authz_settings = get_settings()
-    return (
-        authz_settings,
-        get_openfga_client(authz_settings),
-        get_permission_cache(authz_settings),
-    )
-
-
 def _resolve_principal(state: Any) -> Any | None:
     """Return the principal for the current MCP call.
 
@@ -203,24 +183,19 @@ async def _dispatch_via_registry(
     arguments: dict[str, Any],
 ) -> Any:
     if name in registry:
-        authz_settings, fga, cache = _authz_context()
         # The Streamable HTTP transport (bsage.mcp.streamable_http) carries
         # the ``Authorization`` header on every request, resolves the
         # principal per-request, and stashes it on a context-var that
         # ``_resolve_principal`` reads here — so ``ctx.user`` is the real
-        # principal and permissioned tools authorize correctly over HTTP.
-        # The stdio transport has no per-request HTTP headers; it pins
-        # the principal on ``state.mcp_principal`` at startup from
-        # ``$BSAGE_MCP_PAT`` (see ``bsage.mcp.stdio``) and
-        # ``_resolve_principal`` reads it back here. When the PAT is
-        # unset the principal is ``None`` — domain read tools
-        # (``required_permission=None``) still work; permissioned tools deny.
+        # principal. The stdio transport has no per-request HTTP headers; it
+        # pins the principal on ``state.mcp_principal`` at startup from
+        # ``$BSAGE_MCP_PAT`` (see ``bsage.mcp.stdio``). When the PAT is unset
+        # the principal is ``None`` — domain read tools
+        # (``required_permission=None``) still work; permissioned tools
+        # require authentication.
         ctx = ToolContext(
             state=state,
             user=_resolve_principal(state),
-            settings=authz_settings,
-            fga=fga,
-            cache=cache,
             audit_outbox=getattr(state, "audit_outbox", None),
         )
         try:

@@ -7,18 +7,17 @@ the REST routers in :mod:`bsage.gateway.routes`. Each tool ships with:
 * a typed Pydantic ``output_schema`` (validates handler return values)
 * an async ``handler`` that talks to the same service layer the REST
   routes use — never the CLI / typer command function
-* an optional ``required_permission`` — a ``<product>.<resource>.<action>``
-  dot-string checked against OpenFGA via
-  ``bsvibe_authz.check_tenant_permission``. Tier 5 Phase 3a unifies MCP
-  tool authorization with REST ``require_permission``: one OpenFGA model
-  gates both surfaces. (Replaces the legacy ``required_scopes`` list,
-  which checked the JWT ``scope`` claim — a separate authz path.)
+* an optional ``required_permission`` — retained as descriptive metadata.
+  OpenFGA was retired (BSVibe is a single backend); the dispatcher now
+  only requires that the caller be authenticated. Fine-grained role
+  gating, when a tool needs it, is the RBAC layer's job
+  (``Membership.role`` via :func:`backend.api.deps.require_role`).
 * an optional ``audit_event`` — emitted on success via the same
   audit outbox the REST routes use, so every mutating tool is
   observable identically to its REST sibling.
 
 The dispatcher (``ToolRegistry``) deliberately mirrors how FastAPI
-routers behave: validate input → enforce permission → run handler →
+routers behave: validate input → enforce auth → run handler →
 validate output → audit emit on success.
 """
 
@@ -80,30 +79,15 @@ class AuditOutboxLike(Protocol):
 class ToolContext:
     """Runtime context handed to every tool handler.
 
-    ``user`` mirrors :class:`bsvibe_authz.User`. The dispatcher never
-    inspects internal fields directly — only ``user.id``, ``user.email``,
-    ``user.is_service``, ``user.is_demo``, ``user.active_tenant_id`` and
-    ``user.app_metadata`` (consumed inside ``check_tenant_permission``) —
-    so a duck-typed test fixture works without dragging in the real
-    authz package.
-
-    ``fga`` / ``cache`` are the OpenFGA client + permission cache used by
-    the Tier 5 permission check. They are optional: when absent the
-    dispatcher lazily resolves the process-wide singletons from
-    ``bsvibe_authz`` (mirroring how the REST ``require_permission``
-    dependency injects them). ``settings`` is the
-    ``bsvibe_authz.Settings`` the OpenFGA check reads
-    (``openfga_api_url`` decides permissive mode); when absent the
-    dispatcher falls back to ``bsvibe_authz.get_settings()`` — the same
-    Settings the REST app's ``get_settings_dep`` resolves.
+    ``user`` mirrors :class:`backend.shared.authz.User`. The dispatcher only
+    reads ``user.id``, ``user.email`` and ``user.is_service`` (for audit
+    attribution), so a duck-typed test fixture works without dragging in the
+    real authz package.
     """
 
     user: Any | None = None
     audit_outbox: AuditOutboxLike | None = None
     state: Any | None = None
-    settings: Any | None = None
-    fga: Any | None = None
-    cache: Any | None = None
     request_id: str | None = None
 
 
@@ -116,11 +100,10 @@ ToolHandler = Callable[[Any, ToolContext], Awaitable[Any]]
 class Tool:
     """First-class MCP tool definition.
 
-    ``required_permission`` is a ``<product>.<resource>.<action>``
-    dot-string (e.g. ``"bsage.canonicalization.apply"``) checked against
-    OpenFGA — every value MUST be a row in the bsvibe-authz permission
-    matrix. ``None`` means the tool is open to any authenticated
-    principal (the SSE / stdio connection is already authenticated).
+    ``required_permission`` is descriptive metadata (a
+    ``<product>.<resource>.<action>`` dot-string). It no longer drives an
+    OpenFGA check — the dispatcher only requires authentication. ``None``
+    means no annotation; either way an authenticated principal may call.
     """
 
     name: str
@@ -183,7 +166,7 @@ class ToolRegistry:
         arguments: dict[str, Any] | None,
         ctx: ToolContext,
     ) -> dict[str, Any]:
-        """Validate args → enforce scope → run → validate output → audit emit.
+        """Validate args → enforce auth → run → validate output → audit emit.
 
         Returns the validated output as a JSON-safe ``dict``. The MCP
         transport wraps that into a ``TextContent`` payload — that
@@ -202,8 +185,8 @@ class ToolRegistry:
             # internal state.
             raise ToolError(f"invalid arguments for {name}: {exc.errors()}") from exc
 
-        # 2. Permission enforcement (Tier 5 — OpenFGA, shared with REST).
-        await _enforce_permission(tool, ctx)
+        # 2. Authentication enforcement.
+        _enforce_authenticated(tool, ctx)
 
         # 3. Handler invocation — wrap any internal failure so the wire
         #    response never leaks implementation detail.
@@ -258,70 +241,19 @@ def _pydantic_to_json_schema(model: type[BaseModel]) -> dict[str, Any]:
     return schema
 
 
-def _resolve_authz(ctx: ToolContext) -> tuple[Any, Any, Any]:
-    """Resolve ``(settings, fga, cache)`` for the permission check.
+def _enforce_authenticated(tool: Tool, ctx: ToolContext) -> None:
+    """Require an authenticated principal for a permissioned tool.
 
-    Prefers values already on ``ctx`` (the SSE/stdio transport may inject
-    them); otherwise lazily resolves the process-wide ``bsvibe_authz``
-    singletons — the same client + cache the REST ``require_permission``
-    dependency uses, so MCP and REST share one OpenFGA client and one
-    30s permission cache per process.
+    OpenFGA was retired (single backend). A tool that carries a
+    ``required_permission`` annotation still demands authentication; the
+    annotation no longer maps to an OpenFGA relation. Fine-grained role
+    gating is the RBAC layer's job (``Membership.role``) and is applied at
+    the REST surface, not in this in-process MCP dispatcher.
     """
-    from backend.shared.authz import get_openfga_client, get_permission_cache, get_settings
-
-    settings = ctx.settings
-    if settings is None or not hasattr(settings, "openfga_api_url"):
-        # ``ctx.settings`` is BSage's own Settings on most call paths —
-        # the OpenFGA check needs bsvibe_authz.Settings. Fall back to the
-        # library default (env-loaded, same as REST's get_settings_dep).
-        settings = get_settings()
-
-    # Permissive mode — OpenFGA not deployed. ``check_tenant_permission``
-    # short-circuits to allow before touching ``fga``, so do not pay the
-    # cost of constructing an OpenFGA client that will never be called.
-    if not getattr(settings, "openfga_api_url", ""):
-        return settings, ctx.fga, ctx.cache
-
-    fga = ctx.fga if ctx.fga is not None else get_openfga_client(settings)
-    cache = ctx.cache if ctx.cache is not None else get_permission_cache(settings)
-    return settings, fga, cache
-
-
-async def _enforce_permission(tool: Tool, ctx: ToolContext) -> None:
-    """Enforce ``tool.required_permission`` via OpenFGA (Tier 5).
-
-    Unified with the gateway routes: the same
-    ``bsvibe_authz.check_tenant_permission`` call backs both this MCP
-    dispatcher and the REST ``require_permission`` dependency, so one
-    OpenFGA model is the source of truth for both surfaces.
-
-    A tool with no ``required_permission`` is open to any authenticated
-    principal (the SSE/stdio connection is already authenticated).
-    Anonymous callers are denied on permissioned tools. The check is
-    permissive (allow) for demo sessions and when OpenFGA is unconfigured
-    — identical posture to ``require_permission``.
-    """
-    permission = tool.required_permission
-    if not permission:
+    if not tool.required_permission:
         return
-    user = ctx.user
-    if user is None:
+    if ctx.user is None:
         raise ToolScopeDenied(f"tool {tool.name!r} requires authentication")
-
-    from backend.shared.authz import check_tenant_permission
-
-    settings, fga, cache = _resolve_authz(ctx)
-    allowed = await check_tenant_permission(
-        user,
-        permission,
-        fga=fga,
-        cache=cache,
-        settings=settings,
-    )
-    if not allowed:
-        raise ToolScopeDenied(
-            f"tool {tool.name!r} requires permission: {permission}",
-        )
 
 
 async def _safe_audit_emit(tool: Tool, ctx: ToolContext) -> None:
@@ -346,7 +278,7 @@ async def _safe_audit_emit(tool: Tool, ctx: ToolContext) -> None:
         event = AuditEventBase(
             event_type=tool.audit_event or f"bsage.mcp.{tool.name}.invoked",
             actor=actor,
-            tenant_id=getattr(ctx.user, "active_tenant_id", None),
+            tenant_id=None,
             resource=AuditResource(type="mcp_tool", id=tool.name),
             data={"tool": tool.name},
         )

@@ -13,7 +13,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.api.deps import get_db_session, get_workspace_id
+from backend.api.deps import get_db_session, get_workspace_id, require_role
 from backend.workspaces.db import ProductRow
 
 router = APIRouter()
@@ -133,7 +133,11 @@ async def update_product(
     return ProductResponse.model_validate(row)
 
 
-@router.delete("/{product_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete(
+    "/{product_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(require_role("admin"))],
+)
 async def delete_product(
     product_id: uuid.UUID,
     workspace_id: Annotated[uuid.UUID, Depends(get_workspace_id)],

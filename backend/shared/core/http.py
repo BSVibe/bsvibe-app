@@ -1,20 +1,18 @@
 """Shared async HTTP client foundation for the BSVibe ecosystem.
 
-Every outbound HTTP call (OpenFGA, audit relay, central dispatch,
-IdP introspection, future CLI clients) flows through
-:class:`HttpClientBase`. The class centralises four cross-cutting
-concerns that were previously copy-pasted across ~5 hand-rolled
-clients:
+Every outbound HTTP call (audit relay, central dispatch, future CLI
+clients) flows through :class:`HttpClientBase`. The class centralises
+four cross-cutting concerns that were previously copy-pasted across
+several hand-rolled clients:
 
 * httpx.AsyncClient lifecycle (lazy build, ownership tracking)
 * Authorization / X-Service-Token header injection
 * Retry on network errors and 5xx responses
 * Structured logging that NEVER includes credential values
 
-Subclasses (``OpenFGAClient``, ``AuditClient``, ``CentralDispatchClient``,
-introspection / device-flow clients) build endpoint-specific helpers on
-top of :meth:`HttpClientBase.request` instead of re-implementing any of
-the above.
+Subclasses (``AuditClient``, ``CentralDispatchClient``, …) build
+endpoint-specific helpers on top of :meth:`HttpClientBase.request`
+instead of re-implementing any of the above.
 """
 
 from __future__ import annotations

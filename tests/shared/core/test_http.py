@@ -1,8 +1,7 @@
 """Tests for :class:`bsvibe_core.http.HttpClientBase`.
 
 The base client is the shared HTTP foundation for all BSVibe outbound
-calls (OpenFGA, audit relay, central dispatch, IdP introspection). It
-must:
+calls (audit relay, central dispatch, …). It must:
 
 * build httpx.AsyncClient lazily and own it iff caller didn't pass one
 * inject ``Authorization`` / ``X-Service-Token`` headers when configured
