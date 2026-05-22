@@ -1,48 +1,711 @@
+/* BSVibe PWA — Notion craft bar (UX §5): light surface, hairline dividers,
+   hierarchy by typography + whitespace, color only for status meaning. */
+
 :root {
-  color-scheme: light dark;
-  font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+  --bg: #fbfbfa;
+  --surface: #ffffff;
+  --ink: #37352f;
+  --ink-2: #6b6a66;
+  --ink-3: #9b9a97;
+  --hair: #eae8e3;
+  --hair-strong: #e3e1db;
+  --accent-bg: #efefee;
+
+  --amber-ink: #b25e09;
+  --amber-dot: #e0922e;
+  --green-ink: #4f8a5b;
+  --green-dot: #5ba877;
+  --green-pill-bg: #eef4ee;
+
+  --rail-w: 248px;
+  --col-w: 760px;
+  --radius: 10px;
+  --radius-sm: 7px;
+
+  color-scheme: light;
+  font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
 
 * {
   box-sizing: border-box;
 }
 
+html,
 body {
   margin: 0;
-  background: #fbfbfa;
-  color: #1f1f1f;
+  padding: 0;
 }
+
+body {
+  background: var(--bg);
+  color: var(--ink);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizelegibility;
+}
+
+button {
+  font: inherit;
+  cursor: pointer;
+}
+
+button:disabled {
+  cursor: default;
+}
+
+/* ── Login ──────────────────────────────────────────────────────────────── */
 
 main.login {
   max-width: 360px;
-  margin: 12vh auto 0;
+  margin: 16vh auto 0;
   padding: 2rem;
   display: flex;
   flex-direction: column;
-  gap: 1rem;
+  gap: 1.5rem;
 }
 
-main.login h1 {
-  margin: 0;
-  font-size: 1.5rem;
+.login__brand {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.login__wordmark {
+  font-size: 1.4rem;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+
+.login__tagline {
+  font-size: 0.8rem;
+  color: var(--ink-3);
+}
+
+.login__form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.login__label {
+  font-size: 0.78rem;
+  color: var(--ink-2);
+  margin-top: 0.5rem;
+}
+
+.login input {
+  padding: 0.6rem 0.7rem;
+  border: 1px solid var(--hair-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--ink);
+}
+
+.login input:focus-visible {
+  outline: 2px solid var(--amber-dot);
+  outline-offset: 1px;
+}
+
+.login__submit {
+  margin-top: 1rem;
+  padding: 0.6rem 0.7rem;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: #1f1d1a;
+  color: #fff;
+  font-weight: 550;
+}
+
+.login__submit:disabled {
+  opacity: 0.6;
+}
+
+.login__error {
+  margin: 0.25rem 0 0;
+  font-size: 0.82rem;
+  color: #b3261e;
+}
+
+/* ── Shell ──────────────────────────────────────────────────────────────── */
+
+.auth-splash {
+  min-height: 100dvh;
+  background: var(--bg);
+}
+
+.shell {
+  display: grid;
+  grid-template-columns: var(--rail-w) minmax(0, 1fr);
+  min-height: 100dvh;
+}
+
+.shell__main {
+  grid-column: 2;
+  padding: 40px 32px 96px;
+}
+
+/* Left rail (desktop) */
+.rail {
+  grid-column: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 22px 14px 18px;
+  border-right: 1px solid var(--hair);
+  position: sticky;
+  top: 0;
+  height: 100dvh;
+}
+
+.rail__brand {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 4px 10px 18px;
+}
+
+.rail__wordmark {
+  font-size: 1.15rem;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+
+.rail__tagline {
+  font-size: 0.72rem;
+  color: var(--ink-3);
+}
+
+.rail__nav {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.rail__item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 7px 10px;
+  border: none;
+  background: transparent;
+  border-radius: var(--radius-sm);
+  color: var(--ink-2);
+  font-size: 0.9rem;
+  text-decoration: none;
+  text-align: left;
+}
+
+.rail__item:hover:not(:disabled) {
+  background: var(--accent-bg);
+  color: var(--ink);
+}
+
+.rail__item[aria-current="page"] {
+  background: var(--accent-bg);
+  color: var(--ink);
+  font-weight: 550;
+}
+
+.rail__item:disabled {
+  color: var(--ink-3);
+}
+
+.rail__item svg {
+  flex: none;
+  color: inherit;
+}
+
+.rail__direct {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  margin: 12px 6px;
+  padding: 9px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: #1f1d1a;
+  color: #fff;
+  font-size: 0.9rem;
+  font-weight: 550;
+}
+
+.rail__foot {
+  margin-top: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.rail__item--sub {
+  font-size: 0.85rem;
+}
+
+/* Account chip */
+.account-chip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-top: 1px solid var(--hair);
+  margin-top: 4px;
+}
+
+.account-chip__avatar {
+  flex: none;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: var(--accent-bg);
+  color: var(--ink-2);
+  display: grid;
+  place-items: center;
+  font-size: 0.78rem;
   font-weight: 600;
 }
 
-main.login form {
+.account-chip__email {
+  flex: 1;
+  min-width: 0;
+  font-size: 0.8rem;
+  color: var(--ink-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.account-chip__signout {
+  flex: none;
+  border: none;
+  background: transparent;
+  color: var(--ink-3);
+  font-size: 0.76rem;
+  padding: 2px 4px;
+}
+
+.account-chip__signout:hover:not(:disabled) {
+  color: var(--ink);
+}
+
+/* Mobile chrome — hidden on desktop */
+.topbar,
+.tabbar {
+  display: none;
+}
+
+/* Direct FAB — both breakpoints */
+.direct-fab {
+  position: fixed;
+  right: 24px;
+  bottom: 24px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 11px 18px;
+  border: none;
+  border-radius: 999px;
+  background: #1f1d1a;
+  color: #fff;
+  font-weight: 550;
+  box-shadow: 0 6px 20px rgba(15, 15, 15, 0.18);
+}
+
+.direct-fab svg {
+  color: inherit;
+}
+
+/* Direct overlay (stub) */
+.direct-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: grid;
+  place-items: start center;
+}
+
+.direct-overlay__backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(20, 20, 20, 0.28);
+}
+
+.direct-overlay__panel {
+  position: relative;
+  inset: auto;
+  margin: 18vh auto 0;
+  width: min(560px, 92vw);
+  max-width: 92vw;
+  background: var(--surface);
+  color: var(--ink);
+  border: 1px solid var(--hair-strong);
+  border-radius: var(--radius);
+  box-shadow: 0 16px 48px rgba(15, 15, 15, 0.22);
+  padding: 18px;
   display: flex;
   flex-direction: column;
-  gap: 0.5rem;
+  gap: 10px;
 }
 
-main.login input,
-main.login button {
-  padding: 0.5rem 0.75rem;
-  border: 1px solid #ddd;
-  border-radius: 4px;
+.direct-overlay__hint {
+  margin: 0;
+  font-size: 0.9rem;
+  color: var(--ink-2);
+}
+
+.direct-overlay__input {
+  width: 100%;
+  border: 1px solid var(--hair-strong);
+  border-radius: var(--radius-sm);
+  padding: 10px;
   font: inherit;
+  resize: none;
+  color: var(--ink);
+  background: var(--bg);
 }
 
-main.login .placeholder {
-  color: #888;
+.direct-overlay__soon {
+  margin: 0;
+  font-size: 0.76rem;
+  color: var(--ink-3);
+}
+
+/* ── Brief ──────────────────────────────────────────────────────────────── */
+
+.brief {
+  max-width: var(--col-w);
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 30px;
+}
+
+.brief__heading {
+  margin: 0;
+  font-size: 1.5rem;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+
+.brief__loading-note {
+  color: var(--ink-3);
+  font-size: 0.9rem;
+}
+
+.section-label {
+  margin: 0 0 12px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+
+/* Needs you */
+.needs-you {
+  background: var(--surface);
+  border: 1px solid var(--hair-strong);
+  border-radius: var(--radius);
+  padding: 16px 18px;
+}
+
+.needs-you--empty {
+  padding: 18px;
+}
+
+.needs-you__clear {
+  margin: 0;
+  color: var(--ink-3);
+  font-size: 0.88rem;
+}
+
+.needs-you__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.needs-you__title {
+  font-size: 0.95rem;
+  font-weight: 600;
+}
+
+.needs-you__count {
+  min-width: 20px;
+  height: 20px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--accent-bg);
+  color: var(--ink-2);
+  font-size: 0.75rem;
+  font-weight: 600;
+  display: grid;
+  place-items: center;
+}
+
+.needs-you__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.needs-you__row {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 9px 0;
+  font-size: 0.88rem;
+  color: var(--ink-2);
+  border-top: 1px solid var(--hair);
+}
+
+.needs-you__row:first-child {
+  border-top: none;
+}
+
+.needs-you__product {
+  font-weight: 550;
+  color: var(--ink);
+}
+
+.needs-you__sep {
+  color: var(--ink-3);
+}
+
+.needs-you__q {
+  flex: 1;
+}
+
+.needs-you__chev {
+  color: var(--ink-3);
+}
+
+/* Product lanes */
+.lanes__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.lane {
+  display: flex;
+  gap: 12px;
+  padding: 14px 2px;
+  border-top: 1px solid var(--hair);
+}
+
+.lane:first-child {
+  border-top: none;
+}
+
+.lane__glyph {
+  flex: none;
+  width: 16px;
+  text-align: center;
   font-size: 0.8rem;
+  line-height: 1.5;
+  color: var(--ink-3);
+}
+
+.lane--working .lane__glyph {
+  color: var(--ink-2);
+}
+
+.lane--needs-you .lane__glyph {
+  color: var(--amber-dot);
+}
+
+.lane--shipped .lane__glyph {
+  color: var(--green-dot);
+}
+
+.lane__body {
+  min-width: 0;
+}
+
+.lane__head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.lane__name {
+  font-size: 0.92rem;
+  font-weight: 600;
+}
+
+.lane__state {
+  font-size: 0.76rem;
+  color: var(--ink-3);
+}
+
+.lane--needs-you .lane__state {
+  color: var(--amber-ink);
+  font-weight: 550;
+}
+
+.lane--shipped .lane__state {
+  color: var(--green-ink);
+  font-weight: 550;
+}
+
+.lane__status {
+  margin: 3px 0 0;
+  font-size: 0.85rem;
+  color: var(--ink-2);
+}
+
+/* Recently shipped */
+.shipped__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  background: var(--surface);
+  border: 1px solid var(--hair-strong);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.shipped__row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 13px 16px;
+  border-top: 1px solid var(--hair);
+}
+
+.shipped__row:first-child {
+  border-top: none;
+}
+
+.shipped__icon {
+  flex: none;
+  width: 26px;
+  height: 26px;
+  border-radius: var(--radius-sm);
+  background: var(--accent-bg);
+  color: var(--ink-2);
+  display: grid;
+  place-items: center;
+  font-size: 0.85rem;
+}
+
+.shipped__icon--pr {
+  color: #6a5acd;
+}
+
+.shipped__icon--image {
+  color: #c77d2a;
+}
+
+.shipped__body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.shipped__title {
+  font-size: 0.9rem;
+  font-weight: 550;
+}
+
+.shipped__meta {
+  font-size: 0.78rem;
+  color: var(--ink-3);
+}
+
+.shipped__verdict {
+  flex: none;
+  font-size: 0.74rem;
+  font-weight: 550;
+  color: var(--green-ink);
+  background: var(--green-pill-bg);
+  border-radius: 999px;
+  padding: 3px 10px;
+}
+
+/* ── Mobile ─────────────────────────────────────────────────────────────── */
+
+@media (max-width: 767px) {
+  .shell {
+    display: block;
+  }
+
+  .rail {
+    display: none;
+  }
+
+  .topbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 14px 18px;
+    border-bottom: 1px solid var(--hair);
+    position: sticky;
+    top: 0;
+    background: var(--bg);
+    z-index: 10;
+  }
+
+  .topbar__title {
+    font-size: 1.1rem;
+    font-weight: 650;
+  }
+
+  .topbar__bell {
+    border: none;
+    background: transparent;
+    color: var(--ink-2);
+    padding: 4px;
+  }
+
+  .shell__main {
+    padding: 20px 16px 120px;
+  }
+
+  .brief {
+    gap: 26px;
+  }
+
+  .brief__heading {
+    display: none; /* the top bar already shows the title on mobile */
+  }
+
+  .tabbar {
+    display: flex;
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    border-top: 1px solid var(--hair);
+    background: var(--bg);
+    padding: 8px 8px max(8px, env(safe-area-inset-bottom));
+    z-index: 10;
+  }
+
+  .tabbar__item {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 3px;
+    border: none;
+    background: transparent;
+    color: var(--ink-3);
+    font-size: 0.68rem;
+    padding: 4px;
+    text-decoration: none;
+  }
+
+  .tabbar__item[aria-current="page"] {
+    color: var(--ink);
+    font-weight: 550;
+  }
+
+  .direct-fab {
+    bottom: 78px;
+    right: 16px;
+  }
 }
