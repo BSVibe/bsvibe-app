@@ -31,6 +31,7 @@ about and integration-test, and the load is bounded by Request volume.
 from __future__ import annotations
 
 import inspect
+import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -60,7 +61,13 @@ class AgentWorkerConfig:
 class AgentExecutionDeps:
     """The execution backend :meth:`AgentWorker.drive_once` needs.
 
-    * ``skill_loader`` — frames the Request against the workspace skills.
+    * ``skill_loader_for`` — resolves a :class:`SkillLoader` rooted at the
+      *run's* workspace skills directory (``<skills_root>/<workspace_id>/``).
+      Skills are per-workspace (Workflow §6 #5), and a run's ``workspace_id``
+      is only known per-run (inside :meth:`AgentWorker._frame_and_drive`), so
+      this is a factory ``workspace_id -> SkillLoader`` rather than one shared
+      loader — otherwise every workspace would frame against a single
+      root-level skill set (a multi-tenancy scoping gap).
     * ``orchestrator_factory`` — builds a :class:`RunOrchestrator` bound to
       the *same* session the run is driven in (so compute + transactional
       lifecycle share one transaction) AND to the *specific* run, so the
@@ -78,7 +85,7 @@ class AgentExecutionDeps:
     * ``default_artifact_type`` — frame hint when no skill matches.
     """
 
-    skill_loader: SkillLoader
+    skill_loader_for: Callable[[uuid.UUID], SkillLoader]
     orchestrator_factory: Callable[
         [AsyncSession, ExecutionRun], RunOrchestrator | Awaitable[RunOrchestrator | None]
     ]
@@ -158,10 +165,14 @@ class AgentWorker(BaseWorker):
         if run.request_id is not None:
             request = await session.get(RequestRow, run.request_id)
             if request is not None:
+                # Per-workspace skill scoping: frame against the loader rooted
+                # at THIS run's ``<skills_root>/<workspace_id>/`` (Workflow §6 #5),
+                # not a single shared root-level set.
+                skill_loader = execution.skill_loader_for(run.workspace_id)
                 framed = await self._frame_stage.frame(
                     request=request,
                     config=FrameConfig(
-                        skill_loader=execution.skill_loader,
+                        skill_loader=skill_loader,
                         default_artifact_type=execution.default_artifact_type,
                     ),
                 )
