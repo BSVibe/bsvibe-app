@@ -30,7 +30,8 @@ about and integration-test, and the load is bounded by Request volume.
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Callable
+import inspect
+from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -62,14 +63,25 @@ class AgentExecutionDeps:
     * ``skill_loader`` — frames the Request against the workspace skills.
     * ``orchestrator_factory`` — builds a :class:`RunOrchestrator` bound to
       the *same* session the run is driven in (so compute + transactional
-      lifecycle share one transaction). Production injects the gateway
-      work-LLM + real sandbox; tests inject the scripted LLM + Noop sandbox.
+      lifecycle share one transaction) AND to the *specific* run, so the
+      factory can resolve the run's per-workspace work-LLM identity (the
+      :class:`~backend.execution.db.ExecutionRun` carries only a
+      ``workspace_id``; production resolves that workspace's active
+      ModelAccount → ``account_id`` + ``model_account_id`` for the gateway
+      work-LLM). It may also create a :class:`~backend.execution.db.Decision`
+      and return ``None`` when the run cannot be resolved (e.g. zero / many
+      active model accounts) — in which case ``drive_once`` skips driving the
+      run, leaving it RUNNING (paused on the Decision, never silently stalled).
+      Production injects the gateway work-LLM + real sandbox; tests inject the
+      scripted LLM + Noop sandbox.
     * ``workspace_root`` — each run drives inside ``workspace_root/<run_id>``.
     * ``default_artifact_type`` — frame hint when no skill matches.
     """
 
     skill_loader: SkillLoader
-    orchestrator_factory: Callable[[AsyncSession], RunOrchestrator]
+    orchestrator_factory: Callable[
+        [AsyncSession, ExecutionRun], RunOrchestrator | Awaitable[RunOrchestrator | None]
+    ]
     workspace_root: Path
     default_artifact_type: str | None = "direct_output"
 
@@ -163,10 +175,25 @@ class AgentWorker(BaseWorker):
                 }
                 await session.flush()
 
+        runner = AgentRunner(session)
+        orchestrator = await _resolve_orchestrator(execution, session, run)
+        if orchestrator is None:
+            # Factory could not resolve the run (e.g. created a Decision for
+            # zero/ambiguous model accounts). Transition the run to RUNNING so
+            # it is paused on the Decision — NOT re-picked by the next
+            # ``drive_once`` (which scans OPEN runs), so no duplicate Decision
+            # is minted each tick. Mirrors the orchestrator's needs_decision
+            # semantics (run stays RUNNING, never silently stalled).
+            await runner.transition(
+                run_id=run.id,
+                to_status=RunStatus.RUNNING,
+                reason="paused on decision: model account unresolved",
+            )
+            logger.info("agent_worker_run_unresolved", run_id=str(run.id))
+            return
+
         workspace_dir = execution.workspace_root / str(run.id)
         workspace_dir.mkdir(parents=True, exist_ok=True)
-        orchestrator = execution.orchestrator_factory(session)
-        runner = AgentRunner(session)
         result = await runner.drive(
             run_id=run.id, orchestrator=orchestrator, workspace_dir=workspace_dir
         )
@@ -188,6 +215,21 @@ class AgentWorker(BaseWorker):
         rows = (await session.execute(stmt)).scalars().all()
         for r in rows:
             yield r
+
+
+async def _resolve_orchestrator(
+    execution: AgentExecutionDeps, session: AsyncSession, run: ExecutionRun
+) -> RunOrchestrator | None:
+    """Call ``orchestrator_factory`` supporting both sync and async factories.
+
+    The narrow Phase 1 factory was ``(session) -> RunOrchestrator``; Phase 2
+    widens it to ``(session, run) -> RunOrchestrator | None`` and additionally
+    permits an async factory (production resolution hits the DB). This shim
+    awaits the result when the factory is a coroutine."""
+    produced = execution.orchestrator_factory(session, run)
+    if inspect.isawaitable(produced):
+        return await produced
+    return produced
 
 
 def _request_intent_text(request: RequestRow) -> str:
