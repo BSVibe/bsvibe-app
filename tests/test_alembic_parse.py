@@ -27,11 +27,15 @@ def test_alembic_history_loads():
         "bundle1_initial",
         "bundle1_5a_rules",
         "bundle1_5b_routing_embed",
+        "bundle_k_knowledge",
+        "bundle_x_execution",
+        "bundle_g_glue",
+        "bundle_h_workspaces",
     ):
         assert rev in result.stdout, f"missing revision {rev} in:\n{result.stdout}"
 
 
-def test_alembic_head_is_routing_embed():
+def test_alembic_head_is_bundle_h_workspaces():
     repo = Path(__file__).parent.parent
     result = subprocess.run(
         [sys.executable, "-m", "alembic", "heads"],
@@ -40,18 +44,26 @@ def test_alembic_head_is_routing_embed():
         text=True,
     )
     assert result.returncode == 0
-    assert "bundle1_5b_routing_embed" in result.stdout
+    assert "bundle_h_workspaces" in result.stdout
 
 
 def test_target_metadata_covers_all_bases():
     """Reach into env.py module to confirm the merged metadata sees
-    every base we expect — Bundle 1 + Bundle 1.5a/1.5b."""
+    every base we expect — Bundle 1 + Bundle 1.5a/1.5b + Bundle K + Bundle X."""
     from backend.accounts.models import AccountsBase
+    from backend.delivery.db import DeliveryBase
+    from backend.execution.db import ExecutionBase
     from backend.gateway.budget.models import GatewayBudgetBase
     from backend.gateway.embedding.db import GatewayEmbeddingBase
     from backend.gateway.routing.db import GatewayRoutingBase
     from backend.gateway.rules.db import GatewayRulesBase
+    from backend.intake.db import IntakeBase
+    from backend.knowledge.canonicalization.db import CanonicalizationBase
+    from backend.knowledge.ingest.db import IngestBase
+    from backend.knowledge.retrieval.db import RetrievalBase
     from backend.supervisor.audit.models import AuditOutboxBase, SupervisorBase
+    from backend.workers.db import WorkersBase
+    from backend.workspaces.db import WorkspacesBase
 
     expected_tables = {
         # Bundle 1
@@ -68,6 +80,35 @@ def test_target_metadata_covers_all_bases():
         "intent_examples",
         "model_catalog_entries",
         "routing_logs",
+        # Bundle K
+        "canonical_anchors",
+        "canonicalization_proposals",
+        "canonicalization_decisions",
+        "canonicalization_policies",
+        "ingest_batches",
+        "retrieval_queries",
+        # Bundle X
+        "execution_runs",
+        "execution_run_history",
+        "execution_run_activities",
+        "composition_snapshots",
+        "decomposer_steps",
+        "work_steps",
+        "run_attempts",
+        "deliverables",
+        "execution_decisions",
+        "verification_results",
+        # Bundle G
+        "trigger_events",
+        "requests",
+        "delivery_events",
+        "safe_mode_queue_items",
+        "workers",
+        "worker_install_tokens",
+        "audit_relay_state",
+        # Bundle H
+        "workspaces",
+        "products",
     }
     actual_tables = (
         set(AccountsBase.metadata.tables)
@@ -77,6 +118,14 @@ def test_target_metadata_covers_all_bases():
         | set(GatewayRoutingBase.metadata.tables)
         | set(SupervisorBase.metadata.tables)
         | set(AuditOutboxBase.metadata.tables)
+        | set(CanonicalizationBase.metadata.tables)
+        | set(IngestBase.metadata.tables)
+        | set(RetrievalBase.metadata.tables)
+        | set(ExecutionBase.metadata.tables)
+        | set(IntakeBase.metadata.tables)
+        | set(DeliveryBase.metadata.tables)
+        | set(WorkersBase.metadata.tables)
+        | set(WorkspacesBase.metadata.tables)
     )
     assert expected_tables.issubset(actual_tables), (
         f"Missing tables: {expected_tables - actual_tables}"

@@ -29,7 +29,7 @@ from __future__ import annotations
 
 import logging
 import sys
-from typing import IO, Any
+from typing import IO, Any, TextIO, cast
 
 import structlog
 
@@ -112,7 +112,7 @@ def configure_logging(
         processors=processors,
         wrapper_class=structlog.make_filtering_bound_logger(numeric_level),
         context_class=dict,
-        logger_factory=structlog.PrintLoggerFactory(file=output_stream),
+        logger_factory=structlog.PrintLoggerFactory(file=cast(TextIO, output_stream)),
         cache_logger_on_first_use=False,
     )
 

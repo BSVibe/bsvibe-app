@@ -13,17 +13,11 @@ from enum import StrEnum
 
 from sqlalchemy import DateTime, Integer, UniqueConstraint
 from sqlalchemy import Enum as SAEnum
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column
 
+from backend.data import Base
 
-class GatewayBudgetBase(DeclarativeBase):
-    """Declarative base for budget-enforcement tables.
-
-    Separate from :class:`backend.accounts.models.AccountsBase` because
-    budget caps are a gateway-domain enforcement policy attached to an
-    ``account_id`` scope — the ``ModelAccount`` row itself lives at the
-    workspace layer.
-    """
+GatewayBudgetBase = Base
 
 
 class BudgetScope(StrEnum):
@@ -44,11 +38,18 @@ class AccountBudgetPolicy(GatewayBudgetBase):
     workspace_id: Mapped[uuid.UUID] = mapped_column(nullable=False, index=True)
     account_id: Mapped[uuid.UUID] = mapped_column(nullable=False, index=True)
     scope: Mapped[BudgetScope] = mapped_column(
-        SAEnum(BudgetScope, name="budget_scope_enum"), nullable=False
+        SAEnum(
+            BudgetScope, name="budget_scope_enum", values_callable=lambda ec: [m.value for m in ec]
+        ),
+        nullable=False,
     )
     cost_cap_cents: Mapped[int] = mapped_column(Integer, nullable=False)
     enforcement: Mapped[BudgetEnforcement] = mapped_column(
-        SAEnum(BudgetEnforcement, name="budget_enforcement_enum"),
+        SAEnum(
+            BudgetEnforcement,
+            name="budget_enforcement_enum",
+            values_callable=lambda ec: [m.value for m in ec],
+        ),
         nullable=False,
         default=BudgetEnforcement.BLOCK,
     )

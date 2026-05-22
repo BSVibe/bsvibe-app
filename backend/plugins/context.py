@@ -58,13 +58,18 @@ class NotificationInterface(Protocol):
 
 @runtime_checkable
 class KnowledgeBackend(Protocol):
-    """Placeholder for the BSage-style vault backend.
+    """Restricted vault surface exposed to plugin capability calls.
 
-    Concrete implementation lands with ``backend/knowledge/`` lift; until
-    then this is just a name to type-check against.
+    The canonical implementation is
+    :class:`backend.knowledge.graph.RestrictedPluginGarden` — a read+seed-only
+    wrapper around ``GardenWriter``. External plugins cannot mutate garden
+    notes directly; they submit seeds and let ``IngestCompiler`` classify
+    them.
     """
 
-    async def write_seed(self, source: str, data: dict[str, Any]) -> str: ...
+    async def write_seed(self, source: str, data: dict[str, Any]) -> Any: ...
+
+    async def read_notes(self, subdir: str) -> Any: ...
 
 
 @dataclass

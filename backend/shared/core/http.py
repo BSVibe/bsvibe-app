@@ -201,7 +201,7 @@ class HttpClientBase:
                     call_kwargs["data"] = data
                 if content is not None:
                     call_kwargs["content"] = content
-                resp = await http_method(path, **call_kwargs)
+                resp: httpx.Response = await http_method(path, **call_kwargs)
             except httpx.HTTPError as exc:
                 duration_ms = (time.monotonic() - start) * 1000
                 last_error = exc

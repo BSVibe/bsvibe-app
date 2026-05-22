@@ -20,13 +20,12 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
 )
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
+from backend.data import Base
 from backend.gateway.embedding.column import EmbeddingVector
 
-
-class GatewayEmbeddingBase(DeclarativeBase):
-    """Per-domain declarative base; merged in alembic's env.py."""
+GatewayEmbeddingBase = Base
 
 
 class AccountEmbeddingSettingsRow(GatewayEmbeddingBase):

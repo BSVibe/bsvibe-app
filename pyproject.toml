@@ -20,6 +20,10 @@ dependencies = [
     "jsonschema>=4",
     "cryptography>=42",
     "pgvector>=0.3.0",
+    "networkx>=3",
+    "pyyaml>=6",
+    "mcp>=1",
+    "aiosqlite>=0.20",
 ]
 
 [project.optional-dependencies]
@@ -51,5 +55,4 @@ addopts = "-ra"
 source = ["backend"]
 omit = [
     "backend/*/migrations/*",
-    "backend/workers/*",
 ]

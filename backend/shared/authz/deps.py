@@ -80,7 +80,7 @@ def get_openfga_client(settings: Settings = Depends(get_settings_dep)) -> FGACli
     global _fga_client_singleton
     if _fga_client_singleton is None:
         _fga_client_singleton = OpenFGAClient(settings)
-    return _fga_client_singleton  # type: ignore[return-value]
+    return _fga_client_singleton
 
 
 def get_permission_cache(
