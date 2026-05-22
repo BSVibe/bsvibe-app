@@ -28,17 +28,14 @@ from sqlalchemy import (
     String,
     Text,
 )
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column
+
+from backend.data import Base
+
+SupervisorBase = Base
 
 
-class SupervisorBase(DeclarativeBase):
-    """Declarative base for supervisor-owned tables."""
-
-
-class AuditOutboxBase(DeclarativeBase):
-    """Standalone declarative base for the outbox table (mirror of
-    ``bsvibe_audit.outbox.schema.AuditOutboxBase`` — kept separate so a
-    caller can still ``create_all`` on either one alone in tests)."""
+AuditOutboxBase = Base
 
 
 class AuditEvent(SupervisorBase):

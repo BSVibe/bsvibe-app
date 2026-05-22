@@ -12,11 +12,11 @@ from enum import StrEnum
 
 from sqlalchemy import DateTime, String, UniqueConstraint
 from sqlalchemy import Enum as SAEnum
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column
 
+from backend.data import Base
 
-class WorkersBase(DeclarativeBase):
-    """Declarative base for workers-domain tables."""
+WorkersBase = Base
 
 
 class WorkerStatus(StrEnum):

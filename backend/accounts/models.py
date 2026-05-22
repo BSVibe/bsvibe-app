@@ -13,11 +13,11 @@ from datetime import datetime
 from typing import Any
 
 from sqlalchemy import JSON, Boolean, DateTime, Index, String, UniqueConstraint
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column
 
+from backend.data import Base
 
-class AccountsBase(DeclarativeBase):
-    """Declarative base for workspace-account tables."""
+AccountsBase = Base
 
 
 class ModelAccount(AccountsBase):

@@ -14,11 +14,11 @@ from typing import Any
 
 from sqlalchemy import JSON, DateTime, Index, String
 from sqlalchemy import Enum as SAEnum
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column
 
+from backend.data import Base
 
-class DeliveryBase(DeclarativeBase):
-    """Declarative base for delivery-domain tables."""
+DeliveryBase = Base
 
 
 class SafeModeStatus(StrEnum):

@@ -8,10 +8,12 @@ from collections.abc import AsyncIterator
 
 import pytest
 import pytest_asyncio
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncSession
 
+# Imported for table-registration side effects on the shared Base.metadata.
+import backend.accounts.models  # noqa: F401
 from backend.accounts.crypto import CredentialCipher
-from backend.accounts.models import AccountsBase
+from tests._support import memory_session
 
 
 @pytest.fixture
@@ -26,13 +28,8 @@ def cipher(cipher_key: bytes) -> CredentialCipher:
 
 @pytest_asyncio.fixture
 async def session() -> AsyncIterator[AsyncSession]:
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:", future=True)
-    async with engine.begin() as conn:
-        await conn.run_sync(AccountsBase.metadata.create_all)
-    maker = async_sessionmaker(engine, expire_on_commit=False)
-    async with maker() as s:
+    async with memory_session() as s:
         yield s
-    await engine.dispose()
 
 
 @pytest.fixture(autouse=True)

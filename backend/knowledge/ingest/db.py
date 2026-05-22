@@ -7,11 +7,11 @@ from datetime import datetime
 from typing import Any
 
 from sqlalchemy import JSON, DateTime, Index, Integer, String
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column
 
+from backend.data import Base
 
-class IngestBase(DeclarativeBase):
-    """Declarative base for ingest analytics tables."""
+IngestBase = Base
 
 
 class IngestBatch(IngestBase):

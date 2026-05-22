@@ -20,11 +20,11 @@ from typing import Any
 
 from sqlalchemy import JSON, DateTime, ForeignKey, Index, String, Text, UniqueConstraint
 from sqlalchemy import Enum as SAEnum
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column
 
+from backend.data import Base
 
-class CanonicalizationBase(DeclarativeBase):
-    """Declarative base for canonicalization-domain tables."""
+CanonicalizationBase = Base
 
 
 # Enum domains lifted verbatim from

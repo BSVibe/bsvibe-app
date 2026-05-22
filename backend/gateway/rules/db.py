@@ -21,11 +21,11 @@ from sqlalchemy import (
     String,
     UniqueConstraint,
 )
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
+from backend.data import Base
 
-class GatewayRulesBase(DeclarativeBase):
-    """Per-domain declarative base; merged in alembic's env.py."""
+GatewayRulesBase = Base
 
 
 class RoutingRuleRow(GatewayRulesBase):

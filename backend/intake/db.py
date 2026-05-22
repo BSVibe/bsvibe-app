@@ -20,11 +20,11 @@ from typing import Any
 
 from sqlalchemy import JSON, DateTime, ForeignKey, Index, String, UniqueConstraint
 from sqlalchemy import Enum as SAEnum
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column
 
+from backend.data import Base
 
-class IntakeBase(DeclarativeBase):
-    """Declarative base for intake-domain tables."""
+IntakeBase = Base
 
 
 class TriggerKind(StrEnum):

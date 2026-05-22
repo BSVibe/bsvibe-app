@@ -6,11 +6,11 @@ import uuid
 from datetime import datetime
 
 from sqlalchemy import DateTime, Index, Integer, Text
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column
 
+from backend.data import Base
 
-class RetrievalBase(DeclarativeBase):
-    """Declarative base for retrieval analytics tables."""
+RetrievalBase = Base
 
 
 class RetrievalQuery(RetrievalBase):

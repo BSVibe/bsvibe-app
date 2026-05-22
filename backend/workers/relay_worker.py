@@ -15,7 +15,6 @@ drains it on its own schedule, and persistent failures dead-letter via
 
 from __future__ import annotations
 
-import asyncio
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Protocol
@@ -25,6 +24,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from backend.supervisor.audit.models import AuditOutboxRecord
 from backend.supervisor.audit.store import OutboxStore
+from backend.workers.base import BaseWorker
 
 logger = structlog.get_logger(__name__)
 
@@ -47,7 +47,7 @@ class RelayConfig:
     max_retries: int = 5
 
 
-class RelayWorker:
+class RelayWorker(BaseWorker):
     """Periodic outbox-drain loop."""
 
     def __init__(
@@ -58,28 +58,14 @@ class RelayWorker:
         store: OutboxStore | None = None,
         config: RelayConfig | None = None,
     ) -> None:
+        self._cfg = config or RelayConfig()
+        super().__init__(name="relay_worker", poll_interval_s=self._cfg.poll_interval_s)
         self._session_factory = session_factory
         self._relay = relay
         self._store = store or OutboxStore()
-        self._cfg = config or RelayConfig()
-        self._stop_evt = asyncio.Event()
-        self._task: asyncio.Task[None] | None = None
 
-    async def start(self) -> None:
-        """Launch the background drain loop."""
-        if self._task is not None:
-            return
-        self._stop_evt.clear()
-        self._task = asyncio.create_task(self._run(), name="relay_worker")
-        logger.info("relay_worker_started", batch_size=self._cfg.batch_size)
-
-    async def stop(self) -> None:
-        """Signal the loop to stop and await its exit."""
-        self._stop_evt.set()
-        if self._task is not None:
-            await self._task
-            self._task = None
-        logger.info("relay_worker_stopped")
+    async def _tick(self) -> int:
+        return await self.drain_once()
 
     async def drain_once(self) -> int:
         """Drain one batch from the outbox; return rows delivered.
@@ -117,17 +103,6 @@ class RelayWorker:
                 )
             await session.commit()
             return len(delivered)
-
-    async def _run(self) -> None:
-        while not self._stop_evt.is_set():
-            try:
-                await self.drain_once()
-            except Exception:  # noqa: BLE001 — never let the loop die
-                logger.exception("relay_worker_iteration_failed")
-            try:
-                await asyncio.wait_for(self._stop_evt.wait(), timeout=self._cfg.poll_interval_s)
-            except TimeoutError:
-                continue
 
 
 __all__ = ["Relay", "RelayConfig", "RelayWorker"]

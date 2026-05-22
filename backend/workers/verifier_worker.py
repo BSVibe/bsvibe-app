@@ -12,7 +12,6 @@ wiring (Bundle G) constructs the real verifier from a parsed
 
 from __future__ import annotations
 
-import asyncio
 import uuid
 from dataclasses import dataclass
 from typing import Protocol
@@ -28,6 +27,7 @@ from backend.execution.db import (
     WorkStep,
     WorkStepStatus,
 )
+from backend.workers.base import BaseWorker
 
 logger = structlog.get_logger(__name__)
 
@@ -44,7 +44,7 @@ class VerifierConfig:
     poll_interval_s: float = 5.0
 
 
-class VerifierWorker:
+class VerifierWorker(BaseWorker):
     """Periodic drain of pending WorkSteps → VerificationResult rows."""
 
     def __init__(
@@ -54,25 +54,13 @@ class VerifierWorker:
         verifier: VerifierAdapter,
         config: VerifierConfig | None = None,
     ) -> None:
+        self._cfg = config or VerifierConfig()
+        super().__init__(name="verifier_worker", poll_interval_s=self._cfg.poll_interval_s)
         self._session_factory = session_factory
         self._verifier = verifier
-        self._cfg = config or VerifierConfig()
-        self._stop_evt = asyncio.Event()
-        self._task: asyncio.Task[None] | None = None
 
-    async def start(self) -> None:
-        if self._task is not None:
-            return
-        self._stop_evt.clear()
-        self._task = asyncio.create_task(self._run(), name="verifier_worker")
-        logger.info("verifier_worker_started", batch_size=self._cfg.batch_size)
-
-    async def stop(self) -> None:
-        self._stop_evt.set()
-        if self._task is not None:
-            await self._task
-            self._task = None
-        logger.info("verifier_worker_stopped")
+    async def _tick(self) -> int:
+        return await self.verify_once()
 
     async def verify_once(self) -> int:
         """Verify one batch of running WorkSteps. Returns count processed."""
@@ -119,17 +107,6 @@ class VerifierWorker:
                 step.updated_at = __import__("datetime").datetime.now(tz=__import__("datetime").UTC)
             await session.commit()
             return len(steps)
-
-    async def _run(self) -> None:
-        while not self._stop_evt.is_set():
-            try:
-                await self.verify_once()
-            except Exception:  # noqa: BLE001
-                logger.exception("verifier_worker_iteration_failed")
-            try:
-                await asyncio.wait_for(self._stop_evt.wait(), timeout=self._cfg.poll_interval_s)
-            except TimeoutError:
-                continue
 
 
 def _outcome_to_proof(outcome: VerificationOutcome) -> ProofState:

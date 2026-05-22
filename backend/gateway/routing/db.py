@@ -28,13 +28,12 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
 )
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column
 
+from backend.data import Base
 from backend.gateway.embedding.column import EmbeddingVector
 
-
-class GatewayRoutingBase(DeclarativeBase):
-    """Per-domain declarative base; merged in alembic's env.py."""
+GatewayRoutingBase = Base
 
 
 class ModelCatalogEntryRow(GatewayRoutingBase):

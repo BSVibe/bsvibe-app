@@ -6,11 +6,11 @@ import uuid
 from datetime import datetime
 
 from sqlalchemy import DateTime, ForeignKey, String, UniqueConstraint
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column
 
+from backend.data import Base
 
-class WorkspacesBase(DeclarativeBase):
-    """Declarative base for workspace + product tables."""
+WorkspacesBase = Base
 
 
 class WorkspaceRow(WorkspacesBase):

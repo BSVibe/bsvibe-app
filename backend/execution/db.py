@@ -5,9 +5,9 @@ Workflow §3 scoping: every per-run entity carries ``workspace_id`` NOT NULL
 mirror :mod:`backend.execution._domain` so the runtime + DB share one source
 of truth for the lifecycle vocabulary.
 
-The :class:`ExecutionBase` is its own SQLAlchemy DeclarativeBase per the
-Bundle 1 pattern; ``backend/data/migrations/env.py`` aggregates it into the
-merged metadata.
+``ExecutionBase`` is an alias of the shared ``backend.data.Base`` — every
+module's tables register on one metadata so Alembic autogenerate sees a
+single target and cross-module FKs resolve against one registry.
 """
 
 from __future__ import annotations
@@ -19,11 +19,11 @@ from typing import Any
 
 from sqlalchemy import JSON, DateTime, ForeignKey, Index, Integer, String, Text
 from sqlalchemy import Enum as SAEnum
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column
 
+from backend.data import Base
 
-class ExecutionBase(DeclarativeBase):
-    """Declarative base for execution-domain tables."""
+ExecutionBase = Base
 
 
 # ---------------------------------------------------------------------------

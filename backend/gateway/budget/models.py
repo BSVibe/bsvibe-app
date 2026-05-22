@@ -13,17 +13,11 @@ from enum import StrEnum
 
 from sqlalchemy import DateTime, Integer, UniqueConstraint
 from sqlalchemy import Enum as SAEnum
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column
 
+from backend.data import Base
 
-class GatewayBudgetBase(DeclarativeBase):
-    """Declarative base for budget-enforcement tables.
-
-    Separate from :class:`backend.accounts.models.AccountsBase` because
-    budget caps are a gateway-domain enforcement policy attached to an
-    ``account_id`` scope — the ``ModelAccount`` row itself lives at the
-    workspace layer.
-    """
+GatewayBudgetBase = Base
 
 
 class BudgetScope(StrEnum):

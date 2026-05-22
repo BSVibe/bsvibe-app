@@ -14,23 +14,28 @@ from sqlalchemy import pool
 from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
-# Import every base whose tables Alembic should manage. The metadata
-# objects are merged below.
-from backend.accounts.models import AccountsBase
+# Every module-owned table set registers on the single shared
+# ``backend.data.Base``. Importing the module db.py files is what
+# populates ``Base.metadata`` — so import them all (for side effects),
+# then point Alembic at the one metadata object.
 from backend.config import get_settings
-from backend.gateway.budget.models import GatewayBudgetBase
-from backend.gateway.embedding.db import GatewayEmbeddingBase
-from backend.gateway.routing.db import GatewayRoutingBase
-from backend.gateway.rules.db import GatewayRulesBase
-from backend.delivery.db import DeliveryBase
-from backend.execution.db import ExecutionBase
-from backend.intake.db import IntakeBase
-from backend.knowledge.canonicalization.db import CanonicalizationBase
-from backend.knowledge.ingest.db import IngestBase
-from backend.knowledge.retrieval.db import RetrievalBase
-from backend.supervisor.audit.models import AuditOutboxBase, SupervisorBase
-from backend.workers.db import WorkersBase
-from backend.workspaces.db import WorkspacesBase
+from backend.data import Base
+
+# noqa: F401 — imported for table-registration side effects only.
+import backend.accounts.models  # noqa: F401, E402
+import backend.delivery.db  # noqa: F401, E402
+import backend.execution.db  # noqa: F401, E402
+import backend.gateway.budget.models  # noqa: F401, E402
+import backend.gateway.embedding.db  # noqa: F401, E402
+import backend.gateway.routing.db  # noqa: F401, E402
+import backend.gateway.rules.db  # noqa: F401, E402
+import backend.intake.db  # noqa: F401, E402
+import backend.knowledge.canonicalization.db  # noqa: F401, E402
+import backend.knowledge.ingest.db  # noqa: F401, E402
+import backend.knowledge.retrieval.db  # noqa: F401, E402
+import backend.supervisor.audit.models  # noqa: F401, E402
+import backend.workers.db  # noqa: F401, E402
+import backend.workspaces.db  # noqa: F401, E402
 
 config = context.config
 
@@ -42,51 +47,9 @@ if config.config_file_name is not None:
 config.set_main_option("sqlalchemy.url", get_settings().database_url)
 
 
-class _MergedMetadata:
-    """Lightweight wrapper so Alembic's autogenerate sees a single
-    target_metadata that spans every base's tables."""
-
-    def __init__(self, bases: list) -> None:
-        self._bases = bases
-
-    @property
-    def tables(self) -> dict:
-        merged: dict = {}
-        for base in self._bases:
-            merged.update(base.metadata.tables)
-        return merged
-
-    @property
-    def schema(self) -> str | None:
-        return None
-
-    @property
-    def naming_convention(self) -> dict:
-        return {}
-
-    def is_bound(self) -> bool:
-        return False
-
-
-target_metadata = _MergedMetadata(
-    [
-        AccountsBase,
-        GatewayBudgetBase,
-        GatewayRulesBase,
-        GatewayEmbeddingBase,
-        GatewayRoutingBase,
-        SupervisorBase,
-        AuditOutboxBase,
-        CanonicalizationBase,
-        IngestBase,
-        RetrievalBase,
-        ExecutionBase,
-        IntakeBase,
-        DeliveryBase,
-        WorkersBase,
-        WorkspacesBase,
-    ]
-)
+# One shared metadata now spans every module's tables — the imports
+# above registered them all on ``Base.metadata``.
+target_metadata = Base.metadata
 
 
 def run_migrations_offline() -> None:

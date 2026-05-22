@@ -16,7 +16,6 @@ DB-polling, not Redis Streams. Same justification as AgentWorker.
 
 from __future__ import annotations
 
-import asyncio
 import uuid
 from collections.abc import Iterable
 from dataclasses import dataclass
@@ -28,6 +27,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from backend.delivery.db import DeliveryEventRow
 from backend.delivery.schema import DeliveryResult
+from backend.workers.base import BaseWorker
 
 logger = structlog.get_logger(__name__)
 
@@ -53,7 +53,7 @@ class DeliveryWorkerConfig:
     poll_interval_s: float = 5.0
 
 
-class DeliveryWorker:
+class DeliveryWorker(BaseWorker):
     """Periodic drain of ``delivery_events`` into the plugin dispatcher."""
 
     def __init__(
@@ -63,25 +63,13 @@ class DeliveryWorker:
         dispatcher: PluginDispatchAdapter,
         config: DeliveryWorkerConfig | None = None,
     ) -> None:
+        self._cfg = config or DeliveryWorkerConfig()
+        super().__init__(name="delivery_worker", poll_interval_s=self._cfg.poll_interval_s)
         self._session_factory = session_factory
         self._dispatcher = dispatcher
-        self._cfg = config or DeliveryWorkerConfig()
-        self._stop_evt = asyncio.Event()
-        self._task: asyncio.Task[None] | None = None
 
-    async def start(self) -> None:
-        if self._task is not None:
-            return
-        self._stop_evt.clear()
-        self._task = asyncio.create_task(self._run(), name="delivery_worker")
-        logger.info("delivery_worker_started", batch_size=self._cfg.batch_size)
-
-    async def stop(self) -> None:
-        self._stop_evt.set()
-        if self._task is not None:
-            await self._task
-            self._task = None
-        logger.info("delivery_worker_stopped")
+    async def _tick(self) -> int:
+        return await self.drain_once()
 
     async def drain_once(self) -> int:
         """Pull a batch of pending events + dispatch each. Returns count delivered."""
@@ -122,17 +110,6 @@ class DeliveryWorker:
                 )
                 await session.commit()
             return processed
-
-    async def _run(self) -> None:
-        while not self._stop_evt.is_set():
-            try:
-                await self.drain_once()
-            except Exception:  # noqa: BLE001
-                logger.exception("delivery_worker_iteration_failed")
-            try:
-                await asyncio.wait_for(self._stop_evt.wait(), timeout=self._cfg.poll_interval_s)
-            except TimeoutError:
-                continue
 
 
 __all__ = ["DeliveryWorker", "DeliveryWorkerConfig", "PluginDispatchAdapter"]
