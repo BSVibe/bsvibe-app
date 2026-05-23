@@ -74,6 +74,7 @@ from backend.workers.base import BaseWorker
 from backend.workers.delivery_worker import DeliveryWorker
 from backend.workers.intake_worker import IntakeWorker
 from backend.workers.relay_worker import RelayWorker
+from backend.workers.relays import build_relay
 from backend.workers.settle_worker import (
     KnowledgeSettleSink,
     SettleWorker,
@@ -386,7 +387,9 @@ def build_worker_runtime(
                 vault_root=Path(settings.knowledge_vault_root)
             ),
         ),
-        RelayWorker(session_factory=session_factory, relay=LoggingRelay()),
+        # Config-driven relay: HttpRelay when ``audit_relay_url`` is set,
+        # else the no-sink LoggingRelay default (drain + ack, no delivery).
+        RelayWorker(session_factory=session_factory, relay=build_relay(settings)),
     ]
     return WorkerRuntime(workers=workers, _stop=asyncio.Event())
 
