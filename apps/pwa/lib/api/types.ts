@@ -85,6 +85,52 @@ export interface Proposal {
   expires_at: string | null;
 }
 
+/** `GET /api/v1/checkpoints` element (backend CheckpointResponse). A paused-run
+ *  Decision the founder must answer to resume a stuck run. `question` is the
+ *  blocking prompt; `rationale` is the agent's optional why. */
+export interface Checkpoint {
+  id: string;
+  run_id: string;
+  decision: string;
+  question: string;
+  rationale: string | null;
+  created_at: string;
+}
+
+/** `POST /api/v1/checkpoints/{id}/resolve` → backend ResolveResponse. The
+ *  Decision is recorded and the paused run is resumed (RUNNING → OPEN). */
+export interface CheckpointResolveResponse {
+  id: string;
+  run_id: string;
+  status: string;
+  resolution: string;
+  resolved_at: string;
+  run_status: RunStatus;
+}
+
+/** One linked action's apply outcome inside an AcceptResponse (backend
+ *  ApplyResultResponse). */
+export interface ApplyResult {
+  action_path: string;
+  final_status: string;
+  affected_paths: string[];
+  error: string | null;
+}
+
+/** `POST /api/v1/decisions/{proposal_path}/accept` → backend AcceptResponse. */
+export interface AcceptResponse {
+  proposal_path: string;
+  status: string;
+  results: ApplyResult[];
+}
+
+/** `POST /api/v1/decisions/{proposal_path}/reject` → backend RejectResponse. */
+export interface RejectResponse {
+  proposal_path: string;
+  status: string;
+  reason: string | null;
+}
+
 /** `GET /api/v1/safemode/queue` element (backend SafeModeItemResponse). */
 export interface SafeModeItem {
   id: string;

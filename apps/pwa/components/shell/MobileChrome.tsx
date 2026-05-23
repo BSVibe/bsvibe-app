@@ -1,5 +1,6 @@
 "use client";
 
+import { usePendingDecisionsCount } from "@/lib/decisions/pending-count";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { BellIcon, BriefIcon, DecisionsIcon, InsideIcon } from "./icons";
@@ -11,7 +12,7 @@ const ICONS: Record<NavKey, typeof BriefIcon> = {
   inside: InsideIcon,
 };
 
-const TITLES: Record<string, string> = { "/brief": "Brief" };
+const TITLES: Record<string, string> = { "/brief": "Brief", "/decisions": "Decisions" };
 
 /** Mobile top bar — page title + notifications (UX Brief mobile mockup). */
 export function MobileTopBar() {
@@ -30,6 +31,7 @@ export function MobileTopBar() {
 /** Mobile bottom tab bar — Brief / Decisions / Inside. */
 export function MobileNav() {
   const pathname = usePathname();
+  const pendingDecisions = usePendingDecisionsCount();
   return (
     <nav className="tabbar" aria-label="Primary">
       {PRIMARY_NAV.map((item) => {
@@ -43,6 +45,7 @@ export function MobileNav() {
             </button>
           );
         }
+        const badge = item.key === "decisions" && pendingDecisions > 0 ? pendingDecisions : null;
         return (
           <Link
             key={item.key}
@@ -50,7 +53,14 @@ export function MobileNav() {
             className="tabbar__item"
             aria-current={active ? "page" : undefined}
           >
-            <Icon />
+            <span className="tabbar__icon">
+              <Icon />
+              {badge !== null && (
+                <span className="tabbar__badge" aria-label={`${badge} pending`}>
+                  {badge}
+                </span>
+              )}
+            </span>
             <span>{item.label}</span>
           </Link>
         );

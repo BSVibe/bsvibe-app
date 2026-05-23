@@ -12,6 +12,6 @@ export interface NavItem {
 
 export const PRIMARY_NAV: NavItem[] = [
   { key: "brief", label: "Brief", href: "/brief", available: true },
-  { key: "decisions", label: "Decisions", href: "/decisions", available: false },
+  { key: "decisions", label: "Decisions", href: "/decisions", available: true },
   { key: "inside", label: "Inside", href: "/inside", available: false },
 ];
