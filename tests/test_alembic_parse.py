@@ -33,11 +33,12 @@ def test_alembic_history_loads():
         "bundle_h_workspaces",
         "phase1_auth_identity",
         "settle_drains",
+        "connector_accounts",
     ):
         assert rev in result.stdout, f"missing revision {rev} in:\n{result.stdout}"
 
 
-def test_alembic_head_is_settle_drains():
+def test_alembic_head_is_connector_accounts():
     repo = Path(__file__).parent.parent
     result = subprocess.run(
         [sys.executable, "-m", "alembic", "heads"],
@@ -46,13 +47,14 @@ def test_alembic_head_is_settle_drains():
         text=True,
     )
     assert result.returncode == 0
-    assert "settle_drains" in result.stdout
+    assert "connector_accounts" in result.stdout
 
 
 def test_target_metadata_covers_all_bases():
     """Reach into env.py module to confirm the merged metadata sees
     every base we expect — Bundle 1 + Bundle 1.5a/1.5b + Bundle K + Bundle X."""
     from backend.accounts.models import AccountsBase
+    from backend.connectors.db import ConnectorsBase
     from backend.delivery.db import DeliveryBase
     from backend.execution.db import ExecutionBase
     from backend.gateway.budget.models import GatewayBudgetBase
@@ -117,6 +119,8 @@ def test_target_metadata_covers_all_bases():
         "memberships",
         # Settle drain marker (worker-settle BSage write subscriber)
         "settle_drains",
+        # Connector-inbound webhook bindings (Workflow §11.2)
+        "connector_accounts",
     }
     actual_tables = (
         set(AccountsBase.metadata.tables)
@@ -135,6 +139,7 @@ def test_target_metadata_covers_all_bases():
         | set(WorkersBase.metadata.tables)
         | set(WorkspacesBase.metadata.tables)
         | set(IdentityBase.metadata.tables)
+        | set(ConnectorsBase.metadata.tables)
     )
     assert expected_tables.issubset(actual_tables), (
         f"Missing tables: {expected_tables - actual_tables}"

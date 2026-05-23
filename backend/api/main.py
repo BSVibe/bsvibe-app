@@ -12,6 +12,7 @@ from backend.api.auth import router as auth_router
 from backend.api.health import router as health_router
 from backend.api.middleware import WorkspaceContextMiddleware
 from backend.api.v1 import router as v1_router
+from backend.api.webhooks import router as webhooks_router
 from backend.config import get_settings
 from backend.shared.core.logging import configure_logging
 
@@ -31,5 +32,8 @@ def create_app() -> FastAPI:
     app.add_middleware(WorkspaceContextMiddleware)
     app.include_router(health_router, prefix="/api")
     app.include_router(auth_router, prefix="/api")
+    # Connector webhook ingress is PUBLIC (external callback) — mounted under
+    # /api directly, NOT under the auth-gated v1 router (Workflow §11.2).
+    app.include_router(webhooks_router, prefix="/api")
     app.include_router(v1_router, prefix="/api")
     return app
