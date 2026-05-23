@@ -1446,6 +1446,274 @@ main.login {
   cursor: default;
 }
 
+/* ── Model accounts ──────────────────────────────────────────────────────── */
+
+.accounts {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.accounts__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.accounts__head .section-label {
+  margin: 0;
+}
+
+.accounts__count {
+  min-width: 18px;
+  height: 18px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--accent-bg);
+  color: var(--ink-2);
+  font-size: 0.7rem;
+  font-weight: 600;
+  display: grid;
+  place-items: center;
+}
+
+.accounts__lede {
+  margin: -8px 0 0;
+  font-size: 0.86rem;
+  color: var(--ink-3);
+}
+
+.accounts__warn {
+  margin: 0;
+  padding: 10px 14px;
+  background: var(--amber-bg, var(--accent-bg));
+  border: 1px solid var(--amber-dot);
+  border-radius: var(--radius-sm);
+  font-size: 0.82rem;
+  color: var(--amber-ink);
+}
+
+.accounts__loading,
+.accounts__note,
+.accounts__empty {
+  margin: 0;
+  padding: 16px 18px;
+  background: var(--surface);
+  border: 1px solid var(--hair-strong);
+  border-radius: var(--radius);
+  font-size: 0.86rem;
+  color: var(--ink-3);
+}
+
+.accounts__empty {
+  color: var(--ink-2);
+}
+
+.accounts__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  background: var(--surface);
+  border: 1px solid var(--hair-strong);
+  border-radius: var(--radius);
+}
+
+/* Add-model-account form */
+.account-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 18px;
+  background: var(--surface);
+  border: 1px solid var(--hair-strong);
+  border-radius: var(--radius);
+}
+
+.account-form__row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.account-form__field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.account-form__label {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--ink-2);
+}
+
+.account-form__input {
+  width: 100%;
+  padding: 9px 11px;
+  border: 1px solid var(--hair-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+  font-size: 0.88rem;
+}
+
+.account-form__input:focus-visible {
+  outline: 2px solid var(--amber-dot);
+  outline-offset: 1px;
+}
+
+.account-form__input:disabled {
+  opacity: 0.6;
+}
+
+.account-form__hint {
+  font-size: 0.76rem;
+  color: var(--ink-3);
+}
+
+.account-form__foot {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.account-form__error {
+  flex: 1 1 100%;
+  text-align: right;
+  font-size: 0.78rem;
+  color: var(--amber-ink);
+}
+
+.account-form__success {
+  flex: 1 1 100%;
+  text-align: right;
+  font-size: 0.78rem;
+  color: var(--green-ink);
+}
+
+.account-form__submit {
+  border: 1px solid var(--hair-strong);
+  border-radius: 999px;
+  padding: 6px 16px;
+  font-size: 0.82rem;
+  font-weight: 550;
+  background: var(--ink);
+  color: var(--bg);
+  cursor: pointer;
+}
+
+.account-form__submit:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+/* Model-account row */
+.account-row {
+  padding: 14px 18px;
+  border-top: 1px solid var(--hair);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.account-row:first-child {
+  border-top: none;
+}
+
+.account-row__main {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.account-row__label {
+  font-size: 0.92rem;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.account-row__model {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.78rem;
+  color: var(--ink-2);
+}
+
+.account-row__key {
+  font-size: 0.74rem;
+  color: var(--ink-3);
+}
+
+.account-row__key--missing {
+  color: var(--amber-ink);
+}
+
+.account-row__state {
+  margin-left: auto;
+  font-size: 0.72rem;
+  font-weight: 600;
+  padding: 2px 9px;
+  border-radius: 999px;
+}
+
+.account-row__state--active {
+  background: var(--green-pill-bg);
+  color: var(--green-ink);
+}
+
+.account-row__state--inactive {
+  background: var(--accent-bg);
+  color: var(--ink-3);
+}
+
+.account-row__meta {
+  margin: 0;
+  font-size: 0.78rem;
+  color: var(--ink-3);
+}
+
+.account-row__actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.account-row__error {
+  flex: 1 1 100%;
+  font-size: 0.78rem;
+  color: var(--amber-ink);
+}
+
+.account-row__toggle,
+.account-row__revoke,
+.account-row__cancel,
+.account-row__danger {
+  border: 1px solid var(--hair-strong);
+  border-radius: 999px;
+  padding: 4px 13px;
+  font-size: 0.78rem;
+  font-weight: 550;
+  background: var(--surface);
+  color: var(--ink-2);
+  cursor: pointer;
+}
+
+.account-row__danger {
+  border-color: var(--amber-dot);
+  color: var(--amber-ink);
+}
+
+.account-row__toggle:disabled,
+.account-row__revoke:disabled,
+.account-row__danger:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
 /* ── Mobile ─────────────────────────────────────────────────────────────── */
 
 @media (max-width: 767px) {
@@ -1500,7 +1768,8 @@ main.login {
     margin-top: 0;
   }
 
-  .connector-form__row {
+  .connector-form__row,
+  .account-form__row {
     grid-template-columns: 1fr;
   }
 
