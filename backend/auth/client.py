@@ -55,14 +55,16 @@ def _session_from_gotrue(body: dict[str, Any]) -> SupabaseSession:
 class SupabaseAuthClient:
     """Thin wrapper over the GoTrue REST endpoints."""
 
-    def __init__(self, *, base_url: str, anon_key: str, http: httpx.AsyncClient | None = None):
+    def __init__(
+        self, *, base_url: str, publishable_key: str, http: httpx.AsyncClient | None = None
+    ):
         self._base_url = base_url.rstrip("/")
-        self._anon_key = anon_key
+        self._publishable_key = publishable_key
         self._http = http or httpx.AsyncClient(timeout=10.0)
 
     def _headers(self, access_token: str | None = None) -> dict[str, str]:
-        headers = {"apikey": self._anon_key, "Content-Type": "application/json"}
-        headers["Authorization"] = f"Bearer {access_token or self._anon_key}"
+        headers = {"apikey": self._publishable_key, "Content-Type": "application/json"}
+        headers["Authorization"] = f"Bearer {access_token or self._publishable_key}"
         return headers
 
     async def _token(self, grant_type: str, payload: dict[str, Any]) -> SupabaseSession:
@@ -107,6 +109,6 @@ def get_supabase_client() -> SupabaseAuthClient:
     if _client_singleton is None:
         settings = get_settings()
         _client_singleton = SupabaseAuthClient(
-            base_url=settings.supabase_url, anon_key=settings.supabase_anon_key
+            base_url=settings.supabase_url, publishable_key=settings.supabase_publishable_key
         )
     return _client_singleton

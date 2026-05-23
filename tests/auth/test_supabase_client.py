@@ -29,7 +29,7 @@ _GOTRUE_OK = {
 
 
 def _client() -> SupabaseAuthClient:
-    return SupabaseAuthClient(base_url=BASE + "/", anon_key="anon-key")
+    return SupabaseAuthClient(base_url=BASE + "/", publishable_key="publishable-key")
 
 
 @respx.mock
@@ -95,7 +95,7 @@ async def test_get_supabase_client_is_singleton(monkeypatch) -> None:
 
     monkeypatch.setattr(client_mod, "_client_singleton", None)
     monkeypatch.setenv("BSVIBE_SUPABASE_URL", BASE)
-    monkeypatch.setenv("BSVIBE_SUPABASE_ANON_KEY", "anon")
+    monkeypatch.setenv("BSVIBE_SUPABASE_PUBLISHABLE_KEY", "publishable")
     get_settings.cache_clear()
     try:
         first = get_supabase_client()

@@ -73,7 +73,8 @@ Required (no defaults — compose refuses to start without them):
 - `BSVIBE_DATABASE_URL` — `postgresql+asyncpg://bsvibe:<password>@postgres:5432/bsvibe`
   (host is the compose service name `postgres`).
 - `BSVIBE_GATEWAY_KMS_KEY_B64` — from step 2.
-- `BSVIBE_SUPABASE_URL`, `BSVIBE_SUPABASE_ANON_KEY` — real Supabase project.
+- `BSVIBE_SUPABASE_URL`, `BSVIBE_SUPABASE_PUBLISHABLE_KEY` — real Supabase project
+  (the **publishable** key, `sb_publishable_...`).
 
 `deploy/.env.prod` is gitignored. **Never commit it.**
 
