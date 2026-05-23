@@ -30,19 +30,16 @@ import httpx
 import pytest
 import pytest_asyncio
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from backend.accounts.crypto import CredentialCipher
 from backend.api.deps import get_db_session
 from backend.api.main import create_app
 from backend.api.webhooks import get_credential_cipher
 from backend.connectors.db import ConnectorAccountRow
-from backend.data import Base
 from backend.intake.db import TriggerEventRow
 
-PG_URL = os.environ.get(
-    "BSVIBE_DATABASE_URL", "postgresql+asyncpg://bsvibe:bsvibe@localhost:5442/bsvibe"
-)
+from .._support import db_engine
 
 # Deterministic 32-byte AES key for CredentialCipher in tests.
 TEST_KEY = b"0123456789abcdef0123456789abcdef"
@@ -50,30 +47,10 @@ TEST_KEY = b"0123456789abcdef0123456789abcdef"
 pytestmark = pytest.mark.asyncio
 
 
-async def _can_reach_pg() -> bool:
-    try:
-        engine = create_async_engine(PG_URL, future=True, pool_pre_ping=True)
-        async with engine.connect() as conn:
-            await conn.execute(__import__("sqlalchemy").text("SELECT 1"))
-        await engine.dispose()
-        return True
-    except Exception:
-        return False
-
-
 @pytest_asyncio.fixture
 async def sf():
-    use_pg = os.environ.get("BSVIBE_DATABASE_URL") and await _can_reach_pg()
-    url = PG_URL if use_pg else "sqlite+aiosqlite:///:memory:"
-    engine = create_async_engine(url, future=True)
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-    maker = async_sessionmaker(engine, expire_on_commit=False)
-    yield maker
-    if use_pg:
-        async with engine.begin() as conn:
-            await conn.run_sync(Base.metadata.drop_all)
-    await engine.dispose()
+    async with db_engine() as (engine, _is_pg):
+        yield async_sessionmaker(engine, expire_on_commit=False)
 
 
 @pytest.fixture
