@@ -563,13 +563,19 @@ class RunOrchestrator:
 
         # Deliver event — drained by the DeliveryWorker (delivery_events table).
         await self._emit_deliver_event(run, deliverable, written_paths, final_text)
-        # Settle observation — the run-trace/observation side channel (§1).
-        await self._record(
-            run,
-            attempt,
-            "settle",
-            {"verified": True, "artifact_refs": written_paths, "summary": final_text[:500]},
-        )
+        # Settle observation — the run-trace/observation side channel (§1). The
+        # payload carries the run's STABLE context (product binding + founder
+        # intent_text) so the SettleWorker can cluster garden observations by
+        # product + intent — what the work was ABOUT — not just incidental file
+        # stems. These are deterministic inputs (a product binding and the
+        # founder's own Direction text), never the work LLM's free output.
+        settle_payload: dict[str, Any] = {
+            "verified": True,
+            "artifact_refs": written_paths,
+            "summary": final_text[:500],
+            **await self._settle_run_context(run),
+        }
+        await self._record(run, attempt, "settle", settle_payload)
         await self._session.flush()
         logger.info(
             "run_orchestrator_verified",
@@ -663,6 +669,31 @@ class RunOrchestrator:
                 payload={"attempt_id": str(attempt.id), **payload},
             )
         )
+
+    async def _settle_run_context(self, run: ExecutionRun) -> dict[str, Any]:
+        """Resolve the run's stable settle-clustering context.
+
+        ``intent_text`` is the founder's own Direction (set by intake); the
+        product slug/name is the run's product binding (resolved from
+        ``run.product_id``). Both are stable inputs the SettleWorker uses as
+        canonicalization cluster keys. Only present keys are returned — a
+        connector-inbound run (no product, no intent) yields ``{}`` so the sink
+        degrades to the existing summary + artifact_refs derivation. Resolution
+        is best-effort: a missing/deleted product row is simply omitted (never
+        an exception that could break the verified terminal).
+        """
+        context: dict[str, Any] = {}
+        intent_text = (run.payload or {}).get("intent_text")
+        if isinstance(intent_text, str) and intent_text.strip():
+            context["intent_text"] = intent_text
+        if run.product_id is not None:
+            from backend.workspaces.db import ProductRow  # noqa: PLC0415 — cross-domain, local
+
+            product = await self._session.get(ProductRow, run.product_id)
+            if product is not None:
+                context["product_slug"] = product.slug
+                context["product_name"] = product.name
+        return context
 
 
 async def _invoke_tool_safely(
