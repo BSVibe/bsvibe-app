@@ -28,6 +28,19 @@ Design notes
   bound to *that activity's* ``workspace_id`` — the factory roots the vault
   at ``<vault_root>/<region>/<workspace_id>/``, so a settle for workspace A
   can never land in workspace B's vault.
+* **Promotion closes the §5 ratchet loop.** Depositing the raw observation is
+  only the *learning* half. After a drain batch writes garden notes, the
+  worker runs a :class:`~backend.knowledge.canonicalization.promotion.GardenObservationPromoter`
+  per *affected* workspace so recurring patterns get promoted into canonical
+  anchors (the "wall"). The promoter is idempotent and honours the
+  workspace's canonicalization policy (Safe-Mode default → queued proposals;
+  permissive → applied anchors), so a per-batch run is safe. Promotion is the
+  *derived* step: a promotion failure is soft (logged + skipped) and never
+  reverts a settle write or breaks the drain — the settlement notes remain the
+  source of truth. The promoter is constructed against the SAME per-workspace
+  vault boundary the sink uses (``<vault_root>/<region>/<workspace_id>/`` via
+  the :class:`~backend.knowledge.factory.KnowledgeFactory` convention) behind a
+  :class:`PromoterFactory` seam so the binding stays testable.
 """
 
 from __future__ import annotations
@@ -81,6 +94,35 @@ class SettleSink(Protocol):
     """
 
     async def absorb(self, settlement: Settlement) -> str | None: ...
+
+
+class WorkspacePromoter(Protocol):
+    """Promotes a workspace's accumulated garden observations into canon.
+
+    Mirrors the surface of
+    :class:`~backend.knowledge.canonicalization.promotion.GardenObservationPromoter`
+    that the worker depends on (``promote``), so the post-drain promotion step
+    is testable without standing up a real canonicalization engine.
+    """
+
+    async def promote(self) -> object: ...
+
+
+class PromoterFactory(Protocol):
+    """Builds a :class:`WorkspacePromoter` for one workspace/region.
+
+    Construction is the per-workspace vault boundary: the promoter is rooted at
+    ``<vault_root>/<region>/<workspace_id>/`` (the
+    :class:`~backend.knowledge.factory.KnowledgeFactory` convention), reusing
+    the exact boundary the sink wrote to. ``safe_mode`` carries the workspace's
+    canonicalization policy through to the engine (default strict → queued;
+    permissive → applied). Returning ``None`` disables promotion for that
+    workspace (e.g. promotion not configured).
+    """
+
+    def __call__(
+        self, *, region: str, workspace_id: uuid.UUID, safe_mode: bool
+    ) -> WorkspacePromoter | None: ...
 
 
 @dataclass(slots=True)
@@ -151,6 +193,98 @@ def _observation_body(settlement: Settlement, summary: str) -> str:
     return "\n".join(lines)
 
 
+@dataclass(frozen=True, slots=True)
+class _WorkspacePolicy:
+    """Per-workspace settle context resolved from the ``workspaces`` row.
+
+    ``safe_mode`` is the workspace's canonicalization policy (Safe-Mode default
+    True → promotion queues proposals; False → it auto-applies anchors).
+    """
+
+    region: str
+    safe_mode: bool
+
+
+def build_garden_promoter_factory(*, vault_root: Path) -> PromoterFactory:
+    """Production :class:`PromoterFactory` rooted at the shared vault boundary.
+
+    Builds, per call, a :class:`~backend.knowledge.canonicalization.promotion.GardenObservationPromoter`
+    over a :class:`~backend.knowledge.graph.storage.FileSystemStorage` rooted at
+    ``<vault_root>/<region>/<workspace_id>/`` — the exact directory
+    :class:`KnowledgeSettleSink` (via :class:`~backend.knowledge.factory.KnowledgeFactory`)
+    wrote the garden observations to. ``safe_mode`` is threaded into the
+    :class:`~backend.knowledge.canonicalization.service.CanonicalizationService`
+    so the workspace's policy decides queue-vs-apply; the worker never overrides
+    it. The returned factory is sync but builds a coroutine-driven promoter, so
+    promotion itself runs inside the worker's ``await``.
+    """
+
+    def _factory(
+        *, region: str, workspace_id: uuid.UUID, safe_mode: bool
+    ) -> WorkspacePromoter | None:
+        return _LazyGardenPromoter(
+            vault_root=vault_root,
+            region=region,
+            workspace_id=workspace_id,
+            safe_mode=safe_mode,
+        )
+
+    return _factory
+
+
+class _LazyGardenPromoter:
+    """Adapter that builds the canonicalization engine on first ``promote``.
+
+    The engine (storage + index rebuild + service) is constructed inside the
+    coroutine so the heavy canonicalization imports stay lazy (the worker module
+    must import cheaply) and the per-workspace index is freshly rebuilt from the
+    just-written vault state each pass — keeping promotion idempotent.
+    """
+
+    __slots__ = ("_vault_root", "_region", "_workspace_id", "_safe_mode")
+
+    def __init__(
+        self, *, vault_root: Path, region: str, workspace_id: uuid.UUID, safe_mode: bool
+    ) -> None:
+        self._vault_root = vault_root
+        self._region = region
+        self._workspace_id = workspace_id
+        self._safe_mode = safe_mode
+
+    async def promote(self) -> object:
+        # Lazy heavy imports — keep the worker entrypoint cheap.
+        from backend.knowledge.canonicalization.index import (  # noqa: PLC0415
+            InMemoryCanonicalizationIndex,
+        )
+        from backend.knowledge.canonicalization.lock import AsyncIOMutationLock  # noqa: PLC0415
+        from backend.knowledge.canonicalization.promotion import (  # noqa: PLC0415
+            GardenObservationPromoter,
+        )
+        from backend.knowledge.canonicalization.resolver import TagResolver  # noqa: PLC0415
+        from backend.knowledge.canonicalization.service import (  # noqa: PLC0415
+            CanonicalizationService,
+        )
+        from backend.knowledge.canonicalization.store import NoteStore  # noqa: PLC0415
+        from backend.knowledge.graph.storage import FileSystemStorage  # noqa: PLC0415
+
+        # SAME boundary the sink wrote to: <vault_root>/<region>/<workspace_id>/.
+        ws_root = self._vault_root / self._region / str(self._workspace_id)
+        ws_root.mkdir(parents=True, exist_ok=True)
+        storage = FileSystemStorage(ws_root)
+
+        index = InMemoryCanonicalizationIndex()
+        await index.initialize(storage)
+        safe_mode = self._safe_mode
+        service = CanonicalizationService(
+            store=NoteStore(storage),
+            lock=AsyncIOMutationLock(),
+            index=index,
+            resolver=TagResolver(index=index),
+            safe_mode=lambda: safe_mode,
+        )
+        return await GardenObservationPromoter(service).promote()
+
+
 class SettleWorker(BaseWorker):
     """Periodic drain of ``settle`` activities into BSage (the §4 write subscriber)."""
 
@@ -160,27 +294,41 @@ class SettleWorker(BaseWorker):
         session_factory: async_sessionmaker[AsyncSession],
         sink: SettleSink,
         config: SettleWorkerConfig | None = None,
+        promoter_factory: PromoterFactory | None = None,
     ) -> None:
         self._cfg = config or SettleWorkerConfig()
         super().__init__(name="settle_worker", poll_interval_s=self._cfg.poll_interval_s)
         self._session_factory = session_factory
         self._sink = sink
+        # When unset, promotion is disabled (e.g. tests exercising only the
+        # drain bookkeeping). The runtime entrypoint wires the default factory.
+        self._promoter_factory = promoter_factory
 
     async def _tick(self) -> int:
         return await self.drain_once()
 
     async def drain_once(self) -> int:
-        """Absorb a batch of un-drained ``settle`` activities. Returns count written."""
+        """Absorb a batch of un-drained ``settle`` activities, then promote.
+
+        Returns the count of activities absorbed. After the batch, the
+        canonical-pattern promoter runs once per *affected* workspace (those
+        with ≥1 successful absorb this batch) to close the §5 ratchet loop.
+        Promotion is soft-fail: an error is logged and skipped, never reverting
+        a settle write or affecting the returned drain count.
+        """
         async with self._session_factory() as session:
             rows = await self._claim_undrained(session)
             if not rows:
                 return 0
-            regions = await self._resolve_regions(session, {r.workspace_id for r in rows})
+            policies = await self._resolve_workspaces(session, {r.workspace_id for r in rows})
 
             processed = 0
+            promoted_ids: set[uuid.UUID] = set()
             for row in rows:
-                region = regions.get(row.workspace_id, self._cfg.default_region)
-                settlement = _to_settlement(row, region)
+                policy = policies.get(
+                    row.workspace_id, _WorkspacePolicy(self._cfg.default_region, True)
+                )
+                settlement = _to_settlement(row, policy.region)
                 try:
                     node_ref = await self._sink.absorb(settlement)
                 except Exception:  # noqa: BLE001 — record + leave un-drained for retry
@@ -203,13 +351,56 @@ class SettleWorker(BaseWorker):
                 )
                 await session.commit()
                 processed += 1
+                promoted_ids.add(row.workspace_id)
                 logger.info(
                     "settle_worker_absorbed",
                     activity_id=str(row.id),
                     workspace_id=str(row.workspace_id),
                     node_ref=node_ref,
                 )
+
+            # Close the loop: promote each affected workspace's accumulated
+            # observations into canon. Derived + soft-fail — never affects the
+            # drain count or reverts a write above.
+            await self._promote_affected(promoted_ids, policies)
             return processed
+
+    async def _promote_affected(
+        self,
+        workspace_ids: set[uuid.UUID],
+        policies: dict[uuid.UUID, _WorkspacePolicy],
+    ) -> None:
+        """Run the canonical-pattern promoter for each affected workspace.
+
+        Per-workspace, idempotent, policy-honoring, and soft-fail: each
+        promotion is isolated so one workspace's failure can't stop another's,
+        and no promotion error reverts the settlement writes (the SoT).
+        """
+        if self._promoter_factory is None:
+            return
+        for workspace_id in sorted(workspace_ids, key=str):
+            policy = policies.get(workspace_id, _WorkspacePolicy(self._cfg.default_region, True))
+            try:
+                promoter = self._promoter_factory(
+                    region=policy.region,
+                    workspace_id=workspace_id,
+                    safe_mode=policy.safe_mode,
+                )
+                if promoter is None:
+                    continue
+                await promoter.promote()
+            except Exception:  # noqa: BLE001 — promotion is derived; never break the drain
+                logger.exception(
+                    "settle_worker_promotion_failed",
+                    workspace_id=str(workspace_id),
+                    safe_mode=policy.safe_mode,
+                )
+                continue
+            logger.info(
+                "settle_worker_promotion_complete",
+                workspace_id=str(workspace_id),
+                safe_mode=policy.safe_mode,
+            )
 
     async def _claim_undrained(self, session: AsyncSession) -> list[ExecutionRunActivity]:
         already_drained = select(SettleDrainRow.activity_id)
@@ -224,15 +415,25 @@ class SettleWorker(BaseWorker):
         )
         return list((await session.execute(stmt)).scalars().all())
 
-    @staticmethod
-    async def _resolve_regions(
-        session: AsyncSession, workspace_ids: Iterable[uuid.UUID]
-    ) -> dict[uuid.UUID, str]:
+    async def _resolve_workspaces(
+        self, session: AsyncSession, workspace_ids: Iterable[uuid.UUID]
+    ) -> dict[uuid.UUID, _WorkspacePolicy]:
+        """Resolve region + canonicalization policy for each workspace.
+
+        A missing row (telemetry can outlive its workspace) falls back to the
+        configured default region + the strict Safe-Mode default — never
+        auto-applying canon for an unknown workspace.
+        """
         ids = list(workspace_ids)
         if not ids:
             return {}
-        stmt = select(WorkspaceRow.id, WorkspaceRow.region).where(WorkspaceRow.id.in_(ids))
-        return {wid: region for wid, region in (await session.execute(stmt)).all()}
+        stmt = select(WorkspaceRow.id, WorkspaceRow.region, WorkspaceRow.safe_mode).where(
+            WorkspaceRow.id.in_(ids)
+        )
+        return {
+            wid: _WorkspacePolicy(region, bool(safe_mode))
+            for wid, region, safe_mode in (await session.execute(stmt)).all()
+        }
 
 
 def _to_settlement(row: ExecutionRunActivity, region: str) -> Settlement:
@@ -252,8 +453,11 @@ def _to_settlement(row: ExecutionRunActivity, region: str) -> Settlement:
 
 __all__ = [
     "KnowledgeSettleSink",
+    "PromoterFactory",
     "SettleSink",
     "SettleWorker",
     "SettleWorkerConfig",
     "Settlement",
+    "WorkspacePromoter",
+    "build_garden_promoter_factory",
 ]
