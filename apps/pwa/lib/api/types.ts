@@ -270,8 +270,9 @@ export interface Connector {
 // ── Model accounts (REAL endpoint /api/v1/accounts) ────────────────────────
 
 /** The data-jurisdiction allow-list the backend ModelAccount schema accepts
- *  (backend/accounts/schemas.py `Jurisdiction`). The picker mirrors it exactly
- *  so the form never offers a value the create validator 422s on. */
+ *  (backend/accounts/schemas.py `Jurisdiction`). Invisible infra — the founder
+ *  no longer hand-picks it (the backend defaults it to "unknown"); this stays
+ *  as the source for the `ModelAccountJurisdiction` type the response carries. */
 export const MODEL_ACCOUNT_JURISDICTIONS = ["us", "eu", "kr", "local", "unknown"] as const;
 
 export type ModelAccountJurisdiction = (typeof MODEL_ACCOUNT_JURISDICTIONS)[number];
@@ -285,7 +286,9 @@ export interface ModelAccountCreate {
   label: string;
   litellm_model: string;
   api_key: string;
-  data_jurisdiction: ModelAccountJurisdiction;
+  /** Invisible infra — the founder no longer hand-picks this; the backend
+   *  defaults it to "unknown". Optional for the rare explicit caller. */
+  data_jurisdiction?: ModelAccountJurisdiction;
   api_base?: string | null;
   extra_params?: Record<string, unknown>;
 }

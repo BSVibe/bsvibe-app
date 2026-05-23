@@ -1,15 +1,14 @@
 "use client";
 
-import type { ModelAccount, ModelAccountCreate, ModelAccountJurisdiction } from "@/lib/api/types";
-import { MODEL_ACCOUNT_JURISDICTIONS } from "@/lib/api/types";
+import type { ModelAccount, ModelAccountCreate } from "@/lib/api/types";
 import { useState } from "react";
 
 type FormState = "idle" | "submitting" | "error" | "success";
 
 /**
  * The "Add model account" form. A small calm form: name the provider + the
- * litellm model identifier, give it a label, pick the data jurisdiction, and
- * paste the API key/credential. The key is a secret — like a connector token it
+ * litellm model identifier, give it a label, and paste the API key/credential.
+ * The key is a secret — like a connector token it
  * is sent ONCE and never read back: on success we confirm the account was added
  * (with its label) and clear the key field rather than echoing it.
  *
@@ -29,7 +28,6 @@ export default function AddModelAccount({
   const [label, setLabel] = useState("");
   const [apiBase, setApiBase] = useState("");
   const [apiKey, setApiKey] = useState("");
-  const [jurisdiction, setJurisdiction] = useState<ModelAccountJurisdiction>("us");
   const [state, setState] = useState<FormState>("idle");
   // The label of the just-created account, surfaced in the success note — we
   // confirm WHAT was added without ever echoing the secret.
@@ -47,7 +45,6 @@ export default function AddModelAccount({
     setLabel("");
     setApiBase("");
     setApiKey("");
-    setJurisdiction("us");
   }
 
   async function submit() {
@@ -60,7 +57,6 @@ export default function AddModelAccount({
         label: label.trim(),
         litellm_model: model.trim(),
         api_key: apiKey,
-        data_jurisdiction: jurisdiction,
         api_base: apiBase,
       });
       setCreatedLabel(created.label);
@@ -106,35 +102,17 @@ export default function AddModelAccount({
         </label>
       </div>
 
-      <div className="account-form__row">
-        <label className="account-form__field">
-          <span className="account-form__label">Label</span>
-          <input
-            className="account-form__input"
-            type="text"
-            placeholder="A name you'll recognise — e.g. Primary"
-            value={label}
-            disabled={state === "submitting"}
-            onChange={(e) => setLabel(e.target.value)}
-          />
-        </label>
-
-        <label className="account-form__field">
-          <span className="account-form__label">Data jurisdiction</span>
-          <select
-            className="account-form__input"
-            value={jurisdiction}
-            disabled={state === "submitting"}
-            onChange={(e) => setJurisdiction(e.target.value as ModelAccountJurisdiction)}
-          >
-            {MODEL_ACCOUNT_JURISDICTIONS.map((j) => (
-              <option key={j} value={j}>
-                {j}
-              </option>
-            ))}
-          </select>
-        </label>
-      </div>
+      <label className="account-form__field">
+        <span className="account-form__label">Label</span>
+        <input
+          className="account-form__input"
+          type="text"
+          placeholder="A name you'll recognise — e.g. Primary"
+          value={label}
+          disabled={state === "submitting"}
+          onChange={(e) => setLabel(e.target.value)}
+        />
+      </label>
 
       <label className="account-form__field">
         <span className="account-form__label">API base (optional)</span>

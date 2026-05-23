@@ -24,7 +24,10 @@ class ModelAccountCreate(BaseModel):
     litellm_model: str = Field(min_length=1, max_length=255)
     api_base: str | None = None
     api_key: str = Field(min_length=1)
-    data_jurisdiction: Jurisdiction
+    # Invisible-infra: the founder no longer hand-picks this. Optional in the
+    # request body; defaults to "unknown" so the NOT NULL column is always
+    # populated. Explicit callers (worker SDK, tests) may still supply a value.
+    data_jurisdiction: Jurisdiction = "unknown"
     extra_params: dict[str, Any] = Field(default_factory=dict)
 
 
