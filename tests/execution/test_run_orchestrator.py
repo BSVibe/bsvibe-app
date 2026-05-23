@@ -38,6 +38,7 @@ from backend.execution.orchestrator import (
     RunOrchestrator,
 )
 from backend.supervisor.sandbox import NoopSandboxManager, SandboxUnavailable
+from backend.workspaces.db import ProductRow, WorkspaceRow
 from tests._support import memory_session
 
 # --------------------------------------------------------------------------
@@ -98,11 +99,17 @@ def _declare_judge(*criteria: str) -> LoopToolCall:
     return _tc("declare_verification", checks=[{"kind": "judge", "criteria": list(criteria)}])
 
 
-async def _make_run(session: AsyncSession, *, intent: str = "do the thing") -> ExecutionRun:
+async def _make_run(
+    session: AsyncSession,
+    *,
+    intent: str = "do the thing",
+    product_id: uuid.UUID | None = None,
+    workspace_id: uuid.UUID | None = None,
+) -> ExecutionRun:
     run = ExecutionRun(
         id=uuid.uuid4(),
-        workspace_id=uuid.uuid4(),
-        product_id=None,
+        workspace_id=workspace_id or uuid.uuid4(),
+        product_id=product_id,
         request_id=None,
         status=RunStatus.RUNNING,
         payload={"intent_text": intent},
@@ -110,6 +117,18 @@ async def _make_run(session: AsyncSession, *, intent: str = "do the thing") -> E
     session.add(run)
     await session.flush()
     return run
+
+
+async def _make_product(
+    session: AsyncSession, *, workspace_id: uuid.UUID, slug: str, name: str
+) -> ProductRow:
+    """Seed a workspace + product so the orchestrator can resolve the run's
+    product binding for the settle payload."""
+    session.add(WorkspaceRow(id=workspace_id, name="ws", region="us-1", safe_mode=True))
+    product = ProductRow(id=uuid.uuid4(), workspace_id=workspace_id, name=name, slug=slug)
+    session.add(product)
+    await session.flush()
+    return product
 
 
 # --------------------------------------------------------------------------
@@ -160,6 +179,81 @@ async def test_verified_run_does_file_work_and_passes_command_check(tmp_path: Pa
         # Settle observation recorded as run activity.
         activities = (await session.execute(select(ExecutionRunActivity))).scalars().all()
         assert any(a.activity_type == "settle" for a in activities)
+
+
+def _settle_payload(activities) -> dict:
+    settle = next(a for a in activities if a.activity_type == "settle")
+    return settle.payload
+
+
+async def test_settle_payload_carries_product_and_intent(tmp_path: Path) -> None:
+    """The settle activity must thread the run's STABLE context — product
+    binding (slug/name resolved from product_id) + founder intent_text — so the
+    SettleWorker can cluster garden observations by product + intent."""
+    llm = ScriptedLlm(
+        [
+            LoopTurn(
+                content="",
+                tool_calls=(
+                    _declare_command("test -f marker"),
+                    _tc("file_write", path="marker", content="x"),
+                ),
+            ),
+            LoopTurn(content="done", tool_calls=()),
+        ]
+    )
+    ws = uuid.uuid4()
+    async with memory_session() as session:
+        product = await _make_product(
+            session, workspace_id=ws, slug="vaultwarden-selfhost", name="Vaultwarden Self-Host"
+        )
+        run = await _make_run(
+            session,
+            intent="Set up the vaultwarden password manager on the mini",
+            product_id=product.id,
+            workspace_id=ws,
+        )
+        orch = RunOrchestrator(session=session, llm=llm, sandbox_manager=NoopSandboxManager())
+        result = await orch.run(run=run, workspace_dir=tmp_path)
+        assert result.outcome == "verified"
+
+        activities = (await session.execute(select(ExecutionRunActivity))).scalars().all()
+        payload = _settle_payload(activities)
+        assert payload["product_slug"] == "vaultwarden-selfhost"
+        assert payload["product_name"] == "Vaultwarden Self-Host"
+        assert payload["intent_text"] == "Set up the vaultwarden password manager on the mini"
+        # The PR #27 fields are still present (additive).
+        assert payload["verified"] is True
+        assert payload["artifact_refs"] == ["marker"]
+        assert "summary" in payload
+
+
+async def test_settle_payload_degrades_without_product(tmp_path: Path) -> None:
+    """A run with no product binding (connector-inbound) omits product keys but
+    still carries intent_text — graceful degradation, no synthetic blanks."""
+    llm = ScriptedLlm(
+        [
+            LoopTurn(
+                content="",
+                tool_calls=(
+                    _declare_command("test -f marker"),
+                    _tc("file_write", path="marker", content="x"),
+                ),
+            ),
+            LoopTurn(content="done", tool_calls=()),
+        ]
+    )
+    async with memory_session() as session:
+        run = await _make_run(session, intent="harden the cache")
+        orch = RunOrchestrator(session=session, llm=llm, sandbox_manager=NoopSandboxManager())
+        result = await orch.run(run=run, workspace_dir=tmp_path)
+        assert result.outcome == "verified"
+
+        activities = (await session.execute(select(ExecutionRunActivity))).scalars().all()
+        payload = _settle_payload(activities)
+        assert "product_slug" not in payload
+        assert "product_name" not in payload
+        assert payload["intent_text"] == "harden the cache"
 
 
 async def test_verified_run_no_extra_llm_calls(tmp_path: Path) -> None:

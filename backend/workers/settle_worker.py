@@ -167,6 +167,17 @@ class Settlement:
     verified: bool
     summary: str
     artifact_refs: list[str] = field(default_factory=list)
+    # Stable run context threaded from the orchestrator's settle emission. The
+    # product binding (slug/name) is the strongest cluster key — runs for the
+    # SAME product should canonicalize together regardless of which files
+    # changed — and the founder's ``intent_text`` (their own words) names what
+    # the work was ABOUT. Both are deterministic stable inputs (NOT LLM output),
+    # so using them as clustering signal honours the no-LLM-output-for-system-
+    # fields rule. Absent for connector-inbound runs → graceful degradation to
+    # summary + artifact_refs derivation only.
+    product_slug: str | None = None
+    product_name: str | None = None
+    intent_text: str | None = None
     occurred_at: datetime | None = None
 
 
@@ -266,6 +277,9 @@ class KnowledgeSettleSink:
                 "activity_id": str(settlement.activity_id),
                 "verified": settlement.verified,
                 "artifact_refs": list(settlement.artifact_refs),
+                "product_slug": settlement.product_slug,
+                "product_name": settlement.product_name,
+                "intent_text": settlement.intent_text,
             },
         )
         path = await writer.write_garden(note)
@@ -274,6 +288,14 @@ class KnowledgeSettleSink:
 
 def _observation_body(settlement: Settlement, summary: str) -> str:
     lines = [summary or "(no summary recorded)", ""]
+    # Stable run context (product binding + founder intent) — recorded in the
+    # note body so the observation says what the work was ABOUT, not just which
+    # files moved. Both are deterministic inputs, never LLM output.
+    if settlement.product_slug or settlement.product_name:
+        product = settlement.product_slug or settlement.product_name
+        lines.append(f"Product: {product}")
+    if settlement.intent_text:
+        lines.append(f"Intent: {settlement.intent_text}")
     if settlement.artifact_refs:
         lines.append("## Artifacts")
         lines.extend(f"- `{ref}`" for ref in settlement.artifact_refs)
@@ -342,17 +364,48 @@ def _tags_from_summary(summary: str) -> list[str]:
     return tags
 
 
+def _tags_from_product(product_slug: str | None, product_name: str | None) -> list[str]:
+    """Derive the product cluster key from the run's product binding.
+
+    The slug is the canonical stable binding (``^[a-z][a-z0-9-]*$`` already, so
+    it normalizes to itself); the name is a defensive fallback when no slug is
+    carried. At most ONE product tag is emitted (slug preferred) so the strong
+    cluster key is not diluted by a near-duplicate name token.
+    """
+    for raw in (product_slug, product_name):
+        if not isinstance(raw, str) or not raw.strip():
+            continue
+        tag = _normalize_tag(raw)
+        if tag:
+            return [tag]
+    return []
+
+
 def derive_content_tags(settlement: Settlement) -> list[str]:
     """Deterministically derive content tags from a :class:`Settlement`.
 
-    Pure + offline (no LLM, no network). Artifact-ref stems come first (the
-    strongest recurring-pattern signal), then salient summary terms. The result
-    is normalized to valid concept-id candidates, de-duplicated (first-wins,
-    order preserved), structural tags excluded, and capped at
-    :data:`_MAX_CONTENT_TAGS`. An empty/contentless settlement yields ``[]`` so
-    the sink falls back to structural-only tags.
+    Pure + offline (no LLM, no network). Tags are ordered by clustering strength
+    so the strongest stable keys lead (and survive the cap):
+
+    1. **Product** (slug, else name) — the strongest stable cluster key: runs
+       for the same product should canonicalize together regardless of which
+       files changed. At most one product tag.
+    2. **Intent terms** — salient terms from the founder's ``intent_text``
+       (their own words naming what the work is ABOUT).
+    3. **Artifact-ref stems** — the recurring-file signal (PR #27).
+    4. **Summary terms** — salient terms from the work summary (PR #27).
+
+    The result is normalized to valid concept-id candidates, de-duplicated
+    (first-wins, order preserved), structural tags excluded, and capped at
+    :data:`_MAX_CONTENT_TAGS`. A settlement with no product, no intent, and no
+    contentful summary/refs yields ``[]`` so the sink falls back to
+    structural-only tags — the exact PR #27 graceful-degradation behaviour for
+    connector-inbound runs.
     """
-    ordered = _tags_from_artifact_refs(settlement.artifact_refs)
+    ordered = _tags_from_product(settlement.product_slug, settlement.product_name)
+    if settlement.intent_text:
+        ordered.extend(_tags_from_summary(settlement.intent_text))
+    ordered.extend(_tags_from_artifact_refs(settlement.artifact_refs))
     ordered.extend(_tags_from_summary(settlement.summary))
     deduped = list(dict.fromkeys(ordered))  # first-wins, preserves order
     return deduped[:_MAX_CONTENT_TAGS]
@@ -601,6 +654,19 @@ class SettleWorker(BaseWorker):
         }
 
 
+def _opt_str(value: object) -> str | None:
+    """Coerce a settle-payload value to a non-empty string, else ``None``.
+
+    The settle activity carries product/intent as JSON; an absent key (connector
+    run) or an empty/blank value degrades to ``None`` so derivation falls back to
+    the PR #27 summary + artifact-refs behaviour.
+    """
+    if not isinstance(value, str):
+        return None
+    stripped = value.strip()
+    return stripped or None
+
+
 def _to_settlement(row: ExecutionRunActivity, region: str) -> Settlement:
     payload = row.payload or {}
     refs = payload.get("artifact_refs") or []
@@ -612,6 +678,9 @@ def _to_settlement(row: ExecutionRunActivity, region: str) -> Settlement:
         verified=bool(payload.get("verified", False)),
         summary=str(payload.get("summary") or ""),
         artifact_refs=[str(r) for r in refs],
+        product_slug=_opt_str(payload.get("product_slug")),
+        product_name=_opt_str(payload.get("product_name")),
+        intent_text=_opt_str(payload.get("intent_text")),
         occurred_at=row.created_at,
     )
 

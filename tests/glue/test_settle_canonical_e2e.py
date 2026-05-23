@@ -41,7 +41,7 @@ from pathlib import Path
 
 import pytest
 import pytest_asyncio
-from sqlalchemy import create_engine, select, text
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from backend.execution.db import ExecutionBase, ExecutionRun, ExecutionRunActivity, RunStatus
@@ -68,15 +68,52 @@ _REGION = "us-1"
 
 
 def _can_reach_pg() -> bool:
-    sync_url = PG_URL.replace("+asyncpg", "+psycopg") if "+asyncpg" in PG_URL else PG_URL
+    """Probe PG reachability without requiring a specific sync driver.
+
+    The original probe opened a SQLAlchemy ``+psycopg`` engine — but the ``dev``
+    extra ships only ``asyncpg``, so on a stock checkout the probe always failed
+    and the suite silently fell back to SQLite even with a real PG up (the
+    "real-PG" run would never actually hit PG). A TCP connect to the host:port
+    parsed from ``PG_URL`` is driver-agnostic and event-loop-safe (the fixture
+    calls this synchronously inside pytest-asyncio's running loop, so it must not
+    spin its own loop). ``async_sessionmaker`` then connects for real via
+    asyncpg; a connect failure there surfaces loudly rather than masquerading as
+    SQLite.
+    """
+    import socket  # noqa: PLC0415
+    from urllib.parse import urlsplit  # noqa: PLC0415
+
+    parts = urlsplit(PG_URL.replace("+asyncpg", ""))
+    host = parts.hostname or "localhost"
+    port = parts.port or 5432
     try:
-        engine = create_engine(sync_url, pool_pre_ping=True)
-        with engine.connect() as conn:
-            conn.execute(text("SELECT 1"))
-        engine.dispose()
-        return True
-    except Exception:
+        with socket.create_connection((host, port), timeout=2.0):
+            return True
+    except OSError:
         return False
+
+
+# Suite-owned tables, child-before-parent so row deletes honour FK order. The
+# settle drain marker + run telemetry reference the run, which references the
+# workspace/product; deleting in this order keeps each PG test isolated WITHOUT
+# dropping the shared schema (a real PG may carry other domains' tables — e.g.
+# ``memberships`` FK-references ``workspaces`` — so a blanket ``drop_all`` of
+# only this suite's bases fails on the cross-domain dependency).
+_TABLES_CHILD_FIRST = (
+    "settle_drains",
+    "execution_run_activities",
+    "execution_runs",
+    "products",
+    "workspaces",
+)
+
+
+async def _clean_rows(engine) -> None:
+    from sqlalchemy import text as _text  # noqa: PLC0415
+
+    async with engine.begin() as conn:
+        for table in _TABLES_CHILD_FIRST:
+            await conn.execute(_text(f"DELETE FROM {table}"))
 
 
 @pytest_asyncio.fixture
@@ -85,14 +122,18 @@ async def sf():
     url = PG_URL if use_pg else "sqlite+aiosqlite:///:memory:"
     engine = create_async_engine(url, future=True)
     async with engine.begin() as conn:
+        # ``create_all`` is checkfirst by default — idempotent against a real PG
+        # that already carries the schema.
         for base in _BASES:
             await conn.run_sync(base.metadata.create_all)
+    if use_pg:
+        # Start from a clean slate so leftover rows from a prior run (or a crash
+        # mid-teardown) can't bleed into this test's assertions.
+        await _clean_rows(engine)
     sm = async_sessionmaker(engine, expire_on_commit=False)
     yield sm
     if use_pg:
-        async with engine.begin() as conn:
-            for base in reversed(_BASES):
-                await conn.run_sync(base.metadata.drop_all)
+        await _clean_rows(engine)
     await engine.dispose()
 
 
@@ -110,9 +151,25 @@ async def _seed_settle_activity(
     workspace_id: uuid.UUID,
     summary: str = "configured reverse proxy",
     refs: list[str] | None = None,
+    product_slug: str | None = None,
+    product_name: str | None = None,
+    intent_text: str | None = None,
 ) -> uuid.UUID:
     run_id = uuid.uuid4()
     activity_id = uuid.uuid4()
+    payload: dict = {
+        "verified": True,
+        "artifact_refs": refs if refs is not None else ["deploy/Caddyfile"],
+        "summary": summary,
+    }
+    # Mirror the orchestrator's enriched emission: only present keys are written
+    # (a connector-inbound run carries neither).
+    if product_slug is not None:
+        payload["product_slug"] = product_slug
+    if product_name is not None:
+        payload["product_name"] = product_name
+    if intent_text is not None:
+        payload["intent_text"] = intent_text
     async with sf() as s:
         s.add(
             ExecutionRun(
@@ -131,11 +188,7 @@ async def _seed_settle_activity(
                 run_id=run_id,
                 workspace_id=workspace_id,
                 activity_type="settle",
-                payload={
-                    "verified": True,
-                    "artifact_refs": refs if refs is not None else ["deploy/Caddyfile"],
-                    "summary": summary,
-                },
+                payload=payload,
                 created_at=datetime.now(tz=UTC),
             )
         )
@@ -440,6 +493,76 @@ async def test_loop_produces_canon_from_sink_derived_tags_no_seeding(sf, tmp_pat
     resolved = await resolver.resolve("auth")
     assert resolved.status == "resolved"
     assert resolved.concept_id == "auth"
+
+
+async def test_loop_clusters_two_runs_by_shared_product_and_intent(sf, tmp_path) -> None:
+    """The product+intent enrichment closes the gap PR #27 flagged.
+
+    Two settle activities for the SAME product (slug ``vaultwarden-selfhost``)
+    and SAME founder intent, but touching DIFFERENT files (``deploy/Caddyfile``
+    vs ``backend/auth/client.py``) with non-overlapping summaries. The PR #27
+    derivation (file stems + summary words) would give the two runs ZERO shared
+    content tag — no cluster. With product+intent threaded in, both runs carry
+    the product slug + intent terms as the leading content tags, so the promoter
+    folds them onto canonical anchors keyed on what the work was ABOUT (the
+    product / intent), not which files happened to change.
+    """
+    ws = uuid.uuid4()
+    await _add_workspace(sf, workspace_id=ws, safe_mode=False)  # permissive → apply
+
+    worker = SettleWorker(
+        session_factory=sf,
+        sink=KnowledgeSettleSink(vault_root=tmp_path),
+        config=SettleWorkerConfig(default_region=_REGION),
+        promoter_factory=build_garden_promoter_factory(vault_root=tmp_path),
+    )
+    storage = _ws_storage(tmp_path, ws)
+
+    # Run 1: a settle for the product, touching the deploy config.
+    await _seed_settle_activity(
+        sf,
+        workspace_id=ws,
+        summary="hardened the deploy config",
+        refs=["deploy/Caddyfile"],
+        product_slug="vaultwarden-selfhost",
+        intent_text="Set up the vaultwarden password manager",
+    )
+    assert await worker.drain_once() == 1
+
+    # Run 2: SAME product + intent, but completely different files + summary —
+    # zero overlap on the PR #27 (file/summary) signal alone.
+    await _seed_settle_activity(
+        sf,
+        workspace_id=ws,
+        summary="refactored the token rotation logic",
+        refs=["backend/auth/client.py"],
+        product_slug="vaultwarden-selfhost",
+        intent_text="Set up the vaultwarden password manager",
+    )
+    assert await worker.drain_once() == 1
+
+    # Both settle notes were written (loop half 1) ...
+    assert len(_written_settle_notes(tmp_path, ws)) == 2
+
+    # ... and the promoter produced a canonical anchor keyed on the SHARED
+    # product slug + a shared intent term — the cross-run cluster the PR #27
+    # signal alone could not form.
+    active = {
+        p.removeprefix("concepts/active/").removesuffix(".md")
+        for p in await storage.list_files("concepts/active")
+    }
+    assert "vaultwarden-selfhost" in active, active
+    assert "vaultwarden" in active, active
+    assert "settle" not in active
+    assert "verified-run" not in active
+
+    # Deterministic retrieval resolves the product cluster key to its anchor.
+    index = InMemoryCanonicalizationIndex()
+    await index.initialize(storage)
+    resolver = TagResolver(index=index)
+    resolved = await resolver.resolve("vaultwarden-selfhost")
+    assert resolved.status == "resolved"
+    assert resolved.concept_id == "vaultwarden-selfhost"
 
 
 async def test_no_promoter_factory_disables_promotion(sf, tmp_path) -> None:
