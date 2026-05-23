@@ -190,6 +190,32 @@ async def test_create_returns_token_and_full_url_once(client: httpx.AsyncClient)
     assert "signing_secret_ciphertext" not in body
 
 
+async def test_create_accepts_and_echoes_delivery_config(client: httpx.AsyncClient) -> None:
+    r = await client.post(
+        "/api/v1/connectors",
+        json={
+            "connector": "notion",
+            "signing_secret": "secret_notion_token",
+            "delivery_config": {"parent_page_id": "P"},
+        },
+    )
+    assert r.status_code == 201, r.text
+    assert r.json()["delivery_config"] == {"parent_page_id": "P"}
+
+    listed = await client.get("/api/v1/connectors")
+    assert listed.status_code == 200
+    assert listed.json()[0]["delivery_config"] == {"parent_page_id": "P"}
+
+
+async def test_create_defaults_delivery_config_to_empty(client: httpx.AsyncClient) -> None:
+    r = await client.post(
+        "/api/v1/connectors",
+        json={"connector": "slack", "signing_secret": "x"},
+    )
+    assert r.status_code == 201, r.text
+    assert r.json()["delivery_config"] == {}
+
+
 async def test_create_rejects_unknown_connector(client: httpx.AsyncClient) -> None:
     r = await client.post(
         "/api/v1/connectors",

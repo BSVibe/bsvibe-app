@@ -16,8 +16,9 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime
+from typing import Any
 
-from sqlalchemy import Boolean, DateTime, Index, String, UniqueConstraint
+from sqlalchemy import JSON, Boolean, DateTime, Index, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from backend.data import Base
@@ -44,6 +45,13 @@ class ConnectorAccountRow(ConnectorsBase):
     webhook_token: Mapped[str] = mapped_column(String(128), nullable=False)
     signing_secret_ciphertext: Mapped[str] = mapped_column(String(1024), nullable=False)
     external_ref: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # Outbound delivery target binding (Workflow §6 #2 / §12.5 #8). When the
+    # connector has an ``@p.outbound``, this dict carries the STABLE routing /
+    # system fields the connector needs to deliver a verified Deliverable OUT
+    # (e.g. notion's ``parent_page_id``). Empty ``{}`` = inbound-only binding
+    # (no outbound delivery). The routing comes from this founder-set config,
+    # never from LLM/work output (no-LLM-output-for-system-fields rule).
+    delivery_config: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=_utcnow

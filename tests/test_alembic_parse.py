@@ -35,11 +35,12 @@ def test_alembic_history_loads():
         "settle_drains",
         "connector_accounts",
         "decision_resolve",
+        "connector_delivery_config",
     ):
         assert rev in result.stdout, f"missing revision {rev} in:\n{result.stdout}"
 
 
-def test_alembic_head_is_decision_resolve():
+def test_alembic_head_is_connector_delivery_config():
     repo = Path(__file__).parent.parent
     result = subprocess.run(
         [sys.executable, "-m", "alembic", "heads"],
@@ -48,7 +49,7 @@ def test_alembic_head_is_decision_resolve():
         text=True,
     )
     assert result.returncode == 0
-    assert "decision_resolve" in result.stdout
+    assert "connector_delivery_config" in result.stdout
 
 
 def test_target_metadata_covers_all_bases():

@@ -1,0 +1,256 @@
+"""Connector delivery end-to-end — verified Deliverable → external Notion page.
+
+This closes the last loop of the Direct path (Workflow §11.1 / §12.5 #8): a
+verified run produces a :class:`~backend.execution.db.Deliverable` and a
+:class:`~backend.delivery.db.DeliveryEventRow`; the
+:class:`~backend.workers.delivery_worker.DeliveryWorker` drains it through a
+:class:`~backend.delivery.connector_dispatch.ConnectorDeliveryAdapter` that
+resolves the workspace's configured ``connector_accounts`` (binding =
+``delivery_config``), shapes the connector's outbound event from the
+deliverable content + the stable routing config, and dispatches it through the
+real :class:`~backend.delivery.dispatcher.DeliveryDispatcher` over the loaded
+plugins.
+
+The Notion HTTP API is mocked with respx — no real network I/O. The work LLM /
+sandbox path is bypassed: we seed a verified Deliverable + DeliveryEventRow
+directly (the orchestrator side is already proved by
+``test_direct_path_e2e``), and assert the *delivery* leg.
+
+Runs on in-memory SQLite by default, real Postgres when ``BSVIBE_DATABASE_URL``
+is set (mirrors the other glue tests).
+"""
+
+from __future__ import annotations
+
+import os
+import uuid
+from pathlib import Path
+
+import httpx
+import pytest
+import pytest_asyncio
+import respx
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+
+from backend.accounts.crypto import CredentialCipher
+from backend.connectors.db import ConnectorAccountRow
+from backend.data import Base
+from backend.delivery.connector_dispatch import build_connector_delivery_adapter
+from backend.delivery.db import DeliveryEventRow
+from backend.execution.db import Deliverable, DeliverableType, ExecutionRun, RunStatus
+from backend.plugins.implementations.notion import plugin as notion_module
+from backend.plugins.loader import PluginLoader
+from backend.workers.delivery_worker import DeliveryWorker, DeliveryWorkerConfig
+
+NOTION_API = "https://api.notion.test"
+
+# Deterministic 32-byte AES key for CredentialCipher in tests (matches the
+# webhook/connector glue tests' pattern).
+TEST_KEY = b"0123456789abcdef0123456789abcdef"
+
+PG_URL = os.environ.get(
+    "BSVIBE_DATABASE_URL", "postgresql+asyncpg://bsvibe:bsvibe@localhost:5442/bsvibe"
+)
+
+pytestmark = pytest.mark.asyncio
+
+
+async def _can_reach_pg() -> bool:
+    try:
+        engine = create_async_engine(PG_URL, future=True, pool_pre_ping=True)
+        async with engine.connect() as conn:
+            await conn.execute(__import__("sqlalchemy").text("SELECT 1"))
+        await engine.dispose()
+        return True
+    except Exception:
+        return False
+
+
+@pytest_asyncio.fixture
+async def sf():
+    use_pg = os.environ.get("BSVIBE_DATABASE_URL") and await _can_reach_pg()
+    url = PG_URL if use_pg else "sqlite+aiosqlite:///:memory:"
+    engine = create_async_engine(url, future=True)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    maker = async_sessionmaker(engine, expire_on_commit=False)
+    yield maker
+    if use_pg:
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.drop_all)
+    await engine.dispose()
+
+
+@pytest.fixture
+def cipher() -> CredentialCipher:
+    """A deterministic test cipher (32-byte key) — matches the CRUD encrypt."""
+    return CredentialCipher(TEST_KEY)
+
+
+async def _seed_verified_deliverable(session: AsyncSession, workspace_id: uuid.UUID) -> uuid.UUID:
+    """Seed a verified ExecutionRun + Deliverable + DeliveryEventRow."""
+    run = ExecutionRun(
+        id=uuid.uuid4(),
+        workspace_id=workspace_id,
+        status=RunStatus.REVIEW_READY,
+        payload={"intent_text": "publish the spec"},
+    )
+    session.add(run)
+    await session.flush()
+    summary = "Quarterly Spec\nThe spec body, line two.\nLine three."
+    deliverable = Deliverable(
+        id=uuid.uuid4(),
+        run_id=run.id,
+        workspace_id=workspace_id,
+        deliverable_type=DeliverableType.CODE,
+        payload={"artifact_refs": ["spec.md"], "summary": summary},
+    )
+    session.add(deliverable)
+    await session.flush()
+    session.add(
+        DeliveryEventRow(
+            id=uuid.uuid4(),
+            workspace_id=workspace_id,
+            deliverable_id=deliverable.id,
+            artifact_type=DeliverableType.CODE.value,
+            payload={"artifact_refs": ["spec.md"], "summary": summary[:500]},
+        )
+    )
+    await session.commit()
+    return deliverable.id
+
+
+async def _seed_notion_connector(
+    session: AsyncSession,
+    cipher: CredentialCipher,
+    workspace_id: uuid.UUID,
+) -> None:
+    session.add(
+        ConnectorAccountRow(
+            id=uuid.uuid4(),
+            workspace_id=workspace_id,
+            connector="notion",
+            webhook_token=uuid.uuid4().hex,
+            signing_secret_ciphertext=cipher.encrypt("secret_notion_token"),
+            delivery_config={
+                "parent_page_id": "P",
+                "notion_api_url": NOTION_API,
+            },
+            is_active=True,
+        )
+    )
+    await session.commit()
+
+
+async def _plugins():
+    impl_dir = Path(notion_module.__file__).resolve().parents[1]
+    return await PluginLoader(impl_dir).load_all()
+
+
+@respx.mock
+async def test_verified_deliverable_delivers_to_notion(
+    sf: async_sessionmaker[AsyncSession], cipher: CredentialCipher
+) -> None:
+    workspace_id = uuid.uuid4()
+    route = respx.post(f"{NOTION_API}/v1/pages").mock(
+        return_value=httpx.Response(200, json={"id": "page-77", "url": "https://notion.so/page-77"})
+    )
+
+    async with sf() as s:
+        await _seed_notion_connector(s, cipher, workspace_id)
+        await _seed_verified_deliverable(s, workspace_id)
+
+    registry = await _plugins()
+    adapter = build_connector_delivery_adapter(
+        session_factory=sf, plugins=list(registry.values()), cipher=cipher
+    )
+    worker = DeliveryWorker(
+        session_factory=sf,
+        dispatcher=adapter,
+        config=DeliveryWorkerConfig(batch_size=10, poll_interval_s=0.01),
+    )
+
+    assert await worker.drain_once() == 1
+
+    # Notion POST /v1/pages was called with the parent from config + a title/body
+    # derived from the deliverable summary.
+    assert route.called
+    body = route.calls.last.request.content.decode()
+    assert '"page_id": "P"' in body or '"page_id":"P"' in body
+    assert "Quarterly Spec" in body  # title = first line of the summary
+    assert "The spec body" in body  # body carries the rest of the summary
+
+    # Event drained from the queue.
+    async with sf() as s:
+        assert (await s.execute(select(DeliveryEventRow))).first() is None
+
+
+@respx.mock
+async def test_no_connector_account_no_external_call_no_error(
+    sf: async_sessionmaker[AsyncSession], cipher: CredentialCipher
+) -> None:
+    """No configured connector_account → the Deliverable still exists, the
+    event still drains, and NO external HTTP call is made (no error)."""
+    workspace_id = uuid.uuid4()
+    route = respx.post(f"{NOTION_API}/v1/pages")
+
+    async with sf() as s:
+        deliverable_id = await _seed_verified_deliverable(s, workspace_id)
+
+    registry = await _plugins()
+    adapter = build_connector_delivery_adapter(
+        session_factory=sf, plugins=list(registry.values()), cipher=cipher
+    )
+    worker = DeliveryWorker(
+        session_factory=sf,
+        dispatcher=adapter,
+        config=DeliveryWorkerConfig(batch_size=10, poll_interval_s=0.01),
+    )
+
+    assert await worker.drain_once() == 1
+    assert not route.called
+
+    async with sf() as s:
+        # The in-app Deliverable is untouched.
+        deliverable = await s.get(Deliverable, deliverable_id)
+        assert deliverable is not None
+        # Event drained.
+        assert (await s.execute(select(DeliveryEventRow))).first() is None
+
+
+@respx.mock
+async def test_inactive_connector_is_skipped(
+    sf: async_sessionmaker[AsyncSession], cipher: CredentialCipher
+) -> None:
+    """A revoked (is_active=False) connector_account is not delivered to."""
+    workspace_id = uuid.uuid4()
+    route = respx.post(f"{NOTION_API}/v1/pages")
+
+    async with sf() as s:
+        s.add(
+            ConnectorAccountRow(
+                id=uuid.uuid4(),
+                workspace_id=workspace_id,
+                connector="notion",
+                webhook_token=uuid.uuid4().hex,
+                signing_secret_ciphertext=cipher.encrypt("secret_notion_token"),
+                delivery_config={"parent_page_id": "P", "notion_api_url": NOTION_API},
+                is_active=False,
+            )
+        )
+        await s.commit()
+        await _seed_verified_deliverable(s, workspace_id)
+
+    registry = await _plugins()
+    adapter = build_connector_delivery_adapter(
+        session_factory=sf, plugins=list(registry.values()), cipher=cipher
+    )
+    worker = DeliveryWorker(
+        session_factory=sf,
+        dispatcher=adapter,
+        config=DeliveryWorkerConfig(batch_size=10, poll_interval_s=0.01),
+    )
+
+    assert await worker.drain_once() == 1
+    assert not route.called

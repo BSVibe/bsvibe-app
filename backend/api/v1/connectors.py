@@ -29,7 +29,7 @@ from __future__ import annotations
 import secrets
 import uuid
 from datetime import datetime
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -44,6 +44,7 @@ from backend.api.deps import get_db_session, get_workspace_id
 from backend.api.webhooks import get_credential_cipher
 from backend.connectors.db import ConnectorAccountRow
 from backend.connectors.resolver import ConnectorInboundResolver
+from backend.delivery.connector_dispatch import OUTBOUND_EVENT_BUILDERS
 
 router = APIRouter()
 
@@ -62,11 +63,20 @@ class ConnectorCreate(BaseModel):
     connector: str = Field(min_length=1, max_length=64)
     signing_secret: str = Field(min_length=1, max_length=1024)
     external_ref: str | None = Field(default=None, max_length=255)
+    # Outbound delivery target binding (Workflow §12.5 #8). For a connector
+    # with an ``@p.outbound`` this carries the STABLE routing fields it needs to
+    # deliver a verified Deliverable OUT (e.g. notion ``{"parent_page_id": …}``).
+    # Routing is founder-set config — never derived from LLM/work output.
+    delivery_config: dict[str, Any] = Field(default_factory=dict)
 
     @field_validator("connector")
     @classmethod
     def _known_connector(cls, v: str) -> str:
-        if not ConnectorInboundResolver.is_known(v):
+        # A connector is registerable when it has an inbound parser (webhook
+        # ingress) OR an outbound delivery binding (a v1 event-shaping mapper).
+        # notion is outbound-only — it has no inbound parser but is a valid
+        # delivery target, so the inbound-known check alone would reject it.
+        if not ConnectorInboundResolver.is_known(v) and v not in OUTBOUND_EVENT_BUILDERS:
             raise ValueError(f"unknown connector {v!r}")
         return v
 
@@ -81,6 +91,7 @@ class ConnectorCreated(BaseModel):
     external_ref: str | None
     is_active: bool
     created_at: datetime
+    delivery_config: dict[str, Any]
     webhook_token: str
     webhook_url: str
 
@@ -95,6 +106,7 @@ class ConnectorOut(BaseModel):
     external_ref: str | None
     is_active: bool
     created_at: datetime
+    delivery_config: dict[str, Any]
     token_hint: str
 
 
@@ -126,6 +138,7 @@ async def list_connectors(
             external_ref=r.external_ref,
             is_active=r.is_active,
             created_at=r.created_at,
+            delivery_config=r.delivery_config,
             token_hint=_token_hint(r.webhook_token),
         )
         for r in rows
@@ -147,6 +160,7 @@ async def create_connector(
         webhook_token=webhook_token,
         signing_secret_ciphertext=cipher.encrypt(payload.signing_secret),
         external_ref=payload.external_ref,
+        delivery_config=payload.delivery_config,
         is_active=True,
     )
     session.add(row)
@@ -157,6 +171,7 @@ async def create_connector(
         external_ref=row.external_ref,
         is_active=row.is_active,
         created_at=row.created_at,
+        delivery_config=row.delivery_config,
         webhook_token=webhook_token,
         webhook_url=_webhook_url(row.connector, webhook_token),
     )
