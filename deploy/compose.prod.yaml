@@ -40,6 +40,15 @@ services:
       # what CORSMiddleware allows. Without it the container falls back to the
       # localhost-only code default and rejects the prod origin on preflight.
       BSVIBE_CORS_ALLOWED_ORIGINS: ${BSVIBE_CORS_ALLOWED_ORIGINS:-http://localhost:3700}
+      # Session-JWT verification (backend/shared/authz — these are UNPREFIXED,
+      # not BSVIBE_). The backend logs in against Supabase GoTrue, then must
+      # VERIFY the returned ES256 session JWT via the project's JWKS. Without
+      # these the verifier defaults to HS256 + a missing user_jwt_secret and
+      # every authenticated /api/v1/* call 401s ("user_jwt_secret not configured").
+      USER_JWT_JWKS_URL: ${USER_JWT_JWKS_URL:?set USER_JWT_JWKS_URL}
+      USER_JWT_ALGORITHM: ${USER_JWT_ALGORITHM:-ES256}
+      USER_JWT_AUDIENCE: ${USER_JWT_AUDIENCE:-authenticated}
+      USER_JWT_ISSUER: ${USER_JWT_ISSUER:?set USER_JWT_ISSUER}
       BSVIBE_DEFAULT_WORKSPACE_REGION: ${BSVIBE_DEFAULT_WORKSPACE_REGION:-us-1}
       BSVIBE_KNOWLEDGE_VAULT_ROOT: ${BSVIBE_KNOWLEDGE_VAULT_ROOT:-/app/var/vault}
       BSVIBE_KNOWLEDGE_DEFAULT_REGION: ${BSVIBE_KNOWLEDGE_DEFAULT_REGION:-us-1}
