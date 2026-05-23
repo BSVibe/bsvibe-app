@@ -93,7 +93,13 @@ async def configured_client(db, workspace_id: uuid.UUID):
 
 
 async def _seed_run(s, *, run_id: uuid.UUID, ws: uuid.UUID) -> None:
-    """Create the parent ExecutionRun so the deliverables FK resolves (PG)."""
+    """Create the parent ExecutionRun so the deliverables FK resolves (PG).
+
+    Flush immediately: there is no ORM ``relationship()`` linking Deliverable to
+    ExecutionRun (only a column-level FK), and the deliverables are inserted via
+    a batched ``executemany`` — so the parent row must be flushed to the DB
+    before the children or PG rejects the FK (SQLite silently tolerates it).
+    """
     s.add(
         ExecutionRun(
             id=run_id,
@@ -104,6 +110,7 @@ async def _seed_run(s, *, run_id: uuid.UUID, ws: uuid.UUID) -> None:
             updated_at=datetime.now(tz=UTC),
         )
     )
+    await s.flush()
 
 
 async def test_list_newest_first_with_payload_mapping(configured_client, db, workspace_id) -> None:
