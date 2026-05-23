@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
-import os
 import uuid
 from datetime import UTC, datetime, timedelta
 
 import pytest
 import pytest_asyncio
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from backend.delivery.db import DeliveryBase, SafeModeQueueItemRow, SafeModeStatus
 from backend.delivery.safe_mode_queue import (
@@ -17,41 +16,19 @@ from backend.delivery.safe_mode_queue import (
     SafeModeQueue,
 )
 
-PG_URL = os.environ.get(
-    "BSVIBE_DATABASE_URL", "postgresql+asyncpg://bsvibe:bsvibe@localhost:5442/bsvibe"
-)
-
+from .._support import db_engine
 
 pytestmark = pytest.mark.asyncio
 
 
-async def _can_reach_pg() -> bool:
-    try:
-        engine = create_async_engine(PG_URL, future=True, pool_pre_ping=True)
-        async with engine.connect() as conn:
-            await conn.execute(__import__("sqlalchemy").text("SELECT 1"))
-        await engine.dispose()
-        return True
-    except Exception:
-        return False
-
-
 @pytest_asyncio.fixture
 async def session() -> AsyncSession:
-    # Bundle 1 test pattern — in-memory SQLite by default; opt into PG by
-    # setting ``BSVIBE_DATABASE_URL`` to a reachable Postgres DSN.
-    use_pg = os.environ.get("BSVIBE_DATABASE_URL") and await _can_reach_pg()
-    url = PG_URL if use_pg else "sqlite+aiosqlite:///:memory:"
-    engine = create_async_engine(url, future=True)
-    async with engine.begin() as conn:
-        await conn.run_sync(DeliveryBase.metadata.create_all)
-    sm = async_sessionmaker(engine, expire_on_commit=False)
-    async with sm() as s:
-        yield s
-    if use_pg:
-        async with engine.begin() as conn:
-            await conn.run_sync(DeliveryBase.metadata.drop_all)
-    await engine.dispose()
+    # In-memory SQLite by default; opt into PG by setting ``BSVIBE_DATABASE_URL``
+    # to a reachable Postgres DSN (gate + teardown live in tests/_support).
+    async with db_engine(DeliveryBase) as (engine, _is_pg):
+        sm = async_sessionmaker(engine, expire_on_commit=False)
+        async with sm() as s:
+            yield s
 
 
 def _as_aware(dt: datetime) -> datetime:
