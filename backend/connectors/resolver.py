@@ -40,6 +40,7 @@ from backend.connectors.db import ConnectorAccountRow
 from backend.intake.schema import TriggerEvent
 from backend.plugins.implementations.discord.webhook import parse_interaction
 from backend.plugins.implementations.github.webhook import parse_webhook
+from backend.plugins.implementations.sentry.webhook import parse_webhook as parse_sentry_webhook
 from backend.plugins.implementations.slack.webhook import parse_event
 from backend.plugins.implementations.telegram.webhook import parse_update
 
@@ -70,6 +71,11 @@ _PARSERS: dict[str, ConnectorParser] = {
     "slack": parse_event,
     "telegram": parse_update,
     "discord": _discord_parser,
+    # Sentry's parser already matches the
+    # ``(workspace_id, headers, raw_body, secret) -> TriggerEvent | None``
+    # shape (bare-hex HMAC-SHA256 on ``Sentry-Hook-Signature``), so it is
+    # registered directly — no adapter needed.
+    "sentry": parse_sentry_webhook,
 }
 
 
