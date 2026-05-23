@@ -205,13 +205,19 @@ export interface Observation {
  *  accepts today (backend/api/v1/connectors.py): a name is registerable iff it
  *  has an inbound parser (ConnectorInboundResolver._PARSERS — github / slack /
  *  telegram / discord / sentry) OR an outbound delivery builder
- *  (OUTBOUND_EVENT_BUILDERS — notion). Anything else 422s. We mirror that exact
- *  validated set so the picker never offers a connector the server rejects.
+ *  (OUTBOUND_EVENT_BUILDERS — notion / slack / email-sender). Anything else
+ *  422s. We mirror that exact validated set so the picker never offers a
+ *  connector the server rejects.
  *
- *  Note: email / linear / trello are named in the Workflow as eventual
- *  connectors but have NEITHER an inbound parser NOR an outbound builder wired
- *  yet, so the create validator rejects them — they are intentionally absent
- *  here until the backend lands their mappers (see PR description gap note). */
+ *  Note: the email connector's backend name is `email-sender` (NOT `email`) —
+ *  it is an outbound-only delivery builder (backend/delivery/connector_dispatch
+ *  .py OUTBOUND_EVENT_BUILDERS), so it has no inbound parser but is registerable
+ *  via the outbound branch of the validator.
+ *
+ *  Note: linear / trello are named in the Workflow as eventual connectors but
+ *  have NEITHER an inbound parser NOR an outbound builder wired yet, so the
+ *  create validator rejects them — they are intentionally absent here until the
+ *  backend lands their mappers (see PR description gap note). */
 export const KNOWN_CONNECTORS = [
   "github",
   "slack",
@@ -219,6 +225,7 @@ export const KNOWN_CONNECTORS = [
   "discord",
   "sentry",
   "notion",
+  "email-sender",
 ] as const;
 
 export type ConnectorName = (typeof KNOWN_CONNECTORS)[number];
@@ -258,6 +265,62 @@ export interface Connector {
   created_at: string;
   delivery_config: Record<string, unknown>;
   token_hint: string;
+}
+
+// ── Model accounts (REAL endpoint /api/v1/accounts) ────────────────────────
+
+/** The data-jurisdiction allow-list the backend ModelAccount schema accepts
+ *  (backend/accounts/schemas.py `Jurisdiction`). The picker mirrors it exactly
+ *  so the form never offers a value the create validator 422s on. */
+export const MODEL_ACCOUNT_JURISDICTIONS = ["us", "eu", "kr", "local", "unknown"] as const;
+
+export type ModelAccountJurisdiction = (typeof MODEL_ACCOUNT_JURISDICTIONS)[number];
+
+/** `POST /api/v1/accounts` body (backend ModelAccountCreate, extra=forbid). The
+ *  caller supplies the plaintext `api_key`; the service encrypts it at rest and
+ *  the response NEVER echoes it back (only `has_api_key: true`). Field set
+ *  mirrors the backend schema 1:1 — `api_base` / `extra_params` are optional. */
+export interface ModelAccountCreate {
+  provider: string;
+  label: string;
+  litellm_model: string;
+  api_key: string;
+  data_jurisdiction: ModelAccountJurisdiction;
+  api_base?: string | null;
+  extra_params?: Record<string, unknown>;
+}
+
+/** `PATCH /api/v1/accounts/{id}` body (backend ModelAccountUpdate, extra=forbid)
+ *  — every field optional. Used for activate / deactivate (`is_active`) and any
+ *  field edit. A new `api_key` rotates the stored credential; it is never read
+ *  back. */
+export interface ModelAccountUpdate {
+  label?: string;
+  litellm_model?: string;
+  api_base?: string | null;
+  api_key?: string;
+  data_jurisdiction?: ModelAccountJurisdiction;
+  is_active?: boolean;
+  extra_params?: Record<string, unknown>;
+}
+
+/** `GET /api/v1/accounts` element / `POST` 201 (backend ModelAccountOut). Never
+ *  exposes the encrypted key — `has_api_key` is the masked "a credential is on
+ *  file" flag. Mirrors the backend response model field-for-field. */
+export interface ModelAccount {
+  id: string;
+  workspace_id: string;
+  account_id: string;
+  provider: string;
+  label: string;
+  litellm_model: string;
+  api_base: string | null;
+  data_jurisdiction: ModelAccountJurisdiction;
+  is_active: boolean;
+  has_api_key: boolean;
+  extra_params: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
 }
 
 // ── Brief view-model (UX §3.3 lane states) ────────────────────────────────
