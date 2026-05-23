@@ -8,6 +8,7 @@ from backend.api.deps import get_current_user
 from backend.api.v1 import (
     accounts,
     chat,
+    connectors,
     decisions,
     intents,
     messages,
@@ -32,6 +33,7 @@ router.include_router(chat.router, prefix="/chat", tags=["chat"])
 router.include_router(workspaces.router, prefix="/workspaces", tags=["workspaces"])
 router.include_router(products.router, prefix="/products", tags=["products"])
 router.include_router(accounts.router, prefix="/accounts", tags=["accounts"])
+router.include_router(connectors.router, prefix="/connectors", tags=["connectors"])
 router.include_router(rules.router, prefix="/rules", tags=["rules"])
 router.include_router(intents.router, prefix="/intents", tags=["intents"])
 router.include_router(presets.router, prefix="/presets", tags=["presets"])
