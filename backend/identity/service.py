@@ -15,6 +15,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.accounts.account_service import ensure_personal_account
 from backend.identity.db import MembershipRow, UserRow
 from backend.workspaces.db import WorkspaceRow
 
@@ -125,6 +126,13 @@ async def ensure_user_bootstrapped(
         )
         session.add(membership)
         await session.flush()
+
+    # Seed (or backfill) the workspace's personal billing account so the
+    # model-accounts surface (X-BSVibe-Account-Id) has a real id to partition
+    # on. Runs on EVERY login — idempotent — so pre-feature users who already
+    # own a workspace but no Account get one here. Folded into the bootstrap
+    # commit below.
+    await ensure_personal_account(session, workspace_id=membership.workspace_id)
 
     await session.commit()
     return user, membership

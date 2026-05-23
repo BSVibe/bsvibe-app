@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends
 
 from backend.api.deps import get_current_user
 from backend.api.v1 import (
+    account,
     accounts,
     chat,
     checkpoints,
@@ -36,6 +37,9 @@ router.include_router(chat.router, prefix="/chat", tags=["chat"])
 router.include_router(workspaces.router, prefix="/workspaces", tags=["workspaces"])
 router.include_router(products.router, prefix="/products", tags=["products"])
 router.include_router(accounts.router, prefix="/accounts", tags=["accounts"])
+# Singular /account — personal billing-account discovery (distinct from the
+# plural /accounts ModelAccount CRUD above).
+router.include_router(account.router, prefix="/account", tags=["account"])
 router.include_router(connectors.router, prefix="/connectors", tags=["connectors"])
 router.include_router(rules.router, prefix="/rules", tags=["rules"])
 router.include_router(intents.router, prefix="/intents", tags=["intents"])
