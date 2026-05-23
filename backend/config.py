@@ -73,6 +73,11 @@ class Settings(BaseSettings):
     # the sandbox; the work LLM's file writes land here.
     run_workspace_root: str = "var/runs"
 
+    # Audit relay sink (backend.workers.relays) — the RelayWorker drains
+    # ``audit_outbox`` into this HTTP endpoint when set. Empty (the default)
+    # selects the no-sink ``LoggingRelay`` (drain + ack, no remote delivery).
+    audit_relay_url: str = ""
+
     # Execution settings — agent loop budgets per Workflow §3 + memory
     # ``bsnexus-budget-handoff-design``. Operator may tune for local-LLM
     # vs frontier-model deployments; defaults match Cycle 7-14 dogfood
