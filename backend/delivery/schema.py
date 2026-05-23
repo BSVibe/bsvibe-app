@@ -26,14 +26,19 @@ ArtifactType = Literal[
     "direct_output",
     "slack_message",
     "email",
+    "telegram_message",
+    "discord_message",
+    "issue",
+    "card",
 ]
 """Workflow §3.1 — the canonical artifact-type tags downstream
 plugins understand.
 
 The first five mirror :class:`~backend.execution.db.DeliverableType` 1:1 (the
-*deliverable's own* type). ``slack_message`` / ``email`` are connector-outbound
-dispatch tags: a connector's ``@p.outbound`` declares the artifact_type it
-accepts (slack → ``slack_message``, email-sender → ``email``), and the
+*deliverable's own* type). The rest are connector-outbound dispatch tags: a
+connector's ``@p.outbound`` declares the artifact_type it accepts (slack →
+``slack_message``, email-sender → ``email``, telegram → ``telegram_message``,
+discord → ``discord_message``, linear → ``issue``, trello → ``card``), and the
 connector event-builders in :mod:`backend.delivery.connector_dispatch` dispatch
 the shaped event under that tag so the dispatcher's
 ``artifact_type in cap.artifact_types`` match selects the right outbound."""

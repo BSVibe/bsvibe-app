@@ -428,3 +428,360 @@ async def test_verified_deliverable_delivers_to_email(
 
     async with sf() as s:
         assert (await s.execute(select(DeliveryEventRow))).first() is None
+
+
+# ── telegram ───────────────────────────────────────────────────────────────────
+
+TELEGRAM_API = "https://telegram.test"
+
+
+async def _seed_telegram_connector(
+    session: AsyncSession,
+    cipher: CredentialCipher,
+    workspace_id: uuid.UUID,
+) -> None:
+    session.add(
+        ConnectorAccountRow(
+            id=uuid.uuid4(),
+            workspace_id=workspace_id,
+            connector="telegram",
+            webhook_token=uuid.uuid4().hex,
+            signing_secret_ciphertext=cipher.encrypt("123:bot-token"),
+            delivery_config={"chat_id": "555", "telegram_api_url": TELEGRAM_API},
+            is_active=True,
+        )
+    )
+    await session.commit()
+
+
+@respx.mock
+async def test_verified_deliverable_delivers_to_telegram(
+    sf: async_sessionmaker[AsyncSession], cipher: CredentialCipher
+) -> None:
+    workspace_id = uuid.uuid4()
+    # The bot token is embedded in the URL path (/bot<token>/sendMessage).
+    route = respx.post(f"{TELEGRAM_API}/bot123:bot-token/sendMessage").mock(
+        return_value=httpx.Response(
+            200, json={"ok": True, "result": {"message_id": 42, "chat": {"id": 555}}}
+        )
+    )
+
+    async with sf() as s:
+        await _seed_telegram_connector(s, cipher, workspace_id)
+        await _seed_verified_deliverable(s, workspace_id)
+
+    registry = await _plugins()
+    adapter = build_connector_delivery_adapter(
+        session_factory=sf, plugins=list(registry.values()), cipher=cipher
+    )
+    worker = DeliveryWorker(
+        session_factory=sf,
+        dispatcher=adapter,
+        config=DeliveryWorkerConfig(batch_size=10, poll_interval_s=0.01),
+    )
+
+    assert await worker.drain_once() == 1
+
+    # sendMessage was called with chat_id from config + text from the summary.
+    assert route.called
+    body = route.calls.last.request.content.decode()
+    assert '"chat_id": "555"' in body or '"chat_id":"555"' in body
+    assert "Quarterly Spec" in body
+    assert "The spec body" in body
+
+    async with sf() as s:
+        assert (await s.execute(select(DeliveryEventRow))).first() is None
+
+
+@respx.mock
+async def test_telegram_missing_chat_id_soft_fails_no_call_no_wedge(
+    sf: async_sessionmaker[AsyncSession], cipher: CredentialCipher
+) -> None:
+    """A misconfigured telegram target (no ``chat_id``) makes NO external call
+    and does not wedge the queue — the builder ValueError soft-fails and the
+    event still drains (mirrors slack's missing channel)."""
+    workspace_id = uuid.uuid4()
+    route = respx.post(url__regex=rf"{TELEGRAM_API}/bot.*")
+
+    async with sf() as s:
+        s.add(
+            ConnectorAccountRow(
+                id=uuid.uuid4(),
+                workspace_id=workspace_id,
+                connector="telegram",
+                webhook_token=uuid.uuid4().hex,
+                signing_secret_ciphertext=cipher.encrypt("123:bot-token"),
+                delivery_config={"telegram_api_url": TELEGRAM_API},  # no chat_id
+                is_active=True,
+            )
+        )
+        await s.commit()
+        await _seed_verified_deliverable(s, workspace_id)
+
+    registry = await _plugins()
+    adapter = build_connector_delivery_adapter(
+        session_factory=sf, plugins=list(registry.values()), cipher=cipher
+    )
+    worker = DeliveryWorker(
+        session_factory=sf,
+        dispatcher=adapter,
+        config=DeliveryWorkerConfig(batch_size=10, poll_interval_s=0.01),
+    )
+
+    assert await worker.drain_once() == 1
+    assert not route.called
+
+    async with sf() as s:
+        assert (await s.execute(select(DeliveryEventRow))).first() is None
+
+
+# ── discord ────────────────────────────────────────────────────────────────────
+
+DISCORD_API = "https://discord.test/api"
+
+
+async def _seed_discord_connector(
+    session: AsyncSession,
+    cipher: CredentialCipher,
+    workspace_id: uuid.UUID,
+) -> None:
+    session.add(
+        ConnectorAccountRow(
+            id=uuid.uuid4(),
+            workspace_id=workspace_id,
+            connector="discord",
+            webhook_token=uuid.uuid4().hex,
+            signing_secret_ciphertext=cipher.encrypt("discord-bot-token"),
+            delivery_config={"channel_id": "C99", "discord_api_url": DISCORD_API},
+            is_active=True,
+        )
+    )
+    await session.commit()
+
+
+@respx.mock
+async def test_verified_deliverable_delivers_to_discord(
+    sf: async_sessionmaker[AsyncSession], cipher: CredentialCipher
+) -> None:
+    workspace_id = uuid.uuid4()
+    route = respx.post(f"{DISCORD_API}/channels/C99/messages").mock(
+        return_value=httpx.Response(200, json={"id": "m-7", "channel_id": "C99"})
+    )
+
+    async with sf() as s:
+        await _seed_discord_connector(s, cipher, workspace_id)
+        await _seed_verified_deliverable(s, workspace_id)
+
+    registry = await _plugins()
+    adapter = build_connector_delivery_adapter(
+        session_factory=sf, plugins=list(registry.values()), cipher=cipher
+    )
+    worker = DeliveryWorker(
+        session_factory=sf,
+        dispatcher=adapter,
+        config=DeliveryWorkerConfig(batch_size=10, poll_interval_s=0.01),
+    )
+
+    assert await worker.drain_once() == 1
+
+    # POST to the channel from config with content from the summary.
+    assert route.called
+    body = route.calls.last.request.content.decode()
+    assert "Quarterly Spec" in body
+    assert "The spec body" in body
+    # Bot token came from the decrypted connector secret (bot_token slot).
+    assert route.calls.last.request.headers["authorization"] == "Bot discord-bot-token"
+
+    async with sf() as s:
+        assert (await s.execute(select(DeliveryEventRow))).first() is None
+
+
+# ── linear ─────────────────────────────────────────────────────────────────────
+
+LINEAR_API = "https://linear.test"
+
+
+async def _seed_linear_connector(
+    session: AsyncSession,
+    cipher: CredentialCipher,
+    workspace_id: uuid.UUID,
+) -> None:
+    session.add(
+        ConnectorAccountRow(
+            id=uuid.uuid4(),
+            workspace_id=workspace_id,
+            connector="linear",
+            webhook_token=uuid.uuid4().hex,
+            signing_secret_ciphertext=cipher.encrypt("lin_api_secret"),
+            delivery_config={"team_id": "TEAM-7", "linear_api_url": LINEAR_API},
+            is_active=True,
+        )
+    )
+    await session.commit()
+
+
+@respx.mock
+async def test_verified_deliverable_delivers_to_linear(
+    sf: async_sessionmaker[AsyncSession], cipher: CredentialCipher
+) -> None:
+    workspace_id = uuid.uuid4()
+    route = respx.post(f"{LINEAR_API}/graphql").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": {
+                    "issueCreate": {
+                        "success": True,
+                        "issue": {
+                            "id": "iss-1",
+                            "identifier": "ENG-1",
+                            "url": "https://linear.app/iss-1",
+                        },
+                    }
+                }
+            },
+        )
+    )
+
+    async with sf() as s:
+        await _seed_linear_connector(s, cipher, workspace_id)
+        await _seed_verified_deliverable(s, workspace_id)
+
+    registry = await _plugins()
+    adapter = build_connector_delivery_adapter(
+        session_factory=sf, plugins=list(registry.values()), cipher=cipher
+    )
+    worker = DeliveryWorker(
+        session_factory=sf,
+        dispatcher=adapter,
+        config=DeliveryWorkerConfig(batch_size=10, poll_interval_s=0.01),
+    )
+
+    assert await worker.drain_once() == 1
+
+    # issueCreate mutation carried the team from config + title/description from
+    # the summary.
+    assert route.called
+    body = route.calls.last.request.content.decode()
+    assert "TEAM-7" in body
+    assert "Quarterly Spec" in body
+    assert "The spec body" in body
+    # Linear personal API keys are sent RAW (no "Bearer ") in Authorization.
+    assert route.calls.last.request.headers["authorization"] == "lin_api_secret"
+
+    async with sf() as s:
+        assert (await s.execute(select(DeliveryEventRow))).first() is None
+
+
+# ── trello (dual-secret) ─────────────────────────────────────────────────────────
+
+TRELLO_API = "https://trello.test"
+
+
+async def _seed_trello_connector(
+    session: AsyncSession,
+    cipher: CredentialCipher,
+    workspace_id: uuid.UUID,
+) -> None:
+    # Dual-secret: the connector_account stores ONLY the secret token; the
+    # non-secret api_key rides in the founder-set delivery_config.
+    session.add(
+        ConnectorAccountRow(
+            id=uuid.uuid4(),
+            workspace_id=workspace_id,
+            connector="trello",
+            webhook_token=uuid.uuid4().hex,
+            signing_secret_ciphertext=cipher.encrypt("trello-secret-token"),
+            delivery_config={
+                "list_id": "LIST-9",
+                "api_key": "trello-app-key",
+                "trello_api_url": TRELLO_API,
+            },
+            is_active=True,
+        )
+    )
+    await session.commit()
+
+
+@respx.mock
+async def test_verified_deliverable_delivers_to_trello(
+    sf: async_sessionmaker[AsyncSession], cipher: CredentialCipher
+) -> None:
+    workspace_id = uuid.uuid4()
+    route = respx.post(f"{TRELLO_API}/1/cards").mock(
+        return_value=httpx.Response(
+            200, json={"id": "card-1", "shortUrl": "https://trello.com/c/card-1"}
+        )
+    )
+
+    async with sf() as s:
+        await _seed_trello_connector(s, cipher, workspace_id)
+        await _seed_verified_deliverable(s, workspace_id)
+
+    registry = await _plugins()
+    adapter = build_connector_delivery_adapter(
+        session_factory=sf, plugins=list(registry.values()), cipher=cipher
+    )
+    worker = DeliveryWorker(
+        session_factory=sf,
+        dispatcher=adapter,
+        config=DeliveryWorkerConfig(batch_size=10, poll_interval_s=0.01),
+    )
+
+    assert await worker.drain_once() == 1
+
+    # POST /1/cards with the list from config + name/desc from the summary, and
+    # BOTH trello auth query params present — the secret token from the decrypted
+    # connector secret + the app key from delivery_config (dual-secret mapping).
+    assert route.called
+    req = route.calls.last.request
+    assert req.url.params["idList"] == "LIST-9"
+    assert req.url.params["name"] == "Quarterly Spec"
+    assert "The spec body" in req.url.params["desc"]
+    assert req.url.params["key"] == "trello-app-key"
+    assert req.url.params["token"] == "trello-secret-token"
+
+    async with sf() as s:
+        assert (await s.execute(select(DeliveryEventRow))).first() is None
+
+
+@respx.mock
+async def test_trello_missing_api_key_soft_fails_no_call_no_wedge(
+    sf: async_sessionmaker[AsyncSession], cipher: CredentialCipher
+) -> None:
+    """A trello target missing the founder-set ``api_key`` (dual-secret) makes
+    NO external call and does not wedge the queue — the builder ValueError
+    soft-fails and the event still drains."""
+    workspace_id = uuid.uuid4()
+    route = respx.post(f"{TRELLO_API}/1/cards")
+
+    async with sf() as s:
+        s.add(
+            ConnectorAccountRow(
+                id=uuid.uuid4(),
+                workspace_id=workspace_id,
+                connector="trello",
+                webhook_token=uuid.uuid4().hex,
+                signing_secret_ciphertext=cipher.encrypt("trello-secret-token"),
+                delivery_config={"list_id": "LIST-9", "trello_api_url": TRELLO_API},  # no api_key
+                is_active=True,
+            )
+        )
+        await s.commit()
+        await _seed_verified_deliverable(s, workspace_id)
+
+    registry = await _plugins()
+    adapter = build_connector_delivery_adapter(
+        session_factory=sf, plugins=list(registry.values()), cipher=cipher
+    )
+    worker = DeliveryWorker(
+        session_factory=sf,
+        dispatcher=adapter,
+        config=DeliveryWorkerConfig(batch_size=10, poll_interval_s=0.01),
+    )
+
+    assert await worker.drain_once() == 1
+    assert not route.called
+
+    async with sf() as s:
+        assert (await s.execute(select(DeliveryEventRow))).first() is None
