@@ -27,7 +27,7 @@ Stream names are stable identifiers shared by producer + consumer:
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol, cast
 
 import structlog
 
@@ -47,6 +47,46 @@ class _RedisXadd(Protocol):
     client satisfies it). Narrowed so callers may inject a fake/None freely."""
 
     async def xadd(self, name: str, fields: dict[str, Any], **kwargs: Any) -> Any: ...
+
+
+# A process-wide lazy client, created at most once and ONLY in redis_streams
+# mode. Producers that have no client of their own to inject (the HTTP routes:
+# messages.py / webhooks.py) acquire it via :func:`get_emit_redis_client`. The
+# long-running worker daemon builds + owns its client explicitly in
+# ``backend.workers.run`` instead (so it can ``aclose`` it on shutdown) — this
+# cache is for the request-path producers that have no such lifecycle hook.
+# Held in a single-element list so the lazy build mutates the container, not a
+# rebound module global (keeps the acquirer free of a ``global`` statement).
+_EMIT_CLIENT_CACHE: list[_RedisXadd | None] = [None]
+
+
+def get_emit_redis_client(settings: Settings) -> _RedisXadd | None:
+    """Return the process-wide emit client — built lazily, ONLY in redis mode.
+
+    * ``worker_mode != "redis_streams"`` (the default DB-polling deployment):
+      returns ``None`` WITHOUT importing redis or constructing a client, so the
+      default path never touches Redis.
+    * ``worker_mode == "redis_streams"``: builds a ``redis.asyncio`` client from
+      ``settings.redis_url`` once (``decode_responses=True`` so stream fields are
+      ``str``) and caches it for reuse across requests. Construction is
+      connection-lazy (``redis.asyncio.from_url`` does not connect until the
+      first command), so this never blocks; a Redis outage surfaces only at the
+      :func:`emit_stream_notification` call, where it is swallowed (soft-fail).
+    """
+    if settings.worker_mode != "redis_streams":
+        return None
+    if _EMIT_CLIENT_CACHE[0] is None:
+        import redis.asyncio as redis_aio  # noqa: PLC0415 — only imported in redis mode
+
+        _EMIT_CLIENT_CACHE[0] = cast(
+            "_RedisXadd", redis_aio.from_url(settings.redis_url, decode_responses=True)
+        )
+    return _EMIT_CLIENT_CACHE[0]
+
+
+def reset_emit_redis_client() -> None:
+    """Drop the cached emit client (test isolation hook)."""
+    _EMIT_CLIENT_CACHE[0] = None
 
 
 async def emit_stream_notification(
@@ -79,4 +119,6 @@ __all__ = [
     "STREAM_INTAKE",
     "STREAM_SETTLE",
     "emit_stream_notification",
+    "get_emit_redis_client",
+    "reset_emit_redis_client",
 ]

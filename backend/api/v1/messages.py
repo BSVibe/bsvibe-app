@@ -20,8 +20,10 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.api.deps import get_current_user_row, get_db_session, get_workspace_id
+from backend.config import get_settings
 from backend.identity.db import UserRow
 from backend.intake.direct import DirectTrigger
+from backend.workers.emit import STREAM_INTAKE, emit_stream_notification, get_emit_redis_client
 
 router = APIRouter()
 
@@ -64,6 +66,21 @@ async def submit_message(
         trace_id=body.trace_id,
     )
     await session.commit()
+
+    # AFTER the TriggerEvent is durable, wake the IntakeWorker consumer on the
+    # ``intake`` stream. Gated (no-op + no Redis client built in db_polling) and
+    # soft-fail (a Redis hiccup never breaks the accepted POST — the committed
+    # TriggerEvent is the source of truth, picked up by DB-polling regardless).
+    # A duplicate (collapsed) submit landed no new row, so it emits nothing.
+    if not outcome.duplicate:
+        settings = get_settings()
+        await emit_stream_notification(
+            get_emit_redis_client(settings),
+            settings=settings,
+            stream=STREAM_INTAKE,
+            fields={"workspace_id": str(workspace_id)},
+        )
+
     return MessageAccepted(
         accepted=True,
         duplicate=outcome.duplicate,

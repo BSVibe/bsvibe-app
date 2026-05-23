@@ -37,6 +37,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.accounts.crypto import CredentialCipher, _key_from_settings
 from backend.api.deps import get_db_session
+from backend.config import get_settings
 from backend.connectors.handshake import handshake_response
 from backend.connectors.resolver import ConnectorInboundResolver, UnknownConnectorError
 from backend.intake.webhook import WebhookReceiver
@@ -55,6 +56,7 @@ from backend.plugins.implementations.slack.webhook import (
 from backend.plugins.implementations.telegram.webhook import (
     WebhookSignatureError as TelegramSignatureError,
 )
+from backend.workers.emit import STREAM_INTAKE, emit_stream_notification, get_emit_redis_client
 
 logger = structlog.get_logger(__name__)
 
@@ -148,6 +150,19 @@ async def receive_connector_webhook(
         trace_id=event.trace_id,
     )
     await session.commit()
+
+    # AFTER the TriggerEvent is durable, wake the IntakeWorker consumer on the
+    # ``intake`` stream (same gated + soft-fail contract as the Direct path). A
+    # redelivery that collapsed (duplicate) landed no new row → no emit. In
+    # db_polling (default) no Redis client is built and this is a pure no-op.
+    if not outcome.duplicate:
+        settings = get_settings()
+        await emit_stream_notification(
+            get_emit_redis_client(settings),
+            settings=settings,
+            stream=STREAM_INTAKE,
+            fields={"workspace_id": str(event.workspace_id)},
+        )
 
     return JSONResponse(
         status_code=status.HTTP_202_ACCEPTED,
