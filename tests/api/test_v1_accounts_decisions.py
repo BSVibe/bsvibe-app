@@ -1,11 +1,16 @@
-"""/api/v1/{accounts,decisions} — end-to-end against real Postgres."""
+"""/api/v1/accounts — end-to-end against real Postgres.
+
+The ``/api/v1/decisions`` queue surface used to be DB-sourced and was tested
+here too, but the list now reads the workspace vault (FS-as-SoT) — the same
+store accept/reject resolve against — so those scenarios live alongside the
+resolution tests in ``test_decisions_resolve.py``.
+"""
 
 from __future__ import annotations
 
 import base64
 import os
 import uuid
-from datetime import UTC, datetime
 
 import httpx
 import pytest
@@ -21,15 +26,7 @@ from backend.api.deps import (
 )
 from backend.api.main import create_app
 from backend.config import get_settings
-from backend.knowledge.canonicalization.db import (
-    ActionKind,
-    CanonicalizationBase,
-    CanonicalizationDecision,
-    CanonicalizationProposal,
-    DecisionKind,
-    ProposalKind,
-    ProposalStatus,
-)
+from backend.knowledge.canonicalization.db import CanonicalizationBase
 
 from .._support import fake_current_user
 
@@ -149,86 +146,3 @@ async def test_accounts_full_crud(client) -> None:
     assert r.status_code == 204
     r = await client.get(f"/api/v1/accounts/{ma_id}")
     assert r.status_code == 404
-
-
-async def test_decisions_proposals_list(client, db, workspace_id) -> None:
-    async with db() as s:
-        s.add(
-            CanonicalizationProposal(
-                id=uuid.uuid4(),
-                workspace_id=workspace_id,
-                proposal_kind=ProposalKind.MERGE_CONCEPTS,
-                action_kind=ActionKind.MERGE_CONCEPTS,
-                action_path="concepts/foo",
-                payload={"a": 1},
-                status=ProposalStatus.PENDING,
-                score=80,
-                created_at=datetime.now(tz=UTC),
-            )
-        )
-        s.add(
-            CanonicalizationProposal(
-                id=uuid.uuid4(),
-                workspace_id=workspace_id,
-                proposal_kind=ProposalKind.CREATE_CONCEPT,
-                action_kind=ActionKind.CREATE_CONCEPT,
-                action_path="concepts/bar",
-                payload={"b": 2},
-                status=ProposalStatus.APPROVED,
-                score=50,
-                created_at=datetime.now(tz=UTC),
-            )
-        )
-        await s.commit()
-
-    r = await client.get("/api/v1/decisions")
-    assert r.status_code == 200
-    assert len(r.json()) == 2
-
-    # Filter to pending
-    r = await client.get("/api/v1/decisions", params={"status_filter": "pending"})
-    assert r.status_code == 200
-    rows = r.json()
-    assert len(rows) == 1
-    assert rows[0]["status"] == "pending"
-
-
-async def test_decisions_log(client, db, workspace_id) -> None:
-    async with db() as s:
-        s.add(
-            CanonicalizationDecision(
-                id=uuid.uuid4(),
-                workspace_id=workspace_id,
-                decision_kind=DecisionKind.CANNOT_LINK,
-                actor_id=uuid.uuid4(),
-                rationale="not the same concept",
-                created_at=datetime.now(tz=UTC),
-            )
-        )
-        await s.commit()
-    r = await client.get("/api/v1/decisions/log")
-    assert r.status_code == 200
-    rows = r.json()
-    assert len(rows) == 1
-    assert rows[0]["decision_kind"] == "cannot-link"
-
-
-async def test_decisions_workspace_isolation(client, db, workspace_id) -> None:
-    other = uuid.uuid4()
-    async with db() as s:
-        s.add(
-            CanonicalizationProposal(
-                id=uuid.uuid4(),
-                workspace_id=other,
-                proposal_kind=ProposalKind.CREATE_CONCEPT,
-                action_kind=ActionKind.CREATE_CONCEPT,
-                action_path="concepts/other",
-                payload={},
-                status=ProposalStatus.PENDING,
-                created_at=datetime.now(tz=UTC),
-            )
-        )
-        await s.commit()
-    r = await client.get("/api/v1/decisions")
-    assert r.status_code == 200
-    assert r.json() == []
