@@ -30,6 +30,8 @@ npm-debug.log*
 .env
 .env.local
 .env.*.local
+# Prod secrets — only deploy/.env.prod.example is committed.
+deploy/.env.prod
 
 # Devcontainer worktree overlay (auto-generated)
 .devcontainer/docker-compose.override.yml
