@@ -363,9 +363,40 @@ main.login {
   background: var(--bg);
 }
 
-.direct-overlay__soon {
-  margin: 0;
-  font-size: 0.76rem;
+.direct-overlay__panel form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.direct-overlay__foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 22px;
+}
+
+.direct-overlay__status {
+  font-size: 0.8rem;
+  color: var(--ink-2);
+}
+
+.direct-overlay__error {
+  color: var(--amber-ink);
+}
+
+.direct-overlay__submit {
+  border: none;
+  border-radius: 999px;
+  padding: 8px 18px;
+  background: #1f1d1a;
+  color: #fff;
+  font-weight: 550;
+}
+
+.direct-overlay__submit:disabled {
+  background: var(--accent-bg);
   color: var(--ink-3);
 }
 

@@ -1,0 +1,192 @@
+/**
+ * brief.ts real-data composition — drives getBrief() against a mocked fetch and
+ * asserts it maps /api/v1/{products,runs,decisions,safemode/queue} into the
+ * BriefView shape (run.status → lane state, needs-you count, recently shipped).
+ */
+
+import { getBrief } from "@/lib/api/brief";
+import { type Session, clearSession, setSession } from "@/lib/auth/session";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const SESSION: Session = {
+  accessToken: "tok",
+  refreshToken: "ref",
+  email: "founder@bsvibe.dev",
+  userId: "user-1",
+  expiresAt: Date.now() + 3_600_000,
+};
+
+const NOW = "2026-05-23T00:00:00Z";
+
+function product(id: string, slug: string, name: string) {
+  return {
+    id,
+    workspace_id: "ws-1",
+    name,
+    slug,
+    repo_url: null,
+    created_at: NOW,
+    updated_at: NOW,
+  };
+}
+
+function run(id: string, product_id: string | null, status: string) {
+  return {
+    id,
+    workspace_id: "ws-1",
+    product_id,
+    request_id: null,
+    status,
+    created_at: NOW,
+    updated_at: NOW,
+  };
+}
+
+/** Route a mocked fetch by path → JSON body. */
+function mockFetch(routes: Record<string, unknown>) {
+  return vi.fn(async (input: RequestInfo | URL) => {
+    const url = typeof input === "string" ? input : input.toString();
+    for (const [path, body] of Object.entries(routes)) {
+      if (url.startsWith(path)) {
+        return new Response(JSON.stringify(body), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+    }
+    return new Response("not found", { status: 404 });
+  });
+}
+
+describe("getBrief (real-data composition)", () => {
+  beforeEach(() => {
+    clearSession();
+    setSession(SESSION);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("derives lanes from products + each product's latest run status", async () => {
+    global.fetch = mockFetch({
+      "/api/v1/products": [
+        product("p-running", "alpha", "alpha"),
+        product("p-open", "beta", "beta"),
+        product("p-review", "gamma", "gamma"),
+        product("p-shipped", "delta", "delta"),
+        product("p-none", "epsilon", "epsilon"),
+      ],
+      "/api/v1/runs": [
+        run("r1", "p-running", "running"),
+        run("r2", "p-open", "open"),
+        run("r3", "p-review", "review_ready"),
+        run("r4", "p-shipped", "shipped"),
+      ],
+      "/api/v1/decisions": [],
+      "/api/v1/safemode/queue": [],
+    }) as unknown as typeof fetch;
+
+    const view = await getBrief();
+    const bySlug = Object.fromEntries(view.lanes.map((l) => [l.slug, l.state]));
+
+    expect(bySlug.alpha).toBe("working");
+    expect(bySlug.beta).toBe("triggered");
+    expect(bySlug.gamma).toBe("needs-you");
+    expect(bySlug.delta).toBe("shipped");
+    expect(bySlug.epsilon).toBe("idle"); // no run → idle
+    expect(view.lanes).toHaveLength(5);
+  });
+
+  it("uses only the newest run per product (list is newest-first)", async () => {
+    global.fetch = mockFetch({
+      "/api/v1/products": [product("p1", "alpha", "alpha")],
+      "/api/v1/runs": [run("newest", "p1", "running"), run("older", "p1", "shipped")],
+      "/api/v1/decisions": [],
+      "/api/v1/safemode/queue": [],
+    }) as unknown as typeof fetch;
+
+    const view = await getBrief();
+    expect(view.lanes[0].state).toBe("working");
+  });
+
+  it("counts needs-you from pending proposals + safe-mode queue", async () => {
+    global.fetch = mockFetch({
+      "/api/v1/products": [product("p1", "alpha", "alpha")],
+      "/api/v1/runs": [],
+      "/api/v1/decisions": [
+        {
+          id: "prop-1",
+          proposal_kind: "merge",
+          action_kind: "merge_notes",
+          action_path: "notes/auth",
+          status: "pending",
+          score: 80,
+          created_at: NOW,
+          expires_at: null,
+        },
+      ],
+      "/api/v1/safemode/queue": [
+        {
+          id: "sm-1",
+          workspace_id: "ws-1",
+          deliverable_id: "d-1",
+          status: "pending",
+          compensation_tier: null,
+          expires_at: NOW,
+          extension_count: 0,
+          created_at: NOW,
+        },
+      ],
+    }) as unknown as typeof fetch;
+
+    const view = await getBrief();
+    expect(view.needsYou).toHaveLength(2);
+    expect(view.needsYou.some((n) => n.question.includes("notes/auth"))).toBe(true);
+    expect(view.needsYou.some((n) => n.question.includes("Safe Mode"))).toBe(true);
+  });
+
+  it("lists recently shipped from shipped / review_ready runs", async () => {
+    global.fetch = mockFetch({
+      "/api/v1/products": [product("p1", "alpha", "alpha")],
+      "/api/v1/runs": [
+        run("r-shipped", "p1", "shipped"),
+        run("r-review", "p1", "review_ready"),
+        run("r-running", "p1", "running"),
+      ],
+      "/api/v1/decisions": [],
+      "/api/v1/safemode/queue": [],
+    }) as unknown as typeof fetch;
+
+    const view = await getBrief();
+    expect(view.recentlyShipped).toHaveLength(2);
+    expect(view.recentlyShipped.map((s) => s.id)).toEqual(["r-shipped", "r-review"]);
+    // shipped-item detail is derived (no deliverable endpoint) → placeholder.
+    expect(view.placeholder).toBe(true);
+  });
+
+  it("an empty/fresh workspace yields calm empty states, NOT demo data", async () => {
+    global.fetch = mockFetch({
+      "/api/v1/products": [],
+      "/api/v1/runs": [],
+      "/api/v1/decisions": [],
+      "/api/v1/safemode/queue": [],
+    }) as unknown as typeof fetch;
+
+    const view = await getBrief();
+    expect(view.lanes).toEqual([]);
+    expect(view.needsYou).toEqual([]);
+    expect(view.recentlyShipped).toEqual([]);
+    expect(view.placeholder).toBe(false);
+  });
+
+  it("falls back to demo lanes when the core read fails (no error wall)", async () => {
+    global.fetch = vi.fn(
+      async () => new Response("nope", { status: 500 }),
+    ) as unknown as typeof fetch;
+
+    const view = await getBrief();
+    expect(view.lanes.length).toBeGreaterThan(0); // demo fallback
+    expect(view.placeholder).toBe(true);
+  });
+});
