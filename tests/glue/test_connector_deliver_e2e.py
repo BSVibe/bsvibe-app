@@ -254,3 +254,177 @@ async def test_inactive_connector_is_skipped(
 
     assert await worker.drain_once() == 1
     assert not route.called
+
+
+# ── slack ──────────────────────────────────────────────────────────────────
+
+SLACK_API = "https://slack.test/api"
+
+
+async def _seed_slack_connector(
+    session: AsyncSession,
+    cipher: CredentialCipher,
+    workspace_id: uuid.UUID,
+) -> None:
+    session.add(
+        ConnectorAccountRow(
+            id=uuid.uuid4(),
+            workspace_id=workspace_id,
+            connector="slack",
+            webhook_token=uuid.uuid4().hex,
+            signing_secret_ciphertext=cipher.encrypt("xoxb-test-bot-token"),
+            delivery_config={"channel": "C123", "slack_api_url": SLACK_API},
+            is_active=True,
+        )
+    )
+    await session.commit()
+
+
+@respx.mock
+async def test_verified_deliverable_delivers_to_slack(
+    sf: async_sessionmaker[AsyncSession], cipher: CredentialCipher
+) -> None:
+    workspace_id = uuid.uuid4()
+    route = respx.post(f"{SLACK_API}/chat.postMessage").mock(
+        return_value=httpx.Response(200, json={"ok": True, "ts": "171.99", "channel": "C123"})
+    )
+
+    async with sf() as s:
+        await _seed_slack_connector(s, cipher, workspace_id)
+        await _seed_verified_deliverable(s, workspace_id)
+
+    registry = await _plugins()
+    adapter = build_connector_delivery_adapter(
+        session_factory=sf, plugins=list(registry.values()), cipher=cipher
+    )
+    worker = DeliveryWorker(
+        session_factory=sf,
+        dispatcher=adapter,
+        config=DeliveryWorkerConfig(batch_size=10, poll_interval_s=0.01),
+    )
+
+    assert await worker.drain_once() == 1
+
+    # chat.postMessage was called with the channel from config + text derived
+    # from the deliverable summary (routing-from-config, content-from-content).
+    assert route.called
+    body = route.calls.last.request.content.decode()
+    assert '"channel": "C123"' in body or '"channel":"C123"' in body
+    assert "Quarterly Spec" in body
+    assert "The spec body" in body
+    # Bearer token came from the decrypted connector secret (bot_token slot).
+    assert route.calls.last.request.headers["authorization"] == "Bearer xoxb-test-bot-token"
+
+    async with sf() as s:
+        assert (await s.execute(select(DeliveryEventRow))).first() is None
+
+
+@respx.mock
+async def test_slack_missing_channel_soft_fails_no_call_no_wedge(
+    sf: async_sessionmaker[AsyncSession], cipher: CredentialCipher
+) -> None:
+    """A misconfigured slack target (no ``channel``) makes NO external call and
+    does not wedge the queue — the builder ValueError soft-fails into a failed
+    action and the event still drains (mirrors notion's missing parent_page_id).
+    """
+    workspace_id = uuid.uuid4()
+    route = respx.post(f"{SLACK_API}/chat.postMessage")
+
+    async with sf() as s:
+        s.add(
+            ConnectorAccountRow(
+                id=uuid.uuid4(),
+                workspace_id=workspace_id,
+                connector="slack",
+                webhook_token=uuid.uuid4().hex,
+                signing_secret_ciphertext=cipher.encrypt("xoxb-test-bot-token"),
+                delivery_config={"slack_api_url": SLACK_API},  # no channel
+                is_active=True,
+            )
+        )
+        await s.commit()
+        await _seed_verified_deliverable(s, workspace_id)
+
+    registry = await _plugins()
+    adapter = build_connector_delivery_adapter(
+        session_factory=sf, plugins=list(registry.values()), cipher=cipher
+    )
+    worker = DeliveryWorker(
+        session_factory=sf,
+        dispatcher=adapter,
+        config=DeliveryWorkerConfig(batch_size=10, poll_interval_s=0.01),
+    )
+
+    assert await worker.drain_once() == 1
+    assert not route.called
+
+    async with sf() as s:
+        assert (await s.execute(select(DeliveryEventRow))).first() is None
+
+
+# ── email ────────────────────────────────────────────────────────────────────
+
+RESEND_API = "https://resend.test"
+
+
+async def _seed_email_connector(
+    session: AsyncSession,
+    cipher: CredentialCipher,
+    workspace_id: uuid.UUID,
+) -> None:
+    session.add(
+        ConnectorAccountRow(
+            id=uuid.uuid4(),
+            workspace_id=workspace_id,
+            connector="email-sender",
+            webhook_token=uuid.uuid4().hex,
+            signing_secret_ciphertext=cipher.encrypt("re_test_api_key"),
+            delivery_config={
+                "to": "ceo@bsvibe.dev",
+                "from": "BSVibe <noreply@bsvibe.dev>",
+                "resend_api_url": RESEND_API,
+            },
+            is_active=True,
+        )
+    )
+    await session.commit()
+
+
+@respx.mock
+async def test_verified_deliverable_delivers_to_email(
+    sf: async_sessionmaker[AsyncSession], cipher: CredentialCipher
+) -> None:
+    workspace_id = uuid.uuid4()
+    route = respx.post(f"{RESEND_API}/emails").mock(
+        return_value=httpx.Response(200, json={"id": "email-42"})
+    )
+
+    async with sf() as s:
+        await _seed_email_connector(s, cipher, workspace_id)
+        await _seed_verified_deliverable(s, workspace_id)
+
+    registry = await _plugins()
+    adapter = build_connector_delivery_adapter(
+        session_factory=sf, plugins=list(registry.values()), cipher=cipher
+    )
+    worker = DeliveryWorker(
+        session_factory=sf,
+        dispatcher=adapter,
+        config=DeliveryWorkerConfig(batch_size=10, poll_interval_s=0.01),
+    )
+
+    assert await worker.drain_once() == 1
+
+    # POST /emails was called with to/from from config + subject = first summary
+    # line + body = summary (sent as text).
+    assert route.called
+    body = route.calls.last.request.content.decode()
+    assert '"to": "ceo@bsvibe.dev"' in body or '"to":"ceo@bsvibe.dev"' in body
+    assert "Quarterly Spec" in body  # subject = first line of summary
+    assert "The spec body" in body  # body carries the summary
+    assert "noreply@bsvibe.dev" in body  # founder-set sender from config
+    # Bearer token came from the decrypted connector secret (api_key slot).
+    assert route.calls.last.request.headers["authorization"] == "Bearer re_test_api_key"
+
+    async with sf() as s:
+        assert (await s.execute(select(DeliveryEventRow))).first() is None

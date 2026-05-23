@@ -64,10 +64,18 @@ logger = structlog.get_logger(__name__)
 
 @dataclass(slots=True)
 class ShapedEvent:
-    """The dispatch-ready outbound: which ``artifact_type`` + the event dict."""
+    """The dispatch-ready outbound: which ``artifact_type`` + the event dict.
+
+    ``credential_key`` is the credential slot the decrypted per-account secret
+    is injected under for THIS connector's outbound. Connectors read their
+    token from different keys (notion ``token``, slack ``bot_token``,
+    email-sender ``api_key``); the builder declares which one so the adapter
+    lands the single stored secret in the slot the plugin's ``_client`` reads.
+    """
 
     artifact_type: ArtifactType
     event: dict[str, Any]
+    credential_key: str = "token"
 
 
 # A builder maps {deliverable content} + {connector delivery_config} → a
@@ -114,12 +122,89 @@ def build_notion_event(content: dict[str, Any], delivery_config: dict[str, Any])
     )
 
 
+def build_slack_event(content: dict[str, Any], delivery_config: dict[str, Any]) -> ShapedEvent:
+    """Shape a Deliverable into slack's ``deliver_message`` event.
+
+    * ``channel`` — routing, from the stable ``delivery_config`` (never derived
+      from the work text). A missing / empty ``channel`` is a misconfigured
+      delivery target → ``ValueError`` (mirrors notion raising on a missing
+      ``parent_page_id``), surfaced as a failed action rather than posting to a
+      wrong / default channel.
+    * ``text`` — the deliverable summary, with any ``artifact_refs`` appended as
+      a trailing reference list so the message links the produced artifacts.
+
+    ``artifact_type`` is ``slack_message`` (what slack's ``@p.outbound``
+    declares); the decrypted account secret is injected as ``bot_token``.
+    """
+    channel = delivery_config.get("channel")
+    if not channel:
+        raise ValueError("slack delivery_config missing required 'channel'")
+    summary = str(content.get("summary") or "")
+    _title, text = _split_summary(summary)
+    artifact_refs = content.get("artifact_refs") or []
+    if artifact_refs:
+        refs = "\n".join(f"- {ref}" for ref in artifact_refs)
+        text = f"{text}\n\nArtifacts:\n{refs}" if text else f"Artifacts:\n{refs}"
+    return ShapedEvent(
+        artifact_type="slack_message",
+        event={"channel": str(channel), "text": text},
+        credential_key="bot_token",
+    )
+
+
+def build_email_event(content: dict[str, Any], delivery_config: dict[str, Any]) -> ShapedEvent:
+    """Shape a Deliverable into email-sender's ``deliver_email`` event.
+
+    * ``to`` — routing, from the stable ``delivery_config`` (never derived from
+      the work text). A missing / empty ``to`` is a misconfigured delivery
+      target → ``ValueError`` (mirrors notion raising on a missing
+      ``parent_page_id``).
+    * ``from`` — optional founder-set sender override from ``delivery_config``;
+      omitted when unset so the email-sender plugin falls back to its own
+      ``email_from`` config / ``from`` credential.
+    * ``subject`` — first non-empty line of the deliverable summary.
+    * ``body`` — the deliverable summary (sent as plain text via ``as_text``),
+      with any ``artifact_refs`` appended as a trailing reference list.
+
+    ``artifact_type`` is ``email`` (what email-sender's ``@p.outbound``
+    declares); the decrypted account secret is injected as ``api_key``.
+    """
+    to = delivery_config.get("to")
+    if not to:
+        raise ValueError("email delivery_config missing required 'to'")
+    summary = str(content.get("summary") or "")
+    subject, body = _split_summary(summary)
+    artifact_refs = content.get("artifact_refs") or []
+    if artifact_refs:
+        refs = "\n".join(f"- {ref}" for ref in artifact_refs)
+        body = f"{body}\n\nArtifacts:\n{refs}" if body else f"Artifacts:\n{refs}"
+    event: dict[str, Any] = {
+        "to": str(to),
+        "subject": subject,
+        "body": body,
+        "as_text": True,
+    }
+    sender = delivery_config.get("from")
+    if sender:
+        event["from"] = str(sender)
+    return ShapedEvent(
+        artifact_type="email",
+        event=event,
+        credential_key="api_key",
+    )
+
+
 # The extensible seam: a connector with no entry here has no v1 outbound
-# event-shaping and is skipped (logged) — github/slack/telegram/discord/email/
-# linear/sentry/trello follow the SAME (content, config) -> ShapedEvent shape
-# when their mappers land. DO NOT implement them in this chunk.
+# event-shaping and is skipped (logged). v1 ships notion + slack + email-sender;
+# github/telegram/discord/linear/sentry/trello follow the SAME
+# (content, config) -> ShapedEvent shape when their mappers land. DO NOT
+# implement them in this chunk. Keys MUST match the plugin ``name=`` (and the
+# ``connector_accounts.connector`` value) so binding resolution lines up — note
+# the email connector's name is ``email-sender``, not ``email``.
 OUTBOUND_EVENT_BUILDERS: dict[str, OutboundEventBuilder] = {
     "notion": build_notion_event,
+    "slack": build_slack_event,
+    "email-sender": build_email_event,
 }
 
 
@@ -252,10 +337,34 @@ class ConnectorDeliveryAdapter:
 
         actions: list[ActionResult] = []
         for binding in bindings:
-            shaped = binding.builder(content, dict(binding.account.delivery_config))
+            try:
+                shaped = binding.builder(content, dict(binding.account.delivery_config))
+            except ValueError as exc:
+                # A builder raises ValueError for a misconfigured delivery
+                # target (e.g. slack with no ``channel``, email with no ``to``)
+                # — mirrors notion raising on a missing ``parent_page_id``. Soft
+                # -fail it into a failed action (like a per-plugin dispatch
+                # failure) so a single bad target does not wedge the queue.
+                logger.warning(
+                    "connector_delivery_build_failed",
+                    connector=binding.account.connector,
+                    workspace_id=str(workspace_id),
+                    deliverable_id=str(deliverable_id),
+                    error=str(exc),
+                )
+                actions.append(
+                    ActionResult(
+                        action=f"{binding.account.connector}:outbound:build",
+                        succeeded=False,
+                        error=str(exc),
+                    )
+                )
+                continue
             ctx = _build_context(
                 credentials={
-                    "token": self.cipher.decrypt(binding.account.signing_secret_ciphertext)
+                    shaped.credential_key: self.cipher.decrypt(
+                        binding.account.signing_secret_ciphertext
+                    )
                 },
                 config=dict(binding.account.delivery_config),
             )
@@ -310,5 +419,7 @@ __all__ = [
     "OutboundEventBuilder",
     "ShapedEvent",
     "build_connector_delivery_adapter",
+    "build_email_event",
     "build_notion_event",
+    "build_slack_event",
 ]
