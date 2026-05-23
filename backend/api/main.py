@@ -7,6 +7,7 @@ Entrypoint:
 from __future__ import annotations
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 from backend.api.auth import router as auth_router
 from backend.api.health import router as health_router
@@ -30,6 +31,22 @@ def create_app() -> FastAPI:
     # Brackets each request so the workspace contextvar (defense layer 1)
     # starts unset and is reset afterwards — no scope leaks across requests.
     app.add_middleware(WorkspaceContextMiddleware)
+    # CORS for the browser PWA calling the backend cross-origin (Bearer-header
+    # auth, NOT cookies → allow_credentials=False; explicit allow-list, never
+    # "*"). Added LAST so it is OUTERMOST: in Starlette the middleware added
+    # last runs first, so CORSMiddleware handles the preflight OPTIONS and
+    # stamps the ACAO header before WorkspaceContextMiddleware / routing run.
+    # allow_headers covers the custom request headers the BROWSER sends:
+    # X-BSVibe-Account-Id (billing account, backend.api.deps) and
+    # X-Active-Tenant (Tier 3.2 — raw Supabase JWT carries no tenant claim).
+    # X-Idempotency-Key is server-to-server (webhook ingress), never browser.
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=settings.cors_allowed_origins,
+        allow_credentials=False,
+        allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+        allow_headers=["Authorization", "Content-Type", "X-BSVibe-Account-Id", "X-Active-Tenant"],
+    )
     app.include_router(health_router, prefix="/api")
     app.include_router(auth_router, prefix="/api")
     # Connector webhook ingress is PUBLIC (external callback) — mounted under

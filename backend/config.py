@@ -7,9 +7,18 @@ from __future__ import annotations
 
 from functools import lru_cache
 from importlib import metadata
-from typing import Literal
+from typing import Annotated, Literal
 
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import field_validator
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
+
+from backend.shared.core import csv_list_field, parse_csv_list
+
+# The PWA (app.bsvibe.dev) calls the backend (api.bsvibe.dev) directly from
+# the browser cross-origin. Default to the local PWA dev port so a bare local
+# checkout works without extra env. Override in prod via the comma-separated
+# ``BSVIBE_CORS_ALLOWED_ORIGINS`` env var.
+_DEFAULT_CORS_ORIGINS: list[str] = ["http://localhost:3700"]
 
 
 def _resolve_version() -> str:
@@ -103,6 +112,23 @@ class Settings(BaseSettings):
     execution_soft_pressure_headroom: int = 6
     # Decomposer cycle cap — caps planning/decomposer.py CoT depth.
     decomposer_cycle_cap: int = 14
+
+    # CORS allow-list for the browser PWA calling the backend cross-origin.
+    # ``Annotated[list[str], NoDecode]`` + a ``mode="before"`` validator opts
+    # out of pydantic-settings' default JSON decode so a deployer can set
+    # ``BSVIBE_CORS_ALLOWED_ORIGINS=https://app.bsvibe.dev,https://...`` as a
+    # plain comma-separated string (mirrors backend.shared.core.csv_list_field,
+    # the established list-from-env pattern used by FastApiSettings).
+    cors_allowed_origins: Annotated[list[str], NoDecode] = csv_list_field(
+        default=_DEFAULT_CORS_ORIGINS,
+        alias="cors_allowed_origins",
+        description="Comma-separated CORS allow_origins for the browser PWA.",
+    )
+
+    @field_validator("cors_allowed_origins", mode="before")
+    @classmethod
+    def _parse_cors_allowed_origins(cls, value: str | list[str] | None) -> list[str]:
+        return parse_csv_list(value) or list(_DEFAULT_CORS_ORIGINS)
 
 
 @lru_cache(maxsize=1)
