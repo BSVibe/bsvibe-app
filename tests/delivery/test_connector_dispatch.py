@@ -18,9 +18,13 @@ from backend.delivery.connector_dispatch import (
     _NoLlm,
     _resolve_bindings,
     _split_summary,
+    build_discord_event,
     build_email_event,
+    build_linear_event,
     build_notion_event,
     build_slack_event,
+    build_telegram_event,
+    build_trello_event,
 )
 from backend.plugins.base import OutboundCapability, PluginMeta
 
@@ -172,6 +176,145 @@ class TestEmailEventBuilder:
             build_email_event({"summary": "S"}, {})
 
 
+class TestTelegramEventBuilder:
+    def test_chat_id_from_config_text_from_summary(self) -> None:
+        shaped = build_telegram_event(
+            {"summary": "Ship note\nbody line two", "artifact_refs": []},
+            {"chat_id": "12345"},
+        )
+        assert shaped.artifact_type == "telegram_message"
+        assert shaped.credential_key == "bot_token"
+        assert shaped.event["chat_id"] == "12345"
+        assert "Ship note" in shaped.event["text"]
+        assert "body line two" in shaped.event["text"]
+
+    def test_artifact_refs_appended_to_text(self) -> None:
+        shaped = build_telegram_event(
+            {"summary": "Spec", "artifact_refs": ["a.md", "b.md"]},
+            {"chat_id": "C1"},
+        )
+        assert "Artifacts:" in shaped.event["text"]
+        assert "- a.md" in shaped.event["text"]
+        assert "- b.md" in shaped.event["text"]
+
+    def test_routing_comes_from_config_not_content(self) -> None:
+        shaped = build_telegram_event(
+            {"summary": "S", "chat_id": "FROM_CONTENT"},
+            {"chat_id": "FROM_CONFIG"},
+        )
+        assert shaped.event["chat_id"] == "FROM_CONFIG"
+
+    def test_missing_chat_id_raises(self) -> None:
+        with pytest.raises(ValueError, match="missing required 'chat_id'"):
+            build_telegram_event({"summary": "S"}, {})
+
+
+class TestDiscordEventBuilder:
+    def test_channel_id_from_config_content_from_summary(self) -> None:
+        shaped = build_discord_event(
+            {"summary": "Ship note\nbody line two", "artifact_refs": []},
+            {"channel_id": "9988"},
+        )
+        assert shaped.artifact_type == "discord_message"
+        assert shaped.credential_key == "bot_token"
+        assert shaped.event["channel_id"] == "9988"
+        assert "Ship note" in shaped.event["content"]
+        assert "body line two" in shaped.event["content"]
+
+    def test_artifact_refs_appended_to_content(self) -> None:
+        shaped = build_discord_event(
+            {"summary": "Spec", "artifact_refs": ["a.md"]},
+            {"channel_id": "C1"},
+        )
+        assert "Artifacts:" in shaped.event["content"]
+        assert "- a.md" in shaped.event["content"]
+
+    def test_routing_comes_from_config_not_content(self) -> None:
+        shaped = build_discord_event(
+            {"summary": "S", "channel_id": "FROM_CONTENT"},
+            {"channel_id": "FROM_CONFIG"},
+        )
+        assert shaped.event["channel_id"] == "FROM_CONFIG"
+
+    def test_missing_channel_id_raises(self) -> None:
+        with pytest.raises(ValueError, match="missing required 'channel_id'"):
+            build_discord_event({"summary": "S"}, {})
+
+
+class TestLinearEventBuilder:
+    def test_team_id_from_config_title_and_description_from_summary(self) -> None:
+        shaped = build_linear_event(
+            {"summary": "Fix the bug\nthe description body", "artifact_refs": []},
+            {"team_id": "TEAM-1"},
+        )
+        assert shaped.artifact_type == "issue"
+        assert shaped.credential_key == "api_key"
+        assert shaped.event["team_id"] == "TEAM-1"
+        assert shaped.event["title"] == "Fix the bug"
+        assert "the description body" in shaped.event["description"]
+
+    def test_artifact_refs_appended_to_description(self) -> None:
+        shaped = build_linear_event(
+            {"summary": "Spec", "artifact_refs": ["a.md"]},
+            {"team_id": "T1"},
+        )
+        assert "Artifacts:" in shaped.event["description"]
+        assert "- a.md" in shaped.event["description"]
+
+    def test_routing_comes_from_config_not_content(self) -> None:
+        shaped = build_linear_event(
+            {"summary": "S", "team_id": "FROM_CONTENT"},
+            {"team_id": "FROM_CONFIG"},
+        )
+        assert shaped.event["team_id"] == "FROM_CONFIG"
+
+    def test_missing_team_id_raises(self) -> None:
+        with pytest.raises(ValueError, match="missing required 'team_id'"):
+            build_linear_event({"summary": "S"}, {})
+
+
+class TestTrelloEventBuilder:
+    def test_list_id_from_config_title_and_desc_from_summary(self) -> None:
+        shaped = build_trello_event(
+            {"summary": "Card title\nthe card body", "artifact_refs": []},
+            {"list_id": "LIST-1", "api_key": "tk_app_key"},
+        )
+        assert shaped.artifact_type == "card"
+        # The secret half (token) lands in the credential slot; the non-secret
+        # api_key is carried in extra_credentials, sourced from delivery_config.
+        assert shaped.credential_key == "token"
+        assert shaped.extra_credentials == {"api_key": "tk_app_key"}
+        assert shaped.event["list_id"] == "LIST-1"
+        assert shaped.event["title"] == "Card title"
+        assert "the card body" in shaped.event["desc"]
+
+    def test_artifact_refs_appended_to_desc(self) -> None:
+        shaped = build_trello_event(
+            {"summary": "Spec", "artifact_refs": ["a.md"]},
+            {"list_id": "L1", "api_key": "k"},
+        )
+        assert "Artifacts:" in shaped.event["desc"]
+        assert "- a.md" in shaped.event["desc"]
+
+    def test_routing_comes_from_config_not_content(self) -> None:
+        shaped = build_trello_event(
+            {"summary": "S", "list_id": "FROM_CONTENT"},
+            {"list_id": "FROM_CONFIG", "api_key": "k"},
+        )
+        assert shaped.event["list_id"] == "FROM_CONFIG"
+
+    def test_missing_list_id_raises(self) -> None:
+        with pytest.raises(ValueError, match="missing required 'list_id'"):
+            build_trello_event({"summary": "S"}, {"api_key": "k"})
+
+    def test_missing_api_key_raises(self) -> None:
+        # Trello needs BOTH the key and token; the non-secret api_key comes from
+        # the founder-set delivery_config — a missing one is a misconfigured
+        # target (the trello client requires both auth params).
+        with pytest.raises(ValueError, match="missing required 'api_key'"):
+            build_trello_event({"summary": "S"}, {"list_id": "L1"})
+
+
 class TestSplitSummary:
     def test_skips_leading_blank_lines(self) -> None:
         title, body = _split_summary("\n\n  Real Title  \nrest")
@@ -181,10 +324,19 @@ class TestSplitSummary:
 
 class TestSeam:
     def test_v1_registered_builders(self) -> None:
-        # v1 ships notion + slack + email-sender. Other connectors have no entry
-        # and are skipped at resolution time. The email connector's key is the
-        # plugin name ``email-sender`` (not ``email``) so binding lines up.
-        assert set(OUTBOUND_EVENT_BUILDERS) == {"notion", "slack", "email-sender"}
+        # Ships notion + slack + email-sender + telegram + discord + linear +
+        # trello. Connectors with no entry (github, sentry) are skipped at
+        # resolution time. The email connector's key is the plugin name
+        # ``email-sender`` (not ``email``) so binding lines up.
+        assert set(OUTBOUND_EVENT_BUILDERS) == {
+            "notion",
+            "slack",
+            "email-sender",
+            "telegram",
+            "discord",
+            "linear",
+            "trello",
+        }
 
 
 class TestResolution:
@@ -254,6 +406,60 @@ class TestResolution:
         assert len(bindings) == 1
         assert bindings[0].account.connector == "email-sender"
         assert bindings[0].builder is build_email_event
+
+    async def test_resolves_telegram_binding(self) -> None:
+        ws = uuid.uuid4()
+        async with memory_session() as s:
+            await _seed(s, workspace_id=ws, connector="telegram", delivery_config={"chat_id": "1"})
+            bindings = await _resolve_bindings(
+                s,
+                workspace_id=ws,
+                plugins_by_name={"telegram": _meta("telegram", with_outbound=True)},
+            )
+        assert len(bindings) == 1
+        assert bindings[0].account.connector == "telegram"
+        assert bindings[0].builder is build_telegram_event
+
+    async def test_resolves_discord_binding(self) -> None:
+        ws = uuid.uuid4()
+        async with memory_session() as s:
+            await _seed(
+                s, workspace_id=ws, connector="discord", delivery_config={"channel_id": "9"}
+            )
+            bindings = await _resolve_bindings(
+                s,
+                workspace_id=ws,
+                plugins_by_name={"discord": _meta("discord", with_outbound=True)},
+            )
+        assert len(bindings) == 1
+        assert bindings[0].account.connector == "discord"
+        assert bindings[0].builder is build_discord_event
+
+    async def test_resolves_linear_binding(self) -> None:
+        ws = uuid.uuid4()
+        async with memory_session() as s:
+            await _seed(s, workspace_id=ws, connector="linear", delivery_config={"team_id": "T"})
+            bindings = await _resolve_bindings(
+                s,
+                workspace_id=ws,
+                plugins_by_name={"linear": _meta("linear", with_outbound=True)},
+            )
+        assert len(bindings) == 1
+        assert bindings[0].account.connector == "linear"
+        assert bindings[0].builder is build_linear_event
+
+    async def test_resolves_trello_binding(self) -> None:
+        ws = uuid.uuid4()
+        async with memory_session() as s:
+            await _seed(s, workspace_id=ws, connector="trello", delivery_config={"list_id": "L"})
+            bindings = await _resolve_bindings(
+                s,
+                workspace_id=ws,
+                plugins_by_name={"trello": _meta("trello", with_outbound=True)},
+            )
+        assert len(bindings) == 1
+        assert bindings[0].account.connector == "trello"
+        assert bindings[0].builder is build_trello_event
 
 
 class TestNoLlmGuard:
