@@ -412,6 +412,44 @@ export interface ActivityDeliverable {
   link?: string;
 }
 
+// ── Product detail view-model (focused per-product window) ────────────────
+
+/** One run in a product's "Recent runs" list — the same calm vocabulary the
+ *  Activity surface uses (plain-language status + lone status tone). `shipped`
+ *  flags the runs whose delivered artifacts the detail view surfaces eagerly. */
+export interface ProductDetailRun {
+  runId: string;
+  status: RunStatus;
+  statusLabel: string;
+  tone: ActivityTone;
+  /** Writer-stamped `updated_at` (most recent activity), ISO string. */
+  updatedAt: string;
+  /** True iff the run shipped — its deliverables are surfaced under "Shipped". */
+  shipped: boolean;
+}
+
+/** The focused per-product view-model (the `/products/[slug]` surface). Composed
+ *  entirely client-side from the list endpoints: the product is found in
+ *  /api/v1/products, its runs filtered out of /api/v1/runs by `product_id`, and
+ *  each shipped run's deliverables fetched from /api/v1/deliverables?run_id=.
+ *
+ *  `currentStatus` is the plain-language headline derived from the product's
+ *  latest run (or a calm "Nothing running yet" when it has none). `shipped` are
+ *  the delivered artifacts across the product's shipped runs, newest first. */
+export interface ProductDetailView {
+  id: string;
+  slug: string;
+  name: string;
+  /** External repo landing spot, when the product carries one. */
+  repoUrl: string | null;
+  /** Headline status line for the product header, in plain language. */
+  currentStatus: string;
+  /** Lone status tone for the header dot — derived from the latest run. */
+  currentTone: ActivityTone;
+  runs: ProductDetailRun[];
+  shipped: ShippedItem[];
+}
+
 /** The whole Glance surface.
  *
  * `placeholder` is true only while some field shown is demo / not-yet-served

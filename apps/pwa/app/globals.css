@@ -798,14 +798,33 @@ main.login {
 }
 
 .lane {
-  display: flex;
-  gap: 12px;
-  padding: 14px 2px;
   border-top: 1px solid var(--hair);
 }
 
 .lane:first-child {
   border-top: none;
+}
+
+/* Each lane links into its product's focused detail view. The link is the flex
+   row (was the <li>); it stays visually identical — a quiet hover tint is the
+   only affordance, keeping the Notion-calm board. */
+.lane__link {
+  display: flex;
+  gap: 12px;
+  padding: 14px 8px;
+  margin: 0 -8px;
+  border-radius: var(--radius-sm);
+  text-decoration: none;
+  color: inherit;
+}
+
+.lane__link:hover {
+  background: var(--bg);
+}
+
+.lane__link:focus-visible {
+  outline: 2px solid var(--amber-dot);
+  outline-offset: -2px;
 }
 
 .lane__glyph {
@@ -1304,6 +1323,259 @@ main.login {
   flex: none;
   font-size: 0.76rem;
   color: var(--green-ink);
+}
+
+/* ── Product detail ─────────────────────────────────────────────────────────
+   The focused per-product window (/products/[slug]): the product header
+   (name + lone status dot + plain-language status), its recent runs, and the
+   artifacts it has shipped. Same Notion calm — hairlines, hierarchy by
+   typography + whitespace, colour only for status. Reuses the Activity/Brief
+   status + artifact vocabulary so the surfaces feel like one product. */
+
+.product {
+  max-width: var(--col-w);
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
+}
+
+.product__back {
+  font-size: 0.82rem;
+  color: var(--ink-2);
+  text-decoration: none;
+  width: fit-content;
+}
+
+.product__back:hover {
+  color: var(--ink);
+}
+
+.product__loading-note {
+  margin: 0;
+  color: var(--ink-3);
+  font-size: 0.9rem;
+}
+
+.product-empty {
+  background: var(--surface);
+  border: 1px solid var(--hair-strong);
+  border-radius: var(--radius);
+  padding: 22px 20px;
+}
+
+.product-empty__line {
+  margin: 0;
+  font-size: 0.95rem;
+  font-weight: 550;
+}
+
+.product-empty__sub {
+  margin: 6px 0 0;
+  font-size: 0.85rem;
+  color: var(--ink-3);
+}
+
+.product-empty__sub a {
+  color: var(--ink-2);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+/* Header */
+.product-head {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.product-head__row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.product-head__dot {
+  flex: none;
+  font-size: 0.7rem;
+  line-height: 1;
+  color: var(--ink-3);
+}
+
+.product-head__dot--working {
+  color: var(--ink-2);
+}
+
+.product-head__dot--review {
+  color: var(--amber-dot);
+}
+
+.product-head__dot--shipped {
+  color: var(--green-dot);
+}
+
+.product-head__dot--failed {
+  color: #a1564a;
+}
+
+.product-head__name {
+  margin: 0;
+  font-size: 1.5rem;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+
+.product-head__status {
+  margin: 0;
+  font-size: 0.92rem;
+  color: var(--ink-2);
+}
+
+.product-head__repo {
+  font-size: 0.8rem;
+  color: var(--ink-3);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  width: fit-content;
+  word-break: break-all;
+}
+
+/* Recent runs */
+.product-runs__empty,
+.product-shipped__empty {
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--ink-3);
+}
+
+.product-runs__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  background: var(--surface);
+  border: 1px solid var(--hair-strong);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.product-run {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 13px 16px;
+  border-top: 1px solid var(--hair);
+}
+
+.product-run:first-child {
+  border-top: none;
+}
+
+.product-run__status {
+  font-size: 0.88rem;
+  font-weight: 550;
+  color: var(--ink-3);
+}
+
+.product-run__status--working {
+  color: var(--ink-2);
+}
+
+.product-run__status--review {
+  color: var(--amber-ink);
+}
+
+.product-run__status--shipped {
+  color: var(--green-ink);
+}
+
+.product-run__status--failed {
+  color: #a1564a;
+}
+
+.product-run__when {
+  flex: none;
+  font-size: 0.76rem;
+  color: var(--ink-3);
+}
+
+/* Shipped */
+.product-shipped__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  background: var(--surface);
+  border: 1px solid var(--hair-strong);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.product-shipped__row {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 13px 16px;
+  border-top: 1px solid var(--hair);
+}
+
+.product-shipped__row:first-child {
+  border-top: none;
+}
+
+.product-shipped__icon {
+  flex: none;
+  width: 26px;
+  height: 26px;
+  border-radius: var(--radius-sm);
+  background: var(--accent-bg);
+  color: var(--ink-2);
+  display: grid;
+  place-items: center;
+  font-size: 0.85rem;
+}
+
+.product-shipped__icon--pr {
+  color: #6a5acd;
+}
+
+.product-shipped__icon--image {
+  color: #c77d2a;
+}
+
+.product-shipped__body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.product-shipped__title {
+  font-size: 0.9rem;
+  font-weight: 550;
+}
+
+.product-shipped__source {
+  font-size: 0.78rem;
+  color: var(--ink-3);
+}
+
+.product-shipped__link {
+  font-size: 0.78rem;
+  color: var(--ink-2);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  width: fit-content;
+}
+
+.product-shipped__verdict {
+  flex: none;
+  font-size: 0.74rem;
+  font-weight: 550;
+  color: var(--green-ink);
+  background: var(--green-pill-bg);
+  border-radius: 999px;
+  padding: 3px 10px;
 }
 
 /* ── Settings / Connectors ────────────────────────────────────────────────── */
