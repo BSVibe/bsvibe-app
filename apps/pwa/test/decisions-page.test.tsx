@@ -36,10 +36,13 @@ const CHECKPOINT: Checkpoint = {
 };
 
 const PROPOSAL: Proposal = {
-  id: "p1",
+  // `id` is the proposal's vault path — the accept/reject handle (a `:path`).
+  id: "proposals/merge-concepts/2026-05-23-self-hosting.md",
   proposal_kind: "merge",
   action_kind: "merge-concepts",
-  action_path: "proposals/merge-concepts/2026-05-23-self-hosting.md",
+  // `action_path` is the LINKED ACTION draft (`actions/<kind>/...`), NOT the
+  // resolve handle — distinct from `id`.
+  action_path: "actions/merge-concepts/2026-05-23-self-hosting.md",
   status: "pending",
   score: 82,
   created_at: "2026-05-23T00:00:00Z",
@@ -156,7 +159,7 @@ describe("Decisions surface", () => {
       onPost: (url, init) => {
         posts.push([url, init]);
         proposals = [];
-        return json({ proposal_path: PROPOSAL.action_path, status: "accepted", results: [] });
+        return json({ proposal_path: PROPOSAL.id, status: "accepted", results: [] });
       },
     });
 
@@ -168,7 +171,7 @@ describe("Decisions surface", () => {
     });
     expect(posts).toHaveLength(1);
     const [url, init] = posts[0];
-    expect(url).toBe(`/api/v1/decisions/${encodeURIComponent(PROPOSAL.action_path)}/accept`);
+    expect(url).toBe(`/api/v1/decisions/${encodeURIComponent(PROPOSAL.id)}/accept`);
     expect(init.method).toBe("POST");
   });
 
@@ -181,7 +184,7 @@ describe("Decisions surface", () => {
       onPost: (url, init) => {
         posts.push([url, init]);
         proposals = [];
-        return json({ proposal_path: PROPOSAL.action_path, status: "rejected", reason: "" });
+        return json({ proposal_path: PROPOSAL.id, status: "rejected", reason: "" });
       },
     });
 
@@ -192,7 +195,7 @@ describe("Decisions surface", () => {
       expect(screen.getByText("Nothing needs you right now.")).toBeInTheDocument();
     });
     const [url, init] = posts[0];
-    expect(url).toBe(`/api/v1/decisions/${encodeURIComponent(PROPOSAL.action_path)}/reject`);
+    expect(url).toBe(`/api/v1/decisions/${encodeURIComponent(PROPOSAL.id)}/reject`);
     expect(JSON.parse(init.body as string)).toEqual({ reason: "" });
   });
 

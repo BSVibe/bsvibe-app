@@ -6,12 +6,12 @@ import { useState } from "react";
 
 type RowState = "idle" | "accepting" | "rejecting" | "accepted" | "rejected" | "error";
 
-/** Plain-language summary of a canon proposal — what the merge would do. The
- *  `action_kind` (e.g. `merge-concepts`) and `action_path` (the touched
- *  concept) are the human-readable handles the backend surfaces. */
+/** Plain-language summary of a canon proposal — what the merge would do.
+ *  `action_kind` (e.g. `merge-concepts`) is the verb; `id` is the proposal's
+ *  vault path (`proposals/<kind>/<file>.md`). */
 function describe(p: Proposal): string {
   const verb = p.action_kind.replace(/-/g, " ");
-  return `${verb} → ${p.action_path}`;
+  return `${verb} → ${p.id}`;
 }
 
 /**
@@ -49,9 +49,11 @@ function ProposalRow({ item, onResolved }: { item: Proposal; onResolved?: () => 
   const [state, setState] = useState<RowState>("idle");
   const busy = state === "accepting" || state === "rejecting";
 
-  // The accept/reject endpoints address a proposal by its vault path. The DB
-  // list exposes `action_path` as the path-like handle; we pass it back.
-  const handle = item.action_path;
+  // The accept/reject endpoints address a proposal by its vault path, which the
+  // list surfaces as `id` (e.g. `proposals/merge-concepts/<file>.md`).
+  // (`action_path` is the LINKED ACTION draft `actions/<kind>/...` — a different
+  // handle that would 404 against the `proposals/`-only resolve guard.)
+  const handle = item.id;
 
   async function run(action: "accept" | "reject") {
     if (busy) return;
