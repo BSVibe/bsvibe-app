@@ -215,6 +215,20 @@ main.login {
   color: inherit;
 }
 
+.rail__badge {
+  margin-left: auto;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--amber-dot);
+  color: #fff;
+  font-size: 0.68rem;
+  font-weight: 650;
+  line-height: 18px;
+  text-align: center;
+}
+
 .rail__direct {
   display: flex;
   align-items: center;
@@ -582,6 +596,200 @@ main.login {
   opacity: 0.8;
 }
 
+/* ── Decisions ────────────────────────────────────────────────────────────
+   The dedicated Decisions surface: paused-run checkpoints + canon proposals.
+   Same Notion calm — hairlines, color only for status. */
+
+.decisions {
+  max-width: var(--col-w);
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
+}
+
+.decisions__heading {
+  margin: 0;
+  font-size: 1.5rem;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+
+.decisions__loading-note {
+  color: var(--ink-3);
+  font-size: 0.9rem;
+}
+
+.decisions-empty {
+  background: var(--surface);
+  border: 1px solid var(--hair-strong);
+  border-radius: var(--radius);
+  padding: 22px 20px;
+}
+
+.decisions-empty__line {
+  margin: 0;
+  font-size: 0.95rem;
+  font-weight: 550;
+}
+
+.decisions-empty__sub {
+  margin: 6px 0 0;
+  font-size: 0.85rem;
+  color: var(--ink-3);
+}
+
+.decisions-block__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.decisions-block__head .section-label {
+  margin: 0;
+}
+
+.decisions-block__count {
+  min-width: 18px;
+  height: 18px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--accent-bg);
+  color: var(--ink-2);
+  font-size: 0.7rem;
+  font-weight: 600;
+  display: grid;
+  place-items: center;
+}
+
+.decisions-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  background: var(--surface);
+  border: 1px solid var(--hair-strong);
+  border-radius: var(--radius);
+}
+
+.decisions-row {
+  padding: 16px 18px;
+  border-top: 1px solid var(--hair);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.decisions-row:first-child {
+  border-top: none;
+}
+
+.decisions-row--accepted,
+.decisions-row--rejected,
+.decisions-row--resolved {
+  flex-direction: row;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.decisions-row__q {
+  margin: 0;
+  font-size: 0.92rem;
+  font-weight: 550;
+  color: var(--ink);
+}
+
+.decisions-row__why {
+  margin: 0;
+  font-size: 0.82rem;
+  color: var(--ink-3);
+}
+
+.decisions-row__resolve {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.decisions-row__input {
+  width: 100%;
+  resize: vertical;
+  padding: 9px 11px;
+  border: 1px solid var(--hair-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+  font-size: 0.88rem;
+}
+
+.decisions-row__input:focus-visible {
+  outline: 2px solid var(--amber-dot);
+  outline-offset: 1px;
+}
+
+.decisions-row__input:disabled {
+  opacity: 0.6;
+}
+
+.decisions-row__foot {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.decisions-row__error {
+  flex: 1 1 100%;
+  text-align: right;
+  font-size: 0.78rem;
+  color: var(--amber-ink);
+}
+
+.decisions-row__primary,
+.decisions-row__secondary {
+  border: 1px solid var(--hair-strong);
+  border-radius: 999px;
+  padding: 5px 14px;
+  font-size: 0.8rem;
+  font-weight: 550;
+  background: var(--surface);
+  color: var(--ink-2);
+}
+
+.decisions-row__primary {
+  border-color: transparent;
+  background: #1f1d1a;
+  color: #fff;
+}
+
+.decisions-row__primary:hover:not(:disabled) {
+  background: #000;
+}
+
+.decisions-row__secondary:hover:not(:disabled) {
+  background: var(--accent-bg);
+}
+
+.decisions-row__primary:disabled,
+.decisions-row__secondary:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.decisions-row__done {
+  margin-left: auto;
+  font-size: 0.82rem;
+  font-weight: 550;
+  color: var(--green-ink);
+}
+
+.decisions-row--rejected .decisions-row__done {
+  color: var(--ink-3);
+}
+
 /* Product lanes */
 .lanes__list {
   list-style: none;
@@ -804,6 +1012,27 @@ main.login {
   .tabbar__item[aria-current="page"] {
     color: var(--ink);
     font-weight: 550;
+  }
+
+  .tabbar__icon {
+    position: relative;
+    display: inline-flex;
+  }
+
+  .tabbar__badge {
+    position: absolute;
+    top: -5px;
+    right: -9px;
+    min-width: 15px;
+    height: 15px;
+    padding: 0 4px;
+    border-radius: 999px;
+    background: var(--amber-dot);
+    color: #fff;
+    font-size: 0.6rem;
+    font-weight: 650;
+    line-height: 15px;
+    text-align: center;
   }
 
   .direct-fab {

@@ -1,5 +1,6 @@
 "use client";
 
+import { usePendingDecisionsCount } from "@/lib/decisions/pending-count";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import AccountChip from "./AccountChip";
@@ -15,6 +16,7 @@ const ICONS: Record<NavKey, typeof BriefIcon> = {
 /** Persistent left rail (desktop). UX §1.1 / §3.4 layout. */
 export default function LeftRail({ onDirect }: { onDirect: () => void }) {
   const pathname = usePathname();
+  const pendingDecisions = usePendingDecisionsCount();
 
   return (
     <aside className="rail">
@@ -41,6 +43,7 @@ export default function LeftRail({ onDirect }: { onDirect: () => void }) {
               </button>
             );
           }
+          const badge = item.key === "decisions" && pendingDecisions > 0 ? pendingDecisions : null;
           return (
             <Link
               key={item.key}
@@ -50,6 +53,11 @@ export default function LeftRail({ onDirect }: { onDirect: () => void }) {
             >
               <Icon />
               <span>{item.label}</span>
+              {badge !== null && (
+                <span className="rail__badge" aria-label={`${badge} pending`}>
+                  {badge}
+                </span>
+              )}
             </Link>
           );
         })}
