@@ -16,6 +16,7 @@ const TITLES: Record<string, string> = {
   "/brief": "Brief",
   "/decisions": "Decisions",
   "/inside": "Inside",
+  "/settings": "Settings",
 };
 
 /** Mobile top bar — page title + notifications (UX Brief mobile mockup). */

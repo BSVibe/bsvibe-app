@@ -199,6 +199,67 @@ export interface Observation {
   captured_at: string | null;
 }
 
+// ── Connectors (REAL endpoint /api/v1/connectors) ─────────────────────────
+
+/** The connector names the backend's `ConnectorCreate.connector` validator
+ *  accepts today (backend/api/v1/connectors.py): a name is registerable iff it
+ *  has an inbound parser (ConnectorInboundResolver._PARSERS — github / slack /
+ *  telegram / discord / sentry) OR an outbound delivery builder
+ *  (OUTBOUND_EVENT_BUILDERS — notion). Anything else 422s. We mirror that exact
+ *  validated set so the picker never offers a connector the server rejects.
+ *
+ *  Note: email / linear / trello are named in the Workflow as eventual
+ *  connectors but have NEITHER an inbound parser NOR an outbound builder wired
+ *  yet, so the create validator rejects them — they are intentionally absent
+ *  here until the backend lands their mappers (see PR description gap note). */
+export const KNOWN_CONNECTORS = [
+  "github",
+  "slack",
+  "telegram",
+  "discord",
+  "sentry",
+  "notion",
+] as const;
+
+export type ConnectorName = (typeof KNOWN_CONNECTORS)[number];
+
+/** `POST /api/v1/connectors` body (backend ConnectorCreate, extra=forbid).
+ *  `delivery_config` is founder-set outbound routing config (e.g. notion
+ *  `{ "parent_page_id": … }`) — never derived from LLM/work output; it defaults
+ *  to `{}` on the wire when the connector is inbound-only. */
+export interface ConnectorCreate {
+  connector: string;
+  signing_secret: string;
+  external_ref?: string | null;
+  delivery_config?: Record<string, unknown>;
+}
+
+/** `POST /api/v1/connectors` → 201 (backend ConnectorCreated). The ONLY place
+ *  the `webhook_token` + full `webhook_url` are ever returned — like an API
+ *  key, shown once. Mirrors the backend model field-for-field. */
+export interface ConnectorCreated {
+  id: string;
+  connector: string;
+  external_ref: string | null;
+  is_active: boolean;
+  created_at: string;
+  delivery_config: Record<string, unknown>;
+  webhook_token: string;
+  webhook_url: string;
+}
+
+/** `GET /api/v1/connectors` element (backend ConnectorOut). Never the secret,
+ *  never the full token — `token_hint` is the last-4 mask (`...abcd`). */
+export interface Connector {
+  id: string;
+  connector: string;
+  external_ref: string | null;
+  is_active: boolean;
+  created_at: string;
+  delivery_config: Record<string, unknown>;
+  token_hint: string;
+}
+
 // ── Brief view-model (UX §3.3 lane states) ────────────────────────────────
 
 export type LaneState = "working" | "needs-you" | "triggered" | "shipped" | "idle";

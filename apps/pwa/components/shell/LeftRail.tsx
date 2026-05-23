@@ -69,10 +69,14 @@ export default function LeftRail({ onDirect }: { onDirect: () => void }) {
       </button>
 
       <div className="rail__foot">
-        <button type="button" className="rail__item rail__item--sub" disabled title="Coming soon">
+        <Link
+          href="/settings"
+          className="rail__item rail__item--sub"
+          aria-current={pathname === "/settings" ? "page" : undefined}
+        >
           <SettingsIcon />
           <span>Settings</span>
-        </button>
+        </Link>
         <AccountChip />
       </div>
     </aside>
