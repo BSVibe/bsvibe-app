@@ -36,11 +36,12 @@ def test_alembic_history_loads():
         "connector_accounts",
         "decision_resolve",
         "connector_delivery_config",
+        "accounts",
     ):
         assert rev in result.stdout, f"missing revision {rev} in:\n{result.stdout}"
 
 
-def test_alembic_head_is_connector_delivery_config():
+def test_alembic_head_is_accounts():
     repo = Path(__file__).parent.parent
     result = subprocess.run(
         [sys.executable, "-m", "alembic", "heads"],
@@ -49,12 +50,13 @@ def test_alembic_head_is_connector_delivery_config():
         text=True,
     )
     assert result.returncode == 0
-    assert "connector_delivery_config" in result.stdout
+    assert "accounts" in result.stdout
 
 
 def test_target_metadata_covers_all_bases():
     """Reach into env.py module to confirm the merged metadata sees
     every base we expect — Bundle 1 + Bundle 1.5a/1.5b + Bundle K + Bundle X."""
+    import backend.accounts.account_models  # noqa: F401 — registers `accounts` table
     from backend.accounts.models import AccountsBase
     from backend.connectors.db import ConnectorsBase
     from backend.delivery.db import DeliveryBase
@@ -123,6 +125,8 @@ def test_target_metadata_covers_all_bases():
         "settle_drains",
         # Connector-inbound webhook bindings (Workflow §11.2)
         "connector_accounts",
+        # Per-workspace personal billing account (the account axis)
+        "accounts",
     }
     actual_tables = (
         set(AccountsBase.metadata.tables)

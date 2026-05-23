@@ -78,4 +78,30 @@ describe("apiFetch base prefix", () => {
     const [url] = fetchMock.mock.calls[0] as unknown as [string];
     expect(url).toBe("https://api.bsvibe.dev/api/v1/brief");
   });
+
+  it("sets X-BSVibe-Account-Id when the session carries personalAccountId", async () => {
+    vi.stubEnv("NEXT_PUBLIC_BACKEND_URL", "");
+    setSession({ ...SESSION, personalAccountId: "acct-123" });
+    const fetchMock = mockFetch();
+    const { apiFetch } = await import("@/lib/api/client");
+
+    await apiFetch("/api/v1/accounts");
+
+    const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    const headers = new Headers(init.headers);
+    expect(headers.get("X-BSVibe-Account-Id")).toBe("acct-123");
+  });
+
+  it("omits X-BSVibe-Account-Id when the session has no personalAccountId", async () => {
+    vi.stubEnv("NEXT_PUBLIC_BACKEND_URL", "");
+    setSession(SESSION); // no personalAccountId
+    const fetchMock = mockFetch();
+    const { apiFetch } = await import("@/lib/api/client");
+
+    await apiFetch("/api/v1/accounts");
+
+    const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    const headers = new Headers(init.headers);
+    expect(headers.has("X-BSVibe-Account-Id")).toBe(false);
+  });
 });

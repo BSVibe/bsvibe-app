@@ -20,6 +20,11 @@ export interface Session {
   userId: string;
   /** Epoch ms when the access token expires (for future refresh). */
   expiresAt: number;
+  /** The workspace's personal billing-account id, fetched from
+   *  `/api/v1/account` after login and sent as `X-BSVibe-Account-Id`. Optional:
+   *  the backend resolves a fallback when it's absent, so login never blocks
+   *  on the fetch. */
+  personalAccountId?: string;
 }
 
 const STORAGE_KEY = "bsvibe.session";

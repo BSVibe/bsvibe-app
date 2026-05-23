@@ -201,11 +201,21 @@ async def get_account_id(
 
 async def require_account_id(
     account_id: Annotated[uuid.UUID | None, Depends(get_account_id)],
+    workspace_id: Annotated[uuid.UUID, Depends(get_workspace_id)],
+    session: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> uuid.UUID:
-    """Same as :func:`get_account_id` but 400s if missing — account-scoped routes."""
-    if account_id is None:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="account_id required (pass via X-BSVibe-Account-Id header)",
-        )
-    return account_id
+    """Resolve the billing account id for account-scoped routes.
+
+    Header wins: a valid ``X-BSVibe-Account-Id`` is used verbatim (preserving
+    the orthogonal account axis). When the header is ABSENT the caller's
+    personal account is resolved (create-on-read) for the active workspace, so
+    a logged-in founder never 400s even before the PWA has fetched the id. A
+    malformed header value still 400s upstream in :func:`get_account_id`.
+    """
+    if account_id is not None:
+        return account_id
+    from backend.accounts.account_service import ensure_personal_account  # noqa: PLC0415
+
+    account = await ensure_personal_account(session, workspace_id=workspace_id)
+    await session.commit()
+    return account.id

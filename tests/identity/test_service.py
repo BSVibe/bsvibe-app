@@ -7,6 +7,10 @@ import uuid
 import pytest
 from sqlalchemy import select
 
+# Imported for table registration on the shared Base.metadata (bootstrap now
+# seeds a personal Account alongside the workspace).
+import backend.accounts.account_models  # noqa: F401
+from backend.accounts.account_models import Account
 from backend.identity import service
 from backend.identity.db import MembershipRow, UserRow
 from backend.identity.service import (
@@ -20,6 +24,43 @@ from backend.workspaces.db import WorkspaceRow
 from .._support import memory_session
 
 pytestmark = pytest.mark.asyncio
+
+
+async def test_bootstrap_seeds_personal_account() -> None:
+    async with memory_session() as s:
+        _user, membership = await ensure_user_bootstrapped(
+            s, supabase_user_id="sb-1", email="founder@acme.io"
+        )
+        accounts = (await s.execute(select(Account))).scalars().all()
+        assert len(accounts) == 1
+        assert accounts[0].workspace_id == membership.workspace_id
+
+
+async def test_bootstrap_account_idempotent_on_relogin() -> None:
+    async with memory_session() as s:
+        await ensure_user_bootstrapped(s, supabase_user_id="sb-1", email="a@x.io")
+        await ensure_user_bootstrapped(s, supabase_user_id="sb-1", email="a@x.io")
+        accounts = (await s.execute(select(Account))).scalars().all()
+        assert len(accounts) == 1
+
+
+async def test_bootstrap_backfills_account_for_workspace_without_one() -> None:
+    """An existing user+workspace with no Account gets one on next login."""
+    async with memory_session() as s:
+        _user, membership = await ensure_user_bootstrapped(
+            s, supabase_user_id="sb-1", email="a@x.io"
+        )
+        # Remove the seeded account to simulate a pre-feature workspace.
+        for acct in (await s.execute(select(Account))).scalars().all():
+            await s.delete(acct)
+        await s.commit()
+        assert (await s.execute(select(Account))).scalars().all() == []
+
+        # Re-login backfills.
+        await ensure_user_bootstrapped(s, supabase_user_id="sb-1", email="a@x.io")
+        accounts = (await s.execute(select(Account))).scalars().all()
+        assert len(accounts) == 1
+        assert accounts[0].workspace_id == membership.workspace_id
 
 
 async def test_bootstrap_creates_user_workspace_owner_membership() -> None:

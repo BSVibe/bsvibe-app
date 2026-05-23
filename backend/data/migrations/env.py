@@ -22,6 +22,7 @@ from backend.config import get_settings
 from backend.data import Base
 
 # noqa: F401 — imported for table-registration side effects only.
+import backend.accounts.account_models  # noqa: F401, E402
 import backend.accounts.models  # noqa: F401, E402
 import backend.connectors.db  # noqa: F401, E402
 import backend.delivery.db  # noqa: F401, E402

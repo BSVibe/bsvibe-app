@@ -34,6 +34,12 @@ export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise
   }
   if (session) {
     headers.set("Authorization", `Bearer ${session.accessToken}`);
+    // The billing-account axis (orthogonal to the workspace). When the session
+    // carries the personal account id, send it so account-scoped routes
+    // (/api/v1/accounts) resolve without relying on the backend fallback.
+    if (session.personalAccountId) {
+      headers.set("X-BSVibe-Account-Id", session.personalAccountId);
+    }
   }
 
   const response = await fetch(`${base}${path}`, { ...init, headers });
