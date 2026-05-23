@@ -1804,198 +1804,238 @@ main.login {
   color: var(--ink-3);
 }
 
-/* ── Notifications tab ─────────────────────────────────────────────────────── */
-.notifications__loading {
-  margin: 8px 0;
-  font-size: 0.86rem;
-  color: var(--ink-3);
-}
-
-.notifications__note {
-  margin: 0 0 12px;
-  padding: 12px 14px;
-  background: var(--surface);
-  border: 1px solid var(--hair-strong);
-  border-radius: var(--radius);
-  font-size: 0.84rem;
-  color: var(--ink-2);
-}
-
-.notifications-matrix {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  margin-top: 6px;
-}
-
-.notifications-matrix__table {
-  width: 100%;
-  border-collapse: collapse;
-  border: 1px solid var(--hair);
-  border-radius: var(--radius);
-  overflow: hidden;
-}
-
-.notifications-matrix__event-head,
-.notifications-matrix__channel-head {
-  padding: 10px 12px;
-  font-size: 0.7rem;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  color: var(--ink-3);
-  background: var(--accent-bg);
+/* ── Account tab ───────────────────────────────────────────────────────────
+   Profile / Plan / Sign-in identities / Active sessions. Same Notion calm:
+   hairline dividers, hierarchy by typography + whitespace, color (the green
+   "Connected" pill) only for status meaning. All colors come from the shared
+   light/dark tokens, so this surface adapts to dark mode automatically. */
+.account-section {
+  padding: 18px 0;
   border-bottom: 1px solid var(--hair);
 }
 
-.notifications-matrix__event-head {
-  text-align: left;
+.account-section:last-child {
+  border-bottom: none;
 }
 
-.notifications-matrix__channel-head {
-  text-align: center;
-  width: 84px;
-}
-
-.notifications-matrix__row:not(:last-child) .notifications-matrix__event,
-.notifications-matrix__row:not(:last-child) .notifications-matrix__cell {
-  border-bottom: 1px solid var(--hair);
-}
-
-.notifications-matrix__event {
-  padding: 14px 12px;
-  text-align: left;
-  font-size: 0.86rem;
-  font-weight: 500;
-  color: var(--ink);
-}
-
-.notifications-matrix__cell {
-  padding: 14px 12px;
-  text-align: center;
-}
-
-.notifications-matrix__caption {
-  margin: 0;
-  font-size: 0.74rem;
-  color: var(--ink-3);
-}
-
-/* Accessible toggle (native checkbox styled as a switch) */
-.toggle {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
-}
-
-.toggle__input {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  margin: -1px;
-  overflow: hidden;
-  clip: rect(0, 0, 0, 0);
-}
-
-.toggle__track {
-  display: inline-flex;
-  align-items: center;
-  width: 36px;
-  height: 20px;
-  padding: 2px;
-  border-radius: 999px;
-  background: var(--hair-strong);
-  transition: background 0.15s ease;
-}
-
-.toggle__thumb {
-  width: 16px;
-  height: 16px;
-  border-radius: 50%;
-  background: var(--surface);
-  box-shadow: 0 1px 2px rgba(15, 15, 15, 0.2);
-  transition: transform 0.15s ease;
-}
-
-.toggle__input:checked + .toggle__track {
-  background: var(--good, #1f9d55);
-}
-
-.toggle__input:checked + .toggle__track .toggle__thumb {
-  transform: translateX(16px);
-}
-
-.toggle__input:focus-visible + .toggle__track {
-  outline: 2px solid var(--ink);
-  outline-offset: 2px;
-}
-
-/* Quiet hours */
-.quiet-hours {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  margin-top: 22px;
-}
-
-.quiet-hours__row {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 18px;
-  padding: 14px 16px;
-  background: var(--surface);
-  border: 1px solid var(--hair-strong);
-  border-radius: var(--radius);
-}
-
-.quiet-hours__switch {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 0.88rem;
-  font-weight: 500;
-  color: var(--ink);
-  cursor: pointer;
-}
-
-.quiet-hours__switch-input {
-  width: 16px;
-  height: 16px;
-  accent-color: var(--good, #1f9d55);
-}
-
-.quiet-hours__field {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.quiet-hours__field-label {
+.account-note {
+  margin: 12px 0 0;
   font-size: 0.78rem;
   color: var(--ink-3);
 }
 
-.quiet-hours__time {
-  font: inherit;
-  font-size: 0.84rem;
-  color: var(--ink);
-  background: var(--app-bg, var(--surface));
-  border: 1px solid var(--hair-strong);
-  border-radius: var(--radius-sm);
-  padding: 6px 8px;
+/* Profile */
+.account-profile {
+  display: flex;
+  align-items: flex-start;
+  gap: 22px;
 }
 
-.quiet-hours__time:disabled {
+.account-profile__photo {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+
+.account-profile__avatar {
+  width: 56px;
+  height: 56px;
+  border-radius: 999px;
+  background: var(--accent-bg);
+  color: var(--ink-2);
+  font-size: 1.1rem;
+  font-weight: 600;
+  display: grid;
+  place-items: center;
+}
+
+.account-profile__fields {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  flex: 1;
+}
+
+.account-kv {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.account-kv__label {
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
   color: var(--ink-3);
-  opacity: 0.6;
 }
 
-.quiet-hours__caption {
-  margin: 0;
+.account-kv__value {
+  font-size: 0.95rem;
+  color: var(--ink);
+  font-weight: 540;
+}
+
+.account-kv__hint {
   font-size: 0.74rem;
   color: var(--ink-3);
+}
+
+/* Plan card */
+.account-plan {
+  background: var(--surface);
+  border: 1px solid var(--hair-strong);
+  border-radius: var(--radius);
+  padding: 16px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.account-plan__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.account-plan__name {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.account-plan__tier {
+  font-size: 0.98rem;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.account-plan__price {
+  font-size: 0.86rem;
+  color: var(--ink-2);
+}
+
+.account-plan__status {
+  font-size: 0.72rem;
+  font-weight: 550;
+  color: var(--green-ink);
+  background: var(--green-pill-bg);
+  border-radius: 999px;
+  padding: 2px 9px;
+}
+
+.account-plan__meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  border-top: 1px solid var(--hair);
+  padding-top: 12px;
+}
+
+.account-plan__quota {
+  font-size: 0.82rem;
+  color: var(--ink-3);
+}
+
+/* Identity + session lists */
+.account-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.account-list__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 0;
+  border-top: 1px solid var(--hair);
+}
+
+.account-list__row:first-child {
+  border-top: none;
+}
+
+.account-list__name {
+  font-size: 0.9rem;
+  font-weight: 540;
+  color: var(--ink);
+}
+
+.account-list__device {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.account-list__sub {
+  font-size: 0.78rem;
+  color: var(--ink-3);
+}
+
+.account-list__actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.account-pill {
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  border-radius: 999px;
+  padding: 3px 9px;
+}
+
+.account-pill--on {
+  color: var(--green-ink);
+  background: var(--green-pill-bg);
+}
+
+/* Buttons / link affordances. Disabled states are visibly calmer (deferred,
+   present-but-not-yet-buildable controls). */
+.account-btn {
+  font: inherit;
+  font-size: 0.82rem;
+  font-weight: 540;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--hair-strong);
+  border-radius: var(--radius-sm);
+  padding: 7px 14px;
+  cursor: pointer;
+}
+
+.account-btn:hover:not(:disabled) {
+  background: var(--accent-bg);
+}
+
+.account-link-btn {
+  font: inherit;
+  font-size: 0.82rem;
+  color: var(--ink-2);
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+}
+
+.account-link-btn:hover:not(:disabled) {
+  color: var(--ink);
+  text-decoration: underline;
+}
+
+.account-btn:disabled,
+.account-link-btn:disabled {
+  color: var(--ink-3);
+  cursor: not-allowed;
+  opacity: 0.7;
 }
 
 .connectors {
@@ -2722,3 +2762,198 @@ main.login {
     right: 16px;
   }
 }
+
+/* ── Notifications tab ─────────────────────────────────────────────────────── */
+.notifications__loading {
+  margin: 8px 0;
+  font-size: 0.86rem;
+  color: var(--ink-3);
+}
+
+.notifications__note {
+  margin: 0 0 12px;
+  padding: 12px 14px;
+  background: var(--surface);
+  border: 1px solid var(--hair-strong);
+  border-radius: var(--radius);
+  font-size: 0.84rem;
+  color: var(--ink-2);
+}
+
+.notifications-matrix {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 6px;
+}
+
+.notifications-matrix__table {
+  width: 100%;
+  border-collapse: collapse;
+  border: 1px solid var(--hair);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.notifications-matrix__event-head,
+.notifications-matrix__channel-head {
+  padding: 10px 12px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  background: var(--accent-bg);
+  border-bottom: 1px solid var(--hair);
+}
+
+.notifications-matrix__event-head {
+  text-align: left;
+}
+
+.notifications-matrix__channel-head {
+  text-align: center;
+  width: 84px;
+}
+
+.notifications-matrix__row:not(:last-child) .notifications-matrix__event,
+.notifications-matrix__row:not(:last-child) .notifications-matrix__cell {
+  border-bottom: 1px solid var(--hair);
+}
+
+.notifications-matrix__event {
+  padding: 14px 12px;
+  text-align: left;
+  font-size: 0.86rem;
+  font-weight: 500;
+  color: var(--ink);
+}
+
+.notifications-matrix__cell {
+  padding: 14px 12px;
+  text-align: center;
+}
+
+.notifications-matrix__caption {
+  margin: 0;
+  font-size: 0.74rem;
+  color: var(--ink-3);
+}
+
+/* Accessible toggle (native checkbox styled as a switch) */
+.toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.toggle__input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+}
+
+.toggle__track {
+  display: inline-flex;
+  align-items: center;
+  width: 36px;
+  height: 20px;
+  padding: 2px;
+  border-radius: 999px;
+  background: var(--hair-strong);
+  transition: background 0.15s ease;
+}
+
+.toggle__thumb {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--surface);
+  box-shadow: 0 1px 2px rgba(15, 15, 15, 0.2);
+  transition: transform 0.15s ease;
+}
+
+.toggle__input:checked + .toggle__track {
+  background: var(--good, #1f9d55);
+}
+
+.toggle__input:checked + .toggle__track .toggle__thumb {
+  transform: translateX(16px);
+}
+
+.toggle__input:focus-visible + .toggle__track {
+  outline: 2px solid var(--ink);
+  outline-offset: 2px;
+}
+
+/* Quiet hours */
+.quiet-hours {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 22px;
+}
+
+.quiet-hours__row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 18px;
+  padding: 14px 16px;
+  background: var(--surface);
+  border: 1px solid var(--hair-strong);
+  border-radius: var(--radius);
+}
+
+.quiet-hours__switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.88rem;
+  font-weight: 500;
+  color: var(--ink);
+  cursor: pointer;
+}
+
+.quiet-hours__switch-input {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--good, #1f9d55);
+}
+
+.quiet-hours__field {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.quiet-hours__field-label {
+  font-size: 0.78rem;
+  color: var(--ink-3);
+}
+
+.quiet-hours__time {
+  font: inherit;
+  font-size: 0.84rem;
+  color: var(--ink);
+  background: var(--app-bg, var(--surface));
+  border: 1px solid var(--hair-strong);
+  border-radius: var(--radius-sm);
+  padding: 6px 8px;
+}
+
+.quiet-hours__time:disabled {
+  color: var(--ink-3);
+  opacity: 0.6;
+}
+
+.quiet-hours__caption {
+  margin: 0;
+  font-size: 0.74rem;
+  color: var(--ink-3);
+}
+
