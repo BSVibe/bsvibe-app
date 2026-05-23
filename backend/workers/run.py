@@ -47,6 +47,10 @@ from backend.accounts.crypto import CredentialCipher, _key_from_settings
 from backend.accounts.models import ModelAccount
 from backend.accounts.service import ModelAccountService
 from backend.config import Settings, get_settings
+from backend.delivery.connector_dispatch import (
+    ConnectorDeliveryAdapter,
+    build_connector_delivery_adapter,
+)
 from backend.delivery.dispatcher import DeliveryDispatcher
 from backend.delivery.schema import DeliveryResult
 from backend.execution.db import Decision, ExecutionRun
@@ -71,7 +75,7 @@ from backend.supervisor.sandbox import (
 )
 from backend.workers.agent_worker import AgentExecutionDeps, AgentWorker
 from backend.workers.base import BaseWorker
-from backend.workers.delivery_worker import DeliveryWorker
+from backend.workers.delivery_worker import DeliveryWorker, PluginDispatchAdapter
 from backend.workers.intake_worker import IntakeWorker
 from backend.workers.relay_worker import RelayWorker
 from backend.workers.relays import build_relay
@@ -301,13 +305,35 @@ class RealPluginDispatchAdapter:
         )
 
 
-async def build_delivery_adapter(*, plugins_dir: Path | None = None) -> RealPluginDispatchAdapter:
-    """Load every plugin under ``plugins_dir`` and wrap a real dispatcher."""
+async def build_delivery_adapter(
+    *,
+    session_factory: async_sessionmaker[AsyncSession],
+    plugins_dir: Path | None = None,
+) -> ConnectorDeliveryAdapter:
+    """Load every plugin under ``plugins_dir`` + wrap a connector-bound adapter.
+
+    The production delivery path resolves the run workspace's configured
+    ``connector_accounts`` (binding = ``delivery_config``), shapes the connector
+    outbound event from the Deliverable content + that stable config, and
+    dispatches THAT connector's ``@p.outbound`` — closing the verified-Deliverable
+    → external-delivery loop. v1 ships the notion event mapper; other connectors
+    are a registered seam (see :mod:`backend.delivery.connector_dispatch`).
+
+    The adapter decrypts the per-account outbound credential
+    (``signing_secret_ciphertext``) with the settings-derived
+    :class:`CredentialCipher` and opens its own session per dispatch (it must
+    load the Deliverable + resolve the binding), so it carries a session
+    factory rather than borrowing the worker's row-scoped session.
+    """
     root = plugins_dir or _PLUGINS_IMPLEMENTATIONS_DIR
     loader = PluginLoader(root)
     registry = await loader.load_all()
     logger.info("worker_runtime_plugins_loaded", count=len(registry), names=sorted(registry))
-    return RealPluginDispatchAdapter(plugins=list(registry.values()))
+    return build_connector_delivery_adapter(
+        session_factory=session_factory,
+        plugins=list(registry.values()),
+        cipher=CredentialCipher(_key_from_settings()),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -367,7 +393,7 @@ def build_worker_runtime(
     *,
     session_factory: async_sessionmaker[AsyncSession],
     execution: AgentExecutionDeps,
-    delivery_adapter: RealPluginDispatchAdapter,
+    delivery_adapter: PluginDispatchAdapter,
     settings: Settings | None = None,
 ) -> WorkerRuntime:
     """Construct the full worker set against one shared session factory."""
@@ -404,7 +430,7 @@ async def run_workers() -> None:
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
 
     execution = build_agent_execution_deps(settings=settings)
-    delivery_adapter = await build_delivery_adapter()
+    delivery_adapter = await build_delivery_adapter(session_factory=session_factory)
     runtime = build_worker_runtime(
         session_factory=session_factory,
         execution=execution,

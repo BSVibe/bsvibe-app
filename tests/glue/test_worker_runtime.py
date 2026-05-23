@@ -285,7 +285,7 @@ async def test_production_deps_drive_direct_run_to_delivery(
     assert (tmp_path / str(run_id) / "answer.txt").read_text() == "42\n"
 
     # 3. DeliveryWorker drains the event through the REAL plugin dispatcher.
-    adapter = await runtime.build_delivery_adapter()
+    adapter = await runtime.build_delivery_adapter(session_factory=sf)
     delivery = DeliveryWorker(
         session_factory=sf,
         dispatcher=adapter,
@@ -474,7 +474,7 @@ async def test_build_worker_runtime_constructs_all_workers(
     deps = runtime.build_agent_execution_deps(
         settings=get_settings(), sandbox_manager=NoopSandboxManager()
     )
-    adapter = await runtime.build_delivery_adapter()
+    adapter = await runtime.build_delivery_adapter(session_factory=sf)
     rt = runtime.build_worker_runtime(session_factory=sf, execution=deps, delivery_adapter=adapter)
     names = {w._name for w in rt.workers}
     assert names == {
