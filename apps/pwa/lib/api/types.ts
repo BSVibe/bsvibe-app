@@ -467,3 +467,22 @@ export interface BriefView {
   recentlyShipped: ShippedItem[];
   placeholder: boolean;
 }
+
+// ── Notifications (REAL endpoint /api/v1/notifications/prefs) ──────────────
+
+/** Workspace notification preferences (backend PrefsBody, extra=forbid).
+ *
+ *  `matrix` is the events × channels enable grid keyed
+ *  `event_id -> channel_id -> enabled`. The known event ids are
+ *  needs_you / triggered / shipped / failed / daily_brief; the known channel
+ *  ids are in_app / email / slack — the backend validator (and this surface)
+ *  require exactly that grid. Quiet hours are `"HH:MM"` strings (the same shape
+ *  the PWA <input type="time"> emits). v1 stores PREFERENCES only — real
+ *  email/Slack send is a later phase, and per-product overrides from the design
+ *  are intentionally omitted. */
+export interface NotificationPrefs {
+  matrix: Record<string, Record<string, boolean>>;
+  quiet_hours_enabled: boolean;
+  quiet_hours_start: string;
+  quiet_hours_end: string;
+}

@@ -37,11 +37,12 @@ def test_alembic_history_loads():
         "decision_resolve",
         "connector_delivery_config",
         "accounts",
+        "notification_prefs",
     ):
         assert rev in result.stdout, f"missing revision {rev} in:\n{result.stdout}"
 
 
-def test_alembic_head_is_accounts():
+def test_alembic_head_is_notification_prefs():
     repo = Path(__file__).parent.parent
     result = subprocess.run(
         [sys.executable, "-m", "alembic", "heads"],
@@ -50,7 +51,7 @@ def test_alembic_head_is_accounts():
         text=True,
     )
     assert result.returncode == 0
-    assert "accounts" in result.stdout
+    assert "notification_prefs" in result.stdout
 
 
 def test_target_metadata_covers_all_bases():
@@ -70,6 +71,7 @@ def test_target_metadata_covers_all_bases():
     from backend.knowledge.canonicalization.db import CanonicalizationBase
     from backend.knowledge.ingest.db import IngestBase
     from backend.knowledge.retrieval.db import RetrievalBase
+    from backend.notifications.db import NotificationsBase
     from backend.supervisor.audit.models import AuditOutboxBase, SupervisorBase
     from backend.workers.db import WorkersBase
     from backend.workspaces.db import WorkspacesBase
@@ -127,6 +129,8 @@ def test_target_metadata_covers_all_bases():
         "connector_accounts",
         # Per-workspace personal billing account (the account axis)
         "accounts",
+        # Per-workspace notification preferences (events x channels + quiet hours)
+        "notification_prefs",
     }
     actual_tables = (
         set(AccountsBase.metadata.tables)
@@ -146,6 +150,7 @@ def test_target_metadata_covers_all_bases():
         | set(WorkspacesBase.metadata.tables)
         | set(IdentityBase.metadata.tables)
         | set(ConnectorsBase.metadata.tables)
+        | set(NotificationsBase.metadata.tables)
     )
     assert expected_tables.issubset(actual_tables), (
         f"Missing tables: {expected_tables - actual_tables}"
