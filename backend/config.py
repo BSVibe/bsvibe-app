@@ -119,9 +119,14 @@ class Settings(BaseSettings):
     # ``BSVIBE_CORS_ALLOWED_ORIGINS=https://app.bsvibe.dev,https://...`` as a
     # plain comma-separated string (mirrors backend.shared.core.csv_list_field,
     # the established list-from-env pattern used by FastApiSettings).
+    #
+    # NO explicit alias: an explicit ``validation_alias`` makes pydantic-settings
+    # bypass ``env_prefix`` and read the bare name (``CORS_ALLOWED_ORIGINS``),
+    # which silently ignored the documented ``BSVIBE_CORS_ALLOWED_ORIGINS`` in
+    # prod. Letting the field name + ``env_prefix="BSVIBE_"`` resolve the env
+    # var keeps it consistent with every other setting here.
     cors_allowed_origins: Annotated[list[str], NoDecode] = csv_list_field(
         default=_DEFAULT_CORS_ORIGINS,
-        alias="cors_allowed_origins",
         description="Comma-separated CORS allow_origins for the browser PWA.",
     )
 

@@ -17,17 +17,44 @@ import pytest
 from backend.api.main import create_app
 from backend.config import get_settings
 
-_ALLOWED = "http://localhost:3700"
+# A NON-default origin on purpose: if this matched the code default
+# (``http://localhost:3700``) the test would pass even when the
+# ``BSVIBE_CORS_ALLOWED_ORIGINS`` env var is ignored — which is exactly the
+# regression that shipped to prod. Using a value the default does NOT contain
+# means these tests fail unless the env var actually reaches the settings.
+_ALLOWED = "https://app.bsvibe.dev"
 _DISALLOWED = "http://evil.example"
 
 
 @pytest.fixture
 def cors_app(monkeypatch: pytest.MonkeyPatch) -> object:
     monkeypatch.setenv("BSVIBE_CORS_ALLOWED_ORIGINS", _ALLOWED)
+    monkeypatch.delenv("CORS_ALLOWED_ORIGINS", raising=False)
     get_settings.cache_clear()
     app = create_app()
     yield app
     get_settings.cache_clear()
+
+
+def test_bsvibe_prefixed_env_var_is_honored(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The documented ``BSVIBE_CORS_ALLOWED_ORIGINS`` env var must drive the
+    allow-list. Regression guard: an explicit ``validation_alias`` once made
+    pydantic-settings read the bare ``CORS_ALLOWED_ORIGINS`` instead, so the
+    prefixed var was silently dropped and prod fell back to localhost-only."""
+    monkeypatch.setenv(
+        "BSVIBE_CORS_ALLOWED_ORIGINS",
+        "https://app.bsvibe.dev,https://bsvibe-app.vercel.app",
+    )
+    monkeypatch.delenv("CORS_ALLOWED_ORIGINS", raising=False)
+    get_settings.cache_clear()
+    try:
+        settings = get_settings()
+        assert settings.cors_allowed_origins == [
+            "https://app.bsvibe.dev",
+            "https://bsvibe-app.vercel.app",
+        ]
+    finally:
+        get_settings.cache_clear()
 
 
 @pytest.mark.asyncio
