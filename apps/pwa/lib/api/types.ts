@@ -97,6 +97,14 @@ export interface SafeModeItem {
   created_at: string;
 }
 
+/** `POST /api/v1/safemode/{id}/{approve,deny}` → backend SafeModeActionResponse.
+ *  `dispatched` is true only on approve (the held delivery is sent out). */
+export interface SafeModeActionResponse {
+  item_id: string;
+  status: string;
+  dispatched: boolean;
+}
+
 // ── Brief view-model (UX §3.3 lane states) ────────────────────────────────
 
 export type LaneState = "working" | "needs-you" | "triggered" | "shipped" | "idle";
@@ -111,11 +119,23 @@ export interface ProductLane {
   status: string;
 }
 
-/** A genuine fork that needs the founder (top "Needs you" strip + amber lane). */
+/** How a "Needs you" item can be resolved in-place. Only Safe-Mode held
+ *  deliveries are resolvable from the PWA today (approve / deny endpoints exist,
+ *  PR #17). Canonicalization proposals have no PWA resolve endpoint yet, so they
+ *  carry no `resolve` and stay read-only. */
+export interface SafeModeResolve {
+  kind: "safemode";
+  /** The raw Safe-Mode item id for /api/v1/safemode/{itemId}/{approve,deny}. */
+  itemId: string;
+}
+
+/** A genuine fork that needs the founder (top "Needs you" strip + amber lane).
+ *  `resolve` is present iff the item is actionable in-place; absent → read-only. */
 export interface NeedsYouItem {
   id: string;
   productSlug: string;
   question: string;
+  resolve?: SafeModeResolve;
 }
 
 export type ArtifactType = "pr" | "doc" | "image" | "slides" | "file" | "email";

@@ -6,13 +6,22 @@ import RecentlyShipped from "./RecentlyShipped";
 /**
  * The Glance, presentational (UX §3.4 layout): a centered column with the
  * "Needs you" strip on top, then product status lanes, then "Recently
- * shipped". Pure — takes a ready `BriefView`, so it is trivially testable.
+ * shipped". Takes a ready `BriefView`, so it is trivially testable.
+ *
+ * `onNeedsYouResolved` bubbles up a successful Safe-Mode approve/deny so the
+ * container can re-read the Brief and drop the resolved item.
  */
-export default function BriefContent({ view }: { view: BriefView }) {
+export default function BriefContent({
+  view,
+  onNeedsYouResolved,
+}: {
+  view: BriefView;
+  onNeedsYouResolved?: () => void;
+}) {
   return (
     <div className="brief">
       <h1 className="brief__heading">Brief</h1>
-      <NeedsYou items={view.needsYou} />
+      <NeedsYou items={view.needsYou} onResolved={onNeedsYouResolved} />
       <ProductLanes lanes={view.lanes} />
       <RecentlyShipped items={view.recentlyShipped} />
     </div>
