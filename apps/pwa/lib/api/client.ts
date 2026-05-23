@@ -1,12 +1,20 @@
 /**
  * Thin fetch wrapper for the backend API.
  *
- * All calls go to same-origin `/api/*`, which Next rewrites to the backend
- * (next.config.ts). The caller's Supabase access token is attached as a
- * Bearer header from the session store.
+ * Calls go directly to the backend at `NEXT_PUBLIC_BACKEND_URL` (cross-origin;
+ * the backend serves CORS). When the env var is unset (vitest, and as a safe
+ * default) the base is empty, so requests stay relative (`/api/*`). The
+ * caller's Supabase access token is attached as a Bearer header from the
+ * session store.
  */
 
 import { getSession } from "@/lib/auth/session";
+
+/**
+ * Backend base URL. Prod build: `https://api.bsvibe.dev`. Unset → "" so the
+ * path stays relative (preserves fetch-mocked tests that intercept `/api/...`).
+ */
+const base = process.env.NEXT_PUBLIC_BACKEND_URL ?? "";
 
 export class ApiError extends Error {
   readonly status: number;
@@ -28,7 +36,7 @@ export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise
     headers.set("Authorization", `Bearer ${session.accessToken}`);
   }
 
-  const response = await fetch(path, { ...init, headers });
+  const response = await fetch(`${base}${path}`, { ...init, headers });
 
   if (!response.ok) {
     // Surface the status; the session store / gate decides on redirect. We do

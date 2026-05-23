@@ -1,17 +1,11 @@
 import type { NextConfig } from "next";
 
-const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:8700";
-
+// The browser calls the backend directly at NEXT_PUBLIC_BACKEND_URL
+// (cross-origin; the backend serves CORS). The former `/api/:path*` →
+// backend rewrite proxy was retired because Cloudflare bot-challenged the
+// server-side proxy. See lib/api/client.ts for the base-prefix logic.
 const config: NextConfig = {
   reactStrictMode: true,
-  async rewrites() {
-    return [
-      {
-        source: "/api/:path*",
-        destination: `${backendUrl}/api/:path*`,
-      },
-    ];
-  },
 };
 
 export default config;
