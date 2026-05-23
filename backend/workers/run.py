@@ -35,10 +35,12 @@ from __future__ import annotations
 import asyncio
 import signal
 import uuid
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+import redis.asyncio as redis_aio
 import structlog
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
@@ -77,6 +79,7 @@ from backend.supervisor.sandbox import (
 from backend.workers.agent_worker import AgentExecutionDeps, AgentWorker
 from backend.workers.base import BaseWorker
 from backend.workers.delivery_worker import DeliveryWorker, PluginDispatchAdapter
+from backend.workers.emit import STREAM_AGENT, STREAM_DELIVER, STREAM_INTAKE, STREAM_SETTLE
 from backend.workers.intake_worker import IntakeWorker
 from backend.workers.relay_worker import RelayWorker
 from backend.workers.relays import build_relay
@@ -86,6 +89,7 @@ from backend.workers.settle_worker import (
     SettleWorkerConfig,
     build_garden_promoter_factory,
 )
+from backend.workers.streams import RedisStreamConsumer, StreamHandler
 
 logger = structlog.get_logger(__name__)
 
@@ -411,11 +415,22 @@ def build_worker_runtime(
     execution: AgentExecutionDeps,
     delivery_adapter: PluginDispatchAdapter,
     settings: Settings | None = None,
+    redis_client: Any = None,
 ) -> WorkerRuntime:
-    """Construct the full worker set against one shared session factory."""
+    """Construct the full worker set against one shared session factory.
+
+    ``redis_client`` is wired into the producer-side workers (the IntakeWorker
+    emits an ``agent`` notification per minted Request) ONLY in
+    ``worker_mode="redis_streams"``; ``None`` (the default) keeps the pure
+    DB-polling behaviour. Emission is gated + soft-fail inside the worker, so
+    passing a client in db_polling mode is also a harmless no-op."""
     settings = settings or get_settings()
     workers: list[BaseWorker] = [
-        IntakeWorker(session_factory=session_factory),
+        IntakeWorker(
+            session_factory=session_factory,
+            redis_client=redis_client,
+            settings=settings,
+        ),
         AgentWorker(session_factory=session_factory, execution=execution),
         DeliveryWorker(session_factory=session_factory, dispatcher=delivery_adapter),
         SettleWorker(
@@ -436,14 +451,152 @@ def build_worker_runtime(
     return WorkerRuntime(workers=workers, _stop=asyncio.Event())
 
 
+# ---------------------------------------------------------------------------
+# Redis Streams consumer wiring (opt-in — worker_mode="redis_streams")
+# ---------------------------------------------------------------------------
+#
+# This path is purely ADDITIVE. The DB-polling default above is UNTOUCHED. When
+# ``worker_mode="redis_streams"`` the daemon drives each worker by a Redis
+# Streams consumer (XREADGROUP → handler → XACK) INSTEAD of the poll loop — but
+# the handler is the worker's OWN single-tick method (``drain_once`` /
+# ``claim_once`` + ``drive_once`` via ``_tick`` / ``drain_once``), so no business
+# logic is duplicated: Redis is only a different *trigger* for the same tick.
+
+
+@dataclass(slots=True)
+class StreamConsumerBinding:
+    """One worker bound to its source stream + consumer group + tick handler."""
+
+    stream_name: str
+    consumer_group: str
+    handler: StreamHandler
+
+
+def _tick_handler(tick: Callable[[], Awaitable[int]]) -> StreamHandler:
+    """Adapt a worker's no-arg single-tick method to a stream handler.
+
+    The notification fields are intentionally ignored — the worker's tick reads
+    its own source table (the DB row is the source of truth); the stream entry
+    is only a wake-up. This keeps the Redis path a pure trigger over the SAME
+    DB-driven logic, so a notification for an already-drained row is a harmless
+    no-op (the tick simply finds nothing) and a missed notification is still
+    caught by any DB-polling deployment."""
+
+    async def _handle(_fields: dict[str, Any]) -> None:
+        await tick()
+
+    return _handle
+
+
+def build_stream_consumers(workers: list[Any]) -> list[StreamConsumerBinding]:
+    """Map known workers to their (stream, group, handler) bindings.
+
+    The handler reuses each worker's existing single-tick method:
+
+    * intake_worker → ``intake`` stream, handler = ``drain_once``
+    * agent_worker → ``agent`` stream, handler = ``_tick`` (claim + drive)
+    * delivery_worker → ``deliver`` stream, handler = ``drain_once``
+    * settle_worker → ``settle`` stream, handler = ``drain_once``
+
+    The relay_worker is intentionally OMITTED — it drains the audit outbox on
+    its own cadence, not in response to a producer event, so it has no stream.
+    A worker whose name is not in the mapping is skipped (not crashed)."""
+    stream_by_name: dict[str, str] = {
+        "intake_worker": STREAM_INTAKE,
+        "agent_worker": STREAM_AGENT,
+        "delivery_worker": STREAM_DELIVER,
+        "settle_worker": STREAM_SETTLE,
+    }
+    bindings: list[StreamConsumerBinding] = []
+    for worker in workers:
+        name = getattr(worker, "_name", None)
+        if not isinstance(name, str):
+            continue
+        stream = stream_by_name.get(name)
+        if stream is None:
+            continue
+        # agent_worker advances through claim + drive in one tick (``_tick``);
+        # the queue-style workers expose a single ``drain_once``. Both reach the
+        # SAME logic — ``_tick`` simply calls ``drain_once`` (or claim+drive) — so
+        # preferring ``_tick`` keeps the trigger faithful to the poll-loop body.
+        tick = getattr(worker, "_tick", None)
+        if tick is None:
+            tick = worker.drain_once
+        bindings.append(
+            StreamConsumerBinding(
+                stream_name=stream,
+                consumer_group=name,
+                handler=_tick_handler(tick),
+            )
+        )
+    return bindings
+
+
+async def run_stream_consumers(
+    *,
+    workers: list[BaseWorker],
+    redis_client: Any,
+    stop_event: asyncio.Event,
+    consumer_name: str = "worker-1",
+) -> None:
+    """Run a :class:`RedisStreamConsumer` per worker binding until stopped.
+
+    Each consumer loops XREADGROUP → the worker's own tick handler → XACK. The
+    relay worker (no stream binding) keeps running on its DB-poll loop so the
+    audit outbox still drains; it is started/stopped alongside the consumers."""
+    consumer = RedisStreamConsumer(redis_client)
+    bindings = build_stream_consumers(list(workers))
+    bound_groups = {b.consumer_group for b in bindings}
+
+    # Workers without a stream binding (relay) still poll their own source.
+    poll_workers = [w for w in workers if getattr(w, "_name", None) not in bound_groups]
+    for w in poll_workers:
+        await w.start()
+
+    tasks = [
+        asyncio.create_task(
+            consumer.consume(
+                stream_name=b.stream_name,
+                consumer_group=b.consumer_group,
+                consumer_name=consumer_name,
+                handler=b.handler,
+                stop_event=stop_event,
+            ),
+            name=f"stream::{b.consumer_group}",
+        )
+        for b in bindings
+    ]
+    logger.info("worker_runtime_started_redis_streams", streams=sorted(bound_groups))
+    try:
+        await stop_event.wait()
+    finally:
+        for w in poll_workers:
+            await w.stop()
+        for t in tasks:
+            t.cancel()
+        for t in tasks:
+            try:
+                await t
+            except asyncio.CancelledError:  # pragma: no cover — expected on shutdown
+                pass
+
+
 async def run_workers() -> None:
     """Process entrypoint — construct + run every worker until SIGINT/SIGTERM.
 
     Wired by ``python -m backend.workers`` (see ``backend/workers/__main__.py``).
+    Default ``worker_mode="db_polling"`` runs the poll-loop runtime exactly as
+    before; ``worker_mode="redis_streams"`` runs the Redis-consumer runtime.
     """
     settings = get_settings()
     engine = create_async_engine(settings.database_url, future=True)
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    # In redis mode the producer-side worker (IntakeWorker) needs the client to
+    # emit the ``agent`` wake-up; build it BEFORE the runtime so it can be wired in.
+    redis_client: Any = None
+    if settings.worker_mode == "redis_streams":
+        redis_client = redis_aio.from_url(settings.redis_url, decode_responses=True)
 
     execution = build_agent_execution_deps(settings=settings)
     delivery_adapter = await build_delivery_adapter(session_factory=session_factory)
@@ -452,7 +605,27 @@ async def run_workers() -> None:
         execution=execution,
         delivery_adapter=delivery_adapter,
         settings=settings,
+        redis_client=redis_client,
     )
+
+    if settings.worker_mode == "redis_streams":
+        stop_event = asyncio.Event()
+        loop = asyncio.get_running_loop()
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            try:
+                loop.add_signal_handler(sig, stop_event.set)
+            except NotImplementedError:  # pragma: no cover — non-POSIX
+                pass
+        try:
+            await run_stream_consumers(
+                workers=runtime.workers,
+                redis_client=redis_client,
+                stop_event=stop_event,
+            )
+        finally:
+            await redis_client.aclose()
+            await engine.dispose()
+        return
 
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGINT, signal.SIGTERM):
@@ -475,11 +648,14 @@ __all__ = [
     "DECISION_NO_MODEL_ACCOUNT",
     "LoggingRelay",
     "RealPluginDispatchAdapter",
+    "StreamConsumerBinding",
     "WorkerRuntime",
     "build_agent_execution_deps",
     "build_delivery_adapter",
     "build_gateway_dispatcher",
+    "build_stream_consumers",
     "build_worker_runtime",
     "resolve_workspace_model_account",
+    "run_stream_consumers",
     "run_workers",
 ]
