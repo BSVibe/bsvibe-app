@@ -4,18 +4,14 @@
  * │                                                                        │
  * │  The Brief now reads REAL data (lib/api/brief.ts): product lanes from  │
  * │  /api/v1/products + /api/v1/runs, "Needs you" from /api/v1/decisions   │
- * │  + /api/v1/safemode/queue, "Recently shipped" from /api/v1/runs.       │
+ * │  + /api/v1/safemode/queue, "Recently shipped" from                     │
+ * │  /api/v1/deliverables.                                                 │
  * │                                                                        │
  * │  The ONLY thing left here is a demo set of product lanes, used purely  │
  * │  as a FALLBACK when the network / auth fails mid-load — so the surface │
  * │  shows a calm board instead of an error wall. It is never shown on a   │
  * │  successful (even empty) read; an empty workspace renders calm empty   │
  * │  states from the real data, not this.                                  │
- * │                                                                        │
- * │  The remaining genuine gap (no endpoint yet) is the shipped-item       │
- * │  title/source detail — there is no deliverable-read endpoint, only     │
- * │  runs — so brief.ts derives that from the run and keeps                │
- * │  BriefView.placeholder true while any shipped item is shown.           │
  * └──────────────────────────────────────────────────────────────────────┘
  */
 

@@ -6,9 +6,10 @@
  * workspaces.py, backend/api/v1/products.py) — these endpoints are REAL.
  *
  * The `Brief*` view-model types describe the Glance surface (UX §3). These are
- * now composed from REAL endpoints (lib/api/brief.ts); the only residual gap is
- * the shipped-item title/source detail (no deliverable-read endpoint yet). See
- * lib/api/placeholder.ts for the remaining fallback data.
+ * now composed entirely from REAL endpoints (lib/api/brief.ts): lanes, needs-
+ * you, AND recently-shipped (the last from /api/v1/deliverables). The only
+ * residual fallback is the demo lanes shown when the core read fails mid-load
+ * (see lib/api/placeholder.ts).
  */
 
 // ── Wire shapes (REAL endpoints) ──────────────────────────────────────────
@@ -56,6 +57,25 @@ export interface Run {
   status: RunStatus;
   created_at: string;
   updated_at: string;
+}
+
+/** `DeliverableType` (backend/execution/db.py) — the artifact kind a verified
+ *  run produced. The PWA maps these → the calmer `ArtifactType` UI vocabulary. */
+export type DeliverableType = "code" | "pr" | "page" | "page_image" | "direct_output";
+
+/** `GET /api/v1/deliverables` element (backend DeliverableResponse). A real
+ *  artifact produced by a verified run; `summary`/`artifact_refs` come from the
+ *  orchestrator's free-form payload (may be null/empty), `artifact_uri` is the
+ *  external landing spot (PR URL, page URL, …) when one exists. */
+export interface Deliverable {
+  id: string;
+  run_id: string;
+  workspace_id: string;
+  deliverable_type: DeliverableType;
+  summary: string | null;
+  artifact_refs: string[];
+  artifact_uri: string | null;
+  created_at: string;
 }
 
 /** `POST /api/v1/messages` body — founder-direct submission. */
@@ -196,17 +216,20 @@ export interface ShippedItem {
   artifactType: ArtifactType;
   /** Proof verdict; for now always the calm "This is verified". */
   verdict: string;
+  /** External landing URL (`Deliverable.artifact_uri`) when one exists; absent
+   *  for in-repo / unaddressed artifacts. The RecentlyShipped component does not
+   *  render this yet — surfacing it as a tap target is a follow-up chunk. */
+  link?: string;
 }
 
 /** The whole Glance surface.
  *
- * `placeholder` is true only while some field shown is still demo / not-yet-
- * served data. After the real-data wiring (brief.ts) the lanes, needs-you, and
- * recently-shipped all come from live endpoints, so `placeholder` is false on a
+ * `placeholder` is true only while some field shown is demo / not-yet-served
+ * data. The lanes, needs-you, and recently-shipped all come from live endpoints
+ * (recently-shipped from /api/v1/deliverables), so `placeholder` is false on a
  * real read — even when the workspace is empty (that renders calm empty states,
  * NOT demo data). It flips back to true only if a hard failure forces the demo
- * fallback, or for the shipped-item *title/source* detail that has no endpoint
- * yet (derived from the run, not a deliverable-title read). */
+ * lane fallback. */
 export interface BriefView {
   needsYou: NeedsYouItem[];
   lanes: ProductLane[];
