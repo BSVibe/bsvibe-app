@@ -46,6 +46,9 @@ from backend.plugins.implementations.discord.webhook import (
 from backend.plugins.implementations.github.webhook import (
     WebhookSignatureError as GithubSignatureError,
 )
+from backend.plugins.implementations.sentry.webhook import (
+    WebhookSignatureError as SentrySignatureError,
+)
 from backend.plugins.implementations.slack.webhook import (
     WebhookSignatureError as SlackSignatureError,
 )
@@ -57,13 +60,14 @@ logger = structlog.get_logger(__name__)
 
 router = APIRouter()
 
-# All four connector parsers raise their own module-local subclass of
+# Every connector parser raises its own module-local subclass of
 # WebhookSignatureError on a forged delivery; catch the union → 401.
 _SIGNATURE_ERRORS: tuple[type[Exception], ...] = (
     SlackSignatureError,
     GithubSignatureError,
     TelegramSignatureError,
     DiscordSignatureError,
+    SentrySignatureError,
 )
 
 
