@@ -78,6 +78,7 @@ from backend.workers.settle_worker import (
     KnowledgeSettleSink,
     SettleWorker,
     SettleWorkerConfig,
+    build_garden_promoter_factory,
 )
 
 logger = structlog.get_logger(__name__)
@@ -378,6 +379,12 @@ def build_worker_runtime(
             session_factory=session_factory,
             sink=KnowledgeSettleSink(vault_root=Path(settings.knowledge_vault_root)),
             config=SettleWorkerConfig(default_region=settings.knowledge_default_region),
+            # Close the §5 ratchet loop: after each drain batch, promote each
+            # affected workspace's garden observations into canon over the SAME
+            # vault boundary the sink wrote to.
+            promoter_factory=build_garden_promoter_factory(
+                vault_root=Path(settings.knowledge_vault_root)
+            ),
         ),
         RelayWorker(session_factory=session_factory, relay=LoggingRelay()),
     ]
