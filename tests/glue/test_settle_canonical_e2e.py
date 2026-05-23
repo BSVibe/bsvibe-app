@@ -109,6 +109,7 @@ async def _seed_settle_activity(
     *,
     workspace_id: uuid.UUID,
     summary: str = "configured reverse proxy",
+    refs: list[str] | None = None,
 ) -> uuid.UUID:
     run_id = uuid.uuid4()
     activity_id = uuid.uuid4()
@@ -132,7 +133,7 @@ async def _seed_settle_activity(
                 activity_type="settle",
                 payload={
                     "verified": True,
-                    "artifact_refs": ["deploy/Caddyfile"],
+                    "artifact_refs": refs if refs is not None else ["deploy/Caddyfile"],
                     "summary": summary,
                 },
                 created_at=datetime.now(tz=UTC),
@@ -140,6 +141,13 @@ async def _seed_settle_activity(
         )
         await s.commit()
     return activity_id
+
+
+async def _seed_settle_activity_with_refs(
+    sf, *, workspace_id: uuid.UUID, summary: str, refs: list[str]
+) -> uuid.UUID:
+    """Thin alias making the recurring-artifact intent explicit at call sites."""
+    return await _seed_settle_activity(sf, workspace_id=workspace_id, summary=summary, refs=refs)
 
 
 def _ws_storage(vault_root: Path, workspace_id: uuid.UUID) -> FileSystemStorage:
@@ -230,7 +238,11 @@ async def test_drain_then_promote_safe_mode_queues_proposals(sf, tmp_path) -> No
     ws = uuid.uuid4()
     await _add_workspace(sf, workspace_id=ws, safe_mode=True)
     await _seed_content_tagged_observations(_ws_storage(tmp_path, ws))
-    await _seed_settle_activity(sf, workspace_id=ws)
+    # The sink note's own content tags now also become candidates — the gap this
+    # PR closes. Use a known summary/ref so the candidate set is deterministic.
+    await _seed_settle_activity_with_refs(
+        sf, workspace_id=ws, summary="configured the reverse proxy", refs=["deploy/Caddyfile"]
+    )
 
     worker = SettleWorker(
         session_factory=sf,
@@ -246,10 +258,23 @@ async def test_drain_then_promote_safe_mode_queues_proposals(sf, tmp_path) -> No
     storage = _ws_storage(tmp_path, ws)
     # Safe Mode: nothing applied — no active concepts exist.
     assert await storage.list_files("concepts/active") == []
-    # ... but the create-concept actions are queued for review (one per
-    # content tag: self-hosting / self-host / vaultwarden).
-    create_actions = await storage.list_files("actions/create-concept")
-    assert len(create_actions) == 3, create_actions
+    # ... but create-concept actions are QUEUED for review. The candidate set is
+    # the seeded content tags PLUS the sink note's own derived tags (the gap this
+    # PR closes — the sink note is no longer a no-op for promotion).
+    # Action filenames are ``YYYYMMDD-HHMMSS-<slug>.md`` — drop the two
+    # timestamp segments to recover the concept slug (which may itself contain
+    # hyphens, e.g. ``self-hosting``).
+    create_slugs = {
+        p.removeprefix("actions/create-concept/").removesuffix(".md").split("-", 2)[-1]
+        for p in await storage.list_files("actions/create-concept")
+    }
+    # Seeded content tags are queued ...
+    assert {"vaultwarden"} <= create_slugs, create_slugs
+    # ... and the sink note's own derived content tags are queued too.
+    assert {"configured", "reverse", "proxy", "caddyfile"} <= create_slugs, create_slugs
+    # Structural markers never become candidates.
+    assert "settle" not in create_slugs
+    assert "verified-run" not in create_slugs
 
 
 async def test_promotion_failure_is_soft_and_does_not_break_drain(sf, tmp_path) -> None:
@@ -328,7 +353,13 @@ async def test_promotion_idempotent_across_two_drains(sf, tmp_path) -> None:
     ws = uuid.uuid4()
     await _add_workspace(sf, workspace_id=ws, safe_mode=False)
     await _seed_content_tagged_observations(_ws_storage(tmp_path, ws))
-    await _seed_settle_activity(sf, workspace_id=ws, summary="first step")
+    # Identical summary + ref across both drains: the sink derives the SAME
+    # content tags each time, so a re-run is genuinely a no-op for promotion
+    # (a *new* summary would correctly add new concepts — that's new knowledge,
+    # not a duplicate).
+    await _seed_settle_activity_with_refs(
+        sf, workspace_id=ws, summary="hardened the proxy", refs=["deploy/Caddyfile"]
+    )
 
     worker = SettleWorker(
         session_factory=sf,
@@ -341,12 +372,74 @@ async def test_promotion_idempotent_across_two_drains(sf, tmp_path) -> None:
     active_after_first = sorted(await storage.list_files("concepts/active"))
     assert active_after_first  # promotion produced anchors
 
-    # A new settle activity → a second drain batch → another promotion pass.
-    await _seed_settle_activity(sf, workspace_id=ws, summary="second step")
+    # A second settle activity with identical content → another promotion pass
+    # that must add no new concepts.
+    await _seed_settle_activity_with_refs(
+        sf, workspace_id=ws, summary="hardened the proxy", refs=["deploy/Caddyfile"]
+    )
     assert await worker.drain_once() == 1
 
     active_after_second = sorted(await storage.list_files("concepts/active"))
     assert active_after_second == active_after_first, "promotion must be idempotent"
+
+
+async def test_loop_produces_canon_from_sink_derived_tags_no_seeding(sf, tmp_path) -> None:
+    """The closed loop end-to-end with NO seeded content notes.
+
+    Two settle activities across runs reference the SAME artifact
+    (``backend/auth/client.py``) + overlapping summary terms. The sink derives
+    content tags (``auth`` / ``client`` / ...) onto its own garden notes, so the
+    promoter — running over the sink's own writes only — gets real candidates
+    and applies canonical anchors. This proves the gap PR #23 left (sink wrote
+    only structural tags → zero candidates) is actually closed in the running
+    worker, not just when a richer producer seeds content-tagged notes.
+    """
+    ws = uuid.uuid4()
+    await _add_workspace(sf, workspace_id=ws, safe_mode=False)  # permissive → apply
+
+    worker = SettleWorker(
+        session_factory=sf,
+        sink=KnowledgeSettleSink(vault_root=tmp_path),
+        config=SettleWorkerConfig(default_region=_REGION),
+        promoter_factory=build_garden_promoter_factory(vault_root=tmp_path),
+    )
+    storage = _ws_storage(tmp_path, ws)
+
+    # Run 1: first settle referencing the recurring artifact.
+    await _seed_settle_activity_with_refs(
+        sf, workspace_id=ws, summary="configured auth client", refs=["backend/auth/client.py"]
+    )
+    assert await worker.drain_once() == 1
+
+    # Run 2: a second settle in the same workspace, same artifact recurring.
+    await _seed_settle_activity_with_refs(
+        sf,
+        workspace_id=ws,
+        summary="hardened auth client refresh",
+        refs=["backend/auth/client.py"],
+    )
+    assert await worker.drain_once() == 1
+
+    # Both settle notes were written (loop half 1) ...
+    assert len(_written_settle_notes(tmp_path, ws)) == 2
+    # ... and the promoter produced canon (loop half 2) from the SINK's own
+    # derived content tags — the recurring artifact stems are now canonical
+    # anchors. No structural marker ever became a concept.
+    active = {
+        p.removeprefix("concepts/active/").removesuffix(".md")
+        for p in await storage.list_files("concepts/active")
+    }
+    assert {"auth", "client"} <= active, active
+    assert "settle" not in active
+    assert "verified-run" not in active
+
+    # Deterministic retrieval resolves the recurring pattern to its anchor.
+    index = InMemoryCanonicalizationIndex()
+    await index.initialize(storage)
+    resolver = TagResolver(index=index)
+    resolved = await resolver.resolve("auth")
+    assert resolved.status == "resolved"
+    assert resolved.concept_id == "auth"
 
 
 async def test_no_promoter_factory_disables_promotion(sf, tmp_path) -> None:
