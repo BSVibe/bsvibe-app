@@ -6,12 +6,12 @@ export interface NavItem {
   key: NavKey;
   label: string;
   href: string;
-  /** Brief is the only surface this track ships; the rest are IA placeholders. */
+  /** Every primary surface (Brief / Decisions / Inside) now ships a real route. */
   available: boolean;
 }
 
 export const PRIMARY_NAV: NavItem[] = [
   { key: "brief", label: "Brief", href: "/brief", available: true },
   { key: "decisions", label: "Decisions", href: "/decisions", available: true },
-  { key: "inside", label: "Inside", href: "/inside", available: false },
+  { key: "inside", label: "Inside", href: "/inside", available: true },
 ];

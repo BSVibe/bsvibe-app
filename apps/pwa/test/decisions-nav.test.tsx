@@ -64,11 +64,4 @@ describe("Decisions nav wiring", () => {
 
     expect(screen.queryByLabelText(/pending/)).not.toBeInTheDocument();
   });
-
-  it("Inside stays an inert placeholder (not yet a route)", () => {
-    render(<LeftRail onDirect={() => {}} />);
-
-    expect(screen.getByRole("button", { name: "Inside" })).toBeDisabled();
-    expect(screen.queryByRole("link", { name: "Inside" })).not.toBeInTheDocument();
-  });
 });

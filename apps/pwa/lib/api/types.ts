@@ -171,6 +171,34 @@ export interface SafeModeActionResponse {
   dispatched: boolean;
 }
 
+/** `GET /api/v1/inside/concepts` element (backend ConceptResponse). One
+ *  canonical anchor — a settled concept on the founder's knowledge "wall".
+ *  `summary` is a short body excerpt (empty for a freshly-promoted anchor that
+ *  carries only its title); `alias_count` is the cheap connectedness signal
+ *  (how many variant spellings resolve onto this anchor). Mirrors the backend
+ *  model field-for-field (backend/api/v1/inside.py). */
+export interface Concept {
+  id: string;
+  name: string;
+  summary: string;
+  aliases: string[];
+  alias_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
+/** `GET /api/v1/inside/observations` element (backend ObservationResponse). One
+ *  recent garden observation — a raw, unpromoted settle note the SettleWorker
+ *  deposited. `captured_at` is the writer-stamped deposit date (may be absent
+ *  for a note written without one). Mirrors the backend model 1:1. */
+export interface Observation {
+  id: string;
+  title: string;
+  excerpt: string;
+  tags: string[];
+  captured_at: string | null;
+}
+
 // ── Brief view-model (UX §3.3 lane states) ────────────────────────────────
 
 export type LaneState = "working" | "needs-you" | "triggered" | "shipped" | "idle";
