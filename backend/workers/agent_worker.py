@@ -91,6 +91,20 @@ class AgentExecutionDeps:
     ]
     workspace_root: Path
     default_artifact_type: str | None = "direct_output"
+    #: Optional hook to PROVISION the run's ``workspace_dir`` before the loop
+    #: drives. ``None`` (the default) keeps the existing behaviour: the run
+    #: drives in an EMPTY scratch dir (``workspace_root/<run_id>``) — exactly as
+    #: the Direct-path tests rely on. When set, it is awaited with
+    #: ``(session, run, workspace_dir)`` AFTER the dir is created, BEFORE the
+    #: loop drives. The github delivery path injects a provisioner that resolves
+    #: the run's workspace github connector binding and, when present, CLONES the
+    #: target repo into ``workspace_dir`` on a new ``bsvibe/run-<short id>``
+    #: branch — so the agent's file_write/file_edit operate on a real checkout a
+    #: PR diff can be built from. No github binding → the provisioner leaves the
+    #: empty dir untouched (non-github runs are unaffected).
+    workspace_provisioner: Callable[[AsyncSession, ExecutionRun, Path], Awaitable[None]] | None = (
+        None
+    )
 
 
 class AgentWorker(BaseWorker):
@@ -205,6 +219,12 @@ class AgentWorker(BaseWorker):
 
         workspace_dir = execution.workspace_root / str(run.id)
         workspace_dir.mkdir(parents=True, exist_ok=True)
+        if execution.workspace_provisioner is not None:
+            # github delivery path: clone the target repo into workspace_dir on
+            # a new branch so the agent's file edits build a real PR diff. No
+            # github binding → the provisioner is a no-op and the empty scratch
+            # dir is used exactly as the non-github path (Direct-path tests).
+            await execution.workspace_provisioner(session, run, workspace_dir)
         result = await runner.drive(
             run_id=run.id, orchestrator=orchestrator, workspace_dir=workspace_dir
         )
