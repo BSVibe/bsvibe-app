@@ -87,7 +87,6 @@ describe("accounts client", () => {
       label: "Primary",
       litellm_model: "gpt-5",
       api_key: "sk-super-secret",
-      data_jurisdiction: "us",
       api_base: "https://proxy.example.com",
     });
 
@@ -99,15 +98,17 @@ describe("accounts client", () => {
     const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
     expect(url).toBe("/api/v1/accounts");
     expect(init.method).toBe("POST");
-    expect(JSON.parse(init.body as string)).toEqual({
+    const body = JSON.parse(init.body as string);
+    expect(body).toEqual({
       provider: "openai",
       label: "Primary",
       litellm_model: "gpt-5",
       api_key: "sk-super-secret",
-      data_jurisdiction: "us",
       extra_params: {},
       api_base: "https://proxy.example.com",
     });
+    // data_jurisdiction is invisible infra — the backend defaults it.
+    expect("data_jurisdiction" in body).toBe(false);
   });
 
   it("createAccount drops a blank api_base and defaults extra_params to {}", async () => {
@@ -119,7 +120,6 @@ describe("accounts client", () => {
       label: "Claude",
       litellm_model: "claude-sonnet-4",
       api_key: "sk-x",
-      data_jurisdiction: "eu",
       api_base: "   ",
     });
 
@@ -127,6 +127,7 @@ describe("accounts client", () => {
     const body = JSON.parse(init.body as string);
     expect("api_base" in body).toBe(false);
     expect(body.extra_params).toEqual({});
+    expect("data_jurisdiction" in body).toBe(false);
   });
 
   it("setAccountActive PATCHes /api/v1/accounts/{id} with just { is_active }", async () => {
@@ -182,7 +183,6 @@ describe("accounts client", () => {
         label: "x",
         litellm_model: "gpt-5",
         api_key: "k",
-        data_jurisdiction: "us",
       }),
     ).rejects.toBeInstanceOf(ApiError);
   });

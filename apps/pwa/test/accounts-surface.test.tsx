@@ -97,6 +97,9 @@ describe("Model accounts surface", () => {
       expect(screen.getByText(/without it I can.t run work/i)).toBeInTheDocument(),
     );
 
+    // The founder-facing jurisdiction picker is gone — invisible infra.
+    expect(screen.queryByLabelText(/Data jurisdiction/i)).not.toBeInTheDocument();
+
     await userEvent.type(screen.getByLabelText(/^Provider$/i), "openai");
     await userEvent.type(screen.getByLabelText(/Model identifier/i), "gpt-5");
     await userEvent.type(screen.getByLabelText(/^Label$/i), "Primary");
@@ -113,14 +116,16 @@ describe("Model accounts surface", () => {
     const createCall = fetchMock.mock.calls[1] as unknown as [string, RequestInit];
     expect(createCall[0]).toBe("/api/v1/accounts");
     expect(createCall[1].method).toBe("POST");
-    expect(JSON.parse(createCall[1].body as string)).toEqual({
+    // The body no longer carries data_jurisdiction — the backend defaults it.
+    const sentBody = JSON.parse(createCall[1].body as string);
+    expect(sentBody).toEqual({
       provider: "openai",
       label: "Primary",
       litellm_model: "gpt-5",
       api_key: "sk-super-secret",
-      data_jurisdiction: "us",
       extra_params: {},
     });
+    expect("data_jurisdiction" in sentBody).toBe(false);
 
     // A re-read fired (3rd call is the list GET).
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));

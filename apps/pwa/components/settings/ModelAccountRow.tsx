@@ -7,8 +7,8 @@ type RowState = "idle" | "toggling" | "confirming" | "revoking" | "error";
 
 /**
  * One registered model account. Shows the label, provider + litellm model, the
- * active state, a masked "key on file" hint (never the credential), and the data
- * jurisdiction. Two actions:
+ * active state, and a masked "key on file" hint (never the credential). Two
+ * actions:
  *
  *  - Activate / Deactivate — a PATCH flipping `is_active`. The agent loop's
  *    model-account resolution pauses a run when there is zero (or ambiguous)
@@ -88,8 +88,6 @@ export default function ModelAccountRow({
           {account.is_active ? "Active" : "Inactive"}
         </span>
       </div>
-
-      <p className="account-row__meta">Data jurisdiction · {account.data_jurisdiction}</p>
 
       <div className="account-row__actions">
         {state === "error" && (
