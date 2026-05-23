@@ -12,7 +12,11 @@ const ICONS: Record<NavKey, typeof BriefIcon> = {
   inside: InsideIcon,
 };
 
-const TITLES: Record<string, string> = { "/brief": "Brief", "/decisions": "Decisions" };
+const TITLES: Record<string, string> = {
+  "/brief": "Brief",
+  "/decisions": "Decisions",
+  "/inside": "Inside",
+};
 
 /** Mobile top bar — page title + notifications (UX Brief mobile mockup). */
 export function MobileTopBar() {

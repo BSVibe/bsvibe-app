@@ -936,6 +936,155 @@ main.login {
   padding: 3px 10px;
 }
 
+/* ── Inside ───────────────────────────────────────────────────────────────
+   The founder's read-only knowledge snapshot: settled concepts ("What I know")
+   + recent garden observations ("Recently observed"). Same Notion calm —
+   hairlines, hierarchy by typography + whitespace, color only for status. A
+   calm legible list IS the design (no graph viz). */
+
+.inside {
+  max-width: var(--col-w);
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
+}
+
+.inside__heading {
+  margin: 0;
+  font-size: 1.5rem;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+
+.inside__lede {
+  margin: -18px 0 0;
+  font-size: 0.92rem;
+  color: var(--ink-2);
+}
+
+.inside__loading-note {
+  color: var(--ink-3);
+  font-size: 0.9rem;
+}
+
+.inside-empty {
+  background: var(--surface);
+  border: 1px solid var(--hair-strong);
+  border-radius: var(--radius);
+  padding: 22px 20px;
+}
+
+.inside-empty__line {
+  margin: 0;
+  font-size: 0.95rem;
+  font-weight: 550;
+}
+
+.inside-empty__sub {
+  margin: 6px 0 0;
+  font-size: 0.85rem;
+  color: var(--ink-3);
+}
+
+.inside-block__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.inside-block__head .section-label {
+  margin: 0;
+}
+
+.inside-block__count {
+  min-width: 18px;
+  height: 18px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--accent-bg);
+  color: var(--ink-2);
+  font-size: 0.7rem;
+  font-weight: 600;
+  display: grid;
+  place-items: center;
+}
+
+.inside-block__note {
+  margin: 0;
+  padding: 16px 18px;
+  background: var(--surface);
+  border: 1px solid var(--hair-strong);
+  border-radius: var(--radius);
+  font-size: 0.85rem;
+  color: var(--ink-3);
+}
+
+.inside-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  background: var(--surface);
+  border: 1px solid var(--hair-strong);
+  border-radius: var(--radius);
+}
+
+.inside-row {
+  padding: 14px 18px;
+  border-top: 1px solid var(--hair);
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.inside-row:first-child {
+  border-top: none;
+}
+
+.inside-row__head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.inside-row__name {
+  font-size: 0.92rem;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.inside-row__mentions,
+.inside-row__when {
+  margin-left: auto;
+  flex: none;
+  font-size: 0.74rem;
+  color: var(--ink-3);
+}
+
+.inside-row__summary {
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--ink-2);
+}
+
+.inside-tags {
+  list-style: none;
+  margin: 2px 0 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.inside-tag {
+  font-size: 0.72rem;
+  color: var(--ink-2);
+  background: var(--accent-bg);
+  border-radius: 999px;
+  padding: 2px 9px;
+}
+
 /* ── Mobile ─────────────────────────────────────────────────────────────── */
 
 @media (max-width: 767px) {
@@ -979,8 +1128,13 @@ main.login {
     gap: 26px;
   }
 
-  .brief__heading {
+  .brief__heading,
+  .inside__heading {
     display: none; /* the top bar already shows the title on mobile */
+  }
+
+  .inside__lede {
+    margin-top: 0;
   }
 
   .tabbar {
