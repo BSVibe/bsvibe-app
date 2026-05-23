@@ -12,6 +12,7 @@ from backend.api.v1 import (
     connectors,
     decisions,
     deliverables,
+    inside,
     intents,
     messages,
     presets,
@@ -47,5 +48,6 @@ router.include_router(runs.router, prefix="/runs", tags=["runs"])
 router.include_router(deliverables.router, prefix="/deliverables", tags=["deliverables"])
 router.include_router(messages.router, prefix="/messages", tags=["messages"])
 router.include_router(safemode.router, prefix="/safemode", tags=["safemode"])
+router.include_router(inside.router, prefix="/inside", tags=["inside"])
 
 __all__ = ["router"]
