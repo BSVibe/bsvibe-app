@@ -68,6 +68,10 @@ services:
       args:
         GIT_SHA: ${GIT_SHA:-dev}
     restart: unless-stopped
+    # Override the migrate-on-boot entrypoint: only the `backend` (api) service
+    # runs `alembic upgrade head`, so the worker never races it. The worker
+    # starts directly into the daemon.
+    entrypoint: []
     command: ["uv", "run", "python", "-m", "backend.workers"]
     environment:
       BSVIBE_DATABASE_URL: postgresql+asyncpg://bsvibe:bsvibe@postgres:5432/bsvibe

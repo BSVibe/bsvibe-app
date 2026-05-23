@@ -15,10 +15,21 @@ COPY pyproject.toml uv.lock ./
 COPY backend/ ./backend/
 RUN uv sync --no-dev --frozen
 
+# alembic.ini lives at the repo root; the backend image needs it (+ the
+# migration scripts under backend/data/migrations, already copied above) so
+# the entrypoint can run `alembic upgrade head` on boot.
+COPY alembic.ini ./
+COPY deploy/entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh
+
 ARG GIT_SHA=dev
 ENV BSVIBE_GIT_SHA=${GIT_SHA}
 
 EXPOSE 8000
 
+# The entrypoint runs `alembic upgrade head` then execs the CMD. The worker
+# service overrides the command (and bypasses migrations by design) so only the
+# API service migrates — see deploy/compose*.yaml + deploy/README.md.
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 CMD ["uv", "run", "uvicorn", "backend.api.main:create_app", \
      "--factory", "--host", "0.0.0.0", "--port", "8000"]

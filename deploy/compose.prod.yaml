@@ -1,0 +1,85 @@
+# BSVibe — PRODUCTION compose OVERRIDE.
+#
+# Layered on top of deploy/compose.yaml; it overrides the dev hardcodes with
+# env-driven values, drops the public PG/Redis port publishing, and adds a
+# persistent volume for the filesystem roots (vault / skills / runs).
+#
+# Usage (from the repo root):
+#   docker compose -f deploy/compose.yaml -f deploy/compose.prod.yaml \
+#     --env-file deploy/.env.prod up -d
+#
+# The base compose.yaml stays the source of build context, service names,
+# healthchecks, and depends_on; this file ONLY changes prod-relevant settings.
+# See deploy/README.md for the full runbook.
+
+services:
+  postgres:
+    environment:
+      POSTGRES_USER: bsvibe
+      POSTGRES_PASSWORD: ${BSVIBE_DB_PASSWORD:?set BSVIBE_DB_PASSWORD in .env.prod}
+      POSTGRES_DB: bsvibe
+    # Do NOT publish 5432 to the host in prod — only the internal compose
+    # network reaches it. (`!reset []` clears the dev port mapping.)
+    ports: !reset []
+
+  redis:
+    # Same: keep Redis internal-only.
+    ports: !reset []
+
+  backend:
+    environment:
+      BSVIBE_DATABASE_URL: ${BSVIBE_DATABASE_URL:?set BSVIBE_DATABASE_URL}
+      BSVIBE_REDIS_URL: ${BSVIBE_REDIS_URL:-redis://redis:6379/0}
+      BSVIBE_ENVIRONMENT: ${BSVIBE_ENVIRONMENT:-prod}
+      BSVIBE_WORKER_MODE: ${BSVIBE_WORKER_MODE:-db_polling}
+      BSVIBE_GIT_SHA: ${GIT_SHA:-prod}
+      BSVIBE_GATEWAY_KMS_KEY_B64: ${BSVIBE_GATEWAY_KMS_KEY_B64:?set BSVIBE_GATEWAY_KMS_KEY_B64}
+      BSVIBE_SUPABASE_URL: ${BSVIBE_SUPABASE_URL:?set BSVIBE_SUPABASE_URL}
+      BSVIBE_SUPABASE_ANON_KEY: ${BSVIBE_SUPABASE_ANON_KEY:?set BSVIBE_SUPABASE_ANON_KEY}
+      BSVIBE_DEFAULT_WORKSPACE_REGION: ${BSVIBE_DEFAULT_WORKSPACE_REGION:-us-1}
+      BSVIBE_KNOWLEDGE_VAULT_ROOT: ${BSVIBE_KNOWLEDGE_VAULT_ROOT:-/app/var/vault}
+      BSVIBE_KNOWLEDGE_DEFAULT_REGION: ${BSVIBE_KNOWLEDGE_DEFAULT_REGION:-us-1}
+      BSVIBE_SKILLS_ROOT: ${BSVIBE_SKILLS_ROOT:-/app/var/skills}
+      BSVIBE_RUN_WORKSPACE_ROOT: ${BSVIBE_RUN_WORKSPACE_ROOT:-/app/var/runs}
+      BSVIBE_AUDIT_RELAY_URL: ${BSVIBE_AUDIT_RELAY_URL:-}
+      # Sandbox stays off until the LLM phase (see runbook staged rollout).
+      BSVIBE_SANDBOX_ENABLED: ${BSVIBE_SANDBOX_ENABLED:-false}
+      BSVIBE_SANDBOX_IMAGE: ${BSVIBE_SANDBOX_IMAGE:-bsvibe-sandbox:latest}
+      BSVIBE_DOCKER_HOST: ${BSVIBE_DOCKER_HOST:-}
+    volumes:
+      - appdata:/app/var
+
+  worker:
+    # Staged rollout: scale to 0 to bring up api+auth first (UI testing), then
+    # `docker compose ... up -d --scale worker=1` for the LLM/execution phase.
+    # The entrypoint override (in compose.yaml) keeps the worker from migrating.
+    environment:
+      BSVIBE_DATABASE_URL: ${BSVIBE_DATABASE_URL:?set BSVIBE_DATABASE_URL}
+      BSVIBE_REDIS_URL: ${BSVIBE_REDIS_URL:-redis://redis:6379/0}
+      BSVIBE_ENVIRONMENT: ${BSVIBE_ENVIRONMENT:-prod}
+      BSVIBE_WORKER_MODE: ${BSVIBE_WORKER_MODE:-db_polling}
+      BSVIBE_GIT_SHA: ${GIT_SHA:-prod}
+      BSVIBE_GATEWAY_KMS_KEY_B64: ${BSVIBE_GATEWAY_KMS_KEY_B64:?set BSVIBE_GATEWAY_KMS_KEY_B64}
+      BSVIBE_SUPABASE_URL: ${BSVIBE_SUPABASE_URL:?set BSVIBE_SUPABASE_URL}
+      BSVIBE_SUPABASE_ANON_KEY: ${BSVIBE_SUPABASE_ANON_KEY:?set BSVIBE_SUPABASE_ANON_KEY}
+      BSVIBE_DEFAULT_WORKSPACE_REGION: ${BSVIBE_DEFAULT_WORKSPACE_REGION:-us-1}
+      BSVIBE_KNOWLEDGE_VAULT_ROOT: ${BSVIBE_KNOWLEDGE_VAULT_ROOT:-/app/var/vault}
+      BSVIBE_KNOWLEDGE_DEFAULT_REGION: ${BSVIBE_KNOWLEDGE_DEFAULT_REGION:-us-1}
+      BSVIBE_SKILLS_ROOT: ${BSVIBE_SKILLS_ROOT:-/app/var/skills}
+      BSVIBE_RUN_WORKSPACE_ROOT: ${BSVIBE_RUN_WORKSPACE_ROOT:-/app/var/runs}
+      BSVIBE_AUDIT_RELAY_URL: ${BSVIBE_AUDIT_RELAY_URL:-}
+      BSVIBE_SANDBOX_ENABLED: ${BSVIBE_SANDBOX_ENABLED:-false}
+      BSVIBE_SANDBOX_IMAGE: ${BSVIBE_SANDBOX_IMAGE:-bsvibe-sandbox:latest}
+      BSVIBE_DOCKER_HOST: ${BSVIBE_DOCKER_HOST:-}
+    volumes:
+      - appdata:/app/var
+
+  pwa:
+    # PWA is normally deployed on Vercel (native Next build, NOT Dockerfile.pwa).
+    # If you DO run the containerized PWA, point it at the backend's PUBLIC URL.
+    # Scale to 0 by default for the Vercel path: `... up -d --scale pwa=0`.
+    environment:
+      NEXT_PUBLIC_BACKEND_URL: ${NEXT_PUBLIC_BACKEND_URL:-http://backend:8000}
+
+volumes:
+  appdata:
