@@ -360,3 +360,130 @@ async def test_unsupported_event_accepted_but_no_trigger_event(
     assert resp.status_code == 202, resp.text
     assert resp.json() == {"accepted": True, "skipped": True}
     assert await _trigger_events(sf, workspace_id) == []
+
+
+# --------------------------------------------------------------------------
+# Sentry signing helpers (mirror the sentry plugin's test helper) + the
+# connector-inbound path for the newly wired ``sentry`` connector.
+# --------------------------------------------------------------------------
+
+SENTRY_SECRET = "shhh-client-secret"
+
+
+def _sentry_sign(secret: str, body: bytes) -> str:
+    """Compute the bare-hex HMAC-SHA256 signature Sentry sends (no prefix)."""
+    return hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
+
+
+def _sentry_headers(secret: str, body: bytes, *, resource: str = "issue") -> dict[str, str]:
+    return {
+        "Sentry-Hook-Signature": _sentry_sign(secret, body),
+        "Sentry-Hook-Resource": resource,
+        "Content-Type": "application/json",
+    }
+
+
+def _sentry_issue_body(issue_id: str = "100001", *, hook_id: str = "WH-1") -> bytes:
+    return json.dumps(
+        {
+            "id": hook_id,
+            "action": "created",
+            "data": {
+                "issue": {
+                    "id": issue_id,
+                    "title": "TypeError: undefined is not a function",
+                    "culprit": "app/main.py in handler",
+                    "level": "error",
+                    "permalink": f"https://sentry.io/org/proj/issues/{issue_id}/",
+                    "project": "proj",
+                }
+            },
+        }
+    ).encode()
+
+
+@pytest_asyncio.fixture
+async def seeded_sentry_token(
+    sf: async_sessionmaker[AsyncSession],
+    cipher: CredentialCipher,
+    workspace_id: uuid.UUID,
+) -> str:
+    """Seed an active sentry connector_account; return its webhook_token."""
+    token = "wht_" + base64.urlsafe_b64encode(os.urandom(24)).decode().rstrip("=")
+    async with sf() as s:
+        s.add(
+            ConnectorAccountRow(
+                id=uuid.uuid4(),
+                workspace_id=workspace_id,
+                connector="sentry",
+                webhook_token=token,
+                signing_secret_ciphertext=cipher.encrypt(SENTRY_SECRET),
+                external_ref="org/proj",
+                is_active=True,
+            )
+        )
+        await s.commit()
+    return token
+
+
+async def test_signed_sentry_issue_lands_one_trigger_event(
+    client: httpx.AsyncClient,
+    sf: async_sessionmaker[AsyncSession],
+    workspace_id: uuid.UUID,
+    seeded_sentry_token: str,
+) -> None:
+    body = _sentry_issue_body("100001", hook_id="WH-42")
+    resp = await client.post(
+        f"/api/webhooks/sentry/{seeded_sentry_token}",
+        content=body,
+        headers=_sentry_headers(SENTRY_SECRET, body),
+    )
+    assert resp.status_code == 202, resp.text
+    assert resp.json() == {"accepted": True, "duplicate": False}
+
+    events = await _trigger_events(sf, workspace_id)
+    assert len(events) == 1
+    evt = events[0]
+    assert evt.source == "sentry"
+    assert evt.workspace_id == workspace_id
+    assert evt.trigger_kind.value == "webhook"
+    assert evt.idempotency_key == "sentry:issue:WH-42"
+    assert evt.payload["sentry_resource"] == "issue"
+    assert evt.payload["issue_id"] == "100001"
+
+
+async def test_sentry_bad_signature_is_401_no_trigger_event(
+    client: httpx.AsyncClient,
+    sf: async_sessionmaker[AsyncSession],
+    workspace_id: uuid.UUID,
+    seeded_sentry_token: str,
+) -> None:
+    body = _sentry_issue_body()
+    # Sign with the wrong secret → SentrySignatureError → 401.
+    headers = _sentry_headers("WRONG-secret", body)
+    resp = await client.post(
+        f"/api/webhooks/sentry/{seeded_sentry_token}",
+        content=body,
+        headers=headers,
+    )
+    assert resp.status_code == 401, resp.text
+    assert await _trigger_events(sf, workspace_id) == []
+
+
+async def test_sentry_unsupported_resource_accepted_but_no_trigger_event(
+    client: httpx.AsyncClient,
+    sf: async_sessionmaker[AsyncSession],
+    workspace_id: uuid.UUID,
+    seeded_sentry_token: str,
+) -> None:
+    """A verified delivery whose ``Sentry-Hook-Resource`` is not acted on
+    (e.g. ``installation``) → 202 benign skip, no TriggerEvent."""
+    body = _sentry_issue_body()
+    resp = await client.post(
+        f"/api/webhooks/sentry/{seeded_sentry_token}",
+        content=body,
+        headers=_sentry_headers(SENTRY_SECRET, body, resource="installation"),
+    )
+    assert resp.status_code == 202, resp.text
+    assert resp.json() == {"accepted": True, "skipped": True}
+    assert await _trigger_events(sf, workspace_id) == []
