@@ -1,5 +1,6 @@
-import Settings from "@/components/settings/Settings";
+import { redirect } from "next/navigation";
 
+/** `/settings` lands on the General tab. */
 export default function SettingsPage() {
-  return <Settings />;
+  redirect("/settings/general");
 }

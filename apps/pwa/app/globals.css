@@ -26,6 +26,30 @@
   font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
 
+/* Dark token set — applied when the theme controller resolves a dark theme and
+   sets <html data-theme="dark"> (light is the default :root above). A warm
+   near-black palette (not pure #000), inverted ink ramp, and status colors
+   nudged brighter/cooler so they stay legible on dark. Layout tokens
+   (--rail-w/--col-w/--radius*) are shared, so they are NOT redeclared here. */
+:root[data-theme="dark"] {
+  --bg: #1c1b19;
+  --surface: #262522;
+  --ink: #ebe9e4;
+  --ink-2: #b3b0a8;
+  --ink-3: #807d76;
+  --hair: #34322e;
+  --hair-strong: #403d38;
+  --accent-bg: #34322e;
+
+  --amber-ink: #e0a458;
+  --amber-dot: #e0922e;
+  --green-ink: #7cc08c;
+  --green-dot: #5ba877;
+  --green-pill-bg: #243027;
+
+  color-scheme: dark;
+}
+
 * {
   box-sizing: border-box;
 }
@@ -1585,7 +1609,7 @@ main.login {
   margin: 0 auto;
   display: flex;
   flex-direction: column;
-  gap: 28px;
+  gap: 18px;
 }
 
 .settings__heading {
@@ -1599,6 +1623,185 @@ main.login {
   margin: -18px 0 0;
   font-size: 0.92rem;
   color: var(--ink-2);
+}
+
+.settings__body {
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
+}
+
+/* ── Settings tab bar (5-tab IA) ──────────────────────────────────────────── */
+.settings-tabs {
+  display: flex;
+  gap: 4px;
+  border-bottom: 1px solid var(--hair-strong);
+  overflow-x: auto;
+}
+
+.settings-tabs__tab {
+  padding: 8px 12px 11px;
+  margin-bottom: -1px;
+  border-bottom: 2px solid transparent;
+  color: var(--ink-3);
+  font-size: 0.88rem;
+  font-weight: 520;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.settings-tabs__tab:hover {
+  color: var(--ink-2);
+}
+
+.settings-tabs__tab[aria-current="page"] {
+  color: var(--ink);
+  border-bottom-color: var(--ink);
+  font-weight: 600;
+}
+
+/* ── General tab ──────────────────────────────────────────────────────────── */
+.general-tab {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.general-tab__lede {
+  margin: 0 0 14px;
+  font-size: 0.9rem;
+  color: var(--ink-2);
+}
+
+.settings-field {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 16px 2px;
+  border-bottom: 1px solid var(--hair);
+}
+
+.settings-field:last-child {
+  border-bottom: none;
+}
+
+.settings-field__label {
+  font-size: 0.88rem;
+  color: var(--ink-2);
+}
+
+.settings-field__value {
+  font-size: 0.9rem;
+  color: var(--ink);
+  font-weight: 540;
+  text-align: right;
+}
+
+.settings-field__mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.8rem;
+  color: var(--ink-2);
+  background: var(--accent-bg);
+  padding: 3px 8px;
+  border-radius: var(--radius-sm);
+  word-break: break-all;
+}
+
+.settings-field__control {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+}
+
+.settings-field__select {
+  font: inherit;
+  font-size: 0.88rem;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--hair-strong);
+  border-radius: var(--radius-sm);
+  padding: 7px 10px;
+  min-width: 200px;
+}
+
+.settings-field__caption {
+  font-size: 0.74rem;
+  color: var(--ink-3);
+  max-width: 260px;
+  text-align: right;
+}
+
+/* Theme segmented control (Light / System / Dark) */
+.theme-segmented {
+  display: inline-flex;
+  margin: 0;
+  padding: 2px;
+  border: none;
+  background: var(--accent-bg);
+  border-radius: var(--radius-sm);
+}
+
+.theme-segmented__legend {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.theme-segmented__option {
+  display: inline-flex;
+  align-items: center;
+  border: none;
+  background: transparent;
+  color: var(--ink-2);
+  font-size: 0.82rem;
+  font-weight: 520;
+  padding: 6px 14px;
+  border-radius: 5px;
+  cursor: pointer;
+}
+
+.theme-segmented__input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+}
+
+.theme-segmented__input:focus-visible + * {
+  outline: 2px solid var(--ink);
+}
+
+.theme-segmented__option--on {
+  background: var(--surface);
+  color: var(--ink);
+  box-shadow: 0 1px 2px rgba(15, 15, 15, 0.12);
+}
+
+/* Coming-soon stub tabs (Notifications / Account) */
+.settings-stub {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.settings-stub__note {
+  margin: 0;
+  padding: 16px 18px;
+  background: var(--surface);
+  border: 1px solid var(--hair-strong);
+  border-radius: var(--radius);
+  font-size: 0.86rem;
+  color: var(--ink-3);
 }
 
 .connectors {
