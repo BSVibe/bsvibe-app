@@ -43,7 +43,7 @@ from typing import Any, Literal, Protocol, runtime_checkable
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.config import get_settings
+from backend.config import Settings, get_settings
 from backend.execution.db import (
     Decision,
     Deliverable,
@@ -191,16 +191,25 @@ class RunOrchestrator:
         sandbox_manager: SandboxManager,
         max_cycles: int | None = None,
         retriever: CanonRetriever | None = None,
+        redis_client: Any = None,
+        settings: Settings | None = None,
     ) -> None:
         self._session = session
         self._llm = llm
         self._sandbox_manager = sandbox_manager
+        self._settings = settings or get_settings()
         # Round cap: explicit override wins; otherwise the env-overridable
         # Settings knob (promoted in Round 9). Defaults tuned for local LLMs.
         self._max_cycles = (
-            max_cycles if max_cycles is not None else get_settings().execution_work_round_budget
+            max_cycles if max_cycles is not None else self._settings.execution_work_round_budget
         )
         self._retriever = retriever
+        # Optional — only supplied in worker_mode="redis_streams" (the worker
+        # runtime threads its client through the orchestrator factory). ``None``
+        # (the default, incl. every existing caller/test) keeps DB-polling
+        # behaviour: the verified terminal emits no stream notification. Emission
+        # is gated + soft-fail inside :func:`emit_stream_notification`.
+        self._redis_client = redis_client
 
     async def run(self, *, run: ExecutionRun, workspace_dir: Path) -> LoopResult:
         project_id = run.product_id or run.id
@@ -577,6 +586,37 @@ class RunOrchestrator:
         }
         await self._record(run, attempt, "settle", settle_payload)
         await self._session.flush()
+
+        # Wake the delivery + settle consumers (worker_mode="redis_streams"
+        # only). The DeliveryEventRow + settle ExecutionRunActivity are the
+        # source of truth — already flushed above; the XADD is only a wake-up so
+        # the consumer ticks immediately instead of waiting for the next DB poll.
+        # Gated (no-op + no Redis touched in db_polling — the default) and
+        # soft-fail (a Redis hiccup never reverts the verified terminal: emission
+        # only logs + returns False). DB-polling remains the safety net. The
+        # emit helper is imported LOCALLY (``backend.workers`` pulls in
+        # ``agent_worker`` which imports this module → a module-level import
+        # would be a cycle; the local import breaks it, same as the
+        # ``DeliveryEventRow`` import above).
+        from backend.workers.emit import (  # noqa: PLC0415 — cross-domain, breaks import cycle
+            STREAM_DELIVER,
+            STREAM_SETTLE,
+            emit_stream_notification,
+        )
+
+        await emit_stream_notification(
+            self._redis_client,
+            settings=self._settings,
+            stream=STREAM_DELIVER,
+            fields={"workspace_id": str(run.workspace_id), "deliverable_id": str(deliverable.id)},
+        )
+        await emit_stream_notification(
+            self._redis_client,
+            settings=self._settings,
+            stream=STREAM_SETTLE,
+            fields={"workspace_id": str(run.workspace_id), "run_id": str(run.id)},
+        )
+
         logger.info(
             "run_orchestrator_verified",
             run_id=str(run.id),

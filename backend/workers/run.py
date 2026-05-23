@@ -216,6 +216,7 @@ def build_agent_execution_deps(
     *,
     settings: Settings | None = None,
     sandbox_manager: SandboxManager | None = None,
+    redis_client: Any = None,
 ) -> AgentExecutionDeps:
     """The production execution backend for :class:`AgentWorker`.
 
@@ -235,6 +236,11 @@ def build_agent_execution_deps(
 
     ``sandbox_manager`` may be injected (tests pass a Noop manager / CI runs
     without Docker); otherwise it is resolved from settings.
+
+    ``redis_client`` (only set in ``worker_mode="redis_streams"``) is threaded
+    into each per-run :class:`RunOrchestrator` so the verified terminal emits
+    the ``deliver`` + ``settle`` wake-up notifications. ``None`` (the default)
+    keeps the pure DB-polling behaviour — the orchestrator emits nothing.
     """
     settings = settings or get_settings()
     box: SandboxManager = sandbox_manager or build_sandbox_manager() or NoopSandboxManager()
@@ -256,7 +262,13 @@ def build_agent_execution_deps(
             account_id=account.account_id,
             model_account_id=account.id,
         )
-        return RunOrchestrator(session=session, llm=llm, sandbox_manager=box)
+        return RunOrchestrator(
+            session=session,
+            llm=llm,
+            sandbox_manager=box,
+            redis_client=redis_client,
+            settings=settings,
+        )
 
     # github delivery path: a run whose workspace has a github connector binding
     # WORKS INSIDE a clone of the target repo (so its file edits build a real PR
@@ -598,7 +610,7 @@ async def run_workers() -> None:
     if settings.worker_mode == "redis_streams":
         redis_client = redis_aio.from_url(settings.redis_url, decode_responses=True)
 
-    execution = build_agent_execution_deps(settings=settings)
+    execution = build_agent_execution_deps(settings=settings, redis_client=redis_client)
     delivery_adapter = await build_delivery_adapter(session_factory=session_factory)
     runtime = build_worker_runtime(
         session_factory=session_factory,
