@@ -1,13 +1,24 @@
 /**
- * Connectors surface — the Settings → Connectors section. Drives the real
+ * Connectors catalog surface — the Settings → Connectors section, reframed as a
+ * catalog (CONNECTED cards / AVAILABLE cards / custom-MCP). Drives the real
  * list/create/revoke clients against a mocked fetch and asserts:
  *
- *  - empty state when no connectors exist
- *  - list renders each connector (name, external_ref, masked hint, active)
- *  - Add: POST fires with the form body; the one-time webhook_url + token are
- *    shown prominently with a "won't see this again" note, then a re-read fires
+ *  - empty CONNECTED state when no connectors exist (calm note, no cards)
+ *  - CONNECTED renders a card per active connector (name, ref, masked hint,
+ *    "Connected" pill) with a real Revoke and a disabled (coming-soon) Configure
+ *  - AVAILABLE renders the not-yet-connected supported connectors as ENABLED
+ *    "Connect" cards, and the aspirational services (Figma/Linear/…) + the
+ *    custom-MCP card as DISABLED "coming soon" controls
+ *  - Connect → opens the create panel pre-selected → POST fires with the form
+ *    body → the one-time webhook_url + token are shown with a "won't see again"
+ *    note → a re-read fires
  *  - Revoke: confirm → DELETE fires → re-read fires
  *  - calm inline error states (create + revoke) never crash the surface
+ *
+ * Determinism note: the connector list loads asynchronously on mount, so every
+ * assertion that depends on it is gated behind `findBy*`/`waitFor` — we never
+ * read a synchronous `getByText` immediately after `render`. This removes the
+ * race that made the previous (row-list) version of this test flaky.
  */
 
 import Connectors from "@/components/settings/Connectors";
@@ -41,7 +52,7 @@ const GITHUB_ROW = {
   token_hint: "...wxyz",
 };
 
-describe("Connectors surface", () => {
+describe("Connectors catalog surface", () => {
   beforeEach(() => {
     clearSession();
     setSession(SESSION);
@@ -51,31 +62,87 @@ describe("Connectors surface", () => {
     vi.restoreAllMocks();
   });
 
-  it("shows a calm empty state when there are no connectors", async () => {
+  it("keeps the Connectors heading so the tab host can find it", async () => {
+    global.fetch = vi.fn(async () => jsonResponse([])) as unknown as typeof fetch;
+    render(<Connectors />);
+    expect(screen.getByRole("heading", { name: /connectors/i })).toBeInTheDocument();
+    // Settle the async load so the test doesn't leak an unawaited state update.
+    await screen.findByText(/Nothing connected yet/i);
+  });
+
+  it("shows a calm empty CONNECTED state when there are no connectors", async () => {
     global.fetch = vi.fn(async () => jsonResponse([])) as unknown as typeof fetch;
 
     render(<Connectors />);
 
-    await waitFor(() => {
-      expect(screen.getByText(/No connectors yet/i)).toBeInTheDocument();
-    });
+    expect(await screen.findByText(/Nothing connected yet/i)).toBeInTheDocument();
   });
 
-  it("lists registered connectors with name, ref, masked hint and active state", async () => {
+  it("renders a CONNECTED card per active connector with name, ref, masked hint and pill", async () => {
     global.fetch = vi.fn(async () => jsonResponse([GITHUB_ROW])) as unknown as typeof fetch;
 
     render(<Connectors />);
 
-    await waitFor(() => {
-      expect(screen.getByText("github")).toBeInTheDocument();
-    });
-    expect(screen.getByText("acme/widgets")).toBeInTheDocument();
-    expect(screen.getByText("...wxyz")).toBeInTheDocument();
-    expect(screen.getByText(/Active/i)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /Revoke/i })).toBeInTheDocument();
+    const connected = await screen.findByRole("list", { name: /connected/i });
+    expect(within(connected).getByText("github")).toBeInTheDocument();
+    expect(within(connected).getByText("acme/widgets")).toBeInTheDocument();
+    expect(within(connected).getByText("...wxyz")).toBeInTheDocument();
+    expect(within(connected).getByText(/^Connected$/i)).toBeInTheDocument();
+    // Real revoke action present.
+    expect(within(connected).getByRole("button", { name: /^Revoke$/i })).toBeInTheDocument();
   });
 
-  it("creates a connector, shows the one-time webhook URL + token, then re-reads", async () => {
+  it("disables Configure on a connected card (no update API yet)", async () => {
+    global.fetch = vi.fn(async () => jsonResponse([GITHUB_ROW])) as unknown as typeof fetch;
+
+    render(<Connectors />);
+
+    const connected = await screen.findByRole("list", { name: /connected/i });
+    const configure = within(connected).getByRole("button", { name: /^Configure$/i });
+    expect(configure).toBeDisabled();
+    expect(configure).toHaveAttribute("title");
+  });
+
+  it("renders not-yet-connected supported connectors as enabled Connect cards", async () => {
+    // github is connected; the rest of KNOWN_CONNECTORS are available.
+    global.fetch = vi.fn(async () => jsonResponse([GITHUB_ROW])) as unknown as typeof fetch;
+
+    render(<Connectors />);
+
+    const available = await screen.findByRole("list", { name: /available/i });
+    // notion is supported and not connected → an enabled Connect card.
+    const notionCard = within(available).getByText("Notion").closest("li") as HTMLElement;
+    expect(within(notionCard).getByRole("button", { name: /^Connect$/i })).toBeEnabled();
+    // github is connected → it must NOT appear in Available as a Connect card.
+    expect(within(available).queryByText("github")).not.toBeInTheDocument();
+  });
+
+  it("renders aspirational services as disabled coming-soon cards", async () => {
+    global.fetch = vi.fn(async () => jsonResponse([])) as unknown as typeof fetch;
+
+    render(<Connectors />);
+
+    const available = await screen.findByRole("list", { name: /available/i });
+    for (const name of ["Figma", "Linear", "Google Drive", "PowerPoint", "Postgres"]) {
+      const card = within(available).getByText(name).closest("li") as HTMLElement;
+      const btn = within(card).getByRole("button", { name: /^Connect$/i });
+      expect(btn).toBeDisabled();
+      expect(btn).toHaveAttribute("title");
+    }
+  });
+
+  it("renders the custom-MCP card with a disabled coming-soon Add custom button", async () => {
+    global.fetch = vi.fn(async () => jsonResponse([])) as unknown as typeof fetch;
+
+    render(<Connectors />);
+
+    await screen.findByText(/Nothing connected yet/i);
+    const addCustom = screen.getByRole("button", { name: /add custom/i });
+    expect(addCustom).toBeDisabled();
+    expect(addCustom).toHaveAttribute("title");
+  });
+
+  it("Connect → opens the create panel, fires POST with the body, reveals the one-time token, then re-reads", async () => {
     const created = {
       id: "22222222-2222-2222-2222-222222222222",
       connector: "notion",
@@ -97,10 +164,16 @@ describe("Connectors surface", () => {
     global.fetch = fetchMock as unknown as typeof fetch;
 
     render(<Connectors />);
-    await waitFor(() => expect(screen.getByText(/No connectors yet/i)).toBeInTheDocument());
 
-    // Fill the form
-    await userEvent.selectOptions(screen.getByLabelText("Connector"), "notion");
+    // Open the create panel from notion's Connect card.
+    const available = await screen.findByRole("list", { name: /available/i });
+    const notionCard = within(available).getByText("Notion").closest("li") as HTMLElement;
+    await userEvent.click(within(notionCard).getByRole("button", { name: /^Connect$/i }));
+
+    // The panel is pre-selected to notion.
+    const select = (await screen.findByLabelText("Connector")) as HTMLSelectElement;
+    expect(select.value).toBe("notion");
+
     await userEvent.type(screen.getByLabelText(/Signing secret/i), "shh");
     await userEvent.type(screen.getByLabelText(/Reference/i), "ops");
     // fireEvent.change sets the textarea value directly — userEvent.type would
@@ -137,7 +210,10 @@ describe("Connectors surface", () => {
     global.fetch = fetchMock as unknown as typeof fetch;
 
     render(<Connectors />);
-    await waitFor(() => expect(screen.getByText(/No connectors yet/i)).toBeInTheDocument());
+
+    const available = await screen.findByRole("list", { name: /available/i });
+    const notionCard = within(available).getByText("Notion").closest("li") as HTMLElement;
+    await userEvent.click(within(notionCard).getByRole("button", { name: /^Connect$/i }));
 
     await userEvent.type(screen.getByLabelText(/Signing secret/i), "shh");
     fireEvent.change(screen.getByLabelText(/Delivery config/i), {
@@ -158,7 +234,10 @@ describe("Connectors surface", () => {
     global.fetch = fetchMock as unknown as typeof fetch;
 
     render(<Connectors />);
-    await waitFor(() => expect(screen.getByText(/No connectors yet/i)).toBeInTheDocument());
+
+    const available = await screen.findByRole("list", { name: /available/i });
+    const notionCard = within(available).getByText("Notion").closest("li") as HTMLElement;
+    await userEvent.click(within(notionCard).getByRole("button", { name: /^Connect$/i }));
 
     await userEvent.type(screen.getByLabelText(/Signing secret/i), "shh");
     await userEvent.click(screen.getByRole("button", { name: /^Add connector$/i }));
@@ -167,7 +246,7 @@ describe("Connectors surface", () => {
     expect(screen.getByRole("button", { name: /^Add connector$/i })).toBeEnabled();
   });
 
-  it("revokes a connector after confirm → DELETE → re-read", async () => {
+  it("revokes a connected connector after confirm → DELETE → re-read", async () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(jsonResponse([GITHUB_ROW]))
@@ -176,17 +255,13 @@ describe("Connectors surface", () => {
     global.fetch = fetchMock as unknown as typeof fetch;
 
     render(<Connectors />);
-    const list = await screen.findByRole("list");
-    await waitFor(() => expect(within(list).getByText("github")).toBeInTheDocument());
 
-    const row = within(list).getByText("github").closest("li");
-    if (!row) throw new Error("connector row not found");
-    await userEvent.click(within(row as HTMLElement).getByRole("button", { name: /^Revoke$/i }));
+    const connected = await screen.findByRole("list", { name: /connected/i });
+    const card = within(connected).getByText("github").closest("li") as HTMLElement;
+    await userEvent.click(within(card).getByRole("button", { name: /^Revoke$/i }));
 
     // Confirm affordance appears; clicking it fires the DELETE.
-    const confirm = await within(row as HTMLElement).findByRole("button", {
-      name: /^Confirm revoke$/i,
-    });
+    const confirm = await within(card).findByRole("button", { name: /^Confirm revoke$/i });
     await userEvent.click(confirm);
 
     await waitFor(() => {
@@ -198,7 +273,7 @@ describe("Connectors surface", () => {
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
   });
 
-  it("shows a calm inline error when revoke fails — row stays actionable", async () => {
+  it("shows a calm inline error when revoke fails — card stays actionable", async () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(jsonResponse([GITHUB_ROW]))
@@ -206,14 +281,13 @@ describe("Connectors surface", () => {
     global.fetch = fetchMock as unknown as typeof fetch;
 
     render(<Connectors />);
-    const list = await screen.findByRole("list");
-    await waitFor(() => expect(within(list).getByText("github")).toBeInTheDocument());
 
-    const row = within(list).getByText("github").closest("li") as HTMLElement;
-    await userEvent.click(within(row).getByRole("button", { name: /^Revoke$/i }));
-    await userEvent.click(within(row).getByRole("button", { name: /^Confirm revoke$/i }));
+    const connected = await screen.findByRole("list", { name: /connected/i });
+    const card = within(connected).getByText("github").closest("li") as HTMLElement;
+    await userEvent.click(within(card).getByRole("button", { name: /^Revoke$/i }));
+    await userEvent.click(within(card).getByRole("button", { name: /^Confirm revoke$/i }));
 
-    expect(await within(row).findByText(/Couldn.t revoke/i)).toBeInTheDocument();
+    expect(await within(card).findByText(/Couldn.t revoke/i)).toBeInTheDocument();
   });
 
   it("surfaces a calm note when the list read fails", async () => {
@@ -223,8 +297,6 @@ describe("Connectors surface", () => {
 
     render(<Connectors />);
 
-    await waitFor(() => {
-      expect(screen.getByText(/Couldn.t load your connectors/i)).toBeInTheDocument();
-    });
+    expect(await screen.findByText(/Couldn.t load your connectors/i)).toBeInTheDocument();
   });
 });

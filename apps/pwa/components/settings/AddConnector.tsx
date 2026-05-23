@@ -21,15 +21,27 @@ type FormState = "idle" | "submitting" | "error";
  *
  * `createConnector` is injected (defaults to the real client) so the surface is
  * unit-testable against a mocked fetch without monkey-patching the module.
+ *
+ * Additive props for the catalog Connect flow: `initialConnector` pre-selects
+ * the picker (so "Connect" on a card opens this panel already pointed at that
+ * service — the founder can still change it), and `onCancel`, when present,
+ * renders a Cancel control so the panel can be dismissed (it's hosted in a
+ * modal). Both default to the standalone form's prior behaviour.
  */
 export default function AddConnector({
   onCreated,
   createConnector,
+  initialConnector,
+  onCancel,
 }: {
   onCreated: () => void;
   createConnector: (input: ConnectorCreate) => Promise<ConnectorCreated>;
+  initialConnector?: ConnectorName;
+  onCancel?: () => void;
 }) {
-  const [connector, setConnector] = useState<ConnectorName>(KNOWN_CONNECTORS[0]);
+  const [connector, setConnector] = useState<ConnectorName>(
+    initialConnector ?? KNOWN_CONNECTORS[0],
+  );
   const [secret, setSecret] = useState("");
   const [externalRef, setExternalRef] = useState("");
   const [deliveryConfig, setDeliveryConfig] = useState("");
@@ -188,6 +200,16 @@ export default function AddConnector({
             Couldn&rsquo;t register that connector — check the details and try again.
           </span>
         )}
+        {onCancel ? (
+          <button
+            type="button"
+            className="connector-form__cancel"
+            onClick={onCancel}
+            disabled={state === "submitting"}
+          >
+            Cancel
+          </button>
+        ) : null}
         <button
           type="submit"
           className="connector-form__submit"
