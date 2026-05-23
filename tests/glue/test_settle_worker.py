@@ -145,6 +145,41 @@ async def test_settle_worker_writes_observation_to_bsage(sf, tmp_path) -> None:
         assert drains[0].workspace_id == ws
 
 
+async def test_settle_worker_note_carries_content_tags_not_just_structural(sf, tmp_path) -> None:
+    """The written garden note carries deterministically-derived content tags
+    (from artifact_refs + summary) alongside the structural markers — so the
+    promoter actually has candidates instead of an all-structural note it drops."""
+    from backend.knowledge.canonicalization.store import NoteStore  # noqa: PLC0415
+    from backend.knowledge.graph.storage import FileSystemStorage  # noqa: PLC0415
+
+    ws = uuid.uuid4()
+    await _seed_settle_activity(
+        sf,
+        workspace_id=ws,
+        summary="configured the reverse proxy",
+        artifact_refs=["backend/auth/client.py"],
+    )
+    worker = SettleWorker(
+        session_factory=sf,
+        sink=KnowledgeSettleSink(vault_root=tmp_path),
+        config=SettleWorkerConfig(default_region="us-1"),
+    )
+    assert await worker.drain_once() == 1
+
+    store = NoteStore(FileSystemStorage(_ws_dir(tmp_path, "us-1", ws)))
+    garden_paths = await store.list_garden_paths()
+    assert len(garden_paths) == 1
+    tags = set(await store.read_garden_tags(garden_paths[0]))
+
+    # Structural tags preserved (other consumers rely on them) ...
+    assert {"settle", "verified-run"} <= tags
+    # ... and content tags derived from the inputs are present.
+    assert {"auth", "client"} <= tags, tags  # artifact stems
+    assert {"configured", "reverse", "proxy"} <= tags, tags  # salient summary terms
+    # Stopwords / structural markers never leak in as content.
+    assert "the" not in tags
+
+
 async def test_settle_worker_idempotent_redrain(sf, tmp_path) -> None:
     ws = uuid.uuid4()
     await _seed_settle_activity(sf, workspace_id=ws)

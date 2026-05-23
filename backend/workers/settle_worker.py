@@ -45,11 +45,12 @@ Design notes
 
 from __future__ import annotations
 
+import re
 import uuid
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Protocol
 
 import structlog
@@ -64,6 +65,90 @@ from backend.workspaces.db import WorkspaceRow
 logger = structlog.get_logger(__name__)
 
 SETTLE_ACTIVITY_TYPE = "settle"
+
+# Structural tags describe the *kind* of note, not what it is *about*; they are
+# kept on every garden observation but the promoter intentionally drops them, so
+# they must never appear as derived content tags either (Handoff §0.2).
+_STRUCTURAL_TAGS: frozenset[str] = frozenset({"settle", "verified-run"})
+
+# Cap on derived content tags per observation — conservative on purpose: a
+# garden note should carry a handful of high-signal patterns, not a token dump.
+_MAX_CONTENT_TAGS = 8
+
+# Same normalization rule the canonicalization TagResolver uses (lowercase,
+# collapse any non-[a-z0-9] run to a single hyphen, strip edge hyphens) so a
+# derived tag is a candidate the promoter will actually pick up. Duplicated here
+# (not imported) to keep the worker module's import surface cheap.
+_NON_ALNUM_RE = re.compile(r"[^a-z0-9]+")
+# A normalized tag is only a valid concept-id candidate if it starts with a
+# letter (Handoff §2: ``^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$``); a leading digit
+# (e.g. from "v2") would be silently dropped by the promoter, so we drop it here.
+_CONCEPT_ID_LEADING_RE = re.compile(r"^[a-z]")
+
+# Salient-term extraction from the free-text summary. Tokens shorter than this
+# (after normalization) are too generic to be useful patterns.
+_MIN_SUMMARY_TOKEN_LEN = 3
+
+# Conservative English stopword list — dropped from summary-derived tags so the
+# content tags are nouns/verbs that name the work, not filler. Deliberately
+# small: better to keep a borderline term than to over-prune signal.
+_SUMMARY_STOPWORDS: frozenset[str] = frozenset(
+    {
+        "the",
+        "and",
+        "for",
+        "with",
+        "from",
+        "into",
+        "onto",
+        "this",
+        "that",
+        "these",
+        "those",
+        "have",
+        "has",
+        "had",
+        "was",
+        "were",
+        "are",
+        "but",
+        "not",
+        "via",
+        "per",
+        "out",
+        "off",
+        "its",
+        "our",
+        "your",
+        "their",
+        "added",
+        "add",
+        "fixed",
+        "fix",
+        "wired",
+        "wire",
+        "made",
+        "make",
+        "set",
+        "got",
+        "get",
+        "ran",
+        "run",
+        "use",
+        "used",
+        "new",
+        "now",
+        "all",
+        "any",
+        "can",
+        "did",
+        "done",
+        "then",
+        "than",
+        "step",
+        "work",
+    }
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -165,12 +250,17 @@ class KnowledgeSettleSink:
         # Title is descriptive only — the drain marker (keyed on activity_id)
         # owns system identity, so a thin/odd LLM summary can't break dedup.
         headline = summary.splitlines()[0][:80] if summary else "verified work step"
+        # Structural tags first (other consumers rely on them), then the
+        # deterministically-derived content tags so the GardenObservationPromoter
+        # has real candidates to cluster across runs — closing the §5 ratchet
+        # loop. Content tags are de-duped against structural ones already.
+        tags = ["settle", "verified-run", *derive_content_tags(settlement)]
         note = GardenNote(
             title=f"Settle: {headline}",
             content=_observation_body(settlement, summary),
             source="settle_worker",
             knowledge_layer="episodic",
-            tags=["settle", "verified-run"],
+            tags=tags,
             extra_fields={
                 "run_id": str(settlement.run_id),
                 "activity_id": str(settlement.activity_id),
@@ -191,6 +281,81 @@ def _observation_body(settlement: Settlement, summary: str) -> str:
     lines.append(f"Verified: {'yes' if settlement.verified else 'no'}")
     lines.append(f"Run: {settlement.run_id}")
     return "\n".join(lines)
+
+
+def _normalize_tag(raw: str) -> str:
+    """Normalize a raw token into a valid concept-id candidate, or ``""``.
+
+    Mirrors :meth:`backend.knowledge.canonicalization.resolver.TagResolver.normalize`
+    (lowercase, collapse non-alnum runs to a single hyphen, strip edge hyphens)
+    and additionally rejects anything not starting with a letter, so every
+    returned tag passes the Handoff §2 concept-id grammar the promoter requires.
+    Structural tags (``settle`` / ``verified-run``) normalize to themselves and
+    are rejected so they never re-enter as content tags.
+    """
+    normalized = _NON_ALNUM_RE.sub("-", raw.casefold()).strip("-")
+    if not normalized or normalized in _STRUCTURAL_TAGS:
+        return ""
+    if not _CONCEPT_ID_LEADING_RE.match(normalized):
+        return ""
+    return normalized
+
+
+def _tags_from_artifact_refs(artifact_refs: Iterable[str]) -> list[str]:
+    """Derive stable identifiers from artifact paths (stems + basenames).
+
+    Each ref is treated as a POSIX-ish path: every meaningful path component
+    contributes its stem (``backend/auth/client.py`` → ``auth`` + ``client``).
+    Recurring files across runs are exactly the patterns worth promoting, so the
+    derived tags are deterministic stems — not full paths. Generic container
+    components (``backend``/``src``/...) are kept only if they normalize cleanly;
+    de-duplication happens at the call site so order is preserved.
+    """
+    tags: list[str] = []
+    for ref in artifact_refs:
+        if not isinstance(ref, str):
+            continue
+        # Normalize Windows separators, then split into path components.
+        pure = PurePosixPath(ref.replace("\\", "/"))
+        for part in pure.parts:
+            stem = PurePosixPath(part).stem  # drop the file extension if any
+            tag = _normalize_tag(stem)
+            if tag:
+                tags.append(tag)
+    return tags
+
+
+def _tags_from_summary(summary: str) -> list[str]:
+    """Derive a few salient lowercase terms from the free-text summary.
+
+    Deterministic heuristic, no LLM: tokenize on non-alnum, drop stopwords and
+    short tokens, normalize each survivor into a concept-id candidate. Order
+    follows first appearance in the summary; the caller dedupes + caps.
+    """
+    tags: list[str] = []
+    for token in _NON_ALNUM_RE.split(summary.casefold()):
+        if len(token) < _MIN_SUMMARY_TOKEN_LEN or token in _SUMMARY_STOPWORDS:
+            continue
+        tag = _normalize_tag(token)
+        if tag and tag not in _SUMMARY_STOPWORDS:
+            tags.append(tag)
+    return tags
+
+
+def derive_content_tags(settlement: Settlement) -> list[str]:
+    """Deterministically derive content tags from a :class:`Settlement`.
+
+    Pure + offline (no LLM, no network). Artifact-ref stems come first (the
+    strongest recurring-pattern signal), then salient summary terms. The result
+    is normalized to valid concept-id candidates, de-duplicated (first-wins,
+    order preserved), structural tags excluded, and capped at
+    :data:`_MAX_CONTENT_TAGS`. An empty/contentless settlement yields ``[]`` so
+    the sink falls back to structural-only tags.
+    """
+    ordered = _tags_from_artifact_refs(settlement.artifact_refs)
+    ordered.extend(_tags_from_summary(settlement.summary))
+    deduped = list(dict.fromkeys(ordered))  # first-wins, preserves order
+    return deduped[:_MAX_CONTENT_TAGS]
 
 
 @dataclass(frozen=True, slots=True)
@@ -460,4 +625,5 @@ __all__ = [
     "Settlement",
     "WorkspacePromoter",
     "build_garden_promoter_factory",
+    "derive_content_tags",
 ]
