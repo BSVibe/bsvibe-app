@@ -2,116 +2,46 @@
  * ┌──────────────────────────────────────────────────────────────────────┐
  * │  PLACEHOLDER DATA — NOT REAL.                                          │
  * │                                                                        │
- * │  The Glance surface (UX §3) needs three things the backend does not    │
- * │  yet serve: per-product run STATUS, the "needs you" decision queue,    │
- * │  and "recently shipped" deliverables. Until those endpoints exist,     │
- * │  the values below stand in. They are the ONLY non-real data in the     │
- * │  whole API client.                                                     │
+ * │  The Brief now reads REAL data (lib/api/brief.ts): product lanes from  │
+ * │  /api/v1/products + /api/v1/runs, "Needs you" from /api/v1/decisions   │
+ * │  + /api/v1/safemode/queue, "Recently shipped" from /api/v1/runs.       │
  * │                                                                        │
- * │  To go live: in lib/api/brief.ts replace the three `PLACEHOLDER_*`     │
- * │  references with real apiFetch() calls (e.g. /api/v1/runs,             │
- * │  /api/v1/decisions, /api/v1/deliverables). The UI consumes the         │
- * │  BriefView shape only and needs no further change.                     │
+ * │  The ONLY thing left here is a demo set of product lanes, used purely  │
+ * │  as a FALLBACK when the network / auth fails mid-load — so the surface │
+ * │  shows a calm board instead of an error wall. It is never shown on a   │
+ * │  successful (even empty) read; an empty workspace renders calm empty   │
+ * │  states from the real data, not this.                                  │
  * │                                                                        │
- * │  The data mirrors the Stitch Brief mockup so the surface reads true.   │
+ * │  The remaining genuine gap (no endpoint yet) is the shipped-item       │
+ * │  title/source detail — there is no deliverable-read endpoint, only     │
+ * │  runs — so brief.ts derives that from the run and keeps                │
+ * │  BriefView.placeholder true while any shipped item is shown.           │
  * └──────────────────────────────────────────────────────────────────────┘
  */
 
-import type { LaneState, NeedsYouItem, ProductLane, ShippedItem } from "./types";
+import type { ProductLane } from "./types";
 
-/** Demo product lanes — used when the real /api/v1/products list is empty. */
+/** Demo product lanes — shown ONLY when the real reads fail mid-load. */
 export const PLACEHOLDER_LANES: ProductLane[] = [
   {
     id: "ph-bsvibe-site",
     slug: "bsvibe-site",
     name: "bsvibe-site",
     state: "working",
-    status: "writing tests for the related-posts feature · 4m in",
+    status: "working on your latest direction",
   },
   {
     id: "ph-acme-corp",
     slug: "acme-corp",
     name: "acme-corp",
     state: "needs-you",
-    status: "paused — which auth approach?",
-  },
-  {
-    id: "ph-quantum-link",
-    slug: "quantum-link",
-    name: "quantum-link",
-    state: "triggered",
-    status: "started from a GitHub issue · decomposing… · 1m in",
+    status: "paused — needs a call from you",
   },
   {
     id: "ph-stellar-app",
     slug: "stellar-app",
     name: "stellar-app",
     state: "shipped",
-    status: "ingestion retry logic → PR #20 · verified",
-  },
-  {
-    id: "ph-nexus-portal",
-    slug: "nexus-portal",
-    name: "nexus-portal",
-    state: "idle",
-    status: "—",
+    status: "shipped · verified",
   },
 ];
-
-/** Demo "needs you" decisions. */
-export const PLACEHOLDER_NEEDS_YOU: NeedsYouItem[] = [
-  {
-    id: "ph-needs-1",
-    productSlug: "bsvibe-site",
-    question: "keep only the 4 i18n keys, or rewrite the direction?",
-  },
-  {
-    id: "ph-needs-2",
-    productSlug: "acme-corp",
-    question: "which auth approach?",
-  },
-];
-
-/** Demo "recently shipped" deliverables, mixed artifact types (UX §4). */
-export const PLACEHOLDER_RECENTLY_SHIPPED: ShippedItem[] = [
-  {
-    id: "ph-ship-1",
-    title: "getRelatedPosts function",
-    productSlug: "bsvibe-site",
-    source: "GitHub PR #15",
-    artifactType: "pr",
-    verdict: "This is verified",
-  },
-  {
-    id: "ph-ship-2",
-    title: "Q3 launch plan v2",
-    productSlug: "acme-corp",
-    source: "Notion page",
-    artifactType: "doc",
-    verdict: "This is verified",
-  },
-  {
-    id: "ph-ship-3",
-    title: "Hero illustration",
-    productSlug: "stellar-app",
-    source: "Figma frame",
-    artifactType: "image",
-    verdict: "This is verified",
-  },
-];
-
-/** Plain-language placeholder status for a REAL product with no run data yet. */
-export function placeholderLaneStatus(state: LaneState): string {
-  switch (state) {
-    case "working":
-      return "working on your latest direction";
-    case "needs-you":
-      return "paused — needs a call from you";
-    case "triggered":
-      return "just started · decomposing…";
-    case "shipped":
-      return "shipped · verified";
-    default:
-      return "—";
-  }
-}

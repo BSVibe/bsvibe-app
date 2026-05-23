@@ -5,9 +5,10 @@
  * response models 1:1 (backend/api/auth/routes.py, backend/api/v1/
  * workspaces.py, backend/api/v1/products.py) — these endpoints are REAL.
  *
- * The `Brief*` view-model types describe the Glance surface (UX §3). Some of
- * the data behind them is not yet served by the backend; see
- * lib/api/placeholder.ts for exactly which fields are placeholder.
+ * The `Brief*` view-model types describe the Glance surface (UX §3). These are
+ * now composed from REAL endpoints (lib/api/brief.ts); the only residual gap is
+ * the shipped-item title/source detail (no deliverable-read endpoint yet). See
+ * lib/api/placeholder.ts for the remaining fallback data.
  */
 
 // ── Wire shapes (REAL endpoints) ──────────────────────────────────────────
@@ -41,6 +42,59 @@ export interface Product {
   repo_url: string | null;
   created_at: string;
   updated_at: string;
+}
+
+/** `RunStatus` (backend/execution/db.py) — the run lifecycle vocabulary. */
+export type RunStatus = "open" | "running" | "review_ready" | "shipped" | "failed" | "cancelled";
+
+/** `GET /api/v1/runs` element (backend RunResponse). */
+export interface Run {
+  id: string;
+  workspace_id: string;
+  product_id: string | null;
+  request_id: string | null;
+  status: RunStatus;
+  created_at: string;
+  updated_at: string;
+}
+
+/** `POST /api/v1/messages` body — founder-direct submission. */
+export interface MessageCreate {
+  text: string;
+  product_id?: string;
+}
+
+/** `POST /api/v1/messages` → 202 acceptance receipt (backend MessageAccepted). */
+export interface MessageAccepted {
+  accepted: boolean;
+  duplicate: boolean;
+  workspace_id: string;
+}
+
+/** `GET /api/v1/decisions` element (backend ProposalResponse). The decisions
+ *  surface is the canonicalization proposal queue; `action_path` is the
+ *  human-readable handle for what the proposal touches. */
+export interface Proposal {
+  id: string;
+  proposal_kind: string;
+  action_kind: string;
+  action_path: string;
+  status: string;
+  score: number | null;
+  created_at: string;
+  expires_at: string | null;
+}
+
+/** `GET /api/v1/safemode/queue` element (backend SafeModeItemResponse). */
+export interface SafeModeItem {
+  id: string;
+  workspace_id: string;
+  deliverable_id: string;
+  status: string;
+  compensation_tier: string | null;
+  expires_at: string;
+  extension_count: number;
+  created_at: string;
 }
 
 // ── Brief view-model (UX §3.3 lane states) ────────────────────────────────
@@ -78,8 +132,15 @@ export interface ShippedItem {
   verdict: string;
 }
 
-/** The whole Glance surface. `placeholder` is true while any lane status,
- *  needs-you item, or shipped item is still demo data (see brief.ts). */
+/** The whole Glance surface.
+ *
+ * `placeholder` is true only while some field shown is still demo / not-yet-
+ * served data. After the real-data wiring (brief.ts) the lanes, needs-you, and
+ * recently-shipped all come from live endpoints, so `placeholder` is false on a
+ * real read — even when the workspace is empty (that renders calm empty states,
+ * NOT demo data). It flips back to true only if a hard failure forces the demo
+ * fallback, or for the shipped-item *title/source* detail that has no endpoint
+ * yet (derived from the run, not a deliverable-title read). */
 export interface BriefView {
   needsYou: NeedsYouItem[];
   lanes: ProductLane[];
