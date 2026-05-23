@@ -4,7 +4,8 @@
  *
  *  - Models     → the EXISTING <ModelAccounts/> (unchanged by this lift)
  *  - Connectors → the EXISTING <Connectors/> (unchanged by this lift)
- *  - Notifications / Account → real route targets with a "Coming soon" stub body
+ *  - Notifications → a real route target with a "Coming soon" stub body
+ *  - Account → the real Profile / Plan / identities / sessions surface
  *
  * Models/Connectors fetch on mount; we stub fetch with an empty list so the
  * surfaces reach their calm empty state without a network call.
@@ -17,6 +18,12 @@ import NotificationsTab from "@/components/settings/NotificationsTab";
 import { type Session, clearSession, setSession } from "@/lib/auth/session";
 import { render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+// AccountTab surfaces a real sign-out (router.replace + logout()); stub both so
+// the smoke render doesn't need real navigation or a network call.
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ replace: vi.fn(), push: vi.fn(), prefetch: vi.fn() }),
+}));
 
 const SESSION: Session = {
   accessToken: "tok",
@@ -64,9 +71,12 @@ describe("Settings tab content", () => {
     expect(screen.getByText(/coming soon/i)).toBeInTheDocument();
   });
 
-  it("Account tab is a Coming soon stub", () => {
+  it("Account tab renders the real Profile / Plan / identities / sessions surface", () => {
     render(<AccountTab />);
-    expect(screen.getByRole("heading", { name: /account/i })).toBeInTheDocument();
-    expect(screen.getByText(/coming soon/i)).toBeInTheDocument();
+    // The signed-in email (real, from session) anchors the Profile section.
+    expect(screen.getByText("founder@bsvibe.dev")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: /profile/i })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: /plan/i })).toBeInTheDocument();
+    expect(screen.getByText(/this device/i)).toBeInTheDocument();
   });
 });
