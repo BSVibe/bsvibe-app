@@ -374,6 +374,44 @@ export interface ShippedItem {
   link?: string;
 }
 
+// ── Activity view-model (read-only run history surface) ───────────────────
+
+/** Calm status tones for a run's lifecycle — color is used ONLY to carry
+ *  status meaning (UX §5). `neutral` is the quiet grey for open/cancelled,
+ *  `working` the soft ink for in-flight, `review` the amber "needs you",
+ *  `shipped` the green "done", `failed` the muted red. */
+export type ActivityTone = "neutral" | "working" | "review" | "shipped" | "failed";
+
+/** One row in the Activity list: a real ExecutionRun rendered in plain
+ *  language. `productSlug` is resolved via the run's `product_id` (degrades to
+ *  "workspace" when the run carries none). `statusLabel` is the calm word the
+ *  founder reads ("Shipped", "Needs your review"); `tone` drives the lone
+ *  status colour. The raw `runId` is what the expand fetch narrows on. */
+export interface ActivityRun {
+  runId: string;
+  productSlug: string;
+  status: RunStatus;
+  statusLabel: string;
+  tone: ActivityTone;
+  /** Writer-stamped `updated_at` (most recent activity), ISO string. */
+  updatedAt: string;
+}
+
+/** One delivered artifact under an Activity run, mapped to the calm UI
+ *  vocabulary. `verdict` is the constant "This is verified" (deliverables only
+ *  exist for verified runs). `link` is the external landing spot
+ *  (`Deliverable.artifact_uri`) when one exists. */
+export interface ActivityDeliverable {
+  id: string;
+  /** First non-empty line of the summary, or a calm fallback. */
+  title: string;
+  artifactType: ArtifactType;
+  /** Plain-language "where it landed" — "opened a pull request". */
+  source: string;
+  verdict: string;
+  link?: string;
+}
+
 /** The whole Glance surface.
  *
  * `placeholder` is true only while some field shown is demo / not-yet-served

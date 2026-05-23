@@ -49,6 +49,14 @@ export function InsideIcon(props: SVGProps<SVGSVGElement>) {
   );
 }
 
+export function ActivityIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Svg {...props}>
+      <path d="M4 12h3l2 6 4-14 2 8h5" />
+    </Svg>
+  );
+}
+
 export function SettingsIcon(props: SVGProps<SVGSVGElement>) {
   return (
     <Svg {...props}>
