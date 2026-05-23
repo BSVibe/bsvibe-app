@@ -40,5 +40,11 @@ export default function Brief() {
     );
   }
 
-  return <BriefContent view={view} />;
+  // A Safe-Mode approve/deny lands server-side; re-read so the resolved item
+  // drops out of "Needs you" and any downstream lane reflects the dispatch.
+  const onNeedsYouResolved = () => {
+    load((next) => setView(next));
+  };
+
+  return <BriefContent view={view} onNeedsYouResolved={onNeedsYouResolved} />;
 }

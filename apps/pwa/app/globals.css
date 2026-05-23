@@ -483,6 +483,7 @@ main.login {
 .needs-you__row {
   display: flex;
   align-items: baseline;
+  flex-wrap: wrap;
   gap: 6px;
   padding: 9px 0;
   font-size: 0.88rem;
@@ -504,11 +505,81 @@ main.login {
 }
 
 .needs-you__q {
-  flex: 1;
+  flex: 1 1 12ch;
+  min-width: 12ch;
 }
 
 .needs-you__chev {
   color: var(--ink-3);
+}
+
+/* Needs you — Decide affordances (Safe-Mode approve / deny) */
+.needs-you__actions {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+/* Inline error sits on its own line within the actions group so the buttons
+ * never overflow on a narrow (mobile) viewport. */
+.needs-you__actions .needs-you__error {
+  flex: 1 0 100%;
+  text-align: right;
+}
+
+.needs-you__approve,
+.needs-you__deny {
+  border: 1px solid var(--hair-strong);
+  border-radius: 999px;
+  padding: 4px 12px;
+  font-size: 0.78rem;
+  font-weight: 550;
+  background: var(--surface);
+  color: var(--ink-2);
+  cursor: pointer;
+}
+
+.needs-you__approve {
+  border-color: transparent;
+  background: #1f1d1a;
+  color: #fff;
+}
+
+.needs-you__approve:hover {
+  background: #000;
+}
+
+.needs-you__deny:hover {
+  background: var(--accent-bg);
+}
+
+.needs-you__approve:disabled,
+.needs-you__deny:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.needs-you__error {
+  font-size: 0.78rem;
+  color: var(--amber-ink);
+}
+
+.needs-you__resolved {
+  margin-left: auto;
+  font-size: 0.8rem;
+  font-weight: 550;
+  color: var(--green-ink);
+}
+
+.needs-you__row--denied .needs-you__resolved {
+  color: var(--ink-3);
+}
+
+.needs-you__row--resolving {
+  opacity: 0.8;
 }
 
 /* Product lanes */
