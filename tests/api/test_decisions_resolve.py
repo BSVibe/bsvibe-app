@@ -25,7 +25,10 @@ import pytest_asyncio
 
 from backend.api.deps import get_current_user, get_workspace_id
 from backend.api.main import create_app
-from backend.api.v1.decisions import build_canonicalization_service
+from backend.api.v1.decisions import (
+    build_canonicalization_index,
+    build_canonicalization_service,
+)
 from backend.knowledge.canonicalization.index import InMemoryCanonicalizationIndex
 from backend.knowledge.canonicalization.lock import AsyncIOMutationLock
 from backend.knowledge.canonicalization.promotion import GardenObservationPromoter
@@ -130,9 +133,17 @@ async def client(vault_root: Path, workspace_id: uuid.UUID):
         storage = FileSystemStorage(vault_root / "us-1" / str(ws))
         return await _make_service(storage, safe_mode=False)
 
+    async def _index(ws: uuid.UUID = workspace_id) -> InMemoryCanonicalizationIndex:
+        # Read-only listing index rooted at the SAME per-workspace vault as the
+        # resolution service, so a listed proposal id resolves via accept/reject.
+        index = InMemoryCanonicalizationIndex()
+        await index.initialize(FileSystemStorage(vault_root / "us-1" / str(ws)))
+        return index
+
     app.dependency_overrides[get_current_user] = fake_current_user()
     app.dependency_overrides[get_workspace_id] = _ws
     app.dependency_overrides[build_canonicalization_service] = _service
+    app.dependency_overrides[build_canonicalization_index] = _index
 
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
@@ -245,3 +256,109 @@ async def test_non_canon_path_rejected_404(client, workspace_storage) -> None:
     """A path that isn't a canon proposal path is not addressable → 404."""
     r = await client.post(f"/api/v1/decisions/{_enc('garden/seedling/x.md')}/accept")
     assert r.status_code == 404, r.text
+
+
+# ---------------------------------------------------------------------------
+# Listing — the queue surface reads the SAME vault store as accept/reject.
+# Before the fix these read the producer-less ``canonicalization_proposals`` DB
+# table and always returned [] while real proposals piled up in the vault.
+# ---------------------------------------------------------------------------
+
+
+async def test_list_returns_vault_proposal(client, workspace_storage) -> None:
+    """GET /api/v1/decisions surfaces the real ``pending`` vault proposal."""
+    proposal_path = await _seed_queued_merge_proposal(workspace_storage)
+
+    r = await client.get("/api/v1/decisions")
+    assert r.status_code == 200, r.text
+    rows = r.json()
+    assert len(rows) == 1
+    row = rows[0]
+    # id is the proposal's vault path (so list → resolve round-trips).
+    assert row["id"] == proposal_path
+    assert row["proposal_kind"] == "merge-concepts"
+    assert row["status"] == "pending"
+    # action_kind / action_path come from the linked merge action draft.
+    assert row["action_kind"] == "merge-concepts"
+    assert row["action_path"].startswith("actions/merge-concepts/")
+    assert row["score"] is not None
+    assert row["created_at"]
+
+
+async def test_list_to_resolve_round_trips(client, workspace_storage) -> None:
+    """The id returned by the list resolves via accept (one store, end-to-end)."""
+    await _seed_queued_merge_proposal(workspace_storage)
+
+    listed = (await client.get("/api/v1/decisions")).json()
+    assert len(listed) == 1
+    proposal_id = listed[0]["id"]
+
+    r = await client.post(f"/api/v1/decisions/{_enc(proposal_id)}/accept")
+    assert r.status_code == 200, r.text
+    assert r.json()["status"] == "accepted"
+
+    # Re-listing reflects the resolution — no longer pending.
+    pending = (await client.get("/api/v1/decisions", params={"status_filter": "pending"})).json()
+    assert pending == []
+
+
+async def test_list_status_filter(client, workspace_storage) -> None:
+    """status_filter narrows the queue; a non-matching status yields []."""
+    await _seed_queued_merge_proposal(workspace_storage)
+
+    pending = (await client.get("/api/v1/decisions", params={"status_filter": "pending"})).json()
+    assert len(pending) == 1
+    assert pending[0]["status"] == "pending"
+
+    rejected = (await client.get("/api/v1/decisions", params={"status_filter": "rejected"})).json()
+    assert rejected == []
+
+
+async def test_list_empty_when_no_proposals(client, workspace_storage) -> None:
+    """An empty workspace vault → empty queue (not an error, not stale DB rows)."""
+    r = await client.get("/api/v1/decisions")
+    assert r.status_code == 200, r.text
+    assert r.json() == []
+
+
+async def test_list_workspace_isolation(client, vault_root) -> None:
+    """A proposal in a DIFFERENT workspace's vault is never enumerated for the
+    caller (per-workspace vault boundary is structural)."""
+    other_ws = uuid.uuid4()
+    other_root = vault_root / "us-1" / str(other_ws)
+    other_root.mkdir(parents=True, exist_ok=True)
+    await _seed_queued_merge_proposal(FileSystemStorage(other_root))
+
+    r = await client.get("/api/v1/decisions")
+    assert r.status_code == 200, r.text
+    assert r.json() == []
+
+
+async def test_decisions_log_returns_vault_decision(client, workspace_storage) -> None:
+    """GET /api/v1/decisions/log surfaces vault decision-memory notes."""
+    service = await _make_service(workspace_storage, safe_mode=False)
+    draft = await service.create_action_draft(
+        kind="create-decision",
+        params={
+            "decision_path": "decisions/cannot-link/self-host-vs-vaultwarden.md",
+            "subjects": ["self-host", "vaultwarden"],
+            "base_confidence": 0.9,
+            "maturity": "budding",
+        },
+    )
+    applied = await service.apply_action(draft, actor="founder")
+    assert applied.final_status == "applied", applied.error
+
+    r = await client.get("/api/v1/decisions/log")
+    assert r.status_code == 200, r.text
+    rows = r.json()
+    assert len(rows) == 1
+    assert rows[0]["decision_kind"] == "cannot-link"
+    assert rows[0]["id"] == "decisions/cannot-link/self-host-vs-vaultwarden.md"
+
+
+async def test_decisions_log_empty(client, workspace_storage) -> None:
+    """No decision notes → empty log."""
+    r = await client.get("/api/v1/decisions/log")
+    assert r.status_code == 200, r.text
+    assert r.json() == []
