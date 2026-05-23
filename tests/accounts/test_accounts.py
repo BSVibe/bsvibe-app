@@ -89,6 +89,48 @@ class TestCreate:
                 data_jurisdiction="mars",  # type: ignore[arg-type]
             )
 
+    def test_jurisdiction_optional_defaults_to_unknown(self):
+        # The founder no longer hand-picks a data jurisdiction; omitting it
+        # must succeed and fall back to the invisible-infra default.
+        payload = ModelAccountCreate(
+            provider="openai",
+            label="x",
+            litellm_model="openai/gpt-4o",
+            api_key="x",
+        )
+        assert payload.data_jurisdiction == "unknown"
+
+    async def test_create_without_jurisdiction_stores_unknown(
+        self, service, workspace_id, account_id
+    ):
+        out = await service.create(
+            workspace_id=workspace_id,
+            account_id=account_id,
+            payload=ModelAccountCreate(
+                provider="openai",
+                label="defaulted",
+                litellm_model="openai/gpt-4o",
+                api_key="sk-x",
+            ),
+        )
+        assert out.data_jurisdiction == "unknown"
+
+    async def test_create_with_explicit_jurisdiction_stores_it(
+        self, service, workspace_id, account_id
+    ):
+        out = await service.create(
+            workspace_id=workspace_id,
+            account_id=account_id,
+            payload=ModelAccountCreate(
+                provider="openai",
+                label="explicit-eu",
+                litellm_model="openai/gpt-4o",
+                api_key="sk-x",
+                data_jurisdiction="eu",
+            ),
+        )
+        assert out.data_jurisdiction == "eu"
+
 
 class TestListGetUpdateDelete:
     async def test_list_returns_only_account_rows(self, service, workspace_id, account_id):
