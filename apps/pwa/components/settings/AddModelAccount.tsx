@@ -1,6 +1,7 @@
 "use client";
 
 import type { ModelAccount, ModelAccountCreate } from "@/lib/api/types";
+import { useTranslations } from "next-intl";
 import { useState } from "react";
 
 type FormState = "idle" | "submitting" | "error" | "success";
@@ -32,6 +33,7 @@ export default function AddModelAccount({
   // The label of the just-created account, surfaced in the success note — we
   // confirm WHAT was added without ever echoing the secret.
   const [createdLabel, setCreatedLabel] = useState("");
+  const t = useTranslations("settings.models");
 
   const ready =
     provider.trim().length > 0 &&
@@ -78,11 +80,11 @@ export default function AddModelAccount({
     >
       <div className="account-form__row">
         <label className="account-form__field">
-          <span className="account-form__label">Provider</span>
+          <span className="account-form__label">{t("provider")}</span>
           <input
             className="account-form__input"
             type="text"
-            placeholder="e.g. openai, anthropic, ollama"
+            placeholder={t("providerPlaceholder")}
             value={provider}
             disabled={state === "submitting"}
             onChange={(e) => setProvider(e.target.value)}
@@ -90,11 +92,11 @@ export default function AddModelAccount({
         </label>
 
         <label className="account-form__field">
-          <span className="account-form__label">Model identifier</span>
+          <span className="account-form__label">{t("modelIdentifier")}</span>
           <input
             className="account-form__input"
             type="text"
-            placeholder="e.g. gpt-5, claude-sonnet-4, ollama/qwen3"
+            placeholder={t("modelPlaceholder")}
             value={model}
             disabled={state === "submitting"}
             onChange={(e) => setModel(e.target.value)}
@@ -103,11 +105,11 @@ export default function AddModelAccount({
       </div>
 
       <label className="account-form__field">
-        <span className="account-form__label">Label</span>
+        <span className="account-form__label">{t("label")}</span>
         <input
           className="account-form__input"
           type="text"
-          placeholder="A name you'll recognise — e.g. Primary"
+          placeholder={t("labelPlaceholder")}
           value={label}
           disabled={state === "submitting"}
           onChange={(e) => setLabel(e.target.value)}
@@ -115,11 +117,11 @@ export default function AddModelAccount({
       </label>
 
       <label className="account-form__field">
-        <span className="account-form__label">API base (optional)</span>
+        <span className="account-form__label">{t("apiBase")}</span>
         <input
           className="account-form__input"
           type="text"
-          placeholder="Override only for self-hosted / proxy endpoints"
+          placeholder={t("apiBasePlaceholder")}
           value={apiBase}
           disabled={state === "submitting"}
           onChange={(e) => setApiBase(e.target.value)}
@@ -127,30 +129,28 @@ export default function AddModelAccount({
       </label>
 
       <label className="account-form__field">
-        <span className="account-form__label">API key</span>
+        <span className="account-form__label">{t("apiKey")}</span>
         <input
           className="account-form__input"
           type="password"
           autoComplete="off"
-          placeholder="The provider credential — stored encrypted, never shown again"
+          placeholder={t("apiKeyPlaceholder")}
           value={apiKey}
           disabled={state === "submitting"}
           onChange={(e) => setApiKey(e.target.value)}
         />
-        <span className="account-form__hint">
-          I store this encrypted and never show it back — you won&rsquo;t see it again here.
-        </span>
+        <span className="account-form__hint">{t("apiKeyHint")}</span>
       </label>
 
       <div className="account-form__foot">
         {state === "error" && (
           <span className="account-form__error" aria-live="polite">
-            Couldn&rsquo;t add that model account — check the details and try again.
+            {t("addError")}
           </span>
         )}
         {state === "success" && (
           <span className="account-form__success" aria-live="polite">
-            Added “{createdLabel}”. The key is stored encrypted — it won&rsquo;t be shown again.
+            {t("addSuccess", { label: createdLabel })}
           </span>
         )}
         <button
@@ -158,7 +158,7 @@ export default function AddModelAccount({
           className="account-form__submit"
           disabled={state === "submitting" || !ready}
         >
-          {state === "submitting" ? "Adding…" : "Add model account"}
+          {state === "submitting" ? t("adding") : t("addAccount")}
         </button>
       </div>
     </form>

@@ -1,6 +1,8 @@
 "use client";
 
 import { useSession } from "@/lib/auth/session";
+import { type Locale, resolveLocale } from "@/lib/i18n/config";
+import { setLocaleCookie } from "@/lib/i18n/locale";
 import {
   DATE_FORMAT_OPTIONS,
   LANGUAGE_OPTIONS,
@@ -9,6 +11,8 @@ import {
 import { usePreferences } from "@/lib/preferences/usePreferences";
 import type { ThemePreference } from "@/lib/theme/theme";
 import { useThemePreference } from "@/lib/theme/useTheme";
+import { useTranslations } from "next-intl";
+import { useRouter } from "next/navigation";
 
 /**
  * Settings → General. Workspace basics + appearance.
@@ -16,9 +20,11 @@ import { useThemePreference } from "@/lib/theme/useTheme";
  *  - Theme (the headline): a Light / System / Dark segmented control wired to
  *    the theme controller. Choosing one persists `bsvibe.theme` and applies
  *    `data-theme` to <html> immediately. This is the must-work piece.
- *  - Language / Time zone / Date format: LOCAL-only preferences (no backend yet
- *    — server sync is a follow-up). The language control does not translate the
- *    app until i18n lands; a caption says so.
+ *  - Language: writes the `bsvibe.locale` cookie and refreshes the route so the
+ *    new message catalog applies live (real i18n, via next-intl). Also kept in
+ *    the local preference blob so the select reflects the stored choice.
+ *  - Time zone / Date format: LOCAL-only preferences (no backend yet — server
+ *    sync is a follow-up).
  *  - Workspace name / Workspace ID: DISPLAY-only. We surface what the client
  *    already knows (the session's personal account id, the signed-in email) —
  *    no new backend endpoints in this lift.
@@ -28,33 +34,45 @@ import { useThemePreference } from "@/lib/theme/useTheme";
  * scope here.
  */
 
-const THEME_CHOICES: { value: ThemePreference; label: string }[] = [
-  { value: "light", label: "Light" },
-  { value: "system", label: "System" },
-  { value: "dark", label: "Dark" },
+const THEME_CHOICES: { value: ThemePreference; labelKey: "light" | "system" | "dark" }[] = [
+  { value: "light", labelKey: "light" },
+  { value: "system", labelKey: "system" },
+  { value: "dark", labelKey: "dark" },
 ];
 
 export default function GeneralTab() {
   const session = useSession();
+  const router = useRouter();
   const [theme, setTheme] = useThemePreference();
   const [prefs, updatePref] = usePreferences();
+  const t = useTranslations("settings.general");
 
-  const workspaceId = session?.personalAccountId ?? "Not available yet";
-  const workspaceName = session?.email ?? "Your workspace";
+  const workspaceId = session?.personalAccountId ?? t("workspaceIdFallback");
+  const workspaceName = session?.email ?? t("workspaceNameFallback");
+
+  function chooseLanguage(value: string) {
+    // Keep the local preference in sync (the select reads from it) and apply
+    // the locale live: persist the cookie, then refresh so the server re-renders
+    // with the new catalog.
+    updatePref("language", value);
+    const locale: Locale = resolveLocale(value);
+    setLocaleCookie(locale);
+    router.refresh();
+  }
 
   return (
     <div className="general-tab">
-      <p className="general-tab__lede">General — workspace basics.</p>
+      <p className="general-tab__lede">{t("lede")}</p>
 
-      <section className="settings-field" aria-label="Workspace name">
-        <span className="settings-field__label">Workspace name</span>
+      <section className="settings-field" aria-label={t("workspaceName")}>
+        <span className="settings-field__label">{t("workspaceName")}</span>
         <span className="settings-field__value">{workspaceName}</span>
       </section>
 
       <section className="settings-field">
-        <span className="settings-field__label">Theme</span>
+        <span className="settings-field__label">{t("theme")}</span>
         <fieldset className="theme-segmented">
-          <legend className="theme-segmented__legend">Theme</legend>
+          <legend className="theme-segmented__legend">{t("theme")}</legend>
           {THEME_CHOICES.map((choice) => {
             const selected = theme === choice.value;
             return (
@@ -72,7 +90,7 @@ export default function GeneralTab() {
                   checked={selected}
                   onChange={() => setTheme(choice.value)}
                 />
-                {choice.label}
+                {t(`themeChoice.${choice.labelKey}`)}
               </label>
             );
           })}
@@ -80,14 +98,14 @@ export default function GeneralTab() {
       </section>
 
       <section className="settings-field">
-        <span className="settings-field__label">Language</span>
+        <span className="settings-field__label">{t("language")}</span>
         <div className="settings-field__control">
           <select
             id="pref-language"
-            aria-label="Language"
+            aria-label={t("language")}
             className="settings-field__select"
             value={prefs.language}
-            onChange={(e) => updatePref("language", e.target.value)}
+            onChange={(e) => chooseLanguage(e.target.value)}
           >
             {LANGUAGE_OPTIONS.map((o) => (
               <option key={o.value} value={o.value}>
@@ -95,17 +113,15 @@ export default function GeneralTab() {
               </option>
             ))}
           </select>
-          <span className="settings-field__caption">
-            Saved locally. This doesn&rsquo;t translate the app yet — full i18n is coming.
-          </span>
+          <span className="settings-field__caption">{t("languageCaption")}</span>
         </div>
       </section>
 
       <section className="settings-field">
-        <span className="settings-field__label">Time zone</span>
+        <span className="settings-field__label">{t("timezone")}</span>
         <select
           id="pref-timezone"
-          aria-label="Time zone"
+          aria-label={t("timezone")}
           className="settings-field__select"
           value={prefs.timezone}
           onChange={(e) => updatePref("timezone", e.target.value)}
@@ -119,10 +135,10 @@ export default function GeneralTab() {
       </section>
 
       <section className="settings-field">
-        <span className="settings-field__label">Date format</span>
+        <span className="settings-field__label">{t("dateFormat")}</span>
         <select
           id="pref-dateformat"
-          aria-label="Date format"
+          aria-label={t("dateFormat")}
           className="settings-field__select"
           value={prefs.dateFormat}
           onChange={(e) => updatePref("dateFormat", e.target.value)}
@@ -135,8 +151,8 @@ export default function GeneralTab() {
         </select>
       </section>
 
-      <section className="settings-field" aria-label="Workspace ID">
-        <span className="settings-field__label">Workspace ID</span>
+      <section className="settings-field" aria-label={t("workspaceId")}>
+        <span className="settings-field__label">{t("workspaceId")}</span>
         <code className="settings-field__mono">{workspaceId}</code>
       </section>
     </div>

@@ -1,6 +1,7 @@
 "use client";
 
 import { usePendingDecisionsCount } from "@/lib/decisions/pending-count";
+import { useTranslations } from "next-intl";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import AccountChip from "./AccountChip";
@@ -27,15 +28,18 @@ const ICONS: Record<NavKey, typeof BriefIcon> = {
 export default function LeftRail({ onDirect }: { onDirect: () => void }) {
   const pathname = usePathname();
   const pendingDecisions = usePendingDecisionsCount();
+  const tNav = useTranslations("nav");
+  const tShell = useTranslations("shell");
+  const tDirect = useTranslations("direct");
 
   return (
     <aside className="rail">
       <div className="rail__brand">
-        <span className="rail__wordmark">BSVibe</span>
-        <span className="rail__tagline">AI Agent OS</span>
+        <span className="rail__wordmark">{tShell("wordmark")}</span>
+        <span className="rail__tagline">{tShell("tagline")}</span>
       </div>
 
-      <nav className="rail__nav" aria-label="Primary">
+      <nav className="rail__nav" aria-label={tShell("primaryNav")}>
         {PRIMARY_NAV.map((item) => {
           const Icon = ICONS[item.key];
           const active = pathname === item.href;
@@ -46,10 +50,10 @@ export default function LeftRail({ onDirect }: { onDirect: () => void }) {
                 type="button"
                 className="rail__item"
                 disabled
-                title="Coming soon"
+                title={tShell("comingSoon")}
               >
                 <Icon />
-                <span>{item.label}</span>
+                <span>{tNav(item.key)}</span>
               </button>
             );
           }
@@ -62,9 +66,9 @@ export default function LeftRail({ onDirect }: { onDirect: () => void }) {
               aria-current={active ? "page" : undefined}
             >
               <Icon />
-              <span>{item.label}</span>
+              <span>{tNav(item.key)}</span>
               {badge !== null && (
-                <span className="rail__badge" aria-label={`${badge} pending`}>
+                <span className="rail__badge" aria-label={tShell("pending", { count: badge })}>
                   {badge}
                 </span>
               )}
@@ -75,7 +79,7 @@ export default function LeftRail({ onDirect }: { onDirect: () => void }) {
 
       <button type="button" className="rail__direct" onClick={onDirect}>
         <PlusIcon />
-        <span>Direct</span>
+        <span>{tDirect("label")}</span>
       </button>
 
       <div className="rail__foot">
@@ -85,7 +89,7 @@ export default function LeftRail({ onDirect }: { onDirect: () => void }) {
           aria-current={pathname === "/settings" ? "page" : undefined}
         >
           <SettingsIcon />
-          <span>Settings</span>
+          <span>{tNav("settings")}</span>
         </Link>
         <AccountChip />
       </div>

@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslations } from "next-intl";
 import { useState } from "react";
 
 /**
@@ -21,6 +22,7 @@ export default function CopyField({
   secret?: boolean;
 }) {
   const [copied, setCopied] = useState(false);
+  const t = useTranslations("common");
 
   async function copy() {
     try {
@@ -43,9 +45,9 @@ export default function CopyField({
           type="button"
           className="copy-field__btn"
           onClick={copy}
-          aria-label={`Copy ${label}`}
+          aria-label={t("copyLabel", { label })}
         >
-          {copied ? "Copied" : "Copy"}
+          {copied ? t("copied") : t("copy")}
         </button>
       </div>
     </div>

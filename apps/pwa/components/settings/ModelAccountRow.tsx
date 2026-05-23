@@ -1,6 +1,7 @@
 "use client";
 
 import type { ModelAccount } from "@/lib/api/types";
+import { useTranslations } from "next-intl";
 import { useState } from "react";
 
 type RowState = "idle" | "toggling" | "confirming" | "revoking" | "error";
@@ -34,6 +35,7 @@ export default function ModelAccountRow({
   revoke: (id: string) => Promise<void>;
 }) {
   const [state, setState] = useState<RowState>("idle");
+  const t = useTranslations("settings.models");
 
   async function toggle() {
     if (state === "toggling" || state === "revoking") return;
@@ -72,12 +74,12 @@ export default function ModelAccountRow({
           {account.provider} · {account.litellm_model}
         </span>
         {account.has_api_key ? (
-          <span className="account-row__key" title="A credential is stored (encrypted)">
-            key on file
+          <span className="account-row__key" title={t("keyOnFileTitle")}>
+            {t("keyOnFile")}
           </span>
         ) : (
-          <span className="account-row__key account-row__key--missing" title="No credential stored">
-            no key
+          <span className="account-row__key account-row__key--missing" title={t("noKeyTitle")}>
+            {t("noKey")}
           </span>
         )}
         <span
@@ -85,14 +87,14 @@ export default function ModelAccountRow({
             account.is_active ? "active" : "inactive"
           }`}
         >
-          {account.is_active ? "Active" : "Inactive"}
+          {account.is_active ? t("active") : t("inactive")}
         </span>
       </div>
 
       <div className="account-row__actions">
         {state === "error" && (
           <span className="account-row__error" aria-live="polite">
-            Couldn&rsquo;t do that — please try again.
+            {t("rowError")}
           </span>
         )}
 
@@ -104,7 +106,7 @@ export default function ModelAccountRow({
               onClick={confirmRevoke}
               disabled={state === "revoking"}
             >
-              {state === "revoking" ? "Revoking…" : "Confirm revoke"}
+              {state === "revoking" ? t("revoking") : t("confirmRevoke")}
             </button>
             <button
               type="button"
@@ -112,7 +114,7 @@ export default function ModelAccountRow({
               onClick={() => setState("idle")}
               disabled={state === "revoking"}
             >
-              Cancel
+              {t("cancel")}
             </button>
           </>
         ) : (
@@ -120,11 +122,11 @@ export default function ModelAccountRow({
             <button type="button" className="account-row__toggle" onClick={toggle} disabled={busy}>
               {state === "toggling"
                 ? account.is_active
-                  ? "Deactivating…"
-                  : "Activating…"
+                  ? t("deactivating")
+                  : t("activating")
                 : account.is_active
-                  ? "Deactivate"
-                  : "Activate"}
+                  ? t("deactivate")
+                  : t("activate")}
             </button>
             <button
               type="button"
@@ -132,7 +134,7 @@ export default function ModelAccountRow({
               onClick={() => setState("confirming")}
               disabled={busy}
             >
-              Revoke
+              {t("revoke")}
             </button>
           </>
         )}

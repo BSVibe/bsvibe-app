@@ -2,6 +2,7 @@
 
 import { listSkills } from "@/lib/api/skills";
 import type { Skill } from "@/lib/api/types";
+import { useTranslations } from "next-intl";
 import Link from "next/link";
 import { useEffect, useState } from "react";
 
@@ -24,6 +25,7 @@ type Loaded = { state: "loading" } | { state: "error" } | { state: "ready"; skil
 
 export default function SkillsLibrary() {
   const [loaded, setLoaded] = useState<Loaded>({ state: "loading" });
+  const t = useTranslations("skills");
 
   useEffect(() => {
     let active = true;
@@ -44,40 +46,33 @@ export default function SkillsLibrary() {
     <div className="skills">
       <header className="skills__head">
         <div>
-          <h1 className="skills__heading">Skills</h1>
-          <p className="skills__lede">The skills I can draw on while I work for you.</p>
+          <h1 className="skills__heading">{t("heading")}</h1>
+          <p className="skills__lede">{t("lede")}</p>
         </div>
         {/* No write API — authoring is file-system based. Honest disabled stub. */}
-        <button
-          type="button"
-          className="skills__new"
-          disabled
-          title="Editing skills is coming soon"
-        >
-          New skill
+        <button type="button" className="skills__new" disabled title={t("editComingSoon")}>
+          {t("newSkill")}
         </button>
       </header>
 
       {loaded.state === "loading" && (
         <p className="skills__loading-note" aria-busy="true">
-          Looking at your skills…
+          {t("loadingNote")}
         </p>
       )}
 
       {loaded.state === "error" && (
-        <section className="skills-empty" aria-label="Skills">
-          <p className="skills-empty__line">Couldn&rsquo;t load skills just now.</p>
-          <p className="skills-empty__sub">Try again in a moment.</p>
+        <section className="skills-empty" aria-label={t("heading")}>
+          <p className="skills-empty__line">{t("errorLine")}</p>
+          <p className="skills-empty__sub">{t("errorSub")}</p>
         </section>
       )}
 
       {loaded.state === "ready" &&
         (loaded.skills.length === 0 ? (
-          <section className="skills-empty" aria-label="Skills">
-            <p className="skills-empty__line">No skills yet.</p>
-            <p className="skills-empty__sub">
-              Skills you add to this workspace will show up here for me to use.
-            </p>
+          <section className="skills-empty" aria-label={t("heading")}>
+            <p className="skills-empty__line">{t("emptyLine")}</p>
+            <p className="skills-empty__sub">{t("emptySub")}</p>
           </section>
         ) : (
           <ul className="skills-list">
@@ -90,7 +85,7 @@ export default function SkillsLibrary() {
                   <span className="skills-card__name">{skill.name}</span>
                   <p className="skills-card__desc">{skill.description}</p>
                   {skill.has_system_prompt && (
-                    <span className="skills-card__hint">Has a system prompt</span>
+                    <span className="skills-card__hint">{t("hasSystemPrompt")}</span>
                   )}
                 </Link>
               </li>

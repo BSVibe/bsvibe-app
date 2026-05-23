@@ -2,6 +2,7 @@
 
 import type { ConnectorCreate, ConnectorCreated, ConnectorName } from "@/lib/api/types";
 import { KNOWN_CONNECTORS } from "@/lib/api/types";
+import { useTranslations } from "next-intl";
 import { useState } from "react";
 import CopyField from "./CopyField";
 
@@ -50,6 +51,7 @@ export default function AddConnector({
   // A dedicated flag so an invalid-JSON error reads differently from a failed
   // request — both keep the form filled and re-submittable.
   const [configError, setConfigError] = useState(false);
+  const t = useTranslations("settings.connectors.form");
 
   const secretReady = secret.trim().length > 0;
 
@@ -100,24 +102,16 @@ export default function AddConnector({
   // founder dismisses it — the form is hidden so the capability is the focus.
   if (created) {
     return (
-      <section className="connector-secret" aria-label="New connector credentials">
-        <p className="connector-secret__title">
-          Connector added — here&rsquo;s its webhook. Copy it now.
-        </p>
-        <p className="connector-secret__warn">
-          This is the only time you&rsquo;ll see this. The token is a secret — you won&rsquo;t see
-          it again, so copy it before you close this.
-        </p>
+      <section className="connector-secret" aria-label={t("credentialsLabel")}>
+        <p className="connector-secret__title">{t("createdTitle")}</p>
+        <p className="connector-secret__warn">{t("createdWarn")}</p>
 
-        <CopyField label="Webhook URL" value={created.webhook_url} />
-        <CopyField label="Webhook token" value={created.webhook_token} secret />
+        <CopyField label={t("webhookUrl")} value={created.webhook_url} />
+        <CopyField label={t("webhookToken")} value={created.webhook_token} secret />
 
-        <p className="connector-secret__hint">
-          Paste the webhook URL into {created.connector}&rsquo;s outgoing-webhook settings. The
-          token is part of the URL — keep it private.
-        </p>
+        <p className="connector-secret__hint">{t("createdHint", { service: created.connector })}</p>
         <button type="button" className="connector-secret__done" onClick={() => setCreated(null)}>
-          Done — I&rsquo;ve copied it
+          {t("done")}
         </button>
       </section>
     );
@@ -133,7 +127,7 @@ export default function AddConnector({
     >
       <div className="connector-form__row">
         <label className="connector-form__field">
-          <span className="connector-form__label">Connector</span>
+          <span className="connector-form__label">{t("connector")}</span>
           <select
             className="connector-form__input"
             value={connector}
@@ -149,11 +143,11 @@ export default function AddConnector({
         </label>
 
         <label className="connector-form__field">
-          <span className="connector-form__label">Reference (optional)</span>
+          <span className="connector-form__label">{t("reference")}</span>
           <input
             className="connector-form__input"
             type="text"
-            placeholder="e.g. acme/widgets"
+            placeholder={t("referencePlaceholder")}
             value={externalRef}
             disabled={state === "submitting"}
             onChange={(e) => setExternalRef(e.target.value)}
@@ -162,12 +156,12 @@ export default function AddConnector({
       </div>
 
       <label className="connector-form__field">
-        <span className="connector-form__label">Signing secret</span>
+        <span className="connector-form__label">{t("signingSecret")}</span>
         <input
           className="connector-form__input"
           type="password"
           autoComplete="off"
-          placeholder="The service's webhook signing secret"
+          placeholder={t("signingSecretPlaceholder")}
           value={secret}
           disabled={state === "submitting"}
           onChange={(e) => setSecret(e.target.value)}
@@ -175,29 +169,27 @@ export default function AddConnector({
       </label>
 
       <label className="connector-form__field">
-        <span className="connector-form__label">Delivery config (optional, JSON)</span>
+        <span className="connector-form__label">{t("deliveryConfig")}</span>
         <textarea
           className="connector-form__input connector-form__input--mono"
           rows={2}
-          placeholder='e.g. {"parent_page_id":"…"} or {"channel":"#updates"}'
+          placeholder={t("deliveryConfigPlaceholder")}
           value={deliveryConfig}
           disabled={state === "submitting"}
           onChange={(e) => setDeliveryConfig(e.target.value)}
         />
-        <span className="connector-form__hint">
-          Where I deliver finished work back out. Leave blank for inbound-only.
-        </span>
+        <span className="connector-form__hint">{t("deliveryConfigHint")}</span>
       </label>
 
       <div className="connector-form__foot">
         {state === "error" && configError && (
           <span className="connector-form__error" aria-live="polite">
-            Delivery config is not valid JSON — fix it or leave it blank.
+            {t("jsonError")}
           </span>
         )}
         {state === "error" && !configError && (
           <span className="connector-form__error" aria-live="polite">
-            Couldn&rsquo;t register that connector — check the details and try again.
+            {t("createError")}
           </span>
         )}
         {onCancel ? (
@@ -207,7 +199,7 @@ export default function AddConnector({
             onClick={onCancel}
             disabled={state === "submitting"}
           >
-            Cancel
+            {t("cancel")}
           </button>
         ) : null}
         <button
@@ -215,7 +207,7 @@ export default function AddConnector({
           className="connector-form__submit"
           disabled={state === "submitting" || !secretReady}
         >
-          {state === "submitting" ? "Adding…" : "Add connector"}
+          {state === "submitting" ? t("adding") : t("addConnector")}
         </button>
       </div>
     </form>

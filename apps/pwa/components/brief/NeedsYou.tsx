@@ -2,6 +2,7 @@
 
 import { approveSafeModeItem, denySafeModeItem } from "@/lib/api/safemode";
 import type { NeedsYouItem } from "@/lib/api/types";
+import { useTranslations } from "next-intl";
 import { useState } from "react";
 
 /**
@@ -23,19 +24,20 @@ export default function NeedsYou({
   items: NeedsYouItem[];
   onResolved?: () => void;
 }) {
+  const t = useTranslations("brief");
   if (items.length === 0) {
     return (
-      <section className="needs-you needs-you--empty" aria-label="Needs you">
-        <p className="needs-you__clear">Nothing needs you right now.</p>
+      <section className="needs-you needs-you--empty" aria-label={t("needsYou")}>
+        <p className="needs-you__clear">{t("nothingNeedsYou")}</p>
       </section>
     );
   }
 
   return (
-    <section className="needs-you" aria-label="Needs you">
+    <section className="needs-you" aria-label={t("needsYou")}>
       <header className="needs-you__head">
         <span className="needs-you__title">
-          Needs you <span aria-hidden="true">👋</span>
+          {t("needsYou")} <span aria-hidden="true">👋</span>
         </span>
         <span className="needs-you__count">{items.length}</span>
       </header>
@@ -55,6 +57,7 @@ type ResolveState = "idle" | "resolving" | "approved" | "denied" | "error";
  *  inline error states. A failed action does NOT crash the strip. */
 function NeedsYouRow({ item, onResolved }: { item: NeedsYouItem; onResolved?: () => void }) {
   const [state, setState] = useState<ResolveState>("idle");
+  const t = useTranslations("brief");
 
   async function run(action: "approve" | "deny") {
     if (!item.resolve || state === "resolving") return;
@@ -90,7 +93,7 @@ function NeedsYouRow({ item, onResolved }: { item: NeedsYouItem; onResolved?: ()
         <span className="needs-you__actions">
           {state === "error" && (
             <span className="needs-you__error" aria-live="polite">
-              Couldn’t do that — please try again.
+              {t("resolveError")}
             </span>
           )}
           <button
@@ -99,7 +102,7 @@ function NeedsYouRow({ item, onResolved }: { item: NeedsYouItem; onResolved?: ()
             onClick={() => run("deny")}
             disabled={state === "resolving"}
           >
-            Deny
+            {t("deny")}
           </button>
           <button
             type="button"
@@ -107,14 +110,14 @@ function NeedsYouRow({ item, onResolved }: { item: NeedsYouItem; onResolved?: ()
             onClick={() => run("approve")}
             disabled={state === "resolving"}
           >
-            {state === "resolving" ? "Working…" : "Approve"}
+            {state === "resolving" ? t("working") : t("approve")}
           </button>
         </span>
       ) : null}
 
       {resolved && (
         <span className="needs-you__resolved" aria-live="polite">
-          {state === "approved" ? "Approved — sending it out." : "Dismissed."}
+          {state === "approved" ? t("approved") : t("dismissed")}
         </span>
       )}
 

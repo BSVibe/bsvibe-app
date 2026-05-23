@@ -1,14 +1,16 @@
 import type { LaneState, ProductLane } from "@/lib/api/types";
+import { useTranslations } from "next-intl";
 import Link from "next/link";
 
-/** Lane-state glyph + accessible label (UX §3.3). Color only for the two
- *  states that carry status meaning: amber needs-you, green shipped. */
-const GLYPH: Record<LaneState, { mark: string; label: string }> = {
-  working: { mark: "●", label: "working" },
-  "needs-you": { mark: "●", label: "needs you" },
-  triggered: { mark: "↑", label: "just triggered" },
-  shipped: { mark: "✓", label: "shipped" },
-  idle: { mark: "○", label: "idle" },
+/** Lane-state glyph (UX §3.3). The accessible/visible state label comes from
+ *  the `brief.laneState` catalog. Color only for the two states that carry
+ *  status meaning: amber needs-you, green shipped. */
+const GLYPH: Record<LaneState, string> = {
+  working: "●",
+  "needs-you": "●",
+  triggered: "↑",
+  shipped: "✓",
+  idle: "○",
 };
 
 /**
@@ -21,22 +23,22 @@ const GLYPH: Record<LaneState, { mark: string; label: string }> = {
  * artifacts. The lane rendering is unchanged; it is just wrapped in a link.
  */
 export default function ProductLanes({ lanes }: { lanes: ProductLane[] }) {
+  const t = useTranslations("brief");
   return (
-    <section className="lanes" aria-label="Your products">
-      <h2 className="section-label">Your products</h2>
+    <section className="lanes" aria-label={t("yourProducts")}>
+      <h2 className="section-label">{t("yourProducts")}</h2>
       <ul className="lanes__list">
         {lanes.map((lane) => {
-          const g = GLYPH[lane.state];
           return (
             <li key={lane.id} className={`lane lane--${lane.state}`}>
               <Link className="lane__link" href={`/products/${lane.slug}`}>
                 <span className="lane__glyph" aria-hidden="true">
-                  {g.mark}
+                  {GLYPH[lane.state]}
                 </span>
                 <div className="lane__body">
                   <div className="lane__head">
                     <span className="lane__name">{lane.name}</span>
-                    <span className="lane__state">{g.label}</span>
+                    <span className="lane__state">{t(`laneState.${lane.state}`)}</span>
                   </div>
                   {lane.state !== "idle" && <p className="lane__status">{lane.status}</p>}
                 </div>

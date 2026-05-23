@@ -1,3 +1,4 @@
+import { useTranslations } from "next-intl";
 import ModelAccounts from "./ModelAccounts";
 
 /**
@@ -6,9 +7,10 @@ import ModelAccounts from "./ModelAccounts";
  * not touch it, it only places it under the Models tab.
  */
 export default function ModelsTab() {
+  const t = useTranslations("settings.models");
   return (
     <div className="general-tab">
-      <p className="general-tab__lede">Models — how BSVibe gets its thinking done.</p>
+      <p className="general-tab__lede">{t("lede")}</p>
       <ModelAccounts />
     </div>
   );

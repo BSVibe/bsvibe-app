@@ -3,6 +3,7 @@
 import { DIRECT_SUBMITTED_EVENT } from "@/components/shell/DirectAction";
 import { getBrief } from "@/lib/api/brief";
 import type { BriefView } from "@/lib/api/types";
+import { useTranslations } from "next-intl";
 import { useCallback, useEffect, useState } from "react";
 import BriefContent from "./BriefContent";
 
@@ -11,6 +12,7 @@ import BriefContent from "./BriefContent";
  *  up in the lanes without a manual refresh. */
 export default function Brief() {
   const [view, setView] = useState<BriefView | null>(null);
+  const t = useTranslations("brief");
 
   const load = useCallback((onResult: (next: BriefView) => void) => {
     getBrief().then(onResult);
@@ -34,8 +36,8 @@ export default function Brief() {
   if (view === null) {
     return (
       <div className="brief brief--loading" aria-busy="true">
-        <h1 className="brief__heading">Brief</h1>
-        <p className="brief__loading-note">Loading your products…</p>
+        <h1 className="brief__heading">{t("heading")}</h1>
+        <p className="brief__loading-note">{t("loadingNote")}</p>
       </div>
     );
   }

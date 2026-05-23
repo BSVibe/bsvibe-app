@@ -5,6 +5,7 @@ import { ApiError } from "@/lib/api/client";
 import { listPendingProposals } from "@/lib/api/decisions";
 import type { Checkpoint, Proposal } from "@/lib/api/types";
 import { setPendingDecisionsCount } from "@/lib/decisions/pending-count";
+import { useTranslations } from "next-intl";
 import { useCallback, useEffect, useState } from "react";
 import CheckpointSection from "./CheckpointSection";
 import ProposalSection from "./ProposalSection";
@@ -29,6 +30,7 @@ import ProposalSection from "./ProposalSection";
 export default function Decisions() {
   const [checkpoints, setCheckpoints] = useState<Checkpoint[] | null>(null);
   const [proposals, setProposals] = useState<Proposal[] | null>(null);
+  const t = useTranslations("decisions");
 
   const load = useCallback((onResult: (c: Checkpoint[], p: Proposal[]) => void) => {
     Promise.all([
@@ -63,8 +65,8 @@ export default function Decisions() {
   if (checkpoints === null || proposals === null) {
     return (
       <div className="decisions decisions--loading" aria-busy="true">
-        <h1 className="decisions__heading">Decisions</h1>
-        <p className="decisions__loading-note">Loading what needs you…</p>
+        <h1 className="decisions__heading">{t("heading")}</h1>
+        <p className="decisions__loading-note">{t("loadingNote")}</p>
       </div>
     );
   }
@@ -73,14 +75,12 @@ export default function Decisions() {
 
   return (
     <div className="decisions">
-      <h1 className="decisions__heading">Decisions</h1>
+      <h1 className="decisions__heading">{t("heading")}</h1>
 
       {nothingPending ? (
-        <section className="decisions-empty" aria-label="Decisions">
-          <p className="decisions-empty__line">Nothing needs you right now.</p>
-          <p className="decisions-empty__sub">
-            Paused runs and knowledge reviews will show up here when they need a call.
-          </p>
+        <section className="decisions-empty" aria-label={t("heading")}>
+          <p className="decisions-empty__line">{t("emptyLine")}</p>
+          <p className="decisions-empty__sub">{t("emptySub")}</p>
         </section>
       ) : (
         <>

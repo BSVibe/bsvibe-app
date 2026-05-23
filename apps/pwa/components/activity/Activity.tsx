@@ -2,6 +2,7 @@
 
 import { getActivity } from "@/lib/api/activity";
 import type { ActivityRun } from "@/lib/api/types";
+import { useTranslations } from "next-intl";
 import { useEffect, useState } from "react";
 import RunRow from "./RunRow";
 
@@ -26,6 +27,7 @@ type Loaded = { state: "loading" } | { state: "error" } | { state: "ready"; runs
 
 export default function Activity() {
   const [loaded, setLoaded] = useState<Loaded>({ state: "loading" });
+  const t = useTranslations("activity");
 
   useEffect(() => {
     let active = true;
@@ -43,31 +45,31 @@ export default function Activity() {
 
   return (
     <div className="activity">
-      <h1 className="activity__heading">Activity</h1>
-      <p className="activity__lede">A look at what I&rsquo;ve been doing.</p>
+      <h1 className="activity__heading">{t("heading")}</h1>
+      <p className="activity__lede">{t("lede")}</p>
 
       {loaded.state === "loading" && (
         <p className="activity__loading-note" aria-busy="true">
-          Looking at recent activity…
+          {t("loadingNote")}
         </p>
       )}
 
       {loaded.state === "error" && (
-        <section className="activity-empty" aria-label="Activity">
-          <p className="activity-empty__line">Couldn&rsquo;t load recent activity just now.</p>
-          <p className="activity-empty__sub">Try again in a moment.</p>
+        <section className="activity-empty" aria-label={t("heading")}>
+          <p className="activity-empty__line">{t("errorLine")}</p>
+          <p className="activity-empty__sub">{t("errorSub")}</p>
         </section>
       )}
 
       {loaded.state === "ready" && loaded.runs.length === 0 && (
-        <section className="activity-empty" aria-label="Activity">
-          <p className="activity-empty__line">No runs yet.</p>
-          <p className="activity-empty__sub">Give me a Direction and they&rsquo;ll show up here.</p>
+        <section className="activity-empty" aria-label={t("heading")}>
+          <p className="activity-empty__line">{t("emptyLine")}</p>
+          <p className="activity-empty__sub">{t("emptySub")}</p>
         </section>
       )}
 
       {loaded.state === "ready" && loaded.runs.length > 0 && (
-        <ul className="activity-list" aria-label="Recent runs">
+        <ul className="activity-list" aria-label={t("recentRuns")}>
           {loaded.runs.map((run) => (
             <RunRow key={run.runId} run={run} />
           ))}

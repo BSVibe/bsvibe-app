@@ -12,11 +12,18 @@
 
 import GeneralTab from "@/components/settings/GeneralTab";
 import { type Session, clearSession, setSession } from "@/lib/auth/session";
+import { LOCALE_COOKIE } from "@/lib/i18n/config";
 import { PREF_STORAGE_KEY } from "@/lib/preferences/preferences";
 import { THEME_STORAGE_KEY } from "@/lib/theme/theme";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+// GeneralTab refreshes the route after switching the locale; stub the router.
+const refresh = vi.fn();
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ refresh, replace: vi.fn(), push: vi.fn(), prefetch: vi.fn() }),
+}));
 
 const SESSION: Session = {
   accessToken: "tok",
@@ -30,6 +37,8 @@ const SESSION: Session = {
 beforeEach(() => {
   window.localStorage.clear();
   document.documentElement.removeAttribute("data-theme");
+  document.cookie = `${LOCALE_COOKIE}=; path=/; max-age=0`;
+  refresh.mockClear();
   clearSession();
   setSession(SESSION);
   // jsdom lacks matchMedia — provide a light-preferring stub.
@@ -110,9 +119,14 @@ describe("General tab — display preferences", () => {
     expect(JSON.parse(window.localStorage.getItem(PREF_STORAGE_KEY) ?? "{}").dateFormat).toBe("us");
   });
 
-  it("notes that the language choice does not translate the app yet", () => {
+  it("switching language sets the locale cookie and refreshes the route", async () => {
+    const user = userEvent.setup();
     render(<GeneralTab />);
-    expect(screen.getByText(/doesn.t translate the app yet|i18n|coming/i)).toBeInTheDocument();
+
+    await user.selectOptions(screen.getByLabelText(/language/i), "ko");
+
+    expect(document.cookie).toContain(`${LOCALE_COOKIE}=ko`);
+    expect(refresh).toHaveBeenCalled();
   });
 });
 

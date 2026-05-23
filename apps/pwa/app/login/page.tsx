@@ -1,6 +1,7 @@
 "use client";
 
 import { login } from "@/lib/api/auth";
+import { useTranslations } from "next-intl";
 import { useRouter } from "next/navigation";
 import { type FormEvent, useState } from "react";
 
@@ -8,6 +9,7 @@ import { type FormEvent, useState } from "react";
  *  the session is persisted and we land on /brief. */
 export default function LoginPage() {
   const router = useRouter();
+  const t = useTranslations("auth");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -21,7 +23,7 @@ export default function LoginPage() {
       await login(email, password);
       router.replace("/brief");
     } catch {
-      setError("Couldn’t sign you in. Check your email and password.");
+      setError(t("signInError"));
       setBusy(false);
     }
   }
@@ -29,12 +31,12 @@ export default function LoginPage() {
   return (
     <main className="login">
       <div className="login__brand">
-        <span className="login__wordmark">BSVibe</span>
-        <span className="login__tagline">AI Agent OS</span>
+        <span className="login__wordmark">{t("wordmark")}</span>
+        <span className="login__tagline">{t("tagline")}</span>
       </div>
       <form className="login__form" onSubmit={handleSubmit}>
         <label className="login__label" htmlFor="email">
-          Email
+          {t("email")}
         </label>
         <input
           id="email"
@@ -46,7 +48,7 @@ export default function LoginPage() {
           required
         />
         <label className="login__label" htmlFor="password">
-          Password
+          {t("password")}
         </label>
         <input
           id="password"
@@ -63,7 +65,7 @@ export default function LoginPage() {
           </p>
         )}
         <button type="submit" className="login__submit" disabled={busy}>
-          {busy ? "Signing in…" : "Continue"}
+          {busy ? t("signingIn") : t("continue")}
         </button>
       </form>
     </main>

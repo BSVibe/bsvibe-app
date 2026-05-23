@@ -2,6 +2,7 @@
 
 import { acceptProposal, rejectProposal } from "@/lib/api/decisions";
 import type { Proposal } from "@/lib/api/types";
+import { useTranslations } from "next-intl";
 import { useState } from "react";
 
 type RowState = "idle" | "accepting" | "rejecting" | "accepted" | "rejected" | "error";
@@ -28,12 +29,13 @@ export default function ProposalSection({
   items: Proposal[];
   onResolved?: () => void;
 }) {
+  const t = useTranslations("decisions");
   if (items.length === 0) return null;
 
   return (
-    <section className="decisions-block" aria-label="Knowledge review">
+    <section className="decisions-block" aria-label={t("knowledgeReview")}>
       <header className="decisions-block__head">
-        <h2 className="section-label">Knowledge review</h2>
+        <h2 className="section-label">{t("knowledgeReview")}</h2>
         <span className="decisions-block__count">{items.length}</span>
       </header>
       <ul className="decisions-list">
@@ -48,6 +50,7 @@ export default function ProposalSection({
 function ProposalRow({ item, onResolved }: { item: Proposal; onResolved?: () => void }) {
   const [state, setState] = useState<RowState>("idle");
   const busy = state === "accepting" || state === "rejecting";
+  const t = useTranslations("decisions");
 
   // The accept/reject endpoints address a proposal by its vault path, which the
   // list surfaces as `id` (e.g. `proposals/merge-concepts/<file>.md`).
@@ -77,7 +80,7 @@ function ProposalRow({ item, onResolved }: { item: Proposal; onResolved?: () => 
       <li className={`decisions-row decisions-row--${state}`}>
         <span className="decisions-row__q">{describe(item)}</span>
         <span className="decisions-row__done" aria-live="polite">
-          {state === "accepted" ? "Merged into your knowledge." : "Left as-is."}
+          {state === "accepted" ? t("merged") : t("leftAsIs")}
         </span>
       </li>
     );
@@ -86,14 +89,12 @@ function ProposalRow({ item, onResolved }: { item: Proposal; onResolved?: () => 
   return (
     <li className="decisions-row">
       <p className="decisions-row__q">{describe(item)}</p>
-      <p className="decisions-row__why">
-        Merging keeps your knowledge graph from holding the same idea twice.
-      </p>
+      <p className="decisions-row__why">{t("proposalRationale")}</p>
 
       <div className="decisions-row__foot">
         {state === "error" && (
           <span className="decisions-row__error" aria-live="polite">
-            Couldn’t do that — please try again.
+            {t("resolveError")}
           </span>
         )}
         <button
@@ -102,7 +103,7 @@ function ProposalRow({ item, onResolved }: { item: Proposal; onResolved?: () => 
           onClick={() => run("reject")}
           disabled={busy}
         >
-          {state === "rejecting" ? "Working…" : "Reject"}
+          {state === "rejecting" ? t("working") : t("reject")}
         </button>
         <button
           type="button"
@@ -110,7 +111,7 @@ function ProposalRow({ item, onResolved }: { item: Proposal; onResolved?: () => 
           onClick={() => run("accept")}
           disabled={busy}
         >
-          {state === "accepting" ? "Working…" : "Accept"}
+          {state === "accepting" ? t("working") : t("accept")}
         </button>
       </div>
     </li>

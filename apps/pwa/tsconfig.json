@@ -19,7 +19,8 @@
       }
     ],
     "paths": {
-      "@/*": ["./*"]
+      "@/*": ["./*"],
+      "@rtl-actual": ["./node_modules/@testing-library/react"]
     }
   },
   "include": [

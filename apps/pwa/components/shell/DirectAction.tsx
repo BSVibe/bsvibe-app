@@ -2,6 +2,7 @@
 
 import { ApiError } from "@/lib/api/client";
 import { submitMessage } from "@/lib/api/messages";
+import { useTranslations } from "next-intl";
 import { type FormEvent, useEffect, useState } from "react";
 import { PlusIcon } from "./icons";
 
@@ -11,10 +12,11 @@ export const DIRECT_SUBMITTED_EVENT = "bsvibe:direct-submitted";
 
 /** Floating "+ Direct" trigger — the global compose affordance (UX §1.1). */
 export function DirectFab({ onClick }: { onClick: () => void }) {
+  const t = useTranslations("direct");
   return (
     <button type="button" className="direct-fab" onClick={onClick}>
       <PlusIcon />
-      <span>Direct</span>
+      <span>{t("label")}</span>
     </button>
   );
 }
@@ -32,6 +34,7 @@ export function DirectOverlay({ open, onClose }: { open: boolean; onClose: () =>
   const [text, setText] = useState("");
   const [state, setState] = useState<SubmitState>("idle");
   const [error, setError] = useState<string | null>(null);
+  const t = useTranslations("direct");
 
   // Reset the form whenever the overlay (re)opens.
   useEffect(() => {
@@ -75,11 +78,7 @@ export function DirectOverlay({ open, onClose }: { open: boolean; onClose: () =>
       window.dispatchEvent(new CustomEvent(DIRECT_SUBMITTED_EVENT));
     } catch (err) {
       setState("error");
-      setError(
-        err instanceof ApiError
-          ? "Couldn’t send that — please try again."
-          : "Network hiccup — please try again.",
-      );
+      setError(err instanceof ApiError ? t("errorSend") : t("errorNetwork"));
     }
   }
 
@@ -87,14 +86,12 @@ export function DirectOverlay({ open, onClose }: { open: boolean; onClose: () =>
     <div className="direct-overlay">
       {/* biome-ignore lint/a11y/useKeyWithClickEvents: backdrop dismiss; Escape handled above */}
       <div className="direct-overlay__backdrop" onClick={onClose} aria-hidden="true" />
-      <dialog className="direct-overlay__panel" aria-label="Direct" open>
+      <dialog className="direct-overlay__panel" aria-label={t("label")} open>
         <form onSubmit={onSubmit}>
-          <p className="direct-overlay__hint">
-            Tell BSVibe what to do — ask a question or start work.
-          </p>
+          <p className="direct-overlay__hint">{t("hint")}</p>
           <textarea
             className="direct-overlay__input"
-            placeholder="e.g. “draft the launch post for bsvibe-site”"
+            placeholder={t("placeholder")}
             rows={3}
             value={text}
             onChange={(e) => setText(e.target.value)}
@@ -104,12 +101,12 @@ export function DirectOverlay({ open, onClose }: { open: boolean; onClose: () =>
           />
           <div className="direct-overlay__foot">
             <span className="direct-overlay__status" aria-live="polite">
-              {state === "submitting" && "Sending…"}
-              {state === "success" && "Sent — working on it."}
+              {state === "submitting" && t("sending")}
+              {state === "success" && t("sent")}
               {state === "error" && <span className="direct-overlay__error">{error}</span>}
             </span>
             <button type="submit" className="direct-overlay__submit" disabled={!canSubmit}>
-              {state === "submitting" ? "Sending…" : "Direct"}
+              {state === "submitting" ? t("sending") : t("label")}
             </button>
           </div>
         </form>

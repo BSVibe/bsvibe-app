@@ -1,4 +1,5 @@
 import type { ArtifactType, ShippedItem } from "@/lib/api/types";
+import { useTranslations } from "next-intl";
 
 /** Per-artifact-type marker (UX §4 — deliverables are polymorphic). */
 const ARTIFACT: Record<ArtifactType, { glyph: string; tone: string }> = {
@@ -15,11 +16,12 @@ const ARTIFACT: Record<ArtifactType, { glyph: string; tone: string }> = {
  * deliverable with its proof verdict, mixed artifact types.
  */
 export default function RecentlyShipped({ items }: { items: ShippedItem[] }) {
+  const t = useTranslations("brief");
   if (items.length === 0) return null;
 
   return (
-    <section className="shipped" aria-label="Recently shipped">
-      <h2 className="section-label">Recently shipped</h2>
+    <section className="shipped" aria-label={t("recentlyShipped")}>
+      <h2 className="section-label">{t("recentlyShipped")}</h2>
       <ul className="shipped__list">
         {items.map((item) => {
           const a = ARTIFACT[item.artifactType];

@@ -1,4 +1,5 @@
 import type { Observation } from "@/lib/api/types";
+import { useTranslations } from "next-intl";
 
 /**
  * "Recently observed" — the raw, unpromoted garden notes the SettleWorker
@@ -16,19 +17,20 @@ export default function ObservationsSection({
   items: Observation[];
   failed: boolean;
 }) {
+  const t = useTranslations("inside");
   return (
-    <section className="inside-block" aria-label="Recently observed">
+    <section className="inside-block" aria-label={t("recentlyObserved")}>
       <header className="inside-block__head">
-        <h2 className="section-label">Recently observed</h2>
+        <h2 className="section-label">{t("recentlyObserved")}</h2>
         {!failed && items.length > 0 && <span className="inside-block__count">{items.length}</span>}
       </header>
 
       {failed ? (
         <p className="inside-block__note" aria-live="polite">
-          Couldn&rsquo;t load recent observations just now — try again in a moment.
+          {t("observationsError")}
         </p>
       ) : items.length === 0 ? (
-        <p className="inside-block__note">Nothing observed recently.</p>
+        <p className="inside-block__note">{t("observationsEmpty")}</p>
       ) : (
         <ul className="inside-list">
           {items.map((obs) => (
