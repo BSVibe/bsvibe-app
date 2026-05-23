@@ -2,52 +2,29 @@
 
 from __future__ import annotations
 
-import os
 import uuid
 from datetime import UTC, datetime
 
 import pytest
 import pytest_asyncio
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from backend.intake.db import IntakeBase, TriggerEventRow
 from backend.intake.direct import DirectTrigger
 from backend.intake.schedule import ScheduleTrigger
 
-PG_URL = os.environ.get(
-    "BSVIBE_DATABASE_URL", "postgresql+asyncpg://bsvibe:bsvibe@localhost:5442/bsvibe"
-)
-
+from .._support import db_engine
 
 pytestmark = pytest.mark.asyncio
 
 
-async def _can_reach_pg() -> bool:
-    try:
-        engine = create_async_engine(PG_URL, future=True, pool_pre_ping=True)
-        async with engine.connect() as conn:
-            await conn.execute(__import__("sqlalchemy").text("SELECT 1"))
-        await engine.dispose()
-        return True
-    except Exception:
-        return False
-
-
 @pytest_asyncio.fixture
 async def session() -> AsyncSession:
-    use_pg = os.environ.get("BSVIBE_DATABASE_URL") and await _can_reach_pg()
-    url = PG_URL if use_pg else "sqlite+aiosqlite:///:memory:"
-    engine = create_async_engine(url, future=True)
-    async with engine.begin() as conn:
-        await conn.run_sync(IntakeBase.metadata.create_all)
-    sm = async_sessionmaker(engine, expire_on_commit=False)
-    async with sm() as s:
-        yield s
-    if use_pg:
-        async with engine.begin() as conn:
-            await conn.run_sync(IntakeBase.metadata.drop_all)
-    await engine.dispose()
+    async with db_engine(IntakeBase) as (engine, _is_pg):
+        sm = async_sessionmaker(engine, expire_on_commit=False)
+        async with sm() as s:
+            yield s
 
 
 async def test_direct_submit_persists(session: AsyncSession) -> None:
