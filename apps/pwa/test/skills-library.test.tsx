@@ -1,0 +1,144 @@
+/**
+ * Skills Library surface — the read-only skill list container, driven by a
+ * mocked fetch (GET /api/v1/skills). Asserts:
+ *  - renders a card per skill with its real fields (name + description, and a
+ *    "model" / system-prompt hint when present), each linking to its viewer
+ *  - the calm empty state when the workspace has no skills yet
+ *  - a calm inline error (not a blank page / not a crash) when the read fails
+ *  - a loading note before the read lands
+ *  - the authoring affordance ("New skill") is present but DISABLED with a
+ *    "coming soon" hint (no write API)
+ */
+
+import SkillsLibrary from "@/components/skills/SkillsLibrary";
+import type { Skill } from "@/lib/api/types";
+import { type Session, clearSession, setSession } from "@/lib/auth/session";
+import { render, screen, waitFor } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+vi.mock("next/navigation", () => ({
+  usePathname: () => "/skills",
+  useRouter: () => ({ replace: vi.fn(), push: vi.fn(), prefetch: vi.fn() }),
+}));
+
+const SESSION: Session = {
+  accessToken: "tok",
+  refreshToken: "ref",
+  email: "founder@bsvibe.dev",
+  userId: "user-1",
+  expiresAt: Date.now() + 3_600_000,
+};
+
+const BLOG_WRITER: Skill = {
+  name: "blog-writer",
+  version: "1.0.0",
+  description: "Drafts a technical blog post in the house voice.",
+  author: "founder",
+  allowed_tools: ["read", "write"],
+  model: "claude-opus",
+  has_system_prompt: true,
+};
+
+const RELEASE_NOTES: Skill = {
+  name: "release-notes",
+  version: "0.2.0",
+  description: "Summarises merged PRs into a release note.",
+  author: "",
+  allowed_tools: [],
+  model: null,
+  has_system_prompt: false,
+};
+
+function json(body: unknown, status = 200) {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "Content-Type": "application/json" },
+  });
+}
+
+function installFetch(skills: () => Skill[] | Response) {
+  const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url.startsWith("/api/v1/skills")) {
+      const s = skills();
+      return s instanceof Response ? s : json(s);
+    }
+    throw new Error(`unexpected fetch ${url}`);
+  });
+  global.fetch = fetchMock as unknown as typeof fetch;
+  return fetchMock;
+}
+
+describe("Skills Library surface", () => {
+  beforeEach(() => {
+    clearSession();
+    setSession(SESSION);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("renders a card per skill with name + description, linking to the viewer", async () => {
+    installFetch(() => [BLOG_WRITER, RELEASE_NOTES]);
+
+    render(<SkillsLibrary />);
+
+    await waitFor(() => {
+      expect(screen.getByText(BLOG_WRITER.name)).toBeInTheDocument();
+    });
+    expect(screen.getByText(BLOG_WRITER.description)).toBeInTheDocument();
+    expect(screen.getByText(RELEASE_NOTES.name)).toBeInTheDocument();
+    expect(screen.getByText(RELEASE_NOTES.description)).toBeInTheDocument();
+
+    // Each card is a link to its detail route.
+    const link = screen.getByRole("link", { name: /blog-writer/ });
+    expect(link).toHaveAttribute("href", "/skills/blog-writer");
+  });
+
+  it("shows the calm empty state when there are no skills yet", async () => {
+    installFetch(() => []);
+
+    render(<SkillsLibrary />);
+
+    await waitFor(() => {
+      expect(screen.getByText(/No skills yet/i)).toBeInTheDocument();
+    });
+  });
+
+  it("shows a calm inline note (not a crash) when the read fails", async () => {
+    installFetch(() => json("boom", 500));
+
+    render(<SkillsLibrary />);
+
+    await waitFor(() => {
+      expect(screen.getByText(/Couldn’t load skills/)).toBeInTheDocument();
+    });
+    // No skill cards rendered, but the page did not crash.
+    expect(screen.queryByText(BLOG_WRITER.name)).not.toBeInTheDocument();
+  });
+
+  it("shows a loading note before the read lands", async () => {
+    installFetch(() => [BLOG_WRITER]);
+
+    render(<SkillsLibrary />);
+
+    expect(screen.getByText(/Looking at your skills/)).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByText(BLOG_WRITER.name)).toBeInTheDocument();
+    });
+  });
+
+  it("renders a DISABLED 'New skill' affordance with a coming-soon hint", async () => {
+    installFetch(() => [BLOG_WRITER]);
+
+    render(<SkillsLibrary />);
+
+    await waitFor(() => {
+      expect(screen.getByText(BLOG_WRITER.name)).toBeInTheDocument();
+    });
+    const newSkill = screen.getByRole("button", { name: /New skill/i });
+    expect(newSkill).toBeDisabled();
+    expect(newSkill).toHaveAttribute("title", expect.stringMatching(/coming soon/i));
+  });
+});

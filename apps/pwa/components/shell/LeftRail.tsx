@@ -11,6 +11,7 @@ import {
   InsideIcon,
   PlusIcon,
   SettingsIcon,
+  SkillsIcon,
 } from "./icons";
 import { type NavKey, PRIMARY_NAV } from "./nav";
 
@@ -19,6 +20,7 @@ const ICONS: Record<NavKey, typeof BriefIcon> = {
   decisions: DecisionsIcon,
   activity: ActivityIcon,
   inside: InsideIcon,
+  skills: SkillsIcon,
 };
 
 /** Persistent left rail (desktop). UX §1.1 / §3.4 layout. */

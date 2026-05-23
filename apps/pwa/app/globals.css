@@ -3223,3 +3223,239 @@ main.login {
   opacity: 0.45;
   cursor: default;
 }
+
+/* ── Skills surface (Library + viewer, read-only) ──────────────────────────
+   Appended for the Skills lift. Shared design tokens only (ink ramp, surface,
+   hairlines, accent-bg, radii) so the surface adapts to dark mode with no
+   hardcoded colours. */
+.skills {
+  max-width: var(--col-w);
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.skills__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.skills__heading {
+  margin: 0;
+  font-size: 1.5rem;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+
+.skills__lede {
+  margin: 4px 0 0;
+  font-size: 0.92rem;
+  color: var(--ink-2);
+}
+
+.skills__new {
+  flex: none;
+  font: inherit;
+  font-size: 0.84rem;
+  font-weight: 550;
+  color: var(--ink-2);
+  background: var(--surface);
+  border: 1px solid var(--hair-strong);
+  border-radius: var(--radius-sm);
+  padding: 7px 12px;
+}
+
+.skills__new:disabled {
+  color: var(--ink-3);
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.skills__loading-note {
+  margin: 0;
+  color: var(--ink-3);
+  font-size: 0.9rem;
+}
+
+.skills-empty {
+  background: var(--surface);
+  border: 1px solid var(--hair-strong);
+  border-radius: var(--radius);
+  padding: 22px 20px;
+}
+
+.skills-empty__line {
+  margin: 0;
+  font-size: 0.95rem;
+  font-weight: 550;
+}
+
+.skills-empty__sub {
+  margin: 6px 0 0;
+  font-size: 0.85rem;
+  color: var(--ink-3);
+}
+
+.skills-empty__sub a {
+  color: var(--ink-2);
+  text-decoration: underline;
+}
+
+.skills-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.skills-card {
+  background: var(--surface);
+  border: 1px solid var(--hair-strong);
+  border-radius: var(--radius);
+}
+
+.skills-card__link {
+  display: block;
+  padding: 16px 18px;
+  color: inherit;
+  text-decoration: none;
+}
+
+.skills-card__link:hover {
+  background: var(--accent-bg);
+  border-radius: var(--radius);
+}
+
+.skills-card__name {
+  display: block;
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.skills-card__desc {
+  margin: 5px 0 0;
+  font-size: 0.85rem;
+  color: var(--ink-2);
+}
+
+.skills-card__hint {
+  display: inline-block;
+  margin-top: 8px;
+  font-size: 0.72rem;
+  color: var(--ink-3);
+}
+
+/* Skill viewer */
+.skill {
+  max-width: var(--col-w);
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.skill__back {
+  align-self: flex-start;
+  font-size: 0.85rem;
+  color: var(--ink-3);
+  text-decoration: none;
+}
+
+.skill__back:hover {
+  color: var(--ink-2);
+}
+
+.skill__loading-note {
+  margin: 0;
+  color: var(--ink-3);
+  font-size: 0.9rem;
+}
+
+.skill-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.skill-detail__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.skill-detail__name {
+  margin: 0;
+  font-size: 1.4rem;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+
+.skill-detail__meta {
+  margin: 5px 0 0;
+  font-size: 0.8rem;
+  color: var(--ink-3);
+}
+
+.skill-detail__edit {
+  flex: none;
+  font: inherit;
+  font-size: 0.84rem;
+  font-weight: 550;
+  color: var(--ink-2);
+  background: var(--surface);
+  border: 1px solid var(--hair-strong);
+  border-radius: var(--radius-sm);
+  padding: 7px 12px;
+}
+
+.skill-detail__edit:disabled {
+  color: var(--ink-3);
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.skill-detail__desc {
+  margin: 0;
+  font-size: 0.92rem;
+  color: var(--ink);
+}
+
+.skill-detail__block {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.skill-detail__block .section-label {
+  margin: 0;
+}
+
+.skill-tags {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.skill-tag {
+  font-size: 0.74rem;
+  color: var(--ink-2);
+  background: var(--accent-bg);
+  border-radius: 999px;
+  padding: 3px 10px;
+}
+
+.skill-detail__prompt-note {
+  margin: 0;
+  font-size: 0.82rem;
+  color: var(--ink-3);
+}
