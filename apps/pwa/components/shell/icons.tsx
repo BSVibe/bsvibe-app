@@ -57,6 +57,14 @@ export function ActivityIcon(props: SVGProps<SVGSVGElement>) {
   );
 }
 
+export function SkillsIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Svg {...props}>
+      <path d="M12 3l2.2 4.6 5 .7-3.6 3.5.9 5L12 14.9 7.5 16.8l.9-5L4.8 8.3l5-.7Z" />
+    </Svg>
+  );
+}
+
 export function SettingsIcon(props: SVGProps<SVGSVGElement>) {
   return (
     <Svg {...props}>

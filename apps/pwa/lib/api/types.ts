@@ -486,3 +486,24 @@ export interface NotificationPrefs {
   quiet_hours_start: string;
   quiet_hours_end: string;
 }
+
+// ── Skills (REAL endpoint /api/v1/skills, READ-ONLY) ───────────────────────
+// Appended for the Skills surface lift. The backend skills API is read-only —
+// there is NO create/update/delete (skill MD files are file-system based, per
+// backend/api/v1/skills.py). So the PWA surfaces a Library + viewer only; the
+// authoring affordances are disabled stubs.
+
+/** `GET /api/v1/skills` element / `GET /api/v1/skills/{name}` (backend
+ *  SkillResponse, extra=forbid). Skill manifest metadata for the workspace.
+ *  Mirrors the backend response model field-for-field. The skill's markdown
+ *  system prompt body is NOT returned over the API — `has_system_prompt` is the
+ *  "a prompt is on file" flag, the same way the backend masks it. */
+export interface Skill {
+  name: string;
+  version: string;
+  description: string;
+  author: string;
+  allowed_tools: string[];
+  model: string | null;
+  has_system_prompt: boolean;
+}

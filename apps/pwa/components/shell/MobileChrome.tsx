@@ -3,7 +3,7 @@
 import { usePendingDecisionsCount } from "@/lib/decisions/pending-count";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { ActivityIcon, BellIcon, BriefIcon, DecisionsIcon, InsideIcon } from "./icons";
+import { ActivityIcon, BellIcon, BriefIcon, DecisionsIcon, InsideIcon, SkillsIcon } from "./icons";
 import { type NavKey, PRIMARY_NAV } from "./nav";
 
 const ICONS: Record<NavKey, typeof BriefIcon> = {
@@ -11,6 +11,7 @@ const ICONS: Record<NavKey, typeof BriefIcon> = {
   decisions: DecisionsIcon,
   activity: ActivityIcon,
   inside: InsideIcon,
+  skills: SkillsIcon,
 };
 
 const TITLES: Record<string, string> = {
@@ -18,6 +19,7 @@ const TITLES: Record<string, string> = {
   "/decisions": "Decisions",
   "/activity": "Activity",
   "/inside": "Inside",
+  "/skills": "Skills",
   "/settings": "Settings",
 };
 
