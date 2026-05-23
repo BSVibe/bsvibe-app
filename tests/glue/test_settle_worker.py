@@ -13,14 +13,13 @@ tests prove the actual settle→BSage deposit rather than a mock of it.
 
 from __future__ import annotations
 
-import os
 import uuid
 from datetime import UTC, datetime
 
 import pytest
 import pytest_asyncio
-from sqlalchemy import create_engine, select, text
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from backend.execution.db import ExecutionBase, ExecutionRun, ExecutionRunActivity, RunStatus
 from backend.workers.db import SettleDrainRow, WorkersBase
@@ -32,42 +31,17 @@ from backend.workers.settle_worker import (
 )
 from backend.workspaces.db import WorkspaceRow, WorkspacesBase
 
-PG_URL = os.environ.get(
-    "BSVIBE_DATABASE_URL", "postgresql+asyncpg://bsvibe:bsvibe@localhost:5442/bsvibe"
-)
+from .._support import db_engine
 
 pytestmark = pytest.mark.asyncio
 
 _BASES = (ExecutionBase, WorkersBase, WorkspacesBase)
 
 
-def _can_reach_pg() -> bool:
-    sync_url = PG_URL.replace("+asyncpg", "+psycopg") if "+asyncpg" in PG_URL else PG_URL
-    try:
-        engine = create_engine(sync_url, pool_pre_ping=True)
-        with engine.connect() as conn:
-            conn.execute(text("SELECT 1"))
-        engine.dispose()
-        return True
-    except Exception:
-        return False
-
-
 @pytest_asyncio.fixture
 async def sf():
-    use_pg = bool(os.environ.get("BSVIBE_DATABASE_URL")) and _can_reach_pg()
-    url = PG_URL if use_pg else "sqlite+aiosqlite:///:memory:"
-    engine = create_async_engine(url, future=True)
-    async with engine.begin() as conn:
-        for base in _BASES:
-            await conn.run_sync(base.metadata.create_all)
-    sm = async_sessionmaker(engine, expire_on_commit=False)
-    yield sm
-    if use_pg:
-        async with engine.begin() as conn:
-            for base in reversed(_BASES):
-                await conn.run_sync(base.metadata.drop_all)
-    await engine.dispose()
+    async with db_engine(*_BASES) as (engine, _is_pg):
+        yield async_sessionmaker(engine, expire_on_commit=False)
 
 
 async def _seed_settle_activity(

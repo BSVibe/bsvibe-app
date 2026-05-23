@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-import os
 import uuid
 from datetime import UTC, datetime
 
 import httpx
 import pytest
 import pytest_asyncio
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from backend.api.deps import (
     get_current_user,
@@ -22,42 +21,18 @@ from backend.execution.db import ExecutionBase, ExecutionRun, RunStatus
 from backend.gateway.embedding.db import GatewayEmbeddingBase, IntentDefinitionRow
 from backend.gateway.rules.db import GatewayRulesBase, RoutingRuleRow
 
-from .._support import fake_current_user
-
-PG_URL = os.environ.get(
-    "BSVIBE_DATABASE_URL", "postgresql+asyncpg://bsvibe:bsvibe@localhost:5442/bsvibe"
-)
-
+from .._support import db_engine, fake_current_user
 
 pytestmark = pytest.mark.asyncio
 
 
-async def _can_reach_pg() -> bool:
-    try:
-        engine = create_async_engine(PG_URL, future=True, pool_pre_ping=True)
-        async with engine.connect() as conn:
-            await conn.execute(__import__("sqlalchemy").text("SELECT 1"))
-        await engine.dispose()
-        return True
-    except Exception:
-        return False
-
-
 @pytest_asyncio.fixture
 async def db():
-    use_pg = os.environ.get("BSVIBE_DATABASE_URL") and await _can_reach_pg()
-    url = PG_URL if use_pg else "sqlite+aiosqlite:///:memory:"
-    engine = create_async_engine(url, future=True)
-    async with engine.begin() as conn:
-        for base in (GatewayRulesBase, GatewayEmbeddingBase, ExecutionBase):
-            await conn.run_sync(base.metadata.create_all)
-    sm = async_sessionmaker(engine, expire_on_commit=False)
-    yield sm
-    if use_pg:
-        async with engine.begin() as conn:
-            for base in (ExecutionBase, GatewayEmbeddingBase, GatewayRulesBase):
-                await conn.run_sync(base.metadata.drop_all)
-    await engine.dispose()
+    async with db_engine(GatewayRulesBase, GatewayEmbeddingBase, ExecutionBase) as (
+        engine,
+        _is_pg,
+    ):
+        yield async_sessionmaker(engine, expire_on_commit=False)
 
 
 @pytest.fixture

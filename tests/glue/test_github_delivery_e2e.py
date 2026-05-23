@@ -22,7 +22,6 @@ In-memory SQLite by default, real Postgres when ``BSVIBE_DATABASE_URL`` is set
 from __future__ import annotations
 
 import asyncio
-import os
 import uuid
 from pathlib import Path
 from typing import Any
@@ -32,11 +31,10 @@ import pytest
 import pytest_asyncio
 import respx
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from backend.accounts.crypto import CredentialCipher
 from backend.connectors.db import ConnectorAccountRow
-from backend.data import Base
 from backend.delivery.connector_dispatch import (
     build_connector_delivery_adapter,
     build_github_workspace_provisioner,
@@ -51,40 +49,18 @@ from backend.supervisor.sandbox import NoopSandboxManager
 from backend.workers.agent_worker import AgentExecutionDeps, AgentWorker
 from backend.workers.delivery_worker import DeliveryWorker, DeliveryWorkerConfig
 
+from .._support import db_engine
+
 GITHUB_API = "https://api.github.test"
 TEST_KEY = b"0123456789abcdef0123456789abcdef"
-
-PG_URL = os.environ.get(
-    "BSVIBE_DATABASE_URL", "postgresql+asyncpg://bsvibe:bsvibe@localhost:5442/bsvibe"
-)
 
 pytestmark = pytest.mark.asyncio
 
 
-async def _can_reach_pg() -> bool:
-    try:
-        engine = create_async_engine(PG_URL, future=True, pool_pre_ping=True)
-        async with engine.connect() as conn:
-            await conn.execute(__import__("sqlalchemy").text("SELECT 1"))
-        await engine.dispose()
-        return True
-    except Exception:
-        return False
-
-
 @pytest_asyncio.fixture
 async def sf():
-    use_pg = os.environ.get("BSVIBE_DATABASE_URL") and await _can_reach_pg()
-    url = PG_URL if use_pg else "sqlite+aiosqlite:///:memory:"
-    engine = create_async_engine(url, future=True)
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-    maker = async_sessionmaker(engine, expire_on_commit=False)
-    yield maker
-    if use_pg:
-        async with engine.begin() as conn:
-            await conn.run_sync(Base.metadata.drop_all)
-    await engine.dispose()
+    async with db_engine() as (engine, _is_pg):
+        yield async_sessionmaker(engine, expire_on_commit=False)
 
 
 @pytest.fixture

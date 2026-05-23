@@ -34,7 +34,6 @@ purely lexical (character-trigram Jaccard).
 
 from __future__ import annotations
 
-import os
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
@@ -42,7 +41,7 @@ from pathlib import Path
 import pytest
 import pytest_asyncio
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from backend.execution.db import ExecutionBase, ExecutionRun, ExecutionRunActivity, RunStatus
 from backend.knowledge.canonicalization.index import InMemoryCanonicalizationIndex
@@ -57,9 +56,7 @@ from backend.workers.settle_worker import (
 )
 from backend.workspaces.db import WorkspaceRow, WorkspacesBase
 
-PG_URL = os.environ.get(
-    "BSVIBE_DATABASE_URL", "postgresql+asyncpg://bsvibe:bsvibe@localhost:5442/bsvibe"
-)
+from .._support import db_engine
 
 pytestmark = pytest.mark.asyncio
 
@@ -67,74 +64,10 @@ _BASES = (ExecutionBase, WorkersBase, WorkspacesBase)
 _REGION = "us-1"
 
 
-def _can_reach_pg() -> bool:
-    """Probe PG reachability without requiring a specific sync driver.
-
-    The original probe opened a SQLAlchemy ``+psycopg`` engine — but the ``dev``
-    extra ships only ``asyncpg``, so on a stock checkout the probe always failed
-    and the suite silently fell back to SQLite even with a real PG up (the
-    "real-PG" run would never actually hit PG). A TCP connect to the host:port
-    parsed from ``PG_URL`` is driver-agnostic and event-loop-safe (the fixture
-    calls this synchronously inside pytest-asyncio's running loop, so it must not
-    spin its own loop). ``async_sessionmaker`` then connects for real via
-    asyncpg; a connect failure there surfaces loudly rather than masquerading as
-    SQLite.
-    """
-    import socket  # noqa: PLC0415
-    from urllib.parse import urlsplit  # noqa: PLC0415
-
-    parts = urlsplit(PG_URL.replace("+asyncpg", ""))
-    host = parts.hostname or "localhost"
-    port = parts.port or 5432
-    try:
-        with socket.create_connection((host, port), timeout=2.0):
-            return True
-    except OSError:
-        return False
-
-
-# Suite-owned tables, child-before-parent so row deletes honour FK order. The
-# settle drain marker + run telemetry reference the run, which references the
-# workspace/product; deleting in this order keeps each PG test isolated WITHOUT
-# dropping the shared schema (a real PG may carry other domains' tables — e.g.
-# ``memberships`` FK-references ``workspaces`` — so a blanket ``drop_all`` of
-# only this suite's bases fails on the cross-domain dependency).
-_TABLES_CHILD_FIRST = (
-    "settle_drains",
-    "execution_run_activities",
-    "execution_runs",
-    "products",
-    "workspaces",
-)
-
-
-async def _clean_rows(engine) -> None:
-    from sqlalchemy import text as _text  # noqa: PLC0415
-
-    async with engine.begin() as conn:
-        for table in _TABLES_CHILD_FIRST:
-            await conn.execute(_text(f"DELETE FROM {table}"))
-
-
 @pytest_asyncio.fixture
 async def sf():
-    use_pg = bool(os.environ.get("BSVIBE_DATABASE_URL")) and _can_reach_pg()
-    url = PG_URL if use_pg else "sqlite+aiosqlite:///:memory:"
-    engine = create_async_engine(url, future=True)
-    async with engine.begin() as conn:
-        # ``create_all`` is checkfirst by default — idempotent against a real PG
-        # that already carries the schema.
-        for base in _BASES:
-            await conn.run_sync(base.metadata.create_all)
-    if use_pg:
-        # Start from a clean slate so leftover rows from a prior run (or a crash
-        # mid-teardown) can't bleed into this test's assertions.
-        await _clean_rows(engine)
-    sm = async_sessionmaker(engine, expire_on_commit=False)
-    yield sm
-    if use_pg:
-        await _clean_rows(engine)
-    await engine.dispose()
+    async with db_engine(*_BASES) as (engine, _is_pg):
+        yield async_sessionmaker(engine, expire_on_commit=False)
 
 
 async def _add_workspace(

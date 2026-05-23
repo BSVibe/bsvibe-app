@@ -2,51 +2,27 @@
 
 from __future__ import annotations
 
-import os
 from collections.abc import Sequence
 from datetime import UTC, datetime
 
 import pytest
 import pytest_asyncio
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from backend.supervisor.audit.models import AuditOutboxBase, AuditOutboxRecord
 from backend.supervisor.audit.store import OutboxStore
 from backend.workers.relay_worker import RelayConfig, RelayWorker
 
-PG_URL = os.environ.get(
-    "BSVIBE_DATABASE_URL", "postgresql+asyncpg://bsvibe:bsvibe@localhost:5442/bsvibe"
-)
-
+from .._support import db_engine
 
 pytestmark = pytest.mark.asyncio
 
 
-async def _can_reach_pg() -> bool:
-    try:
-        engine = create_async_engine(PG_URL, future=True, pool_pre_ping=True)
-        async with engine.connect() as conn:
-            await conn.execute(__import__("sqlalchemy").text("SELECT 1"))
-        await engine.dispose()
-        return True
-    except Exception:
-        return False
-
-
 @pytest_asyncio.fixture
 async def session_factory() -> async_sessionmaker[AsyncSession]:
-    # SQLite-by-default; opt into PG via BSVIBE_DATABASE_URL.
-    use_pg = os.environ.get("BSVIBE_DATABASE_URL") and await _can_reach_pg()
-    url = PG_URL if use_pg else "sqlite+aiosqlite:///:memory:"
-    engine = create_async_engine(url, future=True)
-    async with engine.begin() as conn:
-        await conn.run_sync(AuditOutboxBase.metadata.create_all)
-    sm = async_sessionmaker(engine, expire_on_commit=False)
-    yield sm
-    if use_pg:
-        async with engine.begin() as conn:
-            await conn.run_sync(AuditOutboxBase.metadata.drop_all)
-    await engine.dispose()
+    # SQLite-by-default; opt into PG via BSVIBE_DATABASE_URL (see tests/_support).
+    async with db_engine(AuditOutboxBase) as (engine, _is_pg):
+        yield async_sessionmaker(engine, expire_on_commit=False)
 
 
 async def _seed_outbox(sm: async_sessionmaker[AsyncSession], *, count: int) -> list[int]:
