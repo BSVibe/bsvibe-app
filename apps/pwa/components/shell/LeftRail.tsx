@@ -4,12 +4,20 @@ import { usePendingDecisionsCount } from "@/lib/decisions/pending-count";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import AccountChip from "./AccountChip";
-import { BriefIcon, DecisionsIcon, InsideIcon, PlusIcon, SettingsIcon } from "./icons";
+import {
+  ActivityIcon,
+  BriefIcon,
+  DecisionsIcon,
+  InsideIcon,
+  PlusIcon,
+  SettingsIcon,
+} from "./icons";
 import { type NavKey, PRIMARY_NAV } from "./nav";
 
 const ICONS: Record<NavKey, typeof BriefIcon> = {
   brief: BriefIcon,
   decisions: DecisionsIcon,
+  activity: ActivityIcon,
   inside: InsideIcon,
 };
 

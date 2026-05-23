@@ -3,18 +3,20 @@
 import { usePendingDecisionsCount } from "@/lib/decisions/pending-count";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { BellIcon, BriefIcon, DecisionsIcon, InsideIcon } from "./icons";
+import { ActivityIcon, BellIcon, BriefIcon, DecisionsIcon, InsideIcon } from "./icons";
 import { type NavKey, PRIMARY_NAV } from "./nav";
 
 const ICONS: Record<NavKey, typeof BriefIcon> = {
   brief: BriefIcon,
   decisions: DecisionsIcon,
+  activity: ActivityIcon,
   inside: InsideIcon,
 };
 
 const TITLES: Record<string, string> = {
   "/brief": "Brief",
   "/decisions": "Decisions",
+  "/activity": "Activity",
   "/inside": "Inside",
   "/settings": "Settings",
 };

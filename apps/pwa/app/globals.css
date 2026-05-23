@@ -1085,6 +1085,227 @@ main.login {
   padding: 2px 9px;
 }
 
+/* ── Activity (run history) ───────────────────────────────────────────────── */
+
+.activity {
+  max-width: var(--col-w);
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
+}
+
+.activity__heading {
+  margin: 0;
+  font-size: 1.5rem;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+
+.activity__lede {
+  margin: -18px 0 0;
+  font-size: 0.92rem;
+  color: var(--ink-2);
+}
+
+.activity__loading-note {
+  color: var(--ink-3);
+  font-size: 0.9rem;
+}
+
+.activity-empty {
+  background: var(--surface);
+  border: 1px solid var(--hair-strong);
+  border-radius: var(--radius);
+  padding: 22px 20px;
+}
+
+.activity-empty__line {
+  margin: 0;
+  font-size: 0.95rem;
+  font-weight: 550;
+}
+
+.activity-empty__sub {
+  margin: 6px 0 0;
+  font-size: 0.85rem;
+  color: var(--ink-3);
+}
+
+.activity-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  background: var(--surface);
+  border: 1px solid var(--hair-strong);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.activity-row {
+  border-top: 1px solid var(--hair);
+}
+
+.activity-row:first-child {
+  border-top: none;
+}
+
+.activity-row__head {
+  width: 100%;
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  padding: 14px 16px;
+  border: none;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+}
+
+.activity-row__head:hover {
+  background: var(--bg);
+}
+
+.activity-row__head:focus-visible {
+  outline: 2px solid var(--amber-dot);
+  outline-offset: -2px;
+}
+
+.activity-row__chevron {
+  flex: none;
+  color: var(--ink-3);
+  font-size: 0.95rem;
+  line-height: 1.4;
+  transition: transform 0.12s ease;
+}
+
+.activity-row__chevron--open {
+  transform: rotate(90deg);
+}
+
+.activity-row__product {
+  font-size: 0.92rem;
+  font-weight: 600;
+  min-width: 0;
+  flex: 1;
+}
+
+.activity-row__status {
+  flex: none;
+  font-size: 0.78rem;
+  font-weight: 550;
+  color: var(--ink-3);
+}
+
+.activity-row__status--working {
+  color: var(--ink-2);
+}
+
+.activity-row__status--review {
+  color: var(--amber-ink);
+}
+
+.activity-row__status--shipped {
+  color: var(--green-ink);
+}
+
+.activity-row__status--failed {
+  color: #a1564a;
+}
+
+.activity-row__when {
+  flex: none;
+  font-size: 0.76rem;
+  color: var(--ink-3);
+}
+
+.activity-row__panel {
+  padding: 0 16px 14px 40px;
+}
+
+.activity-row__note {
+  margin: 0;
+  padding: 8px 0;
+  font-size: 0.84rem;
+  color: var(--ink-3);
+}
+
+.activity-deliverables {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  background: var(--bg);
+  border: 1px solid var(--hair);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+.activity-deliverable {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px 14px;
+  border-top: 1px solid var(--hair);
+}
+
+.activity-deliverable:first-child {
+  border-top: none;
+}
+
+.activity-deliverable__icon {
+  flex: none;
+  width: 26px;
+  height: 26px;
+  border-radius: var(--radius-sm);
+  background: var(--accent-bg);
+  color: var(--ink-2);
+  display: grid;
+  place-items: center;
+  font-size: 0.85rem;
+}
+
+.activity-deliverable__icon--pr {
+  color: #6a5acd;
+}
+
+.activity-deliverable__icon--image {
+  color: #c77d2a;
+}
+
+.activity-deliverable__body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.activity-deliverable__title {
+  font-size: 0.9rem;
+  font-weight: 550;
+}
+
+.activity-deliverable__source {
+  font-size: 0.78rem;
+  color: var(--ink-3);
+}
+
+.activity-deliverable__link {
+  font-size: 0.78rem;
+  color: var(--ink-2);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  width: fit-content;
+}
+
+.activity-deliverable__verdict {
+  flex: none;
+  font-size: 0.76rem;
+  color: var(--green-ink);
+}
+
 /* ── Settings / Connectors ────────────────────────────────────────────────── */
 
 .settings {
@@ -1759,11 +1980,13 @@ main.login {
 
   .brief__heading,
   .inside__heading,
+  .activity__heading,
   .settings__heading {
     display: none; /* the top bar already shows the title on mobile */
   }
 
   .inside__lede,
+  .activity__lede,
   .settings__lede {
     margin-top: 0;
   }
