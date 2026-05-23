@@ -34,11 +34,12 @@ def test_alembic_history_loads():
         "phase1_auth_identity",
         "settle_drains",
         "connector_accounts",
+        "decision_resolve",
     ):
         assert rev in result.stdout, f"missing revision {rev} in:\n{result.stdout}"
 
 
-def test_alembic_head_is_connector_accounts():
+def test_alembic_head_is_decision_resolve():
     repo = Path(__file__).parent.parent
     result = subprocess.run(
         [sys.executable, "-m", "alembic", "heads"],
@@ -47,7 +48,7 @@ def test_alembic_head_is_connector_accounts():
         text=True,
     )
     assert result.returncode == 0
-    assert "connector_accounts" in result.stdout
+    assert "decision_resolve" in result.stdout
 
 
 def test_target_metadata_covers_all_bases():

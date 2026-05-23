@@ -22,6 +22,14 @@ class DecisionResolutionTrigger:
     The trigger envelope carries the originating decision_id in the
     payload so the orchestrator can wire the resolved choice into the
     next ``run_attempt``.
+
+    NOTE (v1): decision resolution currently resumes the paused run *inline*
+    via ``POST /api/v1/checkpoints/{id}/resolve`` (see
+    :mod:`backend.api.v1.checkpoints`) — it records the answer, folds it into
+    the run payload, and flips the run RUNNING → OPEN so the worker re-picks
+    it. This event-driven trigger path remains a future option (it would emit
+    a TriggerEvent instead of resuming the run directly) and is intentionally
+    NOT wired.
     """
 
     async def re_dispatch(
