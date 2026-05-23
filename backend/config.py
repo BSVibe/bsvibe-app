@@ -49,7 +49,9 @@ class Settings(BaseSettings):
     # login / OAuth code exchange / refresh / logout. JWT *verification* is
     # configured separately in backend.shared.authz.settings (USER_JWT_*).
     supabase_url: str = ""
-    supabase_anon_key: str = ""
+    # Supabase **publishable** key (``sb_publishable_...``), passed as the
+    # GoTrue ``apikey`` header. Replaces the deprecated legacy ``anon`` key.
+    supabase_publishable_key: str = ""
     # Default region stamped onto workspaces created at signup (§10.2).
     default_workspace_region: str = "us-1"
 
