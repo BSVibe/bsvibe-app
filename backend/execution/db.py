@@ -78,6 +78,11 @@ class DeliverableType(StrEnum):
     DIRECT_OUTPUT = "direct_output"
 
 
+class DecisionStatus(StrEnum):
+    PENDING = "pending"
+    RESOLVED = "resolved"
+
+
 # ---------------------------------------------------------------------------
 # Tables
 # ---------------------------------------------------------------------------
@@ -322,6 +327,21 @@ class Decision(ExecutionBase):
     actor_id: Mapped[uuid.UUID | None] = mapped_column(nullable=True)
     rationale: Mapped[str | None] = mapped_column(Text, nullable=True)
     payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    # Resolution lifecycle: a decision starts ``pending`` and the founder
+    # resolves it (via /api/v1/checkpoints) which records the answer, the
+    # resolver, and when — then resumes the paused run (Workflow §5 #4).
+    status: Mapped[DecisionStatus] = mapped_column(
+        SAEnum(
+            DecisionStatus,
+            name="decision_status_enum",
+            values_callable=lambda ec: [m.value for m in ec],
+        ),
+        nullable=False,
+        default=DecisionStatus.PENDING,
+    )
+    resolution: Mapped[str | None] = mapped_column(Text, nullable=True)
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    resolved_by: Mapped[uuid.UUID | None] = mapped_column(nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=lambda: datetime.now()
     )
