@@ -4,27 +4,33 @@
  * REAL today:
  *  - lanes        ← /api/v1/products  +  per-product latest /api/v1/runs status
  *  - needsYou     ← /api/v1/decisions (pending proposals) + /api/v1/safemode/queue
- *  - recentlyShipped ← /api/v1/runs filtered to shipped / review_ready
+ *  - recentlyShipped ← /api/v1/deliverables (real Deliverable rows, newest first)
  *
- * STILL PLACEHOLDER (no endpoint yet — see placeholder.ts):
- *  - the shipped item *title* and *source/artifact-type* detail. There is no
- *    deliverable-read endpoint (only runs), so a shipped run renders with a
- *    derived plain-language title + a generic "shipped" source. While any
- *    shipped item carries that derived detail, `BriefView.placeholder` is true.
+ * All three surfaces are now sourced from live endpoints, so a successful read
+ * never carries demo/placeholder data — `BriefView.placeholder` is false on a
+ * real read (even an empty workspace, which renders calm empty states). It
+ * flips true ONLY when a hard failure forces the demo-lane fallback below, so
+ * the surface shows a calm board instead of an error wall.
  *
- * An empty / fresh workspace is a real read → calm empty states (NOT demo
- * data). The demo lanes are used ONLY as a fallback when the network/auth
- * fails mid-load, so the surface never shows an error wall.
+ * Remaining DERIVED detail (no schema gap forced into the backend): a
+ * Deliverable carries `run_id` but no `product_id`, so a shipped item's
+ * product attribution is resolved by cross-referencing the runs list
+ * (run_id → product_id → slug); it degrades to "workspace" when the producing
+ * run is older than the runs window.
  */
 
 import { ApiError } from "./client";
 import { listPendingProposals } from "./decisions";
+import { listDeliverables } from "./deliverables";
 import { PLACEHOLDER_LANES } from "./placeholder";
 import { listProducts } from "./products";
 import { listRuns } from "./runs";
 import { listSafeModeQueue } from "./safemode";
 import type {
+  ArtifactType,
   BriefView,
+  Deliverable,
+  DeliverableType,
   LaneState,
   NeedsYouItem,
   Product,
@@ -125,47 +131,99 @@ function needsYouFrom(proposals: Proposal[], queue: SafeModeItem[]): NeedsYouIte
   return items;
 }
 
-/** Shipped runs → recently-shipped items. The title/source is DERIVED (no
- *  deliverable-read endpoint), so this carries placeholder detail. */
-function recentlyShippedFrom(runs: Run[], products: Product[]): ShippedItem[] {
-  return runs
-    .filter((r) => r.status === "shipped" || r.status === "review_ready")
-    .slice(0, 6)
-    .map((r) => {
-      const slug = productSlug(products, r.product_id);
-      const ready = r.status === "review_ready";
-      return {
-        id: r.id,
-        title: ready ? "Output ready for review" : "Shipped deliverable",
-        productSlug: slug,
-        source: ready ? "awaiting review" : "shipped",
-        artifactType: "file" as const,
-        verdict: ready ? "Ready for your review" : "This is verified",
-      };
-    });
+/** Map a backend DeliverableType → the calmer ArtifactType UI vocabulary
+ *  (UX §4 — deliverables render with a per-type marker). */
+function artifactTypeFor(type: DeliverableType): ArtifactType {
+  switch (type) {
+    case "pr":
+      return "pr";
+    case "page_image":
+      return "image";
+    case "page":
+    case "direct_output":
+      return "doc";
+    default:
+      // code (and any future bare artifact) → the generic file marker.
+      return "file";
+  }
+}
+
+/** Plain-language "where it landed" label for a deliverable type. */
+function sourceFor(type: DeliverableType): string {
+  switch (type) {
+    case "pr":
+      return "opened a pull request";
+    case "code":
+      return "committed to the repo";
+    case "page":
+      return "published a page";
+    case "page_image":
+      return "rendered a page preview";
+    default:
+      return "shipped";
+  }
+}
+
+/** First non-empty line of a summary as the item title; calm fallback if none. */
+function titleFor(summary: string | null): string {
+  const first = (summary ?? "")
+    .split("\n")
+    .map((line) => line.trim())
+    .find((line) => line.length > 0);
+  return first ?? "Shipped deliverable";
+}
+
+/** Resolve a deliverable's product slug via its producing run (Deliverable has
+ *  no product_id of its own). Degrades to "workspace" when the run is outside
+ *  the runs window. */
+function productSlugForRun(runs: Run[], products: Product[], runId: string): string {
+  const run = runs.find((r) => r.id === runId);
+  return productSlug(products, run?.product_id ?? null);
+}
+
+/** Real Deliverable rows → recently-shipped items. Deliverables only exist for
+ *  verified runs, so the verdict is the calm "This is verified". */
+function recentlyShippedFrom(
+  deliverables: Deliverable[],
+  runs: Run[],
+  products: Product[],
+): ShippedItem[] {
+  return deliverables.map((d) => {
+    const item: ShippedItem = {
+      id: d.id,
+      title: titleFor(d.summary),
+      productSlug: productSlugForRun(runs, products, d.run_id),
+      source: sourceFor(d.deliverable_type),
+      artifactType: artifactTypeFor(d.deliverable_type),
+      verdict: "This is verified",
+    };
+    if (d.artifact_uri) item.link = d.artifact_uri;
+    return item;
+  });
 }
 
 export async function getBrief(): Promise<BriefView> {
   try {
-    // Fetch the real surfaces in parallel. A 4xx on any one (e.g. an endpoint
-    // not yet reachable) bubbles up to the fallback below rather than half-
-    // rendering the surface.
-    const [products, runs, proposals, queue] = await Promise.all([
+    // Fetch the real surfaces in parallel. A 4xx on a CORE surface (products /
+    // runs) bubbles up to the fallback below rather than half-rendering. The
+    // optional surfaces (decisions / safemode / deliverables) degrade to empty
+    // on their own ApiError so one of them failing never blanks the Brief.
+    const [products, runs, proposals, queue, deliverables] = await Promise.all([
       listProducts(),
       listRuns(),
       listPendingProposals().catch(emptyOnApiError<Proposal>),
       listSafeModeQueue().catch(emptyOnApiError<SafeModeItem>),
+      listDeliverables(6).catch(emptyOnApiError<Deliverable>),
     ]);
 
-    const recentlyShipped = recentlyShippedFrom(runs, products);
     return {
       needsYou: needsYouFrom(proposals, queue),
       lanes: lanesFromProducts(products, runs),
-      recentlyShipped,
-      // Lanes + needs-you are fully real. Only the shipped-item title/source is
-      // derived (no deliverable endpoint), so placeholder is true iff we showed
-      // any shipped item with that derived detail.
-      placeholder: recentlyShipped.length > 0,
+      recentlyShipped: recentlyShippedFrom(deliverables, runs, products),
+      // All three surfaces are real now. A successful read — even an empty
+      // workspace — is never placeholder; only the hard-failure demo fallback
+      // below sets it true.
+      placeholder: false,
     };
   } catch (error) {
     // No backend / not authed mid-load → show the demo lanes rather than an

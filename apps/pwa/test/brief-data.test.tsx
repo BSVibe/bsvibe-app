@@ -42,6 +42,25 @@ function run(id: string, product_id: string | null, status: string) {
   };
 }
 
+function deliverable(
+  id: string,
+  deliverable_type: string,
+  summary: string | null,
+  artifact_uri: string | null = null,
+  artifact_refs: string[] = [],
+) {
+  return {
+    id,
+    run_id: `run-${id}`,
+    workspace_id: "ws-1",
+    deliverable_type,
+    summary,
+    artifact_refs,
+    artifact_uri,
+    created_at: NOW,
+  };
+}
+
 /** Route a mocked fetch by path → JSON body. */
 function mockFetch(routes: Record<string, unknown>) {
   return vi.fn(async (input: RequestInfo | URL) => {
@@ -85,6 +104,7 @@ describe("getBrief (real-data composition)", () => {
       ],
       "/api/v1/decisions": [],
       "/api/v1/safemode/queue": [],
+      "/api/v1/deliverables": [],
     }) as unknown as typeof fetch;
 
     const view = await getBrief();
@@ -104,6 +124,7 @@ describe("getBrief (real-data composition)", () => {
       "/api/v1/runs": [run("newest", "p1", "running"), run("older", "p1", "shipped")],
       "/api/v1/decisions": [],
       "/api/v1/safemode/queue": [],
+      "/api/v1/deliverables": [],
     }) as unknown as typeof fetch;
 
     const view = await getBrief();
@@ -138,6 +159,7 @@ describe("getBrief (real-data composition)", () => {
           created_at: NOW,
         },
       ],
+      "/api/v1/deliverables": [],
     }) as unknown as typeof fetch;
 
     const view = await getBrief();
@@ -146,23 +168,57 @@ describe("getBrief (real-data composition)", () => {
     expect(view.needsYou.some((n) => n.question.includes("Safe Mode"))).toBe(true);
   });
 
-  it("lists recently shipped from shipped / review_ready runs", async () => {
+  it("lists recently shipped from REAL /api/v1/deliverables, newest first", async () => {
     global.fetch = mockFetch({
       "/api/v1/products": [product("p1", "alpha", "alpha")],
-      "/api/v1/runs": [
-        run("r-shipped", "p1", "shipped"),
-        run("r-review", "p1", "review_ready"),
-        run("r-running", "p1", "running"),
-      ],
+      "/api/v1/runs": [],
       "/api/v1/decisions": [],
       "/api/v1/safemode/queue": [],
+      "/api/v1/deliverables": [
+        deliverable(
+          "d-pr",
+          "pr",
+          "Add getRelatedPosts function\nwith tests",
+          "https://github.com/acme/repo/pull/15",
+        ),
+        deliverable("d-page", "page", "Publish the launch landing page"),
+      ],
     }) as unknown as typeof fetch;
 
     const view = await getBrief();
     expect(view.recentlyShipped).toHaveLength(2);
-    expect(view.recentlyShipped.map((s) => s.id)).toEqual(["r-shipped", "r-review"]);
-    // shipped-item detail is derived (no deliverable endpoint) → placeholder.
-    expect(view.placeholder).toBe(true);
+    expect(view.recentlyShipped.map((s) => s.id)).toEqual(["d-pr", "d-page"]);
+
+    const [pr, page] = view.recentlyShipped;
+    // Title = first line of the summary.
+    expect(pr.title).toBe("Add getRelatedPosts function");
+    // deliverable_type "pr" maps to the UI artifact-type marker "pr".
+    expect(pr.artifactType).toBe("pr");
+    // artifact_uri is carried as the link when present.
+    expect(pr.link).toBe("https://github.com/acme/repo/pull/15");
+    expect(pr.verdict).toBe("This is verified");
+    // deliverable_type "page" maps to the UI "doc" marker; no uri → no link.
+    expect(page.title).toBe("Publish the launch landing page");
+    expect(page.artifactType).toBe("doc");
+    expect(page.link).toBeUndefined();
+
+    // All three surfaces are now real → no placeholder.
+    expect(view.placeholder).toBe(false);
+  });
+
+  it("falls back to a calm title when a deliverable has no summary", async () => {
+    global.fetch = mockFetch({
+      "/api/v1/products": [product("p1", "alpha", "alpha")],
+      "/api/v1/runs": [],
+      "/api/v1/decisions": [],
+      "/api/v1/safemode/queue": [],
+      "/api/v1/deliverables": [deliverable("d-code", "code", null)],
+    }) as unknown as typeof fetch;
+
+    const view = await getBrief();
+    expect(view.recentlyShipped).toHaveLength(1);
+    expect(view.recentlyShipped[0].title).toBe("Shipped deliverable");
+    expect(view.recentlyShipped[0].artifactType).toBe("file");
   });
 
   it("an empty/fresh workspace yields calm empty states, NOT demo data", async () => {
@@ -171,6 +227,7 @@ describe("getBrief (real-data composition)", () => {
       "/api/v1/runs": [],
       "/api/v1/decisions": [],
       "/api/v1/safemode/queue": [],
+      "/api/v1/deliverables": [],
     }) as unknown as typeof fetch;
 
     const view = await getBrief();
