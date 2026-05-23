@@ -32,6 +32,16 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+asyncpg://bsvibe:bsvibe@localhost:5442/bsvibe"
     redis_url: str = "redis://localhost:6387/0"
     environment: Literal["dev", "staging", "prod"] = "dev"
+
+    # Worker trigger mode (backend.workers). DB-polling is the DEFAULT + tested
+    # path: each worker periodically queries its source table. ``redis_streams``
+    # is an OPT-IN scale/latency improvement (Workflow §12.5 #8) — producers
+    # ALSO XADD a notification to the matching stream (best-effort, soft-fail;
+    # the DB row stays the source of truth) and the worker daemon runs each
+    # worker as a Redis Streams consumer (XREADGROUP → existing single-tick
+    # handler → XACK) instead of the poll loop. Switching modes never changes
+    # the business logic — Redis is only a different *trigger* for the same tick.
+    worker_mode: Literal["db_polling", "redis_streams"] = "db_polling"
     git_sha: str = "dev"
     version: str = _resolve_version()
 

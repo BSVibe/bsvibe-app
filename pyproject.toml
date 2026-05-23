@@ -37,6 +37,7 @@ dev = [
     "respx>=0.21",
     "types-jsonschema>=4",
     "aiosqlite>=0.20",
+    "fakeredis>=2.21",
 ]
 
 [build-system]
