@@ -28,13 +28,18 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.api.deps import get_current_user_row, get_db_session, get_workspace_id
+from backend.api.deps import (
+    _get_session_factory,
+    get_current_user_row,
+    get_db_session,
+    get_workspace_id,
+)
 from backend.delivery.safe_mode_queue import SafeModeQueue
 from backend.delivery.schema import ArtifactType
 from backend.execution.db import Deliverable
 from backend.identity.db import UserRow
 from backend.workers.delivery_worker import PluginDispatchAdapter, dispatch_delivery
-from backend.workers.run import RealPluginDispatchAdapter
+from backend.workers.run import build_delivery_adapter
 
 router = APIRouter()
 
@@ -42,15 +47,25 @@ router = APIRouter()
 # ---------------------------------------------------------------------------
 # Dispatcher dependency — overridable in tests with an in-test sink.
 # ---------------------------------------------------------------------------
-def get_delivery_dispatcher() -> PluginDispatchAdapter:
+async def get_delivery_dispatcher() -> PluginDispatchAdapter:
     """The outbound dispatcher used when a queued delivery is approved.
 
-    Defaults to the real plugin dispatch adapter (the same one the worker
-    runtime wires) with no plugins loaded — Phase 1 wiring; per-workspace
-    plugin loading is a later chunk. Tests override this to inject the same
-    in-test sink the worker uses so both code paths converge on one dispatcher.
+    Builds the SAME :class:`~backend.delivery.connector_dispatch.ConnectorDeliveryAdapter`
+    the Direct path uses (``backend.workers.run.build_delivery_adapter``): it
+    loads every connector plugin, carries the settings-derived
+    :class:`~backend.accounts.crypto.CredentialCipher`, and opens its own
+    session per dispatch (it resolves the workspace's ``connector_accounts``
+    delivery binding itself). So an approved delivery shapes + delivers the
+    connector outbound event exactly as a Safe-Mode-off delivery does — one
+    outbound code path, no connector-shaping duplication.
+
+    The adapter carries the process-wide session factory rather than the
+    request-scoped session because it must open a session per dispatch (load the
+    Deliverable + resolve the binding). Tests override this dependency to inject
+    a connector adapter built against the test session factory, so both code
+    paths converge on one adapter.
     """
-    return RealPluginDispatchAdapter(plugins=[])
+    return await build_delivery_adapter(session_factory=_get_session_factory())
 
 
 class SafeModeItemResponse(BaseModel):
