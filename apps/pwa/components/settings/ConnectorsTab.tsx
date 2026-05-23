@@ -1,13 +1,13 @@
 import Connectors from "./Connectors";
 
 /**
- * Settings → Connectors tab. A thin host for the existing connectors surface.
- * The <Connectors/> component is unchanged by this lift.
+ * Settings → Connectors tab. A thin host for the connectors catalog surface.
+ * The <Connectors/> component now carries its own heading + lede (the catalog
+ * reframe), so the host stays a plain wrapper.
  */
 export default function ConnectorsTab() {
   return (
     <div className="general-tab">
-      <p className="general-tab__lede">Connectors — the services I reach in and out to.</p>
       <Connectors />
     </div>
   );
