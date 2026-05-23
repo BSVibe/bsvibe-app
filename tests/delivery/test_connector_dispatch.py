@@ -15,6 +15,8 @@ import pytest
 from backend.connectors.db import ConnectorAccountRow
 from backend.delivery.connector_dispatch import (
     OUTBOUND_EVENT_BUILDERS,
+    ConnectorDeliveryAdapter,
+    GithubBinding,
     _NoLlm,
     _resolve_bindings,
     _split_summary,
@@ -25,10 +27,32 @@ from backend.delivery.connector_dispatch import (
     build_slack_event,
     build_telegram_event,
     build_trello_event,
+    github_remote_url,
+    resolve_github_binding,
+    run_branch_name,
 )
 from backend.plugins.base import OutboundCapability, PluginMeta
 
 from .._support import memory_session
+
+
+class _FakeCipher:
+    """A no-op cipher — the defensive branches return before any decrypt."""
+
+    def decrypt(self, token: str) -> str:
+        return "tok"
+
+
+def _account() -> ConnectorAccountRow:
+    return ConnectorAccountRow(
+        id=uuid.uuid4(),
+        workspace_id=uuid.uuid4(),
+        connector="github",
+        webhook_token=uuid.uuid4().hex,
+        signing_secret_ciphertext="x",
+        delivery_config={"repo": "owner/name"},
+        is_active=True,
+    )
 
 
 def _meta(name: str, *, with_outbound: bool) -> PluginMeta:
@@ -466,3 +490,97 @@ class TestNoLlmGuard:
     async def test_outbound_must_not_call_llm(self) -> None:
         with pytest.raises(RuntimeError, match="must not call the LLM"):
             await _NoLlm().chat("sys", [])
+
+
+class TestGithubHelpers:
+    def test_github_remote_url(self) -> None:
+        assert github_remote_url("owner/name") == "https://github.com/owner/name.git"
+
+    def test_run_branch_name_is_short_and_stable(self) -> None:
+        run_id = uuid.UUID("12345678-1234-5678-1234-567812345678")
+        assert run_branch_name(run_id) == "bsvibe/run-12345678"
+
+
+class TestResolveGithubBinding:
+    async def test_resolves_active_github_with_repo(self) -> None:
+        ws = uuid.uuid4()
+        async with memory_session() as s:
+            await _seed(
+                s,
+                workspace_id=ws,
+                connector="github",
+                delivery_config={"repo": "owner/name", "base_branch": "dev"},
+            )
+            binding = await resolve_github_binding(s, workspace_id=ws)
+        assert binding is not None
+        assert binding.repo == "owner/name"
+        assert binding.base_branch == "dev"
+
+    async def test_base_branch_defaults_main(self) -> None:
+        ws = uuid.uuid4()
+        async with memory_session() as s:
+            await _seed(
+                s, workspace_id=ws, connector="github", delivery_config={"repo": "owner/name"}
+            )
+            binding = await resolve_github_binding(s, workspace_id=ws)
+        assert binding is not None and binding.base_branch == "main"
+
+    async def test_no_repo_is_not_a_delivery_target(self) -> None:
+        ws = uuid.uuid4()
+        async with memory_session() as s:
+            # An inbound-only github binding (no repo) is not a delivery target.
+            await _seed(s, workspace_id=ws, connector="github", delivery_config={})
+            binding = await resolve_github_binding(s, workspace_id=ws)
+        assert binding is None
+
+    async def test_inactive_github_skipped(self) -> None:
+        ws = uuid.uuid4()
+        async with memory_session() as s:
+            await _seed(
+                s,
+                workspace_id=ws,
+                connector="github",
+                delivery_config={"repo": "owner/name"},
+                is_active=False,
+            )
+            binding = await resolve_github_binding(s, workspace_id=ws)
+        assert binding is None
+
+
+class TestGithubDeliveryDefensiveBranches:
+    """The github delivery handler soft-fails (never wedges) on a misconfigured
+    target — mirroring the builder ValueError path the other connectors use."""
+
+    def _adapter(self, **kw: object) -> ConnectorDeliveryAdapter:
+        return ConnectorDeliveryAdapter(
+            session_factory=None,  # type: ignore[arg-type]  # unused in _deliver_github
+            plugins_by_name={},
+            cipher=_FakeCipher(),
+            **kw,  # type: ignore[arg-type]
+        )
+
+    async def test_no_workspace_root_soft_fails(self) -> None:
+        adapter = self._adapter()  # workspace_root defaults None
+        binding = GithubBinding(account=_account(), repo="owner/name", base_branch="main")
+        actions = await adapter._deliver_github(
+            binding=binding,
+            workspace_id=uuid.uuid4(),
+            deliverable_id=uuid.uuid4(),
+            run_id=uuid.uuid4(),
+            content={"summary": "S"},
+        )
+        assert len(actions) == 1 and actions[0].succeeded is False
+        assert "workspace_root" in (actions[0].error or "")
+
+    async def test_missing_checkout_soft_fails(self, tmp_path) -> None:  # type: ignore[no-untyped-def]
+        adapter = self._adapter(workspace_root=tmp_path)
+        binding = GithubBinding(account=_account(), repo="owner/name", base_branch="main")
+        actions = await adapter._deliver_github(
+            binding=binding,
+            workspace_id=uuid.uuid4(),
+            deliverable_id=uuid.uuid4(),
+            run_id=uuid.uuid4(),  # no dir created for it
+            content={"summary": "S"},
+        )
+        assert len(actions) == 1 and actions[0].succeeded is False
+        assert "checkout does not exist" in (actions[0].error or "")

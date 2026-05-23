@@ -50,6 +50,7 @@ from backend.config import Settings, get_settings
 from backend.delivery.connector_dispatch import (
     ConnectorDeliveryAdapter,
     build_connector_delivery_adapter,
+    build_github_workspace_provisioner,
 )
 from backend.delivery.dispatcher import DeliveryDispatcher
 from backend.delivery.schema import DeliveryResult
@@ -253,10 +254,22 @@ def build_agent_execution_deps(
         )
         return RunOrchestrator(session=session, llm=llm, sandbox_manager=box)
 
+    # github delivery path: a run whose workspace has a github connector binding
+    # WORKS INSIDE a clone of the target repo (so its file edits build a real PR
+    # diff). The provisioner clones onto a per-run branch before the loop drives;
+    # no github binding → it is a no-op and the empty scratch dir is used (the
+    # non-github path is unchanged). The cipher is resolved LAZILY (only when a
+    # github binding is actually present), so building the deps never forces the
+    # KMS key for non-github runs.
+    provisioner = build_github_workspace_provisioner(
+        cipher=lambda: CredentialCipher(_key_from_settings())
+    )
+
     return AgentExecutionDeps(
         skill_loader_for=_skill_loader_for,
         orchestrator_factory=_factory,
         workspace_root=Path(settings.run_workspace_root),
+        workspace_provisioner=provisioner,
     )
 
 
@@ -329,10 +342,13 @@ async def build_delivery_adapter(
     loader = PluginLoader(root)
     registry = await loader.load_all()
     logger.info("worker_runtime_plugins_loaded", count=len(registry), names=sorted(registry))
+    # workspace_root lets the github special case find the run's checkout
+    # (``run_workspace_root/<run_id>``) to commit + push before opening the PR.
     return build_connector_delivery_adapter(
         session_factory=session_factory,
         plugins=list(registry.values()),
         cipher=CredentialCipher(_key_from_settings()),
+        workspace_root=Path(get_settings().run_workspace_root),
     )
 
 
