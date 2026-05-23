@@ -4,11 +4,13 @@
  *
  *  - Models     → the EXISTING <ModelAccounts/> (unchanged by this lift)
  *  - Connectors → the EXISTING <Connectors/> (unchanged by this lift)
- *  - Notifications → a real route target with a "Coming soon" stub body
+ *  - Notifications → the real notification-prefs surface (events × channels)
  *  - Account → the real Profile / Plan / identities / sessions surface
  *
  * Models/Connectors fetch on mount; we stub fetch with an empty list so the
- * surfaces reach their calm empty state without a network call.
+ * surfaces reach their calm empty state without a network call. The
+ * Notifications surface fetches its prefs object, so that test stubs a prefs
+ * response instead of the empty list.
  */
 
 import AccountTab from "@/components/settings/AccountTab";
@@ -65,10 +67,25 @@ describe("Settings tab content", () => {
     });
   });
 
-  it("Notifications tab is a Coming soon stub", () => {
+  it("Notifications tab renders the events × channels matrix", async () => {
+    const prefs = {
+      matrix: {
+        needs_you: { in_app: true, email: true, slack: true },
+        triggered: { in_app: true, email: true, slack: false },
+        shipped: { in_app: true, email: true, slack: false },
+        failed: { in_app: true, email: true, slack: false },
+        daily_brief: { in_app: false, email: true, slack: false },
+      },
+      quiet_hours_enabled: false,
+      quiet_hours_start: "22:00",
+      quiet_hours_end: "08:00",
+    };
+    global.fetch = vi.fn(async () => jsonResponse(prefs)) as unknown as typeof fetch;
     render(<NotificationsTab />);
-    expect(screen.getByRole("heading", { name: /notifications/i })).toBeInTheDocument();
-    expect(screen.getByText(/coming soon/i)).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByRole("heading", { name: /events × channels/i })).toBeInTheDocument();
+    });
+    expect(screen.getByRole("heading", { name: /quiet hours/i })).toBeInTheDocument();
   });
 
   it("Account tab renders the real Profile / Plan / identities / sessions surface", () => {

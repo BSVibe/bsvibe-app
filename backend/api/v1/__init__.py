@@ -16,6 +16,7 @@ from backend.api.v1 import (
     inside,
     intents,
     messages,
+    notifications,
     presets,
     products,
     rules,
@@ -53,5 +54,6 @@ router.include_router(deliverables.router, prefix="/deliverables", tags=["delive
 router.include_router(messages.router, prefix="/messages", tags=["messages"])
 router.include_router(safemode.router, prefix="/safemode", tags=["safemode"])
 router.include_router(inside.router, prefix="/inside", tags=["inside"])
+router.include_router(notifications.router, prefix="/notifications", tags=["notifications"])
 
 __all__ = ["router"]

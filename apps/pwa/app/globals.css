@@ -2762,3 +2762,197 @@ main.login {
     right: 16px;
   }
 }
+
+/* ── Notifications tab ─────────────────────────────────────────────────────── */
+.notifications__loading {
+  margin: 8px 0;
+  font-size: 0.86rem;
+  color: var(--ink-3);
+}
+
+.notifications__note {
+  margin: 0 0 12px;
+  padding: 12px 14px;
+  background: var(--surface);
+  border: 1px solid var(--hair-strong);
+  border-radius: var(--radius);
+  font-size: 0.84rem;
+  color: var(--ink-2);
+}
+
+.notifications-matrix {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 6px;
+}
+
+.notifications-matrix__table {
+  width: 100%;
+  border-collapse: collapse;
+  border: 1px solid var(--hair);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.notifications-matrix__event-head,
+.notifications-matrix__channel-head {
+  padding: 10px 12px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  background: var(--accent-bg);
+  border-bottom: 1px solid var(--hair);
+}
+
+.notifications-matrix__event-head {
+  text-align: left;
+}
+
+.notifications-matrix__channel-head {
+  text-align: center;
+  width: 84px;
+}
+
+.notifications-matrix__row:not(:last-child) .notifications-matrix__event,
+.notifications-matrix__row:not(:last-child) .notifications-matrix__cell {
+  border-bottom: 1px solid var(--hair);
+}
+
+.notifications-matrix__event {
+  padding: 14px 12px;
+  text-align: left;
+  font-size: 0.86rem;
+  font-weight: 500;
+  color: var(--ink);
+}
+
+.notifications-matrix__cell {
+  padding: 14px 12px;
+  text-align: center;
+}
+
+.notifications-matrix__caption {
+  margin: 0;
+  font-size: 0.74rem;
+  color: var(--ink-3);
+}
+
+/* Accessible toggle (native checkbox styled as a switch) */
+.toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.toggle__input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+}
+
+.toggle__track {
+  display: inline-flex;
+  align-items: center;
+  width: 36px;
+  height: 20px;
+  padding: 2px;
+  border-radius: 999px;
+  background: var(--hair-strong);
+  transition: background 0.15s ease;
+}
+
+.toggle__thumb {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--surface);
+  box-shadow: 0 1px 2px rgba(15, 15, 15, 0.2);
+  transition: transform 0.15s ease;
+}
+
+.toggle__input:checked + .toggle__track {
+  background: var(--good, #1f9d55);
+}
+
+.toggle__input:checked + .toggle__track .toggle__thumb {
+  transform: translateX(16px);
+}
+
+.toggle__input:focus-visible + .toggle__track {
+  outline: 2px solid var(--ink);
+  outline-offset: 2px;
+}
+
+/* Quiet hours */
+.quiet-hours {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 22px;
+}
+
+.quiet-hours__row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 18px;
+  padding: 14px 16px;
+  background: var(--surface);
+  border: 1px solid var(--hair-strong);
+  border-radius: var(--radius);
+}
+
+.quiet-hours__switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.88rem;
+  font-weight: 500;
+  color: var(--ink);
+  cursor: pointer;
+}
+
+.quiet-hours__switch-input {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--good, #1f9d55);
+}
+
+.quiet-hours__field {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.quiet-hours__field-label {
+  font-size: 0.78rem;
+  color: var(--ink-3);
+}
+
+.quiet-hours__time {
+  font: inherit;
+  font-size: 0.84rem;
+  color: var(--ink);
+  background: var(--app-bg, var(--surface));
+  border: 1px solid var(--hair-strong);
+  border-radius: var(--radius-sm);
+  padding: 6px 8px;
+}
+
+.quiet-hours__time:disabled {
+  color: var(--ink-3);
+  opacity: 0.6;
+}
+
+.quiet-hours__caption {
+  margin: 0;
+  font-size: 0.74rem;
+  color: var(--ink-3);
+}
