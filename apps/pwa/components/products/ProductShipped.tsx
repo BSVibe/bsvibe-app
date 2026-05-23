@@ -1,4 +1,5 @@
 import type { ArtifactType, ShippedItem } from "@/lib/api/types";
+import { useTranslations } from "next-intl";
 
 /** Per-artifact-type marker (UX §4 — deliverables are polymorphic), matched to
  *  the Brief/Activity glyph vocabulary so the surfaces feel like one product. */
@@ -18,11 +19,12 @@ const ARTIFACT: Record<ArtifactType, { glyph: string; tone: string }> = {
  * a calm empty line when the product hasn't shipped anything yet.
  */
 export default function ProductShipped({ items }: { items: ShippedItem[] }) {
+  const t = useTranslations("products");
   return (
-    <section className="product-shipped" aria-label="Shipped">
-      <h2 className="section-label">Shipped</h2>
+    <section className="product-shipped" aria-label={t("shipped")}>
+      <h2 className="section-label">{t("shipped")}</h2>
       {items.length === 0 ? (
-        <p className="product-shipped__empty">Nothing shipped for this product yet.</p>
+        <p className="product-shipped__empty">{t("noShipped")}</p>
       ) : (
         <ul className="product-shipped__list">
           {items.map((item) => {
@@ -45,7 +47,7 @@ export default function ProductShipped({ items }: { items: ShippedItem[] }) {
                       target="_blank"
                       rel="noopener noreferrer"
                     >
-                      Open artifact
+                      {t("openArtifact")}
                     </a>
                   )}
                 </div>

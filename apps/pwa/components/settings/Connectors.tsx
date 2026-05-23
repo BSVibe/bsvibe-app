@@ -3,6 +3,7 @@
 import { createConnector, listConnectors, revokeConnector } from "@/lib/api/connectors";
 import type { Connector, ConnectorName } from "@/lib/api/types";
 import { KNOWN_CONNECTORS } from "@/lib/api/types";
+import { useTranslations } from "next-intl";
 import { useEffect, useRef, useState } from "react";
 import AddConnector from "./AddConnector";
 import ConnectorRow from "./ConnectorRow";
@@ -36,42 +37,14 @@ import ConnectorRow from "./ConnectorRow";
  */
 type ListState = { data: Connector[]; failed: boolean } | null;
 
-/** Pretty display names for the supported KNOWN_CONNECTORS in the catalog. */
-const SUPPORTED_LABELS: Record<ConnectorName, string> = {
-  github: "GitHub",
-  slack: "Slack",
-  telegram: "Telegram",
-  discord: "Discord",
-  sentry: "Sentry",
-  notion: "Notion",
-  "email-sender": "Email",
-};
-
-/** Short one-liners shown under each supported connector's Connect card. */
-const SUPPORTED_BLURBS: Record<ConnectorName, string> = {
-  github: "issues, PRs and pushes",
-  slack: "messages and channels",
-  telegram: "messages and channels",
-  discord: "messages and channels",
-  sentry: "errors and issues",
-  notion: "pages and databases",
-  "email-sender": "outbound delivery",
-};
-
 /** The design's aspirational services — rendered as disabled coming-soon cards
- *  so the catalog visually matches the design. No backend exists for these. */
-const ASPIRATIONAL: { name: string; blurb: string }[] = [
-  { name: "Figma", blurb: "design files, reads and comments" },
-  { name: "Linear", blurb: "issues and projects" },
-  { name: "Google Drive", blurb: "docs, sheets, slides" },
-  { name: "PowerPoint", blurb: "create .pptx via Graph" },
-  { name: "Postgres", blurb: "SQL data sources" },
-];
-
-const COMING_SOON = "Coming soon — there’s no backend for this yet.";
+ *  so the catalog visually matches the design. No backend exists for these.
+ *  Names + blurbs come from the `settings.connectors.aspirational` catalog. */
+const ASPIRATIONAL_KEYS = ["figma", "linear", "googleDrive", "powerpoint", "postgres"] as const;
 
 export default function Connectors() {
   const [list, setList] = useState<ListState>(null);
+  const t = useTranslations("settings.connectors");
   // The connector the founder is mid-creating, if any → renders the create panel
   // pre-selected. `null` = no panel open.
   const [connecting, setConnecting] = useState<ConnectorName | null>(null);
@@ -123,35 +96,30 @@ export default function Connectors() {
   const available = KNOWN_CONNECTORS.filter((name) => !connectedNames.has(name));
 
   return (
-    <section className="connectors" aria-label="Connectors">
+    <section className="connectors" aria-label={t("sectionLabel")}>
       <header className="connectors__head">
-        <h2 className="section-label">Connectors</h2>
+        <h2 className="section-label">{t("sectionHeading")}</h2>
         {connected.length > 0 ? (
           <span className="connectors__count">{connected.length}</span>
         ) : null}
       </header>
-      <p className="connectors__lede">
-        The external systems I can read from and act on. Connect a service to give it a private
-        webhook to reach me, and an optional place for me to deliver finished work back out.
-      </p>
+      <p className="connectors__lede">{t("lede")}</p>
 
       {/* CONNECTED ───────────────────────────────────────────────────────── */}
       <div className="connectors__section">
-        <h3 className="connectors__section-label">Connected</h3>
+        <h3 className="connectors__section-label">{t("connected")}</h3>
         {list === null ? (
           <p className="connectors__loading" aria-busy="true">
-            Loading your connectors…
+            {t("loading")}
           </p>
         ) : list.failed ? (
           <p className="connectors__note" aria-live="polite">
-            Couldn&rsquo;t load your connectors right now — try again in a moment.
+            {t("loadError")}
           </p>
         ) : connected.length === 0 ? (
-          <p className="connectors__empty">
-            Nothing connected yet. Pick a service below to wire one up.
-          </p>
+          <p className="connectors__empty">{t("empty")}</p>
         ) : (
-          <ul className="connectors__grid" aria-label="Connected services">
+          <ul className="connectors__grid" aria-label={t("connectedServices")}>
             {connected.map((c) => (
               <ConnectorRow key={c.id} connector={c} onRevoked={load} revoke={revokeConnector} />
             ))}
@@ -161,13 +129,13 @@ export default function Connectors() {
 
       {/* AVAILABLE ────────────────────────────────────────────────────────── */}
       <div className="connectors__section">
-        <h3 className="connectors__section-label">Available</h3>
-        <ul className="connectors__grid" aria-label="Available services">
+        <h3 className="connectors__section-label">{t("available")}</h3>
+        <ul className="connectors__grid" aria-label={t("availableServices")}>
           {available.map((name) => (
             <li key={name} className="connector-card connector-card--available">
               <div className="connector-card__body">
-                <span className="connector-card__name">{SUPPORTED_LABELS[name]}</span>
-                <p className="connector-card__detail">{SUPPORTED_BLURBS[name]}</p>
+                <span className="connector-card__name">{t(`labels.${name}`)}</span>
+                <p className="connector-card__detail">{t(`blurbs.${name}`)}</p>
               </div>
               <div className="connector-card__actions">
                 <button
@@ -175,25 +143,25 @@ export default function Connectors() {
                   className="connector-card__connect"
                   onClick={() => setConnecting(name)}
                 >
-                  Connect
+                  {t("connect")}
                 </button>
               </div>
             </li>
           ))}
-          {ASPIRATIONAL.map((svc) => (
-            <li key={svc.name} className="connector-card connector-card--available">
+          {ASPIRATIONAL_KEYS.map((key) => (
+            <li key={key} className="connector-card connector-card--available">
               <div className="connector-card__body">
-                <span className="connector-card__name">{svc.name}</span>
-                <p className="connector-card__detail">{svc.blurb}</p>
+                <span className="connector-card__name">{t(`aspirational.${key}.name`)}</span>
+                <p className="connector-card__detail">{t(`aspirational.${key}.blurb`)}</p>
               </div>
               <div className="connector-card__actions">
                 <button
                   type="button"
                   className="connector-card__connect"
                   disabled
-                  title={COMING_SOON}
+                  title={t("comingSoon")}
                 >
-                  Connect
+                  {t("connect")}
                 </button>
               </div>
             </li>
@@ -204,13 +172,11 @@ export default function Connectors() {
       {/* CUSTOM (MCP) ─────────────────────────────────────────────────────── */}
       <div className="connector-custom">
         <div className="connector-custom__body">
-          <p className="connector-custom__title">Add a custom Connector</p>
-          <p className="connector-custom__detail">
-            Point me at your own MCP server endpoint or a BSage plugin built with the plugin SDK.
-          </p>
+          <p className="connector-custom__title">{t("customTitle")}</p>
+          <p className="connector-custom__detail">{t("customDetail")}</p>
         </div>
-        <button type="button" className="connector-custom__action" disabled title={COMING_SOON}>
-          Add custom
+        <button type="button" className="connector-custom__action" disabled title={t("comingSoon")}>
+          {t("addCustom")}
         </button>
       </div>
 
@@ -220,12 +186,14 @@ export default function Connectors() {
       <dialog
         ref={dialogRef}
         className="connector-modal"
-        aria-label="Connect a service"
+        aria-label={t("connectDialogLabel")}
         onClose={() => setConnecting(null)}
       >
         {connecting ? (
           <div className="connector-modal__panel">
-            <p className="connector-modal__title">Connect {SUPPORTED_LABELS[connecting]}</p>
+            <p className="connector-modal__title">
+              {t("connectTitle", { service: t(`labels.${connecting}`) })}
+            </p>
             <AddConnector
               initialConnector={connecting}
               onCancel={() => setConnecting(null)}

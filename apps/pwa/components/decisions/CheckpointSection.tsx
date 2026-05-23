@@ -2,6 +2,7 @@
 
 import { resolveCheckpoint } from "@/lib/api/checkpoints";
 import type { Checkpoint } from "@/lib/api/types";
+import { useTranslations } from "next-intl";
 import { useState } from "react";
 
 type RowState = "idle" | "resolving" | "resolved" | "error";
@@ -20,12 +21,13 @@ export default function CheckpointSection({
   items: Checkpoint[];
   onResolved?: () => void;
 }) {
+  const t = useTranslations("decisions");
   if (items.length === 0) return null;
 
   return (
-    <section className="decisions-block" aria-label="Decisions needed">
+    <section className="decisions-block" aria-label={t("decisionsNeeded")}>
       <header className="decisions-block__head">
-        <h2 className="section-label">Decisions needed</h2>
+        <h2 className="section-label">{t("decisionsNeeded")}</h2>
         <span className="decisions-block__count">{items.length}</span>
       </header>
       <ul className="decisions-list">
@@ -40,6 +42,7 @@ export default function CheckpointSection({
 function CheckpointRow({ item, onResolved }: { item: Checkpoint; onResolved?: () => void }) {
   const [answer, setAnswer] = useState("");
   const [state, setState] = useState<RowState>("idle");
+  const t = useTranslations("decisions");
 
   const trimmed = answer.trim();
 
@@ -58,9 +61,9 @@ function CheckpointRow({ item, onResolved }: { item: Checkpoint; onResolved?: ()
   if (state === "resolved") {
     return (
       <li className="decisions-row decisions-row--resolved">
-        <span className="decisions-row__q">{item.question || "Decision recorded."}</span>
+        <span className="decisions-row__q">{item.question || t("decisionRecorded")}</span>
         <span className="decisions-row__done" aria-live="polite">
-          Answered — resuming the run.
+          {t("answered")}
         </span>
       </li>
     );
@@ -68,16 +71,14 @@ function CheckpointRow({ item, onResolved }: { item: Checkpoint; onResolved?: ()
 
   return (
     <li className="decisions-row">
-      <p className="decisions-row__q">
-        {item.question || "This run is paused and needs your input."}
-      </p>
+      <p className="decisions-row__q">{item.question || t("checkpointFallback")}</p>
       {item.rationale ? <p className="decisions-row__why">{item.rationale}</p> : null}
 
       <div className="decisions-row__resolve">
         <textarea
           className="decisions-row__input"
-          aria-label="Your answer"
-          placeholder="Type your answer to resume the run…"
+          aria-label={t("yourAnswer")}
+          placeholder={t("answerPlaceholder")}
           rows={2}
           value={answer}
           disabled={state === "resolving"}
@@ -86,7 +87,7 @@ function CheckpointRow({ item, onResolved }: { item: Checkpoint; onResolved?: ()
         <div className="decisions-row__foot">
           {state === "error" && (
             <span className="decisions-row__error" aria-live="polite">
-              Couldn’t save that — please try again.
+              {t("saveError")}
             </span>
           )}
           <button
@@ -95,7 +96,7 @@ function CheckpointRow({ item, onResolved }: { item: Checkpoint; onResolved?: ()
             onClick={resolve}
             disabled={state === "resolving" || trimmed.length === 0}
           >
-            {state === "resolving" ? "Working…" : "Resolve"}
+            {state === "resolving" ? t("working") : t("resolve")}
           </button>
         </div>
       </div>

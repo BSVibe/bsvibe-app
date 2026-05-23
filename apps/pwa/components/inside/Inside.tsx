@@ -2,6 +2,7 @@
 
 import { listConcepts, listObservations } from "@/lib/api/inside";
 import type { Concept, Observation } from "@/lib/api/types";
+import { useTranslations } from "next-intl";
 import { useEffect, useState } from "react";
 import ConceptsSection from "./ConceptsSection";
 import ObservationsSection from "./ObservationsSection";
@@ -37,6 +38,7 @@ async function loadSection<T>(fetcher: () => Promise<T[]>): Promise<SectionResul
 export default function Inside() {
   const [concepts, setConcepts] = useState<SectionResult<Concept> | null>(null);
   const [observations, setObservations] = useState<SectionResult<Observation> | null>(null);
+  const t = useTranslations("inside");
 
   useEffect(() => {
     let active = true;
@@ -53,8 +55,8 @@ export default function Inside() {
   if (concepts === null || observations === null) {
     return (
       <div className="inside inside--loading" aria-busy="true">
-        <h1 className="inside__heading">Inside</h1>
-        <p className="inside__loading-note">Looking at what I know…</p>
+        <h1 className="inside__heading">{t("heading")}</h1>
+        <p className="inside__loading-note">{t("loadingNote")}</p>
       </div>
     );
   }
@@ -68,16 +70,13 @@ export default function Inside() {
 
   return (
     <div className="inside">
-      <h1 className="inside__heading">Inside</h1>
-      <p className="inside__lede">A look at what I&rsquo;ve learned working with you.</p>
+      <h1 className="inside__heading">{t("heading")}</h1>
+      <p className="inside__lede">{t("lede")}</p>
 
       {nothingLearned ? (
-        <section className="inside-empty" aria-label="Inside">
-          <p className="inside-empty__line">I haven&rsquo;t learned anything yet.</p>
-          <p className="inside-empty__sub">
-            Give me work and I&rsquo;ll build up knowledge as we go — settled ideas and fresh
-            observations will show up here.
-          </p>
+        <section className="inside-empty" aria-label={t("heading")}>
+          <p className="inside-empty__line">{t("emptyLine")}</p>
+          <p className="inside-empty__sub">{t("emptySub")}</p>
         </section>
       ) : (
         <>

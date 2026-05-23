@@ -1,4 +1,5 @@
 import type { NextConfig } from "next";
+import createNextIntlPlugin from "next-intl/plugin";
 
 // The browser calls the backend directly at NEXT_PUBLIC_BACKEND_URL
 // (cross-origin; the backend serves CORS). The former `/api/:path*` →
@@ -8,4 +9,8 @@ const config: NextConfig = {
   reactStrictMode: true,
 };
 
-export default config;
+// next-intl WITHOUT i18n routing: the request config (i18n/request.ts) picks
+// the locale from the `bsvibe.locale` cookie. No `[locale]` URL segment.
+const withNextIntl = createNextIntlPlugin("./i18n/request.ts");
+
+export default withNextIntl(config);

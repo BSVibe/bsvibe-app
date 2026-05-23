@@ -2,6 +2,7 @@
 
 import { getNotificationPrefs, updateNotificationPrefs } from "@/lib/api/notifications";
 import type { NotificationPrefs } from "@/lib/api/types";
+import { useTranslations } from "next-intl";
 import { useEffect, useState } from "react";
 
 /**
@@ -22,34 +23,28 @@ import { useEffect, useState } from "react";
  */
 
 /** The five notification moments (matrix rows). Ids are the STABLE keys the
- *  backend matrix is keyed on; labels mirror the design copy. */
-const EVENTS: { id: string; label: string }[] = [
-  { id: "needs_you", label: "Needs you — a decision is waiting" },
-  { id: "triggered", label: "Triggered — work woke up from outside" },
-  { id: "shipped", label: "Shipped — a deliverable was verified" },
-  { id: "failed", label: "Failed — verification failed and BSVibe gave up" },
-  { id: "daily_brief", label: "Daily Brief — summary every morning" },
-];
+ *  backend matrix is keyed on; the visible label + short name come from the
+ *  `settings.notifications.events.<id>` catalog. */
+const EVENT_IDS = ["needs_you", "triggered", "shipped", "failed", "daily_brief"] as const;
 
-/** The three channels (matrix columns). */
-const CHANNELS: { id: string; label: string }[] = [
-  { id: "in_app", label: "In-app" },
-  { id: "email", label: "Email" },
-  { id: "slack", label: "Slack" },
-];
-
-/** Short, human cell label for the accessible checkbox name, e.g.
- *  "toggle Slack for Daily Brief". */
-function cellLabel(eventLabel: string, channelLabel: string): string {
-  const event = eventLabel.split(" — ")[0];
-  return `toggle ${channelLabel} for ${event}`;
-}
+/** The three channels (matrix columns). Labels come from the catalog. */
+const CHANNEL_IDS = ["in_app", "email", "slack"] as const;
 
 type LoadState = { prefs: NotificationPrefs; failed: false } | { prefs: null; failed: true } | null;
 
 export default function NotificationsTab() {
   const [state, setState] = useState<LoadState>(null);
   const [saveError, setSaveError] = useState(false);
+  const t = useTranslations("settings.notifications");
+
+  /** Short, human cell label for the accessible checkbox name, e.g.
+   *  "toggle Slack for Daily Brief". */
+  function cellLabel(eventId: string, channelId: string): string {
+    return t("cellLabel", {
+      channel: t(`channels.${channelId}`),
+      event: t(`events.${eventId}.short`),
+    });
+  }
 
   useEffect(() => {
     let active = true;
@@ -90,57 +85,57 @@ export default function NotificationsTab() {
 
   return (
     <div className="general-tab">
-      <p className="general-tab__lede">Notifications — when and where BSVibe pings you.</p>
+      <p className="general-tab__lede">{t("lede")}</p>
 
       {state === null ? (
         <p className="notifications__loading" aria-busy="true">
-          Loading your notification settings…
+          {t("loading")}
         </p>
       ) : state.failed ? (
         <p className="notifications__note" aria-live="polite">
-          Couldn&rsquo;t load your notification settings right now — try again in a moment.
+          {t("loadError")}
         </p>
       ) : (
         <>
           {saveError ? (
             <p className="notifications__note" aria-live="polite">
-              Couldn&rsquo;t save that change — it&rsquo;s been undone. Try again in a moment.
+              {t("saveError")}
             </p>
           ) : null}
 
-          <section className="notifications-matrix" aria-label="Events and channels">
-            <h2 className="section-label">Events × Channels</h2>
+          <section className="notifications-matrix" aria-label={t("matrixLabel")}>
+            <h2 className="section-label">{t("matrixHeading")}</h2>
             <table className="notifications-matrix__table">
               <thead>
                 <tr>
                   <th scope="col" className="notifications-matrix__event-head">
-                    Event
+                    {t("eventColumn")}
                   </th>
-                  {CHANNELS.map((c) => (
-                    <th key={c.id} scope="col" className="notifications-matrix__channel-head">
-                      {c.label}
+                  {CHANNEL_IDS.map((channelId) => (
+                    <th key={channelId} scope="col" className="notifications-matrix__channel-head">
+                      {t(`channels.${channelId}`)}
                     </th>
                   ))}
                 </tr>
               </thead>
               <tbody>
-                {EVENTS.map((event) => (
-                  <tr key={event.id} className="notifications-matrix__row">
+                {EVENT_IDS.map((eventId) => (
+                  <tr key={eventId} className="notifications-matrix__row">
                     <th scope="row" className="notifications-matrix__event">
-                      {event.label}
+                      {t(`events.${eventId}.label`)}
                     </th>
-                    {CHANNELS.map((channel) => {
-                      const on = state.prefs.matrix[event.id]?.[channel.id] ?? false;
-                      const label = cellLabel(event.label, channel.label);
+                    {CHANNEL_IDS.map((channelId) => {
+                      const on = state.prefs.matrix[eventId]?.[channelId] ?? false;
+                      const label = cellLabel(eventId, channelId);
                       return (
-                        <td key={channel.id} className="notifications-matrix__cell">
+                        <td key={channelId} className="notifications-matrix__cell">
                           <label className="toggle" aria-label={label}>
                             <input
                               type="checkbox"
                               className="toggle__input"
                               aria-label={label}
                               checked={on}
-                              onChange={() => toggleCell(state.prefs, event.id, channel.id)}
+                              onChange={() => toggleCell(state.prefs, eventId, channelId)}
                             />
                             <span className="toggle__track" aria-hidden="true">
                               <span className="toggle__thumb" />
@@ -153,9 +148,7 @@ export default function NotificationsTab() {
                 ))}
               </tbody>
             </table>
-            <p className="notifications-matrix__caption">
-              Channels follow your Connectors. In-app always works.
-            </p>
+            <p className="notifications-matrix__caption">{t("matrixCaption")}</p>
           </section>
 
           <QuietHours prefs={state.prefs} onChange={(next) => void save(state.prefs, next)} />
@@ -174,27 +167,28 @@ function QuietHours({
   prefs: NotificationPrefs;
   onChange: (next: NotificationPrefs) => void;
 }) {
+  const t = useTranslations("settings.notifications");
   return (
-    <section className="quiet-hours" aria-label="Quiet hours">
-      <h2 className="section-label">Quiet hours</h2>
+    <section className="quiet-hours" aria-label={t("quietHours")}>
+      <h2 className="section-label">{t("quietHours")}</h2>
       <div className="quiet-hours__row">
         <label className="quiet-hours__switch">
           <input
             type="checkbox"
             className="quiet-hours__switch-input"
-            aria-label="Quiet hours"
+            aria-label={t("quietHours")}
             checked={prefs.quiet_hours_enabled}
             onChange={() => onChange({ ...prefs, quiet_hours_enabled: !prefs.quiet_hours_enabled })}
           />
-          <span>Quiet hours</span>
+          <span>{t("quietHours")}</span>
         </label>
 
         <label className="quiet-hours__field">
-          <span className="quiet-hours__field-label">From</span>
+          <span className="quiet-hours__field-label">{t("from")}</span>
           <input
             type="time"
             className="quiet-hours__time"
-            aria-label="From"
+            aria-label={t("from")}
             value={prefs.quiet_hours_start}
             disabled={!prefs.quiet_hours_enabled}
             onChange={(e) => onChange({ ...prefs, quiet_hours_start: e.target.value })}
@@ -202,21 +196,18 @@ function QuietHours({
         </label>
 
         <label className="quiet-hours__field">
-          <span className="quiet-hours__field-label">Until</span>
+          <span className="quiet-hours__field-label">{t("until")}</span>
           <input
             type="time"
             className="quiet-hours__time"
-            aria-label="Until"
+            aria-label={t("until")}
             value={prefs.quiet_hours_end}
             disabled={!prefs.quiet_hours_enabled}
             onChange={(e) => onChange({ ...prefs, quiet_hours_end: e.target.value })}
           />
         </label>
       </div>
-      <p className="quiet-hours__caption">
-        During quiet hours, only &ldquo;Needs you&rdquo; reaches you in-app. Everything else waits
-        for morning.
-      </p>
+      <p className="quiet-hours__caption">{t("quietHoursCaption")}</p>
     </section>
   );
 }

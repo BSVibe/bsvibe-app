@@ -2,6 +2,7 @@
 
 import { logout } from "@/lib/api/auth";
 import { useSession } from "@/lib/auth/session";
+import { useTranslations } from "next-intl";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 
@@ -10,8 +11,9 @@ export default function AccountChip() {
   const session = useSession();
   const router = useRouter();
   const [busy, setBusy] = useState(false);
+  const t = useTranslations("shell");
 
-  const email = session?.email ?? "Signed in";
+  const email = session?.email ?? t("signedIn");
   const initial = (session?.email ?? "?").trim().charAt(0).toUpperCase() || "?";
 
   async function handleSignOut() {
@@ -34,7 +36,7 @@ export default function AccountChip() {
         onClick={handleSignOut}
         disabled={busy}
       >
-        {busy ? "Signing out…" : "Sign out"}
+        {busy ? t("signingOut") : t("signOut")}
       </button>
     </div>
   );

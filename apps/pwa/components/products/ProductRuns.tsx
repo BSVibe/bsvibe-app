@@ -1,4 +1,5 @@
 import type { ProductDetailRun } from "@/lib/api/types";
+import { useTranslations } from "next-intl";
 
 /** Calm absolute date ("May 23 · 2:14 PM"); falls back to the raw string when
  *  unparseable. No date library — keeps the bundle quiet (matches RunRow). */
@@ -17,11 +18,12 @@ function formatWhen(value: string): string {
  * a quiet empty line when the product has no runs yet.
  */
 export default function ProductRuns({ runs }: { runs: ProductDetailRun[] }) {
+  const t = useTranslations("products");
   return (
-    <section className="product-runs" aria-label="Recent runs">
-      <h2 className="section-label">Recent runs</h2>
+    <section className="product-runs" aria-label={t("recentRuns")}>
+      <h2 className="section-label">{t("recentRuns")}</h2>
       {runs.length === 0 ? (
-        <p className="product-runs__empty">No runs for this product yet.</p>
+        <p className="product-runs__empty">{t("noRuns")}</p>
       ) : (
         <ul className="product-runs__list">
           {runs.map((run) => (

@@ -1,4 +1,5 @@
 import type { Concept } from "@/lib/api/types";
+import { useTranslations } from "next-intl";
 
 /**
  * "What I know" — the settled knowledge wall: canonical anchors the
@@ -17,19 +18,20 @@ export default function ConceptsSection({
   items: Concept[];
   failed: boolean;
 }) {
+  const t = useTranslations("inside");
   return (
-    <section className="inside-block" aria-label="What I know">
+    <section className="inside-block" aria-label={t("whatIKnow")}>
       <header className="inside-block__head">
-        <h2 className="section-label">What I know</h2>
+        <h2 className="section-label">{t("whatIKnow")}</h2>
         {!failed && items.length > 0 && <span className="inside-block__count">{items.length}</span>}
       </header>
 
       {failed ? (
         <p className="inside-block__note" aria-live="polite">
-          Couldn&rsquo;t load what I know just now — try again in a moment.
+          {t("conceptsError")}
         </p>
       ) : items.length === 0 ? (
-        <p className="inside-block__note">No settled concepts yet.</p>
+        <p className="inside-block__note">{t("conceptsEmpty")}</p>
       ) : (
         <ul className="inside-list">
           {items.map((concept) => (
@@ -38,7 +40,7 @@ export default function ConceptsSection({
                 <span className="inside-row__name">{concept.name}</span>
                 {concept.alias_count > 0 && (
                   <span className="inside-row__mentions">
-                    {concept.alias_count} {concept.alias_count === 1 ? "mention" : "mentions"}
+                    {t("mentions", { count: concept.alias_count })}
                   </span>
                 )}
               </div>

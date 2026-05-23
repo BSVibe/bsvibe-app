@@ -1,6 +1,7 @@
 "use client";
 
 import { usePendingDecisionsCount } from "@/lib/decisions/pending-count";
+import { useTranslations } from "next-intl";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { ActivityIcon, BellIcon, BriefIcon, DecisionsIcon, InsideIcon, SkillsIcon } from "./icons";
@@ -14,23 +15,32 @@ const ICONS: Record<NavKey, typeof BriefIcon> = {
   skills: SkillsIcon,
 };
 
-const TITLES: Record<string, string> = {
-  "/brief": "Brief",
-  "/decisions": "Decisions",
-  "/activity": "Activity",
-  "/inside": "Inside",
-  "/skills": "Skills",
-  "/settings": "Settings",
+/** Map a pathname to the `nav` namespace key used for the mobile title. */
+const TITLE_KEYS: Record<string, NavKey | "settings"> = {
+  "/brief": "brief",
+  "/decisions": "decisions",
+  "/activity": "activity",
+  "/inside": "inside",
+  "/skills": "skills",
+  "/settings": "settings",
 };
 
 /** Mobile top bar — page title + notifications (UX Brief mobile mockup). */
 export function MobileTopBar() {
   const pathname = usePathname();
-  const title = TITLES[pathname] ?? "BSVibe";
+  const tNav = useTranslations("nav");
+  const tShell = useTranslations("shell");
+  const titleKey = TITLE_KEYS[pathname];
+  const title = titleKey ? tNav(titleKey) : tShell("wordmark");
   return (
     <header className="topbar">
       <span className="topbar__title">{title}</span>
-      <button type="button" className="topbar__bell" disabled title="Notifications — coming soon">
+      <button
+        type="button"
+        className="topbar__bell"
+        disabled
+        title={tShell("notificationsComingSoon")}
+      >
         <BellIcon />
       </button>
     </header>
@@ -41,8 +51,10 @@ export function MobileTopBar() {
 export function MobileNav() {
   const pathname = usePathname();
   const pendingDecisions = usePendingDecisionsCount();
+  const tNav = useTranslations("nav");
+  const tShell = useTranslations("shell");
   return (
-    <nav className="tabbar" aria-label="Primary">
+    <nav className="tabbar" aria-label={tShell("primaryNav")}>
       {PRIMARY_NAV.map((item) => {
         const Icon = ICONS[item.key];
         const active = pathname === item.href;
@@ -50,7 +62,7 @@ export function MobileNav() {
           return (
             <button key={item.key} type="button" className="tabbar__item" disabled>
               <Icon />
-              <span>{item.label}</span>
+              <span>{tNav(item.key)}</span>
             </button>
           );
         }
@@ -65,12 +77,12 @@ export function MobileNav() {
             <span className="tabbar__icon">
               <Icon />
               {badge !== null && (
-                <span className="tabbar__badge" aria-label={`${badge} pending`}>
+                <span className="tabbar__badge" aria-label={tShell("pending", { count: badge })}>
                   {badge}
                 </span>
               )}
             </span>
-            <span>{item.label}</span>
+            <span>{tNav(item.key)}</span>
           </Link>
         );
       })}

@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslations } from "next-intl";
 import { usePathname } from "next/navigation";
 import type { ReactNode } from "react";
 import SettingsTabs, { type SettingsTabSlug } from "./SettingsTabs";
@@ -22,9 +23,10 @@ function activeSlug(pathname: string | null): SettingsTabSlug {
 
 export default function SettingsShell({ children }: { children: ReactNode }) {
   const active = activeSlug(usePathname());
+  const t = useTranslations("settings");
   return (
     <div className="settings">
-      <h1 className="settings__heading">Settings</h1>
+      <h1 className="settings__heading">{t("heading")}</h1>
       <SettingsTabs active={active} />
       <div className="settings__body">{children}</div>
     </div>

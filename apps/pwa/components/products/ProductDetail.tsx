@@ -2,6 +2,7 @@
 
 import { getProductDetail } from "@/lib/api/product-detail";
 import type { ProductDetailView } from "@/lib/api/types";
+import { useTranslations } from "next-intl";
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import ProductHeader from "./ProductHeader";
@@ -34,6 +35,7 @@ type Loaded =
 
 export default function ProductDetail({ slug }: { slug: string }) {
   const [loaded, setLoaded] = useState<Loaded>({ state: "loading" });
+  const t = useTranslations("products");
 
   useEffect(() => {
     let active = true;
@@ -54,28 +56,30 @@ export default function ProductDetail({ slug }: { slug: string }) {
   return (
     <div className="product">
       <Link className="product__back" href="/brief">
-        ‹ Brief
+        {t("back")}
       </Link>
 
       {loaded.state === "loading" && (
         <p className="product__loading-note" aria-busy="true">
-          Looking at this product…
+          {t("loadingNote")}
         </p>
       )}
 
       {loaded.state === "not-found" && (
-        <section className="product-empty" aria-label="Product">
-          <p className="product-empty__line">I don&rsquo;t know that product.</p>
+        <section className="product-empty" aria-label={t("region")}>
+          <p className="product-empty__line">{t("notFoundLine")}</p>
           <p className="product-empty__sub">
-            It may have been renamed or removed. <Link href="/brief">Back to the Brief</Link>.
+            {t("notFoundSubPrefix")}
+            <Link href="/brief">{t("backToBrief")}</Link>
+            {t("notFoundSubSuffix")}
           </p>
         </section>
       )}
 
       {loaded.state === "error" && (
-        <section className="product-empty" aria-label="Product">
-          <p className="product-empty__line">Couldn&rsquo;t load this product just now.</p>
-          <p className="product-empty__sub">Try again in a moment.</p>
+        <section className="product-empty" aria-label={t("region")}>
+          <p className="product-empty__line">{t("errorLine")}</p>
+          <p className="product-empty__sub">{t("errorSub")}</p>
         </section>
       )}
 

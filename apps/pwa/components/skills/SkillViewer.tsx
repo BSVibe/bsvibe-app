@@ -3,6 +3,7 @@
 import { ApiError } from "@/lib/api/client";
 import { getSkill } from "@/lib/api/skills";
 import type { Skill } from "@/lib/api/types";
+import { useTranslations } from "next-intl";
 import Link from "next/link";
 import { useEffect, useState } from "react";
 
@@ -28,6 +29,7 @@ type Loaded =
 
 export default function SkillViewer({ name }: { name: string }) {
   const [loaded, setLoaded] = useState<Loaded>({ state: "loading" });
+  const t = useTranslations("skills");
 
   useEffect(() => {
     let active = true;
@@ -53,28 +55,30 @@ export default function SkillViewer({ name }: { name: string }) {
   return (
     <div className="skill">
       <Link className="skill__back" href="/skills">
-        ‹ Skills
+        {t("back")}
       </Link>
 
       {loaded.state === "loading" && (
         <p className="skill__loading-note" aria-busy="true">
-          Looking at this skill…
+          {t("viewerLoadingNote")}
         </p>
       )}
 
       {loaded.state === "not-found" && (
-        <section className="skills-empty" aria-label="Skill">
-          <p className="skills-empty__line">I don&rsquo;t know that skill.</p>
+        <section className="skills-empty" aria-label={t("skillRegion")}>
+          <p className="skills-empty__line">{t("notFoundLine")}</p>
           <p className="skills-empty__sub">
-            It may have been renamed or removed. <Link href="/skills">Back to Skills</Link>.
+            {t("notFoundSubPrefix")}
+            <Link href="/skills">{t("backToSkills")}</Link>
+            {t("notFoundSubSuffix")}
           </p>
         </section>
       )}
 
       {loaded.state === "error" && (
-        <section className="skills-empty" aria-label="Skill">
-          <p className="skills-empty__line">Couldn&rsquo;t load this skill just now.</p>
-          <p className="skills-empty__sub">Try again in a moment.</p>
+        <section className="skills-empty" aria-label={t("skillRegion")}>
+          <p className="skills-empty__line">{t("viewerErrorLine")}</p>
+          <p className="skills-empty__sub">{t("viewerErrorSub")}</p>
         </section>
       )}
 
@@ -84,9 +88,11 @@ export default function SkillViewer({ name }: { name: string }) {
             <div>
               <h1 className="skill-detail__name">{loaded.skill.name}</h1>
               <p className="skill-detail__meta">
-                <span>v{loaded.skill.version}</span>
-                {loaded.skill.author && <span> · by {loaded.skill.author}</span>}
-                {loaded.skill.model && <span> · {loaded.skill.model}</span>}
+                <span>{t("version", { version: loaded.skill.version })}</span>
+                {loaded.skill.author && (
+                  <span>{t("byAuthor", { author: loaded.skill.author })}</span>
+                )}
+                {loaded.skill.model && <span>{t("withModel", { model: loaded.skill.model })}</span>}
               </p>
             </div>
             {/* No write API — authoring is file-system based. Honest disabled stub. */}
@@ -94,17 +100,17 @@ export default function SkillViewer({ name }: { name: string }) {
               type="button"
               className="skill-detail__edit"
               disabled
-              title="Editing skills is coming soon"
+              title={t("editComingSoon")}
             >
-              Edit
+              {t("edit")}
             </button>
           </header>
 
           <p className="skill-detail__desc">{loaded.skill.description}</p>
 
           {loaded.skill.allowed_tools.length > 0 && (
-            <section className="skill-detail__block" aria-label="Allowed tools">
-              <h2 className="section-label">Allowed tools</h2>
+            <section className="skill-detail__block" aria-label={t("allowedTools")}>
+              <h2 className="section-label">{t("allowedTools")}</h2>
               <ul className="skill-tags">
                 {loaded.skill.allowed_tools.map((tool) => (
                   <li key={tool} className="skill-tag">
@@ -116,9 +122,7 @@ export default function SkillViewer({ name }: { name: string }) {
           )}
 
           <p className="skill-detail__prompt-note">
-            {loaded.skill.has_system_prompt
-              ? "This skill carries a system prompt. The prompt text lives in the skill file and isn’t shown here."
-              : "This skill has no system prompt."}
+            {loaded.skill.has_system_prompt ? t("systemPromptYes") : t("systemPromptNo")}
           </p>
         </article>
       )}

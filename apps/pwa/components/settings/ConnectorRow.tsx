@@ -1,6 +1,7 @@
 "use client";
 
 import type { Connector } from "@/lib/api/types";
+import { useTranslations } from "next-intl";
 import { useState } from "react";
 
 type RowState = "idle" | "confirming" | "revoking" | "error";
@@ -33,6 +34,8 @@ export default function ConnectorRow({
   revoke: (id: string) => Promise<void>;
 }) {
   const [state, setState] = useState<RowState>("idle");
+  const t = useTranslations("settings.connectors.row");
+  const tConnectors = useTranslations("settings.connectors");
 
   async function confirmRevoke() {
     if (state === "revoking") return;
@@ -55,9 +58,13 @@ export default function ConnectorRow({
         <div className="connector-card__head">
           <span className="connector-card__name">{connector.connector}</span>
           {connector.is_active ? (
-            <span className="connector-card__pill connector-card__pill--connected">Connected</span>
+            <span className="connector-card__pill connector-card__pill--connected">
+              {tConnectors("connected")}
+            </span>
           ) : (
-            <span className="connector-card__pill connector-card__pill--revoked">Revoked</span>
+            <span className="connector-card__pill connector-card__pill--revoked">
+              {t("revoked")}
+            </span>
           )}
         </div>
         <p className="connector-card__detail">
@@ -65,9 +72,11 @@ export default function ConnectorRow({
             <span className="connector-card__ref">{connector.external_ref}</span>
           ) : null}
           {configKeys.length > 0 ? (
-            <span className="connector-card__config">delivers out · {configKeys.join(", ")}</span>
+            <span className="connector-card__config">
+              {t("deliversOut", { keys: configKeys.join(", ") })}
+            </span>
           ) : null}
-          <span className="connector-card__hint" title="Webhook token (masked)">
+          <span className="connector-card__hint" title={t("tokenHintTitle")}>
             {connector.token_hint}
           </span>
         </p>
@@ -76,7 +85,7 @@ export default function ConnectorRow({
       <div className="connector-card__actions">
         {state === "error" && (
           <span className="connector-card__error" aria-live="polite">
-            Couldn&rsquo;t revoke that — please try again.
+            {t("revokeError")}
           </span>
         )}
 
@@ -88,7 +97,7 @@ export default function ConnectorRow({
               onClick={confirmRevoke}
               disabled={state === "revoking"}
             >
-              {state === "revoking" ? "Revoking…" : "Confirm revoke"}
+              {state === "revoking" ? t("revoking") : t("confirmRevoke")}
             </button>
             <button
               type="button"
@@ -96,7 +105,7 @@ export default function ConnectorRow({
               onClick={() => setState("idle")}
               disabled={state === "revoking"}
             >
-              Cancel
+              {t("cancel")}
             </button>
           </>
         ) : (
@@ -105,9 +114,9 @@ export default function ConnectorRow({
               type="button"
               className="connector-card__ghost"
               disabled
-              title="Configuring a connected service isn’t available yet — coming soon."
+              title={t("configureTitle")}
             >
-              Configure
+              {t("configure")}
             </button>
             {connector.is_active ? (
               <button
@@ -115,7 +124,7 @@ export default function ConnectorRow({
                 className="connector-card__revoke"
                 onClick={() => setState("confirming")}
               >
-                Revoke
+                {t("revoke")}
               </button>
             ) : null}
           </>

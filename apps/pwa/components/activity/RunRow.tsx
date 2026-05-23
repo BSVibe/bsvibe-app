@@ -2,6 +2,7 @@
 
 import { getRunDeliverables } from "@/lib/api/activity";
 import type { ActivityDeliverable, ActivityRun, ArtifactType } from "@/lib/api/types";
+import { useTranslations } from "next-intl";
 import { useState } from "react";
 
 /** Per-artifact-type marker (UX §4 — deliverables are polymorphic), matched to
@@ -47,6 +48,7 @@ function formatWhen(value: string): string {
 export default function RunRow({ run }: { run: ActivityRun }) {
   const [open, setOpen] = useState(false);
   const [loaded, setLoaded] = useState<Loaded>({ state: "idle" });
+  const t = useTranslations("activity");
 
   async function toggle() {
     const next = !open;
@@ -91,16 +93,16 @@ export default function RunRow({ run }: { run: ActivityRun }) {
         <div id={panelId} className="activity-row__panel">
           {loaded.state === "loading" && (
             <p className="activity-row__note" aria-live="polite">
-              Looking at what it delivered…
+              {t("deliverablesLoading")}
             </p>
           )}
           {loaded.state === "error" && (
             <p className="activity-row__note" aria-live="polite">
-              Couldn&rsquo;t load this run&rsquo;s deliverables just now — try again in a moment.
+              {t("deliverablesError")}
             </p>
           )}
           {loaded.state === "ready" && loaded.items.length === 0 && (
-            <p className="activity-row__note">No delivered artifacts for this run.</p>
+            <p className="activity-row__note">{t("deliverablesEmpty")}</p>
           )}
           {loaded.state === "ready" && loaded.items.length > 0 && (
             <ul className="activity-deliverables">
@@ -124,7 +126,7 @@ export default function RunRow({ run }: { run: ActivityRun }) {
                           target="_blank"
                           rel="noopener noreferrer"
                         >
-                          Open artifact
+                          {t("openArtifact")}
                         </a>
                       )}
                     </div>

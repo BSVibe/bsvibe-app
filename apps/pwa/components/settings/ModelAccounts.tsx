@@ -2,6 +2,7 @@
 
 import { createAccount, listAccounts, revokeAccount, setAccountActive } from "@/lib/api/accounts";
 import type { ModelAccount } from "@/lib/api/types";
+import { useTranslations } from "next-intl";
 import { useEffect, useState } from "react";
 import AddModelAccount from "./AddModelAccount";
 import ModelAccountRow from "./ModelAccountRow";
@@ -30,6 +31,7 @@ type ListState = { data: ModelAccount[]; failed: boolean } | null;
 
 export default function ModelAccounts() {
   const [list, setList] = useState<ListState>(null);
+  const t = useTranslations("settings.models");
 
   async function load() {
     try {
@@ -52,21 +54,18 @@ export default function ModelAccounts() {
   const hasActive = list && !list.failed && list.data.some((a) => a.is_active);
 
   return (
-    <section className="accounts" aria-label="Model accounts">
+    <section className="accounts" aria-label={t("sectionLabel")}>
       <header className="accounts__head">
-        <h2 className="section-label">Model accounts</h2>
+        <h2 className="section-label">{t("sectionHeading")}</h2>
         {list && !list.failed && list.data.length > 0 ? (
           <span className="accounts__count">{list.data.length}</span>
         ) : null}
       </header>
-      <p className="accounts__lede">
-        The LLM account I run on. I use the active one to do work — register it here once and it
-        stays encrypted.
-      </p>
+      <p className="accounts__lede">{t("accountsLede")}</p>
 
       {list && !list.failed && list.data.length > 0 && !hasActive ? (
         <p className="accounts__warn" aria-live="polite">
-          None of these are active — activate one so I can run work.
+          {t("noneActiveWarn")}
         </p>
       ) : null}
 
@@ -74,16 +73,14 @@ export default function ModelAccounts() {
 
       {list === null ? (
         <p className="accounts__loading" aria-busy="true">
-          Loading your model accounts…
+          {t("loading")}
         </p>
       ) : list.failed ? (
         <p className="accounts__note" aria-live="polite">
-          Couldn&rsquo;t load your model accounts right now — try again in a moment.
+          {t("loadError")}
         </p>
       ) : list.data.length === 0 ? (
-        <p className="accounts__empty">
-          Add the model that powers your AI — without it I can&rsquo;t run work.
-        </p>
+        <p className="accounts__empty">{t("empty")}</p>
       ) : (
         <ul className="accounts__list">
           {list.data.map((a) => (
