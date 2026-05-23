@@ -280,6 +280,11 @@ class RunOrchestrator:
             {"role": "system", "content": _SYSTEM_PROMPT},
             {"role": "user", "content": _intent_title(run)},
         ]
+        # Resumption context: if the founder resolved a prior blocking question
+        # (the run was paused on a Decision and re-opened via /api/v1/checkpoints),
+        # seed each resolution so the loop continues WITH that decision in
+        # context rather than re-asking. See backend.api.v1.checkpoints.
+        messages.extend(_resumption_messages(run))
         attempt.phase = RunAttemptPhase.WORKING
         await self._session.flush()
 
@@ -715,6 +720,38 @@ def _intent_title(run: ExecutionRun) -> str:
     payload = run.payload or {}
     text = payload.get("intent_text") or payload.get("text") or "Untitled run"
     return str(text)[:512]
+
+
+def _resumption_messages(run: ExecutionRun) -> list[dict[str, Any]]:
+    """Build loop seed messages for any founder-resolved decisions.
+
+    ``run.payload["resolved_decisions"]`` is a list of
+    ``{decision_id, question, answer}`` appended by the checkpoints resolve
+    endpoint. Each becomes a user message so the work LLM continues with the
+    founder's answer in context instead of re-asking the blocking question."""
+    payload = run.payload or {}
+    resolved = payload.get("resolved_decisions") if isinstance(payload, dict) else None
+    if not isinstance(resolved, list):
+        return []
+    messages: list[dict[str, Any]] = []
+    for entry in resolved:
+        if not isinstance(entry, dict):
+            continue
+        question = str(entry.get("question") or "")
+        answer = str(entry.get("answer") or "")
+        if not answer:
+            continue
+        messages.append(
+            {
+                "role": "user",
+                "content": (
+                    "The founder resolved a prior question — "
+                    f"Q: {question} A: {answer}. "
+                    "Continue the work with this decision."
+                ),
+            }
+        )
+    return messages
 
 
 def _utcnow() -> Any:
