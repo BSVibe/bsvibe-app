@@ -30,7 +30,31 @@
     "notificationsComingSoon": "Notifications — coming soon",
     "signedIn": "Signed in",
     "signOut": "Sign out",
-    "signingOut": "Signing out…"
+    "signingOut": "Signing out…",
+    "products": {
+      "sectionLabel": "Products",
+      "heading": "Products",
+      "listLabel": "Products",
+      "newProject": "New project",
+      "loading": "Loading projects…",
+      "loadError": "Couldn’t load your projects.",
+      "empty": "No projects yet",
+      "form": {
+        "name": "Name",
+        "namePlaceholder": "Related posts",
+        "slug": "Slug",
+        "slugPlaceholder": "related-posts",
+        "slugHint": "Lowercase letters, numbers and hyphens — used in the URL.",
+        "slugError": "Use lowercase letters, numbers and hyphens, starting with a letter.",
+        "repoUrl": "Repo URL",
+        "repoUrlPlaceholder": "https://github.com/you/project",
+        "repoUrlHint": "Optional — where the code lives.",
+        "create": "Create project",
+        "creating": "Creating…",
+        "createError": "Couldn’t create that project — that name may already be taken.",
+        "cancel": "Cancel"
+      }
+    }
   },
   "direct": {
     "label": "Direct",
