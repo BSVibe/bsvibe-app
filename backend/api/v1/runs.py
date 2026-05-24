@@ -21,6 +21,7 @@ from backend.execution.db import (
     DecisionStatus,
     Deliverable,
     ExecutionRun,
+    ExecutionRunActivity,
     RunStatus,
     VerificationOutcome,
     VerificationResult,
@@ -89,11 +90,33 @@ class RunVerification(BaseModel):
     created_at: datetime
 
 
+class RunActivity(BaseModel):
+    """One meaningful event on the run's timeline — the STORY of what the agent
+    did ("What I did"). The ``type`` is the raw :class:`ExecutionRunActivity`
+    ``activity_type`` (``tool_call`` / ``verify`` / ``settle`` / ``error``) or a
+    synthesized ``deliver`` when the timeline is derived from rows we already
+    carry; the ``label`` is a short human summary built defensively from the
+    payload (so a malformed payload never 500s the response model)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: str
+    label: str
+    created_at: datetime
+
+
 class RunDetailResponse(BaseModel):
     """The inspectable run-detail surface (Stitch "Triggered"): the run's
     status + timestamps, its trigger context, its paused-run Decisions, the
-    latest verification outcome, and the resulting Deliverable id (so the UI can
-    link to its Delivery Report)."""
+    latest verification outcome, the resulting Deliverable id (so the UI can
+    link to its Delivery Report), and the run's activity timeline (the STORY of
+    what the agent did, time-ordered oldest-first).
+
+    ``timeline_source`` is ``"activities"`` when real
+    :class:`ExecutionRunActivity` rows drive the timeline, or ``"derived"`` when
+    no activity rows exist and the timeline is synthesized from the deliverable +
+    verification we already carry (the DEFER fallback — only what the schema
+    actually stores; no fabricated per-step LLM token traces)."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -107,6 +130,8 @@ class RunDetailResponse(BaseModel):
     decisions: list[RunDecision] = []
     verification: RunVerification | None = None
     deliverable_id: uuid.UUID | None = None
+    activities: list[RunActivity] = []
+    timeline_source: str = "derived"
 
 
 def _opt_str(value: Any) -> str | None:
@@ -137,6 +162,104 @@ def _question_text(decision: Decision) -> str:
         if isinstance(value, str):
             return value
     return ""
+
+
+def _write_paths(payload: dict[str, Any]) -> list[str]:
+    """The file paths a ``tool_call`` activity wrote, defensively (an odd
+    ``writes`` value yields an empty list rather than throwing)."""
+    writes = payload.get("writes")
+    if not isinstance(writes, list):
+        return []
+    return [p for p in writes if isinstance(p, str) and p.strip()]
+
+
+_VERIFY_LABELS = {
+    "passed": "Verified the work",
+    "failed": "Verification failed",
+    "inconclusive": "Verification was inconclusive",
+}
+
+
+def _tool_call_label(payload: dict[str, Any]) -> str | None:
+    """ "Delivered X" for a file-writing tool_call; ``None`` for a read-only one
+    (noise the founder timeline skips)."""
+    paths = _write_paths(payload)
+    if not paths:
+        return None
+    shown = ", ".join(paths[:3])
+    if len(paths) > 3:
+        shown += f" (+{len(paths) - 3} more)"
+    return f"Delivered {shown}"
+
+
+def _activity_label(activity_type: str, payload: dict[str, Any]) -> str | None:
+    """A short human label for one ExecutionRunActivity, or ``None`` when the
+    event is low-signal noise the founder timeline should skip.
+
+    Surfaced events tell the run's STORY: a file-writing ``tool_call``
+    ("Delivered X"), a ``verify`` verdict, a ``settle`` ("Settled into
+    knowledge"), and a calm ``error``. Per-turn ``llm_turn`` chatter and
+    read-only ``tool_call`` rows are noise and drop out (→ ``None``). All payload
+    reads are defensive so a malformed row degrades to a calm label / drop rather
+    than 500ing the response model.
+    """
+    if activity_type == "tool_call":
+        return _tool_call_label(payload)
+    if activity_type == "verify":
+        outcome = payload.get("outcome")
+        if isinstance(outcome, str):
+            return _VERIFY_LABELS.get(outcome, "Ran verification")
+        return "Ran verification"
+    if activity_type == "settle":
+        return "Settled into knowledge"
+    if activity_type == "error":
+        return "Hit a problem"
+    # llm_turn and any unknown / low-signal type are skipped.
+    return None
+
+
+def _build_timeline(
+    activity_rows: list[ExecutionRunActivity],
+    verification: VerificationResult | None,
+    deliverable_id: uuid.UUID | None,
+    deliverable_created_at: datetime | None,
+) -> tuple[list[RunActivity], str]:
+    """Build the run's STORY timeline (oldest-first) + its source tag.
+
+    Prefers REAL :class:`ExecutionRunActivity` rows (``timeline_source ==
+    "activities"``). When none exist, DERIVES a calm timeline from the rows we
+    already carry — the latest verification + the resulting deliverable (the
+    DEFER fallback; ``timeline_source == "derived"``). Surfaces only what the
+    schema actually stores — no fabricated per-step token traces.
+    """
+    if activity_rows:
+        events: list[RunActivity] = []
+        for row in activity_rows:
+            payload = row.payload if isinstance(row.payload, dict) else {}
+            label = _activity_label(row.activity_type, payload)
+            if label is None:
+                continue
+            events.append(
+                RunActivity(type=row.activity_type, label=label, created_at=row.created_at)
+            )
+        return events, "activities"
+
+    # Derived fallback: synthesize from the verification + deliverable we have.
+    derived: list[RunActivity] = []
+    if verification is not None:
+        label = _activity_label("verify", {"outcome": verification.outcome.value})
+        if label is not None:
+            derived.append(
+                RunActivity(type="verify", label=label, created_at=verification.created_at)
+            )
+    if deliverable_id is not None and deliverable_created_at is not None:
+        derived.append(
+            RunActivity(
+                type="deliver", label="Produced a deliverable", created_at=deliverable_created_at
+            )
+        )
+    derived.sort(key=lambda e: e.created_at)
+    return derived, "derived"
 
 
 @router.get("")
@@ -229,7 +352,7 @@ async def get_run_detail(
     verification_row = (await session.execute(latest_verification_stmt)).scalars().first()
 
     latest_deliverable_stmt = (
-        select(Deliverable.id)
+        select(Deliverable.id, Deliverable.created_at)
         .where(
             Deliverable.run_id == run_id,
             Deliverable.workspace_id == workspace_id,
@@ -237,7 +360,23 @@ async def get_run_detail(
         .order_by(Deliverable.created_at.desc())
         .limit(1)
     )
-    deliverable_id = (await session.execute(latest_deliverable_stmt)).scalars().first()
+    deliverable_row = (await session.execute(latest_deliverable_stmt)).first()
+    deliverable_id = deliverable_row[0] if deliverable_row is not None else None
+    deliverable_created_at = deliverable_row[1] if deliverable_row is not None else None
+
+    # The run's STORY: meaningful activity rows, oldest-first.
+    activities_stmt = (
+        select(ExecutionRunActivity)
+        .where(
+            ExecutionRunActivity.run_id == run_id,
+            ExecutionRunActivity.workspace_id == workspace_id,
+        )
+        .order_by(ExecutionRunActivity.created_at.asc())
+    )
+    activity_rows = list((await session.execute(activities_stmt)).scalars().all())
+    activities, timeline_source = _build_timeline(
+        activity_rows, verification_row, deliverable_id, deliverable_created_at
+    )
 
     return RunDetailResponse(
         id=run.id,
@@ -269,4 +408,6 @@ async def get_run_detail(
             else None
         ),
         deliverable_id=deliverable_id,
+        activities=activities,
+        timeline_source=timeline_source,
     )

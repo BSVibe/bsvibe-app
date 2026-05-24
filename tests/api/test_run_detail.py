@@ -36,6 +36,7 @@ from backend.execution.db import (
     DeliverableType,
     ExecutionBase,
     ExecutionRun,
+    ExecutionRunActivity,
     RunStatus,
     VerificationOutcome,
     VerificationResult,
@@ -289,3 +290,228 @@ async def test_detail_tolerates_non_string_payload_values(
     assert trigger["source"] is None
     # intent_text falls back to the `text` key when the canonical key is odd.
     assert trigger["intent_text"] == "fallback"
+
+
+# ---------------------------------------------------------------------------
+# Activity timeline — the run's STORY ("What I did")
+# ---------------------------------------------------------------------------
+
+
+async def _seed_activity(
+    s,
+    *,
+    run_id: uuid.UUID,
+    ws: uuid.UUID,
+    activity_type: str,
+    payload: dict | None = None,
+    created_at: datetime,
+) -> None:
+    s.add(
+        ExecutionRunActivity(
+            id=uuid.uuid4(),
+            run_id=run_id,
+            workspace_id=ws,
+            activity_type=activity_type,
+            payload=payload if payload is not None else {},
+            created_at=created_at,
+        )
+    )
+    await s.flush()
+
+
+async def test_detail_returns_activity_timeline_in_order(
+    configured_client, db, workspace_id
+) -> None:
+    """Meaningful ExecutionRunActivity rows surface as a time-ordered timeline
+    (oldest first) — each with its type + a short human label derived from the
+    payload + the timestamp."""
+    run_id = uuid.uuid4()
+    base = datetime.now(tz=UTC)
+    async with db() as s:
+        await _seed_run(s, run_id=run_id, ws=workspace_id, status=RunStatus.REVIEW_READY)
+        # A file-write tool_call → "Delivered calculator.py".
+        await _seed_activity(
+            s,
+            run_id=run_id,
+            ws=workspace_id,
+            activity_type="tool_call",
+            payload={"tool": "file_write", "ok": True, "writes": ["calculator.py"]},
+            created_at=base + timedelta(minutes=1),
+        )
+        # A verify → "Verified".
+        await _seed_activity(
+            s,
+            run_id=run_id,
+            ws=workspace_id,
+            activity_type="verify",
+            payload={"outcome": "passed", "commands": 2},
+            created_at=base + timedelta(minutes=2),
+        )
+        # A settle → "Settled into knowledge".
+        await _seed_activity(
+            s,
+            run_id=run_id,
+            ws=workspace_id,
+            activity_type="settle",
+            payload={"verified": True, "artifact_refs": ["calculator.py"], "summary": "done"},
+            created_at=base + timedelta(minutes=3),
+        )
+        await s.commit()
+
+    r = await configured_client.get(f"/api/v1/runs/{run_id}/detail")
+    assert r.status_code == 200, r.text
+    activities = r.json()["activities"]
+    assert [a["type"] for a in activities] == ["tool_call", "verify", "settle"]
+    # The file-write tool_call names the written path defensively.
+    assert "calculator.py" in activities[0]["label"]
+    # Verify / settle carry a human label.
+    assert activities[1]["label"]
+    assert activities[2]["label"]
+    # Each entry carries its timestamp.
+    assert all(a["created_at"] for a in activities)
+
+
+async def test_detail_timeline_filters_noise(configured_client, db, workspace_id) -> None:
+    """Noisy / low-signal activity rows (per-turn ``llm_turn`` chatter and
+    non-write ``tool_call`` reads) are NOT surfaced on the founder timeline —
+    only meaningful events are."""
+    run_id = uuid.uuid4()
+    base = datetime.now(tz=UTC)
+    async with db() as s:
+        await _seed_run(s, run_id=run_id, ws=workspace_id, status=RunStatus.RUNNING)
+        await _seed_activity(
+            s,
+            run_id=run_id,
+            ws=workspace_id,
+            activity_type="llm_turn",
+            payload={"content": "thinking...", "tool_calls": ["file_read"]},
+            created_at=base + timedelta(seconds=10),
+        )
+        await _seed_activity(
+            s,
+            run_id=run_id,
+            ws=workspace_id,
+            activity_type="tool_call",
+            payload={"tool": "file_read", "ok": True, "writes": []},
+            created_at=base + timedelta(seconds=20),
+        )
+        await _seed_activity(
+            s,
+            run_id=run_id,
+            ws=workspace_id,
+            activity_type="verify",
+            payload={"outcome": "passed", "commands": 1},
+            created_at=base + timedelta(seconds=30),
+        )
+        await s.commit()
+
+    r = await configured_client.get(f"/api/v1/runs/{run_id}/detail")
+    assert r.status_code == 200, r.text
+    activities = r.json()["activities"]
+    # Only the meaningful "verify" survives; llm_turn + read-only tool_call drop.
+    assert [a["type"] for a in activities] == ["verify"]
+
+
+async def test_detail_timeline_synthesized_when_no_activities(
+    configured_client, db, workspace_id
+) -> None:
+    """When no ExecutionRunActivity rows exist, the timeline is DERIVED from the
+    deliverable + verification we already have (the DEFER fallback), rather than
+    being empty — so the founder still sees a story."""
+    run_id = uuid.uuid4()
+    deliverable_id = uuid.uuid4()
+    base = datetime.now(tz=UTC)
+    async with db() as s:
+        await _seed_run(s, run_id=run_id, ws=workspace_id, status=RunStatus.REVIEW_READY)
+        s.add(
+            VerificationResult(
+                id=uuid.uuid4(),
+                run_id=run_id,
+                workspace_id=workspace_id,
+                outcome=VerificationOutcome.PASSED,
+                contract={},
+                result={},
+                created_at=base + timedelta(minutes=1),
+            )
+        )
+        s.add(
+            Deliverable(
+                id=deliverable_id,
+                run_id=run_id,
+                workspace_id=workspace_id,
+                deliverable_type=DeliverableType.CODE,
+                payload={"summary": "Fix"},
+                created_at=base + timedelta(minutes=2),
+            )
+        )
+        await s.commit()
+
+    r = await configured_client.get(f"/api/v1/runs/{run_id}/detail")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    types = [a["type"] for a in body["activities"]]
+    # Synthesized from the rows we already carry.
+    assert "verify" in types
+    assert "deliver" in types
+    assert body["timeline_source"] == "derived"
+
+
+async def test_detail_timeline_source_recorded_when_activities_exist(
+    configured_client, db, workspace_id
+) -> None:
+    """When real activity rows drive the timeline, ``timeline_source`` says so."""
+    run_id = uuid.uuid4()
+    async with db() as s:
+        await _seed_run(s, run_id=run_id, ws=workspace_id, status=RunStatus.RUNNING)
+        await _seed_activity(
+            s,
+            run_id=run_id,
+            ws=workspace_id,
+            activity_type="verify",
+            payload={"outcome": "passed", "commands": 1},
+            created_at=datetime.now(tz=UTC),
+        )
+        await s.commit()
+
+    r = await configured_client.get(f"/api/v1/runs/{run_id}/detail")
+    assert r.status_code == 200, r.text
+    assert r.json()["timeline_source"] == "activities"
+
+
+async def test_detail_timeline_empty_when_nothing_to_show(
+    configured_client, db, workspace_id
+) -> None:
+    """A bare in-flight run with no activities / deliverable / verification has
+    an empty timeline (and says it's derived) — never a 500."""
+    run_id = uuid.uuid4()
+    async with db() as s:
+        await _seed_run(s, run_id=run_id, ws=workspace_id, status=RunStatus.OPEN, payload={})
+        await s.commit()
+
+    r = await configured_client.get(f"/api/v1/runs/{run_id}/detail")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["activities"] == []
+    assert body["timeline_source"] == "derived"
+
+
+async def test_detail_timeline_tolerates_odd_payload(configured_client, db, workspace_id) -> None:
+    """An activity row with an odd / malformed payload (writes not a list, etc.)
+    degrades to a calm generic label rather than 500ing the response model."""
+    run_id = uuid.uuid4()
+    async with db() as s:
+        await _seed_run(s, run_id=run_id, ws=workspace_id, status=RunStatus.RUNNING)
+        await _seed_activity(
+            s,
+            run_id=run_id,
+            ws=workspace_id,
+            activity_type="tool_call",
+            payload={"tool": 123, "ok": "yes", "writes": "not-a-list"},
+            created_at=datetime.now(tz=UTC),
+        )
+        await s.commit()
+
+    r = await configured_client.get(f"/api/v1/runs/{run_id}/detail")
+    assert r.status_code == 200, r.text
+    # No write paths recoverable → the read-only tool_call drops out as noise.
+    assert r.json()["activities"] == []

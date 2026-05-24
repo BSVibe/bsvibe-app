@@ -612,6 +612,15 @@
     },
     "noVerification": "아직 이 실행에 대한 검증 기록이 없습니다.",
     "deliverable": "전달됨",
-    "viewReport": "전달 리포트 보기"
+    "viewReport": "전달 리포트 보기",
+    "timeline": "제가 한 일",
+    "timelineDerived": "기록된 내용으로 재구성했어요 — 단계별 로그는 아닙니다.",
+    "nextStep": "다음 할 일",
+    "nextDecision": "계속 진행하려면 확인이 필요해요.",
+    "nextReview": "검토할 준비가 됐어요.",
+    "nextReviewLink": "전달 리포트 보기",
+    "nextWorking": "작업하고 있어요…",
+    "nextShipped": "전달 완료 — 따로 하실 일은 없어요.",
+    "nextFailed": "완료하지 못했어요. 지금 하실 일은 없습니다."
   }
 }

@@ -135,10 +135,23 @@ export interface RunVerification {
   created_at: string;
 }
 
+/** One meaningful event on the run's timeline — the STORY of what the agent did
+ *  (backend RunActivity). `type` is the raw ExecutionRunActivity activity_type
+ *  (`tool_call` / `verify` / `settle` / `error`) or a synthesized `deliver` when
+ *  the timeline is derived; `label` is a short human summary. */
+export interface RunActivity {
+  type: string;
+  label: string;
+  created_at: string;
+}
+
 /** `GET /api/v1/runs/{id}/detail` body (backend RunDetailResponse) — the
  *  inspectable run-detail surface (Stitch "Triggered"): status, trigger
- *  context, paused-run decisions, the latest verification outcome, and the
- *  resulting Deliverable id (so the UI can link to its Delivery Report). */
+ *  context, paused-run decisions, the latest verification outcome, the
+ *  resulting Deliverable id (so the UI can link to its Delivery Report), and the
+ *  run's activity timeline (the STORY of what the agent did). `timeline_source`
+ *  is `"activities"` when real activity rows drive it, or `"derived"` when it's
+ *  synthesized from the deliverable + verification we already carry. */
 export interface RunDetail {
   id: string;
   workspace_id: string;
@@ -150,6 +163,8 @@ export interface RunDetail {
   decisions: RunDecision[];
   verification: RunVerification | null;
   deliverable_id: string | null;
+  activities: RunActivity[];
+  timeline_source: "activities" | "derived";
 }
 
 /** `DeliverableType` (backend/execution/db.py) — the artifact kind a verified

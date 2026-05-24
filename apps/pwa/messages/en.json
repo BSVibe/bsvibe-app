@@ -612,6 +612,15 @@
     },
     "noVerification": "No verification recorded for this run yet.",
     "deliverable": "Delivered",
-    "viewReport": "View delivery report"
+    "viewReport": "View delivery report",
+    "timeline": "What I did",
+    "timelineDerived": "Reconstructed from what was recorded — not a step-by-step log.",
+    "nextStep": "What's next",
+    "nextDecision": "This needs your decision before I go on.",
+    "nextReview": "Ready for your review.",
+    "nextReviewLink": "See the delivery report",
+    "nextWorking": "Working on it…",
+    "nextShipped": "Shipped — nothing needed from you.",
+    "nextFailed": "This didn't finish. Nothing for you to do right now."
   }
 }
