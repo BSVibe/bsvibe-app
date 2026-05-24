@@ -1,9 +1,8 @@
-"""Tests for worker capability detection + executor selection (Lift 3).
+"""Tests for worker capability detection + executor selection.
 
-``detect_capabilities`` probes ``shutil.which`` for the CLI binaries; only
-``claude_code`` has a real executor in this lift (codex / opencode may be
-*detected* but their executors are a follow-up). ``select_executor`` maps a
-capability/executor_type string to an :class:`ExecutorProtocol` instance.
+``detect_capabilities`` probes ``shutil.which`` for the CLI binaries.
+``select_executor`` maps a capability/executor_type string to an
+:class:`ExecutorProtocol` instance (``claude_code`` / ``codex`` / ``opencode``).
 """
 
 from __future__ import annotations
@@ -15,11 +14,13 @@ import pytest
 
 from backend.executors.worker import executors as exmod
 from backend.executors.worker.claude_code import ClaudeCodeExecutor
+from backend.executors.worker.codex import CodexExecutor
 from backend.executors.worker.executors import (
     ExecutorProtocol,
     detect_capabilities,
     select_executor,
 )
+from backend.executors.worker.opencode import OpenCodeExecutor
 
 
 def _patch_which(monkeypatch: pytest.MonkeyPatch, present: set[str]) -> None:
@@ -40,12 +41,16 @@ def test_detect_none_present(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_detect_lists_codex_opencode_when_present(monkeypatch: pytest.MonkeyPatch) -> None:
-    # codex / opencode are detectable here (a follow-up lift adds their
-    # executors); claude_code stays first.
+    # claude_code stays first; codex / opencode are detected when on PATH.
     _patch_which(monkeypatch, {"claude", "codex", "opencode"})
     caps = detect_capabilities()
     assert caps[0] == "claude_code"
     assert set(caps) == {"claude_code", "codex", "opencode"}
+
+
+def test_detect_codex_opencode_only(monkeypatch: pytest.MonkeyPatch) -> None:
+    _patch_which(monkeypatch, {"codex", "opencode"})
+    assert set(detect_capabilities()) == {"codex", "opencode"}
 
 
 def test_select_claude_code_returns_executor() -> None:
@@ -54,10 +59,20 @@ def test_select_claude_code_returns_executor() -> None:
     assert isinstance(executor, ExecutorProtocol)
 
 
+def test_select_codex_returns_executor() -> None:
+    executor = select_executor("codex")
+    assert isinstance(executor, CodexExecutor)
+    assert isinstance(executor, ExecutorProtocol)
+
+
+def test_select_opencode_returns_executor() -> None:
+    executor = select_executor("opencode")
+    assert isinstance(executor, OpenCodeExecutor)
+    assert isinstance(executor, ExecutorProtocol)
+
+
 def test_select_unknown_raises() -> None:
-    with pytest.raises(ValueError, match="codex"):
-        select_executor("codex")
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="nope"):
         select_executor("nope")
 
 

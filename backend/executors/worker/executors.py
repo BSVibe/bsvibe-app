@@ -6,9 +6,9 @@ subprocess streamer — ``execute()`` returns an ``AsyncIterator[ExecutionChunk]
 reading a CLI's native JSON stream; the worker main loop forwards each chunk to
 the backend (optionally via Redis pub/sub) and aggregates the final output.
 
-This lift ships only the ``claude_code`` executor. ``codex`` / ``opencode`` are
-*detectable* (so the worker registers the right capabilities) but their
-executors are a follow-up lift — :func:`select_executor` raises for them.
+The ``claude_code``, ``codex``, and ``opencode`` executors each wrap their
+native CLI; :func:`detect_capabilities` PATH-probes all three and
+:func:`select_executor` maps an executor_type string to the matching instance.
 """
 
 from __future__ import annotations
@@ -20,6 +20,8 @@ from typing import TYPE_CHECKING, Any, Literal, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
     from backend.executors.worker.claude_code import ClaudeCodeExecutor
+    from backend.executors.worker.codex import CodexExecutor
+    from backend.executors.worker.opencode import OpenCodeExecutor
 
 
 @dataclass
@@ -95,9 +97,9 @@ async def collect(stream: AsyncIterator[ExecutionChunk]) -> ExecutionResult:
 
 # ── Capability detection ──────────────────────────────────────────────────────
 
-# Probe order matters: claude_code is the only capability with a real executor
-# in this lift, so it leads. codex / opencode are detectable for forward
-# compatibility (a follow-up lift adds their executors).
+# Probe order matters: claude_code leads (the worker's primary executor),
+# followed by codex / opencode. Each capability has a real executor wired into
+# :func:`select_executor`.
 _CLI_CAPABILITIES: tuple[tuple[str, str], ...] = (
     ("claude", "claude_code"),
     ("codex", "codex"),
@@ -120,19 +122,32 @@ def detect_capabilities() -> list[str]:
 def select_executor(executor_type: str) -> ExecutorProtocol:
     """Create an :class:`ExecutorProtocol` for ``executor_type``.
 
-    Only ``claude_code`` has a real executor in this lift; ``codex`` /
-    ``opencode`` (and anything unknown) raise :class:`ValueError`.
+    Wires ``claude_code`` / ``codex`` / ``opencode``; anything unknown raises
+    :class:`ValueError`. Executors are imported lazily to avoid a circular
+    import (each imports the chunk/result types from this module).
     """
     if executor_type == "claude_code":
-        # Imported lazily to avoid a circular import (claude_code imports the
-        # chunk/result types from this module).
         from backend.executors.worker.claude_code import (  # noqa: PLC0415 — breaks an import cycle
             ClaudeCodeExecutor,
         )
 
-        executor: ClaudeCodeExecutor = ClaudeCodeExecutor()
-        return executor
-    raise ValueError(f"Unsupported executor type: {executor_type!r} (no executor in this lift)")
+        claude: ClaudeCodeExecutor = ClaudeCodeExecutor()
+        return claude
+    if executor_type == "codex":
+        from backend.executors.worker.codex import (  # noqa: PLC0415 — breaks an import cycle
+            CodexExecutor,
+        )
+
+        codex: CodexExecutor = CodexExecutor()
+        return codex
+    if executor_type == "opencode":
+        from backend.executors.worker.opencode import (  # noqa: PLC0415 — breaks an import cycle
+            OpenCodeExecutor,
+        )
+
+        opencode: OpenCodeExecutor = OpenCodeExecutor()
+        return opencode
+    raise ValueError(f"Unsupported executor type: {executor_type!r}")
 
 
 __all__ = [
