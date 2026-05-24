@@ -58,6 +58,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from backend.execution.db import ExecutionRunActivity
+from backend.knowledge.canonicalization.filler_words import is_filler_tag
 from backend.workers.base import BaseWorker
 from backend.workers.db import SettleDrainRow
 from backend.workspaces.db import WorkspaceRow
@@ -89,9 +90,14 @@ _CONCEPT_ID_LEADING_RE = re.compile(r"^[a-z]")
 # (after normalization) are too generic to be useful patterns.
 _MIN_SUMMARY_TOKEN_LEN = 3
 
-# Conservative English stopword list — dropped from summary-derived tags so the
-# content tags are nouns/verbs that name the work, not filler. Deliberately
-# small: better to keep a borderline term than to over-prune signal.
+# Worker-local stopword supplement — short, high-frequency function words and
+# tense variants of common action verbs that the summary tokenizer would
+# otherwise keep. The authoritative non-concept deny-list lives in
+# :mod:`backend.knowledge.canonicalization.filler_words` (shared with the
+# promoter chokepoint, applied via :func:`is_filler_tag` below); this set only
+# adds short tokens specific to settle summaries that don't merit promotion to
+# the shared module. Deliberately small: better to keep a borderline term than
+# to over-prune signal.
 _SUMMARY_STOPWORDS: frozenset[str] = frozenset(
     {
         "the",
@@ -359,8 +365,14 @@ def _tags_from_summary(summary: str) -> list[str]:
         if len(token) < _MIN_SUMMARY_TOKEN_LEN or token in _SUMMARY_STOPWORDS:
             continue
         tag = _normalize_tag(token)
-        if tag and tag not in _SUMMARY_STOPWORDS:
-            tags.append(tag)
+        if not tag or tag in _SUMMARY_STOPWORDS:
+            continue
+        # Shared quality gate: drop generic filler / meta / action words so the
+        # sink never even records pure noise (kept consistent with the promoter
+        # chokepoint by sharing one deny-list).
+        if is_filler_tag(tag):
+            continue
+        tags.append(tag)
     return tags
 
 

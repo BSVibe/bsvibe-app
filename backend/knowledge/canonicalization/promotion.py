@@ -58,6 +58,7 @@ from dataclasses import dataclass, field
 
 import structlog
 
+from backend.knowledge.canonicalization.filler_words import is_filler_tag
 from backend.knowledge.canonicalization.index import CanonicalizationIndex
 from backend.knowledge.canonicalization.proposals import DeterministicProposer
 from backend.knowledge.canonicalization.resolver import TagResolver
@@ -182,9 +183,14 @@ class GardenObservationPromoter:
     async def _collect_candidate_tags(self) -> list[str]:
         """Gather distinct content tags across garden observation notes.
 
-        Drops structural tags (``settle`` / ``verified-run`` / ...) and any
-        tag that does not normalize to a valid concept id. Order is stable
-        (sorted) so seeding + proposals are deterministic.
+        Drops structural tags (``settle`` / ``verified-run`` / ...), generic
+        filler / meta / action words (``else`` / ``created`` / ``verified`` /
+        ... — see :mod:`backend.knowledge.canonicalization.filler_words`), and
+        any tag that does not normalize to a valid concept id. Filtering here —
+        the candidate-collection chokepoint — cleans BOTH already-written
+        observations (whose noisy tags are already on disk) and future ones, so
+        filler never settles as a concept regardless of which sink wrote it.
+        Order is stable (sorted) so seeding + proposals are deterministic.
         """
         seen: set[str] = set()
         for path in await self._store.list_garden_paths():
@@ -199,6 +205,10 @@ class GardenObservationPromoter:
                     continue
                 normalized = self._resolver.normalize(raw)
                 if not normalized or normalized in self._structural_tags:
+                    continue
+                # Quality gate: filler/meta/action words name the act of
+                # working, not the subject — they must never become an anchor.
+                if is_filler_tag(normalized):
                     continue
                 seen.add(raw)
         return sorted(seen)
