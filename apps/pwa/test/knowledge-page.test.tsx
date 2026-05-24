@@ -22,10 +22,30 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // The canvas lib reaches for a real canvas — stub it. The stub renders a marker
-// + the node count so the test can assert the canvas container mounted.
+// + the node count so the test can assert the canvas container mounted, and a
+// button per node wired to the real `onNodeClick` so a "node tap" can be
+// simulated the same way the lib invokes it (node object → onNodeClick(node)).
 vi.mock("react-force-graph-2d", () => ({
-  default: ({ graphData }: { graphData: { nodes: unknown[] } }) => (
-    <div data-testid="force-graph-stub">nodes:{graphData.nodes.length}</div>
+  default: ({
+    graphData,
+    onNodeClick,
+  }: {
+    graphData: { nodes: { id: string; label: string }[] };
+    onNodeClick?: (node: { id: string }) => void;
+  }) => (
+    <div data-testid="force-graph-stub">
+      nodes:{graphData.nodes.length}
+      {graphData.nodes.map((n) => (
+        <button
+          key={n.id}
+          type="button"
+          data-testid={`graph-node-${n.id}`}
+          onClick={() => onNodeClick?.(n)}
+        >
+          {n.label}
+        </button>
+      ))}
+    </div>
   ),
 }));
 
@@ -265,6 +285,47 @@ describe("Knowledge surface", () => {
     // The non-matching concept is filtered out; the matching one stays.
     expect(screen.queryByText(CONCEPT.name)).not.toBeInTheDocument();
     expect(screen.getByText(OTHER_CONCEPT.name)).toBeInTheDocument();
+  });
+
+  const GRAPH_DETAIL: ConceptDetail = {
+    id: "a",
+    name: "Auth",
+    aliases: ["authn"],
+    related: [],
+    observations: [
+      {
+        id: "garden/seedling/auth.md",
+        title: "Wired the auth callback",
+        excerpt: "Founder confirmed the redirect target.",
+        captured_at: "2026-05-21",
+      },
+    ],
+  };
+
+  it("opens the inspector when a graph node is tapped — the dead-click bug", async () => {
+    installFetch({
+      concepts: () => [CONCEPT],
+      observations: () => [OBSERVATION],
+      graph: () => GRAPH,
+      // The inspector fetch keys on the graph node id ("a"), proving the graph
+      // node id is exactly the concept id getConceptDetail expects.
+      detail: (id) => (id === "a" ? GRAPH_DETAIL : json("not found", 404)),
+    });
+
+    render(<Knowledge />);
+
+    // Wait for the (mocked) graph to mount with its node buttons.
+    const node = await screen.findByTestId("graph-node-a");
+    // No inspector before the tap.
+    expect(screen.queryByRole("complementary", { name: /concept/i })).not.toBeInTheDocument();
+
+    fireEvent.click(node);
+
+    // Tapping the graph node opens the SAME inspector the list opens.
+    await waitFor(() => {
+      expect(screen.getByRole("complementary", { name: /concept/i })).toBeInTheDocument();
+    });
+    expect(await screen.findByText("Wired the auth callback")).toBeInTheDocument();
   });
 
   it("opens the inspector when a concept in the list is clicked", async () => {
