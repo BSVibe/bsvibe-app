@@ -524,6 +524,56 @@ export interface ModelAccount {
   updated_at: string;
 }
 
+// ── Routing rules (Settings → Models → ROUTING) ───────────────────────────
+
+/** One condition the routing engine evaluates. `field` is one of the
+ *  evaluator's whitelisted ALLOWED_FIELDS (e.g. `classified_intent`). The UI
+ *  only surfaces the value as "what a rule matches" — it does not edit complex
+ *  conditions (deferred). Mirrors the backend ConditionResponse 1:1. */
+export interface RuleCondition {
+  condition_type: string;
+  field: string;
+  operator: string;
+  value: unknown;
+  negate: boolean;
+}
+
+/** POST-body condition (backend ConditionPayload). `negate` defaults to `false`
+ *  server-side, so callers may omit it. */
+export interface RuleConditionInput {
+  condition_type: string;
+  field: string;
+  operator: string;
+  value: unknown;
+  negate?: boolean;
+}
+
+/** `GET /api/v1/rules` element / `POST` 201 (backend RuleResponse). A rule maps
+ *  a unit of work to a `target_model`, ordered by `priority` (ascending wins
+ *  first). `is_default` marks the catch-all; `is_active` toggles it. Mirrors the
+ *  backend response model field-for-field. */
+export interface RoutingRule {
+  id: string;
+  name: string;
+  priority: number;
+  target_model: string;
+  is_default: boolean;
+  is_active: boolean;
+  conditions: RuleCondition[];
+}
+
+/** POST body for creating a routing rule (backend RuleCreate, extra=forbid).
+ *  `conditions` is dropped from the wire when empty so a catch-all rule's body
+ *  stays minimal; the backend defaults it to `[]`. */
+export interface RoutingRuleCreate {
+  name: string;
+  target_model: string;
+  priority: number;
+  is_default?: boolean;
+  is_active?: boolean;
+  conditions?: RuleConditionInput[];
+}
+
 // ── Brief view-model (UX §3.3 lane states) ────────────────────────────────
 
 export type LaneState = "working" | "needs-you" | "triggered" | "shipped" | "idle";
