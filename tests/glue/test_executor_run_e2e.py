@@ -61,6 +61,42 @@ async def sf():
         yield async_sessionmaker(engine, expire_on_commit=False)
 
 
+def _short_timeout_settings(timeout_s: float = 5.0):
+    """Settings with a SHORT ``executor_task_timeout_s`` for the happy/failure
+    e2e paths. The prod default is 1800s (30 min): if the done publish is ever
+    raced/missed, ``await_completion`` would block on that timeout before the DB
+    fallback — a 30-minute test hang. A few-second cap keeps the test fast while
+    still exercising the real await/fallback path. Threaded through
+    :func:`build_agent_execution_deps` into the per-run ExecutorOrchestrator."""
+    return get_settings().model_copy(update={"executor_task_timeout_s": timeout_s})
+
+
+async def _await_dispatched_task_id(redis: Any, *, worker_id: uuid.UUID) -> uuid.UUID:
+    """Block until the orchestrator XADDs a task onto ``worker_id``'s stream;
+    return the dispatched ``task_id``.
+
+    This is how the REAL worker daemon learns of a task — a remote machine reads
+    the Redis stream XADD, never the orchestrator's ``executor_tasks`` DB row.
+    Driving the simulated worker off the stream (the production dispatch signal)
+    keeps it faithful on both backends. It also sidesteps the original e2e bug:
+    polling the DB for the ``dispatched`` row happened to work on SQLite (the
+    StaticPool shares one connection so an UNCOMMITTED row was visible) but timed
+    out on real PG (READ COMMITTED hides another session's uncommitted writes).
+    The orchestrator now commits the dispatched task before awaiting, so the
+    worker's separate ``record_result`` session can find + flip it terminal."""
+    stream = dispatch.worker_stream(worker_id)
+    last_id = "0"
+    for _ in range(500):
+        entries = await redis.xread({stream: last_id}, count=1, block=20)
+        if not entries:
+            continue
+        _stream_name, messages = entries[0]
+        for msg_id, fields in messages:
+            last_id = msg_id
+            return uuid.UUID(fields["task_id"])
+    raise AssertionError(f"no task dispatched onto {stream}")
+
+
 async def _make_redis() -> Any:
     try:
         import fakeredis.aioredis as fakeredis_aio
@@ -154,50 +190,53 @@ async def test_executor_run_dispatches_to_worker_and_verifies(
         await s.commit()
 
     # The real production factory must branch on provider == "executor" and
-    # build an ExecutorOrchestrator (not the native RunOrchestrator).
-    deps = build_agent_execution_deps(redis_client=redis)
+    # build an ExecutorOrchestrator (not the native RunOrchestrator). Drive it
+    # with a SHORT timeout so the test finishes in seconds even if the done
+    # publish is missed and the DB fallback takes over (prod default is 30 min).
+    deps = build_agent_execution_deps(redis_client=redis, settings=_short_timeout_settings())
 
-    async with sf() as s:
-        run = await s.get(ExecutionRun, run_id)
+    async with sf() as orch_s:
+        run = await orch_s.get(ExecutionRun, run_id)
         assert run is not None
-        orchestrator = await deps.orchestrator_factory(s, run)
+        orchestrator = await deps.orchestrator_factory(orch_s, run)
         assert isinstance(orchestrator, ExecutorOrchestrator)
 
-        # Simulate the worker: once a task is dispatched (status="dispatched"),
-        # report success on the done channel + DB row — the worker's /result path.
+        # Simulate the worker reporting its result the way production does — on a
+        # SEPARATE session (a real worker reports via a separate HTTP request =
+        # a separate session). Sharing the orchestrator's session is a concurrency
+        # bug: SQLAlchemy AsyncSession is NOT safe for concurrent use, so two
+        # coroutines flushing it collide ("Session is already flushing"). It also
+        # learns of the task from the Redis stream XADD (production's dispatch
+        # signal), since the orchestrator's ``dispatched`` DB row is uncommitted
+        # until the loop ends and so is invisible to a separate PG session.
         async def _simulate_worker() -> None:
-            for _ in range(200):
-                await asyncio.sleep(0.02)
-                task = (
-                    await s.execute(
-                        select(dispatch.ExecutorTaskRow).where(
-                            dispatch.ExecutorTaskRow.workspace_id == workspace_id,
-                            dispatch.ExecutorTaskRow.status == "dispatched",
-                        )
-                    )
-                ).scalar_one_or_none()
-                if task is None:
-                    continue
+            task_id = await _await_dispatched_task_id(redis, worker_id=worker.id)
+            async with sf() as worker_s:
                 await dispatch.record_result(
-                    s,
-                    task_id=task.id,
+                    worker_s,
+                    task_id=task_id,
                     success=True,
                     output="implemented + tests green",
                     error_message=None,
                 )
-                await s.flush()
-                await redis.publish(
-                    dispatch.done_channel(task.id), json.dumps({"task_id": str(task.id)})
-                )
-                return
+                await worker_s.commit()
+            await redis.publish(
+                dispatch.done_channel(task_id), json.dumps({"task_id": str(task_id)})
+            )
 
-        runner = AgentRunner(s)
-        worker_task = asyncio.create_task(_simulate_worker())
-        result = await runner.drive(
-            run_id=run_id, orchestrator=orchestrator, workspace_dir=tmp_path
+        runner = AgentRunner(orch_s)
+        # Subscribe-before-publish ordering: start the orchestrator FIRST (it
+        # subscribes to the done channel inside await_completion), let it reach
+        # the await, THEN the simulated worker (which blocks on the stream XADD)
+        # records + publishes — so the happy path resolves on the pub/sub signal,
+        # not the slow DB-fallback poll.
+        drive_task = asyncio.create_task(
+            runner.drive(run_id=run_id, orchestrator=orchestrator, workspace_dir=tmp_path)
         )
+        worker_task = asyncio.create_task(_simulate_worker())
+        result = await drive_task
         await worker_task
-        await s.commit()
+        await orch_s.commit()
 
     assert result.outcome == "verified"
 
@@ -310,44 +349,38 @@ async def test_executor_run_worker_failure_fails_run(
         run_id = await _open_run(s, workspace_id=workspace_id, text="ship it")
         await s.commit()
 
-    deps = build_agent_execution_deps(redis_client=redis)
-    async with sf() as s:
-        run = await s.get(ExecutionRun, run_id)
+    deps = build_agent_execution_deps(redis_client=redis, settings=_short_timeout_settings())
+    async with sf() as orch_s:
+        run = await orch_s.get(ExecutionRun, run_id)
         assert run is not None
-        orchestrator = await deps.orchestrator_factory(s, run)
+        orchestrator = await deps.orchestrator_factory(orch_s, run)
 
+        # Same separate-session + stream-driven contract as the happy path — the
+        # worker reports failure on its OWN session (concurrent flushes on a
+        # shared AsyncSession collide) and learns the task from the stream XADD.
         async def _simulate_failing_worker() -> None:
-            for _ in range(200):
-                await asyncio.sleep(0.02)
-                task = (
-                    await s.execute(
-                        select(dispatch.ExecutorTaskRow).where(
-                            dispatch.ExecutorTaskRow.status == "dispatched"
-                        )
-                    )
-                ).scalar_one_or_none()
-                if task is None:
-                    continue
+            task_id = await _await_dispatched_task_id(redis, worker_id=worker.id)
+            async with sf() as worker_s:
                 await dispatch.record_result(
-                    s,
-                    task_id=task.id,
+                    worker_s,
+                    task_id=task_id,
                     success=False,
                     output="",
                     error_message="cli exited 1",
                 )
-                await s.flush()
-                await redis.publish(
-                    dispatch.done_channel(task.id), json.dumps({"task_id": str(task.id)})
-                )
-                return
+                await worker_s.commit()
+            await redis.publish(
+                dispatch.done_channel(task_id), json.dumps({"task_id": str(task_id)})
+            )
 
-        runner = AgentRunner(s)
-        worker_task = asyncio.create_task(_simulate_failing_worker())
-        result = await runner.drive(
-            run_id=run_id, orchestrator=orchestrator, workspace_dir=tmp_path
+        runner = AgentRunner(orch_s)
+        drive_task = asyncio.create_task(
+            runner.drive(run_id=run_id, orchestrator=orchestrator, workspace_dir=tmp_path)
         )
+        worker_task = asyncio.create_task(_simulate_failing_worker())
+        result = await drive_task
         await worker_task
-        await s.commit()
+        await orch_s.commit()
 
     assert result.outcome == "system_error"
     async with sf() as s:

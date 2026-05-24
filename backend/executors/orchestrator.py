@@ -168,6 +168,20 @@ class ExecutorOrchestrator:
         attempt.phase = RunAttemptPhase.VERIFYING
         await self._session.flush()
 
+        # COMMIT the dispatched task before awaiting. The worker reports its
+        # result over a SEPARATE session (the ``/result`` HTTP endpoint), whose
+        # ``record_result`` does ``session.get(ExecutorTaskRow, task_id)`` — so
+        # the task row MUST be visible (committed) to that session, or the worker
+        # can never flip it terminal and ``await_completion`` blocks the full
+        # timeout. Without this, the whole orchestrator transaction stayed open
+        # across the (up to 30-min) external CLI run, hiding the row from every
+        # other connection under Postgres READ COMMITTED. Committing here also
+        # narrows the open-transaction window to the brief verified-write at the
+        # end, and reflects reality: the run is genuinely RUNNING while the
+        # external worker executes. (SQLite test runs share one StaticPool
+        # connection so the hidden-row bug never surfaced there.)
+        await self._session.commit()
+
         try:
             completed = await dispatch.await_completion(
                 self._redis,
