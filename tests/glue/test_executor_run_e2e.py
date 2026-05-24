@@ -20,7 +20,6 @@ is set (mirrors the other glue tests).
 from __future__ import annotations
 
 import asyncio
-import json
 import uuid
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -212,17 +211,18 @@ async def test_executor_run_dispatches_to_worker_and_verifies(
         async def _simulate_worker() -> None:
             task_id = await _await_dispatched_task_id(redis, worker_id=worker.id)
             async with sf() as worker_s:
+                # The backend's /result path records + publishes the done channel
+                # (a remote worker has no redis of its own) — record_result owns
+                # the publish, so no separate redis.publish is needed here.
                 await dispatch.record_result(
                     worker_s,
+                    redis,
                     task_id=task_id,
                     success=True,
                     output="implemented + tests green",
                     error_message=None,
                 )
                 await worker_s.commit()
-            await redis.publish(
-                dispatch.done_channel(task_id), json.dumps({"task_id": str(task_id)})
-            )
 
         runner = AgentRunner(orch_s)
         # Subscribe-before-publish ordering: start the orchestrator FIRST (it
@@ -361,17 +361,16 @@ async def test_executor_run_worker_failure_fails_run(
         async def _simulate_failing_worker() -> None:
             task_id = await _await_dispatched_task_id(redis, worker_id=worker.id)
             async with sf() as worker_s:
+                # record_result records + publishes the done channel itself.
                 await dispatch.record_result(
                     worker_s,
+                    redis,
                     task_id=task_id,
                     success=False,
                     output="",
                     error_message="cli exited 1",
                 )
                 await worker_s.commit()
-            await redis.publish(
-                dispatch.done_channel(task_id), json.dumps({"task_id": str(task_id)})
-            )
 
         runner = AgentRunner(orch_s)
         drive_task = asyncio.create_task(

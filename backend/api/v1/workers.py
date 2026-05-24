@@ -276,11 +276,20 @@ async def report_result(
     body: WorkerResultBody,
     worker: Annotated[WorkerRow, Depends(get_current_worker)],
     session: Annotated[AsyncSession, Depends(get_db_session)],
+    redis: Annotated[Any, Depends(get_poll_redis)],
 ) -> HeartbeatResponse:
-    """Record a worker's task result — flips the task row to done / failed."""
+    """Record a worker's task result — flips the task row to done / failed.
+
+    A remote worker reaches the backend only over HTTP and usually cannot
+    publish the ``task:{id}:done`` channel itself. The backend owns redis, so
+    :func:`dispatch.record_result` publishes the authoritative completion signal
+    here (after the row flips terminal) — waking any orchestrator awaiting on it
+    promptly instead of letting it block until its timeout.
+    """
     _ = worker  # auth only; the task row carries its own workspace binding
     await dispatch.record_result(
         session,
+        redis,
         task_id=body.task_id,
         success=body.success,
         output=body.output,

@@ -196,6 +196,40 @@ async def test_result_records_failed(db, redis) -> None:
         assert row.error_message == "boom"
 
 
+async def test_result_publishes_done_channel(db, redis) -> None:
+    """The /result route publishes the done channel after recording the result,
+    so an orchestrator awaiting on a backend-owned redis wakes promptly even
+    though the remote worker reported over plain HTTP (no redis of its own)."""
+    worker_id, token = await _seed_worker(db, capabilities=["claude_code"])
+    async with db() as s:
+        worker = await s.get(WorkerRow, worker_id)
+        task = await dispatch.create_task(
+            s, workspace_id=worker.workspace_id, executor_type="claude_code", prompt="p"
+        )
+        await s.commit()
+        task_id = task.id
+
+    pubsub = redis.pubsub()
+    await pubsub.subscribe(dispatch.done_channel(task_id))
+    await pubsub.get_message(timeout=0.2)  # drain subscribe confirmation
+
+    app = create_app()
+    async with _client(app, db, redis) as c:
+        r = await c.post(
+            "/api/v1/workers/result",
+            headers={"X-Worker-Token": token},
+            json={"task_id": str(task_id), "success": True, "output": "ok", "error_message": None},
+        )
+        assert r.status_code == 200, r.text
+
+    msg = await pubsub.get_message(ignore_subscribe_messages=True, timeout=1.0)
+    assert msg is not None
+    assert msg["type"] == "message"
+    assert str(task_id) in msg["data"]
+    await pubsub.unsubscribe(dispatch.done_channel(task_id))
+    await pubsub.aclose()
+
+
 async def test_result_requires_worker_token(db, redis) -> None:
     app = create_app()
     async with _client(app, db, redis) as c:

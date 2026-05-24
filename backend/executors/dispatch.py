@@ -27,6 +27,7 @@ session transaction boundary (these functions ``add`` / ``flush`` but never
 from __future__ import annotations
 
 import asyncio
+import json
 import uuid
 from datetime import UTC, datetime
 from typing import Any, Protocol
@@ -47,6 +48,12 @@ WORKER_STREAM_PREFIX = "tasks:worker:"
 
 _TERMINAL_STATUSES = ("done", "failed")
 
+# How often :func:`await_completion` re-reads the DB row as a safety net when no
+# done-channel signal arrives (a remote worker reporting over HTTP whose publish
+# was somehow missed). Short enough that a missed signal resolves in seconds, not
+# at ``timeout_s`` (which is the executor-task timeout, ~1800s by default).
+_AWAIT_POLL_INTERVAL_S = 2.0
+
 
 class TaskTimeout(Exception):
     """Raised when :func:`await_completion` sees no terminal result in time."""
@@ -61,6 +68,8 @@ class _RedisDispatch(Protocol):
     """
 
     async def xadd(self, name: str, fields: dict[str, Any], **kwargs: Any) -> Any: ...
+
+    async def publish(self, channel: str, message: str) -> Any: ...
 
     def pubsub(self) -> Any: ...
 
@@ -223,13 +232,24 @@ async def dispatch_task(
 
 async def record_result(
     session: AsyncSession,
+    redis: _RedisDispatch,
     *,
     task_id: uuid.UUID,
     success: bool,
     output: str,
     error_message: str | None,
 ) -> ExecutorTaskRow | None:
-    """Close a task ``done`` / ``failed`` from a worker result. ``None`` if unknown."""
+    """Close a task ``done`` / ``failed`` from a worker result. ``None`` if unknown.
+
+    After the DB row flips terminal, PUBLISH the :func:`done_channel` signal on
+    ``redis``. This is the **authoritative** completion signal: a remote worker
+    reaches the backend only over HTTP (``POST /api/v1/workers/result``) and
+    usually has no redis to publish from, so the backend — which owns redis —
+    publishes here so any :func:`await_completion` wakes promptly instead of
+    blocking until its timeout. A worker that also has redis publishing the same
+    channel is harmless (idempotent wake). The publish is best-effort: a pub/sub
+    hiccup must not roll back the recorded result.
+    """
     task = await session.get(ExecutorTaskRow, task_id)
     if task is None:
         return None
@@ -242,6 +262,10 @@ async def record_result(
         task_id=str(task_id),
         status=task.status,
     )
+    try:
+        await redis.publish(done_channel(task_id), json.dumps({"task_id": str(task_id)}))
+    except Exception:  # noqa: BLE001 — publish is a wake hint, the DB row is truth
+        logger.warning("executor_result_publish_failed", task_id=str(task_id), exc_info=True)
     return task
 
 
@@ -266,13 +290,16 @@ async def await_completion(
     task_id: uuid.UUID,
     timeout_s: float,
 ) -> ExecutorTaskRow:
-    """Wait for ``task:{id}:done`` then read the terminal DB row.
+    """Wait for ``task:{id}:done``, with a periodic DB poll as a safety net.
 
-    Subscribes to the done channel and, on each message (or an immediate
-    already-terminal check), re-reads the row; returns it once terminal. On a
-    missed publish a single **DB fallback** read still returns a row that became
-    terminal meanwhile. Raises :class:`TaskTimeout` when nothing terminal
-    appears within ``timeout_s``.
+    Subscribes to the done channel for the fast path (wake immediately on a
+    published signal), but also re-reads the DB row every
+    :data:`_AWAIT_POLL_INTERVAL_S` seconds so a **missed** signal — the common
+    case for a remote worker that reports its result over HTTP and cannot
+    publish — still resolves within the poll interval rather than blocking until
+    ``timeout_s``. Either path returns the row once it is terminal. Raises
+    :class:`TaskTimeout` only if the row never becomes terminal within
+    ``timeout_s``.
     """
     # Fast path: the result may already be terminal (worker beat the awaiter).
     early = await _read_terminal(session, task_id)
@@ -288,21 +315,29 @@ async def await_completion(
             remaining = deadline - asyncio.get_event_loop().time()
             if remaining <= 0:
                 break
+            # Cap each wait at the poll interval so the DB safety-net read fires
+            # on a short cadence even when no done message ever arrives. A
+            # published signal still wakes us early (get_message returns at once).
+            poll_wait = min(_AWAIT_POLL_INTERVAL_S, remaining)
             try:
                 msg = await asyncio.wait_for(
-                    pubsub.get_message(ignore_subscribe_messages=True, timeout=remaining),
-                    timeout=remaining,
+                    pubsub.get_message(ignore_subscribe_messages=True, timeout=poll_wait),
+                    timeout=poll_wait + 0.5,
                 )
             except TimeoutError:
-                break
-            if msg is None:
-                # No message this poll — keep waiting until the deadline.
-                continue
+                msg = None
+            # Whether or not a signal arrived, re-read the row: the signal is the
+            # fast path; the periodic read is the safety net for a missed publish.
+            _ = msg
             row = await _read_terminal(session, task_id)
             if row is not None:
                 return row
-    except Exception:  # noqa: BLE001 — a pub/sub hiccup degrades to the DB fallback
+    except Exception:  # noqa: BLE001 — a pub/sub hiccup degrades to the DB poll
         logger.warning("executor_await_pubsub_failed", task_id=str(task_id), exc_info=True)
+        # Degrade to a pure DB poll for the remaining budget.
+        row = await _poll_until_terminal(session, task_id, timeout_s=timeout_s)
+        if row is not None:
+            return row
     finally:
         try:
             await pubsub.unsubscribe(chan)
@@ -310,11 +345,33 @@ async def await_completion(
         except Exception:  # noqa: BLE001 — cleanup best-effort
             logger.debug("executor_await_pubsub_close_failed", task_id=str(task_id))
 
-    # Fallback: one final DB read in case the publish was missed entirely.
+    # Final read in case the row turned terminal between the last poll and the
+    # deadline / a pub/sub teardown.
     row = await _read_terminal(session, task_id)
     if row is not None:
         return row
     raise TaskTimeout(f"executor task {task_id} did not complete within {timeout_s}s")
+
+
+async def _poll_until_terminal(
+    session: AsyncSession, task_id: uuid.UUID, *, timeout_s: float
+) -> ExecutorTaskRow | None:
+    """Pure DB poll fallback used when pub/sub is unavailable.
+
+    Re-reads the row every :data:`_AWAIT_POLL_INTERVAL_S` until terminal or the
+    deadline passes. Returns the terminal row, or ``None`` on timeout (the caller
+    raises :class:`TaskTimeout`).
+    """
+    deadline = asyncio.get_event_loop().time() + timeout_s
+    while asyncio.get_event_loop().time() < deadline:
+        row = await _read_terminal(session, task_id)
+        if row is not None:
+            return row
+        remaining = deadline - asyncio.get_event_loop().time()
+        if remaining <= 0:
+            break
+        await asyncio.sleep(min(_AWAIT_POLL_INTERVAL_S, remaining))
+    return await _read_terminal(session, task_id)
 
 
 async def claim_pending_task(session: AsyncSession, *, limit: int = 1) -> ExecutorTaskRow | None:
