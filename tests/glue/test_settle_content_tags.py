@@ -284,6 +284,51 @@ def test_enriched_tags_are_valid_concept_id_candidates() -> None:
         assert is_valid_concept_id(tag), f"{tag!r} is not a valid concept id"
 
 
+def test_summary_filler_and_meta_words_are_dropped() -> None:
+    """Generic filler / action-verb / meta words derived from a work summary
+    must NOT become content tags (they would otherwise settle as noise
+    single-word concepts), while subject nouns survive."""
+    tags = derive_content_tags(
+        _settlement(summary="I've created a one-line hello world function in Python")
+    )
+    # Subject nouns survive.
+    assert "python" in tags
+    assert "hello" in tags
+    assert "world" in tags
+    assert "function" in tags
+    # Filler / action-verb / meta tokens dropped.
+    assert "created" not in tags
+    assert "one" not in tags
+    assert "line" not in tags
+
+
+def test_observed_noise_words_are_filtered() -> None:
+    """The exact noise words observed on the prod 'What I know' surface must be
+    filtered out of summary-derived tags."""
+    noise = (
+        "else nothing exactly based complete reply summarize verified "
+        "untitled inspection finished the calculator application"
+    )
+    tags = derive_content_tags(_settlement(summary=noise))
+    for filler in (
+        "else",
+        "nothing",
+        "exactly",
+        "based",
+        "complete",
+        "reply",
+        "summarize",
+        "verified",
+        "untitled",
+        "inspection",
+        "finished",
+    ):
+        assert filler not in tags, f"{filler!r} leaked through as a content tag"
+    # Real subject nouns survive.
+    assert "calculator" in tags
+    assert "application" in tags
+
+
 def test_structural_product_slug_is_rejected() -> None:
     """A product literally slugged 'settle' must not re-introduce a structural
     marker as a content tag."""

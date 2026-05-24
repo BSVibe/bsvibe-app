@@ -281,6 +281,90 @@ class TestEmptyVault:
         assert result.created_concepts == []
 
 
+class TestFillerWordFiltering:
+    """Filler/meta/action words on garden observations must never become
+    concept candidates — they're noise derived from work-summary tokenization,
+    not subjects the work is *about*. The filter runs at the promoter
+    chokepoint so it cleans BOTH already-written observations and future ones.
+    """
+
+    async def _seed_noisy_and_good(self, storage: FileSystemStorage) -> None:
+        """Seed observations whose tags mix filler noise with real concepts."""
+        await storage.write(
+            "garden/seedling/obs-noisy.md",
+            "---\n"
+            "tags:\n"
+            "  - settle\n"
+            "  - verified-run\n"
+            "  - else\n"
+            "  - nothing\n"
+            "  - created\n"
+            "  - verified\n"
+            "  - untitled\n"
+            "  - line\n"
+            "  - one\n"
+            "  - python\n"
+            "  - hello\n"
+            "  - world\n"
+            "  - function\n"
+            "  - calculator\n"
+            "---\n"
+            "# obs\n",
+        )
+
+    @pytest.mark.asyncio
+    async def test_filler_words_excluded_from_candidates(
+        self, workspace_storage: FileSystemStorage
+    ) -> None:
+        service = await _make_service(workspace_storage, safe_mode=False)
+        await self._seed_noisy_and_good(workspace_storage)
+
+        promoter = GardenObservationPromoter(service)
+        result = await promoter.promote()
+
+        good = {"python", "hello", "world", "function", "calculator"}
+        filler = {"else", "nothing", "created", "verified", "untitled", "line", "one"}
+
+        # Filler never appears as a candidate nor a created concept.
+        assert not (filler & set(result.candidate_tags)), result.candidate_tags
+        assert not (filler & set(result.created_concepts)), result.created_concepts
+
+        # Good concepts survive and become active anchors.
+        assert good <= set(result.candidate_tags)
+        assert good <= set(result.created_concepts)
+        active = {
+            p.removeprefix("concepts/active/").removesuffix(".md")
+            for p in await workspace_storage.list_files("concepts/active")
+        }
+        assert good <= active, active
+        assert not (filler & active), active
+
+    @pytest.mark.asyncio
+    async def test_real_concepts_with_filler_shaped_spellings_survive(
+        self, workspace_storage: FileSystemStorage
+    ) -> None:
+        """The existing e2e vocabulary (self-host*, vaultwarden, auth, client,
+        the product slug) is real signal — the filter must NOT prune it."""
+        service = await _make_service(workspace_storage, safe_mode=False)
+        await _seed_garden_observations(workspace_storage)
+        await workspace_storage.write(
+            "garden/seedling/obs-extra.md",
+            "---\ntags:\n  - settle\n  - auth\n  - client\n  - vaultwarden-selfhost\n---\n# obs\n",
+        )
+
+        result = await GardenObservationPromoter(service).promote()
+
+        survivors = {
+            "self-hosting",
+            "self-host",
+            "vaultwarden",
+            "auth",
+            "client",
+            "vaultwarden-selfhost",
+        }
+        assert survivors <= set(result.candidate_tags), result.candidate_tags
+
+
 class TestPromoterRequiresIndex:
     @pytest.mark.asyncio
     async def test_service_without_index_rejected(
