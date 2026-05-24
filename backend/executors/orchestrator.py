@@ -147,12 +147,20 @@ class ExecutorOrchestrator:
             return self._decision_result(run, work_step, attempt, decision)
 
         prompt = _intent_text(run)
+        # NOTE: ``workspace_dir`` here is the BACKEND container's run path
+        # (``/app/var/runs/<run_id>`` on the backend's appdata volume). A worker
+        # is a SEPARATE machine where that absolute path does not exist, so we
+        # must NOT ship it — sending it as the task cwd made claude-code fail to
+        # chdir ([Errno 2] No such file or directory). The worker now creates and
+        # manages its own isolated per-task local dir; we send a neutral ``"."``
+        # (also ``create_task``'s default). Surfacing the worker's local
+        # artifacts back here is a documented v2 refinement.
         task = await dispatch.create_task(
             self._session,
             workspace_id=run.workspace_id,
             executor_type=executor_type,
             prompt=prompt,
-            workspace_dir=str(workspace_dir),
+            workspace_dir=".",
         )
         await dispatch.dispatch_task(
             self._redis, session=self._session, task=task, worker_id=worker.id

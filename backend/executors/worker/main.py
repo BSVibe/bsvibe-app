@@ -23,7 +23,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import shutil
 import signal
+import tempfile
 from pathlib import Path
 from typing import Any, Protocol, cast
 
@@ -97,19 +99,22 @@ async def handle_task(
     client: httpx.AsyncClient,
     headers: dict[str, str],
     redis: _RedisPublisher | None,
+    workspace_root: str | None = None,
 ) -> None:
-    """Execute one polled task, stream chunks (if redis), and POST the result."""
+    """Execute one polled task, stream chunks (if redis), and POST the result.
+
+    The worker runs each task in a FRESH, isolated local directory it creates
+    here (under ``workspace_root`` if set, else the OS temp dir) and removes in
+    the ``finally``. The ``workspace_dir`` in the dispatched payload is the
+    BACKEND container's run path — a foreign absolute path that does not exist on
+    this (remote) machine — so it is intentionally ignored: the executor's cwd is
+    always the worker-local dir. (Surfacing the artifacts the CLI produces in
+    that local dir back to the backend is a separate v2 concern; the worker still
+    reports the executor's output text via ``/result`` as before.)
+    """
     task_id = task["task_id"]
     prompt = task.get("prompt") or ""
     executor_type = task.get("executor_type") or "claude_code"
-    context: dict[str, Any] = {
-        "task_id": task_id,
-        "workspace_dir": task.get("workspace_dir") or ".",
-        "system": task.get("system") or "",
-        # ``model`` is not part of the current dispatch payload; forwarded when
-        # present for forward-compatibility (CLI default otherwise).
-        "model": task.get("model") or None,
-    }
     stream_chan = task.get("stream_channel") or f"task:{task_id}:stream"
     done_chan = task.get("done_channel") or f"task:{task_id}:done"
 
@@ -119,6 +124,17 @@ async def handle_task(
     if executor is None:
         executor = select_executor(executor_type)
         executors[executor_type] = executor
+
+    local_workspace = tempfile.mkdtemp(prefix="bsvibe-task-", dir=workspace_root or None)
+    context: dict[str, Any] = {
+        "task_id": task_id,
+        # ALWAYS the worker-local dir — never the backend's foreign run path.
+        "workspace_dir": local_workspace,
+        "system": task.get("system") or "",
+        # ``model`` is not part of the current dispatch payload; forwarded when
+        # present for forward-compatibility (CLI default otherwise).
+        "model": task.get("model") or None,
+    }
 
     parts: list[str] = []
     error: str | None = None
@@ -151,6 +167,8 @@ async def handle_task(
                 await aclose()
             except Exception:  # noqa: BLE001, S110 — cleanup best-effort
                 pass
+        # Remove the worker-local working dir whether the task succeeded or not.
+        shutil.rmtree(local_workspace, ignore_errors=True)
 
     await client.post(
         "/api/v1/workers/result",
@@ -218,7 +236,12 @@ async def run_once(
     async def _run(task: dict[str, Any]) -> None:
         try:
             await handle_task(
-                task, executors=executors, client=client, headers=headers, redis=redis
+                task,
+                executors=executors,
+                client=client,
+                headers=headers,
+                redis=redis,
+                workspace_root=settings.workspace_root or None,
             )
         except Exception:  # noqa: BLE001 — one task's failure must not kill the loop
             logger.exception("task_execution_error", task_id=task.get("task_id"))

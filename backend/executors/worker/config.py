@@ -44,6 +44,13 @@ class WorkerSettings(BaseSettings):
     # Bounded local concurrency — how many tasks run in parallel.
     max_parallel_tasks: int = 3
 
+    # Root under which the worker creates a fresh, isolated per-task working
+    # directory. Empty → the OS default temp location (``tempfile.mkdtemp``).
+    # The backend dispatches its own container run path in the task payload, but
+    # that absolute path is meaningless on this (remote) machine — the worker
+    # always runs each task in a local dir it creates here and removes after.
+    workspace_root: str = ""
+
     # Streaming chunks back to the backend via Redis pub/sub (the same Redis the
     # backend dispatch substrate uses). Empty disables streaming — executors
     # still run and results are still POSTed, the backend just falls back to its
