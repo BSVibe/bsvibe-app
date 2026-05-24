@@ -5102,3 +5102,203 @@ main.login {
   cursor: default;
 }
 /* ── END product-resources ────────────────────────────────────────────────── */
+
+/* ── BEGIN Run Detail (lift: triggered) ────────────────────────────────────
+   The inspectable run-detail surface (Stitch "Triggered"): trigger context,
+   current status, the paused-run decision block (Let-it-continue / Hold), how
+   BSVibe checked it, and a link to the Delivery Report. Reuses the shared
+   tokens only; declares no new root tokens. Kept in this delimited block. */
+
+.run-detail {
+  max-width: var(--col-w);
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+}
+
+.run-detail__back {
+  font-size: 0.82rem;
+  color: var(--ink-2);
+  text-decoration: none;
+  width: fit-content;
+}
+
+.run-detail__loading-note {
+  color: var(--ink-3);
+  font-size: 0.9rem;
+}
+
+.run-empty {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.run-empty__line {
+  font-size: 0.95rem;
+  color: var(--ink);
+}
+
+.run-empty__sub {
+  font-size: 0.85rem;
+  color: var(--ink-3);
+}
+
+.run-detail__body {
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+}
+
+.run-detail__header {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.run-detail__status {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--ink-2);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  width: fit-content;
+}
+
+.run-detail__status--shipped {
+  color: var(--green-ink);
+}
+
+.run-detail__status--failed {
+  color: var(--amber-ink);
+}
+
+.run-detail__title {
+  font-size: 1.35rem;
+  font-weight: 600;
+  color: var(--ink);
+  line-height: 1.3;
+}
+
+.run-trigger,
+.run-decision,
+.run-verification,
+.run-deliverable {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.run-trigger__line {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 0.92rem;
+  color: var(--ink);
+}
+
+.run-trigger__product {
+  font-size: 0.82rem;
+  color: var(--ink-2);
+  padding: 2px 8px;
+  border-radius: var(--radius-sm);
+  background: var(--accent-bg);
+}
+
+.run-trigger__empty,
+.run-verification__empty {
+  font-size: 0.88rem;
+  color: var(--ink-3);
+}
+
+.run-decision {
+  border-radius: var(--radius-sm);
+  padding: 14px 16px;
+  background: var(--accent-bg);
+}
+
+.run-decision__question {
+  font-size: 0.98rem;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.run-decision__rationale {
+  font-size: 0.88rem;
+  color: var(--ink-2);
+}
+
+.run-decision__actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 4px;
+}
+
+.run-decision__error {
+  font-size: 0.82rem;
+  color: var(--amber-ink);
+  margin-right: auto;
+}
+
+.run-decision__hold,
+.run-decision__continue {
+  font-size: 0.86rem;
+  padding: 8px 16px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.run-decision__hold {
+  background: transparent;
+  color: var(--ink);
+  border: 1px solid var(--hair-strong);
+}
+
+.run-decision__continue {
+  background: var(--ink);
+  color: var(--bg);
+  border: 1px solid var(--ink);
+}
+
+.run-decision__hold:disabled,
+.run-decision__continue:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.run-decision__resolved {
+  font-size: 0.88rem;
+  color: var(--green-ink);
+}
+
+.run-verification__verdict {
+  font-size: 0.92rem;
+  font-weight: 600;
+  color: var(--green-ink);
+  width: fit-content;
+}
+
+.run-verification__verdict--failed,
+.run-verification__verdict--inconclusive {
+  color: var(--amber-ink);
+}
+
+.run-deliverable__link {
+  font-size: 0.9rem;
+  color: var(--ink);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  width: fit-content;
+}
+
+.activity-row__open {
+  font-size: 0.8rem;
+  color: var(--ink-2);
+  text-decoration: none;
+  width: fit-content;
+  margin-left: 28px;
+}
+
+/* ── END Run Detail ────────────────────────────────────────────────────── */

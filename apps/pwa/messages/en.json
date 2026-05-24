@@ -165,7 +165,8 @@
     "deliverablesLoading": "Looking at what it delivered…",
     "deliverablesError": "Couldn’t load this run’s deliverables just now — try again in a moment.",
     "deliverablesEmpty": "No delivered artifacts for this run.",
-    "openArtifact": "Open artifact"
+    "openArtifact": "Open artifact",
+    "openRun": "Open run"
   },
   "knowledge": {
     "heading": "Knowledge",
@@ -544,5 +545,42 @@
     "openArtifact": "Open artifact",
     "diff": "Diff",
     "viewDiff": "View the diff"
+  },
+  "run": {
+    "back": "‹ Activity",
+    "region": "Run detail",
+    "loadingNote": "Looking at this run…",
+    "notFoundLine": "We can’t find that run.",
+    "backToActivity": "Back to Activity",
+    "errorLine": "Couldn’t load this run just now.",
+    "errorSub": "Try again in a moment.",
+    "untitled": "Triggered run",
+    "trigger": "What triggered this",
+    "triggeredFrom": "Triggered from {source}",
+    "noTrigger": "No trigger context recorded for this run.",
+    "statusLabel": {
+      "open": "Just started",
+      "running": "Working",
+      "review_ready": "Ready for your review",
+      "shipped": "Shipped",
+      "failed": "Didn’t finish",
+      "cancelled": "Stood down"
+    },
+    "decision": "Needs you",
+    "decisionRationale": "Because this came from outside, BSVibe is in Safe Mode.",
+    "letContinue": "Let it continue",
+    "hold": "Hold",
+    "resolving": "Working…",
+    "resolved": "Thanks — picking this back up.",
+    "resolveError": "Couldn’t do that — please try again.",
+    "verification": "How BSVibe checked this",
+    "verdictLabel": {
+      "passed": "This is verified",
+      "failed": "Verification failed",
+      "inconclusive": "Verification inconclusive"
+    },
+    "noVerification": "No verification recorded for this run yet.",
+    "deliverable": "Delivered",
+    "viewReport": "View delivery report"
   }
 }
