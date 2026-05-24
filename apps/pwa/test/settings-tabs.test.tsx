@@ -51,4 +51,17 @@ describe("Settings tab nav", () => {
     expect(active).toHaveAttribute("aria-current", "page");
     expect(screen.getByRole("link", { name: "General" })).not.toHaveAttribute("aria-current");
   });
+
+  it("renders the row on the scrollable nav class and keeps all five tabs (incl. the active last tab) when narrow", () => {
+    // At 390px the row can't fit all five tabs; the `.settings-tabs` class is
+    // the horizontal-scroll container, so every tab — including the active last
+    // one (Account) — stays present and reachable rather than being clipped.
+    const { container } = render(<SettingsTabs active="account" />);
+    const nav = container.querySelector("nav.settings-tabs");
+    expect(nav).not.toBeNull();
+    expect(screen.getAllByRole("link")).toHaveLength(LABELS.length);
+    const active = screen.getByRole("link", { name: "Account" });
+    expect(active).toHaveAttribute("aria-current", "page");
+    expect(active).toHaveClass("settings-tabs__tab");
+  });
 });
