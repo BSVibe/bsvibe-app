@@ -45,6 +45,16 @@ export interface Product {
   updated_at: string;
 }
 
+/** `POST /api/v1/products` body (backend ProductCreate, extra=forbid). The slug
+ *  must match `^[a-z][a-z0-9-]*$` (the backend's _SLUG_RE) — the create form
+ *  auto-suggests + validates one before submit. `repo_url` is optional and is
+ *  omitted from the wire body when blank rather than sent as an empty string. */
+export interface ProductCreate {
+  name: string;
+  slug: string;
+  repo_url?: string | null;
+}
+
 /** `RunStatus` (backend/execution/db.py) — the run lifecycle vocabulary. */
 export type RunStatus = "open" | "running" | "review_ready" | "shipped" | "failed" | "cancelled";
 

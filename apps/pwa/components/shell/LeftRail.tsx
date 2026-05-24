@@ -5,6 +5,7 @@ import { useTranslations } from "next-intl";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import AccountChip from "./AccountChip";
+import RailProducts from "./RailProducts";
 import {
   ActivityIcon,
   BriefIcon,
@@ -76,6 +77,11 @@ export default function LeftRail({ onDirect }: { onDirect: () => void }) {
           );
         })}
       </nav>
+
+      {/* PRODUCTS — a separate section (NOT a primary-nav entry): the
+          workspace's products + a "New project" create flow. Kept self-contained
+          in RailProducts so the nav list above stays untouched. */}
+      <RailProducts />
 
       <button type="button" className="rail__direct" onClick={onDirect}>
         <PlusIcon />
