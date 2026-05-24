@@ -3906,6 +3906,31 @@ main.login {
   color: var(--ink-3);
 }
 
+/* ── Skill editor (Lift: skill-editor) ──────────────────────────────────────
+   Isolated block for the editable skill viewer: the system-prompt body render
+   in the read view (<pre>) and the read-only name row in the edit form. Reuses
+   existing skill / skills-form classes + design tokens — no root token edits. */
+.skill-detail__prompt {
+  margin: 0;
+  font: inherit;
+  font-size: 0.84rem;
+  color: var(--ink);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  background: var(--accent-bg);
+  border: 1px solid var(--hair);
+  border-radius: var(--radius-sm);
+  padding: 12px 14px;
+}
+
+.skills-form__readonly {
+  margin: 0;
+  font-size: 0.92rem;
+  font-weight: 550;
+  color: var(--ink-2);
+}
+/* ── end Skill editor ───────────────────────────────────────────────────── */
+
 /* ───────────────────────────────────────────────────────────────────────────
    Executor workers (Settings → Models → ExecutorWorkers, Lift 4)
    The founder's registered worker machines (their coding-agent CLIs) shown

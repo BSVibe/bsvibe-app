@@ -226,6 +226,119 @@ def test_create_skill_blank_summary_rejected(configured_app, tmp_path: Path, mon
     assert r.status_code == 422, r.text
 
 
+def test_get_skill_returns_system_prompt_body(
+    configured_app, tmp_path: Path, workspace_id: uuid.UUID, monkeypatch
+) -> None:
+    """GET /{name} carries the raw system-prompt body (needed to edit it)."""
+    monkeypatch.setenv("BSVIBE_SKILLS_ROOT", str(tmp_path))
+    get_settings.cache_clear()
+    root = tmp_path / str(workspace_id)
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "blog-writer.md").write_text(
+        "---\nname: blog-writer\nversion: 1.0.0\ndescription: Drafts a post.\n---\n"
+        "You write calm, precise prose.\n",
+        encoding="utf-8",
+    )
+    client = TestClient(configured_app)
+    r = client.get("/api/v1/skills/blog-writer")
+    assert r.status_code == 200
+    assert r.json()["system_prompt"] == "You write calm, precise prose."
+
+
+def test_update_skill_persists_summary_and_system_prompt(
+    configured_app, tmp_path: Path, workspace_id: uuid.UUID, monkeypatch
+) -> None:
+    """PATCH updates description + body; the round-tripped GET reflects both."""
+    monkeypatch.setenv("BSVIBE_SKILLS_ROOT", str(tmp_path))
+    get_settings.cache_clear()
+    _write_skill(tmp_path / str(workspace_id), "blog-writer", "1.0.0", "Old summary.")
+    client = TestClient(configured_app)
+
+    r = client.patch(
+        "/api/v1/skills/blog-writer",
+        json={"summary": "New summary line.", "system_prompt": "New prompt body."},
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["name"] == "blog-writer"
+    assert body["description"] == "New summary line."
+    assert body["system_prompt"] == "New prompt body."
+    assert body["has_system_prompt"] is True
+
+    # Persisted: a fresh GET reflects the edit.
+    one = client.get("/api/v1/skills/blog-writer")
+    assert one.json()["description"] == "New summary line."
+    assert one.json()["system_prompt"] == "New prompt body."
+
+
+def test_update_skill_keeps_name_immutable(
+    configured_app, tmp_path: Path, workspace_id: uuid.UUID, monkeypatch
+) -> None:
+    """The slug/filename never changes — only the body fields are mutable."""
+    monkeypatch.setenv("BSVIBE_SKILLS_ROOT", str(tmp_path))
+    get_settings.cache_clear()
+    _write_skill(tmp_path / str(workspace_id), "blog-writer", "1.0.0", "Old.")
+    client = TestClient(configured_app)
+
+    r = client.patch(
+        "/api/v1/skills/blog-writer",
+        json={"summary": "New.", "system_prompt": "Body."},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["name"] == "blog-writer"
+    assert (tmp_path / str(workspace_id) / "blog-writer.md").is_file()
+
+
+def test_update_skill_not_found(
+    configured_app, tmp_path: Path, workspace_id: uuid.UUID, monkeypatch
+) -> None:
+    """PATCH on a skill that isn't loaded → 404 (no file written)."""
+    monkeypatch.setenv("BSVIBE_SKILLS_ROOT", str(tmp_path))
+    get_settings.cache_clear()
+    client = TestClient(configured_app)
+
+    r = client.patch(
+        "/api/v1/skills/missing",
+        json={"summary": "s", "system_prompt": "p"},
+    )
+    assert r.status_code == 404, r.text
+    assert not (tmp_path / str(workspace_id) / "missing.md").exists()
+
+
+def test_update_skill_blank_summary_rejected(
+    configured_app, tmp_path: Path, workspace_id: uuid.UUID, monkeypatch
+) -> None:
+    """summary is the LLM match signal — a blank update → 422, file untouched."""
+    monkeypatch.setenv("BSVIBE_SKILLS_ROOT", str(tmp_path))
+    get_settings.cache_clear()
+    _write_skill(tmp_path / str(workspace_id), "blog-writer", "1.0.0", "Keep me.")
+    client = TestClient(configured_app)
+
+    r = client.patch(
+        "/api/v1/skills/blog-writer",
+        json={"summary": "   ", "system_prompt": "p"},
+    )
+    assert r.status_code == 422, r.text
+    # Original untouched.
+    assert client.get("/api/v1/skills/blog-writer").json()["description"] == "Keep me."
+
+
+def test_update_skill_extra_field_forbidden(
+    configured_app, tmp_path: Path, workspace_id: uuid.UUID, monkeypatch
+) -> None:
+    """extra=forbid: an unknown body field (e.g. trying to rename) → 422."""
+    monkeypatch.setenv("BSVIBE_SKILLS_ROOT", str(tmp_path))
+    get_settings.cache_clear()
+    _write_skill(tmp_path / str(workspace_id), "blog-writer", "1.0.0", "Old.")
+    client = TestClient(configured_app)
+
+    r = client.patch(
+        "/api/v1/skills/blog-writer",
+        json={"summary": "s", "system_prompt": "p", "name": "renamed"},
+    )
+    assert r.status_code == 422, r.text
+
+
 def test_settings_override_is_isolated(monkeypatch) -> None:
     # Belt-and-suspenders: ensure get_settings cache flips with the env.
     monkeypatch.setenv("BSVIBE_SKILLS_ROOT", "/tmp/x-test-isolated")

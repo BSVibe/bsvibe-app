@@ -541,16 +541,17 @@ export interface NotificationPrefs {
 }
 
 // ── Skills (REAL endpoint /api/v1/skills) ──────────────────────────────────
-// The backend skills API carries reads (list + get) AND create (POST writes a
-// new skill MD file under the per-workspace skills dir, per backend/api/v1/
-// skills.py). Update / delete are deferred to a later lift, so the PWA surfaces
-// a Library + viewer + a New-skill create form (no edit/delete affordances yet).
+// The backend skills API carries reads (list + get), create (POST writes a new
+// skill MD file under the per-workspace skills dir) AND update (PATCH rewrites
+// the editable body fields), per backend/api/v1/skills.py. The PWA surfaces a
+// Library + a New-skill create form + an editor (edit summary + system prompt).
 
-/** `GET /api/v1/skills` element / `GET /api/v1/skills/{name}` / `POST` 201
- *  (backend SkillResponse, extra=forbid). Skill manifest metadata for the
- *  workspace. Mirrors the backend response model field-for-field. The skill's
- *  markdown system prompt body is NOT returned over the API — `has_system_prompt`
- *  is the "a prompt is on file" flag, the same way the backend masks it. */
+/** `GET /api/v1/skills` element / `GET /api/v1/skills/{name}` / `POST` 201 /
+ *  `PATCH` 200 (backend SkillResponse, extra=forbid). Skill manifest metadata
+ *  for the workspace. Mirrors the backend response model field-for-field.
+ *  `has_system_prompt` is the "a prompt is on file" flag; `system_prompt` is the
+ *  raw Markdown body (empty string when none) — carried so the editor can
+ *  round-trip it. */
 export interface Skill {
   name: string;
   version: string;
@@ -559,6 +560,7 @@ export interface Skill {
   allowed_tools: string[];
   model: string | null;
   has_system_prompt: boolean;
+  system_prompt: string;
 }
 
 /** `POST /api/v1/skills` body (backend SkillCreate, extra=forbid). `name` is the
@@ -568,6 +570,15 @@ export interface Skill {
  *  knobs in this lift. Mirrors the backend schema 1:1. */
 export interface SkillCreate {
   name: string;
+  summary: string;
+  system_prompt: string;
+}
+
+/** `PATCH /api/v1/skills/{name}` body (backend SkillUpdate, extra=forbid). Only
+ *  the editable body fields are mutable: `summary` (manifest description) and
+ *  `system_prompt` (markdown body). The slug / `name` is immutable on update (a
+ *  rename would mean a file rename — deferred), so it is NOT part of the body. */
+export interface SkillUpdate {
   summary: string;
   system_prompt: string;
 }

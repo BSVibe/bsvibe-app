@@ -11,8 +11,8 @@
  */
 
 import { ApiError } from "@/lib/api/client";
-import { createSkill, getSkill, listSkills } from "@/lib/api/skills";
-import type { Skill, SkillCreate } from "@/lib/api/types";
+import { createSkill, getSkill, listSkills, updateSkill } from "@/lib/api/skills";
+import type { Skill, SkillCreate, SkillUpdate } from "@/lib/api/types";
 import { type Session, clearSession, setSession } from "@/lib/auth/session";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -32,6 +32,7 @@ const SKILL: Skill = {
   allowed_tools: ["read", "write"],
   model: "claude-opus",
   has_system_prompt: true,
+  system_prompt: "You write calm, precise technical prose.",
 };
 
 function okFetch(body: unknown, status = 200) {
@@ -120,5 +121,32 @@ describe("skills client", () => {
     await expect(
       createSkill({ name: "blog-writer", summary: "s", system_prompt: "p" }),
     ).rejects.toBeInstanceOf(ApiError);
+  });
+
+  it("updateSkill PATCHes /api/v1/skills/{name} (encoded) with the update body", async () => {
+    const fetchMock = okFetch(SKILL, 200);
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    const input: SkillUpdate = {
+      summary: "Updated summary.",
+      system_prompt: "Updated prompt body.",
+    };
+    const res = await updateSkill("blog writer", input);
+
+    expect(res).toEqual(SKILL);
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe("/api/v1/skills/blog%20writer");
+    expect((init.method ?? "GET").toUpperCase()).toBe("PATCH");
+    expect(JSON.parse(init.body as string)).toEqual(input);
+  });
+
+  it("surfaces an ApiError (404) when updating an unknown skill", async () => {
+    global.fetch = vi.fn(
+      async () => new Response("not found", { status: 404 }),
+    ) as unknown as typeof fetch;
+
+    await expect(updateSkill("nope", { summary: "s", system_prompt: "p" })).rejects.toBeInstanceOf(
+      ApiError,
+    );
   });
 });

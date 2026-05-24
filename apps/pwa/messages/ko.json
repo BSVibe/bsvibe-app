@@ -85,7 +85,10 @@
     "heading": "스킬",
     "lede": "당신을 위해 일할 때 활용할 수 있는 스킬입니다.",
     "newSkill": "새 스킬",
-    "editComingSoon": "스킬 편집은 곧 제공됩니다",
+    "editHeading": "스킬 편집",
+    "editSave": "저장",
+    "editValidation": "요약과 시스템 프롬프트를 입력해 주세요.",
+    "editError": "지금은 스킬을 저장하지 못했어요. 잠시 후 다시 시도해 주세요.",
     "createHeading": "새 스킬",
     "createNameLabel": "이름",
     "createNamePlaceholder": "예: 주간 다이제스트",
@@ -118,7 +121,6 @@
     "withModel": " · {model}",
     "edit": "편집",
     "allowedTools": "허용된 도구",
-    "systemPromptYes": "이 스킬에는 시스템 프롬프트가 포함되어 있습니다. 프롬프트 내용은 스킬 파일에 있으며 여기에는 표시되지 않습니다.",
     "systemPromptNo": "이 스킬에는 시스템 프롬프트가 없습니다."
   },
   "activity": {

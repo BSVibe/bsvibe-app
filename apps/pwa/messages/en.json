@@ -85,7 +85,10 @@
     "heading": "Skills",
     "lede": "The skills I can draw on while I work for you.",
     "newSkill": "New skill",
-    "editComingSoon": "Editing skills is coming soon",
+    "editHeading": "Edit skill",
+    "editSave": "Save",
+    "editValidation": "Please fill in a summary and system prompt.",
+    "editError": "Couldn’t save that skill just now. Try again in a moment.",
     "createHeading": "New skill",
     "createNameLabel": "Name",
     "createNamePlaceholder": "e.g. Weekly digest",
@@ -118,7 +121,6 @@
     "withModel": " · {model}",
     "edit": "Edit",
     "allowedTools": "Allowed tools",
-    "systemPromptYes": "This skill carries a system prompt. The prompt text lives in the skill file and isn’t shown here.",
     "systemPromptNo": "This skill has no system prompt."
   },
   "activity": {
