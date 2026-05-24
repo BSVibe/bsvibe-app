@@ -1,10 +1,13 @@
 import { useTranslations } from "next-intl";
+import ExecutorWorkers from "./ExecutorWorkers";
 import ModelAccounts from "./ModelAccounts";
 
 /**
- * Settings → Models tab. A thin host for the existing model-accounts surface.
- * The <ModelAccounts/> component is owned by a parallel lift — this wrapper does
- * not touch it, it only places it under the Models tab.
+ * Settings → Models tab. Hosts the existing model-accounts surface and, beneath
+ * it, the executor-workers surface (the design's "subscription accounts" — the
+ * founder's own coding-agent CLIs the agent loop can route to). Both
+ * sub-surfaces are owned here only as children; this wrapper does not touch
+ * their internals.
  */
 export default function ModelsTab() {
   const t = useTranslations("settings.models");
@@ -12,6 +15,7 @@ export default function ModelsTab() {
     <div className="general-tab">
       <p className="general-tab__lede">{t("lede")}</p>
       <ModelAccounts />
+      <ExecutorWorkers />
     </div>
   );
 }

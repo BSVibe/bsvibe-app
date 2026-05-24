@@ -3459,3 +3459,280 @@ main.login {
   font-size: 0.82rem;
   color: var(--ink-3);
 }
+
+/* ───────────────────────────────────────────────────────────────────────────
+   Executor workers (Settings → Models → ExecutorWorkers, Lift 4)
+   The founder's registered worker machines (their coding-agent CLIs) shown
+   beneath the API model accounts. Mirrors the connectors/accounts surfaces:
+   shared tokens only, status by color, dark-mode safe (no hardcoded colors).
+   ─────────────────────────────────────────────────────────────────────────── */
+.workers {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  margin-top: 22px;
+}
+
+.workers__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.workers__head .section-label {
+  margin: 0;
+}
+
+.workers__count {
+  min-width: 18px;
+  height: 18px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--accent-bg);
+  color: var(--ink-2);
+  font-size: 0.7rem;
+  font-weight: 600;
+  display: grid;
+  place-items: center;
+}
+
+.workers__lede {
+  margin: -8px 0 0;
+  font-size: 0.86rem;
+  color: var(--ink-3);
+}
+
+.workers__connect {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.workers__error {
+  flex: 1 1 100%;
+  font-size: 0.78rem;
+  color: var(--amber-ink);
+}
+
+.workers__connect-btn {
+  border: 1px solid var(--ink);
+  border-radius: 999px;
+  padding: 6px 16px;
+  font: inherit;
+  font-size: 0.82rem;
+  font-weight: 550;
+  background: var(--ink);
+  color: var(--bg);
+  cursor: pointer;
+}
+
+.workers__connect-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.workers__connect-btn:focus-visible {
+  outline: 2px solid var(--amber-dot);
+  outline-offset: 1px;
+}
+
+.workers__loading,
+.workers__empty,
+.workers__note {
+  margin: 0;
+  padding: 16px 18px;
+  background: var(--surface);
+  border: 1px solid var(--hair-strong);
+  border-radius: var(--radius);
+  font-size: 0.86rem;
+  color: var(--ink-3);
+}
+
+.workers__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* One worker card */
+.worker-card {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding: 16px;
+  background: var(--surface);
+  border: 1px solid var(--hair-strong);
+  border-radius: var(--radius);
+}
+
+.worker-card__body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.worker-card__head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.worker-card__name {
+  font-size: 0.92rem;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.worker-card__pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 9px;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  background: var(--accent-bg);
+  color: var(--ink-3);
+}
+
+.worker-card__pill::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--ink-3);
+}
+
+.worker-card__pill--online {
+  background: var(--green-pill-bg);
+  color: var(--green-ink);
+}
+
+.worker-card__pill--online::before {
+  background: var(--green-dot);
+}
+
+.worker-card__caps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.worker-card__chip {
+  padding: 2px 9px;
+  border-radius: 999px;
+  border: 1px solid var(--hair-strong);
+  background: var(--accent-bg);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.74rem;
+  color: var(--ink-2);
+}
+
+.worker-card__labels {
+  margin: 0;
+  font-size: 0.78rem;
+  color: var(--ink-3);
+}
+
+.worker-card__actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.worker-card__error {
+  flex: 1 1 100%;
+  font-size: 0.76rem;
+  color: var(--amber-ink);
+}
+
+.worker-card__revoke,
+.worker-card__ghost,
+.worker-card__danger {
+  border: 1px solid var(--hair-strong);
+  border-radius: 999px;
+  padding: 5px 14px;
+  font: inherit;
+  font-size: 0.8rem;
+  font-weight: 550;
+  cursor: pointer;
+  background: var(--surface);
+  color: var(--ink-2);
+}
+
+.worker-card__danger {
+  background: var(--amber-ink);
+  color: var(--bg);
+  border-color: var(--amber-ink);
+}
+
+.worker-card__ghost:disabled,
+.worker-card__danger:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.worker-card__revoke:focus-visible,
+.worker-card__ghost:focus-visible,
+.worker-card__danger:focus-visible {
+  outline: 2px solid var(--amber-dot);
+  outline-offset: 1px;
+}
+
+/* One-time install-token reveal panel (mirrors .connector-secret) */
+.worker-token {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 18px;
+  background: var(--green-pill-bg);
+  border: 1px solid var(--green-dot);
+  border-radius: var(--radius);
+}
+
+.worker-token__title {
+  margin: 0;
+  font-size: 0.95rem;
+  font-weight: 650;
+  color: var(--ink);
+}
+
+.worker-token__warn {
+  margin: 0;
+  font-size: 0.82rem;
+  color: var(--amber-ink);
+  font-weight: 550;
+}
+
+.worker-token__run-title {
+  margin: 4px 0 0;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--ink-2);
+}
+
+.worker-token__hint {
+  margin: 0;
+  font-size: 0.78rem;
+  color: var(--ink-2);
+}
+
+.worker-token__done {
+  align-self: flex-start;
+  border: 1px solid var(--hair-strong);
+  border-radius: 999px;
+  padding: 6px 16px;
+  font-size: 0.82rem;
+  font-weight: 550;
+  background: var(--surface);
+  color: var(--ink-2);
+  cursor: pointer;
+}
