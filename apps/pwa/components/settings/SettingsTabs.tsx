@@ -1,5 +1,8 @@
+"use client";
+
 import { useTranslations } from "next-intl";
 import Link from "next/link";
+import { useEffect, useRef } from "react";
 
 /**
  * Settings top tab bar. This is the serialization point for the 5-tab Settings
@@ -24,6 +27,18 @@ export const TABS: SettingsTabSlug[] = [
 
 export default function SettingsTabs({ active }: { active: SettingsTabSlug }) {
   const t = useTranslations("settings.tabs");
+  const activeRef = useRef<HTMLAnchorElement>(null);
+
+  // On narrow viewports the row scrolls horizontally; make sure the active tab
+  // (e.g. "Account", the last one) is scrolled into view so every tab — and the
+  // current selection — is reachable at 390px without manual scrolling.
+  useEffect(() => {
+    const el = activeRef.current;
+    if (el && typeof el.scrollIntoView === "function") {
+      el.scrollIntoView({ block: "nearest", inline: "nearest" });
+    }
+  }, []);
+
   return (
     <nav className="settings-tabs" aria-label={t("sectionsLabel")}>
       {TABS.map((slug) => {
@@ -31,6 +46,7 @@ export default function SettingsTabs({ active }: { active: SettingsTabSlug }) {
         return (
           <Link
             key={slug}
+            ref={isActive ? activeRef : undefined}
             href={`/settings/${slug}`}
             className="settings-tabs__tab"
             aria-current={isActive ? "page" : undefined}
