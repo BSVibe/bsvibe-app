@@ -121,7 +121,7 @@ def test_fresh_pg_upgrade_round_trip():
     # Phase 1 — fresh upgrade.
     _alembic(["upgrade", "head"], env_extra=env_extra)
     stamped = asyncio.run(_stamped_head(url))
-    assert stamped == "executor_workers", f"expected head executor_workers, got {stamped}"
+    assert stamped == "executor_tasks", f"expected head executor_tasks, got {stamped}"
 
     # Phase 2 — full downgrade. Verifies every revision's downgrade path.
     _alembic(["downgrade", "base"], env_extra=env_extra)
@@ -129,7 +129,7 @@ def test_fresh_pg_upgrade_round_trip():
     # Phase 3 — re-upgrade. Verifies the chain is idempotent.
     _alembic(["upgrade", "head"], env_extra=env_extra)
     stamped = asyncio.run(_stamped_head(url))
-    assert stamped == "executor_workers"
+    assert stamped == "executor_tasks"
 
 
 def test_pgvector_extension_installed_after_upgrade():

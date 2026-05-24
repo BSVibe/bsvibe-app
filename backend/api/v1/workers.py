@@ -20,14 +20,15 @@ mounts at ``/api/v1/workers`` directly — bypassing the v1 router's
 from __future__ import annotations
 
 import uuid
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Header, HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.api.deps import get_db_session, get_workspace_id, require_role
-from backend.executors import service
+from backend.config import get_settings
+from backend.executors import dispatch, service
 from backend.executors.db import WorkerRow
 
 # JWT-gated routes — mounted under the v1 aggregate (get_current_user upstream).
@@ -64,6 +65,15 @@ class HeartbeatResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     status: str
+
+
+class WorkerResultBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    task_id: uuid.UUID
+    success: bool
+    output: str = ""
+    error_message: str | None = None
 
 
 class WorkerResponse(BaseModel):
@@ -109,6 +119,24 @@ async def get_current_worker(
     if worker is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid worker token")
     return worker
+
+
+async def get_poll_redis() -> Any:
+    """Build the Redis client the poll endpoint consumes the worker stream from.
+
+    Returns a connection-lazy ``redis.asyncio`` client from ``settings.redis_url``
+    (``decode_responses=True`` so stream fields are ``str``). Tests override this
+    dependency with a ``fakeredis`` double, so the dispatch substrate is proven
+    without a real Redis. A 503 surfaces only if redis cannot be imported.
+    """
+    try:
+        import redis.asyncio as redis_aio  # noqa: PLC0415 — only needed on the poll path
+    except ImportError as exc:  # pragma: no cover - redis is a declared dep
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Redis not available for worker dispatch",
+        ) from exc
+    return redis_aio.from_url(get_settings().redis_url, decode_responses=True)
 
 
 # ── JWT-gated (admin / workspace-scoped) ──────────────────────────────────────
@@ -207,4 +235,59 @@ async def heartbeat(
     return HeartbeatResponse(status="ok")
 
 
-__all__ = ["get_current_worker", "public_router", "router"]
+@public_router.post("/poll")
+async def poll_tasks(
+    worker: Annotated[WorkerRow, Depends(get_current_worker)],
+    redis: Annotated[Any, Depends(get_poll_redis)],
+    count: int = 1,
+) -> list[dict[str, Any]]:
+    """Drain up to ``count`` dispatched tasks off the worker's Redis stream.
+
+    XREADGROUP over the worker's dedicated ``tasks:worker:{id}`` stream (group
+    ``worker-{id}``, consumer ``worker-{id}-0``), auto-acking each message so a
+    second poll returns only newer entries. Each returned message is the flat
+    dispatch payload (task_id / executor_type / prompt / system / workspace_dir /
+    stream_channel / done_channel / action / dispatched_at).
+    """
+    from backend.workers.streams import RedisStreamConsumer  # noqa: PLC0415
+
+    stream_name = dispatch.worker_stream(worker.id)
+    group = f"worker-{worker.id}"
+    consumer = f"worker-{worker.id}-0"
+
+    collected: list[dict[str, Any]] = []
+
+    async def _collect(fields: dict[str, Any]) -> None:
+        collected.append(fields)
+
+    consumer_obj = RedisStreamConsumer(redis)
+    await consumer_obj.consume_once(
+        stream_name=stream_name,
+        consumer_group=group,
+        consumer_name=consumer,
+        handler=_collect,
+        count=max(1, count),
+    )
+    return collected
+
+
+@public_router.post("/result", response_model=HeartbeatResponse)
+async def report_result(
+    body: WorkerResultBody,
+    worker: Annotated[WorkerRow, Depends(get_current_worker)],
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+) -> HeartbeatResponse:
+    """Record a worker's task result — flips the task row to done / failed."""
+    _ = worker  # auth only; the task row carries its own workspace binding
+    await dispatch.record_result(
+        session,
+        task_id=body.task_id,
+        success=body.success,
+        output=body.output,
+        error_message=body.error_message,
+    )
+    await session.commit()
+    return HeartbeatResponse(status="ok")
+
+
+__all__ = ["get_current_worker", "get_poll_redis", "public_router", "router"]
