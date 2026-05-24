@@ -59,3 +59,31 @@ class ProductRow(WorkspacesBase):
         default=lambda: datetime.now(),
         onupdate=lambda: datetime.now(),
     )
+
+
+class ProductResourceRow(WorkspacesBase):
+    """A named pointer a product works with — a repo, doc, deploy, or note.
+
+    Workspace-scoped (carries ``workspace_id`` so the global ORM auto-filter
+    engages) and parented to a ``Product`` via ``product_id`` with an
+    ``ON DELETE CASCADE`` FK, so a product's resources go with it. ``kind`` is
+    a short free-string tag (``link`` / ``doc`` / ``repo`` / ``note`` …) the
+    UI renders as a chip; ``url`` and ``note`` are both optional.
+    """
+
+    __tablename__ = "product_resources"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    workspace_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("workspaces.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    product_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("products.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    url: Mapped[str | None] = mapped_column(String(2048), nullable=True)
+    note: Mapped[str | None] = mapped_column(String(2048), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now()
+    )

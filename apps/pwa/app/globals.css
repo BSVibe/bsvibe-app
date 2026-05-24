@@ -4863,3 +4863,242 @@ main.login {
 }
 
 /* ── END Delivery Report ───────────────────────────────────────────────── */
+
+/* ── BEGIN product-resources (feat/product-resources) ─────────────────────── */
+/* RESOURCES section on the product page + the Add-resource modal. Reuses the
+ * established product-shipped row vocabulary + new-product-modal form styling so
+ * the surface feels like the rest of the app. Self-contained block (no token
+ * edits) to stay merge-safe alongside the parallel delivery-report lift. */
+.product-resources {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 28px;
+}
+
+.product-resources__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.product-resources__add {
+  border: 1px solid var(--hair-strong);
+  border-radius: 999px;
+  padding: 4px 12px;
+  font: inherit;
+  font-size: 0.78rem;
+  font-weight: 550;
+  background: var(--surface);
+  color: var(--ink-2);
+  cursor: pointer;
+}
+
+.product-resources__note,
+.product-resources__empty {
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--ink-3);
+}
+
+.product-resources__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  background: var(--surface);
+  border: 1px solid var(--hair-strong);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.product-resources__row {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 13px 16px;
+  border-top: 1px solid var(--hair);
+}
+
+.product-resources__row:first-child {
+  border-top: none;
+}
+
+.product-resources__chip {
+  flex: none;
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--ink-2);
+  background: var(--accent-bg);
+  border-radius: 999px;
+  padding: 3px 9px;
+}
+
+.product-resources__body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.product-resources__title {
+  font-size: 0.9rem;
+  font-weight: 550;
+}
+
+.product-resources__link {
+  font-size: 0.78rem;
+  color: var(--ink-2);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  width: fit-content;
+  word-break: break-all;
+}
+
+.product-resources__note-line {
+  font-size: 0.78rem;
+  color: var(--ink-3);
+}
+
+.product-resources__remove {
+  flex: none;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-size: 0.74rem;
+  color: var(--ink-3);
+  cursor: pointer;
+  padding: 2px 4px;
+}
+
+.product-resources__remove:hover {
+  color: var(--ink-2);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.add-resource-modal {
+  width: min(440px, calc(100vw - 48px));
+  max-height: 90vh;
+  overflow-y: auto;
+  padding: 0;
+  background: transparent;
+  border: 0;
+}
+
+.add-resource-modal::backdrop {
+  background: rgba(0, 0, 0, 0.32);
+}
+
+.add-resource-modal__panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 20px;
+  background: var(--bg);
+  border: 1px solid var(--hair-strong);
+  border-radius: var(--radius);
+}
+
+.add-resource-modal__title {
+  margin: 0;
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.add-resource-form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.add-resource-form__field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.add-resource-form__label {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--ink-2);
+}
+
+.add-resource-form__input {
+  width: 100%;
+  padding: 9px 11px;
+  border: 1px solid var(--hair-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+  font-size: 0.88rem;
+}
+
+.add-resource-form__input:focus-visible {
+  outline: 2px solid var(--amber-dot);
+  outline-offset: 1px;
+}
+
+.add-resource-form__input:disabled {
+  opacity: 0.6;
+}
+
+.add-resource-form__hint {
+  font-size: 0.76rem;
+  color: var(--ink-3);
+}
+
+.add-resource-form__foot {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.add-resource-form__error {
+  flex: 1 1 100%;
+  text-align: right;
+  font-size: 0.78rem;
+  color: var(--amber-ink);
+}
+
+.add-resource-form__submit {
+  border: 1px solid var(--hair-strong);
+  border-radius: 999px;
+  padding: 6px 16px;
+  font: inherit;
+  font-size: 0.82rem;
+  font-weight: 550;
+  background: var(--ink);
+  color: var(--bg);
+  cursor: pointer;
+}
+
+.add-resource-form__submit:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.add-resource-form__cancel {
+  border: 1px solid var(--hair-strong);
+  border-radius: 999px;
+  padding: 6px 16px;
+  font: inherit;
+  font-size: 0.82rem;
+  font-weight: 550;
+  background: var(--surface);
+  color: var(--ink-2);
+  cursor: pointer;
+}
+
+.add-resource-form__cancel:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+/* ── END product-resources ────────────────────────────────────────────────── */

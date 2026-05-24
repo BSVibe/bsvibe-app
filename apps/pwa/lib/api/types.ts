@@ -55,6 +55,43 @@ export interface ProductCreate {
   repo_url?: string | null;
 }
 
+// ── Product resources (REAL endpoint /api/v1/products/{id}/resources) ──────
+
+/** The resource kinds the Add-resource picker offers. Backend-side `kind` is a
+ *  free short string (`String(32)`), so this is a UI convenience set, not a
+ *  server-enforced enum — anything in this list (or any short tag) is accepted.
+ *  `link` is the calm catch-all default. */
+export const RESOURCE_KINDS = ["link", "repo", "doc", "deploy", "note"] as const;
+
+export type ResourceKind = (typeof RESOURCE_KINDS)[number];
+
+/** `GET /api/v1/products/{id}/resources` element / `POST` 201 (backend
+ *  ResourceResponse, extra=forbid). A named pointer the product works with — a
+ *  repo, doc, deploy, or free note. `url` / `note` are both optional. Mirrors
+ *  the backend response model field-for-field. */
+export interface ProductResource {
+  id: string;
+  product_id: string;
+  workspace_id: string;
+  /** Short free-string tag the UI renders as a chip (link / repo / doc / …). */
+  kind: string;
+  title: string;
+  url: string | null;
+  note: string | null;
+  created_at: string;
+}
+
+/** `POST /api/v1/products/{id}/resources` body (backend ResourceCreate,
+ *  extra=forbid). `kind` + `title` are required (title non-blank); `url` must be
+ *  an http(s):// or mailto: link when present, and both `url` and `note` are
+ *  omitted from the wire body when blank rather than sent as empty strings. */
+export interface ProductResourceCreate {
+  kind: string;
+  title: string;
+  url?: string | null;
+  note?: string | null;
+}
+
 /** `RunStatus` (backend/execution/db.py) — the run lifecycle vocabulary. */
 export type RunStatus = "open" | "running" | "review_ready" | "shipped" | "failed" | "cancelled";
 

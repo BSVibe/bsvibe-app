@@ -41,11 +41,12 @@ def test_alembic_history_loads():
         "executor_workers",
         "executor_tasks",
         "model_account_nullable_key",
+        "product_resources",
     ):
         assert rev in result.stdout, f"missing revision {rev} in:\n{result.stdout}"
 
 
-def test_alembic_head_is_model_account_nullable_key():
+def test_alembic_head_is_product_resources():
     repo = Path(__file__).parent.parent
     result = subprocess.run(
         [sys.executable, "-m", "alembic", "heads"],
@@ -54,7 +55,7 @@ def test_alembic_head_is_model_account_nullable_key():
         text=True,
     )
     assert result.returncode == 0
-    assert "model_account_nullable_key" in result.stdout
+    assert "product_resources" in result.stdout
 
 
 def test_target_metadata_covers_all_bases():
@@ -124,6 +125,8 @@ def test_target_metadata_covers_all_bases():
         # Bundle H
         "workspaces",
         "products",
+        # Per-product resources (repo / doc / deploy / note pointers)
+        "product_resources",
         # Phase 1 auth — identity
         "users",
         "memberships",

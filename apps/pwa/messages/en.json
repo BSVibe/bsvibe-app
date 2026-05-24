@@ -79,7 +79,37 @@
     "noRuns": "No runs for this product yet.",
     "shipped": "Shipped",
     "noShipped": "Nothing shipped for this product yet.",
-    "openArtifact": "Open artifact"
+    "openArtifact": "Open artifact",
+    "resources": {
+      "heading": "Resources",
+      "add": "Add resource",
+      "empty": "No resources yet.",
+      "loading": "Loading resources…",
+      "loadError": "Couldn’t load this product’s resources.",
+      "open": "Open",
+      "remove": "Remove",
+      "form": {
+        "kind": "Type",
+        "kinds": {
+          "link": "Link",
+          "repo": "Repo",
+          "doc": "Doc",
+          "deploy": "Deploy",
+          "note": "Note"
+        },
+        "title": "Title",
+        "titlePlaceholder": "Main repo",
+        "url": "URL",
+        "urlPlaceholder": "https://…",
+        "urlHint": "Optional — where it lives.",
+        "note": "Note",
+        "notePlaceholder": "Optional — a short note.",
+        "add": "Add",
+        "adding": "Adding…",
+        "addError": "Couldn’t add that resource — please try again.",
+        "cancel": "Cancel"
+      }
+    }
   },
   "skills": {
     "heading": "Skills",

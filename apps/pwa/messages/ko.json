@@ -79,7 +79,37 @@
     "noRuns": "이 제품에는 아직 작업이 없습니다.",
     "shipped": "배포됨",
     "noShipped": "이 제품은 아직 배포한 것이 없습니다.",
-    "openArtifact": "결과물 열기"
+    "openArtifact": "결과물 열기",
+    "resources": {
+      "heading": "리소스",
+      "add": "리소스 추가",
+      "empty": "아직 리소스가 없습니다.",
+      "loading": "리소스를 불러오는 중…",
+      "loadError": "이 제품의 리소스를 불러오지 못했어요.",
+      "open": "열기",
+      "remove": "삭제",
+      "form": {
+        "kind": "유형",
+        "kinds": {
+          "link": "링크",
+          "repo": "저장소",
+          "doc": "문서",
+          "deploy": "배포",
+          "note": "메모"
+        },
+        "title": "제목",
+        "titlePlaceholder": "메인 저장소",
+        "url": "URL",
+        "urlPlaceholder": "https://…",
+        "urlHint": "선택 사항 — 위치.",
+        "note": "메모",
+        "notePlaceholder": "선택 사항 — 짧은 메모.",
+        "add": "추가",
+        "adding": "추가하는 중…",
+        "addError": "리소스를 추가하지 못했어요 — 다시 시도해 주세요.",
+        "cancel": "취소"
+      }
+    }
   },
   "skills": {
     "heading": "스킬",
