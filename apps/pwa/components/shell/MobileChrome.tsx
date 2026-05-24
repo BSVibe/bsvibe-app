@@ -10,6 +10,7 @@ import {
   BriefIcon,
   DecisionsIcon,
   KnowledgeIcon,
+  SettingsIcon,
   SkillsIcon,
 } from "./icons";
 import { type NavKey, PRIMARY_NAV } from "./nav";
@@ -42,14 +43,27 @@ export function MobileTopBar() {
   return (
     <header className="topbar">
       <span className="topbar__title">{title}</span>
-      <button
-        type="button"
-        className="topbar__bell"
-        disabled
-        title={tShell("notificationsComingSoon")}
-      >
-        <BellIcon />
-      </button>
+      <div className="topbar__actions">
+        <button
+          type="button"
+          className="topbar__bell"
+          disabled
+          title={tShell("notificationsComingSoon")}
+        >
+          <BellIcon />
+        </button>
+        {/* Mobile-only entry to Settings — the desktop left rail (which carries
+            the Settings link) is hidden at this width. */}
+        <Link
+          href="/settings"
+          className="topbar__settings"
+          aria-current={pathname === "/settings" ? "page" : undefined}
+          aria-label={tNav("settings")}
+          title={tNav("settings")}
+        >
+          <SettingsIcon />
+        </Link>
+      </div>
     </header>
   );
 }
