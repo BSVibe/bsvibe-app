@@ -1,10 +1,10 @@
 /**
- * Skill viewer surface — the read-only single-skill detail container, driven by
- * a mocked fetch (GET /api/v1/skills/{name}). Asserts:
+ * Skill viewer surface — the single-skill detail container, driven by a mocked
+ * fetch (GET /api/v1/skills/{name}). Asserts:
  *  - renders the skill's real manifest fields (name, version, description,
- *    author, allowed tools, system-prompt presence)
- *  - the authoring affordance ("Edit") is present but DISABLED with a
- *    "coming soon" hint (no write API)
+ *    author, allowed tools, system-prompt body)
+ *  - the authoring affordance ("Edit") is ENABLED and opens the inline editor
+ *    (prefilled summary + system prompt)
  *  - the calm not-found state for an unknown skill (404 → not-found, with a way
  *    back to the library)
  *  - a calm inline error (not a blank page) when the read otherwise fails
@@ -15,6 +15,7 @@ import SkillViewer from "@/components/skills/SkillViewer";
 import type { Skill } from "@/lib/api/types";
 import { type Session, clearSession, setSession } from "@/lib/auth/session";
 import { render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("next/navigation", () => ({
@@ -38,6 +39,7 @@ const SKILL: Skill = {
   allowed_tools: ["read", "write"],
   model: "claude-opus",
   has_system_prompt: true,
+  system_prompt: "You write calm, precise technical prose.",
 };
 
 function json(body: unknown, status = 200) {
@@ -85,7 +87,7 @@ describe("Skill viewer surface", () => {
     expect(screen.getByText("write")).toBeInTheDocument();
   });
 
-  it("renders a DISABLED 'Edit' affordance with a coming-soon hint", async () => {
+  it("renders an ENABLED 'Edit' affordance that opens the inline editor", async () => {
     installFetch(() => SKILL);
 
     render(<SkillViewer name="blog-writer" />);
@@ -93,9 +95,13 @@ describe("Skill viewer surface", () => {
     await waitFor(() => {
       expect(screen.getByRole("heading", { name: SKILL.name })).toBeInTheDocument();
     });
-    const edit = screen.getByRole("button", { name: /Edit/i });
-    expect(edit).toBeDisabled();
-    expect(edit).toHaveAttribute("title", expect.stringMatching(/coming soon/i));
+    const edit = screen.getByRole("button", { name: /^Edit$/i });
+    expect(edit).not.toBeDisabled();
+
+    await userEvent.click(edit);
+    // The editor opens with the summary + system prompt prefilled.
+    expect(screen.getByLabelText(/Summary/i)).toHaveValue(SKILL.description);
+    expect(screen.getByLabelText(/System prompt/i)).toHaveValue(SKILL.system_prompt);
   });
 
   it("shows the calm not-found state for an unknown skill (404)", async () => {

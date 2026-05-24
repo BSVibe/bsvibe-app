@@ -1,5 +1,6 @@
 "use client";
 
+import SkillEditor from "@/components/skills/SkillEditor";
 import { ApiError } from "@/lib/api/client";
 import { getSkill } from "@/lib/api/skills";
 import type { Skill } from "@/lib/api/types";
@@ -8,18 +9,18 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 
 /**
- * The Skill viewer surface (`/skills/[name]`) — a focused read-only window into
- * one skill's manifest: its name, version, description, author, the tools it is
- * allowed to use, and whether it carries a system prompt.
+ * The Skill viewer surface (`/skills/[name]`) — a focused window into one skill's
+ * manifest: its name, version, description, author, the tools it is allowed to
+ * use, and its system-prompt body.
  *
- * Read-only by design — the backend skills API has NO write path (skill MD
- * files are file-system based; the markdown body itself is not even returned
- * over the wire — only the `has_system_prompt` flag). The "Edit" affordance is
- * therefore a clearly DISABLED honest stub with a "coming soon" hint.
+ * The "Edit" affordance opens an inline editor (`SkillEditor`) for the editable
+ * body fields (`summary` + `system_prompt`); on save it PATCHes and the viewer
+ * returns to the read view with the updated manifest. The slug / name is
+ * immutable (no rename — that would be a file rename, deferred).
  *
  * States: a quiet loading note; a calm not-found state (an unknown skill 404s →
  * not-found, with a way back to the library); a calm inline error (never a
- * blank page) on any other failure; otherwise the manifest.
+ * blank page) on any other failure; otherwise the manifest (or the editor).
  */
 type Loaded =
   | { state: "loading" }
@@ -29,6 +30,7 @@ type Loaded =
 
 export default function SkillViewer({ name }: { name: string }) {
   const [loaded, setLoaded] = useState<Loaded>({ state: "loading" });
+  const [editing, setEditing] = useState(false);
   const t = useTranslations("skills");
 
   useEffect(() => {
@@ -82,50 +84,61 @@ export default function SkillViewer({ name }: { name: string }) {
         </section>
       )}
 
-      {loaded.state === "ready" && (
-        <article className="skill-detail">
-          <header className="skill-detail__head">
-            <div>
-              <h1 className="skill-detail__name">{loaded.skill.name}</h1>
-              <p className="skill-detail__meta">
-                <span>{t("version", { version: loaded.skill.version })}</span>
-                {loaded.skill.author && (
-                  <span>{t("byAuthor", { author: loaded.skill.author })}</span>
-                )}
-                {loaded.skill.model && <span>{t("withModel", { model: loaded.skill.model })}</span>}
-              </p>
-            </div>
-            {/* No write API — authoring is file-system based. Honest disabled stub. */}
-            <button
-              type="button"
-              className="skill-detail__edit"
-              disabled
-              title={t("editComingSoon")}
-            >
-              {t("edit")}
-            </button>
-          </header>
+      {loaded.state === "ready" &&
+        (editing ? (
+          <SkillEditor
+            skill={loaded.skill}
+            onCancel={() => setEditing(false)}
+            onSaved={(updated) => {
+              setLoaded({ state: "ready", skill: updated });
+              setEditing(false);
+            }}
+          />
+        ) : (
+          <article className="skill-detail">
+            <header className="skill-detail__head">
+              <div>
+                <h1 className="skill-detail__name">{loaded.skill.name}</h1>
+                <p className="skill-detail__meta">
+                  <span>{t("version", { version: loaded.skill.version })}</span>
+                  {loaded.skill.author && (
+                    <span>{t("byAuthor", { author: loaded.skill.author })}</span>
+                  )}
+                  {loaded.skill.model && (
+                    <span>{t("withModel", { model: loaded.skill.model })}</span>
+                  )}
+                </p>
+              </div>
+              <button type="button" className="skill-detail__edit" onClick={() => setEditing(true)}>
+                {t("edit")}
+              </button>
+            </header>
 
-          <p className="skill-detail__desc">{loaded.skill.description}</p>
+            <p className="skill-detail__desc">{loaded.skill.description}</p>
 
-          {loaded.skill.allowed_tools.length > 0 && (
-            <section className="skill-detail__block" aria-label={t("allowedTools")}>
-              <h2 className="section-label">{t("allowedTools")}</h2>
-              <ul className="skill-tags">
-                {loaded.skill.allowed_tools.map((tool) => (
-                  <li key={tool} className="skill-tag">
-                    {tool}
-                  </li>
-                ))}
-              </ul>
-            </section>
-          )}
+            {loaded.skill.allowed_tools.length > 0 && (
+              <section className="skill-detail__block" aria-label={t("allowedTools")}>
+                <h2 className="section-label">{t("allowedTools")}</h2>
+                <ul className="skill-tags">
+                  {loaded.skill.allowed_tools.map((tool) => (
+                    <li key={tool} className="skill-tag">
+                      {tool}
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            )}
 
-          <p className="skill-detail__prompt-note">
-            {loaded.skill.has_system_prompt ? t("systemPromptYes") : t("systemPromptNo")}
-          </p>
-        </article>
-      )}
+            {loaded.skill.has_system_prompt ? (
+              <section className="skill-detail__block" aria-label={t("createSystemPromptLabel")}>
+                <h2 className="section-label">{t("createSystemPromptLabel")}</h2>
+                <pre className="skill-detail__prompt">{loaded.skill.system_prompt}</pre>
+              </section>
+            ) : (
+              <p className="skill-detail__prompt-note">{t("systemPromptNo")}</p>
+            )}
+          </article>
+        ))}
     </div>
   );
 }

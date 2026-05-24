@@ -40,6 +40,7 @@ const BLOG_WRITER: Skill = {
   allowed_tools: ["read", "write"],
   model: "claude-opus",
   has_system_prompt: true,
+  system_prompt: "You write calm, precise technical prose.",
 };
 
 const RELEASE_NOTES: Skill = {
@@ -50,6 +51,7 @@ const RELEASE_NOTES: Skill = {
   allowed_tools: [],
   model: null,
   has_system_prompt: false,
+  system_prompt: "",
 };
 
 function json(body: unknown, status = 200) {
@@ -96,6 +98,7 @@ function installCrudFetch(initial: Skill[], postStatus = 201) {
         allowed_tools: [],
         model: null,
         has_system_prompt: true,
+        system_prompt: body.system_prompt,
       };
       rows = [...rows, row];
       return json(row, 201);

@@ -5,9 +5,11 @@ Skills are markdown manifests on disk under ``<skills_root>/<workspace_id>/``
 / ``description`` + optional ``author`` / ``allowed_tools`` / ``model``) followed
 by the Markdown system-prompt body. ``SkillLoader`` discovers + parses them.
 
-``GET ""`` lists, ``GET /{name}`` fetches one, and ``POST ""`` creates one by
-writing a new ``.md`` that round-trips through the loader. CREATE only — update
-/ delete are deferred to a later lift.
+``GET ""`` lists, ``GET /{name}`` fetches one, ``POST ""`` creates one by
+writing a new ``.md`` that round-trips through the loader, and
+``PATCH /{name}`` updates the editable body fields (``summary`` → manifest
+``description`` and ``system_prompt`` → the Markdown body). The ``name`` /
+slug is immutable on update (a rename would mean a file rename — deferred).
 """
 
 from __future__ import annotations
@@ -58,6 +60,9 @@ class SkillResponse(BaseModel):
     allowed_tools: list[str] = []
     model: str | None = None
     has_system_prompt: bool = False
+    # The raw Markdown body — carried so an editor can round-trip it. Empty
+    # string when the skill has no body (``has_system_prompt`` stays the flag).
+    system_prompt: str = ""
 
     @classmethod
     def from_meta(cls, meta: SkillMeta) -> SkillResponse:
@@ -69,6 +74,7 @@ class SkillResponse(BaseModel):
             allowed_tools=list(meta.allowed_tools),
             model=meta.model,
             has_system_prompt=bool(meta.system_prompt),
+            system_prompt=meta.system_prompt,
         )
 
 
@@ -88,12 +94,31 @@ class SkillCreate(BaseModel):
     system_prompt: str = Field(min_length=1, max_length=100_000)
 
 
-def _skill_markdown(*, name: str, description: str, system_prompt: str) -> str:
+class SkillUpdate(BaseModel):
+    """Update body for ``PATCH /api/v1/skills/{name}``.
+
+    Only the editable body fields are mutable: ``summary`` (manifest
+    ``description``) and ``system_prompt`` (Markdown body). The slug / ``name``
+    is immutable — a rename would mean a file rename, deferred to a later lift —
+    so it is NOT a field here (``extra=forbid`` rejects an attempt to send it).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    summary: str = Field(min_length=1, max_length=2000)
+    system_prompt: str = Field(min_length=1, max_length=100_000)
+
+
+def _skill_markdown(
+    *, name: str, description: str, system_prompt: str, version: str = "1.0.0"
+) -> str:
     """Render a skill ``.md`` matching the loader's on-disk format.
 
     Frontmatter fence (``---``…``---``) with the required fields, then the body.
     ``description`` is YAML-escaped via a JSON-style double-quoted scalar so a
-    summary with colons / quotes round-trips through ``yaml.safe_load``.
+    summary with colons / quotes round-trips through ``yaml.safe_load``. On
+    create the default ``version`` is used; an update passes the skill's existing
+    version so it is preserved.
     """
     import json  # noqa: PLC0415 — local: only this renderer needs it
 
@@ -101,7 +126,7 @@ def _skill_markdown(*, name: str, description: str, system_prompt: str) -> str:
     return (
         "---\n"
         f"name: {name}\n"
-        "version: 1.0.0\n"
+        f"version: {version}\n"
         f"description: {desc_scalar}\n"
         "---\n"
         f"{system_prompt.strip()}\n"
@@ -192,5 +217,62 @@ async def get_skill(
     if name not in loader.registry:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail=f"Skill '{name}' not found"
+        )
+    return SkillResponse.from_meta(loader.get(name))
+
+
+@router.patch("/{name}")
+async def update_skill(
+    name: str,
+    body: SkillUpdate,
+    workspace_id: Annotated[uuid.UUID, Depends(get_workspace_id)],
+) -> SkillResponse:
+    """Update an existing skill's ``summary`` + ``system_prompt`` in place.
+
+    Rewrites ``<skills_root>/<workspace_id>/<name>.md`` with the new description
+    + body, preserving the existing ``name`` / ``version`` (the slug is immutable
+    — no rename). 404 when no skill with that name is loaded; 422 when ``summary``
+    is blank (it is the LLM invocation match signal). The rewritten manifest
+    round-trips through ``SkillLoader`` — the 200 carries the parsed manifest.
+    """
+    loader = _loader_for(workspace_id)
+    if name not in loader.registry:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=f"Skill '{name}' not found"
+        )
+    if not body.summary.strip():
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="summary must not be blank",
+        )
+
+    existing = loader.get(name)
+    settings = get_settings()
+    skill_dir = (Path(settings.skills_root) / str(workspace_id)).resolve()
+    md_path = (skill_dir / f"{name}.md").resolve()
+
+    # Path-safety: the resolved write target MUST stay inside the workspace dir.
+    # ``name`` is a registry key (a slug the loader accepted), but resolve-then-
+    # check guards against any unexpected traversal in the route segment.
+    if md_path.parent != skill_dir or not md_path.is_file():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=f"Skill '{name}' not found"
+        )
+
+    md_path.write_text(
+        _skill_markdown(
+            name=existing.name,
+            description=body.summary.strip(),
+            system_prompt=body.system_prompt,
+            version=existing.version,
+        ),
+        encoding="utf-8",
+    )
+
+    loader = _loader_for(workspace_id)
+    if name not in loader.registry:  # pragma: no cover — rewritten file must parse
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="updated skill did not load",
         )
     return SkillResponse.from_meta(loader.get(name))
