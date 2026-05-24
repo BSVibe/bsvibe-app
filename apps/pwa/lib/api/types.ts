@@ -538,6 +538,16 @@ export interface RuleCondition {
   negate: boolean;
 }
 
+/** POST-body condition (backend ConditionPayload). `negate` defaults to `false`
+ *  server-side, so callers may omit it. */
+export interface RuleConditionInput {
+  condition_type: string;
+  field: string;
+  operator: string;
+  value: unknown;
+  negate?: boolean;
+}
+
 /** `GET /api/v1/rules` element / `POST` 201 (backend RuleResponse). A rule maps
  *  a unit of work to a `target_model`, ordered by `priority` (ascending wins
  *  first). `is_default` marks the catch-all; `is_active` toggles it. Mirrors the
@@ -561,7 +571,7 @@ export interface RoutingRuleCreate {
   priority: number;
   is_default?: boolean;
   is_active?: boolean;
-  conditions?: RuleCondition[];
+  conditions?: RuleConditionInput[];
 }
 
 // ── Brief view-model (UX §3.3 lane states) ────────────────────────────────
