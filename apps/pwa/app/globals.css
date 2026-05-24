@@ -5302,3 +5302,292 @@ main.login {
 }
 
 /* ── END Run Detail ────────────────────────────────────────────────────── */
+
+/* ── BEGIN Routing rules (Settings → Models → ROUTING) ──────────────────────
+   Isolated block — reuses existing design tokens only; adds no root tokens and
+   mirrors the calm .workers / .account-form styling. */
+.routing {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  margin-top: 22px;
+}
+
+.routing__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.routing__head .section-label {
+  margin: 0;
+}
+
+.routing__count {
+  min-width: 18px;
+  height: 18px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--accent-bg);
+  color: var(--ink-2);
+  font-size: 0.7rem;
+  font-weight: 600;
+  display: grid;
+  place-items: center;
+}
+
+.routing__lede {
+  margin: -8px 0 0;
+  font-size: 0.86rem;
+  color: var(--ink-3);
+}
+
+.routing__loading,
+.routing__empty,
+.routing__note {
+  margin: 0;
+  padding: 16px 18px;
+  background: var(--surface);
+  border: 1px solid var(--hair-strong);
+  border-radius: var(--radius);
+  font-size: 0.86rem;
+  color: var(--ink-3);
+}
+
+.routing__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* One routing-rule card */
+.routing-card {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding: 16px;
+  background: var(--surface);
+  border: 1px solid var(--hair-strong);
+  border-radius: var(--radius);
+}
+
+.routing-card__body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.routing-card__head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.routing-card__name {
+  font-size: 0.92rem;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.routing-card__chip {
+  padding: 2px 9px;
+  border-radius: 999px;
+  border: 1px solid var(--hair-strong);
+  background: var(--accent-bg);
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--ink-3);
+}
+
+.routing-card__chip--default {
+  background: var(--green-pill-bg);
+  color: var(--green-ink);
+  border-color: var(--green-dot);
+}
+
+.routing-card__chip--inactive {
+  color: var(--amber-ink);
+}
+
+.routing-card__route {
+  margin: 0;
+  font-size: 0.84rem;
+  color: var(--ink-2);
+}
+
+.routing-card__match {
+  color: var(--ink-3);
+}
+
+.routing-card__arrow {
+  color: var(--ink-3);
+}
+
+.routing-card__target {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: var(--ink);
+}
+
+.routing-card__actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.routing-card__error {
+  flex: 1 1 100%;
+  font-size: 0.76rem;
+  color: var(--amber-ink);
+}
+
+.routing-card__remove,
+.routing-card__ghost,
+.routing-card__danger {
+  border: 1px solid var(--hair-strong);
+  border-radius: 999px;
+  padding: 5px 14px;
+  font: inherit;
+  font-size: 0.8rem;
+  font-weight: 550;
+  cursor: pointer;
+  background: var(--surface);
+  color: var(--ink-2);
+}
+
+.routing-card__danger {
+  background: var(--amber-ink);
+  color: var(--bg);
+  border-color: var(--amber-ink);
+}
+
+.routing-card__ghost:disabled,
+.routing-card__danger:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.routing-card__remove:focus-visible,
+.routing-card__ghost:focus-visible,
+.routing-card__danger:focus-visible {
+  outline: 2px solid var(--amber-dot);
+  outline-offset: 1px;
+}
+
+/* Add-rule form (mirrors .account-form) */
+.routing-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 18px;
+  background: var(--surface);
+  border: 1px solid var(--hair-strong);
+  border-radius: var(--radius);
+}
+
+.routing-form__row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  align-items: end;
+}
+
+.routing-form__field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.routing-form__field--narrow {
+  max-width: 160px;
+}
+
+.routing-form__label {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--ink-2);
+}
+
+.routing-form__input {
+  width: 100%;
+  padding: 9px 11px;
+  border: 1px solid var(--hair-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+  font-size: 0.88rem;
+}
+
+.routing-form__input:focus-visible {
+  outline: 2px solid var(--amber-dot);
+  outline-offset: 1px;
+}
+
+.routing-form__input:disabled {
+  opacity: 0.6;
+}
+
+.routing-form__check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.82rem;
+  color: var(--ink-2);
+}
+
+.routing-form__foot {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.routing-form__error {
+  flex: 1 1 100%;
+  text-align: right;
+  font-size: 0.78rem;
+  color: var(--amber-ink);
+}
+
+.routing-form__success {
+  flex: 1 1 100%;
+  text-align: right;
+  font-size: 0.78rem;
+  color: var(--green-ink);
+}
+
+.routing-form__submit {
+  border: 1px solid var(--hair-strong);
+  border-radius: 999px;
+  padding: 6px 16px;
+  font-size: 0.82rem;
+  font-weight: 550;
+  background: var(--ink);
+  color: var(--bg);
+  cursor: pointer;
+}
+
+.routing-form__submit:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+@media (max-width: 640px) {
+  .routing-form__row {
+    grid-template-columns: 1fr;
+  }
+
+  .routing-form__field--narrow {
+    max-width: none;
+  }
+}
+/* ── END Routing rules ─────────────────────────────────────────────────── */
