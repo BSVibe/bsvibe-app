@@ -96,6 +96,136 @@ def test_get_skill_not_found(
     assert r.status_code == 404
 
 
+def test_create_skill_round_trips_through_loader(
+    configured_app, tmp_path: Path, workspace_id: uuid.UUID, monkeypatch
+) -> None:
+    """POST writes a .md the loader then lists + serves (full round-trip)."""
+    monkeypatch.setenv("BSVIBE_SKILLS_ROOT", str(tmp_path))
+    get_settings.cache_clear()
+    client = TestClient(configured_app)
+
+    r = client.post(
+        "/api/v1/skills",
+        json={
+            "name": "blog-writer",
+            "summary": "Drafts a technical blog post in the house voice.",
+            "system_prompt": "You write calm, precise technical prose.",
+        },
+    )
+    assert r.status_code == 201, r.text
+    body = r.json()
+    assert body["name"] == "blog-writer"
+    assert body["description"] == "Drafts a technical blog post in the house voice."
+    assert body["has_system_prompt"] is True
+
+    # The file landed under the per-workspace skills dir.
+    md_path = tmp_path / str(workspace_id) / "blog-writer.md"
+    assert md_path.is_file()
+
+    # The loader-backed GET list now includes it.
+    listed = client.get("/api/v1/skills")
+    assert listed.status_code == 200
+    assert "blog-writer" in [s["name"] for s in listed.json()]
+
+    # And GET /{name} serves the freshly-written skill.
+    one = client.get("/api/v1/skills/blog-writer")
+    assert one.status_code == 200
+    assert one.json()["name"] == "blog-writer"
+    assert one.json()["has_system_prompt"] is True
+
+
+def test_create_skill_derives_slug_from_name(
+    configured_app, tmp_path: Path, workspace_id: uuid.UUID, monkeypatch
+) -> None:
+    """A human-friendly name is slugified for the filename + manifest name."""
+    monkeypatch.setenv("BSVIBE_SKILLS_ROOT", str(tmp_path))
+    get_settings.cache_clear()
+    client = TestClient(configured_app)
+
+    r = client.post(
+        "/api/v1/skills",
+        json={"name": "Weekly Digest", "summary": "Sum up the week.", "system_prompt": "Go."},
+    )
+    assert r.status_code == 201, r.text
+    assert r.json()["name"] == "weekly-digest"
+    assert (tmp_path / str(workspace_id) / "weekly-digest.md").is_file()
+
+
+def test_create_skill_duplicate_name_conflicts(
+    configured_app, tmp_path: Path, workspace_id: uuid.UUID, monkeypatch
+) -> None:
+    """A second create with the same slug → 409, original untouched."""
+    monkeypatch.setenv("BSVIBE_SKILLS_ROOT", str(tmp_path))
+    get_settings.cache_clear()
+    _write_skill(tmp_path / str(workspace_id), "blog-writer", "1.0", "Existing.")
+    client = TestClient(configured_app)
+
+    r = client.post(
+        "/api/v1/skills",
+        json={"name": "blog-writer", "summary": "New.", "system_prompt": "x"},
+    )
+    assert r.status_code == 409, r.text
+
+
+def test_create_skill_empty_name_rejected(configured_app, tmp_path: Path, monkeypatch) -> None:
+    """An empty / unslugifiable name → 422 (no skill written)."""
+    monkeypatch.setenv("BSVIBE_SKILLS_ROOT", str(tmp_path))
+    get_settings.cache_clear()
+    client = TestClient(configured_app)
+
+    r = client.post(
+        "/api/v1/skills",
+        json={"name": "   ", "summary": "s", "system_prompt": "p"},
+    )
+    assert r.status_code == 422, r.text
+
+
+def test_create_skill_extra_field_forbidden(configured_app, tmp_path: Path, monkeypatch) -> None:
+    """extra=forbid: an unknown body field → 422."""
+    monkeypatch.setenv("BSVIBE_SKILLS_ROOT", str(tmp_path))
+    get_settings.cache_clear()
+    client = TestClient(configured_app)
+
+    r = client.post(
+        "/api/v1/skills",
+        json={"name": "ok-skill", "summary": "s", "system_prompt": "p", "version": "9.9"},
+    )
+    assert r.status_code == 422, r.text
+
+
+def test_create_skill_path_traversal_slug_rejected(
+    configured_app, tmp_path: Path, workspace_id: uuid.UUID, monkeypatch
+) -> None:
+    """A name that would escape the workspace dir is sanitized / rejected — the
+    write MUST stay inside <skills_root>/<workspace_id>/ (no traversal)."""
+    monkeypatch.setenv("BSVIBE_SKILLS_ROOT", str(tmp_path))
+    get_settings.cache_clear()
+    client = TestClient(configured_app)
+
+    r = client.post(
+        "/api/v1/skills",
+        json={"name": "../../etc/passwd", "summary": "s", "system_prompt": "p"},
+    )
+    # Either rejected outright (422) — the only outcome that is safe.
+    assert r.status_code == 422, r.text
+    # Nothing escaped the workspace dir.
+    assert not (tmp_path.parent / "etc").exists()
+    assert not (tmp_path / "etc").exists()
+
+
+def test_create_skill_blank_summary_rejected(configured_app, tmp_path: Path, monkeypatch) -> None:
+    """summary becomes the manifest description (the LLM match signal) — blank → 422."""
+    monkeypatch.setenv("BSVIBE_SKILLS_ROOT", str(tmp_path))
+    get_settings.cache_clear()
+    client = TestClient(configured_app)
+
+    r = client.post(
+        "/api/v1/skills",
+        json={"name": "ok-skill", "summary": "   ", "system_prompt": "p"},
+    )
+    assert r.status_code == 422, r.text
+
+
 def test_settings_override_is_isolated(monkeypatch) -> None:
     # Belt-and-suspenders: ensure get_settings cache flips with the env.
     monkeypatch.setenv("BSVIBE_SKILLS_ROOT", "/tmp/x-test-isolated")

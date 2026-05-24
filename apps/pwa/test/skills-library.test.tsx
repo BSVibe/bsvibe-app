@@ -6,14 +6,17 @@
  *  - the calm empty state when the workspace has no skills yet
  *  - a calm inline error (not a blank page / not a crash) when the read fails
  *  - a loading note before the read lands
- *  - the authoring affordance ("New skill") is present but DISABLED with a
- *    "coming soon" hint (no write API)
+ *  - the authoring affordance ("New skill") is now ENABLED → opens a create form;
+ *    submitting fires createSkill with the body, then refreshes the list; a
+ *    duplicate (409) shows a calm inline error and the form stays usable; the
+ *    form validates required fields before firing the request.
  */
 
 import SkillsLibrary from "@/components/skills/SkillsLibrary";
 import type { Skill } from "@/lib/api/types";
 import { type Session, clearSession, setSession } from "@/lib/auth/session";
 import { render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("next/navigation", () => ({
@@ -64,6 +67,40 @@ function installFetch(skills: () => Skill[] | Response) {
       return s instanceof Response ? s : json(s);
     }
     throw new Error(`unexpected fetch ${url}`);
+  });
+  global.fetch = fetchMock as unknown as typeof fetch;
+  return fetchMock;
+}
+
+/** Fetch mock that routes GET (list) and POST (create) separately so the
+ *  create flow can be exercised end-to-end. `created` is the 201 row the POST
+ *  returns; once created it is appended to subsequent list reads. */
+function installCrudFetch(initial: Skill[], postStatus = 201) {
+  let rows = [...initial];
+  const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    if (!url.startsWith("/api/v1/skills")) throw new Error(`unexpected fetch ${url}`);
+    const method = (init?.method ?? "GET").toUpperCase();
+    if (method === "POST") {
+      if (postStatus !== 201) return json("conflict", postStatus);
+      const body = JSON.parse(init?.body as string) as {
+        name: string;
+        summary: string;
+        system_prompt: string;
+      };
+      const row: Skill = {
+        name: body.name,
+        version: "1.0.0",
+        description: body.summary,
+        author: "",
+        allowed_tools: [],
+        model: null,
+        has_system_prompt: true,
+      };
+      rows = [...rows, row];
+      return json(row, 201);
+    }
+    return json(rows);
   });
   global.fetch = fetchMock as unknown as typeof fetch;
   return fetchMock;
@@ -129,8 +166,8 @@ describe("Skills Library surface", () => {
     });
   });
 
-  it("renders a DISABLED 'New skill' affordance with a coming-soon hint", async () => {
-    installFetch(() => [BLOG_WRITER]);
+  it("renders an ENABLED 'New skill' affordance that opens the create form", async () => {
+    installCrudFetch([BLOG_WRITER]);
 
     render(<SkillsLibrary />);
 
@@ -138,7 +175,83 @@ describe("Skills Library surface", () => {
       expect(screen.getByText(BLOG_WRITER.name)).toBeInTheDocument();
     });
     const newSkill = screen.getByRole("button", { name: /New skill/i });
-    expect(newSkill).toBeDisabled();
-    expect(newSkill).toHaveAttribute("title", expect.stringMatching(/coming soon/i));
+    expect(newSkill).not.toBeDisabled();
+
+    await userEvent.click(newSkill);
+    // The form fields appear.
+    expect(screen.getByLabelText(/Name/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/Summary/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/System prompt/i)).toBeInTheDocument();
+  });
+
+  it("submitting the form POSTs createSkill with the body and refreshes the list", async () => {
+    const fetchMock = installCrudFetch([BLOG_WRITER]);
+
+    render(<SkillsLibrary />);
+    await waitFor(() => {
+      expect(screen.getByText(BLOG_WRITER.name)).toBeInTheDocument();
+    });
+
+    await userEvent.click(screen.getByRole("button", { name: /New skill/i }));
+    await userEvent.type(screen.getByLabelText(/Name/i), "Release Notes");
+    await userEvent.type(screen.getByLabelText(/Summary/i), "Summarise merged PRs.");
+    await userEvent.type(screen.getByLabelText(/System prompt/i), "Write a release note.");
+    await userEvent.click(screen.getByRole("button", { name: /^Create skill$/i }));
+
+    // The POST fired with the create body.
+    const postCall = fetchMock.mock.calls.find(
+      (c) => ((c[1] as RequestInit | undefined)?.method ?? "GET").toUpperCase() === "POST",
+    );
+    expect(postCall).toBeDefined();
+    const body = JSON.parse((postCall?.[1] as RequestInit).body as string);
+    expect(body).toEqual({
+      name: "Release Notes",
+      summary: "Summarise merged PRs.",
+      system_prompt: "Write a release note.",
+    });
+
+    // The list refreshed to include the new skill.
+    await waitFor(() => {
+      expect(screen.getByText("Release Notes")).toBeInTheDocument();
+    });
+  });
+
+  it("shows a calm inline error on a duplicate (409) and keeps the form usable", async () => {
+    installCrudFetch([BLOG_WRITER], 409);
+
+    render(<SkillsLibrary />);
+    await waitFor(() => {
+      expect(screen.getByText(BLOG_WRITER.name)).toBeInTheDocument();
+    });
+
+    await userEvent.click(screen.getByRole("button", { name: /New skill/i }));
+    await userEvent.type(screen.getByLabelText(/Name/i), "blog-writer");
+    await userEvent.type(screen.getByLabelText(/Summary/i), "dup");
+    await userEvent.type(screen.getByLabelText(/System prompt/i), "x");
+    await userEvent.click(screen.getByRole("button", { name: /^Create skill$/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText(/already/i)).toBeInTheDocument();
+    });
+    // The form stays open + usable (fields still present).
+    expect(screen.getByLabelText(/Name/i)).toBeInTheDocument();
+  });
+
+  it("validates required fields — does not POST when a field is blank", async () => {
+    const fetchMock = installCrudFetch([BLOG_WRITER]);
+
+    render(<SkillsLibrary />);
+    await waitFor(() => {
+      expect(screen.getByText(BLOG_WRITER.name)).toBeInTheDocument();
+    });
+
+    await userEvent.click(screen.getByRole("button", { name: /New skill/i }));
+    // Submit with everything blank.
+    await userEvent.click(screen.getByRole("button", { name: /^Create skill$/i }));
+
+    const postCall = fetchMock.mock.calls.find(
+      (c) => ((c[1] as RequestInit | undefined)?.method ?? "GET").toUpperCase() === "POST",
+    );
+    expect(postCall).toBeUndefined();
   });
 });

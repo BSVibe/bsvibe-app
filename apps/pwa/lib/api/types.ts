@@ -487,17 +487,17 @@ export interface NotificationPrefs {
   quiet_hours_end: string;
 }
 
-// ── Skills (REAL endpoint /api/v1/skills, READ-ONLY) ───────────────────────
-// Appended for the Skills surface lift. The backend skills API is read-only —
-// there is NO create/update/delete (skill MD files are file-system based, per
-// backend/api/v1/skills.py). So the PWA surfaces a Library + viewer only; the
-// authoring affordances are disabled stubs.
+// ── Skills (REAL endpoint /api/v1/skills) ──────────────────────────────────
+// The backend skills API carries reads (list + get) AND create (POST writes a
+// new skill MD file under the per-workspace skills dir, per backend/api/v1/
+// skills.py). Update / delete are deferred to a later lift, so the PWA surfaces
+// a Library + viewer + a New-skill create form (no edit/delete affordances yet).
 
-/** `GET /api/v1/skills` element / `GET /api/v1/skills/{name}` (backend
- *  SkillResponse, extra=forbid). Skill manifest metadata for the workspace.
- *  Mirrors the backend response model field-for-field. The skill's markdown
- *  system prompt body is NOT returned over the API — `has_system_prompt` is the
- *  "a prompt is on file" flag, the same way the backend masks it. */
+/** `GET /api/v1/skills` element / `GET /api/v1/skills/{name}` / `POST` 201
+ *  (backend SkillResponse, extra=forbid). Skill manifest metadata for the
+ *  workspace. Mirrors the backend response model field-for-field. The skill's
+ *  markdown system prompt body is NOT returned over the API — `has_system_prompt`
+ *  is the "a prompt is on file" flag, the same way the backend masks it. */
 export interface Skill {
   name: string;
   version: string;
@@ -506,6 +506,17 @@ export interface Skill {
   allowed_tools: string[];
   model: string | null;
   has_system_prompt: boolean;
+}
+
+/** `POST /api/v1/skills` body (backend SkillCreate, extra=forbid). `name` is the
+ *  human-friendly handle (the backend slugifies it for the filename + manifest
+ *  name); `summary` becomes the manifest description (the LLM match signal);
+ *  `system_prompt` is the markdown body. CREATE only — no version/author/tools
+ *  knobs in this lift. Mirrors the backend schema 1:1. */
+export interface SkillCreate {
+  name: string;
+  summary: string;
+  system_prompt: string;
 }
 
 // ── Executor workers (REAL endpoint /api/v1/workers) ───────────────────────
