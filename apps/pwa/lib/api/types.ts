@@ -507,3 +507,31 @@ export interface Skill {
   model: string | null;
   has_system_prompt: boolean;
 }
+
+// ── Executor workers (REAL endpoint /api/v1/workers) ───────────────────────
+
+/** `GET /api/v1/workers` element (backend WorkerResponse). A registered worker
+ *  is a machine the founder runs the BSVibe worker process on, where their
+ *  coding-agent CLIs (claude_code / codex / opencode) are logged in — letting
+ *  BSVibe route work to those CLIs under the founder's own subscription.
+ *
+ *  `status` is heartbeat-driven ("online" / "offline"); `capabilities` lists the
+ *  CLIs that machine can drive. NOTE: the response carries no `last_heartbeat`
+ *  yet (a later backend tweak) — surface `status` + `capabilities`, not an exact
+ *  last-seen timestamp. Mirrors the backend response model field-for-field. */
+export interface Worker {
+  id: string;
+  workspace_id: string;
+  name: string;
+  labels: string[];
+  capabilities: string[];
+  status: string;
+  is_active: boolean;
+}
+
+/** `POST /api/v1/workers/install-token` → `{ token }` (backend response). The
+ *  ONLY place the plaintext install token is ever returned — like an API key,
+ *  shown once. The founder feeds it to the worker process on its host. */
+export interface WorkerInstallToken {
+  token: string;
+}
