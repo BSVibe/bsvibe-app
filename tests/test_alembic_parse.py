@@ -39,11 +39,12 @@ def test_alembic_history_loads():
         "accounts",
         "notification_prefs",
         "executor_workers",
+        "executor_tasks",
     ):
         assert rev in result.stdout, f"missing revision {rev} in:\n{result.stdout}"
 
 
-def test_alembic_head_is_executor_workers():
+def test_alembic_head_is_executor_tasks():
     repo = Path(__file__).parent.parent
     result = subprocess.run(
         [sys.executable, "-m", "alembic", "heads"],
@@ -52,7 +53,7 @@ def test_alembic_head_is_executor_workers():
         text=True,
     )
     assert result.returncode == 0
-    assert "executor_workers" in result.stdout
+    assert "executor_tasks" in result.stdout
 
 
 def test_target_metadata_covers_all_bases():
@@ -136,6 +137,8 @@ def test_target_metadata_covers_all_bases():
         # External executor-worker registration subsystem (executor-pool Lift 1)
         "executor_workers",
         "executor_install_tokens",
+        # Executor dispatch substrate — pending→dispatched→done/failed (Lift 2)
+        "executor_tasks",
     }
     actual_tables = (
         set(AccountsBase.metadata.tables)

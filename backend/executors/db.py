@@ -24,7 +24,7 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import JSON, Boolean, DateTime, String, UniqueConstraint
+from sqlalchemy import JSON, Boolean, DateTime, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from backend.data import Base
@@ -82,7 +82,46 @@ class WorkerInstallTokenRow(Base):
     )
 
 
+class ExecutorTaskRow(Base):
+    """One row per executor task — the dispatch unit (Lift 2).
+
+    A task is created ``pending``, dispatched to a worker's Redis Stream
+    (``status=dispatched`` + ``worker_id`` set), then closed ``done`` / ``failed``
+    when the worker reports a result. The DB row is the source of truth; the
+    Redis Stream entry is only the dispatch notification and the
+    ``task:{id}:done`` pub/sub message only a wake-up — the awaiter always reads
+    the canonical terminal state from this row.
+
+    Mirrors BSGateway's ``executor_tasks`` table, re-tenanted on ``workspace_id``
+    (BSGateway uses ``tenant_id``). ``prompt`` / ``system`` / ``output`` are
+    ``Text`` (unbounded); ``system`` / ``workspace_dir`` carry the executor's
+    invocation context (forwarded verbatim onto the dispatch stream).
+    """
+
+    __tablename__ = "executor_tasks"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    workspace_id: Mapped[uuid.UUID] = mapped_column(nullable=False, index=True)
+    # Nullable until dispatched; indexed so a worker can scan its own queue and
+    # find_available_worker / the dispatch worker can join by assignment.
+    worker_id: Mapped[uuid.UUID | None] = mapped_column(nullable=True, index=True)
+    executor_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    prompt: Mapped[str] = mapped_column(Text, nullable=False)
+    system: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    workspace_dir: Mapped[str] = mapped_column(String(1024), nullable=False, default=".")
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending", index=True)
+    output: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_utcnow
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_utcnow, onupdate=_utcnow
+    )
+
+
 __all__ = [
+    "ExecutorTaskRow",
     "ExecutorsBase",
     "WorkerInstallTokenRow",
     "WorkerRow",
