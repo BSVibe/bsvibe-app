@@ -3,6 +3,7 @@
 import { getRunDeliverables } from "@/lib/api/activity";
 import type { ActivityDeliverable, ActivityRun, ArtifactType } from "@/lib/api/types";
 import { useTranslations } from "next-intl";
+import Link from "next/link";
 import { useState } from "react";
 
 /** Per-artifact-type marker (UX §4 — deliverables are polymorphic), matched to
@@ -88,6 +89,10 @@ export default function RunRow({ run }: { run: ActivityRun }) {
         </span>
         <span className="activity-row__when">{formatWhen(run.updatedAt)}</span>
       </button>
+
+      <Link className="activity-row__open" href={`/runs/${run.runId}`}>
+        {t("openRun")}
+      </Link>
 
       {open && (
         <div id={panelId} className="activity-row__panel">

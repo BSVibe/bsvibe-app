@@ -165,7 +165,8 @@
     "deliverablesLoading": "전달한 결과물을 살펴보는 중…",
     "deliverablesError": "지금은 이 작업의 결과물을 불러오지 못했어요 — 잠시 후 다시 시도해 주세요.",
     "deliverablesEmpty": "이 작업에는 전달된 결과물이 없습니다.",
-    "openArtifact": "결과물 열기"
+    "openArtifact": "결과물 열기",
+    "openRun": "작업 열기"
   },
   "knowledge": {
     "heading": "지식",
@@ -544,5 +545,42 @@
     "openArtifact": "산출물 열기",
     "diff": "변경 내용",
     "viewDiff": "변경 내용 보기"
+  },
+  "run": {
+    "back": "‹ 활동",
+    "region": "실행 상세",
+    "loadingNote": "이 실행을 살펴보는 중…",
+    "notFoundLine": "해당 실행을 찾을 수 없어요.",
+    "backToActivity": "활동으로 돌아가기",
+    "errorLine": "지금은 이 실행을 불러올 수 없어요.",
+    "errorSub": "잠시 후 다시 시도해 주세요.",
+    "untitled": "트리거된 실행",
+    "trigger": "무엇이 이 실행을 시작했나요",
+    "triggeredFrom": "{source}에서 시작됨",
+    "noTrigger": "이 실행에 기록된 트리거 정보가 없습니다.",
+    "statusLabel": {
+      "open": "막 시작됨",
+      "running": "작업 중",
+      "review_ready": "검토 준비됨",
+      "shipped": "전달됨",
+      "failed": "완료하지 못함",
+      "cancelled": "중단됨"
+    },
+    "decision": "확인이 필요합니다",
+    "decisionRationale": "외부에서 들어온 작업이라 BSVibe는 안전 모드입니다.",
+    "letContinue": "계속 진행",
+    "hold": "보류",
+    "resolving": "처리 중…",
+    "resolved": "감사합니다 — 다시 진행할게요.",
+    "resolveError": "처리하지 못했어요 — 다시 시도해 주세요.",
+    "verification": "BSVibe가 어떻게 확인했나요",
+    "verdictLabel": {
+      "passed": "검증되었습니다",
+      "failed": "검증에 실패했습니다",
+      "inconclusive": "검증이 불확실합니다"
+    },
+    "noVerification": "아직 이 실행에 대한 검증 기록이 없습니다.",
+    "deliverable": "전달됨",
+    "viewReport": "전달 리포트 보기"
   }
 }

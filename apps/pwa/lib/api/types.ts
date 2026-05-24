@@ -106,6 +106,52 @@ export interface Run {
   updated_at: string;
 }
 
+/** The "outside" that asked for this run (backend RunTriggerContext) — pulled
+ *  defensively out of the run's free-form payload. Each field is null when the
+ *  payload doesn't carry it (a sparse run shows a calm minimal detail). */
+export interface RunTriggerContext {
+  source: string | null;
+  trigger_kind: string | null;
+  intent_text: string | null;
+  product: string | null;
+}
+
+/** One paused-run Decision on a run-detail response (backend RunDecision). The
+ *  founder resolves a `pending` decision via POST /api/v1/checkpoints/{id}/resolve. */
+export interface RunDecision {
+  id: string;
+  decision: string;
+  question: string;
+  rationale: string | null;
+  status: "pending" | "resolved";
+  resolution: string | null;
+  created_at: string;
+}
+
+/** The latest VerificationResult outcome for a run (backend RunVerification). */
+export interface RunVerification {
+  id: string;
+  outcome: VerificationOutcome;
+  created_at: string;
+}
+
+/** `GET /api/v1/runs/{id}/detail` body (backend RunDetailResponse) — the
+ *  inspectable run-detail surface (Stitch "Triggered"): status, trigger
+ *  context, paused-run decisions, the latest verification outcome, and the
+ *  resulting Deliverable id (so the UI can link to its Delivery Report). */
+export interface RunDetail {
+  id: string;
+  workspace_id: string;
+  product_id: string | null;
+  status: RunStatus;
+  created_at: string;
+  updated_at: string;
+  trigger: RunTriggerContext;
+  decisions: RunDecision[];
+  verification: RunVerification | null;
+  deliverable_id: string | null;
+}
+
 /** `DeliverableType` (backend/execution/db.py) — the artifact kind a verified
  *  run produced. The PWA maps these → the calmer `ArtifactType` UI vocabulary. */
 export type DeliverableType = "code" | "pr" | "page" | "page_image" | "direct_output";
