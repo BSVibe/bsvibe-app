@@ -4793,6 +4793,77 @@ main.login {
 .report-checks__empty,
 .report-checks__none,
 .report-artifacts__empty {
+  font-size: 0.85rem;
+  color: var(--ink-3);
+}
+
+.report-checks__block {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.report-checks__list,
+.report-artifacts__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.report-checks__row {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  border: 1px solid var(--hair);
+  border-radius: var(--radius-sm);
+  padding: 8px 12px;
+  background: var(--surface);
+}
+
+.report-checks__cmd {
+  font-size: 0.85rem;
+  color: var(--ink);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.report-checks__rationale {
+  font-size: 0.78rem;
+  color: var(--ink-3);
+}
+
+.report-checks__result {
+  font-size: 0.82rem;
+  color: var(--ink-2);
+}
+
+.report-artifacts__row {
+  font-size: 0.85rem;
+  color: var(--ink-2);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.report-artifacts__link,
+.report-diff__link {
+  font-size: 0.85rem;
+  color: var(--ink-2);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  width: fit-content;
+}
+
+.shipped__report-link {
+  font-size: 0.78rem;
+  color: var(--ink-2);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  width: fit-content;
+}
+
+/* ── END Delivery Report ───────────────────────────────────────────────── */
+
 /* ── BEGIN product-resources (feat/product-resources) ─────────────────────── */
 /* RESOURCES section on the product page + the Add-resource modal. Reuses the
  * established product-shipped row vocabulary + new-product-modal form styling so
@@ -4831,39 +4902,6 @@ main.login {
   color: var(--ink-3);
 }
 
-.report-checks__block {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.report-checks__list,
-.report-artifacts__list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.report-checks__row {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  border: 1px solid var(--hair);
-  border-radius: var(--radius-sm);
-  padding: 8px 12px;
-  background: var(--surface);
-}
-
-.report-checks__cmd {
-  font-size: 0.85rem;
-  color: var(--ink);
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-}
-
-.report-checks__rationale {
 .product-resources__list {
   list-style: none;
   margin: 0;
@@ -4925,35 +4963,6 @@ main.login {
   color: var(--ink-3);
 }
 
-.report-checks__result {
-  font-size: 0.82rem;
-  color: var(--ink-2);
-}
-
-.report-artifacts__row {
-  font-size: 0.85rem;
-  color: var(--ink-2);
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-}
-
-.report-artifacts__link,
-.report-diff__link {
-  font-size: 0.85rem;
-  color: var(--ink-2);
-  text-decoration: underline;
-  text-underline-offset: 2px;
-  width: fit-content;
-}
-
-.shipped__report-link {
-  font-size: 0.78rem;
-  color: var(--ink-2);
-  text-decoration: underline;
-  text-underline-offset: 2px;
-  width: fit-content;
-}
-
-/* ── END Delivery Report ───────────────────────────────────────────────── */
 .product-resources__remove {
   flex: none;
   border: 0;

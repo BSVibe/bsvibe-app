@@ -52,6 +52,7 @@ async def client_with_product(db):
 
     async with db() as s:
         s.add(WorkspaceRow(id=workspace_id, name="test", region="us-1", safe_mode=True))
+        await s.flush()  # workspace must INSERT before the product (PG FK; SQLite ignores)
         s.add(ProductRow(id=product_id, workspace_id=workspace_id, name="Blog", slug="blog"))
         await s.commit()
 
