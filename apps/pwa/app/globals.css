@@ -3300,11 +3300,25 @@ main.login {
     font-weight: 650;
   }
 
-  .topbar__bell {
+  .topbar__actions {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .topbar__bell,
+  .topbar__settings {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
     border: none;
     background: transparent;
     color: var(--ink-2);
     padding: 4px;
+  }
+
+  .topbar__settings[aria-current="page"] {
+    color: var(--ink);
   }
 
   .shell__main {
