@@ -38,11 +38,12 @@ def test_alembic_history_loads():
         "connector_delivery_config",
         "accounts",
         "notification_prefs",
+        "executor_workers",
     ):
         assert rev in result.stdout, f"missing revision {rev} in:\n{result.stdout}"
 
 
-def test_alembic_head_is_notification_prefs():
+def test_alembic_head_is_executor_workers():
     repo = Path(__file__).parent.parent
     result = subprocess.run(
         [sys.executable, "-m", "alembic", "heads"],
@@ -51,7 +52,7 @@ def test_alembic_head_is_notification_prefs():
         text=True,
     )
     assert result.returncode == 0
-    assert "notification_prefs" in result.stdout
+    assert "executor_workers" in result.stdout
 
 
 def test_target_metadata_covers_all_bases():
@@ -62,6 +63,7 @@ def test_target_metadata_covers_all_bases():
     from backend.connectors.db import ConnectorsBase
     from backend.delivery.db import DeliveryBase
     from backend.execution.db import ExecutionBase
+    from backend.executors.db import ExecutorsBase
     from backend.gateway.budget.models import GatewayBudgetBase
     from backend.gateway.embedding.db import GatewayEmbeddingBase
     from backend.gateway.routing.db import GatewayRoutingBase
@@ -131,6 +133,9 @@ def test_target_metadata_covers_all_bases():
         "accounts",
         # Per-workspace notification preferences (events x channels + quiet hours)
         "notification_prefs",
+        # External executor-worker registration subsystem (executor-pool Lift 1)
+        "executor_workers",
+        "executor_install_tokens",
     }
     actual_tables = (
         set(AccountsBase.metadata.tables)
@@ -151,6 +156,7 @@ def test_target_metadata_covers_all_bases():
         | set(IdentityBase.metadata.tables)
         | set(ConnectorsBase.metadata.tables)
         | set(NotificationsBase.metadata.tables)
+        | set(ExecutorsBase.metadata.tables)
     )
     assert expected_tables.issubset(actual_tables), (
         f"Missing tables: {expected_tables - actual_tables}"
