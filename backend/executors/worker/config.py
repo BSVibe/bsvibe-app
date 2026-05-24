@@ -27,10 +27,11 @@ class WorkerSettings(BaseSettings):
     # The backend API base URL (e.g. https://api.bsvibe.dev).
     server_url: str = "http://localhost:8400"
 
-    # Worker identity. ``worker_token`` is minted at first-run registration and
-    # persisted back to ``.env``; ``install_token`` is required ONLY on the very
-    # first run (minted by an admin via POST /api/v1/workers/install-token).
-    worker_token: str = ""
+    # Worker identity. ``token`` (env: ``BSVIBE_WORKER_TOKEN``) is minted at
+    # first-run registration and persisted back to ``.env``; ``install_token``
+    # is required ONLY on the very first run (minted by an admin via
+    # POST /api/v1/workers/install-token).
+    token: str = ""
     install_token: str = ""
     name: str = socket.gethostname()
 

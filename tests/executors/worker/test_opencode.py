@@ -235,14 +235,37 @@ async def test_timeout_yields_explicit_timeout_message(monkeypatch: pytest.Monke
 
 
 async def test_no_system_no_config_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    # Without a system prompt the executor passes through the parent env
-    # unchanged (no OPENCODE_CONFIG_CONTENT injected for this run).
+    # Without a system prompt the executor injects no OPENCODE_CONFIG_CONTENT.
     proc = _FakeProcess(stdout_lines=[_text_line("x")])
     _, envs = _patch_subprocess(monkeypatch, proc)
 
     await _drain(OpenCodeExecutor().execute("p", {}))
 
     assert "OPENCODE_CONFIG_CONTENT" not in envs[0] or not os.environ.get("OPENCODE_CONFIG_CONTENT")
+
+
+async def test_subprocess_env_strips_session_markers_keeps_normal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The opencode env (which layers OPENCODE_CONFIG_CONTENT) must still drop
+    # the parent Claude-Code session markers while keeping normal env.
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "leak-me")
+    monkeypatch.setenv("CLAUDECODE", "1")
+    monkeypatch.setenv("PATH", "/usr/bin:/bin")
+    monkeypatch.setenv("HOME", "/home/worker")
+
+    proc = _FakeProcess(stdout_lines=[_text_line("x")])
+    _, envs = _patch_subprocess(monkeypatch, proc)
+
+    await _drain(OpenCodeExecutor().execute("p", {"system": "be brief"}))
+
+    env = envs[0]
+    assert "CLAUDE_CODE_SESSION_ID" not in env
+    assert "CLAUDECODE" not in env
+    assert env["PATH"] == "/usr/bin:/bin"
+    assert env["HOME"] == "/home/worker"
+    # The opencode-specific config is still layered on.
+    assert "OPENCODE_CONFIG_CONTENT" in env
 
 
 async def test_supported_task_types() -> None:

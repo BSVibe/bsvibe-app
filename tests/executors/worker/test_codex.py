@@ -217,3 +217,32 @@ async def test_timeout_yields_explicit_timeout_message(monkeypatch: pytest.Monke
 
 async def test_supported_task_types() -> None:
     assert CodexExecutor().supported_task_types() == ["codex"]
+
+
+# ── Sanitized subprocess env (no parent Claude-Code session leakage) ──────────
+
+
+async def test_subprocess_env_strips_session_markers_keeps_normal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "leak-me")
+    monkeypatch.setenv("CLAUDECODE", "1")
+    monkeypatch.setenv("PATH", "/usr/bin:/bin")
+    monkeypatch.setenv("HOME", "/home/worker")
+
+    envs: list[dict[str, str]] = []
+    proc = _FakeProcess(stdout_lines=[_agent_message_line("x")])
+
+    async def _fake_exec(*args: Any, **kwargs: Any) -> _FakeProcess:
+        envs.append(dict(kwargs.get("env") or {}))
+        return proc
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", _fake_exec)
+
+    await _drain(CodexExecutor().execute("p", {}))
+
+    env = envs[0]
+    assert "CLAUDE_CODE_SESSION_ID" not in env
+    assert "CLAUDECODE" not in env
+    assert env["PATH"] == "/usr/bin:/bin"
+    assert env["HOME"] == "/home/worker"

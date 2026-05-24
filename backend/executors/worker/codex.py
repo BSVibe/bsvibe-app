@@ -40,7 +40,7 @@ from typing import Any
 
 import structlog
 
-from backend.executors.worker.executors import ExecutionChunk
+from backend.executors.worker.executors import ExecutionChunk, sanitized_subprocess_env
 
 logger = structlog.get_logger(__name__)
 
@@ -89,6 +89,7 @@ class CodexExecutor:
                 stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
+                env=sanitized_subprocess_env(),
             )
             assert process.stdin is not None
             assert process.stdout is not None

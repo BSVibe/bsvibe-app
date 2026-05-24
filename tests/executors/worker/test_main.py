@@ -92,7 +92,7 @@ def _client(state: dict[str, Any]) -> httpx.AsyncClient:
 def _settings(**overrides: Any) -> WorkerSettings:
     base: dict[str, Any] = {
         "server_url": "http://test",
-        "worker_token": "WORKER-TOKEN",
+        "token": "WORKER-TOKEN",
         "install_token": "",
         "name": "test-worker",
         "redis_url": "",
@@ -336,7 +336,7 @@ async def test_poll_and_execute_registers_when_no_token(monkeypatch: Any) -> Non
     state: dict[str, Any] = {"poll_queue": []}
     captured: dict[str, Any] = {}
 
-    settings = _settings(worker_token="", install_token="INSTALL-1")
+    settings = _settings(token="", install_token="INSTALL-1")
     stop = asyncio.Event()
 
     # Run exactly one tick: capture the headers the loop built post-registration,
@@ -358,7 +358,7 @@ async def test_poll_and_execute_registers_when_no_token(monkeypatch: Any) -> Non
     assert ("POST", "/api/v1/workers/register") in state["calls"]
     assert captured["headers"]["X-Worker-Token"] == "WORKER-TOKEN"
     # The minted token was persisted back onto the settings object.
-    assert settings.worker_token == "WORKER-TOKEN"
+    assert settings.token == "WORKER-TOKEN"
 
 
 # ── .env persistence ──────────────────────────────────────────────────────────
@@ -384,6 +384,25 @@ def test_update_env_file_creates_when_absent(tmp_path: Any) -> None:
     env = tmp_path / ".env"
     worker_main._update_env_file(str(env), {"BSVIBE_WORKER_TOKEN": "X"})
     assert env.read_text(encoding="utf-8") == "BSVIBE_WORKER_TOKEN=X\n"
+
+
+def test_persist_writes_key_that_settings_reads(tmp_path: Any, monkeypatch: Any) -> None:
+    # Bug 2 regression: ``_persist_worker_token`` must write the SAME env key
+    # that the settings field reads. A round-trip (persist -> reload from .env)
+    # must populate ``settings.token`` so the worker does NOT re-register.
+    env = tmp_path / ".env"
+    monkeypatch.setattr(worker_main, "_ENV_PATH", str(env))
+
+    settings = _settings(token="", name="rt-worker", server_url="http://rt")
+    worker_main._persist_worker_token("MINTED-TOKEN", settings)
+
+    # Reload a fresh WorkerSettings purely from the persisted .env (no overrides,
+    # no leaking process env that could mask the bug).
+    for key in ("BSVIBE_WORKER_TOKEN", "BSVIBE_WORKER_WORKER_TOKEN"):
+        monkeypatch.delenv(key, raising=False)
+    reloaded = WorkerSettings(_env_file=str(env))
+
+    assert reloaded.token == "MINTED-TOKEN"
 
 
 # ── Full loop: error resilience + graceful stop ───────────────────────────────

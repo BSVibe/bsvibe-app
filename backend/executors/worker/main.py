@@ -267,7 +267,7 @@ async def poll_and_execute(
     A ``stop`` event lets a signal handler (or a test) end the loop gracefully;
     in-flight tasks are awaited before returning.
     """
-    token = settings.worker_token
+    token = settings.token
     if not token:
         logger.info("no_worker_token", hint="registering with backend")
         token = await register(
@@ -276,7 +276,7 @@ async def poll_and_execute(
             install_token=settings.install_token,
             capabilities=detect_capabilities(),
         )
-        settings.worker_token = token
+        settings.token = token
         _persist_worker_token(token, settings)
 
     executors: dict[str, ExecutorProtocol] = {}
