@@ -13,7 +13,6 @@ simulated by calling :func:`record_result` + publishing the done channel.
 from __future__ import annotations
 
 import asyncio
-import json
 import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -329,43 +328,104 @@ async def test_dispatch_task_xadds_and_marks_dispatched() -> None:
 
 async def test_record_result_marks_done() -> None:
     workspace_id = uuid.uuid4()
+    redis = await _make_redis()
     async with memory_session() as s:
         task = await dispatch.create_task(
             s, workspace_id=workspace_id, executor_type="claude_code", prompt="p"
         )
         await s.commit()
         updated = await dispatch.record_result(
-            s, task_id=task.id, success=True, output="all good", error_message=None
+            s, redis, task_id=task.id, success=True, output="all good", error_message=None
         )
         await s.commit()
         assert updated is not None
         assert updated.status == "done"
         assert updated.output == "all good"
         assert updated.error_message is None
+    await redis.aclose()
 
 
 async def test_record_result_marks_failed() -> None:
     workspace_id = uuid.uuid4()
+    redis = await _make_redis()
     async with memory_session() as s:
         task = await dispatch.create_task(
             s, workspace_id=workspace_id, executor_type="claude_code", prompt="p"
         )
         await s.commit()
         updated = await dispatch.record_result(
-            s, task_id=task.id, success=False, output="", error_message="boom"
+            s, redis, task_id=task.id, success=False, output="", error_message="boom"
         )
         await s.commit()
         assert updated is not None
         assert updated.status == "failed"
         assert updated.error_message == "boom"
+    await redis.aclose()
 
 
 async def test_record_result_unknown_task_is_none() -> None:
     async with memory_session() as s:
+        redis = await _make_redis()
         result = await dispatch.record_result(
-            s, task_id=uuid.uuid4(), success=True, output="", error_message=None
+            s, redis, task_id=uuid.uuid4(), success=True, output="", error_message=None
         )
         assert result is None
+        await redis.aclose()
+
+
+async def test_record_result_publishes_done_channel() -> None:
+    """``record_result`` publishes the done channel so a remote worker (no redis
+    of its own) still wakes an awaiter via the backend's redis client."""
+    workspace_id = uuid.uuid4()
+    redis = await _make_redis()
+    async with memory_session() as s:
+        task = await dispatch.create_task(
+            s, workspace_id=workspace_id, executor_type="claude_code", prompt="p"
+        )
+        await s.commit()
+        task_id = task.id
+
+        pubsub = redis.pubsub()
+        await pubsub.subscribe(dispatch.done_channel(task_id))
+        # Drain the subscribe confirmation so only the real publish remains.
+        await pubsub.get_message(timeout=0.2)
+
+        updated = await dispatch.record_result(
+            s, redis, task_id=task_id, success=True, output="ok", error_message=None
+        )
+        await s.commit()
+        assert updated is not None
+        assert updated.status == "done"
+
+        # The done channel carried a message identifying the completed task.
+        msg = await pubsub.get_message(ignore_subscribe_messages=True, timeout=1.0)
+        assert msg is not None
+        assert msg["type"] == "message"
+        assert str(task_id) in msg["data"]
+        await pubsub.unsubscribe(dispatch.done_channel(task_id))
+        await pubsub.aclose()
+    await redis.aclose()
+
+
+async def test_record_result_unknown_task_does_not_publish() -> None:
+    """An unknown task id is a no-op — no row, no publish."""
+    redis = await _make_redis()
+    task_id = uuid.uuid4()
+    pubsub = redis.pubsub()
+    await pubsub.subscribe(dispatch.done_channel(task_id))
+    await pubsub.get_message(timeout=0.2)
+
+    async with memory_session() as s:
+        result = await dispatch.record_result(
+            s, redis, task_id=task_id, success=True, output="", error_message=None
+        )
+        assert result is None
+
+    msg = await pubsub.get_message(ignore_subscribe_messages=True, timeout=0.3)
+    assert msg is None
+    await pubsub.unsubscribe(dispatch.done_channel(task_id))
+    await pubsub.aclose()
+    await redis.aclose()
 
 
 # ── await_completion ──────────────────────────────────────────────────────────
@@ -382,16 +442,14 @@ async def test_await_completion_returns_on_done_signal() -> None:
         task_id = task.id
 
         async def _simulate_worker() -> None:
-            # Give the awaiter time to subscribe, then write the result row +
-            # publish the done channel (the worker's /result + publish path).
+            # Give the awaiter time to subscribe, then write the result row.
+            # ``record_result`` itself publishes the done channel (the backend's
+            # /result path — a remote worker has no redis to publish from).
             await asyncio.sleep(0.05)
             await dispatch.record_result(
-                s, task_id=task_id, success=True, output="done!", error_message=None
+                s, redis, task_id=task_id, success=True, output="done!", error_message=None
             )
             await s.commit()
-            await redis.publish(
-                dispatch.done_channel(task_id), json.dumps({"task_id": str(task_id)})
-            )
 
         worker_task = asyncio.create_task(_simulate_worker())
         row = await dispatch.await_completion(redis, session=s, task_id=task_id, timeout_s=2.0)
@@ -399,6 +457,44 @@ async def test_await_completion_returns_on_done_signal() -> None:
         assert row is not None
         assert row.status == "done"
         assert row.output == "done!"
+    await redis.aclose()
+
+
+async def test_await_completion_db_poll_resolves_without_signal() -> None:
+    """Belt-and-braces: even when NO done signal is ever published, the periodic
+    DB poll resolves the awaiter soon after the row becomes terminal — well
+    before ``timeout_s``, not at the deadline."""
+    workspace_id = uuid.uuid4()
+    redis = await _make_redis()
+    async with memory_session() as s:
+        task = await dispatch.create_task(
+            s, workspace_id=workspace_id, executor_type="claude_code", prompt="p"
+        )
+        await s.commit()
+        task_id = task.id
+
+        async def _silent_worker() -> None:
+            # Mark the row terminal but DO NOT publish — simulates a remote
+            # worker whose backend somehow missed the publish entirely.
+            await asyncio.sleep(0.05)
+            task.status = "done"
+            task.output = "silent"
+            await s.commit()
+
+        worker_task = asyncio.create_task(_silent_worker())
+        loop = asyncio.get_event_loop()
+        started = loop.time()
+        timeout_s = 30.0
+        row = await dispatch.await_completion(
+            redis, session=s, task_id=task_id, timeout_s=timeout_s
+        )
+        elapsed = loop.time() - started
+        await worker_task
+        assert row is not None
+        assert row.status == "done"
+        assert row.output == "silent"
+        # Resolved via the poll safety net, NOT by burning the full timeout.
+        assert elapsed < timeout_s / 2
     await redis.aclose()
 
 
@@ -413,7 +509,7 @@ async def test_await_completion_db_fallback_when_already_done() -> None:
         )
         await s.commit()
         await dispatch.record_result(
-            s, task_id=task.id, success=True, output="pre-done", error_message=None
+            s, redis, task_id=task.id, success=True, output="pre-done", error_message=None
         )
         await s.commit()
         row = await dispatch.await_completion(redis, session=s, task_id=task.id, timeout_s=0.3)
