@@ -5212,6 +5212,18 @@ main.login {
   color: var(--ink-3);
 }
 
+/* --- phaseb-polish: run-detail trigger fidelity (Fix 1) --- */
+.run-trigger__direct {
+  font-size: 0.88rem;
+  color: var(--ink-3);
+}
+
+.run-trigger__safe-mode {
+  font-size: 0.82rem;
+  color: var(--ink-2);
+}
+/* --- end phaseb-polish --- */
+
 .run-decision {
   border-radius: var(--radius-sm);
   padding: 14px 16px;

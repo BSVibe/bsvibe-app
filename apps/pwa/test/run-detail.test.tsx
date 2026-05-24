@@ -89,6 +89,10 @@ describe("Run-detail surface (Triggered)", () => {
     // Trigger source surfaces ("github" / webhook).
     const trigger = screen.getByRole("region", { name: /trigger/i });
     expect(within(trigger).getByText(/github/i)).toBeInTheDocument();
+    // Externally-originated run → a calm Safe-Mode reassurance line.
+    expect(
+      within(trigger).getByText(/won’t push, merge, or reply|won't push, merge, or reply/i),
+    ).toBeInTheDocument();
 
     // Decision block — the blocking question + rationale.
     const decision = screen.getByRole("region", { name: /decision|needs you/i });
@@ -162,6 +166,15 @@ describe("Run-detail surface (Triggered)", () => {
     });
     expect(screen.queryByRole("link", { name: /view delivery report/i })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /let it continue/i })).not.toBeInTheDocument();
+
+    // The trigger section is never empty — a Direct run (no source/kind) shows an
+    // honest "Started directly by you." line, not a bare header.
+    const trigger = screen.getByRole("region", { name: /trigger/i });
+    expect(within(trigger).getByText(/started directly by you/i)).toBeInTheDocument();
+    // And NOT the external Safe-Mode reassurance line (no external origin here).
+    expect(
+      within(trigger).queryByText(/won’t push, merge, or reply|won't push, merge, or reply/i),
+    ).not.toBeInTheDocument();
   });
 
   it("shows a calm not-found state for an unknown id (404)", async () => {
