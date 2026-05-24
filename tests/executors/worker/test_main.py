@@ -11,6 +11,7 @@ sleeps gate the assertions.
 from __future__ import annotations
 
 import json
+import os
 import uuid
 from collections.abc import AsyncIterator
 from typing import Any
@@ -36,6 +37,26 @@ class _StubExecutor:
             yield ExecutionChunk(done=True, error="exploded")
         else:
             yield ExecutionChunk(done=True)
+
+
+class _WorkspaceCapturingExecutor:
+    """Records the ``workspace_dir`` it was handed (and whether it existed)."""
+
+    def __init__(self, *, fail: bool = False) -> None:
+        self._fail = fail
+        self.seen_workspace: str | None = None
+        self.workspace_existed: bool | None = None
+
+    def supported_task_types(self) -> list[str]:
+        return ["coding"]
+
+    async def execute(self, prompt: str, context: dict[str, Any]) -> AsyncIterator[ExecutionChunk]:
+        self.seen_workspace = context.get("workspace_dir")
+        self.workspace_existed = bool(self.seen_workspace and os.path.isdir(self.seen_workspace))
+        yield ExecutionChunk(delta=f"ran:{prompt}")
+        if self._fail:
+            raise RuntimeError("executor blew up mid-stream")
+        yield ExecutionChunk(done=True)
 
 
 def _mock_transport(state: dict[str, Any]) -> httpx.MockTransport:
@@ -143,6 +164,65 @@ async def test_handle_task_posts_result_with_collected_output() -> None:
     assert body["success"] is True
     assert body["output"] == "ran:hello"
     assert body["error_message"] is None
+
+
+async def test_handle_task_runs_in_local_temp_dir_not_foreign_path() -> None:
+    # The backend dispatches the run with ITS container path, which does not
+    # exist on this (remote) worker. The worker must create its own local
+    # working dir and run the executor there — never chdir into the foreign path.
+    foreign = "/app/var/runs/d686dc1e-does-not-exist-here"
+    assert not os.path.isdir(foreign)
+    executor = _WorkspaceCapturingExecutor()
+    state: dict[str, Any] = {}
+    async with _client(state) as client:
+        await worker_main.handle_task(
+            _task(workspace_dir=foreign),
+            executors={"claude_code": executor},
+            client=client,
+            headers={"X-Worker-Token": "WORKER-TOKEN"},
+            redis=None,
+        )
+    # The executor ran in a real, existing local directory — not the foreign one.
+    assert executor.seen_workspace is not None
+    assert executor.seen_workspace != foreign
+    assert executor.workspace_existed is True
+    # Result still posted with the collected output.
+    assert state["results"][0]["success"] is True
+
+
+async def test_handle_task_cleans_up_local_temp_dir_after_success() -> None:
+    executor = _WorkspaceCapturingExecutor()
+    state: dict[str, Any] = {}
+    async with _client(state) as client:
+        await worker_main.handle_task(
+            _task(workspace_dir="/app/var/runs/foreign"),
+            executors={"claude_code": executor},
+            client=client,
+            headers={"X-Worker-Token": "WORKER-TOKEN"},
+            redis=None,
+        )
+    # The temp dir the executor saw is gone (cleaned in finally).
+    assert executor.seen_workspace is not None
+    assert not os.path.exists(executor.seen_workspace)
+
+
+async def test_handle_task_cleans_up_local_temp_dir_on_executor_error() -> None:
+    # Even when the executor raises mid-stream, the worker's local temp dir must
+    # be removed (cleanup lives in a finally, not only the happy path).
+    executor = _WorkspaceCapturingExecutor(fail=True)
+    state: dict[str, Any] = {}
+    async with _client(state) as client:
+        await worker_main.handle_task(
+            _task(workspace_dir="/app/var/runs/foreign"),
+            executors={"claude_code": executor},
+            client=client,
+            headers={"X-Worker-Token": "WORKER-TOKEN"},
+            redis=None,
+        )
+    assert executor.seen_workspace is not None
+    assert not os.path.exists(executor.seen_workspace)
+    # The error was reported as a failed result, not a crash.
+    assert state["results"][0]["success"] is False
 
 
 async def test_handle_task_reports_failure_on_error_chunk() -> None:
