@@ -105,7 +105,7 @@ async def build_concept_graph(storage: StorageBackend) -> nx.MultiDiGraph:
     #    observation, weighted by the count of co-occurring observations.
     pair_counts: dict[tuple[str, str], int] = {}
     for path in await store.list_garden_paths():
-        present = await _concept_ids_in_observation(path, store, resolver)
+        present = await concept_ids_in_observation(path, store, resolver)
         ordered = sorted(present)
         for i, left in enumerate(ordered):
             for right in ordered[i + 1 :]:
@@ -138,7 +138,7 @@ async def _list_tombstone_ids(store: NoteStore, storage: StorageBackend) -> set[
     return ids
 
 
-async def _concept_ids_in_observation(
+async def concept_ids_in_observation(
     path: str,
     store: NoteStore,
     resolver: TagResolver,
@@ -148,6 +148,11 @@ async def _concept_ids_in_observation(
     Applies the same candidate-tag filter the promoter uses (drop structural
     tags, normalize, drop filler), then resolves each surviving tag; only tags
     that resolve to an active concept contribute a node id.
+
+    Exported so the concept *inspector*
+    (:func:`backend.api.v1.inside.get_concept_detail`) can derive a concept's
+    source observations with the exact tag→concept resolution the graph builder
+    uses, rather than re-deriving (and drifting from) that filter.
     """
     try:
         tags = await store.read_garden_tags(path)
@@ -169,4 +174,4 @@ async def _concept_ids_in_observation(
     return present
 
 
-__all__ = ["build_concept_graph"]
+__all__ = ["build_concept_graph", "concept_ids_in_observation"]

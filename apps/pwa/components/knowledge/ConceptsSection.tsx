@@ -6,24 +6,40 @@ import { useTranslations } from "next-intl";
  * canonicalization promoter graduated. Each row shows the concept name, a short
  * summary (empty for a freshly-promoted anchor that carries only its title),
  * and a calm connectedness signal — how many variant spellings resolve onto
- * this anchor ("N mentions"). Read-only.
+ * this anchor ("N mentions").
  *
- * On a failed read this renders a calm inline note instead of the list, so the
- * sibling section still shows.
+ * Each row is a button that opens the read-only inspector via `onSelect`. The
+ * `filter` (from the surface's search box) narrows the list by concept name +
+ * alias; when it filters everything out, a calm "no matches" note shows instead
+ * of an empty list. On a failed read this renders a calm inline note instead of
+ * the list, so the sibling section still shows.
  */
+function matchesFilter(concept: Concept, needle: string): boolean {
+  if (!needle) return true;
+  const haystack = [concept.name, ...concept.aliases].join(" ").toLowerCase();
+  return haystack.includes(needle.toLowerCase());
+}
+
 export default function ConceptsSection({
   items,
   failed,
+  filter = "",
+  onSelect,
 }: {
   items: Concept[];
   failed: boolean;
+  filter?: string;
+  onSelect?: (id: string) => void;
 }) {
   const t = useTranslations("knowledge");
+  const visible = items.filter((c) => matchesFilter(c, filter));
   return (
     <section className="inside-block" aria-label={t("whatIKnow")}>
       <header className="inside-block__head">
         <h2 className="section-label">{t("whatIKnow")}</h2>
-        {!failed && items.length > 0 && <span className="inside-block__count">{items.length}</span>}
+        {!failed && visible.length > 0 && (
+          <span className="inside-block__count">{visible.length}</span>
+        )}
       </header>
 
       {failed ? (
@@ -32,19 +48,27 @@ export default function ConceptsSection({
         </p>
       ) : items.length === 0 ? (
         <p className="inside-block__note">{t("conceptsEmpty")}</p>
+      ) : visible.length === 0 ? (
+        <p className="inside-block__note">{t("conceptsNoMatch")}</p>
       ) : (
         <ul className="inside-list">
-          {items.map((concept) => (
-            <li key={concept.id} className="inside-row">
-              <div className="inside-row__head">
-                <span className="inside-row__name">{concept.name}</span>
-                {concept.alias_count > 0 && (
-                  <span className="inside-row__mentions">
-                    {t("mentions", { count: concept.alias_count })}
-                  </span>
-                )}
-              </div>
-              {concept.summary && <p className="inside-row__summary">{concept.summary}</p>}
+          {visible.map((concept) => (
+            <li key={concept.id} className="inside-row inside-row--clickable">
+              <button
+                type="button"
+                className="inside-row__button"
+                onClick={() => onSelect?.(concept.id)}
+              >
+                <span className="inside-row__head">
+                  <span className="inside-row__name">{concept.name}</span>
+                  {concept.alias_count > 0 && (
+                    <span className="inside-row__mentions">
+                      {t("mentions", { count: concept.alias_count })}
+                    </span>
+                  )}
+                </span>
+                {concept.summary && <span className="inside-row__summary">{concept.summary}</span>}
+              </button>
             </li>
           ))}
         </ul>

@@ -27,7 +27,15 @@ type GraphState =
   | { status: "error" }
   | { status: "ready"; graph: KnowledgeGraph };
 
-export default function KnowledgeGraphView() {
+export default function KnowledgeGraphView({
+  filter = "",
+  onNodeClick,
+}: {
+  /** Search needle propagated to the canvas (matching nodes stay vivid). */
+  filter?: string;
+  /** Fired with a node id when a graph node is tapped (opens the inspector). */
+  onNodeClick?: (id: string) => void;
+} = {}) {
   const t = useTranslations("knowledge");
   const [state, setState] = useState<GraphState>({ status: "loading" });
 
@@ -66,7 +74,7 @@ export default function KnowledgeGraphView() {
           </div>
         ) : (
           <div className="knowledge-graph__canvas" data-testid="knowledge-graph-canvas">
-            <ForceGraphCanvas graph={state.graph} />
+            <ForceGraphCanvas graph={state.graph} filter={filter} onNodeClick={onNodeClick} />
           </div>
         ))}
     </section>

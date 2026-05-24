@@ -4,6 +4,7 @@ import { listConcepts, listObservations } from "@/lib/api/knowledge";
 import type { Concept, Observation } from "@/lib/api/types";
 import { useTranslations } from "next-intl";
 import { useEffect, useState } from "react";
+import ConceptInspector from "./ConceptInspector";
 import ConceptsSection from "./ConceptsSection";
 import KnowledgeGraphView from "./KnowledgeGraphView";
 import ObservationsSection from "./ObservationsSection";
@@ -44,6 +45,10 @@ async function loadSection<T>(fetcher: () => Promise<T[]>): Promise<SectionResul
 export default function Knowledge() {
   const [concepts, setConcepts] = useState<SectionResult<Concept> | null>(null);
   const [observations, setObservations] = useState<SectionResult<Observation> | null>(null);
+  // Search needle (filters the list + dims non-matching graph nodes) and the
+  // currently-inspected concept id (opens the read-only inspector drawer).
+  const [filter, setFilter] = useState("");
+  const [selectedId, setSelectedId] = useState<string | null>(null);
   const t = useTranslations("knowledge");
 
   useEffect(() => {
@@ -79,21 +84,57 @@ export default function Knowledge() {
       <h1 className="inside__heading">{t("heading")}</h1>
       <p className="inside__lede">{t("lede")}</p>
 
-      {/* Primary view — the force-directed knowledge graph. Self-contained
-          (own loading/empty/error states), so it never blanks the lists. */}
-      <KnowledgeGraphView />
-
-      {nothingLearned ? (
-        <section className="inside-empty" aria-label={t("heading")}>
-          <p className="inside-empty__line">{t("emptyLine")}</p>
-          <p className="inside-empty__sub">{t("emptySub")}</p>
-        </section>
-      ) : (
-        <>
-          <ConceptsSection items={concepts.data} failed={concepts.failed} />
-          <ObservationsSection items={observations.data} failed={observations.failed} />
-        </>
+      {/* Filter / search — narrows the "What I know" list and dims non-matching
+          graph nodes. Hidden only on a genuinely empty workspace. */}
+      {!nothingLearned && (
+        <div className="inside-search">
+          <input
+            type="search"
+            className="inside-search__input"
+            placeholder={t("searchPlaceholder")}
+            aria-label={t("searchLabel")}
+            value={filter}
+            onChange={(e) => setFilter(e.target.value)}
+          />
+        </div>
       )}
+
+      <div className="inside-layout">
+        <div className="inside-layout__main">
+          {/* Primary view — the force-directed knowledge graph. Self-contained
+              (own loading/empty/error states), so it never blanks the lists.
+              A node tap opens the inspector; the search dims non-matches. */}
+          <KnowledgeGraphView filter={filter} onNodeClick={setSelectedId} />
+
+          {nothingLearned ? (
+            <section className="inside-empty" aria-label={t("heading")}>
+              <p className="inside-empty__line">{t("emptyLine")}</p>
+              <p className="inside-empty__sub">{t("emptySub")}</p>
+            </section>
+          ) : (
+            <>
+              <ConceptsSection
+                items={concepts.data}
+                failed={concepts.failed}
+                filter={filter}
+                onSelect={setSelectedId}
+              />
+              <ObservationsSection items={observations.data} failed={observations.failed} />
+            </>
+          )}
+        </div>
+
+        {selectedId !== null && (
+          <div className="inside-layout__aside">
+            <ConceptInspector
+              key={selectedId}
+              conceptId={selectedId}
+              onClose={() => setSelectedId(null)}
+              onPivot={setSelectedId}
+            />
+          </div>
+        )}
+      </div>
     </div>
   );
 }
