@@ -221,7 +221,8 @@
       "triggered": "방금 시작됨",
       "shipped": "배포됨",
       "idle": "대기"
-    }
+    },
+    "viewReport": "리포트 보기"
   },
   "settings": {
     "heading": "설정",
@@ -340,11 +341,26 @@
         "email-sender": "아웃바운드 전송"
       },
       "aspirational": {
-        "figma": { "name": "Figma", "blurb": "디자인 파일, 읽기와 댓글" },
-        "linear": { "name": "Linear", "blurb": "이슈와 프로젝트" },
-        "googleDrive": { "name": "Google Drive", "blurb": "문서, 시트, 슬라이드" },
-        "powerpoint": { "name": "PowerPoint", "blurb": "Graph로 .pptx 생성" },
-        "postgres": { "name": "Postgres", "blurb": "SQL 데이터 소스" }
+        "figma": {
+          "name": "Figma",
+          "blurb": "디자인 파일, 읽기와 댓글"
+        },
+        "linear": {
+          "name": "Linear",
+          "blurb": "이슈와 프로젝트"
+        },
+        "googleDrive": {
+          "name": "Google Drive",
+          "blurb": "문서, 시트, 슬라이드"
+        },
+        "powerpoint": {
+          "name": "PowerPoint",
+          "blurb": "Graph로 .pptx 생성"
+        },
+        "postgres": {
+          "name": "Postgres",
+          "blurb": "SQL 데이터 소스"
+        }
       },
       "row": {
         "revoked": "해지됨",
@@ -396,10 +412,22 @@
           "short": "확인이 필요해요",
           "label": "확인이 필요해요 — 결정이 대기 중입니다"
         },
-        "triggered": { "short": "시작됨", "label": "시작됨 — 외부에서 작업이 시작되었습니다" },
-        "shipped": { "short": "배포됨", "label": "배포됨 — 결과물이 검증되었습니다" },
-        "failed": { "short": "실패", "label": "실패 — 검증에 실패하여 BSVibe가 중단했습니다" },
-        "daily_brief": { "short": "데일리 브리프", "label": "데일리 브리프 — 매일 아침 요약" }
+        "triggered": {
+          "short": "시작됨",
+          "label": "시작됨 — 외부에서 작업이 시작되었습니다"
+        },
+        "shipped": {
+          "short": "배포됨",
+          "label": "배포됨 — 결과물이 검증되었습니다"
+        },
+        "failed": {
+          "short": "실패",
+          "label": "실패 — 검증에 실패하여 BSVibe가 중단했습니다"
+        },
+        "daily_brief": {
+          "short": "데일리 브리프",
+          "label": "데일리 브리프 — 매일 아침 요약"
+        }
       },
       "channels": {
         "in_app": "인앱",
@@ -461,5 +489,30 @@
       "workspaceId": "워크스페이스 ID",
       "workspaceIdFallback": "아직 사용할 수 없음"
     }
+  },
+  "report": {
+    "back": "‹ 브리프",
+    "region": "전달 리포트",
+    "loadingNote": "리포트를 살펴보는 중…",
+    "notFoundLine": "해당 리포트를 찾을 수 없어요.",
+    "backToBrief": "브리프로 돌아가기",
+    "errorLine": "지금은 이 리포트를 불러올 수 없어요.",
+    "errorSub": "잠시 후 다시 시도해 주세요.",
+    "untitled": "전달된 산출물",
+    "verdict": "검증 결과",
+    "verdictLabel": {
+      "passed": "검증되었습니다",
+      "failed": "검증에 실패했습니다",
+      "inconclusive": "검증이 불확실합니다",
+      "none": "아직 검증되지 않음"
+    },
+    "howChecked": "BSVibe가 어떻게 확인했나요",
+    "noVerification": "아직 이 산출물에 대한 검증 기록이 없습니다.",
+    "noChecksDeclared": "이 검증에 선언된 확인 항목이 없습니다.",
+    "artifacts": "산출물",
+    "noArtifacts": "이 산출물에 기록된 항목이 없습니다.",
+    "openArtifact": "산출물 열기",
+    "diff": "변경 내용",
+    "viewDiff": "변경 내용 보기"
   }
 }
