@@ -13,8 +13,9 @@ native CLI; :func:`detect_capabilities` PATH-probes all three and
 
 from __future__ import annotations
 
+import os
 import shutil
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Mapping
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal, Protocol, runtime_checkable
 
@@ -95,6 +96,45 @@ async def collect(stream: AsyncIterator[ExecutionChunk]) -> ExecutionResult:
     )
 
 
+# ── Subprocess env sanitization ─────────────────────────────────────────────
+
+# Parent Claude-Code *session/agent* markers. When the worker daemon is launched
+# from inside a Claude Code session (or any env that exported these), a spawned
+# ``claude`` CLI attaches to / is confused by that session and fails (observed:
+# ``API Error: 400 role 'system' is not supported on this model``). Each CLI must
+# run as a clean standalone process, so we strip these before spawning.
+#
+# Conservative policy: drop any key with the ``CLAUDE_CODE_`` prefix (the session
+# markers — CLAUDE_CODE_SESSION_ID / CLAUDE_CODE_ENTRYPOINT / …) plus the named
+# extras below. We do NOT touch PATH, HOME, ANTHROPIC_* auth, or other CLAUDE_*
+# config (e.g. CLAUDE_CONFIG_DIR) — only the session/agent leakage.
+_SESSION_ENV_PREFIX = "CLAUDE_CODE_"
+_SESSION_ENV_KEYS: frozenset[str] = frozenset(
+    {
+        "CLAUDECODE",
+        "CLAUDE_AGENT_SDK_VERSION",
+        "CLAUDE_EFFORT",
+        "AI_AGENT",
+    }
+)
+
+
+def sanitized_subprocess_env(base: Mapping[str, str] | None = None) -> dict[str, str]:
+    """Return a copy of ``base`` (default ``os.environ``) with session leakage removed.
+
+    Strips every key starting with ``CLAUDE_CODE_`` plus the named extras
+    (``CLAUDECODE``, ``CLAUDE_AGENT_SDK_VERSION``, ``CLAUDE_EFFORT``, ``AI_AGENT``)
+    so a CLI subprocess runs as a clean standalone process. All other env —
+    PATH, HOME, ANTHROPIC_* auth, other CLAUDE_* config — is preserved.
+    """
+    source: Mapping[str, str] = base if base is not None else os.environ
+    return {
+        key: value
+        for key, value in source.items()
+        if not key.startswith(_SESSION_ENV_PREFIX) and key not in _SESSION_ENV_KEYS
+    }
+
+
 # ── Capability detection ──────────────────────────────────────────────────────
 
 # Probe order matters: claude_code leads (the worker's primary executor),
@@ -156,5 +196,6 @@ __all__ = [
     "ExecutorProtocol",
     "collect",
     "detect_capabilities",
+    "sanitized_subprocess_env",
     "select_executor",
 ]

@@ -272,3 +272,44 @@ async def test_rate_limit_exhausted_surfaces_terminal_error(
 
 async def test_supported_task_types() -> None:
     assert "coding" in ClaudeCodeExecutor().supported_task_types()
+
+
+# ── Sanitized subprocess env (no parent Claude-Code session leakage) ──────────
+
+
+async def test_subprocess_env_strips_session_markers_keeps_normal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # When the worker is launched from inside a Claude Code session, the parent
+    # env carries CLAUDE_CODE_* / CLAUDECODE markers that confuse a freshly
+    # spawned ``claude``. The executor must pass a sanitized ``env=`` that drops
+    # those markers but keeps normal env (PATH/HOME/ANTHROPIC_*).
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "leak-me")
+    monkeypatch.setenv("CLAUDECODE", "1")
+    monkeypatch.setenv("CLAUDE_AGENT_SDK_VERSION", "0.1.0")
+    monkeypatch.setenv("CLAUDE_EFFORT", "high")
+    monkeypatch.setenv("AI_AGENT", "claude-code")
+    monkeypatch.setenv("PATH", "/usr/bin:/bin")
+    monkeypatch.setenv("HOME", "/home/worker")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-keep")
+
+    envs: list[dict[str, str]] = []
+    proc = _FakeProcess(stdout_lines=[_assistant_line("x")])
+
+    async def _fake_exec(*args: Any, **kwargs: Any) -> _FakeProcess:
+        envs.append(dict(kwargs.get("env") or {}))
+        return proc
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", _fake_exec)
+
+    await _drain(ClaudeCodeExecutor().execute("p", {}))
+
+    env = envs[0]
+    assert "CLAUDE_CODE_SESSION_ID" not in env
+    assert "CLAUDECODE" not in env
+    assert "CLAUDE_AGENT_SDK_VERSION" not in env
+    assert "CLAUDE_EFFORT" not in env
+    assert "AI_AGENT" not in env
+    assert env["PATH"] == "/usr/bin:/bin"
+    assert env["HOME"] == "/home/worker"
+    assert env["ANTHROPIC_API_KEY"] == "sk-keep"

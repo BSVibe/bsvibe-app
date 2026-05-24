@@ -37,7 +37,7 @@ from typing import Any
 
 import structlog
 
-from backend.executors.worker.executors import ExecutionChunk
+from backend.executors.worker.executors import ExecutionChunk, sanitized_subprocess_env
 
 logger = structlog.get_logger(__name__)
 
@@ -67,7 +67,9 @@ class OpenCodeExecutor:
             sys_path = _write_system_file(system)
             config["instructions"] = [sys_path]
 
-        env = dict(os.environ)
+        # Start from a sanitized env (no parent Claude-Code session leakage),
+        # then layer opencode's per-task inline config on top.
+        env = sanitized_subprocess_env()
         if config:
             env["OPENCODE_CONFIG_CONTENT"] = json.dumps(config)
 
