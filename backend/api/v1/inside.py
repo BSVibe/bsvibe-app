@@ -35,6 +35,7 @@ from pydantic import BaseModel, ConfigDict
 
 from backend.api.deps import get_workspace_id
 from backend.api.v1.decisions import _vault_root
+from backend.knowledge.canonicalization.concept_graph import build_concept_graph
 from backend.knowledge.canonicalization.index import InMemoryCanonicalizationIndex
 from backend.knowledge.graph.markdown_utils import (
     body_after_frontmatter,
@@ -42,7 +43,6 @@ from backend.knowledge.graph.markdown_utils import (
     extract_title,
 )
 from backend.knowledge.graph.storage import FileSystemStorage, StorageBackend
-from backend.knowledge.graph.vault_backend import VaultBackend
 
 router = APIRouter()
 
@@ -100,20 +100,23 @@ async def build_inside_graph(
 ) -> nx.MultiDiGraph:
     """The caller's per-workspace knowledge graph as a NetworkX snapshot.
 
-    Reads from a :class:`~backend.knowledge.graph.vault_backend.VaultBackend`
-    rooted at the SAME per-workspace vault storage the concept/observation lists
-    read (``<knowledge_vault_root>/<region>/<workspace_id>/``). The VaultBackend
-    loads the ``.bsage/graph_cache.json`` snapshot the GraphSubscriber persists
-    from vault writes (FS-as-SoT) — so this is a pure, read-only view of exactly
-    the graph the trust ratchet built for THIS workspace. A vault outside it is
-    not addressable; a fresh workspace simply has no cache and yields an empty
-    graph (handled gracefully upstream).
+    Built **deterministically** from the settled canonicalization vault rooted
+    at the SAME per-workspace storage the concept/observation lists read
+    (``<knowledge_vault_root>/<region>/<workspace_id>/``) — see
+    :func:`backend.knowledge.canonicalization.concept_graph.build_concept_graph`.
+    Active concepts become nodes; concepts that co-occur in the same garden
+    observation become weighted ``co-occurs`` edges, and alias/merged links
+    between concept nodes become ``alias-of`` edges. No LLM and no network are
+    involved (the previous ``VaultBackend`` ``.bsage/graph_cache.json`` path
+    depended on a GraphSubscriber/extractor that is NOT wired in this
+    deployment, so the graph was always empty even when concepts existed).
+
+    Pure + read-only: a vault outside this workspace is not addressable, and a
+    fresh workspace yields an empty graph (handled gracefully upstream).
 
     Overridable in tests via ``app.dependency_overrides``.
     """
-    backend = VaultBackend(storage)
-    await backend.initialize()
-    return backend.to_networkx()
+    return await build_concept_graph(storage)
 
 
 class ConceptResponse(BaseModel):
@@ -296,8 +299,9 @@ async def get_graph(
     """The workspace knowledge graph as nodes + edges for a force-directed view.
 
     Entities → nodes (id + display name + entity_type + degree), relationships →
-    edges (source/target/type/weight), sourced from the per-workspace
-    ``VaultBackend`` snapshot (FS-as-SoT). Strictly read-only.
+    edges (source/target/type/weight), built deterministically from the
+    per-workspace canonicalization vault (FS-as-SoT) by
+    :func:`build_inside_graph`. Strictly read-only.
 
     When the graph is large it is capped to the ``_MAX_GRAPH_NODES`` most-
     connected nodes (top-N by degree — the hubs the founder cares about);
