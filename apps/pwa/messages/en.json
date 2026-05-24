@@ -221,7 +221,8 @@
       "triggered": "just triggered",
       "shipped": "shipped",
       "idle": "idle"
-    }
+    },
+    "viewReport": "View report"
   },
   "settings": {
     "heading": "Settings",
@@ -340,11 +341,26 @@
         "email-sender": "outbound delivery"
       },
       "aspirational": {
-        "figma": { "name": "Figma", "blurb": "design files, reads and comments" },
-        "linear": { "name": "Linear", "blurb": "issues and projects" },
-        "googleDrive": { "name": "Google Drive", "blurb": "docs, sheets, slides" },
-        "powerpoint": { "name": "PowerPoint", "blurb": "create .pptx via Graph" },
-        "postgres": { "name": "Postgres", "blurb": "SQL data sources" }
+        "figma": {
+          "name": "Figma",
+          "blurb": "design files, reads and comments"
+        },
+        "linear": {
+          "name": "Linear",
+          "blurb": "issues and projects"
+        },
+        "googleDrive": {
+          "name": "Google Drive",
+          "blurb": "docs, sheets, slides"
+        },
+        "powerpoint": {
+          "name": "PowerPoint",
+          "blurb": "create .pptx via Graph"
+        },
+        "postgres": {
+          "name": "Postgres",
+          "blurb": "SQL data sources"
+        }
       },
       "row": {
         "revoked": "Revoked",
@@ -392,11 +408,26 @@
       "matrixCaption": "Channels follow your Connectors. In-app always works.",
       "cellLabel": "toggle {channel} for {event}",
       "events": {
-        "needs_you": { "short": "Needs you", "label": "Needs you — a decision is waiting" },
-        "triggered": { "short": "Triggered", "label": "Triggered — work woke up from outside" },
-        "shipped": { "short": "Shipped", "label": "Shipped — a deliverable was verified" },
-        "failed": { "short": "Failed", "label": "Failed — verification failed and BSVibe gave up" },
-        "daily_brief": { "short": "Daily Brief", "label": "Daily Brief — summary every morning" }
+        "needs_you": {
+          "short": "Needs you",
+          "label": "Needs you — a decision is waiting"
+        },
+        "triggered": {
+          "short": "Triggered",
+          "label": "Triggered — work woke up from outside"
+        },
+        "shipped": {
+          "short": "Shipped",
+          "label": "Shipped — a deliverable was verified"
+        },
+        "failed": {
+          "short": "Failed",
+          "label": "Failed — verification failed and BSVibe gave up"
+        },
+        "daily_brief": {
+          "short": "Daily Brief",
+          "label": "Daily Brief — summary every morning"
+        }
       },
       "channels": {
         "in_app": "In-app",
@@ -458,5 +489,30 @@
       "workspaceId": "Workspace ID",
       "workspaceIdFallback": "Not available yet"
     }
+  },
+  "report": {
+    "back": "‹ Brief",
+    "region": "Delivery report",
+    "loadingNote": "Looking at this report…",
+    "notFoundLine": "We can’t find that report.",
+    "backToBrief": "Back to the Brief",
+    "errorLine": "Couldn’t load this report just now.",
+    "errorSub": "Try again in a moment.",
+    "untitled": "Shipped deliverable",
+    "verdict": "Verdict",
+    "verdictLabel": {
+      "passed": "This is verified",
+      "failed": "Verification failed",
+      "inconclusive": "Verification inconclusive",
+      "none": "Not yet verified"
+    },
+    "howChecked": "How BSVibe checked this",
+    "noVerification": "No verification recorded for this deliverable yet.",
+    "noChecksDeclared": "No checks were declared for this verification.",
+    "artifacts": "Artifacts",
+    "noArtifacts": "No artifacts recorded for this deliverable.",
+    "openArtifact": "Open artifact",
+    "diff": "Diff",
+    "viewDiff": "View the diff"
   }
 }

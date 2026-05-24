@@ -29,6 +29,8 @@ from backend.execution.db import (
     ExecutionBase,
     ExecutionRun,
     RunStatus,
+    VerificationOutcome,
+    VerificationResult,
 )
 
 from .._support import db_engine, fake_current_user
@@ -261,6 +263,173 @@ async def test_list_empty(configured_client) -> None:
     r = await configured_client.get("/api/v1/deliverables")
     assert r.status_code == 200
     assert r.json() == []
+
+
+async def test_report_returns_deliverable_with_verification(
+    configured_client, db, workspace_id
+) -> None:
+    """The report bundles the deliverable + the VerificationResult rows for its
+    run — each carrying outcome / contract / result, the "how BSVibe checked
+    this" proof."""
+    run_id = uuid.uuid4()
+    deliverable_id = uuid.uuid4()
+    contract = {
+        "checks": [
+            {"kind": "command", "command": "pytest -q", "rationale": "tests pass"},
+            {"kind": "judge", "criteria": ["reads cleanly"], "rationale": "style"},
+        ]
+    }
+    result = {"checks": [{"passed": True, "output": "19 passed"}]}
+    async with db() as s:
+        await _seed_run(s, run_id=run_id, ws=workspace_id)
+        s.add(
+            Deliverable(
+                id=deliverable_id,
+                run_id=run_id,
+                workspace_id=workspace_id,
+                deliverable_type=DeliverableType.PR,
+                artifact_uri="https://github.com/acme/repo/pull/15",
+                diff_url="https://github.com/acme/repo/commit/abc",
+                payload={"summary": "Add getRelatedPosts", "artifact_refs": ["src/posts.ts"]},
+                created_at=datetime.now(tz=UTC),
+            )
+        )
+        s.add(
+            VerificationResult(
+                id=uuid.uuid4(),
+                run_id=run_id,
+                work_step_id=None,
+                workspace_id=workspace_id,
+                outcome=VerificationOutcome.PASSED,
+                contract=contract,
+                result=result,
+                created_at=datetime.now(tz=UTC),
+            )
+        )
+        await s.commit()
+
+    r = await configured_client.get(f"/api/v1/deliverables/{deliverable_id}/report")
+    assert r.status_code == 200, r.text
+    body = r.json()
+
+    d = body["deliverable"]
+    assert d["id"] == str(deliverable_id)
+    assert d["summary"] == "Add getRelatedPosts"
+    assert d["artifact_refs"] == ["src/posts.ts"]
+    assert d["artifact_uri"] == "https://github.com/acme/repo/pull/15"
+    assert d["diff_url"] == "https://github.com/acme/repo/commit/abc"
+    assert d["deliverable_type"] == "pr"
+
+    assert len(body["verifications"]) == 1
+    v = body["verifications"][0]
+    assert v["outcome"] == "passed"
+    assert v["contract"] == contract
+    assert v["result"] == result
+
+
+async def test_report_empty_verification_does_not_error(
+    configured_client, db, workspace_id
+) -> None:
+    """A run with no VerificationResult yields a calm empty list, not a 500."""
+    run_id = uuid.uuid4()
+    deliverable_id = uuid.uuid4()
+    async with db() as s:
+        await _seed_run(s, run_id=run_id, ws=workspace_id)
+        s.add(
+            Deliverable(
+                id=deliverable_id,
+                run_id=run_id,
+                workspace_id=workspace_id,
+                deliverable_type=DeliverableType.DIRECT_OUTPUT,
+                payload={"summary": "direct"},
+                created_at=datetime.now(tz=UTC),
+            )
+        )
+        await s.commit()
+
+    r = await configured_client.get(f"/api/v1/deliverables/{deliverable_id}/report")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["deliverable"]["id"] == str(deliverable_id)
+    assert body["verifications"] == []
+
+
+async def test_report_cross_workspace_404(configured_client, db, workspace_id) -> None:
+    """A deliverable in another workspace's report is 404, never a leak."""
+    other_run_id = uuid.uuid4()
+    other_ws = uuid.uuid4()
+    theirs = uuid.uuid4()
+    async with db() as s:
+        await _seed_run(s, run_id=other_run_id, ws=other_ws)
+        s.add(
+            Deliverable(
+                id=theirs,
+                run_id=other_run_id,
+                workspace_id=other_ws,
+                deliverable_type=DeliverableType.PR,
+                payload={},
+                created_at=datetime.now(tz=UTC),
+            )
+        )
+        await s.commit()
+
+    r = await configured_client.get(f"/api/v1/deliverables/{theirs}/report")
+    assert r.status_code == 404
+
+    r2 = await configured_client.get(f"/api/v1/deliverables/{uuid.uuid4()}/report")
+    assert r2.status_code == 404
+
+
+async def test_report_only_includes_own_run_verifications(
+    configured_client, db, workspace_id
+) -> None:
+    """Verification rows are scoped to the deliverable's run, not all of them."""
+    run_id = uuid.uuid4()
+    other_run_id = uuid.uuid4()
+    deliverable_id = uuid.uuid4()
+    async with db() as s:
+        await _seed_run(s, run_id=run_id, ws=workspace_id)
+        await _seed_run(s, run_id=other_run_id, ws=workspace_id)
+        s.add(
+            Deliverable(
+                id=deliverable_id,
+                run_id=run_id,
+                workspace_id=workspace_id,
+                deliverable_type=DeliverableType.CODE,
+                payload={},
+                created_at=datetime.now(tz=UTC),
+            )
+        )
+        s.add(
+            VerificationResult(
+                id=uuid.uuid4(),
+                run_id=run_id,
+                workspace_id=workspace_id,
+                outcome=VerificationOutcome.PASSED,
+                contract={},
+                result={},
+                created_at=datetime.now(tz=UTC),
+            )
+        )
+        # A verification for an unrelated run — MUST NOT appear.
+        s.add(
+            VerificationResult(
+                id=uuid.uuid4(),
+                run_id=other_run_id,
+                workspace_id=workspace_id,
+                outcome=VerificationOutcome.FAILED,
+                contract={},
+                result={},
+                created_at=datetime.now(tz=UTC),
+            )
+        )
+        await s.commit()
+
+    r = await configured_client.get(f"/api/v1/deliverables/{deliverable_id}/report")
+    assert r.status_code == 200, r.text
+    verifications = r.json()["verifications"]
+    assert len(verifications) == 1
+    assert verifications[0]["outcome"] == "passed"
 
 
 async def test_limit_capped(configured_client, db, workspace_id) -> None:

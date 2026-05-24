@@ -85,7 +85,33 @@ export interface Deliverable {
   summary: string | null;
   artifact_refs: string[];
   artifact_uri: string | null;
+  /** Commit / diff URL when the producing run recorded one; absent otherwise. */
+  diff_url?: string | null;
   created_at: string;
+}
+
+/** `VerificationOutcome` (backend/execution/db.py) — the verdict of running the
+ *  declared verification contract against a run. */
+export type VerificationOutcome = "passed" | "failed" | "inconclusive";
+
+/** One `VerificationResult` in a delivery report (backend VerificationReport).
+ *  `contract` is the work LLM's declared checks (the checks BSVibe promised to
+ *  run) and `result` is the execution outcome of running them — both free-form
+ *  JSON, rendered defensively by the report view. */
+export interface VerificationReportItem {
+  id: string;
+  outcome: VerificationOutcome;
+  contract: Record<string, unknown>;
+  result: Record<string, unknown>;
+  created_at: string;
+}
+
+/** `GET /api/v1/deliverables/{id}/report` body (backend
+ *  DeliverableReportResponse) — the glass-box proof for one shipped
+ *  deliverable: the artifact plus the verification(s) recorded for its run. */
+export interface DeliverableReport {
+  deliverable: Deliverable;
+  verifications: VerificationReportItem[];
 }
 
 /** `POST /api/v1/messages` body — founder-direct submission. */

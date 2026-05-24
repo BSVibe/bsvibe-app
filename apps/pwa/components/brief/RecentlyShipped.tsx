@@ -1,5 +1,6 @@
 import type { ArtifactType, ShippedItem } from "@/lib/api/types";
 import { useTranslations } from "next-intl";
+import Link from "next/link";
 
 /** Per-artifact-type marker (UX §4 — deliverables are polymorphic). */
 const ARTIFACT: Record<ArtifactType, { glyph: string; tone: string }> = {
@@ -35,6 +36,10 @@ export default function RecentlyShipped({ items }: { items: ShippedItem[] }) {
                 <span className="shipped__meta">
                   {item.productSlug} · {item.source}
                 </span>
+                {/* Glass-box proof: open the deliverable's Delivery Report. */}
+                <Link className="shipped__report-link" href={`/deliverables/${item.id}`}>
+                  {t("viewReport")}
+                </Link>
               </div>
               <span className="shipped__verdict">{item.verdict}</span>
             </li>
