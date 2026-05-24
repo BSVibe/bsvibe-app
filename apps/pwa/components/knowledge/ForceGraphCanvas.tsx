@@ -17,6 +17,17 @@ import ForceGraph2D from "react-force-graph-2d";
  * labelled, and edges are drawn between them. We only tune the built-in `link`
  * / `charge` forces (never replace them — replacing the link force breaks the
  * lib's id-resolution and the canvas stops repainting).
+ *
+ * CRITICAL: `react-force-graph-2d` does NOT auto-size — given no `width`/
+ * `height` it falls back to `window.innerWidth`/`innerHeight`. The host box is
+ * clipped to a fixed height (`.knowledge-graph__canvas`, `overflow: hidden`),
+ * so a window-sized canvas centres the simulation far below the visible slice
+ * AND, worse, makes the lib's shadow-canvas hit-detection (it reads the pixel
+ * under the pointer, mapped relative to the container's top-left) read a region
+ * that no longer holds the visible nodes — every node tap resolves to nothing,
+ * so `onNodeClick` never fires and the inspector never opens. We measure the
+ * host box (ResizeObserver) and pass explicit `width`/`height` so the canvas
+ * coordinate space matches what the founder sees and clicks register.
  */
 
 interface Palette {
@@ -83,6 +94,30 @@ export default function ForceGraphCanvas({
 
   const [palette, setPalette] = useState<Palette>(() => readPalette());
 
+  // Measure the host box and feed its size to the lib. Without this the lib
+  // defaults to window.innerWidth/innerHeight, mismatching the clipped host —
+  // which both hides most nodes and breaks the shadow-canvas click hit-test
+  // (see the file header). Default to the CSS box height (360px) so the first
+  // paint — before the observer fires — is already roughly correct.
+  const hostRef = useRef<HTMLDivElement>(null);
+  const [size, setSize] = useState<{ width: number; height: number }>({
+    width: 640,
+    height: 360,
+  });
+  useEffect(() => {
+    const host = hostRef.current;
+    if (!host || typeof ResizeObserver === "undefined") return;
+    const measure = () => {
+      const { width, height } = host.getBoundingClientRect();
+      // Guard against a 0×0 (pre-layout) read so the canvas never collapses.
+      if (width > 0 && height > 0) setSize({ width, height });
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(host);
+    return () => observer.disconnect();
+  }, []);
+
   // Re-read tokens when the theme flips (data-theme on <html>).
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -109,33 +144,39 @@ export default function ForceGraphCanvas({
   }, []);
 
   return (
-    <ForceGraph2D
-      ref={fgRef}
-      graphData={data}
-      nodeId="id"
-      nodeLabel="label"
-      nodeVal="val"
-      nodeColor={(node: ForceNode) => (isMatch(node.label) ? palette.node : palette.dim)}
-      linkColor={() => palette.edge}
-      linkWidth={1}
-      backgroundColor="rgba(0,0,0,0)"
-      enableZoomInteraction
-      enablePanInteraction
-      cooldownTicks={120}
-      warmupTicks={40}
-      onNodeClick={(node: ForceNode) => onNodeClick?.(node.id)}
-      // Draw the node label beneath each node so the graph reads as knowledge,
-      // not anonymous dots.
-      nodeCanvasObjectMode={() => "after"}
-      nodeCanvasObject={(node: ForceNode & { x?: number; y?: number }, ctx, globalScale) => {
-        if (node.x === undefined || node.y === undefined) return;
-        const fontSize = 11 / globalScale;
-        ctx.font = `${fontSize}px ui-sans-serif, system-ui, sans-serif`;
-        ctx.textAlign = "center";
-        ctx.textBaseline = "top";
-        ctx.fillStyle = isMatch(node.label) ? palette.text : palette.dim;
-        ctx.fillText(node.label, node.x, node.y + 5 / globalScale);
-      }}
-    />
+    // The host fills the CSS box (`.knowledge-graph__canvas`); we measure it and
+    // size the canvas to match so clicks land on nodes (see the file header).
+    <div ref={hostRef} style={{ width: "100%", height: "100%" }}>
+      <ForceGraph2D
+        ref={fgRef}
+        width={size.width}
+        height={size.height}
+        graphData={data}
+        nodeId="id"
+        nodeLabel="label"
+        nodeVal="val"
+        nodeColor={(node: ForceNode) => (isMatch(node.label) ? palette.node : palette.dim)}
+        linkColor={() => palette.edge}
+        linkWidth={1}
+        backgroundColor="rgba(0,0,0,0)"
+        enableZoomInteraction
+        enablePanInteraction
+        cooldownTicks={120}
+        warmupTicks={40}
+        onNodeClick={(node: ForceNode) => onNodeClick?.(node.id)}
+        // Draw the node label beneath each node so the graph reads as knowledge,
+        // not anonymous dots.
+        nodeCanvasObjectMode={() => "after"}
+        nodeCanvasObject={(node: ForceNode & { x?: number; y?: number }, ctx, globalScale) => {
+          if (node.x === undefined || node.y === undefined) return;
+          const fontSize = 11 / globalScale;
+          ctx.font = `${fontSize}px ui-sans-serif, system-ui, sans-serif`;
+          ctx.textAlign = "center";
+          ctx.textBaseline = "top";
+          ctx.fillStyle = isMatch(node.label) ? palette.text : palette.dim;
+          ctx.fillText(node.label, node.x, node.y + 5 / globalScale);
+        }}
+      />
+    </div>
   );
 }
