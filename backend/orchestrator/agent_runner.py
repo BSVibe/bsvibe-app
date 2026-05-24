@@ -29,7 +29,7 @@ import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.execution.db import ExecutionRun, ExecutionRunHistory, RunStatus
-from backend.execution.orchestrator import LoopResult, RunOrchestrator
+from backend.execution.orchestrator import LoopResult, RunCompute
 from backend.intake.db import RequestRow
 
 logger = structlog.get_logger(__name__)
@@ -85,11 +85,17 @@ class AgentRunner:
         self,
         *,
         run_id: uuid.UUID,
-        orchestrator: RunOrchestrator,
+        orchestrator: RunCompute,
         workspace_dir: Path,
     ) -> LoopResult:
         """Run the compute loop for ``run_id`` and reconcile its outcome
         with the transactional run status.
+
+        ``orchestrator`` is any :class:`RunCompute` — the native
+        :class:`~backend.execution.orchestrator.RunOrchestrator` (api-llm) or
+        the :class:`~backend.executors.orchestrator.ExecutorOrchestrator`
+        (CLI-worker dispatch). Both have the same ``run(...) -> LoopResult``
+        shape, so the outcome mapping below is backend-agnostic.
 
         Transitions ``open → running`` before the loop, then maps the
         terminal outcome: ``verified → review_ready``, ``system_error →

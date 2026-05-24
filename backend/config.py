@@ -113,6 +113,14 @@ class Settings(BaseSettings):
     # Decomposer cycle cap — caps planning/decomposer.py CoT depth.
     decomposer_cycle_cap: int = 14
 
+    # Executor-pool dispatch (executor-pool Lift 5b). A run whose resolved
+    # ModelAccount is ``provider='executor'`` dispatches a task to an external
+    # CLI worker instead of running the native LLM loop; this is how long the
+    # orchestrator waits for the worker to report a terminal result before
+    # giving up (→ system_error). Default 30 min — a CLI coding agent run is
+    # long-lived. Operator-tunable per deployment.
+    executor_task_timeout_s: float = 1800.0
+
     # CORS allow-list for the browser PWA calling the backend cross-origin.
     # ``Annotated[list[str], NoDecode]`` + a ``mode="before"`` validator opts
     # out of pydantic-settings' default JSON decode so a deployer can set

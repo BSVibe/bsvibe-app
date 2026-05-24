@@ -46,8 +46,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.config import Settings, get_settings
 from backend.execution.db import (
     Decision,
-    Deliverable,
-    DeliverableType,
     ExecutionRun,
     ExecutionRunActivity,
     ProofState,
@@ -59,6 +57,7 @@ from backend.execution.db import (
     WorkStepStatus,
 )
 from backend.execution.tools import ToolError, ToolRegistry
+from backend.execution.verified_deliverable import write_verified_deliverable
 from backend.execution.verifier.contract import (
     VerificationCheck,
     VerificationContract,
@@ -129,6 +128,21 @@ class LoopResult:
     decision_id: uuid.UUID | None = None
     written_paths: list[str] = field(default_factory=list)
     summary: str = ""
+
+
+@runtime_checkable
+class RunCompute(Protocol):
+    """The single compute seam :class:`~backend.orchestrator.agent_runner.AgentRunner`
+    drives.
+
+    Both the native :class:`RunOrchestrator` (api-llm path) and the
+    :class:`~backend.executors.orchestrator.ExecutorOrchestrator` (CLI-worker
+    path, Lift 5b) satisfy it structurally, so the worker-runtime factory can
+    return either without the runner depending on a Union of concretes (per the
+    ``bsvibe-llm-wrapper-not-raw-litellm`` rule: one Protocol, never a Union).
+    """
+
+    async def run(self, *, run: ExecutionRun, workspace_dir: Path) -> LoopResult: ...
 
 
 # Tools the work LLM may use during the loop. ``ask_user_question`` is a
@@ -558,34 +572,19 @@ class RunOrchestrator:
         attempt.phase = RunAttemptPhase.COMPLETED
         attempt.finished_at = _utcnow()
 
-        deliverable = Deliverable(
-            id=uuid.uuid4(),
-            run_id=run.id,
-            workspace_id=run.workspace_id,
-            deliverable_type=DeliverableType.CODE,
-            artifact_uri=None,
-            diff_url=None,
-            payload={"artifact_refs": written_paths, "summary": final_text},
+        # The verified-terminal artifact contract (Deliverable type CODE +
+        # DeliveryEventRow + settle activity) is the SAME regardless of compute
+        # backend, so it lives in ONE shared helper (Lift 5b). The settle payload
+        # carries the run's STABLE context (product binding + founder intent_text)
+        # so the SettleWorker can cluster garden observations by product + intent
+        # — deterministic inputs, never the work LLM's free output.
+        deliverable = await write_verified_deliverable(
+            self._session,
+            run,
+            attempt_id=attempt.id,
+            artifact_refs=written_paths,
+            summary=final_text,
         )
-        self._session.add(deliverable)
-        await self._session.flush()
-
-        # Deliver event — drained by the DeliveryWorker (delivery_events table).
-        await self._emit_deliver_event(run, deliverable, written_paths, final_text)
-        # Settle observation — the run-trace/observation side channel (§1). The
-        # payload carries the run's STABLE context (product binding + founder
-        # intent_text) so the SettleWorker can cluster garden observations by
-        # product + intent — what the work was ABOUT — not just incidental file
-        # stems. These are deterministic inputs (a product binding and the
-        # founder's own Direction text), never the work LLM's free output.
-        settle_payload: dict[str, Any] = {
-            "verified": True,
-            "artifact_refs": written_paths,
-            "summary": final_text[:500],
-            **await self._settle_run_context(run),
-        }
-        await self._record(run, attempt, "settle", settle_payload)
-        await self._session.flush()
 
         # Wake the delivery + settle consumers (worker_mode="redis_streams"
         # only). The DeliveryEventRow + settle ExecutionRunActivity are the
@@ -630,25 +629,6 @@ class RunOrchestrator:
             verification_result_id=verdict.id,
             written_paths=written_paths,
             summary=final_text,
-        )
-
-    async def _emit_deliver_event(
-        self,
-        run: ExecutionRun,
-        deliverable: Deliverable,
-        written_paths: list[str],
-        final_text: str,
-    ) -> None:
-        from backend.delivery.db import DeliveryEventRow  # noqa: PLC0415 — cross-domain, local
-
-        self._session.add(
-            DeliveryEventRow(
-                id=uuid.uuid4(),
-                workspace_id=run.workspace_id,
-                deliverable_id=deliverable.id,
-                artifact_type=DeliverableType.CODE.value,
-                payload={"artifact_refs": written_paths, "summary": final_text[:500]},
-            )
         )
 
     async def _create_decision(
@@ -709,31 +689,6 @@ class RunOrchestrator:
                 payload={"attempt_id": str(attempt.id), **payload},
             )
         )
-
-    async def _settle_run_context(self, run: ExecutionRun) -> dict[str, Any]:
-        """Resolve the run's stable settle-clustering context.
-
-        ``intent_text`` is the founder's own Direction (set by intake); the
-        product slug/name is the run's product binding (resolved from
-        ``run.product_id``). Both are stable inputs the SettleWorker uses as
-        canonicalization cluster keys. Only present keys are returned — a
-        connector-inbound run (no product, no intent) yields ``{}`` so the sink
-        degrades to the existing summary + artifact_refs derivation. Resolution
-        is best-effort: a missing/deleted product row is simply omitted (never
-        an exception that could break the verified terminal).
-        """
-        context: dict[str, Any] = {}
-        intent_text = (run.payload or {}).get("intent_text")
-        if isinstance(intent_text, str) and intent_text.strip():
-            context["intent_text"] = intent_text
-        if run.product_id is not None:
-            from backend.workspaces.db import ProductRow  # noqa: PLC0415 — cross-domain, local
-
-            product = await self._session.get(ProductRow, run.product_id)
-            if product is not None:
-                context["product_slug"] = product.slug
-                context["product_name"] = product.name
-        return context
 
 
 async def _invoke_tool_safely(
@@ -840,5 +795,6 @@ __all__ = [
     "LoopResult",
     "LoopToolCall",
     "LoopTurn",
+    "RunCompute",
     "RunOrchestrator",
 ]
