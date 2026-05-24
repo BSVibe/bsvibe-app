@@ -6,6 +6,7 @@ import { useTranslations } from "next-intl";
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import ProductHeader from "./ProductHeader";
+import ProductResources from "./ProductResources";
 import ProductRuns from "./ProductRuns";
 import ProductShipped from "./ProductShipped";
 
@@ -88,6 +89,7 @@ export default function ProductDetail({ slug }: { slug: string }) {
           <ProductHeader view={loaded.view} />
           <ProductRuns runs={loaded.view.runs} />
           <ProductShipped items={loaded.view.shipped} />
+          <ProductResources productId={loaded.view.id} />
         </>
       )}
     </div>
