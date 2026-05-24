@@ -13,6 +13,7 @@ from backend.api.auth import router as auth_router
 from backend.api.health import router as health_router
 from backend.api.middleware import WorkspaceContextMiddleware
 from backend.api.v1 import router as v1_router
+from backend.api.v1.workers import public_router as workers_public_router
 from backend.api.webhooks import router as webhooks_router
 from backend.config import get_settings
 from backend.shared.core.logging import configure_logging
@@ -52,5 +53,9 @@ def create_app() -> FastAPI:
     # Connector webhook ingress is PUBLIC (external callback) — mounted under
     # /api directly, NOT under the auth-gated v1 router (Workflow §11.2).
     app.include_router(webhooks_router, prefix="/api")
+    # Executor-worker register/heartbeat are install-token / worker-token authed
+    # (a headless worker has no Supabase session JWT) — mounted under /api/v1
+    # directly, NOT under the auth-gated v1 router, like the webhooks ingress.
+    app.include_router(workers_public_router, prefix="/api/v1")
     app.include_router(v1_router, prefix="/api")
     return app
