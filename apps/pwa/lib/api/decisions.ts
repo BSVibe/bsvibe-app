@@ -13,11 +13,17 @@
  *  list/path contract gap this works around. */
 
 import { apiFetch } from "./client";
-import type { AcceptResponse, Proposal, RejectResponse } from "./types";
+import type { AcceptResponse, DecisionLogEntry, Proposal, RejectResponse } from "./types";
 
 /** Pending canonicalization proposals — the founder-approval queue. */
 export function listPendingProposals(limit = 50): Promise<Proposal[]> {
   return apiFetch<Proposal[]>(`/api/v1/decisions?status_filter=pending&limit=${limit}`);
+}
+
+/** Resolved decisions — the founder-approval audit trail (`GET /decisions/log`).
+ *  Feeds the "Resolved" tab; each row records its outcome (decision_kind). */
+export function listDecisionsLog(limit = 50): Promise<DecisionLogEntry[]> {
+  return apiFetch<DecisionLogEntry[]>(`/api/v1/decisions/log?limit=${limit}`);
 }
 
 /** Accept a queued proposal — applies every linked typed action (e.g. the merge

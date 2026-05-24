@@ -1,20 +1,26 @@
 /**
- * Decisions surface — the full container rendering both queues, driven by a
- * mocked fetch (route-aware). Asserts:
- *  - both sections render (checkpoint question + proposal summary)
- *  - resolving a checkpoint POSTs /checkpoints/{id}/resolve with the answer,
- *    then drops out on the re-read
- *  - accepting a proposal POSTs /decisions/{path}/accept, then drops out
- *  - a forced error leaves a calm inline message and the row actionable
- *  - the empty state when nothing is pending
- *  - the nav pending-count store reflects the loaded queue sizes
+ * Decisions surface — the redesigned inbox (Stitch screens
+ * 1175801d… Inbox + 5bf54bdf… detail). Driven by a route-aware mocked fetch.
+ *
+ * The surface is the canonicalization proposals queue:
+ *  - Pending tab   ← GET /api/v1/decisions?status_filter=pending
+ *  - Resolved tab  ← GET /api/v1/decisions/log  (the audit trail)
+ *  - tab labels carry live counts
+ *  - a client-side search box filters the visible list
+ *  - opening a pending item shows a calm detail/resolve panel (kind + affected
+ *    path + Accept / Reject, Reject taking an optional reason)
+ *  - Accept POSTs /accept with the encoded vault path; Reject POSTs /reject
+ *    with a { reason } body; after resolve the item leaves Pending
+ *  - a forced error keeps the detail panel actionable with a calm message
+ *  - the empty Pending state stays calm
+ *  - the nav pending-count store reflects the pending queue size
  */
 
 import Decisions from "@/components/decisions/Decisions";
-import type { Checkpoint, Proposal } from "@/lib/api/types";
+import type { DecisionLogEntry, Proposal } from "@/lib/api/types";
 import { type Session, clearSession, setSession } from "@/lib/auth/session";
-import { setPendingDecisionsCount } from "@/lib/decisions/pending-count";
-import { render, screen, waitFor } from "@testing-library/react";
+import { setPendingDecisionsCount, usePendingDecisionsCount } from "@/lib/decisions/pending-count";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -26,27 +32,35 @@ const SESSION: Session = {
   expiresAt: Date.now() + 3_600_000,
 };
 
-const CHECKPOINT: Checkpoint = {
-  id: "c1",
-  run_id: "r1",
-  decision: "ask_user_question",
-  question: "Should the related-posts widget show 3 or 5 items?",
-  rationale: "The spec didn’t say; both fit the layout.",
-  created_at: "2026-05-23T00:00:00Z",
-};
-
 const PROPOSAL: Proposal = {
   // `id` is the proposal's vault path — the accept/reject handle (a `:path`).
   id: "proposals/merge-concepts/2026-05-23-self-hosting.md",
   proposal_kind: "merge",
   action_kind: "merge-concepts",
-  // `action_path` is the LINKED ACTION draft (`actions/<kind>/...`), NOT the
-  // resolve handle — distinct from `id`.
   action_path: "actions/merge-concepts/2026-05-23-self-hosting.md",
   status: "pending",
   score: 82,
   created_at: "2026-05-23T00:00:00Z",
   expires_at: null,
+};
+
+const PROPOSAL_2: Proposal = {
+  id: "proposals/create-concept/2026-05-22-jwt-bearer.md",
+  proposal_kind: "create",
+  action_kind: "create-concept",
+  action_path: "actions/create-concept/2026-05-22-jwt-bearer.md",
+  status: "pending",
+  score: 64,
+  created_at: "2026-05-22T00:00:00Z",
+  expires_at: null,
+};
+
+const DECISION: DecisionLogEntry = {
+  id: "decisions/must-link/2026-05-20-css-in-js.md",
+  proposal_id: "proposals/merge-concepts/2026-05-20-css-in-js.md",
+  decision_kind: "must-link",
+  actor_id: "user-1",
+  created_at: "2026-05-20T00:00:00Z",
 };
 
 function json(body: unknown, status = 200) {
@@ -57,19 +71,21 @@ function json(body: unknown, status = 200) {
 }
 
 /**
- * A route-aware fetch mock. `checkpoints` / `proposals` are the queue contents
+ * A route-aware fetch mock. `proposals` / `decisions` are the queue contents
  * returned by the list GETs (mutate them between calls to simulate the re-read
- * dropping a resolved item). `onPost` records resolve/accept/reject calls.
+ * dropping a resolved item). `onPost` records resolve calls.
  */
 function installFetch(opts: {
-  checkpoints: () => Checkpoint[];
   proposals: () => Proposal[];
+  decisions?: () => DecisionLogEntry[];
   onPost?: (url: string, init: RequestInit) => Response;
 }) {
   const fetchMock = vi.fn(async (input: RequestInfo | URL, init: RequestInit = {}) => {
     const url = String(input);
     const method = (init.method ?? "GET").toUpperCase();
-    if (method === "GET" && url === "/api/v1/checkpoints") return json(opts.checkpoints());
+    if (method === "GET" && url.startsWith("/api/v1/decisions/log")) {
+      return json((opts.decisions ?? (() => []))());
+    }
     if (method === "GET" && url.startsWith("/api/v1/decisions?")) return json(opts.proposals());
     if (method === "POST" && opts.onPost) return opts.onPost(url, init);
     throw new Error(`unexpected fetch ${method} ${url}`);
@@ -89,72 +105,52 @@ describe("Decisions surface", () => {
     vi.restoreAllMocks();
   });
 
-  it("renders both sections from the two queues", async () => {
-    installFetch({ checkpoints: () => [CHECKPOINT], proposals: () => [PROPOSAL] });
+  it("renders Pending and Resolved tabs with live counts", async () => {
+    installFetch({ proposals: () => [PROPOSAL, PROPOSAL_2], decisions: () => [DECISION] });
 
+    render(<Decisions />);
+
+    const tablist = await screen.findByRole("tablist");
+    const tabs = within(tablist);
+    // Pending tab shows the 2-proposal count.
+    expect(tabs.getByRole("tab", { name: /Pending/ })).toHaveTextContent("2");
+    expect(tabs.getByRole("tab", { name: /Resolved/ })).toHaveTextContent("1");
+  });
+
+  it("lists pending proposals in plain language", async () => {
+    installFetch({ proposals: () => [PROPOSAL] });
     render(<Decisions />);
 
     await waitFor(() => {
-      expect(screen.getByText(CHECKPOINT.question)).toBeInTheDocument();
+      expect(screen.getByText(/merge concepts/)).toBeInTheDocument();
     });
-    expect(screen.getByRole("region", { name: "Decisions needed" })).toBeInTheDocument();
-    expect(screen.getByRole("region", { name: "Knowledge review" })).toBeInTheDocument();
-    // Proposal summary surfaces the action kind + path in plain language.
-    expect(screen.getByText(/merge concepts → proposals\/merge-concepts/)).toBeInTheDocument();
   });
 
-  it("resolves a checkpoint — POSTs the answer, then the item drops out", async () => {
-    let checkpoints = [CHECKPOINT];
-    const posts: Array<[string, RequestInit]> = [];
-    installFetch({
-      checkpoints: () => checkpoints,
-      proposals: () => [],
-      onPost: (url, init) => {
-        posts.push([url, init]);
-        // Resolving removes it from the queue so the re-read shows it gone.
-        checkpoints = [];
-        return json({
-          id: "c1",
-          run_id: "r1",
-          status: "resolved",
-          resolution: "5 items",
-          resolved_at: "2026-05-23T00:01:00Z",
-          run_status: "open",
-        });
-      },
-    });
-
-    render(<Decisions />);
-    const input = await screen.findByLabelText("Your answer");
-    await userEvent.type(input, "5 items");
-    await userEvent.click(screen.getByRole("button", { name: "Resolve" }));
-
-    await waitFor(() => {
-      // After the re-read, nothing pending → empty state.
-      expect(screen.getByText("Nothing needs you right now.")).toBeInTheDocument();
-    });
-    expect(posts).toHaveLength(1);
-    const [url, init] = posts[0];
-    expect(url).toBe("/api/v1/checkpoints/c1/resolve");
-    expect(init.method).toBe("POST");
-    expect(JSON.parse(init.body as string)).toEqual({ answer: "5 items" });
-  });
-
-  it("does not allow Resolve until an answer is typed", async () => {
-    installFetch({ checkpoints: () => [CHECKPOINT], proposals: () => [] });
+  it("filters the visible list with the search box", async () => {
+    installFetch({ proposals: () => [PROPOSAL, PROPOSAL_2] });
     render(<Decisions />);
 
-    const button = await screen.findByRole("button", { name: "Resolve" });
-    expect(button).toBeDisabled();
-    await userEvent.type(screen.getByLabelText("Your answer"), "ok");
-    expect(button).toBeEnabled();
+    await screen.findByText(/merge concepts/);
+    const search = screen.getByRole("searchbox");
+    await userEvent.type(search, "jwt");
+
+    expect(screen.getByText(/create concept/)).toBeInTheDocument();
+    expect(screen.queryByText(/merge concepts/)).not.toBeInTheDocument();
   });
 
-  it("accepts a proposal — POSTs /accept with the encoded path, then drops out", async () => {
+  it("shows the Resolved audit trail with its recorded outcome", async () => {
+    installFetch({ proposals: () => [], decisions: () => [DECISION] });
+    render(<Decisions />);
+
+    await userEvent.click(await screen.findByRole("tab", { name: /Resolved/ }));
+    // The recorded decision kind surfaces as the outcome.
+    expect(screen.getByText(/must.link/i)).toBeInTheDocument();
+  });
+
+  it("opens a detail/resolve panel for a pending item and Accepts it", async () => {
     let proposals = [PROPOSAL];
     const posts: Array<[string, RequestInit]> = [];
     installFetch({
-      checkpoints: () => [],
       proposals: () => proposals,
       onPost: (url, init) => {
         posts.push([url, init]);
@@ -164,84 +160,93 @@ describe("Decisions surface", () => {
     });
 
     render(<Decisions />);
-    await userEvent.click(await screen.findByRole("button", { name: "Accept" }));
+    await userEvent.click(await screen.findByRole("button", { name: /merge concepts/ }));
+
+    // Detail panel reveals the affected path + the resolve affordances.
+    const panel = screen.getByRole("dialog");
+    expect(within(panel).getByText(PROPOSAL.action_path)).toBeInTheDocument();
+    await userEvent.click(within(panel).getByRole("button", { name: "Accept" }));
 
     await waitFor(() => {
-      expect(screen.getByText("Nothing needs you right now.")).toBeInTheDocument();
+      // Resolved → leaves the pending list (count → 0).
+      expect(screen.getByRole("tab", { name: /Pending/ })).toHaveTextContent("0");
     });
-    expect(posts).toHaveLength(1);
     const [url, init] = posts[0];
     expect(url).toBe(`/api/v1/decisions/${encodeURIComponent(PROPOSAL.id)}/accept`);
     expect(init.method).toBe("POST");
   });
 
-  it("rejects a proposal — POSTs /reject with a reason body", async () => {
+  it("Rejects a pending item with an optional reason", async () => {
     let proposals = [PROPOSAL];
     const posts: Array<[string, RequestInit]> = [];
     installFetch({
-      checkpoints: () => [],
       proposals: () => proposals,
       onPost: (url, init) => {
         posts.push([url, init]);
         proposals = [];
-        return json({ proposal_path: PROPOSAL.id, status: "rejected", reason: "" });
+        return json({ proposal_path: PROPOSAL.id, status: "rejected", reason: "not a dup" });
       },
     });
 
     render(<Decisions />);
-    await userEvent.click(await screen.findByRole("button", { name: "Reject" }));
+    await userEvent.click(await screen.findByRole("button", { name: /merge concepts/ }));
+
+    const panel = screen.getByRole("dialog");
+    await userEvent.type(within(panel).getByRole("textbox"), "not a dup");
+    await userEvent.click(within(panel).getByRole("button", { name: "Reject" }));
 
     await waitFor(() => {
-      expect(screen.getByText("Nothing needs you right now.")).toBeInTheDocument();
+      expect(screen.getByRole("tab", { name: /Pending/ })).toHaveTextContent("0");
     });
     const [url, init] = posts[0];
     expect(url).toBe(`/api/v1/decisions/${encodeURIComponent(PROPOSAL.id)}/reject`);
-    expect(JSON.parse(init.body as string)).toEqual({ reason: "" });
+    expect(JSON.parse(init.body as string)).toEqual({ reason: "not a dup" });
   });
 
-  it("shows a calm inline error on a failed accept — row stays actionable", async () => {
+  it("shows a calm inline error on a failed accept — panel stays actionable", async () => {
     installFetch({
-      checkpoints: () => [],
       proposals: () => [PROPOSAL],
       onPost: () => json("boom", 500),
     });
 
     render(<Decisions />);
-    await userEvent.click(await screen.findByRole("button", { name: "Accept" }));
+    await userEvent.click(await screen.findByRole("button", { name: /merge concepts/ }));
+    const panel = screen.getByRole("dialog");
+    await userEvent.click(within(panel).getByRole("button", { name: "Accept" }));
 
     await waitFor(() => {
       expect(screen.getByText("Couldn’t do that — please try again.")).toBeInTheDocument();
     });
-    // Still pending, still actionable — no crash, no empty state.
-    expect(screen.getByRole("button", { name: "Accept" })).toBeEnabled();
-    expect(screen.queryByText("Nothing needs you right now.")).not.toBeInTheDocument();
+    expect(
+      within(screen.getByRole("dialog")).getByRole("button", { name: "Accept" }),
+    ).toBeEnabled();
   });
 
   it("shows the calm empty state when nothing is pending", async () => {
-    installFetch({ checkpoints: () => [], proposals: () => [] });
+    installFetch({ proposals: () => [] });
     render(<Decisions />);
 
     await waitFor(() => {
       expect(screen.getByText("Nothing needs you right now.")).toBeInTheDocument();
     });
-    expect(screen.queryByRole("region", { name: "Decisions needed" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("region", { name: "Knowledge review" })).not.toBeInTheDocument();
   });
 
-  it("degrades gracefully when one queue 4xxs — the other still renders", async () => {
-    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
-      const url = String(input);
-      if (url === "/api/v1/checkpoints") return json([CHECKPOINT]);
-      // proposals list fails — should not blank the page.
-      return json("forbidden", 403);
-    });
-    global.fetch = fetchMock as unknown as typeof fetch;
+  it("syncs the nav pending-count store with the pending queue size", async () => {
+    installFetch({ proposals: () => [PROPOSAL, PROPOSAL_2], decisions: () => [DECISION] });
 
-    render(<Decisions />);
+    function Probe() {
+      return <span data-testid="badge">{usePendingDecisionsCount()}</span>;
+    }
+    render(
+      <>
+        <Decisions />
+        <Probe />
+      </>,
+    );
 
     await waitFor(() => {
-      expect(screen.getByText(CHECKPOINT.question)).toBeInTheDocument();
+      // Resolved items do NOT inflate the nav badge — only pending.
+      expect(screen.getByTestId("badge")).toHaveTextContent("2");
     });
-    expect(screen.queryByRole("region", { name: "Knowledge review" })).not.toBeInTheDocument();
   });
 });

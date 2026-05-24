@@ -11,7 +11,12 @@
 
 import { listCheckpoints, resolveCheckpoint } from "@/lib/api/checkpoints";
 import { ApiError } from "@/lib/api/client";
-import { acceptProposal, listPendingProposals, rejectProposal } from "@/lib/api/decisions";
+import {
+  acceptProposal,
+  listDecisionsLog,
+  listPendingProposals,
+  rejectProposal,
+} from "@/lib/api/decisions";
 import { type Session, clearSession, setSession } from "@/lib/auth/session";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -94,6 +99,16 @@ describe("decisions surface clients", () => {
 
     const [url] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
     expect(url).toBe("/api/v1/decisions?status_filter=pending&limit=50");
+  });
+
+  it("listDecisionsLog GETs the resolved-decisions audit trail", async () => {
+    const fetchMock = okFetch([]);
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    await listDecisionsLog();
+
+    const [url] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe("/api/v1/decisions/log?limit=50");
   });
 
   it("acceptProposal POSTs /accept with the URL-encoded vault path, no body", async () => {

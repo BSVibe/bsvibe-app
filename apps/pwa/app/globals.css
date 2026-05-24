@@ -814,6 +814,292 @@ main.login {
   color: var(--ink-3);
 }
 
+/* ===== feat/decisions-surface: inbox + detail (Stitch) — isolated block ===== */
+.decisions__masthead {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.decisions__lede {
+  margin: 0;
+  max-width: 52ch;
+  font-size: 0.9rem;
+  color: var(--ink-3);
+  line-height: 1.5;
+}
+
+.decisions__search {
+  width: 100%;
+  padding: 9px 13px;
+  border: 1px solid var(--hair-strong);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+  font-size: 0.88rem;
+}
+
+.decisions__search:focus-visible {
+  outline: 2px solid var(--amber-dot);
+  outline-offset: 1px;
+}
+
+.decisions__tabs {
+  display: flex;
+  gap: 4px;
+  border-bottom: 1px solid var(--hair-strong);
+  margin: -8px 0 -8px;
+}
+
+.decisions__tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 8px 12px 11px;
+  margin-bottom: -1px;
+  border: none;
+  border-bottom: 2px solid transparent;
+  background: none;
+  color: var(--ink-3);
+  font: inherit;
+  font-size: 0.88rem;
+  font-weight: 520;
+  cursor: pointer;
+}
+
+.decisions__tab:hover {
+  color: var(--ink-2);
+}
+
+.decisions__tab[aria-selected="true"] {
+  color: var(--ink);
+  border-bottom-color: var(--ink);
+  font-weight: 600;
+}
+
+.decisions__tab-count {
+  min-width: 18px;
+  height: 18px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--accent-bg);
+  color: var(--ink-2);
+  font-size: 0.7rem;
+  font-weight: 600;
+  display: grid;
+  place-items: center;
+}
+
+.decisions-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 9px;
+  border-radius: 999px;
+  background: var(--accent-bg);
+  color: var(--ink-2);
+  font-size: 0.7rem;
+  font-weight: 550;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+}
+
+.decisions-chip--outcome {
+  background: var(--green-pill-bg);
+  color: var(--green-ink);
+}
+
+.decisions__footnote {
+  margin: 0;
+  font-size: 0.78rem;
+  color: var(--ink-3);
+}
+
+/* The pending row becomes a single clickable line (overrides the legacy
+   column row layout above for the inbox list). */
+.decisions-row__open {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0;
+  border: none;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.decisions-row__main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.decisions-row__meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.decisions-row__time {
+  font-size: 0.78rem;
+  color: var(--ink-3);
+}
+
+.decisions-row__chevron {
+  color: var(--ink-3);
+  font-size: 1.1rem;
+  line-height: 1;
+}
+
+.decisions-row__open:hover .decisions-row__q {
+  color: var(--ink);
+}
+
+.decisions-row--resolved .decisions-row__q {
+  font-weight: 500;
+  color: var(--ink-2);
+}
+
+/* Detail / resolve panel — a calm centered native <dialog> over a soft
+   backdrop (mirrors the Direct-action / Connectors modal pattern). */
+.decisions-detail__overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+}
+
+.decisions-detail__backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(20, 18, 15, 0.32);
+}
+
+.decisions-detail {
+  position: relative;
+  margin: 0;
+  width: 100%;
+  max-width: 460px;
+  max-height: calc(100dvh - 40px);
+  overflow-y: auto;
+  background: var(--surface);
+  color: var(--ink);
+  border: 1px solid var(--hair-strong);
+  border-radius: var(--radius);
+  padding: 22px 22px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.16);
+}
+
+.decisions-detail__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.decisions-detail__close {
+  border: none;
+  background: none;
+  color: var(--ink-3);
+  font-size: 0.95rem;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+}
+
+.decisions-detail__close:hover {
+  color: var(--ink);
+  background: var(--accent-bg);
+}
+
+.decisions-detail__title {
+  margin: 0;
+  font-size: 1.15rem;
+  font-weight: 620;
+  letter-spacing: -0.01em;
+}
+
+.decisions-detail__why {
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--ink-3);
+  line-height: 1.5;
+}
+
+.decisions-detail__facts {
+  margin: 4px 0 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.decisions-detail__fact {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.decisions-detail__fact dt {
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--ink-3);
+}
+
+.decisions-detail__fact dd {
+  margin: 0;
+  font-size: 0.86rem;
+  color: var(--ink-2);
+}
+
+.decisions-detail__path {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 0.78rem !important;
+  word-break: break-all;
+}
+
+.decisions-detail__reason-label {
+  font-size: 0.78rem;
+  font-weight: 550;
+  color: var(--ink-3);
+}
+
+.decisions-detail__reason {
+  width: 100%;
+  resize: vertical;
+  padding: 9px 11px;
+  border: 1px solid var(--hair-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+  font-size: 0.86rem;
+}
+
+.decisions-detail__reason:focus-visible {
+  outline: 2px solid var(--amber-dot);
+  outline-offset: 1px;
+}
+
+.decisions-detail__foot {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 4px;
+}
+/* ===== end feat/decisions-surface block ===== */
+
 /* Product lanes */
 .lanes__list {
   list-style: none;
