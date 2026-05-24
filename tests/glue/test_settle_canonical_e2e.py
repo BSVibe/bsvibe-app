@@ -45,7 +45,9 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from backend.execution.db import ExecutionBase, ExecutionRun, ExecutionRunActivity, RunStatus
 from backend.knowledge.canonicalization.index import InMemoryCanonicalizationIndex
+from backend.knowledge.canonicalization.models import DecisionEntry
 from backend.knowledge.canonicalization.resolver import TagResolver
+from backend.knowledge.canonicalization.store import NoteStore
 from backend.knowledge.graph.storage import FileSystemStorage
 from backend.workers.db import SettleDrainRow, WorkersBase
 from backend.workers.settle_worker import (
@@ -218,14 +220,20 @@ async def test_drain_then_promote_permissive_creates_canonical_anchor(sf, tmp_pa
         assert resolved.concept_id == canonical, (variant, resolved.concept_id)
 
 
-async def test_drain_then_promote_safe_mode_queues_proposals(sf, tmp_path) -> None:
-    """Safe-Mode workspace (the default policy): drain writes the observation,
-    promotion QUEUES create-concept actions and applies NO anchors."""
+async def test_drain_then_promote_safe_mode_auto_applies_low_risk(sf, tmp_path) -> None:
+    """Safe-Mode workspace, risk-aware gate: drain writes the observation, and
+    the promotion pass AUTO-APPLIES low-risk create-concepts (no conflict) even
+    under Safe Mode. Adding fresh knowledge is not 'risky' — Safe Mode is for
+    genuine conflicts, not routine knowledge accrual.
+
+    Before the risk-aware gate, Safe Mode blanket-queued every action and
+    ``concepts/active`` stayed empty; that was the wrong criterion (it equated
+    'add knowledge' with 'risk'). The wired scorer + policy now let clean
+    create-concepts settle automatically.
+    """
     ws = uuid.uuid4()
     await _add_workspace(sf, workspace_id=ws, safe_mode=True)
     await _seed_content_tagged_observations(_ws_storage(tmp_path, ws))
-    # The sink note's own content tags now also become candidates — the gap this
-    # PR closes. Use a known summary/ref so the candidate set is deterministic.
     await _seed_settle_activity_with_refs(
         sf, workspace_id=ws, summary="configured the reverse proxy", refs=["deploy/Caddyfile"]
     )
@@ -242,25 +250,73 @@ async def test_drain_then_promote_safe_mode_queues_proposals(sf, tmp_path) -> No
     assert len(_written_settle_notes(tmp_path, ws)) == 1
 
     storage = _ws_storage(tmp_path, ws)
-    # Safe Mode: nothing applied — no active concepts exist.
-    assert await storage.list_files("concepts/active") == []
-    # ... but create-concept actions are QUEUED for review. The candidate set is
-    # the seeded content tags PLUS the sink note's own derived tags (the gap this
-    # PR closes — the sink note is no longer a no-op for promotion).
-    # Action filenames are ``YYYYMMDD-HHMMSS-<slug>.md`` — drop the two
-    # timestamp segments to recover the concept slug (which may itself contain
-    # hyphens, e.g. ``self-hosting``).
-    create_slugs = {
-        p.removeprefix("actions/create-concept/").removesuffix(".md").split("-", 2)[-1]
-        for p in await storage.list_files("actions/create-concept")
+    # Risk-aware Safe Mode: low-risk concepts auto-applied → active concepts exist.
+    active = {
+        p.removeprefix("concepts/active/").removesuffix(".md")
+        for p in await storage.list_files("concepts/active")
     }
-    # Seeded content tags are queued ...
-    assert {"vaultwarden"} <= create_slugs, create_slugs
-    # ... and the sink note's own derived content tags are queued too.
-    assert {"configured", "reverse", "proxy", "caddyfile"} <= create_slugs, create_slugs
-    # Structural markers never become candidates.
-    assert "settle" not in create_slugs
-    assert "verified-run" not in create_slugs
+    # The unrelated clean concept settles (the self-host* pair may fold via a
+    # clean merge, leaving one survivor — either way the graph is no longer empty).
+    assert "vaultwarden" in active, active
+    # Sink-derived content tags also settle as anchors.
+    assert {"configured", "reverse", "proxy", "caddyfile"} <= active, active
+    # Structural markers never become concepts.
+    assert "settle" not in active
+    assert "verified-run" not in active
+
+
+async def test_drain_then_promote_safe_mode_queues_conflicting_merge(sf, tmp_path) -> None:
+    """Safe Mode still gates GENUINE risk: a merge that contradicts an active
+    cannot-link decision (review band) is queued for approval, not auto-applied,
+    even though clean create-concepts auto-apply in the same pass."""
+    ws = uuid.uuid4()
+    await _add_workspace(sf, workspace_id=ws, safe_mode=True)
+    storage = _ws_storage(tmp_path, ws)
+    await _seed_content_tagged_observations(storage)
+
+    # Pre-seed a cannot-link decision between the two variant spellings so the
+    # promoter's merge proposal scores into the review band → must queue.
+    decision = DecisionEntry(
+        path="decisions/cannot-link/20260524-120000-self-hosting-self-host.md",
+        kind="cannot-link",
+        status="active",
+        maturity="seedling",
+        decision_schema_version="cannot-link-v1",
+        subjects=("self-hosting", "self-host"),
+        base_confidence=0.70,
+        last_confirmed_at=datetime(2026, 5, 24, tzinfo=UTC),
+        decay_profile="definitional",
+        decay_halflife_days=None,
+        valid_from=datetime(2026, 5, 24, tzinfo=UTC),
+        created_at=datetime(2026, 5, 24, tzinfo=UTC),
+        updated_at=datetime(2026, 5, 24, tzinfo=UTC),
+    )
+    await NoteStore(storage).write_decision(decision)
+
+    await _seed_settle_activity(sf, workspace_id=ws, summary="hardened the proxy")
+
+    worker = SettleWorker(
+        session_factory=sf,
+        sink=KnowledgeSettleSink(vault_root=tmp_path),
+        config=SettleWorkerConfig(default_region=_REGION),
+        promoter_factory=build_garden_promoter_factory(vault_root=tmp_path),
+    )
+    assert await worker.drain_once() == 1
+
+    # Clean concepts auto-applied (the variant pair both exist as anchors) ...
+    active = {
+        p.removeprefix("concepts/active/").removesuffix(".md")
+        for p in await storage.list_files("concepts/active")
+    }
+    assert {"self-hosting", "self-host"} <= active, active
+    # ... but the conflicting merge did NOT apply — neither was folded away.
+    assert await storage.list_files("concepts/merged") == []
+    merge_actions = await storage.list_files("actions/merge-concepts")
+    assert merge_actions, "a merge action should have been drafted"
+    from backend.knowledge.graph.markdown_utils import extract_frontmatter
+
+    statuses = {extract_frontmatter(await storage.read(p))["status"] for p in merge_actions}
+    assert statuses == {"pending_approval"}, statuses
 
 
 async def test_promotion_failure_is_soft_and_does_not_break_drain(sf, tmp_path) -> None:
