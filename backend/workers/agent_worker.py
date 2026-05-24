@@ -41,7 +41,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from backend.execution.db import ExecutionRun, RunStatus
-from backend.execution.orchestrator import RunOrchestrator
+from backend.execution.orchestrator import RunCompute
 from backend.intake.db import RequestRow, RequestStatus
 from backend.orchestrator.agent_runner import AgentRunner
 from backend.orchestrator.frame import FrameConfig, FrameStage
@@ -68,10 +68,14 @@ class AgentExecutionDeps:
       this is a factory ``workspace_id -> SkillLoader`` rather than one shared
       loader — otherwise every workspace would frame against a single
       root-level skill set (a multi-tenancy scoping gap).
-    * ``orchestrator_factory`` — builds a :class:`RunOrchestrator` bound to
-      the *same* session the run is driven in (so compute + transactional
-      lifecycle share one transaction) AND to the *specific* run, so the
-      factory can resolve the run's per-workspace work-LLM identity (the
+    * ``orchestrator_factory`` — builds a :class:`RunCompute` (the native
+      :class:`~backend.execution.orchestrator.RunOrchestrator` for api-llm
+      accounts, or the
+      :class:`~backend.executors.orchestrator.ExecutorOrchestrator` for
+      ``provider='executor'`` accounts) bound to the *same* session the run is
+      driven in (so compute + transactional lifecycle share one transaction)
+      AND to the *specific* run, so the factory can resolve the run's
+      per-workspace work-LLM identity (the
       :class:`~backend.execution.db.ExecutionRun` carries only a
       ``workspace_id``; production resolves that workspace's active
       ModelAccount → ``account_id`` + ``model_account_id`` for the gateway
@@ -87,7 +91,7 @@ class AgentExecutionDeps:
 
     skill_loader_for: Callable[[uuid.UUID], SkillLoader]
     orchestrator_factory: Callable[
-        [AsyncSession, ExecutionRun], RunOrchestrator | Awaitable[RunOrchestrator | None]
+        [AsyncSession, ExecutionRun], RunCompute | Awaitable[RunCompute | None]
     ]
     workspace_root: Path
     default_artifact_type: str | None = "direct_output"
@@ -250,11 +254,11 @@ class AgentWorker(BaseWorker):
 
 async def _resolve_orchestrator(
     execution: AgentExecutionDeps, session: AsyncSession, run: ExecutionRun
-) -> RunOrchestrator | None:
+) -> RunCompute | None:
     """Call ``orchestrator_factory`` supporting both sync and async factories.
 
     The narrow Phase 1 factory was ``(session) -> RunOrchestrator``; Phase 2
-    widens it to ``(session, run) -> RunOrchestrator | None`` and additionally
+    widens it to ``(session, run) -> RunCompute | None`` and additionally
     permits an async factory (production resolution hits the DB). This shim
     awaits the result when the factory is a coroutine."""
     produced = execution.orchestrator_factory(session, run)

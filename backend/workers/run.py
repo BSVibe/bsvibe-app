@@ -58,7 +58,8 @@ from backend.delivery.dispatcher import DeliveryDispatcher
 from backend.delivery.schema import DeliveryResult
 from backend.execution.db import Decision, ExecutionRun
 from backend.execution.loop_llm import GatewayLoopLlm
-from backend.execution.orchestrator import RunOrchestrator
+from backend.execution.orchestrator import RunCompute, RunOrchestrator
+from backend.executors.orchestrator import ExecutorOrchestrator
 from backend.gateway.budget.policy import BudgetPolicyService
 from backend.gateway.budget.repository import BudgetPolicyRepository
 from backend.gateway.budget.tracker import BudgetTracker, InMemoryBudgetStore
@@ -251,10 +252,23 @@ def build_agent_execution_deps(
         loader.load_all()
         return loader
 
-    async def _factory(session: AsyncSession, run: ExecutionRun) -> RunOrchestrator | None:
+    async def _factory(session: AsyncSession, run: ExecutionRun) -> RunCompute | None:
         account = await resolve_workspace_model_account(session, run)
         if account is None:
             return None
+        # Executor-pool Lift 5b: a ``provider='executor'`` account routes to a
+        # registered external CLI worker, NOT the native LLM loop. Dispatch a
+        # task + await the worker's result (ExecutorOrchestrator); the api-llm
+        # path below is unchanged. The redis client is threaded in by
+        # ``run_workers`` (built whenever a Redis URL is configured); a None
+        # client → the orchestrator raises a Decision (cannot dispatch).
+        if account.provider == "executor":
+            return ExecutorOrchestrator(
+                session=session,
+                redis=redis_client,
+                account=account,
+                settings=settings,
+            )
         dispatcher = build_gateway_dispatcher(session, settings)
         llm = GatewayLoopLlm(
             dispatcher=dispatcher,
@@ -604,10 +618,15 @@ async def run_workers() -> None:
     engine = create_async_engine(settings.database_url, future=True)
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
 
-    # In redis mode the producer-side worker (IntakeWorker) needs the client to
-    # emit the ``agent`` wake-up; build it BEFORE the runtime so it can be wired in.
+    # The Redis client is needed by (a) redis_streams mode's producer-side
+    # wake-up emission and (b) executor-pool dispatch (Lift 5b) — the
+    # ExecutorOrchestrator XADDs a task onto the worker's stream + awaits the
+    # done channel, even in the default db_polling mode. So it is built whenever
+    # a Redis URL is configured (the default is set), and threaded through the
+    # orchestrator factory. ``decode_responses=True`` matches the dispatch
+    # substrate's flat-string contract.
     redis_client: Any = None
-    if settings.worker_mode == "redis_streams":
+    if settings.redis_url:
         redis_client = redis_aio.from_url(settings.redis_url, decode_responses=True)
 
     execution = build_agent_execution_deps(settings=settings, redis_client=redis_client)
@@ -649,6 +668,8 @@ async def run_workers() -> None:
     try:
         await runtime.run_forever()
     finally:
+        if redis_client is not None:
+            await redis_client.aclose()
         await engine.dispose()
 
 
