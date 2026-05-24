@@ -1,13 +1,16 @@
 /**
- * Inside surface clients — wire contracts against a mocked fetch.
+ * Knowledge surface clients — wire contracts against a mocked fetch.
  *
- *  - inside.ts: listConcepts + listObservations. Both GET the read-only
- *    /api/v1/inside/* lists with a `limit` query (backend defaults 50 / 25).
- *    Mirrors the backend Concept/Observation response shapes 1:1.
+ *  - knowledge.ts: listConcepts + listObservations + getKnowledgeGraph. The
+ *    lists GET the read-only /api/v1/inside/* endpoints with a `limit` query
+ *    (backend defaults 50 / 25); getKnowledgeGraph GETs /api/v1/inside/graph
+ *    and parses the { nodes, edges } shape. Mirrors the backend response shapes
+ *    1:1. The backend router keeps the `/inside` prefix even though the surface
+ *    is now labeled "Knowledge".
  */
 
 import { ApiError } from "@/lib/api/client";
-import { listConcepts, listObservations } from "@/lib/api/inside";
+import { getKnowledgeGraph, listConcepts, listObservations } from "@/lib/api/knowledge";
 import { type Session, clearSession, setSession } from "@/lib/auth/session";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -29,7 +32,7 @@ function okFetch(body: unknown) {
   );
 }
 
-describe("inside surface clients", () => {
+describe("knowledge surface clients", () => {
   beforeEach(() => {
     clearSession();
     setSession(SESSION);
@@ -102,6 +105,34 @@ describe("inside surface clients", () => {
     expect(url).toBe("/api/v1/inside/observations?limit=5");
   });
 
+  it("getKnowledgeGraph GETs /api/v1/inside/graph and parses { nodes, edges }", async () => {
+    const graph = {
+      nodes: [
+        { id: "a", label: "Auth", kind: "concept", weight: 1 },
+        { id: "b", label: "JWKS", kind: "concept", weight: 1 },
+      ],
+      edges: [{ source: "a", target: "b", type: "relates_to", weight: 0.8 }],
+    };
+    const fetchMock = okFetch(graph);
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    const res = await getKnowledgeGraph();
+
+    expect(res).toEqual(graph);
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe("/api/v1/inside/graph");
+    expect((init.method ?? "GET").toUpperCase()).toBe("GET");
+  });
+
+  it("getKnowledgeGraph parses the empty/sparse shape", async () => {
+    const fetchMock = okFetch({ nodes: [], edges: [] });
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    const res = await getKnowledgeGraph();
+
+    expect(res).toEqual({ nodes: [], edges: [] });
+  });
+
   it("surfaces an ApiError on a non-ok concepts read", async () => {
     global.fetch = vi.fn(
       async () => new Response("forbidden", { status: 403 }),
@@ -116,5 +147,13 @@ describe("inside surface clients", () => {
     ) as unknown as typeof fetch;
 
     await expect(listObservations()).rejects.toBeInstanceOf(ApiError);
+  });
+
+  it("surfaces an ApiError on a non-ok graph read", async () => {
+    global.fetch = vi.fn(
+      async () => new Response("boom", { status: 500 }),
+    ) as unknown as typeof fetch;
+
+    await expect(getKnowledgeGraph()).rejects.toBeInstanceOf(ApiError);
   });
 });

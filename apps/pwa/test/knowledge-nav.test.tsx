@@ -1,7 +1,7 @@
 /**
- * Inside nav wiring — the previously-inert "Inside" item is now a real route
- * ((app)/inside) in both the desktop left rail and the mobile tab bar. It is a
- * plain read-only link (no badge — Inside carries no pending count).
+ * Knowledge nav wiring — the "Knowledge" item (formerly "Inside") is a real
+ * route ((app)/knowledge) in both the desktop left rail and the mobile tab bar.
+ * It is a plain read-only link (no badge — Knowledge carries no pending count).
  */
 
 import LeftRail from "@/components/shell/LeftRail";
@@ -24,7 +24,7 @@ const SESSION: Session = {
   expiresAt: Date.now() + 3_600_000,
 };
 
-describe("Inside nav wiring", () => {
+describe("Knowledge nav wiring", () => {
   beforeEach(() => {
     clearSession();
     setSession(SESSION);
@@ -35,27 +35,28 @@ describe("Inside nav wiring", () => {
     vi.restoreAllMocks();
   });
 
-  it("renders Inside as a real link to /inside in the left rail", () => {
+  it("renders Knowledge as a real link to /knowledge in the left rail", () => {
     render(<LeftRail onDirect={() => {}} />);
 
-    const link = screen.getByRole("link", { name: /Inside/ });
-    expect(link).toHaveAttribute("href", "/inside");
-    // No longer a disabled placeholder button.
-    expect(screen.queryByRole("button", { name: "Inside" })).not.toBeInTheDocument();
+    const link = screen.getByRole("link", { name: /Knowledge/ });
+    expect(link).toHaveAttribute("href", "/knowledge");
+    // No longer a disabled placeholder button, and no stale "Inside" label.
+    expect(screen.queryByRole("button", { name: "Knowledge" })).not.toBeInTheDocument();
+    expect(screen.queryByText("Inside")).not.toBeInTheDocument();
   });
 
-  it("renders Inside as a real link in the mobile tab bar", () => {
+  it("renders Knowledge as a real link in the mobile tab bar", () => {
     render(<MobileNav />);
 
-    const link = screen.getByRole("link", { name: /Inside/ });
-    expect(link).toHaveAttribute("href", "/inside");
+    const link = screen.getByRole("link", { name: /Knowledge/ });
+    expect(link).toHaveAttribute("href", "/knowledge");
   });
 
-  it("Inside carries no pending-count badge even when decisions are pending", () => {
+  it("Knowledge carries no pending-count badge even when decisions are pending", () => {
     setPendingDecisionsCount(3);
     render(<LeftRail onDirect={() => {}} />);
 
-    const link = screen.getByRole("link", { name: /Inside/ });
+    const link = screen.getByRole("link", { name: /Knowledge/ });
     expect(link).not.toHaveTextContent("3");
   });
 });
