@@ -102,6 +102,20 @@ describe("Concept inspector", () => {
     expect(screen.getByText(/redirect target/)).toBeInTheDocument();
   });
 
+  it("labels the source-observations block 'Origin' (where the concept was learned)", async () => {
+    installFetch({ auth: () => AUTH });
+
+    render(<ConceptInspector conceptId="auth" onClose={vi.fn()} onPivot={vi.fn()} />);
+
+    await waitFor(() => {
+      expect(screen.getByRole("heading", { name: "Auth" })).toBeInTheDocument();
+    });
+    // The provenance heading is exactly "Origin" — honest (these observations are
+    // where the concept was learned). We do NOT claim a "usage" count we don't track.
+    expect(screen.getByRole("heading", { name: /^Origin$/ })).toBeInTheDocument();
+    expect(screen.queryByText(/usage/i)).not.toBeInTheDocument();
+  });
+
   it("pivots when a related concept is clicked", async () => {
     installFetch({ auth: () => AUTH, jwks: () => JWKS });
     const onPivot = vi.fn();

@@ -197,7 +197,7 @@
     "inspectorAliases": "Also known as",
     "inspectorRelated": "Related context",
     "inspectorRelatedEmpty": "Nothing related yet.",
-    "inspectorOrigin": "Origin & usage",
+    "inspectorOrigin": "Origin",
     "inspectorOriginEmpty": "No observations reference this yet.",
     "relatedWeight": "{count, plural, one {# link} other {# links}}",
     "inspectorEdit": "Edit",
@@ -586,6 +586,8 @@
     "untitled": "Triggered run",
     "trigger": "What triggered this",
     "triggeredFrom": "Triggered from {source}",
+    "triggeredDirectly": "Started directly by you.",
+    "safeModeExternal": "Came from outside BSVibe — I won’t push, merge, or reply until you approve.",
     "noTrigger": "No trigger context recorded for this run.",
     "statusLabel": {
       "open": "Just started",

@@ -164,17 +164,26 @@ function DetailBody({
 
 function TriggerBlock({ trigger }: { trigger: RunDetailModel["trigger"] }) {
   const t = useTranslations("run");
-  const hasAny = trigger.source || trigger.trigger_kind || trigger.intent_text || trigger.product;
+  // "External" purely from the detail payload: a connector/webhook origin carries
+  // a source (or a trigger_kind). Absent both → the founder started this Direct.
+  // We never render an empty section: a Direct run gets an honest one-line note.
+  const isExternal = Boolean(trigger.source || trigger.trigger_kind);
   return (
     <section className="run-trigger" aria-label={t("trigger")}>
       <h2 className="section-label">{t("trigger")}</h2>
-      {hasAny ? (
-        <p className="run-trigger__line">
-          {trigger.source ? t("triggeredFrom", { source: trigger.source }) : null}
-          {trigger.product ? <span className="run-trigger__product">{trigger.product}</span> : null}
-        </p>
+      {isExternal ? (
+        <>
+          <p className="run-trigger__line">
+            {trigger.source ? t("triggeredFrom", { source: trigger.source }) : null}
+            {trigger.product ? (
+              <span className="run-trigger__product">{trigger.product}</span>
+            ) : null}
+          </p>
+          {/* Static reassurance — only for externally-originated runs (Safe Mode). */}
+          <p className="run-trigger__safe-mode">{t("safeModeExternal")}</p>
+        </>
       ) : (
-        <p className="run-trigger__empty">{t("noTrigger")}</p>
+        <p className="run-trigger__direct">{t("triggeredDirectly")}</p>
       )}
     </section>
   );
