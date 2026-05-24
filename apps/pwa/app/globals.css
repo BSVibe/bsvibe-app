@@ -3274,6 +3274,100 @@ main.login {
   cursor: not-allowed;
 }
 
+/* New-skill create form — an inline card matching the empty-state surface. */
+.skills-form {
+  background: var(--surface);
+  border: 1px solid var(--hair-strong);
+  border-radius: var(--radius);
+  padding: 20px;
+  margin-bottom: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.skills-form__heading {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.skills-form__field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.skills-form__label {
+  font-size: 0.82rem;
+  font-weight: 550;
+  color: var(--ink-2);
+}
+
+.skills-form__input,
+.skills-form__textarea {
+  font: inherit;
+  font-size: 0.9rem;
+  color: var(--ink);
+  background: var(--bg);
+  border: 1px solid var(--hair-strong);
+  border-radius: var(--radius-sm);
+  padding: 9px 11px;
+  width: 100%;
+}
+
+.skills-form__textarea {
+  resize: vertical;
+  min-height: 110px;
+  line-height: 1.5;
+}
+
+.skills-form__input:focus,
+.skills-form__textarea:focus {
+  outline: none;
+  border-color: var(--ink-3);
+}
+
+.skills-form__error {
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--amber-ink);
+}
+
+.skills-form__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.skills-form__cancel,
+.skills-form__submit {
+  font: inherit;
+  font-size: 0.84rem;
+  font-weight: 550;
+  border-radius: var(--radius-sm);
+  padding: 8px 14px;
+  cursor: pointer;
+}
+
+.skills-form__cancel {
+  color: var(--ink-2);
+  background: var(--surface);
+  border: 1px solid var(--hair-strong);
+}
+
+.skills-form__submit {
+  color: var(--surface);
+  background: var(--ink);
+  border: 1px solid var(--ink);
+}
+
+.skills-form__submit:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
 .skills__loading-note {
   margin: 0;
   color: var(--ink-3);
