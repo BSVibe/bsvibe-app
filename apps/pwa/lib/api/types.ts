@@ -161,6 +161,18 @@ export interface RejectResponse {
   reason: string | null;
 }
 
+/** `GET /api/v1/decisions/log` element (backend DecisionResponse). One resolved
+ *  decision-memory note — the founder-approval audit trail. `decision_kind` is
+ *  the directional decision recorded (e.g. `must-link` / `cannot-link`);
+ *  `proposal_id` links back to the proposal it resolved (when known). */
+export interface DecisionLogEntry {
+  id: string;
+  proposal_id: string | null;
+  decision_kind: string;
+  actor_id: string | null;
+  created_at: string;
+}
+
 /** `GET /api/v1/safemode/queue` element (backend SafeModeItemResponse). */
 export interface SafeModeItem {
   id: string;
