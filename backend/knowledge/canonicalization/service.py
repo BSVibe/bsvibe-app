@@ -24,7 +24,7 @@ from backend.knowledge.canonicalization import models, paths
 from backend.knowledge.canonicalization.decisions import DecisionMemory
 from backend.knowledge.canonicalization.index import CanonicalizationIndex
 from backend.knowledge.canonicalization.lock import AsyncIOMutationLock
-from backend.knowledge.canonicalization.policies import PolicyResolver
+from backend.knowledge.canonicalization.policies import PolicyConflictError, PolicyResolver
 from backend.knowledge.canonicalization.resolver import TagResolver
 from backend.knowledge.canonicalization.scoring import CanonicalizationScorer
 from backend.knowledge.canonicalization.store import NoteStore
@@ -394,8 +394,17 @@ class CanonicalizationService:
         if self._scorer is not None:
             entry.scoring = await self._scorer.score(entry)
 
-        # Safe Mode permission policy (Handoff §13 steps 10-11)
-        if not force_approved and self._safe_mode():
+        # Safe Mode permission policy (Handoff §13 steps 10-11). Safe Mode is
+        # NOT "all changes are risky" — it gates GENUINE risk. A low-risk action
+        # (allow-listed kind, score at/above the policy's auto_apply_threshold,
+        # no deterministic risk reason) auto-applies even under Safe Mode; only
+        # risky actions (knowledge conflicts, oversized blast radius, or kinds
+        # outside the allow-list) are queued for founder approval.
+        if (
+            not force_approved
+            and self._safe_mode()
+            and not await self._safe_mode_permits_auto_apply(entry)
+        ):
             return await self._handle_safe_mode(entry, validation, previous_status, actor)
 
         # Slice 1 has no scoring/Safe Mode/policy — go straight to effects
@@ -427,7 +436,10 @@ class CanonicalizationService:
             entry.permission.safe_mode = True
             entry.permission.decision = "approved"
         else:
-            entry.permission.safe_mode = False
+            # Record whether Safe Mode was on when this auto-applied — a low-risk
+            # action can auto-apply *under* Safe Mode (decision stays auto_apply,
+            # but the audit trail shows Safe Mode was in effect).
+            entry.permission.safe_mode = self._safe_mode()
             entry.permission.decision = "auto_apply"
         entry.permission.actor = actor
         entry.permission.decided_at = now
@@ -473,6 +485,42 @@ class CanonicalizationService:
         )
 
     # ---------------------------------------------------------- safe mode
+
+    async def _safe_mode_permits_auto_apply(self, entry: models.ActionEntry) -> bool:
+        """Decide whether a Safe-Mode action is low-risk enough to auto-apply.
+
+        Consults the active ``merge-auto-apply`` policy's ``safe_mode_on`` block
+        (the risk model the scorer already feeds) — auto-apply requires ALL of:
+
+        * a risk signal exists (scorer + policy wired, scoring completed); when
+          no signal is available we fall back to the conservative queue;
+        * the action kind is in ``auto_action_kinds`` (decisions/policies are
+          never auto-applied — they always require approval under Safe Mode);
+        * ``stability_score >= auto_apply_threshold`` — each deterministic risk
+          reason (knowledge conflict, oversized blast radius) drops the score,
+          so a conflicting merge falls below the bar and is queued.
+
+        Returns ``False`` (→ queue for approval) on any missing signal or any
+        risk — Safe Mode stays strict about *genuine* risk while letting routine
+        knowledge accrual settle automatically.
+        """
+        scoring = entry.scoring
+        if self._scorer is None or self._policies is None or scoring is None:
+            return False
+        if scoring.status != "completed":
+            return False
+        try:
+            policy = await self._policies.select(kind="merge-auto-apply", scope={})
+        except PolicyConflictError:
+            return False
+        if policy is None:
+            return False
+        safe_on = policy.params.get("safe_mode_on", {})
+        if entry.kind not in safe_on.get("auto_action_kinds", []):
+            return False
+        threshold = float(safe_on.get("auto_apply_threshold", 1.0))
+        score = scoring.stability_score
+        return score is not None and score >= threshold
 
     async def _handle_safe_mode(
         self,

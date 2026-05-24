@@ -471,10 +471,12 @@ class _LazyGardenPromoter:
 
     async def promote(self) -> object:
         # Lazy heavy imports — keep the worker entrypoint cheap.
+        from backend.knowledge.canonicalization.decisions import DecisionMemory  # noqa: PLC0415
         from backend.knowledge.canonicalization.index import (  # noqa: PLC0415
             InMemoryCanonicalizationIndex,
         )
         from backend.knowledge.canonicalization.lock import AsyncIOMutationLock  # noqa: PLC0415
+        from backend.knowledge.canonicalization.policies import PolicyResolver  # noqa: PLC0415
         from backend.knowledge.canonicalization.promotion import (  # noqa: PLC0415
             GardenObservationPromoter,
         )
@@ -492,12 +494,25 @@ class _LazyGardenPromoter:
 
         index = InMemoryCanonicalizationIndex()
         await index.initialize(storage)
+        store = NoteStore(storage)
+        # Wire the policy + decision memory so the service has a risk SIGNAL: the
+        # scorer is built only when both are present (Class_Diagram §5). Without
+        # them the Safe Mode gate has nothing to score and conservatively queues
+        # EVERY action — which is exactly why a Safe-Mode workspace's knowledge
+        # never settled (the trust loop treated 'add knowledge' as risk). With
+        # the policy wired, the gate auto-applies low-risk anchors and queues
+        # only genuine risk. bootstrap_defaults is idempotent (skips existing).
+        policies = PolicyResolver(index=index, store=store)
+        await policies.bootstrap_defaults()
+        decisions = DecisionMemory(index=index, store=store)
         safe_mode = self._safe_mode
         service = CanonicalizationService(
-            store=NoteStore(storage),
+            store=store,
             lock=AsyncIOMutationLock(),
             index=index,
             resolver=TagResolver(index=index),
+            decisions=decisions,
+            policies=policies,
             safe_mode=lambda: safe_mode,
         )
         return await GardenObservationPromoter(service).promote()
