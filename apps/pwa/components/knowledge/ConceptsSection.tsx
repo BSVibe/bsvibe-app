@@ -18,7 +18,7 @@ export default function ConceptsSection({
   items: Concept[];
   failed: boolean;
 }) {
-  const t = useTranslations("inside");
+  const t = useTranslations("knowledge");
   return (
     <section className="inside-block" aria-label={t("whatIKnow")}>
       <header className="inside-block__head">

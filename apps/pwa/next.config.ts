@@ -7,6 +7,11 @@ import createNextIntlPlugin from "next-intl/plugin";
 // server-side proxy. See lib/api/client.ts for the base-prefix logic.
 const config: NextConfig = {
   reactStrictMode: true,
+  // The "Inside" surface was relabeled "Knowledge" and moved to /knowledge.
+  // Keep any old /inside link (bookmark, external ref) working.
+  async redirects() {
+    return [{ source: "/inside", destination: "/knowledge", permanent: true }];
+  },
 };
 
 // next-intl WITHOUT i18n routing: the request config (i18n/request.ts) picks

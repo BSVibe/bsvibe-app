@@ -1,27 +1,33 @@
 "use client";
 
-import { listConcepts, listObservations } from "@/lib/api/inside";
+import { listConcepts, listObservations } from "@/lib/api/knowledge";
 import type { Concept, Observation } from "@/lib/api/types";
 import { useTranslations } from "next-intl";
 import { useEffect, useState } from "react";
 import ConceptsSection from "./ConceptsSection";
+import KnowledgeGraphView from "./KnowledgeGraphView";
 import ObservationsSection from "./ObservationsSection";
 
 /**
- * The Inside surface (the left-rail / mobile "Inside" route). The founder's
- * calm, read-only window into what the AI has learned — the trust ratchet's
- * accumulated knowledge. Two sections, each consuming a REAL backend list:
+ * The Knowledge surface (the left-rail / mobile "Knowledge" route, formerly
+ * "Inside"). The founder's calm, read-only window into what the AI has learned
+ * — the trust ratchet's accumulated knowledge.
+ *
+ * The PRIMARY view is a force-directed knowledge graph (concepts + how they
+ * relate), sourced from GET /api/v1/inside/graph. Below it sit the two existing
+ * lists, each consuming a REAL backend list, so the surface stays useful even
+ * when the graph is sparse:
  *
  *  - "What I know"        ← GET /api/v1/inside/concepts      (canonical anchors —
  *    the settled concepts the canonicalization promoter graduated)
  *  - "Recently observed"  ← GET /api/v1/inside/observations  (raw garden notes
  *    the SettleWorker deposited, unpromoted)
  *
- * Read-only by design: there are no mutations on this surface. Each list loads
- * independently; one failing read shows a calm inline note for THAT section
- * rather than blanking the page (the other section still renders). A fresh
- * workspace — nothing learned, nothing observed — shows a calm "I haven't
- * learned anything yet" rather than a blank page.
+ * Read-only by design: there are no mutations on this surface. The graph + each
+ * list load independently; one failing read shows a calm inline note for THAT
+ * part rather than blanking the page. A fresh workspace — nothing learned,
+ * nothing observed — shows a calm "I haven't learned anything yet" for the
+ * lists, and the graph shows its own "No connections yet" empty state.
  */
 type SectionResult<T> = { data: T[]; failed: boolean };
 
@@ -35,10 +41,10 @@ async function loadSection<T>(fetcher: () => Promise<T[]>): Promise<SectionResul
   }
 }
 
-export default function Inside() {
+export default function Knowledge() {
   const [concepts, setConcepts] = useState<SectionResult<Concept> | null>(null);
   const [observations, setObservations] = useState<SectionResult<Observation> | null>(null);
-  const t = useTranslations("inside");
+  const t = useTranslations("knowledge");
 
   useEffect(() => {
     let active = true;
@@ -61,7 +67,7 @@ export default function Inside() {
     );
   }
 
-  // A genuinely fresh workspace: both reads succeeded and returned nothing.
+  // A genuinely fresh workspace: both list reads succeeded and returned nothing.
   const nothingLearned =
     !concepts.failed &&
     !observations.failed &&
@@ -72,6 +78,10 @@ export default function Inside() {
     <div className="inside">
       <h1 className="inside__heading">{t("heading")}</h1>
       <p className="inside__lede">{t("lede")}</p>
+
+      {/* Primary view — the force-directed knowledge graph. Self-contained
+          (own loading/empty/error states), so it never blanks the lists. */}
+      <KnowledgeGraphView />
 
       {nothingLearned ? (
         <section className="inside-empty" aria-label={t("heading")}>

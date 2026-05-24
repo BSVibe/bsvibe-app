@@ -17,7 +17,7 @@ export default function ObservationsSection({
   items: Observation[];
   failed: boolean;
 }) {
-  const t = useTranslations("inside");
+  const t = useTranslations("knowledge");
   return (
     <section className="inside-block" aria-label={t("recentlyObserved")}>
       <header className="inside-block__head">

@@ -38,7 +38,7 @@ export function DecisionsIcon(props: SVGProps<SVGSVGElement>) {
   );
 }
 
-export function InsideIcon(props: SVGProps<SVGSVGElement>) {
+export function KnowledgeIcon(props: SVGProps<SVGSVGElement>) {
   return (
     <Svg {...props}>
       <circle cx="6" cy="7" r="2" />

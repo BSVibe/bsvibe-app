@@ -10,7 +10,7 @@ import {
   ActivityIcon,
   BriefIcon,
   DecisionsIcon,
-  InsideIcon,
+  KnowledgeIcon,
   PlusIcon,
   SettingsIcon,
   SkillsIcon,
@@ -21,7 +21,7 @@ const ICONS: Record<NavKey, typeof BriefIcon> = {
   brief: BriefIcon,
   decisions: DecisionsIcon,
   activity: ActivityIcon,
-  inside: InsideIcon,
+  knowledge: KnowledgeIcon,
   skills: SkillsIcon,
 };
 

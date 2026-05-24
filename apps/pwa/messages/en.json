@@ -17,7 +17,7 @@
     "brief": "Brief",
     "decisions": "Decisions",
     "activity": "Activity",
-    "inside": "Inside",
+    "knowledge": "Knowledge",
     "skills": "Skills",
     "settings": "Settings"
   },
@@ -135,8 +135,8 @@
     "deliverablesEmpty": "No delivered artifacts for this run.",
     "openArtifact": "Open artifact"
   },
-  "inside": {
-    "heading": "Inside",
+  "knowledge": {
+    "heading": "Knowledge",
     "lede": "A look at what I’ve learned working with you.",
     "loadingNote": "Looking at what I know…",
     "emptyLine": "I haven’t learned anything yet.",
@@ -147,7 +147,12 @@
     "conceptsEmpty": "No settled concepts yet.",
     "observationsError": "Couldn’t load recent observations just now — try again in a moment.",
     "observationsEmpty": "Nothing observed recently.",
-    "mentions": "{count, plural, one {# mention} other {# mentions}}"
+    "mentions": "{count, plural, one {# mention} other {# mentions}}",
+    "graphLabel": "Knowledge graph",
+    "graphLoading": "Drawing the connections…",
+    "graphEmptyLine": "No connections yet",
+    "graphEmptySub": "Knowledge links will appear here as I learn — concepts and how they relate.",
+    "graphError": "Couldn’t draw the knowledge graph just now — try again in a moment."
   },
   "decisions": {
     "heading": "Decisions",

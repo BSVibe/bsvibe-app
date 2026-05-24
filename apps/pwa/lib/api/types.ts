@@ -209,6 +209,37 @@ export interface Observation {
   captured_at: string | null;
 }
 
+/** `GET /api/v1/inside/graph` node (backend GraphNode). One entity in the
+ *  force-directed knowledge graph: `id` is stable across edges, `label` the
+ *  display name, `kind` the ontology entity type (may be absent), `weight` the
+ *  node's degree (connectedness signal for sizing). Mirrors the backend model
+ *  field-for-field (backend/api/v1/inside.py). */
+export interface KnowledgeGraphNode {
+  id: string;
+  label: string;
+  kind?: string | null;
+  weight: number;
+}
+
+/** `GET /api/v1/inside/graph` edge (backend GraphEdge). `source`/`target` are
+ *  `KnowledgeGraphNode` ids; `type` the relationship type (may be absent);
+ *  `weight` the edge importance. Mirrors the backend model 1:1. */
+export interface KnowledgeGraphEdge {
+  source: string;
+  target: string;
+  type?: string | null;
+  weight: number;
+}
+
+/** `GET /api/v1/inside/graph` response (backend GraphResponse). The workspace
+ *  knowledge graph as nodes + edges for a force-directed view. An empty/sparse
+ *  workspace returns `{ nodes: [], edges: [] }`. Edges only reference nodes
+ *  present in `nodes`. */
+export interface KnowledgeGraph {
+  nodes: KnowledgeGraphNode[];
+  edges: KnowledgeGraphEdge[];
+}
+
 // ── Connectors (REAL endpoint /api/v1/connectors) ─────────────────────────
 
 /** The connector names the backend's `ConnectorCreate.connector` validator

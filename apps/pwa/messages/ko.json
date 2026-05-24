@@ -17,7 +17,7 @@
     "brief": "브리프",
     "decisions": "결정",
     "activity": "활동",
-    "inside": "내부",
+    "knowledge": "지식",
     "skills": "스킬",
     "settings": "설정"
   },
@@ -135,8 +135,8 @@
     "deliverablesEmpty": "이 작업에는 전달된 결과물이 없습니다.",
     "openArtifact": "결과물 열기"
   },
-  "inside": {
-    "heading": "내부",
+  "knowledge": {
+    "heading": "지식",
     "lede": "함께 일하며 배운 것을 살펴봅니다.",
     "loadingNote": "알고 있는 것을 살펴보는 중…",
     "emptyLine": "아직 배운 것이 없어요.",
@@ -147,7 +147,12 @@
     "conceptsEmpty": "아직 정리된 개념이 없습니다.",
     "observationsError": "지금은 최근 관찰을 불러오지 못했어요 — 잠시 후 다시 시도해 주세요.",
     "observationsEmpty": "최근 관찰된 내용이 없습니다.",
-    "mentions": "{count, plural, other {언급 #회}}"
+    "mentions": "{count, plural, other {언급 #회}}",
+    "graphLabel": "지식 그래프",
+    "graphLoading": "연결을 그리는 중…",
+    "graphEmptyLine": "아직 연결이 없어요",
+    "graphEmptySub": "배워 가면서 지식 사이의 연결이 여기에 나타납니다 — 개념과 그 관계들이요.",
+    "graphError": "지금은 지식 그래프를 그리지 못했어요 — 잠시 후 다시 시도해 주세요."
   },
   "decisions": {
     "heading": "결정",

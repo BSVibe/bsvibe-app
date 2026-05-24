@@ -1128,6 +1128,72 @@ main.login {
   padding: 2px 9px;
 }
 
+/* ── Knowledge graph (force-directed primary view) ────────────────────────── */
+
+.knowledge-graph {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.knowledge-graph .section-label {
+  margin: 0;
+}
+
+/* The canvas host: a calm, bordered surface the force graph paints onto. A
+   fixed height gives the simulation room without pushing the lists off-screen;
+   the lib sizes its canvas to this box. The background uses the shared surface
+   token so it reads correctly in light + dark (the node/edge/text colours are
+   passed into the canvas from the same tokens). */
+.knowledge-graph__canvas {
+  height: 360px;
+  background: var(--surface);
+  border: 1px solid var(--hair-strong);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.knowledge-graph__canvas canvas {
+  display: block;
+}
+
+.knowledge-graph__empty {
+  background: var(--surface);
+  border: 1px dashed var(--hair-strong);
+  border-radius: var(--radius);
+  padding: 32px 20px;
+  text-align: center;
+}
+
+.knowledge-graph__empty-line {
+  margin: 0;
+  font-size: 0.95rem;
+  font-weight: 550;
+  color: var(--ink-2);
+}
+
+.knowledge-graph__empty-sub {
+  margin: 6px 0 0;
+  font-size: 0.85rem;
+  color: var(--ink-3);
+}
+
+.knowledge-graph__note {
+  margin: 0;
+  padding: 16px 18px;
+  background: var(--surface);
+  border: 1px solid var(--hair-strong);
+  border-radius: var(--radius);
+  font-size: 0.85rem;
+  color: var(--ink-3);
+}
+
+@media (max-width: 720px) {
+  .knowledge-graph__canvas {
+    height: 280px;
+  }
+}
+
 /* ── Activity (run history) ───────────────────────────────────────────────── */
 
 .activity {

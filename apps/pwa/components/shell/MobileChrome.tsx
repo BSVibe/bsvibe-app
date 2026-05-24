@@ -4,14 +4,21 @@ import { usePendingDecisionsCount } from "@/lib/decisions/pending-count";
 import { useTranslations } from "next-intl";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { ActivityIcon, BellIcon, BriefIcon, DecisionsIcon, InsideIcon, SkillsIcon } from "./icons";
+import {
+  ActivityIcon,
+  BellIcon,
+  BriefIcon,
+  DecisionsIcon,
+  KnowledgeIcon,
+  SkillsIcon,
+} from "./icons";
 import { type NavKey, PRIMARY_NAV } from "./nav";
 
 const ICONS: Record<NavKey, typeof BriefIcon> = {
   brief: BriefIcon,
   decisions: DecisionsIcon,
   activity: ActivityIcon,
-  inside: InsideIcon,
+  knowledge: KnowledgeIcon,
   skills: SkillsIcon,
 };
 
@@ -20,7 +27,7 @@ const TITLE_KEYS: Record<string, NavKey | "settings"> = {
   "/brief": "brief",
   "/decisions": "decisions",
   "/activity": "activity",
-  "/inside": "inside",
+  "/knowledge": "knowledge",
   "/skills": "skills",
   "/settings": "settings",
 };
