@@ -81,6 +81,27 @@ async def test_preflight_options_allowed_origin_returns_acao(cors_app: object) -
 
 
 @pytest.mark.asyncio
+async def test_preflight_put_method_allowed(cors_app: object) -> None:
+    """A PUT preflight must pass — the notification-prefs save uses
+    ``PUT /api/v1/notifications/prefs``; if PUT is missing from allow_methods
+    the browser blocks the save (regression: it once was)."""
+    transport = httpx.ASGITransport(app=cors_app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.options(
+            "/api/v1/notifications/prefs",
+            headers={
+                "Origin": _ALLOWED,
+                "Access-Control-Request-Method": "PUT",
+                "Access-Control-Request-Headers": "authorization,content-type",
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.headers["access-control-allow-origin"] == _ALLOWED
+    assert "PUT" in response.headers["access-control-allow-methods"]
+
+
+@pytest.mark.asyncio
 async def test_preflight_disallowed_origin_has_no_acao(cors_app: object) -> None:
     transport = httpx.ASGITransport(app=cors_app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
