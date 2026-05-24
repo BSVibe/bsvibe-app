@@ -11,8 +11,8 @@
  */
 
 import { ApiError } from "@/lib/api/client";
-import { getSkill, listSkills } from "@/lib/api/skills";
-import type { Skill } from "@/lib/api/types";
+import { createSkill, getSkill, listSkills } from "@/lib/api/skills";
+import type { Skill, SkillCreate } from "@/lib/api/types";
 import { type Session, clearSession, setSession } from "@/lib/auth/session";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -92,5 +92,33 @@ describe("skills client", () => {
     ) as unknown as typeof fetch;
 
     await expect(getSkill("nope")).rejects.toBeInstanceOf(ApiError);
+  });
+
+  it("createSkill POSTs /api/v1/skills with the create body and parses the 201", async () => {
+    const fetchMock = okFetch(SKILL, 201);
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    const input: SkillCreate = {
+      name: "Blog Writer",
+      summary: "Drafts a technical blog post in the house voice.",
+      system_prompt: "You write calm, precise technical prose.",
+    };
+    const res = await createSkill(input);
+
+    expect(res).toEqual(SKILL);
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe("/api/v1/skills");
+    expect((init.method ?? "GET").toUpperCase()).toBe("POST");
+    expect(JSON.parse(init.body as string)).toEqual(input);
+  });
+
+  it("surfaces an ApiError (409) when the skill name is already taken", async () => {
+    global.fetch = vi.fn(
+      async () => new Response("conflict", { status: 409 }),
+    ) as unknown as typeof fetch;
+
+    await expect(
+      createSkill({ name: "blog-writer", summary: "s", system_prompt: "p" }),
+    ).rejects.toBeInstanceOf(ApiError);
   });
 });
