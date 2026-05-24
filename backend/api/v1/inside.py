@@ -30,13 +30,18 @@ from pathlib import PurePosixPath
 from typing import Annotated
 
 import networkx as nx
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, ConfigDict
 
 from backend.api.deps import get_workspace_id
 from backend.api.v1.decisions import _vault_root
-from backend.knowledge.canonicalization.concept_graph import build_concept_graph
+from backend.knowledge.canonicalization.concept_graph import (
+    build_concept_graph,
+    concept_ids_in_observation,
+)
 from backend.knowledge.canonicalization.index import InMemoryCanonicalizationIndex
+from backend.knowledge.canonicalization.resolver import TagResolver
+from backend.knowledge.canonicalization.store import NoteStore
 from backend.knowledge.graph.markdown_utils import (
     body_after_frontmatter,
     extract_frontmatter,
@@ -207,6 +212,62 @@ class ObservationResponse(BaseModel):
     captured_at: str | None = None
 
 
+class RelatedConcept(BaseModel):
+    """One neighbour of an inspected concept in the workspace concept graph.
+
+    ``id``/``name`` identify the related anchor (clickable to pivot the
+    inspector onto it); ``weight`` is the co-occurrence weight from
+    :func:`build_concept_graph` — how strongly the two concepts are related
+    (number of shared observations for a ``co-occurs`` edge, ``1.0`` for an
+    ``alias-of`` link).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    name: str
+    weight: float
+
+
+class SourceObservation(BaseModel):
+    """One garden observation that references the inspected concept.
+
+    These are the raw settle notes whose tags resolve onto this concept (the
+    *origin / usage* of the anchor) — derived with the exact tag→concept
+    resolution the graph builder uses. ``id`` is the note's vault path;
+    ``title`` its H1; ``excerpt`` a short body blurb; ``captured_at`` the
+    writer-stamped deposit date (may be absent).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    title: str
+    excerpt: str
+    captured_at: str | None = None
+
+
+class ConceptDetailResponse(BaseModel):
+    """The read-only inspector behind a clicked concept.
+
+    Identity (``id`` / ``name`` / ``aliases``) plus the two connectedness
+    signals the founder cares about: ``related`` (the concept's neighbours in
+    the deterministic concept graph, with weight) and ``observations`` (the
+    garden notes that reference it — its origin/usage). Strictly read-only:
+    Stitch's Edit/Retract affordances map to canonicalization deprecate/edit
+    actions that have no v1 endpoint yet and are intentionally not surfaced
+    here.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    name: str
+    aliases: list[str]
+    related: list[RelatedConcept]
+    observations: list[SourceObservation]
+
+
 def _excerpt(body: str) -> str:
     """First non-empty body line (after the H1), truncated for a calm blurb."""
     for raw in body.splitlines():
@@ -251,6 +312,99 @@ async def list_concepts(
             )
         )
     return out
+
+
+@router.get("/concepts/{concept_id}")
+async def get_concept_detail(
+    concept_id: str,
+    index: Annotated[InMemoryCanonicalizationIndex, Depends(build_inside_index)],
+    storage: Annotated[StorageBackend, Depends(build_inside_storage)],
+    graph: Annotated[nx.MultiDiGraph, Depends(build_inside_graph)],
+) -> ConceptDetailResponse:
+    """Inspect one canonical anchor — identity, related concepts, origin/usage.
+
+    Returns the concept's display name + aliases, its **related concepts** (its
+    neighbours in :func:`build_concept_graph`, with the co-occurrence weight),
+    and its **source observations** — the garden notes whose tags resolve onto
+    this concept (title + short excerpt + date), resolved the SAME way the graph
+    builder resolves tags → concepts (so the inspector and the graph never
+    drift). Strictly read-only.
+
+    A 404 is returned when ``concept_id`` is not an active concept (a tombstone,
+    a deprecated id, or an unknown/other-workspace id is simply not on the
+    wall) — never a 500 or a misleading empty 200.
+    """
+    concept = await index.get_active_concept(concept_id)
+    if concept is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"concept not found: {concept_id}",
+        )
+
+    # Related = the concept's graph neighbours. The builder emits a single
+    # undirected edge per relationship (stored in one direction), so collapse
+    # both successor + predecessor edges and keep the strongest weight seen for
+    # each neighbour. Self-loops (defensive) are excluded.
+    related_weights: dict[str, float] = {}
+    if graph.has_node(concept_id):
+        for _src, neighbour, attrs in graph.out_edges(concept_id, data=True):
+            if neighbour == concept_id:
+                continue
+            weight = float(attrs.get("weight", 0.5))
+            related_weights[neighbour] = max(related_weights.get(neighbour, 0.0), weight)
+        for neighbour, _dst, attrs in graph.in_edges(concept_id, data=True):
+            if neighbour == concept_id:
+                continue
+            weight = float(attrs.get("weight", 0.5))
+            related_weights[neighbour] = max(related_weights.get(neighbour, 0.0), weight)
+
+    related = [
+        RelatedConcept(
+            id=str(neighbour),
+            name=str(graph.nodes[neighbour].get("name") or neighbour),
+            weight=weight,
+        )
+        for neighbour, weight in related_weights.items()
+    ]
+    # Strongest relationship first, then a stable id tiebreaker.
+    related.sort(key=lambda r: (-r.weight, r.id))
+
+    # Source observations = the garden notes whose tags resolve onto THIS
+    # concept, using the exact resolution the graph builder uses (so the
+    # inspector's "origin/usage" matches the co-occurrence edges).
+    resolver = TagResolver(index=index)
+    store = NoteStore(storage)
+    observations: list[tuple[str | None, str, SourceObservation]] = []
+    for path in await store.list_garden_paths():
+        present = await concept_ids_in_observation(path, store, resolver)
+        if concept_id not in present:
+            continue
+        text = await storage.read(path)
+        fm = extract_frontmatter(text)
+        captured_at = fm.get("captured_at")
+        captured_str = captured_at if isinstance(captured_at, str) else None
+        observations.append(
+            (
+                captured_str,
+                path,
+                SourceObservation(
+                    id=path,
+                    title=extract_title(text) or PurePosixPath(path).stem,
+                    excerpt=_excerpt(body_after_frontmatter(text)),
+                    captured_at=captured_str,
+                ),
+            )
+        )
+    # Newest first: captured_at descending, then path descending (stable).
+    observations.sort(key=lambda r: (r[0] or "", r[1]), reverse=True)
+
+    return ConceptDetailResponse(
+        id=concept.concept_id,
+        name=concept.display,
+        aliases=list(concept.aliases),
+        related=related,
+        observations=[resp for _captured, _path, resp in observations],
+    )
 
 
 @router.get("/observations")

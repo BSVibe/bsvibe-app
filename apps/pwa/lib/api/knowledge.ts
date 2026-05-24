@@ -18,12 +18,19 @@
  *  plain call asks for exactly the calm snapshot it serves. */
 
 import { apiFetch } from "./client";
-import type { Concept, KnowledgeGraph, Observation } from "./types";
+import type { Concept, ConceptDetail, KnowledgeGraph, Observation } from "./types";
 
 /** The workspace's canonical anchors (settled concepts), newest first.
  *  Backend default limit is 50 (clamped 1..200). */
 export function listConcepts(limit = 50): Promise<Concept[]> {
   return apiFetch<Concept[]>(`/api/v1/inside/concepts?limit=${limit}`);
+}
+
+/** Inspect one concept — identity, related concepts (graph neighbours with
+ *  weight), and the source observations that reference it. Read-only; the
+ *  backend 404s when the id is not an active concept. */
+export function getConceptDetail(id: string): Promise<ConceptDetail> {
+  return apiFetch<ConceptDetail>(`/api/v1/inside/concepts/${encodeURIComponent(id)}`);
 }
 
 /** Recent garden observation notes (raw, unpromoted), newest first.

@@ -209,6 +209,42 @@ export interface Concept {
   updated_at: string;
 }
 
+/** `GET /api/v1/inside/concepts/{id}` related-concept (backend RelatedConcept).
+ *  One neighbour of the inspected concept in the deterministic concept graph;
+ *  `weight` is the co-occurrence weight (shared observations for a `co-occurs`
+ *  edge, 1.0 for an `alias-of` link). Clickable to pivot the inspector onto the
+ *  neighbour. Mirrors the backend model 1:1 (backend/api/v1/inside.py). */
+export interface RelatedConcept {
+  id: string;
+  name: string;
+  weight: number;
+}
+
+/** `GET /api/v1/inside/concepts/{id}` source observation (backend
+ *  SourceObservation). One garden note whose tags resolve onto the inspected
+ *  concept — its origin/usage. `captured_at` is the writer-stamped deposit date
+ *  (may be absent). Mirrors the backend model 1:1. */
+export interface ConceptSourceObservation {
+  id: string;
+  title: string;
+  excerpt: string;
+  captured_at: string | null;
+}
+
+/** `GET /api/v1/inside/concepts/{id}` response (backend ConceptDetailResponse).
+ *  The read-only inspector behind a clicked concept: identity (`id` / `name` /
+ *  `aliases`) plus its `related` graph neighbours (with weight) and the
+ *  `observations` that reference it. Read-only — Stitch's Edit/Retract map to
+ *  canonicalization actions with no v1 endpoint yet (deferred). Mirrors the
+ *  backend model field-for-field. */
+export interface ConceptDetail {
+  id: string;
+  name: string;
+  aliases: string[];
+  related: RelatedConcept[];
+  observations: ConceptSourceObservation[];
+}
+
 /** `GET /api/v1/inside/observations` element (backend ObservationResponse). One
  *  recent garden observation — a raw, unpromoted settle note the SettleWorker
  *  deposited. `captured_at` is the writer-stamped deposit date (may be absent

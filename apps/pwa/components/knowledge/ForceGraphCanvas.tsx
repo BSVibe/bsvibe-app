@@ -23,11 +23,13 @@ interface Palette {
   node: string;
   edge: string;
   text: string;
+  /** Muted tone for nodes/labels that fall outside the active search filter. */
+  dim: string;
 }
 
 function readPalette(): Palette {
   if (typeof window === "undefined") {
-    return { node: "#6b6a66", edge: "#e3e1db", text: "#37352f" };
+    return { node: "#6b6a66", edge: "#e3e1db", text: "#37352f", dim: "#c9c7c1" };
   }
   const styles = getComputedStyle(document.documentElement);
   const token = (name: string, fallback: string) =>
@@ -36,6 +38,7 @@ function readPalette(): Palette {
     node: token("--ink-2", "#6b6a66"),
     edge: token("--hair-strong", "#e3e1db"),
     text: token("--ink", "#37352f"),
+    dim: token("--ink-3", "#c9c7c1"),
   };
 }
 
@@ -50,7 +53,19 @@ interface ForceLink {
   target: string;
 }
 
-export default function ForceGraphCanvas({ graph }: { graph: KnowledgeGraph }) {
+export default function ForceGraphCanvas({
+  graph,
+  filter = "",
+  onNodeClick,
+}: {
+  graph: KnowledgeGraph;
+  /** Search needle — matching nodes stay vivid, non-matching nodes dim. */
+  filter?: string;
+  /** Fired with a node id when a node is tapped (opens the inspector). */
+  onNodeClick?: (id: string) => void;
+}) {
+  const needle = filter.trim().toLowerCase();
+  const isMatch = (label: string) => needle === "" || label.toLowerCase().includes(needle);
   // The lib's d3 sim resolves string link.source/target against node ids, so we
   // pass the raw ids and let the built-in link force do the resolution.
   const data = useMemo(
@@ -100,7 +115,7 @@ export default function ForceGraphCanvas({ graph }: { graph: KnowledgeGraph }) {
       nodeId="id"
       nodeLabel="label"
       nodeVal="val"
-      nodeColor={() => palette.node}
+      nodeColor={(node: ForceNode) => (isMatch(node.label) ? palette.node : palette.dim)}
       linkColor={() => palette.edge}
       linkWidth={1}
       backgroundColor="rgba(0,0,0,0)"
@@ -108,6 +123,7 @@ export default function ForceGraphCanvas({ graph }: { graph: KnowledgeGraph }) {
       enablePanInteraction
       cooldownTicks={120}
       warmupTicks={40}
+      onNodeClick={(node: ForceNode) => onNodeClick?.(node.id)}
       // Draw the node label beneath each node so the graph reads as knowledge,
       // not anonymous dots.
       nodeCanvasObjectMode={() => "after"}
@@ -117,7 +133,7 @@ export default function ForceGraphCanvas({ graph }: { graph: KnowledgeGraph }) {
         ctx.font = `${fontSize}px ui-sans-serif, system-ui, sans-serif`;
         ctx.textAlign = "center";
         ctx.textBaseline = "top";
-        ctx.fillStyle = palette.text;
+        ctx.fillStyle = isMatch(node.label) ? palette.text : palette.dim;
         ctx.fillText(node.label, node.x, node.y + 5 / globalScale);
       }}
     />

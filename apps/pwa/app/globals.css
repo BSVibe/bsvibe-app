@@ -1480,6 +1480,263 @@ main.login {
   }
 }
 
+/* ──────────────────────────────────────────────────────────────────────────
+   Knowledge inspector + filter (feat/knowledge-inspector) — ISOLATED BLOCK.
+   Scoped entirely to `.inside-*` / `.concept-inspector*` selectors added by
+   this lift; touches no shared tokens. Safe to merge alongside parallel lifts.
+   ────────────────────────────────────────────────────────────────────────── */
+
+/* Filter / search box above the graph + lists. */
+.inside-search {
+  margin: 2px 0 4px;
+}
+
+.inside-search__input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 9px 14px;
+  font-size: 0.9rem;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--hair-strong);
+  border-radius: var(--radius);
+}
+
+.inside-search__input::placeholder {
+  color: var(--ink-3);
+}
+
+.inside-search__input:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+}
+
+/* Two-column layout: graph + lists on the left, inspector drawer on the right.
+   Collapses to a single column below the breakpoint (inspector stacks under). */
+.inside-layout {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 20px;
+  align-items: start;
+}
+
+@media (min-width: 920px) {
+  .inside-layout:has(.inside-layout__aside) {
+    grid-template-columns: minmax(0, 1fr) 320px;
+  }
+}
+
+.inside-layout__main {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  min-width: 0;
+}
+
+/* Clickable concept rows — the button fills the row, resetting native styling. */
+.inside-row__button {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  width: 100%;
+  padding: 0;
+  background: none;
+  border: none;
+  text-align: left;
+  cursor: pointer;
+  color: inherit;
+  font: inherit;
+}
+
+.inside-row--clickable:hover {
+  background: var(--accent-bg);
+}
+
+.inside-row__button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+  border-radius: 4px;
+}
+
+/* The inspector drawer. */
+.concept-inspector {
+  position: sticky;
+  top: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 18px;
+  background: var(--surface);
+  border: 1px solid var(--hair-strong);
+  border-radius: var(--radius);
+}
+
+.concept-inspector__head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.concept-inspector__name {
+  margin: 0;
+  font-size: 1.05rem;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.concept-inspector__close {
+  margin-left: auto;
+  flex: none;
+  width: 28px;
+  height: 28px;
+  font-size: 1.2rem;
+  line-height: 1;
+  color: var(--ink-3);
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.concept-inspector__close:hover {
+  color: var(--ink);
+  border-color: var(--hair-strong);
+}
+
+.concept-inspector__note {
+  margin: 0;
+  font-size: 0.86rem;
+  color: var(--ink-3);
+}
+
+.concept-inspector__body {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.concept-inspector__block {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.concept-inspector__block-label {
+  margin: 0;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+
+.concept-inspector__empty {
+  margin: 0;
+  font-size: 0.84rem;
+  color: var(--ink-3);
+}
+
+/* Related concepts — clickable chips that pivot the inspector. */
+.concept-inspector__related {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.concept-inspector__chip {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 7px;
+  padding: 4px 11px;
+  font: inherit;
+  color: var(--ink);
+  background: var(--accent-bg);
+  border: 1px solid transparent;
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+.concept-inspector__chip:hover {
+  border-color: var(--accent);
+}
+
+.concept-inspector__chip-name {
+  font-size: 0.83rem;
+  font-weight: 550;
+}
+
+.concept-inspector__chip-weight {
+  font-size: 0.72rem;
+  color: var(--ink-3);
+}
+
+/* Source observations (origin / usage). */
+.concept-inspector__obs {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.concept-inspector__obs-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.concept-inspector__obs-title {
+  font-size: 0.86rem;
+  font-weight: 550;
+  color: var(--ink);
+}
+
+.concept-inspector__obs-date {
+  margin-left: auto;
+  flex: none;
+  font-size: 0.72rem;
+  color: var(--ink-3);
+}
+
+.concept-inspector__obs-excerpt {
+  margin: 3px 0 0;
+  font-size: 0.82rem;
+  color: var(--ink-2);
+}
+
+/* Deferred Edit / Retract — disabled (no v1 write endpoint yet). */
+.concept-inspector__actions {
+  display: flex;
+  gap: 10px;
+  padding-top: 4px;
+  border-top: 1px solid var(--hair);
+}
+
+.concept-inspector__action {
+  padding: 7px 14px;
+  font: inherit;
+  font-size: 0.83rem;
+  color: var(--ink-2);
+  background: var(--surface);
+  border: 1px solid var(--hair-strong);
+  border-radius: 6px;
+  cursor: not-allowed;
+}
+
+.concept-inspector__action:disabled {
+  opacity: 0.55;
+}
+
+.concept-inspector__action--danger {
+  color: var(--danger, #b3261e);
+}
+
+/* End isolated block (feat/knowledge-inspector). */
+
 /* ── Activity (run history) ───────────────────────────────────────────────── */
 
 .activity {

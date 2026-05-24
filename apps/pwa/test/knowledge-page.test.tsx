@@ -16,9 +16,9 @@
  */
 
 import Knowledge from "@/components/knowledge/Knowledge";
-import type { Concept, KnowledgeGraph, Observation } from "@/lib/api/types";
+import type { Concept, ConceptDetail, KnowledgeGraph, Observation } from "@/lib/api/types";
 import { type Session, clearSession, setSession } from "@/lib/auth/session";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // The canvas lib reaches for a real canvas — stub it. The stub renders a marker
@@ -70,17 +70,26 @@ function json(body: unknown, status = 200) {
   });
 }
 
-/** A route-aware fetch mock for the three Knowledge reads. */
+/** A route-aware fetch mock for the Knowledge reads. The optional `detail`
+ *  handler serves the per-concept inspector read; the `/concepts/{id}` check
+ *  MUST precede the `/concepts` list check (the list path is a prefix). */
 function installFetch(opts: {
   concepts: () => Concept[] | Response;
   observations: () => Observation[] | Response;
   graph: () => KnowledgeGraph | Response;
+  detail?: (id: string) => ConceptDetail | Response;
 }) {
   const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
     const url = String(input);
     if (url.startsWith("/api/v1/inside/graph")) {
       const g = opts.graph();
       return g instanceof Response ? g : json(g);
+    }
+    const detailMatch = url.match(/\/api\/v1\/inside\/concepts\/([^?]+)/);
+    if (detailMatch) {
+      const id = decodeURIComponent(detailMatch[1]);
+      const d = opts.detail?.(id) ?? json("not found", 404);
+      return d instanceof Response ? d : json(d);
     }
     if (url.startsWith("/api/v1/inside/concepts")) {
       const c = opts.concepts();
@@ -210,5 +219,74 @@ describe("Knowledge surface", () => {
     });
     expect(screen.getByRole("region", { name: "What I know" })).toBeInTheDocument();
     expect(screen.getByText(/Couldn’t load recent observations/)).toBeInTheDocument();
+  });
+
+  const OTHER_CONCEPT: Concept = {
+    id: "vaultwarden",
+    name: "Vaultwarden",
+    summary: "Self-hosted password manager.",
+    aliases: [],
+    alias_count: 0,
+    created_at: "2026-05-22T00:00:00Z",
+    updated_at: "2026-05-23T00:00:00Z",
+  };
+
+  const DETAIL: ConceptDetail = {
+    id: "self-hosting",
+    name: "Self-hosting",
+    aliases: ["self host"],
+    related: [{ id: "vaultwarden", name: "Vaultwarden", weight: 1 }],
+    observations: [
+      {
+        id: "garden/seedling/obs.md",
+        title: "Moved the vault to my mini",
+        excerpt: "Cutover went clean.",
+        captured_at: "2026-05-20",
+      },
+    ],
+  };
+
+  it("filters the 'What I know' list by the search box", async () => {
+    installFetch({
+      concepts: () => [CONCEPT, OTHER_CONCEPT],
+      observations: () => [OBSERVATION],
+      graph: () => GRAPH,
+    });
+
+    render(<Knowledge />);
+
+    await waitFor(() => {
+      expect(screen.getByText(CONCEPT.name)).toBeInTheDocument();
+    });
+    expect(screen.getByText(OTHER_CONCEPT.name)).toBeInTheDocument();
+
+    fireEvent.change(screen.getByRole("searchbox"), { target: { value: "vault" } });
+
+    // The non-matching concept is filtered out; the matching one stays.
+    expect(screen.queryByText(CONCEPT.name)).not.toBeInTheDocument();
+    expect(screen.getByText(OTHER_CONCEPT.name)).toBeInTheDocument();
+  });
+
+  it("opens the inspector when a concept in the list is clicked", async () => {
+    installFetch({
+      concepts: () => [CONCEPT],
+      observations: () => [OBSERVATION],
+      graph: () => GRAPH,
+      detail: () => DETAIL,
+    });
+
+    render(<Knowledge />);
+
+    await waitFor(() => {
+      expect(screen.getByText(CONCEPT.name)).toBeInTheDocument();
+    });
+    // The concept row is a button that opens the inspector.
+    fireEvent.click(screen.getByRole("button", { name: new RegExp(CONCEPT.name) }));
+
+    await waitFor(() => {
+      expect(screen.getByRole("complementary", { name: /concept/i })).toBeInTheDocument();
+    });
+    // The inspector shows the detail's source observation.
+    expect(await screen.findByText("Moved the vault to my mini")).toBeInTheDocument();
   });
 });

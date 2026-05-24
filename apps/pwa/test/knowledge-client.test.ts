@@ -10,7 +10,12 @@
  */
 
 import { ApiError } from "@/lib/api/client";
-import { getKnowledgeGraph, listConcepts, listObservations } from "@/lib/api/knowledge";
+import {
+  getConceptDetail,
+  getKnowledgeGraph,
+  listConcepts,
+  listObservations,
+} from "@/lib/api/knowledge";
 import { type Session, clearSession, setSession } from "@/lib/auth/session";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -131,6 +136,56 @@ describe("knowledge surface clients", () => {
     const res = await getKnowledgeGraph();
 
     expect(res).toEqual({ nodes: [], edges: [] });
+  });
+
+  it("getConceptDetail GETs /api/v1/inside/concepts/{id} and parses the detail", async () => {
+    const detail = {
+      id: "self-hosting",
+      name: "Self-hosting",
+      aliases: ["self host"],
+      related: [{ id: "vaultwarden", name: "Vaultwarden", weight: 2 }],
+      observations: [
+        {
+          id: "garden/seedling/obs.md",
+          title: "Moved the vault",
+          excerpt: "Cutover went clean.",
+          captured_at: "2026-05-20",
+        },
+      ],
+    };
+    const fetchMock = okFetch(detail);
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    const res = await getConceptDetail("self-hosting");
+
+    expect(res).toEqual(detail);
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe("/api/v1/inside/concepts/self-hosting");
+    expect((init.method ?? "GET").toUpperCase()).toBe("GET");
+  });
+
+  it("getConceptDetail URL-encodes the concept id", async () => {
+    const fetchMock = okFetch({
+      id: "a/b",
+      name: "A/B",
+      aliases: [],
+      related: [],
+      observations: [],
+    });
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    await getConceptDetail("a/b");
+
+    const [url] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe("/api/v1/inside/concepts/a%2Fb");
+  });
+
+  it("surfaces an ApiError (with status) on a 404 concept detail read", async () => {
+    global.fetch = vi.fn(
+      async () => new Response("not found", { status: 404 }),
+    ) as unknown as typeof fetch;
+
+    await expect(getConceptDetail("nope")).rejects.toMatchObject({ status: 404 });
   });
 
   it("surfaces an ApiError on a non-ok concepts read", async () => {
