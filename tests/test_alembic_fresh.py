@@ -121,7 +121,9 @@ def test_fresh_pg_upgrade_round_trip():
     # Phase 1 — fresh upgrade.
     _alembic(["upgrade", "head"], env_extra=env_extra)
     stamped = asyncio.run(_stamped_head(url))
-    assert stamped == "executor_tasks", f"expected head executor_tasks, got {stamped}"
+    assert stamped == "model_account_nullable_key", (
+        f"expected head model_account_nullable_key, got {stamped}"
+    )
 
     # Phase 2 — full downgrade. Verifies every revision's downgrade path.
     _alembic(["downgrade", "base"], env_extra=env_extra)
@@ -129,7 +131,58 @@ def test_fresh_pg_upgrade_round_trip():
     # Phase 3 — re-upgrade. Verifies the chain is idempotent.
     _alembic(["upgrade", "head"], env_extra=env_extra)
     stamped = asyncio.run(_stamped_head(url))
-    assert stamped == "executor_tasks"
+    assert stamped == "model_account_nullable_key"
+
+
+def test_model_account_api_key_encrypted_is_nullable_after_upgrade():
+    """Lift 5a migration makes ``model_accounts.api_key_encrypted`` NULLABLE so
+    executor accounts (which carry no api key) can be inserted with a NULL."""
+    url = _skip_if_no_pg()
+    env_extra = {"BSVIBE_DATABASE_URL": url}
+
+    asyncio.run(_drop_everything(url))
+    _alembic(["upgrade", "head"], env_extra=env_extra)
+
+    async def _insert_null_key() -> bool:
+        import uuid as _uuid
+        from datetime import UTC, datetime
+
+        engine = create_async_engine(url, future=True)
+        try:
+            async with engine.begin() as conn:
+                # Seed a personal account so the FK-less partition id is real.
+                account_id = _uuid.uuid4()
+                await conn.execute(
+                    text(
+                        "INSERT INTO accounts (id, workspace_id, label, created_at) "
+                        "VALUES (:id, :ws, 'personal', :now)"
+                    ),
+                    {"id": account_id, "ws": _uuid.uuid4(), "now": datetime.now(UTC)},
+                )
+                await conn.execute(
+                    text(
+                        "INSERT INTO model_accounts "
+                        "(id, workspace_id, account_id, provider, label, litellm_model, "
+                        " api_base, api_key_encrypted, data_jurisdiction, is_active, "
+                        " extra_params, created_at, updated_at) "
+                        "VALUES (:id, :ws, :acct, 'executor', 'laptop-1', "
+                        " 'executor/claude_code', NULL, NULL, 'unknown', true, "
+                        " '{}'::jsonb, :now, :now)"
+                    ),
+                    {
+                        "id": _uuid.uuid4(),
+                        "ws": _uuid.uuid4(),
+                        "acct": account_id,
+                        "now": datetime.now(UTC),
+                    },
+                )
+            return True
+        finally:
+            await engine.dispose()
+
+    assert asyncio.run(_insert_null_key()), (
+        "could not insert a NULL api_key_encrypted — column is still NOT NULL"
+    )
 
 
 def test_pgvector_extension_installed_after_upgrade():

@@ -171,3 +171,43 @@ async def test_get_account_persists_single_row(client, db) -> None:
 
         rows = (await s.execute(select(Account))).scalars().all()
         assert len(rows) == 1
+
+
+async def test_model_accounts_list_excludes_executor_rows(client, db) -> None:
+    """Lift 5a: a provider=executor row is a routable account but must NOT
+    surface in the api-llm Models list (workers are shown separately)."""
+    from backend.accounts.models import ModelAccount
+
+    # Create a real LLM account through the API so the personal account exists.
+    create_body = {
+        "provider": "openai",
+        "label": "primary",
+        "litellm_model": "openai/gpt-4o-mini",
+        "api_key": "sk-secret-test",
+    }
+    r = await client.post("/api/v1/accounts", json=create_body)
+    assert r.status_code == 201, r.text
+    account_id = uuid.UUID(r.json()["account_id"])
+    ws = uuid.UUID(r.json()["workspace_id"])
+
+    # Insert an executor row directly (the path register_worker uses).
+    async with db() as s:
+        s.add(
+            ModelAccount(
+                workspace_id=ws,
+                account_id=account_id,
+                provider="executor",
+                label="laptop-1",
+                litellm_model="executor/claude_code",
+                api_base=None,
+                api_key_encrypted=None,
+                data_jurisdiction="unknown",
+                extra_params={"worker_id": str(uuid.uuid4()), "executor_type": "claude_code"},
+            )
+        )
+        await s.commit()
+
+    listed = await client.get("/api/v1/accounts")
+    assert listed.status_code == 200, listed.text
+    providers = [row["provider"] for row in listed.json()]
+    assert providers == ["openai"]

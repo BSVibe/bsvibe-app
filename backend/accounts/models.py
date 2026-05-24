@@ -30,7 +30,10 @@ class ModelAccount(AccountsBase):
     label: Mapped[str] = mapped_column(String(128), nullable=False)
     litellm_model: Mapped[str] = mapped_column(String(255), nullable=False)
     api_base: Mapped[str | None] = mapped_column(String(512), nullable=True)
-    api_key_encrypted: Mapped[str] = mapped_column(String(1024), nullable=False)
+    # NULLABLE since executor-pool Lift 5a: a ``provider='executor'`` account
+    # routes to a CLI worker capability and carries NO api key. Real LLM
+    # accounts always populate it (the encrypting create path requires one).
+    api_key_encrypted: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     data_jurisdiction: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     extra_params: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)

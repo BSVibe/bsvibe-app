@@ -114,5 +114,14 @@ class ModelAccountService:
         )
 
     def reveal_api_key(self, row: ModelAccount) -> str:
-        """Decrypt — only the dispatch path should call this."""
+        """Decrypt — only the dispatch path should call this.
+
+        Executor accounts (Lift 5a) carry no api key (the column is NULL); this
+        is never valid for them, so a missing blob raises rather than silently
+        returning an empty credential.
+        """
+        if row.api_key_encrypted is None:
+            raise ValueError(
+                f"ModelAccount {row.id} has no api key to reveal (provider={row.provider!r})"
+            )
         return self._cipher.decrypt(row.api_key_encrypted)

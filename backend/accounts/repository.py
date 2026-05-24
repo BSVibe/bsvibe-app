@@ -25,7 +25,7 @@ class ModelAccountRepository:
         label: str,
         litellm_model: str,
         api_base: str | None,
-        api_key_encrypted: str,
+        api_key_encrypted: str | None,
         data_jurisdiction: str,
         extra_params: dict[str, Any],
     ) -> ModelAccount:
@@ -65,14 +65,41 @@ class ModelAccountRepository:
         account_id: uuid.UUID,
         only_active: bool = False,
     ) -> Sequence[ModelAccount]:
+        """List the api-llm ModelAccounts for ``(workspace_id, account_id)``.
+
+        Executor-pool accounts (``provider='executor'``, Lift 5a) are EXCLUDED
+        here — they are routable model rows but the founder-facing api-llm
+        Models surface shows them separately (workers in the PWA). They remain
+        reachable by id via :meth:`get` (Lift 5b resolution) and by worker via
+        :meth:`list_executor_accounts_for_worker`.
+        """
         stmt = select(ModelAccount).where(
             ModelAccount.workspace_id == workspace_id,
             ModelAccount.account_id == account_id,
+            ModelAccount.provider != "executor",
         )
         if only_active:
             stmt = stmt.where(ModelAccount.is_active.is_(True))
         stmt = stmt.order_by(ModelAccount.created_at.asc())
         return (await self._session.execute(stmt)).scalars().all()
+
+    async def list_executor_accounts_for_worker(
+        self, *, workspace_id: uuid.UUID, worker_id: uuid.UUID
+    ) -> Sequence[ModelAccount]:
+        """Return the workspace's executor ModelAccounts bound to ``worker_id``.
+
+        Matches on the ``extra_params.worker_id`` tag the executor upsert
+        writes. Used by ``revoke_worker`` to remove a worker's routable models.
+        Filtering on the JSON tag in Python keeps it portable across the
+        SQLite test tier and Postgres (JSON vs JSONB operator differences).
+        """
+        stmt = select(ModelAccount).where(
+            ModelAccount.workspace_id == workspace_id,
+            ModelAccount.provider == "executor",
+        )
+        rows = (await self._session.execute(stmt)).scalars().all()
+        target = str(worker_id)
+        return [r for r in rows if r.extra_params.get("worker_id") == target]
 
     async def delete(
         self,

@@ -26,6 +26,8 @@ import structlog
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.accounts.account_service import ensure_personal_account
+from backend.accounts.repository import ModelAccountRepository
 from backend.executors.db import WorkerInstallTokenRow, WorkerRow
 
 logger = structlog.get_logger(__name__)
@@ -87,6 +89,71 @@ async def resolve_install_token_workspace(session: AsyncSession, token: str) -> 
     return row.workspace_id if row is not None else None
 
 
+# ── Executor model accounts (Lift 5a) ─────────────────────────────────────────
+
+
+def _executor_label(name: str, capability: str, *, single: bool) -> str:
+    """A single-capability worker borrows its name; multi disambiguates."""
+    return name if single else f"{name} ({capability})"
+
+
+async def _upsert_executor_model_accounts(
+    session: AsyncSession,
+    *,
+    workspace_id: uuid.UUID,
+    account_id: uuid.UUID,
+    worker_id: uuid.UUID,
+    name: str,
+    capabilities: list[str],
+) -> None:
+    """Make each worker capability a routable ``provider='executor'`` model row.
+
+    BSGateway's "abstract the coding agent like an LLM" pattern: one row per
+    capability so the existing model-resolution treats it like any model (Lift
+    5b branches on ``provider=='executor'`` to dispatch to the worker). The row
+    carries NO api key — it is inserted via the low-level repository directly,
+    NEVER through ``ModelAccountService.create`` (which would encrypt a key it
+    doesn't have).
+
+    Idempotent on ``(worker_id, capability)``: re-register / re-mint of the same
+    worker reuses the existing rows (keyed by the ``extra_params.worker_id`` tag
+    plus the capability) instead of duplicating them.
+    """
+    repo = ModelAccountRepository(session)
+    existing = await repo.list_executor_accounts_for_worker(
+        workspace_id=workspace_id, worker_id=worker_id
+    )
+    by_capability = {r.extra_params.get("executor_type"): r for r in existing}
+    single = len(capabilities) == 1
+    for capability in capabilities:
+        if capability in by_capability:
+            continue  # already routable — idempotent re-register
+        await repo.create(
+            workspace_id=workspace_id,
+            account_id=account_id,
+            provider="executor",
+            label=_executor_label(name, capability, single=single),
+            litellm_model=f"executor/{capability}",
+            api_base=None,
+            api_key_encrypted=None,
+            data_jurisdiction="unknown",
+            extra_params={"worker_id": str(worker_id), "executor_type": capability},
+        )
+
+
+async def _remove_executor_model_accounts(
+    session: AsyncSession, *, workspace_id: uuid.UUID, worker_id: uuid.UUID
+) -> None:
+    """Delete the routable executor model rows bound to ``worker_id``."""
+    repo = ModelAccountRepository(session)
+    rows = await repo.list_executor_accounts_for_worker(
+        workspace_id=workspace_id, worker_id=worker_id
+    )
+    for row in rows:
+        await session.delete(row)
+    await session.flush()
+
+
 # ── Worker registration ───────────────────────────────────────────────────────
 
 
@@ -120,11 +187,25 @@ async def register_worker(
     )
     session.add(worker)
     await session.flush()
+
+    # Make each capability a routable provider='executor' model account
+    # (Lift 5a). The personal account is the partition the rows hang off.
+    account = await ensure_personal_account(session, workspace_id=workspace_id)
+    await _upsert_executor_model_accounts(
+        session,
+        workspace_id=workspace_id,
+        account_id=account.id,
+        worker_id=worker.id,
+        name=name,
+        capabilities=list(capabilities),
+    )
+
     logger.info(
         "executor_worker_registered",
         worker_id=str(worker.id),
         workspace_id=str(workspace_id),
         name=name,
+        capabilities=list(capabilities),
     )
     return worker, token
 
@@ -191,6 +272,9 @@ async def revoke_worker(
     if row is None:
         return None
     row.is_active = False
+    # Remove the routable executor model accounts so a revoked worker is no
+    # longer resolvable (Lift 5a).
+    await _remove_executor_model_accounts(session, workspace_id=workspace_id, worker_id=worker_id)
     await session.flush()
     logger.info(
         "executor_worker_revoked",

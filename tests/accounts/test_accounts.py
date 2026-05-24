@@ -226,3 +226,55 @@ class TestListGetUpdateDelete:
             account_id=account_id,
             model_account_id=created.id,
         )
+
+
+class TestExecutorRowsHiddenFromList:
+    """Lift 5a: provider=executor rows are routable accounts but must NOT
+    appear in the api-llm Models list (the PWA shows workers separately)."""
+
+    async def _seed_executor(self, service, workspace_id, account_id, *, label):
+        # Executor rows are inserted via the low-level repo (no api_key to
+        # encrypt). The encrypting ``create`` path is never used for them.
+        return await service._repo.create(  # noqa: SLF001
+            workspace_id=workspace_id,
+            account_id=account_id,
+            provider="executor",
+            label=label,
+            litellm_model="executor/claude_code",
+            api_base=None,
+            api_key_encrypted=None,
+            data_jurisdiction="unknown",
+            extra_params={"worker_id": str(uuid.uuid4()), "executor_type": "claude_code"},
+        )
+
+    async def test_list_excludes_executor_rows(self, service, workspace_id, account_id):
+        await service.create(
+            workspace_id=workspace_id, account_id=account_id, payload=_make_create()
+        )
+        await self._seed_executor(service, workspace_id, account_id, label="laptop-1")
+        rows = await service.list_(workspace_id=workspace_id, account_id=account_id)
+        # Only the real LLM account is returned; the executor row is hidden.
+        assert len(rows) == 1
+        assert rows[0].provider == "openai"
+
+    async def test_list_only_active_also_excludes_executor_rows(
+        self, service, workspace_id, account_id
+    ):
+        await self._seed_executor(service, workspace_id, account_id, label="laptop-1")
+        rows = await service.list_(
+            workspace_id=workspace_id, account_id=account_id, only_active=True
+        )
+        assert rows == []
+
+    async def test_get_executor_row_still_resolves(self, service, workspace_id, account_id):
+        # Lift 5b resolution fetches an executor account by id directly — get
+        # must keep working even though it's hidden from the list.
+        row = await self._seed_executor(service, workspace_id, account_id, label="laptop-1")
+        fetched = await service.get(
+            workspace_id=workspace_id,
+            account_id=account_id,
+            model_account_id=row.id,
+        )
+        assert fetched is not None
+        assert fetched.provider == "executor"
+        assert fetched.has_api_key is False
