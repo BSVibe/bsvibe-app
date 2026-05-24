@@ -246,4 +246,20 @@ describe("getBrief (real-data composition)", () => {
     expect(view.lanes.length).toBeGreaterThan(0); // demo fallback
     expect(view.placeholder).toBe(true);
   });
+
+  it("does NOT show the placeholder board on a 401 — it propagates so the gate redirects", async () => {
+    // window.location is stubbed so apiFetch's 401 handler can no-op its
+    // redirect inside the test without touching the real navigation.
+    Object.defineProperty(window, "location", {
+      configurable: true,
+      value: { pathname: "/brief", assign: vi.fn() } as unknown as Location,
+    });
+    global.fetch = vi.fn(
+      async () => new Response("unauthorized", { status: 401 }),
+    ) as unknown as typeof fetch;
+
+    // A 401 is auth-expired, not a network blip: it must NOT degrade into the
+    // calm demo board — it propagates (the global handler / gate redirects).
+    await expect(getBrief()).rejects.toMatchObject({ status: 401 });
+  });
 });
