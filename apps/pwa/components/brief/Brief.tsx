@@ -15,7 +15,13 @@ export default function Brief() {
   const t = useTranslations("brief");
 
   const load = useCallback((onResult: (next: BriefView) => void) => {
-    getBrief().then(onResult);
+    // A 401 propagates from getBrief() (auth expired): apiFetch has already
+    // cleared the session and is redirecting to /login, so swallow the rejection
+    // and stay on the calm loading splash while the page navigates away — rather
+    // than surfacing an unhandled rejection or the demo board.
+    getBrief()
+      .then(onResult)
+      .catch(() => {});
   }, []);
 
   useEffect(() => {

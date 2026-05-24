@@ -226,8 +226,12 @@ export async function getBrief(): Promise<BriefView> {
       placeholder: false,
     };
   } catch (error) {
-    // No backend / not authed mid-load → show the demo lanes rather than an
-    // error wall. A real 4xx still surfaces the demo (the gate handles 401).
+    // A 401 is auth-expired, NOT a transient network blip: it must propagate so
+    // the global 401 handler (apiFetch) + the gate redirect to /login fire,
+    // instead of masking the expired session behind the calm demo board.
+    if (error instanceof ApiError && error.status === 401) throw error;
+    // No backend / non-401 4xx-5xx mid-load → show the demo lanes rather than an
+    // error wall, so the surface stays calm during a genuine network failure.
     if (!(error instanceof ApiError) && !(error instanceof TypeError)) throw error;
     return {
       needsYou: [],
