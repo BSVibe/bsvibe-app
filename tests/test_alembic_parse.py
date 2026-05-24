@@ -40,11 +40,12 @@ def test_alembic_history_loads():
         "notification_prefs",
         "executor_workers",
         "executor_tasks",
+        "model_account_nullable_key",
     ):
         assert rev in result.stdout, f"missing revision {rev} in:\n{result.stdout}"
 
 
-def test_alembic_head_is_executor_tasks():
+def test_alembic_head_is_model_account_nullable_key():
     repo = Path(__file__).parent.parent
     result = subprocess.run(
         [sys.executable, "-m", "alembic", "heads"],
@@ -53,7 +54,7 @@ def test_alembic_head_is_executor_tasks():
         text=True,
     )
     assert result.returncode == 0
-    assert "executor_tasks" in result.stdout
+    assert "model_account_nullable_key" in result.stdout
 
 
 def test_target_metadata_covers_all_bases():
