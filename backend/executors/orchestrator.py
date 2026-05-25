@@ -96,12 +96,105 @@ DECISION_HUMAN_REVIEW_REQUIRED = "human_review_required"
 DECISION_VERIFICATION_FAILED = "verification_failed"
 
 
-def _intent_text(run: ExecutionRun) -> str:
-    """The run's framed instruction — the same stable input the native loop
-    seeds its first user turn with (``backend.execution.orchestrator._intent_title``)."""
+# B8 — context assembly for the CLI worker. Before B8 the executor shipped only
+# a bare 512-char intent with an EMPTY system prompt — the CLI worked near-blind.
+# B8 brings it to parity with the native loop: a real engineer system prompt
+# (passed via ``create_task(system=...)``) + a context-rich framed prompt
+# (intent + relevant canon + founder-resolved decisions). Caps respect the
+# local-model generation budget (declared context window ≠ practical budget).
+
+# The intent is now the REAL instruction (not a title), so the legacy 512-char
+# cap is lifted to a few KB — still bounded so a runaway intent never blows the
+# generation budget.
+_INTENT_MAX_CHARS = 8_000
+# Canon folded into the prompt as "Relevant established patterns" — top-N
+# statements, each clamped (mirrors the native B6 knowledge seed: 5 × 500).
+_KNOWLEDGE_MAX_RESULTS = 5
+_KNOWLEDGE_MAX_CHARS_PER_STATEMENT = 500
+
+# The executor system prompt — engineer guidance for a delegated CLI agent that
+# runs its OWN tool loop (unlike the native loop, the CLI owns plan→act→verify).
+# Adapted from the native ``_SYSTEM_PROMPT`` intent (do the framed work, produce
+# the artifacts) but fitted to a self-driving CLI rather than the loop's
+# declare_verification-gated tool protocol.
+_EXECUTOR_SYSTEM_PROMPT = (
+    "You are an autonomous software engineer executing a delegated task inside a "
+    "working directory. Read the framed task, then use your own tools to inspect "
+    "and change files until the work is complete. Produce the concrete "
+    "artifacts the task asks for — write real files, run the relevant "
+    "tests/lint, and leave the work in a verifiable state (your output is "
+    "checked against a verification contract afterwards). Honor any established "
+    "patterns and founder decisions included in the task. Do the work; do not "
+    "ask for permission to proceed."
+)
+
+
+def _intent_text(run: ExecutionRun, *, max_chars: int = 512) -> str:
+    """The run's stable intent — the same input the native loop seeds with
+    (``backend.execution.orchestrator._intent_title``).
+
+    ``max_chars`` defaults to the legacy 512 cap used for the WorkStep title and
+    canon-retrieval signal; the framed dispatch prompt lifts it to
+    :data:`_INTENT_MAX_CHARS` (the intent is the real instruction there)."""
     payload = run.payload or {}
     text = payload.get("intent_text") or payload.get("text") or "Untitled run"
-    return str(text)[:512]
+    return str(text)[:max_chars]
+
+
+def _resolved_decisions(run: ExecutionRun) -> list[tuple[str, str]]:
+    """Extract ``(question, answer)`` pairs from ``run.payload["resolved_decisions"]``.
+
+    Same data the native ``_resumption_messages`` uses (appended by the
+    checkpoints resolve endpoint). Entries without an answer / malformed entries
+    are skipped. Always returns a list (never raises) — graceful for a resumed
+    executor run with no decisions."""
+    payload = run.payload or {}
+    resolved = payload.get("resolved_decisions") if isinstance(payload, dict) else None
+    if not isinstance(resolved, list):
+        return []
+    pairs: list[tuple[str, str]] = []
+    for entry in resolved:
+        if not isinstance(entry, dict):
+            continue
+        question = str(entry.get("question") or "")
+        answer = str(entry.get("answer") or "")
+        if not answer:
+            continue
+        pairs.append((question, answer))
+    return pairs
+
+
+def _executor_system_prompt() -> str:
+    """The engineer system prompt for the delegated CLI agent (B8)."""
+    return _EXECUTOR_SYSTEM_PROMPT
+
+
+def _assemble_executor_prompt(run: ExecutionRun, *, statements: list[str]) -> str:
+    """Frame the context-rich CLI prompt: intent + canon + resolved decisions.
+
+    Pure + synchronous (testable in isolation) — the caller does the async canon
+    retrieval and passes the resulting ``statements``. Sections that have no
+    content are omitted entirely (no empty headers): an empty-knowledge,
+    no-decisions run yields just the intent. Caps applied: the intent to
+    :data:`_INTENT_MAX_CHARS`, canon to :data:`_KNOWLEDGE_MAX_RESULTS` × clamped
+    statements (respect the local-model generation budget)."""
+    parts: list[str] = [_intent_text(run, max_chars=_INTENT_MAX_CHARS)]
+
+    cleaned = [
+        s.strip()[:_KNOWLEDGE_MAX_CHARS_PER_STATEMENT] for s in statements if s and s.strip()
+    ][:_KNOWLEDGE_MAX_RESULTS]
+    if cleaned:
+        body = "\n".join(f"- {s}" for s in cleaned)
+        parts.append("Relevant established patterns for this workspace:\n" + body)
+
+    decisions = _resolved_decisions(run)
+    if decisions:
+        lines = [f"- Q: {q} A: {a}" for q, a in decisions]
+        parts.append(
+            "The founder resolved these prior questions — honor them:\n" + "\n".join(lines)
+        )
+
+    return "\n\n".join(parts)
 
 
 class ExecutorOrchestrator:
@@ -185,7 +278,14 @@ class ExecutorOrchestrator:
             )
             return self._decision_result(run, work_step, attempt, decision)
 
-        prompt = _intent_text(run)
+        # B8 — assemble the context-rich CLI prompt (intent + relevant canon +
+        # founder-resolved decisions) + a real engineer system prompt, instead of
+        # the bare 512-char intent with an empty system. Graceful: a retriever
+        # hiccup / no canon / no decisions degrades to intent-only — never raises
+        # into dispatch.
+        statements = await self._retrieve_canon(run)
+        prompt = _assemble_executor_prompt(run, statements=statements)
+        system = _executor_system_prompt()
         # NOTE: ``workspace_dir`` here is the BACKEND container's run path
         # (``/app/var/runs/<run_id>`` on the backend's appdata volume). A worker
         # is a SEPARATE machine where that absolute path does not exist, so we
@@ -201,6 +301,7 @@ class ExecutorOrchestrator:
             workspace_id=run.workspace_id,
             executor_type=executor_type,
             prompt=prompt,
+            system=system,
             workspace_dir=".",
             run_id=run.id,
         )
@@ -265,6 +366,25 @@ class ExecutorOrchestrator:
             output=completed.output or "",
             workspace_dir=workspace_dir,
         )
+
+    # -- context assembly (B8) ---------------------------------------------
+
+    async def _retrieve_canon(self, run: ExecutionRun) -> list[str]:
+        """Retrieve canon relevant to the run's intent for the framed prompt (B8).
+
+        Uses the SAME signal + retriever as the native B6 knowledge seed
+        (``retrieve_for_signals(intent)``). No retriever → ``[]``; a retrieval
+        hiccup degrades to ``[]`` (never raises into dispatch — exactly the
+        graceful-empty contract the native seed/verify fold follow)."""
+        if self._retriever is None:
+            return []
+        signals = _intent_text(run)
+        try:
+            statements = await self._retriever.retrieve_for_signals(signals)
+        except Exception:  # noqa: BLE001 — canon priming must never crash dispatch
+            logger.warning("executor_canon_retrieve_failed", run_id=str(run.id), exc_info=True)
+            return []
+        return list(statements)
 
     # -- verification convergence (B2b) ------------------------------------
 

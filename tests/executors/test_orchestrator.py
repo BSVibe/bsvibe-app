@@ -608,3 +608,115 @@ async def test_judge_contract_without_verify_llm_yields_human_review(tmp_path: P
 async def test_b2b_decision_kind_exports() -> None:
     assert orch.DECISION_HUMAN_REVIEW_REQUIRED == "human_review_required"
     assert orch.DECISION_VERIFICATION_FAILED == "verification_failed"
+
+
+# --------------------------------------------------------------------------
+# B8 — context assembly for executor dispatch (CLI parity)
+#
+# The dispatch now ships a NON-empty engineer system prompt + a context-rich
+# framed prompt (intent + relevant canon + founder-resolved decisions) instead
+# of the bare 512-char intent with an EMPTY system. These assert the created
+# ExecutorTaskRow carries them; the dispatch→await→verify flow is unchanged.
+# --------------------------------------------------------------------------
+
+
+async def _create_task_only(
+    s: Any,
+    *,
+    redis: Any,
+    account: ModelAccount,
+    run: ExecutionRun,
+    tmp_path: Path,
+    retriever: Any | None = None,
+) -> ExecutorTaskRow:
+    """Drive ``oc.run`` with a 0.05s timeout (no worker reports) so it dispatches
+    a task then fails on timeout — the task row carries the assembled prompt."""
+    from sqlalchemy import select
+
+    settings = Settings(executor_task_timeout_s=0.05)
+    oc = ExecutorOrchestrator(
+        session=s,
+        redis=redis,
+        account=account,
+        settings=settings,
+        sandbox_manager=FakeSandboxManager(FakeBox()),
+        retriever=retriever,
+    )
+    await oc.run(run=run, workspace_dir=tmp_path)
+    await s.flush()
+    return (await s.execute(select(ExecutorTaskRow))).scalar_one()
+
+
+async def test_dispatch_carries_non_empty_system_prompt(tmp_path: Path) -> None:
+    redis = await _make_redis()
+    async with memory_session() as s:
+        run, account = await _seed(s)
+        await s.commit()
+        task = await _create_task_only(s, redis=redis, account=account, run=run, tmp_path=tmp_path)
+        # Was "" before B8 — now a real engineer system prompt.
+        assert task.system != ""
+        assert "engineer" in task.system.lower()
+    await redis.aclose()
+
+
+async def test_dispatch_prompt_includes_canon_and_decisions(tmp_path: Path) -> None:
+    redis = await _make_redis()
+    async with memory_session() as s:
+        run, account = await _seed(s)
+        run.payload = {
+            "intent_text": "ship the parser",
+            "resolved_decisions": [
+                {"decision_id": "d1", "question": "Strict mode?", "answer": "Yes, strict"},
+            ],
+        }
+        await s.flush()
+        await s.commit()
+        retriever = StubRetriever(["parsers belong in backend/parse/"])
+        task = await _create_task_only(
+            s, redis=redis, account=account, run=run, tmp_path=tmp_path, retriever=retriever
+        )
+        assert "ship the parser" in task.prompt
+        assert "Relevant established patterns" in task.prompt
+        assert "parsers belong in backend/parse/" in task.prompt
+        assert "The founder resolved" in task.prompt
+        assert "Strict mode?" in task.prompt
+        assert "Yes, strict" in task.prompt
+        # The retriever was queried with the run's intent (same signal as B6).
+        assert retriever.queried == ["ship the parser"]
+    await redis.aclose()
+
+
+async def test_dispatch_prompt_intent_only_when_empty_knowledge(tmp_path: Path) -> None:
+    redis = await _make_redis()
+    async with memory_session() as s:
+        run, account = await _seed(s)  # payload = {"intent_text": "do work"}, no decisions
+        await s.commit()
+        # No retriever → no canon; no resolved_decisions → no decisions section.
+        task = await _create_task_only(
+            s, redis=redis, account=account, run=run, tmp_path=tmp_path, retriever=None
+        )
+        assert "do work" in task.prompt
+        assert "Relevant established patterns" not in task.prompt
+        assert "The founder resolved" not in task.prompt
+        # System prompt is still shipped even with empty knowledge.
+        assert task.system != ""
+    await redis.aclose()
+
+
+async def test_dispatch_prompt_graceful_when_retriever_raises(tmp_path: Path) -> None:
+    class _BoomRetriever:
+        async def retrieve_for_signals(self, signals: str) -> list[str]:
+            raise RuntimeError("canon backend down")
+
+    redis = await _make_redis()
+    async with memory_session() as s:
+        run, account = await _seed(s)
+        await s.commit()
+        # A retriever that raises must never crash dispatch — degrade to intent-only.
+        task = await _create_task_only(
+            s, redis=redis, account=account, run=run, tmp_path=tmp_path, retriever=_BoomRetriever()
+        )
+        assert "do work" in task.prompt
+        assert "Relevant established patterns" not in task.prompt
+        assert task.system != ""
+    await redis.aclose()
