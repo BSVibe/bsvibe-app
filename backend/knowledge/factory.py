@@ -30,6 +30,7 @@ if TYPE_CHECKING:
     from backend.knowledge.graph.restricted import RestrictedPluginGarden
     from backend.knowledge.graph.vault import Vault
     from backend.knowledge.graph.writer import GardenWriter
+    from backend.knowledge.retrieval.canon_retriever import CanonConceptRetriever
 
 
 @dataclass(frozen=True, slots=True)
@@ -108,3 +109,22 @@ class KnowledgeFactory:
         )
 
         return _R(writer=self.writer())
+
+    def retriever(self) -> CanonConceptRetriever:
+        """Return a workspace-scoped read-only canon retriever (Workflow §1.2).
+
+        Satisfies the :class:`~backend.execution.verifier.service.CanonRetriever`
+        Protocol: ``retrieve_for_signals(signals) -> list[str]`` surfaces THIS
+        workspace's promoted active concepts relevant to a change's signals (top
+        of the recurrence-gated registry, capped) so the verifier can fold them
+        in as judge criteria. Reads only this workspace's vault storage (rooted
+        at :attr:`vault_path`); an empty/unknown workspace yields ``[]`` and the
+        retriever never raises into the verify path. Construction is cheap (no
+        deps forced) — the derived index is built lazily per retrieval call.
+        """
+        from backend.knowledge.graph.storage import FileSystemStorage  # noqa: PLC0415
+        from backend.knowledge.retrieval.canon_retriever import (  # noqa: PLC0415
+            CanonConceptRetriever,
+        )
+
+        return CanonConceptRetriever(FileSystemStorage(self._vault_root))
