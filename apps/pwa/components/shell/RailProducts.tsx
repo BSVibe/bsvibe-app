@@ -12,8 +12,9 @@ import { PlusIcon } from "./icons";
 /**
  * The left rail's "PRODUCTS" section (Stitch design's PRODUCTS heading): a
  * separate section BELOW the primary nav listing the workspace's products, each
- * a link to its `/products/{slug}` detail. A calm "No projects yet" empty state
- * and a "+ New project" affordance that opens the create flow in a modal.
+ * a link to its `/products/{slug}` detail. A calm "No products yet" empty state
+ * and a prominent "+ Product" CTA (where the old "+ Direct" rail button sat —
+ * Direct is now the omnipresent FAB) that opens the create flow in a modal.
  *
  * The list loads on mount and re-reads after a successful create so the section
  * reflects the server. A failed read degrades to a calm inline note rather than
@@ -69,15 +70,6 @@ export default function RailProducts() {
     <section className="rail-products" aria-label={t("sectionLabel")}>
       <header className="rail-products__head">
         <h2 className="rail-products__heading">{t("heading")}</h2>
-        <button
-          type="button"
-          className="rail-products__new"
-          onClick={() => setCreating(true)}
-          title={t("newProject")}
-        >
-          <PlusIcon width={14} height={14} />
-          <span className="rail-products__new-label">{t("newProject")}</span>
-        </button>
       </header>
 
       {list === null ? (
@@ -111,16 +103,28 @@ export default function RailProducts() {
         </ul>
       )}
 
+      {/* "+ Product" CTA — the prominent create action, sitting where the old
+          "+ Direct" rail button was (Direct is now the omnipresent FAB). */}
+      <button
+        type="button"
+        className="rail-products__cta"
+        onClick={() => setCreating(true)}
+        title={t("newProduct")}
+      >
+        <PlusIcon />
+        <span>{t("newProduct")}</span>
+      </button>
+
       {/* CREATE — a native <dialog> hosting the real create form. */}
       <dialog
         ref={dialogRef}
         className="new-product-modal"
-        aria-label={t("newProject")}
+        aria-label={t("newProduct")}
         onClose={() => setCreating(false)}
       >
         {creating ? (
           <div className="new-product-modal__panel">
-            <p className="new-product-modal__title">{t("newProject")}</p>
+            <p className="new-product-modal__title">{t("newProduct")}</p>
             <NewProductForm
               onCreated={() => {
                 setCreating(false);

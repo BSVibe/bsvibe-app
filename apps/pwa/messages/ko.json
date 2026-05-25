@@ -35,10 +35,10 @@
       "sectionLabel": "제품",
       "heading": "제품",
       "listLabel": "제품",
-      "newProject": "새 프로젝트",
-      "loading": "프로젝트 불러오는 중…",
-      "loadError": "프로젝트를 불러오지 못했어요.",
-      "empty": "아직 프로젝트가 없어요",
+      "newProduct": "새 제품",
+      "loading": "제품 불러오는 중…",
+      "loadError": "제품을 불러오지 못했어요.",
+      "empty": "아직 제품이 없어요",
       "form": {
         "name": "이름",
         "namePlaceholder": "관련 글",
@@ -46,12 +46,9 @@
         "slugPlaceholder": "related-posts",
         "slugHint": "소문자, 숫자, 하이픈만 사용 — URL에 쓰입니다.",
         "slugError": "소문자, 숫자, 하이픈만 사용하고 글자로 시작해 주세요.",
-        "repoUrl": "저장소 URL",
-        "repoUrlPlaceholder": "https://github.com/you/project",
-        "repoUrlHint": "선택 — 코드가 있는 곳.",
-        "create": "프로젝트 만들기",
+        "create": "제품 만들기",
         "creating": "만드는 중…",
-        "createError": "프로젝트를 만들지 못했어요 — 그 이름은 이미 사용 중일 수 있어요.",
+        "createError": "제품을 만들지 못했어요 — 그 이름은 이미 사용 중일 수 있어요.",
         "cancel": "취소"
       }
     }

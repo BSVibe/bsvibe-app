@@ -14,7 +14,7 @@ import AddResourceForm from "./AddResourceForm";
  * "Resources" — the product's named pointers (repo / doc / deploy / note). Each
  * row shows the title, a kind chip, an external link when the resource carries a
  * URL, and a quiet remove affordance. An "Add resource" button opens the add
- * form in a native <dialog> (same pattern as the rail's New-project modal); a
+ * form in a native <dialog> (same pattern as the rail's New-product modal); a
  * successful add re-reads the list. A calm empty state when there are none, and
  * a calm inline note (never a crash) when the read fails.
  *

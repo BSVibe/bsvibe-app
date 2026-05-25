@@ -36,7 +36,7 @@ describe("Knowledge nav wiring", () => {
   });
 
   it("renders Knowledge as a real link to /knowledge in the left rail", () => {
-    render(<LeftRail onDirect={() => {}} />);
+    render(<LeftRail />);
 
     const link = screen.getByRole("link", { name: /Knowledge/ });
     expect(link).toHaveAttribute("href", "/knowledge");
@@ -54,7 +54,7 @@ describe("Knowledge nav wiring", () => {
 
   it("Knowledge carries no pending-count badge even when decisions are pending", () => {
     setPendingDecisionsCount(3);
-    render(<LeftRail onDirect={() => {}} />);
+    render(<LeftRail />);
 
     const link = screen.getByRole("link", { name: /Knowledge/ });
     expect(link).not.toHaveTextContent("3");

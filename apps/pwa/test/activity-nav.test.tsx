@@ -36,7 +36,7 @@ describe("Activity nav wiring", () => {
   });
 
   it("renders Activity as a real link to /activity in the left rail", () => {
-    render(<LeftRail onDirect={() => {}} />);
+    render(<LeftRail />);
 
     const link = screen.getByRole("link", { name: /Activity/ });
     expect(link).toHaveAttribute("href", "/activity");
@@ -52,7 +52,7 @@ describe("Activity nav wiring", () => {
 
   it("Activity carries no pending-count badge even when decisions are pending", () => {
     setPendingDecisionsCount(3);
-    render(<LeftRail onDirect={() => {}} />);
+    render(<LeftRail />);
 
     const link = screen.getByRole("link", { name: /Activity/ });
     expect(link).not.toHaveTextContent("3");

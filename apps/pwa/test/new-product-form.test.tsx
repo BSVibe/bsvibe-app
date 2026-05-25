@@ -1,12 +1,13 @@
 /**
- * New project create form (components/shell/NewProductForm.tsx). A calm form:
- * Name + Slug (auto-suggested from Name, editable) + optional Repo URL. It:
+ * New product create form (components/shell/NewProductForm.tsx). A calm form:
+ * Name + Slug (auto-suggested from Name, editable). Repo binding is
+ * GitHub-connector-only, so there is no repo-URL field. It:
  *
  *  - auto-suggests a valid slug as the founder types the Name
  *  - lets the founder edit the slug, then stops overriding their edit
  *  - blocks submit on an invalid/empty slug (no request fired)
- *  - on submit fires createProduct with {name, slug, repo_url?} and, on 201,
- *    navigates to the new product's /products/{slug}
+ *  - on submit fires createProduct with {name, slug} and, on 201, navigates to
+ *    the new product's /products/{slug}
  *  - shows a calm inline error on failure (e.g. duplicate slug) and keeps the
  *    form usable
  *
@@ -16,7 +17,7 @@
 
 import NewProductForm from "@/components/shell/NewProductForm";
 import type { Product, ProductCreate } from "@/lib/api/types";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -38,7 +39,7 @@ function product(slug: string, name: string): Product {
   };
 }
 
-describe("New project form", () => {
+describe("New product form", () => {
   afterEach(() => {
     vi.restoreAllMocks();
     pushMock.mockReset();
@@ -70,7 +71,7 @@ describe("New project form", () => {
     expect(slug.value).toBe("my-widgets");
   });
 
-  it("submits createProduct with {name, slug, repo_url} and navigates on 201", async () => {
+  it("submits createProduct with {name, slug} and navigates on 201", async () => {
     const createProduct = vi
       .fn<(input: ProductCreate) => Promise<Product>>()
       .mockResolvedValue(product("related-posts", "Related Posts"));
@@ -78,20 +79,21 @@ describe("New project form", () => {
     render(<NewProductForm onCreated={onCreated} createProduct={createProduct} />);
 
     await userEvent.type(screen.getByLabelText(/^Name$/i), "Related Posts");
-    fireEvent.change(screen.getByLabelText(/Repo URL/i), {
-      target: { value: "https://github.com/acme/related-posts" },
-    });
-    await userEvent.click(screen.getByRole("button", { name: /Create project/i }));
+    await userEvent.click(screen.getByRole("button", { name: /Create product/i }));
 
     await waitFor(() => {
       expect(createProduct).toHaveBeenCalledWith({
         name: "Related Posts",
         slug: "related-posts",
-        repo_url: "https://github.com/acme/related-posts",
       });
     });
     await waitFor(() => expect(pushMock).toHaveBeenCalledWith("/products/related-posts"));
     expect(onCreated).toHaveBeenCalled();
+  });
+
+  it("has no Repo URL field (repo binding is github-connector-only)", () => {
+    render(<NewProductForm onCreated={() => {}} createProduct={vi.fn()} />);
+    expect(screen.queryByLabelText(/Repo URL/i)).not.toBeInTheDocument();
   });
 
   it("blocks submit on an invalid slug — no request fired", async () => {
@@ -103,7 +105,7 @@ describe("New project form", () => {
     // Force an invalid slug (starts with a digit).
     await userEvent.clear(slug);
     await userEvent.type(slug, "1bad");
-    await userEvent.click(screen.getByRole("button", { name: /Create project/i }));
+    await userEvent.click(screen.getByRole("button", { name: /Create product/i }));
 
     expect(createProduct).not.toHaveBeenCalled();
     expect(await screen.findByText(/starting with a letter/i)).toBeInTheDocument();
@@ -116,11 +118,11 @@ describe("New project form", () => {
     render(<NewProductForm onCreated={() => {}} createProduct={createProduct} />);
 
     await userEvent.type(screen.getByLabelText(/^Name$/i), "Widgets");
-    await userEvent.click(screen.getByRole("button", { name: /Create project/i }));
+    await userEvent.click(screen.getByRole("button", { name: /Create product/i }));
 
-    expect(await screen.findByText(/Couldn.t create that project/i)).toBeInTheDocument();
+    expect(await screen.findByText(/Couldn’t create that product/i)).toBeInTheDocument();
     // Form stays usable (button re-enabled, no navigation).
-    expect(screen.getByRole("button", { name: /Create project/i })).toBeEnabled();
+    expect(screen.getByRole("button", { name: /Create product/i })).toBeEnabled();
     expect(pushMock).not.toHaveBeenCalled();
   });
 });

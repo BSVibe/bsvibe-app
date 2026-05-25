@@ -36,7 +36,7 @@ describe("Settings nav wiring", () => {
   });
 
   it("renders Settings as a real link to /settings in the left rail", () => {
-    render(<LeftRail onDirect={() => {}} />);
+    render(<LeftRail />);
 
     const link = screen.getByRole("link", { name: /Settings/ });
     expect(link).toHaveAttribute("href", "/settings");
@@ -46,7 +46,7 @@ describe("Settings nav wiring", () => {
 
   it("Settings carries no pending-count badge", () => {
     setPendingDecisionsCount(3);
-    render(<LeftRail onDirect={() => {}} />);
+    render(<LeftRail />);
 
     const link = screen.getByRole("link", { name: /Settings/ });
     expect(link).not.toHaveTextContent("3");

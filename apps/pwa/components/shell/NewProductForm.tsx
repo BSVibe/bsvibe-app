@@ -10,13 +10,14 @@ import { useState } from "react";
 type FormState = "idle" | "submitting" | "error";
 
 /**
- * The "New project" create form. A small calm form: Name, Slug, optional Repo
- * URL. The slug is auto-suggested from the Name (lowercase, separators →
- * hyphens, invalid chars stripped — `lib/products/slug.ts`) and editable; once
- * the founder edits it we stop overriding their value. Submit is gated on a
- * backend-valid slug (`^[a-z][a-z0-9-]*$`) so we never fire a request that the
- * server would 422; a duplicate slug 409s and surfaces as a calm inline error
- * that keeps the form usable.
+ * The "New product" create form. A small calm form: Name + Slug. (Repo binding
+ * is GitHub-connector-only, so there is no repo-URL field.) The slug is
+ * auto-suggested from the Name (lowercase, separators → hyphens, invalid chars
+ * stripped — `lib/products/slug.ts`) and editable; once the founder edits it we
+ * stop overriding their value. Submit is gated on a backend-valid slug
+ * (`^[a-z][a-z0-9-]*$`) so we never fire a request that the server would 422; a
+ * duplicate slug 409s and surfaces as a calm inline error that keeps the form
+ * usable.
  *
  * On a successful create we navigate to the new product's `/products/{slug}`
  * and call `onCreated` (the rail re-reads its list underneath).
@@ -38,7 +39,6 @@ export default function NewProductForm({
 
   const [name, setName] = useState("");
   const [slug, setSlug] = useState("");
-  const [repoUrl, setRepoUrl] = useState("");
   // True until the founder edits the slug by hand — while true we keep the slug
   // mirrored to the auto-suggestion derived from the Name.
   const [slugAuto, setSlugAuto] = useState(true);
@@ -74,7 +74,6 @@ export default function NewProductForm({
       const created = await createProduct({
         name: name.trim(),
         slug,
-        repo_url: repoUrl,
       });
       onCreated();
       router.push(`/products/${created.slug}`);
@@ -120,22 +119,6 @@ export default function NewProductForm({
           onChange={(e) => onSlugChange(e.target.value)}
         />
         <span className="new-product-form__hint">{t("slugHint")}</span>
-      </div>
-
-      <div className="new-product-form__field">
-        <label className="new-product-form__label" htmlFor="new-product-repo">
-          {t("repoUrl")}
-        </label>
-        <input
-          id="new-product-repo"
-          className="new-product-form__input"
-          type="url"
-          placeholder={t("repoUrlPlaceholder")}
-          value={repoUrl}
-          disabled={state === "submitting"}
-          onChange={(e) => setRepoUrl(e.target.value)}
-        />
-        <span className="new-product-form__hint">{t("repoUrlHint")}</span>
       </div>
 
       <div className="new-product-form__foot">
