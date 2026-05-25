@@ -28,12 +28,32 @@ Flow:
    silent stall).
 4. :func:`dispatch.create_task` → :func:`dispatch.dispatch_task` →
    :func:`dispatch.await_completion` (timeout = ``settings.executor_task_timeout_s``).
-5. On success → write the verified artifacts (shared helper); on failure /
-   timeout → ``system_error``.
+5. On success → run the SAME verification the native loop runs (B2b: assemble
+   contract + verify in a sandbox) and ONLY set PROVED on a passing
+   VerificationResult; on failure / timeout → ``system_error``.
 
-v1 TRUSTS the worker's success signal — there is no BSVibe-side re-verification
-of the CLI output. Re-running the declared verification contract against the
-worker's diff is a documented v2 refinement.
+B2b (executor verification convergence) — native full convergence. The old v1
+trusted the worker's success signal and set ``ProofState.PROVED`` /
+``WorkStepStatus.VERIFIED`` UNCONDITIONALLY on exit-0 (a hollow "verified"
+Deliverable). That is RETIRED. On worker success the orchestrator now:
+
+* acquires a sandbox mounting the run dir (where B1 persisted the worker's
+  files, ``run_workspace_root/<run_id>/``),
+* assembles a :class:`VerificationContract` via the shared
+  :class:`~backend.execution.verifier.service.VerificationService` (declared +
+  BSage canon retrieval), and
+* verifies it. PROVED is set on, and ONLY on, a passing
+  :class:`VerificationResult` — exactly like the native ``_finish_verified``.
+
+The HONEST branches (never a fake PROVED):
+
+* no usable contract → ``human_review_required`` Decision (reason
+  ``no_verifiable_contract``).
+* contract has judge checks but no verify LLM → ``human_review_required``
+  (reason ``no_verification_llm``); command-only contracts still run.
+* contract PASSES → verified Deliverable + PROVED.
+* contract FAILS → ``verification_failed`` Decision (executor is
+  single-dispatch — FAIL goes to the founder, NOT an auto-retry, NOT PROVED).
 """
 
 from __future__ import annotations
@@ -53,19 +73,27 @@ from backend.execution.db import (
     ProofState,
     RunAttempt,
     RunAttemptPhase,
+    VerificationOutcome,
     WorkStep,
     WorkStepStatus,
 )
 from backend.execution.orchestrator import LoopResult
 from backend.execution.verified_deliverable import write_verified_deliverable
+from backend.execution.verifier.service import CanonRetriever, JudgeLlm, VerificationService
 from backend.executors import dispatch
 from backend.executors.dispatch import TaskTimeout
+from backend.supervisor.sandbox import SandboxManager
 
 logger = structlog.get_logger(__name__)
 
 # Decision kinds raised when an executor run cannot dispatch.
 DECISION_NO_WORKER_AVAILABLE = "no_executor_worker_available"
 DECISION_NO_DISPATCH_TRANSPORT = "no_executor_dispatch_transport"
+# Decision kinds raised by the B2b verification-convergence branch. These mirror
+# the native loop's kinds so the founder surface is uniform across compute
+# backends (the native ``_drive_loop`` raises the same two).
+DECISION_HUMAN_REVIEW_REQUIRED = "human_review_required"
+DECISION_VERIFICATION_FAILED = "verification_failed"
 
 
 def _intent_text(run: ExecutionRun) -> str:
@@ -85,12 +113,23 @@ class ExecutorOrchestrator:
         session: AsyncSession,
         redis: Any,
         account: ModelAccount,
+        sandbox_manager: SandboxManager,
         settings: Settings | None = None,
+        retriever: CanonRetriever | None = None,
+        verify_llm: JudgeLlm | None = None,
     ) -> None:
         self._session = session
         self._redis = redis
         self._account = account
         self._settings = settings or get_settings()
+        # B2b verification-convergence seams. ``sandbox_manager`` mounts the run
+        # dir to run the contract's command checks; ``verify_llm`` grades judge
+        # checks (None → judge-bearing contracts route to human review);
+        # ``retriever`` folds BSage canon into the contract (None for now — B3
+        # injects it later, this is a one-line wire).
+        self._sandbox_manager = sandbox_manager
+        self._retriever = retriever
+        self._verify_llm = verify_llm
 
     async def run(self, *, run: ExecutionRun, workspace_dir: Path) -> LoopResult:
         work_step = WorkStep(
@@ -213,31 +252,147 @@ class ExecutorOrchestrator:
                 summary=completed.error_message or "executor task failed",
             )
 
-        # v1 trusts the worker's success signal — no BSVibe-side re-verification
-        # of the CLI output (B2 handles re-verification; this lift keeps the
-        # trust-the-success-signal flow but with REAL artifacts).
+        # B2b — native verification convergence. The worker exited 0, but exit-0
+        # is NOT proof: run the SAME verification the native loop runs against the
+        # captured artifacts (B1 persisted them under the run dir) and set PROVED
+        # only on a passing VerificationResult.
+        return await self._verify_and_finish(
+            run=run,
+            work_step=work_step,
+            attempt=attempt,
+            task_id=task.id,
+            artifact_refs=completed.artifact_refs or [],
+            output=completed.output or "",
+            workspace_dir=workspace_dir,
+        )
+
+    # -- verification convergence (B2b) ------------------------------------
+
+    async def _verify_and_finish(
+        self,
+        *,
+        run: ExecutionRun,
+        work_step: WorkStep,
+        attempt: RunAttempt,
+        task_id: uuid.UUID,
+        artifact_refs: list[str],
+        output: str,
+        workspace_dir: Path,
+    ) -> LoopResult:
+        """Verify the worker's captured artifacts and land an HONEST terminal.
+
+        Acquires a sandbox mounting the run dir (where B1 persisted the files),
+        assembles + runs the shared verification contract, and branches WITHOUT
+        ever faking PROVED. A sandbox/verify hiccup degrades to ``system_error``
+        (true infra failure) — never a silent verified, never a crash that leaks
+        the loop (mirrors the native orchestrator's soft-fail discipline).
+        """
+        attempt.phase = RunAttemptPhase.VERIFYING
+        await self._session.flush()
+
+        # The sandbox is keyed on the run's project the same way native derives
+        # it (``run.product_id or run.id``) and mounts the run dir B1 wrote into.
+        project_id = run.product_id or run.id
+        try:
+            box = await self._sandbox_manager.acquire(project_id, str(workspace_dir))
+        except Exception as exc:  # noqa: BLE001 — infra failure → system_error
+            logger.warning(
+                "executor_orchestrator_sandbox_unavailable", run_id=str(run.id), error=str(exc)
+            )
+            return await self._fail(run, work_step, attempt, summary=f"sandbox unavailable: {exc}")
+
+        try:
+            # The service requires a ``JudgeLlm``; when none is available we pass
+            # a sentinel that raises if a judge call is ever attempted. It is
+            # NEVER reached: a judge-bearing contract is routed to human review
+            # below before ``verify`` runs, and command-only contracts make no
+            # judge call (asserted by the VerificationService unit tests).
+            judge: JudgeLlm = self._verify_llm or _UnavailableJudge()
+            svc = VerificationService(session=self._session, llm=judge, retriever=self._retriever)
+            contract = await svc.assemble_contract(
+                declared_contract=None,
+                written_paths=artifact_refs,
+                final_text=output,
+            )
+
+            # HONEST branch 1 — no usable contract → human review (NOT a silent
+            # pass, NOT PROVED). This is the anti-regression for the fake-PROVED
+            # sin: exit-0 with nothing to check is NOT a verified deliverable.
+            if contract is None:
+                decision = await self._create_decision(
+                    run,
+                    kind=DECISION_HUMAN_REVIEW_REQUIRED,
+                    rationale="executor produced work but there is no verifiable contract",
+                    payload={"reason": "no_verifiable_contract", "artifact_refs": artifact_refs},
+                )
+                return self._decision_result(run, work_step, attempt, decision)
+
+            # HONEST branch 2 — the contract has judge checks but no verify LLM is
+            # available (e.g. executor-only-active workspace → no resolvable judge
+            # account). Command-only contracts still run; a judge-bearing contract
+            # we cannot grade routes to human review (NOT PROVED).
+            if contract.judge_checks and self._verify_llm is None:
+                decision = await self._create_decision(
+                    run,
+                    kind=DECISION_HUMAN_REVIEW_REQUIRED,
+                    rationale="contract requires an LLM judge but no verification LLM is available",
+                    payload={"reason": "no_verification_llm", "artifact_refs": artifact_refs},
+                )
+                return self._decision_result(run, work_step, attempt, decision)
+
+            vr = await svc.verify(
+                run=run,
+                work_step=work_step,
+                attempt=attempt,
+                contract=contract,
+                box=box,
+                written_paths=artifact_refs,
+                final_text=output,
+            )
+        except Exception as exc:  # noqa: BLE001 — any verify crash → system_error
+            logger.exception("executor_orchestrator_verify_crash", run_id=str(run.id))
+            return await self._fail(run, work_step, attempt, summary=f"verification crashed: {exc}")
+        finally:
+            try:
+                await self._sandbox_manager.release(project_id)
+            except Exception:  # noqa: BLE001 — release best-effort, never leak
+                logger.warning(
+                    "executor_orchestrator_sandbox_release_failed",
+                    run_id=str(run.id),
+                    exc_info=True,
+                )
+
+        # HONEST branch 3 — verification FAILED → founder Decision. Executor is
+        # single-dispatch (no agent loop to replan), so FAIL goes to the founder,
+        # NOT an auto-retry, NOT PROVED.
+        if vr.outcome is not VerificationOutcome.PASSED:
+            decision = await self._create_decision(
+                run,
+                kind=DECISION_VERIFICATION_FAILED,
+                rationale="executor work failed the verification contract",
+                payload={"artifact_refs": artifact_refs, "verification_result_id": str(vr.id)},
+            )
+            return self._decision_result(run, work_step, attempt, decision)
+
+        # The ONLY PROVED path — gated on a real passing VerificationResult,
+        # exactly like the native ``_finish_verified``.
         work_step.status = WorkStepStatus.VERIFIED
         work_step.proof_state = ProofState.PROVED
         attempt.phase = RunAttemptPhase.COMPLETED
         attempt.finished_at = _utcnow()
-        # The worker's result path persisted the captured files under this run's
-        # workspace and recorded their relative paths on ``task.artifact_refs``
-        # (executor-pool B1). Surface them as the verified Deliverable's
-        # artifact_refs so the existing artifact-read endpoint serves real
-        # content (was always ``[]`` before B1).
-        artifact_refs = completed.artifact_refs or []
         deliverable = await write_verified_deliverable(
             self._session,
             run,
             attempt_id=attempt.id,
             artifact_refs=artifact_refs,
-            summary=completed.output,
+            summary=output,
         )
         logger.info(
             "executor_orchestrator_verified",
             run_id=str(run.id),
-            task_id=str(task.id),
+            task_id=str(task_id),
             deliverable_id=str(deliverable.id),
+            verification_result_id=str(vr.id),
             artifact_refs=artifact_refs,
         )
         return LoopResult(
@@ -245,8 +400,9 @@ class ExecutorOrchestrator:
             run_id=run.id,
             work_step_id=work_step.id,
             run_attempt_id=attempt.id,
+            verification_result_id=vr.id,
             written_paths=artifact_refs,
-            summary=completed.output,
+            summary=output,
         )
 
     # -- terminal helpers --------------------------------------------------
@@ -310,6 +466,20 @@ class ExecutorOrchestrator:
         )
 
 
+class _UnavailableJudge:
+    """A :class:`JudgeLlm` sentinel for when no verification LLM is available.
+
+    Never reached at runtime: a judge-bearing contract is routed to a
+    human-review Decision before ``verify`` runs, and a command-only contract
+    makes no judge call. If a judge call is ever attempted it raises loudly
+    rather than silently passing — a refused judge is never a silent pass."""
+
+    async def complete(
+        self, *, messages: list[dict[str, Any]], tools: list[dict[str, Any]] | None
+    ) -> Any:
+        raise RuntimeError("no verification LLM available for the judge")
+
+
 def _parse_uuid(value: Any) -> uuid.UUID | None:
     """Best-effort parse of a stored ``worker_id`` tag (always a str in JSON)."""
     if isinstance(value, uuid.UUID):
@@ -327,7 +497,9 @@ def _utcnow() -> Any:
 
 
 __all__ = [
+    "DECISION_HUMAN_REVIEW_REQUIRED",
     "DECISION_NO_DISPATCH_TRANSPORT",
     "DECISION_NO_WORKER_AVAILABLE",
+    "DECISION_VERIFICATION_FAILED",
     "ExecutorOrchestrator",
 ]
