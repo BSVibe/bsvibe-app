@@ -1,52 +1,59 @@
 /**
- * Knowledge surface — the read-only knowledge view (formerly "Inside"), driven
- * by a route-aware mocked fetch. The primary view is a force-directed graph;
- * the Concepts + Observations lists sit below it. Asserts:
- *  - the graph container renders when the graph has nodes
- *  - the graph's calm empty state ("No connections yet") when it has none
+ * Knowledge surface — the BSage-style knowledge-graph view (ported from
+ * BSage's `KnowledgeGraphView`). The graph IS the surface now: there is no
+ * separate "What I know" list and no "Recently observed" section (directive
+ * #2 — removed as noise; the system learns from everything). Asserts:
+ *  - the graph canvas mounts when `/inside/graph` has nodes
+ *  - tapping a graph node fetches `getConceptDetail` and opens the detail panel
+ *    (directive #1 — clicks now work via the canvas hit-area; here we drive the
+ *    onNodeClick the lib provides)
+ *  - the detail panel renders the concept's name, aliases, related concepts
+ *    (clickable pivots), and source observations
+ *  - clicking a related concept pivots the panel onto the neighbour
+ *  - the search box filters the graph nodes
+ *  - the group(kind) legend lets you toggle a group off (filters its nodes)
+ *  - the "Recently observed" section is GONE
+ *  - a calm empty state on a fresh/sparse workspace
  *  - a calm inline error on a failed graph read — never a crash
- *  - both lists still render the REAL fields (concept name + summary + alias
- *    count; observation title + excerpt + tags)
- *  - the calm "nothing learned" state when the workspace has learned nothing yet
- *  - a calm inline error (not a blank page) when a list read fails
  *
  * `react-force-graph-2d` needs a real canvas (jsdom has none), so it is mocked
- * to a simple stub that just renders its node count — enough to assert the
- * container mounts without choking the test environment.
+ * to a stub that exposes a button per node wired to the real `onNodeClick`, so
+ * a "node tap" is simulated exactly the way the lib invokes it.
  */
 
 import Knowledge from "@/components/knowledge/Knowledge";
-import type { Concept, ConceptDetail, KnowledgeGraph, Observation } from "@/lib/api/types";
+import type { ConceptDetail, KnowledgeGraph } from "@/lib/api/types";
 import { type Session, clearSession, setSession } from "@/lib/auth/session";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-// The canvas lib reaches for a real canvas — stub it. The stub renders a marker
-// + the node count so the test can assert the canvas container mounted, and a
-// button per node wired to the real `onNodeClick` so a "node tap" can be
-// simulated the same way the lib invokes it (node object → onNodeClick(node)).
+// Stub the canvas lib: render a marker, the node count, and a button per node
+// wired to the real onNodeClick (node object → onNodeClick(node)) so a tap is
+// reproducible. Also capture nodePointerAreaPaint so we can assert the click
+// hit-area is wired (the dead-click fix).
+let captured: Record<string, unknown> = {};
 vi.mock("react-force-graph-2d", () => ({
-  default: ({
-    graphData,
-    onNodeClick,
-  }: {
-    graphData: { nodes: { id: string; label: string }[] };
+  default: (props: {
+    graphData: { nodes: { id: string; name?: string; label?: string }[] };
     onNodeClick?: (node: { id: string }) => void;
-  }) => (
-    <div data-testid="force-graph-stub">
-      nodes:{graphData.nodes.length}
-      {graphData.nodes.map((n) => (
-        <button
-          key={n.id}
-          type="button"
-          data-testid={`graph-node-${n.id}`}
-          onClick={() => onNodeClick?.(n)}
-        >
-          {n.label}
-        </button>
-      ))}
-    </div>
-  ),
+  }) => {
+    captured = props as unknown as Record<string, unknown>;
+    return (
+      <div data-testid="force-graph-stub">
+        nodes:{props.graphData.nodes.length}
+        {props.graphData.nodes.map((n) => (
+          <button
+            key={n.id}
+            type="button"
+            data-testid={`graph-node-${n.id}`}
+            onClick={() => props.onNodeClick?.(n)}
+          >
+            {n.name ?? n.label ?? n.id}
+          </button>
+        ))}
+      </div>
+    );
+  },
 }));
 
 const SESSION: Session = {
@@ -57,30 +64,39 @@ const SESSION: Session = {
   expiresAt: Date.now() + 3_600_000,
 };
 
-const CONCEPT: Concept = {
-  id: "self-hosting",
-  name: "Self-hosting",
-  summary: "Running services on owned hardware instead of a managed cloud.",
-  aliases: ["self host", "selfhosting"],
-  alias_count: 2,
-  created_at: "2026-05-22T00:00:00Z",
-  updated_at: "2026-05-23T00:00:00Z",
-};
-
-const OBSERVATION: Observation = {
-  id: "garden/seedling/2026-05-23-related-posts.md",
-  title: "Related posts widget shows 5 items",
-  excerpt: "Founder settled on 5 over 3; both fit the layout.",
-  tags: ["frontend", "widget"],
-  captured_at: "2026-05-23T00:00:00Z",
-};
-
 const GRAPH: KnowledgeGraph = {
   nodes: [
-    { id: "a", label: "Auth", kind: "concept", weight: 1 },
-    { id: "b", label: "JWKS", kind: "concept", weight: 1 },
+    { id: "auth", label: "Auth", kind: "concept", weight: 2 },
+    { id: "jwks", label: "JWKS", kind: "concept", weight: 1 },
+    { id: "deploy", label: "Deploy", kind: "topic", weight: 1 },
   ],
-  edges: [{ source: "a", target: "b", type: "relates_to", weight: 0.8 }],
+  edges: [
+    { source: "auth", target: "jwks", type: "relates_to", weight: 0.8 },
+    { source: "auth", target: "deploy", type: "relates_to", weight: 0.5 },
+  ],
+};
+
+const AUTH_DETAIL: ConceptDetail = {
+  id: "auth",
+  name: "Auth",
+  aliases: ["authn", "authentication"],
+  related: [{ id: "jwks", name: "JWKS", weight: 2 }],
+  observations: [
+    {
+      id: "garden/seedling/auth.md",
+      title: "Wired the auth callback",
+      excerpt: "Founder confirmed the redirect target.",
+      captured_at: "2026-05-21",
+    },
+  ],
+};
+
+const JWKS_DETAIL: ConceptDetail = {
+  id: "jwks",
+  name: "JWKS",
+  aliases: [],
+  related: [{ id: "auth", name: "Auth", weight: 2 }],
+  observations: [],
 };
 
 function json(body: unknown, status = 200) {
@@ -90,12 +106,10 @@ function json(body: unknown, status = 200) {
   });
 }
 
-/** A route-aware fetch mock for the Knowledge reads. The optional `detail`
- *  handler serves the per-concept inspector read; the `/concepts/{id}` check
- *  MUST precede the `/concepts` list check (the list path is a prefix). */
+/** Route-aware fetch mock for the Knowledge reads. The `/concepts/{id}` detail
+ *  check MUST precede the list-prefix check (there is no list call anymore, but
+ *  the matcher mirrors the real client paths). */
 function installFetch(opts: {
-  concepts: () => Concept[] | Response;
-  observations: () => Observation[] | Response;
   graph: () => KnowledgeGraph | Response;
   detail?: (id: string) => ConceptDetail | Response;
 }) {
@@ -111,243 +125,172 @@ function installFetch(opts: {
       const d = opts.detail?.(id) ?? json("not found", 404);
       return d instanceof Response ? d : json(d);
     }
-    if (url.startsWith("/api/v1/inside/concepts")) {
-      const c = opts.concepts();
-      return c instanceof Response ? c : json(c);
-    }
-    if (url.startsWith("/api/v1/inside/observations")) {
-      const o = opts.observations();
-      return o instanceof Response ? o : json(o);
-    }
     throw new Error(`unexpected fetch ${url}`);
   });
   global.fetch = fetchMock as unknown as typeof fetch;
   return fetchMock;
 }
 
-describe("Knowledge surface", () => {
+describe("Knowledge surface (BSage graph)", () => {
   beforeEach(() => {
     clearSession();
     setSession(SESSION);
+    captured = {};
   });
 
   afterEach(() => {
     vi.restoreAllMocks();
   });
 
-  it("renders the graph container when the graph has nodes", async () => {
+  it("mounts the graph canvas when the graph has nodes", async () => {
+    installFetch({ graph: () => GRAPH });
+    render(<Knowledge />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("force-graph-stub")).toHaveTextContent("nodes:3");
+    });
+  });
+
+  it("wires a node-click hit-area (nodePointerAreaPaint) — the dead-click fix", async () => {
+    installFetch({ graph: () => GRAPH });
+    render(<Knowledge />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("force-graph-stub")).toBeInTheDocument();
+    });
+    // The root cause of dead clicks: a custom nodeCanvasObject with NO
+    // nodePointerAreaPaint means the lib's hit-area doesn't match the drawn
+    // nodes. The ported component MUST supply it.
+    expect(captured.nodePointerAreaPaint).toBeTypeOf("function");
+    expect(captured.onNodeClick).toBeTypeOf("function");
+  });
+
+  it("opens the detail panel and fetches getConceptDetail when a node is tapped", async () => {
     installFetch({
-      concepts: () => [CONCEPT],
-      observations: () => [OBSERVATION],
       graph: () => GRAPH,
+      detail: (id) => (id === "auth" ? AUTH_DETAIL : json("not found", 404)),
     });
-
     render(<Knowledge />);
 
+    const node = await screen.findByTestId("graph-node-auth");
+    // No detail panel before the tap.
+    expect(screen.queryByRole("complementary", { name: /concept/i })).not.toBeInTheDocument();
+
+    fireEvent.click(node);
+
     await waitFor(() => {
-      expect(screen.getByTestId("knowledge-graph-canvas")).toBeInTheDocument();
+      expect(screen.getByRole("complementary", { name: /concept/i })).toBeInTheDocument();
     });
-    // The (mocked) force graph mounts with the two nodes — it loads via
-    // next/dynamic (ssr:false), so it resolves on a microtask after the
-    // container mounts.
+    // Detail panel renders the concept's real fields.
+    expect(await screen.findByRole("heading", { name: "Auth" })).toBeInTheDocument();
+    expect(screen.getByText("authn")).toBeInTheDocument();
+    expect(screen.getByText("Wired the auth callback")).toBeInTheDocument();
+    expect(screen.getByText(/redirect target/)).toBeInTheDocument();
+    // Related concept rendered as a clickable pivot — scoped to the panel (a
+    // graph-node stub button shares the "JWKS" name in the canvas mock).
+    const panel = screen.getByRole("complementary", { name: /concept/i });
+    expect(within(panel).getByRole("button", { name: /JWKS/ })).toBeInTheDocument();
+  });
+
+  it("pivots the panel when a related concept is clicked (re-fetches the neighbour)", async () => {
+    installFetch({
+      graph: () => GRAPH,
+      detail: (id) => (id === "auth" ? AUTH_DETAIL : id === "jwks" ? JWKS_DETAIL : json("nf", 404)),
+    });
+    render(<Knowledge />);
+
+    fireEvent.click(await screen.findByTestId("graph-node-auth"));
+    await screen.findByRole("heading", { name: "Auth" });
+
+    // Click the related-concept chip inside the panel (not the same-named graph
+    // node button the canvas stub renders).
+    const panel = screen.getByRole("complementary", { name: /concept/i });
+    fireEvent.click(within(panel).getByRole("button", { name: /JWKS/ }));
+
+    // The panel pivots onto JWKS (a fresh getConceptDetail("jwks")).
     await waitFor(() => {
-      expect(screen.getByTestId("force-graph-stub")).toHaveTextContent("nodes:2");
+      expect(screen.getByRole("heading", { name: "JWKS" })).toBeInTheDocument();
     });
   });
 
-  it("shows the calm graph empty state when there are no connections", async () => {
-    installFetch({
-      concepts: () => [CONCEPT],
-      observations: () => [OBSERVATION],
-      graph: () => ({ nodes: [], edges: [] }),
-    });
-
+  it("filters the graph nodes by the search box", async () => {
+    installFetch({ graph: () => GRAPH });
     render(<Knowledge />);
 
     await waitFor(() => {
-      expect(screen.getByTestId("knowledge-graph-empty")).toBeInTheDocument();
+      expect(screen.getByTestId("force-graph-stub")).toHaveTextContent("nodes:3");
     });
-    expect(screen.getByText(/No connections yet/)).toBeInTheDocument();
-    // The canvas is not mounted when empty.
-    expect(screen.queryByTestId("knowledge-graph-canvas")).not.toBeInTheDocument();
+
+    fireEvent.change(screen.getByRole("searchbox"), { target: { value: "jwks" } });
+
+    // Only the matching node remains in the graph data.
+    await waitFor(() => {
+      expect(screen.getByTestId("force-graph-stub")).toHaveTextContent("nodes:1");
+    });
+    expect(screen.getByTestId("graph-node-jwks")).toBeInTheDocument();
+    expect(screen.queryByTestId("graph-node-auth")).not.toBeInTheDocument();
   });
 
-  it("shows a calm inline error when the graph read fails — never a crash", async () => {
-    installFetch({
-      concepts: () => [CONCEPT],
-      observations: () => [OBSERVATION],
-      graph: () => json("boom", 500),
+  it("filters by the group(kind) legend toggle", async () => {
+    installFetch({ graph: () => GRAPH });
+    render(<Knowledge />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("force-graph-stub")).toHaveTextContent("nodes:3");
     });
 
+    // Toggle the "topic" group off — its single node (deploy) drops out.
+    fireEvent.click(screen.getByRole("button", { name: /topic/i }));
+
+    await waitFor(() => {
+      expect(screen.queryByTestId("graph-node-deploy")).not.toBeInTheDocument();
+    });
+    expect(screen.getByTestId("graph-node-auth")).toBeInTheDocument();
+    expect(screen.getByTestId("graph-node-jwks")).toBeInTheDocument();
+  });
+
+  it("no longer renders the 'Recently observed' section (directive #2)", async () => {
+    installFetch({ graph: () => GRAPH });
+    render(<Knowledge />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("force-graph-stub")).toBeInTheDocument();
+    });
+    expect(screen.queryByText(/Recently observed/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: /Recently observed/i })).not.toBeInTheDocument();
+    // And no separate "What I know" list — the graph is the surface now.
+    expect(screen.queryByRole("region", { name: /What I know/i })).not.toBeInTheDocument();
+  });
+
+  it("shows a calm empty state on a fresh/sparse workspace", async () => {
+    installFetch({ graph: () => ({ nodes: [], edges: [] }) });
+    render(<Knowledge />);
+
+    await waitFor(() => {
+      expect(screen.getByText(/No connections yet/)).toBeInTheDocument();
+    });
+    expect(screen.queryByTestId("force-graph-stub")).not.toBeInTheDocument();
+  });
+
+  it("shows a calm inline error on a failed graph read — never a crash", async () => {
+    installFetch({ graph: () => json("boom", 500) });
     render(<Knowledge />);
 
     await waitFor(() => {
       expect(screen.getByText(/Couldn’t draw the knowledge graph/)).toBeInTheDocument();
     });
-    // The lists still render — a failed graph never blanks the surface.
-    expect(screen.getByText(CONCEPT.name)).toBeInTheDocument();
   });
 
-  it("renders both lists with their real fields below the graph", async () => {
-    installFetch({
-      concepts: () => [CONCEPT],
-      observations: () => [OBSERVATION],
-      graph: () => GRAPH,
-    });
-
+  it("closes the detail panel from the close affordance", async () => {
+    installFetch({ graph: () => GRAPH, detail: () => AUTH_DETAIL });
     render(<Knowledge />);
 
+    fireEvent.click(await screen.findByTestId("graph-node-auth"));
+    await screen.findByRole("complementary", { name: /concept/i });
+
+    fireEvent.click(screen.getByRole("button", { name: /close/i }));
     await waitFor(() => {
-      expect(screen.getByText(CONCEPT.name)).toBeInTheDocument();
+      expect(screen.queryByRole("complementary", { name: /concept/i })).not.toBeInTheDocument();
     });
-    expect(screen.getByRole("region", { name: "What I know" })).toBeInTheDocument();
-    expect(screen.getByRole("region", { name: "Recently observed" })).toBeInTheDocument();
-
-    expect(screen.getByText(CONCEPT.summary)).toBeInTheDocument();
-    expect(screen.getByText(/2 mentions/)).toBeInTheDocument();
-    expect(screen.getByText(OBSERVATION.title)).toBeInTheDocument();
-    expect(screen.getByText(OBSERVATION.excerpt)).toBeInTheDocument();
-    expect(screen.getByText("frontend")).toBeInTheDocument();
-  });
-
-  it("shows the calm 'nothing learned' list state when nothing has been learned", async () => {
-    installFetch({
-      concepts: () => [],
-      observations: () => [],
-      graph: () => ({ nodes: [], edges: [] }),
-    });
-
-    render(<Knowledge />);
-
-    await waitFor(() => {
-      expect(screen.getByText(/I haven’t learned anything yet/)).toBeInTheDocument();
-    });
-    expect(screen.queryByRole("region", { name: "What I know" })).not.toBeInTheDocument();
-  });
-
-  it("renders concepts even when observations fail — calm, not blank", async () => {
-    installFetch({
-      concepts: () => [CONCEPT],
-      observations: () => json("boom", 500),
-      graph: () => GRAPH,
-    });
-
-    render(<Knowledge />);
-
-    await waitFor(() => {
-      expect(screen.getByText(CONCEPT.name)).toBeInTheDocument();
-    });
-    expect(screen.getByRole("region", { name: "What I know" })).toBeInTheDocument();
-    expect(screen.getByText(/Couldn’t load recent observations/)).toBeInTheDocument();
-  });
-
-  const OTHER_CONCEPT: Concept = {
-    id: "vaultwarden",
-    name: "Vaultwarden",
-    summary: "Self-hosted password manager.",
-    aliases: [],
-    alias_count: 0,
-    created_at: "2026-05-22T00:00:00Z",
-    updated_at: "2026-05-23T00:00:00Z",
-  };
-
-  const DETAIL: ConceptDetail = {
-    id: "self-hosting",
-    name: "Self-hosting",
-    aliases: ["self host"],
-    related: [{ id: "vaultwarden", name: "Vaultwarden", weight: 1 }],
-    observations: [
-      {
-        id: "garden/seedling/obs.md",
-        title: "Moved the vault to my mini",
-        excerpt: "Cutover went clean.",
-        captured_at: "2026-05-20",
-      },
-    ],
-  };
-
-  it("filters the 'What I know' list by the search box", async () => {
-    installFetch({
-      concepts: () => [CONCEPT, OTHER_CONCEPT],
-      observations: () => [OBSERVATION],
-      graph: () => GRAPH,
-    });
-
-    render(<Knowledge />);
-
-    await waitFor(() => {
-      expect(screen.getByText(CONCEPT.name)).toBeInTheDocument();
-    });
-    expect(screen.getByText(OTHER_CONCEPT.name)).toBeInTheDocument();
-
-    fireEvent.change(screen.getByRole("searchbox"), { target: { value: "vault" } });
-
-    // The non-matching concept is filtered out; the matching one stays.
-    expect(screen.queryByText(CONCEPT.name)).not.toBeInTheDocument();
-    expect(screen.getByText(OTHER_CONCEPT.name)).toBeInTheDocument();
-  });
-
-  const GRAPH_DETAIL: ConceptDetail = {
-    id: "a",
-    name: "Auth",
-    aliases: ["authn"],
-    related: [],
-    observations: [
-      {
-        id: "garden/seedling/auth.md",
-        title: "Wired the auth callback",
-        excerpt: "Founder confirmed the redirect target.",
-        captured_at: "2026-05-21",
-      },
-    ],
-  };
-
-  it("opens the inspector when a graph node is tapped — the dead-click bug", async () => {
-    installFetch({
-      concepts: () => [CONCEPT],
-      observations: () => [OBSERVATION],
-      graph: () => GRAPH,
-      // The inspector fetch keys on the graph node id ("a"), proving the graph
-      // node id is exactly the concept id getConceptDetail expects.
-      detail: (id) => (id === "a" ? GRAPH_DETAIL : json("not found", 404)),
-    });
-
-    render(<Knowledge />);
-
-    // Wait for the (mocked) graph to mount with its node buttons.
-    const node = await screen.findByTestId("graph-node-a");
-    // No inspector before the tap.
-    expect(screen.queryByRole("complementary", { name: /concept/i })).not.toBeInTheDocument();
-
-    fireEvent.click(node);
-
-    // Tapping the graph node opens the SAME inspector the list opens.
-    await waitFor(() => {
-      expect(screen.getByRole("complementary", { name: /concept/i })).toBeInTheDocument();
-    });
-    expect(await screen.findByText("Wired the auth callback")).toBeInTheDocument();
-  });
-
-  it("opens the inspector when a concept in the list is clicked", async () => {
-    installFetch({
-      concepts: () => [CONCEPT],
-      observations: () => [OBSERVATION],
-      graph: () => GRAPH,
-      detail: () => DETAIL,
-    });
-
-    render(<Knowledge />);
-
-    await waitFor(() => {
-      expect(screen.getByText(CONCEPT.name)).toBeInTheDocument();
-    });
-    // The concept row is a button that opens the inspector.
-    fireEvent.click(screen.getByRole("button", { name: new RegExp(CONCEPT.name) }));
-
-    await waitFor(() => {
-      expect(screen.getByRole("complementary", { name: /concept/i })).toBeInTheDocument();
-    });
-    // The inspector shows the detail's source observation.
-    expect(await screen.findByText("Moved the vault to my mini")).toBeInTheDocument();
   });
 });
