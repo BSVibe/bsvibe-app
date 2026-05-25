@@ -192,6 +192,7 @@
     "inspectorRelatedEmpty": "아직 관련된 것이 없습니다.",
     "inspectorOrigin": "출처",
     "inspectorOriginEmpty": "아직 이를 참조한 관찰이 없습니다.",
+    "inspectorObsTruncated": "…(생략됨)",
     "relatedWeight": "{count, plural, other {연결 #개}}",
     "graphColorType": "종류",
     "graphColorCommunity": "커뮤니티",

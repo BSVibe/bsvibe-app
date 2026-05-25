@@ -192,6 +192,7 @@
     "inspectorRelatedEmpty": "Nothing related yet.",
     "inspectorOrigin": "Origin",
     "inspectorOriginEmpty": "No observations reference this yet.",
+    "inspectorObsTruncated": "…(truncated)",
     "relatedWeight": "{count, plural, one {# link} other {# links}}",
     "graphColorType": "Type",
     "graphColorCommunity": "Community",

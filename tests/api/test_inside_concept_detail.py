@@ -219,6 +219,43 @@ async def test_detail_lists_source_observations(client, workspace_storage) -> No
     assert obs["id"] == "garden/seedling/obs-a.md"
     assert "redirect target" in obs["excerpt"]
     assert obs["captured_at"] == "2026-05-20T00:00:00"
+    # The inspector renders the note's FULL body (not just the one-line excerpt)
+    # so a clicked concept reads as a readable note.
+    assert obs["body"] == "Founder confirmed the redirect target."
+    assert obs["truncated"] is False
+
+
+async def test_detail_observation_body_preserves_multiline(client, workspace_storage) -> None:
+    """The source observation body keeps its line breaks so the inspector can
+    render it as a readable note (white-space: pre-wrap), not a flattened blurb."""
+    await _seed_concepts(workspace_storage, ["auth"])
+    multiline = "First paragraph line.\n\nSecond paragraph after a blank line.\n- a bullet"
+    await workspace_storage.write(
+        "garden/seedling/obs-multi.md",
+        _garden_note("Multi-line note", multiline, "settle", "verified-run", "auth"),
+    )
+
+    r = await client.get("/api/v1/inside/concepts/auth")
+    assert r.status_code == 200, r.text
+    obs = r.json()["observations"][0]
+    assert obs["body"] == multiline
+    assert obs["truncated"] is False
+
+
+async def test_detail_observation_body_truncated_when_huge(client, workspace_storage) -> None:
+    """A body past the ~8KB cap is truncated and flagged so the wire stays bounded."""
+    await _seed_concepts(workspace_storage, ["auth"])
+    huge = "x" * 20000
+    await workspace_storage.write(
+        "garden/seedling/obs-huge.md",
+        _garden_note("Huge note", huge, "settle", "verified-run", "auth"),
+    )
+
+    r = await client.get("/api/v1/inside/concepts/auth")
+    assert r.status_code == 200, r.text
+    obs = r.json()["observations"][0]
+    assert obs["truncated"] is True
+    assert len(obs["body"]) <= 8192
 
 
 async def test_detail_observations_empty_when_no_reference(client, workspace_storage) -> None:

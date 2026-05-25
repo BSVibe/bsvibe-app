@@ -65,6 +65,10 @@ _MAX_GRAPH_NODES = 200
 # Excerpt cap — a short, founder-legible blurb, not the full note body.
 _EXCERPT_CHARS = 200
 
+# Note-body cap (~8KB) — the inspector renders the full observation body, but the
+# wire stays bounded; a longer body is truncated and flagged.
+_OBSERVATION_BODY_CHARS = 8192
+
 
 async def build_inside_storage(
     workspace_id: Annotated[uuid.UUID, Depends(get_workspace_id)],
@@ -238,7 +242,9 @@ class SourceObservation(BaseModel):
     These are the raw settle notes whose tags resolve onto this concept (the
     *origin / usage* of the anchor) — derived with the exact tag→concept
     resolution the graph builder uses. ``id`` is the note's vault path;
-    ``title`` its H1; ``excerpt`` a short body blurb; ``captured_at`` the
+    ``title`` its H1; ``excerpt`` a short body blurb; ``body`` the full note
+    body (capped at ``_OBSERVATION_BODY_CHARS``, with ``truncated`` set when it
+    overflowed) so the inspector can render the note in full; ``captured_at`` the
     writer-stamped deposit date (may be absent).
     """
 
@@ -247,6 +253,8 @@ class SourceObservation(BaseModel):
     id: str
     title: str
     excerpt: str
+    body: str
+    truncated: bool
     captured_at: str | None = None
 
 
@@ -279,6 +287,27 @@ def _excerpt(body: str) -> str:
             continue
         return line[:_EXCERPT_CHARS]
     return ""
+
+
+def _capped_body(body: str) -> tuple[str, bool]:
+    """Full note body capped at ``_OBSERVATION_BODY_CHARS``; flag if truncated.
+
+    The leading H1 is dropped (the inspector already shows it as the note's
+    title, so repeating it would be redundant). Inner line breaks are preserved
+    so the inspector can render it as a readable note; only surrounding
+    whitespace is stripped.
+    """
+    lines = body.splitlines()
+    # Skip a single leading H1 heading + any blank lines beneath it.
+    start = 0
+    if start < len(lines) and lines[start].lstrip().startswith("# "):
+        start += 1
+        while start < len(lines) and not lines[start].strip():
+            start += 1
+    text = "\n".join(lines[start:]).strip()
+    if len(text) > _OBSERVATION_BODY_CHARS:
+        return text[:_OBSERVATION_BODY_CHARS], True
+    return text, False
 
 
 @router.get("/concepts")
@@ -386,6 +415,8 @@ async def get_concept_detail(
         fm = extract_frontmatter(text)
         captured_at = fm.get("captured_at")
         captured_str = captured_at if isinstance(captured_at, str) else None
+        raw_body = body_after_frontmatter(text)
+        full_body, truncated = _capped_body(raw_body)
         observations.append(
             (
                 captured_str,
@@ -393,7 +424,9 @@ async def get_concept_detail(
                 SourceObservation(
                     id=path,
                     title=extract_title(text) or PurePosixPath(path).stem,
-                    excerpt=_excerpt(body_after_frontmatter(text)),
+                    excerpt=_excerpt(raw_body),
+                    body=full_body,
+                    truncated=truncated,
                     captured_at=captured_str,
                 ),
             )
