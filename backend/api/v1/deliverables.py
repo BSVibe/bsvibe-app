@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
+from pathlib import Path
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -21,6 +22,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.api.deps import get_db_session, get_workspace_id
+from backend.config import get_settings
 from backend.execution.db import (
     Deliverable,
     DeliverableType,
@@ -29,6 +31,13 @@ from backend.execution.db import (
 )
 
 router = APIRouter()
+
+# Read cap for artifact content. A produced source file is small; this guards
+# against an accidental multi-MB log/blob slipping into a JSON body. Beyond it
+# the response carries the first ``_MAX_CONTENT_BYTES`` decoded as text with
+# ``truncated: true`` so the viewer can show a calm "showing the first part"
+# note rather than streaming an unbounded payload.
+_MAX_CONTENT_BYTES = 256 * 1024
 
 
 class DeliverableResponse(BaseModel):
@@ -71,6 +80,28 @@ class DeliverableReportResponse(BaseModel):
 
     deliverable: DeliverableResponse
     verifications: list[VerificationReport] = []
+
+
+class ArtifactContentResponse(BaseModel):
+    """The produced CONTENT of one artifact file, read-only.
+
+    Served from the persisted run workspace
+    (``<run_workspace_root>/<run_id>/<ref>``) so the founder can SEE what the
+    agent actually wrote — not just a filename or a (often-null) git link.
+
+    ``content`` is the file decoded as UTF-8 text with ``errors="replace"``
+    (lossy but never throws), capped at 256 KiB. ``truncated`` flags that the
+    file was larger than the cap (only the leading bytes are returned).
+    ``binary`` flags a non-text file, in which case ``content`` is a short
+    "binary file, N bytes" note rather than the raw bytes.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    ref: str
+    content: str
+    truncated: bool = False
+    binary: bool = False
 
 
 def _summary_of(payload: dict[str, Any]) -> str | None:
@@ -184,4 +215,95 @@ async def get_deliverable_report(
     return DeliverableReportResponse(
         deliverable=_to_response(row),
         verifications=verifications,
+    )
+
+
+def _looks_binary(raw: bytes) -> bool:
+    """Heuristic binary sniff: a NUL byte in the inspected prefix → binary.
+
+    Mirrors git's own "is this a text file" test (a NUL in the first 8 KiB).
+    Cheap, dependency-free, and deliberately conservative — a stray NUL makes
+    us report metadata-only rather than dumping mojibake into a JSON string.
+    """
+    return b"\x00" in raw[:8192]
+
+
+@router.get("/{deliverable_id}/artifacts/{ref:path}")
+async def get_deliverable_artifact(
+    deliverable_id: uuid.UUID,
+    ref: str,
+    workspace_id: Annotated[uuid.UUID, Depends(get_workspace_id)],
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+) -> ArtifactContentResponse:
+    """Serve one artifact file's CONTENT, read-only, scoped to the caller.
+
+    The file is read from the deliverable's PERSISTED run workspace
+    (``<run_workspace_root>/<run_id>/<ref>``) — the orchestrator/worker drives
+    each run inside that dir and the work LLM's writes land there, so no
+    orchestrator/git change is needed to surface real content.
+
+    Security (all 404 — never leak existence/contents across the boundary):
+      * workspace scope — the deliverable must belong to the caller's workspace;
+      * ref whitelist — ``ref`` MUST be one of the deliverable's own
+        ``payload.artifact_refs`` (arbitrary paths are refused outright);
+      * path traversal — the resolved realpath MUST stay within the run dir, so
+        a whitelisted-but-malicious ``../`` ref cannot escape;
+      * missing file — a cleaned run dir / absent file 404s calmly.
+
+    Content is UTF-8 with ``errors="replace"``, capped at 256 KiB
+    (``truncated: true`` past the cap). A binary file yields a short
+    "binary file, N bytes" note (``binary: true``) instead of raw bytes.
+    """
+    row = await session.get(Deliverable, deliverable_id)
+    if row is None or row.workspace_id != workspace_id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Deliverable {deliverable_id} not found",
+        )
+
+    # Ref whitelist: only the deliverable's own declared artifact_refs are
+    # serveable — never an arbitrary path the caller supplies.
+    payload = row.payload if isinstance(row.payload, dict) else {}
+    if ref not in _artifact_refs_of(payload):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="artifact not found for this deliverable",
+        )
+
+    settings = get_settings()
+    run_dir = (Path(settings.run_workspace_root) / str(row.run_id)).resolve()
+    target = (run_dir / ref).resolve()
+
+    # Path-traversal defense: the resolved target must stay within the run dir
+    # (catches a whitelisted-but-malicious ``../`` ref). ``is_relative_to`` is
+    # the realpath containment check (Py 3.9+).
+    if not target.is_relative_to(run_dir):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="artifact not found for this deliverable",
+        )
+
+    if not target.is_file():
+        # Run dir cleaned, or never written — calm not-found, not a 500.
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="artifact content is no longer available",
+        )
+
+    raw = target.read_bytes()
+    if _looks_binary(raw):
+        return ArtifactContentResponse(
+            ref=ref,
+            content=f"Binary file, {len(raw)} bytes — not shown.",
+            truncated=False,
+            binary=True,
+        )
+
+    truncated = len(raw) > _MAX_CONTENT_BYTES
+    text = raw[:_MAX_CONTENT_BYTES].decode("utf-8", errors="replace")
+    return ArtifactContentResponse(
+        ref=ref,
+        content=text,
+        truncated=truncated,
+        binary=False,
     )

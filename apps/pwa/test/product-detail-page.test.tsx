@@ -133,6 +133,23 @@ describe("Product detail surface", () => {
     );
   });
 
+  it("links each shipped artifact to its Delivery Report (so artifacts are reachable)", async () => {
+    global.fetch = installFetch({
+      runs: () => [SHIPPED_RUN],
+      deliverables: (runId) => (runId === "run-ship" ? [DELIVERABLE] : []),
+    }) as unknown as typeof fetch;
+
+    render(<ProductDetail slug="blog" />);
+
+    const shippedSection = await screen.findByRole("region", { name: "Shipped" });
+    // The report link points at the deliverable's report route — where the new
+    // interactive artifact viewer lives.
+    expect(within(shippedSection).getByRole("link", { name: /report/i })).toHaveAttribute(
+      "href",
+      "/deliverables/d1",
+    );
+  });
+
   it("shows the calm not-found state for an unknown slug", async () => {
     global.fetch = installFetch({
       products: () => [BLOG],

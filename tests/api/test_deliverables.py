@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 import httpx
 import pytest
@@ -23,6 +24,7 @@ from backend.api.deps import (
     get_workspace_id,
 )
 from backend.api.main import create_app
+from backend.config import get_settings
 from backend.execution.db import (
     Deliverable,
     DeliverableType,
@@ -457,3 +459,218 @@ async def test_limit_capped(configured_client, db, workspace_id) -> None:
     r2 = await configured_client.get("/api/v1/deliverables?limit=1")
     assert r2.status_code == 200
     assert len(r2.json()) == 1
+
+
+# ---------------------------------------------------------------------------
+# Artifact content viewer — GET /{id}/artifacts/{ref:path}
+#
+# Serves a deliverable's produced file CONTENT read-only from the persisted run
+# workspace (``<run_workspace_root>/<run_id>/<ref>``). The ``run_workspace_root``
+# is read from settings, so the fixture points it at a tmp dir + clears the
+# ``get_settings`` lru_cache (mirrors tests/api/test_v1_skills.py).
+# ---------------------------------------------------------------------------
+
+
+async def _seed_deliverable_with_refs(
+    s,
+    *,
+    deliverable_id: uuid.UUID,
+    run_id: uuid.UUID,
+    ws: uuid.UUID,
+    refs: list[str],
+) -> None:
+    """Seed the parent run (flushed first for the PG FK) + a deliverable whose
+    payload carries ``artifact_refs``."""
+    await _seed_run(s, run_id=run_id, ws=ws)
+    s.add(
+        Deliverable(
+            id=deliverable_id,
+            run_id=run_id,
+            workspace_id=ws,
+            deliverable_type=DeliverableType.CODE,
+            payload={"summary": "shipped", "artifact_refs": refs},
+            created_at=datetime.now(tz=UTC),
+        )
+    )
+    await s.commit()
+
+
+@pytest.fixture
+def run_workspace_root(tmp_path: Path, monkeypatch) -> Path:
+    """Point ``run_workspace_root`` at a tmp dir; clear the settings cache so the
+    override takes effect for the request-time ``get_settings()`` read."""
+    root = tmp_path / "runs"
+    root.mkdir()
+    monkeypatch.setenv("BSVIBE_RUN_WORKSPACE_ROOT", str(root))
+    get_settings.cache_clear()
+    yield root
+    get_settings.cache_clear()
+
+
+def _write_run_file(root: Path, run_id: uuid.UUID, ref: str, content: str | bytes) -> Path:
+    """Write a file into ``<root>/<run_id>/<ref>`` (creating parents)."""
+    path = root / str(run_id) / ref
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if isinstance(content, bytes):
+        path.write_bytes(content)
+    else:
+        path.write_text(content, encoding="utf-8")
+    return path
+
+
+async def test_artifact_serves_text_content(
+    configured_client, db, workspace_id, run_workspace_root
+) -> None:
+    run_id = uuid.uuid4()
+    deliverable_id = uuid.uuid4()
+    async with db() as s:
+        await _seed_deliverable_with_refs(
+            s, deliverable_id=deliverable_id, run_id=run_id, ws=workspace_id, refs=["hello.py"]
+        )
+    _write_run_file(run_workspace_root, run_id, "hello.py", "print('hi')\n")
+
+    r = await configured_client.get(f"/api/v1/deliverables/{deliverable_id}/artifacts/hello.py")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["ref"] == "hello.py"
+    assert body["content"] == "print('hi')\n"
+    assert body["truncated"] is False
+    assert body["binary"] is False
+
+
+async def test_artifact_serves_nested_ref(
+    configured_client, db, workspace_id, run_workspace_root
+) -> None:
+    """A ref with a subdirectory (e.g. ``src/app.py``) is served — the ``:path``
+    converter keeps the slash, and the realpath stays inside the run dir."""
+    run_id = uuid.uuid4()
+    deliverable_id = uuid.uuid4()
+    async with db() as s:
+        await _seed_deliverable_with_refs(
+            s, deliverable_id=deliverable_id, run_id=run_id, ws=workspace_id, refs=["src/app.py"]
+        )
+    _write_run_file(run_workspace_root, run_id, "src/app.py", "x = 1\n")
+
+    r = await configured_client.get(f"/api/v1/deliverables/{deliverable_id}/artifacts/src/app.py")
+    assert r.status_code == 200, r.text
+    assert r.json()["content"] == "x = 1\n"
+
+
+async def test_artifact_ref_not_in_whitelist_404(
+    configured_client, db, workspace_id, run_workspace_root
+) -> None:
+    """A ref that is NOT one of the deliverable's own artifact_refs is rejected,
+    even when a file by that name physically exists in the run dir."""
+    run_id = uuid.uuid4()
+    deliverable_id = uuid.uuid4()
+    async with db() as s:
+        await _seed_deliverable_with_refs(
+            s, deliverable_id=deliverable_id, run_id=run_id, ws=workspace_id, refs=["hello.py"]
+        )
+    # secret.txt exists on disk but is NOT in artifact_refs.
+    _write_run_file(run_workspace_root, run_id, "secret.txt", "shh")
+
+    r = await configured_client.get(f"/api/v1/deliverables/{deliverable_id}/artifacts/secret.txt")
+    assert r.status_code == 404
+
+
+async def test_artifact_path_traversal_rejected(
+    configured_client, db, workspace_id, run_workspace_root
+) -> None:
+    """A traversal ref (``../``) is rejected even if it were somehow whitelisted
+    — the resolved realpath must stay within the run dir."""
+    run_id = uuid.uuid4()
+    deliverable_id = uuid.uuid4()
+    traversal = "../../etc/passwd"
+    async with db() as s:
+        await _seed_deliverable_with_refs(
+            s,
+            deliverable_id=deliverable_id,
+            run_id=run_id,
+            ws=workspace_id,
+            refs=[traversal],  # even whitelisted, must be refused
+        )
+
+    r = await configured_client.get(f"/api/v1/deliverables/{deliverable_id}/artifacts/{traversal}")
+    assert r.status_code == 404
+
+
+async def test_artifact_cross_workspace_404(
+    configured_client, db, workspace_id, run_workspace_root
+) -> None:
+    """A deliverable in another workspace is 404 (never a content leak)."""
+    other_run_id = uuid.uuid4()
+    other_ws = uuid.uuid4()
+    theirs = uuid.uuid4()
+    async with db() as s:
+        await _seed_deliverable_with_refs(
+            s, deliverable_id=theirs, run_id=other_run_id, ws=other_ws, refs=["hello.py"]
+        )
+    _write_run_file(run_workspace_root, other_run_id, "hello.py", "print('hi')\n")
+
+    r = await configured_client.get(f"/api/v1/deliverables/{theirs}/artifacts/hello.py")
+    assert r.status_code == 404
+
+
+async def test_artifact_missing_file_404(
+    configured_client, db, workspace_id, run_workspace_root
+) -> None:
+    """When the run dir was cleaned and the file no longer exists on disk, the
+    endpoint 404s calmly (the ref IS whitelisted, but the bytes are gone)."""
+    run_id = uuid.uuid4()
+    deliverable_id = uuid.uuid4()
+    async with db() as s:
+        await _seed_deliverable_with_refs(
+            s, deliverable_id=deliverable_id, run_id=run_id, ws=workspace_id, refs=["gone.py"]
+        )
+    # No file written → the run dir / file is absent.
+
+    r = await configured_client.get(f"/api/v1/deliverables/{deliverable_id}/artifacts/gone.py")
+    assert r.status_code == 404
+
+
+async def test_artifact_oversized_truncated(
+    configured_client, db, workspace_id, run_workspace_root
+) -> None:
+    """Content beyond the 256 KiB cap is truncated with ``truncated: true``."""
+    run_id = uuid.uuid4()
+    deliverable_id = uuid.uuid4()
+    big = "a" * (256 * 1024 + 500)
+    async with db() as s:
+        await _seed_deliverable_with_refs(
+            s, deliverable_id=deliverable_id, run_id=run_id, ws=workspace_id, refs=["big.txt"]
+        )
+    _write_run_file(run_workspace_root, run_id, "big.txt", big)
+
+    r = await configured_client.get(f"/api/v1/deliverables/{deliverable_id}/artifacts/big.txt")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["truncated"] is True
+    assert len(body["content"]) == 256 * 1024
+
+
+async def test_artifact_binary_metadata_only(
+    configured_client, db, workspace_id, run_workspace_root
+) -> None:
+    """A binary file is reported as metadata only, never dumped as bytes."""
+    run_id = uuid.uuid4()
+    deliverable_id = uuid.uuid4()
+    raw = b"\x89PNG\r\n\x1a\n\x00\x01\x02\x03"
+    async with db() as s:
+        await _seed_deliverable_with_refs(
+            s, deliverable_id=deliverable_id, run_id=run_id, ws=workspace_id, refs=["logo.png"]
+        )
+    _write_run_file(run_workspace_root, run_id, "logo.png", raw)
+
+    r = await configured_client.get(f"/api/v1/deliverables/{deliverable_id}/artifacts/logo.png")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["binary"] is True
+    assert "binary file" in body["content"].lower()
+    assert str(len(raw)) in body["content"]
+
+
+async def test_artifact_unknown_deliverable_404(configured_client, run_workspace_root) -> None:
+    """An unknown deliverable id is 404, not a 500."""
+    r = await configured_client.get(f"/api/v1/deliverables/{uuid.uuid4()}/artifacts/hello.py")
+    assert r.status_code == 404

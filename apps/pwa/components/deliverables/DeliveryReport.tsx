@@ -1,8 +1,9 @@
 "use client";
 
 import { ApiError } from "@/lib/api/client";
-import { getDeliverableReport } from "@/lib/api/deliverables";
+import { getDeliverableArtifact, getDeliverableReport } from "@/lib/api/deliverables";
 import type {
+  ArtifactContent,
   DeliverableReport,
   VerificationOutcome,
   VerificationReportItem,
@@ -25,9 +26,17 @@ import { useEffect, useState } from "react";
  * error) / error / ready. A run with no verification shows a calm
  * "no verification recorded" note rather than erroring.
  *
- * Deferred (no data behind them yet): a full inline side-by-side diff VIEWER
- * (we link out to diff_url), any risk score the model doesn't carry, and
- * per-deliverable approve / follow-up actions (the report is read-only proof).
+ * The artifacts list is interactive: clicking a ref fetches its produced file
+ * CONTENT from the persisted run workspace (REAL
+ * `GET /api/v1/deliverables/{id}/artifacts/{ref}`) and shows it in a calm
+ * inline monospace viewer. A 404 (file cleaned / unavailable) degrades to a
+ * "couldn't show this file — see the git diff" note; the diff_url link is kept.
+ *
+ * Deferred (no data behind them yet): a true side-by-side DIFF (we don't store
+ * a base — this shows the produced file CONTENT, which is what was missing),
+ * any risk score the model doesn't carry, and per-deliverable approve /
+ * follow-up actions (the report is read-only proof). Binary artifacts surface
+ * metadata only (a "binary file, N bytes" note), never raw bytes.
  */
 type Loaded =
   | { state: "loading" }
@@ -127,6 +136,7 @@ function ReportBody({ report }: { report: DeliverableReport }) {
   const t = useTranslations("report");
   const { deliverable, verifications } = report;
   const summary = deliverable.summary?.trim() || t("untitled");
+  const hasDiff = Boolean(deliverable.diff_url);
 
   return (
     <article className="report__body">
@@ -145,7 +155,7 @@ function ReportBody({ report }: { report: DeliverableReport }) {
         )}
       </section>
 
-      <Artifacts deliverable={deliverable} />
+      <Artifacts deliverable={deliverable} hasDiff={hasDiff} />
 
       {deliverable.diff_url && (
         <section className="report-diff" aria-label={t("diff")}>
@@ -227,11 +237,16 @@ function summarizeResult(result: Record<string, unknown>): string | null {
 
 function Artifacts({
   deliverable,
+  hasDiff,
 }: {
   deliverable: DeliverableReport["deliverable"];
+  hasDiff: boolean;
 }) {
   const t = useTranslations("report");
-  const { artifact_refs, artifact_uri } = deliverable;
+  const { id, artifact_refs, artifact_uri } = deliverable;
+  // Which ref is open in the inline viewer (one at a time — calm, focused).
+  const [openRef, setOpenRef] = useState<string | null>(null);
+
   return (
     <section className="report-artifacts" aria-label={t("artifacts")}>
       <h2 className="section-label">{t("artifacts")}</h2>
@@ -243,7 +258,17 @@ function Artifacts({
             <ul className="report-artifacts__list">
               {artifact_refs.map((ref) => (
                 <li key={ref} className="report-artifacts__row">
-                  {ref}
+                  <button
+                    type="button"
+                    className="report-artifacts__ref"
+                    aria-expanded={openRef === ref}
+                    onClick={() => setOpenRef((prev) => (prev === ref ? null : ref))}
+                  >
+                    {ref}
+                  </button>
+                  {openRef === ref && (
+                    <ArtifactViewer deliverableId={id} refName={ref} hasDiff={hasDiff} />
+                  )}
                 </li>
               ))}
             </ul>
@@ -261,5 +286,80 @@ function Artifacts({
         </>
       )}
     </section>
+  );
+}
+
+type ArtifactLoaded =
+  | { state: "loading" }
+  | { state: "unavailable" }
+  | { state: "ready"; artifact: ArtifactContent };
+
+/** Inline content viewer for one artifact ref. Fetches the produced file
+ *  CONTENT and shows it in a calm scrollable monospace block. A 404 (cleaned
+ *  run dir / unavailable) degrades to a "couldn't show this file" note that
+ *  points back at the git diff; any other failure shows the same calm note
+ *  rather than an error wall. A binary file shows its metadata note, a
+ *  truncated file shows a "showing the first part" line. */
+function ArtifactViewer({
+  deliverableId,
+  refName,
+  hasDiff,
+}: {
+  deliverableId: string;
+  refName: string;
+  hasDiff: boolean;
+}) {
+  const t = useTranslations("report");
+  const [loaded, setLoaded] = useState<ArtifactLoaded>({ state: "loading" });
+
+  useEffect(() => {
+    let active = true;
+    setLoaded({ state: "loading" });
+    getDeliverableArtifact(deliverableId, refName)
+      .then((artifact) => {
+        if (active) setLoaded({ state: "ready", artifact });
+      })
+      .catch(() => {
+        // 404 (file cleaned / not whitelisted) OR any read failure → the same
+        // calm "couldn't show this file" fallback (never an error wall).
+        if (active) setLoaded({ state: "unavailable" });
+      });
+    return () => {
+      active = false;
+    };
+  }, [deliverableId, refName]);
+
+  if (loaded.state === "loading") {
+    return (
+      <p className="report-artifact-view__loading" aria-busy="true">
+        {t("artifactLoading")}
+      </p>
+    );
+  }
+
+  if (loaded.state === "unavailable") {
+    return (
+      <p className="report-artifact-view__unavailable">
+        {hasDiff ? t("artifactUnavailableWithDiff") : t("artifactUnavailable")}
+      </p>
+    );
+  }
+
+  const { artifact } = loaded;
+  return (
+    <div className="report-artifact-view">
+      {artifact.binary ? (
+        <p className="report-artifact-view__binary">{artifact.content}</p>
+      ) : (
+        <>
+          {artifact.truncated && (
+            <p className="report-artifact-view__truncated">{t("artifactTruncated")}</p>
+          )}
+          <pre className="report-artifact-view__content">
+            <code>{artifact.content}</code>
+          </pre>
+        </>
+      )}
+    </div>
   );
 }

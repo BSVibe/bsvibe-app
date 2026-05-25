@@ -212,6 +212,20 @@ export interface DeliverableReport {
   verifications: VerificationReportItem[];
 }
 
+/** `GET /api/v1/deliverables/{id}/artifacts/{ref:path}` body (backend
+ *  ArtifactContentResponse) — the produced CONTENT of one artifact file, read
+ *  from the persisted run workspace. `content` is the file as UTF-8 text
+ *  (lossy `errors="replace"`), capped at 256 KiB. `truncated` flags the file
+ *  exceeded the cap (only the leading bytes are returned). `binary` flags a
+ *  non-text file, where `content` is a short "binary file, N bytes" note rather
+ *  than raw bytes. Mirrors the backend response model field-for-field. */
+export interface ArtifactContent {
+  ref: string;
+  content: string;
+  truncated: boolean;
+  binary: boolean;
+}
+
 /** `POST /api/v1/messages` body — founder-direct submission. */
 export interface MessageCreate {
   text: string;

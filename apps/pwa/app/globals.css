@@ -4902,6 +4902,71 @@ main.login {
   width: fit-content;
 }
 
+/* ── BEGIN artifact-viewer (feat/artifact-viewer) ───────────────────────────
+ * Self-contained block (no token edits) for the interactive artifact-content
+ * viewer on the Delivery Report: each artifact_ref is a calm button that
+ * toggles an inline monospace content panel. Sits alongside the parallel
+ * delivery-report styling so it stays merge-safe. */
+.report-artifacts__ref {
+  appearance: none;
+  background: none;
+  border: none;
+  padding: 0;
+  margin: 0;
+  font: inherit;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.85rem;
+  color: var(--ink-2);
+  text-align: left;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  width: fit-content;
+}
+
+.report-artifacts__ref[aria-expanded="true"] {
+  color: var(--ink);
+}
+
+.report-artifact-view {
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.report-artifact-view__loading,
+.report-artifact-view__unavailable,
+.report-artifact-view__truncated,
+.report-artifact-view__binary {
+  font-size: 0.8rem;
+  color: var(--ink-3);
+}
+
+.report-artifact-view__content {
+  margin: 0;
+  max-height: 420px;
+  overflow: auto;
+  padding: 12px 14px;
+  border: 1px solid var(--hair);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.82rem;
+  line-height: 1.5;
+  color: var(--ink);
+  white-space: pre;
+}
+
+.product-shipped__report-link {
+  font-size: 0.78rem;
+  color: var(--ink-2);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  width: fit-content;
+}
+/* ── END artifact-viewer ────────────────────────────────────────────────── */
+
 /* ── END Delivery Report ───────────────────────────────────────────────── */
 
 /* ── BEGIN product-resources (feat/product-resources) ─────────────────────── */

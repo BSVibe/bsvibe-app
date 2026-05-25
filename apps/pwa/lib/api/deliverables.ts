@@ -4,7 +4,7 @@
  *  shipped" reads this to surface real artifact detail. */
 
 import { apiFetch } from "./client";
-import type { Deliverable, DeliverableReport } from "./types";
+import type { ArtifactContent, Deliverable, DeliverableReport } from "./types";
 
 /** Recent Deliverable rows for the active workspace (newest first).
  *  `runId` narrows to one run's deliverables; the backend clamps `limit` to
@@ -22,5 +22,25 @@ export function listDeliverables(limit = 50, runId?: string): Promise<Deliverabl
 export function getDeliverableReport(deliverableId: string): Promise<DeliverableReport> {
   return apiFetch<DeliverableReport>(
     `/api/v1/deliverables/${encodeURIComponent(deliverableId)}/report`,
+  );
+}
+
+/** The produced CONTENT of one artifact file, read-only. REAL backend
+ *  `GET /api/v1/deliverables/{id}/artifacts/{ref:path}`. `ref` MUST be one of
+ *  the deliverable's own `artifact_refs` — the backend whitelists it and 404s
+ *  anything else (unknown ref, traversal, cleaned run dir). A 404 surfaces as
+ *  an `ApiError`; the viewer renders a calm "content unavailable — see git".
+ *  The `ref` may contain slashes (`src/app.ts`); each segment is encoded so the
+ *  `:path` route still resolves it as one nested path, not a query/escape. */
+export function getDeliverableArtifact(
+  deliverableId: string,
+  ref: string,
+): Promise<ArtifactContent> {
+  const encodedRef = ref
+    .split("/")
+    .map((segment) => encodeURIComponent(segment))
+    .join("/");
+  return apiFetch<ArtifactContent>(
+    `/api/v1/deliverables/${encodeURIComponent(deliverableId)}/artifacts/${encodedRef}`,
   );
 }

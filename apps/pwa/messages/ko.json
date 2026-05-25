@@ -80,6 +80,7 @@
     "shipped": "배포됨",
     "noShipped": "이 제품은 아직 배포한 것이 없습니다.",
     "openArtifact": "결과물 열기",
+    "viewReport": "리포트 보기",
     "resources": {
       "heading": "리소스",
       "add": "리소스 추가",
@@ -581,6 +582,10 @@
     "artifacts": "산출물",
     "noArtifacts": "이 산출물에 기록된 항목이 없습니다.",
     "openArtifact": "산출물 열기",
+    "artifactLoading": "이 파일을 여는 중…",
+    "artifactTruncated": "이 파일의 앞부분만 표시합니다 — 인라인으로 보여주기에 너무 큽니다.",
+    "artifactUnavailable": "지금은 이 파일을 표시할 수 없어요.",
+    "artifactUnavailableWithDiff": "이 파일을 표시할 수 없어요 — 전체 변경 내용은 변경 내용에서 확인하세요.",
     "diff": "변경 내용",
     "viewDiff": "변경 내용 보기"
   },
