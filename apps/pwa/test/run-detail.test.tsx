@@ -185,8 +185,10 @@ describe("Run-detail surface (Triggered)", () => {
     expect(screen.queryByRole("button", { name: /let it continue/i })).not.toBeInTheDocument();
 
     // The trigger section is never empty — a Direct run (no source/kind) shows an
-    // honest "Started directly by you." line, not a bare header.
-    const trigger = screen.getByRole("region", { name: /trigger/i });
+    // honest "Started directly by you." line, not a bare header. Use findByRole
+    // (await) so we wait for the fetched content to render, not the loading state
+    // (the error-absent waitFor above is true during loading too → was flaky).
+    const trigger = await screen.findByRole("region", { name: /trigger/i });
     expect(within(trigger).getByText(/started directly by you/i)).toBeInTheDocument();
     // And NOT the external Safe-Mode reassurance line (no external origin here).
     expect(
