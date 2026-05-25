@@ -14,7 +14,7 @@
     "continue": "계속"
   },
   "nav": {
-    "brief": "브리프",
+    "brief": "요약",
     "decisions": "결정",
     "activity": "활동",
     "knowledge": "지식",
@@ -63,12 +63,12 @@
     "errorNetwork": "네트워크 오류 — 다시 시도해 주세요."
   },
   "products": {
-    "back": "‹ 브리프",
+    "back": "‹ 요약",
     "region": "제품",
     "loadingNote": "이 제품을 살펴보는 중…",
     "notFoundLine": "그 제품을 찾을 수 없어요.",
     "notFoundSubPrefix": "이름이 변경되었거나 삭제되었을 수 있습니다. ",
-    "backToBrief": "브리프로 돌아가기",
+    "backToBrief": "요약으로 돌아가기",
     "notFoundSubSuffix": ".",
     "errorLine": "지금은 이 제품을 불러오지 못했어요.",
     "errorSub": "잠시 후 다시 시도해 주세요.",
@@ -171,6 +171,7 @@
     "deliverablesError": "지금은 이 작업의 결과물을 불러오지 못했어요 — 잠시 후 다시 시도해 주세요.",
     "deliverablesEmpty": "이 작업에는 전달된 결과물이 없습니다.",
     "openArtifact": "결과물 열기",
+    "viewReport": "리포트 보기",
     "openRun": "작업 열기"
   },
   "knowledge": {
@@ -248,7 +249,7 @@
     "timeDays": "{n}일 전"
   },
   "brief": {
-    "heading": "브리프",
+    "heading": "요약",
     "loadingNote": "제품을 불러오는 중…",
     "needsYou": "확인이 필요해요",
     "nothingNeedsYou": "지금은 확인할 것이 없어요.",
@@ -499,8 +500,8 @@
           "label": "실패 — 검증에 실패하여 BSVibe가 중단했습니다"
         },
         "daily_brief": {
-          "short": "데일리 브리프",
-          "label": "데일리 브리프 — 매일 아침 요약"
+          "short": "데일리 요약",
+          "label": "데일리 요약 — 매일 아침 보내드려요"
         }
       },
       "channels": {
@@ -565,11 +566,11 @@
     }
   },
   "report": {
-    "back": "‹ 브리프",
+    "back": "‹ 요약",
     "region": "전달 리포트",
     "loadingNote": "리포트를 살펴보는 중…",
     "notFoundLine": "해당 리포트를 찾을 수 없어요.",
-    "backToBrief": "브리프로 돌아가기",
+    "backToBrief": "요약으로 돌아가기",
     "errorLine": "지금은 이 리포트를 불러올 수 없어요.",
     "errorSub": "잠시 후 다시 시도해 주세요.",
     "untitled": "전달된 산출물",

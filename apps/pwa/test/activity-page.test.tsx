@@ -142,6 +142,11 @@ describe("Activity surface", () => {
     expect(screen.getByText("This is verified")).toBeInTheDocument();
     const link = screen.getByRole("link", { name: /Open artifact/ });
     expect(link).toHaveAttribute("href", "https://github.com/acme/repo/pull/15");
+    // A "View report" link opens the deliverable's (redesigned) Delivery Report.
+    expect(screen.getByRole("link", { name: /View report/ })).toHaveAttribute(
+      "href",
+      "/deliverables/d1",
+    );
     // The expand fetch narrowed to this run.
     const delUrl = fetchMock.mock.calls
       .map((c) => String(c[0]))

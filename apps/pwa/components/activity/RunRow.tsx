@@ -124,6 +124,14 @@ export default function RunRow({ run }: { run: ActivityRun }) {
                     <div className="activity-deliverable__body">
                       <span className="activity-deliverable__title">{d.title}</span>
                       <span className="activity-deliverable__source">{d.source}</span>
+                      {/* Glass-box proof: open the deliverable's Delivery Report
+                          (the Notion-style document), same as the Brief. */}
+                      <Link
+                        className="activity-deliverable__report-link"
+                        href={`/deliverables/${d.id}`}
+                      >
+                        {t("viewReport")}
+                      </Link>
                       {d.link && (
                         <a
                           className="activity-deliverable__link"
