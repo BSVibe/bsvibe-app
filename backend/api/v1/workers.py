@@ -67,6 +67,16 @@ class HeartbeatResponse(BaseModel):
     status: str
 
 
+class WorkerResultFile(BaseModel):
+    """One file the worker's CLI produced, shipped back for persistence (B1)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    path: str = Field(..., min_length=1)
+    content_b64: str = ""
+    truncated: bool = False
+
+
 class WorkerResultBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -74,6 +84,9 @@ class WorkerResultBody(BaseModel):
     success: bool
     output: str = ""
     error_message: str | None = None
+    # Files the CLI produced (executor-pool B1). Persisted under the run
+    # workspace + recorded as the task's artifact_refs by ``record_result``.
+    files: list[WorkerResultFile] = Field(default_factory=list)
 
 
 class WorkerResponse(BaseModel):
@@ -294,6 +307,8 @@ async def report_result(
         success=body.success,
         output=body.output,
         error_message=body.error_message,
+        files=[f.model_dump() for f in body.files],
+        run_workspace_root=get_settings().run_workspace_root,
     )
     await session.commit()
     return HeartbeatResponse(status="ok")

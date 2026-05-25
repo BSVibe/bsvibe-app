@@ -230,6 +230,62 @@ async def test_result_publishes_done_channel(db, redis) -> None:
     await pubsub.aclose()
 
 
+async def test_result_persists_files_and_records_refs(db, redis, tmp_path, monkeypatch) -> None:
+    """B1: POST /result with ``files`` writes them under
+    ``run_workspace_root/<run_id>/`` and records ``task.artifact_refs``."""
+    import base64
+
+    from backend.config import get_settings
+
+    root = tmp_path / "runs"
+    monkeypatch.setenv("BSVIBE_RUN_WORKSPACE_ROOT", str(root))
+    get_settings.cache_clear()
+
+    run_id = uuid.uuid4()
+    worker_id, token = await _seed_worker(db, capabilities=["claude_code"])
+    async with db() as s:
+        worker = await s.get(WorkerRow, worker_id)
+        task = await dispatch.create_task(
+            s,
+            workspace_id=worker.workspace_id,
+            executor_type="claude_code",
+            prompt="p",
+            run_id=run_id,
+        )
+        await s.commit()
+        task_id = task.id
+
+    app = create_app()
+    try:
+        async with _client(app, db, redis) as c:
+            r = await c.post(
+                "/api/v1/workers/result",
+                headers={"X-Worker-Token": token},
+                json={
+                    "task_id": str(task_id),
+                    "success": True,
+                    "output": "ok",
+                    "error_message": None,
+                    "files": [
+                        {
+                            "path": "out.txt",
+                            "content_b64": base64.b64encode(b"captured").decode(),
+                            "truncated": False,
+                        }
+                    ],
+                },
+            )
+            assert r.status_code == 200, r.text
+
+        assert (root / str(run_id) / "out.txt").read_bytes() == b"captured"
+        async with db() as s:
+            row = await s.get(ExecutorTaskRow, task_id)
+            assert row is not None
+            assert row.artifact_refs == ["out.txt"]
+    finally:
+        get_settings.cache_clear()
+
+
 async def test_result_requires_worker_token(db, redis) -> None:
     app = create_app()
     async with _client(app, db, redis) as c:

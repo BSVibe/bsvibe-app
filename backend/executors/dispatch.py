@@ -27,15 +27,19 @@ session transaction boundary (these functions ``add`` / ``flush`` but never
 from __future__ import annotations
 
 import asyncio
+import base64
+import binascii
 import json
 import uuid
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any, Protocol
 
 import structlog
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.config import get_settings
 from backend.executors.db import ExecutorTaskRow, WorkerRow
 
 logger = structlog.get_logger(__name__)
@@ -171,10 +175,17 @@ async def create_task(
     prompt: str,
     system: str = "",
     workspace_dir: str = ".",
+    run_id: uuid.UUID | None = None,
 ) -> ExecutorTaskRow:
-    """Create a ``pending`` :class:`ExecutorTaskRow` and flush it (no commit)."""
+    """Create a ``pending`` :class:`ExecutorTaskRow` and flush it (no commit).
+
+    ``run_id`` (optional) binds the task to its :class:`ExecutionRun` so the
+    result path can resolve the run workspace to persist captured files into
+    (executor-pool B1). It is nullable: substrate-only callers omit it.
+    """
     task = ExecutorTaskRow(
         workspace_id=workspace_id,
+        run_id=run_id,
         executor_type=executor_type,
         prompt=prompt,
         system=system,
@@ -230,6 +241,48 @@ async def dispatch_task(
     return str(msg_id)
 
 
+def _persist_task_files(
+    *,
+    run_id: uuid.UUID,
+    run_workspace_root: str,
+    files: list[dict[str, Any]],
+) -> list[str]:
+    """Persist worker-returned files under ``run_workspace_root/<run_id>/`` (B1).
+
+    For each file: resolve ``(root/<run_id>/path).resolve()`` and REJECT any path
+    that is not ``is_relative_to`` the run dir (path-traversal guard — mirrors
+    ``backend/api/v1/deliverables.py`` so the same containment invariant holds on
+    write as on read). Truncation-marker entries (``truncated: True``, empty
+    content) are recorded as refs but written empty. Returns the accepted
+    relative paths (the recorded ``artifact_refs``); a rejected / malformed entry
+    is skipped, never written.
+    """
+    run_dir = (Path(run_workspace_root) / str(run_id)).resolve()
+    accepted: list[str] = []
+    for entry in files:
+        rel = entry.get("path")
+        if not isinstance(rel, str) or not rel:
+            logger.warning("artifact_persist_skipped_no_path", run_id=str(run_id))
+            continue
+        target = (run_dir / rel).resolve()
+        # Path-traversal defense: the resolved target MUST stay within the run
+        # dir (catches a malicious ``../`` ref). ``is_relative_to`` is the
+        # realpath containment check (Py 3.9+).
+        if not target.is_relative_to(run_dir):
+            logger.warning("artifact_persist_rejected_traversal", run_id=str(run_id), ref=rel)
+            continue
+        truncated = bool(entry.get("truncated"))
+        try:
+            raw = b"" if truncated else base64.b64decode(entry.get("content_b64") or "")
+        except (binascii.Error, ValueError):
+            logger.warning("artifact_persist_bad_base64", run_id=str(run_id), ref=rel)
+            continue
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(raw)
+        accepted.append(rel)
+    return accepted
+
+
 async def record_result(
     session: AsyncSession,
     redis: _RedisDispatch,
@@ -238,8 +291,18 @@ async def record_result(
     success: bool,
     output: str,
     error_message: str | None,
+    files: list[dict[str, Any]] | None = None,
+    run_workspace_root: str | None = None,
 ) -> ExecutorTaskRow | None:
     """Close a task ``done`` / ``failed`` from a worker result. ``None`` if unknown.
+
+    B1: when the worker ships ``files`` (each ``{path, content_b64, truncated}``)
+    and the task carries a ``run_id``, they are persisted under
+    ``run_workspace_root/<run_id>/`` (traversal-guarded, see
+    :func:`_persist_task_files`) and their accepted relative paths recorded on
+    ``task.artifact_refs`` — so the existing artifact-read endpoint serves them.
+    A task with ``run_id is None`` skips persistence (back-compat). The root
+    defaults to ``settings.run_workspace_root`` when not given.
 
     After the DB row flips terminal, PUBLISH the :func:`done_channel` signal on
     ``redis``. This is the **authoritative** completion signal: a remote worker
@@ -256,6 +319,25 @@ async def record_result(
     task.status = "done" if success else "failed"
     task.output = output
     task.error_message = error_message
+
+    # Persist captured files + record real artifact_refs (B1). Skipped when the
+    # task has no run binding (substrate-only / back-compat) or no files shipped.
+    if files and task.run_id is not None:
+        root = run_workspace_root or get_settings().run_workspace_root
+        accepted = await asyncio.to_thread(
+            _persist_task_files,
+            run_id=task.run_id,
+            run_workspace_root=root,
+            files=files,
+        )
+        task.artifact_refs = accepted
+        logger.info(
+            "executor_task_artifacts_persisted",
+            task_id=str(task_id),
+            run_id=str(task.run_id),
+            count=len(accepted),
+        )
+
     await session.flush()
     logger.info(
         "executor_task_result_recorded",

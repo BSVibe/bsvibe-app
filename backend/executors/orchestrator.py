@@ -153,14 +153,17 @@ class ExecutorOrchestrator:
         # must NOT ship it — sending it as the task cwd made claude-code fail to
         # chdir ([Errno 2] No such file or directory). The worker now creates and
         # manages its own isolated per-task local dir; we send a neutral ``"."``
-        # (also ``create_task``'s default). Surfacing the worker's local
-        # artifacts back here is a documented v2 refinement.
+        # (also ``create_task``'s default). The task carries ``run_id`` so the
+        # worker's result path persists the files the CLI produced under this
+        # run's workspace (``run_workspace_root/<run_id>/``) — surfaced as the
+        # verified Deliverable's artifact_refs (executor-pool B1).
         task = await dispatch.create_task(
             self._session,
             workspace_id=run.workspace_id,
             executor_type=executor_type,
             prompt=prompt,
             workspace_dir=".",
+            run_id=run.id,
         )
         await dispatch.dispatch_task(
             self._redis, session=self._session, task=task, worker_id=worker.id
@@ -211,16 +214,23 @@ class ExecutorOrchestrator:
             )
 
         # v1 trusts the worker's success signal — no BSVibe-side re-verification
-        # of the CLI output (documented v2 refinement).
+        # of the CLI output (B2 handles re-verification; this lift keeps the
+        # trust-the-success-signal flow but with REAL artifacts).
         work_step.status = WorkStepStatus.VERIFIED
         work_step.proof_state = ProofState.PROVED
         attempt.phase = RunAttemptPhase.COMPLETED
         attempt.finished_at = _utcnow()
+        # The worker's result path persisted the captured files under this run's
+        # workspace and recorded their relative paths on ``task.artifact_refs``
+        # (executor-pool B1). Surface them as the verified Deliverable's
+        # artifact_refs so the existing artifact-read endpoint serves real
+        # content (was always ``[]`` before B1).
+        artifact_refs = completed.artifact_refs or []
         deliverable = await write_verified_deliverable(
             self._session,
             run,
             attempt_id=attempt.id,
-            artifact_refs=[],
+            artifact_refs=artifact_refs,
             summary=completed.output,
         )
         logger.info(
@@ -228,13 +238,14 @@ class ExecutorOrchestrator:
             run_id=str(run.id),
             task_id=str(task.id),
             deliverable_id=str(deliverable.id),
+            artifact_refs=artifact_refs,
         )
         return LoopResult(
             outcome="verified",
             run_id=run.id,
             work_step_id=work_step.id,
             run_attempt_id=attempt.id,
-            written_paths=[],
+            written_paths=artifact_refs,
             summary=completed.output,
         )
 
