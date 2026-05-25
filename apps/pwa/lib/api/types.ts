@@ -188,6 +188,10 @@ export interface Deliverable {
   artifact_uri: string | null;
   /** Commit / diff URL when the producing run recorded one; absent otherwise. */
   diff_url?: string | null;
+  /** Backend-authoritative trust signal (B4): `true` ONLY when a PASSED
+   *  VerificationResult exists for the producing run — never inferred from the
+   *  deliverable existing. The "This is verified" badge MUST derive from this. */
+  verified: boolean;
   created_at: string;
 }
 
@@ -215,6 +219,12 @@ export interface DeliverableReport {
   /** The founder's Direction that led to this work (from the producing run's
    *  payload); `null` when the run carries no recorded intent. */
   request: string | null;
+  /** Backend-authoritative trust signal (B4): `true` ONLY when a PASSED
+   *  VerificationResult is among the run's recorded verifications. The report's
+   *  "verified" verdict derives from THIS flag, not from the list contents, so a
+   *  hollow deliverable (none, or only failed/inconclusive) reads as needs
+   *  review — never a green "verified". */
+  verified: boolean;
   verifications: VerificationReportItem[];
 }
 
@@ -759,7 +769,9 @@ export interface ShippedItem {
   /** Where it landed — "GitHub PR #15", "Notion page", "Figma frame". */
   source: string;
   artifactType: ArtifactType;
-  /** Proof verdict; for now always the calm "This is verified". */
+  /** Proof verdict, derived from the backend-authoritative `Deliverable.verified`
+   *  flag (B4): the calm "This is verified" ONLY when a PASSED VerificationResult
+   *  backs it, else an honest "Awaiting verification" — never a hollow green. */
   verdict: string;
   /** External landing URL (`Deliverable.artifact_uri`) when one exists; absent
    *  for in-repo / unaddressed artifacts. The RecentlyShipped component does not

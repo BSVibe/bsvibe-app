@@ -133,7 +133,11 @@ function toShippedItem(d: Deliverable, productSlug: string): ShippedItem {
     productSlug,
     source: sourceFor(d.deliverable_type),
     artifactType: artifactTypeFor(d.deliverable_type),
-    verdict: "This is verified",
+    // B4 trust-integrity: the verdict derives from the backend-authoritative
+    // `verified` flag (a PASSED VerificationResult), NOT from the deliverable
+    // existing. A hollow deliverable reads honestly as awaiting verification —
+    // the founder never sees a green "This is verified" without real proof.
+    verdict: d.verified ? "This is verified" : "Awaiting verification",
   };
   if (d.artifact_uri) item.link = d.artifact_uri;
   return item;

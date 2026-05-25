@@ -467,6 +467,177 @@ async def test_limit_capped(configured_client, db, workspace_id) -> None:
     assert r.status_code == 200, r.text
     assert len(r.json()) == 3
 
+
+# ── B4: the "verified" signal MUST be backed by a PASSED VerificationResult ──
+# Defense-in-depth on the READ path. B2b gates the source (a verified Deliverable
+# is only written on a PASSED VerificationResult), but the founder-facing
+# "verified" signal must DERIVE from a real PASSED row — never be inferred from a
+# Deliverable merely existing. A hollow Deliverable (no PASSED row) reads
+# unverified, honestly.
+
+
+async def test_report_verified_true_with_passed_verification(
+    configured_client, db, workspace_id
+) -> None:
+    """A run WITH a PASSED VerificationResult → the report's ``verified`` is True."""
+    run_id = uuid.uuid4()
+    deliverable_id = uuid.uuid4()
+    async with db() as s:
+        await _seed_run(s, run_id=run_id, ws=workspace_id)
+        s.add(
+            Deliverable(
+                id=deliverable_id,
+                run_id=run_id,
+                workspace_id=workspace_id,
+                deliverable_type=DeliverableType.CODE,
+                payload={"summary": "ok", "artifact_refs": ["src/a.py"]},
+                created_at=datetime.now(tz=UTC),
+            )
+        )
+        s.add(
+            VerificationResult(
+                id=uuid.uuid4(),
+                run_id=run_id,
+                work_step_id=None,
+                workspace_id=workspace_id,
+                outcome=VerificationOutcome.PASSED,
+                contract={},
+                result={},
+                created_at=datetime.now(tz=UTC),
+            )
+        )
+        await s.commit()
+
+    r = await configured_client.get(f"/api/v1/deliverables/{deliverable_id}/report")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["verified"] is True
+    assert body["deliverable"]["verified"] is True
+
+
+async def test_report_verified_false_for_hollow_deliverable(
+    configured_client, db, workspace_id
+) -> None:
+    """The DEFENSIVE delta: a Deliverable that exists with NO PASSED
+    VerificationResult (the hollow case constructed directly) must read
+    ``verified=False`` — the report shows it as needs-review, never verified."""
+    run_id = uuid.uuid4()
+    deliverable_id = uuid.uuid4()
+    async with db() as s:
+        await _seed_run(s, run_id=run_id, ws=workspace_id)
+        s.add(
+            Deliverable(
+                id=deliverable_id,
+                run_id=run_id,
+                workspace_id=workspace_id,
+                deliverable_type=DeliverableType.CODE,
+                payload={"summary": "hollow", "artifact_refs": []},
+                created_at=datetime.now(tz=UTC),
+            )
+        )
+        await s.commit()
+
+    r = await configured_client.get(f"/api/v1/deliverables/{deliverable_id}/report")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["verified"] is False
+    assert body["deliverable"]["verified"] is False
+
+
+async def test_report_verified_false_when_only_failed_verification(
+    configured_client, db, workspace_id
+) -> None:
+    """A Deliverable whose run has only a FAILED VerificationResult is NOT
+    verified — a non-PASSED row must never be inferred as proof."""
+    run_id = uuid.uuid4()
+    deliverable_id = uuid.uuid4()
+    async with db() as s:
+        await _seed_run(s, run_id=run_id, ws=workspace_id)
+        s.add(
+            Deliverable(
+                id=deliverable_id,
+                run_id=run_id,
+                workspace_id=workspace_id,
+                deliverable_type=DeliverableType.CODE,
+                payload={"summary": "failed", "artifact_refs": []},
+                created_at=datetime.now(tz=UTC),
+            )
+        )
+        s.add(
+            VerificationResult(
+                id=uuid.uuid4(),
+                run_id=run_id,
+                work_step_id=None,
+                workspace_id=workspace_id,
+                outcome=VerificationOutcome.FAILED,
+                contract={},
+                result={},
+                created_at=datetime.now(tz=UTC),
+            )
+        )
+        await s.commit()
+
+    r = await configured_client.get(f"/api/v1/deliverables/{deliverable_id}/report")
+    assert r.status_code == 200, r.text
+    assert r.json()["verified"] is False
+
+
+async def test_list_and_get_carry_verified_flag(configured_client, db, workspace_id) -> None:
+    """The list + single-deliverable surfaces carry a ``verified`` flag derived
+    from a PASSED VerificationResult, so the PWA "This is verified" badge renders
+    from a backend-authoritative flag rather than deliverable existence alone."""
+    verified_run = uuid.uuid4()
+    hollow_run = uuid.uuid4()
+    verified_id = uuid.uuid4()
+    hollow_id = uuid.uuid4()
+    base = datetime.now(tz=UTC)
+    async with db() as s:
+        await _seed_run(s, run_id=verified_run, ws=workspace_id)
+        await _seed_run(s, run_id=hollow_run, ws=workspace_id)
+        s.add(
+            Deliverable(
+                id=verified_id,
+                run_id=verified_run,
+                workspace_id=workspace_id,
+                deliverable_type=DeliverableType.CODE,
+                payload={"summary": "real"},
+                created_at=base + timedelta(minutes=5),
+            )
+        )
+        s.add(
+            Deliverable(
+                id=hollow_id,
+                run_id=hollow_run,
+                workspace_id=workspace_id,
+                deliverable_type=DeliverableType.CODE,
+                payload={"summary": "hollow"},
+                created_at=base,
+            )
+        )
+        s.add(
+            VerificationResult(
+                id=uuid.uuid4(),
+                run_id=verified_run,
+                work_step_id=None,
+                workspace_id=workspace_id,
+                outcome=VerificationOutcome.PASSED,
+                contract={},
+                result={},
+                created_at=base,
+            )
+        )
+        await s.commit()
+
+    r = await configured_client.get("/api/v1/deliverables")
+    assert r.status_code == 200, r.text
+    by_id = {row["id"]: row for row in r.json()}
+    assert by_id[str(verified_id)]["verified"] is True
+    assert by_id[str(hollow_id)]["verified"] is False
+
+    r2 = await configured_client.get(f"/api/v1/deliverables/{hollow_id}")
+    assert r2.status_code == 200, r2.text
+    assert r2.json()["verified"] is False
+
     r2 = await configured_client.get("/api/v1/deliverables?limit=1")
     assert r2.status_code == 200
     assert len(r2.json()) == 1
