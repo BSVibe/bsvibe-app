@@ -10,6 +10,7 @@ those without a second token decode.
 from __future__ import annotations
 
 from typing import Any
+from urllib.parse import urlencode
 
 import httpx
 import structlog
@@ -98,6 +99,40 @@ class SupabaseAuthClient:
         if resp.status_code not in (200, 204, 401):
             logger.warning("supabase_logout_failed", status=resp.status_code)
             raise SupabaseAuthError(f"supabase logout failed ({resp.status_code})")
+
+    def build_authorize_url(self, provider: str, redirect_to: str, code_challenge: str) -> str:
+        """Assemble the GoTrue ``/authorize`` URL for a social provider (PKCE).
+
+        Pure string assembly — no HTTP. The browser is redirected here; GoTrue
+        sends the user to the provider and back to ``redirect_to`` with a
+        ``?code=`` the frontend exchanges via ``/api/auth/oauth/{provider}/callback``.
+        The matching ``code_verifier`` is held client-side (sessionStorage).
+        """
+        query = urlencode(
+            {
+                "provider": provider,
+                "redirect_to": redirect_to,
+                "code_challenge": code_challenge,
+                "code_challenge_method": "s256",
+            }
+        )
+        return f"{self._base_url}/auth/v1/authorize?{query}"
+
+    async def send_password_reset(self, email: str, redirect_to: str | None = None) -> None:
+        """Ask GoTrue to email a recovery link (``/auth/v1/recover``).
+
+        GoTrue returns 200 whether or not the email exists, so this never leaks
+        account existence. A non-2xx is an infra error → ``SupabaseAuthError``;
+        the route swallows it into a uniform 204 so the client learns nothing.
+        """
+        url = f"{self._base_url}/auth/v1/recover"
+        payload: dict[str, Any] = {"email": email}
+        if redirect_to is not None:
+            payload["redirect_to"] = redirect_to
+        resp = await self._http.post(url, json=payload, headers=self._headers())
+        if resp.status_code >= 400:
+            logger.warning("supabase_recover_failed", status=resp.status_code)
+            raise SupabaseAuthError(f"supabase recover failed ({resp.status_code})")
 
 
 _client_singleton: SupabaseAuthClient | None = None
