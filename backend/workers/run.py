@@ -58,7 +58,7 @@ from backend.delivery.dispatcher import DeliveryDispatcher
 from backend.delivery.schema import DeliveryResult
 from backend.execution.db import Decision, ExecutionRun
 from backend.execution.loop_llm import GatewayLoopLlm
-from backend.execution.orchestrator import RunCompute, RunOrchestrator
+from backend.execution.orchestrator import CanonRetriever, RunCompute, RunOrchestrator
 from backend.executors.orchestrator import ExecutorOrchestrator
 from backend.gateway.budget.policy import BudgetPolicyService
 from backend.gateway.budget.repository import BudgetPolicyRepository
@@ -282,16 +282,40 @@ def build_agent_execution_deps(
     settings = settings or get_settings()
     box: SandboxManager = sandbox_manager or build_sandbox_manager() or NoopSandboxManager()
     skills_root = Path(settings.skills_root)
+    knowledge_vault_root = Path(settings.knowledge_vault_root)
 
     def _skill_loader_for(workspace_id: uuid.UUID) -> SkillLoader:
         loader = SkillLoader(skills_root / str(workspace_id))
         loader.load_all()
         return loader
 
+    def _retriever_for(workspace_id: uuid.UUID) -> CanonRetriever:
+        """The workspace-scoped BSage canon retriever (B3 / RC-2 fix).
+
+        Built per run from :class:`KnowledgeFactory` rooted at the SAME
+        ``<vault_root>/<region>/<workspace_id>/`` boundary the settle/promotion
+        pipeline writes to, so verify folds in THIS workspace's promoted
+        canonical patterns. Construction is cheap + forces no deps; an
+        empty-knowledge workspace yields ``[]`` and the retriever never raises
+        into the verify path (mirrors the settle-extractor's graceful
+        resolution). Wired into BOTH the native and executor orchestrators —
+        before B3 each got ``retriever=None``, so canon was never consulted."""
+        from backend.knowledge.factory import (  # noqa: PLC0415 — lazy heavy import
+            KnowledgeFactory,
+        )
+
+        knowledge = KnowledgeFactory(
+            region=settings.knowledge_default_region,
+            workspace_id=str(workspace_id),
+            vault_root=knowledge_vault_root,
+        )
+        return knowledge.retriever()
+
     async def _factory(session: AsyncSession, run: ExecutionRun) -> RunCompute | None:
         account = await resolve_workspace_model_account(session, run)
         if account is None:
             return None
+        retriever = _retriever_for(run.workspace_id)
         # Executor-pool Lift 5b: a ``provider='executor'`` account routes to a
         # registered external CLI worker, NOT the native LLM loop. Dispatch a
         # task + await the worker's result (ExecutorOrchestrator); the api-llm
@@ -306,7 +330,8 @@ def build_agent_execution_deps(
             # the deps. ``verify_llm`` resolves a NON-executor active account for
             # the judge (mirrors the settle-extractor resolution) — None when
             # only executor accounts are active (→ judge-bearing contracts route
-            # to human review). ``retriever`` stays None for now (B3 wires it).
+            # to human review). ``retriever`` folds in the workspace's BSage
+            # canon (B3 / RC-2 fix — was always None before).
             verify_llm = await _resolve_judge_llm(session, run, settings)
             return ExecutorOrchestrator(
                 session=session,
@@ -314,7 +339,7 @@ def build_agent_execution_deps(
                 account=account,
                 sandbox_manager=box,
                 settings=settings,
-                retriever=None,
+                retriever=retriever,
                 verify_llm=verify_llm,
             )
         dispatcher = build_gateway_dispatcher(session, settings)
@@ -328,6 +353,7 @@ def build_agent_execution_deps(
             session=session,
             llm=llm,
             sandbox_manager=box,
+            retriever=retriever,
             redis_client=redis_client,
             settings=settings,
         )

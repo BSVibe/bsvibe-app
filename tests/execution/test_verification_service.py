@@ -213,6 +213,78 @@ async def test_assemble_contract_none_when_canon_empty_and_no_declared() -> None
 
 
 # --------------------------------------------------------------------------
+# B3 integration — the REAL factory retriever folds workspace canon into the
+# assembled contract (it did NOT before B3, when the retriever was always None).
+# Pairs with the empty-knowledge case: no canon → contract unchanged.
+# --------------------------------------------------------------------------
+
+
+async def test_real_factory_retriever_folds_canon_into_contract(tmp_path: Any) -> None:
+    """A workspace WITH a matching canonical pattern → the assembled contract
+    INCLUDES that canon as a judge criterion (the B3 delta)."""
+    import uuid as _uuid
+    from datetime import datetime as _dt
+
+    from backend.knowledge import KnowledgeFactory
+    from backend.knowledge.canonicalization import models as _models
+    from backend.knowledge.canonicalization.store import NoteStore
+    from backend.knowledge.graph.storage import FileSystemStorage
+
+    vault_root = tmp_path / "vault"
+    region, ws = "us-1", str(_uuid.uuid4())
+    store = NoteStore(FileSystemStorage(vault_root / region / ws))
+    await store.write_concept(
+        _models.ConceptEntry(
+            concept_id="dependency-pinning",
+            path="concepts/active/dependency-pinning.md",
+            display="Always pin dependency versions",
+            aliases=[],
+            created_at=_dt(2026, 5, 6),
+            updated_at=_dt(2026, 5, 6),
+        )
+    )
+    retriever = KnowledgeFactory(region=region, workspace_id=ws, vault_root=vault_root).retriever()
+
+    async with memory_session() as session:
+        svc = VerificationService(session=session, llm=StubLlm([]), retriever=retriever)
+        contract = await svc.assemble_contract(
+            declared_contract=None,
+            written_paths=["requirements.txt"],
+            final_text="updated dependency pinning in the lockfile",
+        )
+        assert contract is not None
+        assert len(contract.judge_checks) == 1
+        assert "Always pin dependency versions" in contract.judge_checks[0].criteria
+
+
+async def test_real_factory_retriever_empty_workspace_leaves_contract_unchanged(
+    tmp_path: Any,
+) -> None:
+    """An empty-knowledge workspace → the real retriever folds NOTHING, so a
+    declared-only contract is identical to the no-retriever case."""
+    import uuid as _uuid
+
+    from backend.knowledge import KnowledgeFactory
+
+    retriever = KnowledgeFactory(
+        region="us-1", workspace_id=str(_uuid.uuid4()), vault_root=tmp_path / "vault"
+    ).retriever()
+
+    async with memory_session() as session:
+        svc = VerificationService(session=session, llm=StubLlm([]), retriever=retriever)
+        declared = {"checks": [{"kind": "command", "command": "pytest -q"}]}
+        contract = await svc.assemble_contract(
+            declared_contract=declared,
+            written_paths=["a.py"],
+            final_text="did a thing",
+        )
+        assert contract is not None
+        # ONLY the declared command — no judge criterion folded in.
+        assert len(contract.command_checks) == 1
+        assert len(contract.judge_checks) == 0
+
+
+# --------------------------------------------------------------------------
 # verify — command checks
 # --------------------------------------------------------------------------
 

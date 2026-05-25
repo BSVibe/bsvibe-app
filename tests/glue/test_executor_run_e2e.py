@@ -761,3 +761,184 @@ async def test_executor_run_without_redis_creates_decision(
 
 async def test_executor_task_timeout_setting_default() -> None:
     assert get_settings().executor_task_timeout_s == 1800.0
+
+
+# --------------------------------------------------------------------------
+# 7. B3 — _factory injects a REAL (non-None) CanonRetriever into BOTH
+#    orchestrators. Prior state: retriever was ALWAYS None in prod (RC-2), so
+#    BSage canon was never folded into verification. The delta asserted here is
+#    None → a workspace-scoped retriever on each orchestrator.
+# --------------------------------------------------------------------------
+
+
+def _vault_root_settings(tmp_path: Path, timeout_s: float = 5.0):
+    """Settings pointing the knowledge vault root at ``tmp_path`` (so the
+    factory's retriever reads the test-seeded canon) + a short executor timeout."""
+    return get_settings().model_copy(
+        update={
+            "knowledge_vault_root": str(tmp_path / "vault"),
+            "executor_task_timeout_s": timeout_s,
+        }
+    )
+
+
+async def _seed_canon_concept(
+    *,
+    vault_root: Path,
+    region: str,
+    workspace_id: uuid.UUID,
+    concept_id: str,
+    display: str,
+) -> None:
+    from backend.knowledge.canonicalization import models  # noqa: PLC0415
+    from backend.knowledge.canonicalization.store import NoteStore  # noqa: PLC0415
+    from backend.knowledge.graph.storage import FileSystemStorage  # noqa: PLC0415
+
+    store = NoteStore(FileSystemStorage(vault_root / region / str(workspace_id)))
+    await store.write_concept(
+        models.ConceptEntry(
+            concept_id=concept_id,
+            path=f"concepts/active/{concept_id}.md",
+            display=display,
+            aliases=[],
+            created_at=datetime(2026, 5, 6, tzinfo=UTC),
+            updated_at=datetime(2026, 5, 6, tzinfo=UTC),
+        )
+    )
+
+
+async def test_factory_wires_retriever_into_executor_orchestrator(
+    sf: async_sessionmaker[AsyncSession],
+    tmp_path: Path,
+) -> None:
+    """B3 delta: the production factory now passes a non-None retriever to the
+    ExecutorOrchestrator (was None)."""
+    settings = _vault_root_settings(tmp_path)
+    workspace_id = uuid.uuid4()
+    redis = await _make_redis()
+    await _seed_canon_concept(
+        vault_root=Path(settings.knowledge_vault_root),
+        region=settings.knowledge_default_region,
+        workspace_id=workspace_id,
+        concept_id="dependency-pinning",
+        display="Always pin dependency versions",
+    )
+    async with sf() as s:
+        worker = await _seed_worker(s, workspace_id=workspace_id, capabilities=["claude_code"])
+        await _seed_executor_account(
+            s, workspace_id=workspace_id, worker_id=worker.id, executor_type="claude_code"
+        )
+        run_id = await _open_run(s, workspace_id=workspace_id, text="ship it")
+        await s.commit()
+
+    deps = build_agent_execution_deps(redis_client=redis, settings=settings)
+    async with sf() as s:
+        run = await s.get(ExecutionRun, run_id)
+        assert run is not None
+        orchestrator = await deps.orchestrator_factory(s, run)
+        assert isinstance(orchestrator, ExecutorOrchestrator)
+        # The delta: a real retriever is wired (NOT None as before B3).
+        assert orchestrator._retriever is not None  # noqa: SLF001 — wiring invariant
+        patterns = await orchestrator._retriever.retrieve_for_signals(  # noqa: SLF001
+            "updated dependency pinning\nrequirements.txt"
+        )
+        assert "Always pin dependency versions" in patterns
+
+    await redis.aclose()
+
+
+async def test_factory_wires_retriever_into_native_orchestrator(
+    sf: async_sessionmaker[AsyncSession],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """B3 delta: the production factory now passes a non-None retriever to the
+    native RunOrchestrator (was None)."""
+    import base64
+
+    from backend.config import get_settings as _get_settings
+    from backend.execution.orchestrator import RunOrchestrator
+    from backend.gateway.llm_client import LlmClient
+    from backend.workers import run as run_module
+
+    monkeypatch.setenv("BSVIBE_GATEWAY_KMS_KEY_B64", base64.urlsafe_b64encode(b"0" * 32).decode())
+    _get_settings.cache_clear()
+    monkeypatch.setattr(run_module, "LlmClient", lambda: LlmClient(completion_fn=lambda **_: None))
+
+    settings = _vault_root_settings(tmp_path)
+    workspace_id = uuid.uuid4()
+    await _seed_canon_concept(
+        vault_root=Path(settings.knowledge_vault_root),
+        region=settings.knowledge_default_region,
+        workspace_id=workspace_id,
+        concept_id="structured-logging",
+        display="Use structlog for structured logging",
+    )
+    async with sf() as s:
+        account = ModelAccount(
+            id=uuid.uuid4(),
+            workspace_id=workspace_id,
+            account_id=uuid.uuid4(),
+            provider="anthropic",
+            label="claude",
+            litellm_model="claude-3-5-sonnet",
+            api_base=None,
+            api_key_encrypted="ciphertext",
+            data_jurisdiction="us",
+            is_active=True,
+            extra_params={},
+        )
+        s.add(account)
+        run_id = await _open_run(s, workspace_id=workspace_id, text="native run")
+        await s.commit()
+
+    deps = build_agent_execution_deps(settings=settings)
+    async with sf() as s:
+        run = await s.get(ExecutionRun, run_id)
+        assert run is not None
+        orchestrator = await deps.orchestrator_factory(s, run)
+        assert isinstance(orchestrator, RunOrchestrator)
+        # The delta: a real retriever is wired (NOT None as before B3).
+        assert orchestrator._retriever is not None  # noqa: SLF001 — wiring invariant
+        patterns = await orchestrator._retriever.retrieve_for_signals(  # noqa: SLF001
+            "added structured logging throughout\napp.py"
+        )
+        assert "Use structlog for structured logging" in patterns
+
+
+async def test_factory_retriever_empty_workspace_folds_nothing(
+    sf: async_sessionmaker[AsyncSession],
+    tmp_path: Path,
+) -> None:
+    """B3 graceful-empty: an empty-knowledge workspace's retriever yields [] →
+    no canon folded → contract unchanged (no verify behaviour change)."""
+    from backend.execution.verifier.service import VerificationService
+
+    settings = _vault_root_settings(tmp_path)
+    workspace_id = uuid.uuid4()
+    redis = await _make_redis()
+    async with sf() as s:
+        worker = await _seed_worker(s, workspace_id=workspace_id, capabilities=["claude_code"])
+        await _seed_executor_account(
+            s, workspace_id=workspace_id, worker_id=worker.id, executor_type="claude_code"
+        )
+        run_id = await _open_run(s, workspace_id=workspace_id, text="ship it")
+        await s.commit()
+
+    deps = build_agent_execution_deps(redis_client=redis, settings=settings)
+    async with sf() as s:
+        run = await s.get(ExecutionRun, run_id)
+        assert run is not None
+        orchestrator = await deps.orchestrator_factory(s, run)
+        assert isinstance(orchestrator, ExecutorOrchestrator)
+        retriever = orchestrator._retriever  # noqa: SLF001
+        assert retriever is not None
+        # Empty workspace → no patterns → assemble_contract folds NO canon.
+        svc = VerificationService(session=s, llm=_StubJudge(passed=True), retriever=retriever)
+        contract = await svc.assemble_contract(
+            declared_contract=None, written_paths=["x.py"], final_text="did a thing"
+        )
+        # No declared checks + no canon → None (unchanged from no-retriever).
+        assert contract is None
+
+    await redis.aclose()
