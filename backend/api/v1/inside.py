@@ -289,13 +289,32 @@ def _excerpt(body: str) -> str:
     return ""
 
 
+# Deterministic settle-note footer the SettleWorker appends after the LLM
+# narrative (see backend/workers/settle_worker.py ``_observation_body``). These
+# are machine metadata, not content — the inspector shows the founder the
+# narrative, so the footer (a trailing block) is trimmed off.
+_SETTLE_FOOTER_PREFIXES = ("Product:", "Intent:", "## Artifacts", "Verified:", "Run:")
+
+
+def _strip_settle_footer(lines: list[str]) -> list[str]:
+    """Drop the trailing settle-note metadata footer. The footer is a contiguous
+    block at the end starting with one of ``_SETTLE_FOOTER_PREFIXES``, so cut
+    from the first such marker line onward (keeps the LLM narrative above it)."""
+    for i, line in enumerate(lines):
+        if line.lstrip().startswith(_SETTLE_FOOTER_PREFIXES):
+            return lines[:i]
+    return lines
+
+
 def _capped_body(body: str) -> tuple[str, bool]:
     """Full note body capped at ``_OBSERVATION_BODY_CHARS``; flag if truncated.
 
     The leading H1 is dropped (the inspector already shows it as the note's
-    title, so repeating it would be redundant). Inner line breaks are preserved
-    so the inspector can render it as a readable note; only surrounding
-    whitespace is stripped.
+    title, so repeating it would be redundant) and the SettleWorker's machine
+    footer (Product/Intent/Artifacts/Verified/Run) is trimmed so the inspector
+    shows the founder the note's CONTENT, not the metadata. Inner line breaks are
+    preserved so it renders as a readable note; only surrounding whitespace is
+    stripped.
     """
     lines = body.splitlines()
     start = 0
@@ -308,7 +327,7 @@ def _capped_body(body: str) -> tuple[str, bool]:
         start += 1
         while start < len(lines) and not lines[start].strip():
             start += 1
-    text = "\n".join(lines[start:]).strip()
+    text = "\n".join(_strip_settle_footer(lines[start:])).strip()
     if len(text) > _OBSERVATION_BODY_CHARS:
         return text[:_OBSERVATION_BODY_CHARS], True
     return text, False
