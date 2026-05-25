@@ -13,9 +13,10 @@
  */
 
 import DeliveryReport from "@/components/deliverables/DeliveryReport";
-import type { DeliverableReport } from "@/lib/api/types";
+import type { ArtifactContent, DeliverableReport } from "@/lib/api/types";
 import { type Session, clearSession, setSession } from "@/lib/auth/session";
 import { render, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const SESSION: Session = {
@@ -188,5 +189,99 @@ describe("Delivery Report surface", () => {
     await waitFor(() => {
       expect(screen.getByText("Add getRelatedPosts to blog.ts")).toBeInTheDocument();
     });
+  });
+});
+
+/**
+ * Interactive artifact viewer — clicking an artifact_ref fetches + shows the
+ * produced file CONTENT inline (the missing "SEE what the agent produced").
+ * Routes the mocked fetch by URL: the `/report` read seeds the page, the
+ * `/artifacts/{ref}` read returns the content (or a 404 for the graceful
+ * "content unavailable — see git" path).
+ */
+describe("Delivery Report — artifact content viewer", () => {
+  beforeEach(() => {
+    clearSession();
+    setSession(SESSION);
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  /** A fetch mock that returns REPORT for the report URL and dispatches each
+   *  `/artifacts/...` URL through `artifactResponder`. */
+  function mockFetch(artifactResponder: (url: string) => Response) {
+    global.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : input.toString();
+      if (url.includes("/artifacts/")) return artifactResponder(url);
+      return json(REPORT);
+    }) as unknown as typeof fetch;
+  }
+
+  it("renders the artifact refs as interactive buttons", async () => {
+    mockFetch(() => json({ ref: "x", content: "", truncated: false, binary: false }));
+    render(<DeliveryReport deliverableId="d1" />);
+
+    const artifacts = await screen.findByRole("region", { name: /artifacts/i });
+    // Each ref is now a clickable control, not inert text.
+    expect(within(artifacts).getByRole("button", { name: /src\/blog\.ts/ })).toBeInTheDocument();
+    expect(
+      within(artifacts).getByRole("button", { name: /tests\/blog\.test\.ts/ }),
+    ).toBeInTheDocument();
+  });
+
+  it("fetches and shows the file content when a ref is clicked", async () => {
+    const content: ArtifactContent = {
+      ref: "src/blog.ts",
+      content: "export function getRelatedPosts() {\n  return [];\n}\n",
+      truncated: false,
+      binary: false,
+    };
+    mockFetch((url) => (url.includes("src/blog.ts") ? json(content) : json({}, 404)));
+
+    render(<DeliveryReport deliverableId="d1" />);
+    const artifacts = await screen.findByRole("region", { name: /artifacts/i });
+
+    await userEvent.click(within(artifacts).getByRole("button", { name: /src\/blog\.ts/ }));
+
+    await waitFor(() => {
+      expect(screen.getByText(/export function getRelatedPosts/)).toBeInTheDocument();
+    });
+    // The diff link is still present (we did not replace it).
+    expect(screen.getByRole("link", { name: /diff/i })).toBeInTheDocument();
+  });
+
+  it("shows a truncated note when the content was capped", async () => {
+    const content: ArtifactContent = {
+      ref: "src/blog.ts",
+      content: "partial…",
+      truncated: true,
+      binary: false,
+    };
+    mockFetch((url) => (url.includes("src/blog.ts") ? json(content) : json({}, 404)));
+
+    render(<DeliveryReport deliverableId="d1" />);
+    const artifacts = await screen.findByRole("region", { name: /artifacts/i });
+    await userEvent.click(within(artifacts).getByRole("button", { name: /src\/blog\.ts/ }));
+
+    await waitFor(() => {
+      expect(screen.getByText(/showing the first part|truncated/i)).toBeInTheDocument();
+    });
+  });
+
+  it("shows a graceful 'content unavailable — see git' message on a 404", async () => {
+    mockFetch(() => json({ detail: "artifact content is no longer available" }, 404));
+
+    render(<DeliveryReport deliverableId="d1" />);
+    const artifacts = await screen.findByRole("region", { name: /artifacts/i });
+    await userEvent.click(within(artifacts).getByRole("button", { name: /src\/blog\.ts/ }));
+
+    await waitFor(() => {
+      expect(
+        screen.getByText(/couldn’t show this file|couldn't show this file|unavailable/i),
+      ).toBeInTheDocument();
+    });
+    // The diff link is still offered as the fallback path.
+    expect(screen.getByRole("link", { name: /diff/i })).toBeInTheDocument();
   });
 });

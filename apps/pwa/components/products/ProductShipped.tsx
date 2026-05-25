@@ -1,5 +1,6 @@
 import type { ArtifactType, ShippedItem } from "@/lib/api/types";
 import { useTranslations } from "next-intl";
+import Link from "next/link";
 
 /** Per-artifact-type marker (UX §4 — deliverables are polymorphic), matched to
  *  the Brief/Activity glyph vocabulary so the surfaces feel like one product. */
@@ -40,6 +41,11 @@ export default function ProductShipped({ items }: { items: ShippedItem[] }) {
                 <div className="product-shipped__body">
                   <span className="product-shipped__title">{item.title}</span>
                   <span className="product-shipped__source">{item.source}</span>
+                  {/* Glass-box proof: open the deliverable's Delivery Report,
+                      where the produced artifact CONTENT is viewable inline. */}
+                  <Link className="product-shipped__report-link" href={`/deliverables/${item.id}`}>
+                    {t("viewReport")}
+                  </Link>
                   {item.link && (
                     <a
                       className="product-shipped__link"

@@ -80,6 +80,7 @@
     "shipped": "Shipped",
     "noShipped": "Nothing shipped for this product yet.",
     "openArtifact": "Open artifact",
+    "viewReport": "View report",
     "resources": {
       "heading": "Resources",
       "add": "Add resource",
@@ -581,6 +582,10 @@
     "artifacts": "Artifacts",
     "noArtifacts": "No artifacts recorded for this deliverable.",
     "openArtifact": "Open artifact",
+    "artifactLoading": "Opening this file…",
+    "artifactTruncated": "Showing the first part of this file — it was larger than we display inline.",
+    "artifactUnavailable": "Couldn’t show this file right now.",
+    "artifactUnavailableWithDiff": "Couldn’t show this file — see the diff for the full change.",
     "diff": "Diff",
     "viewDiff": "View the diff"
   },

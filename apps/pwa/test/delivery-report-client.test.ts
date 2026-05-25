@@ -4,7 +4,7 @@
  * and returns the deliverable + verification rows verbatim.
  */
 
-import { getDeliverableReport } from "@/lib/api/deliverables";
+import { getDeliverableArtifact, getDeliverableReport } from "@/lib/api/deliverables";
 import { type Session, clearSession, setSession } from "@/lib/auth/session";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -65,5 +65,51 @@ describe("getDeliverableReport", () => {
     expect(result).toEqual(body);
     const url = String(fetchSpy.mock.calls[0]?.[0]);
     expect(url).toContain("/api/v1/deliverables/d1/report");
+  });
+});
+
+describe("getDeliverableArtifact", () => {
+  it("requests the artifacts path (encoding each ref segment) and returns the body", async () => {
+    const body = {
+      ref: "src/app.ts",
+      content: "export const x = 1;\n",
+      truncated: false,
+      binary: false,
+    };
+    const fetchSpy = vi.fn(
+      async (_input: RequestInfo | URL) =>
+        new Response(JSON.stringify(body), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+    );
+    global.fetch = fetchSpy as unknown as typeof fetch;
+
+    const result = await getDeliverableArtifact("d1", "src/app.ts");
+
+    expect(result).toEqual(body);
+    const url = String(fetchSpy.mock.calls[0]?.[0]);
+    // The slash is preserved (nested path) but each segment is encoded — the
+    // `:path` route resolves it as one nested ref, never a query/escape.
+    expect(url).toContain("/api/v1/deliverables/d1/artifacts/src/app.ts");
+  });
+
+  it("percent-encodes special characters within a ref segment", async () => {
+    const fetchSpy = vi.fn(
+      async (_input: RequestInfo | URL) =>
+        new Response(
+          JSON.stringify({ ref: "a b.ts", content: "", truncated: false, binary: false }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        ),
+    );
+    global.fetch = fetchSpy as unknown as typeof fetch;
+
+    await getDeliverableArtifact("d1", "a b.ts");
+
+    const url = String(fetchSpy.mock.calls[0]?.[0]);
+    expect(url).toContain("/api/v1/deliverables/d1/artifacts/a%20b.ts");
   });
 });
