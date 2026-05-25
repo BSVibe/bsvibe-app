@@ -1707,6 +1707,7 @@ main.login {
   align-items: center;
   gap: 8px;
   width: 100%;
+  min-width: 0;
   padding: 0;
   font: inherit;
   background: none;
@@ -1734,6 +1735,10 @@ main.login {
 .kgraph__legend-label {
   font-size: 0.78rem;
   color: var(--ink-2);
+  /* min-width:0 lets the flex child shrink so the ellipsis actually clips a long
+     label instead of widening the legend / wrapping onto a second line. */
+  flex: 1 1 auto;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1956,6 +1961,24 @@ main.login {
   margin: 3px 0 0;
   font-size: 0.82rem;
   color: var(--ink-2);
+}
+
+/* Full observation body, rendered as a readable note (preserve line breaks,
+   wrap long lines, never overflow the panel). */
+.kgraph__obs-body {
+  margin: 4px 0 0;
+  font-size: 0.82rem;
+  line-height: 1.5;
+  color: var(--ink-2);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.kgraph__obs-more {
+  display: inline;
+  margin-left: 4px;
+  font-size: 0.72rem;
+  color: var(--ink-3);
 }
 
 @media (max-width: 720px) {

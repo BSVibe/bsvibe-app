@@ -194,17 +194,26 @@ export default function KnowledgeGraphView({ graph }: { graph: KnowledgeGraph })
       const key = colorMode === "type" ? n.group : n.community;
       counts[key] = (counts[key] ?? 0) + 1;
     }
-    return Object.entries(counts)
-      .sort(([, a], [, b]) => b - a)
-      .map(([group, count], idx) => ({
-        group,
-        count,
-        label:
-          colorMode === "type"
-            ? (humanizeGroup(group) ?? t("graphGroupOther"))
-            : (humanizeGroup(group) ?? t("graphCommunityLabel", { id: "?" })),
-        color: GROUP_PALETTE[idx % GROUP_PALETTE.length],
-      }));
+    return (
+      Object.entries(counts)
+        // Frequency desc, then group id asc — a stable, deterministic order so the
+        // "Cluster N" community labels never reshuffle between renders.
+        .sort(([ga, a], [gb, b]) => b - a || ga.localeCompare(gb))
+        .map(([group, count], idx) => ({
+          group,
+          count,
+          // TYPE → the humanized kind. COMMUNITY → a SHORT human label
+          // ("Cluster N"), never the raw community id (a long concept-id string
+          // that overflows the legend). Unclustered nodes fall back to "Other".
+          label:
+            colorMode === "type"
+              ? (humanizeGroup(group) ?? t("graphGroupOther"))
+              : group
+                ? t("graphCommunityLabel", { id: idx + 1 })
+                : t("graphGroupOther"),
+          color: GROUP_PALETTE[idx % GROUP_PALETTE.length],
+        }))
+    );
   }, [baseNodes, colorMode, t]);
 
   const groupColorMap = useMemo(() => {
@@ -639,7 +648,18 @@ export default function KnowledgeGraphView({ graph }: { graph: KnowledgeGraph })
                             <span className="kgraph__obs-date">{obs.captured_at}</span>
                           )}
                         </div>
-                        {obs.excerpt && <p className="kgraph__obs-excerpt">{obs.excerpt}</p>}
+                        {/* The note's full body, rendered readable (pre-wrap) —
+                            not just the one-line excerpt. */}
+                        {obs.body ? (
+                          <div className="kgraph__obs-body">
+                            {obs.body}
+                            {obs.truncated && (
+                              <span className="kgraph__obs-more">{t("inspectorObsTruncated")}</span>
+                            )}
+                          </div>
+                        ) : (
+                          obs.excerpt && <p className="kgraph__obs-excerpt">{obs.excerpt}</p>
+                        )}
                       </li>
                     ))}
                   </ul>

@@ -416,6 +416,10 @@ export interface ConceptSourceObservation {
   id: string;
   title: string;
   excerpt: string;
+  /** The full note body (leading H1 dropped, capped ~8KB). `truncated` flags an
+   *  overflow so the inspector can render it as a readable note. */
+  body: string;
+  truncated: boolean;
   captured_at: string | null;
 }
 

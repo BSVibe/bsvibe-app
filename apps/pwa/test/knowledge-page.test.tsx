@@ -127,6 +127,8 @@ const AUTH_DETAIL: ConceptDetail = {
       id: "garden/seedling/auth.md",
       title: "Wired the auth callback",
       excerpt: "Founder confirmed the redirect target.",
+      body: "Founder confirmed the redirect target.\n\nThe callback now lands on /app.",
+      truncated: false,
       captured_at: "2026-05-21",
     },
   ],
@@ -226,7 +228,10 @@ describe("Knowledge surface (BSage graph)", () => {
     expect(await screen.findByRole("heading", { name: "Auth" })).toBeInTheDocument();
     expect(screen.getByText("authn")).toBeInTheDocument();
     expect(screen.getByText("Wired the auth callback")).toBeInTheDocument();
+    // The inspector renders the observation's FULL body as a readable note —
+    // both lines of the body show, not just the one-line excerpt.
     expect(screen.getByText(/redirect target/)).toBeInTheDocument();
+    expect(screen.getByText(/lands on \/app/)).toBeInTheDocument();
     // Related concept rendered as a clickable pivot — scoped to the panel (a
     // graph-node stub button shares the "JWKS" name in the canvas mock).
     const panel = screen.getByRole("complementary", { name: /concept/i });
@@ -346,6 +351,10 @@ describe("Knowledge surface (BSage graph)", () => {
     });
     // The community legend entry shows the member count (auth community has 2).
     expect(screen.getByTestId("legend-community-auth")).toHaveTextContent("2");
+    // Communities get SHORT human labels ("Cluster N"), not the raw long
+    // community id (which is a concept-id string and overflows the legend).
+    expect(screen.getByTestId("legend-community-auth")).toHaveTextContent(/Cluster \d/);
+    expect(screen.getByTestId("legend-community-auth")).not.toHaveTextContent("auth");
   });
 
   it("filters by a COMMUNITY legend entry", async () => {
