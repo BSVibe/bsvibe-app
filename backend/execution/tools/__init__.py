@@ -63,6 +63,16 @@ SHELL_TIMEOUT_S: float = 30.0
 FILE_READ_MAX_BYTES: int = 256 * 1024
 FILE_WRITE_MAX_BYTES: int = 256 * 1024
 
+# B7 — verify-first gate. The mutating file tools refuse until a verification
+# contract has been declared this run, with this actionable message naming the
+# unlock tool. The verification plan must be committed BEFORE the work, not
+# bolted on after (or never) — TDD discipline, enforced not merely nudged.
+VERIFY_FIRST_REFUSAL: str = (
+    "Declare your verification first: call declare_verification(...) describing "
+    "how this work will be checked (a command check that runs the real test/lint, "
+    "scoped to the files you change), then write."
+)
+
 
 class ToolError(Exception):
     """Raised when a tool refuses to run (path escape, denylist hit,
@@ -317,6 +327,14 @@ class ToolRegistry:
             handler=self._declare_verification,
         )
 
+    def _require_declared_contract(self, tool: str) -> None:
+        """B7 — refuse a mutating file tool until ``declare_verification`` has
+        been called at least once this run. Declaring latches ``declared_contract``;
+        once set, every later write/edit passes. Raises :class:`ToolError` with an
+        actionable message naming the unlock tool."""
+        if self.declared_contract is None:
+            raise ToolError(f"{tool}: {VERIFY_FIRST_REFUSAL}")
+
     def _resolve(self, raw: str) -> Path:
         candidate = (self._root / raw).resolve()
         try:
@@ -365,6 +383,7 @@ class ToolRegistry:
         return "\n".join(entries) if entries else "(empty)"
 
     async def _file_write(self, args: dict[str, Any]) -> str:
+        self._require_declared_contract("file_write")
         raw_path = str(args.get("path") or "")
         if not raw_path:
             raise ToolError("file_write requires 'path'")
@@ -405,6 +424,7 @@ class ToolRegistry:
         return data.decode("utf-8", errors="replace")
 
     async def _file_edit(self, args: dict[str, Any]) -> str:
+        self._require_declared_contract("file_edit")
         raw_path = str(args.get("path") or "")
         if not raw_path:
             raise ToolError("file_edit requires 'path'")

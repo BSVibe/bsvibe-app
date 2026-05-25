@@ -202,6 +202,59 @@ async def test_verified_run_does_file_work_and_passes_command_check(tmp_path: Pa
         assert any(a.activity_type == "settle" for a in activities)
 
 
+# --------------------------------------------------------------------------
+# B7 — verify-first gate: a write BEFORE declare_verification is refused;
+# the model must declare first, then writes work (the new discipline).
+# --------------------------------------------------------------------------
+
+
+async def test_write_before_declare_is_refused_then_declare_then_verified(
+    tmp_path: Path,
+) -> None:
+    """The work LLM tries to write first (refused with an actionable error),
+    then declares verification, then writes (now succeeds), then summarises →
+    verified. Proves the gate refuses the premature write yet the run still
+    reaches a verified terminal once the model follows the discipline."""
+    llm = ScriptedLlm(
+        [
+            # Turn 1: write before declaring → refused, no file on disk.
+            LoopTurn(
+                content="writing first",
+                tool_calls=(_tc("file_write", path="answer.txt", content="42\n"),),
+            ),
+            # Turn 2: declare, then write (now unlocked).
+            LoopTurn(
+                content="declaring then writing",
+                tool_calls=(
+                    _declare_command("grep -q 42 answer.txt"),
+                    _tc("file_write", path="answer.txt", content="42\n"),
+                ),
+            ),
+            LoopTurn(content="done", tool_calls=()),
+        ]
+    )
+    async with memory_session() as session:
+        run = await _make_run(session)
+        orch = RunOrchestrator(session=session, llm=llm, sandbox_manager=NoopSandboxManager())
+        result = await orch.run(run=run, workspace_dir=tmp_path)
+
+        assert result.outcome == "verified"
+        assert result.written_paths == ["answer.txt"]
+        assert (tmp_path / "answer.txt").read_text() == "42\n"
+
+        # The first (premature) write was fed back as a refusal tool message
+        # naming declare_verification — not silently dropped.
+        refusal_msgs = [
+            m
+            for call in llm.calls
+            for m in call["messages"]
+            if m.get("role") == "tool"
+            and "declare_verification" in (m.get("content") or "")
+            and "ERROR" in (m.get("content") or "")
+        ]
+        assert refusal_msgs, "the premature write must be refused with an actionable error"
+
+
 def _settle_payload(activities) -> dict:
     settle = next(a for a in activities if a.activity_type == "settle")
     return settle.payload
@@ -424,11 +477,21 @@ async def test_ask_user_question_creates_decision_and_pauses(tmp_path: Path) -> 
 
 async def test_no_contract_declared_routes_to_decision(tmp_path: Path) -> None:
     """Work that finishes without ever declaring a contract is never a
-    silent pass — it becomes a human-review Decision."""
+    silent pass — it becomes a human-review Decision.
+
+    Under the B7 verify-first gate the premature ``file_write`` is REFUSED
+    (so no file lands and ``written_paths`` stays empty), the loop nudges the
+    model to declare-then-do (up to ``MAX_NO_WORK_NUDGES``), and when the model
+    still never declares it routes to the human-review Decision — still never a
+    silent pass."""
     llm = ScriptedLlm(
         [
+            # Refused — no contract declared yet, so the write does not land.
             LoopTurn(content="", tool_calls=(_tc("file_write", path="foo.txt", content="bar"),)),
+            # Two no-work turns absorbed by the nudge, then a third settles to verify.
             LoopTurn(content="I think I'm done", tool_calls=()),
+            LoopTurn(content="still nothing", tool_calls=()),
+            LoopTurn(content="giving up", tool_calls=()),
         ]
     )
     async with memory_session() as session:
@@ -439,6 +502,8 @@ async def test_no_contract_declared_routes_to_decision(tmp_path: Path) -> None:
         assert result.outcome == "needs_decision"
         decision = (await session.execute(select(Decision))).scalar_one()
         assert decision.decision == "human_review_required"
+        # The premature write was refused — nothing landed on disk.
+        assert not (tmp_path / "foo.txt").exists()
 
 
 # --------------------------------------------------------------------------
