@@ -1668,6 +1668,8 @@ main.login {
   border: none;
   border-radius: calc(var(--radius-sm) - 2px);
   cursor: pointer;
+  /* Keep the mode label on one line — "커뮤니티" was wrapping mid-word. */
+  white-space: nowrap;
 }
 
 .kgraph__mode--on {
@@ -2181,7 +2183,8 @@ main.login {
   color: var(--ink-3);
 }
 
-.activity-deliverable__link {
+.activity-deliverable__link,
+.activity-deliverable__report-link {
   font-size: 0.78rem;
   color: var(--ink-2);
   text-decoration: underline;

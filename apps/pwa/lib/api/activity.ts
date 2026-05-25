@@ -17,6 +17,7 @@
  * Read-only by design — no mutations on this surface.
  */
 
+import { conciseSummary } from "../text/summary";
 import { listDeliverables } from "./deliverables";
 import { listProducts } from "./products";
 import { listRuns } from "./runs";
@@ -108,13 +109,10 @@ function sourceFor(type: DeliverableType): string {
   }
 }
 
-/** First non-empty line of a summary as the artifact title; calm fallback. */
+/** A concise one-line artifact title (the shared first-sentence condenser), so
+ *  Activity reads like the Brief instead of dumping the raw LLM summary. */
 function titleFor(summary: string | null): string {
-  const first = (summary ?? "")
-    .split("\n")
-    .map((line) => line.trim())
-    .find((line) => line.length > 0);
-  return first ?? "Delivered artifact";
+  return conciseSummary(summary, "Delivered artifact");
 }
 
 function toActivityDeliverable(d: Deliverable): ActivityDeliverable {

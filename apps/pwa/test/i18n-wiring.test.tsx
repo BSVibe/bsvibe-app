@@ -48,7 +48,7 @@ describe("i18n wiring", () => {
         <NavLabels />
       </NextIntlClientProvider>,
     );
-    expect(screen.getByText("브리프")).toBeInTheDocument();
+    expect(screen.getByText("요약")).toBeInTheDocument();
     expect(screen.getByText("결정")).toBeInTheDocument();
     expect(screen.getByText("설정")).toBeInTheDocument();
   });
@@ -67,7 +67,7 @@ describe("i18n wiring", () => {
   it("renders a real surface (Brief) in Korean under the ko catalog", () => {
     render(ko(<BriefContent view={EMPTY_BRIEF} />));
     // Heading + the calm empty state, both from the brief catalog.
-    expect(screen.getByText("브리프")).toBeInTheDocument();
+    expect(screen.getByText("요약")).toBeInTheDocument();
     expect(screen.getByText("지금은 확인할 것이 없어요.")).toBeInTheDocument();
   });
 

@@ -171,6 +171,7 @@
     "deliverablesError": "Couldn’t load this run’s deliverables just now — try again in a moment.",
     "deliverablesEmpty": "No delivered artifacts for this run.",
     "openArtifact": "Open artifact",
+    "viewReport": "View report",
     "openRun": "Open run"
   },
   "knowledge": {
