@@ -205,6 +205,14 @@ WORK_TOOLS: tuple[str, ...] = (
 KNOWLEDGE_SEARCH_NAME = "knowledge_search"
 _KNOWLEDGE_SEARCH_MAX_RESULTS = 5
 
+# B6 — at loop start, canon relevant to the run's intent is SEEDED into the
+# agent's initial context so the work is informed by prior knowledge (not just
+# the verify-time fold of B3). Capped: top-N statements, each clamped, so the
+# seed never blows the (local-model) generation budget. Empty / no retriever →
+# no seed message at all (empty-knowledge workspace = byte-identical to today).
+_KNOWLEDGE_SEED_MAX_RESULTS = 5
+_KNOWLEDGE_SEED_MAX_CHARS_PER_STATEMENT = 500
+
 ASK_USER_QUESTION_TOOL: dict[str, Any] = {
     "type": "function",
     "function": {
@@ -358,6 +366,42 @@ class RunOrchestrator:
         ]
         turn = await self._llm.complete(messages=messages, tools=None)
         return turn.content
+
+    async def _knowledge_seed_message(self, run: ExecutionRun) -> dict[str, Any] | None:
+        """B6 — build the loop-start knowledge seed for ``run``, or ``None``.
+
+        Retrieves canon relevant to the run's STABLE intent (the same text the
+        first user turn uses — never written_paths, none exist yet) and folds the
+        top statements into a single context message so the work is informed by
+        the workspace's established patterns BEFORE the act/verify cycle. No
+        retriever / no patterns → ``None`` (inject nothing; an empty-knowledge
+        workspace stays byte-identical to pre-B6). Never raises — a retrieval
+        hiccup degrades to no seed, exactly like the B3 verify fold."""
+        retriever = self._retriever
+        if retriever is None:
+            return None
+        signals = _intent_title(run)
+        try:
+            statements = await retriever.retrieve_for_signals(signals)
+        except Exception:  # noqa: BLE001 — seeding must never crash the loop
+            logger.warning("knowledge_seed_retrieve_failed", run_id=str(run.id), exc_info=True)
+            return None
+        cleaned = [
+            s.strip()[:_KNOWLEDGE_SEED_MAX_CHARS_PER_STATEMENT]
+            for s in statements
+            if s and s.strip()
+        ][:_KNOWLEDGE_SEED_MAX_RESULTS]
+        if not cleaned:
+            return None
+        body = "\n".join(f"- {s}" for s in cleaned)
+        logger.info("knowledge_seeded", run_id=str(run.id), count=len(cleaned))
+        return {
+            "role": "system",
+            "content": (
+                "Relevant established patterns for this workspace "
+                "(consider them as you work):\n" + body
+            ),
+        }
 
     async def _knowledge_search(self, arguments: dict[str, Any]) -> str:
         """Handler for the ``knowledge_search`` tool — never raises into the loop.
@@ -639,6 +683,13 @@ class RunOrchestrator:
             {"role": "system", "content": _SYSTEM_PROMPT},
             {"role": "user", "content": _intent_title(run)},
         ]
+        # B6 — seed canon relevant to the run intent into the initial context so
+        # the work is informed by the workspace's established patterns up front
+        # (the complement to B5a's on-demand knowledge_search + B3's verify-time
+        # fold). No retriever / empty knowledge → nothing injected.
+        seed = await self._knowledge_seed_message(run)
+        if seed is not None:
+            messages.append(seed)
         # Resumption context: if the founder resolved a prior blocking question
         # (the run was paused on a Decision and re-opened via /api/v1/checkpoints),
         # seed each resolution so the loop continues WITH that decision in
