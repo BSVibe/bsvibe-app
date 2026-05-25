@@ -26,6 +26,7 @@ from backend.config import get_settings
 from backend.execution.db import (
     Deliverable,
     DeliverableType,
+    ExecutionRun,
     VerificationOutcome,
     VerificationResult,
 )
@@ -73,13 +74,29 @@ class VerificationReport(BaseModel):
 
 
 class DeliverableReportResponse(BaseModel):
-    """The glass-box proof for one shipped deliverable: the artifact plus the
-    verification(s) recorded for its producing run."""
+    """The glass-box proof for one shipped deliverable: the founder's original
+    request, the artifact, and the verification(s) recorded for its producing
+    run. ``request`` is the founder's Direction that led to this work (pulled
+    from the producing run's free-form payload), so the report reads as a
+    document — request → what was built → how it was checked. ``None`` when the
+    run carries no recorded intent."""
 
     model_config = ConfigDict(extra="forbid")
 
     deliverable: DeliverableResponse
+    request: str | None = None
     verifications: list[VerificationReport] = []
+
+
+def _request_text_of(payload: dict[str, Any]) -> str | None:
+    """Pull the founder's Direction out of the producing run's free-form payload
+    (``intent_text`` from intake, or ``text``), the same keys the run-detail
+    trigger context reads. ``None`` when neither is a non-empty string."""
+    for key in ("intent_text", "text"):
+        value = payload.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
 
 
 class ArtifactContentResponse(BaseModel):
@@ -212,8 +229,20 @@ async def get_deliverable_report(
     )
     result = await session.execute(stmt)
     verifications = [_to_verification(v) for v in result.scalars().all()]
+
+    # The founder's Direction that led to this work — pulled from the producing
+    # run's free-form payload so the report reads request → built → checked. A
+    # missing run (cleaned history) degrades to no request, never a 500.
+    run = await session.get(ExecutionRun, row.run_id)
+    request = (
+        _request_text_of(run.payload)
+        if run is not None and run.workspace_id == workspace_id and isinstance(run.payload, dict)
+        else None
+    )
+
     return DeliverableReportResponse(
         deliverable=_to_response(row),
+        request=request,
         verifications=verifications,
     )
 

@@ -580,11 +580,20 @@
       "inconclusive": "Verification inconclusive",
       "none": "Not yet verified"
     },
+    "typeLabel": {
+      "code": "Code",
+      "pr": "Pull request",
+      "page": "Page",
+      "page_image": "Page preview",
+      "direct_output": "Output"
+    },
+    "yourRequest": "Your request",
+    "whatWasBuilt": "What was built",
     "howChecked": "How BSVibe checked this",
     "noVerification": "No verification recorded for this deliverable yet.",
     "noChecksDeclared": "No checks were declared for this verification.",
     "artifacts": "Artifacts",
-    "noArtifacts": "No artifacts recorded for this deliverable.",
+    "noArtifacts": "Nothing was produced for this deliverable.",
     "openArtifact": "Open artifact",
     "artifactLoading": "Opening this file…",
     "artifactTruncated": "Showing the first part of this file — it was larger than we display inline.",

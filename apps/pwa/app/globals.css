@@ -5144,56 +5144,146 @@ main.login {
   color: var(--ink-3);
 }
 
-.report__body {
+/* ── Delivery Report — Notion-style document ──────────────────────────────── */
+.report-doc {
   display: flex;
   flex-direction: column;
-  gap: 22px;
+  gap: 26px;
+  max-width: 760px;
 }
 
-.report__title {
-  font-size: 1.35rem;
-  font-weight: 600;
-  color: var(--ink);
-  line-height: 1.3;
-}
-
-.report-verdict {
-  display: flex;
-  align-items: center;
-  border-radius: var(--radius-sm);
-  padding: 10px 14px;
-  background: var(--green-pill-bg);
-}
-
-.report-verdict__label {
-  font-size: 0.92rem;
-  font-weight: 600;
-  color: var(--green-ink);
-}
-
-.report-verdict--failed,
-.report-verdict--inconclusive,
-.report-verdict--none {
-  background: var(--accent-bg);
-}
-
-.report-verdict--failed .report-verdict__label,
-.report-verdict--inconclusive .report-verdict__label,
-.report-verdict--none .report-verdict__label {
-  color: var(--amber-ink);
-}
-
-.report-checks,
-.report-artifacts,
-.report-diff {
+.report-doc__head {
   display: flex;
   flex-direction: column;
   gap: 10px;
 }
 
-.report-checks__empty,
-.report-checks__none,
-.report-artifacts__empty {
+.report-doc__chips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.report-doc__chip {
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--ink-2);
+  background: var(--accent-bg);
+  border-radius: 999px;
+  padding: 3px 10px;
+}
+
+.report-doc__chip--passed {
+  color: var(--green-ink);
+  background: var(--green-pill-bg);
+}
+
+.report-doc__date {
+  font-size: 0.74rem;
+  color: var(--ink-3);
+}
+
+.report-doc__title {
+  font-size: 1.4rem;
+  font-weight: 600;
+  line-height: 1.3;
+  color: var(--ink);
+}
+
+.report-doc__section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.report-doc__label {
+  font-size: 0.68rem;
+  font-weight: 650;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+
+.report-doc__request {
+  margin: 0;
+  padding: 10px 14px;
+  border-left: 3px solid var(--hair-strong);
+  background: var(--accent-bg);
+  border-radius: var(--radius-sm);
+  font-size: 0.92rem;
+  line-height: 1.55;
+  color: var(--ink);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.report-doc__built {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.report-doc__tabs {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.report-doc__tab {
+  appearance: none;
+  font: inherit;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.78rem;
+  color: var(--ink-2);
+  background: var(--accent-bg);
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  padding: 4px 9px;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.report-doc__tab--active {
+  color: var(--ink);
+  background: var(--surface);
+  border-color: var(--hair-strong);
+}
+
+.report-doc__verdict {
+  font-size: 0.92rem;
+  font-weight: 600;
+  color: var(--green-ink);
+}
+
+.report-doc__verdict--failed,
+.report-doc__verdict--inconclusive,
+.report-doc__verdict--none {
+  color: var(--amber-ink);
+}
+
+.report-doc__muted {
+  font-size: 0.85rem;
+  color: var(--ink-3);
+}
+
+.report-doc__diff,
+.report-doc__open {
+  font-size: 0.85rem;
+  color: var(--ink-2);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  width: fit-content;
+}
+
+/* Inner verification check rows (the document's How-checked block). */
+.report-checks__none {
   font-size: 0.85rem;
   color: var(--ink-3);
 }
@@ -5204,8 +5294,7 @@ main.login {
   gap: 8px;
 }
 
-.report-checks__list,
-.report-artifacts__list {
+.report-checks__list {
   list-style: none;
   margin: 0;
   padding: 0;
@@ -5240,21 +5329,6 @@ main.login {
   color: var(--ink-2);
 }
 
-.report-artifacts__row {
-  font-size: 0.85rem;
-  color: var(--ink-2);
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-}
-
-.report-artifacts__link,
-.report-diff__link {
-  font-size: 0.85rem;
-  color: var(--ink-2);
-  text-decoration: underline;
-  text-underline-offset: 2px;
-  width: fit-content;
-}
-
 .shipped__report-link {
   font-size: 0.78rem;
   color: var(--ink-2);
@@ -5263,37 +5337,21 @@ main.login {
   width: fit-content;
 }
 
-/* ── BEGIN artifact-viewer (feat/artifact-viewer) ───────────────────────────
- * Self-contained block (no token edits) for the interactive artifact-content
- * viewer on the Delivery Report: each artifact_ref is a calm button that
- * toggles an inline monospace content panel. Sits alongside the parallel
- * delivery-report styling so it stays merge-safe. */
-.report-artifacts__ref {
-  appearance: none;
-  background: none;
-  border: none;
-  padding: 0;
-  margin: 0;
-  font: inherit;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 0.85rem;
-  color: var(--ink-2);
-  text-align: left;
-  cursor: pointer;
-  text-decoration: underline;
-  text-underline-offset: 2px;
-  width: fit-content;
-}
-
-.report-artifacts__ref[aria-expanded="true"] {
-  color: var(--ink);
-}
-
+/* ── Artifact content viewer (the "What was built" inline file panel) ──────── */
 .report-artifact-view {
-  margin-top: 8px;
   display: flex;
   flex-direction: column;
   gap: 6px;
+}
+
+.report-artifact-view__head {
+  font-size: 0.78rem;
+}
+
+.report-artifact-view__path {
+  color: var(--ink-2);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  word-break: break-all;
 }
 
 .report-artifact-view__loading,

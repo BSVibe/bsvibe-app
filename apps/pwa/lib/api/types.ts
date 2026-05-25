@@ -209,6 +209,9 @@ export interface VerificationReportItem {
  *  deliverable: the artifact plus the verification(s) recorded for its run. */
 export interface DeliverableReport {
   deliverable: Deliverable;
+  /** The founder's Direction that led to this work (from the producing run's
+   *  payload); `null` when the run carries no recorded intent. */
+  request: string | null;
   verifications: VerificationReportItem[];
 }
 
