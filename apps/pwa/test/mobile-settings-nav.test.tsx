@@ -1,23 +1,29 @@
 /**
- * Mobile Settings entry point — on mobile the desktop left rail is hidden, so
- * the only way to reach /settings is via the mobile top bar. The top bar now
- * renders a Settings gear link (next to the disabled notifications bell) that
- * navigates to /settings, reusing the existing `nav.settings` label.
+ * Mobile top bar — on mobile the desktop left rail is hidden, so the only way to
+ * reach /settings is via the mobile top bar's Settings link (next to the
+ * disabled notifications bell). The top-bar title resolves by the FIRST path
+ * segment, so nested routes (e.g. `/settings/general`, the redirect target of
+ * `/settings`) still read their section name rather than the "BSVibe" wordmark.
  */
 
 import { MobileTopBar } from "@/components/shell/MobileChrome";
 import { render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+let pathname = "/brief";
 
 vi.mock("next/navigation", () => ({
-  usePathname: () => "/brief",
+  usePathname: () => pathname,
 }));
 
 vi.mock("@/lib/decisions/pending-count", () => ({
   usePendingDecisionsCount: () => 0,
 }));
 
-describe("Mobile Settings entry point", () => {
+describe("Mobile top bar", () => {
+  beforeEach(() => {
+    pathname = "/brief";
+  });
   afterEach(() => {
     vi.restoreAllMocks();
   });
@@ -29,12 +35,24 @@ describe("Mobile Settings entry point", () => {
     expect(link).toHaveAttribute("href", "/settings");
   });
 
-  it("marks the Settings link as the current page when on /settings", () => {
-    vi.resetModules();
+  it("does not mark Settings as the current page when on /brief", () => {
     render(<MobileTopBar />);
 
-    // On /brief, Settings is not the current page.
     const link = screen.getByRole("link", { name: /Settings/ });
     expect(link).not.toHaveAttribute("aria-current", "page");
+  });
+
+  it("shows the section title for the current page", () => {
+    pathname = "/brief";
+    render(<MobileTopBar />);
+    expect(screen.getByText("Brief")).toBeInTheDocument();
+  });
+
+  it("shows 'Settings' on a NESTED settings route (the /settings redirect target)", () => {
+    pathname = "/settings/general";
+    render(<MobileTopBar />);
+    // The title resolves by first segment → "Settings", NOT the BSVibe wordmark.
+    expect(screen.getByText("Settings")).toBeInTheDocument();
+    expect(screen.queryByText("BSVibe")).not.toBeInTheDocument();
   });
 });

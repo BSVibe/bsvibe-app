@@ -38,7 +38,11 @@ export function MobileTopBar() {
   const pathname = usePathname();
   const tNav = useTranslations("nav");
   const tShell = useTranslations("shell");
-  const titleKey = TITLE_KEYS[pathname];
+  // Match by the FIRST path segment so nested routes resolve too — e.g.
+  // `/settings/general` (the redirect target of `/settings`) still reads
+  // "Settings" instead of falling through to the "BSVibe" wordmark.
+  const segment = `/${pathname.split("/")[1] ?? ""}`;
+  const titleKey = TITLE_KEYS[segment];
   const title = titleKey ? tNav(titleKey) : tShell("wordmark");
   return (
     <header className="topbar">
