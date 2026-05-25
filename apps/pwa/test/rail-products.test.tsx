@@ -4,9 +4,9 @@
  *
  *  - loads the workspace's products from listProducts() on mount
  *  - renders each as a link to /products/{slug} showing the name
- *  - shows a calm "No projects yet" empty state when there are none
+ *  - shows a calm "No products yet" empty state when there are none
  *  - degrades to a calm note (and never crashes) when the load fails
- *  - offers a "+ New project" affordance that opens the create flow
+ *  - offers a "+ Product" CTA that opens the create flow
  *
  * The list loads asynchronously, so every assertion that depends on it is gated
  * behind findBy / waitFor — never a synchronous getBy right after render.
@@ -70,8 +70,8 @@ describe("Sidebar PRODUCTS section", () => {
   it("renders a PRODUCTS heading", async () => {
     global.fetch = vi.fn(async () => jsonResponse([])) as unknown as typeof fetch;
     render(<RailProducts />);
-    expect(screen.getByText(/products/i)).toBeInTheDocument();
-    await screen.findByText(/No projects yet/i);
+    expect(screen.getByRole("heading", { name: /products/i })).toBeInTheDocument();
+    await screen.findByText(/No products yet/i);
   });
 
   it("renders each product as a link to /products/{slug}", async () => {
@@ -93,7 +93,7 @@ describe("Sidebar PRODUCTS section", () => {
 
     render(<RailProducts />);
 
-    expect(await screen.findByText(/No projects yet/i)).toBeInTheDocument();
+    expect(await screen.findByText(/No products yet/i)).toBeInTheDocument();
     expect(screen.queryByRole("list", { name: /products/i })).not.toBeInTheDocument();
   });
 
@@ -102,21 +102,31 @@ describe("Sidebar PRODUCTS section", () => {
 
     render(<RailProducts />);
 
-    expect(await screen.findByText(/Couldn.t load your projects/i)).toBeInTheDocument();
+    expect(await screen.findByText(/Couldn.t load your products/i)).toBeInTheDocument();
   });
 
-  it("offers a + New project affordance that opens the create form", async () => {
+  it("offers a + Product CTA that opens the create form", async () => {
     global.fetch = vi.fn(async () => jsonResponse([])) as unknown as typeof fetch;
 
     render(<RailProducts />);
 
-    await screen.findByText(/No projects yet/i);
-    const newBtn = screen.getByRole("button", { name: /New project/i });
+    await screen.findByText(/No products yet/i);
+    const newBtn = screen.getByRole("button", { name: /New product/i });
     await userEvent.click(newBtn);
 
     // The create form's Name field appears once the modal opens.
     await waitFor(() => {
       expect(screen.getByLabelText(/^Name$/i)).toBeInTheDocument();
     });
+  });
+
+  it("no longer shows a New-project link beside the Products heading", async () => {
+    global.fetch = vi.fn(async () => jsonResponse([PRODUCT_A])) as unknown as typeof fetch;
+
+    render(<RailProducts />);
+
+    await screen.findByRole("list", { name: /products/i });
+    // Exactly one create affordance (the bottom CTA) — the old header link is gone.
+    expect(screen.getAllByRole("button", { name: /New product/i })).toHaveLength(1);
   });
 });

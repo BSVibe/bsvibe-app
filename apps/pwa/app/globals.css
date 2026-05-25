@@ -258,21 +258,6 @@ main.login {
   text-align: center;
 }
 
-.rail__direct {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  margin: 12px 6px;
-  padding: 9px;
-  border: none;
-  border-radius: var(--radius-sm);
-  background: #1f1d1a;
-  color: #fff;
-  font-size: 0.9rem;
-  font-weight: 550;
-}
-
 .rail__foot {
   margin-top: auto;
   display: flex;
@@ -4784,26 +4769,27 @@ main.login {
   color: var(--ink-3);
 }
 
-.rail-products__new {
-  display: inline-flex;
+/* "+ Product" CTA — the prominent create action (sits where the old "+ Direct"
+   rail button was; Direct is now the omnipresent FAB). */
+.rail-products__cta {
+  display: flex;
   align-items: center;
-  gap: 4px;
-  padding: 3px 6px;
+  justify-content: center;
+  gap: 6px;
+  width: calc(100% - 12px);
+  margin: 12px 6px 4px;
+  padding: 9px;
   border: none;
   border-radius: var(--radius-sm);
-  background: transparent;
-  color: var(--ink-3);
+  background: #1f1d1a;
+  color: #fff;
   font: inherit;
-  font-size: 0.74rem;
+  font-size: 0.9rem;
+  font-weight: 550;
   cursor: pointer;
 }
 
-.rail-products__new:hover {
-  background: var(--accent-bg);
-  color: var(--ink-2);
-}
-
-.rail-products__new svg {
+.rail-products__cta svg {
   flex: none;
 }
 

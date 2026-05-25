@@ -11,7 +11,6 @@ import {
   BriefIcon,
   DecisionsIcon,
   KnowledgeIcon,
-  PlusIcon,
   SettingsIcon,
   SkillsIcon,
 } from "./icons";
@@ -25,13 +24,14 @@ const ICONS: Record<NavKey, typeof BriefIcon> = {
   skills: SkillsIcon,
 };
 
-/** Persistent left rail (desktop). UX §1.1 / §3.4 layout. */
-export default function LeftRail({ onDirect }: { onDirect: () => void }) {
+/** Persistent left rail (desktop). UX §1.1 / §3.4 layout. The product create
+ *  action lives in the PRODUCTS section ("+ Product"); the Direct affordance is
+ *  the omnipresent FAB (AppShell), not a rail button. */
+export default function LeftRail() {
   const pathname = usePathname();
   const pendingDecisions = usePendingDecisionsCount();
   const tNav = useTranslations("nav");
   const tShell = useTranslations("shell");
-  const tDirect = useTranslations("direct");
 
   return (
     <aside className="rail">
@@ -79,14 +79,9 @@ export default function LeftRail({ onDirect }: { onDirect: () => void }) {
       </nav>
 
       {/* PRODUCTS — a separate section (NOT a primary-nav entry): the
-          workspace's products + a "New project" create flow. Kept self-contained
+          workspace's products + a "+ Product" create flow. Kept self-contained
           in RailProducts so the nav list above stays untouched. */}
       <RailProducts />
-
-      <button type="button" className="rail__direct" onClick={onDirect}>
-        <PlusIcon />
-        <span>{tDirect("label")}</span>
-      </button>
 
       <div className="rail__foot">
         <Link

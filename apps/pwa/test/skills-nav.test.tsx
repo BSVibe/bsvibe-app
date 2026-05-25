@@ -36,7 +36,7 @@ describe("Skills nav wiring", () => {
   });
 
   it("renders Skills as a real link to /skills in the left rail", () => {
-    render(<LeftRail onDirect={() => {}} />);
+    render(<LeftRail />);
 
     const link = screen.getByRole("link", { name: /Skills/ });
     expect(link).toHaveAttribute("href", "/skills");
@@ -53,7 +53,7 @@ describe("Skills nav wiring", () => {
 
   it("Skills carries no pending-count badge even when decisions are pending", () => {
     setPendingDecisionsCount(3);
-    render(<LeftRail onDirect={() => {}} />);
+    render(<LeftRail />);
 
     const link = screen.getByRole("link", { name: /Skills/ });
     expect(link).not.toHaveTextContent("3");

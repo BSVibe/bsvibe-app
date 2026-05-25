@@ -25,7 +25,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
 
   return (
     <div className="shell">
-      <LeftRail onDirect={() => setDirectOpen(true)} />
+      <LeftRail />
       <MobileTopBar />
       <main className="shell__main">{children}</main>
       <MobileNav />

@@ -36,7 +36,7 @@ describe("Decisions nav wiring", () => {
   });
 
   it("renders Decisions as a real link to /decisions in the left rail", () => {
-    render(<LeftRail onDirect={() => {}} />);
+    render(<LeftRail />);
 
     const link = screen.getByRole("link", { name: /Decisions/ });
     expect(link).toHaveAttribute("href", "/decisions");
@@ -53,14 +53,14 @@ describe("Decisions nav wiring", () => {
 
   it("shows a pending-count badge when there are pending decisions", () => {
     setPendingDecisionsCount(3);
-    render(<LeftRail onDirect={() => {}} />);
+    render(<LeftRail />);
 
     expect(screen.getByLabelText("3 pending")).toHaveTextContent("3");
   });
 
   it("hides the badge when nothing is pending", () => {
     setPendingDecisionsCount(0);
-    render(<LeftRail onDirect={() => {}} />);
+    render(<LeftRail />);
 
     expect(screen.queryByLabelText(/pending/)).not.toBeInTheDocument();
   });
