@@ -386,6 +386,10 @@ describe("Knowledge surface (BSage graph)", () => {
     // metadatum. The fixture node's kind is "concept" → humanized "Concept".
     expect(within(panel).getByText("Type")).toBeInTheDocument();
     expect(within(panel).getByText("Concept")).toBeInTheDocument();
+    // Community is labelled with the same "Cluster N" scheme as the legend (not
+    // the raw community id), so the two surfaces agree.
+    expect(within(panel).getByText("Community")).toBeInTheDocument();
+    expect(within(panel).getByText(/Cluster \d/)).toBeInTheDocument();
   });
 
   it("no longer renders the 'Recently observed' section (directive #2)", async () => {

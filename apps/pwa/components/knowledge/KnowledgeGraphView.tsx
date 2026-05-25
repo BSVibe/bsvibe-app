@@ -186,6 +186,25 @@ export default function KnowledgeGraphView({ graph }: { graph: KnowledgeGraph })
     [colorMode],
   );
 
+  // Deterministic community id → "Cluster N" map, the SINGLE source of truth for
+  // community labels (used by both the legend and the inspector so they never
+  // disagree). Numbered by the same freq-desc / id-asc order the legend uses;
+  // computed independent of colorMode so the inspector can label a node's
+  // community even while the canvas is coloured by TYPE.
+  const communityLabels = useMemo(() => {
+    const counts: Record<string, number> = {};
+    for (const n of baseNodes) {
+      if (n.community) counts[n.community] = (counts[n.community] ?? 0) + 1;
+    }
+    const map: Record<string, string> = {};
+    Object.entries(counts)
+      .sort(([ga, a], [gb, b]) => b - a || ga.localeCompare(gb))
+      .forEach(([community], idx) => {
+        map[community] = t("graphCommunityLabel", { id: idx + 1 });
+      });
+    return map;
+  }, [baseNodes, t]);
+
   // Legend entries derived from actual data for the ACTIVE color mode: each
   // unique group gets a color (palette cycles by frequency rank) and a count.
   const groupsInfo = useMemo(() => {
@@ -202,19 +221,17 @@ export default function KnowledgeGraphView({ graph }: { graph: KnowledgeGraph })
         .map(([group, count], idx) => ({
           group,
           count,
-          // TYPE → the humanized kind. COMMUNITY → a SHORT human label
-          // ("Cluster N"), never the raw community id (a long concept-id string
-          // that overflows the legend). Unclustered nodes fall back to "Other".
+          // TYPE → the humanized kind. COMMUNITY → the shared "Cluster N" label,
+          // never the raw community id (a long concept-id string that overflows
+          // the legend). Unclustered nodes fall back to "Other".
           label:
             colorMode === "type"
               ? (humanizeGroup(group) ?? t("graphGroupOther"))
-              : group
-                ? t("graphCommunityLabel", { id: idx + 1 })
-                : t("graphGroupOther"),
+              : (communityLabels[group] ?? t("graphGroupOther")),
           color: GROUP_PALETTE[idx % GROUP_PALETTE.length],
         }))
     );
-  }, [baseNodes, colorMode, t]);
+  }, [baseNodes, colorMode, communityLabels, t]);
 
   const groupColorMap = useMemo(() => {
     const map: Record<string, string> = {};
@@ -428,8 +445,9 @@ export default function KnowledgeGraphView({ graph }: { graph: KnowledgeGraph })
     [baseNodes, selectedId],
   );
   const selectedTypeLabel = selectedNode?.group ? humanizeGroup(selectedNode.group) : null;
+  // Same "Cluster N" label the legend shows — so the inspector and legend agree.
   const selectedCommunityLabel = selectedNode?.community
-    ? (humanizeGroup(selectedNode.community) ?? selectedNode.community)
+    ? (communityLabels[selectedNode.community] ?? null)
     : null;
 
   return (
