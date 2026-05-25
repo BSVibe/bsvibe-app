@@ -1,8 +1,8 @@
 "use client";
 
-import { listDecisionsLog } from "@/lib/api/decisions";
 import { listPendingDecisions } from "@/lib/api/pending";
-import type { DecisionLogEntry, PendingDecision, Proposal } from "@/lib/api/types";
+import { listResolvedDecisions } from "@/lib/api/resolved";
+import type { PendingDecision, Proposal, ResolvedDecision } from "@/lib/api/types";
 import { setPendingDecisionsCount } from "@/lib/decisions/pending-count";
 import { useTranslations } from "next-intl";
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -25,7 +25,10 @@ import ResolvedRow from "./ResolvedRow";
  *        (POST /api/v1/checkpoints/{id}/resolve)
  *      · "knowledge" canon proposal — opens the focused Accept / Reject panel
  *        (POST /api/v1/decisions/{path}/accept|reject)
- *  - Resolved  ← GET /api/v1/decisions/log  (the canon decision audit trail)
+ *  - Resolved  ← the SAME three queues' settled items, aggregated client-side
+ *    (lib/api/resolved.ts): decided Safe-Mode deliveries + answered checkpoints
+ *    + the canon decision log — so an item the founder acted on stays visible as
+ *    history instead of vanishing.
  *
  * The Pending count = deliveries + checkpoints + proposals. Deliveries +
  * proposals are the SAME set the Brief "Needs you" strip shows, so the Pending
@@ -42,17 +45,17 @@ type Tab = "pending" | "resolved";
 
 export default function Decisions() {
   const [pending, setPending] = useState<PendingDecision[] | null>(null);
-  const [resolved, setResolved] = useState<DecisionLogEntry[] | null>(null);
+  const [resolved, setResolved] = useState<ResolvedDecision[] | null>(null);
   const [tab, setTab] = useState<Tab>("pending");
   const [query, setQuery] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const t = useTranslations("decisions");
 
-  const load = useCallback((onResult: (p: PendingDecision[], d: DecisionLogEntry[]) => void) => {
+  const load = useCallback((onResult: (p: PendingDecision[], d: ResolvedDecision[]) => void) => {
     Promise.all([
-      // listPendingDecisions already degrades each per-surface failure to empty.
+      // Both aggregators already degrade each per-surface failure to empty.
       listPendingDecisions().catch(() => [] as PendingDecision[]),
-      listDecisionsLog().catch(() => [] as DecisionLogEntry[]),
+      listResolvedDecisions().catch(() => [] as ResolvedDecision[]),
     ]).then(([p, d]) => {
       // The whole pending list (all three kinds) drives the nav badge — resolved
       // items are history and never inflate it.
@@ -245,9 +248,21 @@ function filterPending(items: PendingDecision[], query: string): PendingDecision
   return items.filter((item) => pendingHaystack(item).toLowerCase().includes(q));
 }
 
-/** Client-side filter over the resolved decision's kind + handle. */
-function filterDecisions(items: DecisionLogEntry[], query: string): DecisionLogEntry[] {
+/** Searchable text for a Resolved item across all three kinds. */
+function resolvedHaystack(item: ResolvedDecision): string {
+  switch (item.kind) {
+    case "delivery":
+      return `delivery ${item.status} ${item.itemId}`;
+    case "decision":
+      return `decision ${item.question} ${item.resolution ?? ""} ${item.checkpointId}`;
+    default:
+      return `knowledge ${item.decisionKind} ${item.id}`;
+  }
+}
+
+/** Client-side filter over the unified Resolved list. */
+function filterDecisions(items: ResolvedDecision[], query: string): ResolvedDecision[] {
   const q = query.trim().toLowerCase();
   if (q.length === 0) return items;
-  return items.filter((d) => `${d.decision_kind} ${d.id}`.toLowerCase().includes(q));
+  return items.filter((item) => resolvedHaystack(item).toLowerCase().includes(q));
 }

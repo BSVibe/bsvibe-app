@@ -11,7 +11,10 @@
  *                  resolve POSTs /resolve with { answer })
  *  - "knowledge" ← GET /api/v1/decisions?status_filter=pending  (canon
  *                  proposals; Accept POSTs /accept, Reject POSTs /reject)
- * The Resolved tab stays the canon decisions log (GET /api/v1/decisions/log).
+ * The Resolved tab folds the SAME three queues' settled items: decided
+ * Safe-Mode deliveries (GET /api/v1/safemode/resolved) + answered checkpoints
+ * (GET /api/v1/checkpoints/resolved) + the canon decision log (GET
+ * /api/v1/decisions/log).
  *
  * Verified here:
  *  - tab labels carry live counts (Pending = all three kinds summed)
@@ -27,7 +30,14 @@
  */
 
 import Decisions from "@/components/decisions/Decisions";
-import type { Checkpoint, DecisionLogEntry, Proposal, SafeModeItem } from "@/lib/api/types";
+import type {
+  Checkpoint,
+  DecisionLogEntry,
+  Proposal,
+  ResolvedCheckpointItem,
+  SafeModeItem,
+  SafeModeResolvedItem,
+} from "@/lib/api/types";
 import { type Session, clearSession, setSession } from "@/lib/auth/session";
 import { setPendingDecisionsCount, usePendingDecisionsCount } from "@/lib/decisions/pending-count";
 import { render, screen, waitFor, within } from "@testing-library/react";
@@ -73,6 +83,22 @@ const DECISION: DecisionLogEntry = {
   created_at: "2026-05-20T00:00:00Z",
 };
 
+const RESOLVED_DELIVERY: SafeModeResolvedItem = {
+  id: "33333333-3333-3333-3333-333333333333",
+  deliverable_id: "del-9",
+  status: "approved",
+  decided_at: "2026-05-24T09:00:00Z",
+  created_at: "2026-05-24T08:00:00Z",
+};
+
+const RESOLVED_CHECKPOINT: ResolvedCheckpointItem = {
+  id: "44444444-4444-4444-4444-444444444444",
+  run_id: "run-7",
+  question: "Ship to staging first?",
+  resolution: "yes, staging then prod",
+  resolved_at: "2026-05-24T10:00:00Z",
+};
+
 const SAFEMODE: SafeModeItem = {
   id: "11111111-1111-1111-1111-111111111111",
   workspace_id: "ws-1",
@@ -112,11 +138,15 @@ function installFetch(opts: {
   safemode?: () => SafeModeItem[];
   checkpoints?: () => Checkpoint[];
   decisions?: () => DecisionLogEntry[];
+  resolvedSafemode?: () => SafeModeResolvedItem[];
+  resolvedCheckpoints?: () => ResolvedCheckpointItem[];
   onPost?: (url: string, init: RequestInit) => Response;
 }) {
   const proposals = opts.proposals ?? (() => []);
   const safemode = opts.safemode ?? (() => []);
   const checkpoints = opts.checkpoints ?? (() => []);
+  const resolvedSafemode = opts.resolvedSafemode ?? (() => []);
+  const resolvedCheckpoints = opts.resolvedCheckpoints ?? (() => []);
   const fetchMock = vi.fn(async (input: RequestInfo | URL, init: RequestInit = {}) => {
     const url = String(input);
     const method = (init.method ?? "GET").toUpperCase();
@@ -124,7 +154,15 @@ function installFetch(opts: {
       return json((opts.decisions ?? (() => []))());
     }
     if (method === "GET" && url.startsWith("/api/v1/decisions?")) return json(proposals());
+    // The resolved variants MUST be matched before their pending prefixes
+    // (`/checkpoints/resolved` startsWith `/checkpoints`).
+    if (method === "GET" && url.startsWith("/api/v1/safemode/resolved")) {
+      return json(resolvedSafemode());
+    }
     if (method === "GET" && url.startsWith("/api/v1/safemode/queue")) return json(safemode());
+    if (method === "GET" && url.startsWith("/api/v1/checkpoints/resolved")) {
+      return json(resolvedCheckpoints());
+    }
     if (method === "GET" && url.startsWith("/api/v1/checkpoints")) return json(checkpoints());
     if (method === "POST" && opts.onPost) return opts.onPost(url, init);
     throw new Error(`unexpected fetch ${method} ${url}`);
@@ -298,6 +336,27 @@ describe("Decisions surface", () => {
     await userEvent.click(await screen.findByRole("tab", { name: /Resolved/ }));
     // The recorded decision kind surfaces as the outcome.
     expect(screen.getByText(/must.link/i)).toBeInTheDocument();
+  });
+
+  it("folds resolved deliveries + answered checkpoints into the Resolved tab", async () => {
+    installFetch({
+      decisions: () => [DECISION],
+      resolvedSafemode: () => [RESOLVED_DELIVERY],
+      resolvedCheckpoints: () => [RESOLVED_CHECKPOINT],
+    });
+    render(<Decisions />);
+
+    const tablist = await screen.findByRole("tablist");
+    // 1 canon decision + 1 resolved delivery + 1 answered checkpoint = 3.
+    expect(within(tablist).getByRole("tab", { name: /Resolved/ })).toHaveTextContent("3");
+
+    await userEvent.click(within(tablist).getByRole("tab", { name: /Resolved/ }));
+    // Delivery outcome, the canon decision, and the answered checkpoint (with
+    // its question + recorded answer) all show as history.
+    expect(screen.getByText("Delivery approved")).toBeInTheDocument();
+    expect(screen.getByText(/must.link/i)).toBeInTheDocument();
+    expect(screen.getByText(/Ship to staging first\?/)).toBeInTheDocument();
+    expect(screen.getByText(/yes, staging then prod/)).toBeInTheDocument();
   });
 
   it("opens a detail/resolve panel for a pending item and Accepts it", async () => {
