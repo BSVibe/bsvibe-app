@@ -2,22 +2,32 @@
  * Decisions surface — the redesigned inbox (Stitch screens
  * 1175801d… Inbox + 5bf54bdf… detail). Driven by a route-aware mocked fetch.
  *
- * The surface is the canonicalization proposals queue:
- *  - Pending tab   ← GET /api/v1/decisions?status_filter=pending
- *  - Resolved tab  ← GET /api/v1/decisions/log  (the audit trail)
- *  - tab labels carry live counts
+ * The surface is the SINGLE place for everything needing the founder's
+ * judgment — three real backend queues aggregated client-side into one calm
+ * Pending list, each row labeled by kind:
+ *  - "delivery"  ← GET /api/v1/safemode/queue   (held outbound deliveries;
+ *                  Approve POSTs /approve, Deny POSTs /deny with { reason })
+ *  - "decision"  ← GET /api/v1/checkpoints       (paused-run questions;
+ *                  resolve POSTs /resolve with { answer })
+ *  - "knowledge" ← GET /api/v1/decisions?status_filter=pending  (canon
+ *                  proposals; Accept POSTs /accept, Reject POSTs /reject)
+ * The Resolved tab stays the canon decisions log (GET /api/v1/decisions/log).
+ *
+ * Verified here:
+ *  - tab labels carry live counts (Pending = all three kinds summed)
+ *  - the Pending count matches the Brief "Needs you" count for the overlap
+ *    (deliveries + proposals)
+ *  - each kind renders with its label + the right resolve affordance, wired to
+ *    its OWN endpoint
  *  - a client-side search box filters the visible list
- *  - opening a pending item shows a calm detail/resolve panel (kind + affected
- *    path + Accept / Reject, Reject taking an optional reason)
- *  - Accept POSTs /accept with the encoded vault path; Reject POSTs /reject
- *    with a { reason } body; after resolve the item leaves Pending
- *  - a forced error keeps the detail panel actionable with a calm message
+ *  - opening a knowledge item shows a calm detail/resolve panel (Accept/Reject)
+ *  - a forced error keeps the action actionable with a calm message
  *  - the empty Pending state stays calm
- *  - the nav pending-count store reflects the pending queue size
+ *  - the nav pending-count store reflects the full pending size (all kinds)
  */
 
 import Decisions from "@/components/decisions/Decisions";
-import type { DecisionLogEntry, Proposal } from "@/lib/api/types";
+import type { Checkpoint, DecisionLogEntry, Proposal, SafeModeItem } from "@/lib/api/types";
 import { type Session, clearSession, setSession } from "@/lib/auth/session";
 import { setPendingDecisionsCount, usePendingDecisionsCount } from "@/lib/decisions/pending-count";
 import { render, screen, waitFor, within } from "@testing-library/react";
@@ -63,6 +73,26 @@ const DECISION: DecisionLogEntry = {
   created_at: "2026-05-20T00:00:00Z",
 };
 
+const SAFEMODE: SafeModeItem = {
+  id: "11111111-1111-1111-1111-111111111111",
+  workspace_id: "ws-1",
+  deliverable_id: "del-1",
+  status: "pending",
+  compensation_tier: null,
+  expires_at: "2026-05-24T00:00:00Z",
+  extension_count: 0,
+  created_at: "2026-05-23T12:00:00Z",
+};
+
+const CHECKPOINT: Checkpoint = {
+  id: "22222222-2222-2222-2222-222222222222",
+  run_id: "run-1",
+  decision: "clarify-scope",
+  question: "Should the export include archived items?",
+  rationale: "The direction was ambiguous.",
+  created_at: "2026-05-23T11:00:00Z",
+};
+
 function json(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
     status,
@@ -71,22 +101,31 @@ function json(body: unknown, status = 200) {
 }
 
 /**
- * A route-aware fetch mock. `proposals` / `decisions` are the queue contents
- * returned by the list GETs (mutate them between calls to simulate the re-read
- * dropping a resolved item). `onPost` records resolve calls.
+ * A route-aware fetch mock for the unified Decisions surface. Each list getter
+ * returns the contents of one of the three real queues (mutate them between
+ * calls to simulate a re-read dropping a resolved item); they all default to
+ * empty so a test only declares the kinds it cares about. `onPost` records
+ * resolve calls (approve/deny/resolve/accept/reject all route here).
  */
 function installFetch(opts: {
-  proposals: () => Proposal[];
+  proposals?: () => Proposal[];
+  safemode?: () => SafeModeItem[];
+  checkpoints?: () => Checkpoint[];
   decisions?: () => DecisionLogEntry[];
   onPost?: (url: string, init: RequestInit) => Response;
 }) {
+  const proposals = opts.proposals ?? (() => []);
+  const safemode = opts.safemode ?? (() => []);
+  const checkpoints = opts.checkpoints ?? (() => []);
   const fetchMock = vi.fn(async (input: RequestInfo | URL, init: RequestInit = {}) => {
     const url = String(input);
     const method = (init.method ?? "GET").toUpperCase();
     if (method === "GET" && url.startsWith("/api/v1/decisions/log")) {
       return json((opts.decisions ?? (() => []))());
     }
-    if (method === "GET" && url.startsWith("/api/v1/decisions?")) return json(opts.proposals());
+    if (method === "GET" && url.startsWith("/api/v1/decisions?")) return json(proposals());
+    if (method === "GET" && url.startsWith("/api/v1/safemode/queue")) return json(safemode());
+    if (method === "GET" && url.startsWith("/api/v1/checkpoints")) return json(checkpoints());
     if (method === "POST" && opts.onPost) return opts.onPost(url, init);
     throw new Error(`unexpected fetch ${method} ${url}`);
   });
@@ -115,6 +154,120 @@ describe("Decisions surface", () => {
     // Pending tab shows the 2-proposal count.
     expect(tabs.getByRole("tab", { name: /Pending/ })).toHaveTextContent("2");
     expect(tabs.getByRole("tab", { name: /Resolved/ })).toHaveTextContent("1");
+  });
+
+  it("aggregates all three kinds — deliveries, decisions, knowledge — into one Pending count", async () => {
+    installFetch({
+      proposals: () => [PROPOSAL],
+      safemode: () => [SAFEMODE],
+      checkpoints: () => [CHECKPOINT],
+      decisions: () => [DECISION],
+    });
+
+    render(<Decisions />);
+
+    const tablist = await screen.findByRole("tablist");
+    // 1 delivery + 1 checkpoint + 1 proposal = 3.
+    expect(within(tablist).getByRole("tab", { name: /Pending/ })).toHaveTextContent("3");
+  });
+
+  it("renders each pending kind with its own label and question", async () => {
+    installFetch({
+      proposals: () => [PROPOSAL],
+      safemode: () => [SAFEMODE],
+      checkpoints: () => [CHECKPOINT],
+    });
+
+    render(<Decisions />);
+
+    // delivery (Safe Mode held delivery) — its kind chip + plain-language line
+    expect(await screen.findByText("Delivery")).toBeInTheDocument();
+    expect(screen.getByText(/A delivery is held in Safe Mode/)).toBeInTheDocument();
+    // decision (paused-run checkpoint) carries the agent's blocking question +
+    // its kind chip
+    expect(screen.getByText(/Should the export include archived items\?/)).toBeInTheDocument();
+    expect(screen.getByText("Decision")).toBeInTheDocument();
+    // knowledge (canon proposal) — verb + the Knowledge kind chip is the
+    // proposal's existing proposal_kind chip ("merge")
+    expect(screen.getByText(/merge concepts/)).toBeInTheDocument();
+  });
+
+  it("approves a held delivery against the safemode endpoint", async () => {
+    let safemode = [SAFEMODE];
+    const posts: Array<[string, RequestInit]> = [];
+    installFetch({
+      safemode: () => safemode,
+      onPost: (url, init) => {
+        posts.push([url, init]);
+        safemode = [];
+        return json({ item_id: SAFEMODE.id, status: "approved", dispatched: true });
+      },
+    });
+
+    render(<Decisions />);
+    await userEvent.click(await screen.findByRole("button", { name: /Approve/ }));
+
+    await waitFor(() => {
+      expect(screen.getByRole("tab", { name: /Pending/ })).toHaveTextContent("0");
+    });
+    const [url, init] = posts[0];
+    expect(url).toBe(`/api/v1/safemode/${SAFEMODE.id}/approve`);
+    expect(init.method).toBe("POST");
+  });
+
+  it("denies a held delivery against the safemode endpoint", async () => {
+    let safemode = [SAFEMODE];
+    const posts: Array<[string, RequestInit]> = [];
+    installFetch({
+      safemode: () => safemode,
+      onPost: (url, init) => {
+        posts.push([url, init]);
+        safemode = [];
+        return json({ item_id: SAFEMODE.id, status: "denied", dispatched: false });
+      },
+    });
+
+    render(<Decisions />);
+    await userEvent.click(await screen.findByRole("button", { name: /Decline|Deny/ }));
+
+    await waitFor(() => {
+      expect(screen.getByRole("tab", { name: /Pending/ })).toHaveTextContent("0");
+    });
+    const [url, init] = posts[0];
+    expect(url).toBe(`/api/v1/safemode/${SAFEMODE.id}/deny`);
+    expect(JSON.parse(init.body as string)).toEqual({ reason: "" });
+  });
+
+  it("resolves a paused-run checkpoint against the checkpoints endpoint", async () => {
+    let checkpoints = [CHECKPOINT];
+    const posts: Array<[string, RequestInit]> = [];
+    installFetch({
+      checkpoints: () => checkpoints,
+      onPost: (url, init) => {
+        posts.push([url, init]);
+        checkpoints = [];
+        return json({
+          id: CHECKPOINT.id,
+          run_id: CHECKPOINT.run_id,
+          status: "resolved",
+          resolution: "yes, include them",
+          resolved_at: "2026-05-23T12:00:00Z",
+          run_status: "open",
+        });
+      },
+    });
+
+    render(<Decisions />);
+    // Answer the blocking question, then submit.
+    await userEvent.type(await screen.findByLabelText(/Your answer/i), "yes, include them");
+    await userEvent.click(screen.getByRole("button", { name: /Answer|Resolve|Send/ }));
+
+    await waitFor(() => {
+      expect(screen.getByRole("tab", { name: /Pending/ })).toHaveTextContent("0");
+    });
+    const [url, init] = posts[0];
+    expect(url).toBe(`/api/v1/checkpoints/${CHECKPOINT.id}/resolve`);
+    expect(JSON.parse(init.body as string)).toEqual({ answer: "yes, include them" });
   });
 
   it("lists pending proposals in plain language", async () => {
@@ -222,8 +375,8 @@ describe("Decisions surface", () => {
     ).toBeEnabled();
   });
 
-  it("shows the calm empty state when nothing is pending", async () => {
-    installFetch({ proposals: () => [] });
+  it("shows the calm empty state when nothing is pending across all kinds", async () => {
+    installFetch({});
     render(<Decisions />);
 
     await waitFor(() => {
@@ -231,8 +384,13 @@ describe("Decisions surface", () => {
     });
   });
 
-  it("syncs the nav pending-count store with the pending queue size", async () => {
-    installFetch({ proposals: () => [PROPOSAL, PROPOSAL_2], decisions: () => [DECISION] });
+  it("syncs the nav pending-count store with the FULL pending size (all kinds)", async () => {
+    installFetch({
+      proposals: () => [PROPOSAL, PROPOSAL_2],
+      safemode: () => [SAFEMODE],
+      checkpoints: () => [CHECKPOINT],
+      decisions: () => [DECISION],
+    });
 
     function Probe() {
       return <span data-testid="badge">{usePendingDecisionsCount()}</span>;
@@ -245,8 +403,9 @@ describe("Decisions surface", () => {
     );
 
     await waitFor(() => {
-      // Resolved items do NOT inflate the nav badge — only pending.
-      expect(screen.getByTestId("badge")).toHaveTextContent("2");
+      // 2 proposals + 1 delivery + 1 checkpoint = 4. Resolved items (the log)
+      // do NOT inflate the badge.
+      expect(screen.getByTestId("badge")).toHaveTextContent("4");
     });
   });
 });

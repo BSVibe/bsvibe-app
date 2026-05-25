@@ -297,6 +297,56 @@ export interface DecisionLogEntry {
   created_at: string;
 }
 
+// ── Unified Decisions queue (frontend aggregation of three real queues) ────
+// The Decisions surface is the SINGLE place for everything needing the
+// founder's judgment. It aggregates three EXISTING backend queues client-side
+// into one calm list, each item tagged by `kind` so the row renders the right
+// resolve affordance wired to its OWN endpoint:
+//   - "delivery"  → Safe Mode held delivery  (/api/v1/safemode/{id}/approve|deny)
+//   - "decision"  → paused-run checkpoint     (/api/v1/checkpoints/{id}/resolve)
+//   - "knowledge" → canon proposal            (/api/v1/decisions/{path}/accept|reject)
+// This is the SAME set the Brief "Needs you" strip surfaces for the overlapping
+// kinds (deliveries + proposals); the Decisions surface additionally folds in
+// paused-run checkpoints, which the Brief does not yet show.
+export type PendingKind = "delivery" | "decision" | "knowledge";
+
+/** A Safe Mode held delivery awaiting Approve / Deny. */
+export interface PendingDelivery {
+  kind: "delivery";
+  /** Stable list key — `delivery-<safemode item id>`. */
+  id: string;
+  /** Raw Safe-Mode item id for /api/v1/safemode/{itemId}/{approve,deny}. */
+  itemId: string;
+  createdAt: string;
+}
+
+/** A paused-run checkpoint awaiting the founder's answer. */
+export interface PendingCheckpoint {
+  kind: "decision";
+  /** Stable list key — `checkpoint-<checkpoint id>`. */
+  id: string;
+  /** Raw checkpoint id for /api/v1/checkpoints/{checkpointId}/resolve. */
+  checkpointId: string;
+  /** The agent's blocking question. */
+  question: string;
+  rationale: string | null;
+  createdAt: string;
+}
+
+/** A canonicalization proposal awaiting Accept / Reject. Carries the raw
+ *  `Proposal` so the existing detail panel keeps working unchanged. */
+export interface PendingProposal {
+  kind: "knowledge";
+  /** Stable list key — `proposal-<proposal id/path>`. */
+  id: string;
+  proposal: Proposal;
+  createdAt: string;
+}
+
+/** One row in the unified Pending list — a discriminated union over the three
+ *  kinds the founder must judge. */
+export type PendingDecision = PendingDelivery | PendingCheckpoint | PendingProposal;
+
 /** `GET /api/v1/safemode/queue` element (backend SafeModeItemResponse). */
 export interface SafeModeItem {
   id: string;
