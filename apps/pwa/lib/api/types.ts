@@ -847,6 +847,22 @@ export interface ProductDetailView {
   currentTone: ActivityTone;
   runs: ProductDetailRun[];
   shipped: ShippedItem[];
+  /** Flat list of the product's produced files (every shipped deliverable's
+   *  `artifact_refs`), powering the inline file viewer. Empty when none. */
+  files: ProductFile[];
+}
+
+/** One produced file under a product — an artifact ref tied back to the
+ *  deliverable that produced it, so the viewer can fetch its content via
+ *  `GET /deliverables/{deliverableId}/artifacts/{ref}`. */
+export interface ProductFile {
+  /** Stable key — `<deliverableId>::<ref>`. */
+  id: string;
+  deliverableId: string;
+  /** The producing deliverable's title (a group header in the viewer). */
+  deliverableTitle: string;
+  /** The artifact path (whitelisted by the deliverable's own artifact_refs). */
+  ref: string;
 }
 
 /** The whole Glance surface.

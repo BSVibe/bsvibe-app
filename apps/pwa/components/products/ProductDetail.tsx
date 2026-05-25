@@ -5,6 +5,7 @@ import type { ProductDetailView } from "@/lib/api/types";
 import { useTranslations } from "next-intl";
 import Link from "next/link";
 import { useEffect, useState } from "react";
+import ProductFiles from "./ProductFiles";
 import ProductHeader from "./ProductHeader";
 import ProductResources from "./ProductResources";
 import ProductRuns from "./ProductRuns";
@@ -89,6 +90,7 @@ export default function ProductDetail({ slug }: { slug: string }) {
           <ProductHeader view={loaded.view} />
           <ProductRuns runs={loaded.view.runs} />
           <ProductShipped items={loaded.view.shipped} />
+          <ProductFiles files={loaded.view.files} />
           <ProductResources productId={loaded.view.id} />
         </>
       )}

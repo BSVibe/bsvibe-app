@@ -78,6 +78,13 @@
     "noShipped": "Nothing shipped for this product yet.",
     "openArtifact": "Open artifact",
     "viewReport": "View report",
+    "files": "Files",
+    "filesEmpty": "No files produced for this product yet.",
+    "filesSelectHint": "Select a file to view it.",
+    "fileLoading": "Opening file…",
+    "fileError": "Couldn’t open this file — see the repo.",
+    "fileTruncated": "Showing the first part of a large file.",
+    "fileBinary": "Binary file — not shown here.",
     "resources": {
       "heading": "Resources",
       "add": "Add resource",
