@@ -54,6 +54,7 @@ function deliverable(
   deliverable_type: string,
   summary: string | null,
   artifact_uri: string | null = null,
+  artifact_refs: string[] = [],
 ) {
   return {
     id,
@@ -61,7 +62,7 @@ function deliverable(
     workspace_id: "ws-1",
     deliverable_type,
     summary,
-    artifact_refs: [],
+    artifact_refs,
     artifact_uri,
     created_at: NOW,
   };
@@ -198,6 +199,45 @@ describe("getProductDetail (real-data composition)", () => {
       .filter((u) => u.startsWith("/api/v1/deliverables"));
     expect(delCalls.some((u) => u.includes("run_id=r-ship"))).toBe(true);
     expect(delCalls.some((u) => u.includes("run_id=r-work"))).toBe(false);
+  });
+
+  it("flattens shipped deliverables' artifact_refs into the files list", async () => {
+    global.fetch = mockFetch({
+      products: [product("p1", "blog", "Blog")],
+      runs: [run("r-ship", "p1", "shipped")],
+      deliverablesByRun: {
+        "r-ship": [
+          deliverable("d1", "r-ship", "code", "Add fib", null, ["fib.py", "src/util.py"]),
+          deliverable("d2", "r-ship", "code", "Add greet", null, ["greet.py"]),
+        ],
+      },
+    }) as unknown as typeof fetch;
+
+    const view = await getProductDetail("blog");
+    expect(view?.files).toHaveLength(3);
+    // Each file ties its ref back to the producing deliverable (for the scoped,
+    // whitelisted content fetch) + carries that deliverable's title as a group.
+    expect(view?.files).toEqual([
+      { id: "d1::fib.py", deliverableId: "d1", deliverableTitle: "Add fib", ref: "fib.py" },
+      {
+        id: "d1::src/util.py",
+        deliverableId: "d1",
+        deliverableTitle: "Add fib",
+        ref: "src/util.py",
+      },
+      { id: "d2::greet.py", deliverableId: "d2", deliverableTitle: "Add greet", ref: "greet.py" },
+    ]);
+  });
+
+  it("yields an empty files list when no deliverable declares artifact_refs", async () => {
+    global.fetch = mockFetch({
+      products: [product("p1", "blog", "Blog")],
+      runs: [run("r-ship", "p1", "shipped")],
+      deliverablesByRun: { "r-ship": [deliverable("d1", "r-ship", "page", "Launch page")] },
+    }) as unknown as typeof fetch;
+
+    const view = await getProductDetail("blog");
+    expect(view?.files).toEqual([]);
   });
 
   it("degrades a failing per-run deliverables read to no artifacts (no throw)", async () => {
