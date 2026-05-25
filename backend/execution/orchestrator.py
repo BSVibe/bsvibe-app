@@ -59,19 +59,20 @@ from backend.execution.db import (
 from backend.execution.tools import ToolError, ToolRegistry
 from backend.execution.verified_deliverable import write_verified_deliverable
 from backend.execution.verifier.contract import (
-    VerificationCheck,
     VerificationContract,
-    parse_verification_contract,
 )
-from backend.supervisor.sandbox import SandboxError, SandboxManager, SandboxSession
+from backend.execution.verifier.service import VerificationService
+from backend.supervisor.sandbox import SandboxManager, SandboxSession
 
 logger = structlog.get_logger(__name__)
 
 LoopOutcome = Literal["verified", "needs_decision", "system_error"]
 
-VERIFY_TIMEOUT_S = 60.0
+# The per-command verify timeout, the judge file-context cap, and the judge
+# verdict parser now live with the shared VerificationService
+# (``backend.execution.verifier.service``) — the canonical home shared by both
+# the native loop and the executor orchestrator.
 MAX_NO_WORK_NUDGES = 2
-_JUDGE_FILE_CONTEXT_BYTES = 8 * 1024
 
 
 @dataclass(frozen=True)
@@ -431,7 +432,13 @@ class RunOrchestrator:
         )
         return self._decision_result(run, work_step, attempt, decision, written_paths, final_text)
 
-    # -- verify ------------------------------------------------------------
+    # -- verify (delegated to the shared VerificationService) --------------
+
+    def _verifier(self) -> VerificationService:
+        """Build the shared verifier with this run's deps. The native loop and
+        the executor orchestrator both go through this SAME service so they
+        verify identically (Lift B2a)."""
+        return VerificationService(session=self._session, llm=self._llm, retriever=self._retriever)
 
     async def _verify(
         self,
@@ -444,117 +451,24 @@ class RunOrchestrator:
         written_paths: list[str],
         final_text: str,
     ) -> VerificationResult:
-        command_results = await self._run_command_checks(contract, box)
-        all_cmd_pass = all(r["passed"] for r in command_results)
-
-        judge_blob: dict[str, Any] | None = None
-        judge_pass = True
-        criteria = [c for chk in contract.judge_checks for c in chk.criteria]
-        if criteria:
-            judge_blob = await self._run_judge(criteria, written_paths, final_text, box)
-            judge_pass = bool(judge_blob.get("passed"))
-
-        passed = all_cmd_pass and judge_pass
-        outcome = VerificationOutcome.PASSED if passed else VerificationOutcome.FAILED
-        vr = VerificationResult(
-            id=uuid.uuid4(),
-            run_id=run.id,
-            work_step_id=work_step.id,
-            workspace_id=run.workspace_id,
-            outcome=outcome,
-            contract=contract.to_dict(),
-            result={"command_results": command_results, "judge": judge_blob},
+        return await self._verifier().verify(
+            run=run,
+            work_step=work_step,
+            attempt=attempt,
+            contract=contract,
+            box=box,
+            written_paths=written_paths,
+            final_text=final_text,
         )
-        self._session.add(vr)
-        await self._record(
-            run, attempt, "verify", {"outcome": outcome.value, "commands": len(command_results)}
-        )
-        await self._session.flush()
-        return vr
 
     async def _assemble_contract(
         self, registry: ToolRegistry, written_paths: list[str], final_text: str
     ) -> VerificationContract | None:
-        declared = (
-            parse_verification_contract(registry.declared_contract)
-            if registry.declared_contract is not None
-            else None
+        return await self._verifier().assemble_contract(
+            declared_contract=registry.declared_contract,
+            written_paths=written_paths,
+            final_text=final_text,
         )
-        checks: list[VerificationCheck] = list(declared.checks) if declared is not None else []
-
-        if self._retriever is not None:
-            signals = (final_text + "\n" + "\n".join(written_paths)).strip()
-            patterns = [
-                p.strip() for p in await self._retriever.retrieve_for_signals(signals) if p.strip()
-            ]
-            if patterns:
-                checks.append(
-                    VerificationCheck(
-                        kind="judge",
-                        criteria=tuple(patterns),
-                        rationale="BSage canonical patterns retrieved for this change",
-                    )
-                )
-
-        if not checks:
-            return None
-        return VerificationContract(checks=tuple(checks))
-
-    async def _run_command_checks(
-        self, contract: VerificationContract, box: SandboxSession
-    ) -> list[dict[str, Any]]:
-        results: list[dict[str, Any]] = []
-        for check in contract.command_checks:
-            command = check.command or ""
-            res = await box.exec(command, timeout_s=VERIFY_TIMEOUT_S, shell=True)
-            output = "\n".join(c for c in (res.stdout, res.stderr) if c)[-2000:]
-            results.append(
-                {
-                    "command": command,
-                    "exit_code": res.exit_code,
-                    "timed_out": res.timed_out,
-                    "passed": res.exit_code == 0 and not res.timed_out,
-                    "output": output,
-                }
-            )
-        return results
-
-    async def _run_judge(
-        self,
-        criteria: list[str],
-        written_paths: list[str],
-        final_text: str,
-        box: SandboxSession,
-    ) -> dict[str, Any]:
-        file_blobs: list[str] = []
-        for path in written_paths[:5]:
-            try:
-                data = await box.read_file(path, _JUDGE_FILE_CONTEXT_BYTES)
-            except SandboxError:
-                continue
-            file_blobs.append(f"--- {path} ---\n{data.decode('utf-8', errors='replace')}")
-        criteria_block = "\n".join(f"- {c}" for c in criteria)
-        work_block = ("\n\n".join(file_blobs))[:12000] or "(no file content captured)"
-        judge_messages = [
-            {
-                "role": "system",
-                "content": (
-                    "You are a strict verification judge. Decide whether the produced work "
-                    "satisfies EVERY criterion. Respond with ONLY a JSON object: "
-                    '{"passed": <true|false>, "reasoning": "<short>"}.'
-                ),
-            },
-            {
-                "role": "user",
-                "content": (
-                    f"Criteria:\n{criteria_block}\n\n"
-                    f"Work summary: {final_text or '(none)'}\n\n"
-                    f"Changed files:\n{work_block}"
-                ),
-            },
-        ]
-        turn = await self._llm.complete(messages=judge_messages, tools=None)
-        return _parse_judge_verdict(turn.content)
 
     # -- terminal helpers --------------------------------------------------
 
@@ -723,23 +637,6 @@ def _assistant_tool_call_message(
             for call in tool_calls
         ],
     }
-
-
-def _parse_judge_verdict(raw: str) -> dict[str, Any]:
-    """Tolerant parse of the judge LLM's JSON verdict. A failure to parse
-    is treated as a non-pass (never a silent pass)."""
-    text = raw.strip()
-    start = text.find("{")
-    end = text.rfind("}")
-    if start != -1 and end != -1 and end > start:
-        text = text[start : end + 1]
-    try:
-        data = json.loads(text)
-    except (ValueError, TypeError):
-        return {"passed": False, "reasoning": "unparseable judge response", "raw": raw[:500]}
-    if not isinstance(data, dict):
-        return {"passed": False, "reasoning": "judge response not an object", "raw": raw[:500]}
-    return {"passed": bool(data.get("passed")), "reasoning": str(data.get("reasoning") or "")}
 
 
 def _intent_title(run: ExecutionRun) -> str:
