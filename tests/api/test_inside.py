@@ -67,20 +67,25 @@ async def _make_service(storage: FileSystemStorage, *, safe_mode: bool) -> Canon
 
 async def _seed_garden_observations(storage: FileSystemStorage) -> None:
     """settle-style observations referencing one entity under two variant
-    spellings plus an unrelated entity (mirrors test_promotion_e2e)."""
+    spellings plus an unrelated entity (mirrors test_promotion_e2e).
+
+    Every entity recurs across >= 2 observations so it clears the promoter's
+    recurrence gate (``_MIN_OBSERVATIONS_FOR_PROMOTION``)."""
     for i in range(4):
         await storage.write(
             f"garden/seedling/settle-self-hosting-{i}.md",
             "---\ntags:\n  - settle\n  - verified-run\n  - self-hosting\n---\n# obs\n",
         )
-    await storage.write(
-        "garden/seedling/settle-self-host.md",
-        "---\ntags:\n  - settle\n  - verified-run\n  - self-host\n---\n# obs\n",
-    )
-    await storage.write(
-        "garden/seedling/settle-vaultwarden.md",
-        "---\ntags:\n  - settle\n  - verified-run\n  - vaultwarden\n---\n# obs\n",
-    )
+    for i in range(2):
+        await storage.write(
+            f"garden/seedling/settle-self-host-{i}.md",
+            "---\ntags:\n  - settle\n  - verified-run\n  - self-host\n---\n# obs\n",
+        )
+    for i in range(2):
+        await storage.write(
+            f"garden/seedling/settle-vaultwarden-{i}.md",
+            "---\ntags:\n  - settle\n  - verified-run\n  - vaultwarden\n---\n# obs\n",
+        )
 
 
 async def _seed_anchors(storage: FileSystemStorage) -> set[str]:

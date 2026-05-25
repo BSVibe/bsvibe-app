@@ -60,7 +60,12 @@ async def _make_service(storage: FileSystemStorage, *, safe_mode: bool) -> Canon
 async def _seed_garden_observations(storage: FileSystemStorage) -> None:
     """Seed settle-style garden observation notes referencing one entity
     under two variant spellings (``self-hosting`` / ``self-host``) plus an
-    unrelated entity, alongside the structural settle tags."""
+    unrelated entity, alongside the structural settle tags.
+
+    Every entity recurs across **>= 2 distinct observations** so it clears the
+    promoter's recurrence gate (``_MIN_OBSERVATIONS_FOR_PROMOTION``) — the gate
+    suppresses one-off noise, so a candidate must be a genuinely recurring
+    pattern, which is exactly what these fixtures represent."""
     # Four observations tagged with the dominant spelling ...
     for i in range(4):
         await storage.write(
@@ -73,28 +78,30 @@ async def _seed_garden_observations(storage: FileSystemStorage) -> None:
             "---\n"
             "# Settle: configured reverse proxy\n",
         )
-    # ... and one with the variant spelling.
-    await storage.write(
-        "garden/seedling/settle-self-host.md",
-        "---\n"
-        "tags:\n"
-        "  - settle\n"
-        "  - verified-run\n"
-        "  - self-host\n"
-        "---\n"
-        "# Settle: hardened self host\n",
-    )
-    # An unrelated entity that must NOT cluster with the self-host* pair.
-    await storage.write(
-        "garden/seedling/settle-vaultwarden.md",
-        "---\n"
-        "tags:\n"
-        "  - settle\n"
-        "  - verified-run\n"
-        "  - vaultwarden\n"
-        "---\n"
-        "# Settle: vaultwarden backup\n",
-    )
+    # ... and two with the variant spelling (recurs, so it clears the gate).
+    for i in range(2):
+        await storage.write(
+            f"garden/seedling/settle-self-host-{i}.md",
+            "---\n"
+            "tags:\n"
+            "  - settle\n"
+            "  - verified-run\n"
+            "  - self-host\n"
+            "---\n"
+            "# Settle: hardened self host\n",
+        )
+    # An unrelated entity (recurring) that must NOT cluster with the self-host* pair.
+    for i in range(2):
+        await storage.write(
+            f"garden/seedling/settle-vaultwarden-{i}.md",
+            "---\n"
+            "tags:\n"
+            "  - settle\n"
+            "  - verified-run\n"
+            "  - vaultwarden\n"
+            "---\n"
+            "# Settle: vaultwarden backup\n",
+        )
 
 
 class TestSafeModeDefault:
@@ -281,76 +288,67 @@ class TestEmptyVault:
         assert result.created_concepts == []
 
 
-class TestFillerWordFiltering:
-    """Filler/meta/action words on garden observations must never become
-    concept candidates — they're noise derived from work-summary tokenization,
-    not subjects the work is *about*. The filter runs at the promoter
-    chokepoint so it cleans BOTH already-written observations and future ones.
+class TestRecurrenceGate:
+    """Recurrence gate replaces the retired ``filler_words`` deny-list.
+
+    Concepts now come from LLM-extracted entities at the settle sink (generic
+    nouns are excluded *structurally*), and the promoter only promotes a tag
+    that recurs across ``>= _MIN_OBSERVATIONS_FOR_PROMOTION`` distinct
+    observations. A one-off tag (whether a genuine subject seen once or stray
+    noise) is NOT promoted; a tag the work keeps coming back to IS — without any
+    enumerated list of non-concept words.
     """
 
-    async def _seed_noisy_and_good(self, storage: FileSystemStorage) -> None:
-        """Seed observations whose tags mix filler noise with real concepts."""
+    async def _seed_once_and_twice(self, storage: FileSystemStorage) -> None:
+        """``recurring`` appears in two observations; ``oneoff`` in only one."""
+        for i in range(2):
+            await storage.write(
+                f"garden/seedling/obs-recurring-{i}.md",
+                "---\ntags:\n  - settle\n  - verified-run\n  - recurring\n  - calculator\n---\n# o\n",
+            )
         await storage.write(
-            "garden/seedling/obs-noisy.md",
-            "---\n"
-            "tags:\n"
-            "  - settle\n"
-            "  - verified-run\n"
-            "  - else\n"
-            "  - nothing\n"
-            "  - created\n"
-            "  - verified\n"
-            "  - untitled\n"
-            "  - line\n"
-            "  - one\n"
-            "  - python\n"
-            "  - hello\n"
-            "  - world\n"
-            "  - function\n"
-            "  - calculator\n"
-            "---\n"
-            "# obs\n",
+            "garden/seedling/obs-oneoff.md",
+            "---\ntags:\n  - settle\n  - verified-run\n  - oneoff\n---\n# o\n",
         )
 
     @pytest.mark.asyncio
-    async def test_filler_words_excluded_from_candidates(
+    async def test_once_seen_tag_not_promoted_recurring_is(
         self, workspace_storage: FileSystemStorage
     ) -> None:
         service = await _make_service(workspace_storage, safe_mode=False)
-        await self._seed_noisy_and_good(workspace_storage)
+        await self._seed_once_and_twice(workspace_storage)
 
-        promoter = GardenObservationPromoter(service)
-        result = await promoter.promote()
+        result = await GardenObservationPromoter(service).promote()
 
-        good = {"python", "hello", "world", "function", "calculator"}
-        filler = {"else", "nothing", "created", "verified", "untitled", "line", "one"}
-
-        # Filler never appears as a candidate nor a created concept.
-        assert not (filler & set(result.candidate_tags)), result.candidate_tags
-        assert not (filler & set(result.created_concepts)), result.created_concepts
-
-        # Good concepts survive and become active anchors.
-        assert good <= set(result.candidate_tags)
-        assert good <= set(result.created_concepts)
+        # Recurring tags (>= 2 observations) are candidates + active anchors.
+        recurring = {"recurring", "calculator"}
+        assert recurring <= set(result.candidate_tags), result.candidate_tags
+        assert recurring <= set(result.created_concepts), result.created_concepts
+        # A tag seen in only ONE observation is suppressed by the gate.
+        assert "oneoff" not in result.candidate_tags
+        assert "oneoff" not in result.created_concepts
         active = {
             p.removeprefix("concepts/active/").removesuffix(".md")
             for p in await workspace_storage.list_files("concepts/active")
         }
-        assert good <= active, active
-        assert not (filler & active), active
+        assert recurring <= active, active
+        assert "oneoff" not in active
 
     @pytest.mark.asyncio
-    async def test_real_concepts_with_filler_shaped_spellings_survive(
+    async def test_variant_spellings_count_toward_recurrence_together(
         self, workspace_storage: FileSystemStorage
     ) -> None:
-        """The existing e2e vocabulary (self-host*, vaultwarden, auth, client,
-        the product slug) is real signal — the filter must NOT prune it."""
+        """Recurrence is counted on the NORMALIZED form, so the e2e vocabulary
+        (self-host*, vaultwarden, auth, client, the product slug) — each seeded
+        across >= 2 observations — all survives the gate."""
         service = await _make_service(workspace_storage, safe_mode=False)
         await _seed_garden_observations(workspace_storage)
-        await workspace_storage.write(
-            "garden/seedling/obs-extra.md",
-            "---\ntags:\n  - settle\n  - auth\n  - client\n  - vaultwarden-selfhost\n---\n# obs\n",
-        )
+        for i in range(2):
+            await workspace_storage.write(
+                f"garden/seedling/obs-extra-{i}.md",
+                "---\ntags:\n  - settle\n  - auth\n  - client\n"
+                "  - vaultwarden-selfhost\n---\n# obs\n",
+            )
 
         result = await GardenObservationPromoter(service).promote()
 

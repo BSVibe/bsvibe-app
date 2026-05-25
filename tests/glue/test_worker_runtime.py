@@ -463,3 +463,78 @@ async def test_build_worker_runtime_constructs_all_workers(
         await w.start()
     await rt.shutdown()
     assert all(w._task is None for w in rt.workers)
+
+
+# --------------------------------------------------------------------------
+# Settle entity-extractor factory — concepts from LLM-extracted entities
+# --------------------------------------------------------------------------
+
+
+async def test_settle_entity_extractor_factory_extracts_entities(
+    sf: async_sessionmaker[AsyncSession],
+    workspace_id: uuid.UUID,
+    account_id: uuid.UUID,
+    kms_key: None,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """With ONE active account, the factory builds an IngestCompiler whose
+    CompileLlm seam routes through the gateway; the scripted LLM returns an entity
+    plan and ``extract_entity_names`` surfaces the committed entities. The LLM is
+    stubbed at the LlmClient boundary (never a real model)."""
+    monkeypatch.setenv("BSVIBE_KNOWLEDGE_VAULT_ROOT", str(tmp_path / "vault"))
+    get_settings.cache_clear()
+    await _seed_active_account(sf, workspace_id=workspace_id, account_id=account_id)
+
+    # The dispatcher returns the IngestCompiler's plan as the response content.
+    plan = json.dumps(
+        [
+            {
+                "action": "create",
+                "target_path": None,
+                "title": "Calculator",
+                "content": "Built a [[calculator]] in [[Python]].",
+                "tags": ["math"],
+                "entities": ["[[calculator]]", "[[Python]]"],
+                "reason": "r",
+                "source_seeds": [1],
+                "related": [],
+            }
+        ]
+    )
+    _patch_scripted_llm(monkeypatch, _ScriptedCompletion([{"content": plan}]))
+
+    factory = runtime.build_settle_entity_extractor_factory(
+        session_factory=sf, settings=get_settings()
+    )
+    extractor = await factory(region="us-1", workspace_id=workspace_id)
+    assert extractor is not None
+    names = await extractor.extract_entity_names("build a calculator in python")
+    assert names == ["calculator", "Python"]
+    get_settings.cache_clear()
+
+
+async def test_settle_entity_extractor_factory_none_when_no_account(
+    sf: async_sessionmaker[AsyncSession],
+    workspace_id: uuid.UUID,
+    kms_key: None,
+) -> None:
+    """Zero active accounts → None (soft-fallback signal), never a guess."""
+    factory = runtime.build_settle_entity_extractor_factory(
+        session_factory=sf, settings=get_settings()
+    )
+    assert await factory(region="us-1", workspace_id=workspace_id) is None
+
+
+async def test_settle_entity_extractor_factory_none_when_ambiguous(
+    sf: async_sessionmaker[AsyncSession],
+    workspace_id: uuid.UUID,
+    kms_key: None,
+) -> None:
+    """More than one active account → None (no silent guess for derived knowledge)."""
+    await _seed_active_account(sf, workspace_id=workspace_id, account_id=uuid.uuid4(), label="a")
+    await _seed_active_account(sf, workspace_id=workspace_id, account_id=uuid.uuid4(), label="b")
+    factory = runtime.build_settle_entity_extractor_factory(
+        session_factory=sf, settings=get_settings()
+    )
+    assert await factory(region="us-1", workspace_id=workspace_id) is None

@@ -150,21 +150,26 @@ async def _seed_content_tagged_observations(storage: FileSystemStorage) -> None:
 
     One entity under two variant spellings (``self-hosting`` / ``self-host``)
     plus an unrelated entity — mirrors the PR #20 promotion e2e fixture so the
-    proposer has a real cluster + a non-cluster to promote.
+    proposer has a real cluster + a non-cluster to promote. Every entity recurs
+    across **>= 2 distinct observations** so it clears the promoter's recurrence
+    gate (``_MIN_OBSERVATIONS_FOR_PROMOTION``); a candidate must be a genuinely
+    recurring pattern, which is what these fixtures represent.
     """
     for i in range(4):
         await storage.write(
             f"garden/seedling/obs-self-hosting-{i}.md",
             "---\ntags:\n  - settle\n  - verified-run\n  - self-hosting\n---\n# obs\n",
         )
-    await storage.write(
-        "garden/seedling/obs-self-host.md",
-        "---\ntags:\n  - settle\n  - verified-run\n  - self-host\n---\n# obs\n",
-    )
-    await storage.write(
-        "garden/seedling/obs-vaultwarden.md",
-        "---\ntags:\n  - settle\n  - verified-run\n  - vaultwarden\n---\n# obs\n",
-    )
+    for i in range(2):
+        await storage.write(
+            f"garden/seedling/obs-self-host-{i}.md",
+            "---\ntags:\n  - settle\n  - verified-run\n  - self-host\n---\n# obs\n",
+        )
+    for i in range(2):
+        await storage.write(
+            f"garden/seedling/obs-vaultwarden-{i}.md",
+            "---\ntags:\n  - settle\n  - verified-run\n  - vaultwarden\n---\n# obs\n",
+        )
 
 
 def _written_settle_notes(vault_root: Path, workspace_id: uuid.UUID) -> list[Path]:
@@ -258,8 +263,11 @@ async def test_drain_then_promote_safe_mode_auto_applies_low_risk(sf, tmp_path) 
     # The unrelated clean concept settles (the self-host* pair may fold via a
     # clean merge, leaving one survivor — either way the graph is no longer empty).
     assert "vaultwarden" in active, active
-    # Sink-derived content tags also settle as anchors.
-    assert {"configured", "reverse", "proxy", "caddyfile"} <= active, active
+    # The sink's single observation contributes its content tags ONCE, so the
+    # recurrence gate (>= 2 observations) correctly withholds them from promotion
+    # — a one-off run is not yet a settled pattern. They become anchors only once
+    # the same tags recur across another run.
+    assert {"configured", "reverse", "proxy", "caddyfile"}.isdisjoint(active), active
     # Structural markers never become concepts.
     assert "settle" not in active
     assert "verified-run" not in active
@@ -389,19 +397,18 @@ async def test_promotion_runs_per_affected_workspace_in_isolation(sf, tmp_path) 
     assert await ok_storage.list_files("concepts/active") != []
 
 
-async def test_promotion_idempotent_across_two_drains(sf, tmp_path) -> None:
-    """Promotion is idempotent: a second drain batch in the same workspace runs
-    the promoter again and adds no duplicate concepts."""
+async def test_promotion_idempotent_across_repeated_drains(sf, tmp_path) -> None:
+    """Promotion is idempotent: once a pattern has recurred enough to settle,
+    further drains of identical content add no duplicate concepts.
+
+    With the recurrence gate, the sink's content tags must appear in >= 2
+    observations before they promote — so we drain TWICE with identical content
+    to reach steady state, snapshot, then drain a THIRD time and assert the
+    active concept set is unchanged (a *new* summary would correctly add new
+    concepts — that's new knowledge, not a duplicate)."""
     ws = uuid.uuid4()
     await _add_workspace(sf, workspace_id=ws, safe_mode=False)
     await _seed_content_tagged_observations(_ws_storage(tmp_path, ws))
-    # Identical summary + ref across both drains: the sink derives the SAME
-    # content tags each time, so a re-run is genuinely a no-op for promotion
-    # (a *new* summary would correctly add new concepts — that's new knowledge,
-    # not a duplicate).
-    await _seed_settle_activity_with_refs(
-        sf, workspace_id=ws, summary="hardened the proxy", refs=["deploy/Caddyfile"]
-    )
 
     worker = SettleWorker(
         session_factory=sf,
@@ -409,20 +416,27 @@ async def test_promotion_idempotent_across_two_drains(sf, tmp_path) -> None:
         config=SettleWorkerConfig(default_region=_REGION),
         promoter_factory=build_garden_promoter_factory(vault_root=tmp_path),
     )
-    assert await worker.drain_once() == 1
     storage = _ws_storage(tmp_path, ws)
-    active_after_first = sorted(await storage.list_files("concepts/active"))
-    assert active_after_first  # promotion produced anchors
 
-    # A second settle activity with identical content → another promotion pass
+    # Two drains of identical content → the sink's derived tags now recur across
+    # two observations and clear the gate, reaching steady state.
+    for _ in range(2):
+        await _seed_settle_activity_with_refs(
+            sf, workspace_id=ws, summary="hardened the proxy", refs=["deploy/Caddyfile"]
+        )
+        assert await worker.drain_once() == 1
+    active_steady = sorted(await storage.list_files("concepts/active"))
+    assert active_steady  # promotion produced anchors
+
+    # A third settle activity with identical content → another promotion pass
     # that must add no new concepts.
     await _seed_settle_activity_with_refs(
         sf, workspace_id=ws, summary="hardened the proxy", refs=["deploy/Caddyfile"]
     )
     assert await worker.drain_once() == 1
 
-    active_after_second = sorted(await storage.list_files("concepts/active"))
-    assert active_after_second == active_after_first, "promotion must be idempotent"
+    active_after_third = sorted(await storage.list_files("concepts/active"))
+    assert active_after_third == active_steady, "promotion must be idempotent"
 
 
 async def test_loop_produces_canon_from_sink_derived_tags_no_seeding(sf, tmp_path) -> None:
