@@ -1,82 +1,100 @@
 import BriefContent from "@/components/brief/BriefContent";
 import type { BriefView } from "@/lib/api/types";
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
 const VIEW: BriefView = {
-  needsYou: [{ id: "n1", productSlug: "acme-corp", question: "which auth approach?" }],
-  lanes: [
+  working: [
     {
-      id: "l1",
-      slug: "bsvibe-site",
-      name: "bsvibe-site",
-      state: "working",
-      status: "writing tests · 4m in",
-    },
-    {
-      id: "l2",
-      slug: "acme-corp",
-      name: "acme-corp",
-      state: "needs-you",
-      status: "paused — which auth approach?",
-    },
-    {
-      id: "l3",
-      slug: "stellar-app",
-      name: "stellar-app",
-      state: "shipped",
-      status: "retry logic → PR #20 · verified",
+      runId: "r-active",
+      title: "Writing tests for the related-posts feature",
+      productSlug: "bsvibe-site",
+      status: "running",
+      startedAt: new Date(Date.now() - 4 * 60_000).toISOString(),
     },
   ],
-  recentlyShipped: [
+  needsYou: [{ id: "n1", productSlug: "acme-corp", question: "which auth approach?" }],
+  stream: [
     {
-      id: "s1",
+      runId: "r-ship",
       title: "getRelatedPosts function",
       productSlug: "bsvibe-site",
-      source: "GitHub PR #15",
+      status: "shipped",
+      updatedAt: new Date(Date.now() - 2 * 3600_000).toISOString(),
+      deliverableId: "d1",
       artifactType: "pr",
-      verdict: "This is verified",
+    },
+    {
+      runId: "r-fail",
+      title: "Broken link fix",
+      productSlug: "nexus-portal",
+      status: "failed",
+      updatedAt: new Date(Date.now() - 26 * 3600_000).toISOString(),
+      deliverableId: null,
+      artifactType: null,
     },
   ],
-  placeholder: true,
+  placeholder: false,
 };
 
-describe("Brief (Glance) surface", () => {
-  it("shows the three sections: Needs you, Your products, Recently shipped", () => {
+describe("Brief (Work Home) surface", () => {
+  it("shows the three merged sections: Working on now, Needs you, Work stream", () => {
     render(<BriefContent view={VIEW} />);
-
+    expect(screen.getByRole("region", { name: "Working on now" })).toBeInTheDocument();
     expect(screen.getByRole("region", { name: "Needs you" })).toBeInTheDocument();
-    expect(screen.getByRole("region", { name: "Your products" })).toBeInTheDocument();
-    expect(screen.getByRole("region", { name: "Recently shipped" })).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Work stream" })).toBeInTheDocument();
+  });
+
+  it("makes active work the hero — title, product, and a live status", () => {
+    render(<BriefContent view={VIEW} />);
+    const hero = screen.getByRole("region", { name: "Working on now" });
+    expect(
+      within(hero).getByText("Writing tests for the related-posts feature"),
+    ).toBeInTheDocument();
+    expect(within(hero).getByText("Working")).toBeInTheDocument();
+    expect(within(hero).getByText("bsvibe-site")).toBeInTheDocument();
   });
 
   it("renders the needs-you question and its count", () => {
     render(<BriefContent view={VIEW} />);
-
     expect(screen.getByText("which auth approach?")).toBeInTheDocument();
     expect(screen.getByText("1")).toBeInTheDocument();
   });
 
-  it("narrates each product lane in plain language with a state tag", () => {
+  it("lists done work in the stream, with a View report link when it shipped", () => {
     render(<BriefContent view={VIEW} />);
-
-    expect(screen.getByText("bsvibe-site")).toBeInTheDocument();
-    expect(screen.getByText("writing tests · 4m in")).toBeInTheDocument();
-    expect(screen.getByText("needs you")).toBeInTheDocument();
-    expect(screen.getByText("shipped")).toBeInTheDocument();
+    const stream = screen.getByRole("region", { name: "Work stream" });
+    expect(within(stream).getByText("getRelatedPosts function")).toBeInTheDocument();
+    expect(within(stream).getByText("Broken link fix")).toBeInTheDocument();
+    // The shipped row links to its Delivery Report; the failed row (no
+    // deliverable) falls back to opening the run.
+    expect(within(stream).getByRole("link", { name: /View report/ })).toHaveAttribute(
+      "href",
+      "/deliverables/d1",
+    );
+    expect(within(stream).getByRole("link", { name: /Open run/ })).toHaveAttribute(
+      "href",
+      "/runs/r-fail",
+    );
   });
 
-  it("shows recently-shipped deliverables with a proof verdict", () => {
+  it("filters the stream by outcome", async () => {
+    const { default: userEvent } = await import("@testing-library/user-event");
     render(<BriefContent view={VIEW} />);
+    const stream = screen.getByRole("region", { name: "Work stream" });
+    // "Shipped" filter hides the failed row.
+    await userEvent.click(within(stream).getByRole("tab", { name: "Shipped" }));
+    expect(within(stream).getByText("getRelatedPosts function")).toBeInTheDocument();
+    expect(within(stream).queryByText("Broken link fix")).not.toBeInTheDocument();
+  });
 
-    expect(screen.getByText("getRelatedPosts function")).toBeInTheDocument();
-    expect(screen.getByText("bsvibe-site · GitHub PR #15")).toBeInTheDocument();
-    expect(screen.getByText("This is verified")).toBeInTheDocument();
+  it("shows a calm 'all caught up' when nothing is running", () => {
+    render(<BriefContent view={{ ...VIEW, working: [] }} />);
+    expect(screen.getByText(/All caught up/)).toBeInTheDocument();
   });
 
   it("shows a calm empty state when nothing needs the founder", () => {
     render(<BriefContent view={{ ...VIEW, needsYou: [] }} />);
-
     expect(screen.getByText("Nothing needs you right now.")).toBeInTheDocument();
   });
 });

@@ -6,20 +6,12 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import AccountChip from "./AccountChip";
 import RailProducts from "./RailProducts";
-import {
-  ActivityIcon,
-  BriefIcon,
-  DecisionsIcon,
-  KnowledgeIcon,
-  SettingsIcon,
-  SkillsIcon,
-} from "./icons";
+import { BriefIcon, DecisionsIcon, KnowledgeIcon, SettingsIcon, SkillsIcon } from "./icons";
 import { type NavKey, PRIMARY_NAV } from "./nav";
 
 const ICONS: Record<NavKey, typeof BriefIcon> = {
   brief: BriefIcon,
   decisions: DecisionsIcon,
-  activity: ActivityIcon,
   knowledge: KnowledgeIcon,
   skills: SkillsIcon,
 };

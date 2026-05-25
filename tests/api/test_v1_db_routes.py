@@ -119,7 +119,7 @@ async def test_runs_list_and_get(configured_client, db, workspace_id) -> None:
                 id=run_id,
                 workspace_id=workspace_id,
                 status=RunStatus.OPEN,
-                payload={},
+                payload={"intent_text": "Write the related-posts feature"},
                 created_at=datetime.now(tz=UTC),
                 updated_at=datetime.now(tz=UTC),
             )
@@ -143,9 +143,13 @@ async def test_runs_list_and_get(configured_client, db, workspace_id) -> None:
     assert len(rows) == 1
     assert rows[0]["id"] == str(run_id)
     assert rows[0]["status"] == "open"
+    # The run carries the founder's Direction (from payload.intent_text) so the
+    # merged Brief can show "what BSVibe is working on".
+    assert rows[0]["intent"] == "Write the related-posts feature"
 
     r2 = await configured_client.get(f"/api/v1/runs/{run_id}")
     assert r2.status_code == 200
+    assert r2.json()["intent"] == "Write the related-posts feature"
 
     r3 = await configured_client.get(f"/api/v1/runs/{other_ws_run_id}")
     assert r3.status_code == 404

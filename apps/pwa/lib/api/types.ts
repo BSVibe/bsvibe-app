@@ -102,6 +102,9 @@ export interface Run {
   product_id: string | null;
   request_id: string | null;
   status: RunStatus;
+  /** The founder's Direction for this run (backend RunResponse.intent, from the
+   *  run payload); `null` when the run carries none. */
+  intent: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -725,19 +728,7 @@ export interface RoutingRuleCreate {
   conditions?: RuleConditionInput[];
 }
 
-// ── Brief view-model (UX §3.3 lane states) ────────────────────────────────
-
-export type LaneState = "working" | "needs-you" | "triggered" | "shipped" | "idle";
-
-/** One product, as a calm plain-language status lane (never a metric card). */
-export interface ProductLane {
-  id: string;
-  slug: string;
-  name: string;
-  state: LaneState;
-  /** Plain-language status line — "writing tests for related-posts · 4m in". */
-  status: string;
-}
+// ── Brief / Work-Home view-model ──────────────────────────────────────────
 
 /** How a "Needs you" item can be resolved in-place. Only Safe-Mode held
  *  deliveries are resolvable from the PWA today (approve / deny endpoints exist,
@@ -776,43 +767,12 @@ export interface ShippedItem {
   link?: string;
 }
 
-// ── Activity view-model (read-only run history surface) ───────────────────
-
 /** Calm status tones for a run's lifecycle — color is used ONLY to carry
  *  status meaning (UX §5). `neutral` is the quiet grey for open/cancelled,
  *  `working` the soft ink for in-flight, `review` the amber "needs you",
- *  `shipped` the green "done", `failed` the muted red. */
+ *  `shipped` the green "done", `failed` the muted red. Shared by the Work-Home
+ *  surface (lib/runs/status.ts) and the product-detail run rows. */
 export type ActivityTone = "neutral" | "working" | "review" | "shipped" | "failed";
-
-/** One row in the Activity list: a real ExecutionRun rendered in plain
- *  language. `productSlug` is resolved via the run's `product_id` (degrades to
- *  "workspace" when the run carries none). `statusLabel` is the calm word the
- *  founder reads ("Shipped", "Needs your review"); `tone` drives the lone
- *  status colour. The raw `runId` is what the expand fetch narrows on. */
-export interface ActivityRun {
-  runId: string;
-  productSlug: string;
-  status: RunStatus;
-  statusLabel: string;
-  tone: ActivityTone;
-  /** Writer-stamped `updated_at` (most recent activity), ISO string. */
-  updatedAt: string;
-}
-
-/** One delivered artifact under an Activity run, mapped to the calm UI
- *  vocabulary. `verdict` is the constant "This is verified" (deliverables only
- *  exist for verified runs). `link` is the external landing spot
- *  (`Deliverable.artifact_uri`) when one exists. */
-export interface ActivityDeliverable {
-  id: string;
-  /** First non-empty line of the summary, or a calm fallback. */
-  title: string;
-  artifactType: ArtifactType;
-  /** Plain-language "where it landed" — "opened a pull request". */
-  source: string;
-  verdict: string;
-  link?: string;
-}
 
 // ── Product detail view-model (focused per-product window) ────────────────
 
@@ -876,10 +836,47 @@ export interface ProductFile {
  * real read — even when the workspace is empty (that renders calm empty states,
  * NOT demo data). It flips back to true only if a hard failure forces the demo
  * lane fallback. */
+/** One actively-running piece of work for the "Working on now" hero — the
+ *  founder's "what is BSVibe doing right now". Sourced from a run in an
+ *  in-flight status (open / running). */
+export interface ActiveWork {
+  runId: string;
+  /** What the run is doing — the founder's Direction (run.intent); `null` when
+   *  the run carries none, so the component shows a calm i18n fallback. */
+  title: string | null;
+  productSlug: string;
+  /** Lifecycle status (open = just started, running = working). The component
+   *  translates this to a label + tone (keeps the data layer locale-free). */
+  status: RunStatus;
+  /** ISO timestamp the run started (created_at) — drives the "Nm in" elapsed. */
+  startedAt: string;
+}
+
+/** One row in the unified Work Stream (the merged Brief/Activity history) — a
+ *  completed (or in-flight) run rendered with its status as the lead signal.
+ *  The component maps `status` → label + tone via i18n. */
+export interface WorkStreamItem {
+  runId: string;
+  /** A concise one-line title: the shipped deliverable's summary when there is
+   *  one, else the run's Direction; `null` → component shows an i18n fallback. */
+  title: string | null;
+  productSlug: string;
+  status: RunStatus;
+  /** Writer-stamped `updated_at`, ISO string (drives the relative time). */
+  updatedAt: string;
+  /** The deliverable this run produced (for the "View report" link), when one
+   *  exists; `null` for runs that shipped nothing addressable. */
+  deliverableId: string | null;
+  artifactType: ArtifactType | null;
+}
+
+/** The merged Brief / Work-Home view-model: what BSVibe is doing now, what needs
+ *  the founder, and the full chronological work stream (this replaces the old
+ *  product lanes + recently-shipped + the separate Activity surface). */
 export interface BriefView {
+  working: ActiveWork[];
   needsYou: NeedsYouItem[];
-  lanes: ProductLane[];
-  recentlyShipped: ShippedItem[];
+  stream: WorkStreamItem[];
   placeholder: boolean;
 }
 

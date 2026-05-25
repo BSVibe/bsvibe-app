@@ -5,7 +5,6 @@ import { useTranslations } from "next-intl";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
-  ActivityIcon,
   BellIcon,
   BriefIcon,
   DecisionsIcon,
@@ -18,7 +17,6 @@ import { type NavKey, PRIMARY_NAV } from "./nav";
 const ICONS: Record<NavKey, typeof BriefIcon> = {
   brief: BriefIcon,
   decisions: DecisionsIcon,
-  activity: ActivityIcon,
   knowledge: KnowledgeIcon,
   skills: SkillsIcon,
 };
@@ -27,7 +25,6 @@ const ICONS: Record<NavKey, typeof BriefIcon> = {
 const TITLE_KEYS: Record<string, NavKey | "settings"> = {
   "/brief": "brief",
   "/decisions": "decisions",
-  "/activity": "activity",
   "/knowledge": "knowledge",
   "/skills": "skills",
   "/settings": "settings",
