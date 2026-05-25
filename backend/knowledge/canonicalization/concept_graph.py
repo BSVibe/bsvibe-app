@@ -114,7 +114,46 @@ async def build_concept_graph(storage: StorageBackend) -> nx.MultiDiGraph:
     for (left, right), count in sorted(pair_counts.items()):
         graph.add_edge(left, right, rel_type=_COOCCUR_REL, weight=float(count))
 
+    # 4. Community detection — a deterministic ``community`` attribute per node
+    #    so the Knowledge view's COMMUNITY legend can colour by emergent cluster
+    #    (vs the TYPE/``entity_type`` mode). Pure + stable: same vault → same ids.
+    _assign_communities(graph)
+
     return graph
+
+
+def _assign_communities(graph: nx.MultiDiGraph) -> None:
+    """Stamp a deterministic, stable ``community`` id on every node.
+
+    The structural signal is connectedness, so communities are detected on an
+    *undirected simple* projection of the concept graph (direction + parallel
+    multi-edges are irrelevant to "which concepts cluster together"). We use
+    NetworkX's :func:`greedy_modularity_communities` — deterministic given a
+    fixed input (no random seed, unlike Louvain) — and isolated nodes each fall
+    into their own singleton community.
+
+    The community *id* is the lexicographically-smallest member node id, so it
+    is stable across rebuilds regardless of the order communities are returned
+    in (the legend must not flicker between reads). A trivial/empty graph is a
+    no-op.
+    """
+    if graph.number_of_nodes() == 0:
+        return
+
+    # Undirected simple projection — community structure ignores edge direction
+    # and multiplicity. Isolated nodes are preserved so they get a singleton id.
+    undirected = nx.Graph()
+    undirected.add_nodes_from(graph.nodes())
+    for source, target in graph.edges():
+        if source != target:
+            undirected.add_edge(source, target)
+
+    communities = nx.community.greedy_modularity_communities(undirected)
+
+    for members in communities:
+        community_id = min(str(m) for m in members)
+        for member in members:
+            graph.nodes[member]["community"] = community_id
 
 
 def _add_alias_edge(graph: nx.MultiDiGraph, alias_id: str, canonical_id: str) -> None:

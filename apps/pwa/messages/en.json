@@ -192,7 +192,13 @@
     "inspectorRelatedEmpty": "Nothing related yet.",
     "inspectorOrigin": "Origin",
     "inspectorOriginEmpty": "No observations reference this yet.",
-    "relatedWeight": "{count, plural, one {# link} other {# links}}"
+    "relatedWeight": "{count, plural, one {# link} other {# links}}",
+    "graphColorType": "Type",
+    "graphColorCommunity": "Community",
+    "graphLegendCommunityLabel": "Filter by community",
+    "graphCommunityLabel": "Cluster {id}",
+    "inspectorType": "Type",
+    "inspectorCommunity": "Community"
   },
   "decisions": {
     "heading": "Decisions",
