@@ -272,6 +272,47 @@ async def test_detail_observation_body_strips_leading_h1_after_blank(
     assert not obs["body"].startswith("#")
 
 
+async def test_detail_observation_body_strips_settle_footer(client, workspace_storage) -> None:
+    """The inspector shows the note's CONTENT, not the SettleWorker's machine
+    footer (Product / Intent / ## Artifacts / Verified / Run). The footer is a
+    trailing block, so the body is just the LLM narrative above it."""
+    await _seed_concepts(workspace_storage, ["auth"])
+    # Mirrors SettleWorker._observation_body: narrative, then the metadata footer.
+    note = (
+        "---\n"
+        "tags:\n"
+        "  - settle\n"
+        "  - verified-run\n"
+        "  - auth\n"
+        "captured_at: '2026-05-24'\n"
+        "---\n"
+        "# Settle: wired the auth callback\n"
+        "\n"
+        "Wired the OAuth callback and confirmed the redirect target.\n"
+        "\n"
+        "It now lands on /app.\n"
+        "\n"
+        "Product: bsvibe-site\n"
+        "Intent: wire the auth callback\n"
+        "## Artifacts\n"
+        "- `src/auth.ts`\n"
+        "\n"
+        "Verified: yes\n"
+        "Run: 6187b89b-92b7-4e68-8cc0-8aabebc32371\n"
+    )
+    await workspace_storage.write("garden/seedling/obs-footer.md", note)
+
+    r = await client.get("/api/v1/inside/concepts/auth")
+    assert r.status_code == 200, r.text
+    obs = r.json()["observations"][0]
+    # The narrative (incl. its inner line breaks) survives; the footer is gone.
+    assert obs["body"] == (
+        "Wired the OAuth callback and confirmed the redirect target.\n\nIt now lands on /app."
+    )
+    for marker in ("Intent:", "## Artifacts", "Verified:", "Run:", "Product:"):
+        assert marker not in obs["body"]
+
+
 async def test_detail_observation_body_truncated_when_huge(client, workspace_storage) -> None:
     """A body past the ~8KB cap is truncated and flagged so the wire stays bounded."""
     await _seed_concepts(workspace_storage, ["auth"])
