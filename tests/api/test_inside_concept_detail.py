@@ -242,6 +242,36 @@ async def test_detail_observation_body_preserves_multiline(client, workspace_sto
     assert obs["truncated"] is False
 
 
+async def test_detail_observation_body_strips_leading_h1_after_blank(
+    client, workspace_storage
+) -> None:
+    """Real settle notes have a blank line between the frontmatter and the H1.
+    The body must still drop that leading H1 (it's already the note title) so the
+    inspector doesn't show the heading twice."""
+    await _seed_concepts(workspace_storage, ["auth"])
+    # Built by hand to mirror the GardenWriter: a BLANK line precedes the "# " H1.
+    note = (
+        "---\n"
+        "tags:\n"
+        "  - settle\n"
+        "  - verified-run\n"
+        "  - auth\n"
+        "captured_at: '2026-05-24'\n"
+        "---\n"
+        "\n"
+        "# Settle: wired the auth callback\n"
+        "\n"
+        "Founder confirmed the redirect target.\n"
+    )
+    await workspace_storage.write("garden/seedling/obs-blank-h1.md", note)
+
+    r = await client.get("/api/v1/inside/concepts/auth")
+    assert r.status_code == 200, r.text
+    obs = r.json()["observations"][0]
+    assert obs["body"] == "Founder confirmed the redirect target."
+    assert not obs["body"].startswith("#")
+
+
 async def test_detail_observation_body_truncated_when_huge(client, workspace_storage) -> None:
     """A body past the ~8KB cap is truncated and flagged so the wire stays bounded."""
     await _seed_concepts(workspace_storage, ["auth"])

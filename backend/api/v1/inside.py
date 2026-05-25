@@ -298,8 +298,12 @@ def _capped_body(body: str) -> tuple[str, bool]:
     whitespace is stripped.
     """
     lines = body.splitlines()
-    # Skip a single leading H1 heading + any blank lines beneath it.
     start = 0
+    # Skip leading blank lines (real settle notes put a blank line between the
+    # frontmatter and the H1), then drop a single leading H1 heading + the blank
+    # lines beneath it.
+    while start < len(lines) and not lines[start].strip():
+        start += 1
     if start < len(lines) and lines[start].lstrip().startswith("# "):
         start += 1
         while start < len(lines) and not lines[start].strip():
