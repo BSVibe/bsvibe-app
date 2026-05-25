@@ -54,7 +54,14 @@ export default function Knowledge() {
   if (state.status === "ready" && state.graph.nodes.length > 0) {
     return (
       <div className="knowledge-fullscreen">
-        <KnowledgeGraphView graph={state.graph} />
+        {/* A page header, for consistency with the other surfaces (they all show
+            their title at the top). The graph fills the area below it. */}
+        <header className="knowledge-fullscreen__header">
+          <h1 className="knowledge-fullscreen__heading">{t("heading")}</h1>
+        </header>
+        <div className="knowledge-fullscreen__graph">
+          <KnowledgeGraphView graph={state.graph} />
+        </div>
       </div>
     );
   }
