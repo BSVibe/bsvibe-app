@@ -1709,6 +1709,32 @@ main.login {
   position: fixed;
   inset: 0 0 0 var(--rail-w);
   overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Page header — consistent with the other surfaces' title. The graph fills the
+   area below it. */
+.knowledge-fullscreen__header {
+  flex: none;
+  z-index: 4;
+  padding: 16px 24px 12px;
+  background: var(--bg);
+  border-bottom: 1px solid var(--hair);
+}
+
+.knowledge-fullscreen__heading {
+  margin: 0;
+  font-size: 1.5rem;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  color: var(--ink);
+}
+
+.knowledge-fullscreen__graph {
+  position: relative;
+  flex: 1;
+  min-height: 0;
 }
 
 .kgraph--fullscreen {
@@ -2137,47 +2163,20 @@ main.login {
 }
 
 /* Source observations (origin). */
-.kgraph__obs {
-  list-style: none;
-  margin: 0;
-  padding: 0;
+/* The concept's CONTENT — its source notes' bodies rendered as one readable
+   note (preserve line breaks, wrap long lines, never overflow the panel). The
+   per-note source detail (title/date) is intentionally dropped: the founder
+   wants the content, not the origin metadata. */
+.kgraph__note {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 16px;
 }
 
-.kgraph__obs-head {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-}
-
-.kgraph__obs-title {
+.kgraph__note-body {
   font-size: 0.86rem;
-  font-weight: 550;
+  line-height: 1.55;
   color: var(--ink);
-}
-
-.kgraph__obs-date {
-  margin-left: auto;
-  flex: none;
-  font-size: 0.72rem;
-  color: var(--ink-3);
-}
-
-.kgraph__obs-excerpt {
-  margin: 3px 0 0;
-  font-size: 0.82rem;
-  color: var(--ink-2);
-}
-
-/* Full observation body, rendered as a readable note (preserve line breaks,
-   wrap long lines, never overflow the panel). */
-.kgraph__obs-body {
-  margin: 4px 0 0;
-  font-size: 0.82rem;
-  line-height: 1.5;
-  color: var(--ink-2);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }

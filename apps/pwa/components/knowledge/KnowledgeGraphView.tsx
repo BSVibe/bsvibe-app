@@ -594,8 +594,34 @@ export default function KnowledgeGraphView({ graph }: { graph: KnowledgeGraph })
 
           {detail.status === "ready" && (
             <div className="kgraph__panel-body">
-              {/* Metadata grid — only the real fields the concept carries (TYPE
-                  + community come from the graph node, not ConceptDetail). */}
+              {/* CONTENT — the note's actual content (what the founder wants to
+                  read), led with. It's the source observations' bodies, rendered
+                  as one readable note WITHOUT the per-observation source detail
+                  (title / date) — that was noise that buried the content. */}
+              <section className="kgraph__block">
+                <h3 className="kgraph__block-label">{t("inspectorContent")}</h3>
+                {detail.detail.observations.length === 0 ? (
+                  <p className="kgraph__empty">{t("inspectorContentEmpty")}</p>
+                ) : (
+                  <div className="kgraph__note">
+                    {detail.detail.observations.map((obs) => {
+                      const text = obs.body || obs.excerpt;
+                      if (!text) return null;
+                      return (
+                        <div key={obs.id} className="kgraph__note-body">
+                          {text}
+                          {obs.truncated && (
+                            <span className="kgraph__obs-more">{t("inspectorObsTruncated")}</span>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </section>
+
+              {/* Compact context below the content: kind / community, aliases,
+                  and related concepts (clickable pivots for navigating the graph). */}
               {(selectedTypeLabel || selectedCommunityLabel) && (
                 <section className="kgraph__block">
                   <div className="kgraph__meta">
@@ -628,11 +654,9 @@ export default function KnowledgeGraphView({ graph }: { graph: KnowledgeGraph })
                 </section>
               )}
 
-              <section className="kgraph__block">
-                <h3 className="kgraph__block-label">{t("inspectorRelated")}</h3>
-                {detail.detail.related.length === 0 ? (
-                  <p className="kgraph__empty">{t("inspectorRelatedEmpty")}</p>
-                ) : (
+              {detail.detail.related.length > 0 && (
+                <section className="kgraph__block">
+                  <h3 className="kgraph__block-label">{t("inspectorRelated")}</h3>
                   <ul className="kgraph__related">
                     {detail.detail.related.map((rel) => (
                       <li key={rel.id}>
@@ -649,40 +673,8 @@ export default function KnowledgeGraphView({ graph }: { graph: KnowledgeGraph })
                       </li>
                     ))}
                   </ul>
-                )}
-              </section>
-
-              <section className="kgraph__block">
-                <h3 className="kgraph__block-label">{t("inspectorOrigin")}</h3>
-                {detail.detail.observations.length === 0 ? (
-                  <p className="kgraph__empty">{t("inspectorOriginEmpty")}</p>
-                ) : (
-                  <ul className="kgraph__obs">
-                    {detail.detail.observations.map((obs) => (
-                      <li key={obs.id} className="kgraph__obs-row">
-                        <div className="kgraph__obs-head">
-                          <span className="kgraph__obs-title">{obs.title}</span>
-                          {obs.captured_at && (
-                            <span className="kgraph__obs-date">{obs.captured_at}</span>
-                          )}
-                        </div>
-                        {/* The note's full body, rendered readable (pre-wrap) —
-                            not just the one-line excerpt. */}
-                        {obs.body ? (
-                          <div className="kgraph__obs-body">
-                            {obs.body}
-                            {obs.truncated && (
-                              <span className="kgraph__obs-more">{t("inspectorObsTruncated")}</span>
-                            )}
-                          </div>
-                        ) : (
-                          obs.excerpt && <p className="kgraph__obs-excerpt">{obs.excerpt}</p>
-                        )}
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </section>
+                </section>
+              )}
             </div>
           )}
         </aside>

@@ -227,11 +227,11 @@ describe("Knowledge surface (BSage graph)", () => {
     // Detail panel renders the concept's real fields.
     expect(await screen.findByRole("heading", { name: "Auth" })).toBeInTheDocument();
     expect(screen.getByText("authn")).toBeInTheDocument();
-    expect(screen.getByText("Wired the auth callback")).toBeInTheDocument();
-    // The inspector renders the observation's FULL body as a readable note —
-    // both lines of the body show, not just the one-line excerpt.
+    // The inspector leads with the note's CONTENT (the body, as a readable note),
+    // NOT the source detail — the observation title/date are no longer shown.
     expect(screen.getByText(/redirect target/)).toBeInTheDocument();
     expect(screen.getByText(/lands on \/app/)).toBeInTheDocument();
+    expect(screen.queryByText("Wired the auth callback")).not.toBeInTheDocument();
     // Related concept rendered as a clickable pivot — scoped to the panel (a
     // graph-node stub button shares the "JWKS" name in the canvas mock).
     const panel = screen.getByRole("complementary", { name: /concept/i });
