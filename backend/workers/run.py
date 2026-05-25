@@ -211,6 +211,39 @@ async def resolve_workspace_model_account(
     return None
 
 
+async def _resolve_judge_llm(
+    session: AsyncSession, run: ExecutionRun, settings: Settings
+) -> GatewayLoopLlm | None:
+    """Resolve a judge LLM for the executor verification path (B2b).
+
+    The executor account routes work to an external CLI worker — it cannot grade
+    a judge contract itself. So the judge runs on a SEPARATE, NON-executor active
+    ModelAccount (an api-llm account in the same workspace), resolved here
+    independently of the run's executor account. Mirrors the settle-extractor
+    resolution (:func:`build_settle_entity_extractor_factory`): the FIRST active
+    non-executor account wins; ``None`` when the workspace has only executor
+    accounts active — in which case a judge-bearing contract routes to a
+    human-review Decision (never a silent pass). Command-only contracts still
+    verify without a judge.
+    """
+    accounts = await _list_active_workspace_accounts(session, run.workspace_id)
+    judge_account = next((a for a in accounts if a.provider != "executor"), None)
+    if judge_account is None:
+        logger.info(
+            "executor_judge_llm_unresolved",
+            run_id=str(run.id),
+            workspace_id=str(run.workspace_id),
+        )
+        return None
+    dispatcher = build_gateway_dispatcher(session, settings)
+    return GatewayLoopLlm(
+        dispatcher=dispatcher,
+        workspace_id=run.workspace_id,
+        account_id=judge_account.account_id,
+        model_account_id=judge_account.id,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Production AgentExecutionDeps
 # ---------------------------------------------------------------------------
@@ -266,11 +299,23 @@ def build_agent_execution_deps(
         # ``run_workers`` (built whenever a Redis URL is configured); a None
         # client → the orchestrator raises a Decision (cannot dispatch).
         if account.provider == "executor":
+            # B2b — executor verification convergence. The orchestrator now runs
+            # the SAME verification the native loop runs, so it needs the same
+            # sandbox manager (mount the run dir to run command checks) and a
+            # judge LLM. ``box`` is the real (or Noop) sandbox already built for
+            # the deps. ``verify_llm`` resolves a NON-executor active account for
+            # the judge (mirrors the settle-extractor resolution) — None when
+            # only executor accounts are active (→ judge-bearing contracts route
+            # to human review). ``retriever`` stays None for now (B3 wires it).
+            verify_llm = await _resolve_judge_llm(session, run, settings)
             return ExecutorOrchestrator(
                 session=session,
                 redis=redis_client,
                 account=account,
+                sandbox_manager=box,
                 settings=settings,
+                retriever=None,
+                verify_llm=verify_llm,
             )
         dispatcher = build_gateway_dispatcher(session, settings)
         llm = GatewayLoopLlm(

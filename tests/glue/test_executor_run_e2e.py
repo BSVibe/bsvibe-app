@@ -42,6 +42,8 @@ from backend.execution.db import (
     ExecutionRun,
     ExecutionRunActivity,
     RunStatus,
+    VerificationOutcome,
+    VerificationResult,
 )
 from backend.executors import dispatch
 from backend.executors.db import WorkerRow
@@ -168,11 +170,108 @@ async def _open_run(s: AsyncSession, *, workspace_id: uuid.UUID, text: str) -> u
 
 
 # --------------------------------------------------------------------------
-# 1. KEYSTONE: executor run dispatches + verifies via the worker
+# B2b verify-convergence doubles — a scripted sandbox + judge LLM + retriever
+# so the verified-PASS path can be exercised end-to-end through AgentRunner.
 # --------------------------------------------------------------------------
 
 
-async def test_executor_run_dispatches_to_worker_and_verifies(
+class _FakeBox:
+    def __init__(self, files: dict[str, bytes] | None = None) -> None:
+        self._files = files or {}
+
+    @property
+    def workspace_mount(self) -> str:
+        return "/work"
+
+    async def exec(self, command: str, *, timeout_s: float, shell: bool = False):
+        from backend.supervisor.sandbox.protocol import SandboxResult  # noqa: PLC0415
+
+        return SandboxResult(exit_code=0, stdout="ok", stderr="", timed_out=False)
+
+    async def read_file(self, rel_path: str, max_bytes: int) -> bytes:
+        return self._files.get(rel_path, b"")
+
+    async def write_file(self, rel_path: str, content: bytes) -> None:  # pragma: no cover
+        self._files[rel_path] = content
+
+    async def list_dir(self, rel_path: str) -> list[str]:  # pragma: no cover
+        return list(self._files)
+
+
+class _FakeSandboxManager:
+    def __init__(self, box: _FakeBox) -> None:
+        self._box = box
+        self.acquired = 0
+        self.released = 0
+
+    async def acquire(self, project_id: uuid.UUID, workspace_path: str) -> _FakeBox:
+        self.acquired += 1
+        return self._box
+
+    async def release(self, project_id: uuid.UUID) -> None:
+        self.released += 1
+
+    async def reap_idle(self) -> None:  # pragma: no cover
+        return None
+
+    async def health(self) -> bool:  # pragma: no cover
+        return True
+
+
+class _StubJudge:
+    def __init__(self, passed: bool) -> None:
+        self._passed = passed
+
+    async def complete(self, *, messages: list[dict[str, Any]], tools: Any):
+        from backend.execution.orchestrator import LoopTurn  # noqa: PLC0415
+
+        verdict = "true" if self._passed else "false"
+        return LoopTurn(content=f'{{"passed": {verdict}, "reasoning": "x"}}')
+
+
+class _StubRetriever:
+    def __init__(self, patterns: list[str]) -> None:
+        self._patterns = patterns
+
+    async def retrieve_for_signals(self, signals: str) -> list[str]:
+        return list(self._patterns)
+
+
+async def _simulate_worker_done(
+    redis: Any,
+    *,
+    worker_id: uuid.UUID,
+    sf: async_sessionmaker[AsyncSession],
+    output: str,
+    files: list[dict[str, Any]] | None = None,
+    run_workspace_root: str | None = None,
+) -> None:
+    """The standard simulated-worker coroutine: learn the task from the stream
+    XADD, then report a ``done`` result on a SEPARATE session."""
+    task_id = await _await_dispatched_task_id(redis, worker_id=worker_id)
+    async with sf() as worker_s:
+        await dispatch.record_result(
+            worker_s,
+            redis,
+            task_id=task_id,
+            success=True,
+            output=output,
+            error_message=None,
+            files=files,
+            run_workspace_root=run_workspace_root,
+        )
+        await worker_s.commit()
+
+
+# --------------------------------------------------------------------------
+# 1. KEYSTONE (B2b): through the REAL production factory (retriever=None today,
+#    no judge account) a successful executor run produces NO verifiable
+#    contract → human-review Decision, NOT a fake-PROVED verified Deliverable.
+#    This is the anti-regression for the fake-PROVED sin.
+# --------------------------------------------------------------------------
+
+
+async def test_executor_run_success_no_contract_routes_to_human_review(
     sf: async_sessionmaker[AsyncSession],
     tmp_path: Path,
 ) -> None:
@@ -188,10 +287,10 @@ async def test_executor_run_dispatches_to_worker_and_verifies(
         run_id = await _open_run(s, workspace_id=workspace_id, text="ship the feature")
         await s.commit()
 
-    # The real production factory must branch on provider == "executor" and
-    # build an ExecutorOrchestrator (not the native RunOrchestrator). Drive it
-    # with a SHORT timeout so the test finishes in seconds even if the done
-    # publish is missed and the DB fallback takes over (prod default is 30 min).
+    # The real production factory branches on provider == "executor" and builds
+    # an ExecutorOrchestrator. Today it wires retriever=None (B3 wires canon),
+    # and the workspace has only an executor account (no judge LLM) — so a
+    # successful worker exit assembles NO contract and routes to human review.
     deps = build_agent_execution_deps(redis_client=redis, settings=_short_timeout_settings())
 
     async with sf() as orch_s:
@@ -200,40 +299,105 @@ async def test_executor_run_dispatches_to_worker_and_verifies(
         orchestrator = await deps.orchestrator_factory(orch_s, run)
         assert isinstance(orchestrator, ExecutorOrchestrator)
 
-        # Simulate the worker reporting its result the way production does — on a
-        # SEPARATE session (a real worker reports via a separate HTTP request =
-        # a separate session). Sharing the orchestrator's session is a concurrency
-        # bug: SQLAlchemy AsyncSession is NOT safe for concurrent use, so two
-        # coroutines flushing it collide ("Session is already flushing"). It also
-        # learns of the task from the Redis stream XADD (production's dispatch
-        # signal), since the orchestrator's ``dispatched`` DB row is uncommitted
-        # until the loop ends and so is invisible to a separate PG session.
-        async def _simulate_worker() -> None:
-            task_id = await _await_dispatched_task_id(redis, worker_id=worker.id)
-            async with sf() as worker_s:
-                # The backend's /result path records + publishes the done channel
-                # (a remote worker has no redis of its own) — record_result owns
-                # the publish, so no separate redis.publish is needed here.
-                await dispatch.record_result(
-                    worker_s,
-                    redis,
-                    task_id=task_id,
-                    success=True,
-                    output="implemented + tests green",
-                    error_message=None,
-                )
-                await worker_s.commit()
-
         runner = AgentRunner(orch_s)
-        # Subscribe-before-publish ordering: start the orchestrator FIRST (it
-        # subscribes to the done channel inside await_completion), let it reach
-        # the await, THEN the simulated worker (which blocks on the stream XADD)
-        # records + publishes — so the happy path resolves on the pub/sub signal,
-        # not the slow DB-fallback poll.
         drive_task = asyncio.create_task(
             runner.drive(run_id=run_id, orchestrator=orchestrator, workspace_dir=tmp_path)
         )
-        worker_task = asyncio.create_task(_simulate_worker())
+        worker_task = asyncio.create_task(
+            _simulate_worker_done(
+                redis, worker_id=worker.id, sf=sf, output="implemented + tests green"
+            )
+        )
+        result = await drive_task
+        await worker_task
+        await orch_s.commit()
+
+    # NOT verified — exit-0 with no checkable contract is NOT a verified deliverable.
+    assert result.outcome == "needs_decision"
+
+    async with sf() as s:
+        run = await s.get(ExecutionRun, run_id)
+        # needs_decision leaves the run RUNNING (paused on the Decision).
+        assert run is not None and run.status is RunStatus.RUNNING
+
+        decision = (await s.execute(select(Decision))).scalar_one()
+        assert decision.decision == "human_review_required"
+        assert decision.payload.get("reason") == "no_verifiable_contract"
+
+        # NO fake-PROVED Deliverable / DeliveryEvent / settle were written.
+        assert (await s.execute(select(Deliverable))).first() is None
+        assert (await s.execute(select(DeliveryEventRow))).first() is None
+        settle = (
+            (
+                await s.execute(
+                    select(ExecutionRunActivity).where(
+                        ExecutionRunActivity.activity_type == "settle"
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        assert settle == []
+
+        task = (
+            await s.execute(
+                select(dispatch.ExecutorTaskRow).where(
+                    dispatch.ExecutorTaskRow.workspace_id == workspace_id
+                )
+            )
+        ).scalar_one()
+        assert task.status == "done"
+        assert "ship the feature" in task.prompt
+
+    await redis.aclose()
+
+
+# --------------------------------------------------------------------------
+# 1a. KEYSTONE PASS (B2b): a runnable contract that PASSES → verified terminal.
+#     Constructs the ExecutorOrchestrator directly with a fake sandbox + canon
+#     retriever + passing judge (the seams B3/judge-account wire in prod) and
+#     drives it through AgentRunner → REVIEW_READY + a REAL verified Deliverable.
+# --------------------------------------------------------------------------
+
+
+async def test_executor_run_contract_pass_verifies_and_review_ready(
+    sf: async_sessionmaker[AsyncSession],
+    tmp_path: Path,
+) -> None:
+    workspace_id = uuid.uuid4()
+    redis = await _make_redis()
+    executor_type = "claude_code"
+
+    async with sf() as s:
+        worker = await _seed_worker(s, workspace_id=workspace_id, capabilities=[executor_type])
+        account = await _seed_executor_account(
+            s, workspace_id=workspace_id, worker_id=worker.id, executor_type=executor_type
+        )
+        run_id = await _open_run(s, workspace_id=workspace_id, text="ship the feature")
+        await s.commit()
+
+    async with sf() as orch_s:
+        run = await orch_s.get(ExecutionRun, run_id)
+        assert run is not None
+        manager = _FakeSandboxManager(_FakeBox(files={"result.py": b"print('done')\n"}))
+        orchestrator = ExecutorOrchestrator(
+            session=orch_s,
+            redis=redis,
+            account=account,
+            settings=_short_timeout_settings(),
+            sandbox_manager=manager,
+            retriever=_StubRetriever(["the change is correct and tested"]),
+            verify_llm=_StubJudge(passed=True),
+        )
+
+        runner = AgentRunner(orch_s)
+        drive_task = asyncio.create_task(
+            runner.drive(run_id=run_id, orchestrator=orchestrator, workspace_dir=tmp_path)
+        )
+        worker_task = asyncio.create_task(
+            _simulate_worker_done(redis, worker_id=worker.id, sf=sf, output="implemented + green")
+        )
         result = await drive_task
         await worker_task
         await orch_s.commit()
@@ -244,14 +408,16 @@ async def test_executor_run_dispatches_to_worker_and_verifies(
         run = await s.get(ExecutionRun, run_id)
         assert run is not None and run.status is RunStatus.REVIEW_READY
 
+        # PROVED was gated on a real PASSED VerificationResult.
+        vr = (await s.execute(select(VerificationResult))).scalar_one()
+        assert vr.outcome is VerificationOutcome.PASSED
+
         deliverable = (await s.execute(select(Deliverable))).scalar_one()
-        assert deliverable.run_id == run_id
         assert deliverable.deliverable_type is DeliverableType.CODE
-        assert deliverable.payload.get("summary") == "implemented + tests green"
+        assert deliverable.payload.get("summary") == "implemented + green"
 
         deliver_event = (await s.execute(select(DeliveryEventRow))).scalar_one()
         assert deliver_event.deliverable_id == deliverable.id
-        assert deliver_event.artifact_type == DeliverableType.CODE.value
 
         settle = (
             (
@@ -268,24 +434,17 @@ async def test_executor_run_dispatches_to_worker_and_verifies(
         assert len(settle) == 1
         assert settle[0].payload.get("verified") is True
 
-        task = (
-            await s.execute(
-                select(dispatch.ExecutorTaskRow).where(
-                    dispatch.ExecutorTaskRow.workspace_id == workspace_id
-                )
-            )
-        ).scalar_one()
-        assert task.status == "done"
-        assert task.executor_type == executor_type
-        # The task prompt is framed from the run's intent text.
-        assert "ship the feature" in task.prompt
+        assert (await s.execute(select(Decision))).first() is None
 
     await redis.aclose()
 
 
 # --------------------------------------------------------------------------
-# 1b. KEY B1 DELTA: worker-produced file lands as a real artifact_ref and
-#     ROUND-TRIPS through the existing artifact-read endpoint.
+# 1b. KEY B1 DELTA + B2b: worker-produced file lands as a real artifact_ref on
+#     the verified Deliverable and ROUND-TRIPS through the artifact-read
+#     endpoint. Drives the B2b verified-PASS path (fake sandbox + retriever +
+#     passing judge) so a real verified Deliverable is written — the Deliverable
+#     is gated on a passing VerificationResult, never fake-PROVED.
 # --------------------------------------------------------------------------
 
 
@@ -317,48 +476,50 @@ async def test_executor_run_captures_artifact_and_serves_via_endpoint(
     try:
         async with sf() as s:
             worker = await _seed_worker(s, workspace_id=workspace_id, capabilities=[executor_type])
-            await _seed_executor_account(
+            account = await _seed_executor_account(
                 s, workspace_id=workspace_id, worker_id=worker.id, executor_type=executor_type
             )
             run_id = await _open_run(s, workspace_id=workspace_id, text="ship the feature")
             await s.commit()
 
         settings = get_settings().model_copy(update={"executor_task_timeout_s": 5.0})
-        deps = build_agent_execution_deps(redis_client=redis, settings=settings)
 
         async with sf() as orch_s:
             run = await orch_s.get(ExecutionRun, run_id)
             assert run is not None
-            orchestrator = await deps.orchestrator_factory(orch_s, run)
-            assert isinstance(orchestrator, ExecutorOrchestrator)
-
-            async def _simulate_worker() -> None:
-                task_id = await _await_dispatched_task_id(redis, worker_id=worker.id)
-                async with sf() as worker_s:
-                    # The worker reports a captured file alongside the success.
-                    await dispatch.record_result(
-                        worker_s,
-                        redis,
-                        task_id=task_id,
-                        success=True,
-                        output="implemented",
-                        error_message=None,
-                        files=[
-                            {
-                                "path": "result.py",
-                                "content_b64": base64.b64encode(b"print('done')\n").decode(),
-                                "truncated": False,
-                            }
-                        ],
-                        run_workspace_root=str(root),
-                    )
-                    await worker_s.commit()
+            # B2b verified-PASS seams: a fake sandbox + canon retriever + a
+            # passing judge → a real PASSED VerificationResult → verified
+            # Deliverable carrying the captured artifact_ref (B1).
+            orchestrator = ExecutorOrchestrator(
+                session=orch_s,
+                redis=redis,
+                account=account,
+                settings=settings,
+                sandbox_manager=_FakeSandboxManager(_FakeBox()),
+                retriever=_StubRetriever(["the change is correct"]),
+                verify_llm=_StubJudge(passed=True),
+            )
 
             runner = AgentRunner(orch_s)
             drive_task = asyncio.create_task(
                 runner.drive(run_id=run_id, orchestrator=orchestrator, workspace_dir=tmp_path)
             )
-            worker_task = asyncio.create_task(_simulate_worker())
+            worker_task = asyncio.create_task(
+                _simulate_worker_done(
+                    redis,
+                    worker_id=worker.id,
+                    sf=sf,
+                    output="implemented",
+                    files=[
+                        {
+                            "path": "result.py",
+                            "content_b64": base64.b64encode(b"print('done')\n").decode(),
+                            "truncated": False,
+                        }
+                    ],
+                    run_workspace_root=str(root),
+                )
+            )
             result = await drive_task
             await worker_task
             await orch_s.commit()
