@@ -58,7 +58,6 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from backend.execution.db import ExecutionRunActivity
-from backend.knowledge.canonicalization.filler_words import is_filler_tag
 from backend.workers.base import BaseWorker
 from backend.workers.db import SettleDrainRow
 from backend.workspaces.db import WorkspaceRow
@@ -92,12 +91,12 @@ _MIN_SUMMARY_TOKEN_LEN = 3
 
 # Worker-local stopword supplement — short, high-frequency function words and
 # tense variants of common action verbs that the summary tokenizer would
-# otherwise keep. The authoritative non-concept deny-list lives in
-# :mod:`backend.knowledge.canonicalization.filler_words` (shared with the
-# promoter chokepoint, applied via :func:`is_filler_tag` below); this set only
-# adds short tokens specific to settle summaries that don't merit promotion to
-# the shared module. Deliberately small: better to keep a borderline term than
-# to over-prune signal.
+# otherwise keep. This is the FALLBACK path's only lexical guard: the PRIMARY
+# derivation now extracts LLM-committed entities (see :class:`EntityExtractor`),
+# which excludes generic nouns structurally, so the open-ended filler deny-list
+# is retired. This deliberately small set only trims the most obvious function
+# words from the deterministic fallback used when no LLM is available — better
+# to keep a borderline term than to over-prune signal.
 _SUMMARY_STOPWORDS: frozenset[str] = frozenset(
     {
         "the",
@@ -198,6 +197,38 @@ class SettleSink(Protocol):
     async def absorb(self, settlement: Settlement) -> str | None: ...
 
 
+class EntityExtractor(Protocol):
+    """Extracts named entities from a piece of text — the PRIMARY tag source.
+
+    Mirrors the surface of
+    :meth:`backend.knowledge.ingest.ingest_compiler.IngestCompiler.extract_entity_names`:
+    given seed text it returns the entity NAMES the LLM committed as
+    ``[[wikilinks]]`` (guarded by the ``_clean_entities`` anti-hallucination
+    gate). This is how BSage derives concepts — generic nouns ("work",
+    "returns", "string") are excluded *structurally* (an entity must appear as a
+    literal wikilink in the model's own prose), not via an open-ended deny-list.
+    """
+
+    async def extract_entity_names(self, text: str, *, label: str = ...) -> list[str]: ...
+
+
+class ExtractorFactory(Protocol):
+    """Builds an :class:`EntityExtractor` for one workspace/region, or ``None``.
+
+    The settle sink calls this per settlement to derive concepts from extracted
+    entities. Construction is the per-workspace boundary (the
+    :class:`~backend.knowledge.factory.KnowledgeFactory` convention roots the
+    extractor's vault at ``<vault_root>/<region>/<workspace_id>/``); the
+    production factory also resolves the workspace's LLM model account. Returning
+    ``None`` (no LLM / no active account / not configured) is the documented
+    soft-fallback signal — the sink degrades to the deterministic
+    :func:`derive_content_tags` heuristic and the settlement write still
+    succeeds. Errors raised here are caught by the sink for the same reason.
+    """
+
+    async def __call__(self, *, region: str, workspace_id: uuid.UUID) -> EntityExtractor | None: ...
+
+
 class WorkspacePromoter(Protocol):
     """Promotes a workspace's accumulated garden observations into canon.
 
@@ -247,10 +278,19 @@ class KnowledgeSettleSink:
     here; this sink only deposits the raw observation via the writer.
     """
 
-    __slots__ = ("_vault_root",)
+    __slots__ = ("_vault_root", "_extractor_factory")
 
-    def __init__(self, *, vault_root: Path) -> None:
+    def __init__(
+        self,
+        *,
+        vault_root: Path,
+        extractor_factory: ExtractorFactory | None = None,
+    ) -> None:
         self._vault_root = vault_root
+        # PRIMARY content-tag source: when wired, concepts come from LLM-extracted
+        # entities (BSage's mechanism). ``None`` (tests / no LLM) keeps the pure
+        # deterministic fallback — the sink never *requires* an LLM.
+        self._extractor_factory = extractor_factory
 
     async def absorb(self, settlement: Settlement) -> str | None:
         from backend.knowledge.factory import KnowledgeFactory  # noqa: PLC0415 — lazy heavy import
@@ -267,11 +307,15 @@ class KnowledgeSettleSink:
         # Title is descriptive only — the drain marker (keyed on activity_id)
         # owns system identity, so a thin/odd LLM summary can't break dedup.
         headline = summary.splitlines()[0][:80] if summary else "verified work step"
-        # Structural tags first (other consumers rely on them), then the
-        # deterministically-derived content tags so the GardenObservationPromoter
-        # has real candidates to cluster across runs — closing the §5 ratchet
-        # loop. Content tags are de-duped against structural ones already.
-        tags = ["settle", "verified-run", *derive_content_tags(settlement)]
+        # Structural tags first (other consumers rely on them), then the content
+        # tags so the GardenObservationPromoter has real candidates to cluster
+        # across runs — closing the §5 ratchet loop. Content tags are de-duped
+        # against structural ones already. PRIMARY: LLM-extracted entities (when
+        # an extractor is wired + succeeds); soft-fallback: the deterministic
+        # heuristic. Settlement is the source of truth, so derivation never breaks
+        # the write.
+        content_tags = await self._derive_tags(settlement)
+        tags = ["settle", "verified-run", *content_tags]
         note = GardenNote(
             title=f"Settle: {headline}",
             content=_observation_body(settlement, summary),
@@ -290,6 +334,73 @@ class KnowledgeSettleSink:
         )
         path = await writer.write_garden(note)
         return str(path)
+
+    async def _derive_tags(self, settlement: Settlement) -> list[str]:
+        """Content tags for the observation: extracted entities, else fallback.
+
+        PRIMARY: run the workspace's :class:`EntityExtractor` over the verified
+        work's summary + intent and use the LLM-committed entity names
+        (normalized) as candidate concepts — BSage's mechanism, where generic
+        nouns are excluded structurally. SOFT-FALLBACK (no factory, no extractor,
+        empty result, or any error): the deterministic :func:`derive_content_tags`
+        heuristic. The settlement is the source of truth; a derivation failure is
+        logged + degraded, never raised, so it can't break the settle write.
+        """
+        if self._extractor_factory is None:
+            return derive_content_tags(settlement)
+        try:
+            extractor = await self._extractor_factory(
+                region=settlement.region, workspace_id=settlement.workspace_id
+            )
+            if extractor is None:
+                return derive_content_tags(settlement)
+            names = await extractor.extract_entity_names(_extraction_seed_text(settlement))
+        except Exception:  # noqa: BLE001 — extraction is derived; never break the write
+            logger.warning(
+                "settle_sink_entity_extraction_failed",
+                workspace_id=str(settlement.workspace_id),
+                run_id=str(settlement.run_id),
+                exc_info=True,
+            )
+            return derive_content_tags(settlement)
+        entity_tags = _entity_names_to_tags(names)
+        if not entity_tags:
+            # The LLM committed no entities (thin summary / connector-inbound run)
+            # — degrade to the deterministic signal rather than emit nothing.
+            return derive_content_tags(settlement)
+        return entity_tags
+
+
+def _extraction_seed_text(settlement: Settlement) -> str:
+    """Assemble the seed text the entity extractor sees.
+
+    The founder's ``intent_text`` (their own words naming what the work is ABOUT)
+    leads, then the verified work summary. Both are deterministic inputs; the LLM
+    only *names entities* within them (it does not invent system fields), so this
+    honours the no-LLM-output-for-system-fields rule the same way BSage trusts
+    LLM-extracted entities at ``confidence=INFERRED``.
+    """
+    parts = [p for p in (settlement.intent_text, settlement.summary.strip()) if p]
+    return "\n\n".join(parts)
+
+
+def _entity_names_to_tags(names: Iterable[str]) -> list[str]:
+    """Normalize extracted entity names into capped, de-duped concept candidates.
+
+    Each name is run through :func:`_normalize_tag` (same grammar the promoter
+    requires), structural markers + non-conforming names are dropped, the product
+    slug still leads as the strongest stable cluster key, and the result is
+    de-duplicated (first-wins) and capped at :data:`_MAX_CONTENT_TAGS`.
+    """
+    tags: list[str] = []
+    for name in names:
+        if not isinstance(name, str):
+            continue
+        tag = _normalize_tag(name)
+        if tag:
+            tags.append(tag)
+    deduped = list(dict.fromkeys(tags))  # first-wins, preserves order
+    return deduped[:_MAX_CONTENT_TAGS]
 
 
 def _observation_body(settlement: Settlement, summary: str) -> str:
@@ -366,11 +477,6 @@ def _tags_from_summary(summary: str) -> list[str]:
             continue
         tag = _normalize_tag(token)
         if not tag or tag in _SUMMARY_STOPWORDS:
-            continue
-        # Shared quality gate: drop generic filler / meta / action words so the
-        # sink never even records pure noise (kept consistent with the promoter
-        # chokepoint by sharing one deny-list).
-        if is_filler_tag(tag):
             continue
         tags.append(tag)
     return tags
@@ -713,6 +819,8 @@ def _to_settlement(row: ExecutionRunActivity, region: str) -> Settlement:
 
 
 __all__ = [
+    "EntityExtractor",
+    "ExtractorFactory",
     "KnowledgeSettleSink",
     "PromoterFactory",
     "SettleSink",

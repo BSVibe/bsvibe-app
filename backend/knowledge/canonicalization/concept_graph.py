@@ -42,7 +42,6 @@ from __future__ import annotations
 
 import networkx as nx
 
-from backend.knowledge.canonicalization.filler_words import is_filler_tag
 from backend.knowledge.canonicalization.index import InMemoryCanonicalizationIndex
 from backend.knowledge.canonicalization.resolver import TagResolver
 from backend.knowledge.canonicalization.store import NoteStore
@@ -145,14 +144,16 @@ async def concept_ids_in_observation(
 ) -> set[str]:
     """Distinct active-concept ids referenced by one garden observation.
 
-    Applies the same candidate-tag filter the promoter uses (drop structural
-    tags, normalize, drop filler), then resolves each surviving tag; only tags
-    that resolve to an active concept contribute a node id.
+    Drops structural tags + normalizes, then resolves each surviving tag; only
+    tags that resolve to an active concept contribute a node id. Noise is
+    excluded *structurally* — a tag only resolves to an active concept if it
+    cleared the promoter's recurrence gate, so no separate filler deny-list is
+    needed here (the graph can only show concepts the promoter already settled).
 
     Exported so the concept *inspector*
     (:func:`backend.api.v1.inside.get_concept_detail`) can derive a concept's
     source observations with the exact tag→concept resolution the graph builder
-    uses, rather than re-deriving (and drifting from) that filter.
+    uses, rather than re-deriving (and drifting from) it.
     """
     try:
         tags = await store.read_garden_tags(path)
@@ -165,8 +166,6 @@ async def concept_ids_in_observation(
             continue
         normalized = resolver.normalize(raw)
         if not normalized or normalized in _STRUCTURAL_TAGS:
-            continue
-        if is_filler_tag(normalized):
             continue
         resolved = await resolver.resolve(raw)
         if resolved.status == "resolved" and resolved.concept_id is not None:

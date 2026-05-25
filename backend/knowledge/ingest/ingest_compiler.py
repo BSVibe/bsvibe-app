@@ -453,6 +453,48 @@ class IngestCompiler:
             elapsed_ms=elapsed_ms,
         )
 
+    async def extract_entity_names(self, text: str, *, label: str = "seed") -> list[str]:
+        """Extract the entity NAMES the LLM commits to ``text`` — no garden write.
+
+        Runs the SAME plan + anti-hallucination path :meth:`compile_batch` uses
+        (``_plan_batch_updates`` → ``_parse_plan`` → :func:`_clean_entities`) but
+        stops short of writing any note: it returns only the de-duplicated entity
+        names (the inner text of each surviving ``[[Name]]`` wikilink).
+
+        This is the seam the settle→knowledge path uses to derive *concepts*
+        from LLM-extracted entities (BSage's primary mechanism) instead of by
+        tokenizing the work summary. Every returned name is guaranteed to have
+        appeared as a literal ``[[Name]]`` in the LLM's own ``content`` — generic
+        nouns ("work", "returns", "string") are excluded structurally, not by a
+        denylist. Order follows first appearance across the plan; the caller is
+        responsible for any further normalization / capping.
+
+        Empty ``text`` (or a plan with no surviving entities) returns ``[]``.
+        Errors propagate to the caller, which decides the fallback policy — the
+        settle sink soft-falls back rather than break the settlement write.
+        """
+        if not text.strip():
+            return []
+        items = [_truncate_item(BatchItem(label=label, content=text), self._batch_char_budget)]
+        related_context = await self._find_related(items[0].content[:500])
+        plan = await self._plan_batch_updates(items, label, related_context)
+
+        names: list[str] = []
+        seen: set[str] = set()
+        for raw_action in plan[: self._max_updates]:
+            if not self._validate_action(raw_action):
+                continue
+            entities = _clean_entities(raw_action.get("entities") or [], raw_action["content"])
+            for wikilink in entities:
+                match = _WIKILINK_PATTERN.match(wikilink.strip())
+                if not match:
+                    continue
+                name = match.group(1).strip()
+                if name and name not in seen:
+                    names.append(name)
+                    seen.add(name)
+        return names
+
     async def _record_batch(self, record: IngestBatchRecord) -> None:
         """Best-effort persist of the ``ingest_batches`` analytics row."""
         if self._batch_recorder is None:

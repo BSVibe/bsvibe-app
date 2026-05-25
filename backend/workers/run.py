@@ -63,9 +63,10 @@ from backend.executors.orchestrator import ExecutorOrchestrator
 from backend.gateway.budget.policy import BudgetPolicyService
 from backend.gateway.budget.repository import BudgetPolicyRepository
 from backend.gateway.budget.tracker import BudgetTracker, InMemoryBudgetStore
+from backend.gateway.classifier.base import ClassificationFeatures
 from backend.gateway.classifier.local_vs_cloud import LocalVsCloudClassifier
 from backend.gateway.classifier.static import StaticClassifier
-from backend.gateway.dispatch import GatewayDispatcher
+from backend.gateway.dispatch import DispatchRequest, GatewayDispatcher
 from backend.gateway.llm_client import LlmClient
 from backend.plugins.base import PluginMeta
 from backend.plugins.loader import PluginLoader
@@ -85,6 +86,8 @@ from backend.workers.intake_worker import IntakeWorker
 from backend.workers.relay_worker import RelayWorker
 from backend.workers.relays import build_relay
 from backend.workers.settle_worker import (
+    EntityExtractor,
+    ExtractorFactory,
     KnowledgeSettleSink,
     SettleWorker,
     SettleWorkerConfig,
@@ -304,6 +307,125 @@ def build_agent_execution_deps(
 
 
 # ---------------------------------------------------------------------------
+# Settle entity-extractor factory — concepts from LLM-extracted entities
+# ---------------------------------------------------------------------------
+#
+# The settle→knowledge path derives concepts from EXTRACTED ENTITIES (BSage's
+# mechanism) instead of by tokenizing the work summary. This factory builds a
+# per-workspace IngestCompiler whose CompileLlm seam routes the extraction call
+# through the SAME GatewayDispatcher the chat/agent paths use. Resolution is the
+# "exactly one active account → use it" policy; ZERO/MANY (or no LLM) returns
+# None so the sink soft-falls back to the deterministic heuristic — extraction
+# is derived knowledge, not a run, so it never raises a founder Decision.
+
+
+class _GatewayCompileLlm:
+    """Adapts :class:`GatewayDispatcher` to the ``CompileLlm`` seam.
+
+    Maps a single ``chat(system, messages, ...)`` call to a ``DispatchRequest``
+    and returns the response content string. The account/model identity is
+    resolved once (per workspace) by the factory and held for the call. Mirrors
+    :class:`~backend.execution.loop_llm.GatewayLoopLlm`, but for the plain
+    chat-completion (no tools) extraction call."""
+
+    # Substantial-tier features — extraction is a structured-output task that
+    # benefits from the heavier model, same as the agent loop's plan/act turns.
+    _FEATURES = ClassificationFeatures(
+        token_count=4096,
+        system_prompt_chars=2048,
+        conversation_turns=1,
+        code_block_count=0,
+        tool_count=0,
+    )
+
+    def __init__(
+        self,
+        *,
+        dispatcher: GatewayDispatcher,
+        workspace_id: uuid.UUID,
+        account_id: uuid.UUID,
+        model_account_id: uuid.UUID,
+    ) -> None:
+        self._dispatcher = dispatcher
+        self._workspace_id = workspace_id
+        self._account_id = account_id
+        self._model_account_id = model_account_id
+
+    async def chat(
+        self,
+        *,
+        system: str,
+        messages: list[dict[str, Any]],
+        suppress_reasoning: bool = False,
+        timeout_s: float | None = None,
+    ) -> str:
+        # CompileLlm passes only user messages; the system prompt is a separate
+        # arg — prepend it so the dispatcher (OpenAI-style messages) sees it.
+        full_messages: list[dict[str, Any]] = [{"role": "system", "content": system}]
+        full_messages.extend(dict(m) for m in messages)
+        request = DispatchRequest(
+            workspace_id=self._workspace_id,
+            account_id=self._account_id,
+            model_account_id=self._model_account_id,
+            messages=full_messages,
+            features=self._FEATURES,
+            projected_cost_cents=1,
+        )
+        result = await self._dispatcher.dispatch(request)
+        return result.response.content
+
+
+def build_settle_entity_extractor_factory(
+    *,
+    session_factory: async_sessionmaker[AsyncSession],
+    settings: Settings | None = None,
+) -> ExtractorFactory:
+    """Production :class:`ExtractorFactory` for the settle sink.
+
+    Per call (one per settlement), resolves the workspace's single active
+    ModelAccount and builds an :class:`~backend.knowledge.ingest.ingest_compiler.IngestCompiler`
+    rooted at the SAME ``<vault_root>/<region>/<workspace_id>/`` boundary the
+    sink writes to, with a :class:`_GatewayCompileLlm` seam over a per-session
+    :class:`GatewayDispatcher`. Returns ``None`` (soft-fallback) when the
+    workspace has zero or more-than-one active account — never guessing a model
+    for derived knowledge."""
+    settings = settings or get_settings()
+    vault_root = Path(settings.knowledge_vault_root)
+
+    async def _factory(*, region: str, workspace_id: uuid.UUID) -> EntityExtractor | None:
+        from backend.knowledge.factory import KnowledgeFactory  # noqa: PLC0415 — lazy heavy import
+        from backend.knowledge.ingest.ingest_compiler import IngestCompiler  # noqa: PLC0415
+
+        async with session_factory() as session:
+            accounts = await _list_active_workspace_accounts(session, workspace_id)
+            if len(accounts) != 1:
+                logger.info(
+                    "settle_extractor_account_unresolved",
+                    workspace_id=str(workspace_id),
+                    active_count=len(accounts),
+                )
+                return None
+            account = accounts[0]
+            dispatcher = build_gateway_dispatcher(session, settings)
+            llm = _GatewayCompileLlm(
+                dispatcher=dispatcher,
+                workspace_id=workspace_id,
+                account_id=account.account_id,
+                model_account_id=account.id,
+            )
+            knowledge = KnowledgeFactory(
+                region=region,
+                workspace_id=str(workspace_id),
+                vault_root=vault_root,
+            )
+            # retriever omitted (None) — entity extraction needs no vault context;
+            # the compiler only extracts names from the seed text, never writes.
+            return IngestCompiler(garden_writer=knowledge.writer(), llm_client=llm)
+
+    return _factory
+
+
+# ---------------------------------------------------------------------------
 # Real delivery dispatch adapter
 # ---------------------------------------------------------------------------
 
@@ -461,7 +583,15 @@ def build_worker_runtime(
         DeliveryWorker(session_factory=session_factory, dispatcher=delivery_adapter),
         SettleWorker(
             session_factory=session_factory,
-            sink=KnowledgeSettleSink(vault_root=Path(settings.knowledge_vault_root)),
+            sink=KnowledgeSettleSink(
+                vault_root=Path(settings.knowledge_vault_root),
+                # PRIMARY: derive concepts from LLM-extracted entities (BSage's
+                # mechanism) — soft-falls back to the deterministic heuristic when
+                # the workspace has no single active model account.
+                extractor_factory=build_settle_entity_extractor_factory(
+                    session_factory=session_factory, settings=settings
+                ),
+            ),
             config=SettleWorkerConfig(default_region=settings.knowledge_default_region),
             # Close the §5 ratchet loop: after each drain batch, promote each
             # affected workspace's garden observations into canon over the SAME
@@ -686,6 +816,7 @@ __all__ = [
     "build_agent_execution_deps",
     "build_delivery_adapter",
     "build_gateway_dispatcher",
+    "build_settle_entity_extractor_factory",
     "build_stream_consumers",
     "build_worker_runtime",
     "resolve_workspace_model_account",

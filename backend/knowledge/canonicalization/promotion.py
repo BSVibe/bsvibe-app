@@ -15,7 +15,9 @@ decision state machine, or policy semantics:
 1. **Collect candidate names** — read garden notes (``garden/<maturity>/...``)
    and gather their content ``tags``, dropping structural tags (``settle``,
    ``verified-run``, ...) that describe the *kind* of note rather than what it
-   is *about* (Handoff §0.2: tags are content, not kind).
+   is *about* (Handoff §0.2: tags are content, not kind), then keep only tags
+   that **recur** across ``>= _MIN_OBSERVATIONS_FOR_PROMOTION`` observations
+   (BSage's recurrence mechanism — suppresses one-off noise without a deny-list).
 
 2. **Seed candidate concepts** — for every candidate tag without an active
    concept, route a ``create-concept`` action through
@@ -58,7 +60,6 @@ from dataclasses import dataclass, field
 
 import structlog
 
-from backend.knowledge.canonicalization.filler_words import is_filler_tag
 from backend.knowledge.canonicalization.index import CanonicalizationIndex
 from backend.knowledge.canonicalization.proposals import DeterministicProposer
 from backend.knowledge.canonicalization.resolver import TagResolver
@@ -73,6 +74,14 @@ logger = structlog.get_logger(__name__)
 # sink stamps ``settle`` + ``verified-run`` on every observation; add more
 # here as other producers introduce their own structural markers.
 _DEFAULT_STRUCTURAL_TAGS: frozenset[str] = frozenset({"settle", "verified-run"})
+
+# Recurrence gate (complementary safeguard — mirrors BSage's ``evolution_config``
+# ``edge_promotion_min_mentions`` / ``promotion_frequency_ratio``): a tag only
+# becomes a candidate concept after it recurs across at least this many distinct
+# garden observations. One-off noise (a single odd entity from one run) never
+# anchors a concept; a pattern the work keeps coming back to does. Kept small so
+# a genuinely recurring subject is promoted promptly.
+_MIN_OBSERVATIONS_FOR_PROMOTION = 2
 
 
 @dataclass(slots=True)
@@ -181,37 +190,48 @@ class GardenObservationPromoter:
     # ------------------------------------------------------------- internals
 
     async def _collect_candidate_tags(self) -> list[str]:
-        """Gather distinct content tags across garden observation notes.
+        """Gather recurring content tags across garden observation notes.
 
-        Drops structural tags (``settle`` / ``verified-run`` / ...), generic
-        filler / meta / action words (``else`` / ``created`` / ``verified`` /
-        ... — see :mod:`backend.knowledge.canonicalization.filler_words`), and
-        any tag that does not normalize to a valid concept id. Filtering here —
-        the candidate-collection chokepoint — cleans BOTH already-written
-        observations (whose noisy tags are already on disk) and future ones, so
-        filler never settles as a concept regardless of which sink wrote it.
-        Order is stable (sorted) so seeding + proposals are deterministic.
+        Drops structural tags (``settle`` / ``verified-run`` / ...) and any tag
+        that does not normalize to a valid concept id, then applies the
+        **recurrence gate**: a tag is only a candidate after it appears in
+        ``>= _MIN_OBSERVATIONS_FOR_PROMOTION`` distinct observations. Recurrence
+        is counted on the *normalized* form so variant spellings of one concept
+        accumulate together; the first-seen raw spelling is returned as the
+        representative. This replaces the old open-ended filler deny-list:
+        concepts now come from LLM-extracted entities (the settle sink), and a
+        recurrence threshold (BSage's ``evolution_config`` mechanism) suppresses
+        any remaining one-off noise *structurally* rather than by enumerating
+        non-concept words. Order is stable (sorted) so seeding + proposals are
+        deterministic.
         """
-        seen: set[str] = set()
+        observation_counts: dict[str, int] = {}
+        representative: dict[str, str] = {}
         for path in await self._store.list_garden_paths():
             try:
                 tags = await self._store.read_garden_tags(path)
             except FileNotFoundError:  # pragma: no cover — listing/read race
                 continue
+            # Count each normalized tag at most ONCE per observation — recurrence
+            # is across notes, not repeated tags within one note.
+            in_this_note: set[str] = set()
             for raw in tags:
-                if not isinstance(raw, str):
-                    continue
-                if raw in self._structural_tags:
+                if not isinstance(raw, str) or raw in self._structural_tags:
                     continue
                 normalized = self._resolver.normalize(raw)
                 if not normalized or normalized in self._structural_tags:
                     continue
-                # Quality gate: filler/meta/action words name the act of
-                # working, not the subject — they must never become an anchor.
-                if is_filler_tag(normalized):
-                    continue
-                seen.add(raw)
-        return sorted(seen)
+                in_this_note.add(normalized)
+                representative.setdefault(normalized, raw)
+            for normalized in in_this_note:
+                observation_counts[normalized] = observation_counts.get(normalized, 0) + 1
+
+        survivors = {
+            representative[normalized]
+            for normalized, count in observation_counts.items()
+            if count >= _MIN_OBSERVATIONS_FOR_PROMOTION
+        }
+        return sorted(survivors)
 
     async def _seed_concept(self, raw_tag: str, result: PromotionResult) -> None:
         """Ensure a candidate concept exists for ``raw_tag``.

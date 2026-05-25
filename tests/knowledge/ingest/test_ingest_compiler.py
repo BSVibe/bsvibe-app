@@ -920,3 +920,118 @@ class TestDeriveBatchCharBudget:
         )
         # 32k tokens × 3.5 × 0.4 ≈ 45k, but ollama cap kicks in.
         assert budget == ingest_compiler._OLLAMA_BUDGET_CAP
+
+
+class _ScriptedCompileLlm:
+    """Deterministic CompileLlm seam — returns one canned plan string per call."""
+
+    def __init__(self, plan_json: str) -> None:
+        self._plan = plan_json
+        self.calls: list[dict[str, Any]] = []
+
+    async def chat(
+        self,
+        *,
+        system: str,
+        messages: list[dict[str, Any]],
+        suppress_reasoning: bool = False,
+        timeout_s: float | None = None,
+    ) -> str:
+        self.calls.append({"system": system, "messages": messages})
+        return self._plan
+
+
+class TestExtractEntityNames:
+    """``extract_entity_names`` returns LLM-committed entity names (no garden write).
+
+    This is the seam the settle→knowledge path uses to derive concepts from
+    EXTRACTED ENTITIES (BSage's primary mechanism), replacing the summary
+    word-tokenizer. Every name must survive the ``_clean_entities`` wikilink
+    anti-hallucination gate.
+    """
+
+    def _compiler(self, tmp_path: Path, plan_json: str) -> Any:
+        from backend.knowledge.ingest.ingest_compiler import IngestCompiler
+
+        vault = Vault(tmp_path)
+        vault.ensure_dirs()
+        writer = GardenWriter(vault)
+        return IngestCompiler(
+            garden_writer=writer,
+            llm_client=_ScriptedCompileLlm(plan_json),
+            retriever=None,
+            event_bus=None,
+            max_updates=10,
+        )
+
+    @pytest.mark.asyncio
+    async def test_returns_entity_names_from_wikilinks(self, tmp_path: Path) -> None:
+        plan = json.dumps(
+            [
+                {
+                    "action": "create",
+                    "target_path": None,
+                    "title": "Calculator in Python",
+                    "content": "Built a [[calculator]] in [[Python]].",
+                    "tags": ["math"],
+                    "entities": ["[[calculator]]", "[[Python]]"],
+                    "reason": "seed #1",
+                    "source_seeds": [1],
+                    "related": [],
+                }
+            ]
+        )
+        compiler = self._compiler(tmp_path, plan)
+        names = await compiler.extract_entity_names("Built a calculator in Python")
+        assert names == ["calculator", "Python"]
+
+    @pytest.mark.asyncio
+    async def test_hallucinated_entities_are_dropped(self, tmp_path: Path) -> None:
+        """An entity NOT present as a literal [[wikilink]] in content is dropped."""
+        plan = json.dumps(
+            [
+                {
+                    "action": "create",
+                    "target_path": None,
+                    "title": "T",
+                    "content": "Discussed [[Python]] only.",
+                    "tags": [],
+                    "entities": ["[[Python]]", "[[Rust]]"],
+                    "reason": "r",
+                    "source_seeds": [1],
+                    "related": [],
+                }
+            ]
+        )
+        compiler = self._compiler(tmp_path, plan)
+        names = await compiler.extract_entity_names("text")
+        assert names == ["Python"]
+
+    @pytest.mark.asyncio
+    async def test_empty_text_returns_empty(self, tmp_path: Path) -> None:
+        compiler = self._compiler(tmp_path, "[]")
+        assert await compiler.extract_entity_names("   ") == []
+
+    @pytest.mark.asyncio
+    async def test_no_garden_note_is_written(self, tmp_path: Path) -> None:
+        """Extraction must NOT write any garden note — it is read-only derivation."""
+        plan = json.dumps(
+            [
+                {
+                    "action": "create",
+                    "target_path": None,
+                    "title": "T",
+                    "content": "About [[Python]].",
+                    "tags": [],
+                    "entities": ["[[Python]]"],
+                    "reason": "r",
+                    "source_seeds": [1],
+                    "related": [],
+                }
+            ]
+        )
+        compiler = self._compiler(tmp_path, plan)
+        await compiler.extract_entity_names("About Python")
+        garden_dir = tmp_path / "garden"
+        written = list(garden_dir.rglob("*.md")) if garden_dir.exists() else []
+        assert written == []

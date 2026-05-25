@@ -1,16 +1,24 @@
-"""Unit tests for the deterministic content-tag derivation in the settle sink.
+"""Tests for content-tag derivation in the settle sink.
 
-``KnowledgeSettleSink`` writes each garden observation with the structural tags
-``settle`` / ``verified-run`` — which the ``GardenObservationPromoter``
-intentionally drops. With only those, the promoter gets zero candidates and the
-§5 trust-ratchet loop never produces canon. ``derive_content_tags`` closes that
-gap by deriving real content tags from the ``Settlement`` — deterministically,
-no LLM/network. These tests pin the heuristic's bounds: artifact-ref stems,
-salient summary terms, normalization, dedupe, cap, and the structural-only
-fallback for contentless settlements.
+``KnowledgeSettleSink`` writes each garden observation with structural tags
+(``settle`` / ``verified-run``) plus CONTENT tags that the
+``GardenObservationPromoter`` clusters into canonical concepts. Content tags now
+come from two paths:
 
-The derived tags must also pass the canonicalization concept-id grammar
-(Handoff §2) so the promoter actually picks them up — asserted via the real
+* PRIMARY — LLM-extracted ENTITIES (BSage's mechanism): the sink runs an
+  ``EntityExtractor`` over the verified work's summary + intent and uses the
+  entity names the LLM committed as ``[[wikilinks]]`` (anti-hallucination
+  gated). Generic nouns ("returns", "string", "work") are excluded
+  *structurally*, never via a denylist. (``Test*`` classes at the bottom; the
+  LLM is MOCKED per the testing rules.)
+* SOFT-FALLBACK — the deterministic ``derive_content_tags`` heuristic
+  (product slug + intent/summary salient terms + artifact-ref stems), used only
+  when no LLM / no active model account is available, or extraction errors /
+  yields nothing. The settlement is the source of truth — derivation never
+  breaks the write. The retired ``filler_words`` deny-list is NOT applied here.
+
+The fallback's derived tags must pass the canonicalization concept-id grammar
+(Handoff §2) so the promoter picks them up — asserted via the real
 ``TagResolver.normalize`` + ``is_valid_concept_id``.
 """
 
@@ -284,10 +292,14 @@ def test_enriched_tags_are_valid_concept_id_candidates() -> None:
         assert is_valid_concept_id(tag), f"{tag!r} is not a valid concept id"
 
 
-def test_summary_filler_and_meta_words_are_dropped() -> None:
-    """Generic filler / action-verb / meta words derived from a work summary
-    must NOT become content tags (they would otherwise settle as noise
-    single-word concepts), while subject nouns survive."""
+def test_fallback_keeps_subject_nouns() -> None:
+    """The deterministic fallback (``derive_content_tags``) keeps salient subject
+    nouns from the summary. It is the SOFT-FALLBACK path used only when no LLM is
+    available; the PRIMARY path (LLM entity extraction at the sink) is where
+    generic nouns are excluded *structurally*. The fallback no longer carries an
+    open-ended filler deny-list (``filler_words`` was retired) — it only drops a
+    small set of function-word stopwords, by design (better to keep a borderline
+    subject than to over-prune with an unbounded noun list)."""
     tags = derive_content_tags(
         _settlement(summary="I've created a one-line hello world function in Python")
     )
@@ -296,37 +308,26 @@ def test_summary_filler_and_meta_words_are_dropped() -> None:
     assert "hello" in tags
     assert "world" in tags
     assert "function" in tags
-    # Filler / action-verb / meta tokens dropped.
-    assert "created" not in tags
-    assert "one" not in tags
-    assert "line" not in tags
+    # Function-word stopwords are still dropped (short, high-frequency).
+    assert "the" not in tags
 
 
-def test_observed_noise_words_are_filtered() -> None:
-    """The exact noise words observed on the prod 'What I know' surface must be
-    filtered out of summary-derived tags."""
-    noise = (
-        "else nothing exactly based complete reply summarize verified "
-        "untitled inspection finished the calculator application"
-    )
-    tags = derive_content_tags(_settlement(summary=noise))
-    for filler in (
-        "else",
-        "nothing",
-        "exactly",
-        "based",
-        "complete",
-        "reply",
-        "summarize",
-        "verified",
-        "untitled",
-        "inspection",
-        "finished",
-    ):
-        assert filler not in tags, f"{filler!r} leaked through as a content tag"
-    # Real subject nouns survive.
+def test_fallback_no_longer_applies_a_filler_denylist() -> None:
+    """The retired ``filler_words`` deny-list is gone: the deterministic fallback
+    is deliberately lenient and does NOT enumerate non-concept words. Words like
+    'created' / 'else' that the old denylist dropped now survive the fallback —
+    the noise problem is solved at the PRIMARY path (entity extraction), not by a
+    denylist on the degraded fallback."""
+    tags = derive_content_tags(_settlement(summary="else created the calculator application"))
+    # No denylist filtering — formerly-'filler' tokens are kept by the fallback.
+    assert "created" in tags
+    assert "else" in tags
+    # Real subject nouns survive too.
     assert "calculator" in tags
     assert "application" in tags
+    # filler_words module must be gone — importing it is an ImportError.
+    with pytest.raises(ModuleNotFoundError):
+        import backend.knowledge.canonicalization.filler_words  # noqa: F401
 
 
 def test_structural_product_slug_is_rejected() -> None:
@@ -334,3 +335,135 @@ def test_structural_product_slug_is_rejected() -> None:
     marker as a content tag."""
     tags = derive_content_tags(_settlement(product_slug="settle", summary="real work"))
     assert "settle" not in tags
+
+
+# --------------------------------------------------------------------------
+# PRIMARY path: concepts from LLM-extracted ENTITIES (not summary tokens).
+# The sink runs an EntityExtractor over summary+intent; the LLM-committed
+# entity names (anti-hallucination-gated) become the content tags. Generic
+# nouns are excluded structurally. On no-extractor / no-LLM / error / empty,
+# the sink SOFT-FALLS BACK to derive_content_tags — settlement never breaks.
+# The LLM is MOCKED (per the testing rules — never call a real model).
+# --------------------------------------------------------------------------
+
+
+class _StubExtractor:
+    """Mocked EntityExtractor — returns scripted entity names, never an LLM."""
+
+    def __init__(self, names: list[str] | None = None, *, raises: bool = False) -> None:
+        self._names = names or []
+        self._raises = raises
+        self.seen_text: str | None = None
+
+    async def extract_entity_names(self, text: str, *, label: str = "seed") -> list[str]:
+        self.seen_text = text
+        if self._raises:
+            raise RuntimeError("llm exploded")
+        return list(self._names)
+
+
+async def _sink_tags(sink, settlement) -> list[str]:
+    """Drive the sink's tag derivation in isolation."""
+    return await sink._derive_tags(settlement)
+
+
+@pytest.mark.asyncio
+async def test_sink_uses_extracted_entities_as_content_tags(tmp_path) -> None:
+    """With an extractor wired, content tags are the LLM-extracted entity names
+    (normalized), NOT summary word-tokens."""
+    from backend.workers.settle_worker import KnowledgeSettleSink
+
+    extractor = _StubExtractor(["calculator", "Python"])
+
+    async def _factory(
+        *,
+        region: str,
+        workspace_id,
+    ):  # noqa: ANN001, ARG001
+        return extractor
+
+    sink = KnowledgeSettleSink(vault_root=tmp_path, extractor_factory=_factory)
+    settlement = _settlement(
+        summary="returns a string from the function",
+        intent_text="build a calculator",
+    )
+    tags = await _sink_tags(sink, settlement)
+
+    # Entity names become the tags (normalized).
+    assert tags == ["calculator", "python"]
+    # Generic summary nouns ('returns', 'string', 'function') do NOT leak in —
+    # they were never extracted as entities.
+    assert "returns" not in tags
+    assert "string" not in tags
+    assert "function" not in tags
+    # The extractor saw the intent + summary as seed text.
+    assert "calculator" in (extractor.seen_text or "")
+    assert "returns a string" in (extractor.seen_text or "")
+
+
+@pytest.mark.asyncio
+async def test_sink_soft_fallback_when_no_extractor(tmp_path) -> None:
+    """No extractor factory → deterministic fallback (current behavior)."""
+    from backend.workers.settle_worker import KnowledgeSettleSink
+
+    sink = KnowledgeSettleSink(vault_root=tmp_path)
+    tags = await _sink_tags(sink, _settlement(summary="configured the reverse proxy"))
+    assert {"configured", "reverse", "proxy"} <= set(tags)
+
+
+@pytest.mark.asyncio
+async def test_sink_soft_fallback_when_factory_returns_none(tmp_path) -> None:
+    """Factory returns None (no active model account) → deterministic fallback."""
+    from backend.workers.settle_worker import KnowledgeSettleSink
+
+    async def _factory(*, region: str, workspace_id):  # noqa: ANN001, ARG001
+        return None
+
+    sink = KnowledgeSettleSink(vault_root=tmp_path, extractor_factory=_factory)
+    tags = await _sink_tags(sink, _settlement(summary="configured the reverse proxy"))
+    assert {"configured", "reverse", "proxy"} <= set(tags)
+
+
+@pytest.mark.asyncio
+async def test_sink_soft_fallback_when_extractor_raises(tmp_path) -> None:
+    """An extractor that raises must NOT break the settle write — the sink logs
+    + degrades to the deterministic fallback."""
+    from backend.workers.settle_worker import KnowledgeSettleSink
+
+    async def _factory(*, region: str, workspace_id):  # noqa: ANN001, ARG001
+        return _StubExtractor(raises=True)
+
+    sink = KnowledgeSettleSink(vault_root=tmp_path, extractor_factory=_factory)
+    tags = await _sink_tags(sink, _settlement(summary="configured the reverse proxy"))
+    # Fell back to the deterministic heuristic instead of raising.
+    assert {"configured", "reverse", "proxy"} <= set(tags)
+
+
+@pytest.mark.asyncio
+async def test_sink_soft_fallback_when_no_entities_extracted(tmp_path) -> None:
+    """A thin summary yielding zero entities → fallback (never an empty tag set
+    when deterministic signal exists)."""
+    from backend.workers.settle_worker import KnowledgeSettleSink
+
+    async def _factory(*, region: str, workspace_id):  # noqa: ANN001, ARG001
+        return _StubExtractor([])
+
+    sink = KnowledgeSettleSink(vault_root=tmp_path, extractor_factory=_factory)
+    tags = await _sink_tags(sink, _settlement(summary="configured the reverse proxy"))
+    assert {"configured", "reverse", "proxy"} <= set(tags)
+
+
+@pytest.mark.asyncio
+async def test_sink_entity_tags_are_capped_and_normalized(tmp_path) -> None:
+    """Extracted entity names are normalized + capped at _MAX_CONTENT_TAGS."""
+    from backend.workers.settle_worker import _MAX_CONTENT_TAGS, KnowledgeSettleSink
+
+    many = [f"Entity{i:02d}" for i in range(_MAX_CONTENT_TAGS + 5)]
+
+    async def _factory(*, region: str, workspace_id):  # noqa: ANN001, ARG001
+        return _StubExtractor(many)
+
+    sink = KnowledgeSettleSink(vault_root=tmp_path, extractor_factory=_factory)
+    tags = await _sink_tags(sink, _settlement(summary="x"))
+    assert len(tags) <= _MAX_CONTENT_TAGS
+    assert all(t == t.casefold() for t in tags)

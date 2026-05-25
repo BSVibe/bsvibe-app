@@ -182,11 +182,12 @@ async def test_no_self_loops(workspace_storage: FileSystemStorage) -> None:
     assert not any(s == t for s, t in graph.edges())
 
 
-async def test_filler_and_structural_tags_never_become_nodes_or_edges(
+async def test_unsettled_and_structural_tags_never_become_nodes_or_edges(
     workspace_storage: FileSystemStorage,
 ) -> None:
     await _seed_concepts(workspace_storage, ["python", "calculator"])
-    # Mix in filler/structural noise alongside two real concepts.
+    # Mix in structural markers + tags that were never promoted to a concept
+    # (no separate filler deny-list needed — only active concepts become nodes).
     await workspace_storage.write(
         "garden/seedling/obs.md",
         _garden_note("settle", "verified-run", "else", "created", "line", "python", "calculator"),
@@ -194,9 +195,10 @@ async def test_filler_and_structural_tags_never_become_nodes_or_edges(
 
     graph = await build_concept_graph(workspace_storage)
 
-    # Only the two seeded concepts are nodes — no filler/structural node ever.
+    # Only the two seeded (active) concepts are nodes — unsettled/structural
+    # tags resolve to no active concept, so they never appear.
     assert set(graph.nodes()) == {"python", "calculator"}
-    # The real pair still co-occurs (filler did not contaminate the pairing).
+    # The real pair still co-occurs (the unsettled tags did not contaminate it).
     assert frozenset({"python", "calculator"}) in _cooccurs_pairs(graph)
 
 
