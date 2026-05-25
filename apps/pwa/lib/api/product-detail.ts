@@ -25,6 +25,7 @@
  * Read-only by design — no mutations on this surface.
  */
 
+import { conciseSummary } from "../text/summary";
 import { listDeliverables } from "./deliverables";
 import { listProducts } from "./products";
 import { listRuns } from "./runs";
@@ -119,13 +120,10 @@ function sourceFor(type: DeliverableType): string {
   }
 }
 
-/** First non-empty line of a summary as the item title; calm fallback if none. */
+/** A concise one-line summary for a shipped deliverable (the shared first-
+ *  sentence condenser), so the product surfaces read like the Brief. */
 function titleFor(summary: string | null): string {
-  const first = (summary ?? "")
-    .split("\n")
-    .map((line) => line.trim())
-    .find((line) => line.length > 0);
-  return first ?? "Shipped deliverable";
+  return conciseSummary(summary, "Shipped deliverable");
 }
 
 function toShippedItem(d: Deliverable, productSlug: string): ShippedItem {

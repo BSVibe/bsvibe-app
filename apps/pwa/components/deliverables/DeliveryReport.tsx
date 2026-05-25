@@ -8,6 +8,7 @@ import type {
   VerificationOutcome,
   VerificationReportItem,
 } from "@/lib/api/types";
+import { conciseSummary } from "@/lib/text/summary";
 import { useTranslations } from "next-intl";
 import Link from "next/link";
 import { useEffect, useState } from "react";
@@ -131,7 +132,9 @@ export default function DeliveryReport({ deliverableId }: { deliverableId: strin
 function ReportDocument({ report }: { report: DeliverableReport }) {
   const t = useTranslations("report");
   const { deliverable, request, verifications } = report;
-  const summary = deliverable.summary?.trim() || t("untitled");
+  // Concise document title — the first sentence of the (often paragraph-long)
+  // LLM summary, not the whole blob; the detail lives in the body + request.
+  const summary = conciseSummary(deliverable.summary, t("untitled"));
   const tone = strongestOutcome(verifications) ?? "none";
   const hasDiff = Boolean(deliverable.diff_url);
 

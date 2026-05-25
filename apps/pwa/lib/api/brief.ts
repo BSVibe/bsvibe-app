@@ -19,6 +19,7 @@
  * run is older than the runs window.
  */
 
+import { conciseSummary } from "../text/summary";
 import { ApiError } from "./client";
 import { listPendingProposals } from "./decisions";
 import { listDeliverables } from "./deliverables";
@@ -164,22 +165,10 @@ function sourceFor(type: DeliverableType): string {
   }
 }
 
-/** A concise one-line summary for a shipped deliverable — NOT the raw LLM
- *  `summary` (which is often a multi-paragraph blob). Take the first non-empty
- *  line, then its first sentence (cut at the first `.`/`!`/`?` that's followed by
- *  whitespace — so "fibonacci.py" isn't split), then hard-cap the length with an
- *  ellipsis. Calm fallback when there's no summary at all. */
-const _SUMMARY_MAX = 140;
+/** A concise one-line summary for a shipped deliverable (the shared first-
+ *  sentence condenser). Calm fallback when there's no summary at all. */
 function titleFor(summary: string | null): string {
-  const first = (summary ?? "")
-    .split("\n")
-    .map((line) => line.trim())
-    .find((line) => line.length > 0);
-  if (!first) return "Shipped deliverable";
-  const sentence = first.match(/^.*?[.!?](?=\s)/);
-  let text = sentence ? sentence[0] : first;
-  if (text.length > _SUMMARY_MAX) text = `${text.slice(0, _SUMMARY_MAX).trimEnd()}…`;
-  return text;
+  return conciseSummary(summary, "Shipped deliverable");
 }
 
 /** Resolve a deliverable's product slug via its producing run (Deliverable has
