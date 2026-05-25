@@ -580,11 +580,20 @@
       "inconclusive": "검증이 불확실합니다",
       "none": "아직 검증되지 않음"
     },
+    "typeLabel": {
+      "code": "코드",
+      "pr": "풀 리퀘스트",
+      "page": "페이지",
+      "page_image": "페이지 미리보기",
+      "direct_output": "결과물"
+    },
+    "yourRequest": "당신의 요청",
+    "whatWasBuilt": "무엇을 만들었나요",
     "howChecked": "BSVibe가 어떻게 확인했나요",
     "noVerification": "아직 이 산출물에 대한 검증 기록이 없습니다.",
     "noChecksDeclared": "이 검증에 선언된 확인 항목이 없습니다.",
     "artifacts": "산출물",
-    "noArtifacts": "이 산출물에 기록된 항목이 없습니다.",
+    "noArtifacts": "이 산출물에서 만들어진 것이 없습니다.",
     "openArtifact": "산출물 열기",
     "artifactLoading": "이 파일을 여는 중…",
     "artifactTruncated": "이 파일의 앞부분만 표시합니다 — 인라인으로 보여주기에 너무 큽니다.",

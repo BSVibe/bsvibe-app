@@ -1,15 +1,16 @@
 /**
- * Delivery Report surface — the "glass box proof" for one shipped deliverable.
- * Drives the DeliveryReport container with a mocked fetch and asserts:
- *  - the verdict (verification outcome) renders
- *  - "How BSVibe checked this" lists the declared contract checks + per-check
- *    result, rendered defensively from free-form JSON
- *  - the artifacts (artifact_refs + artifact_uri) render
+ * Delivery Report surface — the "glass box proof" for one shipped deliverable,
+ * read as a single Notion-like DOCUMENT. Drives the DeliveryReport container
+ * with a route-aware mocked fetch and asserts:
+ *  - the masthead (title + type / verdict chips)
+ *  - "Your request" renders the founder's Direction (and is absent when null)
+ *  - "What was built" auto-opens the first artifact's CONTENT inline, and
+ *    switches when another artifact tab is clicked
+ *  - "How BSVibe checked this" shows the verdict + the declared contract checks,
+ *    rendered defensively from free-form JSON
  *  - a diff link to diff_url when present
- *  - a calm "no verification recorded" state when the run has no verification
- *  - a calm not-found state for an unknown id (404 → not-found, not an error)
- *  - a calm inline error (not a blank page) when the read fails
- *  - a loading note before the read lands
+ *  - calm states: no-verification, not-found (404), inline error, loading
+ *  - artifact content edge cases: truncated note, 404 "unavailable — see diff"
  */
 
 import DeliveryReport from "@/components/deliverables/DeliveryReport";
@@ -41,6 +42,7 @@ const REPORT: DeliverableReport = {
     diff_url: "https://github.com/acme/repo/commit/abc123",
     created_at: NOW,
   },
+  request: "Add a getRelatedPosts helper to blog.ts",
   verifications: [
     {
       id: "v1",
@@ -57,6 +59,8 @@ const REPORT: DeliverableReport = {
   ],
 };
 
+const BLOG_CONTENT = "export function getRelatedPosts() {\n  return [];\n}\n";
+
 function json(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
     status,
@@ -64,7 +68,28 @@ function json(body: unknown, status = 200) {
   });
 }
 
-describe("Delivery Report surface", () => {
+/** Route-aware fetch: REPORT for the report URL, and each `/artifacts/{ref}`
+ *  URL through `artifactResponder` (defaults to the blog.ts content). */
+function installFetch(opts?: {
+  report?: () => DeliverableReport | Response;
+  artifact?: (url: string) => Response;
+}) {
+  const reportFn = opts?.report ?? (() => REPORT);
+  const artifactFn =
+    opts?.artifact ??
+    ((url: string) =>
+      url.includes("src/blog.ts")
+        ? json({ ref: "src/blog.ts", content: BLOG_CONTENT, truncated: false, binary: false })
+        : json({ ref: "x", content: "// other", truncated: false, binary: false }));
+  global.fetch = vi.fn(async (input: RequestInfo | URL) => {
+    const url = typeof input === "string" ? input : input.toString();
+    if (url.includes("/artifacts/")) return artifactFn(url);
+    const r = reportFn();
+    return r instanceof Response ? r : json(r);
+  }) as unknown as typeof fetch;
+}
+
+describe("Delivery Report document", () => {
   beforeEach(() => {
     clearSession();
     setSession(SESSION);
@@ -73,34 +98,31 @@ describe("Delivery Report surface", () => {
     vi.restoreAllMocks();
   });
 
-  it("renders the verdict, the declared checks, the artifacts, and a diff link", async () => {
-    global.fetch = vi.fn(async () => json(REPORT)) as unknown as typeof fetch;
-
+  it("renders the masthead, request, what-was-built content, checks, and diff", async () => {
+    installFetch();
     render(<DeliveryReport deliverableId="d1" />);
 
-    // Summary header.
+    // Masthead title + chips (type + verdict).
     await waitFor(() => {
       expect(screen.getByText("Add getRelatedPosts to blog.ts")).toBeInTheDocument();
     });
+    expect(screen.getByText("Pull request")).toBeInTheDocument();
 
-    // Verdict — the verification outcome.
-    const verdict = screen.getByRole("region", { name: /verdict/i });
-    expect(within(verdict).getByText(/verified/i)).toBeInTheDocument();
+    // "Your request" — the founder's Direction.
+    const request = screen.getByRole("region", { name: /your request/i });
+    expect(within(request).getByText(/getRelatedPosts helper to blog\.ts/)).toBeInTheDocument();
 
-    // "How BSVibe checked this" — the declared contract checks.
+    // "What was built" — the first artifact's CONTENT shows inline by default.
+    const built = screen.getByRole("region", { name: /what was built/i });
+    await waitFor(() => {
+      expect(within(built).getByText(/export function getRelatedPosts/)).toBeInTheDocument();
+    });
+
+    // "How BSVibe checked this" — verdict + the declared contract checks.
     const checks = screen.getByRole("region", { name: /how bsvibe checked this/i });
+    expect(within(checks).getByText(/this is verified/i)).toBeInTheDocument();
     expect(within(checks).getByText(/pytest -q/)).toBeInTheDocument();
     expect(within(checks).getByText(/reads cleanly/)).toBeInTheDocument();
-    expect(within(checks).getByText(/matches the spec/)).toBeInTheDocument();
-
-    // Artifacts — refs + external link.
-    const artifacts = screen.getByRole("region", { name: /artifacts/i });
-    expect(within(artifacts).getByText(/src\/blog\.ts/)).toBeInTheDocument();
-    expect(within(artifacts).getByText(/tests\/blog\.test\.ts/)).toBeInTheDocument();
-    expect(within(artifacts).getByRole("link", { name: /open/i })).toHaveAttribute(
-      "href",
-      "https://github.com/acme/repo/pull/15",
-    );
 
     // Diff link.
     expect(screen.getByRole("link", { name: /diff/i })).toHaveAttribute(
@@ -109,13 +131,50 @@ describe("Delivery Report surface", () => {
     );
   });
 
-  it("shows a calm no-verification state when the run has no verification recorded", async () => {
-    const noVerify: DeliverableReport = {
-      deliverable: { ...REPORT.deliverable, diff_url: null },
-      verifications: [],
-    };
-    global.fetch = vi.fn(async () => json(noVerify)) as unknown as typeof fetch;
+  it("switches the shown artifact when another tab is clicked", async () => {
+    installFetch({
+      artifact: (url) =>
+        url.includes("tests/blog.test.ts")
+          ? json({
+              ref: "tests/blog.test.ts",
+              content: "test('related', () => {})",
+              truncated: false,
+              binary: false,
+            })
+          : json({ ref: "src/blog.ts", content: BLOG_CONTENT, truncated: false, binary: false }),
+    });
+    render(<DeliveryReport deliverableId="d1" />);
 
+    const built = await screen.findByRole("region", { name: /what was built/i });
+    // First artifact is shown by default.
+    await waitFor(() => {
+      expect(within(built).getByText(/export function getRelatedPosts/)).toBeInTheDocument();
+    });
+    // Click the second artifact's tab → its content replaces the first.
+    await userEvent.click(within(built).getByRole("button", { name: /tests\/blog\.test\.ts/ }));
+    await waitFor(() => {
+      expect(within(built).getByText(/test\('related'/)).toBeInTheDocument();
+    });
+  });
+
+  it("omits 'Your request' when the report carries no request", async () => {
+    installFetch({ report: () => ({ ...REPORT, request: null }) });
+    render(<DeliveryReport deliverableId="d1" />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Add getRelatedPosts to blog.ts")).toBeInTheDocument();
+    });
+    expect(screen.queryByRole("region", { name: /your request/i })).not.toBeInTheDocument();
+  });
+
+  it("shows a calm no-verification state when the run has no verification recorded", async () => {
+    installFetch({
+      report: () => ({
+        deliverable: { ...REPORT.deliverable, diff_url: null },
+        request: null,
+        verifications: [],
+      }),
+    });
     render(<DeliveryReport deliverableId="d1" />);
 
     await waitFor(() => {
@@ -127,34 +186,32 @@ describe("Delivery Report surface", () => {
   });
 
   it("renders defensively when contract/result JSON is an unexpected shape", async () => {
-    const odd: DeliverableReport = {
-      deliverable: { ...REPORT.deliverable },
-      verifications: [
-        {
-          id: "v1",
-          outcome: "inconclusive",
-          // No "checks" array — must not crash.
-          contract: {},
-          result: { error: "toolchain missing" },
-          created_at: NOW,
-        },
-      ],
-    };
-    global.fetch = vi.fn(async () => json(odd)) as unknown as typeof fetch;
-
+    installFetch({
+      report: () => ({
+        deliverable: { ...REPORT.deliverable },
+        request: null,
+        verifications: [
+          {
+            id: "v1",
+            outcome: "inconclusive",
+            contract: {}, // No "checks" array — must not crash.
+            result: { error: "toolchain missing" },
+            created_at: NOW,
+          },
+        ],
+      }),
+    });
     render(<DeliveryReport deliverableId="d1" />);
 
     await waitFor(() => {
       expect(screen.getByText("Add getRelatedPosts to blog.ts")).toBeInTheDocument();
     });
-    // Outcome still renders even with no parseable checks.
-    const verdict = screen.getByRole("region", { name: /verdict/i });
-    expect(within(verdict).getByText(/inconclusive|couldn|not/i)).toBeInTheDocument();
+    const checks = screen.getByRole("region", { name: /how bsvibe checked this/i });
+    expect(within(checks).getByText(/inconclusive/i)).toBeInTheDocument();
   });
 
   it("shows the calm not-found state for an unknown id (404)", async () => {
-    global.fetch = vi.fn(async () => json({ detail: "not found" }, 404)) as unknown as typeof fetch;
-
+    installFetch({ report: () => json({ detail: "not found" }, 404) });
     render(<DeliveryReport deliverableId="ghost" />);
 
     await waitFor(() => {
@@ -169,8 +226,7 @@ describe("Delivery Report surface", () => {
   });
 
   it("renders a calm inline error (not a blank page) when the read fails", async () => {
-    global.fetch = vi.fn(async () => json("boom", 500)) as unknown as typeof fetch;
-
+    installFetch({ report: () => json("boom", 500) });
     render(<DeliveryReport deliverableId="d1" />);
 
     await waitFor(() => {
@@ -181,8 +237,7 @@ describe("Delivery Report surface", () => {
   });
 
   it("shows a loading note before the read lands", async () => {
-    global.fetch = vi.fn(async () => json(REPORT)) as unknown as typeof fetch;
-
+    installFetch();
     render(<DeliveryReport deliverableId="d1" />);
 
     expect(screen.getByText(/looking at this report/i)).toBeInTheDocument();
@@ -190,95 +245,31 @@ describe("Delivery Report surface", () => {
       expect(screen.getByText("Add getRelatedPosts to blog.ts")).toBeInTheDocument();
     });
   });
-});
 
-/**
- * Interactive artifact viewer — clicking an artifact_ref fetches + shows the
- * produced file CONTENT inline (the missing "SEE what the agent produced").
- * Routes the mocked fetch by URL: the `/report` read seeds the page, the
- * `/artifacts/{ref}` read returns the content (or a 404 for the graceful
- * "content unavailable — see git" path).
- */
-describe("Delivery Report — artifact content viewer", () => {
-  beforeEach(() => {
-    clearSession();
-    setSession(SESSION);
-  });
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
-
-  /** A fetch mock that returns REPORT for the report URL and dispatches each
-   *  `/artifacts/...` URL through `artifactResponder`. */
-  function mockFetch(artifactResponder: (url: string) => Response) {
-    global.fetch = vi.fn(async (input: RequestInfo | URL) => {
-      const url = typeof input === "string" ? input : input.toString();
-      if (url.includes("/artifacts/")) return artifactResponder(url);
-      return json(REPORT);
-    }) as unknown as typeof fetch;
-  }
-
-  it("renders the artifact refs as interactive buttons", async () => {
-    mockFetch(() => json({ ref: "x", content: "", truncated: false, binary: false }));
-    render(<DeliveryReport deliverableId="d1" />);
-
-    const artifacts = await screen.findByRole("region", { name: /artifacts/i });
-    // Each ref is now a clickable control, not inert text.
-    expect(within(artifacts).getByRole("button", { name: /src\/blog\.ts/ })).toBeInTheDocument();
-    expect(
-      within(artifacts).getByRole("button", { name: /tests\/blog\.test\.ts/ }),
-    ).toBeInTheDocument();
-  });
-
-  it("fetches and shows the file content when a ref is clicked", async () => {
-    const content: ArtifactContent = {
-      ref: "src/blog.ts",
-      content: "export function getRelatedPosts() {\n  return [];\n}\n",
-      truncated: false,
-      binary: false,
-    };
-    mockFetch((url) => (url.includes("src/blog.ts") ? json(content) : json({}, 404)));
-
-    render(<DeliveryReport deliverableId="d1" />);
-    const artifacts = await screen.findByRole("region", { name: /artifacts/i });
-
-    await userEvent.click(within(artifacts).getByRole("button", { name: /src\/blog\.ts/ }));
-
-    await waitFor(() => {
-      expect(screen.getByText(/export function getRelatedPosts/)).toBeInTheDocument();
-    });
-    // The diff link is still present (we did not replace it).
-    expect(screen.getByRole("link", { name: /diff/i })).toBeInTheDocument();
-  });
-
-  it("shows a truncated note when the content was capped", async () => {
+  it("shows a truncated note when the produced content was capped", async () => {
     const content: ArtifactContent = {
       ref: "src/blog.ts",
       content: "partial…",
       truncated: true,
       binary: false,
     };
-    mockFetch((url) => (url.includes("src/blog.ts") ? json(content) : json({}, 404)));
-
+    installFetch({ artifact: () => json(content) });
     render(<DeliveryReport deliverableId="d1" />);
-    const artifacts = await screen.findByRole("region", { name: /artifacts/i });
-    await userEvent.click(within(artifacts).getByRole("button", { name: /src\/blog\.ts/ }));
 
+    const built = await screen.findByRole("region", { name: /what was built/i });
     await waitFor(() => {
-      expect(screen.getByText(/showing the first part|truncated/i)).toBeInTheDocument();
+      expect(within(built).getByText(/showing the first part|truncated/i)).toBeInTheDocument();
     });
   });
 
-  it("shows a graceful 'content unavailable — see git' message on a 404", async () => {
-    mockFetch(() => json({ detail: "artifact content is no longer available" }, 404));
-
+  it("degrades to 'content unavailable — see the diff' on a 404 artifact read", async () => {
+    installFetch({ artifact: () => json({ detail: "gone" }, 404) });
     render(<DeliveryReport deliverableId="d1" />);
-    const artifacts = await screen.findByRole("region", { name: /artifacts/i });
-    await userEvent.click(within(artifacts).getByRole("button", { name: /src\/blog\.ts/ }));
 
+    const built = await screen.findByRole("region", { name: /what was built/i });
     await waitFor(() => {
       expect(
-        screen.getByText(/couldn’t show this file|couldn't show this file|unavailable/i),
+        within(built).getByText(/couldn’t show this file|couldn't show this file|unavailable/i),
       ).toBeInTheDocument();
     });
     // The diff link is still offered as the fallback path.

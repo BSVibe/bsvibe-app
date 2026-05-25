@@ -13,30 +13,26 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 
 /**
- * Delivery Report — the "glass box proof" for one shipped deliverable
- * (Stitch "Delivery Report — Code"). Read-only: the artifact summary, the
- * verdict, "How BSVibe checked this" (the declared verification contract +
- * the result of running it), the artifacts (refs + external link), and a link
- * out to the diff.
+ * Delivery Report — the "glass box proof" for one shipped deliverable, read as a
+ * single Notion-like DOCUMENT (Stitch "Delivery Report" redesign): a masthead
+ * (title + type / verdict chips + date), then the founder's "Your request", the
+ * prominent "What was built" (the produced file CONTENT shown inline by default,
+ * switchable across artifacts), "How BSVibe checked this" (the verdict + the
+ * declared verification contract and the result of running it), and a diff link.
  *
- * Composed client-side from REAL `GET /api/v1/deliverables/{id}/report`. The
- * contract/result JSON is free-form (shape varies by verifier), so it is
+ * Composed client-side from REAL `GET /api/v1/deliverables/{id}/report` — which
+ * now also carries `request` (the founder's Direction, from the producing run).
+ * The contract/result JSON is free-form (shape varies by verifier), so it is
  * rendered DEFENSIVELY — an odd shape degrades to a calm line, never a crash.
- * States mirror the product-detail surface: loading / not-found (404, NOT an
- * error) / error / ready. A run with no verification shows a calm
- * "no verification recorded" note rather than erroring.
+ * States: loading / not-found (404, NOT an error) / error / ready.
  *
- * The artifacts list is interactive: clicking a ref fetches its produced file
- * CONTENT from the persisted run workspace (REAL
- * `GET /api/v1/deliverables/{id}/artifacts/{ref}`) and shows it in a calm
- * inline monospace viewer. A 404 (file cleaned / unavailable) degrades to a
- * "couldn't show this file — see the git diff" note; the diff_url link is kept.
+ * "What was built" auto-opens the first artifact's CONTENT (the document's
+ * centerpiece — the founder SEES the produced file without a click). A 404 /
+ * cleaned run dir degrades to a calm "couldn't show this file — see the diff"
+ * note; binary files surface metadata only; a truncated file shows a note.
  *
- * Deferred (no data behind them yet): a true side-by-side DIFF (we don't store
- * a base — this shows the produced file CONTENT, which is what was missing),
- * any risk score the model doesn't carry, and per-deliverable approve /
- * follow-up actions (the report is read-only proof). Binary artifacts surface
- * metadata only (a "binary file, N bytes" note), never raw bytes.
+ * Read-only proof: no approve / follow-up actions here (those live on Decisions
+ * and have no per-report endpoint), and no risk score the model doesn't carry.
  */
 type Loaded =
   | { state: "loading" }
@@ -127,63 +123,66 @@ export default function DeliveryReport({ deliverableId }: { deliverableId: strin
         </section>
       )}
 
-      {loaded.state === "ready" && <ReportBody report={loaded.report} />}
+      {loaded.state === "ready" && <ReportDocument report={loaded.report} />}
     </div>
   );
 }
 
-function ReportBody({ report }: { report: DeliverableReport }) {
+function ReportDocument({ report }: { report: DeliverableReport }) {
   const t = useTranslations("report");
-  const { deliverable, verifications } = report;
+  const { deliverable, request, verifications } = report;
   const summary = deliverable.summary?.trim() || t("untitled");
+  const tone = strongestOutcome(verifications) ?? "none";
   const hasDiff = Boolean(deliverable.diff_url);
 
   return (
-    <article className="report__body">
-      <header className="report__header">
-        <h1 className="report__title">{summary}</h1>
+    <article className="report-doc">
+      <header className="report-doc__head">
+        <div className="report-doc__chips">
+          <span className="report-doc__chip">{t(`typeLabel.${deliverable.deliverable_type}`)}</span>
+          <span className={`report-doc__chip report-doc__chip--${tone}`}>
+            {t(`verdictLabel.${tone}`)}
+          </span>
+          <span className="report-doc__date">{deliverable.created_at.slice(0, 10)}</span>
+        </div>
+        <h1 className="report-doc__title">{summary}</h1>
       </header>
 
-      <Verdict verifications={verifications} />
+      {request && (
+        <section className="report-doc__section" aria-label={t("yourRequest")}>
+          <h2 className="report-doc__label">{t("yourRequest")}</h2>
+          <blockquote className="report-doc__request">{request}</blockquote>
+        </section>
+      )}
 
-      <section className="report-checks" aria-label={t("howChecked")}>
-        <h2 className="section-label">{t("howChecked")}</h2>
+      <section className="report-doc__section" aria-label={t("whatWasBuilt")}>
+        <h2 className="report-doc__label">{t("whatWasBuilt")}</h2>
+        <WhatWasBuilt deliverable={deliverable} hasDiff={hasDiff} />
+      </section>
+
+      <section className="report-doc__section" aria-label={t("howChecked")}>
+        <h2 className="report-doc__label">{t("howChecked")}</h2>
+        <p className={`report-doc__verdict report-doc__verdict--${tone}`}>
+          {t(`verdictLabel.${tone}`)}
+        </p>
         {verifications.length === 0 ? (
-          <p className="report-checks__empty">{t("noVerification")}</p>
+          <p className="report-doc__muted">{t("noVerification")}</p>
         ) : (
           verifications.map((v) => <VerificationBlock key={v.id} verification={v} />)
         )}
       </section>
 
-      <Artifacts deliverable={deliverable} hasDiff={hasDiff} />
-
       {deliverable.diff_url && (
-        <section className="report-diff" aria-label={t("diff")}>
-          <h2 className="section-label">{t("diff")}</h2>
-          <a
-            className="report-diff__link"
-            href={deliverable.diff_url}
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            {t("viewDiff")}
-          </a>
-        </section>
+        <a
+          className="report-doc__diff"
+          href={deliverable.diff_url}
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          {t("viewDiff")}
+        </a>
       )}
     </article>
-  );
-}
-
-/** Verdict tone + label from the strongest recorded outcome (failed beats
- *  inconclusive beats passed). No verification → an honest "not yet verified". */
-function Verdict({ verifications }: { verifications: VerificationReportItem[] }) {
-  const t = useTranslations("report");
-  const outcome = strongestOutcome(verifications);
-  const tone = outcome ?? "none";
-  return (
-    <section className={`report-verdict report-verdict--${tone}`} aria-label={t("verdict")}>
-      <span className="report-verdict__label">{t(`verdictLabel.${tone}`)}</span>
-    </section>
   );
 }
 
@@ -226,7 +225,7 @@ function VerificationBlock({ verification }: { verification: VerificationReportI
 }
 
 /** A calm one-line summary of the free-form result JSON: a known string field
- *  if present, else a compact count, else nothing. Never throws. */
+ *  if present, else nothing. Never throws. */
 function summarizeResult(result: Record<string, unknown>): string | null {
   for (const key of ["summary", "output", "error", "detail"]) {
     const value = result[key];
@@ -235,7 +234,11 @@ function summarizeResult(result: Record<string, unknown>): string | null {
   return null;
 }
 
-function Artifacts({
+/** "What was built" — the document centerpiece. Shows the produced file CONTENT
+ *  inline by default (the first artifact), switchable across the deliverable's
+ *  refs; the external landing link when one exists. A deliverable with neither
+ *  refs nor a uri shows a calm "nothing produced" note. */
+function WhatWasBuilt({
   deliverable,
   hasDiff,
 }: {
@@ -244,48 +247,43 @@ function Artifacts({
 }) {
   const t = useTranslations("report");
   const { id, artifact_refs, artifact_uri } = deliverable;
-  // Which ref is open in the inline viewer (one at a time — calm, focused).
-  const [openRef, setOpenRef] = useState<string | null>(null);
+  const [selected, setSelected] = useState<string | null>(artifact_refs[0] ?? null);
+
+  if (artifact_refs.length === 0 && !artifact_uri) {
+    return <p className="report-doc__muted">{t("noArtifacts")}</p>;
+  }
 
   return (
-    <section className="report-artifacts" aria-label={t("artifacts")}>
-      <h2 className="section-label">{t("artifacts")}</h2>
-      {artifact_refs.length === 0 && !artifact_uri ? (
-        <p className="report-artifacts__empty">{t("noArtifacts")}</p>
-      ) : (
-        <>
-          {artifact_refs.length > 0 && (
-            <ul className="report-artifacts__list">
-              {artifact_refs.map((ref) => (
-                <li key={ref} className="report-artifacts__row">
-                  <button
-                    type="button"
-                    className="report-artifacts__ref"
-                    aria-expanded={openRef === ref}
-                    onClick={() => setOpenRef((prev) => (prev === ref ? null : ref))}
-                  >
-                    {ref}
-                  </button>
-                  {openRef === ref && (
-                    <ArtifactViewer deliverableId={id} refName={ref} hasDiff={hasDiff} />
-                  )}
-                </li>
-              ))}
-            </ul>
-          )}
-          {artifact_uri && (
-            <a
-              className="report-artifacts__link"
-              href={artifact_uri}
-              target="_blank"
-              rel="noopener noreferrer"
-            >
-              {t("openArtifact")}
-            </a>
-          )}
-        </>
+    <div className="report-doc__built">
+      {artifact_refs.length > 1 && (
+        <ul className="report-doc__tabs" aria-label={t("artifacts")}>
+          {artifact_refs.map((ref) => (
+            <li key={ref}>
+              <button
+                type="button"
+                className={`report-doc__tab${selected === ref ? " report-doc__tab--active" : ""}`}
+                aria-pressed={selected === ref}
+                onClick={() => setSelected(ref)}
+                title={ref}
+              >
+                {ref}
+              </button>
+            </li>
+          ))}
+        </ul>
       )}
-    </section>
+      {selected && <ArtifactViewer deliverableId={id} refName={selected} hasDiff={hasDiff} />}
+      {artifact_uri && (
+        <a
+          className="report-doc__open"
+          href={artifact_uri}
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          {t("openArtifact")}
+        </a>
+      )}
+    </div>
   );
 }
 
@@ -297,9 +295,8 @@ type ArtifactLoaded =
 /** Inline content viewer for one artifact ref. Fetches the produced file
  *  CONTENT and shows it in a calm scrollable monospace block. A 404 (cleaned
  *  run dir / unavailable) degrades to a "couldn't show this file" note that
- *  points back at the git diff; any other failure shows the same calm note
- *  rather than an error wall. A binary file shows its metadata note, a
- *  truncated file shows a "showing the first part" line. */
+ *  points back at the git diff; any other failure shows the same calm note. A
+ *  binary file shows its metadata note; a truncated file shows a note. */
 function ArtifactViewer({
   deliverableId,
   refName,
@@ -348,6 +345,9 @@ function ArtifactViewer({
   const { artifact } = loaded;
   return (
     <div className="report-artifact-view">
+      <div className="report-artifact-view__head">
+        <span className="report-artifact-view__path">{artifact.ref}</span>
+      </div>
       {artifact.binary ? (
         <p className="report-artifact-view__binary">{artifact.content}</p>
       ) : (

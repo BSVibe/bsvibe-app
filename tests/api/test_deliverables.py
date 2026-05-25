@@ -71,7 +71,7 @@ async def configured_client(db, workspace_id: uuid.UUID):
         yield client
 
 
-async def _seed_run(s, *, run_id: uuid.UUID, ws: uuid.UUID) -> None:
+async def _seed_run(s, *, run_id: uuid.UUID, ws: uuid.UUID, payload: dict | None = None) -> None:
     """Create the parent ExecutionRun so the deliverables FK resolves (PG).
 
     Flush immediately: there is no ORM ``relationship()`` linking Deliverable to
@@ -84,7 +84,7 @@ async def _seed_run(s, *, run_id: uuid.UUID, ws: uuid.UUID) -> None:
             id=run_id,
             workspace_id=ws,
             status=RunStatus.SHIPPED,
-            payload={},
+            payload=payload or {},
             created_at=datetime.now(tz=UTC),
             updated_at=datetime.now(tz=UTC),
         )
@@ -283,7 +283,12 @@ async def test_report_returns_deliverable_with_verification(
     }
     result = {"checks": [{"passed": True, "output": "19 passed"}]}
     async with db() as s:
-        await _seed_run(s, run_id=run_id, ws=workspace_id)
+        await _seed_run(
+            s,
+            run_id=run_id,
+            ws=workspace_id,
+            payload={"intent_text": "Add a getRelatedPosts helper to blog.ts"},
+        )
         s.add(
             Deliverable(
                 id=deliverable_id,
@@ -322,6 +327,10 @@ async def test_report_returns_deliverable_with_verification(
     assert d["diff_url"] == "https://github.com/acme/repo/commit/abc"
     assert d["deliverable_type"] == "pr"
 
+    # The report carries the founder's Direction (from the producing run's
+    # payload) so it reads as a document: request → built → checked.
+    assert body["request"] == "Add a getRelatedPosts helper to blog.ts"
+
     assert len(body["verifications"]) == 1
     v = body["verifications"][0]
     assert v["outcome"] == "passed"
@@ -354,6 +363,8 @@ async def test_report_empty_verification_does_not_error(
     body = r.json()
     assert body["deliverable"]["id"] == str(deliverable_id)
     assert body["verifications"] == []
+    # The seed run carries no intent_text → request degrades to null, not a 500.
+    assert body["request"] is None
 
 
 async def test_report_cross_workspace_404(configured_client, db, workspace_id) -> None:
