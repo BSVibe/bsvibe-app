@@ -42,6 +42,7 @@ function run(id: string, product_id: string | null, status: string, updated_at =
     workspace_id: "ws-1",
     product_id,
     request_id: null,
+    intent: null,
     status,
     created_at: NOW,
     updated_at,

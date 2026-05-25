@@ -1,111 +1,48 @@
 /**
- * Composes the Brief (Glance) view-model from REAL backend endpoints.
+ * Composes the merged Brief / Work-Home view-model from REAL backend endpoints.
  *
- * REAL today:
- *  - lanes        ← /api/v1/products  +  per-product latest /api/v1/runs status
- *  - needsYou     ← /api/v1/decisions (pending proposals) + /api/v1/safemode/queue
- *  - recentlyShipped ← /api/v1/deliverables (real Deliverable rows, newest first)
+ * This is the single "what is BSVibe doing + what has it done" surface (the old
+ * Brief and Activity tabs were merged because they overlapped). It folds:
+ *  - working   ← /api/v1/runs in an in-flight status (open / running)
+ *  - needsYou  ← /api/v1/decisions (pending proposals) + /api/v1/safemode/queue
+ *  - stream    ← /api/v1/runs (ALL, newest first) joined to /api/v1/deliverables
+ *               by run_id (the chronological work history)
  *
- * All three surfaces are now sourced from live endpoints, so a successful read
- * never carries demo/placeholder data — `BriefView.placeholder` is false on a
- * real read (even an empty workspace, which renders calm empty states). It
- * flips true ONLY when a hard failure forces the demo-lane fallback below, so
- * the surface shows a calm board instead of an error wall.
+ * Every surface is live, so a successful read — even an empty workspace — is
+ * never `placeholder`; that flips true ONLY on a hard non-401 failure, so the
+ * surface shows calm empty states instead of an error wall. A 401 propagates so
+ * the global auth handler can redirect to /login.
  *
- * Remaining DERIVED detail (no schema gap forced into the backend): a
- * Deliverable carries `run_id` but no `product_id`, so a shipped item's
- * product attribution is resolved by cross-referencing the runs list
- * (run_id → product_id → slug); it degrades to "workspace" when the producing
- * run is older than the runs window.
+ * Status LABELS are intentionally NOT composed here — the components translate
+ * `status` via i18n (the data layer stays locale-free). Titles are user/LLM
+ * content (a shipped deliverable's concise summary, or the run's Direction).
  */
 
+import { isActiveStatus } from "../runs/status";
 import { conciseSummary } from "../text/summary";
 import { ApiError } from "./client";
 import { listPendingProposals } from "./decisions";
 import { listDeliverables } from "./deliverables";
-import { PLACEHOLDER_LANES } from "./placeholder";
 import { listProducts } from "./products";
 import { listRuns } from "./runs";
 import { listSafeModeQueue } from "./safemode";
 import type {
+  ActiveWork,
   ArtifactType,
   BriefView,
   Deliverable,
   DeliverableType,
-  LaneState,
   NeedsYouItem,
   Product,
-  ProductLane,
   Proposal,
   Run,
-  RunStatus,
   SafeModeItem,
-  ShippedItem,
+  WorkStreamItem,
 } from "./types";
 
-/** Map a run's lifecycle status → the calm lane-state vocabulary (UX §3.3). */
-function laneStateForRun(status: RunStatus): LaneState {
-  switch (status) {
-    case "open":
-      // freshly created, not yet picked up → "just triggered · decomposing…"
-      return "triggered";
-    case "running":
-      return "working";
-    case "review_ready":
-      // verified output waiting on the founder → the amber needs-you state
-      return "needs-you";
-    case "shipped":
-      return "shipped";
-    default:
-      // failed / cancelled → calm idle rather than a red error lane
-      return "idle";
-  }
-}
+const _RUN_WINDOW = 50;
 
-/** Plain-language status line for a real lane derived from its latest run. */
-function laneStatusFor(state: LaneState, hasRun: boolean): string {
-  if (!hasRun) return "—";
-  switch (state) {
-    case "triggered":
-      return "just started · decomposing…";
-    case "working":
-      return "working on your latest direction";
-    case "needs-you":
-      return "ready for your review";
-    case "shipped":
-      return "shipped · verified";
-    default:
-      return "—";
-  }
-}
-
-/** Newest run per product_id from a newest-first run list. */
-function latestRunByProduct(runs: Run[]): Map<string, Run> {
-  const latest = new Map<string, Run>();
-  for (const run of runs) {
-    if (run.product_id && !latest.has(run.product_id)) {
-      latest.set(run.product_id, run);
-    }
-  }
-  return latest;
-}
-
-function lanesFromProducts(products: Product[], runs: Run[]): ProductLane[] {
-  const byProduct = latestRunByProduct(runs);
-  return products.map((p) => {
-    const run = byProduct.get(p.id);
-    const state: LaneState = run ? laneStateForRun(run.status) : "idle";
-    return {
-      id: p.id,
-      slug: p.slug,
-      name: p.name,
-      state,
-      status: laneStatusFor(state, run !== undefined),
-    };
-  });
-}
-
-/** Resolve a product's slug from its id (for needs-you / shipped attribution). */
+/** Resolve a product's slug from its id; "workspace" when none / not found. */
 function productSlug(products: Product[], productId: string | null): string {
   if (!productId) return "workspace";
   return products.find((p) => p.id === productId)?.slug ?? "workspace";
@@ -132,8 +69,7 @@ function needsYouFrom(proposals: Proposal[], queue: SafeModeItem[]): NeedsYouIte
   return items;
 }
 
-/** Map a backend DeliverableType → the calmer ArtifactType UI vocabulary
- *  (UX §4 — deliverables render with a per-type marker). */
+/** Map a backend DeliverableType → the calmer ArtifactType UI vocabulary. */
 function artifactTypeFor(type: DeliverableType): ArtifactType {
   switch (type) {
     case "pr":
@@ -144,104 +80,86 @@ function artifactTypeFor(type: DeliverableType): ArtifactType {
     case "direct_output":
       return "doc";
     default:
-      // code (and any future bare artifact) → the generic file marker.
       return "file";
   }
 }
 
-/** Plain-language "where it landed" label for a deliverable type. */
-function sourceFor(type: DeliverableType): string {
-  switch (type) {
-    case "pr":
-      return "opened a pull request";
-    case "code":
-      return "committed to the repo";
-    case "page":
-      return "published a page";
-    case "page_image":
-      return "rendered a page preview";
-    default:
-      return "shipped";
-  }
+/** The actively-running work (in-flight runs) for the "Working on now" hero,
+ *  newest first. */
+function activeWorkFrom(runs: Run[], products: Product[]): ActiveWork[] {
+  return runs
+    .filter((r) => isActiveStatus(r.status))
+    .map((r) => ({
+      runId: r.id,
+      title: r.intent,
+      productSlug: productSlug(products, r.product_id),
+      status: r.status,
+      startedAt: r.created_at,
+    }));
 }
 
-/** A concise one-line summary for a shipped deliverable (the shared first-
- *  sentence condenser). Calm fallback when there's no summary at all. */
-function titleFor(summary: string | null): string {
-  return conciseSummary(summary, "Shipped deliverable");
-}
-
-/** Resolve a deliverable's product slug via its producing run (Deliverable has
- *  no product_id of its own). Degrades to "workspace" when the run is outside
- *  the runs window. */
-function productSlugForRun(runs: Run[], products: Product[], runId: string): string {
-  const run = runs.find((r) => r.id === runId);
-  return productSlug(products, run?.product_id ?? null);
-}
-
-/** Real Deliverable rows → recently-shipped items. Deliverables only exist for
- *  verified runs, so the verdict is the calm "This is verified". */
-function recentlyShippedFrom(
-  deliverables: Deliverable[],
+/** The full chronological work stream (every run, newest first), each joined to
+ *  the deliverable it produced (when any) for the title + "View report" link. */
+function workStreamFrom(
   runs: Run[],
+  deliverables: Deliverable[],
   products: Product[],
-): ShippedItem[] {
-  return deliverables.map((d) => {
-    const item: ShippedItem = {
-      id: d.id,
-      title: titleFor(d.summary),
-      productSlug: productSlugForRun(runs, products, d.run_id),
-      source: sourceFor(d.deliverable_type),
-      artifactType: artifactTypeFor(d.deliverable_type),
-      verdict: "This is verified",
-    };
-    if (d.artifact_uri) item.link = d.artifact_uri;
-    return item;
-  });
+): WorkStreamItem[] {
+  // run_id → its latest deliverable (the list is newest-first, so the first
+  // deliverable seen for a run_id is the most recent).
+  const byRun = new Map<string, Deliverable>();
+  for (const d of deliverables) {
+    if (!byRun.has(d.run_id)) byRun.set(d.run_id, d);
+  }
+  // Active (open / running) runs live in the "Working on now" hero — the stream
+  // is the DONE history, so they're excluded here to avoid duplication.
+  return runs
+    .filter((r) => !isActiveStatus(r.status))
+    .map((run) => {
+      const deliverable = byRun.get(run.id);
+      const summaryTitle = deliverable?.summary ? conciseSummary(deliverable.summary, "") : "";
+      return {
+        runId: run.id,
+        title: summaryTitle || run.intent || null,
+        productSlug: productSlug(products, run.product_id),
+        status: run.status,
+        updatedAt: run.updated_at,
+        deliverableId: deliverable?.id ?? null,
+        artifactType: deliverable ? artifactTypeFor(deliverable.deliverable_type) : null,
+      };
+    });
 }
 
 export async function getBrief(): Promise<BriefView> {
   try {
-    // Fetch the real surfaces in parallel. A 4xx on a CORE surface (products /
-    // runs) bubbles up to the fallback below rather than half-rendering. The
-    // optional surfaces (decisions / safemode / deliverables) degrade to empty
-    // on their own ApiError so one of them failing never blanks the Brief.
+    // Core surfaces (products / runs) bubble a 4xx to the fallback; the optional
+    // surfaces (decisions / safemode / deliverables) degrade to empty on their
+    // own ApiError so one failing never blanks the whole surface.
     const [products, runs, proposals, queue, deliverables] = await Promise.all([
       listProducts(),
-      listRuns(),
+      listRuns(_RUN_WINDOW),
       listPendingProposals().catch(emptyOnApiError<Proposal>),
       listSafeModeQueue().catch(emptyOnApiError<SafeModeItem>),
-      listDeliverables(6).catch(emptyOnApiError<Deliverable>),
+      listDeliverables(_RUN_WINDOW).catch(emptyOnApiError<Deliverable>),
     ]);
 
     return {
+      working: activeWorkFrom(runs, products),
       needsYou: needsYouFrom(proposals, queue),
-      lanes: lanesFromProducts(products, runs),
-      recentlyShipped: recentlyShippedFrom(deliverables, runs, products),
-      // All three surfaces are real now. A successful read — even an empty
-      // workspace — is never placeholder; only the hard-failure demo fallback
-      // below sets it true.
+      stream: workStreamFrom(runs, deliverables, products),
       placeholder: false,
     };
   } catch (error) {
-    // A 401 is auth-expired, NOT a transient network blip: it must propagate so
-    // the global 401 handler (apiFetch) + the gate redirect to /login fire,
-    // instead of masking the expired session behind the calm demo board.
+    // A 401 is auth-expired — propagate so the global handler + gate redirect to
+    // /login fire, rather than masking it behind calm empty states.
     if (error instanceof ApiError && error.status === 401) throw error;
-    // No backend / non-401 4xx-5xx mid-load → show the demo lanes rather than an
-    // error wall, so the surface stays calm during a genuine network failure.
     if (!(error instanceof ApiError) && !(error instanceof TypeError)) throw error;
-    return {
-      needsYou: [],
-      lanes: PLACEHOLDER_LANES,
-      recentlyShipped: [],
-      placeholder: true,
-    };
+    return { working: [], needsYou: [], stream: [], placeholder: true };
   }
 }
 
 /** Swallow a per-surface ApiError into an empty list so a single optional
- *  surface (decisions / safemode) failing does not blank the whole Brief. */
+ *  surface (decisions / safemode / deliverables) failing does not blank it. */
 function emptyOnApiError<T>(error: unknown): T[] {
   if (error instanceof ApiError || error instanceof TypeError) return [];
   throw error;

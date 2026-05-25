@@ -1,12 +1,13 @@
 /** Left-rail / bottom-nav information architecture (UX §4 IA lock). */
 
-export type NavKey = "brief" | "decisions" | "activity" | "knowledge" | "skills";
+// Activity was merged into Brief (the "Work stream") — it is no longer a tab.
+export type NavKey = "brief" | "decisions" | "knowledge" | "skills";
 
 export interface NavItem {
   key: NavKey;
   label: string;
   href: string;
-  /** Every primary surface (Brief / Decisions / Activity / Knowledge) ships a
+  /** Every primary surface (Brief / Decisions / Knowledge / Skills) ships a
    *  real route. */
   available: boolean;
 }
@@ -14,7 +15,6 @@ export interface NavItem {
 export const PRIMARY_NAV: NavItem[] = [
   { key: "brief", label: "Brief", href: "/brief", available: true },
   { key: "decisions", label: "Decisions", href: "/decisions", available: true },
-  { key: "activity", label: "Activity", href: "/activity", available: true },
   { key: "knowledge", label: "Knowledge", href: "/knowledge", available: true },
   { key: "skills", label: "Skills", href: "/skills", available: true },
 ];

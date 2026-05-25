@@ -38,6 +38,10 @@ class RunResponse(BaseModel):
     product_id: uuid.UUID | None = None
     request_id: uuid.UUID | None = None
     status: RunStatus
+    # The founder's Direction for this run (from the free-form payload's
+    # ``intent_text`` / ``text``); ``None`` when the run carries none. Powers the
+    # "what is BSVibe working on" title on the merged Brief / Work-Home surface.
+    intent: str | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -139,6 +143,14 @@ def _opt_str(value: Any) -> str | None:
     if isinstance(value, str) and value.strip():
         return value.strip()
     return None
+
+
+def _intent_of(payload: Any) -> str | None:
+    """The founder's Direction from a run's free-form payload (``intent_text``
+    from intake, or ``text`` from a direct submission); ``None`` when neither is
+    a non-empty string. Same resolution the trigger context + report use."""
+    payload = payload if isinstance(payload, dict) else {}
+    return _opt_str(payload.get("intent_text")) or _opt_str(payload.get("text"))
 
 
 def _trigger_context(payload: Any) -> RunTriggerContext:
@@ -285,6 +297,7 @@ async def list_runs(
             product_id=row.product_id,
             request_id=row.request_id,
             status=row.status,
+            intent=_intent_of(row.payload),
             created_at=row.created_at,
             updated_at=row.updated_at,
         )
@@ -308,6 +321,7 @@ async def get_run(
         product_id=row.product_id,
         request_id=row.request_id,
         status=row.status,
+        intent=_intent_of(row.payload),
         created_at=row.created_at,
         updated_at=row.updated_at,
     )

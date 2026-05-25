@@ -1,7 +1,8 @@
 /**
  * brief.ts real-data composition — drives getBrief() against a mocked fetch and
- * asserts it maps /api/v1/{products,runs,decisions,safemode/queue} into the
- * BriefView shape (run.status → lane state, needs-you count, recently shipped).
+ * asserts it folds /api/v1/{products,runs,decisions,safemode/queue,deliverables}
+ * into the merged Work-Home shape: active runs → the "working" hero, done runs →
+ * the "stream" (joined to their deliverable), and the needs-you count.
  */
 
 import { getBrief } from "@/lib/api/brief";
@@ -30,13 +31,14 @@ function product(id: string, slug: string, name: string) {
   };
 }
 
-function run(id: string, product_id: string | null, status: string) {
+function run(id: string, product_id: string | null, status: string, intent: string | null = null) {
   return {
     id,
     workspace_id: "ws-1",
     product_id,
     request_id: null,
     status,
+    intent,
     created_at: NOW,
     updated_at: NOW,
   };
@@ -44,18 +46,18 @@ function run(id: string, product_id: string | null, status: string) {
 
 function deliverable(
   id: string,
+  run_id: string,
   deliverable_type: string,
   summary: string | null,
   artifact_uri: string | null = null,
-  artifact_refs: string[] = [],
 ) {
   return {
     id,
-    run_id: `run-${id}`,
+    run_id,
     workspace_id: "ws-1",
     deliverable_type,
     summary,
-    artifact_refs,
+    artifact_refs: [],
     artifact_uri,
     created_at: NOW,
   };
@@ -77,7 +79,7 @@ function mockFetch(routes: Record<string, unknown>) {
   });
 }
 
-describe("getBrief (real-data composition)", () => {
+describe("getBrief (merged Work-Home composition)", () => {
   beforeEach(() => {
     clearSession();
     setSession(SESSION);
@@ -87,48 +89,30 @@ describe("getBrief (real-data composition)", () => {
     vi.restoreAllMocks();
   });
 
-  it("derives lanes from products + each product's latest run status", async () => {
-    global.fetch = mockFetch({
-      "/api/v1/products": [
-        product("p-running", "alpha", "alpha"),
-        product("p-open", "beta", "beta"),
-        product("p-review", "gamma", "gamma"),
-        product("p-shipped", "delta", "delta"),
-        product("p-none", "epsilon", "epsilon"),
-      ],
-      "/api/v1/runs": [
-        run("r1", "p-running", "running"),
-        run("r2", "p-open", "open"),
-        run("r3", "p-review", "review_ready"),
-        run("r4", "p-shipped", "shipped"),
-      ],
-      "/api/v1/decisions": [],
-      "/api/v1/safemode/queue": [],
-      "/api/v1/deliverables": [],
-    }) as unknown as typeof fetch;
-
-    const view = await getBrief();
-    const bySlug = Object.fromEntries(view.lanes.map((l) => [l.slug, l.state]));
-
-    expect(bySlug.alpha).toBe("working");
-    expect(bySlug.beta).toBe("triggered");
-    expect(bySlug.gamma).toBe("needs-you");
-    expect(bySlug.delta).toBe("shipped");
-    expect(bySlug.epsilon).toBe("idle"); // no run → idle
-    expect(view.lanes).toHaveLength(5);
-  });
-
-  it("uses only the newest run per product (list is newest-first)", async () => {
+  it("splits active runs into the hero and done runs into the stream", async () => {
     global.fetch = mockFetch({
       "/api/v1/products": [product("p1", "alpha", "alpha")],
-      "/api/v1/runs": [run("newest", "p1", "running"), run("older", "p1", "shipped")],
+      "/api/v1/runs": [
+        run("r-running", "p1", "running", "Write the feature"),
+        run("r-open", "p1", "open", "Decompose the direction"),
+        run("r-shipped", "p1", "shipped"),
+        run("r-failed", "p1", "failed", "Broken link fix"),
+      ],
       "/api/v1/decisions": [],
       "/api/v1/safemode/queue": [],
       "/api/v1/deliverables": [],
     }) as unknown as typeof fetch;
 
     const view = await getBrief();
-    expect(view.lanes[0].state).toBe("working");
+
+    // Active (running / open) → the "Working on now" hero, newest-first.
+    expect(view.working.map((w) => w.runId)).toEqual(["r-running", "r-open"]);
+    expect(view.working[0].title).toBe("Write the feature");
+    expect(view.working[0].status).toBe("running");
+
+    // Done (shipped / failed) → the work stream; active runs excluded.
+    expect(view.stream.map((s) => s.runId)).toEqual(["r-shipped", "r-failed"]);
+    expect(view.placeholder).toBe(false);
   });
 
   it("counts needs-you from pending proposals + safe-mode queue", async () => {
@@ -168,92 +152,40 @@ describe("getBrief (real-data composition)", () => {
     expect(view.needsYou.some((n) => n.question.includes("Safe Mode"))).toBe(true);
   });
 
-  it("lists recently shipped from REAL /api/v1/deliverables, newest first", async () => {
+  it("joins a stream row to its deliverable (concise title + report link)", async () => {
     global.fetch = mockFetch({
       "/api/v1/products": [product("p1", "alpha", "alpha")],
-      "/api/v1/runs": [],
+      "/api/v1/runs": [run("r-ship", "p1", "shipped", "Add related posts")],
       "/api/v1/decisions": [],
       "/api/v1/safemode/queue": [],
       "/api/v1/deliverables": [
-        deliverable(
-          "d-pr",
-          "pr",
-          "Add getRelatedPosts function\nwith tests",
-          "https://github.com/acme/repo/pull/15",
-        ),
-        deliverable("d-page", "page", "Publish the launch landing page"),
+        deliverable("d-pr", "r-ship", "pr", "Add getRelatedPosts function. With tests."),
       ],
     }) as unknown as typeof fetch;
 
     const view = await getBrief();
-    expect(view.recentlyShipped).toHaveLength(2);
-    expect(view.recentlyShipped.map((s) => s.id)).toEqual(["d-pr", "d-page"]);
-
-    const [pr, page] = view.recentlyShipped;
-    // Title = first line of the summary.
-    expect(pr.title).toBe("Add getRelatedPosts function");
-    // deliverable_type "pr" maps to the UI artifact-type marker "pr".
-    expect(pr.artifactType).toBe("pr");
-    // artifact_uri is carried as the link when present.
-    expect(pr.link).toBe("https://github.com/acme/repo/pull/15");
-    expect(pr.verdict).toBe("This is verified");
-    // deliverable_type "page" maps to the UI "doc" marker; no uri → no link.
-    expect(page.title).toBe("Publish the launch landing page");
-    expect(page.artifactType).toBe("doc");
-    expect(page.link).toBeUndefined();
-
-    // All three surfaces are now real → no placeholder.
-    expect(view.placeholder).toBe(false);
+    expect(view.stream).toHaveLength(1);
+    const row = view.stream[0];
+    // Title prefers the deliverable's CONCISE summary (first sentence).
+    expect(row.title).toBe("Add getRelatedPosts function.");
+    expect(row.deliverableId).toBe("d-pr");
+    expect(row.artifactType).toBe("pr");
+    expect(row.status).toBe("shipped");
   });
 
-  it("falls back to a calm title when a deliverable has no summary", async () => {
+  it("uses the run's intent as the stream title when there's no deliverable", async () => {
     global.fetch = mockFetch({
       "/api/v1/products": [product("p1", "alpha", "alpha")],
-      "/api/v1/runs": [],
+      "/api/v1/runs": [run("r-fail", "p1", "failed", "Fix the broken link")],
       "/api/v1/decisions": [],
       "/api/v1/safemode/queue": [],
-      "/api/v1/deliverables": [deliverable("d-code", "code", null)],
+      "/api/v1/deliverables": [],
     }) as unknown as typeof fetch;
 
     const view = await getBrief();
-    expect(view.recentlyShipped).toHaveLength(1);
-    expect(view.recentlyShipped[0].title).toBe("Shipped deliverable");
-    expect(view.recentlyShipped[0].artifactType).toBe("file");
-  });
-
-  it("condenses a long LLM summary to its first sentence (not the raw blob)", async () => {
-    const longSummary =
-      "The fibonacci.py file has been successfully created with a function that " +
-      "returns the nth Fibonacci number. The implementation:\n" +
-      "- handles n=0 and n=1\n- is iterative";
-    global.fetch = mockFetch({
-      "/api/v1/products": [product("p1", "alpha", "alpha")],
-      "/api/v1/runs": [],
-      "/api/v1/decisions": [],
-      "/api/v1/safemode/queue": [],
-      "/api/v1/deliverables": [deliverable("d-fib", "code", longSummary)],
-    }) as unknown as typeof fetch;
-
-    const view = await getBrief();
-    expect(view.recentlyShipped[0].title).toBe(
-      "The fibonacci.py file has been successfully created with a function that returns the nth Fibonacci number.",
-    );
-  });
-
-  it("hard-caps an over-long single sentence with an ellipsis", async () => {
-    const huge = `${"word ".repeat(60).trim()} end`; // ~300 chars, no sentence break
-    global.fetch = mockFetch({
-      "/api/v1/products": [product("p1", "alpha", "alpha")],
-      "/api/v1/runs": [],
-      "/api/v1/decisions": [],
-      "/api/v1/safemode/queue": [],
-      "/api/v1/deliverables": [deliverable("d-long", "code", huge)],
-    }) as unknown as typeof fetch;
-
-    const view = await getBrief();
-    const title = view.recentlyShipped[0].title;
-    expect(title.endsWith("…")).toBe(true);
-    expect(title.length).toBeLessThanOrEqual(141);
+    expect(view.stream[0].title).toBe("Fix the broken link");
+    expect(view.stream[0].deliverableId).toBeNull();
+    expect(view.stream[0].artifactType).toBeNull();
   });
 
   it("an empty/fresh workspace yields calm empty states, NOT demo data", async () => {
@@ -266,25 +198,24 @@ describe("getBrief (real-data composition)", () => {
     }) as unknown as typeof fetch;
 
     const view = await getBrief();
-    expect(view.lanes).toEqual([]);
+    expect(view.working).toEqual([]);
     expect(view.needsYou).toEqual([]);
-    expect(view.recentlyShipped).toEqual([]);
+    expect(view.stream).toEqual([]);
     expect(view.placeholder).toBe(false);
   });
 
-  it("falls back to demo lanes when the core read fails (no error wall)", async () => {
+  it("degrades to calm empty states when the core read fails (no error wall)", async () => {
     global.fetch = vi.fn(
       async () => new Response("nope", { status: 500 }),
     ) as unknown as typeof fetch;
 
     const view = await getBrief();
-    expect(view.lanes.length).toBeGreaterThan(0); // demo fallback
+    expect(view.working).toEqual([]);
+    expect(view.stream).toEqual([]);
     expect(view.placeholder).toBe(true);
   });
 
-  it("does NOT show the placeholder board on a 401 — it propagates so the gate redirects", async () => {
-    // window.location is stubbed so apiFetch's 401 handler can no-op its
-    // redirect inside the test without touching the real navigation.
+  it("does NOT degrade on a 401 — it propagates so the gate redirects", async () => {
     Object.defineProperty(window, "location", {
       configurable: true,
       value: { pathname: "/brief", assign: vi.fn() } as unknown as Location,
@@ -293,8 +224,6 @@ describe("getBrief (real-data composition)", () => {
       async () => new Response("unauthorized", { status: 401 }),
     ) as unknown as typeof fetch;
 
-    // A 401 is auth-expired, not a network blip: it must NOT degrade into the
-    // calm demo board — it propagates (the global handler / gate redirects).
     await expect(getBrief()).rejects.toMatchObject({ status: 401 });
   });
 });

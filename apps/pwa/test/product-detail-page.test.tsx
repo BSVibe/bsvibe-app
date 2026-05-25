@@ -42,6 +42,7 @@ const SHIPPED_RUN: Run = {
   workspace_id: "ws-1",
   product_id: "p-blog",
   request_id: null,
+  intent: null,
   status: "shipped",
   created_at: NOW,
   updated_at: NOW,
