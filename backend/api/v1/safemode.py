@@ -81,6 +81,20 @@ class SafeModeItemResponse(BaseModel):
     created_at: datetime
 
 
+class SafeModeResolvedResponse(BaseModel):
+    """One decided Safe-Mode delivery (the Decisions "Resolved" tab, delivery
+    side). ``status`` is the terminal outcome (approved / denied / expired);
+    ``decided_at`` is when the founder (or expiry) settled it."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: uuid.UUID
+    deliverable_id: uuid.UUID
+    status: str
+    decided_at: datetime | None = None
+    created_at: datetime
+
+
 class SafeModeDenyRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -112,6 +126,27 @@ async def list_queue(
             compensation_tier=None,
             expires_at=item.expires_at,
             extension_count=item.extension_count,
+            created_at=item.created_at,
+        )
+        for item in items
+    ]
+
+
+@router.get("/resolved")
+async def list_resolved(
+    workspace_id: Annotated[uuid.UUID, Depends(get_workspace_id)],
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+) -> list[SafeModeResolvedResponse]:
+    """List decided Safe-Mode deliveries (approved / denied / expired) for the
+    Decisions "Resolved" tab, most-recently-decided first."""
+    queue = SafeModeQueue(session)
+    items = await queue.list_resolved(workspace_id=workspace_id)
+    return [
+        SafeModeResolvedResponse(
+            id=item.id,
+            deliverable_id=item.deliverable_id,
+            status=item.status.value,
+            decided_at=item.decided_at,
             created_at=item.created_at,
         )
         for item in items

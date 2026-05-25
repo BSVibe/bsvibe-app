@@ -361,6 +361,68 @@ export interface PendingProposal {
  *  kinds the founder must judge. */
 export type PendingDecision = PendingDelivery | PendingCheckpoint | PendingProposal;
 
+// ── Unified Resolved list (frontend aggregation, mirror of Pending) ────────
+// The Decisions "Resolved" tab is the history side of the same three queues: a
+// resolved canon decision (the audit-log note), a decided Safe-Mode delivery
+// (approved/denied/expired), and an answered paused-run checkpoint. Folded
+// client-side exactly like the Pending list, newest-resolved first.
+
+/** A resolved canon decision (the audit-trail note). */
+export interface ResolvedKnowledge {
+  kind: "knowledge";
+  /** Stable list key — `decision-<path>`. */
+  id: string;
+  /** Directional decision recorded (e.g. `must-link` / `cannot-link`). */
+  decisionKind: string;
+  resolvedAt: string;
+}
+
+/** A decided Safe-Mode delivery (approved / denied / expired). */
+export interface ResolvedDelivery {
+  kind: "delivery";
+  /** Stable list key — `delivery-<safemode item id>`. */
+  id: string;
+  itemId: string;
+  /** Terminal outcome: `approved` | `denied` | `expired`. */
+  status: string;
+  resolvedAt: string;
+}
+
+/** An answered paused-run checkpoint — the question + the founder's answer. */
+export interface ResolvedCheckpointDecision {
+  kind: "decision";
+  /** Stable list key — `checkpoint-<checkpoint id>`. */
+  id: string;
+  checkpointId: string;
+  question: string;
+  resolution: string | null;
+  resolvedAt: string;
+}
+
+/** One row in the unified Resolved list — a discriminated union mirroring
+ *  {@link PendingDecision}. */
+export type ResolvedDecision = ResolvedKnowledge | ResolvedDelivery | ResolvedCheckpointDecision;
+
+/** `GET /api/v1/safemode/resolved` element (backend SafeModeResolvedResponse).
+ *  A decided Safe-Mode delivery; `decided_at` is when it was settled. */
+export interface SafeModeResolvedItem {
+  id: string;
+  deliverable_id: string;
+  status: string;
+  decided_at: string | null;
+  created_at: string;
+}
+
+/** `GET /api/v1/checkpoints/resolved` element (backend
+ *  ResolvedCheckpointResponse). An answered paused-run checkpoint. */
+export interface ResolvedCheckpointItem {
+  id: string;
+  run_id: string;
+  question: string;
+  resolution: string | null;
+  resolved_at: string | null;
+}
+
 /** `GET /api/v1/safemode/queue` element (backend SafeModeItemResponse). */
 export interface SafeModeItem {
   id: string;

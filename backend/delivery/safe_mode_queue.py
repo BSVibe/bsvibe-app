@@ -75,6 +75,30 @@ class SafeModeQueue:
         )
         return list((await self._session.execute(stmt)).scalars().all())
 
+    async def list_resolved(self, *, workspace_id: uuid.UUID) -> list[SafeModeQueueItemRow]:
+        """Founder-facing list of decided items (approved / denied / expired),
+        most-recently-decided first. Powers the Decisions "Resolved" tab's
+        delivery side; ``decided_at`` is the sort key (created_at as a stable
+        tiebreaker for a defensively-undecided row)."""
+        stmt = (
+            select(SafeModeQueueItemRow)
+            .where(
+                SafeModeQueueItemRow.workspace_id == workspace_id,
+                SafeModeQueueItemRow.status.in_(
+                    [
+                        SafeModeStatus.APPROVED,
+                        SafeModeStatus.DENIED,
+                        SafeModeStatus.EXPIRED,
+                    ]
+                ),
+            )
+            .order_by(
+                SafeModeQueueItemRow.decided_at.desc(),
+                SafeModeQueueItemRow.created_at.desc(),
+            )
+        )
+        return list((await self._session.execute(stmt)).scalars().all())
+
     async def approve(
         self,
         *,

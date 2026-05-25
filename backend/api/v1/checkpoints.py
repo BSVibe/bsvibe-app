@@ -55,6 +55,19 @@ class CheckpointResponse(BaseModel):
     created_at: datetime
 
 
+class ResolvedCheckpointResponse(BaseModel):
+    """One answered paused-run checkpoint (the Decisions "Resolved" tab,
+    checkpoint side): the question + the founder's recorded answer + when."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: uuid.UUID
+    run_id: uuid.UUID
+    question: str
+    resolution: str | None = None
+    resolved_at: datetime | None = None
+
+
 class ResolveRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -104,6 +117,34 @@ async def list_checkpoints(
             question=_question_text(row),
             rationale=row.rationale,
             created_at=row.created_at,
+        )
+        for row in rows
+    ]
+
+
+@router.get("/resolved")
+async def list_resolved_checkpoints(
+    workspace_id: Annotated[uuid.UUID, Depends(get_workspace_id)],
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+) -> list[ResolvedCheckpointResponse]:
+    """List RESOLVED execution Decisions for the Decisions "Resolved" tab,
+    most-recently-resolved first (created_at as a stable tiebreaker)."""
+    stmt = (
+        select(Decision)
+        .where(
+            Decision.workspace_id == workspace_id,
+            Decision.status == DecisionStatus.RESOLVED,
+        )
+        .order_by(Decision.resolved_at.desc(), Decision.created_at.desc())
+    )
+    rows = (await session.execute(stmt)).scalars().all()
+    return [
+        ResolvedCheckpointResponse(
+            id=row.id,
+            run_id=row.run_id,
+            question=_question_text(row),
+            resolution=row.resolution,
+            resolved_at=row.resolved_at,
         )
         for row in rows
     ]

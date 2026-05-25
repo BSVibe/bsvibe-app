@@ -8,11 +8,17 @@
  *  OPEN so the worker re-picks it with the answer in context. */
 
 import { apiFetch } from "./client";
-import type { Checkpoint, CheckpointResolveResponse } from "./types";
+import type { Checkpoint, CheckpointResolveResponse, ResolvedCheckpointItem } from "./types";
 
 /** Pending paused-run checkpoints awaiting a founder answer (newest first). */
 export function listCheckpoints(): Promise<Checkpoint[]> {
   return apiFetch<Checkpoint[]>("/api/v1/checkpoints");
+}
+
+/** Answered paused-run checkpoints (newest-resolved first) — the checkpoint
+ *  side of the Decisions "Resolved" tab. */
+export function listResolvedCheckpoints(): Promise<ResolvedCheckpointItem[]> {
+  return apiFetch<ResolvedCheckpointItem[]>("/api/v1/checkpoints/resolved");
 }
 
 /** Resolve a paused-run checkpoint with the founder's answer and resume the

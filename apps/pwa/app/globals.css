@@ -6082,6 +6082,20 @@ main.login {
   outline-offset: 1px;
 }
 
+/* Read-only recorded answer on a RESOLVED checkpoint row (history, not an
+   input — distinct from the textarea above). */
+.decisions-row__answered {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  align-items: baseline;
+  font-size: 0.82rem;
+}
+
+.decisions-row__answer-text {
+  color: var(--ink-2);
+}
+
 .decisions-row__answer:disabled {
   opacity: 0.6;
 }
