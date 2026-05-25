@@ -56,12 +56,14 @@ from backend.execution.db import (
     WorkStep,
     WorkStepStatus,
 )
-from backend.execution.tools import ToolError, ToolRegistry
+from backend.execution.tools import ToolDefinition, ToolError, ToolRegistry
 from backend.execution.verified_deliverable import write_verified_deliverable
 from backend.execution.verifier.contract import (
     VerificationContract,
 )
 from backend.execution.verifier.service import VerificationService
+from backend.skills.loader import SkillLoader
+from backend.skills.tool_binding import INVOKE_SKILL_NAME, register_invoke_skill
 from backend.supervisor.sandbox import SandboxManager, SandboxSession
 
 logger = structlog.get_logger(__name__)
@@ -117,6 +119,37 @@ class CanonRetriever(Protocol):
     async def retrieve_for_signals(self, signals: str) -> list[str]: ...
 
 
+class _RetrieverSearcher:
+    """Adapt a :class:`CanonRetriever` to the skill runner's :class:`Searcher`.
+
+    The skill runner primes a skill's system prompt via ``search(query, *,
+    top_k, max_chars) -> str``; the retriever speaks ``retrieve_for_signals
+    (signals) -> list[str]``. This thin adapter joins the canonical statements
+    into the formatted-string shape the runner expects, capped at ``max_chars``,
+    and degrades to an empty string when there is no knowledge (never raises —
+    matching the retriever's own graceful-empty contract)."""
+
+    def __init__(self, retriever: CanonRetriever) -> None:
+        self._retriever = retriever
+
+    async def search(
+        self,
+        query: str,
+        *,
+        top_k: int = 20,
+        max_chars: int = 50_000,
+    ) -> str:
+        try:
+            statements = await self._retriever.retrieve_for_signals(query)
+        except Exception:  # noqa: BLE001 — priming must never crash a skill run
+            logger.warning("skill_searcher_retrieve_failed", exc_info=True)
+            return ""
+        cleaned = [s.strip() for s in statements if s and s.strip()][:top_k]
+        if not cleaned:
+            return ""
+        return "\n".join(f"- {s}" for s in cleaned)[:max_chars]
+
+
 @dataclass
 class LoopResult:
     """Outcome of one :meth:`RunOrchestrator.run` invocation."""
@@ -156,6 +189,16 @@ WORK_TOOLS: tuple[str, ...] = (
     "shell_exec",
     "declare_verification",
 )
+
+# B5a — knowledge_search is a read-only tool the work LLM may call mid-run to
+# consult the workspace's settled canonical knowledge. Backed by the SAME
+# :class:`CanonRetriever` the verifier folds in (B3). ``invoke_skill`` is
+# registered separately via :func:`register_invoke_skill`. Both are only
+# surfaced when the orchestrator was given a workspace ``skill_loader`` (the
+# production worker factory always threads one in; legacy/test callers that
+# omit it keep the original 6-tool set).
+KNOWLEDGE_SEARCH_NAME = "knowledge_search"
+_KNOWLEDGE_SEARCH_MAX_RESULTS = 5
 
 ASK_USER_QUESTION_TOOL: dict[str, Any] = {
     "type": "function",
@@ -206,6 +249,7 @@ class RunOrchestrator:
         sandbox_manager: SandboxManager,
         max_cycles: int | None = None,
         retriever: CanonRetriever | None = None,
+        skill_loader: SkillLoader | None = None,
         redis_client: Any = None,
         settings: Settings | None = None,
     ) -> None:
@@ -213,6 +257,11 @@ class RunOrchestrator:
         self._llm = llm
         self._sandbox_manager = sandbox_manager
         self._settings = settings or get_settings()
+        # B5a — the run's workspace SkillLoader. When set, the loop registers
+        # the ``invoke_skill`` + ``knowledge_search`` tools so the work LLM can
+        # discover skills and consult canonical knowledge mid-run. ``None`` (the
+        # default, every legacy caller/test) keeps the original WORK_TOOLS set.
+        self._skill_loader = skill_loader
         # Round cap: explicit override wins; otherwise the env-overridable
         # Settings knob (promoted in Round 9). Defaults tuned for local LLMs.
         self._max_cycles = (
@@ -225,6 +274,102 @@ class RunOrchestrator:
         # behaviour: the verified terminal emits no stream notification. Emission
         # is gated + soft-fail inside :func:`emit_stream_notification`.
         self._redis_client = redis_client
+
+    # -- B5a: skill + knowledge tools -------------------------------------
+
+    def _register_knowledge_tools(self, registry: ToolRegistry) -> list[str]:
+        """Register ``invoke_skill`` + ``knowledge_search`` into ``registry``.
+
+        Only when the orchestrator was given a workspace :class:`SkillLoader`
+        (the production worker factory always threads one in). Returns the names
+        added so the caller can fold them into the surfaced tool schema. A
+        missing loader → no extra tools (legacy behaviour, empty list)."""
+        loader = self._skill_loader
+        if loader is None:
+            return []
+        searcher = _RetrieverSearcher(self._retriever) if self._retriever is not None else None
+        # invoke_skill — runs a named workspace skill end-to-end. The skill
+        # runner's completion seam routes through the SAME loop LLM (adapted to
+        # its (system_prompt, user_input) shape); the optional searcher primes
+        # the skill's system prompt with retrieved knowledge.
+        register_invoke_skill(
+            registry,
+            loader=loader,
+            completion_fn=self._skill_completion_fn,
+            searcher=searcher,
+        )
+        # knowledge_search — read-only, lets the LLM consult canonical knowledge
+        # mid-run. Backed by the retriever; empty/no-knowledge → empty-but-valid.
+        registry.register(
+            ToolDefinition(
+                name=KNOWLEDGE_SEARCH_NAME,
+                description=(
+                    "Search this workspace's settled canonical knowledge for guidance "
+                    "relevant to your task. Returns the most relevant canonical concept "
+                    "statements (may be empty if the workspace has no settled knowledge "
+                    "yet). Read-only — consult it before deciding how to do the work."
+                ),
+                parameters_schema={
+                    "type": "object",
+                    "properties": {
+                        "query": {
+                            "type": "string",
+                            "description": "What you want to know — describe the task or topic.",
+                        },
+                    },
+                    "required": ["query"],
+                },
+                handler=self._knowledge_search,
+            )
+        )
+        return [INVOKE_SKILL_NAME, KNOWLEDGE_SEARCH_NAME]
+
+    async def _skill_completion_fn(
+        self,
+        *,
+        system_prompt: str,
+        user_input: str,
+        model: str | None = None,
+        allowed_tools: list[str] | None = None,
+    ) -> str:
+        """Adapt the skill runner's ``CompletionFn`` to the loop LLM seam.
+
+        The skill runner expects ``(system_prompt, user_input, *, model,
+        allowed_tools) -> str``; the loop LLM speaks ``(messages, tools) ->
+        LoopTurn``. A skill is a single plain completion (no tool loop here), so
+        we send the composed system prompt + user input as messages with
+        ``tools=None`` and return the response text."""
+        messages: list[dict[str, Any]] = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_input},
+        ]
+        turn = await self._llm.complete(messages=messages, tools=None)
+        return turn.content
+
+    async def _knowledge_search(self, arguments: dict[str, Any]) -> str:
+        """Handler for the ``knowledge_search`` tool — never raises into the loop.
+
+        Returns a human-legible string of the top canonical statements for the
+        query, or a valid empty result when there is no knowledge / no
+        retriever / the retrieval fails."""
+        query = str(arguments.get("query") or "").strip()
+        if not query:
+            return "knowledge_search requires a non-empty 'query'."
+        if self._retriever is None:
+            return "No workspace knowledge is available."
+        try:
+            statements = await self._retriever.retrieve_for_signals(query)
+        except Exception:  # noqa: BLE001 — read-only consult must never crash the loop
+            logger.warning("knowledge_search_failed", exc_info=True)
+            return "No workspace knowledge is available."
+        statements = [s.strip() for s in statements if s and s.strip()][
+            :_KNOWLEDGE_SEARCH_MAX_RESULTS
+        ]
+        if not statements:
+            return f"No settled knowledge found for: {query}"
+        lines = [f"Relevant workspace knowledge for '{query}':"]
+        lines.extend(f"- {s}" for s in statements)
+        return "\n".join(lines)
 
     async def run(self, *, run: ExecutionRun, workspace_dir: Path) -> LoopResult:
         project_id = run.product_id or run.id
@@ -299,7 +444,14 @@ class RunOrchestrator:
         workspace_dir: Path,
     ) -> LoopResult:
         registry = ToolRegistry(workspace_dir=workspace_dir, sandbox=box)
-        tools_schema = [*registry.schema_for(list(WORK_TOOLS)), ASK_USER_QUESTION_TOOL]
+        # B5a — register the skill + knowledge tools (when a workspace skill
+        # loader was threaded in) so the work LLM can discover skills + consult
+        # canonical knowledge during the run. Returns the extra surfaced names.
+        extra_tool_names = self._register_knowledge_tools(registry)
+        tools_schema = [
+            *registry.schema_for([*WORK_TOOLS, *extra_tool_names]),
+            ASK_USER_QUESTION_TOOL,
+        ]
         messages: list[dict[str, Any]] = [
             {"role": "system", "content": _SYSTEM_PROMPT},
             {"role": "user", "content": _intent_title(run)},
@@ -685,6 +837,7 @@ def _utcnow() -> Any:
 
 __all__ = [
     "ASK_USER_QUESTION_TOOL",
+    "KNOWLEDGE_SEARCH_NAME",
     "WORK_TOOLS",
     "CanonRetriever",
     "LoopLlm",
