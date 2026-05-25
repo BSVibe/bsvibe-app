@@ -36,7 +36,6 @@
   "nav": {
     "brief": "요약",
     "decisions": "결정",
-    "activity": "활동",
     "knowledge": "지식",
     "skills": "스킬",
     "settings": "설정"
@@ -178,22 +177,6 @@
     "allowedTools": "허용된 도구",
     "systemPromptNo": "이 스킬에는 시스템 프롬프트가 없어요."
   },
-  "activity": {
-    "heading": "활동",
-    "lede": "그동안 한 일을 살펴봅니다.",
-    "loadingNote": "최근 활동을 살펴보는 중…",
-    "errorLine": "지금은 최근 활동을 불러오지 못했어요.",
-    "errorSub": "잠시 후 다시 시도해 주세요.",
-    "emptyLine": "아직 작업이 없어요.",
-    "emptySub": "방향을 알려주시면 여기에 표시됩니다.",
-    "recentRuns": "최근 작업",
-    "deliverablesLoading": "전달한 결과물을 살펴보는 중…",
-    "deliverablesError": "지금은 이 작업의 결과물을 불러오지 못했어요 — 잠시 후 다시 시도해 주세요.",
-    "deliverablesEmpty": "이 작업에는 전달된 결과물이 없습니다.",
-    "openArtifact": "결과물 열기",
-    "viewReport": "리포트 보기",
-    "openRun": "작업 열기"
-  },
   "knowledge": {
     "heading": "지식",
     "lede": "함께 일하며 배운 것을 살펴봐요.",
@@ -253,7 +236,6 @@
     "resolvedAnswerLabel": "답변",
     "kindDelivery": "전달물",
     "kindDecision": "결정",
-    "kindKnowledge": "지식",
     "deliveryQuestion": "전달물이 안전 모드에 보류되어 있어요 — 내보낼까요?",
     "approve": "승인",
     "decline": "거절",
@@ -633,15 +615,14 @@
     "artifactTruncated": "이 파일의 앞부분만 보여드려요 — 인라인으로 표시하기엔 너무 커요.",
     "artifactUnavailable": "지금은 이 파일을 표시할 수 없어요.",
     "artifactUnavailableWithDiff": "이 파일을 표시할 수 없어요 — 전체 변경 내용은 변경 내용에서 확인하세요.",
-    "diff": "변경 내용",
     "viewDiff": "변경 내용 보기"
   },
   "run": {
-    "back": "‹ 활동",
+    "back": "‹ 요약",
     "region": "실행 상세",
     "loadingNote": "이 실행을 살펴보는 중…",
     "notFoundLine": "해당 실행을 찾을 수 없어요.",
-    "backToActivity": "활동으로 돌아가기",
+    "backToBrief": "요약으로 돌아가기",
     "errorLine": "지금은 이 실행을 불러올 수 없어요.",
     "errorSub": "잠시 후 다시 시도해 주세요.",
     "untitled": "트리거된 실행",
@@ -649,7 +630,6 @@
     "triggeredFrom": "{source}에서 시작됨",
     "triggeredDirectly": "직접 시작하셨어요.",
     "safeModeExternal": "BSVibe 외부에서 들어온 작업이에요 — 승인하기 전까지는 푸시·머지·답신하지 않을게요.",
-    "noTrigger": "이 실행에 기록된 트리거 정보가 없습니다.",
     "statusLabel": {
       "open": "방금 시작됨",
       "running": "작업 중",

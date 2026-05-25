@@ -36,7 +36,6 @@
   "nav": {
     "brief": "Brief",
     "decisions": "Decisions",
-    "activity": "Activity",
     "knowledge": "Knowledge",
     "skills": "Skills",
     "settings": "Settings"
@@ -178,22 +177,6 @@
     "allowedTools": "Allowed tools",
     "systemPromptNo": "This skill has no system prompt."
   },
-  "activity": {
-    "heading": "Activity",
-    "lede": "A look at what I’ve been doing.",
-    "loadingNote": "Looking at recent activity…",
-    "errorLine": "Couldn’t load recent activity just now.",
-    "errorSub": "Try again in a moment.",
-    "emptyLine": "No runs yet.",
-    "emptySub": "Give me a Direction and they’ll show up here.",
-    "recentRuns": "Recent runs",
-    "deliverablesLoading": "Looking at what it delivered…",
-    "deliverablesError": "Couldn’t load this run’s deliverables just now — try again in a moment.",
-    "deliverablesEmpty": "No delivered artifacts for this run.",
-    "openArtifact": "Open artifact",
-    "viewReport": "View report",
-    "openRun": "Open run"
-  },
   "knowledge": {
     "heading": "Knowledge",
     "lede": "A look at what I’ve learned working with you.",
@@ -253,7 +236,6 @@
     "resolvedAnswerLabel": "Your answer",
     "kindDelivery": "Delivery",
     "kindDecision": "Decision",
-    "kindKnowledge": "Knowledge",
     "deliveryQuestion": "A delivery is held in Safe Mode — send it out?",
     "approve": "Approve",
     "decline": "Decline",
@@ -633,15 +615,14 @@
     "artifactTruncated": "Showing the first part of this file — it was larger than we display inline.",
     "artifactUnavailable": "Couldn’t show this file right now.",
     "artifactUnavailableWithDiff": "Couldn’t show this file — see the diff for the full change.",
-    "diff": "Diff",
     "viewDiff": "View the diff"
   },
   "run": {
-    "back": "‹ Activity",
+    "back": "‹ Brief",
     "region": "Run detail",
     "loadingNote": "Looking at this run…",
     "notFoundLine": "We can’t find that run.",
-    "backToActivity": "Back to Activity",
+    "backToBrief": "Back to the Brief",
     "errorLine": "Couldn’t load this run just now.",
     "errorSub": "Try again in a moment.",
     "untitled": "Triggered run",
@@ -649,7 +630,6 @@
     "triggeredFrom": "Triggered from {source}",
     "triggeredDirectly": "Started directly by you.",
     "safeModeExternal": "Came from outside BSVibe — I won’t push, merge, or reply until you approve.",
-    "noTrigger": "No trigger context recorded for this run.",
     "statusLabel": {
       "open": "Just started",
       "running": "Working",

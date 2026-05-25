@@ -83,7 +83,7 @@ export default function RunDetail({ runId }: { runId: string }) {
 
   return (
     <div className="run-detail">
-      <Link className="run-detail__back" href="/activity">
+      <Link className="run-detail__back" href="/brief">
         {t("back")}
       </Link>
 
@@ -97,7 +97,7 @@ export default function RunDetail({ runId }: { runId: string }) {
         <section className="run-empty" aria-label={t("region")}>
           <p className="run-empty__line">{t("notFoundLine")}</p>
           <p className="run-empty__sub">
-            <Link href="/activity">{t("backToActivity")}</Link>
+            <Link href="/brief">{t("backToBrief")}</Link>
           </p>
         </section>
       )}
