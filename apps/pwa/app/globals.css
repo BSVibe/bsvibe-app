@@ -81,32 +81,120 @@ button:disabled {
   cursor: default;
 }
 
-/* ── Login ──────────────────────────────────────────────────────────────── */
+/* ── Login (centered craft-bar card, UX §5) ───────────────────────────────── */
 
 main.login {
-  max-width: 360px;
-  margin: 16vh auto 0;
-  padding: 2rem;
+  min-height: 100dvh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1.5rem;
+}
+
+.login__card {
+  width: 100%;
+  max-width: 400px;
   display: flex;
   flex-direction: column;
-  gap: 1.5rem;
+  gap: 1.25rem;
+  padding: 2rem;
+  background: var(--surface);
+  border: 1px solid var(--hair-strong);
+  border-radius: var(--radius);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.03);
 }
 
 .login__brand {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  align-items: center;
+  gap: 4px;
+  text-align: center;
+}
+
+.login__mark {
+  color: var(--ink);
+  margin-bottom: 2px;
 }
 
 .login__wordmark {
-  font-size: 1.4rem;
+  font-size: 1.3rem;
   font-weight: 650;
   letter-spacing: -0.01em;
 }
 
 .login__tagline {
-  font-size: 0.8rem;
+  font-size: 0.78rem;
   color: var(--ink-3);
+}
+
+.login__head {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  text-align: center;
+}
+
+.login__title {
+  margin: 0;
+  font-size: 1.05rem;
+  font-weight: 600;
+}
+
+.login__subtitle {
+  margin: 0;
+  font-size: 0.82rem;
+  color: var(--ink-2);
+}
+
+.login__social {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.login__oauth {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.6rem;
+  padding: 0.6rem 0.7rem;
+  border: 1px solid var(--hair-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--ink);
+  font-size: 0.9rem;
+  font-weight: 500;
+  transition: background 0.12s ease, border-color 0.12s ease;
+}
+
+.login__oauth:hover:not(:disabled) {
+  background: var(--accent-bg);
+}
+
+.login__oauth:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.login__oauth-icon {
+  flex: 0 0 auto;
+}
+
+.login__divider {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  color: var(--ink-3);
+  font-size: 0.74rem;
+}
+
+.login__divider::before,
+.login__divider::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--hair);
 }
 
 .login__form {
@@ -118,20 +206,67 @@ main.login {
 .login__label {
   font-size: 0.78rem;
   color: var(--ink-2);
+}
+
+.login__label-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
   margin-top: 0.5rem;
 }
 
+.login__forgot {
+  font-size: 0.76rem;
+  color: var(--ink-3);
+  text-decoration: none;
+}
+
+.login__forgot:hover {
+  color: var(--ink-2);
+  text-decoration: underline;
+}
+
 .login input {
+  width: 100%;
   padding: 0.6rem 0.7rem;
   border: 1px solid var(--hair-strong);
   border-radius: var(--radius-sm);
   background: var(--surface);
   color: var(--ink);
+  font-size: 0.9rem;
 }
 
 .login input:focus-visible {
   outline: 2px solid var(--amber-dot);
   outline-offset: 1px;
+}
+
+.login__password {
+  position: relative;
+  display: flex;
+}
+
+.login__password input {
+  padding-right: 2.5rem;
+}
+
+.login__eye {
+  position: absolute;
+  top: 50%;
+  right: 0.35rem;
+  transform: translateY(-50%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.3rem;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--ink-3);
+}
+
+.login__eye:hover {
+  color: var(--ink-2);
 }
 
 .login__submit {
@@ -148,10 +283,48 @@ main.login {
   opacity: 0.6;
 }
 
+:root[data-theme="dark"] .login__submit {
+  background: var(--ink);
+  color: var(--bg);
+}
+
 .login__error {
   margin: 0.25rem 0 0;
   font-size: 0.82rem;
   color: #b3261e;
+}
+
+:root[data-theme="dark"] .login__error {
+  color: #f2b8b5;
+}
+
+/* The forgot-password / callback pages reuse the card; these add their own
+   centered status + back-link affordances. */
+.login__note {
+  margin: 0;
+  font-size: 0.84rem;
+  color: var(--ink-2);
+  text-align: center;
+}
+
+.login__back {
+  align-self: center;
+  font-size: 0.8rem;
+  color: var(--ink-3);
+  text-decoration: none;
+}
+
+.login__back:hover {
+  color: var(--ink-2);
+  text-decoration: underline;
+}
+
+.login__status {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.5rem;
+  text-align: center;
 }
 
 /* ── Shell ──────────────────────────────────────────────────────────────── */

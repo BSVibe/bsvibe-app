@@ -38,6 +38,11 @@ class FakeSupabaseClient:
     email: str | None = "founder@example.com"
     logout_calls: list[str] = field(default_factory=list)
     refresh_calls: list[str] = field(default_factory=list)
+    reset_calls: list[tuple[str, str | None]] = field(default_factory=list)
+    authorize_calls: list[tuple[str, str, str]] = field(default_factory=list)
+    # When set, ``send_password_reset`` raises it (simulates GoTrue rejecting
+    # the recover request) so the route's leak-safe 204 path can be exercised.
+    reset_error: Exception | None = None
 
     def _session(self) -> object:
         from backend.auth.client import SupabaseSession
@@ -67,6 +72,15 @@ class FakeSupabaseClient:
 
     async def logout(self, access_token: str) -> None:
         self.logout_calls.append(access_token)
+
+    def build_authorize_url(self, provider: str, redirect_to: str, code_challenge: str) -> str:
+        self.authorize_calls.append((provider, redirect_to, code_challenge))
+        return f"https://fake-supabase/auth/v1/authorize?provider={provider}"
+
+    async def send_password_reset(self, email: str, redirect_to: str | None = None) -> None:
+        self.reset_calls.append((email, redirect_to))
+        if self.reset_error is not None:
+            raise self.reset_error
 
 
 @pytest_asyncio.fixture

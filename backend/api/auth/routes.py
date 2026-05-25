@@ -11,6 +11,7 @@ the user has none. Token *verification* on subsequent requests is handled by
 from __future__ import annotations
 
 from typing import Annotated
+from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Depends, Header, HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field
@@ -50,6 +51,44 @@ class RefreshRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     refresh_token: str = Field(min_length=1)
+
+
+class OAuthAuthorizeRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    # PKCE challenge derived client-side; the matching verifier stays in the
+    # browser (sessionStorage) and is sent to .../callback for the exchange.
+    code_challenge: str = Field(min_length=1)
+    redirect_to: str = Field(min_length=1)
+
+
+class OAuthAuthorizeResponse(BaseModel):
+    authorize_url: str
+
+
+class PasswordResetRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    email: str = Field(min_length=3, max_length=320)
+    redirect_to: str | None = None
+
+
+# Social providers the workspace supports (Supabase must have each configured).
+_OAUTH_PROVIDERS = frozenset({"google", "github"})
+
+
+def _validate_redirect_to(redirect_to: str) -> None:
+    """Reject open redirects — the target origin must be CORS-allow-listed.
+
+    Reuses ``cors_allowed_origins`` (the browser PWA's own origins) as the
+    redirect allow-list so there is a single source of truth and no new knob.
+    """
+    parts = urlsplit(redirect_to)
+    origin = f"{parts.scheme}://{parts.netloc}"
+    if origin not in set(get_settings().cors_allowed_origins):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="redirect_to not allowed"
+        )
 
 
 async def _bootstrap(session: AsyncSession, supa: SupabaseSession) -> None:
@@ -92,6 +131,36 @@ async def oauth_callback(
         ) from exc
     await _bootstrap(session, supa)
     return supa
+
+
+@router.post("/oauth/{provider}/authorize")
+async def oauth_authorize(
+    provider: str, payload: OAuthAuthorizeRequest, supabase: SupabaseDep
+) -> OAuthAuthorizeResponse:
+    """Start social sign-in: return the GoTrue authorize URL to redirect to.
+
+    Keeps the Supabase URL server-side. ``provider`` and ``redirect_to`` are
+    both validated before any URL is assembled (no open redirect, no arbitrary
+    provider).
+    """
+    if provider not in _OAUTH_PROVIDERS:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="unsupported provider")
+    _validate_redirect_to(payload.redirect_to)
+    url = supabase.build_authorize_url(provider, payload.redirect_to, payload.code_challenge)
+    return OAuthAuthorizeResponse(authorize_url=url)
+
+
+@router.post("/password/reset", status_code=status.HTTP_204_NO_CONTENT)
+async def password_reset(payload: PasswordResetRequest, supabase: SupabaseDep) -> None:
+    """Request a password-recovery email. Always 204 — never leaks existence."""
+    if payload.redirect_to is not None:
+        _validate_redirect_to(payload.redirect_to)
+    try:
+        await supabase.send_password_reset(payload.email, payload.redirect_to)
+    except SupabaseAuthError:
+        # Swallow: the caller must not learn whether the email exists or whether
+        # GoTrue rejected it. The recovery email path is best-effort.
+        pass
 
 
 @router.post("/refresh")
