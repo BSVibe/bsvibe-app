@@ -522,6 +522,89 @@ async def test_retriever_folds_canonical_patterns_into_contract(tmp_path: Path) 
         assert "pin dependency versions" in contract_blob
 
 
+# --------------------------------------------------------------------------
+# B6 — knowledge informs the WORK: canon relevant to the run intent is seeded
+# into the agent's initial context BEFORE the act/verify cycle (RC-2)
+# --------------------------------------------------------------------------
+
+
+def _all_message_text(messages: list[dict[str, Any]]) -> str:
+    """Flatten every message's content into one blob for substring assertions."""
+    parts: list[str] = []
+    for m in messages:
+        content = m.get("content")
+        if isinstance(content, str):
+            parts.append(content)
+    return "\n".join(parts)
+
+
+async def test_knowledge_seeded_into_initial_context_on_turn_1(tmp_path: Path) -> None:
+    """A workspace whose canon matches the intent → the seeded pattern text is
+    present in the messages the loop LLM receives on its FIRST turn (it was not
+    before B6). The verify-time retriever fold (B3) still happens, so the stub
+    must also script the judge call for the folded criterion."""
+    retriever = StubRetriever(["always pin dependency versions"])
+    llm = ScriptedLlm(
+        [
+            LoopTurn(
+                content="",
+                tool_calls=(
+                    _declare_judge("the file pins deps"),
+                    _tc("file_write", path="deps.txt", content="pkg==1.0"),
+                ),
+            ),
+            LoopTurn(content="declared deps", tool_calls=()),
+            # judge call (tools=None) for the declared + folded criteria
+            LoopTurn(content='{"passed": true}', tool_calls=()),
+        ]
+    )
+    async with memory_session() as session:
+        run = await _make_run(session, intent="add a dependency to the project")
+        orch = RunOrchestrator(
+            session=session,
+            llm=llm,
+            sandbox_manager=NoopSandboxManager(),
+            retriever=retriever,
+        )
+        result = await orch.run(run=run, workspace_dir=tmp_path)
+
+    assert result.outcome == "verified"
+    # Turn 1 saw the seeded knowledge in its messages.
+    first_messages = llm.calls[0]["messages"]
+    blob = _all_message_text(first_messages)
+    assert "pin dependency versions" in blob
+    # The retriever was queried with the STABLE run intent (not written_paths).
+    assert retriever.queried, "retriever should be queried for the seed at loop start"
+    assert "add a dependency to the project" in retriever.queried[0]
+
+
+async def test_no_seed_message_for_empty_or_absent_knowledge(tmp_path: Path) -> None:
+    """Empty-knowledge workspace AND no retriever both inject NOTHING — the
+    initial messages are byte-identical to the no-knowledge baseline."""
+    baseline = LoopTurn(content="nothing to do", tool_calls=())
+
+    async def _first_messages(retriever: CanonRetriever | None) -> list[dict[str, Any]]:
+        llm = ScriptedLlm([baseline])
+        async with memory_session() as session:
+            run = await _make_run(session, intent="some work")
+            orch = RunOrchestrator(
+                session=session,
+                llm=llm,
+                sandbox_manager=NoopSandboxManager(),
+                retriever=retriever,
+            )
+            await orch.run(run=run, workspace_dir=tmp_path)
+        return llm.calls[0]["messages"]
+
+    no_retriever = await _first_messages(None)
+    empty_retriever = await _first_messages(StubRetriever([]))
+
+    # No seed message in either case → identical initial message lists.
+    assert no_retriever == empty_retriever
+    blob = _all_message_text(no_retriever)
+    assert "established patterns" not in blob.lower()
+
+
 def test_loop_protocols_are_runtime_checkable() -> None:
     assert isinstance(ScriptedLlm([]), LoopLlm)
     assert isinstance(StubRetriever([]), CanonRetriever)
