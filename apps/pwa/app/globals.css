@@ -5353,6 +5353,88 @@ main.login {
   margin-left: 28px;
 }
 
+/* --- BEGIN feat/run-trace: next-step + story timeline (isolated) --- */
+.run-next {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  border-radius: var(--radius-sm);
+  padding: 14px 16px;
+  background: var(--accent-bg);
+}
+
+.run-next__line {
+  font-size: 0.96rem;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.run-next__line--decision {
+  color: var(--amber-ink);
+}
+
+.run-next--failed .run-next__line,
+.run-next--cancelled .run-next__line {
+  color: var(--ink-2);
+  font-weight: 500;
+}
+
+.run-next__link {
+  font-size: 0.9rem;
+  color: var(--ink);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  width: fit-content;
+}
+
+.run-timeline {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.run-timeline__list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.run-timeline__event {
+  position: relative;
+  font-size: 0.9rem;
+  color: var(--ink);
+  padding-left: 18px;
+}
+
+.run-timeline__event::before {
+  content: "";
+  position: absolute;
+  left: 2px;
+  top: 0.5em;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--ink-3);
+}
+
+.run-timeline__event--verify::before,
+.run-timeline__event--settle::before {
+  background: var(--green-ink);
+}
+
+.run-timeline__event--error::before {
+  background: var(--amber-ink);
+}
+
+.run-timeline__note {
+  font-size: 0.82rem;
+  color: var(--ink-3);
+}
+/* --- END feat/run-trace block --- */
+
 /* ── END Run Detail ────────────────────────────────────────────────────── */
 
 /* ── BEGIN Routing rules (Settings → Models → ROUTING) ──────────────────────

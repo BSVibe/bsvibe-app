@@ -4,6 +4,7 @@ import { resolveCheckpoint } from "@/lib/api/checkpoints";
 import { ApiError } from "@/lib/api/client";
 import { getRunDetail } from "@/lib/api/runs";
 import type {
+  RunActivity,
   RunDecision,
   RunDetail as RunDetailModel,
   RunStatus,
@@ -128,7 +129,7 @@ function DetailBody({
   onResolved: () => void;
 }) {
   const t = useTranslations("run");
-  const { trigger, decisions, verification, deliverable_id } = detail;
+  const { trigger, decisions, verification, deliverable_id, activities, timeline_source } = detail;
   const title = trigger.intent_text?.trim() || t("untitled");
   // Only PENDING decisions are actionable; resolved ones are history.
   const pending = decisions.filter((d) => d.status === "pending");
@@ -142,7 +143,15 @@ function DetailBody({
         <h1 className="run-detail__title">{title}</h1>
       </header>
 
+      <NextStep
+        status={detail.status}
+        hasPendingDecision={pending.length > 0}
+        deliverableId={deliverable_id}
+      />
+
       <TriggerBlock trigger={trigger} />
+
+      <TimelineBlock activities={activities} source={timeline_source} />
 
       {pending.map((decision) => (
         <DecisionBlock key={decision.id} decision={decision} onResolved={onResolved} />
@@ -159,6 +168,89 @@ function DetailBody({
         </section>
       )}
     </article>
+  );
+}
+
+/** The explicit NEXT STEP — the founder should always know what (if anything)
+ *  they need to DO. A pending decision (the genuine blocker) takes priority over
+ *  the run's status word; otherwise the status maps to a calm, honest line:
+ *  review_ready → see the delivery report ; running/open → working ;
+ *  shipped → all done ; failed/cancelled → a calm failure line. A deliverable
+ *  link is attached when one exists so review_ready is one tap from the proof. */
+function NextStep({
+  status,
+  hasPendingDecision,
+  deliverableId,
+}: {
+  status: RunStatus;
+  hasPendingDecision: boolean;
+  deliverableId: string | null;
+}) {
+  const t = useTranslations("run");
+
+  // The genuine blocker wins, regardless of the run's status word.
+  if (hasPendingDecision) {
+    return (
+      <section className="run-next" aria-label={t("nextStep")}>
+        <h2 className="section-label">{t("nextStep")}</h2>
+        <p className="run-next__line run-next__line--decision">{t("nextDecision")}</p>
+      </section>
+    );
+  }
+
+  let line: string;
+  if (status === "review_ready") line = t("nextReview");
+  else if (status === "running" || status === "open") line = t("nextWorking");
+  else if (status === "shipped") line = t("nextShipped");
+  else if (status === "failed" || status === "cancelled") line = t("nextFailed");
+  else line = t("nextWorking");
+
+  // review_ready points one tap from the proof when a deliverable exists.
+  const showReportLink = status === "review_ready" && Boolean(deliverableId);
+
+  return (
+    <section className={`run-next run-next--${status}`} aria-label={t("nextStep")}>
+      <h2 className="section-label">{t("nextStep")}</h2>
+      <p className="run-next__line">{line}</p>
+      {showReportLink && deliverableId && (
+        <Link className="run-next__link" href={`/deliverables/${deliverableId}`}>
+          {t("nextReviewLink")}
+        </Link>
+      )}
+    </section>
+  );
+}
+
+/** The run's STORY — a calm "What I did" timeline of the ordered meaningful
+ *  events (delivered / verified / settled / …). When the timeline was DERIVED
+ *  (no real activity rows recorded), an honest note says it was reconstructed
+ *  from what we have — we never fabricate a per-step log. An empty timeline
+ *  renders nothing (a bare in-flight run has no story yet). */
+function TimelineBlock({
+  activities,
+  source,
+}: {
+  activities: RunActivity[];
+  source: RunDetailModel["timeline_source"];
+}) {
+  const t = useTranslations("run");
+  if (activities.length === 0) return null;
+
+  return (
+    <section className="run-timeline" aria-label={t("timeline")}>
+      <h2 className="section-label">{t("timeline")}</h2>
+      <ol className="run-timeline__list">
+        {activities.map((event, i) => (
+          <li
+            key={`${event.type}-${event.created_at}-${i}`}
+            className={`run-timeline__event run-timeline__event--${event.type}`}
+          >
+            {event.label}
+          </li>
+        ))}
+      </ol>
+      {source === "derived" && <p className="run-timeline__note">{t("timelineDerived")}</p>}
+    </section>
   );
 }
 

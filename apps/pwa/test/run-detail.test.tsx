@@ -56,6 +56,21 @@ const TRIGGERED: RunDetailModel = {
   ],
   verification: { id: "v1", outcome: "passed", created_at: NOW },
   deliverable_id: "d1",
+  activities: [
+    { type: "tool_call", label: "Delivered calculator.py", created_at: NOW },
+    { type: "verify", label: "Verified the work", created_at: NOW },
+    { type: "settle", label: "Settled into knowledge", created_at: NOW },
+  ],
+  timeline_source: "activities",
+};
+
+/** A clean `review_ready` run (no pending decision) — drives the next-step
+ *  assertions. */
+const REVIEW_READY: RunDetailModel = {
+  ...TRIGGERED,
+  id: "rr",
+  status: "review_ready",
+  decisions: [],
 };
 
 function json(body: unknown, status = 200) {
@@ -154,6 +169,8 @@ describe("Run-detail surface (Triggered)", () => {
       decisions: [],
       verification: null,
       deliverable_id: null,
+      activities: [],
+      timeline_source: "derived",
     };
     global.fetch = vi.fn(async () => json(sparse)) as unknown as typeof fetch;
 
@@ -197,5 +214,85 @@ describe("Run-detail surface (Triggered)", () => {
         screen.getByText(/couldn’t load this run|couldn't load this run/i),
       ).toBeInTheDocument();
     });
+  });
+
+  it("renders the activity timeline (the run's story) in order", async () => {
+    global.fetch = vi.fn(async () => json(TRIGGERED)) as unknown as typeof fetch;
+
+    render(<RunDetail runId="r1" />);
+
+    const timeline = await screen.findByRole("region", { name: /what i did|timeline/i });
+    // The ordered events from the response render, oldest first.
+    expect(within(timeline).getByText(/Delivered calculator\.py/i)).toBeInTheDocument();
+    expect(within(timeline).getByText(/Verified the work/i)).toBeInTheDocument();
+    expect(within(timeline).getByText(/Settled into knowledge/i)).toBeInTheDocument();
+  });
+
+  it("shows a derived-timeline note when no real activities were recorded", async () => {
+    const derived: RunDetailModel = {
+      ...REVIEW_READY,
+      activities: [{ type: "verify", label: "Verified the work", created_at: NOW }],
+      timeline_source: "derived",
+    };
+    global.fetch = vi.fn(async () => json(derived)) as unknown as typeof fetch;
+
+    render(<RunDetail runId="rr" />);
+
+    const timeline = await screen.findByRole("region", { name: /what i did|timeline/i });
+    expect(within(timeline).getByText(/Verified the work/i)).toBeInTheDocument();
+    // An honest note that the story was reconstructed (not a faked per-step log).
+    expect(within(timeline).getByText(/reconstructed|from what was recorded/i)).toBeInTheDocument();
+  });
+
+  it("next step: review_ready points the founder at the delivery report", async () => {
+    global.fetch = vi.fn(async () => json(REVIEW_READY)) as unknown as typeof fetch;
+
+    render(<RunDetail runId="rr" />);
+
+    const nextStep = await screen.findByRole("region", { name: /next step|what.s next/i });
+    expect(within(nextStep).getByText(/ready for your review/i)).toBeInTheDocument();
+    // The link out is the delivery report for the deliverable.
+    expect(within(nextStep).getByRole("link")).toHaveAttribute("href", "/deliverables/d1");
+  });
+
+  it("next step: a pending decision asks the founder to resolve it", async () => {
+    global.fetch = vi.fn(async () => json(TRIGGERED)) as unknown as typeof fetch;
+
+    render(<RunDetail runId="r1" />);
+
+    const nextStep = await screen.findByRole("region", { name: /next step|what.s next/i });
+    expect(within(nextStep).getByText(/needs your decision|waiting on you/i)).toBeInTheDocument();
+    // The resolve affordance still lives in the decision block (not reinvented).
+    expect(screen.getByRole("button", { name: /let it continue/i })).toBeInTheDocument();
+  });
+
+  it("next step: a running run shows a calm working line", async () => {
+    const running: RunDetailModel = { ...REVIEW_READY, status: "running" };
+    global.fetch = vi.fn(async () => json(running)) as unknown as typeof fetch;
+
+    render(<RunDetail runId="rr" />);
+
+    const nextStep = await screen.findByRole("region", { name: /next step|what.s next/i });
+    expect(within(nextStep).getByText(/working|on it/i)).toBeInTheDocument();
+  });
+
+  it("next step: a shipped run says shipped and needs nothing", async () => {
+    const shipped: RunDetailModel = { ...REVIEW_READY, status: "shipped" };
+    global.fetch = vi.fn(async () => json(shipped)) as unknown as typeof fetch;
+
+    render(<RunDetail runId="rr" />);
+
+    const nextStep = await screen.findByRole("region", { name: /next step|what.s next/i });
+    expect(within(nextStep).getByText(/shipped|all done|nothing needed/i)).toBeInTheDocument();
+  });
+
+  it("next step: a failed run shows a calm failure line", async () => {
+    const failed: RunDetailModel = { ...REVIEW_READY, status: "failed" };
+    global.fetch = vi.fn(async () => json(failed)) as unknown as typeof fetch;
+
+    render(<RunDetail runId="rr" />);
+
+    const nextStep = await screen.findByRole("region", { name: /next step|what.s next/i });
+    expect(within(nextStep).getByText(/didn.t finish|something went wrong/i)).toBeInTheDocument();
   });
 });
