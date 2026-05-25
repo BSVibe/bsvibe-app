@@ -22,6 +22,7 @@ Usage::
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import shutil
 import signal
@@ -43,6 +44,86 @@ logger = structlog.get_logger(__name__)
 
 _ENV_PATH = ".env"
 _HTTP_TIMEOUT_S = 30.0
+
+# Artifact-capture caps (executor-pool B1). The per-task work dir starts EMPTY
+# for executor tasks, so every regular file in it is the CLI's output — but cap
+# the count + per-file size so a runaway build (node_modules, large binaries)
+# can't blow up the result POST. A file over the byte cap is reported as a
+# truncation marker (empty content + ``truncated: True``), never shipped in full.
+_MAX_CAPTURED_FILES = 100
+_MAX_FILE_BYTES = 256 * 1024
+
+
+def _collect_workspace_files(work_dir: str) -> list[dict[str, Any]]:
+    """Walk ``work_dir`` and return the files the CLI produced (B1).
+
+    The dir starts empty for executor tasks, so every regular file is treated as
+    output. Each entry is ``{path, content_b64, truncated}`` where ``path`` is
+    relative to ``work_dir`` (POSIX-style). Symlinks are skipped (never follow
+    out of the work dir); files over :data:`_MAX_FILE_BYTES` are reported as a
+    truncation marker with empty content. At most :data:`_MAX_CAPTURED_FILES`
+    files are returned (deterministic sort so the cap is stable).
+    """
+    root = Path(work_dir)
+    if not root.is_dir():
+        return []
+    candidates = sorted(p for p in root.rglob("*") if p.is_file() and not p.is_symlink())
+    collected: list[dict[str, Any]] = []
+    for path in candidates[:_MAX_CAPTURED_FILES]:
+        rel = path.relative_to(root).as_posix()
+        try:
+            size = path.stat().st_size
+        except OSError:
+            logger.warning("artifact_stat_failed", path=rel)
+            continue
+        if size > _MAX_FILE_BYTES:
+            logger.info("artifact_skipped_oversized", path=rel, size=size)
+            collected.append({"path": rel, "content_b64": "", "truncated": True})
+            continue
+        try:
+            content = path.read_bytes()
+        except OSError:
+            logger.warning("artifact_read_failed", path=rel)
+            continue
+        collected.append(
+            {
+                "path": rel,
+                "content_b64": base64.b64encode(content).decode("ascii"),
+                "truncated": False,
+            }
+        )
+    if len(candidates) > _MAX_CAPTURED_FILES:
+        logger.info(
+            "artifact_capture_truncated",
+            work_dir=work_dir,
+            total=len(candidates),
+            kept=_MAX_CAPTURED_FILES,
+        )
+    return collected
+
+
+async def _finalize_task(
+    stream: Any, local_workspace: str, *, task_id: Any
+) -> list[dict[str, Any]]:
+    """Close the executor stream, capture produced files, then remove the work dir.
+
+    Returns the captured ``files`` (B1) — collected BEFORE the rmtree, else the
+    CLI's output is lost. Both close and capture are best-effort: a failure here
+    must never crash the loop or drop the result POST.
+    """
+    aclose = getattr(stream, "aclose", None)
+    if aclose is not None:
+        try:
+            await aclose()
+        except Exception:  # noqa: BLE001, S110 — cleanup best-effort
+            pass
+    files: list[dict[str, Any]] = []
+    try:
+        files = await asyncio.to_thread(_collect_workspace_files, local_workspace)
+    except Exception:  # noqa: BLE001 — capture is best-effort, never fails a task
+        logger.warning("artifact_capture_failed", task_id=task_id, exc_info=True)
+    shutil.rmtree(local_workspace, ignore_errors=True)
+    return files
 
 
 class _RedisPublisher(Protocol):
@@ -108,9 +189,14 @@ async def handle_task(
     the ``finally``. The ``workspace_dir`` in the dispatched payload is the
     BACKEND container's run path — a foreign absolute path that does not exist on
     this (remote) machine — so it is intentionally ignored: the executor's cwd is
-    always the worker-local dir. (Surfacing the artifacts the CLI produces in
-    that local dir back to the backend is a separate v2 concern; the worker still
-    reports the executor's output text via ``/result`` as before.)
+    always the worker-local dir.
+
+    B1: before removing that local dir, the worker walks it and collects the
+    files the CLI produced (the dir started empty, so every regular file is
+    output), base64-encoding each so binary and text carry safely. They ship in
+    the ``/result`` POST body as ``files`` alongside the existing output/success/
+    error fields; the backend persists them under the run workspace and records
+    real ``artifact_refs`` (see :func:`backend.executors.dispatch.record_result`).
     """
     task_id = task["task_id"]
     prompt = task.get("prompt") or ""
@@ -139,6 +225,7 @@ async def handle_task(
     parts: list[str] = []
     error: str | None = None
     success = True
+    files: list[dict[str, Any]] = []
     stream = executor.execute(prompt, context)
     try:
         async for chunk in stream:
@@ -161,14 +248,9 @@ async def handle_task(
         if redis is not None:
             await _publish(redis, stream_chan, {"delta": "", "done": True, "error": error})
     finally:
-        aclose = getattr(stream, "aclose", None)
-        if aclose is not None:
-            try:
-                await aclose()
-            except Exception:  # noqa: BLE001, S110 — cleanup best-effort
-                pass
-        # Remove the worker-local working dir whether the task succeeded or not.
-        shutil.rmtree(local_workspace, ignore_errors=True)
+        # Close the stream, CAPTURE produced files (B1), then remove the work
+        # dir — order matters: capture must precede the rmtree.
+        files = await _finalize_task(stream, local_workspace, task_id=task_id)
 
     await client.post(
         "/api/v1/workers/result",
@@ -178,6 +260,7 @@ async def handle_task(
             "success": success,
             "output": "".join(parts),
             "error_message": error,
+            "files": files,
         },
     )
     if redis is not None:

@@ -59,6 +59,26 @@ class _WorkspaceCapturingExecutor:
         yield ExecutionChunk(done=True)
 
 
+class _FileWritingExecutor:
+    """Writes files into the work dir it is handed (simulates a CLI producing output)."""
+
+    def __init__(self, files: dict[str, bytes]) -> None:
+        self._files = files
+
+    def supported_task_types(self) -> list[str]:
+        return ["coding"]
+
+    async def execute(self, prompt: str, context: dict[str, Any]) -> AsyncIterator[ExecutionChunk]:
+        work_dir = context["workspace_dir"]
+        for rel, content in self._files.items():
+            dest = os.path.join(work_dir, rel)
+            os.makedirs(os.path.dirname(dest) or work_dir, exist_ok=True)
+            with open(dest, "wb") as fh:
+                fh.write(content)
+        yield ExecutionChunk(delta=f"ran:{prompt}")
+        yield ExecutionChunk(done=True)
+
+
 def _mock_transport(state: dict[str, Any]) -> httpx.MockTransport:
     """Build a MockTransport recording calls + serving the worker endpoints."""
 
@@ -223,6 +243,67 @@ async def test_handle_task_cleans_up_local_temp_dir_on_executor_error() -> None:
     assert not os.path.exists(executor.seen_workspace)
     # The error was reported as a failed result, not a crash.
     assert state["results"][0]["success"] is False
+
+
+async def test_handle_task_captures_produced_files_in_result(tmp_path: Any) -> None:
+    """B1: files the executor writes into its work dir are collected and shipped
+    in the ``/result`` POST body as base64-encoded ``files`` entries."""
+    import base64
+
+    executor = _FileWritingExecutor({"out.txt": b"hello world", "src/app.py": b"x = 1\n"})
+    state: dict[str, Any] = {}
+    async with _client(state) as client:
+        await worker_main.handle_task(
+            _task(prompt="build"),
+            executors={"claude_code": executor},
+            client=client,
+            headers={"X-Worker-Token": "WORKER-TOKEN"},
+            redis=None,
+            workspace_root=str(tmp_path),
+        )
+    body = state["results"][0]
+    assert body["success"] is True
+    files = {f["path"]: f for f in body["files"]}
+    assert set(files) == {"out.txt", "src/app.py"}
+    assert base64.b64decode(files["out.txt"]["content_b64"]) == b"hello world"
+    assert base64.b64decode(files["src/app.py"]["content_b64"]) == b"x = 1\n"
+    assert files["out.txt"]["truncated"] is False
+
+
+async def test_handle_task_no_files_when_executor_writes_nothing(tmp_path: Any) -> None:
+    """B1: an executor that produces no files reports an empty ``files`` list."""
+    state: dict[str, Any] = {}
+    async with _client(state) as client:
+        await worker_main.handle_task(
+            _task(prompt="noop"),
+            executors={"claude_code": _StubExecutor()},
+            client=client,
+            headers={"X-Worker-Token": "WORKER-TOKEN"},
+            redis=None,
+            workspace_root=str(tmp_path),
+        )
+    assert state["results"][0]["files"] == []
+
+
+async def test_handle_task_skips_oversized_file_with_truncation_marker(tmp_path: Any) -> None:
+    """B1: a file larger than the per-file cap is skipped (content empty) with a
+    ``truncated: True`` marker — never shipped in full."""
+    big = b"A" * (300 * 1024)  # > 256 KiB cap
+    executor = _FileWritingExecutor({"big.bin": big, "small.txt": b"ok"})
+    state: dict[str, Any] = {}
+    async with _client(state) as client:
+        await worker_main.handle_task(
+            _task(),
+            executors={"claude_code": executor},
+            client=client,
+            headers={"X-Worker-Token": "WORKER-TOKEN"},
+            redis=None,
+            workspace_root=str(tmp_path),
+        )
+    files = {f["path"]: f for f in state["results"][0]["files"]}
+    assert files["big.bin"]["truncated"] is True
+    assert files["big.bin"]["content_b64"] == ""
+    assert files["small.txt"]["truncated"] is False
 
 
 async def test_handle_task_reports_failure_on_error_chunk() -> None:

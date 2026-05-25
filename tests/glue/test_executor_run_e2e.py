@@ -284,6 +284,119 @@ async def test_executor_run_dispatches_to_worker_and_verifies(
 
 
 # --------------------------------------------------------------------------
+# 1b. KEY B1 DELTA: worker-produced file lands as a real artifact_ref and
+#     ROUND-TRIPS through the existing artifact-read endpoint.
+# --------------------------------------------------------------------------
+
+
+async def test_executor_run_captures_artifact_and_serves_via_endpoint(
+    sf: async_sessionmaker[AsyncSession],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import base64
+
+    import httpx
+
+    from backend.api.deps import get_current_user, get_db_session, get_workspace_id
+    from backend.api.main import create_app
+    from backend.config import get_settings
+
+    from .._support import fake_current_user
+
+    # Point the run workspace root at a tmp dir (where captured files persist +
+    # where the artifact endpoint reads them back from).
+    root = tmp_path / "runs"
+    monkeypatch.setenv("BSVIBE_RUN_WORKSPACE_ROOT", str(root))
+    get_settings.cache_clear()
+
+    workspace_id = uuid.uuid4()
+    redis = await _make_redis()
+    executor_type = "claude_code"
+
+    try:
+        async with sf() as s:
+            worker = await _seed_worker(s, workspace_id=workspace_id, capabilities=[executor_type])
+            await _seed_executor_account(
+                s, workspace_id=workspace_id, worker_id=worker.id, executor_type=executor_type
+            )
+            run_id = await _open_run(s, workspace_id=workspace_id, text="ship the feature")
+            await s.commit()
+
+        settings = get_settings().model_copy(update={"executor_task_timeout_s": 5.0})
+        deps = build_agent_execution_deps(redis_client=redis, settings=settings)
+
+        async with sf() as orch_s:
+            run = await orch_s.get(ExecutionRun, run_id)
+            assert run is not None
+            orchestrator = await deps.orchestrator_factory(orch_s, run)
+            assert isinstance(orchestrator, ExecutorOrchestrator)
+
+            async def _simulate_worker() -> None:
+                task_id = await _await_dispatched_task_id(redis, worker_id=worker.id)
+                async with sf() as worker_s:
+                    # The worker reports a captured file alongside the success.
+                    await dispatch.record_result(
+                        worker_s,
+                        redis,
+                        task_id=task_id,
+                        success=True,
+                        output="implemented",
+                        error_message=None,
+                        files=[
+                            {
+                                "path": "result.py",
+                                "content_b64": base64.b64encode(b"print('done')\n").decode(),
+                                "truncated": False,
+                            }
+                        ],
+                        run_workspace_root=str(root),
+                    )
+                    await worker_s.commit()
+
+            runner = AgentRunner(orch_s)
+            drive_task = asyncio.create_task(
+                runner.drive(run_id=run_id, orchestrator=orchestrator, workspace_dir=tmp_path)
+            )
+            worker_task = asyncio.create_task(_simulate_worker())
+            result = await drive_task
+            await worker_task
+            await orch_s.commit()
+
+        assert result.outcome == "verified"
+        assert result.written_paths == ["result.py"]
+
+        async with sf() as s:
+            deliverable = (await s.execute(select(Deliverable))).scalar_one()
+            deliverable_id = deliverable.id
+            # The KEY delta: artifact_refs is NON-EMPTY (was always [] before B1).
+            assert deliverable.payload.get("artifact_refs") == ["result.py"]
+
+        # The captured file persisted under the run dir.
+        assert (root / str(run_id) / "result.py").read_bytes() == b"print('done')\n"
+
+        # ROUND-TRIP: the EXISTING artifact-read endpoint serves the content
+        # (no endpoint change — persisting real refs is all it took).
+        app = create_app()
+
+        async def _session():
+            async with sf() as s:
+                yield s
+
+        app.dependency_overrides[get_db_session] = _session
+        app.dependency_overrides[get_current_user] = fake_current_user()
+        app.dependency_overrides[get_workspace_id] = lambda: workspace_id
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
+            r = await c.get(f"/api/v1/deliverables/{deliverable_id}/artifacts/result.py")
+            assert r.status_code == 200, r.text
+            assert r.json()["content"] == "print('done')\n"
+    finally:
+        get_settings.cache_clear()
+        await redis.aclose()
+
+
+# --------------------------------------------------------------------------
 # 2. No worker available → Decision, run stays RUNNING (needs_decision)
 # --------------------------------------------------------------------------
 

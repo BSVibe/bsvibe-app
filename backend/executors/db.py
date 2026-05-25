@@ -102,6 +102,11 @@ class ExecutorTaskRow(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
     workspace_id: Mapped[uuid.UUID] = mapped_column(nullable=False, index=True)
+    # The ExecutionRun this task belongs to (executor-pool Lift 5b / B1). Nullable
+    # for back-compat with substrate-only tasks created without a run binding; set
+    # by the ExecutorOrchestrator so the result path can resolve the run workspace
+    # (``run_workspace_root/<run_id>/``) to persist the files the CLI produced.
+    run_id: Mapped[uuid.UUID | None] = mapped_column(nullable=True, index=True)
     # Nullable until dispatched; indexed so a worker can scan its own queue and
     # find_available_worker / the dispatch worker can join by assignment.
     worker_id: Mapped[uuid.UUID | None] = mapped_column(nullable=True, index=True)
@@ -112,6 +117,12 @@ class ExecutorTaskRow(Base):
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending", index=True)
     output: Mapped[str] = mapped_column(Text, nullable=False, default="")
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Relative paths (within the run workspace) of the files the worker produced
+    # and the backend persisted (B1). NULL until a result with files is recorded;
+    # surfaced as the Deliverable's ``artifact_refs`` by the orchestrator. JSON
+    # (not JSONB) for SQLite test-tier portability, matching the other executor
+    # tables' JSON columns.
+    artifact_refs: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=_utcnow
     )

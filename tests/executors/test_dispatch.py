@@ -121,6 +121,27 @@ async def test_create_task_defaults() -> None:
         assert task.system == ""
         assert task.workspace_dir == "."
         assert task.status == "pending"
+        # B1: a task carries the run it belongs to (nullable for back-compat) and
+        # starts with no artifact_refs.
+        assert task.run_id is None
+        assert task.artifact_refs is None
+
+
+async def test_create_task_carries_run_id() -> None:
+    """B1: ``create_task`` threads ``run_id`` onto the task row so the result
+    path can resolve the run workspace to persist captured files into."""
+    workspace_id = uuid.uuid4()
+    run_id = uuid.uuid4()
+    async with memory_session() as s:
+        task = await dispatch.create_task(
+            s,
+            workspace_id=workspace_id,
+            executor_type="claude_code",
+            prompt="p",
+            run_id=run_id,
+        )
+        await s.commit()
+        assert task.run_id == run_id
 
 
 # ── find_available_worker ──────────────────────────────────────────────────────
@@ -425,6 +446,136 @@ async def test_record_result_unknown_task_does_not_publish() -> None:
     assert msg is None
     await pubsub.unsubscribe(dispatch.done_channel(task_id))
     await pubsub.aclose()
+    await redis.aclose()
+
+
+# ── record_result: file persistence (B1) ─────────────────────────────────────
+
+
+async def test_record_result_persists_files_and_records_refs(tmp_path: Any) -> None:
+    """B1: returned worker files are written under ``run_workspace_root/<run_id>/``
+    and their relative paths recorded on ``task.artifact_refs``."""
+    import base64
+
+    workspace_id = uuid.uuid4()
+    run_id = uuid.uuid4()
+    redis = await _make_redis()
+    async with memory_session() as s:
+        task = await dispatch.create_task(
+            s, workspace_id=workspace_id, executor_type="claude_code", prompt="p", run_id=run_id
+        )
+        await s.commit()
+        task_id = task.id
+
+        files = [
+            {
+                "path": "out.txt",
+                "content_b64": base64.b64encode(b"hello").decode(),
+                "truncated": False,
+            },
+            {
+                "path": "src/app.py",
+                "content_b64": base64.b64encode(b"x = 1\n").decode(),
+                "truncated": False,
+            },
+        ]
+        updated = await dispatch.record_result(
+            s,
+            redis,
+            task_id=task_id,
+            success=True,
+            output="ok",
+            error_message=None,
+            files=files,
+            run_workspace_root=str(tmp_path),
+        )
+        await s.commit()
+        assert updated is not None
+        assert updated.status == "done"
+        # Files landed under run dir.
+        run_dir = tmp_path / str(run_id)
+        assert (run_dir / "out.txt").read_bytes() == b"hello"
+        assert (run_dir / "src" / "app.py").read_bytes() == b"x = 1\n"
+        # Refs recorded (order-independent).
+        assert set(updated.artifact_refs or []) == {"out.txt", "src/app.py"}
+    await redis.aclose()
+
+
+async def test_record_result_rejects_traversal_paths(tmp_path: Any) -> None:
+    """B1: a ``../escape.txt`` file path must NOT be written outside the run dir,
+    and must NOT be recorded as a ref."""
+    import base64
+
+    workspace_id = uuid.uuid4()
+    run_id = uuid.uuid4()
+    redis = await _make_redis()
+    async with memory_session() as s:
+        task = await dispatch.create_task(
+            s, workspace_id=workspace_id, executor_type="claude_code", prompt="p", run_id=run_id
+        )
+        await s.commit()
+        files = [
+            {
+                "path": "good.txt",
+                "content_b64": base64.b64encode(b"ok").decode(),
+                "truncated": False,
+            },
+            {
+                "path": "../escape.txt",
+                "content_b64": base64.b64encode(b"pwned").decode(),
+                "truncated": False,
+            },
+        ]
+        updated = await dispatch.record_result(
+            s,
+            redis,
+            task_id=task.id,
+            success=True,
+            output="ok",
+            error_message=None,
+            files=files,
+            run_workspace_root=str(tmp_path),
+        )
+        await s.commit()
+        assert updated is not None
+        # The traversal target was NOT written.
+        assert not (tmp_path / "escape.txt").exists()
+        # Only the safe ref recorded.
+        assert updated.artifact_refs == ["good.txt"]
+    await redis.aclose()
+
+
+async def test_record_result_skips_files_when_no_run_id(tmp_path: Any) -> None:
+    """B1 back-compat: a task with ``run_id is None`` skips persistence entirely
+    (no run dir to anchor paths to)."""
+    import base64
+
+    workspace_id = uuid.uuid4()
+    redis = await _make_redis()
+    async with memory_session() as s:
+        task = await dispatch.create_task(
+            s, workspace_id=workspace_id, executor_type="claude_code", prompt="p"
+        )
+        await s.commit()
+        files = [
+            {"path": "out.txt", "content_b64": base64.b64encode(b"hi").decode(), "truncated": False}
+        ]
+        updated = await dispatch.record_result(
+            s,
+            redis,
+            task_id=task.id,
+            success=True,
+            output="ok",
+            error_message=None,
+            files=files,
+            run_workspace_root=str(tmp_path),
+        )
+        await s.commit()
+        assert updated is not None
+        assert updated.status == "done"
+        # Nothing persisted; no refs.
+        assert not any(tmp_path.iterdir())
+        assert not (updated.artifact_refs or [])
     await redis.aclose()
 
 

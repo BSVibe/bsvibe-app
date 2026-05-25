@@ -42,11 +42,12 @@ def test_alembic_history_loads():
         "executor_tasks",
         "model_account_nullable_key",
         "product_resources",
+        "executor_artifact_capture",
     ):
         assert rev in result.stdout, f"missing revision {rev} in:\n{result.stdout}"
 
 
-def test_alembic_head_is_product_resources():
+def test_alembic_head_is_executor_artifact_capture():
     repo = Path(__file__).parent.parent
     result = subprocess.run(
         [sys.executable, "-m", "alembic", "heads"],
@@ -55,7 +56,7 @@ def test_alembic_head_is_product_resources():
         text=True,
     )
     assert result.returncode == 0
-    assert "product_resources" in result.stdout
+    assert "executor_artifact_capture" in result.stdout
 
 
 def test_target_metadata_covers_all_bases():
