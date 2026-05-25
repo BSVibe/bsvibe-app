@@ -15,7 +15,9 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.connectors.db import ConnectorAccountRow
 from backend.delivery.db import DeliveryEventRow
+from backend.execution.connector_actions import ConnectorActionTool
 from backend.execution.db import (
     Decision,
     Deliverable,
@@ -37,6 +39,8 @@ from backend.execution.orchestrator import (
     LoopTurn,
     RunOrchestrator,
 )
+from backend.plugins.base import ActionCapability, PluginMeta
+from backend.plugins.context import SkillContext
 from backend.skills.loader import SkillLoader
 from backend.skills.tool_binding import INVOKE_SKILL_NAME
 from backend.supervisor.sandbox import NoopSandboxManager, SandboxUnavailable
@@ -741,4 +745,325 @@ async def test_loop_without_skill_loader_omits_skill_tools(tmp_path: Path) -> No
     names = _tool_names(first_tools)
     assert INVOKE_SKILL_NAME not in names
     assert "knowledge_search" not in names
+    assert "file_write" in names
+
+
+# --------------------------------------------------------------------------
+# B5b — connector @p.action surfaced as loop tools, gated by DangerAnalyzer
+# --------------------------------------------------------------------------
+
+
+def _fake_action_plugin(
+    name: str,
+    *,
+    action_name: str,
+    input_schema: dict[str, Any] | None = None,
+    mcp_exposed: bool = True,
+) -> PluginMeta:
+    """A PluginMeta carrying a single ``@p.action``-style capability."""
+    recorded: dict[str, Any] = {}
+
+    async def _fn(context: Any, **kwargs: Any) -> dict[str, Any]:
+        recorded["context"] = context
+        recorded["kwargs"] = kwargs
+        return {"ok": True, "echo": kwargs}
+
+    meta = PluginMeta(
+        name=name,
+        version="0",
+        description="fake connector",
+        author="t",
+        data_jurisdiction="us",
+        credentials=[],
+        actions={
+            action_name: ActionCapability(
+                fn=_fn, name=action_name, mcp_exposed=mcp_exposed, input_schema=input_schema
+            )
+        },
+    )
+    meta._recorded = recorded  # type: ignore[attr-defined]  # test introspection handle
+    return meta
+
+
+def _fake_account(workspace_id: uuid.UUID, connector: str) -> ConnectorAccountRow:
+    return ConnectorAccountRow(
+        id=uuid.uuid4(),
+        workspace_id=workspace_id,
+        connector=connector,
+        webhook_token=uuid.uuid4().hex,
+        signing_secret_ciphertext="cipher-blob",
+        delivery_config={"repo": "owner/name"},
+        is_active=True,
+    )
+
+
+class FakeConnectorActionProvider:
+    """A :class:`ConnectorActionProvider` over a fixed set of fake actions.
+
+    ``credentials_for`` returns a sentinel dict so a test can assert the action
+    received decrypted credentials; ``dispatch`` records the call and runs the
+    plugin's fn so the result flows back to the loop."""
+
+    def __init__(self, tools: list[ConnectorActionTool]) -> None:
+        self._tools = tools
+        self.dispatched: list[dict[str, Any]] = []
+
+    async def list_actions(self, workspace_id: uuid.UUID) -> list[ConnectorActionTool]:
+        return [t for t in self._tools if t.account.workspace_id == workspace_id]
+
+    def credentials_for(self, tool: ConnectorActionTool) -> dict[str, Any]:
+        return {"token": f"decrypted::{tool.account.signing_secret_ciphertext}"}
+
+    async def dispatch(
+        self, tool: ConnectorActionTool, *, credentials: dict[str, Any], kwargs: dict[str, Any]
+    ) -> Any:
+        self.dispatched.append({"tool": tool, "credentials": credentials, "kwargs": kwargs})
+        # Run the plugin fn so the real arg-passing + credential injection is
+        # exercised end-to-end (the fn records the context it saw).
+        return await tool.action.fn(
+            SkillContext(llm=_RaisingLlm(), config={}, logger=None, credentials=credentials),
+            **kwargs,
+        )
+
+
+def _tool(
+    plugin: PluginMeta, account: ConnectorAccountRow, *, is_dangerous: bool
+) -> ConnectorActionTool:
+    action = next(iter(plugin.actions.values()))
+    return ConnectorActionTool(
+        plugin=plugin, action=action, account=account, is_dangerous=is_dangerous
+    )
+
+
+async def test_connector_action_in_schema_when_workspace_has_account(tmp_path: Path) -> None:
+    """The surfaced tool schema includes a workspace's connector action when the
+    workspace has that connector account."""
+    llm = ScriptedLlm([LoopTurn(content="done", tool_calls=())])
+    ws = uuid.uuid4()
+    plugin = _fake_action_plugin("github", action_name="open_pr")
+    account = _fake_account(ws, "github")
+    provider = FakeConnectorActionProvider([_tool(plugin, account, is_dangerous=False)])
+    async with memory_session() as session:
+        session.add(WorkspaceRow(id=ws, name="ws", region="us-1", safe_mode=False))
+        await session.flush()
+        run = await _make_run(session, workspace_id=ws)
+        orch = RunOrchestrator(
+            session=session,
+            llm=llm,
+            sandbox_manager=NoopSandboxManager(),
+            connector_actions=provider,
+        )
+        await orch.run(run=run, workspace_dir=tmp_path)
+
+    names = _tool_names(llm.calls[0]["tools"])
+    assert "github__open_pr" in names
+    # Built-ins still present.
+    assert "file_write" in names
+    assert "ask_user_question" in names
+
+
+async def test_connector_action_excluded_when_workspace_lacks_account(tmp_path: Path) -> None:
+    """A workspace with no connector account surfaces no connector tool (the
+    provider returns no actions for it)."""
+    llm = ScriptedLlm([LoopTurn(content="done", tool_calls=())])
+    other_ws = uuid.uuid4()
+    plugin = _fake_action_plugin("github", action_name="open_pr")
+    account = _fake_account(other_ws, "github")  # belongs to a DIFFERENT workspace
+    provider = FakeConnectorActionProvider([_tool(plugin, account, is_dangerous=False)])
+    async with memory_session() as session:
+        this_ws = uuid.uuid4()
+        session.add(WorkspaceRow(id=this_ws, name="ws", region="us-1", safe_mode=False))
+        await session.flush()
+        run = await _make_run(session, workspace_id=this_ws)
+        orch = RunOrchestrator(
+            session=session,
+            llm=llm,
+            sandbox_manager=NoopSandboxManager(),
+            connector_actions=provider,
+        )
+        await orch.run(run=run, workspace_dir=tmp_path)
+
+    names = _tool_names(llm.calls[0]["tools"])
+    assert "github__open_pr" not in names
+
+
+async def test_non_dangerous_action_runs_and_feeds_result_back(tmp_path: Path) -> None:
+    """The LLM calls a NON-dangerous connector action → it dispatches, and the
+    result is fed back to the loop as a tool message. Credentials are resolved
+    into the action context."""
+    ws = uuid.uuid4()
+    plugin = _fake_action_plugin(
+        "github",
+        action_name="open_pr",
+        input_schema={
+            "type": "object",
+            "required": ["title"],
+            "properties": {"title": {"type": "string"}},
+            "additionalProperties": False,
+        },
+    )
+    account = _fake_account(ws, "github")
+    provider = FakeConnectorActionProvider([_tool(plugin, account, is_dangerous=False)])
+    llm = ScriptedLlm(
+        [
+            LoopTurn(
+                content="opening a PR",
+                tool_calls=(_tc("github__open_pr", title="Ship it"),),
+            ),
+            LoopTurn(
+                content="",
+                tool_calls=(
+                    _declare_command("test -f out.txt"),
+                    _tc("file_write", path="out.txt", content="x"),
+                ),
+            ),
+            LoopTurn(content="done", tool_calls=()),
+        ]
+    )
+    async with memory_session() as session:
+        session.add(WorkspaceRow(id=ws, name="ws", region="us-1", safe_mode=False))
+        await session.flush()
+        run = await _make_run(session, workspace_id=ws)
+        orch = RunOrchestrator(
+            session=session,
+            llm=llm,
+            sandbox_manager=NoopSandboxManager(),
+            connector_actions=provider,
+        )
+        result = await orch.run(run=run, workspace_dir=tmp_path)
+
+        assert result.outcome == "verified"
+        # The action was actually dispatched with the LLM's args.
+        assert provider.dispatched, "the connector action should have dispatched"
+        assert provider.dispatched[0]["kwargs"] == {"title": "Ship it"}
+        # Credentials were resolved into the action context (the plugin fn saw them).
+        recorded = plugin._recorded  # type: ignore[attr-defined]
+        assert recorded["context"].credentials == {"token": "decrypted::cipher-blob"}
+        # No approval Decision was created (non-dangerous).
+        assert (await session.execute(select(Decision))).first() is None
+        # The action result was fed back as a tool message.
+        tool_msgs = [
+            m
+            for call in llm.calls
+            for m in call["messages"]
+            if m.get("role") == "tool" and "github__open_pr" not in (m.get("content") or "")
+        ]
+        ok_msgs = [
+            m
+            for call in llm.calls
+            for m in call["messages"]
+            if m.get("role") == "tool" and '"echo"' in (m.get("content") or "")
+        ]
+        assert ok_msgs, "the connector action result should be appended as a tool message"
+        assert tool_msgs  # built-ins / action result tool messages exist
+
+
+async def test_dangerous_action_in_safe_mode_creates_approval_decision(tmp_path: Path) -> None:
+    """The key danger gate: the LLM calls a DANGEROUS action while safe_mode=True
+    → NO execution, a ``connector_action_approval`` Decision is created, and the
+    LLM gets a 'pending approval' tool result."""
+    ws = uuid.uuid4()
+    plugin = _fake_action_plugin("slack", action_name="post_message")
+    account = _fake_account(ws, "slack")
+    provider = FakeConnectorActionProvider([_tool(plugin, account, is_dangerous=True)])
+    llm = ScriptedLlm(
+        [
+            LoopTurn(
+                content="posting to slack",
+                tool_calls=(_tc("slack__post_message", channel="C1", text="hi"),),
+            ),
+            # After the gate, the loop continues; the model does real file work.
+            LoopTurn(
+                content="",
+                tool_calls=(
+                    _declare_command("test -f out.txt"),
+                    _tc("file_write", path="out.txt", content="x"),
+                ),
+            ),
+            LoopTurn(content="done", tool_calls=()),
+        ]
+    )
+    async with memory_session() as session:
+        session.add(WorkspaceRow(id=ws, name="ws", region="us-1", safe_mode=True))
+        await session.flush()
+        run = await _make_run(session, workspace_id=ws)
+        orch = RunOrchestrator(
+            session=session,
+            llm=llm,
+            sandbox_manager=NoopSandboxManager(),
+            connector_actions=provider,
+        )
+        result = await orch.run(run=run, workspace_dir=tmp_path)
+
+        assert result.outcome == "verified"
+        # The dangerous action did NOT execute.
+        assert not provider.dispatched, "a dangerous action must not run in safe mode"
+        # An approval Decision was created with the action details.
+        decision = (await session.execute(select(Decision))).scalar_one()
+        assert decision.decision == "connector_action_approval"
+        assert decision.payload["plugin"] == "slack"
+        assert decision.payload["action"] == "post_message"
+        assert decision.payload["is_dangerous"] is True
+        assert decision.payload["args"] == {"channel": "C1", "text": "hi"}
+        # The LLM was told the action is pending approval.
+        pending_msgs = [
+            m
+            for call in llm.calls
+            for m in call["messages"]
+            if m.get("role") == "tool" and "needs_approval" in (m.get("content") or "")
+        ]
+        assert pending_msgs, "the gate must feed back a needs_approval tool result"
+
+
+async def test_dangerous_action_runs_when_not_in_safe_mode(tmp_path: Path) -> None:
+    """A dangerous action with safe_mode OFF runs directly (the gate is danger AND
+    safe_mode — neither alone blocks a non-safe-mode workspace)."""
+    ws = uuid.uuid4()
+    plugin = _fake_action_plugin("slack", action_name="post_message")
+    account = _fake_account(ws, "slack")
+    provider = FakeConnectorActionProvider([_tool(plugin, account, is_dangerous=True)])
+    llm = ScriptedLlm(
+        [
+            LoopTurn(
+                content="posting",
+                tool_calls=(_tc("slack__post_message", text="hi"),),
+            ),
+            LoopTurn(
+                content="",
+                tool_calls=(
+                    _declare_command("test -f out.txt"),
+                    _tc("file_write", path="out.txt", content="x"),
+                ),
+            ),
+            LoopTurn(content="done", tool_calls=()),
+        ]
+    )
+    async with memory_session() as session:
+        session.add(WorkspaceRow(id=ws, name="ws", region="us-1", safe_mode=False))
+        await session.flush()
+        run = await _make_run(session, workspace_id=ws)
+        orch = RunOrchestrator(
+            session=session,
+            llm=llm,
+            sandbox_manager=NoopSandboxManager(),
+            connector_actions=provider,
+        )
+        result = await orch.run(run=run, workspace_dir=tmp_path)
+
+        assert result.outcome == "verified"
+        assert provider.dispatched, "a dangerous action must run when safe_mode is off"
+        assert (await session.execute(select(Decision))).first() is None
+
+
+async def test_loop_without_connector_provider_omits_connector_tools(tmp_path: Path) -> None:
+    """Backward-compat: a run with no connector-action provider surfaces no
+    connector tool — the loop is unchanged (and matches every legacy caller)."""
+    llm = ScriptedLlm([LoopTurn(content="done", tool_calls=())])
+    async with memory_session() as session:
+        run = await _make_run(session)
+        orch = RunOrchestrator(session=session, llm=llm, sandbox_manager=NoopSandboxManager())
+        await orch.run(run=run, workspace_dir=tmp_path)
+
+    names = _tool_names(llm.calls[0]["tools"])
+    assert not any("__" in n for n in names)
     assert "file_write" in names
