@@ -56,6 +56,7 @@ function deliverable(
   summary: string | null,
   artifact_uri: string | null = null,
   artifact_refs: string[] = [],
+  verified = true,
 ) {
   return {
     id,
@@ -65,6 +66,9 @@ function deliverable(
     summary,
     artifact_refs,
     artifact_uri,
+    // B4: backend-authoritative flag — True only when a PASSED VerificationResult
+    // exists for the producing run (mirrors the real response shape).
+    verified,
     created_at: NOW,
   };
 }
@@ -200,6 +204,42 @@ describe("getProductDetail (real-data composition)", () => {
       .filter((u) => u.startsWith("/api/v1/deliverables"));
     expect(delCalls.some((u) => u.includes("run_id=r-ship"))).toBe(true);
     expect(delCalls.some((u) => u.includes("run_id=r-work"))).toBe(false);
+  });
+
+  it("shows an honest non-verified verdict for a deliverable WITHOUT a PASSED proof", async () => {
+    // B4 trust-integrity: a hollow deliverable (backend `verified: false`) must
+    // NOT stamp the green "This is verified" — it reads honestly as awaiting
+    // verification, derived from the backend-authoritative flag.
+    global.fetch = mockFetch({
+      products: [product("p1", "blog", "Blog")],
+      runs: [run("r-ship", "p1", "shipped")],
+      deliverablesByRun: {
+        "r-ship": [
+          deliverable("d-hollow", "r-ship", "code", "Add util", null, [], /* verified */ false),
+        ],
+      },
+    }) as unknown as typeof fetch;
+
+    const view = await getProductDetail("blog");
+    const item = view?.shipped[0];
+    expect(item?.id).toBe("d-hollow");
+    expect(item?.verdict).not.toBe("This is verified");
+    expect(item?.verdict).toMatch(/awaiting|review/i);
+  });
+
+  it("stamps 'This is verified' only when the backend flag is set", async () => {
+    global.fetch = mockFetch({
+      products: [product("p1", "blog", "Blog")],
+      runs: [run("r-ship", "p1", "shipped")],
+      deliverablesByRun: {
+        "r-ship": [
+          deliverable("d-real", "r-ship", "code", "Real work", null, [], /* verified */ true),
+        ],
+      },
+    }) as unknown as typeof fetch;
+
+    const view = await getProductDetail("blog");
+    expect(view?.shipped[0]?.verdict).toBe("This is verified");
   });
 
   it("flattens shipped deliverables' artifact_refs into the files list", async () => {

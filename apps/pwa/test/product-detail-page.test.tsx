@@ -58,6 +58,8 @@ const DELIVERABLE: Deliverable = {
   summary: "Add related-posts widget",
   artifact_refs: [],
   artifact_uri: "https://github.com/acme/blog/pull/15",
+  // B4: backed by a PASSED VerificationResult → the green "This is verified".
+  verified: true,
   created_at: NOW,
 };
 

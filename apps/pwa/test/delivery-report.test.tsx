@@ -40,9 +40,12 @@ const REPORT: DeliverableReport = {
     artifact_refs: ["src/blog.ts", "tests/blog.test.ts"],
     artifact_uri: "https://github.com/acme/repo/pull/15",
     diff_url: "https://github.com/acme/repo/commit/abc123",
+    // B4: backend-authoritative — True only on a PASSED VerificationResult.
+    verified: true,
     created_at: NOW,
   },
   request: "Add a getRelatedPosts helper to blog.ts",
+  verified: true,
   verifications: [
     {
       id: "v1",
@@ -170,8 +173,9 @@ describe("Delivery Report document", () => {
   it("shows a calm no-verification state when the run has no verification recorded", async () => {
     installFetch({
       report: () => ({
-        deliverable: { ...REPORT.deliverable, diff_url: null },
+        deliverable: { ...REPORT.deliverable, diff_url: null, verified: false },
         request: null,
+        verified: false,
         verifications: [],
       }),
     });
@@ -188,8 +192,9 @@ describe("Delivery Report document", () => {
   it("renders defensively when contract/result JSON is an unexpected shape", async () => {
     installFetch({
       report: () => ({
-        deliverable: { ...REPORT.deliverable },
+        deliverable: { ...REPORT.deliverable, verified: false },
         request: null,
+        verified: false,
         verifications: [
           {
             id: "v1",
@@ -208,6 +213,45 @@ describe("Delivery Report document", () => {
     });
     const checks = screen.getByRole("region", { name: /how bsvibe checked this/i });
     expect(within(checks).getByText(/inconclusive/i)).toBeInTheDocument();
+  });
+
+  it("renders the green 'This is verified' verdict ONLY when backend verified is true", async () => {
+    installFetch();
+    render(<DeliveryReport deliverableId="d1" />);
+    const checks = await screen.findByRole("region", { name: /how bsvibe checked this/i });
+    // Backend verified:true → the verdict is the green "This is verified".
+    expect(within(checks).getByText(/this is verified/i)).toBeInTheDocument();
+  });
+
+  it("never shows 'This is verified' when backend verified is false (defense-in-depth)", async () => {
+    // B4: even if a stray verification row claims `passed`, the backend's
+    // authoritative `verified: false` flag must win — the founder must NOT see a
+    // green "This is verified" on a deliverable the backend did not certify.
+    installFetch({
+      report: () => ({
+        deliverable: { ...REPORT.deliverable, verified: false },
+        request: null,
+        verified: false,
+        verifications: [
+          {
+            id: "v1",
+            outcome: "passed",
+            contract: {},
+            result: {},
+            created_at: NOW,
+          },
+        ],
+      }),
+    });
+    render(<DeliveryReport deliverableId="d1" />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Add getRelatedPosts to blog.ts")).toBeInTheDocument();
+    });
+    const checks = screen.getByRole("region", { name: /how bsvibe checked this/i });
+    expect(within(checks).queryByText(/this is verified/i)).not.toBeInTheDocument();
+    // It reads honestly as not-yet-verified instead.
+    expect(within(checks).getByText(/not yet verified/i)).toBeInTheDocument();
   });
 
   it("shows the calm not-found state for an unknown id (404)", async () => {

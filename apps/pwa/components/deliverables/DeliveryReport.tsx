@@ -131,11 +131,16 @@ export default function DeliveryReport({ deliverableId }: { deliverableId: strin
 
 function ReportDocument({ report }: { report: DeliverableReport }) {
   const t = useTranslations("report");
-  const { deliverable, request, verifications } = report;
+  const { deliverable, request, verified, verifications } = report;
   // Concise document title — the first sentence of the (often paragraph-long)
   // LLM summary, not the whole blob; the detail lives in the body + request.
   const summary = conciseSummary(deliverable.summary, t("untitled"));
-  const tone = strongestOutcome(verifications) ?? "none";
+  // B4 defense-in-depth: the green "This is verified" verdict ("passed" tone)
+  // shows ONLY when the backend's authoritative `verified` flag is set (a real
+  // PASSED VerificationResult). If a stray verification row claims "passed" but
+  // the backend did not certify the deliverable, the verdict reads honestly as
+  // "Not yet verified" ("none") rather than a hollow green.
+  const tone = verdictTone(verified, verifications);
   const hasDiff = Boolean(deliverable.diff_url);
 
   return (
@@ -196,6 +201,24 @@ function strongestOutcome(verifications: VerificationReportItem[]): Verification
   if (outcomes.has("failed")) return "failed";
   if (outcomes.has("inconclusive")) return "inconclusive";
   return "passed";
+}
+
+/** The verdict tone for the masthead/verdict line, gated by the backend's
+ *  authoritative `verified` flag (B4). The green "passed" tone (= "This is
+ *  verified") is shown ONLY when `verified` is true; otherwise the strongest
+ *  honest non-passed signal is surfaced (failed / inconclusive), degrading to
+ *  "none" (Not yet verified) when nothing certifies the deliverable. This means
+ *  a stray "passed" row can never produce a green badge the backend didn't
+ *  certify. */
+function verdictTone(
+  verified: boolean,
+  verifications: VerificationReportItem[],
+): VerificationOutcome | "none" {
+  if (verified) return "passed";
+  const strongest = strongestOutcome(verifications);
+  // Drop a "passed" the backend did not certify back to the honest "none".
+  if (strongest === null || strongest === "passed") return "none";
+  return strongest;
 }
 
 function VerificationBlock({ verification }: { verification: VerificationReportItem }) {

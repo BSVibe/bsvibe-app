@@ -85,13 +85,32 @@ class ResolveResponse(BaseModel):
     run_status: RunStatus
 
 
+# B4: executor B2b Decisions (raised when an executor run does NOT verify) record
+# ``payload.reason`` instead of ``payload.question`` — they are an honest "this
+# needs you" surfaced as a Decision, not a work-LLM question. Map the kind →
+# a calm, human-readable line so the founder never sees a blank question on a
+# genuinely actionable needs-you item.
+_EXECUTOR_DECISION_QUESTIONS: dict[str, str] = {
+    "verification_failed": "BSVibe couldn't verify this work — review it before it ships?",
+    "human_review_required": "This work needs your review before BSVibe can call it verified.",
+}
+
+
 def _question_text(decision: Decision) -> str:
+    """The founder-facing question for a paused-run Decision.
+
+    Prefers the work LLM's recorded ``payload.question`` (the ``ask_user_question``
+    path). For an executor B2b Decision — which records ``payload.reason``, not a
+    question — fall back to a calm kind-derived line so the needs-you item is
+    never blank. A wholly unrecognised reason-only Decision degrades to an empty
+    string (unchanged), never raising."""
     payload = decision.payload or {}
     if isinstance(payload, dict):
         value = payload.get("question")
-        if isinstance(value, str):
+        if isinstance(value, str) and value.strip():
             return value
-    return ""
+    fallback = _EXECUTOR_DECISION_QUESTIONS.get(decision.decision)
+    return fallback if fallback is not None else ""
 
 
 @router.get("")

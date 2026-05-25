@@ -52,6 +52,12 @@ class DeliverableResponse(BaseModel):
     artifact_refs: list[str] = []
     artifact_uri: str | None = None
     diff_url: str | None = None
+    # B4 trust-integrity: True ONLY when a PASSED VerificationResult exists for
+    # the producing run. The founder-facing "verified" badge MUST derive from
+    # this backend-authoritative flag, never from a Deliverable merely existing.
+    # Defaults False so a hollow row (no PASSED proof) reads honestly as
+    # unverified / needs-review rather than a green "verified".
+    verified: bool = False
     created_at: datetime
 
 
@@ -85,6 +91,11 @@ class DeliverableReportResponse(BaseModel):
 
     deliverable: DeliverableResponse
     request: str | None = None
+    # B4 trust-integrity: True ONLY when at least one PASSED VerificationResult is
+    # recorded for the producing run (mirrors ``deliverable.verified``). The
+    # report's "verified" / "This is verified" signal derives from this, so a
+    # deliverable without a PASSED proof reads as needs-review, not verified.
+    verified: bool = False
     verifications: list[VerificationReport] = []
 
 
@@ -135,7 +146,7 @@ def _artifact_refs_of(payload: dict[str, Any]) -> list[str]:
     return []
 
 
-def _to_response(row: Deliverable) -> DeliverableResponse:
+def _to_response(row: Deliverable, *, verified: bool = False) -> DeliverableResponse:
     payload = row.payload if isinstance(row.payload, dict) else {}
     return DeliverableResponse(
         id=row.id,
@@ -146,8 +157,36 @@ def _to_response(row: Deliverable) -> DeliverableResponse:
         artifact_refs=_artifact_refs_of(payload),
         artifact_uri=row.artifact_uri,
         diff_url=row.diff_url,
+        verified=verified,
         created_at=row.created_at,
     )
+
+
+async def _verified_run_ids(
+    session: AsyncSession, workspace_id: uuid.UUID, run_ids: set[uuid.UUID]
+) -> set[uuid.UUID]:
+    """The subset of ``run_ids`` that have at least one PASSED VerificationResult.
+
+    B4 defense-in-depth: a run is "verified" ONLY when a real PASSED
+    :class:`VerificationResult` row exists — never inferred from a Deliverable
+    existing. One indexed query covers the whole listing page. An empty input
+    short-circuits to an empty set (no needless query)."""
+    if not run_ids:
+        return set()
+    stmt = select(VerificationResult.run_id).where(
+        VerificationResult.workspace_id == workspace_id,
+        VerificationResult.run_id.in_(run_ids),
+        VerificationResult.outcome == VerificationOutcome.PASSED,
+    )
+    result = await session.execute(stmt)
+    return set(result.scalars().all())
+
+
+async def _run_is_verified(
+    session: AsyncSession, workspace_id: uuid.UUID, run_id: uuid.UUID
+) -> bool:
+    """True iff the run has at least one PASSED VerificationResult (single row)."""
+    return bool(await _verified_run_ids(session, workspace_id, {run_id}))
 
 
 def _to_verification(row: VerificationResult) -> VerificationReport:
@@ -179,7 +218,9 @@ async def list_deliverables(
         stmt = stmt.where(Deliverable.run_id == run_id)
     stmt = stmt.order_by(Deliverable.created_at.desc()).limit(limit)
     result = await session.execute(stmt)
-    return [_to_response(row) for row in result.scalars().all()]
+    rows = list(result.scalars().all())
+    verified = await _verified_run_ids(session, workspace_id, {row.run_id for row in rows})
+    return [_to_response(row, verified=row.run_id in verified) for row in rows]
 
 
 @router.get("/{deliverable_id}")
@@ -195,7 +236,8 @@ async def get_deliverable(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Deliverable {deliverable_id} not found",
         )
-    return _to_response(row)
+    verified = await _run_is_verified(session, workspace_id, row.run_id)
+    return _to_response(row, verified=verified)
 
 
 @router.get("/{deliverable_id}/report")
@@ -229,6 +271,11 @@ async def get_deliverable_report(
     )
     result = await session.execute(stmt)
     verifications = [_to_verification(v) for v in result.scalars().all()]
+    # B4 trust-integrity: the report is "verified" ONLY when a real PASSED
+    # VerificationResult is among the run's recorded verifications — never
+    # inferred from the Deliverable existing. A hollow deliverable (none, or only
+    # failed/inconclusive) reads as needs-review, honestly.
+    verified = any(v.outcome == VerificationOutcome.PASSED for v in verifications)
 
     # The founder's Direction that led to this work — pulled from the producing
     # run's free-form payload so the report reads request → built → checked. A
@@ -241,8 +288,9 @@ async def get_deliverable_report(
     )
 
     return DeliverableReportResponse(
-        deliverable=_to_response(row),
+        deliverable=_to_response(row, verified=verified),
         request=request,
+        verified=verified,
         verifications=verifications,
     )
 
