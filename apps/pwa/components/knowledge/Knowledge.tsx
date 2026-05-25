@@ -45,6 +45,20 @@ export default function Knowledge() {
     };
   }, []);
 
+  // Full-screen (directive #2/#3): when the graph is ready it IS the surface —
+  // a full-bleed force-directed canvas with controls floating over it. The calm
+  // loading / empty / error states keep the boxed heading layout (there's no
+  // canvas to fill yet). The ready graph escapes the boxed `.inside` column and
+  // fills the whole content area via `.knowledge-fullscreen` (an isolated CSS
+  // block that zeroes the shell's content padding for this surface).
+  if (state.status === "ready" && state.graph.nodes.length > 0) {
+    return (
+      <div className="knowledge-fullscreen">
+        <KnowledgeGraphView graph={state.graph} />
+      </div>
+    );
+  }
+
   return (
     <div className="inside inside--graph">
       <h1 className="inside__heading">{t("heading")}</h1>
@@ -62,15 +76,12 @@ export default function Knowledge() {
         </p>
       )}
 
-      {state.status === "ready" &&
-        (state.graph.nodes.length === 0 ? (
-          <div className="knowledge-graph__empty" data-testid="knowledge-graph-empty">
-            <p className="knowledge-graph__empty-line">{t("graphEmptyLine")}</p>
-            <p className="knowledge-graph__empty-sub">{t("graphEmptySub")}</p>
-          </div>
-        ) : (
-          <KnowledgeGraphView graph={state.graph} />
-        ))}
+      {state.status === "ready" && state.graph.nodes.length === 0 && (
+        <div className="knowledge-graph__empty" data-testid="knowledge-graph-empty">
+          <p className="knowledge-graph__empty-line">{t("graphEmptyLine")}</p>
+          <p className="knowledge-graph__empty-sub">{t("graphEmptySub")}</p>
+        </div>
+      )}
     </div>
   );
 }

@@ -18,29 +18,40 @@ import ForceGraph2D from "react-force-graph-2d";
 /**
  * The Knowledge graph view — ported from BSage's `KnowledgeGraphView` and
  * adapted to the monorepo's `/api/v1/inside` data. This is the WHOLE knowledge
- * surface: a force-directed graph (left) + a click→detail side panel (right),
- * plus a search box and a group(kind) color legend/filter.
+ * surface, FULL-SCREEN (directive #2/#3): a force-directed canvas that fills
+ * the content area with controls floating OVER it — a search box top, a
+ * TYPE/COMMUNITY legend bottom-left, and a right-docked Node Inspector that
+ * slides in when a node is selected.
  *
- * WHY THIS REPLACES `ForceGraphCanvas`: the old canvas used a custom
- * `nodeCanvasObject` but provided NO `nodePointerAreaPaint`, so the lib's click
- * hit-area (a shadow canvas read under the pointer) never matched the drawn
- * nodes — every real tap resolved to nothing and `onNodeClick` never fired.
- * BSage's component supplies `nodePointerAreaPaint` (a generous circular hit
- * area per node), which is what makes clicks work. We keep that verbatim.
+ * WHY CLICKS WORK WITHOUT HOVER (directive #1 — the priority): the previous
+ * port relied solely on `react-force-graph`'s `onNodeClick`, which is driven by
+ * the lib's hover state (a shadow-canvas hit-test under the *current pointer*).
+ * On a real Retina device a tap that doesn't first generate a matching
+ * pointer-move — or where DPR scaling makes the shadow-canvas read miss the
+ * drawn node — never fires `onNodeClick`, so the inspector never opened. The
+ * fix is an EXPLICIT, hover-independent click handler: we keep a ref to the
+ * ForceGraph2D instance and, on a canvas (`onBackgroundClick`) click, convert
+ * the click's `offsetX/offsetY` to graph coords with `fg.screen2GraphCoords`
+ * (already DPR-correct — the lib accounts for devicePixelRatio internally) and
+ * select the NEAREST node whose distance ≤ its render radius (+ a few px touch
+ * tolerance). `onNodeClick` + `nodePointerAreaPaint` are kept as a secondary
+ * path. So a tap lands regardless of pointer-move / hover / touch / DPR.
  *
  * Loaded only on the client (`next/dynamic` with `ssr: false` from the parent)
  * because `react-force-graph-2d` reaches for `window`/canvas at module scope.
  *
- * Dropped from BSage's version (no equivalent data in the monorepo): the
- * community color-mode + community legend (no community data on `/inside`), and
- * the markdown/wikilink note rendering (no react-markdown/remark/rehype dep) —
- * the detail panel renders aliases + related concepts + source observations as
- * plain styled elements instead.
+ * COLOUR MODES (directive #3): TYPE colours each node by its ontology `kind`;
+ * COMMUNITY colours by the backend's deterministic `community` cluster id. The
+ * legend lists each group + node count, and clicking an entry filters (like
+ * BSage). The inspector renders ONLY the real `ConceptDetailResponse` fields
+ * (name / kind-as-TYPE / community / aliases / related / observations) — no
+ * fabricated vault frontmatter (our concepts don't carry confidence/maturity).
  */
 
-// Palette applied in deterministic order to whatever kinds show up in the
-// graph. A new ontology kind lands on a fresh slot with no frontend change.
-// Tuned to read on the calm light/dark surfaces (mid-saturation, mid-value).
+// Palette applied in deterministic order to whatever groups show up in the
+// graph (kinds in TYPE mode, community ids in COMMUNITY mode). A new group lands
+// on a fresh slot with no frontend change. Tuned to read on the calm light/dark
+// surfaces (mid-saturation, mid-value).
 const GROUP_PALETTE = [
   "#5b8def",
   "#3fb68b",
@@ -55,6 +66,8 @@ const GROUP_PALETTE = [
 ];
 const FALLBACK_COLOR = "#8b6fd6";
 
+type ColorMode = "type" | "community";
+
 /** The empty/unknown kind gets the translated "Other" label; everything else is
  *  humanized from the backend id. */
 function humanizeGroup(group: string): string | null {
@@ -67,6 +80,7 @@ interface GraphNode {
   id: string;
   name: string;
   group: string;
+  community: string;
   weight: number;
   x?: number;
   y?: number;
@@ -104,9 +118,11 @@ function readPalette(): Palette {
 export default function KnowledgeGraphView({ graph }: { graph: KnowledgeGraph }) {
   const t = useTranslations("knowledge");
   const [searchQuery, setSearchQuery] = useState("");
-  // `null` = no filter (all kinds visible). First toggle seeds the allowlist to
-  // every known kind, then toggles the clicked one off.
+  // `null` = no filter (all groups visible). First toggle seeds the allowlist to
+  // every known group, then toggles the clicked one off. Keyed per color mode so
+  // switching modes starts from a clean (unfiltered) slate.
   const [activeFilters, setActiveFilters] = useState<Set<string> | null>(null);
+  const [colorMode, setColorMode] = useState<ColorMode>("type");
   const [detail, setDetail] = useState<DetailState>({ status: "idle" });
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
@@ -121,7 +137,8 @@ export default function KnowledgeGraphView({ graph }: { graph: KnowledgeGraph })
 
   // Measure the host box and feed its size to the lib. Without explicit
   // width/height the lib defaults to window.innerWidth/innerHeight, mismatching
-  // the clipped host AND breaking the shadow-canvas hit-test.
+  // the host AND breaking the shadow-canvas hit-test. Full-bleed now, so this
+  // tracks the whole content area as it resizes.
   useEffect(() => {
     const el = containerRef.current;
     if (!el || typeof ResizeObserver === "undefined") return;
@@ -149,32 +166,46 @@ export default function KnowledgeGraphView({ graph }: { graph: KnowledgeGraph })
   }, []);
 
   // Map the `/inside/graph` shape onto the lib's node/link shape once per
-  // response: label→name, kind→group (color/filter), weight kept for sizing.
+  // response: label→name, kind→group (TYPE color/filter), community kept for the
+  // COMMUNITY mode, weight kept for sizing.
   const baseNodes = useMemo<GraphNode[]>(
     () =>
       graph.nodes.map((n) => ({
         id: n.id,
         name: n.label,
         group: n.kind ?? "",
+        community: n.community ?? "",
         weight: n.weight,
       })),
     [graph],
   );
 
-  // Legend entries derived from actual data: each unique kind gets a color
-  // (palette cycles by frequency rank) and a node count.
+  // The active grouping key per node, switched by colorMode.
+  const groupKeyOf = useCallback(
+    (n: { group: string; community: string }) => (colorMode === "type" ? n.group : n.community),
+    [colorMode],
+  );
+
+  // Legend entries derived from actual data for the ACTIVE color mode: each
+  // unique group gets a color (palette cycles by frequency rank) and a count.
   const groupsInfo = useMemo(() => {
     const counts: Record<string, number> = {};
-    for (const n of baseNodes) counts[n.group] = (counts[n.group] ?? 0) + 1;
+    for (const n of baseNodes) {
+      const key = colorMode === "type" ? n.group : n.community;
+      counts[key] = (counts[key] ?? 0) + 1;
+    }
     return Object.entries(counts)
       .sort(([, a], [, b]) => b - a)
       .map(([group, count], idx) => ({
         group,
         count,
-        label: humanizeGroup(group) ?? t("graphGroupOther"),
+        label:
+          colorMode === "type"
+            ? (humanizeGroup(group) ?? t("graphGroupOther"))
+            : (humanizeGroup(group) ?? t("graphCommunityLabel", { id: "?" })),
         color: GROUP_PALETTE[idx % GROUP_PALETTE.length],
       }));
-  }, [baseNodes, t]);
+  }, [baseNodes, colorMode, t]);
 
   const groupColorMap = useMemo(() => {
     const map: Record<string, string> = {};
@@ -195,13 +226,20 @@ export default function KnowledgeGraphView({ graph }: { graph: KnowledgeGraph })
     [groupsInfo],
   );
 
-  // Filtered nodes + edges (search needle + kind allowlist). Edges survive only
-  // when both endpoints survive. New node/link objects each pass so the sim
-  // re-seeds cleanly.
+  // Switching color mode clears any active filter (the filter set is keyed by
+  // the other mode's group ids — keeping it would hide everything).
+  const switchMode = useCallback((mode: ColorMode) => {
+    setColorMode(mode);
+    setActiveFilters(null);
+  }, []);
+
+  // Filtered nodes + edges (search needle + active-mode group allowlist). Edges
+  // survive only when both endpoints survive. New node/link objects each pass so
+  // the sim re-seeds cleanly.
   const filteredData = useMemo(() => {
     const query = searchQuery.trim().toLowerCase();
     const nodes = baseNodes.filter((n) => {
-      if (activeFilters && !activeFilters.has(n.group)) return false;
+      if (activeFilters && !activeFilters.has(groupKeyOf(n))) return false;
       if (query && !n.name.toLowerCase().includes(query)) return false;
       return true;
     });
@@ -210,7 +248,7 @@ export default function KnowledgeGraphView({ graph }: { graph: KnowledgeGraph })
       .filter((e) => nodeIds.has(e.source) && nodeIds.has(e.target))
       .map((e) => ({ source: e.source, target: e.target }));
     return { nodes: nodes.map((n) => ({ ...n })), links };
-  }, [baseNodes, graph.edges, activeFilters, searchQuery]);
+  }, [baseNodes, graph.edges, activeFilters, searchQuery, groupKeyOf]);
 
   const degreeMap = useMemo(() => computeDegree(filteredData.links as GraphLink[]), [filteredData]);
   const hubThreshold = useMemo(() => labelDegreeThreshold(degreeMap, 0.05), [degreeMap]);
@@ -241,10 +279,7 @@ export default function KnowledgeGraphView({ graph }: { graph: KnowledgeGraph })
     fg.d3Force("y", forceY(0).strength(0.05));
   }, [degreeMap]);
 
-  const handleNodeClick = useCallback(async (node: { id?: string; name?: string }) => {
-    if (!node.id) return;
-    const id = node.id;
-    const name = node.name ?? id;
+  const selectConcept = useCallback(async (id: string, name: string) => {
     setSelectedId(id);
     setDetail({ status: "loading", id, name });
     try {
@@ -259,6 +294,51 @@ export default function KnowledgeGraphView({ graph }: { graph: KnowledgeGraph })
     }
   }, []);
 
+  // Secondary path: the lib's hover-based node click.
+  const handleNodeClick = useCallback(
+    (node: { id?: string; name?: string }) => {
+      if (!node.id) return;
+      void selectConcept(node.id, node.name ?? node.id);
+    },
+    [selectConcept],
+  );
+
+  // PRIMARY path (the dead-click fix): hover-independent canvas click. Convert
+  // the click's offset coords to graph coords via the fg instance, then pick the
+  // nearest node within its render radius (+ touch tolerance). Works regardless
+  // of pointer-move / hover / touch / DPR — screen2GraphCoords is DPR-correct.
+  const handleBackgroundClick = useCallback(
+    (event: MouseEvent) => {
+      const fg = fgRef.current;
+      if (!fg?.screen2GraphCoords) return;
+      const { offsetX, offsetY } = event;
+      const { x: gx, y: gy } = fg.screen2GraphCoords(offsetX, offsetY);
+
+      let nearest: GraphNode | null = null;
+      let nearestDist = Number.POSITIVE_INFINITY;
+      for (const n of filteredData.nodes as GraphNode[]) {
+        if (n.x === undefined || n.y === undefined) continue;
+        const dx = n.x - gx;
+        const dy = n.y - gy;
+        const dist = Math.hypot(dx, dy);
+        if (dist < nearestDist) {
+          nearestDist = dist;
+          nearest = n;
+        }
+      }
+      if (!nearest) return;
+      // Accept the click only when it lands within the node's drawn radius plus
+      // a generous touch tolerance (min 12px world units), so a click on empty
+      // canvas doesn't grab a far-off node.
+      const deg = (nearest.id && degreeMap[nearest.id]) || 0;
+      const hitRadius = Math.max(12, nodeRadius(deg, false) + 6);
+      if (nearestDist <= hitRadius) {
+        void selectConcept(nearest.id, nearest.name);
+      }
+    },
+    [filteredData, degreeMap, selectConcept],
+  );
+
   const closePanel = useCallback(() => {
     setSelectedId(null);
     setDetail({ status: "idle" });
@@ -269,7 +349,8 @@ export default function KnowledgeGraphView({ graph }: { graph: KnowledgeGraph })
       const x = rawNode.x ?? 0;
       const y = rawNode.y ?? 0;
       const label = rawNode.name || "";
-      const color = groupColorMap[rawNode.group] ?? FALLBACK_COLOR;
+      const groupKey = colorMode === "type" ? rawNode.group : rawNode.community;
+      const color = groupColorMap[groupKey] ?? FALLBACK_COLOR;
       const isSelected = selectedId === rawNode.id;
       const degree = (rawNode.id && degreeMap[rawNode.id]) || 0;
       const radius = nodeRadius(degree, isSelected);
@@ -314,13 +395,11 @@ export default function KnowledgeGraphView({ graph }: { graph: KnowledgeGraph })
       ctx.fillStyle = isSelected ? palette.labelSelected : palette.label;
       ctx.fillText(label, x, y + radius + 2);
     },
-    [selectedId, groupColorMap, degreeMap, hubThreshold, palette],
+    [selectedId, colorMode, groupColorMap, degreeMap, hubThreshold, palette],
   );
 
-  // The click hit-area — the fix for the dead clicks. A generous circle (min
-  // 12px) per node so even isolated/low-degree nodes stay tappable at default
-  // zoom. WITHOUT this, the lib has no hit-area matching the custom-drawn nodes
-  // and onNodeClick never fires.
+  // The secondary click hit-area. A generous circle (min 12px) per node so even
+  // isolated/low-degree nodes stay tappable at default zoom.
   const nodePointerAreaPaint = useCallback(
     (node: GraphNode, color: string, ctx: CanvasRenderingContext2D) => {
       const deg = (node.id && degreeMap[node.id]) || 0;
@@ -333,10 +412,21 @@ export default function KnowledgeGraphView({ graph }: { graph: KnowledgeGraph })
     [degreeMap],
   );
 
+  // The selected node (for inspector metadata that isn't on ConceptDetail —
+  // TYPE/kind + community come from the graph node, not the detail response).
+  const selectedNode = useMemo(
+    () => baseNodes.find((n) => n.id === selectedId) ?? null,
+    [baseNodes, selectedId],
+  );
+  const selectedTypeLabel = selectedNode?.group ? humanizeGroup(selectedNode.group) : null;
+  const selectedCommunityLabel = selectedNode?.community
+    ? (humanizeGroup(selectedNode.community) ?? selectedNode.community)
+    : null;
+
   return (
-    <div className="kgraph">
+    <div className="kgraph kgraph--fullscreen">
       <div className="kgraph__main">
-        {/* Top bar: search + reset-filters */}
+        {/* Floating toolbar: search + reset-filters. */}
         <div className="kgraph__toolbar">
           <input
             type="search"
@@ -357,7 +447,7 @@ export default function KnowledgeGraphView({ graph }: { graph: KnowledgeGraph })
           )}
         </div>
 
-        {/* Canvas host — measured + sized so clicks land. */}
+        {/* Canvas host — full-bleed, measured + sized so clicks land. */}
         <div ref={containerRef} className="kgraph__canvas" data-testid="knowledge-graph-canvas">
           {filteredData.nodes.length === 0 ? (
             <div className="kgraph__no-match">
@@ -381,39 +471,71 @@ export default function KnowledgeGraphView({ graph }: { graph: KnowledgeGraph })
               enableZoomInteraction
               enablePanInteraction
               onNodeClick={handleNodeClick}
+              onBackgroundClick={handleBackgroundClick}
               nodeCanvasObject={nodeCanvasObject}
               nodePointerAreaPaint={nodePointerAreaPaint}
             />
           )}
 
-          {/* Group(kind) legend + filter. */}
+          {/* TYPE / COMMUNITY legend — floats over the canvas bottom-left. */}
           {groupsInfo.length > 0 && (
-            <div className="kgraph__legend" aria-label={t("graphLegendLabel")}>
-              {groupsInfo.map(({ group, count, label, color }) => {
-                const active = activeFilters === null || activeFilters.has(group);
-                return (
-                  <button
-                    key={group || "__other"}
-                    type="button"
-                    className={`kgraph__legend-item${active ? "" : " kgraph__legend-item--off"}`}
-                    onClick={() => toggleFilter(group)}
-                    aria-pressed={active}
-                  >
-                    <span className="kgraph__legend-dot" style={{ backgroundColor: color }} />
-                    <span className="kgraph__legend-label">{label}</span>
-                    <span className="kgraph__legend-count">{count}</span>
-                  </button>
-                );
-              })}
+            <div
+              className="kgraph__legend"
+              aria-label={
+                colorMode === "type" ? t("graphLegendLabel") : t("graphLegendCommunityLabel")
+              }
+            >
+              <div className="kgraph__legend-modes">
+                <button
+                  type="button"
+                  className={`kgraph__mode${colorMode === "type" ? " kgraph__mode--on" : ""}`}
+                  onClick={() => switchMode("type")}
+                  aria-pressed={colorMode === "type"}
+                >
+                  {t("graphColorType")}
+                </button>
+                <button
+                  type="button"
+                  className={`kgraph__mode${colorMode === "community" ? " kgraph__mode--on" : ""}`}
+                  onClick={() => switchMode("community")}
+                  aria-pressed={colorMode === "community"}
+                >
+                  {t("graphColorCommunity")}
+                </button>
+              </div>
+
+              <ul className="kgraph__legend-items">
+                {groupsInfo.map(({ group, count, label, color }) => {
+                  const active = activeFilters === null || activeFilters.has(group);
+                  return (
+                    <li key={group || "__other"}>
+                      <button
+                        type="button"
+                        className={`kgraph__legend-item${active ? "" : " kgraph__legend-item--off"}`}
+                        onClick={() => toggleFilter(group)}
+                        aria-pressed={active}
+                        data-testid={
+                          colorMode === "community" ? `legend-community-${group}` : undefined
+                        }
+                      >
+                        <span className="kgraph__legend-dot" style={{ backgroundColor: color }} />
+                        <span className="kgraph__legend-label">{label}</span>
+                        <span className="kgraph__legend-count">{count}</span>
+                      </button>
+                    </li>
+                  );
+                })}
+              </ul>
             </div>
           )}
         </div>
       </div>
 
-      {/* Detail side panel — opens on a node tap. */}
+      {/* Node Inspector — docks right, slides in on a node tap. */}
       {detail.status !== "idle" && (
         <aside className="kgraph__panel" aria-label={t("inspectorLabel")}>
           <header className="kgraph__panel-head">
+            <div className="kgraph__panel-eyebrow">{t("inspectorLabel")}</div>
             <h2 className="kgraph__panel-name">
               {detail.status === "ready" ? detail.detail.name : detail.name}
             </h2>
@@ -445,6 +567,27 @@ export default function KnowledgeGraphView({ graph }: { graph: KnowledgeGraph })
 
           {detail.status === "ready" && (
             <div className="kgraph__panel-body">
+              {/* Metadata grid — only the real fields the concept carries (TYPE
+                  + community come from the graph node, not ConceptDetail). */}
+              {(selectedTypeLabel || selectedCommunityLabel) && (
+                <section className="kgraph__block">
+                  <div className="kgraph__meta">
+                    {selectedTypeLabel && (
+                      <div className="kgraph__meta-cell">
+                        <span className="kgraph__meta-key">{t("inspectorType")}</span>
+                        <span className="kgraph__meta-val">{selectedTypeLabel}</span>
+                      </div>
+                    )}
+                    {selectedCommunityLabel && (
+                      <div className="kgraph__meta-cell">
+                        <span className="kgraph__meta-key">{t("inspectorCommunity")}</span>
+                        <span className="kgraph__meta-val">{selectedCommunityLabel}</span>
+                      </div>
+                    )}
+                  </div>
+                </section>
+              )}
+
               {detail.detail.aliases.length > 0 && (
                 <section className="kgraph__block">
                   <h3 className="kgraph__block-label">{t("inspectorAliases")}</h3>
@@ -469,7 +612,7 @@ export default function KnowledgeGraphView({ graph }: { graph: KnowledgeGraph })
                         <button
                           type="button"
                           className="kgraph__chip"
-                          onClick={() => handleNodeClick({ id: rel.id, name: rel.name })}
+                          onClick={() => void selectConcept(rel.id, rel.name)}
                         >
                           <span className="kgraph__chip-name">{rel.name}</span>
                           <span className="kgraph__chip-weight">

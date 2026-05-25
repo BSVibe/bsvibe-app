@@ -151,8 +151,10 @@ class GraphNode(BaseModel):
 
     ``id`` is the entity's graph id (stable across edges); ``label`` its
     human-readable name; ``kind`` its ontology entity type (concept, person,
-    project, tool, …); ``weight`` its connectedness signal (degree) so the viz
-    can size hubs.
+    project, tool, …) — the TYPE legend colours by this; ``community`` the
+    deterministic emergent-cluster id (:func:`build_concept_graph` assigns one
+    per node) the COMMUNITY legend colours by; ``weight`` its connectedness
+    signal (degree) so the viz can size hubs.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -160,6 +162,7 @@ class GraphNode(BaseModel):
     id: str
     label: str
     kind: str | None = None
+    community: str | None = None
     weight: int = 0
 
 
@@ -482,6 +485,7 @@ async def get_graph(
             id=str(node_id),
             label=str(attrs.get("name") or node_id),
             kind=(str(attrs["entity_type"]) if attrs.get("entity_type") else None),
+            community=(str(attrs["community"]) if attrs.get("community") else None),
             weight=int(degrees.get(node_id, 0)),
         )
         for node_id, attrs in graph.nodes(data=True)

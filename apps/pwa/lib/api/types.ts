@@ -447,13 +447,16 @@ export interface Observation {
 
 /** `GET /api/v1/inside/graph` node (backend GraphNode). One entity in the
  *  force-directed knowledge graph: `id` is stable across edges, `label` the
- *  display name, `kind` the ontology entity type (may be absent), `weight` the
- *  node's degree (connectedness signal for sizing). Mirrors the backend model
+ *  display name, `kind` the ontology entity type (may be absent; the TYPE
+ *  legend colours by it), `community` the deterministic emergent-cluster id
+ *  (may be absent; the COMMUNITY legend colours by it), `weight` the node's
+ *  degree (connectedness signal for sizing). Mirrors the backend model
  *  field-for-field (backend/api/v1/inside.py). */
 export interface KnowledgeGraphNode {
   id: string;
   label: string;
   kind?: string | null;
+  community?: string | null;
   weight: number;
 }
 

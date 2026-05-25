@@ -296,3 +296,71 @@ async def test_build_is_idempotent(workspace_storage: FileSystemStorage) -> None
     assert set(first.nodes()) == set(second.nodes())
     assert _cooccurs_pairs(first) == _cooccurs_pairs(second)
     assert first.number_of_edges() == second.number_of_edges()
+
+
+# ---------------------------------------------------------------------------
+# community detection
+# ---------------------------------------------------------------------------
+async def test_every_node_gets_a_community_id(workspace_storage: FileSystemStorage) -> None:
+    """Each node carries a stable, non-empty ``community`` attribute (the
+    legend's COMMUNITY mode colours by it). get_graph reads ``community``."""
+    await _seed_concepts(workspace_storage, ["python", "calculator", "rust"])
+    await workspace_storage.write(
+        "garden/seedling/obs.md",
+        _garden_note("settle", "python", "calculator"),
+    )
+
+    graph = await build_concept_graph(workspace_storage)
+
+    for _node_id, attrs in graph.nodes(data=True):
+        assert isinstance(attrs.get("community"), str)
+        assert attrs["community"]
+
+
+async def test_connected_concepts_share_a_community(
+    workspace_storage: FileSystemStorage,
+) -> None:
+    """Two clusters that never cross-link land in different communities; the
+    members of one cluster share a community id (greedy modularity is stable
+    on this clearly-partitioned input)."""
+    await _seed_concepts(workspace_storage, ["a1", "a2", "b1", "b2"])
+    # Cluster A: a1+a2 co-occur. Cluster B: b1+b2 co-occur. No A-B link.
+    await workspace_storage.write("garden/seedling/a.md", _garden_note("settle", "a1", "a2"))
+    await workspace_storage.write("garden/seedling/b.md", _garden_note("settle", "b1", "b2"))
+
+    graph = await build_concept_graph(workspace_storage)
+    comm = {n: a["community"] for n, a in graph.nodes(data=True)}
+
+    assert comm["a1"] == comm["a2"]
+    assert comm["b1"] == comm["b2"]
+    assert comm["a1"] != comm["b1"]
+
+
+async def test_isolated_node_gets_own_community(
+    workspace_storage: FileSystemStorage,
+) -> None:
+    """A lone concept with no edges still gets a valid community id (trivial
+    case — never crashes, never empty)."""
+    await _seed_concepts(workspace_storage, ["lonely"])
+
+    graph = await build_concept_graph(workspace_storage)
+
+    assert isinstance(graph.nodes["lonely"]["community"], str)
+    assert graph.nodes["lonely"]["community"]
+
+
+async def test_community_assignment_is_deterministic(
+    workspace_storage: FileSystemStorage,
+) -> None:
+    """Building twice over the same vault yields the same community ids (no
+    randomness — the legend must not flicker between reads)."""
+    await _seed_concepts(workspace_storage, ["a1", "a2", "b1", "b2"])
+    await workspace_storage.write("garden/seedling/a.md", _garden_note("settle", "a1", "a2"))
+    await workspace_storage.write("garden/seedling/b.md", _garden_note("settle", "b1", "b2"))
+
+    first = await build_concept_graph(workspace_storage)
+    second = await build_concept_graph(workspace_storage)
+
+    assert {n: a["community"] for n, a in first.nodes(data=True)} == {
+        n: a["community"] for n, a in second.nodes(data=True)
+    }

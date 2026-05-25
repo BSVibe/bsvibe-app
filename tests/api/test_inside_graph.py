@@ -146,10 +146,16 @@ async def test_graph_returns_nodes_and_edges(client, workspace_storage) -> None:
     labels = {n["label"] for n in body["nodes"]}
     assert {"auth", "jwks"} <= labels
 
-    # Node shape carries id + label + kind (entity_type="concept").
+    # Node shape carries id + label + kind (entity_type="concept") + community.
     auth_node = next(n for n in body["nodes"] if n["id"] == "auth")
     assert auth_node["label"] == "auth"
     assert auth_node["kind"] == "concept"
+    # COMMUNITY legend mode colours by this — every node carries a non-empty id.
+    assert isinstance(auth_node["community"], str)
+    assert auth_node["community"]
+    # Two concepts co-occurring in one observation are in the same community.
+    jwks_node = next(n for n in body["nodes"] if n["id"] == "jwks")
+    assert auth_node["community"] == jwks_node["community"]
 
     # One undirected co-occurs edge between the two concepts.
     assert len(body["edges"]) == 1
@@ -176,6 +182,9 @@ async def test_graph_sparse_nodes_no_edges(client, workspace_storage) -> None:
     assert len(body["nodes"]) == 1
     assert body["nodes"][0]["label"] == "lonely"
     assert body["edges"] == []
+    # Even an isolated node carries a valid community id (trivial-graph case).
+    assert isinstance(body["nodes"][0]["community"], str)
+    assert body["nodes"][0]["community"]
 
 
 async def test_graph_workspace_isolation(client, vault_root) -> None:

@@ -1489,6 +1489,81 @@ main.login {
   }
 }
 
+/* Full-screen surface (directive #2/#3): the graph IS the surface. The route
+   renders `.knowledge-fullscreen` which escapes the shell's content padding so
+   the canvas fills the whole content area (rail-offset on desktop, full width
+   on mobile). The controls (search top, legend bottom-left, inspector docked
+   right) float OVER the canvas. The shell main keeps its padding for every
+   OTHER surface — only this one opts out. */
+.shell__main:has(.knowledge-fullscreen) {
+  padding: 0;
+}
+
+.knowledge-fullscreen {
+  position: fixed;
+  inset: 0 0 0 var(--rail-w);
+  overflow: hidden;
+}
+
+.kgraph--fullscreen {
+  position: absolute;
+  inset: 0;
+  display: block;
+  gap: 0;
+}
+
+/* In full-screen the canvas fills the whole layer; the toolbar floats on top
+   of it rather than sitting in a column above it. */
+.kgraph--fullscreen .kgraph__main {
+  position: absolute;
+  inset: 0;
+  gap: 0;
+}
+
+.kgraph--fullscreen .kgraph__toolbar {
+  position: absolute;
+  top: 18px;
+  left: 18px;
+  right: 18px;
+  z-index: 2;
+  max-width: 420px;
+}
+
+.kgraph--fullscreen .kgraph__canvas {
+  position: absolute;
+  inset: 0;
+  height: auto;
+  border: none;
+  border-radius: 0;
+}
+
+/* The inspector docks to the right edge and slides over the canvas. */
+.kgraph--fullscreen .kgraph__panel {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: min(360px, 92vw);
+  border-top: none;
+  border-right: none;
+  border-bottom: none;
+  border-radius: 0;
+  z-index: 3;
+  overflow-y: auto;
+  box-shadow: -8px 0 24px color-mix(in srgb, var(--ink) 8%, transparent);
+}
+
+@media (max-width: 767px) {
+  /* No left rail on mobile — fill the full width, clear the top bar + tabbar. */
+  .knowledge-fullscreen {
+    inset: 0;
+  }
+
+  .kgraph--fullscreen .kgraph__panel {
+    width: 100vw;
+  }
+}
+
 .kgraph__main {
   display: flex;
   flex-direction: column;
@@ -1570,26 +1645,68 @@ main.login {
   margin: 0;
 }
 
-/* Group(kind) legend / filter — floats over the canvas bottom-left. */
+/* TYPE / COMMUNITY legend / filter — floats over the canvas bottom-left. */
 .kgraph__legend {
   position: absolute;
-  bottom: 14px;
-  left: 14px;
+  bottom: 18px;
+  left: 18px;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-width: 220px;
+  padding: 12px 14px;
+  background: color-mix(in srgb, var(--surface) 90%, transparent);
+  backdrop-filter: blur(8px);
+  border: 1px solid var(--hair-strong);
+  border-radius: var(--radius);
+}
+
+/* TYPE / COMMUNITY color-mode toggle (like BSage). */
+.kgraph__legend-modes {
+  display: inline-flex;
+  gap: 2px;
+  padding: 2px;
+  background: var(--accent-bg);
+  border-radius: var(--radius-sm);
+}
+
+.kgraph__mode {
+  flex: 1;
+  padding: 4px 10px;
+  font: inherit;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--ink-3);
+  background: none;
+  border: none;
+  border-radius: calc(var(--radius-sm) - 2px);
+  cursor: pointer;
+}
+
+.kgraph__mode--on {
+  color: var(--ink);
+  background: var(--surface);
+  box-shadow: 0 1px 2px color-mix(in srgb, var(--ink) 10%, transparent);
+}
+
+.kgraph__legend-items {
+  list-style: none;
+  margin: 0;
+  padding: 0;
   display: flex;
   flex-direction: column;
   gap: 6px;
-  max-width: 200px;
-  padding: 10px 12px;
-  background: color-mix(in srgb, var(--surface) 88%, transparent);
-  backdrop-filter: blur(6px);
-  border: 1px solid var(--hair-strong);
-  border-radius: var(--radius-sm);
+  max-height: 40vh;
+  overflow-y: auto;
 }
 
 .kgraph__legend-item {
   display: flex;
   align-items: center;
   gap: 8px;
+  width: 100%;
   padding: 0;
   font: inherit;
   background: none;
@@ -1643,29 +1760,43 @@ main.login {
 }
 
 .kgraph__panel-head {
-  display: flex;
-  align-items: baseline;
-  gap: 10px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 4px 10px;
+}
+
+.kgraph__panel-eyebrow {
+  grid-column: 1;
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-3);
 }
 
 .kgraph__panel-name {
+  grid-column: 1;
   margin: 0;
-  font-size: 1.05rem;
-  font-weight: 600;
+  font-size: 1.15rem;
+  font-weight: 650;
+  letter-spacing: -0.01em;
   color: var(--ink);
 }
 
 .kgraph__panel-close {
-  margin-left: auto;
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  align-self: start;
   flex: none;
-  width: 28px;
-  height: 28px;
-  font-size: 1.2rem;
+  width: 30px;
+  height: 30px;
+  font-size: 1.3rem;
   line-height: 1;
   color: var(--ink-3);
   background: none;
   border: 1px solid transparent;
-  border-radius: 6px;
+  border-radius: 8px;
   cursor: pointer;
 }
 
@@ -1705,6 +1836,37 @@ main.login {
   margin: 0;
   font-size: 0.84rem;
   color: var(--ink-3);
+}
+
+/* BSage-style metadata grid — only the real fields the concept carries (TYPE +
+   community). No fabricated vault frontmatter (confidence/maturity/tenant_id). */
+.kgraph__meta {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 8px;
+}
+
+.kgraph__meta-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 10px 12px;
+  background: var(--accent-bg);
+  border-radius: var(--radius-sm);
+}
+
+.kgraph__meta-key {
+  font-size: 0.66rem;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+
+.kgraph__meta-val {
+  font-size: 0.88rem;
+  font-weight: 550;
+  color: var(--ink);
 }
 
 .kgraph__tags {
