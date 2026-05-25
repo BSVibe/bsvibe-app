@@ -164,13 +164,22 @@ function sourceFor(type: DeliverableType): string {
   }
 }
 
-/** First non-empty line of a summary as the item title; calm fallback if none. */
+/** A concise one-line summary for a shipped deliverable — NOT the raw LLM
+ *  `summary` (which is often a multi-paragraph blob). Take the first non-empty
+ *  line, then its first sentence (cut at the first `.`/`!`/`?` that's followed by
+ *  whitespace — so "fibonacci.py" isn't split), then hard-cap the length with an
+ *  ellipsis. Calm fallback when there's no summary at all. */
+const _SUMMARY_MAX = 140;
 function titleFor(summary: string | null): string {
   const first = (summary ?? "")
     .split("\n")
     .map((line) => line.trim())
     .find((line) => line.length > 0);
-  return first ?? "Shipped deliverable";
+  if (!first) return "Shipped deliverable";
+  const sentence = first.match(/^.*?[.!?](?=\s)/);
+  let text = sentence ? sentence[0] : first;
+  if (text.length > _SUMMARY_MAX) text = `${text.slice(0, _SUMMARY_MAX).trimEnd()}…`;
+  return text;
 }
 
 /** Resolve a deliverable's product slug via its producing run (Deliverable has

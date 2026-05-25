@@ -221,6 +221,41 @@ describe("getBrief (real-data composition)", () => {
     expect(view.recentlyShipped[0].artifactType).toBe("file");
   });
 
+  it("condenses a long LLM summary to its first sentence (not the raw blob)", async () => {
+    const longSummary =
+      "The fibonacci.py file has been successfully created with a function that " +
+      "returns the nth Fibonacci number. The implementation:\n" +
+      "- handles n=0 and n=1\n- is iterative";
+    global.fetch = mockFetch({
+      "/api/v1/products": [product("p1", "alpha", "alpha")],
+      "/api/v1/runs": [],
+      "/api/v1/decisions": [],
+      "/api/v1/safemode/queue": [],
+      "/api/v1/deliverables": [deliverable("d-fib", "code", longSummary)],
+    }) as unknown as typeof fetch;
+
+    const view = await getBrief();
+    expect(view.recentlyShipped[0].title).toBe(
+      "The fibonacci.py file has been successfully created with a function that returns the nth Fibonacci number.",
+    );
+  });
+
+  it("hard-caps an over-long single sentence with an ellipsis", async () => {
+    const huge = `${"word ".repeat(60).trim()} end`; // ~300 chars, no sentence break
+    global.fetch = mockFetch({
+      "/api/v1/products": [product("p1", "alpha", "alpha")],
+      "/api/v1/runs": [],
+      "/api/v1/decisions": [],
+      "/api/v1/safemode/queue": [],
+      "/api/v1/deliverables": [deliverable("d-long", "code", huge)],
+    }) as unknown as typeof fetch;
+
+    const view = await getBrief();
+    const title = view.recentlyShipped[0].title;
+    expect(title.endsWith("…")).toBe(true);
+    expect(title.length).toBeLessThanOrEqual(141);
+  });
+
   it("an empty/fresh workspace yields calm empty states, NOT demo data", async () => {
     global.fetch = mockFetch({
       "/api/v1/products": [],
