@@ -349,11 +349,19 @@ def build_agent_execution_deps(
             account_id=account.account_id,
             model_account_id=account.id,
         )
+        # B5a — thread the run's workspace SkillLoader into the native loop so it
+        # registers the ``invoke_skill`` + ``knowledge_search`` tools. The loader
+        # is the SAME per-workspace one the FrameStage uses (``<skills_root>/
+        # <workspace_id>/``, already ``load_all()``-ed). Before B5a the loop's
+        # tool set was a static 6-tuple — skills were authored but the loop could
+        # never call them, and it could not consult knowledge on demand.
+        skill_loader = _skill_loader_for(run.workspace_id)
         return RunOrchestrator(
             session=session,
             llm=llm,
             sandbox_manager=box,
             retriever=retriever,
+            skill_loader=skill_loader,
             redis_client=redis_client,
             settings=settings,
         )

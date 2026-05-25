@@ -37,6 +37,8 @@ from backend.execution.orchestrator import (
     LoopTurn,
     RunOrchestrator,
 )
+from backend.skills.loader import SkillLoader
+from backend.skills.tool_binding import INVOKE_SKILL_NAME
 from backend.supervisor.sandbox import NoopSandboxManager, SandboxUnavailable
 from backend.workspaces.db import ProductRow, WorkspaceRow
 from tests._support import memory_session
@@ -87,7 +89,22 @@ class StubRetriever:
         return list(self._patterns)
 
 
+def _write_skill(skill_dir: Path, name: str, body: str, description: str = "desc") -> None:
+    """Author a workspace skill manifest the SkillLoader can parse."""
+    skill_dir.mkdir(parents=True, exist_ok=True)
+    (skill_dir / f"{name}.md").write_text(
+        f"---\nname: {name}\nversion: 1\ndescription: {description}\n---\n{body}",
+        encoding="utf-8",
+    )
+
+
 def _tc(name: str, **arguments: Any) -> LoopToolCall:
+    return LoopToolCall(id=f"call-{name}-{uuid.uuid4().hex[:6]}", name=name, arguments=arguments)
+
+
+def _tc_args(name: str, arguments: dict[str, Any]) -> LoopToolCall:
+    """Build a tool call whose arguments dict may use keys that collide with
+    :func:`_tc`'s own params (e.g. an ``invoke_skill`` call's ``name`` arg)."""
     return LoopToolCall(id=f"call-{name}-{uuid.uuid4().hex[:6]}", name=name, arguments=arguments)
 
 
@@ -504,3 +521,224 @@ async def test_retriever_folds_canonical_patterns_into_contract(tmp_path: Path) 
 def test_loop_protocols_are_runtime_checkable() -> None:
     assert isinstance(ScriptedLlm([]), LoopLlm)
     assert isinstance(StubRetriever([]), CanonRetriever)
+
+
+# --------------------------------------------------------------------------
+# B5a — invoke_skill + knowledge_search are now reachable by the loop
+# --------------------------------------------------------------------------
+
+
+def _tool_names(tools_schema: list[dict[str, Any]]) -> set[str]:
+    return {t["function"]["name"] for t in tools_schema if t.get("type") == "function"}
+
+
+async def test_loop_tool_schema_includes_skill_and_knowledge_tools(tmp_path: Path) -> None:
+    """The schema surfaced to the work LLM now includes ``invoke_skill`` and
+    ``knowledge_search`` when a skill loader is wired in (was absent before B5a).
+    """
+    llm = ScriptedLlm([LoopTurn(content="done", tool_calls=())])
+    skill_dir = tmp_path / "skills"
+    _write_skill(skill_dir, "weekly-digest", "Summarize the week.")
+    loader = SkillLoader(skill_dir)
+    loader.load_all()
+    async with memory_session() as session:
+        run = await _make_run(session)
+        orch = RunOrchestrator(
+            session=session,
+            llm=llm,
+            sandbox_manager=NoopSandboxManager(),
+            skill_loader=loader,
+            retriever=StubRetriever([]),
+        )
+        await orch.run(run=run, workspace_dir=tmp_path / "ws")
+
+    # The first plan turn saw the surfaced tool schema.
+    first_tools = llm.calls[0]["tools"]
+    assert first_tools is not None
+    names = _tool_names(first_tools)
+    assert INVOKE_SKILL_NAME in names
+    assert "knowledge_search" in names
+    # Existing tools still present.
+    assert "file_write" in names
+    assert "declare_verification" in names
+    assert "ask_user_question" in names
+
+
+async def test_loop_invokes_workspace_skill(tmp_path: Path) -> None:
+    """A stub LLM that emits an ``invoke_skill`` tool call → the skill runner
+    runs (injecting the skill body as the system prompt) and the result is fed
+    back to the loop. Proves ``register_invoke_skill`` is actually called with
+    the workspace loader (it was never called before B5a)."""
+    skill_dir = tmp_path / "skills"
+    _write_skill(skill_dir, "weekly-digest", "SKILL-BODY-MARKER summarize the week.")
+    loader = SkillLoader(skill_dir)
+    loader.load_all()
+
+    captured: dict[str, Any] = {}
+
+    class RecordingLlm:
+        """Records the system prompt the skill runner's completion seam sees,
+        then drives the loop to a verified terminal."""
+
+        def __init__(self) -> None:
+            self._turns = [
+                LoopTurn(
+                    content="invoking the skill",
+                    tool_calls=(
+                        _tc_args("invoke_skill", {"name": "weekly-digest", "input": "go"}),
+                    ),
+                ),
+                LoopTurn(
+                    content="",
+                    tool_calls=(
+                        _declare_command("test -f out.txt"),
+                        _tc("file_write", path="out.txt", content="x"),
+                    ),
+                ),
+                LoopTurn(content="done", tool_calls=()),
+            ]
+            self.calls: list[dict[str, Any]] = []
+
+        async def complete(
+            self, *, messages: list[dict[str, Any]], tools: list[dict[str, Any]] | None
+        ) -> LoopTurn:
+            # The skill runner routes its completion through the SAME loop LLM
+            # seam, but as a plain completion (no tools). Capture the system
+            # prompt of that call so we can prove the skill body was injected.
+            if tools is None and messages and messages[0].get("role") == "system":
+                content = messages[0].get("content") or ""
+                if "SKILL-BODY-MARKER" in content:
+                    captured["skill_system_prompt"] = content
+                    return LoopTurn(content="skill response text", tool_calls=())
+            self.calls.append({"messages": list(messages), "tools": tools})
+            if not self._turns:
+                raise AssertionError("RecordingLlm exhausted")
+            return self._turns.pop(0)
+
+    llm = RecordingLlm()
+    async with memory_session() as session:
+        run = await _make_run(session)
+        orch = RunOrchestrator(
+            session=session,
+            llm=llm,
+            sandbox_manager=NoopSandboxManager(),
+            skill_loader=loader,
+            retriever=StubRetriever([]),
+        )
+        result = await orch.run(run=run, workspace_dir=tmp_path / "ws")
+
+    assert result.outcome == "verified"
+    # The skill runner actually ran with the workspace skill's body injected.
+    assert "SKILL-BODY-MARKER" in captured.get("skill_system_prompt", "")
+    # The skill result was fed back as a tool message the loop continued from.
+    tool_msgs = [
+        m
+        for call in llm.calls
+        for m in call["messages"]
+        if m.get("role") == "tool" and "weekly-digest" in (m.get("content") or "")
+    ]
+    assert tool_msgs, "the invoke_skill result should be appended as a tool message"
+
+
+async def test_knowledge_search_tool_returns_workspace_knowledge(tmp_path: Path) -> None:
+    """A stub LLM that calls ``knowledge_search`` → the tool returns the
+    workspace's knowledge for the query, fed back as a tool message."""
+    retriever = StubRetriever(["always pin dependency versions"])
+    llm = ScriptedLlm(
+        [
+            LoopTurn(
+                content="consulting knowledge",
+                tool_calls=(_tc("knowledge_search", query="dependency"),),
+            ),
+            LoopTurn(
+                content="",
+                tool_calls=(
+                    _declare_command("test -f out.txt"),
+                    _tc("file_write", path="out.txt", content="x"),
+                ),
+            ),
+            LoopTurn(content="done", tool_calls=()),
+            # A non-empty retriever folds its patterns into the verify contract
+            # as a judge criterion (B3), so the verify step makes one judge call.
+            LoopTurn(content='{"passed": true}', tool_calls=()),
+        ]
+    )
+    skill_dir = tmp_path / "skills"
+    _write_skill(skill_dir, "weekly-digest", "Summarize.")
+    loader = SkillLoader(skill_dir)
+    loader.load_all()
+    async with memory_session() as session:
+        run = await _make_run(session)
+        orch = RunOrchestrator(
+            session=session,
+            llm=llm,
+            sandbox_manager=NoopSandboxManager(),
+            skill_loader=loader,
+            retriever=retriever,
+        )
+        result = await orch.run(run=run, workspace_dir=tmp_path / "ws")
+
+    assert result.outcome == "verified"
+    assert retriever.queried, "knowledge_search should query the retriever"
+    tool_msgs = [
+        m
+        for call in llm.calls
+        for m in call["messages"]
+        if m.get("role") == "tool" and "pin dependency versions" in (m.get("content") or "")
+    ]
+    assert tool_msgs, "the knowledge_search result should be appended as a tool message"
+
+
+async def test_knowledge_search_empty_workspace_returns_valid_empty(tmp_path: Path) -> None:
+    """An empty-knowledge workspace → knowledge_search returns an empty-but-valid
+    result and never crashes the loop."""
+    retriever = StubRetriever([])
+    llm = ScriptedLlm(
+        [
+            LoopTurn(
+                content="consulting knowledge",
+                tool_calls=(_tc("knowledge_search", query="anything"),),
+            ),
+            LoopTurn(
+                content="",
+                tool_calls=(
+                    _declare_command("test -f out.txt"),
+                    _tc("file_write", path="out.txt", content="x"),
+                ),
+            ),
+            LoopTurn(content="done", tool_calls=()),
+        ]
+    )
+    skill_dir = tmp_path / "skills"
+    _write_skill(skill_dir, "weekly-digest", "Summarize.")
+    loader = SkillLoader(skill_dir)
+    loader.load_all()
+    async with memory_session() as session:
+        run = await _make_run(session)
+        orch = RunOrchestrator(
+            session=session,
+            llm=llm,
+            sandbox_manager=NoopSandboxManager(),
+            skill_loader=loader,
+            retriever=retriever,
+        )
+        result = await orch.run(run=run, workspace_dir=tmp_path / "ws")
+
+    assert result.outcome == "verified"
+
+
+async def test_loop_without_skill_loader_omits_skill_tools(tmp_path: Path) -> None:
+    """Backward-compat: a run with no skill loader wired (existing callers /
+    tests) surfaces neither new tool — the loop is unchanged."""
+    llm = ScriptedLlm([LoopTurn(content="done", tool_calls=())])
+    async with memory_session() as session:
+        run = await _make_run(session)
+        orch = RunOrchestrator(session=session, llm=llm, sandbox_manager=NoopSandboxManager())
+        await orch.run(run=run, workspace_dir=tmp_path)
+
+    first_tools = llm.calls[0]["tools"]
+    assert first_tools is not None
+    names = _tool_names(first_tools)
+    assert INVOKE_SKILL_NAME not in names
+    assert "knowledge_search" not in names
+    assert "file_write" in names
