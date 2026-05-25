@@ -1,0 +1,85 @@
+/**
+ * Unified pending-decisions aggregator.
+ *
+ * The Decisions surface is the SINGLE place for everything that genuinely needs
+ * the founder's judgment. Rather than read one queue, it folds three EXISTING
+ * backend queues into one calm list (no new backend, no change to any endpoint's
+ * behaviour — see backend/api/v1/{safemode,checkpoints,decisions}.py):
+ *
+ *   - "delivery"  ← GET /api/v1/safemode/queue   (held outbound deliveries)
+ *   - "decision"  ← GET /api/v1/checkpoints       (paused-run questions)
+ *   - "knowledge" ← GET /api/v1/decisions?status_filter=pending  (canon proposals)
+ *
+ * Deliveries + proposals are the SAME set the Brief "Needs you" strip surfaces
+ * (lib/api/brief.ts `needsYouFrom`), so the Pending count matches the Brief
+ * count for that overlap. Paused-run checkpoints are folded in here too — the
+ * Brief does not yet show them, so the Decisions Pending count is a superset by
+ * exactly the pending-checkpoint count (that is the only kind the Brief omits).
+ *
+ * Each list degrades to empty on its own per-surface 4xx / network blip so one
+ * failing queue never blanks the whole surface (same calm-fallback rule the
+ * Brief uses). The merged list is newest-first across kinds.
+ */
+
+import { listCheckpoints } from "./checkpoints";
+import { ApiError } from "./client";
+import { listPendingProposals } from "./decisions";
+import { listSafeModeQueue } from "./safemode";
+import type { Checkpoint, PendingDecision, Proposal, SafeModeItem } from "./types";
+
+/** Swallow a per-surface ApiError / network blip into an empty list so one
+ *  failing queue does not blank the whole Decisions surface. */
+function emptyOnApiError<T>(error: unknown): T[] {
+  if (error instanceof ApiError || error instanceof TypeError) return [];
+  throw error;
+}
+
+/** Map the three raw queue responses → the unified, kind-tagged Pending list,
+ *  newest-first across kinds. */
+export function toPendingDecisions(
+  deliveries: SafeModeItem[],
+  checkpoints: Checkpoint[],
+  proposals: Proposal[],
+): PendingDecision[] {
+  const items: PendingDecision[] = [];
+  for (const d of deliveries) {
+    items.push({
+      kind: "delivery",
+      id: `delivery-${d.id}`,
+      itemId: d.id,
+      createdAt: d.created_at,
+    });
+  }
+  for (const c of checkpoints) {
+    items.push({
+      kind: "decision",
+      id: `checkpoint-${c.id}`,
+      checkpointId: c.id,
+      question: c.question,
+      rationale: c.rationale,
+      createdAt: c.created_at,
+    });
+  }
+  for (const p of proposals) {
+    items.push({
+      kind: "knowledge",
+      id: `proposal-${p.id}`,
+      proposal: p,
+      createdAt: p.created_at,
+    });
+  }
+  // Newest-first across kinds. Items with an unparseable timestamp sort last.
+  return items.sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
+}
+
+/** Read all three queues in parallel and return the merged Pending list. A
+ *  single optional queue failing degrades to empty rather than blanking the
+ *  surface. */
+export async function listPendingDecisions(): Promise<PendingDecision[]> {
+  const [deliveries, checkpoints, proposals] = await Promise.all([
+    listSafeModeQueue().catch(emptyOnApiError<SafeModeItem>),
+    listCheckpoints().catch(emptyOnApiError<Checkpoint>),
+    listPendingProposals().catch(emptyOnApiError<Proposal>),
+  ]);
+  return toPendingDecisions(deliveries, checkpoints, proposals);
+}

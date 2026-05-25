@@ -5725,3 +5725,66 @@ main.login {
   }
 }
 /* ── END Routing rules ─────────────────────────────────────────────────── */
+
+/* ── BEGIN feat/decisions-unify: unified Pending kinds (isolated block) ─────
+   The Decisions Pending list now aggregates three kinds — Safe-Mode held
+   deliveries, paused-run checkpoints, and canon proposals. Deliveries +
+   checkpoints resolve inline, so their rows reuse the base .decisions-row
+   column layout (already flex-column) and add a right-aligned action bar plus
+   a per-kind chip tint. Reuses existing design tokens only; adds no root
+   tokens. The proposal (knowledge) row is unchanged (.decisions-row__open). */
+.decisions-row__actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+/* Per-kind chip tints so the founder reads the kind at a glance. Knowledge
+   keeps the default chip (the proposal's existing proposal_kind chip). */
+.decisions-chip--delivery {
+  background: var(--amber-pill-bg, var(--accent-bg));
+  color: var(--amber-ink, var(--ink-2));
+}
+
+.decisions-chip--decision {
+  background: var(--accent-bg);
+  color: var(--ink-2);
+}
+
+/* The agent's optional "why" under a paused-run question. */
+.decisions-row__rationale {
+  margin: 0;
+  font-size: 0.82rem;
+  color: var(--ink-3);
+}
+
+/* Inline answer field for a paused-run checkpoint. */
+.decisions-row__answer-label {
+  font-size: 0.78rem;
+  font-weight: 550;
+  color: var(--ink-2);
+}
+
+.decisions-row__answer {
+  width: 100%;
+  resize: vertical;
+  border: 1px solid var(--hair-strong);
+  border-radius: var(--radius-sm, 8px);
+  padding: 8px 10px;
+  font: inherit;
+  font-size: 0.85rem;
+  color: var(--ink);
+  background: var(--surface);
+}
+
+.decisions-row__answer:focus-visible {
+  outline: 2px solid var(--ink-3);
+  outline-offset: 1px;
+}
+
+.decisions-row__answer:disabled {
+  opacity: 0.6;
+}
+/* ── END feat/decisions-unify block ────────────────────────────────────── */

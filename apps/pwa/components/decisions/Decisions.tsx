@@ -1,50 +1,61 @@
 "use client";
 
-import { ApiError } from "@/lib/api/client";
-import { listDecisionsLog, listPendingProposals } from "@/lib/api/decisions";
-import type { DecisionLogEntry, Proposal } from "@/lib/api/types";
+import { listDecisionsLog } from "@/lib/api/decisions";
+import { listPendingDecisions } from "@/lib/api/pending";
+import type { DecisionLogEntry, PendingDecision, Proposal } from "@/lib/api/types";
 import { setPendingDecisionsCount } from "@/lib/decisions/pending-count";
 import { useTranslations } from "next-intl";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import CheckpointRow from "./CheckpointRow";
 import DecisionDetail from "./DecisionDetail";
+import DeliveryRow from "./DeliveryRow";
 import ProposalRow from "./ProposalRow";
 import ResolvedRow from "./ResolvedRow";
 
 /**
- * The Decisions surface — the canonicalization proposals inbox (Stitch screens
- * 1175801d… Inbox + 5bf54bdf… detail). Two calm tabs over the SAME backend
- * queue (backend/api/v1/decisions.py):
+ * The Decisions surface — the SINGLE place for everything that genuinely needs
+ * the founder's judgment. Two calm tabs:
  *
- *  - Pending   ← GET /api/v1/decisions?status_filter=pending  (proposals the
- *    founder must judge — Accept applies the linked merge, Reject leaves it)
- *  - Resolved  ← GET /api/v1/decisions/log  (the founder-approval audit trail)
+ *  - Pending   ← three EXISTING backend queues aggregated client-side
+ *    (lib/api/pending.ts), each row labeled by kind and wired to its OWN
+ *    resolve endpoint, with no change to any endpoint's behaviour:
+ *      · "delivery"  Safe-Mode held delivery — Approve / Decline inline
+ *        (POST /api/v1/safemode/{id}/approve|deny)
+ *      · "decision"  paused-run checkpoint — answer + resume inline
+ *        (POST /api/v1/checkpoints/{id}/resolve)
+ *      · "knowledge" canon proposal — opens the focused Accept / Reject panel
+ *        (POST /api/v1/decisions/{path}/accept|reject)
+ *  - Resolved  ← GET /api/v1/decisions/log  (the canon decision audit trail)
  *
- * Selecting a pending item opens a focused detail/resolve panel. A client-side
- * search box filters the visible list. Each list degrades to empty on a per-
- * surface 4xx/network blip rather than blanking the page. Resolving an item
- * re-reads both queues so the surface reflects server state, and keeps the nav
- * pending-count badge in sync with the pending size only.
+ * The Pending count = deliveries + checkpoints + proposals. Deliveries +
+ * proposals are the SAME set the Brief "Needs you" strip shows, so the Pending
+ * count matches the Brief for that overlap; paused-run checkpoints are folded
+ * in here too (the Brief does not yet show them — Decisions is a superset by
+ * exactly the pending-checkpoint count, the one kind the Brief omits).
  *
- * Scope note: this lift is the canon proposals queue only. Paused-run
- * checkpoints (the other thing that used to live here) and Safe-Mode delivery
- * approvals stay in the Brief's "Needs you" — deliberately NOT mirrored here.
+ * A client-side search box filters the visible list. Each queue degrades to
+ * empty on a per-surface 4xx / network blip rather than blanking the page.
+ * Resolving any item re-reads both tabs so the surface reflects server state,
+ * and keeps the nav pending-count badge in sync with the full pending size.
  */
 type Tab = "pending" | "resolved";
 
 export default function Decisions() {
-  const [proposals, setProposals] = useState<Proposal[] | null>(null);
+  const [pending, setPending] = useState<PendingDecision[] | null>(null);
   const [resolved, setResolved] = useState<DecisionLogEntry[] | null>(null);
   const [tab, setTab] = useState<Tab>("pending");
   const [query, setQuery] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const t = useTranslations("decisions");
 
-  const load = useCallback((onResult: (p: Proposal[], d: DecisionLogEntry[]) => void) => {
+  const load = useCallback((onResult: (p: PendingDecision[], d: DecisionLogEntry[]) => void) => {
     Promise.all([
-      listPendingProposals().catch(emptyOnApiError<Proposal>),
-      listDecisionsLog().catch(emptyOnApiError<DecisionLogEntry>),
+      // listPendingDecisions already degrades each per-surface failure to empty.
+      listPendingDecisions().catch(() => [] as PendingDecision[]),
+      listDecisionsLog().catch(() => [] as DecisionLogEntry[]),
     ]).then(([p, d]) => {
-      // Only PENDING proposals drive the nav badge — resolved items are history.
+      // The whole pending list (all three kinds) drives the nav badge — resolved
+      // items are history and never inflate it.
       setPendingDecisionsCount(p.length);
       onResult(p, d);
     });
@@ -54,7 +65,7 @@ export default function Decisions() {
     let active = true;
     load((p, d) => {
       if (!active) return;
-      setProposals(p);
+      setPending(p);
       setResolved(d);
     });
     return () => {
@@ -64,19 +75,16 @@ export default function Decisions() {
 
   const reload = useCallback(() => {
     load((p, d) => {
-      setProposals(p);
+      setPending(p);
       setResolved(d);
       setSelectedId(null);
     });
   }, [load]);
 
-  const filteredPending = useMemo(
-    () => filterProposals(proposals ?? [], query),
-    [proposals, query],
-  );
+  const filteredPending = useMemo(() => filterPending(pending ?? [], query), [pending, query]);
   const filteredResolved = useMemo(() => filterDecisions(resolved ?? [], query), [resolved, query]);
 
-  if (proposals === null || resolved === null) {
+  if (pending === null || resolved === null) {
     return (
       <div className="decisions decisions--loading" aria-busy="true">
         <h1 className="decisions__heading">{t("heading")}</h1>
@@ -85,7 +93,10 @@ export default function Decisions() {
     );
   }
 
-  const selected = proposals.find((p) => p.id === selectedId) ?? null;
+  // The open detail panel only applies to the "knowledge" (proposal) kind.
+  const selected = pending.find((p) => p.kind === "knowledge" && p.proposal.id === selectedId) as
+    | Extract<PendingDecision, { kind: "knowledge" }>
+    | undefined;
 
   return (
     <div className="decisions">
@@ -112,7 +123,7 @@ export default function Decisions() {
           onClick={() => setTab("pending")}
         >
           {t("tabPending")}
-          <span className="decisions__tab-count">{proposals.length}</span>
+          <span className="decisions__tab-count">{pending.length}</span>
         </button>
         <button
           type="button"
@@ -132,7 +143,12 @@ export default function Decisions() {
         ) : (
           <ul className="decisions-list" aria-label={t("tabPending")}>
             {filteredPending.map((item) => (
-              <ProposalRow key={item.id} item={item} onOpen={() => setSelectedId(item.id)} />
+              <PendingItem
+                key={item.id}
+                item={item}
+                onOpen={() => setSelectedId(proposalId(item))}
+                onResolved={reload}
+              />
             ))}
           </ul>
         )
@@ -151,10 +167,41 @@ export default function Decisions() {
       <p className="decisions__footnote">{t("footnote")}</p>
 
       {selected ? (
-        <DecisionDetail item={selected} onClose={() => setSelectedId(null)} onResolved={reload} />
+        <DecisionDetail
+          item={selected.proposal}
+          onClose={() => setSelectedId(null)}
+          onResolved={reload}
+        />
       ) : null}
     </div>
   );
+}
+
+/** Render one Pending row by kind — delivery + decision resolve inline, a
+ *  knowledge proposal opens the focused detail/resolve panel. */
+function PendingItem({
+  item,
+  onOpen,
+  onResolved,
+}: {
+  item: PendingDecision;
+  onOpen: () => void;
+  onResolved: () => void;
+}) {
+  switch (item.kind) {
+    case "delivery":
+      return <DeliveryRow item={item} onResolved={onResolved} />;
+    case "decision":
+      return <CheckpointRow item={item} onResolved={onResolved} />;
+    default:
+      return <ProposalRow item={item.proposal} onOpen={onOpen} />;
+  }
+}
+
+/** The proposal id for a knowledge row (the detail-panel selection key); "" for
+ *  the inline-resolving kinds, which never open the panel. */
+function proposalId(item: PendingDecision): string {
+  return item.kind === "knowledge" ? item.proposal.id : "";
 }
 
 function EmptyPending({
@@ -177,13 +224,25 @@ export function proposalVerb(p: Proposal): string {
   return p.action_kind.replace(/-/g, " ");
 }
 
-/** Client-side filter over the proposal's verb + handle. */
-function filterProposals(items: Proposal[], query: string): Proposal[] {
+/** Searchable text for a Pending item across all three kinds. */
+function pendingHaystack(item: PendingDecision): string {
+  switch (item.kind) {
+    case "delivery":
+      return `delivery ${item.itemId}`;
+    case "decision":
+      return `decision ${item.question} ${item.rationale ?? ""} ${item.checkpointId}`;
+    default: {
+      const p = item.proposal;
+      return `knowledge ${proposalVerb(p)} ${p.id} ${p.action_path} ${p.proposal_kind}`;
+    }
+  }
+}
+
+/** Client-side filter over the unified Pending list. */
+function filterPending(items: PendingDecision[], query: string): PendingDecision[] {
   const q = query.trim().toLowerCase();
   if (q.length === 0) return items;
-  return items.filter((p) =>
-    `${proposalVerb(p)} ${p.id} ${p.action_path} ${p.proposal_kind}`.toLowerCase().includes(q),
-  );
+  return items.filter((item) => pendingHaystack(item).toLowerCase().includes(q));
 }
 
 /** Client-side filter over the resolved decision's kind + handle. */
@@ -191,11 +250,4 @@ function filterDecisions(items: DecisionLogEntry[], query: string): DecisionLogE
   const q = query.trim().toLowerCase();
   if (q.length === 0) return items;
   return items.filter((d) => `${d.decision_kind} ${d.id}`.toLowerCase().includes(q));
-}
-
-/** Swallow a per-surface ApiError / network blip into an empty list so one
- *  failing queue does not blank the whole Decisions page. */
-function emptyOnApiError<T>(error: unknown): T[] {
-  if (error instanceof ApiError || error instanceof TypeError) return [];
-  throw error;
 }
