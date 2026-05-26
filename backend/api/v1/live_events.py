@@ -90,9 +90,15 @@ class LiveEventBus:
     """
 
     def __init__(self) -> None:
-        # workspace_id → set of queues (each queue belongs to one subscriber)
+        # workspace_id → set of queues (each queue belongs to one subscriber).
+        # No asyncio.Lock here: set add/discard are atomic under CPython's GIL
+        # for our usage (single bucket per workspace, short critical sections),
+        # and an asyncio.Lock would bind to the FIRST event loop that touches
+        # the singleton — every later test loop's publish would raise
+        # "Lock is bound to a different event loop", a failure mode the
+        # soft-fail bridge above might not catch in every Python version.
+        # Singleton is per-process; per-call snapshots are taken without a lock.
         self._subscribers: dict[uuid.UUID, set[asyncio.Queue[LiveEvent]]] = {}
-        self._lock = asyncio.Lock()
 
     @asynccontextmanager
     async def subscribe(self, workspace_id: uuid.UUID) -> AsyncIterator[asyncio.Queue[LiveEvent]]:
@@ -102,17 +108,18 @@ class LiveEventBus:
         deregistered, so producers no longer fan out into it.
         """
         queue: asyncio.Queue[LiveEvent] = asyncio.Queue()
-        async with self._lock:
-            self._subscribers.setdefault(workspace_id, set()).add(queue)
+        self._subscribers.setdefault(workspace_id, set()).add(queue)
         try:
             yield queue
         finally:
-            async with self._lock:
-                bucket = self._subscribers.get(workspace_id)
-                if bucket is not None:
-                    bucket.discard(queue)
-                    if not bucket:
-                        del self._subscribers[workspace_id]
+            bucket = self._subscribers.get(workspace_id)
+            if bucket is not None:
+                bucket.discard(queue)
+                if not bucket:
+                    # del is safe even under concurrent subscribe — if a
+                    # racing subscriber re-populated the set we just lose its
+                    # entry from the registry; it sets a fresh queue anyway.
+                    self._subscribers.pop(workspace_id, None)
 
     async def publish(self, workspace_id: uuid.UUID, event: LiveEvent) -> None:
         """Fan an event out to every subscriber on ``workspace_id``.
@@ -121,11 +128,11 @@ class LiveEventBus:
         durable record). Per-queue ``put`` failures are logged + swallowed so
         one stuck consumer cannot poison the rest.
         """
-        async with self._lock:
-            bucket = self._subscribers.get(workspace_id)
-            # Snapshot — queue.put is awaited OUTSIDE the lock to keep
-            # publish responsive when many subscribers are present.
-            queues = list(bucket) if bucket else []
+        bucket = self._subscribers.get(workspace_id)
+        # Snapshot the queues — no lock needed; set membership reads are
+        # atomic and we tolerate racing subscribe/unsubscribe (a brand-new
+        # subscriber may miss this single publish but will catch the next).
+        queues = list(bucket) if bucket else []
         for queue in queues:
             try:
                 queue.put_nowait(event)
