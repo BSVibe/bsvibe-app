@@ -184,6 +184,19 @@ class Settlement:
     product_name: str | None = None
     intent_text: str | None = None
     occurred_at: datetime | None = None
+    # B11b: the settle payload's ``kind`` (``"decision_resolution"`` for an
+    # answered checkpoint, absent for verified-work observations). Threaded
+    # onto the absorbed garden note so downstream consumers — specifically the
+    # :class:`~backend.knowledge.retrieval.resolved_decisions_retriever.ResolvedDecisionsRetriever`
+    # — can recognise decision-resolution notes structurally instead of
+    # parsing the free-text summary.
+    kind: str | None = None
+    # B11b: structured Q/A for a ``decision_resolution`` settlement, so the
+    # absorbed note carries the founder's question + answer text as durable
+    # extra-fields the retriever can read directly (instead of regex-parsing
+    # the human-legible summary). ``None`` for verified-work observations.
+    question: str | None = None
+    answer: str | None = None
 
 
 class SettleSink(Protocol):
@@ -316,21 +329,32 @@ class KnowledgeSettleSink:
         # the write.
         content_tags = await self._derive_tags(settlement)
         tags = ["settle", "verified-run", *content_tags]
+        # B11b: a decision-resolution settlement gets an extra structural tag
+        # so consumers can filter for it without parsing the body.
+        if settlement.kind == "decision_resolution":
+            tags.append("decision-resolution")
+        extra_fields: dict[str, object | None] = {
+            "run_id": str(settlement.run_id),
+            "activity_id": str(settlement.activity_id),
+            "verified": settlement.verified,
+            "artifact_refs": list(settlement.artifact_refs),
+            "product_slug": settlement.product_slug,
+            "product_name": settlement.product_name,
+            "intent_text": settlement.intent_text,
+        }
+        if settlement.kind is not None:
+            extra_fields["kind"] = settlement.kind
+        if settlement.question is not None:
+            extra_fields["question"] = settlement.question
+        if settlement.answer is not None:
+            extra_fields["answer"] = settlement.answer
         note = GardenNote(
             title=f"Settle: {headline}",
             content=_observation_body(settlement, summary),
             source="settle_worker",
             knowledge_layer="episodic",
             tags=tags,
-            extra_fields={
-                "run_id": str(settlement.run_id),
-                "activity_id": str(settlement.activity_id),
-                "verified": settlement.verified,
-                "artifact_refs": list(settlement.artifact_refs),
-                "product_slug": settlement.product_slug,
-                "product_name": settlement.product_name,
-                "intent_text": settlement.intent_text,
-            },
+            extra_fields=extra_fields,
         )
         path = await writer.write_garden(note)
         return str(path)
@@ -815,6 +839,11 @@ def _to_settlement(row: ExecutionRunActivity, region: str) -> Settlement:
         product_name=_opt_str(payload.get("product_name")),
         intent_text=_opt_str(payload.get("intent_text")),
         occurred_at=row.created_at,
+        # B11b — decision-resolution metadata when this settle row came from
+        # the checkpoints resolve endpoint; ``None`` for verified-work settles.
+        kind=_opt_str(payload.get("kind")),
+        question=_opt_str(payload.get("question")),
+        answer=_opt_str(payload.get("answer")),
     )
 
 
