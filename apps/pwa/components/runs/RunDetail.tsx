@@ -10,9 +10,11 @@ import type {
   RunStatus,
   RunVerification,
 } from "@/lib/api/types";
+import { useSession } from "@/lib/auth/session";
+import { useEventStream } from "@/lib/live-events/use-event-stream";
 import { useTranslations } from "next-intl";
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 /**
  * Run-detail surface — the Stitch "Triggered" screen made real. One
@@ -46,7 +48,7 @@ export default function RunDetail({ runId }: { runId: string }) {
   const [loaded, setLoaded] = useState<Loaded>({ state: "loading" });
   const t = useTranslations("run");
 
-  function reload() {
+  const reload = useCallback(() => {
     setLoaded({ state: "loading" });
     getRunDetail(runId)
       .then((detail) => setLoaded({ state: "ready", detail }))
@@ -59,7 +61,7 @@ export default function RunDetail({ runId }: { runId: string }) {
           setLoaded({ state: "error" });
         }
       });
-  }
+  }, [runId]);
 
   useEffect(() => {
     let active = true;
@@ -80,6 +82,23 @@ export default function RunDetail({ runId }: { runId: string }) {
       active = false;
     };
   }, [runId]);
+
+  // B16 — wake up when the backend signals THIS run reached a terminal
+  // state or raised a decision, so the founder sees the new status without
+  // a manual refresh. Filter by run_id so unrelated workspace events don't
+  // thrash this surface.
+  const session = useSession();
+  const liveRefresh = useCallback(
+    (payload: { run_id?: string }) => {
+      if (payload.run_id === runId) reload();
+    },
+    [runId, reload],
+  );
+  useEventStream({
+    token: session?.accessToken ?? null,
+    onRunTerminal: liveRefresh,
+    onDecisionPending: liveRefresh,
+  });
 
   return (
     <div className="run-detail">

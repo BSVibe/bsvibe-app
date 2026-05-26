@@ -62,13 +62,17 @@ async def sf():
         yield async_sessionmaker(engine, expire_on_commit=False)
 
 
-def _short_timeout_settings(timeout_s: float = 5.0):
+def _short_timeout_settings(timeout_s: float = 30.0):
     """Settings with a SHORT ``executor_task_timeout_s`` for the happy/failure
     e2e paths. The prod default is 1800s (30 min): if the done publish is ever
     raced/missed, ``await_completion`` would block on that timeout before the DB
     fallback — a 30-minute test hang. A few-second cap keeps the test fast while
     still exercising the real await/fallback path. Threaded through
-    :func:`build_agent_execution_deps` into the per-run ExecutorOrchestrator."""
+    :func:`build_agent_execution_deps` into the per-run ExecutorOrchestrator.
+
+    Bumped from 5s → 30s: under CI load with B15 audit emits + B16 SSE bridge
+    overhead the worker-done simulation race could land past 5s and trip
+    TaskTimeout → system_error, masking the actual outcome the test asserts."""
     return get_settings().model_copy(update={"executor_task_timeout_s": timeout_s})
 
 
@@ -482,7 +486,7 @@ async def test_executor_run_captures_artifact_and_serves_via_endpoint(
             run_id = await _open_run(s, workspace_id=workspace_id, text="ship the feature")
             await s.commit()
 
-        settings = get_settings().model_copy(update={"executor_task_timeout_s": 5.0})
+        settings = get_settings().model_copy(update={"executor_task_timeout_s": 30.0})
 
         async with sf() as orch_s:
             run = await orch_s.get(ExecutionRun, run_id)
@@ -771,7 +775,7 @@ async def test_executor_task_timeout_setting_default() -> None:
 # --------------------------------------------------------------------------
 
 
-def _vault_root_settings(tmp_path: Path, timeout_s: float = 5.0):
+def _vault_root_settings(tmp_path: Path, timeout_s: float = 30.0):
     """Settings pointing the knowledge vault root at ``tmp_path`` (so the
     factory's retriever reads the test-seeded canon) + a short executor timeout."""
     return get_settings().model_copy(

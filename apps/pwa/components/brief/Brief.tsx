@@ -3,6 +3,8 @@
 import { DIRECT_SUBMITTED_EVENT } from "@/components/shell/DirectAction";
 import { getBrief } from "@/lib/api/brief";
 import type { BriefView } from "@/lib/api/types";
+import { useSession } from "@/lib/auth/session";
+import { useEventStream } from "@/lib/live-events/use-event-stream";
 import { useTranslations } from "next-intl";
 import { useCallback, useEffect, useState } from "react";
 import BriefContent from "./BriefContent";
@@ -38,6 +40,20 @@ export default function Brief() {
       window.removeEventListener(DIRECT_SUBMITTED_EVENT, onDirect);
     };
   }, [load]);
+
+  // B16 — wake up on backend live events so the Brief lanes stay current
+  // without a manual refresh. Each event just signals "refetch"; the Brief
+  // GET endpoint remains the source of truth for the rendered view.
+  const session = useSession();
+  const refresh = useCallback(() => {
+    load((next) => setView(next));
+  }, [load]);
+  useEventStream({
+    token: session?.accessToken ?? null,
+    onDecisionPending: refresh,
+    onRunTerminal: refresh,
+    onDeliveryQueued: refresh,
+  });
 
   if (view === null) {
     return (

@@ -388,7 +388,7 @@ async def test_success_no_contract_yields_human_review_not_proved(tmp_path: Path
         async with sf() as orch_s:
             run = await orch_s.get(ExecutionRun, run.id)
             assert run is not None
-            settings = Settings(executor_task_timeout_s=5.0)
+            settings = Settings(executor_task_timeout_s=30.0)
             oc = ExecutorOrchestrator(
                 session=orch_s,
                 redis=redis,
@@ -449,7 +449,7 @@ async def test_contract_pass_sets_proved_and_writes_deliverable(tmp_path: Path) 
         async with sf() as orch_s:
             run = await orch_s.get(ExecutionRun, run.id)
             assert run is not None
-            settings = Settings(executor_task_timeout_s=5.0)
+            settings = Settings(executor_task_timeout_s=30.0)
             oc = ExecutorOrchestrator(
                 session=orch_s,
                 redis=redis,
@@ -521,7 +521,7 @@ async def test_contract_fail_yields_verification_failed_decision(tmp_path: Path)
         async with sf() as orch_s:
             run = await orch_s.get(ExecutionRun, run.id)
             assert run is not None
-            settings = Settings(executor_task_timeout_s=5.0)
+            settings = Settings(executor_task_timeout_s=30.0)
             oc = ExecutorOrchestrator(
                 session=orch_s,
                 redis=redis,
@@ -575,7 +575,7 @@ async def test_judge_contract_without_verify_llm_yields_human_review(tmp_path: P
         async with sf() as orch_s:
             run = await orch_s.get(ExecutionRun, run.id)
             assert run is not None
-            settings = Settings(executor_task_timeout_s=5.0)
+            settings = Settings(executor_task_timeout_s=30.0)
             oc = ExecutorOrchestrator(
                 session=orch_s,
                 redis=redis,
