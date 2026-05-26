@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 import uuid
 from datetime import datetime
-from typing import Annotated
+from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -14,7 +14,9 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.api.deps import get_db_session, get_workspace_id, require_role
+from backend.connectors.db import ConnectorAccountRow
 from backend.workspaces.db import ProductResourceRow, ProductRow
+from backend.workspaces.resource_bindings import ResourceBindingRepository
 
 router = APIRouter()
 
@@ -275,4 +277,174 @@ async def delete_product_resource(
             status_code=status.HTTP_404_NOT_FOUND, detail=f"Resource {resource_id} not found"
         )
     await session.delete(row)
+    await session.commit()
+
+
+# ---------------------------------------------------------------------------
+# Resource bindings — per-Product × ConnectorAccount 3-knob binding
+# (Workflow §3). Carries ``selection`` / ``trigger`` / ``output_mode``. The
+# Receive stage (B10b) resolves an inbound webhook → binding → Product via
+# ``ResourceBindingRepository.find_binding``; this surface is the founder's
+# CRUD to manage those bindings.
+#
+# Workspace-scoped exactly like a product resource: every route first resolves
+# the product within the caller's workspace and 404s otherwise, and the binding
+# repository itself filters every read/write on ``workspace_id``.
+# ---------------------------------------------------------------------------
+_OutputMode = Literal["safe", "direct"]
+
+
+class TriggerKnob(BaseModel):
+    """The trigger knob — ``{"enabled": bool, "filters": dict}``."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    filters: dict[str, Any] = Field(default_factory=dict)
+
+
+class ResourceBindingCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    connector_account_id: uuid.UUID
+    resource_id: str = Field(min_length=1, max_length=512)
+    selection: dict[str, Any] = Field(default_factory=dict)
+    trigger: TriggerKnob = Field(default_factory=TriggerKnob)
+    output_mode: _OutputMode = "safe"
+
+
+class ResourceBindingUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    selection: dict[str, Any] | None = None
+    trigger: TriggerKnob | None = None
+    output_mode: _OutputMode | None = None
+
+
+class ResourceBindingResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", from_attributes=True)
+
+    id: uuid.UUID
+    workspace_id: uuid.UUID
+    product_id: uuid.UUID
+    connector_account_id: uuid.UUID
+    resource_id: str
+    selection: dict[str, Any]
+    trigger: dict[str, Any]
+    output_mode: str
+    created_at: datetime
+    updated_at: datetime
+
+
+async def _resolve_connector_account_in_workspace(
+    session: AsyncSession,
+    connector_account_id: uuid.UUID,
+    workspace_id: uuid.UUID,
+) -> ConnectorAccountRow:
+    """Load a connector account the caller's workspace owns, or 404.
+
+    Mirror of :func:`_resolve_product_in_workspace`. Returning 404 (not 400)
+    keeps the surface uniform with "this thing isn't here for you".
+    """
+    account = await session.get(ConnectorAccountRow, connector_account_id)
+    if account is None or account.workspace_id != workspace_id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"connector_account {connector_account_id} not found",
+        )
+    return account
+
+
+@router.get("/{product_id}/bindings")
+async def list_product_bindings(
+    product_id: uuid.UUID,
+    workspace_id: Annotated[uuid.UUID, Depends(get_workspace_id)],
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+) -> list[ResourceBindingResponse]:
+    await _resolve_product_in_workspace(session, product_id, workspace_id)
+    repo = ResourceBindingRepository(session)
+    rows = await repo.list_for_product(workspace_id=workspace_id, product_id=product_id)
+    return [ResourceBindingResponse.model_validate(r) for r in rows]
+
+
+@router.post("/{product_id}/bindings", status_code=status.HTTP_201_CREATED)
+async def create_product_binding(
+    product_id: uuid.UUID,
+    payload: ResourceBindingCreate,
+    workspace_id: Annotated[uuid.UUID, Depends(get_workspace_id)],
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+) -> ResourceBindingResponse:
+    await _resolve_product_in_workspace(session, product_id, workspace_id)
+    await _resolve_connector_account_in_workspace(
+        session, payload.connector_account_id, workspace_id
+    )
+    repo = ResourceBindingRepository(session)
+    row = await repo.create(
+        workspace_id=workspace_id,
+        product_id=product_id,
+        connector_account_id=payload.connector_account_id,
+        resource_id=payload.resource_id,
+        selection=payload.selection,
+        trigger=payload.trigger.model_dump(),
+        output_mode=payload.output_mode,
+    )
+    await session.commit()
+    await session.refresh(row)
+    return ResourceBindingResponse.model_validate(row)
+
+
+@router.patch("/{product_id}/bindings/{binding_id}")
+async def update_product_binding(
+    product_id: uuid.UUID,
+    binding_id: uuid.UUID,
+    payload: ResourceBindingUpdate,
+    workspace_id: Annotated[uuid.UUID, Depends(get_workspace_id)],
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+) -> ResourceBindingResponse:
+    await _resolve_product_in_workspace(session, product_id, workspace_id)
+    repo = ResourceBindingRepository(session)
+    row = await repo.get(workspace_id=workspace_id, binding_id=binding_id)
+    if row is None or row.product_id != product_id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Binding {binding_id} not found",
+        )
+    await repo.update(
+        row,
+        selection=payload.selection,
+        trigger=payload.trigger.model_dump() if payload.trigger is not None else None,
+        output_mode=payload.output_mode,
+    )
+    await session.commit()
+    await session.refresh(row)
+    return ResourceBindingResponse.model_validate(row)
+
+
+@router.delete(
+    "/{product_id}/bindings/{binding_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+async def delete_product_binding(
+    product_id: uuid.UUID,
+    binding_id: uuid.UUID,
+    workspace_id: Annotated[uuid.UUID, Depends(get_workspace_id)],
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+) -> None:
+    await _resolve_product_in_workspace(session, product_id, workspace_id)
+    # Scope check: the binding must belong to this product (and the repo's get
+    # already enforces workspace scope).
+    repo = ResourceBindingRepository(session)
+    row = await repo.get(workspace_id=workspace_id, binding_id=binding_id)
+    if row is None or row.product_id != product_id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Binding {binding_id} not found",
+        )
+    deleted = await repo.delete(workspace_id=workspace_id, binding_id=binding_id)
+    if not deleted:
+        # Concurrent delete — surface 404 uniformly.
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Binding {binding_id} not found",
+        )
     await session.commit()

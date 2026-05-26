@@ -133,6 +133,30 @@
         "addError": "Couldn’t add that resource — please try again.",
         "cancel": "Cancel"
       }
+    },
+    "bindings": {
+      "heading": "Connector bindings",
+      "add": "Add binding",
+      "cancel": "Cancel",
+      "remove": "Remove",
+      "loading": "Loading bindings…",
+      "loadError": "Couldn’t load this product’s bindings.",
+      "empty": "No connector bindings yet.",
+      "addError": "Couldn’t add that binding — please try again.",
+      "triggerEnabled": "Trigger on",
+      "outputMode": "Output",
+      "outputModes": {
+        "safe": "Safe (queue for approval)",
+        "direct": "Direct (auto-deliver)"
+      },
+      "form": {
+        "connector": "Connector",
+        "noConnectors": "No connectors registered — add one in Settings first.",
+        "resourceId": "Resource id",
+        "resourceIdPlaceholder": "e.g. acme/blog",
+        "add": "Add",
+        "adding": "Adding…"
+      }
     }
   },
   "skills": {

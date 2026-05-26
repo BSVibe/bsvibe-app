@@ -92,6 +92,57 @@ export interface ProductResourceCreate {
   note?: string | null;
 }
 
+/** `OutputMode` (backend Workflow §3) — the binding's delivery knob. `safe`
+ *  queues a verified Deliverable into the Safe Mode queue for founder approval
+ *  (default for non-founder triggers); `direct` ships it straight out. */
+export const OUTPUT_MODES = ["safe", "direct"] as const;
+export type OutputMode = (typeof OUTPUT_MODES)[number];
+
+/** The trigger knob — `{ enabled, filters }`. Mirrors the backend
+ *  `TriggerKnob` schema 1:1 (extra=forbid). `enabled=false` is the safe
+ *  default: a fresh binding doesn't auto-fire until the founder flips it on. */
+export interface TriggerKnob {
+  enabled: boolean;
+  filters: Record<string, unknown>;
+}
+
+/** `GET /api/v1/products/{id}/bindings` element — the per-Product × Connector
+ *  3-knob binding (backend ResourceBindingResponse). `selection`, `trigger`,
+ *  and `output_mode` are the three founder-set knobs; `resource_id` is the
+ *  connector-side identifier (e.g. a GitHub `"bsvibe/bsvibe-site"`). */
+export interface ResourceBinding {
+  id: string;
+  workspace_id: string;
+  product_id: string;
+  connector_account_id: string;
+  resource_id: string;
+  selection: Record<string, unknown>;
+  trigger: TriggerKnob;
+  output_mode: OutputMode;
+  created_at: string;
+  updated_at: string;
+}
+
+/** `POST /api/v1/products/{id}/bindings` body (backend ResourceBindingCreate,
+ *  extra=forbid). Only `connector_account_id` + `resource_id` are required;
+ *  the three knobs all have safe defaults (selection `{}`, trigger disabled
+ *  no-filters, output_mode `safe`). */
+export interface ResourceBindingCreate {
+  connector_account_id: string;
+  resource_id: string;
+  selection?: Record<string, unknown>;
+  trigger?: TriggerKnob;
+  output_mode?: OutputMode;
+}
+
+/** `PATCH /api/v1/products/{id}/bindings/{binding_id}` body. Every knob is
+ *  individually optional — pass only the knob being changed. */
+export interface ResourceBindingUpdate {
+  selection?: Record<string, unknown>;
+  trigger?: TriggerKnob;
+  output_mode?: OutputMode;
+}
+
 /** `RunStatus` (backend/execution/db.py) — the run lifecycle vocabulary. */
 export type RunStatus = "open" | "running" | "review_ready" | "shipped" | "failed" | "cancelled";
 

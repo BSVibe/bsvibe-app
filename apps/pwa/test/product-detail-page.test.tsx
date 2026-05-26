@@ -77,6 +77,11 @@ function installFetch(opts: {
 }) {
   return vi.fn(async (input: RequestInfo | URL) => {
     const url = String(input);
+    // Specific sub-paths under /api/v1/products/{id}/... must be matched
+    // BEFORE the bare /products list — order is load-bearing.
+    if (url.match(/^\/api\/v1\/products\/[^/]+\/(resources|bindings)/)) {
+      return json([]);
+    }
     if (url.startsWith("/api/v1/products")) {
       const p = opts.products?.() ?? [BLOG];
       return p instanceof Response ? p : json(p);

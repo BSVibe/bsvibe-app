@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
+from typing import Any
 
-from sqlalchemy import DateTime, ForeignKey, String, UniqueConstraint
+from sqlalchemy import JSON, DateTime, ForeignKey, Index, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from backend.data import Base
@@ -86,4 +87,72 @@ class ProductResourceRow(WorkspacesBase):
     note: Mapped[str | None] = mapped_column(String(2048), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=lambda: datetime.now()
+    )
+
+
+class ResourceBindingRow(WorkspacesBase):
+    """Per-Product × Connector 3-knob binding (Workflow §3).
+
+    A *Resource* in the spec sense — the binding that carries the founder-set
+    knobs for one Product × ConnectorAccount pairing:
+
+    * ``selection`` — connector-shaped scope (e.g. ``{"labels": ["bug"]}``).
+    * ``trigger`` — ``{"enabled": bool, "filters": dict}`` (the *do I act* knob).
+    * ``output_mode`` — ``'safe'`` (queue for founder approval, default) or
+      ``'direct'`` (deliver straight out). See Workflow §1/§3/§12.5.
+
+    Workspace-scoped (``workspace_id``) so the global ORM auto-filter engages;
+    parented to ``products`` and ``connector_accounts`` via FKs with
+    ``ON DELETE CASCADE`` — a product or account removal cascades to its
+    bindings. ``resource_id`` is the *connector-side* identifier (e.g. a GitHub
+    ``"bsvibe/bsvibe-site"``); the ``(connector_account_id, resource_id)`` index
+    is what Receive (B10b) will use to resolve an inbound webhook → binding →
+    Product.
+    """
+
+    __tablename__ = "resource_bindings"
+    __table_args__ = (
+        Index(
+            "ix_resource_bindings_product_id",
+            "product_id",
+        ),
+        Index(
+            "ix_resource_bindings_lookup",
+            "connector_account_id",
+            "resource_id",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    workspace_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("workspaces.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    product_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("products.id", ondelete="CASCADE"), nullable=False
+    )
+    connector_account_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("connector_accounts.id", ondelete="CASCADE"), nullable=False
+    )
+    # Connector-shaped opaque identifier ("bsvibe/bsvibe-site#42",
+    # "C123/THREAD", …). Free string — each connector defines its own grammar.
+    resource_id: Mapped[str] = mapped_column(String(512), nullable=False)
+    # Selection scope (connector-shaped). Empty ``{}`` = the whole resource.
+    selection: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    # Trigger knob: {"enabled": bool, "filters": dict}. Default = disabled,
+    # no filters (the safest default — a fresh binding doesn't auto-fire).
+    trigger: Mapped[dict[str, Any]] = mapped_column(
+        JSON, nullable=False, default=lambda: {"enabled": False, "filters": {}}
+    )
+    # Output mode: 'safe' = Safe Mode queue (founder approves), 'direct' =
+    # auto-deliver. TEXT + app-side validation keeps this portable across the
+    # SQLite test tier and Postgres (no enum DDL gymnastics in migrations).
+    output_mode: Mapped[str] = mapped_column(String(16), nullable=False, default="safe")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(),
+        onupdate=lambda: datetime.now(),
     )
