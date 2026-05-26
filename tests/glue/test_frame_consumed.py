@@ -21,7 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from backend.execution.db import ExecutionRun, RunStatus
 from backend.execution.orchestrator import LoopTurn, RunOrchestrator
-from backend.intake.db import RequestRow, RequestStatus
+from backend.intake.db import RequestRow, RequestStatus, TriggerEventRow, TriggerKind
 from backend.orchestrator.agent_runner import AgentRunner
 from backend.skills.loader import SkillLoader
 from backend.supervisor.sandbox import NoopSandboxManager
@@ -74,10 +74,23 @@ def _write_skill(root: Path, name: str, description: str) -> None:
 async def _seed_request_and_run(
     session: AsyncSession, *, workspace_id: uuid.UUID, text: str
 ) -> uuid.UUID:
+    # Seed the FK parent (TriggerEvent) BEFORE the Request — real Postgres
+    # enforces requests_trigger_event_id_fkey (local SQLite does not).
+    trigger = TriggerEventRow(
+        id=uuid.uuid4(),
+        workspace_id=workspace_id,
+        source="direct",
+        trigger_kind=TriggerKind.DIRECT,
+        idempotency_key=f"k-{uuid.uuid4()}",
+        payload={"text": text},
+        received_at=datetime.now(tz=UTC),
+    )
+    session.add(trigger)
+    await session.flush()
     request = RequestRow(
         id=uuid.uuid4(),
         workspace_id=workspace_id,
-        trigger_event_id=uuid.uuid4(),
+        trigger_event_id=trigger.id,
         status=RequestStatus.RUNNING,
         payload={"text": text},
         created_at=datetime.now(tz=UTC),
