@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal, get_args
 
 from sqlalchemy import JSON, DateTime, ForeignKey, Index, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
@@ -12,6 +12,24 @@ from sqlalchemy.orm import Mapped, mapped_column
 from backend.data import Base
 
 WorkspacesBase = Base
+
+# GDPR L1 — Art. 6 legal-basis marker. v1 carries only the two bases that
+# describe BSVibe's own model: ``contract`` (the workspace founder operating
+# under our service contract) and ``consent`` (an end-user-driven workspace
+# operating on opt-in consent). TEXT + ``Literal`` validation keeps this
+# portable across the SQLite test tier and Postgres without enum DDL
+# gymnastics in the migration (same shape as ``resource_bindings.output_mode``).
+LegalBasis = Literal["contract", "consent"]
+_LEGAL_BASIS_VALUES: frozenset[str] = frozenset(get_args(LegalBasis))
+
+
+def validate_legal_basis(value: str) -> LegalBasis:
+    """Raise ``ValueError`` unless ``value`` is a recognised legal basis."""
+    if value not in _LEGAL_BASIS_VALUES:
+        raise ValueError(
+            f"invalid legal_basis {value!r}; must be one of {sorted(_LEGAL_BASIS_VALUES)}"
+        )
+    return value  # type: ignore[return-value]
 
 
 class WorkspaceRow(WorkspacesBase):
@@ -24,6 +42,14 @@ class WorkspaceRow(WorkspacesBase):
     # Region per Workflow §2.3 — vault/<region>/<workspace_id>/ FS layout
     region: Mapped[str] = mapped_column(String(32), nullable=False, default="us-1")
     safe_mode: Mapped[bool] = mapped_column(nullable=False, default=True)
+    # GDPR L1 — Art. 6 legal basis the workspace operates under. TEXT + app
+    # Literal validation (see :func:`validate_legal_basis`). Default mirrors
+    # BSVibe's v1 product reality: every workspace is a founder operating
+    # under our service contract until a future deployment opens consent-based
+    # workspaces.
+    legal_basis: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="contract", server_default="contract"
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=lambda: datetime.now()
     )

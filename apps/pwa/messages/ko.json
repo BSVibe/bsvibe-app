@@ -603,7 +603,9 @@
       "timezone": "시간대",
       "dateFormat": "날짜 형식",
       "workspaceId": "워크스페이스 ID",
-      "workspaceIdFallback": "아직 사용할 수 없음"
+      "workspaceIdFallback": "아직 사용할 수 없음",
+      "legalBasis": "법적 근거",
+      "legalBasisValue": "계약 (Art. 6(1)(b))"
     }
   },
   "report": {
