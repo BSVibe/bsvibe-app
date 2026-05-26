@@ -155,6 +155,15 @@ export default function GeneralTab() {
         <span className="settings-field__label">{t("workspaceId")}</span>
         <code className="settings-field__mono">{workspaceId}</code>
       </section>
+
+      {/* GDPR L1 — Art. 6 legal-basis disclosure. Read-only badge for v1:
+          founder-editable UI is a follow-up. Default workspaces ship under
+          'contract' (BSVibe's service contract); a future consent-based
+          deployment would flip this to 'consent'. */}
+      <section className="settings-field" aria-label={t("legalBasis")}>
+        <span className="settings-field__label">{t("legalBasis")}</span>
+        <span className="settings-field__value settings-field__badge">{t("legalBasisValue")}</span>
+      </section>
     </div>
   );
 }

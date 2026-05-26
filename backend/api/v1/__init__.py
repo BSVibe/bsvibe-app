@@ -24,6 +24,7 @@ from backend.api.v1 import (
     safemode,
     skills,
     workers,
+    workspace_compliance,
     workspaces,
 )
 from backend.api.v1 import (
@@ -37,6 +38,12 @@ from backend.api.v1 import (
 router = APIRouter(prefix="/v1", dependencies=[Depends(get_current_user)])
 router.include_router(chat.router, prefix="/chat", tags=["chat"])
 router.include_router(workspaces.router, prefix="/workspaces", tags=["workspaces"])
+# GDPR L1 — Art. 15 / 20 export + Art. 30 processing record. Singular
+# /workspace because both routes operate on the *caller's* one resolved
+# workspace, not the plural /workspaces membership lookup above.
+router.include_router(
+    workspace_compliance.router, prefix="/workspace", tags=["workspace-compliance"]
+)
 router.include_router(products.router, prefix="/products", tags=["products"])
 router.include_router(accounts.router, prefix="/accounts", tags=["accounts"])
 # Singular /account — personal billing-account discovery (distinct from the

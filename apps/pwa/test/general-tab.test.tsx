@@ -140,4 +140,11 @@ describe("General tab — workspace identity", () => {
     render(<GeneralTab />);
     expect(screen.queryByText(/delete workspace/i)).not.toBeInTheDocument();
   });
+
+  it("renders the GDPR legal-basis badge (display-only)", () => {
+    render(<GeneralTab />);
+    // The default basis for a workspace is 'contract' — the badge surfaces
+    // that as a read-only marker until the founder-editable UI ships.
+    expect(screen.getByText(/legal basis/i)).toBeInTheDocument();
+  });
 });

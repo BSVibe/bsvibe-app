@@ -603,7 +603,9 @@
       "timezone": "Time zone",
       "dateFormat": "Date format",
       "workspaceId": "Workspace ID",
-      "workspaceIdFallback": "Not available yet"
+      "workspaceIdFallback": "Not available yet",
+      "legalBasis": "Legal basis",
+      "legalBasisValue": "Contract (Art. 6(1)(b))"
     }
   },
   "report": {

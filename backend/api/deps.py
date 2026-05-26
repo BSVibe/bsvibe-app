@@ -27,6 +27,7 @@ from sqlalchemy.ext.asyncio import (
 )
 
 # Importing scoping installs the do_orm_execute auto-filter listener.
+from backend.data.rls import set_workspace_guc
 from backend.data.scoping import set_current_workspace_id
 from backend.identity.db import MembershipRow, UserRow
 from backend.identity.roles import role_satisfies
@@ -129,6 +130,12 @@ async def get_workspace_id(
             detail="no workspace membership for principal",
         )
     set_current_workspace_id(workspace_id)
+    # Defense layer 3 — publish the workspace into the Postgres session GUC
+    # so RLS policies on root tables enforce isolation at the DB itself. No-op
+    # on SQLite (no GUCs). Uses the session's underlying connection so the
+    # GUC + the route's subsequent SELECTs share one PG session.
+    conn = await session.connection()
+    await set_workspace_guc(conn, workspace_id)
     return workspace_id
 
 
@@ -154,6 +161,8 @@ async def get_current_membership(
             detail="no workspace membership for principal",
         )
     set_current_workspace_id(membership.workspace_id)
+    conn = await session.connection()
+    await set_workspace_guc(conn, membership.workspace_id)
     return membership
 
 
