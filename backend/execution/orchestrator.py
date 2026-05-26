@@ -268,11 +268,20 @@ class RunOrchestrator:
         connector_actions: ConnectorActionProvider | None = None,
         redis_client: Any = None,
         settings: Settings | None = None,
+        suggested_skill: str | None = None,
+        suggested_skill_description: str | None = None,
     ) -> None:
         self._session = session
         self._llm = llm
         self._sandbox_manager = sandbox_manager
         self._settings = settings or get_settings()
+        # B9a — the frame stage's matched skill (+ its description), consumed as a
+        # FIRST-INVOCATION hint: the loop's initial context nudges the work LLM to
+        # invoke it via ``invoke_skill`` if appropriate. ``None`` (no frame match
+        # / legacy caller) → no hint message, loop unchanged. The frame's output
+        # was written-but-never-read before B9a; this is where it reaches the loop.
+        self._suggested_skill = suggested_skill
+        self._suggested_skill_description = suggested_skill_description
         # B5b — the run's connector-action provider. When set, the loop surfaces
         # the workspace's available ``mcp_exposed`` connector actions (github
         # open_pr, notion create_page, …) as tools, gated by DangerAnalyzer +
@@ -402,6 +411,25 @@ class RunOrchestrator:
             "content": (
                 "Relevant established patterns for this workspace "
                 "(consider them as you work):\n" + body
+            ),
+        }
+
+    def _suggested_skill_message(self) -> dict[str, Any] | None:
+        """B9a — the frame-matched skill hint for the loop's initial context.
+
+        ``None`` when the frame matched no skill (the hint is omitted, loop
+        unchanged). The message names the skill + its description and points the
+        work LLM at ``invoke_skill`` — a hint, not a forced first action."""
+        name = self._suggested_skill
+        if not name:
+            return None
+        description = self._suggested_skill_description or ""
+        suffix = f" — {description}" if description else ""
+        return {
+            "role": "system",
+            "content": (
+                f"Suggested skill for this task: {name}{suffix}. "
+                f"Invoke it via invoke_skill if appropriate for the work."
             ),
         }
 
@@ -692,6 +720,14 @@ class RunOrchestrator:
         seed = await self._knowledge_seed_message(run)
         if seed is not None:
             messages.append(seed)
+        # B9a — the frame stage's matched skill, seeded as a first-invocation
+        # hint. The frame chose this skill by matching the request against the
+        # workspace skill catalog (by description); surfacing it here is how the
+        # frame output is finally CONSUMED (it was written-but-ignored before).
+        # No match → nothing injected (loop unchanged).
+        skill_hint = self._suggested_skill_message()
+        if skill_hint is not None:
+            messages.append(skill_hint)
         # Resumption context: if the founder resolved a prior blocking question
         # (the run was paused on a Decision and re-opened via /api/v1/checkpoints),
         # seed each resolution so the loop continues WITH that decision in

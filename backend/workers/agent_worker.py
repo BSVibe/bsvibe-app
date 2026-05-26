@@ -44,7 +44,7 @@ from backend.execution.db import ExecutionRun, RunStatus
 from backend.execution.orchestrator import RunCompute
 from backend.intake.db import RequestRow, RequestStatus
 from backend.orchestrator.agent_runner import AgentRunner
-from backend.orchestrator.frame import FrameConfig, FrameStage
+from backend.orchestrator.frame import FrameConfig, FrameLlm, FrameStage
 from backend.skills.loader import SkillLoader
 from backend.workers.base import BaseWorker
 
@@ -95,6 +95,21 @@ class AgentExecutionDeps:
     ]
     workspace_root: Path
     default_artifact_type: str | None = "direct_output"
+    #: B9a — the cheap-LLM framing seam, resolved per-workspace (mirrors the
+    #: settle-extractor's gateway resolution). Either a static
+    #: :class:`~backend.orchestrator.frame.FrameLlm`, or a factory
+    #: ``(session, workspace_id) -> FrameLlm | None`` (sync or async) that
+    #: resolves the workspace's active model account → a gateway cheap-LLM,
+    #: BOUND to the worker's active framing session (so it shares the run's
+    #: transaction, exactly like ``orchestrator_factory``). ``None`` (the
+    #: default — executor-only / no account / legacy caller) makes
+    #: :class:`~backend.orchestrator.frame.FrameStage` fall back to the keyword
+    #: heuristic — the pre-B9a behaviour, no regression.
+    frame_llm: (
+        FrameLlm
+        | Callable[[AsyncSession, uuid.UUID], FrameLlm | None | Awaitable[FrameLlm | None]]
+        | None
+    ) = None
     #: Optional hook to PROVISION the run's ``workspace_dir`` before the loop
     #: drives. ``None`` (the default) keeps the existing behaviour: the run
     #: drives in an EMPTY scratch dir (``workspace_root/<run_id>``) — exactly as
@@ -187,19 +202,29 @@ class AgentWorker(BaseWorker):
                 # at THIS run's ``<skills_root>/<workspace_id>/`` (Workflow §6 #5),
                 # not a single shared root-level set.
                 skill_loader = execution.skill_loader_for(run.workspace_id)
+                # B9a — resolve the per-workspace cheap-LLM for real framing,
+                # bound to this framing session. None (executor-only / no
+                # account) → keyword fallback.
+                frame_llm = await _resolve_frame_llm(execution, session, run.workspace_id)
                 framed = await self._frame_stage.frame(
                     request=request,
                     config=FrameConfig(
                         skill_loader=skill_loader,
                         default_artifact_type=execution.default_artifact_type,
+                        llm=frame_llm,
                     ),
                 )
+                # Record the FULL framing (B9a): skill match + artifact-type hint
+                # (for delivery routing) + the refined intent + the path
+                # classification (recorded for B9b, which acts on knowledge_only).
                 run.payload = {
                     **(run.payload or {}),
                     "intent_text": _request_intent_text(request),
                     "frame": {
                         "skill_match": framed.skill_match,
                         "artifact_type_hint": framed.artifact_type_hint,
+                        "framed_intent": framed.framed_intent,
+                        "path_classification": framed.path_classification,
                     },
                 }
                 await session.flush()
@@ -262,6 +287,31 @@ async def _resolve_orchestrator(
     permits an async factory (production resolution hits the DB). This shim
     awaits the result when the factory is a coroutine."""
     produced = execution.orchestrator_factory(session, run)
+    if inspect.isawaitable(produced):
+        return await produced
+    return produced
+
+
+async def _resolve_frame_llm(
+    execution: AgentExecutionDeps, session: AsyncSession, workspace_id: uuid.UUID
+) -> FrameLlm | None:
+    """Resolve the per-workspace cheap-LLM for framing, or ``None`` to fall back.
+
+    ``execution.frame_llm`` may be a static :class:`FrameLlm`, a sync factory, or
+    an async factory ``(session, workspace_id) -> FrameLlm | None``. A static
+    instance (one that exposes ``complete_text``) is returned as-is; a callable
+    is invoked with the framing session + workspace id (awaited when it returns a
+    coroutine). ``None`` anywhere → the keyword fallback (no regression for
+    executor-only / accountless workspaces)."""
+    frame_llm = execution.frame_llm
+    if frame_llm is None:
+        return None
+    # A static FrameLlm satisfies the Protocol (has ``complete_text``); a factory
+    # does not — distinguish on that rather than ``callable`` (the Protocol stub
+    # may itself be callable).
+    if isinstance(frame_llm, FrameLlm):
+        return frame_llm
+    produced = frame_llm(session, workspace_id)
     if inspect.isawaitable(produced):
         return await produced
     return produced
