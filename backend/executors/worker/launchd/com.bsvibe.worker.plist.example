@@ -1,0 +1,85 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  BSVibe executor worker — macOS launchd template (B14).
+
+  Installs the worker as a per-user LaunchAgent so the Mac Mini keeps it
+  running after login, with auto-restart on crash, and writes stdout/stderr to
+  visible log files.
+
+  Customisation checklist (search for the {PLACEHOLDER} tokens):
+
+    {USER}         your macOS username, e.g. "blasin"
+    {REPO}         absolute path to the BSVibe checkout, e.g.
+                     "/Users/blasin/Works/bsvibe-app/main"
+    {SERVER_URL}   the backend base URL, e.g. "https://api.bsvibe.dev"
+    {WORKER_NAME}  optional display name for the worker (defaults to hostname)
+    {REDIS_URL}    optional — set to enable streaming output back to the
+                     backend (e.g. "redis://api.bsvibe.dev:6387/0"); remove the
+                     whole BSVIBE_WORKER_REDIS_URL entry to disable streaming
+
+  Install:
+
+    cp backend/executors/worker/launchd/com.bsvibe.worker.plist.example \
+       ~/Library/LaunchAgents/com.bsvibe.worker.plist
+    # …edit the {PLACEHOLDER} fields…
+    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.bsvibe.worker.plist
+    launchctl kickstart -k gui/$(id -u)/com.bsvibe.worker
+
+  Logs land at /Users/{USER}/Library/Logs/bsvibe-worker.{out,err}.log.
+
+  Heartbeat is visible from the PWA Models tab (Executor Workers section):
+  the worker's status flips to "online" when it heartbeats every ~30s. If you
+  see "offline" / a stale last_heartbeat, tail the log files above.
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.bsvibe.worker</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/{USER}/.local/bin/uv</string>
+        <string>run</string>
+        <string>python</string>
+        <string>-m</string>
+        <string>backend.executors.worker</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>{REPO}</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>BSVIBE_WORKER_SERVER_URL</key>
+        <string>{SERVER_URL}</string>
+        <key>BSVIBE_WORKER_NAME</key>
+        <string>{WORKER_NAME}</string>
+        <!-- Remove this entry if you do not want streaming output. -->
+        <key>BSVIBE_WORKER_REDIS_URL</key>
+        <string>{REDIS_URL}</string>
+        <!-- BSVIBE_WORKER_TOKEN is written by the worker into the repo's
+             .env after the first registration; subsequent runs reuse it. -->
+        <key>PATH</key>
+        <string>/Users/{USER}/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+    </dict>
+
+    <!-- Auto-launch at login and restart on crash. -->
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+        <key>Crashed</key>
+        <true/>
+    </dict>
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+
+    <key>StandardOutPath</key>
+    <string>/Users/{USER}/Library/Logs/bsvibe-worker.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/{USER}/Library/Logs/bsvibe-worker.err.log</string>
+</dict>
+</plist>
