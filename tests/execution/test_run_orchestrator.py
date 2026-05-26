@@ -670,6 +670,40 @@ async def test_no_seed_message_for_empty_or_absent_knowledge(tmp_path: Path) -> 
     assert "established patterns" not in blob.lower()
 
 
+async def test_suggested_skill_hint_seeded_into_initial_context(tmp_path: Path) -> None:
+    """B9a — when the orchestrator is given a frame-matched ``suggested_skill``,
+    the loop's FIRST-turn context nudges the model to invoke it via invoke_skill
+    (previously the frame dict was written and never consumed)."""
+    llm = ScriptedLlm([LoopTurn(content="nothing to do", tool_calls=())])
+    async with memory_session() as session:
+        run = await _make_run(session, intent="draft a PRD for onboarding")
+        orch = RunOrchestrator(
+            session=session,
+            llm=llm,
+            sandbox_manager=NoopSandboxManager(),
+            suggested_skill="prd-writer",
+            suggested_skill_description="Draft a product requirements document",
+        )
+        await orch.run(run=run, workspace_dir=tmp_path)
+
+    blob = _all_message_text(llm.calls[0]["messages"])
+    assert "prd-writer" in blob
+    assert "Draft a product requirements document" in blob
+    assert "invoke_skill" in blob
+
+
+async def test_no_suggested_skill_hint_when_unset(tmp_path: Path) -> None:
+    """No ``suggested_skill`` → no hint message (loop unchanged from today)."""
+    llm = ScriptedLlm([LoopTurn(content="nothing to do", tool_calls=())])
+    async with memory_session() as session:
+        run = await _make_run(session, intent="some work")
+        orch = RunOrchestrator(session=session, llm=llm, sandbox_manager=NoopSandboxManager())
+        await orch.run(run=run, workspace_dir=tmp_path)
+
+    blob = _all_message_text(llm.calls[0]["messages"]).lower()
+    assert "suggested skill" not in blob
+
+
 def test_loop_protocols_are_runtime_checkable() -> None:
     assert isinstance(ScriptedLlm([]), LoopLlm)
     assert isinstance(StubRetriever([]), CanonRetriever)

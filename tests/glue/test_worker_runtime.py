@@ -126,9 +126,25 @@ class _ScriptedCompletion:
 
 
 def _verified_script() -> _ScriptedCompletion:
-    """declare a command check + write the artifact, then plain text → verified."""
+    """declare a command check + write the artifact, then plain text → verified.
+
+    B9a — the production deps now make a real cheap-LLM FRAME call before the work
+    loop drives (FrameStage uses the gateway-resolved cheap LLM). So the script
+    leads with the frame turn: a JSON framing the FrameStage parses (skill match
+    by description against the workspace catalog), then the two work turns."""
     return _ScriptedCompletion(
         [
+            {
+                "content": json.dumps(
+                    {
+                        "framed_intent": "Build the answer file",
+                        "skill_match": "weekly-digest",
+                        "artifact_type_hint": "code",
+                        "path_classification": "agent_loop",
+                    }
+                ),
+                "tool_calls": [],
+            },
             {
                 "content": "Writing the deliverable and declaring how to check it.",
                 "tool_calls": [

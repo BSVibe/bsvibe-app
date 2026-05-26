@@ -31,12 +31,25 @@ class WorkflowState:
     run_id: uuid.UUID | None = None
 
 
+# The path branch the frame stage classifies (Workflow §1.2 "Frame path
+# branch"). B9a records the classification; B9b is the branch that ACTS on
+# ``knowledge_only`` (answer from BSage, skip the loop). The agent-loop path is
+# the default and behaves exactly as today.
+PathClassification = Literal["knowledge_only", "agent_loop"]
+
+
 @dataclass
 class FramedRequest:
     """Output of the ``frame`` stage — Workflow §1 stage 2."""
 
     skill_match: str | None
     artifact_type_hint: str | None
+    # B9a — the LLM's refined natural-language intent (``None`` on the keyword
+    # fallback path, which has no LLM to refine with).
+    framed_intent: str | None = None
+    # B9a — the path branch (Workflow §1.2). ``agent_loop`` keeps today's
+    # behaviour; ``knowledge_only`` is recorded for B9b to act on.
+    path_classification: PathClassification = "agent_loop"
 
 
-__all__ = ["FramedRequest", "Stage", "WorkflowState"]
+__all__ = ["FramedRequest", "PathClassification", "Stage", "WorkflowState"]

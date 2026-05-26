@@ -69,6 +69,7 @@ from backend.gateway.classifier.local_vs_cloud import LocalVsCloudClassifier
 from backend.gateway.classifier.static import StaticClassifier
 from backend.gateway.dispatch import DispatchRequest, GatewayDispatcher
 from backend.gateway.llm_client import LlmClient
+from backend.orchestrator.frame import FrameLlm
 from backend.plugins.analyzer import DangerAnalyzer
 from backend.plugins.base import PluginMeta
 from backend.plugins.loader import PluginLoader
@@ -323,11 +324,48 @@ def build_agent_execution_deps(
         )
         return knowledge.retriever()
 
+    async def _frame_llm_for(session: AsyncSession, workspace_id: uuid.UUID) -> FrameLlm | None:
+        """B9a — the per-workspace cheap-LLM for the frame stage.
+
+        Resolves the workspace's single active ModelAccount and adapts a
+        :class:`GatewayDispatcher` (bound to the worker's framing ``session``, so
+        it shares the run's transaction) to the :class:`FrameLlm` seam — mirrors
+        :func:`build_settle_entity_extractor_factory`'s resolution. Returns
+        ``None`` — the keyword fallback — when the workspace has zero or
+        more-than-one active account, or only executor accounts are active, so
+        framing never guesses a model (and an executor-only / accountless
+        workspace keeps the pre-B9a behaviour)."""
+        accounts = await _list_active_workspace_accounts(session, workspace_id)
+        if len(accounts) != 1:
+            logger.info(
+                "frame_llm_account_unresolved",
+                workspace_id=str(workspace_id),
+                active_count=len(accounts),
+            )
+            return None
+        account = accounts[0]
+        if account.provider == "executor":
+            return None
+        dispatcher = build_gateway_dispatcher(session, settings)
+        return _GatewayFrameLlm(
+            dispatcher=dispatcher,
+            workspace_id=workspace_id,
+            account_id=account.account_id,
+            model_account_id=account.id,
+        )
+
     async def _factory(session: AsyncSession, run: ExecutionRun) -> RunCompute | None:
         account = await resolve_workspace_model_account(session, run)
         if account is None:
             return None
         retriever = _retriever_for(run.workspace_id)
+        # B9a — CONSUME the frame: the worker recorded ``run.payload["frame"]``
+        # (skill match by description) BEFORE this factory runs, so read the
+        # matched skill + its description here and thread it into the native loop
+        # as a first-invocation hint. No match → no hint (loop unchanged). The
+        # description is resolved from the SAME per-workspace skill loader the
+        # frame matched against.
+        suggested_skill, suggested_skill_description = _frame_skill_hint(run, _skill_loader_for)
         # Executor-pool Lift 5b: a ``provider='executor'`` account routes to a
         # registered external CLI worker, NOT the native LLM loop. Dispatch a
         # task + await the worker's result (ExecutorOrchestrator); the api-llm
@@ -393,6 +431,8 @@ def build_agent_execution_deps(
             connector_actions=connector_actions,
             redis_client=redis_client,
             settings=settings,
+            suggested_skill=suggested_skill,
+            suggested_skill_description=suggested_skill_description,
         )
 
     # github delivery path: a run whose workspace has a github connector binding
@@ -411,6 +451,10 @@ def build_agent_execution_deps(
         orchestrator_factory=_factory,
         workspace_root=Path(settings.run_workspace_root),
         workspace_provisioner=provisioner,
+        # B9a — the cheap-LLM framing seam, resolved per-workspace via the gateway
+        # (mirrors the settle extractor). FrameStage uses it for real framing;
+        # None (zero/ambiguous/executor-only account) → keyword fallback.
+        frame_llm=_frame_llm_for,
     )
 
 
@@ -481,6 +525,76 @@ class _GatewayCompileLlm:
         )
         result = await self._dispatcher.dispatch(request)
         return result.response.content
+
+
+class _GatewayFrameLlm:
+    """Adapts :class:`GatewayDispatcher` to the :class:`FrameLlm` seam (B9a).
+
+    The frame stage is a single cheap completion: ``complete_text(system, user)``
+    maps to one :class:`DispatchRequest`. Framing is a small classification call,
+    so it uses LIGHTER features than the work loop (it benefits from the cheap
+    tier — Workflow §1.2 "✓ cheap"). The account/model identity is resolved once
+    (per workspace) by the factory and held for the call."""
+
+    # Cheap-tier features — framing is a short interpret/classify call, not the
+    # heavy structured-output of the work loop, so it deliberately routes cheaper.
+    _FEATURES = ClassificationFeatures(
+        token_count=512,
+        system_prompt_chars=1024,
+        conversation_turns=1,
+        code_block_count=0,
+        tool_count=0,
+    )
+
+    def __init__(
+        self,
+        *,
+        dispatcher: GatewayDispatcher,
+        workspace_id: uuid.UUID,
+        account_id: uuid.UUID,
+        model_account_id: uuid.UUID,
+    ) -> None:
+        self._dispatcher = dispatcher
+        self._workspace_id = workspace_id
+        self._account_id = account_id
+        self._model_account_id = model_account_id
+
+    async def complete_text(self, *, system: str, user: str) -> str:
+        request = DispatchRequest(
+            workspace_id=self._workspace_id,
+            account_id=self._account_id,
+            model_account_id=self._model_account_id,
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+            features=self._FEATURES,
+            projected_cost_cents=1,
+        )
+        result = await self._dispatcher.dispatch(request)
+        return result.response.content
+
+
+def _frame_skill_hint(
+    run: ExecutionRun, skill_loader_for: Callable[[uuid.UUID], SkillLoader]
+) -> tuple[str | None, str | None]:
+    """Read the frame's matched skill off ``run.payload`` + resolve its description.
+
+    The :class:`~backend.workers.agent_worker.AgentWorker` records the frame onto
+    ``run.payload["frame"]`` BEFORE the orchestrator factory runs, so the matched
+    skill is available here to thread into the loop as a first-invocation hint
+    (B9a — the frame output is finally consumed). The description is looked up in
+    the SAME per-workspace skill loader the frame matched against. No frame / no
+    match / a stale name not in the loader → ``(None, None)`` (no hint)."""
+    payload = run.payload or {}
+    frame = payload.get("frame") if isinstance(payload, dict) else None
+    skill_match = frame.get("skill_match") if isinstance(frame, dict) else None
+    if not isinstance(skill_match, str) or not skill_match:
+        return None, None
+    loader = skill_loader_for(run.workspace_id)
+    meta = loader.registry.get(skill_match)
+    description = meta.description if meta is not None else None
+    return skill_match, description
 
 
 def build_settle_entity_extractor_factory(
