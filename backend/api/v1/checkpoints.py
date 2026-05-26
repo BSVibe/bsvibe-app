@@ -32,6 +32,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.api.deps import get_current_user_row, get_db_session, get_workspace_id
+from backend.execution.audit_events import DecisionResolved
 from backend.execution.db import (
     Decision,
     DecisionStatus,
@@ -42,6 +43,8 @@ from backend.execution.db import (
 from backend.execution.verified_deliverable import settle_run_context
 from backend.identity.db import UserRow
 from backend.orchestrator.agent_runner import AgentRunner
+from backend.supervisor.audit.events import AuditActor, AuditResource
+from backend.supervisor.audit.service import safe_emit
 
 #: Payload ``kind`` on the settle activity emitted by the resolve endpoint
 #: (B11b). The :class:`~backend.workers.settle_worker.SettleWorker` drains the
@@ -318,6 +321,27 @@ async def resolve_checkpoint(
         to_status=RunStatus.OPEN,
         reason=f"resumed: decision {decision.id} resolved",
     )
+
+    # B15 — emit ``DecisionResolved`` onto the audit outbox so the supervisor
+    # audit stream sees the founder's resolution (alongside the settle activity
+    # row above). Soft-fail via :func:`safe_emit`. The actor is the founder
+    # (``type="user"`` — this is a human action, NOT a system event like the
+    # loop-side ``DecisionPending``).
+    await safe_emit(
+        DecisionResolved(
+            actor=AuditActor(type="user", id=str(user_row.id)),
+            workspace_id=str(workspace_id),
+            resource=AuditResource(type="execution_run", id=str(run.id)),
+            data={
+                "run_id": str(run.id),
+                "decision_id": str(decision.id),
+                "kind": decision.decision,
+                "answer": body.answer[:500],
+            },
+        ),
+        session=session,
+    )
+
     await session.commit()
 
     return ResolveResponse(

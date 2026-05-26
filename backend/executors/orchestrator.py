@@ -67,6 +67,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.accounts.models import ModelAccount
 from backend.config import Settings, get_settings
+from backend.execution.audit_events import (
+    DecisionPending,
+    LoopTerminal,
+    RunStarted,
+    VerifyRun,
+)
 from backend.execution.db import (
     Decision,
     ExecutionRun,
@@ -82,6 +88,8 @@ from backend.execution.verified_deliverable import write_verified_deliverable
 from backend.execution.verifier.service import CanonRetriever, JudgeLlm, VerificationService
 from backend.executors import dispatch
 from backend.executors.dispatch import TaskTimeout
+from backend.supervisor.audit.events import AuditActor, AuditEventBase, AuditResource
+from backend.supervisor.audit.service import safe_emit
 from backend.supervisor.sandbox import SandboxManager
 
 logger = structlog.get_logger(__name__)
@@ -244,6 +252,12 @@ class ExecutorOrchestrator:
         self._session.add_all([work_step, attempt])
         await self._session.flush()
 
+        # B15 — emit RunStarted onto the supervisor outbox the moment the
+        # executor-driven run is known to its WorkStep+RunAttempt rows. The
+        # ExecutorOrchestrator's compute backend is an external CLI worker,
+        # but the audit-stream surface is unified across both orchestrators.
+        await self._audit(run, attempt, RunStarted, {"intent": _intent_text(run)})
+
         extra = self._account.extra_params or {}
         executor_type = str(extra.get("executor_type") or "")
         pinned_raw = extra.get("worker_id")
@@ -258,7 +272,7 @@ class ExecutorOrchestrator:
                 rationale="executor run has no Redis client to dispatch the worker task over",
                 payload={"executor_type": executor_type},
             )
-            return self._decision_result(run, work_step, attempt, decision)
+            return await self._decision_result(run, work_step, attempt, decision)
 
         worker = await dispatch.find_available_worker(
             self._session,
@@ -276,7 +290,7 @@ class ExecutorOrchestrator:
                     "pinned_worker_id": str(pinned_worker_id) if pinned_worker_id else None,
                 },
             )
-            return self._decision_result(run, work_step, attempt, decision)
+            return await self._decision_result(run, work_step, attempt, decision)
 
         # B8 — assemble the context-rich CLI prompt (intent + relevant canon +
         # founder-resolved decisions) + a real engineer system prompt, instead of
@@ -445,7 +459,7 @@ class ExecutorOrchestrator:
                     rationale="executor produced work but there is no verifiable contract",
                     payload={"reason": "no_verifiable_contract", "artifact_refs": artifact_refs},
                 )
-                return self._decision_result(run, work_step, attempt, decision)
+                return await self._decision_result(run, work_step, attempt, decision)
 
             # HONEST branch 2 — the contract has judge checks but no verify LLM is
             # available (e.g. executor-only-active workspace → no resolvable judge
@@ -458,7 +472,7 @@ class ExecutorOrchestrator:
                     rationale="contract requires an LLM judge but no verification LLM is available",
                     payload={"reason": "no_verification_llm", "artifact_refs": artifact_refs},
                 )
-                return self._decision_result(run, work_step, attempt, decision)
+                return await self._decision_result(run, work_step, attempt, decision)
 
             vr = await svc.verify(
                 run=run,
@@ -468,6 +482,17 @@ class ExecutorOrchestrator:
                 box=box,
                 written_paths=artifact_refs,
                 final_text=output,
+            )
+            # B15 — VerifyRun: outcome + check counts (no result body).
+            await self._audit(
+                run,
+                attempt,
+                VerifyRun,
+                {
+                    "outcome": vr.outcome.value,
+                    "command_checks": len(contract.command_checks),
+                    "judge_checks": len(contract.judge_checks),
+                },
             )
         except Exception as exc:  # noqa: BLE001 — any verify crash → system_error
             logger.exception("executor_orchestrator_verify_crash", run_id=str(run.id))
@@ -492,7 +517,7 @@ class ExecutorOrchestrator:
                 rationale="executor work failed the verification contract",
                 payload={"artifact_refs": artifact_refs, "verification_result_id": str(vr.id)},
             )
-            return self._decision_result(run, work_step, attempt, decision)
+            return await self._decision_result(run, work_step, attempt, decision)
 
         # The ONLY PROVED path — gated on a real passing VerificationResult,
         # exactly like the native ``_finish_verified``.
@@ -514,6 +539,13 @@ class ExecutorOrchestrator:
             deliverable_id=str(deliverable.id),
             verification_result_id=str(vr.id),
             artifact_refs=artifact_refs,
+        )
+        # B15 — terminal (verified) — the founder-facing closing event.
+        await self._audit(
+            run,
+            attempt,
+            LoopTerminal,
+            {"outcome": "verified", "written_paths_count": len(artifact_refs)},
         )
         return LoopResult(
             outcome="verified",
@@ -540,6 +572,13 @@ class ExecutorOrchestrator:
         attempt.finished_at = _utcnow()
         await self._session.flush()
         logger.warning("executor_orchestrator_system_error", run_id=str(run.id), error=summary)
+        # B15 — terminal: system_error is the founder-facing closing event.
+        await self._audit(
+            run,
+            attempt,
+            LoopTerminal,
+            {"outcome": "system_error", "summary": summary[:500]},
+        )
         return LoopResult(
             outcome="system_error",
             run_id=run.id,
@@ -570,13 +609,34 @@ class ExecutorOrchestrator:
         logger.info("executor_orchestrator_needs_decision", run_id=str(run.id), kind=kind)
         return decision
 
-    def _decision_result(
+    async def _decision_result(
         self,
         run: ExecutionRun,
         work_step: WorkStep,
         attempt: RunAttempt,
         decision: Decision,
     ) -> LoopResult:
+        # B15 — DecisionPending + the needs_decision terminal. Centralised here
+        # so every executor decision path emits the same pair without each
+        # caller remembering to. ``decision.payload`` carries the small reason
+        # tag (no_executor_*/no_verifiable_contract/verification_failed/…).
+        payload = decision.payload if isinstance(decision.payload, dict) else {}
+        await self._audit(
+            run,
+            attempt,
+            DecisionPending,
+            {
+                "kind": decision.decision,
+                "decision_id": str(decision.id),
+                "reason": payload.get("reason"),
+            },
+        )
+        await self._audit(
+            run,
+            attempt,
+            LoopTerminal,
+            {"outcome": "needs_decision", "decision_id": str(decision.id)},
+        )
         return LoopResult(
             outcome="needs_decision",
             run_id=run.id,
@@ -584,6 +644,37 @@ class ExecutorOrchestrator:
             run_attempt_id=attempt.id,
             decision_id=decision.id,
         )
+
+    # -- B15: audit-stream emit (always soft-fail) -------------------------
+
+    async def _audit(
+        self,
+        run: ExecutionRun,
+        attempt: RunAttempt | None,
+        event_cls: type[AuditEventBase],
+        data: dict[str, Any],
+    ) -> None:
+        """Emit one audit event onto the supervisor outbox (B15).
+
+        Mirrors :meth:`backend.execution.orchestrator.RunOrchestrator._audit`
+        so the audit-stream surface is uniform across the two compute
+        backends. Soft-fail via :func:`safe_emit`."""
+        actor = AuditActor(type="system", id="backend.executors.executor_orchestrator")
+        resource = AuditResource(type="execution_run", id=str(run.id))
+        full_data: dict[str, Any] = {
+            "run_id": str(run.id),
+            "product_id": str(run.product_id) if run.product_id is not None else None,
+        }
+        if attempt is not None:
+            full_data["attempt_id"] = str(attempt.id)
+        full_data.update(data)
+        event = event_cls(
+            actor=actor,
+            workspace_id=str(run.workspace_id),
+            resource=resource,
+            data=full_data,
+        )
+        await safe_emit(event, session=self._session)
 
 
 class _UnavailableJudge:
