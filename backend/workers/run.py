@@ -58,6 +58,7 @@ from backend.delivery.dispatcher import DeliveryDispatcher
 from backend.delivery.schema import DeliveryResult
 from backend.execution.connector_actions import ConnectorActionResolver
 from backend.execution.db import Decision, ExecutionRun
+from backend.execution.knowledge_orchestrator import KnowledgeAnswerOrchestrator
 from backend.execution.loop_llm import GatewayLoopLlm
 from backend.execution.orchestrator import CanonRetriever, RunCompute, RunOrchestrator
 from backend.executors.orchestrator import ExecutorOrchestrator
@@ -399,6 +400,28 @@ def build_agent_execution_deps(
             account_id=account.account_id,
             model_account_id=account.id,
         )
+        # B9b — knowledge-only short-circuit (the cost saver). B9a recorded
+        # ``run.payload["frame"]["path_classification"]`` but only the agent loop
+        # ran. When the frame classified the ask as ``knowledge_only`` (a question
+        # answerable from the workspace's BSage ontology), route to the
+        # KnowledgeAnswerOrchestrator: ONE LLM call composes an answer grounded in
+        # retrieved knowledge — NO plan→act→verify loop, no sandbox, no verify, no
+        # PROVED. The work LLM is the same gateway-resolved api-llm above (an
+        # executor account already returned above — knowledge-only is for the LLM
+        # Q&A path, never a delegated CLI worker). Any other classification (the
+        # ``agent_loop`` default + the B9a keyword fallback) falls through to the
+        # native loop below — unchanged.
+        if _is_knowledge_only(run):
+            logger.info(
+                "knowledge_only_route",
+                run_id=str(run.id),
+                workspace_id=str(run.workspace_id),
+            )
+            return KnowledgeAnswerOrchestrator(
+                session=session,
+                llm=llm,
+                retriever=retriever,
+            )
         # B5a — thread the run's workspace SkillLoader into the native loop so it
         # registers the ``invoke_skill`` + ``knowledge_search`` tools. The loader
         # is the SAME per-workspace one the FrameStage uses (``<skills_root>/
@@ -573,6 +596,20 @@ class _GatewayFrameLlm:
         )
         result = await self._dispatcher.dispatch(request)
         return result.response.content
+
+
+def _is_knowledge_only(run: ExecutionRun) -> bool:
+    """Read the frame's ``path_classification`` off ``run.payload`` (B9b).
+
+    The :class:`~backend.workers.agent_worker.AgentWorker` records the full frame
+    onto ``run.payload["frame"]`` BEFORE the orchestrator factory runs, so the
+    knowledge-only branch is available here. ``True`` only when the frame
+    explicitly classified the ask ``knowledge_only`` — any other value, a missing
+    frame, or a malformed payload is the agent-loop default (no strand)."""
+    payload = run.payload or {}
+    frame = payload.get("frame") if isinstance(payload, dict) else None
+    classification = frame.get("path_classification") if isinstance(frame, dict) else None
+    return classification == "knowledge_only"
 
 
 def _frame_skill_hint(
