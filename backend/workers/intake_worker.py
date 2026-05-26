@@ -24,9 +24,11 @@ from datetime import UTC, datetime
 import structlog
 from sqlalchemy import exists, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from sqlalchemy.orm.attributes import flag_modified
 
 from backend.config import Settings, get_settings
 from backend.intake.db import RequestRow, RequestStatus, TriggerEventRow
+from backend.intake.receive import RECEIVE_FILTERED_KEY, filtered_out_record, receive
 from backend.workers.base import BaseWorker
 from backend.workers.emit import STREAM_AGENT, emit_stream_notification
 
@@ -71,11 +73,45 @@ class IntakeWorker(BaseWorker):
         return await self.drain_once()
 
     async def drain_once(self) -> int:
-        """Drain one batch of un-drained TriggerEvents into Requests. Returns count."""
+        """Drain one batch of un-drained TriggerEvents into Requests.
+
+        Returns the count of trigger rows PROCESSED (not Requests created):
+        a filter-rejected trigger still counts as drained — the row has been
+        evaluated and marked, so the next drain pass won't reprocess it. The
+        Request count is the subset that pass Receive.
+
+        Idempotency on the filter-rejected path comes from stamping the
+        ``RECEIVE_FILTERED_KEY`` audit record onto the trigger row's payload;
+        the ``_claim_batch`` ``NOT EXISTS (Request)`` filter alone would
+        otherwise loop forever on a filtered trigger.
+        """
         count = 0
         emitted_workspace_ids: list[str] = []
         async with self._session_factory() as session:
             async for trig in self._claim_batch(session):
+                outcome = await receive(session, trig)
+                if outcome.filtered_out:
+                    # Mark the trigger row so it isn't reprocessed forever,
+                    # and so an operator can audit "trigger landed but
+                    # rejected by which filter".
+                    trig.payload = {
+                        **(trig.payload or {}),
+                        RECEIVE_FILTERED_KEY: filtered_out_record(
+                            filters={},
+                            reason=outcome.reason or "filter_rejected",
+                        ),
+                    }
+                    flag_modified(trig, "payload")
+                    logger.info(
+                        "intake_worker_trigger_filtered",
+                        trigger_event_id=str(trig.id),
+                        workspace_id=str(trig.workspace_id),
+                        source=trig.source,
+                        reason=outcome.reason,
+                    )
+                    count += 1
+                    continue
+
                 now = datetime.now(tz=UTC)
                 session.add(
                     RequestRow(
@@ -83,7 +119,7 @@ class IntakeWorker(BaseWorker):
                         workspace_id=trig.workspace_id,
                         trigger_event_id=trig.id,
                         status=RequestStatus.OPEN,
-                        payload=dict(trig.payload or {}),
+                        payload=dict(outcome.request_payload),
                         created_at=now,
                         updated_at=now,
                     )
@@ -93,6 +129,9 @@ class IntakeWorker(BaseWorker):
                     trigger_event_id=str(trig.id),
                     workspace_id=str(trig.workspace_id),
                     source=trig.source,
+                    product_id=(
+                        str(outcome.product_id) if outcome.product_id is not None else None
+                    ),
                 )
                 emitted_workspace_ids.append(str(trig.workspace_id))
                 count += 1
@@ -109,7 +148,15 @@ class IntakeWorker(BaseWorker):
         return count
 
     async def _claim_batch(self, session: AsyncSession) -> AsyncIterator[TriggerEventRow]:
-        """Yield up to ``batch_size`` TriggerEvents that have no Request yet."""
+        """Yield up to ``batch_size`` TriggerEvents that have no Request yet.
+
+        A row is *drained* when either (a) a Request row references it, OR
+        (b) Receive marked it filter-rejected (``RECEIVE_FILTERED_KEY`` set
+        on the payload). The (b) clause is filtered in-process rather than
+        in the WHERE — JSON key-presence semantics drift across the
+        Postgres/SQLite test tiers, and an extra in-process filter is cheap
+        for a small batch.
+        """
         already_drained = exists().where(RequestRow.trigger_event_id == TriggerEventRow.id)
         stmt = (
             select(TriggerEventRow)
@@ -120,6 +167,8 @@ class IntakeWorker(BaseWorker):
         )
         rows = (await session.execute(stmt)).scalars().all()
         for r in rows:
+            if (r.payload or {}).get(RECEIVE_FILTERED_KEY) is not None:
+                continue
             yield r
 
 
