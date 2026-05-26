@@ -27,10 +27,10 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from backend.execution.verifier.service import CanonRetriever
     from backend.knowledge.graph.restricted import RestrictedPluginGarden
     from backend.knowledge.graph.vault import Vault
     from backend.knowledge.graph.writer import GardenWriter
-    from backend.knowledge.retrieval.canon_retriever import CanonConceptRetriever
 
 
 @dataclass(frozen=True, slots=True)
@@ -110,21 +110,44 @@ class KnowledgeFactory:
 
         return _R(writer=self.writer())
 
-    def retriever(self) -> CanonConceptRetriever:
-        """Return a workspace-scoped read-only canon retriever (Workflow §1.2).
+    def retriever(self) -> CanonRetriever:
+        """Return a workspace-scoped read-only retriever (Workflow §1.2 + B11b).
 
         Satisfies the :class:`~backend.execution.verifier.service.CanonRetriever`
         Protocol: ``retrieve_for_signals(signals) -> list[str]`` surfaces THIS
-        workspace's promoted active concepts relevant to a change's signals (top
-        of the recurrence-gated registry, capped) so the verifier can fold them
-        in as judge criteria. Reads only this workspace's vault storage (rooted
-        at :attr:`vault_path`); an empty/unknown workspace yields ``[]`` and the
-        retriever never raises into the verify path. Construction is cheap (no
-        deps forced) — the derived index is built lazily per retrieval call.
+        workspace's relevant knowledge for a change's signals — folded by the
+        verifier as judge criteria and by the orchestrator's B6 seed as the
+        loop-start context. Composes two sources behind the single Protocol:
+
+        1. :class:`~backend.knowledge.retrieval.canon_retriever.CanonConceptRetriever`
+           — the workspace's promoted active concepts (the recurrence-gated
+           registry, capped). Structurally precise: only patterns the promoter
+           already settled can surface.
+        2. :class:`~backend.knowledge.retrieval.resolved_decisions_retriever.ResolvedDecisionsRetriever`
+           — prior resolved decisions absorbed into the vault by the settle
+           pipeline (B11b). Surfaces the founder's prior answer for an
+           overlapping signal so a new run does not re-ask the same question.
+
+        Both sources read only this workspace's vault storage (rooted at
+        :attr:`vault_path`); an empty/unknown workspace yields ``[]`` and the
+        composite never raises into the verify path. Construction is cheap (no
+        deps forced) — each source builds its derived state lazily per call.
         """
         from backend.knowledge.graph.storage import FileSystemStorage  # noqa: PLC0415
         from backend.knowledge.retrieval.canon_retriever import (  # noqa: PLC0415
             CanonConceptRetriever,
         )
+        from backend.knowledge.retrieval.composite_retriever import (  # noqa: PLC0415
+            CompositeCanonRetriever,
+        )
+        from backend.knowledge.retrieval.resolved_decisions_retriever import (  # noqa: PLC0415
+            ResolvedDecisionsRetriever,
+        )
 
-        return CanonConceptRetriever(FileSystemStorage(self._vault_root))
+        storage = FileSystemStorage(self._vault_root)
+        return CompositeCanonRetriever(
+            [
+                CanonConceptRetriever(storage),
+                ResolvedDecisionsRetriever(storage),
+            ]
+        )

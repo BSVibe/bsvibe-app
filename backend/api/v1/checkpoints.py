@@ -36,10 +36,25 @@ from backend.execution.db import (
     Decision,
     DecisionStatus,
     ExecutionRun,
+    ExecutionRunActivity,
     RunStatus,
 )
+from backend.execution.verified_deliverable import settle_run_context
 from backend.identity.db import UserRow
 from backend.orchestrator.agent_runner import AgentRunner
+
+#: Payload ``kind`` on the settle activity emitted by the resolve endpoint
+#: (B11b). The :class:`~backend.workers.settle_worker.SettleWorker` drains the
+#: row into the workspace's BSage vault — turning the answered Decision into
+#: reusable knowledge so a future run with similar signals doesn't re-ask the
+#: same question. The kind is stable wire shape; downstream consumers
+#: (retriever, audit) key off it.
+DECISION_RESOLUTION_SETTLE_KIND = "decision_resolution"
+
+#: Cap on the settle-activity ``summary`` text — keeps the absorbed garden
+#: note's body proportionate to the question + answer (mirrors
+#: :data:`~backend.execution.verified_deliverable._SETTLE_SUMMARY_CAP`).
+_SUMMARY_CAP = 500
 
 router = APIRouter()
 
@@ -257,6 +272,41 @@ async def resolve_checkpoint(
     payload["resolved_decisions"] = resolved
     run.payload = payload
 
+    await session.flush()
+
+    # B11b — Knowledge-ize the resolution. Emit a ``settle`` ExecutionRunActivity
+    # carrying the decision-resolution payload + the run's stable clustering
+    # context (intent/product). The :class:`~backend.workers.settle_worker.SettleWorker`
+    # drains this row into the workspace's BSage vault, exactly like a
+    # verified-work observation — so a future run with similar signals can
+    # surface the prior decision via the retriever (the SAME seam B3 verify
+    # and B6 seed inject). ``verified`` is False — the resolution is an honest
+    # answer, NOT verified-as-code (B4 trust integrity).
+    settle_payload: dict[str, Any] = {
+        "kind": DECISION_RESOLUTION_SETTLE_KIND,
+        "decision_id": str(decision.id),
+        "question": _question_text(decision),
+        "answer": body.answer,
+        "options": offered,
+        "resolved_by": str(user_row.id),
+        "resolved_at": now.isoformat(),
+        "verified": False,
+        # A human-legible summary the settle sink uses as the garden note body /
+        # title. Capped so a long answer can't blow up the note size.
+        "summary": (f"Decision resolved — Q: {_question_text(decision)} A: {body.answer}")[
+            :_SUMMARY_CAP
+        ],
+        **await settle_run_context(session, run),
+    }
+    session.add(
+        ExecutionRunActivity(
+            id=uuid.uuid4(),
+            run_id=run.id,
+            workspace_id=run.workspace_id,
+            activity_type="settle",
+            payload=settle_payload,
+        )
+    )
     await session.flush()
 
     # Resume: RUNNING → OPEN so AgentWorker.drive_once (scans OPEN runs) re-picks
