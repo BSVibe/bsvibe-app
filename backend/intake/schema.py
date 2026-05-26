@@ -8,7 +8,11 @@ them into ``Request`` rows for the workflow state machine.
 
 Field shapes are anchored in Workflow §3 (TriggerEvent / DeliveryResult /
 ActionResult) so that producer/consumer drift is impossible without an
-explicit schema bump.
+explicit schema bump. The B10b cohort completes the spec field set:
+``connector`` / ``connector_account_id`` / ``resource_id`` /
+``suggested_artifact_type`` / ``suggested_skill`` / ``intent_text`` /
+``actor`` / ``correlation_id``. They are all optional so legacy producers
+that only emit the original Bundle G fields continue to validate.
 """
 
 from __future__ import annotations
@@ -24,6 +28,7 @@ logger = structlog.get_logger(__name__)
 
 
 TriggerKindLiteral = Literal["webhook", "schedule", "direct", "decision_resolution"]
+ActorLiteral = Literal["founder", "external", "system"]
 
 
 class TriggerEvent(BaseModel):
@@ -36,6 +41,11 @@ class TriggerEvent(BaseModel):
     Idempotency is enforced at intake time via the composite
     ``(workspace_id, source, idempotency_key)`` key — see
     :mod:`backend.intake.idempotency`.
+
+    Routing hints (``connector`` / ``connector_account_id`` / ``resource_id``
+    / ``suggested_artifact_type`` / ``suggested_skill``) are populated by the
+    Receive stage (Workflow §0 / §1, B10b) and refined by Frame; see
+    :mod:`backend.intake.receive`.
     """
 
     workspace_id: uuid.UUID
@@ -48,7 +58,22 @@ class TriggerEvent(BaseModel):
     trace_id: str | None = None
     received_at: datetime = Field(default_factory=lambda: datetime.now())
 
+    # --- B10b additions: spec §3.1 routing hints ---
+    # Connector identity (only meaningful for inbound webhook deliveries).
+    connector: str | None = None
+    connector_account_id: uuid.UUID | None = None
+    resource_id: str | None = None
+
+    # Routing hints — Receive sets these from the binding; Frame refines them.
+    suggested_artifact_type: str | None = None
+    suggested_skill: str | None = None
+
+    # Content + provenance.
+    intent_text: str | None = None
+    actor: ActorLiteral = "external"
+    correlation_id: uuid.UUID | None = None
+
     model_config = ConfigDict(extra="forbid")
 
 
-__all__ = ["TriggerEvent", "TriggerKindLiteral"]
+__all__ = ["ActorLiteral", "TriggerEvent", "TriggerKindLiteral"]
