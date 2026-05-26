@@ -43,11 +43,12 @@ def test_alembic_history_loads():
         "model_account_nullable_key",
         "product_resources",
         "executor_artifact_capture",
+        "resource_bindings",
     ):
         assert rev in result.stdout, f"missing revision {rev} in:\n{result.stdout}"
 
 
-def test_alembic_head_is_executor_artifact_capture():
+def test_alembic_head_is_resource_bindings():
     repo = Path(__file__).parent.parent
     result = subprocess.run(
         [sys.executable, "-m", "alembic", "heads"],
@@ -56,7 +57,7 @@ def test_alembic_head_is_executor_artifact_capture():
         text=True,
     )
     assert result.returncode == 0
-    assert "executor_artifact_capture" in result.stdout
+    assert "resource_bindings" in result.stdout
 
 
 def test_target_metadata_covers_all_bases():
@@ -128,6 +129,9 @@ def test_target_metadata_covers_all_bases():
         "products",
         # Per-product resources (repo / doc / deploy / note pointers)
         "product_resources",
+        # Per-Product × Connector 3-knob binding (Workflow §3 — selection +
+        # trigger + output_mode).
+        "resource_bindings",
         # Phase 1 auth — identity
         "users",
         "memberships",
