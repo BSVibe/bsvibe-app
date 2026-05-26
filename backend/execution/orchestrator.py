@@ -44,6 +44,14 @@ import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.config import Settings, get_settings
+from backend.execution.audit_events import (
+    DecisionPending,
+    LlmTurn,
+    LoopTerminal,
+    RunStarted,
+    ToolCall,
+    VerifyRun,
+)
 from backend.execution.connector_actions import (
     ConnectorActionProvider,
     ConnectorActionTool,
@@ -72,6 +80,8 @@ from backend.execution.verifier.contract import (
 from backend.execution.verifier.service import VerificationService
 from backend.skills.loader import SkillLoader
 from backend.skills.tool_binding import INVOKE_SKILL_NAME, register_invoke_skill
+from backend.supervisor.audit.events import AuditActor, AuditEventBase, AuditResource
+from backend.supervisor.audit.service import safe_emit
 from backend.supervisor.sandbox import SandboxManager, SandboxSession
 
 logger = structlog.get_logger(__name__)
@@ -730,6 +740,11 @@ class RunOrchestrator:
         self._session.add_all([work_step, attempt])
         await self._session.flush()
 
+        # B15 — emit RunStarted onto the audit outbox the moment the run is
+        # known to its WorkStep+RunAttempt rows. Soft-fail: any outbox failure
+        # is logged + swallowed (the run continues regardless).
+        await self._audit(run, attempt, RunStarted, {"intent": _intent_title(run)})
+
         try:
             box = await self._sandbox_manager.acquire(project_id, str(workspace_dir))
         except Exception as exc:  # noqa: BLE001 — infra failure → system_error
@@ -739,6 +754,13 @@ class RunOrchestrator:
             await self._session.flush()
             logger.warning(
                 "run_orchestrator_sandbox_unavailable", run_id=str(run.id), error=str(exc)
+            )
+            # B15 — emit a terminal so the audit stream is not blind to bad runs.
+            await self._audit(
+                run,
+                attempt,
+                LoopTerminal,
+                {"outcome": "system_error", "stage": "acquire", "error": str(exc)},
             )
             return LoopResult(
                 outcome="system_error",
@@ -762,6 +784,13 @@ class RunOrchestrator:
             work_step.status = WorkStepStatus.FAILED
             await self._session.flush()
             logger.exception("run_orchestrator_loop_crash", run_id=str(run.id))
+            # B15 — emit a terminal so the audit stream is not blind to bad runs.
+            await self._audit(
+                run,
+                attempt,
+                LoopTerminal,
+                {"outcome": "system_error", "stage": "loop", "error": str(exc)},
+            )
             return LoopResult(
                 outcome="system_error",
                 run_id=run.id,
@@ -843,6 +872,19 @@ class RunOrchestrator:
                 "llm_turn",
                 {"content": turn.content[:500], "tool_calls": [c.name for c in turn.tool_calls]},
             )
+            # B15 — emit one ``LlmTurn`` per completion. Carries the small
+            # observable shape (counts + tool names), NEVER the raw LLM
+            # content (that stays on the rich ExecutionRunActivity row).
+            await self._audit(
+                run,
+                attempt,
+                LlmTurn,
+                {
+                    "cycle": _cycle,
+                    "tool_calls": [c.name for c in turn.tool_calls],
+                    "content_len": len(turn.content or ""),
+                },
+            )
 
             ask = next((c for c in turn.tool_calls if c.name == "ask_user_question"), None)
             if ask is not None:
@@ -864,6 +906,23 @@ class RunOrchestrator:
                     kind="ask_user_question",
                     payload=payload,
                     rationale="work LLM asked the founder a blocking question",
+                )
+                # B15 — DecisionPending + the needs_decision terminal.
+                await self._audit(
+                    run,
+                    attempt,
+                    DecisionPending,
+                    {
+                        "kind": "ask_user_question",
+                        "decision_id": str(decision.id),
+                        "question": payload.get("question", ""),
+                    },
+                )
+                await self._audit(
+                    run,
+                    attempt,
+                    LoopTerminal,
+                    {"outcome": "needs_decision", "decision_id": str(decision.id)},
                 )
                 return self._decision_result(
                     run, work_step, attempt, decision, written_paths, final_text
@@ -902,6 +961,15 @@ class RunOrchestrator:
                         "tool_call",
                         {"tool": call.name, "ok": ok, "writes": writes},
                     )
+                    # B15 — ToolCall: tool name + ok bool + writes count (no
+                    # arguments, no raw output — kept tiny so the outbox stays
+                    # cheap; the full payload still lives on activity rows).
+                    await self._audit(
+                        run,
+                        attempt,
+                        ToolCall,
+                        {"tool": call.name, "ok": ok, "writes_count": len(writes)},
+                    )
                     messages.append({"role": "tool", "tool_call_id": call.id, "content": output})
                 continue
 
@@ -937,6 +1005,23 @@ class RunOrchestrator:
                     payload={"reason": "no_verification_declared", "written_paths": written_paths},
                     rationale="work finished without any verifiable contract",
                 )
+                # B15 — DecisionPending + the needs_decision terminal.
+                await self._audit(
+                    run,
+                    attempt,
+                    DecisionPending,
+                    {
+                        "kind": "human_review_required",
+                        "decision_id": str(decision.id),
+                        "reason": "no_verification_declared",
+                    },
+                )
+                await self._audit(
+                    run,
+                    attempt,
+                    LoopTerminal,
+                    {"outcome": "needs_decision", "decision_id": str(decision.id)},
+                )
                 return self._decision_result(
                     run, work_step, attempt, decision, written_paths, final_text
                 )
@@ -950,10 +1035,30 @@ class RunOrchestrator:
                 written_paths=written_paths,
                 final_text=final_text,
             )
+            # B15 — VerifyRun: the verdict outcome + counts of the checks the
+            # contract actually ran. NEVER the rich verdict result body.
+            await self._audit(
+                run,
+                attempt,
+                VerifyRun,
+                {
+                    "outcome": verdict.outcome.value,
+                    "command_checks": len(contract.command_checks),
+                    "judge_checks": len(contract.judge_checks),
+                },
+            )
             if verdict.outcome is VerificationOutcome.PASSED:
-                return await self._finish_verified(
+                result = await self._finish_verified(
                     run, work_step, attempt, written_paths, final_text, verdict
                 )
+                # B15 — terminal (verified) — the founder-facing closing event.
+                await self._audit(
+                    run,
+                    attempt,
+                    LoopTerminal,
+                    {"outcome": "verified", "written_paths_count": len(written_paths)},
+                )
+                return result
             # Failed: feed the verifier output back and re-plan on the next cycle.
             messages.append(
                 {
@@ -973,6 +1078,23 @@ class RunOrchestrator:
             kind="verification_failed",
             payload={"reason": "round_cap_reached", "written_paths": written_paths},
             rationale="agent loop exhausted its round budget without a passing verification",
+        )
+        # B15 — DecisionPending + the needs_decision terminal.
+        await self._audit(
+            run,
+            attempt,
+            DecisionPending,
+            {
+                "kind": "verification_failed",
+                "decision_id": str(decision.id),
+                "reason": "round_cap_reached",
+            },
+        )
+        await self._audit(
+            run,
+            attempt,
+            LoopTerminal,
+            {"outcome": "needs_decision", "decision_id": str(decision.id)},
         )
         return self._decision_result(run, work_step, attempt, decision, written_paths, final_text)
 
@@ -1220,6 +1342,40 @@ class RunOrchestrator:
                 payload={"attempt_id": str(attempt.id), **payload},
             )
         )
+
+    # -- B15: audit-stream emit (always soft-fail) -------------------------
+
+    async def _audit(
+        self,
+        run: ExecutionRun,
+        attempt: RunAttempt | None,
+        event_cls: type[AuditEventBase],
+        data: dict[str, Any],
+    ) -> None:
+        """Emit one audit event onto the supervisor outbox (B15).
+
+        The supervisor :class:`backend.workers.relay_worker.RelayWorker` drains
+        the outbox onto the audit stream — exactly the same seam the gateway
+        chat path uses. ``safe_emit`` swallows any emitter failure so the run
+        is NEVER broken by audit infrastructure trouble (the soft-fail contract
+        every audit producer follows).
+        """
+        actor = AuditActor(type="system", id="backend.execution.run_orchestrator")
+        resource = AuditResource(type="execution_run", id=str(run.id))
+        full_data: dict[str, Any] = {
+            "run_id": str(run.id),
+            "product_id": str(run.product_id) if run.product_id is not None else None,
+        }
+        if attempt is not None:
+            full_data["attempt_id"] = str(attempt.id)
+        full_data.update(data)
+        event = event_cls(
+            actor=actor,
+            workspace_id=str(run.workspace_id),
+            resource=resource,
+            data=full_data,
+        )
+        await safe_emit(event, session=self._session)
 
 
 def _safe_args(arguments: dict[str, Any]) -> dict[str, Any]:
