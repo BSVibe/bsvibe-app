@@ -27,7 +27,7 @@ from __future__ import annotations
 import uuid
 from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Any, Protocol
 
 import structlog
 from sqlalchemy import delete, select
@@ -35,7 +35,8 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from backend.delivery.db import DeliveryEventRow
 from backend.delivery.safe_mode_queue import SafeModeQueue
-from backend.delivery.schema import DeliveryResult
+from backend.delivery.schema import ActionResult, DeliveryResult
+from backend.execution.db import Deliverable
 from backend.workers.base import BaseWorker
 from backend.workspaces.db import WorkspaceRow
 
@@ -69,18 +70,96 @@ async def _workspace_safe_mode(session: AsyncSession, workspace_id: uuid.UUID) -
     return bool(row.safe_mode) if row is not None else False
 
 
+def extract_compensation_handles(
+    actions: list[ActionResult],
+) -> list[dict[str, Any]]:
+    """B12b — pull ``compensation_handle`` from successful actions.
+
+    Each :class:`ActionResult.action` is shaped ``"<plugin>:outbound:<artifact>"``
+    (see :class:`backend.delivery.dispatcher.DeliveryDispatcher` and
+    :class:`backend.delivery.connector_dispatch.ConnectorDeliveryAdapter`). A
+    successful action whose ``output`` carries ``compensation_handle`` (a
+    plugin-private revert token — Workflow §3.1) produces one entry:
+    ``{"plugin": "<name>", "artifact_type": "<type>", "handle": {...}}``.
+    Failed actions and successful actions WITHOUT a handle are skipped — the
+    retract endpoint reads this list and 400s an empty one rather than
+    inventing fake entries.
+    """
+    entries: list[dict[str, Any]] = []
+    for action in actions:
+        if not action.succeeded or not action.output:
+            continue
+        handle = action.output.get("compensation_handle")
+        if not isinstance(handle, dict) or not handle:
+            continue
+        plugin_name, _, rest = action.action.partition(":outbound:")
+        if not plugin_name:
+            continue
+        artifact_type = rest or str(action.output.get("artifact_type") or "")
+        entries.append(
+            {
+                "plugin": plugin_name,
+                "artifact_type": artifact_type,
+                "handle": dict(handle),
+            }
+        )
+    return entries
+
+
+async def persist_compensation_handles(
+    session: AsyncSession,
+    *,
+    deliverable_id: uuid.UUID,
+    result: DeliveryResult,
+) -> int:
+    """B12b — append captured handles onto the Deliverable.
+
+    Workflow §1.2 + §3.1 + §9. Reads every successful action whose ``output``
+    carries a ``compensation_handle`` (plugin-private revert token) and
+    persists ``{"plugin", "artifact_type", "handle"}`` entries onto the
+    Deliverable's ``compensation_handles`` column. The row may already carry
+    handles from a prior dispatch of the same deliverable (Safe Mode approve
+    re-runs the same code path); append rather than overwrite so re-dispatches
+    keep accumulating. A missing Deliverable (purged run) is a silent no-op —
+    the dispatch already succeeded, the lost handle just means retract is
+    unavailable for that target. Returns the count of entries appended.
+    """
+    entries = extract_compensation_handles(result.actions)
+    if not entries:
+        return 0
+    row = await session.get(Deliverable, deliverable_id)
+    if row is None:
+        return 0
+    existing = list(row.compensation_handles or [])
+    existing.extend(entries)
+    # SQLAlchemy treats list assignment as a mutation; setting the attribute
+    # explicitly avoids the dirty-tracking blind spot of in-place ``.extend``.
+    row.compensation_handles = existing
+    await session.commit()
+    return len(entries)
+
+
 async def dispatch_delivery(
     dispatcher: PluginDispatchAdapter,
     *,
     workspace_id: uuid.UUID,
     deliverable_id: uuid.UUID,
     artifact_type: str,
+    session_factory: async_sessionmaker[AsyncSession] | None = None,
 ) -> DeliveryResult:
     """The single outbound-dispatch code path shared by the worker + approve.
 
     Extracted so :meth:`DeliveryWorker.drain_once` (Safe Mode off) and the
     ``POST /api/v1/safemode/{item_id}/approve`` route dispatch through one
     helper rather than duplicating the call shape.
+
+    B12b — when ``session_factory`` is provided, any ``compensation_handle``
+    returned by a successful outbound action is persisted on the Deliverable
+    row so the retract endpoint can later read it (Workflow §1.2 + §3.1 + §9).
+    Callers that already hold an open session (e.g. an HTTP route handler)
+    should omit the factory and call :func:`persist_compensation_handles`
+    directly on that session — keeps the persist step inside the caller's
+    transaction.
     """
     result = await dispatcher.dispatch(
         workspace_id=workspace_id,
@@ -93,6 +172,13 @@ async def dispatch_delivery(
         workspace_id=str(workspace_id),
         actions=len(result.actions),
     )
+    if session_factory is not None:
+        async with session_factory() as session:
+            await persist_compensation_handles(
+                session,
+                deliverable_id=deliverable_id,
+                result=result,
+            )
     return result
 
 
@@ -158,6 +244,10 @@ class DeliveryWorker(BaseWorker):
                             workspace_id=row.workspace_id,
                             deliverable_id=row.deliverable_id,
                             artifact_type=row.artifact_type,
+                            # B12b — capture compensation_handle onto the
+                            # Deliverable so the retract endpoint can later
+                            # revert through @p.compensate.
+                            session_factory=self._session_factory,
                         )
                 except Exception:  # noqa: BLE001 — record + move on
                     logger.exception(

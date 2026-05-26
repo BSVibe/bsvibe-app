@@ -45,11 +45,12 @@ def test_alembic_history_loads():
         "executor_artifact_capture",
         "resource_bindings",
         "mid_loop_deliver",
+        "compensation_wiring",
     ):
         assert rev in result.stdout, f"missing revision {rev} in:\n{result.stdout}"
 
 
-def test_alembic_head_is_mid_loop_deliver():
+def test_alembic_head_is_compensation_wiring():
     repo = Path(__file__).parent.parent
     result = subprocess.run(
         [sys.executable, "-m", "alembic", "heads"],
@@ -58,7 +59,7 @@ def test_alembic_head_is_mid_loop_deliver():
         text=True,
     )
     assert result.returncode == 0
-    assert "mid_loop_deliver" in result.stdout
+    assert "compensation_wiring" in result.stdout
 
 
 def test_target_metadata_covers_all_bases():

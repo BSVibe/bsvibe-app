@@ -307,6 +307,20 @@ class Deliverable(ExecutionBase):
     artifact_uri: Mapped[str | None] = mapped_column(Text, nullable=True)
     diff_url: Mapped[str | None] = mapped_column(Text, nullable=True)
     payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    # B12b — captured plugin compensation handles (Workflow §1.2 + §3.1 + §9).
+    # One entry per successful outbound action that returned a ``compensation_handle``:
+    # ``{"plugin": "<name>", "artifact_type": "<type>", "handle": {...}}``. Nullable
+    # so pre-B12b rows (and rows where every outbound opted out of compensation) read
+    # honestly as "nothing to revert", not as an empty fake list. The retract
+    # endpoint reads it; ``None`` / empty → 400 ``no_compensation_handle``.
+    compensation_handles: Mapped[list[dict[str, Any]] | None] = mapped_column(
+        JSON, nullable=True, default=None
+    )
+    # B12b — when the founder retracted this deliverable, else ``None``. Set by
+    # ``POST /api/v1/deliverables/{deliverable_id}/retract`` after the plugin
+    # compensate dispatch succeeds. Idempotency: re-retract on a row whose value
+    # is non-None short-circuits to a 200 no-op rather than dispatching twice.
+    retracted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=lambda: datetime.now()
     )
