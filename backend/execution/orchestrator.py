@@ -221,7 +221,11 @@ ASK_USER_QUESTION_TOOL: dict[str, Any] = {
             "Pause the run and ask the founder a blocking question when you "
             "genuinely cannot proceed without a human decision. This creates a "
             "Decision and stops the loop until it is resolved — use it only when "
-            "no tool call can unblock you."
+            "no tool call can unblock you. When the decision is a choice between "
+            "concrete alternatives, pass them as ``options`` (a list of plain "
+            "strings) so the founder sees a single-select instead of an "
+            "open-ended textbox — the founder's answer must then be one of the "
+            "offered strings."
         ),
         "parameters": {
             "type": "object",
@@ -234,11 +238,39 @@ ASK_USER_QUESTION_TOOL: dict[str, Any] = {
                     "type": "string",
                     "description": "Why you are blocked / what you have tried.",
                 },
+                "options": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": (
+                        "Optional concrete choices to present to the founder as "
+                        "a single-select. When set, the founder's answer must "
+                        "match one of these strings exactly. Omit for "
+                        "free-text questions."
+                    ),
+                },
             },
             "required": ["question"],
         },
     },
 }
+
+
+def _sanitize_ask_user_question_options(raw: Any) -> list[str] | None:
+    """Coerce the work LLM's ``options`` arg into a clean ``list[str]``.
+
+    B11a: only plain non-empty strings survive; anything else (numbers, ``None``,
+    whitespace-only, the wrong outer type) is dropped. Returns ``None`` when
+    nothing usable remains so the Decision payload simply omits the field — the
+    resolve endpoint then treats the question as free-text (existing behaviour).
+    """
+    if not isinstance(raw, list):
+        return None
+    cleaned: list[str] = []
+    for entry in raw:
+        if isinstance(entry, str) and entry.strip():
+            cleaned.append(entry)
+    return cleaned or None
+
 
 _SYSTEM_PROMPT = (
     "You are an autonomous engineer working inside a sandboxed workspace. "
@@ -752,14 +784,23 @@ class RunOrchestrator:
 
             ask = next((c for c in turn.tool_calls if c.name == "ask_user_question"), None)
             if ask is not None:
+                payload: dict[str, Any] = {
+                    "question": str(ask.arguments.get("question") or ""),
+                    "context": str(ask.arguments.get("context") or ""),
+                }
+                # B11a: persist structured ``options`` (when the LLM offered
+                # concrete choices) so the Decisions UI can render a
+                # single-select and the resolve endpoint can validate the
+                # founder's answer against them. Sanitised to strings only —
+                # noise gets dropped, never planted on disk.
+                options = _sanitize_ask_user_question_options(ask.arguments.get("options"))
+                if options is not None:
+                    payload["options"] = options
                 decision = await self._create_decision(
                     run,
                     work_step,
                     kind="ask_user_question",
-                    payload={
-                        "question": str(ask.arguments.get("question") or ""),
-                        "context": str(ask.arguments.get("context") or ""),
-                    },
+                    payload=payload,
                     rationale="work LLM asked the founder a blocking question",
                 )
                 return self._decision_result(

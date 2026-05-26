@@ -322,12 +322,15 @@ export interface Proposal {
 
 /** `GET /api/v1/checkpoints` element (backend CheckpointResponse). A paused-run
  *  Decision the founder must answer to resume a stuck run. `question` is the
- *  blocking prompt; `rationale` is the agent's optional why. */
+ *  blocking prompt; `rationale` is the agent's optional why; `options` (B11a)
+ *  are concrete choices the work LLM offered — when set, the UI renders a
+ *  single-select and the resolve endpoint requires the answer be one of them. */
 export interface Checkpoint {
   id: string;
   run_id: string;
   decision: string;
   question: string;
+  options: string[] | null;
   rationale: string | null;
   created_at: string;
 }
@@ -410,6 +413,10 @@ export interface PendingCheckpoint {
   checkpointId: string;
   /** The agent's blocking question. */
   question: string;
+  /** B11a — concrete choices the work LLM offered (or null for free-text).
+   *  When non-empty, CheckpointRow renders a single-select; the founder's
+   *  answer is then one of these strings (the backend validates membership). */
+  options: string[] | null;
   rationale: string | null;
   createdAt: string;
 }

@@ -115,6 +115,7 @@ const CHECKPOINT: Checkpoint = {
   run_id: "run-1",
   decision: "clarify-scope",
   question: "Should the export include archived items?",
+  options: null,
   rationale: "The direction was ambiguous.",
   created_at: "2026-05-23T11:00:00Z",
 };
