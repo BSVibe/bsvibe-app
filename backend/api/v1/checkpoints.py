@@ -51,6 +51,11 @@ class CheckpointResponse(BaseModel):
     run_id: uuid.UUID
     decision: str
     question: str
+    # B11a: structured options the work LLM offered (``ask_user_question`` with
+    # an ``options`` array). When non-empty, the PWA renders a single-select
+    # and the resolve endpoint validates the founder's answer is one of these.
+    # ``None`` (or empty) keeps the existing free-text behaviour.
+    options: list[str] | None = None
     rationale: str | None = None
     created_at: datetime
 
@@ -113,6 +118,23 @@ def _question_text(decision: Decision) -> str:
     return fallback if fallback is not None else ""
 
 
+def _decision_options(decision: Decision) -> list[str] | None:
+    """The structured options offered for this paused-run Decision, if any.
+
+    B11a: the work LLM's ``ask_user_question`` may carry an ``options`` array on
+    the Decision payload. Only return a clean list of non-empty strings; any
+    other shape degrades to ``None`` so the PWA falls back to free-text and the
+    resolve endpoint skips the membership check (existing behaviour)."""
+    payload = decision.payload or {}
+    if not isinstance(payload, dict):
+        return None
+    raw = payload.get("options")
+    if not isinstance(raw, list):
+        return None
+    cleaned = [item for item in raw if isinstance(item, str) and item.strip()]
+    return cleaned or None
+
+
 @router.get("")
 async def list_checkpoints(
     workspace_id: Annotated[uuid.UUID, Depends(get_workspace_id)],
@@ -134,6 +156,7 @@ async def list_checkpoints(
             run_id=row.run_id,
             decision=row.decision,
             question=_question_text(row),
+            options=_decision_options(row),
             rationale=row.rationale,
             created_at=row.created_at,
         )
@@ -193,6 +216,17 @@ async def resolve_checkpoint(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Pending checkpoint {checkpoint_id} not found",
+        )
+
+    # B11a: if the work LLM offered concrete options, the founder's answer
+    # MUST be one of them — off-list answers are 400 (the Decision stays
+    # pending). Free-text mode (no options on the payload) keeps the existing
+    # behaviour of accepting any non-empty answer.
+    offered = _decision_options(decision)
+    if offered is not None and body.answer not in offered:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(f"answer {body.answer!r} is not one of the offered options: {offered}"),
         )
 
     now = datetime.now(tz=UTC)

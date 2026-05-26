@@ -56,6 +56,9 @@ export function toPendingDecisions(
       id: `checkpoint-${c.id}`,
       checkpointId: c.id,
       question: c.question,
+      // B11a — forward the structured options (when set) so CheckpointRow can
+      // render a single-select. Null/empty falls back to the free-text path.
+      options: c.options && c.options.length > 0 ? c.options : null,
       rationale: c.rationale,
       createdAt: c.created_at,
     });

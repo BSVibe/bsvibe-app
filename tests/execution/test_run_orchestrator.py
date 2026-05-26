@@ -475,6 +475,104 @@ async def test_ask_user_question_creates_decision_and_pauses(tmp_path: Path) -> 
         assert work_step.status is not WorkStepStatus.VERIFIED
 
 
+async def test_ask_user_question_tool_schema_advertises_options() -> None:
+    """B11a: the work LLM's ``ask_user_question`` tool advertises a structured
+    optional ``options`` field (an array of plain strings) so the model can
+    present concrete choices to the founder, not just free text."""
+    from backend.execution.orchestrator import ASK_USER_QUESTION_TOOL
+
+    params = ASK_USER_QUESTION_TOOL["function"]["parameters"]
+    assert params["type"] == "object"
+    props = params["properties"]
+    assert "options" in props
+    options_schema = props["options"]
+    assert options_schema["type"] == "array"
+    # v1 shape: a plain list of strings (one chosen option string is the answer).
+    assert options_schema["items"]["type"] == "string"
+    # ``options`` is OPTIONAL — free-text mode (no options) must keep working,
+    # so the required list MUST NOT grow beyond the existing ``question``.
+    assert params["required"] == ["question"]
+
+
+async def test_ask_user_question_with_options_persists_them_on_decision(
+    tmp_path: Path,
+) -> None:
+    """B11a: when the work LLM calls ``ask_user_question`` WITH ``options``, the
+    minted Decision's payload carries the offered choices so the Decisions UI
+    can render them as a single-select."""
+    llm = ScriptedLlm(
+        [
+            LoopTurn(
+                content="I need the founder to pick.",
+                tool_calls=(
+                    _tc(
+                        "ask_user_question",
+                        question="Which database should I target?",
+                        options=["postgres", "sqlite", "mysql"],
+                    ),
+                ),
+            ),
+        ]
+    )
+    async with memory_session() as session:
+        run = await _make_run(session)
+        orch = RunOrchestrator(session=session, llm=llm, sandbox_manager=NoopSandboxManager())
+        result = await orch.run(run=run, workspace_dir=tmp_path)
+
+        assert result.outcome == "needs_decision"
+        decision = (await session.execute(select(Decision))).scalar_one()
+        assert decision.payload.get("question")
+        assert decision.payload.get("options") == ["postgres", "sqlite", "mysql"]
+
+
+async def test_ask_user_question_without_options_omits_field(tmp_path: Path) -> None:
+    """B11a regression: a free-text ``ask_user_question`` (no options) must
+    NOT plant a stray ``options`` key on the Decision payload — the existing
+    free-text resolve path stays unaffected."""
+    llm = ScriptedLlm(
+        [
+            LoopTurn(
+                content="I'm stuck.",
+                tool_calls=(_tc("ask_user_question", question="What should I do here?"),),
+            ),
+        ]
+    )
+    async with memory_session() as session:
+        run = await _make_run(session)
+        orch = RunOrchestrator(session=session, llm=llm, sandbox_manager=NoopSandboxManager())
+        await orch.run(run=run, workspace_dir=tmp_path)
+
+        decision = (await session.execute(select(Decision))).scalar_one()
+        assert "options" not in decision.payload
+
+
+async def test_ask_user_question_drops_non_string_options(tmp_path: Path) -> None:
+    """B11a: defensive — if the LLM hands us non-string entries in ``options``
+    (provider drift, type confusion), the orchestrator coerces / drops them so
+    only clean strings survive onto the Decision payload."""
+    llm = ScriptedLlm(
+        [
+            LoopTurn(
+                content="picking",
+                tool_calls=(
+                    _tc(
+                        "ask_user_question",
+                        question="Pick one",
+                        options=["good", 42, None, "  ", "other"],
+                    ),
+                ),
+            ),
+        ]
+    )
+    async with memory_session() as session:
+        run = await _make_run(session)
+        orch = RunOrchestrator(session=session, llm=llm, sandbox_manager=NoopSandboxManager())
+        await orch.run(run=run, workspace_dir=tmp_path)
+
+        decision = (await session.execute(select(Decision))).scalar_one()
+        assert decision.payload.get("options") == ["good", "other"]
+
+
 async def test_no_contract_declared_routes_to_decision(tmp_path: Path) -> None:
     """Work that finishes without ever declaring a contract is never a
     silent pass — it becomes a human-review Decision.
