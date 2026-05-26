@@ -1,8 +1,14 @@
-"""/api/v1/deliverables — read API for Deliverable rows.
+"""/api/v1/deliverables — read API for Deliverable rows + B12b retract.
 
-Read-only on the HTTP surface; deliverables are *produced* by the agent loop /
-workers on a verified run (Bundle G), never directly by an HTTP POST. The PWA
-Brief's "recently shipped" reads this to surface real artifacts.
+Read-mostly: deliverables are *produced* by the agent loop / workers on a
+verified run (Bundle G), never directly created via HTTP. The PWA Brief's
+"recently shipped" reads this to surface real artifacts.
+
+B12b adds one MUTATING endpoint: ``POST /{deliverable_id}/retract`` rolls a
+delivered direct-mode artifact back by calling the originating plugin's
+``@p.compensate`` handler with the ``compensation_handle`` captured at
+delivery time (Workflow §1.2 + §3.1 + §9). The endpoint is the only path
+that flips ``retracted_at``.
 
 The ``payload`` column is free-form JSON written by the orchestrator and shaped
 ``{summary, artifact_refs}``; we map it defensively (missing/odd values degrade
@@ -12,17 +18,21 @@ to ``None`` / ``[]``) so a malformed row never 500s the response model.
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from collections.abc import Callable
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Annotated, Any, Protocol
 
+import structlog
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.accounts.crypto import CredentialCipher
 from backend.api.deps import get_db_session, get_workspace_id
 from backend.config import get_settings
+from backend.connectors.db import ConnectorAccountRow
 from backend.execution.db import (
     Deliverable,
     DeliverableType,
@@ -30,6 +40,11 @@ from backend.execution.db import (
     VerificationOutcome,
     VerificationResult,
 )
+from backend.plugins.base import PluginMeta, PluginRunError
+from backend.plugins.context import SkillContext
+from backend.plugins.runner import PluginRunner
+
+logger = structlog.get_logger(__name__)
 
 router = APIRouter()
 
@@ -383,4 +398,271 @@ async def get_deliverable_artifact(
         content=text,
         truncated=truncated,
         binary=False,
+    )
+
+
+# ---------------------------------------------------------------------------
+# B12b — retract (compensate a delivered direct-mode artifact)
+# ---------------------------------------------------------------------------
+
+
+class RetractHandler(Protocol):
+    """The runtime hand-off that actually calls a plugin's ``@p.compensate``.
+
+    Stubbed in tests via the :func:`get_retract_handler` dependency override;
+    production wires :class:`PluginRetractHandler` which loads the plugin
+    registry, resolves the workspace's connector account for the named plugin,
+    decrypts its secret, and dispatches through :class:`PluginRunner`.
+    """
+
+    async def compensate(
+        self,
+        *,
+        plugin: str,
+        artifact_type: str,
+        handle: dict[str, Any],
+        workspace_id: uuid.UUID,
+    ) -> dict[str, Any]: ...
+
+
+class PluginRetractHandler:
+    """Production :class:`RetractHandler` — dispatches through the plugin runner.
+
+    Per stored entry the handler:
+
+    1. Looks up the plugin by name in the loaded registry.
+    2. Resolves the workspace's active ``connector_account`` for that plugin
+       (the same row the delivery used), decrypts its secret, builds a
+       :class:`SkillContext` mirroring the delivery-time one.
+    3. Calls :meth:`PluginRunner.dispatch_compensate` with the captured handle.
+
+    Plugin or connector_account missing → :class:`PluginRunError` (the endpoint
+    surfaces this as 502, the row is NOT marked retracted so the operator can
+    see + retry). Handlers are idempotent (Workflow §9), so a stale handle
+    yielding "already gone" is reported as success.
+    """
+
+    def __init__(
+        self,
+        *,
+        session_factory: Callable[[], AsyncSession],
+        plugins_by_name: dict[str, PluginMeta],
+        cipher: CredentialCipher,
+        runner: PluginRunner | None = None,
+    ) -> None:
+        self._session_factory = session_factory
+        self._plugins_by_name = plugins_by_name
+        self._cipher = cipher
+        self._runner = runner or PluginRunner()
+
+    async def compensate(
+        self,
+        *,
+        plugin: str,
+        artifact_type: str,
+        handle: dict[str, Any],
+        workspace_id: uuid.UUID,
+    ) -> dict[str, Any]:
+        meta = self._plugins_by_name.get(plugin)
+        if meta is None:
+            raise PluginRunError(f"compensate: plugin {plugin!r} not loaded")
+        async with self._session_factory() as session:
+            row = (
+                (
+                    await session.execute(
+                        select(ConnectorAccountRow).where(
+                            ConnectorAccountRow.workspace_id == workspace_id,
+                            ConnectorAccountRow.connector == plugin,
+                            ConnectorAccountRow.is_active.is_(True),
+                        )
+                    )
+                )
+                .scalars()
+                .first()
+            )
+        credentials: dict[str, Any] = {}
+        config: dict[str, Any] = {}
+        if row is not None:
+            credentials = {"token": self._cipher.decrypt(row.signing_secret_ciphertext)}
+            config = dict(row.delivery_config or {})
+        ctx = SkillContext(llm=_NoLlm(), config=config, logger=logger, credentials=credentials)
+        result = await self._runner.dispatch_compensate(
+            meta,
+            artifact_type=artifact_type,
+            context=ctx,
+            handle=handle,
+        )
+        return result if isinstance(result, dict) else {"result": result}
+
+
+class _NoLlm:
+    """A no-op LLM for the compensate :class:`SkillContext`.
+
+    Compensation handlers call external APIs to revert artifacts — they should
+    never invoke the LLM. Calling this raises rather than silently no-opping.
+    Mirrors :class:`backend.delivery.connector_dispatch._NoLlm`.
+    """
+
+    async def chat(self, *args: Any, **kwargs: Any) -> str:
+        raise RuntimeError("compensate must not call the LLM")
+
+
+async def get_retract_handler() -> RetractHandler:  # pragma: no cover — overridden in tests
+    """Production :class:`RetractHandler` dependency.
+
+    Loads the plugin registry (same path the delivery worker uses) + builds a
+    :class:`PluginRetractHandler` over the request-scoped session factory and
+    settings-derived :class:`CredentialCipher`. Tests override this with an
+    in-test stub so a unit run never touches the loader / KMS.
+    """
+    from backend.accounts.crypto import _key_from_settings  # noqa: PLC0415
+    from backend.api.deps import _get_session_factory  # noqa: PLC0415 — avoid import cycle
+    from backend.plugins.implementations import __path__ as _impl_path  # noqa: PLC0415
+    from backend.plugins.loader import PluginLoader  # noqa: PLC0415
+
+    loader = PluginLoader(Path(_impl_path[0]))
+    registry = await loader.load_all()
+    return PluginRetractHandler(
+        session_factory=_get_session_factory(),
+        plugins_by_name=dict(registry),
+        cipher=CredentialCipher(_key_from_settings()),
+    )
+
+
+class RetractedCompensationEntry(BaseModel):
+    """One per-stored-handle dispatch outcome (Workflow §3.1)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    plugin: str
+    artifact_type: str
+    output: dict[str, Any] = {}
+
+
+class RetractResponse(BaseModel):
+    """The retract endpoint's response shape (Workflow §1.2)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    deliverable_id: uuid.UUID
+    retracted: bool
+    retracted_at: datetime
+    # B12b — True iff the row was ALREADY retracted before this call (200
+    # no-op, the API short-circuited and the per-handle compensate dispatches
+    # did NOT re-run). False on the first successful retract. Lets the founder
+    # UI render "already retracted" cleanly vs. "just retracted".
+    already_retracted: bool = False
+    compensated: list[RetractedCompensationEntry] = []
+
+
+@router.post("/{deliverable_id}/retract")
+async def retract_deliverable(
+    deliverable_id: uuid.UUID,
+    workspace_id: Annotated[uuid.UUID, Depends(get_workspace_id)],
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    handler: Annotated[RetractHandler, Depends(get_retract_handler)],
+) -> RetractResponse:
+    """Roll a delivered direct-mode artifact back (B12b / Workflow §1.2 + §9).
+
+    Reads the Deliverable's ``compensation_handles`` (populated at delivery
+    time from each successful outbound action's ``compensation_handle``) and
+    calls the originating plugin's ``@p.compensate`` handler with each.
+
+    Error semantics (operator-visible; the row is mutated ONLY on success):
+
+    * ``404 not_found`` — unknown id, or the deliverable belongs to another
+      workspace (existence is never leaked across the boundary).
+    * ``400 no_compensation_handle`` — the row carries no handles (pre-B12b or
+      every outbound opted out of compensation); nothing to revert.
+    * ``502 compensate_failed`` — at least one compensate dispatch raised; the
+      row is NOT marked retracted, so the operator can retry. Idempotent
+      plugin handlers re-tolerate the second call.
+    * ``200 already_retracted`` — re-retracting an already-retracted row is a
+      short-circuit no-op (the plugin handlers are idempotent, but the API
+      avoids even attempting them).
+    """
+    row = await session.get(Deliverable, deliverable_id)
+    if row is None or row.workspace_id != workspace_id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Deliverable {deliverable_id} not found",
+        )
+
+    # Idempotency: already retracted → 200 no-op (don't fire compensate twice).
+    if row.retracted_at is not None:
+        return RetractResponse(
+            deliverable_id=deliverable_id,
+            retracted=True,
+            retracted_at=row.retracted_at,
+            already_retracted=True,
+            compensated=[],
+        )
+
+    handles = list(row.compensation_handles or [])
+    if not handles:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="no_compensation_handle: deliverable has no captured compensation handles",
+        )
+
+    compensated: list[RetractedCompensationEntry] = []
+    for entry in handles:
+        plugin = str(entry.get("plugin") or "")
+        artifact_type = str(entry.get("artifact_type") or "")
+        handle = entry.get("handle")
+        if not plugin or not isinstance(handle, dict):
+            # Malformed stored entry — surface as a 502 so the operator sees it
+            # rather than silently skipping a delivered artifact.
+            logger.warning(
+                "retract_malformed_entry",
+                deliverable_id=str(deliverable_id),
+                entry=entry,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=f"compensate_failed: malformed compensation entry {entry!r}",
+            )
+        try:
+            output = await handler.compensate(
+                plugin=plugin,
+                artifact_type=artifact_type,
+                handle=handle,
+                workspace_id=workspace_id,
+            )
+        except Exception as exc:  # noqa: BLE001 — surface as 502 + log; do NOT mark retracted
+            logger.warning(
+                "retract_compensate_failed",
+                deliverable_id=str(deliverable_id),
+                plugin=plugin,
+                artifact_type=artifact_type,
+                error=str(exc),
+            )
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=f"compensate_failed: {exc}",
+            ) from exc
+        compensated.append(
+            RetractedCompensationEntry(
+                plugin=plugin,
+                artifact_type=artifact_type,
+                output=output if isinstance(output, dict) else {"result": output},
+            )
+        )
+
+    # All handlers succeeded — flip retracted_at.
+    now = datetime.now(tz=UTC)
+    row.retracted_at = now
+    await session.commit()
+    logger.info(
+        "deliverable_retracted",
+        deliverable_id=str(deliverable_id),
+        workspace_id=str(workspace_id),
+        compensated=len(compensated),
+    )
+    return RetractResponse(
+        deliverable_id=deliverable_id,
+        retracted=True,
+        retracted_at=now,
+        already_retracted=False,
+        compensated=compensated,
     )

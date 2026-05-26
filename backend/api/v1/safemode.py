@@ -38,7 +38,11 @@ from backend.delivery.safe_mode_queue import SafeModeQueue
 from backend.delivery.schema import ArtifactType
 from backend.execution.db import Deliverable
 from backend.identity.db import UserRow
-from backend.workers.delivery_worker import PluginDispatchAdapter, dispatch_delivery
+from backend.workers.delivery_worker import (
+    PluginDispatchAdapter,
+    dispatch_delivery,
+    persist_compensation_handles,
+)
 from backend.workers.run import build_delivery_adapter
 
 router = APIRouter()
@@ -261,11 +265,18 @@ async def approve_run(
             continue
         artifact_type = await _artifact_type_for(session, deliverable_id)
         try:
-            await dispatch_delivery(
+            result = await dispatch_delivery(
                 dispatcher,
                 workspace_id=workspace_id,
                 deliverable_id=deliverable_id,
                 artifact_type=artifact_type,
+            )
+            # B12b — capture compensation_handle onto the Deliverable so the
+            # retract endpoint can later revert through @p.compensate. Uses the
+            # request-scoped session so the persist sits inside the caller's
+            # transaction (no extra factory connection).
+            await persist_compensation_handles(
+                session, deliverable_id=deliverable_id, result=result
             )
             dispatched += 1
         except Exception as exc:  # noqa: BLE001, S112 — never revert the approval on a dispatch hiccup
@@ -321,12 +332,16 @@ async def approve_item(
     await session.commit()
 
     artifact_type = await _artifact_type_for(session, deliverable_id)
-    await dispatch_delivery(
+    result = await dispatch_delivery(
         dispatcher,
         workspace_id=workspace_id,
         deliverable_id=deliverable_id,
         artifact_type=artifact_type,
     )
+    # B12b — capture compensation_handle onto the Deliverable so the retract
+    # endpoint can later revert through @p.compensate. Uses the request-scoped
+    # session so the persist sits inside the caller's transaction.
+    await persist_compensation_handles(session, deliverable_id=deliverable_id, result=result)
     return SafeModeActionResponse(item_id=item_id, status="approved", dispatched=True)
 
 
