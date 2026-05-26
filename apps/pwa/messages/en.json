@@ -261,6 +261,8 @@
     "kindDelivery": "Delivery",
     "kindDecision": "Decision",
     "deliveryQuestion": "A delivery is held in Safe Mode — send it out?",
+    "deliveryGroupQuestion": "{count} deliveries from one run are held in Safe Mode — send them all out?",
+    "approveAll": "Approve all ({count})",
     "approve": "Approve",
     "decline": "Decline",
     "answerLabel": "Your answer",

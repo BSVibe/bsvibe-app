@@ -47,6 +47,9 @@ export function toPendingDecisions(
       kind: "delivery",
       id: `delivery-${d.id}`,
       itemId: d.id,
+      // B12a — thread the run_id so the Decisions surface can group
+      // delivery rows by run and offer a per-run "Approve all" shortcut.
+      runId: d.run_id ?? null,
       createdAt: d.created_at,
     });
   }

@@ -5,10 +5,12 @@ import { listResolvedDecisions } from "@/lib/api/resolved";
 import type { PendingDecision, Proposal, ResolvedDecision } from "@/lib/api/types";
 import { setPendingDecisionsCount } from "@/lib/decisions/pending-count";
 import { useTranslations } from "next-intl";
+import type { ReactNode } from "react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import CheckpointRow from "./CheckpointRow";
 import DecisionDetail from "./DecisionDetail";
 import DeliveryRow from "./DeliveryRow";
+import DeliveryRunGroupRow from "./DeliveryRunGroupRow";
 import ProposalRow from "./ProposalRow";
 import ResolvedRow from "./ResolvedRow";
 
@@ -145,14 +147,10 @@ export default function Decisions() {
           <EmptyPending muted={query.length > 0} t={t} />
         ) : (
           <ul className="decisions-list" aria-label={t("tabPending")}>
-            {filteredPending.map((item) => (
-              <PendingItem
-                key={item.id}
-                item={item}
-                onOpen={() => setSelectedId(proposalId(item))}
-                onResolved={reload}
-              />
-            ))}
+            {renderPendingWithRunGroups(filteredPending, {
+              onOpen: (id) => setSelectedId(id),
+              onResolved: reload,
+            })}
           </ul>
         )
       ) : filteredResolved.length === 0 ? (
@@ -205,6 +203,65 @@ function PendingItem({
  *  the inline-resolving kinds, which never open the panel. */
 function proposalId(item: PendingDecision): string {
   return item.kind === "knowledge" ? item.proposal.id : "";
+}
+
+/** B12a — render the unified Pending list with per-Run delivery groups.
+ *
+ *  Each "delivery" row carries a `runId` (Workflow §1.2 — Safe Mode is the
+ *  per-Run transactional container). When ≥2 delivery rows share the same
+ *  `runId`, insert a single grouped row ABOVE the first occurrence with an
+ *  "Approve all (N)" action that approves every item of that run together
+ *  (POST /api/v1/safemode/runs/{runId}/approve). The per-item rows still
+ *  render normally below the group, so per-item Approve / Decline keeps
+ *  working unchanged (back-compat). Legacy items with no `runId` get no
+ *  group header — they render as today.
+ */
+function renderPendingWithRunGroups(
+  items: PendingDecision[],
+  handlers: { onOpen: (proposalId: string) => void; onResolved: () => void },
+): ReactNode[] {
+  // Count delivery rows per runId so we know which runs are multi-artifact.
+  const countsByRun = new Map<string, number>();
+  for (const item of items) {
+    if (item.kind === "delivery" && item.runId) {
+      countsByRun.set(item.runId, (countsByRun.get(item.runId) ?? 0) + 1);
+    }
+  }
+  // Track which run groups have already been surfaced (so we render the
+  // group header exactly once per run, ABOVE its first delivery row).
+  const renderedGroupFor = new Set<string>();
+  const nodes: ReactNode[] = [];
+  for (const item of items) {
+    if (
+      item.kind === "delivery" &&
+      item.runId &&
+      (countsByRun.get(item.runId) ?? 0) >= 2 &&
+      !renderedGroupFor.has(item.runId)
+    ) {
+      renderedGroupFor.add(item.runId);
+      const groupItems = items.filter(
+        (i): i is PendingDecision & { kind: "delivery" } =>
+          i.kind === "delivery" && i.runId === item.runId,
+      );
+      nodes.push(
+        <DeliveryRunGroupRow
+          key={`run-group-${item.runId}`}
+          runId={item.runId}
+          items={groupItems}
+          onResolved={handlers.onResolved}
+        />,
+      );
+    }
+    nodes.push(
+      <PendingItem
+        key={item.id}
+        item={item}
+        onOpen={() => handlers.onOpen(proposalId(item))}
+        onResolved={handlers.onResolved}
+      />,
+    );
+  }
+  return nodes;
 }
 
 function EmptyPending({

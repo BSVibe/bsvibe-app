@@ -401,6 +401,11 @@ export interface PendingDelivery {
   id: string;
   /** Raw Safe-Mode item id for /api/v1/safemode/{itemId}/{approve,deny}. */
   itemId: string;
+  /** B12a — per-Run grouping key (Workflow §1.2). When multiple delivery rows
+   *  share the same runId, the Decisions surface offers an "Approve all (N)"
+   *  shortcut that hits POST /api/v1/safemode/runs/{runId}/approve. ``null``
+   *  for legacy items emitted before the run_id column existed. */
+  runId: string | null;
   createdAt: string;
 }
 
@@ -502,11 +507,29 @@ export interface SafeModeItem {
   id: string;
   workspace_id: string;
   deliverable_id: string;
+  /** B12a — per-Run grouping key (Workflow §1.2). Nullable for legacy items
+   *  that pre-date the run_id column. */
+  run_id: string | null;
   status: string;
   compensation_tier: string | null;
   expires_at: string;
   extension_count: number;
   created_at: string;
+}
+
+/** `GET /api/v1/safemode/queue/by-run` element (backend SafeModeRunGroupResponse).
+ *  B12a — pending Safe Mode items grouped by Run. */
+export interface SafeModeRunGroup {
+  run_id: string | null;
+  items: SafeModeItem[];
+}
+
+/** `POST /api/v1/safemode/runs/{run_id}/approve` → backend
+ *  SafeModeRunApproveResponse. B12a — per-Run bulk approve result. */
+export interface SafeModeRunApproveResponse {
+  run_id: string;
+  approved_count: number;
+  dispatched_count: number;
 }
 
 /** `POST /api/v1/safemode/{id}/{approve,deny}` → backend SafeModeActionResponse.

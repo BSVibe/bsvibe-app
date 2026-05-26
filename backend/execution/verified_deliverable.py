@@ -26,6 +26,7 @@ import uuid
 from typing import Any
 
 import structlog
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.execution.db import (
@@ -99,12 +100,17 @@ async def write_verified_deliverable(
     await session.flush()
 
     # Deliver event — drained by the DeliveryWorker (delivery_events table).
+    # ``run_id`` is the per-Run grouping key (B12a / Workflow §1.2 — Safe Mode
+    # as transactional container): the DeliveryWorker threads it onto the
+    # SafeModeQueueItemRow so the founder can approve every queued item of a
+    # run together.
     from backend.delivery.db import DeliveryEventRow  # noqa: PLC0415 — cross-domain, local
 
     session.add(
         DeliveryEventRow(
             id=uuid.uuid4(),
             workspace_id=run.workspace_id,
+            run_id=run.id,
             deliverable_id=deliverable.id,
             artifact_type=DeliverableType.CODE.value,
             payload={"artifact_refs": artifact_refs, "summary": summary[:_SETTLE_SUMMARY_CAP]},
@@ -134,6 +140,119 @@ async def write_verified_deliverable(
         run_id=str(run.id),
         deliverable_id=str(deliverable.id),
         artifact_refs=artifact_refs,
+    )
+    return deliverable
+
+
+#: B12a — Marks a Deliverable's payload as a MID-LOOP partial Deliver event
+#: (one external artifact the agent loop produced before terminating). Downstream
+#: surfaces key off ``payload["kind"]`` to render it as a partial (e.g. a PR
+#: opened mid-run) instead of a verified terminal artifact.
+PARTIAL_DELIVERABLE_KIND = "mid_loop_partial"
+
+_DELIVERABLE_TYPE_VALUES = {member.value for member in DeliverableType}
+
+
+def _resolve_deliverable_type(raw: str) -> DeliverableType:
+    """Map a free-form ``artifact_type`` string onto a :class:`DeliverableType`.
+
+    The work LLM may emit any of the spec's artifact_type strings (``pr``,
+    ``page``, ``issue_comment``, ``notion_page``, …). Known values mirror the
+    enum 1:1; anything unknown is parked under ``DIRECT_OUTPUT`` so the row
+    still persists (the original artifact_type lives on in payload + the
+    DeliveryEventRow.artifact_type column, which is free-form).
+    """
+    if raw in _DELIVERABLE_TYPE_VALUES:
+        return DeliverableType(raw)
+    return DeliverableType.DIRECT_OUTPUT
+
+
+async def write_partial_deliverable(
+    session: AsyncSession,
+    run: ExecutionRun,
+    *,
+    artifact_type: str,
+    summary: str,
+    external_ref: str | None = None,
+    channel: str | None = None,
+) -> Deliverable | None:
+    """Write a mid-loop partial Deliver event (B12a / Workflow §1).
+
+    Each successful ``emit_deliverable`` tool call by the work LLM produces one
+    of these — one external artifact (PR, page, comment, draft, …) the loop
+    emitted BEFORE reaching the verified terminal. The DeliveryWorker drains
+    the resulting DeliveryEventRow exactly like the terminal write (so Safe
+    Mode gating + dispatch are uniform).
+
+    Idempotent on ``external_ref``: when the same ``(run_id, external_ref)``
+    has already been emitted this run, returns ``None`` (no row written, no
+    DeliveryEventRow either) — the LLM occasionally re-emits the same artifact
+    and we don't want duplicate Safe Mode queue items.
+
+    No settle activity here — settle is the canonical-knowledge side channel
+    (Workflow §1) and a mid-loop partial isn't a settled observation. Settle
+    still fires once at the verified terminal via
+    :func:`write_verified_deliverable`.
+    """
+    if external_ref:
+        # Idempotency on ``(run_id, external_ref)`` — done Python-side rather
+        # than via a JSON path operator so SQLite tests + PG prod behave
+        # identically. The per-run partial set is tiny (single-digit emits per
+        # run in practice), so loading them once per dedupe check is cheap.
+        existing_stmt = select(Deliverable).where(Deliverable.run_id == run.id)
+        existing_rows = (await session.execute(existing_stmt)).scalars().all()
+        for prior in existing_rows:
+            prior_payload = prior.payload if isinstance(prior.payload, dict) else {}
+            if prior_payload.get("external_ref") == external_ref:
+                logger.info(
+                    "partial_deliverable_deduped",
+                    run_id=str(run.id),
+                    external_ref=external_ref,
+                )
+                return None
+
+    deliverable_type = _resolve_deliverable_type(artifact_type)
+    payload: dict[str, Any] = {
+        "kind": PARTIAL_DELIVERABLE_KIND,
+        "artifact_type": artifact_type,
+        "summary": summary[:_SETTLE_SUMMARY_CAP],
+    }
+    if external_ref:
+        payload["external_ref"] = external_ref
+    if channel:
+        payload["channel"] = channel
+
+    deliverable = Deliverable(
+        id=uuid.uuid4(),
+        run_id=run.id,
+        workspace_id=run.workspace_id,
+        deliverable_type=deliverable_type,
+        artifact_uri=None,
+        diff_url=None,
+        payload=payload,
+    )
+    session.add(deliverable)
+    await session.flush()
+
+    from backend.delivery.db import DeliveryEventRow  # noqa: PLC0415 — cross-domain, local
+
+    session.add(
+        DeliveryEventRow(
+            id=uuid.uuid4(),
+            workspace_id=run.workspace_id,
+            run_id=run.id,
+            deliverable_id=deliverable.id,
+            artifact_type=artifact_type,
+            payload=dict(payload),
+        )
+    )
+    await session.flush()
+    logger.info(
+        "partial_deliverable_written",
+        run_id=str(run.id),
+        deliverable_id=str(deliverable.id),
+        artifact_type=artifact_type,
+        external_ref=external_ref,
     )
     return deliverable
 
@@ -195,6 +314,7 @@ async def write_answer_deliverable(
         DeliveryEventRow(
             id=uuid.uuid4(),
             workspace_id=run.workspace_id,
+            run_id=run.id,
             deliverable_id=deliverable.id,
             artifact_type=DeliverableType.DIRECT_OUTPUT.value,
             payload={
@@ -234,7 +354,9 @@ async def write_answer_deliverable(
 
 __all__ = [
     "ANSWER_DELIVERABLE_KIND",
+    "PARTIAL_DELIVERABLE_KIND",
     "settle_run_context",
     "write_answer_deliverable",
+    "write_partial_deliverable",
     "write_verified_deliverable",
 ]
