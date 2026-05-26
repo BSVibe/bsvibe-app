@@ -1,0 +1,55 @@
+# BSVibe executor worker — systemd unit template (B14).
+#
+# Linux variant of the launchd plist (see ../launchd/com.bsvibe.worker.plist.example).
+# Installs the worker as a per-user systemd service so the host keeps it running,
+# with auto-restart on crash, and journald captures stdout/stderr.
+#
+# Customisation checklist (search for the {PLACEHOLDER} tokens):
+#
+#   {USER}         the Linux user that owns the BSVibe checkout, e.g. "bsvibe"
+#   {REPO}         absolute path to the BSVibe checkout, e.g. "/home/bsvibe/bsvibe-app"
+#   {SERVER_URL}   the backend base URL, e.g. "https://api.bsvibe.dev"
+#   {WORKER_NAME}  optional display name (defaults to hostname)
+#   {REDIS_URL}    optional — set to enable streaming output back to the
+#                    backend (e.g. "redis://api.bsvibe.dev:6387/0"); comment the
+#                    Environment line out to disable streaming
+#
+# Install (as the user, NOT root):
+#
+#   mkdir -p ~/.config/systemd/user
+#   cp backend/executors/worker/systemd/bsvibe-worker.service.example \
+#      ~/.config/systemd/user/bsvibe-worker.service
+#   # …edit the {PLACEHOLDER} fields…
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now bsvibe-worker.service
+#
+# Logs:    journalctl --user -u bsvibe-worker -f
+# Status:  systemctl --user status bsvibe-worker
+#
+# Heartbeat is visible from the PWA Models tab (Executor Workers section):
+# the worker's status flips to "online" when it heartbeats every ~30s. If you
+# see "offline" / a stale last_heartbeat, tail the journal above.
+
+[Unit]
+Description=BSVibe Executor Worker
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory={REPO}
+Environment=BSVIBE_WORKER_SERVER_URL={SERVER_URL}
+Environment=BSVIBE_WORKER_NAME={WORKER_NAME}
+# Comment out the next line if you do not want streaming output.
+Environment=BSVIBE_WORKER_REDIS_URL={REDIS_URL}
+# BSVIBE_WORKER_TOKEN is written by the worker into {REPO}/.env after the first
+# registration; subsequent runs reuse it.
+ExecStart=/home/{USER}/.local/bin/uv run python -m backend.executors.worker
+Restart=on-failure
+RestartSec=10
+# Drain in-flight tasks gracefully on stop.
+TimeoutStopSec=120
+KillSignal=SIGTERM
+
+[Install]
+WantedBy=default.target

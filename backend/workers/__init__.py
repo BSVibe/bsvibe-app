@@ -16,7 +16,11 @@ from backend.workers.db import (
     WorkerStatus,
 )
 from backend.workers.delivery_worker import DeliveryWorker
-from backend.workers.executor_dispatch import ExecutorDispatchWorker
+
+# NOTE: ``ExecutorDispatchWorker`` (formerly backend.workers.executor_dispatch)
+# was an orphaned alt-dispatch design — never wired into
+# :func:`backend.workers.run.build_worker_runtime`. Real executor dispatch lives
+# inline in :class:`backend.executors.orchestrator.ExecutorOrchestrator` (B14).
 from backend.workers.intake_worker import IntakeWorker
 from backend.workers.relay_worker import RelayWorker
 from backend.workers.settle_worker import (
@@ -33,7 +37,6 @@ __all__ = [
     "AgentWorker",
     "AuditRelayStateRow",
     "DeliveryWorker",
-    "ExecutorDispatchWorker",
     "IntakeWorker",
     "KnowledgeSettleSink",
     "RedisStreamConsumer",

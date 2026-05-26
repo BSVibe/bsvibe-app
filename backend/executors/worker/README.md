@@ -89,5 +89,63 @@ backend/executors/worker/
 ├── executors.py       # ExecutorProtocol, ExecutionChunk/Result, collect(),
 │                       # detect_capabilities(), select_executor()
 ├── claude_code.py     # ClaudeCodeExecutor — the claude_code subprocess streamer
-└── main.py            # register / handle_task / run_once / poll_and_execute + entrypoint
+├── main.py            # register / handle_task / run_once / poll_and_execute + entrypoint
+├── launchd/           # macOS LaunchAgent template (per-user, auto-restart)
+│   └── com.bsvibe.worker.plist.example
+└── systemd/           # Linux user-service template (per-user, auto-restart)
+    └── bsvibe-worker.service.example
 ```
+
+## Running it as a persistent service (B14)
+
+Running `python -m backend.executors.worker` directly in a terminal is fine for
+dev but disappears the moment that terminal closes. For the founder's Mac Mini
+(or any always-on host) install the worker as an OS-managed service so it
+auto-starts at login and auto-restarts on crash — with visible logs.
+
+### macOS (Mac Mini) — launchd
+
+Template: [`launchd/com.bsvibe.worker.plist.example`](launchd/com.bsvibe.worker.plist.example).
+Edit the `{USER}` / `{REPO}` / `{SERVER_URL}` / `{REDIS_URL}` placeholders,
+copy it to `~/Library/LaunchAgents/com.bsvibe.worker.plist`, then:
+
+```bash
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.bsvibe.worker.plist
+launchctl kickstart -k gui/$(id -u)/com.bsvibe.worker
+# Logs:
+tail -f ~/Library/Logs/bsvibe-worker.out.log ~/Library/Logs/bsvibe-worker.err.log
+```
+
+### Linux — systemd (user service)
+
+Template: [`systemd/bsvibe-worker.service.example`](systemd/bsvibe-worker.service.example).
+Edit the placeholders, copy it to `~/.config/systemd/user/bsvibe-worker.service`,
+then:
+
+```bash
+systemctl --user daemon-reload
+systemctl --user enable --now bsvibe-worker.service
+# Logs:
+journalctl --user -u bsvibe-worker -f
+```
+
+## Verifying the worker is alive
+
+Two ways to confirm the worker is heart-beating:
+
+1. **PWA Models tab → Executor Workers** — surfaces the worker's name,
+   `status` (`online` / `offline`), and `last_heartbeat` timestamp from
+   `GET /api/v1/workers`. Refresh after starting the service; it should flip to
+   `online` within the heartbeat interval (≈30s) and tick `last_heartbeat`
+   forward on every poll.
+2. **Backend startup log** — when executor `ModelAccount`s are active but the
+   backend has no `BSVIBE_REDIS_URL` configured (no transport for dispatch),
+   `run_workers` emits a single structured WARNING at startup:
+
+   ```
+   executor_dispatch_no_redis  executor_account_count=N  hint=…
+   ```
+
+   This is the loud-at-startup guard for the configure-once-forget mistake;
+   the runtime keeps booting but every executor run would otherwise raise a
+   `no_executor_dispatch_transport` Decision after the fact.

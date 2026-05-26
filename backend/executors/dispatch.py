@@ -456,23 +456,6 @@ async def _poll_until_terminal(
     return await _read_terminal(session, task_id)
 
 
-async def claim_pending_task(session: AsyncSession, *, limit: int = 1) -> ExecutorTaskRow | None:
-    """Return the oldest ``pending`` task (FIFO), or ``None`` — for the worker.
-
-    A thin helper the :class:`backend.workers.executor_dispatch.ExecutorDispatchWorker`
-    uses to find work to dispatch. ``limit`` is reserved for a future batch tick.
-    """
-    _ = limit
-    return (
-        await session.execute(
-            select(ExecutorTaskRow)
-            .where(ExecutorTaskRow.status == "pending")
-            .order_by(ExecutorTaskRow.created_at.asc())
-            .limit(1)
-        )
-    ).scalar_one_or_none()
-
-
 async def mark_pending(session: AsyncSession, *, task_id: uuid.UUID) -> None:
     """Reset a task to ``pending`` (e.g. dispatch rolled back). Idempotent."""
     await session.execute(
@@ -487,7 +470,6 @@ __all__ = [
     "HEARTBEAT_FRESHNESS_S",
     "TaskTimeout",
     "await_completion",
-    "claim_pending_task",
     "create_task",
     "dispatch_task",
     "done_channel",

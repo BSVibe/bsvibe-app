@@ -42,7 +42,7 @@ from typing import Any
 
 import redis.asyncio as redis_aio
 import structlog
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from backend.accounts.crypto import CredentialCipher, _key_from_settings
@@ -846,6 +846,63 @@ class WorkerRuntime:
         logger.info("worker_runtime_stopped")
 
 
+async def check_executor_dispatch_health(
+    *,
+    session_factory: async_sessionmaker[AsyncSession],
+    redis_url: str,
+) -> dict[str, Any]:
+    """B14 — operator liveness probe for executor dispatch readiness.
+
+    The :class:`backend.executors.orchestrator.ExecutorOrchestrator` dispatches
+    a run to a CLI worker by XADDing onto a Redis Stream. When ``settings.redis_url``
+    is empty the orchestrator raises a ``no_executor_dispatch_transport``
+    :class:`Decision` at run time — a correct, non-silent failure mode, but one
+    that only surfaces AFTER an executor run has been minted. An operator that
+    has configured executor workers (one or more active
+    ``provider='executor'`` :class:`ModelAccount` rows) with no Redis URL set
+    will see every executor run fail this way.
+
+    This helper makes the misconfiguration **loud at startup**: it counts
+    active executor accounts across all workspaces and, when the count is
+    positive AND ``redis_url`` is empty, emits a structured
+    ``executor_dispatch_no_redis`` WARNING that points operators at the
+    ``BSVIBE_REDIS_URL`` env var. It NEVER crashes — preserves the existing
+    runtime contract; it only adds visibility.
+
+    Returns a dict (``healthy``, ``executor_account_count``,
+    ``redis_configured``) so a future CLI ``health`` command / smoke probe can
+    surface the same signal without re-grepping logs.
+    """
+    redis_configured = bool(redis_url)
+    async with session_factory() as session:
+        result = await session.execute(
+            select(func.count())
+            .select_from(ModelAccount)
+            .where(
+                ModelAccount.provider == "executor",
+                ModelAccount.is_active.is_(True),
+            )
+        )
+    count = int(result.scalar() or 0)
+    healthy = redis_configured or count == 0
+    if not healthy:
+        logger.warning(
+            "executor_dispatch_no_redis",
+            executor_account_count=count,
+            hint=(
+                "executor accounts are active but BSVIBE_REDIS_URL is empty — "
+                "every executor run will raise a 'no_executor_dispatch_transport' "
+                "Decision; set BSVIBE_REDIS_URL (e.g. redis://localhost:6387/0) "
+                "to enable worker dispatch"
+            ),
+        )
+    return {
+        "healthy": healthy,
+        "executor_account_count": count,
+        "redis_configured": redis_configured,
+    }
+
+
 def build_worker_runtime(
     *,
     session_factory: async_sessionmaker[AsyncSession],
@@ -1048,6 +1105,14 @@ async def run_workers() -> None:
     if settings.redis_url:
         redis_client = redis_aio.from_url(settings.redis_url, decode_responses=True)
 
+    # B14 — operator visibility: warn LOUDLY at startup when the executor pool
+    # is configured but Redis is not. The runtime keeps booting (the warning is
+    # informational, not fatal) but the operator now sees a clear pointer at
+    # the env var instead of debugging silent run-time decisions later.
+    await check_executor_dispatch_health(
+        session_factory=session_factory, redis_url=settings.redis_url
+    )
+
     # B5b — load the plugin registry + DangerAnalyzer verdicts ONCE so each
     # per-run native loop can surface the workspace's connector actions as tools
     # (gated by danger + safe_mode). Shared across runs; the per-run resolver
@@ -1118,6 +1183,7 @@ __all__ = [
     "build_settle_entity_extractor_factory",
     "build_stream_consumers",
     "build_worker_runtime",
+    "check_executor_dispatch_health",
     "load_connector_plugins",
     "resolve_workspace_model_account",
     "run_stream_consumers",
