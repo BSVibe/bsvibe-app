@@ -62,7 +62,10 @@ from backend.execution.db import (
     WorkStepStatus,
 )
 from backend.execution.tools import ToolDefinition, ToolError, ToolRegistry
-from backend.execution.verified_deliverable import write_verified_deliverable
+from backend.execution.verified_deliverable import (
+    write_partial_deliverable,
+    write_verified_deliverable,
+)
 from backend.execution.verifier.contract import (
     VerificationContract,
 )
@@ -212,6 +215,59 @@ _KNOWLEDGE_SEARCH_MAX_RESULTS = 5
 # no seed message at all (empty-knowledge workspace = byte-identical to today).
 _KNOWLEDGE_SEED_MAX_RESULTS = 5
 _KNOWLEDGE_SEED_MAX_CHARS_PER_STATEMENT = 500
+
+EMIT_DELIVERABLE_NAME = "emit_deliverable"
+
+EMIT_DELIVERABLE_TOOL: dict[str, Any] = {
+    "type": "function",
+    "function": {
+        "name": EMIT_DELIVERABLE_NAME,
+        "description": (
+            "Emit ONE external artifact you produced during this run — a partial "
+            "Deliver event (B12a / Workflow §1). Use this whenever you have just "
+            "produced one external thing (a PR, an issue comment, a Notion page, "
+            "a draft) so the founder sees it on the Brief and Safe Mode can hold "
+            "it for approval. Multi-artifact is the norm: emit ONE call per "
+            "artifact (do NOT bundle several artifacts into one emit). This does "
+            "NOT replace your verification — keep going through declare_verification "
+            "+ tools + summary as usual; emit_deliverable is purely a side-channel "
+            "for what already exists externally."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "artifact_type": {
+                    "type": "string",
+                    "description": (
+                        "What kind of artifact this is — e.g. 'pr', 'issue_comment', "
+                        "'notion_page', 'page', 'page_image', 'direct_output'."
+                    ),
+                },
+                "summary": {
+                    "type": "string",
+                    "description": ("A founder-readable one-liner — what you delivered and why."),
+                },
+                "external_ref": {
+                    "type": "string",
+                    "description": (
+                        "Plugin-canonical id for the external artifact (used to "
+                        "dedupe re-emits and as the compensation key). Example: "
+                        "'github://acme/site/pull/15'. Optional but strongly "
+                        "preferred — re-emitting the same external_ref is a no-op."
+                    ),
+                },
+                "channel": {
+                    "type": "string",
+                    "description": (
+                        "Where the artifact landed — 'github', 'notion', 'slack', etc. Optional."
+                    ),
+                },
+            },
+            "required": ["artifact_type", "summary"],
+        },
+    },
+}
+
 
 ASK_USER_QUESTION_TOOL: dict[str, Any] = {
     "type": "function",
@@ -740,6 +796,12 @@ class RunOrchestrator:
         tools_schema = [
             *registry.schema_for([*WORK_TOOLS, *extra_tool_names, *connector_tool_names]),
             ASK_USER_QUESTION_TOOL,
+            # B12a — mid-loop Deliver events (Workflow §1): the agent loop emits
+            # one of these per external artifact (PR / page / comment / draft)
+            # produced during the run, BEFORE the verified terminal. The
+            # terminal still writes its CODE Deliverable on top — these are
+            # additive partials.
+            EMIT_DELIVERABLE_TOOL,
         ]
         messages: list[dict[str, Any]] = [
             {"role": "system", "content": _SYSTEM_PROMPT},
@@ -810,6 +872,23 @@ class RunOrchestrator:
             if turn.tool_calls:
                 messages.append(_assistant_tool_call_message(turn.content, turn.tool_calls))
                 for call in turn.tool_calls:
+                    # B12a — emit_deliverable is a LOOP-owned tool (not in the
+                    # registry, like ask_user_question). It writes a partial
+                    # Deliverable + DeliveryEventRow side-channel and feeds an
+                    # ack back to the LLM, then the loop continues. Idempotent
+                    # on external_ref; bad args produce a readable error.
+                    if call.name == EMIT_DELIVERABLE_NAME:
+                        output = await self._handle_emit_deliverable(run, call.arguments)
+                        await self._record(
+                            run,
+                            attempt,
+                            "deliver_event",
+                            {"tool": call.name, "args": _safe_args(call.arguments)},
+                        )
+                        messages.append(
+                            {"role": "tool", "tool_call_id": call.id, "content": output}
+                        )
+                        continue
                     output, ok, writes = await _invoke_tool_safely(
                         registry, call.name, call.arguments
                     )
@@ -1010,6 +1089,79 @@ class RunOrchestrator:
             summary=final_text,
         )
 
+    async def _handle_emit_deliverable(self, run: ExecutionRun, arguments: dict[str, Any]) -> str:
+        """Persist a mid-loop Deliver event (B12a / Workflow §1).
+
+        Validates the required ``artifact_type`` + ``summary`` strings, calls
+        :func:`write_partial_deliverable`, and returns a JSON ack the LLM can
+        read. Bad args produce a readable error tool result (the loop can
+        recover); persistence failures degrade to an error string but never
+        crash the loop."""
+        artifact_type = str(arguments.get("artifact_type") or "").strip()
+        summary = str(arguments.get("summary") or "").strip()
+        external_ref_raw = arguments.get("external_ref")
+        channel_raw = arguments.get("channel")
+        external_ref = (
+            str(external_ref_raw).strip()
+            if isinstance(external_ref_raw, str) and external_ref_raw.strip()
+            else None
+        )
+        channel = (
+            str(channel_raw).strip()
+            if isinstance(channel_raw, str) and channel_raw.strip()
+            else None
+        )
+        if not artifact_type:
+            return json.dumps(
+                {
+                    "status": "error",
+                    "error": "emit_deliverable requires a non-empty 'artifact_type'.",
+                }
+            )
+        if not summary:
+            return json.dumps(
+                {
+                    "status": "error",
+                    "error": "emit_deliverable requires a non-empty 'summary'.",
+                }
+            )
+        try:
+            deliverable = await write_partial_deliverable(
+                self._session,
+                run,
+                artifact_type=artifact_type,
+                summary=summary,
+                external_ref=external_ref,
+                channel=channel,
+            )
+        except Exception as exc:  # noqa: BLE001 — never crash the loop
+            logger.warning(
+                "emit_deliverable_failed",
+                run_id=str(run.id),
+                artifact_type=artifact_type,
+                error=str(exc),
+            )
+            return json.dumps({"status": "error", "error": str(exc)})
+        if deliverable is None:
+            return json.dumps(
+                {
+                    "status": "deduped",
+                    "artifact_type": artifact_type,
+                    "external_ref": external_ref,
+                    "message": (
+                        "This external_ref was already emitted earlier this run — "
+                        "the second emit is a no-op (idempotent). Do not retry."
+                    ),
+                }
+            )
+        return json.dumps(
+            {
+                "status": "emitted",
+                "deliverable_id": str(deliverable.id),
+                "artifact_type": artifact_type,
+            }
+        )
+
     async def _create_decision(
         self,
         run: ExecutionRun,
@@ -1068,6 +1220,21 @@ class RunOrchestrator:
                 payload={"attempt_id": str(attempt.id), **payload},
             )
         )
+
+
+def _safe_args(arguments: dict[str, Any]) -> dict[str, Any]:
+    """Truncate tool arguments for activity-payload logging (B12a).
+
+    The agent-activity log carries each tool-call's args for replay/audit;
+    long ``summary`` strings would balloon row sizes. Strings over 256 chars
+    are truncated with an ellipsis."""
+    capped: dict[str, Any] = {}
+    for k, v in arguments.items():
+        if isinstance(v, str) and len(v) > 256:
+            capped[k] = v[:253] + "..."
+        else:
+            capped[k] = v
+    return capped
 
 
 async def _invoke_tool_safely(
@@ -1162,6 +1329,8 @@ def _utcnow() -> Any:
 
 __all__ = [
     "ASK_USER_QUESTION_TOOL",
+    "EMIT_DELIVERABLE_NAME",
+    "EMIT_DELIVERABLE_TOOL",
     "KNOWLEDGE_SEARCH_NAME",
     "WORK_TOOLS",
     "CanonRetriever",

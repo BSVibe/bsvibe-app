@@ -138,10 +138,14 @@ class DeliveryWorker(BaseWorker):
                     if await _workspace_safe_mode(session, row.workspace_id):
                         # Safe Mode ON — hold for founder approval instead of
                         # dispatching. The /api/v1/safemode routes drive it the
-                        # rest of the way.
+                        # rest of the way. ``run_id`` (B12a) threads the
+                        # originating run onto the queue item so the founder
+                        # can approve all of a run's accumulated partial
+                        # Deliver events as ONE transaction (Workflow §1.2).
                         await queue.enqueue(
                             workspace_id=row.workspace_id,
                             deliverable_id=row.deliverable_id,
+                            run_id=row.run_id,
                         )
                         logger.info(
                             "delivery_worker_enqueued_safe_mode",

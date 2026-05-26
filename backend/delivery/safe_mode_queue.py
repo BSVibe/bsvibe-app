@@ -41,13 +41,20 @@ class SafeModeQueue:
         *,
         workspace_id: uuid.UUID,
         deliverable_id: uuid.UUID,
+        run_id: uuid.UUID | None = None,
     ) -> uuid.UUID:
-        """Enqueue a pending delivery; returns the queue item id."""
+        """Enqueue a pending delivery; returns the queue item id.
+
+        ``run_id`` is the optional per-Run grouping key (B12a / Workflow §1.2).
+        Existing callers omit it and pre-B12a rows keep working; new callers
+        (DeliveryWorker) always thread the originating event's run_id through.
+        """
         now = datetime.now(tz=UTC)
         row = SafeModeQueueItemRow(
             id=uuid.uuid4(),
             workspace_id=workspace_id,
             deliverable_id=deliverable_id,
+            run_id=run_id,
             status=SafeModeStatus.PENDING,
             expires_at=now + timedelta(days=INITIAL_TTL_DAYS),
             extension_count=0,
@@ -72,6 +79,25 @@ class SafeModeQueue:
                 SafeModeQueueItemRow.status == SafeModeStatus.PENDING,
             )
             .order_by(SafeModeQueueItemRow.created_at.desc())
+        )
+        return list((await self._session.execute(stmt)).scalars().all())
+
+    async def list_pending_for_run(
+        self, *, workspace_id: uuid.UUID, run_id: uuid.UUID
+    ) -> list[SafeModeQueueItemRow]:
+        """The pending items for one run (B12a) — drives per-Run approve.
+
+        Returned in creation order (oldest first) so dispatch happens in the
+        same order the agent loop emitted the artifacts. Empty list when the
+        run has no pending items (or never existed)."""
+        stmt = (
+            select(SafeModeQueueItemRow)
+            .where(
+                SafeModeQueueItemRow.workspace_id == workspace_id,
+                SafeModeQueueItemRow.run_id == run_id,
+                SafeModeQueueItemRow.status == SafeModeStatus.PENDING,
+            )
+            .order_by(SafeModeQueueItemRow.created_at.asc())
         )
         return list((await self._session.execute(stmt)).scalars().all())
 
@@ -203,4 +229,9 @@ class SafeModeQueue:
         return True
 
 
-__all__ = ["EXTENSION_TTL_DAYS", "INITIAL_TTL_DAYS", "MAX_EXTENSIONS", "SafeModeQueue"]
+__all__ = [
+    "EXTENSION_TTL_DAYS",
+    "INITIAL_TTL_DAYS",
+    "MAX_EXTENSIONS",
+    "SafeModeQueue",
+]

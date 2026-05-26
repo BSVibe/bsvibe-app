@@ -40,17 +40,26 @@ class DeliveryEventRow(DeliveryBase):
     own separate :class:`DeclarativeBase` instances and we don't want
     cross-Base FK assertions to leak. The integrity is enforced via a
     raw FK at the migration / Alembic layer.
+
+    ``run_id`` is nullable so legacy rows (pre-B12a) keep working — the
+    DeliveryWorker threads it onto the SafeModeQueueItemRow it enqueues, so
+    the founder can approve every queued item of a run as one transaction
+    (Workflow §1.2 — Safe Mode as per-Run transactional container).
     """
 
     __tablename__ = "delivery_events"
     __table_args__ = (
         Index("ix_delivery_events_ws_created", "workspace_id", "created_at"),
         Index("ix_delivery_events_deliverable", "deliverable_id"),
+        Index("ix_delivery_events_run", "run_id"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
     workspace_id: Mapped[uuid.UUID] = mapped_column(nullable=False, index=True)
     deliverable_id: Mapped[uuid.UUID] = mapped_column(nullable=False)
+    # B12a — the run this Deliver event came from. Nullable for back-compat
+    # with rows seeded before the column existed.
+    run_id: Mapped[uuid.UUID | None] = mapped_column(nullable=True)
     artifact_type: Mapped[str] = mapped_column(String(64), nullable=False)
     payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
     created_at: Mapped[datetime] = mapped_column(
@@ -59,17 +68,27 @@ class DeliveryEventRow(DeliveryBase):
 
 
 class SafeModeQueueItemRow(DeliveryBase):
-    """Founder approval queue — Workflow §10.5 (90d + 2×30d retention)."""
+    """Founder approval queue — Workflow §10.5 (90d + 2×30d retention).
+
+    ``run_id`` is the per-Run grouping key (Workflow §1.2 — Safe Mode is the
+    transactional container for a run's accumulated partial Deliver events).
+    Nullable so existing rows survive the migration unchanged; new rows
+    threaded by the DeliveryWorker always carry it.
+    """
 
     __tablename__ = "safe_mode_queue_items"
     __table_args__ = (
         Index("ix_safe_mode_queue_ws_status", "workspace_id", "status"),
         Index("ix_safe_mode_queue_deliverable", "deliverable_id"),
+        Index("ix_safe_mode_queue_ws_run", "workspace_id", "run_id"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
     workspace_id: Mapped[uuid.UUID] = mapped_column(nullable=False, index=True)
     deliverable_id: Mapped[uuid.UUID] = mapped_column(nullable=False)
+    # B12a — per-Run grouping key. Nullable for legacy rows; new rows always
+    # set it via DeliveryWorker.
+    run_id: Mapped[uuid.UUID | None] = mapped_column(nullable=True)
     status: Mapped[SafeModeStatus] = mapped_column(
         SAEnum(
             SafeModeStatus,

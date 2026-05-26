@@ -74,11 +74,44 @@ class SafeModeItemResponse(BaseModel):
     id: uuid.UUID
     workspace_id: uuid.UUID
     deliverable_id: uuid.UUID
+    # B12a — per-Run grouping key (Workflow §1.2). Nullable for legacy items
+    # that pre-date the run_id column.
+    run_id: uuid.UUID | None = None
     status: str
     compensation_tier: str | None = None
     expires_at: datetime
     extension_count: int
     created_at: datetime
+
+
+class SafeModeRunGroupResponse(BaseModel):
+    """B12a — pending Safe Mode queue grouped by Run (Workflow §1.2).
+
+    Each group is one Run's accumulated partial Deliver events — the founder
+    approves them together via ``POST /api/v1/safemode/runs/{run_id}/approve``.
+    Legacy items with no ``run_id`` are surfaced under a single ``null`` group
+    so they remain visible until they age out of the queue.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    run_id: uuid.UUID | None = None
+    items: list[SafeModeItemResponse]
+
+
+class SafeModeRunApproveResponse(BaseModel):
+    """B12a — ``POST /api/v1/safemode/runs/{run_id}/approve`` result.
+
+    ``approved_count`` is how many queue items flipped pending→approved;
+    ``dispatched_count`` is how many of those were actually dispatched (a
+    transient dispatch failure does NOT revert the approval — the item stays
+    approved and surfaces on the resolved tab)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    run_id: uuid.UUID
+    approved_count: int
+    dispatched_count: int
 
 
 class SafeModeResolvedResponse(BaseModel):
@@ -109,6 +142,22 @@ class SafeModeActionResponse(BaseModel):
     dispatched: bool
 
 
+def _to_item_response(item: object) -> SafeModeItemResponse:
+    """Map a :class:`SafeModeQueueItemRow` to the response shape (B12a — also
+    threads ``run_id`` through)."""
+    return SafeModeItemResponse(
+        id=item.id,  # type: ignore[attr-defined]
+        workspace_id=item.workspace_id,  # type: ignore[attr-defined]
+        deliverable_id=item.deliverable_id,  # type: ignore[attr-defined]
+        run_id=item.run_id,  # type: ignore[attr-defined]
+        status=item.status.value,  # type: ignore[attr-defined]
+        compensation_tier=None,
+        expires_at=item.expires_at,  # type: ignore[attr-defined]
+        extension_count=item.extension_count,  # type: ignore[attr-defined]
+        created_at=item.created_at,  # type: ignore[attr-defined]
+    )
+
+
 @router.get("/queue")
 async def list_queue(
     workspace_id: Annotated[uuid.UUID, Depends(get_workspace_id)],
@@ -117,19 +166,33 @@ async def list_queue(
     """List pending Safe Mode items awaiting founder approval (newest first)."""
     queue = SafeModeQueue(session)
     items = await queue.list_pending(workspace_id=workspace_id)
-    return [
-        SafeModeItemResponse(
-            id=item.id,
-            workspace_id=item.workspace_id,
-            deliverable_id=item.deliverable_id,
-            status=item.status.value,
-            compensation_tier=None,
-            expires_at=item.expires_at,
-            extension_count=item.extension_count,
-            created_at=item.created_at,
-        )
-        for item in items
-    ]
+    return [_to_item_response(item) for item in items]
+
+
+@router.get("/queue/by-run")
+async def list_queue_by_run(
+    workspace_id: Annotated[uuid.UUID, Depends(get_workspace_id)],
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+) -> list[SafeModeRunGroupResponse]:
+    """List pending Safe Mode items grouped by Run (B12a / Workflow §1.2).
+
+    The founder-visible "approve all (N) for this run" surface — Safe Mode is
+    the per-Run transactional container for a run's accumulated partial
+    Deliver events. Groups are ordered by the most recent item in each group
+    (matches the newest-first ordering of :meth:`SafeModeQueue.list_pending`).
+    Items with no ``run_id`` (legacy / single-emit) are folded under a single
+    ``null`` group so they remain visible until they age out."""
+    queue = SafeModeQueue(session)
+    items = await queue.list_pending(workspace_id=workspace_id)
+    by_run: dict[uuid.UUID | None, list[SafeModeItemResponse]] = {}
+    order: list[uuid.UUID | None] = []
+    for item in items:
+        key: uuid.UUID | None = item.run_id
+        if key not in by_run:
+            by_run[key] = []
+            order.append(key)
+        by_run[key].append(_to_item_response(item))
+    return [SafeModeRunGroupResponse(run_id=k, items=by_run[k]) for k in order]
 
 
 @router.get("/resolved")
@@ -151,6 +214,79 @@ async def list_resolved(
         )
         for item in items
     ]
+
+
+@router.post("/runs/{run_id}/approve")
+async def approve_run(
+    run_id: uuid.UUID,
+    workspace_id: Annotated[uuid.UUID, Depends(get_workspace_id)],
+    user: Annotated[UserRow, Depends(get_current_user_row)],
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    dispatcher: Annotated[PluginDispatchAdapter, Depends(get_delivery_dispatcher)],
+) -> SafeModeRunApproveResponse:
+    """Approve ALL pending Safe Mode items for one Run (B12a / Workflow §1.2).
+
+    Safe Mode is the per-Run transactional container — a single multi-artifact
+    run accumulates N partial Deliver events as N pending queue items. This
+    endpoint flips all of them pending→approved AND dispatches each through
+    the same :func:`dispatch_delivery` helper the per-item approve uses, so
+    there is still ONE outbound code path. Returns 404 when the run has no
+    pending items (unknown or already settled). A transient dispatch failure
+    on one item does NOT revert the approval — the item stays approved.
+    """
+    queue = SafeModeQueue(session)
+    pending = await queue.list_pending_for_run(workspace_id=workspace_id, run_id=run_id)
+    if not pending:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"No pending Safe Mode items for run {run_id}",
+        )
+
+    # Capture deliverable_ids BEFORE the approve flips state (the row stays
+    # but ``decided_at`` is set; deliverable_id is unaffected, however we
+    # snapshot to keep the dispatch loop independent of the queue rows).
+    targets: list[tuple[uuid.UUID, uuid.UUID]] = [
+        (item.id, item.deliverable_id) for item in pending
+    ]
+    approved_ids: list[uuid.UUID] = []
+    for item_id, _ in targets:
+        ok = await queue.approve(workspace_id=workspace_id, item_id=item_id, actor_id=user.id)
+        if ok:
+            approved_ids.append(item_id)
+    await session.commit()
+
+    dispatched = 0
+    for item_id, deliverable_id in targets:
+        if item_id not in approved_ids:
+            continue
+        artifact_type = await _artifact_type_for(session, deliverable_id)
+        try:
+            await dispatch_delivery(
+                dispatcher,
+                workspace_id=workspace_id,
+                deliverable_id=deliverable_id,
+                artifact_type=artifact_type,
+            )
+            dispatched += 1
+        except Exception as exc:  # noqa: BLE001, S112 — never revert the approval on a dispatch hiccup
+            # Approval is irreversible (matches the per-item approve path); a
+            # transient connector failure surfaces in the audit log + log here,
+            # and on the next worker tick (the worker re-drains shipped events).
+            import structlog as _structlog  # noqa: PLC0415 — local; avoid top-level churn
+
+            _structlog.get_logger(__name__).warning(
+                "safemode_run_approve_dispatch_failed",
+                run_id=str(run_id),
+                deliverable_id=str(deliverable_id),
+                error=str(exc),
+            )
+            continue
+
+    return SafeModeRunApproveResponse(
+        run_id=run_id,
+        approved_count=len(approved_ids),
+        dispatched_count=dispatched,
+    )
 
 
 @router.post("/{item_id}/approve")
@@ -234,6 +370,8 @@ __all__ = [
     "SafeModeActionResponse",
     "SafeModeDenyRequest",
     "SafeModeItemResponse",
+    "SafeModeRunApproveResponse",
+    "SafeModeRunGroupResponse",
     "get_delivery_dispatcher",
     "router",
 ]

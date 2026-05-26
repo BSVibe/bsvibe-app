@@ -103,6 +103,7 @@ const SAFEMODE: SafeModeItem = {
   id: "11111111-1111-1111-1111-111111111111",
   workspace_id: "ws-1",
   deliverable_id: "del-1",
+  run_id: null,
   status: "pending",
   compensation_tier: null,
   expires_at: "2026-05-24T00:00:00Z",
@@ -252,6 +253,54 @@ describe("Decisions surface", () => {
     const [url, init] = posts[0];
     expect(url).toBe(`/api/v1/safemode/${SAFEMODE.id}/approve`);
     expect(init.method).toBe("POST");
+  });
+
+  // ─────────────────────────────────────────────────────────────────────
+  // B12a — per-Run delivery grouping + "Approve all (N)" bulk action.
+  // ─────────────────────────────────────────────────────────────────────
+
+  it("renders a per-Run group with Approve all when multiple deliveries share a runId", async () => {
+    const RUN_ID = "run-7";
+    const ITEM_A: SafeModeItem = { ...SAFEMODE, id: "sm-a", run_id: RUN_ID };
+    const ITEM_B: SafeModeItem = {
+      ...SAFEMODE,
+      id: "sm-b",
+      deliverable_id: "del-2",
+      run_id: RUN_ID,
+    };
+    let safemode = [ITEM_A, ITEM_B];
+    const posts: Array<[string, RequestInit]> = [];
+    installFetch({
+      safemode: () => safemode,
+      onPost: (url, init) => {
+        posts.push([url, init]);
+        safemode = [];
+        return json({ run_id: RUN_ID, approved_count: 2, dispatched_count: 2 });
+      },
+    });
+
+    render(<Decisions />);
+    // The "Approve all (2)" group action appears alongside the per-item rows.
+    const approveAll = await screen.findByRole("button", { name: /Approve all \(2\)/ });
+    await userEvent.click(approveAll);
+
+    await waitFor(() => {
+      expect(screen.getByRole("tab", { name: /Pending/ })).toHaveTextContent("0");
+    });
+    const [url, init] = posts[0];
+    expect(url).toBe(`/api/v1/safemode/runs/${RUN_ID}/approve`);
+    expect(init.method).toBe("POST");
+    expect(init.body).toBeUndefined();
+  });
+
+  it("does NOT render a per-Run group when only one delivery row has a runId", async () => {
+    const SOLO: SafeModeItem = { ...SAFEMODE, run_id: "run-9" };
+    installFetch({ safemode: () => [SOLO] });
+
+    render(<Decisions />);
+    await screen.findByRole("button", { name: /Approve$/ });
+    // No "Approve all" surface for a single-item run.
+    expect(screen.queryByRole("button", { name: /Approve all/ })).toBeNull();
   });
 
   it("denies a held delivery against the safemode endpoint", async () => {
