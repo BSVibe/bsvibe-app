@@ -3,7 +3,9 @@
 import { listPendingDecisions } from "@/lib/api/pending";
 import { listResolvedDecisions } from "@/lib/api/resolved";
 import type { PendingDecision, Proposal, ResolvedDecision } from "@/lib/api/types";
+import { useSession } from "@/lib/auth/session";
 import { setPendingDecisionsCount } from "@/lib/decisions/pending-count";
+import { useEventStream } from "@/lib/live-events/use-event-stream";
 import { useTranslations } from "next-intl";
 import type { ReactNode } from "react";
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -85,6 +87,24 @@ export default function Decisions() {
       setSelectedId(null);
     });
   }, [load]);
+
+  // B16 — wake up on backend live events so the queue stays current without
+  // a manual refresh. The pending count + Resolved tab both reflect changes
+  // the founder didn't trigger from this tab (e.g. a run hit needs_decision
+  // server-side, or a Safe-Mode item was queued).
+  const session = useSession();
+  const liveRefresh = useCallback(() => {
+    load((p, d) => {
+      setPending(p);
+      setResolved(d);
+    });
+  }, [load]);
+  useEventStream({
+    token: session?.accessToken ?? null,
+    onDecisionPending: liveRefresh,
+    onRunTerminal: liveRefresh,
+    onDeliveryQueued: liveRefresh,
+  });
 
   const filteredPending = useMemo(() => filterPending(pending ?? [], query), [pending, query]);
   const filteredResolved = useMemo(() => filterDecisions(resolved ?? [], query), [resolved, query]);

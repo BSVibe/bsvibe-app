@@ -13,6 +13,7 @@ from backend.api.auth import router as auth_router
 from backend.api.health import router as health_router
 from backend.api.middleware import WorkspaceContextMiddleware
 from backend.api.v1 import router as v1_router
+from backend.api.v1.events import public_router as events_public_router
 from backend.api.v1.workers import public_router as workers_public_router
 from backend.api.webhooks import router as webhooks_router
 from backend.config import get_settings
@@ -57,5 +58,10 @@ def create_app() -> FastAPI:
     # (a headless worker has no Supabase session JWT) — mounted under /api/v1
     # directly, NOT under the auth-gated v1 router, like the webhooks ingress.
     app.include_router(workers_public_router, prefix="/api/v1")
+    # SSE live-events stream (B16) — query-param token auth because the
+    # browser EventSource cannot send Authorization headers
+    # (eventsource-sse-auth-trap). Mounted OUTSIDE the auth-gated v1 router
+    # for the same reason, like webhooks + worker register/heartbeat.
+    app.include_router(events_public_router, prefix="/api/v1")
     app.include_router(v1_router, prefix="/api")
     return app
