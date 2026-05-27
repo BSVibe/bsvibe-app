@@ -107,4 +107,18 @@ async def safe_emit(
             exc_info=True,
         )
         return
-    await _bridge_to_live_event_bus(event)
+    # Defense-in-depth: ``_bridge_to_live_event_bus`` is soft-fail internally,
+    # but a stale singleton bus bound to a closed test event loop has surfaced
+    # loop-binding RuntimeErrors that escape via the await chain (the redis
+    # client's disconnect path re-raises during exception cleanup). Wrap the
+    # bridge call here so a bus-side hiccup can never propagate into the
+    # producer — the executor orchestrator wraps a verify try/except around
+    # this, and a leaking error mapped a Decision path to system_error.
+    try:
+        await _bridge_to_live_event_bus(event)
+    except BaseException:  # noqa: BLE001 — last-resort guard, never propagate
+        logger.warning(
+            "supervisor_audit_bridge_outer_guard",
+            event_type=getattr(event, "event_type", None),
+            exc_info=True,
+        )

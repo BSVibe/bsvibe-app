@@ -6,6 +6,8 @@ Entrypoint:
 
 from __future__ import annotations
 
+import redis.asyncio as redis_aio
+import structlog
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -14,10 +16,13 @@ from backend.api.health import router as health_router
 from backend.api.middleware import WorkspaceContextMiddleware
 from backend.api.v1 import router as v1_router
 from backend.api.v1.events import public_router as events_public_router
+from backend.api.v1.live_events import set_live_event_bus_redis
 from backend.api.v1.workers import public_router as workers_public_router
 from backend.api.webhooks import router as webhooks_router
 from backend.config import get_settings
 from backend.shared.core.logging import configure_logging
+
+logger = structlog.get_logger(__name__)
 
 
 def create_app() -> FastAPI:
@@ -64,4 +69,20 @@ def create_app() -> FastAPI:
     # for the same reason, like webhooks + worker register/heartbeat.
     app.include_router(events_public_router, prefix="/api/v1")
     app.include_router(v1_router, prefix="/api")
+
+    # C2 — bind the LiveEventBus singleton to the configured Redis transport
+    # so SSE subscribers in THIS container see publishes from the worker
+    # container (the audit emit fires there). No Redis URL set → in-memory
+    # fallback, useful for dev / tests. Construction is connection-lazy
+    # (``redis.asyncio.from_url`` does not connect until the first command),
+    # so this never blocks app start; an outage surfaces only at publish /
+    # subscribe time and is soft-failed inside the bus.
+    if settings.redis_url:
+        try:
+            redis_client = redis_aio.from_url(settings.redis_url, decode_responses=True)
+            set_live_event_bus_redis(redis_client)
+            logger.info("live_event_bus_redis_bound", redis_url=settings.redis_url)
+        except Exception:  # noqa: BLE001 — never let SSE wiring break app startup
+            logger.warning("live_event_bus_redis_bind_failed", exc_info=True)
+
     return app
