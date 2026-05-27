@@ -278,3 +278,63 @@ class TestExecutorRowsHiddenFromList:
         assert fetched is not None
         assert fetched.provider == "executor"
         assert fetched.has_api_key is False
+
+
+class TestRevealApiKeyLocalProviders:
+    """Local-inference providers (Ollama / LM Studio / llama.cpp / vLLM) run
+    on the operator's host — their ``api_key_encrypted`` is meaningless and
+    may legitimately be NULL. ``reveal_api_key`` returns the empty string for
+    them rather than raising. Every other provider still rejects a NULL key
+    so an accidentally-incomplete row never silently dispatches."""
+
+    async def _seed_provider(
+        self, service, workspace_id, account_id, *, provider: str, api_key_encrypted=None
+    ):
+        return await service._repo.create(  # noqa: SLF001
+            workspace_id=workspace_id,
+            account_id=account_id,
+            provider=provider,
+            label=f"{provider}-seed",
+            litellm_model=f"{provider}/whatever",
+            api_base=None,
+            api_key_encrypted=api_key_encrypted,
+            data_jurisdiction="self-hosted-kr",
+            extra_params={},
+        )
+
+    @pytest.mark.parametrize("provider", ["ollama", "lmstudio", "llama_cpp", "vllm"])
+    async def test_local_provider_null_key_returns_empty(
+        self, service, workspace_id, account_id, provider
+    ):
+        row = await self._seed_provider(
+            service, workspace_id, account_id, provider=provider, api_key_encrypted=None
+        )
+        # NULL is allowed → empty string, no raise.
+        assert service.reveal_api_key(row) == ""
+
+    async def test_local_provider_populated_key_still_decrypts(
+        self, service, workspace_id, account_id, cipher
+    ):
+        encrypted = cipher.encrypt("sk-ollama")
+        row = await self._seed_provider(
+            service,
+            workspace_id,
+            account_id,
+            provider="ollama",
+            api_key_encrypted=encrypted,
+        )
+        # If the operator does set a key (rare), it still round-trips.
+        assert service.reveal_api_key(row) == "sk-ollama"
+
+    async def test_non_local_provider_null_key_still_raises(
+        self, service, workspace_id, account_id
+    ):
+        row = await self._seed_provider(
+            service,
+            workspace_id,
+            account_id,
+            provider="openai",
+            api_key_encrypted=None,
+        )
+        with pytest.raises(ValueError, match="has no api key to reveal"):
+            service.reveal_api_key(row)

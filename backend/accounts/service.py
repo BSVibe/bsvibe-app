@@ -24,6 +24,12 @@ from backend.accounts.schemas import (
 # personal account so single-user flows don't have to mint one manually.
 DEFAULT_ACCOUNT_LABEL = "default"
 
+# Providers whose models run on the operator's host — they don't authenticate
+# with a real key, so a NULL ``api_key_encrypted`` is allowed and resolves to
+# the empty string (litellm forwards it harmlessly). Every other provider
+# requires a populated key; NULL there is a bug, not a no-op.
+_LOCAL_INFERENCE_PROVIDERS = frozenset({"ollama", "lmstudio", "llama_cpp", "vllm"})
+
 
 class ModelAccountService:
     def __init__(self, session: AsyncSession, *, cipher: CredentialCipher) -> None:
@@ -116,11 +122,17 @@ class ModelAccountService:
     def reveal_api_key(self, row: ModelAccount) -> str:
         """Decrypt — only the dispatch path should call this.
 
-        Executor accounts (Lift 5a) carry no api key (the column is NULL); this
-        is never valid for them, so a missing blob raises rather than silently
-        returning an empty credential.
+        Executor accounts (Lift 5a) carry no api key (the column is NULL); the
+        gateway never resolves to an executor account so reaching here for one
+        is a bug. Local-inference providers (Ollama / LM Studio / llama.cpp /
+        vLLM) are reached as regular ``provider`` rows BUT their api_key is
+        meaningless (the LLM runs on the operator's host) — accept NULL there
+        and return an empty credential string. Everything else: NULL is a bug,
+        raise rather than silently dispatch with an empty key.
         """
         if row.api_key_encrypted is None:
+            if row.provider in _LOCAL_INFERENCE_PROVIDERS:
+                return ""
             raise ValueError(
                 f"ModelAccount {row.id} has no api key to reveal (provider={row.provider!r})"
             )
