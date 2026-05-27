@@ -12,7 +12,7 @@ import type { Metadata } from "next";
  */
 
 export const metadata: Metadata = {
-  title: "Sub-processors — BSVibe",
+  title: "Sub-processors · BSVibe",
   description: "Third-party sub-processors that handle data on behalf of BSVibe workspaces.",
 };
 
@@ -58,7 +58,7 @@ export default function SubProcessorsPage() {
       <h1>Sub-processors</h1>
       <p className="legal-page__lede">
         Third-party services we engage to deliver the BSVibe AI agent OS. Each sub-processor handles
-        a narrow slice of workspace data for the purpose listed below — no profiling, no resale, no
+        a narrow slice of workspace data for the purpose listed below: no profiling, no resale, no
         off-purpose use.
       </p>
       <table className="legal-page__table">

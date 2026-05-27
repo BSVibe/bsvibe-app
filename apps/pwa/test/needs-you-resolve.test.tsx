@@ -72,7 +72,7 @@ describe("NeedsYou (Decide interactions)", () => {
     await userEvent.click(screen.getByRole("button", { name: "Approve" }));
 
     await waitFor(() => {
-      expect(screen.getByText("Approved — sending it out.")).toBeInTheDocument();
+      expect(screen.getByText("Approved. Sending it out.")).toBeInTheDocument();
     });
     const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
     expect(url).toBe("/api/v1/safemode/sm-1/approve");
@@ -106,7 +106,7 @@ describe("NeedsYou (Decide interactions)", () => {
     await userEvent.click(screen.getByRole("button", { name: "Approve" }));
 
     await waitFor(() => {
-      expect(screen.getByText("Couldn’t do that — please try again.")).toBeInTheDocument();
+      expect(screen.getByText("Couldn’t do that. Please try again.")).toBeInTheDocument();
     });
     // The row is still here and re-actionable; no re-read fired.
     expect(screen.getByRole("button", { name: "Approve" })).toBeEnabled();

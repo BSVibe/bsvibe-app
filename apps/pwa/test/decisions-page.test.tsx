@@ -478,7 +478,7 @@ describe("Decisions surface", () => {
     await userEvent.click(within(panel).getByRole("button", { name: "Accept" }));
 
     await waitFor(() => {
-      expect(screen.getByText("Couldn’t do that — please try again.")).toBeInTheDocument();
+      expect(screen.getByText("Couldn’t do that. Please try again.")).toBeInTheDocument();
     });
     expect(
       within(screen.getByRole("dialog")).getByRole("button", { name: "Accept" }),
