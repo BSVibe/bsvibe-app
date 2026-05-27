@@ -54,13 +54,15 @@ def upgrade() -> None:
     # product. ``IS NULL`` on the LHS short-circuits when the workspace has
     # zero products — those rows stay NULL and Phase 3 catches them so the
     # operator can decide (re-bind, soft-delete) before re-running.
+    # Products table has no ``deleted_at`` (soft-delete lives at the
+    # workspace level only). Pick the workspace's earliest product
+    # outright; orphan-cleanup is the operator's call.
     backfill_sql = """
         UPDATE {table} t
         SET product_id = (
             SELECT p.id
             FROM products p
             WHERE p.workspace_id = t.workspace_id
-              AND p.deleted_at IS NULL
             ORDER BY p.created_at ASC
             LIMIT 1
         )
