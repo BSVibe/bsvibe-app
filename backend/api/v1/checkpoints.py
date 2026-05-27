@@ -236,17 +236,12 @@ async def resolve_checkpoint(
             detail=f"Pending checkpoint {checkpoint_id} not found",
         )
 
-    # B11a: if the work LLM offered concrete options, the founder's answer
-    # MUST be one of them — off-list answers are 400 (the Decision stays
-    # pending). Free-text mode (no options on the payload) keeps the existing
-    # behaviour of accepting any non-empty answer.
-    offered = _decision_options(decision)
-    if offered is not None and body.answer not in offered:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=(f"answer {body.answer!r} is not one of the offered options: {offered}"),
-        )
-
+    # L-D1: the work LLM's ``options`` are **suggestions**, not a closed
+    # set. The founder may pick one of the offered strings (PWA single-
+    # select) OR type their own answer ("Other" free-text) — mirrors the
+    # AskUserQuestion UX where users can always fall back to free input.
+    # The off-list answer is recorded verbatim as the resolution; the
+    # downstream loop sees the founder's exact words, not a coerced match.
     now = datetime.now(tz=UTC)
     decision.status = DecisionStatus.RESOLVED
     decision.resolution = body.answer
@@ -290,7 +285,7 @@ async def resolve_checkpoint(
         "decision_id": str(decision.id),
         "question": _question_text(decision),
         "answer": body.answer,
-        "options": offered,
+        "options": _decision_options(decision),
         "resolved_by": str(user_row.id),
         "resolved_at": now.isoformat(),
         "verified": False,
