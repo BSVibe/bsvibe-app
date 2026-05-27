@@ -291,7 +291,7 @@ ASK_USER_QUESTION_TOOL: dict[str, Any] = {
             "concrete alternatives, pass them as ``options`` (a list of plain "
             "strings) so the founder sees those choices as suggestions. The "
             "options are NOT a closed set — the founder may pick one of them or "
-            "type a different answer (\"Other\" free-text). Offer the 2–4 most "
+            'type a different answer ("Other" free-text). Offer the 2–4 most '
             "likely choices you would consider; do not try to enumerate every "
             "possibility."
         ),
@@ -312,7 +312,7 @@ ASK_USER_QUESTION_TOOL: dict[str, Any] = {
                     "description": (
                         "Optional concrete suggestions to present to the founder. "
                         "When set, the PWA shows them as a single-select with an "
-                        "\"Other\" option for free-text. The founder's answer "
+                        '"Other" option for free-text. The founder\'s answer '
                         "is recorded verbatim — do not assume membership."
                     ),
                 },

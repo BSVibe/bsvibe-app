@@ -194,9 +194,7 @@ async def test_resolve_accepts_offered_option(client, db, workspace_id) -> None:
     assert body["status"] == "resolved"
 
 
-async def test_resolve_accepts_off_list_answer_as_other_freetext(
-    client, db, workspace_id
-) -> None:
+async def test_resolve_accepts_off_list_answer_as_other_freetext(client, db, workspace_id) -> None:
     """L-D1: off-list answers are accepted as "Other" free-text.
 
     The work LLM's ``options`` are **suggestions**, not a closed set
