@@ -320,17 +320,28 @@ export interface Proposal {
   expires_at: string | null;
 }
 
+/** L-D2 — one-click action spec on an executor B2b Decision (backend
+ *  `DecisionAction`). Label fields ship per supported locale so the PWA
+ *  renders them client-side without a server round-trip per locale change. */
+export interface CheckpointAction {
+  key: string;
+  label_en: string;
+  label_ko: string;
+}
+
 /** `GET /api/v1/checkpoints` element (backend CheckpointResponse). A paused-run
  *  Decision the founder must answer to resume a stuck run. `question` is the
  *  blocking prompt; `rationale` is the agent's optional why; `options` (B11a)
- *  are concrete choices the work LLM offered — when set, the UI renders a
- *  single-select and the resolve endpoint requires the answer be one of them. */
+ *  are LLM-suggested choices (L-D1: not a closed set — founder may override
+ *  via "Other" free-text); `actions` (L-D2) are one-click side-effecting
+ *  buttons (ship / discard) on executor B2b Decisions. */
 export interface Checkpoint {
   id: string;
   run_id: string;
   decision: string;
   question: string;
   options: string[] | null;
+  actions: CheckpointAction[] | null;
   rationale: string | null;
   created_at: string;
 }
@@ -418,10 +429,18 @@ export interface PendingCheckpoint {
   checkpointId: string;
   /** The agent's blocking question. */
   question: string;
-  /** B11a — concrete choices the work LLM offered (or null for free-text).
-   *  When non-empty, CheckpointRow renders a single-select; the founder's
-   *  answer is then one of these strings (the backend validates membership). */
+  /** L-D1 — LLM-suggested choices (or null for pure free-text). The PWA
+   *  shows them as radio buttons + an "Other" option that reveals a
+   *  free-text textarea. The backend accepts ANY non-empty string verbatim. */
   options: string[] | null;
+  /** L-D2 — one-click actions (ship / discard) on executor B2b Decisions
+   *  (verification_failed / human_review_required). When present, the row
+   *  renders dedicated action buttons that POST ``action_key`` instead of
+   *  ``answer`` for side-effecting resolutions. */
+  actions: CheckpointAction[] | null;
+  /** The Decision kind (e.g. "verification_failed", "human_review_required",
+   *  "ask_user_question") — exposed so the UI can label / style by kind. */
+  decision: string;
   rationale: string | null;
   createdAt: string;
 }

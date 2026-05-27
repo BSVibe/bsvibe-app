@@ -59,9 +59,14 @@ export function toPendingDecisions(
       id: `checkpoint-${c.id}`,
       checkpointId: c.id,
       question: c.question,
-      // B11a — forward the structured options (when set) so CheckpointRow can
-      // render a single-select. Null/empty falls back to the free-text path.
+      // L-D1 — LLM-suggested options. Null/empty falls back to free-text;
+      // CheckpointRow always renders an "Other" radio so the founder isn't
+      // locked into the suggested set.
       options: c.options && c.options.length > 0 ? c.options : null,
+      // L-D2 — one-click action specs (ship / discard) on executor B2b
+      // Decisions. When non-empty the row renders dedicated action buttons.
+      actions: c.actions && c.actions.length > 0 ? c.actions : null,
+      decision: c.decision,
       rationale: c.rationale,
       createdAt: c.created_at,
     });
