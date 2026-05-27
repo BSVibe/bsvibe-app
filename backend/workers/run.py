@@ -33,6 +33,7 @@ DB-polling, not Redis Streams (Phase 1 invariant retained).
 from __future__ import annotations
 
 import asyncio
+import os
 import signal
 import uuid
 from collections.abc import Awaitable, Callable
@@ -1113,8 +1114,13 @@ async def run_workers() -> None:
         # No Redis URL → in-memory fallback (in-process subscribers — none
         # in the worker — only; SSE in the HTTP container won't see it,
         # which is the regression C2 is here to fix).
-        set_live_event_bus_redis(redis_client)
-        logger.info("worker_live_event_bus_redis_bound", redis_url=settings.redis_url)
+        #
+        # Skip under pytest for the same reason as create_app() — a real
+        # redis client held in the process-wide singleton leaks
+        # connection-pool Futures across per-test event loops.
+        if not os.environ.get("PYTEST_CURRENT_TEST"):
+            set_live_event_bus_redis(redis_client)
+            logger.info("worker_live_event_bus_redis_bound", redis_url=settings.redis_url)
 
     # B14 — operator visibility: warn LOUDLY at startup when the executor pool
     # is configured but Redis is not. The runtime keeps booting (the warning is

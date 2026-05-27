@@ -6,6 +6,8 @@ Entrypoint:
 
 from __future__ import annotations
 
+import os
+
 import redis.asyncio as redis_aio
 import structlog
 from fastapi import FastAPI
@@ -77,7 +79,13 @@ def create_app() -> FastAPI:
     # (``redis.asyncio.from_url`` does not connect until the first command),
     # so this never blocks app start; an outage surfaces only at publish /
     # subscribe time and is soft-failed inside the bus.
-    if settings.redis_url:
+    #
+    # Skip under pytest: glue tests instantiate ``create_app()`` per-test on
+    # per-test event loops, and binding a real Redis client into the
+    # process-wide singleton leaks connection-pool Futures across event
+    # loops — surfaced as ``got Future attached to a different loop`` in
+    # later non-glue tests when audit emit fires the bridge.
+    if settings.redis_url and not os.environ.get("PYTEST_CURRENT_TEST"):
         try:
             redis_client = redis_aio.from_url(settings.redis_url, decode_responses=True)
             set_live_event_bus_redis(redis_client)
