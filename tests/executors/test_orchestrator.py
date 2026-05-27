@@ -160,12 +160,35 @@ async def _drive_with_worker_done(
 
     Mirrors the glue e2e contract: the worker learns of the task from the stream
     XADD and reports its result on a SEPARATE session via
-    :func:`dispatch.record_result` (which publishes the done channel)."""
+    :func:`dispatch.record_result` (which publishes the done channel).
+
+    Stabilization (CI flake fix):
+    * The worker enters its ``xread`` loop BEFORE the orchestrator starts, signalled
+      via ``worker_ready``. Previously both tasks were created back-to-back; on a
+      slow runner the orchestrator's ``XADD`` could land before the worker reached
+      ``xread``, leaving the worker polling from ``last_id="0"``... which usually
+      still works in fakeredis but races with the worker timing out first. Driving
+      the orchestrator only after the worker is actually subscribed eliminates
+      that race.
+    * The worker's loop budget (2000 × 20ms = 40s) is sized above the orchestrator's
+      ``executor_task_timeout_s=30.0`` ceiling. Previously the worker capped at
+      ~10s and could give up before the orchestrator's timeout fired, leaving the
+      orchestrator's ``await_completion`` blocked until its own 30s timeout —
+      which surfaces as a ``system_error`` ``LoopResult``. Keeping the worker
+      alive longer than the orchestrator means a flaky tick can never flip a
+      ``needs_decision`` outcome to ``system_error``.
+    """
+
+    worker_ready = asyncio.Event()
 
     async def _await_task_id() -> uuid.UUID:
         stream = dispatch.worker_stream(worker_id)
         last_id = "0"
-        for _ in range(500):
+        # Signal that we're at the xread loop so the caller can start the
+        # orchestrator AFTER the worker is actually polling — eliminates the
+        # subscribe-after-XADD race that surfaced under slow CI scheduling.
+        worker_ready.set()
+        for _ in range(2000):
             entries = await redis.xread({stream: last_id}, count=1, block=20)
             if not entries:
                 continue
@@ -190,8 +213,13 @@ async def _drive_with_worker_done(
             )
             await worker_s.commit()
 
-    drive_task = asyncio.create_task(oc.run(run=run, workspace_dir=workspace_dir))
     worker_task = asyncio.create_task(_simulate_worker())
+    # Block until the worker is in its xread loop before starting the
+    # orchestrator. Bounded wait so a misconfigured fakeredis never hangs
+    # the test; 2s is generous (the worker reaches xread within a few
+    # event-loop ticks even on slow runners).
+    await asyncio.wait_for(worker_ready.wait(), timeout=2.0)
+    drive_task = asyncio.create_task(oc.run(run=run, workspace_dir=workspace_dir))
     result = await drive_task
     await worker_task
     return result
