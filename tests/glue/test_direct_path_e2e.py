@@ -51,6 +51,7 @@ from backend.supervisor.sandbox import NoopSandboxManager
 from backend.workers.agent_worker import AgentExecutionDeps, AgentWorker
 from backend.workers.delivery_worker import DeliveryWorker, DeliveryWorkerConfig
 from backend.workers.intake_worker import IntakeWorker
+from backend.workspaces.db import ProductRow
 
 from .._support import db_engine, fake_current_user
 
@@ -176,6 +177,46 @@ def workspace_id() -> uuid.UUID:
     return uuid.uuid4()
 
 
+@pytest_asyncio.fixture
+async def seeded_product(
+    sf: async_sessionmaker[AsyncSession], workspace_id: uuid.UUID
+) -> uuid.UUID:
+    """L-P1: every direct-path test now needs a product to bind the run to;
+    the API rejects submissions on a workspace with zero products. Seeds
+    Workspace + Product (Postgres enforces ``products.workspace_id``→
+    ``workspaces.id`` FK; SQLite's default-off FK checks let the bare
+    Product insert succeed locally, but real-PG CI rejects it)."""
+    from backend.workspaces.db import WorkspaceRow
+
+    product_id = uuid.uuid4()
+    async with sf() as s:
+        s.add(
+            WorkspaceRow(
+                id=workspace_id,
+                name="test-workspace",
+                # Safe Mode default is True; the dispatcher-sink assertions
+                # in this file expect the direct path to dispatch, not
+                # enqueue into Safe Mode for human approval.
+                safe_mode=False,
+                created_at=datetime.now(tz=UTC),
+                updated_at=datetime.now(tz=UTC),
+            )
+        )
+        await s.flush()
+        s.add(
+            ProductRow(
+                id=product_id,
+                workspace_id=workspace_id,
+                name="test-product",
+                slug="test-product",
+                created_at=datetime.now(tz=UTC),
+                updated_at=datetime.now(tz=UTC),
+            )
+        )
+        await s.commit()
+    return product_id
+
+
 # --------------------------------------------------------------------------
 # The end-to-end Direct path
 # --------------------------------------------------------------------------
@@ -185,6 +226,7 @@ async def test_direct_path_message_to_delivered_artifact(
     client: httpx.AsyncClient,
     sf: async_sessionmaker[AsyncSession],
     workspace_id: uuid.UUID,
+    seeded_product: uuid.UUID,
     tmp_path: Path,
 ) -> None:
     # 1. Founder POSTs a direct message → TriggerEvent (source=direct).
@@ -266,6 +308,7 @@ async def test_direct_path_message_to_delivered_artifact(
 async def test_direct_path_duplicate_submit_collapses(
     client: httpx.AsyncClient,
     sf: async_sessionmaker[AsyncSession],
+    seeded_product: uuid.UUID,
 ) -> None:
     """Same founder + same text twice → second POST is reported as a duplicate
     and lands no second TriggerEvent (DirectTrigger idempotency)."""
@@ -282,9 +325,36 @@ async def test_direct_path_duplicate_submit_collapses(
     assert len(triggers) == 1
 
 
-async def test_messages_rejects_empty_text(client: httpx.AsyncClient) -> None:
+async def test_messages_rejects_empty_text(
+    client: httpx.AsyncClient, seeded_product: uuid.UUID
+) -> None:
     resp = await client.post("/api/v1/messages", json={"text": ""})
     assert resp.status_code == 422
+
+
+async def test_messages_rejects_when_workspace_has_no_products(
+    client: httpx.AsyncClient,
+) -> None:
+    """L-P1: a workspace with zero products MUST surface a 400 rather than
+    minting a NULL-product trigger that vanishes from project detail pages."""
+    resp = await client.post("/api/v1/messages", json={"text": "anything"})
+    assert resp.status_code == 400, resp.text
+    assert "no products" in resp.json()["detail"]
+
+
+async def test_messages_resolves_default_product_when_omitted(
+    client: httpx.AsyncClient,
+    sf: async_sessionmaker[AsyncSession],
+    seeded_product: uuid.UUID,
+) -> None:
+    """L-P1: when ``product_id`` is omitted, the workspace's first product
+    is used as the smart default — the trigger row carries that product."""
+    resp = await client.post("/api/v1/messages", json={"text": "no product id"})
+    assert resp.status_code == 202, resp.text
+
+    async with sf() as s:
+        trig = (await s.execute(select(TriggerEventRow))).scalar_one()
+        assert trig.product_id == seeded_product
 
 
 async def test_intake_worker_idle_returns_zero(sf: async_sessionmaker[AsyncSession]) -> None:

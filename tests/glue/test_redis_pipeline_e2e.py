@@ -246,6 +246,40 @@ def workspace_id() -> uuid.UUID:
     return uuid.uuid4()
 
 
+@pytest_asyncio.fixture
+async def seeded_product(
+    sf: async_sessionmaker[AsyncSession], workspace_id: uuid.UUID
+) -> uuid.UUID:
+    """L-P1: messages API requires a workspace to have at least one product.
+    Seeds Workspace + Product (PG enforces products.workspace_id FK)."""
+    from backend.workspaces.db import ProductRow, WorkspaceRow
+
+    product_id = uuid.uuid4()
+    async with sf() as s:
+        s.add(
+            WorkspaceRow(
+                id=workspace_id,
+                name="test-workspace",
+                safe_mode=False,
+                created_at=datetime.now(tz=UTC),
+                updated_at=datetime.now(tz=UTC),
+            )
+        )
+        await s.flush()
+        s.add(
+            ProductRow(
+                id=product_id,
+                workspace_id=workspace_id,
+                name="test-product",
+                slug="test-product",
+                created_at=datetime.now(tz=UTC),
+                updated_at=datetime.now(tz=UTC),
+            )
+        )
+        await s.commit()
+    return product_id
+
+
 # --------------------------------------------------------------------------
 # Helpers — drain one stream's notifications into the worker's tick handler
 # --------------------------------------------------------------------------
@@ -278,6 +312,7 @@ async def test_full_direct_path_flows_via_redis(
     sf: async_sessionmaker[AsyncSession],
     redis_client: Any,
     workspace_id: uuid.UUID,
+    seeded_product: uuid.UUID,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -367,6 +402,7 @@ async def test_full_direct_path_flows_via_redis(
 async def test_messages_producer_is_noop_in_db_polling(
     client: httpx.AsyncClient,
     sf: async_sessionmaker[AsyncSession],
+    seeded_product: uuid.UUID,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """In the default db_polling mode the route emits nothing — and crucially
@@ -412,6 +448,7 @@ async def test_get_emit_redis_client_builds_nothing_in_db_polling() -> None:
 async def test_messages_post_succeeds_when_redis_down(
     client: httpx.AsyncClient,
     sf: async_sessionmaker[AsyncSession],
+    seeded_product: uuid.UUID,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A broken Redis on the intake producer must not break the POST — the

@@ -105,6 +105,12 @@ class RequestRow(IntakeBase):
     trigger_event_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("trigger_events.id", ondelete="CASCADE"), nullable=False
     )
+    # L-P1: every request belongs to a product. ``nullable=True`` here in
+    # the ORM matches the column attribute the migration introduces (so a
+    # mixed-state DB during the lift doesn't fail loads); the
+    # ``trigger_events_request_runs_product_id_not_null`` Alembic migration
+    # enforces NOT NULL after backfill.
+    product_id: Mapped[uuid.UUID | None] = mapped_column(nullable=True, index=True)
     status: Mapped[RequestStatus] = mapped_column(
         SAEnum(
             RequestStatus,

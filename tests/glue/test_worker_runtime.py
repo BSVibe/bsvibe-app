@@ -21,6 +21,7 @@ import base64
 import json
 import uuid
 from collections.abc import AsyncIterator
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -74,6 +75,40 @@ def founder_id() -> uuid.UUID:
 @pytest.fixture
 def workspace_id() -> uuid.UUID:
     return uuid.uuid4()
+
+
+@pytest_asyncio.fixture
+async def seeded_product(
+    sf: async_sessionmaker[AsyncSession], workspace_id: uuid.UUID
+) -> uuid.UUID:
+    """L-P1: every direct-path message now requires a product binding.
+    Seeds Workspace + Product (PG enforces products.workspace_id FK)."""
+    from backend.workspaces.db import ProductRow, WorkspaceRow
+
+    product_id = uuid.uuid4()
+    async with sf() as s:
+        s.add(
+            WorkspaceRow(
+                id=workspace_id,
+                name="test-workspace",
+                safe_mode=False,
+                created_at=datetime.now(tz=UTC),
+                updated_at=datetime.now(tz=UTC),
+            )
+        )
+        await s.flush()
+        s.add(
+            ProductRow(
+                id=product_id,
+                workspace_id=workspace_id,
+                name="test-product",
+                slug="test-product",
+                created_at=datetime.now(tz=UTC),
+                updated_at=datetime.now(tz=UTC),
+            )
+        )
+        await s.commit()
+    return product_id
 
 
 @pytest.fixture
@@ -236,6 +271,7 @@ async def test_production_deps_drive_direct_run_to_delivery(
     sf: async_sessionmaker[AsyncSession],
     workspace_id: uuid.UUID,
     account_id: uuid.UUID,
+    seeded_product: uuid.UUID,
     kms_key: None,
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -297,6 +333,7 @@ async def test_zero_active_accounts_creates_decision_and_run_stays_running(
     client: httpx.AsyncClient,
     sf: async_sessionmaker[AsyncSession],
     workspace_id: uuid.UUID,
+    seeded_product: uuid.UUID,
     kms_key: None,
     tmp_path: Path,
 ) -> None:
@@ -335,6 +372,7 @@ async def test_ambiguous_active_accounts_creates_decision(
     sf: async_sessionmaker[AsyncSession],
     workspace_id: uuid.UUID,
     account_id: uuid.UUID,
+    seeded_product: uuid.UUID,
     kms_key: None,
     tmp_path: Path,
 ) -> None:
@@ -412,6 +450,7 @@ async def test_drive_frames_against_only_the_runs_workspace_skills(
     sf: async_sessionmaker[AsyncSession],
     workspace_id: uuid.UUID,
     account_id: uuid.UUID,
+    seeded_product: uuid.UUID,
     kms_key: None,
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
