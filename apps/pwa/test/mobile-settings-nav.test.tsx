@@ -55,4 +55,15 @@ describe("Mobile top bar", () => {
     expect(screen.getByText("Settings")).toBeInTheDocument();
     expect(screen.queryByText("BSVibe")).not.toBeInTheDocument();
   });
+
+  it.each([
+    ["/deliverables/abc-123", "Delivery"],
+    ["/runs/def-456", "Run"],
+    ["/products/e2e-hello", "Product"],
+  ])("shows the surface label on detail route %s (not the BSVibe wordmark)", (path, label) => {
+    pathname = path;
+    render(<MobileTopBar />);
+    expect(screen.getByText(label)).toBeInTheDocument();
+    expect(screen.queryByText("BSVibe")).not.toBeInTheDocument();
+  });
 });

@@ -21,13 +21,19 @@ const ICONS: Record<NavKey, typeof BriefIcon> = {
   skills: SkillsIcon,
 };
 
-/** Map a pathname to the `nav` namespace key used for the mobile title. */
-const TITLE_KEYS: Record<string, NavKey | "settings"> = {
+/** Map a pathname's first segment to the `nav` namespace key used for the
+ *  mobile title. Detail routes (``/deliverables/{id}``, ``/runs/{id}``,
+ *  ``/products/{slug}``) get their own short label so the header keeps
+ *  surface context instead of falling through to the BSVibe wordmark. */
+const TITLE_KEYS: Record<string, NavKey | "settings" | "deliverable" | "run" | "product"> = {
   "/brief": "brief",
   "/decisions": "decisions",
   "/knowledge": "knowledge",
   "/skills": "skills",
   "/settings": "settings",
+  "/deliverables": "deliverable",
+  "/runs": "run",
+  "/products": "product",
 };
 
 /** Mobile top bar — page title + notifications (UX Brief mobile mockup). */
