@@ -37,9 +37,12 @@ services:
       BSVIBE_SUPABASE_URL: ${BSVIBE_SUPABASE_URL:?set BSVIBE_SUPABASE_URL}
       BSVIBE_SUPABASE_PUBLISHABLE_KEY: ${BSVIBE_SUPABASE_PUBLISHABLE_KEY:?set BSVIBE_SUPABASE_PUBLISHABLE_KEY}
       # Browser PWA (app.bsvibe.dev) calls the backend cross-origin; this list is
-      # what CORSMiddleware allows. Without it the container falls back to the
-      # localhost-only code default and rejects the prod origin on preflight.
-      BSVIBE_CORS_ALLOWED_ORIGINS: ${BSVIBE_CORS_ALLOWED_ORIGINS:-http://localhost:3700}
+      # what CORSMiddleware allows. The prod default carries the production
+      # origin so a fresh prod deploy without the env var in .env.prod still
+      # serves cross-origin instead of falling back to the localhost-only code
+      # default and 405'ing the PWA's /api/v1/accounts preflight (the bug
+      # /impeccable audit surfaced on Settings/Models in 2026-05).
+      BSVIBE_CORS_ALLOWED_ORIGINS: ${BSVIBE_CORS_ALLOWED_ORIGINS:-https://app.bsvibe.dev}
       # Session-JWT verification (backend/shared/authz — these are UNPREFIXED,
       # not BSVIBE_). The backend logs in against Supabase GoTrue, then must
       # VERIFY the returned ES256 session JWT via the project's JWKS. Without
