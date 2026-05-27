@@ -46,6 +46,7 @@ from backend.intake.db import RequestRow, RequestStatus
 from backend.orchestrator.agent_runner import AgentRunner
 from backend.orchestrator.frame import FrameConfig, FrameLlm, FrameStage
 from backend.skills.loader import SkillLoader
+from backend.storage.artifact_store import ArtifactStore, LocalFilesystemArtifactStore
 from backend.workers.base import BaseWorker
 
 logger = structlog.get_logger(__name__)
@@ -86,6 +87,15 @@ class AgentExecutionDeps:
       Production injects the gateway work-LLM + real sandbox; tests inject the
       scripted LLM + Noop sandbox.
     * ``workspace_root`` — each run drives inside ``workspace_root/<run_id>``.
+      Today this resolves through ``artifact_store.run_dir(run_id)`` (the
+      :class:`~backend.storage.artifact_store.ArtifactStore` seam — swap-ready
+      for R2/S3; the FS impl returns a real :class:`pathlib.Path` the sandbox
+      can mount). ``workspace_root`` is retained for back-compat callers that
+      still build the deps positionally.
+    * ``artifact_store`` — the per-run storage seam. ``None`` (the default)
+      builds a :class:`LocalFilesystemArtifactStore` rooted at
+      ``workspace_root`` lazily — so every existing call site that only sets
+      ``workspace_root`` keeps working unchanged.
     * ``default_artifact_type`` — frame hint when no skill matches.
     """
 
@@ -94,6 +104,7 @@ class AgentExecutionDeps:
         [AsyncSession, ExecutionRun], RunCompute | Awaitable[RunCompute | None]
     ]
     workspace_root: Path
+    artifact_store: ArtifactStore | None = None
     default_artifact_type: str | None = "direct_output"
     #: B9a — the cheap-LLM framing seam, resolved per-workspace (mirrors the
     #: settle-extractor's gateway resolution). Either a static
@@ -246,7 +257,12 @@ class AgentWorker(BaseWorker):
             logger.info("agent_worker_run_unresolved", run_id=str(run.id))
             return
 
-        workspace_dir = execution.workspace_root / str(run.id)
+        # Resolve the run dir via the artifact store (centralized seam — the
+        # FS impl returns ``<workspace_root>/<run_id>`` exactly as before; a
+        # future R2/S3 impl would stage to a local temp dir, since the
+        # sandbox + ToolRegistry need a real Path to mount).
+        store = execution.artifact_store or LocalFilesystemArtifactStore(execution.workspace_root)
+        workspace_dir = store.run_dir(run.id)
         workspace_dir.mkdir(parents=True, exist_ok=True)
         if execution.workspace_provisioner is not None:
             # github delivery path: clone the target repo into workspace_dir on
