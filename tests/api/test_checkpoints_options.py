@@ -194,12 +194,17 @@ async def test_resolve_accepts_offered_option(client, db, workspace_id) -> None:
     assert body["status"] == "resolved"
 
 
-async def test_resolve_rejects_off_list_answer(client, db, workspace_id) -> None:
-    """B11a: an answer NOT in the offered options is 400 — the founder picked
-    something the agent never offered, so the resolve is refused (the Decision
-    stays pending). Off-list means the LLM never asked about it; if the founder
-    needs to say something else, they ought to be able to reach the agent
-    differently. Strict for v1 — easy to relax later, hard to tighten."""
+async def test_resolve_accepts_off_list_answer_as_other_freetext(
+    client, db, workspace_id
+) -> None:
+    """L-D1: off-list answers are accepted as "Other" free-text.
+
+    The work LLM's ``options`` are **suggestions**, not a closed set
+    (AskUserQuestion semantics): when the founder picks none of them and
+    writes their own answer, the Decision resolves with that verbatim
+    string. Previously this was rejected 400 — that was too strict and
+    forced the founder to game a list rather than say what they meant.
+    """
     run = await _seed_run(db, ws=workspace_id)
     cp = await _seed_ask_user_question_decision(
         db,
@@ -215,14 +220,17 @@ async def test_resolve_rejects_off_list_answer(client, db, workspace_id) -> None
         f"/api/v1/checkpoints/{cp}/resolve",
         json={"answer": "duckdb"},
     )
-    assert r.status_code == 400, r.text
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["resolution"] == "duckdb"
+    assert body["status"] == "resolved"
 
-    # The Decision is still pending; nothing was recorded.
+    # The Decision is now resolved with the off-list answer verbatim.
     async with db() as s:
         d = await s.get(Decision, cp)
         assert d is not None
-        assert d.status is DecisionStatus.PENDING
-        assert d.resolution is None
+        assert d.status is DecisionStatus.RESOLVED
+        assert d.resolution == "duckdb"
 
 
 async def test_resolve_free_text_when_no_options(client, db, workspace_id) -> None:

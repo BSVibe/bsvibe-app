@@ -289,9 +289,11 @@ ASK_USER_QUESTION_TOOL: dict[str, Any] = {
             "Decision and stops the loop until it is resolved — use it only when "
             "no tool call can unblock you. When the decision is a choice between "
             "concrete alternatives, pass them as ``options`` (a list of plain "
-            "strings) so the founder sees a single-select instead of an "
-            "open-ended textbox — the founder's answer must then be one of the "
-            "offered strings."
+            "strings) so the founder sees those choices as suggestions. The "
+            "options are NOT a closed set — the founder may pick one of them or "
+            "type a different answer (\"Other\" free-text). Offer the 2–4 most "
+            "likely choices you would consider; do not try to enumerate every "
+            "possibility."
         ),
         "parameters": {
             "type": "object",
@@ -308,10 +310,10 @@ ASK_USER_QUESTION_TOOL: dict[str, Any] = {
                     "type": "array",
                     "items": {"type": "string"},
                     "description": (
-                        "Optional concrete choices to present to the founder as "
-                        "a single-select. When set, the founder's answer must "
-                        "match one of these strings exactly. Omit for "
-                        "free-text questions."
+                        "Optional concrete suggestions to present to the founder. "
+                        "When set, the PWA shows them as a single-select with an "
+                        "\"Other\" option for free-text. The founder's answer "
+                        "is recorded verbatim — do not assume membership."
                     ),
                 },
             },
