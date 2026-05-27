@@ -349,7 +349,17 @@ _SYSTEM_PROMPT = (
     "changed). Reading files (file_read, file_list) is allowed first. When the "
     "step is complete, stop calling tools and reply with a short plain-text "
     "summary — that triggers verification. If you are blocked on a decision "
-    "only the founder can make, call ask_user_question."
+    "only the founder can make, call ask_user_question. "
+    "W2 — your work is committed to a per-run git branch and merged into the "
+    "product's main on verify. If verify reports a merge conflict, the "
+    "conflicting files in your workspace will contain '<<<<<<<', '=======', "
+    "and '>>>>>>>' markers. Resolve them with file_read/file_edit (you can "
+    "also `shell_exec git log/diff/show` to inspect main's intent) and "
+    "re-trigger verification by re-replying. If the conflict is semantically "
+    "ambiguous — i.e. you can't tell which intent to honor — call "
+    "ask_user_question with a clear semantic question (e.g., 'main added X "
+    "while this branch added Y at the same spot — should X replace Y, or "
+    "should both coexist?'). Never paste raw conflict markers to the founder."
 )
 
 

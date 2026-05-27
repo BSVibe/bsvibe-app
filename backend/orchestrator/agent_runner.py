@@ -145,14 +145,11 @@ class AgentRunner:
     ) -> bool:
         """Append history + flip ExecutionRun.status. Returns False on no-op.
 
-        W1 NOTE: the L-P2 ``ship_or_discard`` Decision synthesis used to fire
-        here on ``REVIEW_READY`` transitions. The W1 design removes that —
-        verified runs are now expected to auto-merge (W2 wires the actual
-        merge logic; W1 just removes the founder-approval gate so the next
-        lift has a clean slot). Until W2 lands the merge, verified runs
-        still sit at REVIEW_READY indefinitely without UI surface; that is
-        acceptable for W1 dogfood because the FS+worktree layout is what
-        we're testing.
+        W2: when transitioning to ``REVIEW_READY`` on a product-bound run,
+        auto-ship — fast-forward main onto the run branch (under advisory
+        lock) and cascade to SHIPPED. Non-product runs (Direct-path / no
+        product binding) transition to REVIEW_READY and stay there
+        unchanged, matching pre-W1 behavior for tests + legacy code paths.
         """
         run = await self._session.get(ExecutionRun, run_id)
         if run is None:
@@ -180,7 +177,103 @@ class AgentRunner:
             from_status=from_status.value,
             to_status=to_status.value,
         )
+
+        # W2 — auto-ship on REVIEW_READY for product-bound runs that
+        # actually have a git worktree on disk. Glue tests that bypass
+        # the workspace provisioner (no worktree) skip auto-ship and
+        # leave the run at REVIEW_READY — exactly the pre-W2 invariant.
+        if to_status is RunStatus.REVIEW_READY and run.product_id is not None:
+            from backend.storage.product_workspace import (  # noqa: PLC0415
+                run_worktree_path,
+            )
+
+            if (run_worktree_path(run.id) / ".git").exists():
+                await self._auto_ship_product_run(run)
         return True
+
+    async def _auto_ship_product_run(self, run: ExecutionRun) -> None:
+        """Fast-forward main onto the run branch and transition to SHIPPED.
+
+        Pre-conditions: ``verify`` already ran ``commit_worktree`` +
+        ``merge_main_into_worktree`` (cleanly) before transitioning to
+        REVIEW_READY, so the run's branch is a strict descendant of main.
+        The advisory lock here protects the ``merge_to_main``
+        fast-forward from a parallel ship moving main between the
+        verify-time merge and this call.
+
+        Failure modes:
+
+        * Lock busy → leave run at REVIEW_READY; next AgentWorker tick
+          (or a follow-up trigger) retries. Doesn't block.
+        * Fast-forward refused (rare — verify-time merge stale) → leave
+          run at REVIEW_READY with a history note. The next verify
+          round will pull main again.
+        * Worktree cleanup fails → logged, run still ships (cleanup is
+          best-effort; the next worker tick retries).
+        """
+        from backend.storage.product_workspace import (  # noqa: PLC0415 — lazy
+            ProductWorkspaceBusy,
+            ProductWorkspaceError,
+            merge_to_main,
+            product_workspace_lock,
+            remove_run_worktree,
+        )
+
+        product_id = run.product_id
+        if product_id is None:
+            return
+
+        try:
+            async with product_workspace_lock(self._session, product_id):
+                sha = await merge_to_main(product_id, run.id)
+                logger.info(
+                    "auto_ship_merge_to_main",
+                    run_id=str(run.id),
+                    product_id=str(product_id),
+                    main_sha=sha,
+                )
+            # Transition past REVIEW_READY → SHIPPED. The history row
+            # is recorded directly here rather than re-calling
+            # ``transition`` (which would recurse).
+            run.status = RunStatus.SHIPPED
+            run.updated_at = datetime.now(tz=UTC)
+            self._session.add(
+                ExecutionRunHistory(
+                    id=uuid.uuid4(),
+                    run_id=run.id,
+                    workspace_id=run.workspace_id,
+                    from_status=RunStatus.REVIEW_READY,
+                    to_status=RunStatus.SHIPPED,
+                    reason="auto-shipped after verify",
+                    created_at=datetime.now(tz=UTC),
+                )
+            )
+            await self._session.flush()
+            # Best-effort worktree cleanup (idempotent — covers retries).
+            try:
+                await remove_run_worktree(product_id, run.id)
+            except ProductWorkspaceError:
+                logger.warning(
+                    "auto_ship_worktree_cleanup_failed",
+                    run_id=str(run.id),
+                    exc_info=True,
+                )
+        except ProductWorkspaceBusy:
+            logger.info(
+                "auto_ship_lock_busy",
+                run_id=str(run.id),
+                product_id=str(product_id),
+            )
+            # Leave at REVIEW_READY; next tick retries.
+        except ProductWorkspaceError:
+            logger.warning(
+                "auto_ship_merge_failed",
+                run_id=str(run.id),
+                product_id=str(product_id),
+                exc_info=True,
+            )
+            # Leave at REVIEW_READY; next verify round will pull main
+            # again and either succeed or surface a conflict.
 
     async def _find_existing_run(self, *, request_id: uuid.UUID) -> ExecutionRun | None:
         from sqlalchemy import select  # noqa: PLC0415 — local-only lookup

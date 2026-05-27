@@ -1,4 +1,4 @@
-"""Git-backed product workspace + per-run worktrees (W1).
+"""Git-backed product workspace + per-run worktrees (W1+W2).
 
 Workflow §13 (product workspace design). Each product has a canonical git
 repo at ``settings.product_workspace_root/<product_id>``; each run gets
@@ -9,15 +9,20 @@ This module owns the *filesystem + git* lifecycle. The transactional state
 :class:`~backend.orchestrator.agent_runner.AgentRunner` — this module
 just shells out to git for the FS-level operations.
 
-W1 scope (this lift):
+W1 scope:
 * ``init_product_workspace`` — git init + initial commit, idempotent
 * ``add_run_worktree`` / ``remove_run_worktree`` — per-run worktree
   lifecycle
 * :class:`ProductWorkspaceError` — domain error for non-zero git exit
 
-W2 scope (next lift): ``merge_to_main`` / ``merge_main_into_worktree``
-(verify-time merge integration) + advisory lock. Not in this module
-until W2.
+W2 additions:
+* ``commit_worktree`` — stage agent's writes as a real branch commit
+* ``merge_main_into_worktree`` — at verify time, pull main into the
+  run worktree to detect conflicts before ship
+* ``merge_to_main`` — fast-forward main onto the run branch at ship,
+  guarded by advisory lock
+* ``force_merge_theirs`` — executor B2b ship_anyway path (run wins)
+* :class:`MergeOutcome` — typed result carrying conflict paths
 
 Subprocess-based (no pygit2 / dulwich dependency). Every git invocation
 uses ``asyncio.create_subprocess_exec`` with an argument list (NEVER
@@ -30,12 +35,20 @@ from __future__ import annotations
 
 import asyncio
 import uuid
-from dataclasses import dataclass
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Literal
 
 import structlog
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.config import get_settings
+from backend.execution.advisory_lock import (
+    release_run_dispatch_lock,
+    try_run_dispatch_lock,
+)
 
 logger = structlog.get_logger(__name__)
 
@@ -320,10 +333,240 @@ async def remove_run_worktree(
     )
 
 
+# ---------------------------------------------------------------------------
+# W2 — verify-time merge + ship merge
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class MergeOutcome:
+    """Result of an attempted merge.
+
+    ``status`` is ``"clean"`` when git completed the merge without
+    conflicts (HEAD now points at the merged state) and ``"conflict"``
+    when at least one path conflicts (the working tree is in a mid-merge
+    state with conflict markers — caller decides whether to abort or to
+    leave the markers for the agent to resolve).
+    """
+
+    status: Literal["clean", "conflict"]
+    conflict_paths: list[str] = field(default_factory=list)
+
+
+async def commit_worktree(
+    product_id: uuid.UUID,
+    run_id: uuid.UUID,
+    *,
+    message: str,
+) -> str | None:
+    """``git add -A && git commit`` in the run worktree.
+
+    Stages every agent-written file as a real commit on the run's
+    branch — so the subsequent merge into main has a clear set of
+    changes to reconcile. Returns the new commit SHA on success.
+
+    Idempotent for the "nothing to commit" case (``returncode != 0``
+    from ``git commit`` with an empty index returns ``None`` without
+    raising). Other failures raise :class:`ProductWorkspaceError`.
+    """
+    worktree = run_worktree_path(run_id)
+    await _git("add", "-A", cwd=worktree)
+    # ``--allow-empty`` would mask the "nothing changed" case which we
+    # want to treat as a benign no-op — detect via status check first.
+    status = await _git("status", "--porcelain", cwd=worktree)
+    if not status.stdout.strip():
+        # No staged changes — the agent didn't write anything in this
+        # round. Nothing to commit; return ``None`` so callers can
+        # short-circuit (e.g. verify still calls this, finds nothing,
+        # moves on to merge attempt which will be a no-op too).
+        return None
+    await _git("commit", "-m", message, cwd=worktree)
+    head = await _git("rev-parse", "HEAD", cwd=worktree)
+    return head.stdout.strip()
+
+
+async def merge_main_into_worktree(product_id: uuid.UUID, run_id: uuid.UUID) -> MergeOutcome:
+    """Pull ``main`` into the run worktree.
+
+    Detects pre-ship conflicts: if ``main`` has moved since the worktree
+    branched (e.g. a parallel run already shipped to main), git tries to
+    merge those changes into the agent's branch. Clean → run is now
+    fast-forwardable; conflict → the worktree carries conflict markers
+    and the agent gets another loop round to resolve them.
+
+    Does NOT abort on conflict — leaves the worktree in the mid-merge
+    state so the agent's next round (or the caller's explicit recovery)
+    sees the markers via standard file_read/file_edit tools. This
+    matches the Claude Code-style "agent fixes its own merge" model.
+
+    Returns :class:`MergeOutcome` with ``status="clean"`` and empty
+    paths on success; ``status="conflict"`` with the unmerged paths on
+    conflict. Non-conflict git errors raise :class:`ProductWorkspaceError`.
+    """
+    worktree = run_worktree_path(run_id)
+    # ``--no-ff`` forces a merge commit even when main hasn't moved; this
+    # keeps the run-branch history honest (it always carries an explicit
+    # "merged main at <SHA>" anchor). Cleaner audit at the cost of one
+    # extra commit per round.
+    result = await _git(
+        "merge",
+        "--no-ff",
+        "--no-edit",
+        "main",
+        cwd=worktree,
+        check=False,
+    )
+    if result.returncode == 0:
+        return MergeOutcome(status="clean")
+    # git exits 1 on conflicts. Capture the unmerged paths for the
+    # caller to surface to the agent.
+    unmerged = await _git(
+        "diff",
+        "--name-only",
+        "--diff-filter=U",
+        cwd=worktree,
+        check=False,
+    )
+    if result.returncode == 1 and unmerged.returncode == 0:
+        paths = [p for p in unmerged.stdout.splitlines() if p.strip()]
+        logger.info(
+            "merge_main_into_worktree_conflict",
+            product_id=str(product_id),
+            run_id=str(run_id),
+            conflict_paths=paths,
+        )
+        return MergeOutcome(status="conflict", conflict_paths=paths)
+    # Any other exit code (e.g. 128 on FS errors) is not a merge result.
+    raise ProductWorkspaceError(f"git merge main exited {result.returncode}", stderr=result.stderr)
+
+
+async def merge_to_main(product_id: uuid.UUID, run_id: uuid.UUID) -> str:
+    """Fast-forward ``main`` onto the run branch.
+
+    Pre-conditions: the run worktree just committed (so its branch
+    head is up to date) AND a previous ``merge_main_into_worktree``
+    returned clean (so main is an ancestor of the run branch — the
+    fast-forward is guaranteed). Callers must hold the
+    :func:`product_workspace_lock` for this product around the
+    verify→ship sequence so no parallel run can move main between
+    the worktree's merge and this fast-forward.
+
+    Returns the new ``main`` SHA. Raises :class:`ProductWorkspaceError`
+    if fast-forward is not possible (e.g. main moved while the lock was
+    held by a different process — shouldn't happen with proper locking
+    but surfaces if it does).
+    """
+    product_path = product_workspace_path(product_id)
+    branch = run_branch_name(run_id)
+    await _git("merge", "--ff-only", branch, cwd=product_path)
+    head = await _git("rev-parse", "HEAD", cwd=product_path)
+    sha = head.stdout.strip()
+    logger.info(
+        "merge_to_main",
+        product_id=str(product_id),
+        run_id=str(run_id),
+        main_sha=sha,
+    )
+    return sha
+
+
+async def force_merge_theirs(product_id: uuid.UUID, run_id: uuid.UUID) -> str:
+    """``git merge -X theirs <branch>`` from product main.
+
+    Executor B2b ``ship_anyway`` path. The founder pressed "Approve &
+    ship" on a run that hit verification trouble (merge conflict or
+    contract fail); we honor that intent by overriding main with the
+    run's version on every conflicting path. Non-conflicting paths
+    merge normally.
+
+    ``-X theirs`` is git's strategy option, NOT a separate strategy —
+    it pairs with the default ``recursive`` strategy. "Theirs" here
+    means "the branch being merged IN" (= the run branch), so the run's
+    edits win. The naming is git's; we surface it under the more
+    user-friendly ``force_merge_theirs`` here.
+
+    Returns the new main SHA. Use ONLY for explicit founder-overridden
+    ship paths — the agent's auto-merge path goes through ``merge_to_main``.
+    """
+    product_path = product_workspace_path(product_id)
+    branch = run_branch_name(run_id)
+    await _git(
+        "merge",
+        "-X",
+        "theirs",
+        "--no-edit",
+        "--no-ff",
+        branch,
+        cwd=product_path,
+    )
+    head = await _git("rev-parse", "HEAD", cwd=product_path)
+    sha = head.stdout.strip()
+    logger.info(
+        "force_merge_theirs",
+        product_id=str(product_id),
+        run_id=str(run_id),
+        main_sha=sha,
+    )
+    return sha
+
+
+async def abort_merge(product_id: uuid.UUID, run_id: uuid.UUID | None = None) -> None:
+    """``git merge --abort`` in either the product main (when ``run_id``
+    is ``None``) or the run worktree. Best-effort cleanup; a "no merge
+    in progress" exit is treated as success."""
+    target = product_workspace_path(product_id) if run_id is None else run_worktree_path(run_id)
+    await _git("merge", "--abort", cwd=target, check=False)
+
+
+@asynccontextmanager
+async def product_workspace_lock(
+    session: AsyncSession, product_id: uuid.UUID
+) -> AsyncIterator[None]:
+    """Serialize verify→ship sequences on the same product workspace.
+
+    Reuses the same Postgres ``pg_try_advisory_lock`` primitive
+    :mod:`backend.execution.advisory_lock` already uses for run-dispatch
+    locking — the lock key is derived from the *product_id*, so it's a
+    different lock from the run-dispatch ones (no conflict). When two
+    sessions race for the same product, the loser raises
+    :class:`ProductWorkspaceBusy` and the caller (typically the
+    verifier) retries on the next AgentWorker tick.
+
+    On SQLite (unit tests), the underlying helper falls back to a
+    per-process ``asyncio.Lock`` keyed by the same UUID — semantics
+    match well enough for the test tier.
+    """
+    acquired = await try_run_dispatch_lock(session, product_id)
+    if not acquired:
+        raise ProductWorkspaceBusy(f"product workspace {product_id} is busy with another ship")
+    try:
+        yield
+    finally:
+        await release_run_dispatch_lock(session, product_id)
+
+
+class ProductWorkspaceBusy(ProductWorkspaceError):
+    """The product workspace lock is held by another session.
+
+    Raised by :func:`product_workspace_lock` on the loser path. The
+    caller is expected to retry on the next worker tick rather than
+    block — long-running merges on a single product workspace should
+    serialize, not pile up.
+    """
+
+
 __all__ = [
+    "MergeOutcome",
+    "ProductWorkspaceBusy",
     "ProductWorkspaceError",
+    "abort_merge",
     "add_run_worktree",
+    "commit_worktree",
+    "force_merge_theirs",
     "init_product_workspace",
+    "merge_main_into_worktree",
+    "merge_to_main",
+    "product_workspace_lock",
     "product_workspace_path",
     "remove_run_worktree",
     "run_branch_name",
