@@ -483,12 +483,16 @@ async def _ship_decision_run(
     )
 
     work_step = (
-        await session.execute(
-            select(WorkStep)
-            .where(WorkStep.run_id == run.id)
-            .order_by(WorkStep.created_at.desc())
+        (
+            await session.execute(
+                select(WorkStep)
+                .where(WorkStep.run_id == run.id)
+                .order_by(WorkStep.created_at.desc())
+            )
         )
-    ).scalars().first()
+        .scalars()
+        .first()
+    )
     if work_step is not None:
         work_step.status = WorkStepStatus.VERIFIED
         # DB-level ProofState enum is {UNTESTED, PROVED, REFUTED} — PROVED is

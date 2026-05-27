@@ -285,9 +285,7 @@ async def test_resolve_ship_promotes_workstep_creates_deliverable_and_ships_run(
 # ---------------------------------------------------------------------------
 
 
-async def test_resolve_discard_abandons_run_with_no_deliverable(
-    client, db, workspace_id
-) -> None:
+async def test_resolve_discard_abandons_run_with_no_deliverable(client, db, workspace_id) -> None:
     """Founder ``discard`` → run goes to CANCELLED, no Deliverable minted."""
     run_id, _ = await _seed_run_with_step(db, ws=workspace_id)
     cp = await _seed_executor_decision(
@@ -312,9 +310,7 @@ async def test_resolve_discard_abandons_run_with_no_deliverable(
         assert run.status is RunStatus.CANCELLED
         # No deliverable on discard.
         deliverable_count = len(
-            (
-                await s.execute(select(Deliverable).where(Deliverable.run_id == run_id))
-            )
+            (await s.execute(select(Deliverable).where(Deliverable.run_id == run_id)))
             .scalars()
             .all()
         )
