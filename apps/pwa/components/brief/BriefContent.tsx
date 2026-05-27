@@ -1,3 +1,4 @@
+import RailProducts from "@/components/shell/RailProducts";
 import type { BriefView } from "@/lib/api/types";
 import { useTranslations } from "next-intl";
 import NeedsYou from "./NeedsYou";
@@ -12,6 +13,12 @@ import WorkingNow from "./WorkingNow";
  *
  * `onNeedsYouResolved` bubbles up a successful Safe-Mode approve/deny so the
  * container can re-read and drop the resolved item.
+ *
+ * The mobile-only Products section at the bottom mirrors the desktop left
+ * rail's PRODUCTS block — on mobile the rail is hidden and there was no other
+ * entry point to a product detail page short of clicking through a work-stream
+ * row. The CSS wrapper (.brief__mobile-products) hides the block on desktop
+ * where the rail already shows it.
  */
 export default function BriefContent({
   view,
@@ -27,6 +34,9 @@ export default function BriefContent({
       <WorkingNow items={view.working} />
       <NeedsYou items={view.needsYou} onResolved={onNeedsYouResolved} />
       <WorkStream items={view.stream} />
+      <div className="brief__mobile-products">
+        <RailProducts />
+      </div>
     </div>
   );
 }

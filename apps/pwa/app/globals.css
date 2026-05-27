@@ -691,6 +691,20 @@ main.login {
   font-size: 0.9rem;
 }
 
+/* Brief renders the desktop-rail PRODUCTS block at the bottom of the page so
+   mobile users still have a one-tap path into product detail. The left rail
+   shows the same component on desktop, so we hide the mobile-only embed at
+   the breakpoint where the rail appears (matches the .rail / .tabbar
+   visibility switch at 767px). */
+.brief__mobile-products {
+  display: block;
+}
+@media (min-width: 768px) {
+  .brief__mobile-products {
+    display: none;
+  }
+}
+
 /* ── Working on now (the live-work hero) ──────────────────────────────────── */
 .working__empty {
   margin: 0;
