@@ -48,12 +48,12 @@ def test_alembic_history_loads():
         "compensation_wiring",
         "gdpr_l1_and_rls",
         "product_id_not_null",
-        "backfill_ship_or_discard_decisions",
+        "backfill_ship_or_discard",
     ):
         assert rev in result.stdout, f"missing revision {rev} in:\n{result.stdout}"
 
 
-def test_alembic_head_is_backfill_ship_or_discard_decisions():
+def test_alembic_head_is_backfill_ship_or_discard():
     repo = Path(__file__).parent.parent
     result = subprocess.run(
         [sys.executable, "-m", "alembic", "heads"],
@@ -62,7 +62,7 @@ def test_alembic_head_is_backfill_ship_or_discard_decisions():
         text=True,
     )
     assert result.returncode == 0
-    assert "backfill_ship_or_discard_decisions" in result.stdout
+    assert "backfill_ship_or_discard" in result.stdout
 
 
 def test_target_metadata_covers_all_bases():

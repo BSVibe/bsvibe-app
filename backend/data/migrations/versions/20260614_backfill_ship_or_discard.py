@@ -1,4 +1,4 @@
-"""backfill_ship_or_discard_decisions — L-P2: surface existing REVIEW_READY runs.
+"""backfill_ship_or_discard — L-P2: surface existing REVIEW_READY runs.
 
 Pre-L-P2, a run that verified left the founder UI silent: no Decision was
 ever minted on the REVIEW_READY transition, so the run sat invisible in
@@ -13,7 +13,7 @@ becomes actionable as soon as the lift lands.
 Postgres only. The SQLite test tier rebuilds from ``create_all`` and
 never carries pre-lift rows that need backfill.
 
-Revision ID: backfill_ship_or_discard_decisions
+Revision ID: backfill_ship_or_discard
 Revises: product_id_not_null
 Create Date: 2026-05-27
 """
@@ -26,7 +26,7 @@ from typing import Union
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "backfill_ship_or_discard_decisions"
+revision: str = "backfill_ship_or_discard"
 down_revision: Union[str, Sequence[str], None] = "product_id_not_null"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
