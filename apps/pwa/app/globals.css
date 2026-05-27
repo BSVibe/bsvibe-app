@@ -81,6 +81,19 @@ button:disabled {
   cursor: default;
 }
 
+/* Inherit the html system-font stack on every form control. User-agent
+   stylesheets default <input>, <textarea>, <select> to the platform's UI
+   font — typically Arial on macOS — which broke the ui-sans-serif /
+   system-ui / -apple-system stack the rest of the app uses; /impeccable
+   audit observed inputs rendering Arial while their labels stayed in the
+   intended sans. Only the family is overridden (not the shorthand) so
+   per-component font-size / line-height stays exactly as authored. */
+input,
+textarea,
+select {
+  font-family: inherit;
+}
+
 /* Global keyboard-focus ring for interactive elements (WCAG 2.4.7 AA).
    The existing per-input/per-link rules scoped focus styling to ``.login
    input``, ``.decisions-row__input``, ``.lane__link`` and a dozen other
@@ -4172,7 +4185,15 @@ main.login {
   }
 
   .shell__main {
-    padding: 20px 16px 120px;
+    /* Bottom padding uses the shared --mobile-fab-clear token so the FAB
+       (which floats ~24+44+24 = ~92px from the viewport bottom) plus the
+       58px-tall fixed tabbar never sit on top of the last content row.
+       The previous 120px hard-coded value left as little as ~28px of gap
+       and caused the FAB to occlude the right edge of code blocks in the
+       Deliverable / Run detail pages on a 390-wide viewport — surfaced by
+       /impeccable audit. The token replacement also keeps Settings, which
+       already used the same token via .settings__body, consistent. */
+    padding: 20px 16px var(--mobile-fab-clear);
   }
 
   .brief {
