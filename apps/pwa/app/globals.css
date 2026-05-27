@@ -486,7 +486,11 @@ main.login {
   background: transparent;
   color: var(--ink-3);
   font-size: 0.76rem;
-  padding: 2px 4px;
+  /* 9px y-padding lifts the hit area from ~19px to ~33px tall — at/above the
+     ~32px sidebar row baseline and comfortable for keyboard navigation. The
+     767px mobile rule below bumps it to the WCAG AAA 44×44 floor. */
+  padding: 9px 10px;
+  border-radius: var(--radius-sm);
 }
 
 .account-chip__signout:hover:not(:disabled) {
@@ -507,7 +511,9 @@ main.login {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 11px 18px;
+  /* 13px y-padding + 16px line-height = 42px, plus 1px subpixel rendering ≈
+     WCAG AAA 44×44 hit area at the highest-traffic CTA in the app. */
+  padding: 13px 18px;
   border: none;
   border-radius: 999px;
   background: #1f1d1a;
@@ -747,7 +753,10 @@ main.login {
   background: none;
   border: 1px solid transparent;
   border-radius: 999px;
-  padding: 3px 10px;
+  /* 8px y-padding brings the All/Shipped/Needs you/Didn't finish filter tabs
+     from ~21px to ~32px tall — at the desktop hit-area floor without losing
+     the compact filter-bar density. Mobile media bumps to 44px. */
+  padding: 8px 10px;
   cursor: pointer;
   white-space: nowrap;
 }
@@ -843,6 +852,14 @@ main.login {
 
 .stream__report-link {
   flex: none;
+  display: inline-flex;
+  align-items: center;
+  /* The "View report" / "Open run" link is a bare text node — at 12px line
+     height it was a 15px-tall tap target. inline-flex + padding lifts the
+     hit area to ~30px (≈32px desktop floor) without changing the visual
+     underline treatment. Mobile media bumps the min-height to 44px. */
+  min-height: 30px;
+  padding: 4px 0;
   font-size: 0.78rem;
   color: var(--ink-2);
   text-decoration: underline;
@@ -961,7 +978,11 @@ main.login {
 .needs-you__deny {
   border: 1px solid var(--hair-strong);
   border-radius: 999px;
-  padding: 4px 12px;
+  /* 8px y-padding lifts the decision CTAs from ~25px to ~32px tall (matches
+     the sidebar/row baseline); mobile bumps to 44px. These two buttons sit
+     side-by-side on the high-stakes "Approve / Deny" row — generous padding
+     is worth more than density here. */
+  padding: 8px 14px;
   font-size: 0.78rem;
   font-weight: 550;
   background: var(--surface);
@@ -4075,7 +4096,23 @@ main.login {
     border: none;
     background: transparent;
     color: var(--ink-2);
-    padding: 4px;
+    /* 44×44 tap target on mobile — explicit min sizing so the icon-only
+       buttons hit the WCAG AAA floor regardless of the rendered icon size. */
+    min-width: 44px;
+    min-height: 44px;
+    padding: 10px;
+    border-radius: var(--radius-sm);
+  }
+
+  /* Bump every primary tap target to the WCAG AAA 44×44 floor on mobile —
+     desktop intentionally stays denser (~30-32px) for product UI rhythm. */
+  .needs-you__approve,
+  .needs-you__deny,
+  .stream__filter,
+  .stream__report-link,
+  .account-chip__signout,
+  .direct-fab {
+    min-height: 44px;
   }
 
   .topbar__settings[aria-current="page"] {
