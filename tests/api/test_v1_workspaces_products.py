@@ -155,6 +155,32 @@ async def test_products_full_lifecycle(client_with_ws) -> None:
     assert r.status_code == 204
 
 
+async def test_create_product_initialises_git_workspace(client_with_ws) -> None:
+    """W1: every ProductRow create call provisions a real git repo at
+    ``var/products/<product_id>/`` so the next AgentRunner can branch a
+    worktree off ``main`` (no lazy init needed at first-run time, though
+    the provisioner does it as a safety net for legacy rows).
+    """
+    import uuid as _uuid  # noqa: PLC0415 — local-only
+
+    from backend.storage.product_workspace import product_workspace_path  # noqa: PLC0415
+
+    c, _ = client_with_ws
+    r = await c.post(
+        "/api/v1/products",
+        json={"name": "Workspace Probe", "slug": "ws-probe"},
+    )
+    assert r.status_code == 201, r.text
+    product_id = _uuid.UUID(r.json()["id"])
+
+    path = product_workspace_path(product_id)
+    assert path.is_dir(), "product workspace dir must exist after create"
+    assert (path / ".git").is_dir(), "must be a real git repo"
+    assert (path / ".bsvibe" / "PRODUCT.md").is_file(), (
+        "initial commit's marker must be checked out"
+    )
+
+
 async def test_product_workspace_isolation(db) -> None:
     """A product in workspace A is NOT visible / patchable from workspace B."""
     app = create_app()

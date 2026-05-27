@@ -149,10 +149,6 @@ class ResolveResponse(BaseModel):
 _EXECUTOR_DECISION_QUESTIONS: dict[str, str] = {
     "verification_failed": "BSVibe couldn't verify this work — review it before it ships?",
     "human_review_required": "This work needs your review before BSVibe can call it verified.",
-    # L-P2 — synthesized by AgentRunner.transition when a run enters
-    # REVIEW_READY (work verified, Deliverable already created). The
-    # founder picks ship vs discard via the same canned actions.
-    "ship_or_discard": "This work verified — ship it or discard?",
 }
 
 
@@ -174,13 +170,8 @@ _EXECUTOR_DECISION_ACTIONS: dict[str, list[DecisionAction]] = {
         DecisionAction(key=ACTION_SHIP, label_en="Approve & ship", label_ko="승인하고 출시"),
         DecisionAction(key=ACTION_DISCARD, label_en="Discard", label_ko="폐기"),
     ],
-    # L-P2: ship_or_discard runs already have a Deliverable from the
-    # verifier's PASS path; ``_ship_decision_run`` short-circuits the
-    # Deliverable mint when one exists so this case is idempotent.
-    "ship_or_discard": [
-        DecisionAction(key=ACTION_SHIP, label_en="Ship", label_ko="출시"),
-        DecisionAction(key=ACTION_DISCARD, label_en="Discard", label_ko="폐기"),
-    ],
+    # W1: the ship_or_discard kind from L-P2 is retired. Verified runs no
+    # longer need a founder-approval gate; W2 wires the actual auto-merge.
 }
 
 
