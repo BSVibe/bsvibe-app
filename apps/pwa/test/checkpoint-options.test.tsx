@@ -34,6 +34,8 @@ const CHECKPOINT_WITH_OPTIONS: PendingCheckpoint = {
   question: "Which database should I target?",
   rationale: null,
   options: ["postgres", "sqlite", "mysql"],
+  actions: null,
+  decision: "ask_user_question",
   createdAt: "2026-05-26T10:00:00Z",
 };
 
@@ -44,6 +46,8 @@ const CHECKPOINT_FREE_TEXT: PendingCheckpoint = {
   question: "What should I do here?",
   rationale: null,
   options: null,
+  actions: null,
+  decision: "ask_user_question",
   createdAt: "2026-05-26T10:00:00Z",
 };
 
@@ -115,6 +119,40 @@ describe("CheckpointRow — structured options (B11a)", () => {
     expect(screen.getByRole("button", { name: /Answer|Resolve|Send/ })).toBeDisabled();
     await userEvent.click(screen.getByRole("radio", { name: "postgres" }));
     expect(screen.getByRole("button", { name: /Answer|Resolve|Send/ })).not.toBeDisabled();
+  });
+
+  it("L-D1: offers an Other radio that reveals a free-text textarea", async () => {
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const body = JSON.parse(init?.body as string) as { answer: string };
+      return okResolveResponse(CHECKPOINT_WITH_OPTIONS.checkpointId, body.answer);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const onResolved = vi.fn();
+    render(<CheckpointRow item={CHECKPOINT_WITH_OPTIONS} onResolved={onResolved} />);
+
+    // An "Other" radio renders alongside the LLM-supplied options.
+    const otherRadio = screen.getByRole("radio", { name: "Other" });
+    expect(otherRadio).toBeInTheDocument();
+
+    // Before Other is picked, no textarea is shown (single-select feel intact).
+    expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
+
+    await userEvent.click(otherRadio);
+
+    // Picking Other reveals a free-text textarea; submit stays disabled until
+    // the founder types something.
+    const textarea = screen.getByRole("textbox");
+    expect(textarea).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Answer|Resolve|Send/ })).toBeDisabled();
+
+    await userEvent.type(textarea, "duckdb");
+    await userEvent.click(screen.getByRole("button", { name: /Answer|Resolve|Send/ }));
+
+    await waitFor(() => expect(onResolved).toHaveBeenCalled());
+    const [, init] = fetchMock.mock.calls[0];
+    // The verbatim off-list answer is POSTed (no membership coercion).
+    expect(JSON.parse((init as RequestInit).body as string)).toEqual({ answer: "duckdb" });
   });
 
   it("falls back to a free-text textarea when no options are offered", async () => {

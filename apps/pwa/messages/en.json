@@ -267,6 +267,8 @@
     "decline": "Decline",
     "answerLabel": "Your answer",
     "answerPlaceholder": "Answer to resume this run…",
+    "otherOptionLabel": "Other",
+    "otherAnswerPlaceholder": "Write your own answer…",
     "answer": "Answer & resume",
     "proposalRationale": "Merging keeps your knowledge graph from holding the same idea twice.",
     "resolveError": "Couldn’t do that — please try again.",

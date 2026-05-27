@@ -1,28 +1,36 @@
 "use client";
 
-import { resolveCheckpoint } from "@/lib/api/checkpoints";
-import type { PendingCheckpoint } from "@/lib/api/types";
-import { useTranslations } from "next-intl";
+import { resolveCheckpoint, resolveCheckpointAction } from "@/lib/api/checkpoints";
+import type { CheckpointAction, PendingCheckpoint } from "@/lib/api/types";
+import { useLocale, useTranslations } from "next-intl";
 import { useId, useState } from "react";
 import { relativeTime } from "./relative-time";
 
 type RowState = "idle" | "working" | "error";
 
+// Sentinel for the "Other → free-text" radio. Picked so it can never collide
+// with a real LLM-supplied option string.
+const OTHER_SENTINEL = "__bsvibe_other__";
+
 /**
  * One paused-run checkpoint row in the unified Pending list. The agent is
- * blocked on a question (`item.question`); the founder's answer resumes the
- * run via POST /api/v1/checkpoints/{id}/resolve ({ answer }, non-empty — the
- * backend ResolveRequest requires min_length=1, so the submit stays disabled
- * until there is real text).
+ * blocked on a question (`item.question`); the founder's resolution resumes
+ * the run via POST /api/v1/checkpoints/{id}/resolve.
  *
- * B11a — when the work LLM offered concrete choices (`item.options` non-empty),
- * render them as a single-select (radio group) so the founder picks one
- * instead of free-typing. The backend then validates the answer is one of the
- * offered strings (400 otherwise). Free-text mode (no options) keeps the
- * existing textarea behaviour unchanged.
+ * Two interaction shapes:
  *
- * Resolves inline; a failed call keeps the row actionable with a calm message.
- * On success the container re-reads so the resolved item leaves Pending.
+ * 1. **Free-text / suggestions (L-D1).** When the work LLM offered
+ *    `options`, render them as radios PLUS an "Other" radio that reveals
+ *    a free-text textarea. The backend records whichever string was
+ *    submitted verbatim. Pure free-text (no options) → plain textarea.
+ *
+ * 2. **One-click actions (L-D2).** For executor B2b Decisions
+ *    (`verification_failed`, `human_review_required`), the backend ships
+ *    `actions` like `[{key:"ship",label_en:"Approve & ship",...}, ...]`.
+ *    Render those as dedicated buttons that POST `{ action_key }` and
+ *    trigger side effects (ship → deliverable + shipped run; discard →
+ *    cancelled run). A small "Other (free-text)" disclosure stays
+ *    available below so the founder can always type a free reply.
  */
 export default function CheckpointRow({
   item,
@@ -32,28 +40,60 @@ export default function CheckpointRow({
   onResolved: () => void;
 }) {
   const t = useTranslations("decisions");
-  const [answer, setAnswer] = useState("");
-  const [state, setState] = useState<RowState>("idle");
-  const answerId = useId();
-  const optionsGroupName = useId();
-
+  const locale = useLocale();
   const offered: string[] | null = item.options && item.options.length > 0 ? item.options : null;
   const hasOptions = offered !== null;
+  const actions: CheckpointAction[] | null =
+    item.actions && item.actions.length > 0 ? item.actions : null;
+  const hasActions = actions !== null;
 
-  const trimmed = answer.trim();
+  // In options mode the radio drives `selected`; "Other" reveals `otherText`.
+  // In free-text mode only `answer` is used. In actions mode `freeTextOpen`
+  // toggles the disclosure for an optional free-text reply alongside the
+  // action buttons (the founder may explain a discard or a custom path).
+  const [selected, setSelected] = useState<string | null>(null);
+  const [otherText, setOtherText] = useState("");
+  const [answer, setAnswer] = useState("");
+  const [freeTextOpen, setFreeTextOpen] = useState(false);
+  const [state, setState] = useState<RowState>("idle");
+
+  const answerId = useId();
+  const otherId = useId();
+  const actionFreeTextId = useId();
+  const optionsGroupName = useId();
+
+  const otherActive = hasOptions && selected === OTHER_SENTINEL;
+  const otherTrimmed = otherText.trim();
+  const freeTrimmed = answer.trim();
   const working = state === "working";
-  const submitDisabled =
-    working || (offered !== null ? !offered.includes(answer) : trimmed.length === 0);
 
-  async function submit() {
-    if (submitDisabled) return;
+  const labelFor = (a: CheckpointAction): string => (locale === "ko" ? a.label_ko : a.label_en);
+
+  // Free-text payload (used outside of the action-button path).
+  const freeTextPayload = (() => {
+    if (hasActions) return freeTrimmed;
+    if (!hasOptions) return freeTrimmed;
+    if (selected === OTHER_SENTINEL) return otherTrimmed;
+    return selected ?? "";
+  })();
+  const freeTextSubmitDisabled = working || freeTextPayload.length === 0;
+
+  async function submitFreeText() {
+    if (freeTextSubmitDisabled) return;
     setState("working");
     try {
-      // In options mode we POST the chosen option verbatim (no trim — the
-      // founder selected it from a fixed list, and the backend matches by
-      // strict string equality). In free-text mode we post the trimmed answer.
-      const payload = hasOptions ? answer : trimmed;
-      await resolveCheckpoint(item.checkpointId, payload);
+      await resolveCheckpoint(item.checkpointId, freeTextPayload);
+      onResolved();
+    } catch {
+      setState("error");
+    }
+  }
+
+  async function submitAction(actionKey: string) {
+    if (working) return;
+    setState("working");
+    try {
+      await resolveCheckpointAction(item.checkpointId, actionKey);
       onResolved();
     } catch {
       setState("error");
@@ -70,30 +110,122 @@ export default function CheckpointRow({
         </span>
       </span>
       {item.rationale ? <p className="decisions-row__rationale">{item.rationale}</p> : null}
-      {hasOptions && offered !== null ? (
-        // Single-select via a radio group. role=radiogroup with aria-label is
-        // the founder-facing "Your answer" prompt; each radio carries the
-        // accessible name of the offered option so tests / screen readers can
-        // address them by label.
-        <fieldset className="decisions-row__options" aria-label={t("answerLabel")}>
-          {offered.map((opt) => {
-            const id = `${optionsGroupName}-${opt}`;
-            return (
-              <label key={opt} className="decisions-row__option" htmlFor={id}>
-                <input
-                  id={id}
-                  type="radio"
-                  name={optionsGroupName}
-                  value={opt}
-                  checked={answer === opt}
-                  disabled={working}
-                  onChange={() => setAnswer(opt)}
-                />
-                <span>{opt}</span>
+
+      {hasActions && actions !== null ? (
+        <>
+          <div className="decisions-row__action-buttons">
+            {actions.map((a) => (
+              <button
+                key={a.key}
+                type="button"
+                className={`decisions-row__action decisions-row__action--${a.key}`}
+                onClick={() => submitAction(a.key)}
+                disabled={working}
+              >
+                {labelFor(a)}
+              </button>
+            ))}
+          </div>
+          {/* Optional free-text reply alongside the one-click actions. */}
+          {!freeTextOpen ? (
+            <button
+              type="button"
+              className="decisions-row__free-text-toggle"
+              onClick={() => setFreeTextOpen(true)}
+              disabled={working}
+            >
+              {t("otherOptionLabel")}
+            </button>
+          ) : (
+            <>
+              <label className="decisions-row__answer-label" htmlFor={actionFreeTextId}>
+                {t("answerLabel")}
               </label>
-            );
-          })}
-        </fieldset>
+              <textarea
+                id={actionFreeTextId}
+                className="decisions-row__answer"
+                rows={2}
+                placeholder={t("otherAnswerPlaceholder")}
+                value={answer}
+                disabled={working}
+                onChange={(e) => setAnswer(e.target.value)}
+              />
+              <button
+                type="button"
+                className="decisions-row__primary"
+                onClick={submitFreeText}
+                disabled={freeTextSubmitDisabled}
+              >
+                {working ? t("working") : t("answer")}
+              </button>
+            </>
+          )}
+        </>
+      ) : hasOptions && offered !== null ? (
+        <>
+          <fieldset className="decisions-row__options" aria-label={t("answerLabel")}>
+            {offered.map((opt) => {
+              const id = `${optionsGroupName}-${opt}`;
+              return (
+                <label key={opt} className="decisions-row__option" htmlFor={id}>
+                  <input
+                    id={id}
+                    type="radio"
+                    name={optionsGroupName}
+                    value={opt}
+                    checked={selected === opt}
+                    disabled={working}
+                    onChange={() => setSelected(opt)}
+                  />
+                  <span>{opt}</span>
+                </label>
+              );
+            })}
+            <label
+              key={OTHER_SENTINEL}
+              className="decisions-row__option"
+              htmlFor={`${optionsGroupName}-other`}
+            >
+              <input
+                id={`${optionsGroupName}-other`}
+                type="radio"
+                name={optionsGroupName}
+                value={OTHER_SENTINEL}
+                checked={otherActive}
+                disabled={working}
+                onChange={() => setSelected(OTHER_SENTINEL)}
+              />
+              <span>{t("otherOptionLabel")}</span>
+            </label>
+            {otherActive ? (
+              <textarea
+                id={otherId}
+                className="decisions-row__answer"
+                rows={2}
+                placeholder={t("otherAnswerPlaceholder")}
+                value={otherText}
+                disabled={working}
+                aria-label={t("otherOptionLabel")}
+                onChange={(e) => setOtherText(e.target.value)}
+              />
+            ) : null}
+          </fieldset>
+          <span className="decisions-row__actions">
+            {state === "error" && (
+              <span className="decisions-row__error" aria-live="polite">
+                {t("resolveError")}
+              </span>
+            )}
+            <button
+              type="button"
+              className="decisions-row__primary"
+              onClick={submitFreeText}
+              disabled={freeTextSubmitDisabled}
+            >
+              {working ? t("working") : t("answer")}
+            </button>
+          </span>
+        </>
       ) : (
         <>
           <label className="decisions-row__answer-label" htmlFor={answerId}>
@@ -108,23 +240,29 @@ export default function CheckpointRow({
             disabled={working}
             onChange={(e) => setAnswer(e.target.value)}
           />
+          <span className="decisions-row__actions">
+            {state === "error" && (
+              <span className="decisions-row__error" aria-live="polite">
+                {t("resolveError")}
+              </span>
+            )}
+            <button
+              type="button"
+              className="decisions-row__primary"
+              onClick={submitFreeText}
+              disabled={freeTextSubmitDisabled}
+            >
+              {working ? t("working") : t("answer")}
+            </button>
+          </span>
         </>
       )}
-      <span className="decisions-row__actions">
-        {state === "error" && (
-          <span className="decisions-row__error" aria-live="polite">
-            {t("resolveError")}
-          </span>
-        )}
-        <button
-          type="button"
-          className="decisions-row__primary"
-          onClick={submit}
-          disabled={submitDisabled}
-        >
-          {working ? t("working") : t("answer")}
-        </button>
-      </span>
+
+      {hasActions && state === "error" ? (
+        <span className="decisions-row__error" aria-live="polite">
+          {t("resolveError")}
+        </span>
+      ) : null}
     </li>
   );
 }
