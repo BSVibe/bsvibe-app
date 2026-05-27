@@ -438,13 +438,11 @@ async def test_executor_run_contract_pass_verifies_and_review_ready(
         assert len(settle) == 1
         assert settle[0].payload.get("verified") is True
 
-        # L-P2: a verified REVIEW_READY run now mints a ``ship_or_discard``
-        # Decision so the founder can ship / discard with one click. The
-        # only Decision on this run is that synthetic one (the executor
-        # verified-PASS path itself does not mint any other Decision).
-        decisions = (await s.execute(select(Decision))).scalars().all()
-        assert len(decisions) == 1
-        assert decisions[0].decision == "ship_or_discard"
+        # W1: the L-P2 ``ship_or_discard`` synthesis is retired. Verified
+        # runs no longer get a synthetic Decision on REVIEW_READY — W2
+        # wires auto-merge instead. The executor verified-PASS path mints
+        # no Decision of its own, so the count is 0.
+        assert (await s.execute(select(Decision))).first() is None
 
     await redis.aclose()
 

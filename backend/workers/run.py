@@ -254,6 +254,69 @@ async def _resolve_judge_llm(
 # ---------------------------------------------------------------------------
 
 
+async def _product_workspace_provisioner(
+    session: AsyncSession,
+    run: ExecutionRun,
+    workspace_dir: Path,
+) -> bool:
+    """W1: provision the run's workspace_dir as a git worktree of the
+    product's main branch. Lazily initialises the product workspace if
+    missing (the startup hook for backfill — keeps the lift simple).
+
+    Returns ``True`` when a worktree was provisioned (so the composite
+    provisioner knows the slot is taken); ``False`` when this run has no
+    product_id and the empty scratch dir should stand (legacy / test
+    behavior). A raised :class:`ProductWorkspaceError` surfaces to
+    AgentWorker, which marks the run terminal with a usable reason.
+
+    The empty ``workspace_dir`` created by AgentWorker is REMOVED before
+    ``git worktree add`` (git refuses to write into an existing dir).
+    """
+    if run.product_id is None:
+        return False
+
+    from backend.storage.product_workspace import (  # noqa: PLC0415 — lazy
+        add_run_worktree,
+        init_product_workspace,
+    )
+
+    await init_product_workspace(run.product_id)
+    if workspace_dir.exists() and not any(workspace_dir.iterdir()):  # noqa: ASYNC240
+        workspace_dir.rmdir()  # noqa: ASYNC240
+    await add_run_worktree(run.product_id, run.id)
+    return True
+
+
+def _build_composite_workspace_provisioner(
+    *,
+    github: Callable[[AsyncSession, ExecutionRun, Path], Awaitable[None]],
+    product: Callable[[AsyncSession, ExecutionRun, Path], Awaitable[bool]],
+) -> Callable[[AsyncSession, ExecutionRun, Path], Awaitable[None]]:
+    """Compose the two W1 provisioners in priority order:
+
+    1. github connector binding → existing clone path
+    2. product workspace (no github binding) → new git worktree
+    3. neither → leave scratch dir empty (legacy)
+
+    The github provisioner is a no-op on no-binding (silent return), so
+    we detect "did github do something" by checking whether the dir is
+    still empty after it ran. If yes, try product. If product also
+    returns False, the empty dir stays — matching pre-W1 behavior for
+    tests that inject neither binding nor product.
+    """
+
+    async def _composed(session: AsyncSession, run: ExecutionRun, workspace_dir: Path) -> None:
+        await github(session, run, workspace_dir)
+        # github provisioner removes the empty dir + clones into it. If the
+        # dir is now missing OR non-empty, github filled it — done.
+        if not workspace_dir.exists() or any(workspace_dir.iterdir()):  # noqa: ASYNC240
+            return
+        # Empty dir + no github → product workspace if available.
+        await product(session, run, workspace_dir)
+
+    return _composed
+
+
 def build_agent_execution_deps(
     *,
     settings: Settings | None = None,
@@ -459,15 +522,20 @@ def build_agent_execution_deps(
             suggested_skill_description=suggested_skill_description,
         )
 
-    # github delivery path: a run whose workspace has a github connector binding
-    # WORKS INSIDE a clone of the target repo (so its file edits build a real PR
-    # diff). The provisioner clones onto a per-run branch before the loop drives;
-    # no github binding → it is a no-op and the empty scratch dir is used (the
-    # non-github path is unchanged). The cipher is resolved LAZILY (only when a
-    # github binding is actually present), so building the deps never forces the
-    # KMS key for non-github runs.
-    provisioner = build_github_workspace_provisioner(
+    # W1: composed workspace provisioner — first try github (clones target
+    # repo onto a per-run branch when a binding exists), then fall back to
+    # the product workspace path (git worktree from product's main branch
+    # when run.product_id is set), else leave the empty scratch dir (the
+    # Direct-path tests + no-product runs are unaffected).
+    #
+    # The cipher is resolved LAZILY inside the github branch only — non-
+    # github runs never force the KMS key.
+    github_provisioner = build_github_workspace_provisioner(
         cipher=lambda: CredentialCipher(_key_from_settings())
+    )
+    provisioner = _build_composite_workspace_provisioner(
+        github=github_provisioner,
+        product=_product_workspace_provisioner,
     )
 
     return AgentExecutionDeps(

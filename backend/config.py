@@ -92,7 +92,16 @@ class Settings(BaseSettings):
     # Worker runtime (backend.workers.run) — each ExecutionRun drives inside
     # ``<run_workspace_root>/<run_id>/``. The agent loop mounts this dir into
     # the sandbox; the work LLM's file writes land here.
+    #
+    # W1 onwards (when run.product_id is set), this dir is provisioned as a
+    # ``git worktree`` of the product workspace's ``main`` branch — see
+    # :mod:`backend.storage.product_workspace`.
     run_workspace_root: str = "var/runs"
+
+    # W1 — product workspace root. Each ProductRow gets a canonical git repo
+    # at ``<product_workspace_root>/<product_id>/`` on the ``main`` branch.
+    # Per-run worktrees branch from this and merge back on ship.
+    product_workspace_root: str = "var/products"
 
     # Audit relay sink (backend.workers.relays) — the RelayWorker drains
     # ``audit_outbox`` into this HTTP endpoint when set. Empty (the default)

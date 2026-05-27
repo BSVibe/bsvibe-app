@@ -48,3 +48,8 @@ vault/
 data/local/
 tmp/
 logs/
+
+# W1 — runtime product workspaces (git repos) + per-run worktrees.
+# Never committed to the BSVibe repo itself.
+var/products/
+var/runs/

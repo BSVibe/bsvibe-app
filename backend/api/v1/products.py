@@ -7,6 +7,7 @@ import uuid
 from datetime import datetime
 from typing import Annotated, Any, Literal
 
+import structlog
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import select
@@ -17,6 +18,8 @@ from backend.api.deps import get_db_session, get_workspace_id, require_role
 from backend.connectors.db import ConnectorAccountRow
 from backend.workspaces.db import ProductResourceRow, ProductRow
 from backend.workspaces.resource_bindings import ResourceBindingRepository
+
+logger = structlog.get_logger(__name__)
 
 router = APIRouter()
 
@@ -102,6 +105,25 @@ async def create_product(
             status_code=status.HTTP_409_CONFLICT,
             detail=f"slug={payload.slug!r} already exists in this workspace",
         ) from None
+    # W1 — every product gets a canonical git workspace immediately.
+    # The init is FS-side; a failure here logs but doesn't undo the DB
+    # commit (the product is real; the workspace can be re-initialised on
+    # next request via the startup hook). The strict failure path (raise +
+    # rollback) would force the founder to retry the whole POST on a
+    # transient disk error, which is a worse UX.
+    from backend.storage.product_workspace import (  # noqa: PLC0415 — lazy to avoid import cycle
+        ProductWorkspaceError,
+        init_product_workspace,
+    )
+
+    try:
+        await init_product_workspace(row.id)
+    except ProductWorkspaceError:
+        logger.warning(
+            "product_workspace_init_failed_at_create",
+            product_id=str(row.id),
+            exc_info=True,
+        )
     return ProductResponse.model_validate(row)
 
 

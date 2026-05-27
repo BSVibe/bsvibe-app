@@ -21,6 +21,28 @@ import pytest
 
 
 @pytest.fixture(autouse=True)
+def _isolate_w1_workspace_roots(tmp_path, monkeypatch) -> None:
+    """W1: point product/run workspace roots at this test's ``tmp_path``.
+
+    Without this, every test that goes through the create-product API path
+    (or the new product workspace provisioner) would write to the host's
+    ``var/products/`` and ``var/runs/`` — leaving FS detritus across runs
+    and risking collisions on CI. The fixture is autouse + tmp_path-scoped
+    so each test gets its own roots. Settings has ``model_config`` frozen?
+    No — Settings is a Pydantic BaseSettings instance and ``monkeypatch.
+    setattr`` works on it; the ``raising=False`` matters only if a future
+    rename of either field drops the attribute.
+    """
+    from backend.config import get_settings
+
+    settings = get_settings()
+    monkeypatch.setattr(
+        settings, "product_workspace_root", str(tmp_path / "products"), raising=False
+    )
+    monkeypatch.setattr(settings, "run_workspace_root", str(tmp_path / "runs"), raising=False)
+
+
+@pytest.fixture(autouse=True)
 def _reset_live_event_bus_singleton() -> Iterator[None]:
     """Clear the process-wide ``LiveEventBus`` state between tests.
 
