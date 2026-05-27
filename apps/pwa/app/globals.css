@@ -4172,7 +4172,15 @@ main.login {
   }
 
   .shell__main {
-    padding: 20px 16px 120px;
+    /* Bottom padding uses the shared --mobile-fab-clear token so the FAB
+       (which floats ~24+44+24 = ~92px from the viewport bottom) plus the
+       58px-tall fixed tabbar never sit on top of the last content row.
+       The previous 120px hard-coded value left as little as ~28px of gap
+       and caused the FAB to occlude the right edge of code blocks in the
+       Deliverable / Run detail pages on a 390-wide viewport — surfaced by
+       /impeccable audit. The token replacement also keeps Settings, which
+       already used the same token via .settings__body, consistent. */
+    padding: 20px 16px var(--mobile-fab-clear);
   }
 
   .brief {
