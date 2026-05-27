@@ -56,6 +56,7 @@ class _StubJudgeLlm:
     async def complete(self, *, messages, response_format):  # type: ignore[no-untyped-def]
         return {"passed": True, "reasoning": ""}
 
+
 pytestmark = pytest.mark.asyncio
 
 
