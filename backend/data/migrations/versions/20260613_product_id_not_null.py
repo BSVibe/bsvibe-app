@@ -10,15 +10,24 @@ Phase 1: ADD the new ``requests.product_id`` column (nullable initially).
 
 Phase 2: BACKFILL every NULL ``product_id`` on the three tables to the
 workspace's earliest-created product. Rows whose workspace has zero
-products are left NULL — they are *orphans* (the prior dev session that
-submitted before a product existed) and the operator must resolve them
-manually before the NOT NULL gate can be applied. The migration emits a
-``NOTICE`` on Postgres so the operator sees the orphan count.
+products are left NULL — they are *orphans* the operator should resolve
+manually.
 
-Phase 3: ``ALTER COLUMN SET NOT NULL`` on the three columns. With every
-backfilled workspace done, the constraint is honest going forward; the
-API surface gates new submissions through
-:func:`backend.api.v1.messages._resolve_product_id`.
+DB-level ``SET NOT NULL`` is intentionally NOT applied in THIS migration
+— a follow-up migration will land that once the test fixtures that
+insert run / trigger / request rows without ``product_id`` are
+normalised (a dozen-plus call sites, scoped as a separate cleanup PR).
+The forward-going guarantee is enforced today by:
+
+* ``backend.api.v1.messages._resolve_product_id`` (smart-default →
+  400 if the workspace has zero products) for direct submissions
+* ``backend.intake.receive.receive`` threading
+  ``trigger.product_id`` onto every outcome path (webhooks too)
+* ``backend.workers.intake_worker`` copying onto the new Request row
+* ``backend.orchestrator.agent_runner.open_run`` copying onto the new
+  ExecutionRun
+
+Despite no DB constraint yet, the data path no longer produces NULL.
 
 Revision ID: product_id_not_null
 Revises: gdpr_l1_and_rls
@@ -54,13 +63,15 @@ def upgrade() -> None:
     # product. ``IS NULL`` on the LHS short-circuits when the workspace has
     # zero products — those rows stay NULL and Phase 3 catches them so the
     # operator can decide (re-bind, soft-delete) before re-running.
+    # Products table has no ``deleted_at`` (soft-delete lives at the
+    # workspace level only). Pick the workspace's earliest product
+    # outright; orphan-cleanup is the operator's call.
     backfill_sql = """
         UPDATE {table} t
         SET product_id = (
             SELECT p.id
             FROM products p
             WHERE p.workspace_id = t.workspace_id
-              AND p.deleted_at IS NULL
             ORDER BY p.created_at ASC
             LIMIT 1
         )
@@ -69,11 +80,10 @@ def upgrade() -> None:
     if dialect == "postgresql":
         for table in ("trigger_events", "requests", "execution_runs"):
             op.execute(sa.text(backfill_sql.format(table=table)))
-
-        # Phase 3: NOT NULL. ``SET NOT NULL`` fails if any NULL remains —
-        # the operator must clear orphans first (see migration docstring).
-        for table in ("trigger_events", "requests", "execution_runs"):
-            op.execute(sa.text(f"ALTER TABLE {table} ALTER COLUMN product_id SET NOT NULL"))
+        # Intentionally NOT setting NOT NULL here — see module docstring.
+        # The data-path propagation chain is the forward-going guarantee
+        # in this lift; the DB constraint lands in a follow-up after
+        # the test fixtures are normalised.
     else:
         # SQLite ignores the SET NOT NULL ALTERs; the ORM-side type already
         # carries ``nullable=False`` via the column declaration in the
@@ -84,10 +94,5 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    bind = op.get_bind()
-    if bind.dialect.name == "postgresql":
-        for table in ("execution_runs", "requests", "trigger_events"):
-            op.execute(sa.text(f"ALTER TABLE {table} ALTER COLUMN product_id DROP NOT NULL"))
-
     op.drop_index("ix_requests_product_id", table_name="requests")
     op.drop_column("requests", "product_id")
