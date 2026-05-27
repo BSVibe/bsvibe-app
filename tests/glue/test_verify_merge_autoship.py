@@ -36,17 +36,6 @@ from backend.execution.db import (
 )
 from backend.execution.verifier.contract import VerificationContract
 from backend.execution.verifier.service import VerificationService
-
-
-class _StubJudgeLlm:
-    """No-op judge LLM — the W2 merge tests use empty contracts so the
-    judge step never runs, but VerificationService.__init__ requires
-    one."""
-
-    async def complete(self, *, messages, response_format):
-        return {"passed": True, "reasoning": ""}
-
-
 from backend.orchestrator.agent_runner import AgentRunner
 from backend.storage.product_workspace import (
     add_run_worktree,
@@ -57,6 +46,15 @@ from backend.storage.product_workspace import (
 from backend.supervisor.sandbox import NoopSandboxManager
 
 from .._support import db_engine
+
+
+class _StubJudgeLlm:
+    """No-op judge LLM — the W2 merge tests use empty contracts so the
+    judge step never runs, but VerificationService.__init__ requires
+    one."""
+
+    async def complete(self, *, messages, response_format):  # type: ignore[no-untyped-def]
+        return {"passed": True, "reasoning": ""}
 
 pytestmark = pytest.mark.asyncio
 
