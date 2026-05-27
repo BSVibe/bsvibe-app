@@ -15,8 +15,9 @@ from __future__ import annotations
 import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.api.deps import get_current_user_row, get_db_session, get_workspace_id
@@ -24,6 +25,7 @@ from backend.config import get_settings
 from backend.identity.db import UserRow
 from backend.intake.direct import DirectTrigger
 from backend.workers.emit import STREAM_INTAKE, emit_stream_notification, get_emit_redis_client
+from backend.workspaces.db import ProductRow
 
 router = APIRouter()
 
@@ -44,6 +46,59 @@ class MessageAccepted(BaseModel):
     workspace_id: uuid.UUID
 
 
+async def _resolve_product_id(
+    *,
+    workspace_id: uuid.UUID,
+    requested: uuid.UUID | None,
+    session: AsyncSession,
+) -> uuid.UUID:
+    """L-P1: derive the product binding for a founder-direct submission.
+
+    Preference order:
+
+    1. When the caller supplied ``product_id`` and it belongs to this
+       workspace, use it verbatim.
+    2. Otherwise fall back to the workspace's earliest-created product
+       (the "smart default" — a single-product workspace never bothers
+       the founder; a multi-product workspace can override per-call).
+    3. If the workspace has no products at all, the founder can't bind
+       this submission to anything sensible — surface a 400 so they
+       create a product first rather than silently minting a NULL run.
+
+    The chosen product MUST be in the caller's workspace (any product_id
+    from another workspace silently falls through to the default).
+    """
+    if requested is not None:
+        prod = (
+            await session.execute(
+                select(ProductRow).where(
+                    ProductRow.id == requested,
+                    ProductRow.workspace_id == workspace_id,
+                )
+            )
+        ).scalar_one_or_none()
+        if prod is not None:
+            return prod.id
+
+    default_id = (
+        await session.execute(
+            select(ProductRow.id)
+            .where(ProductRow.workspace_id == workspace_id)
+            .order_by(ProductRow.created_at.asc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    if default_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "workspace has no products — create a product before submitting "
+                "direct messages so the run can be bound to one"
+            ),
+        )
+    return default_id
+
+
 @router.post("", status_code=status.HTTP_202_ACCEPTED)
 async def submit_message(
     body: MessageCreate,
@@ -56,13 +111,23 @@ async def submit_message(
     Idempotent on ``(founder_id, text)`` (see :class:`DirectTrigger`): a
     double-submit of the same text by the same founder collapses and is
     reported via ``duplicate=True`` rather than landing a second trigger.
+
+    L-P1: every direct message is bound to a product. When ``product_id``
+    is omitted, the workspace's earliest-created product is the default;
+    a workspace with zero products receives a 400 so the founder creates
+    one before submitting (no more NULL runs that vanish from project
+    detail pages).
     """
+    product_id = await _resolve_product_id(
+        workspace_id=workspace_id, requested=body.product_id, session=session
+    )
+
     trigger = DirectTrigger(session)
     outcome = await trigger.submit(
         workspace_id=workspace_id,
         founder_id=user_row.id,
         text=body.text,
-        product_id=body.product_id,
+        product_id=product_id,
         trace_id=body.trace_id,
     )
     await session.commit()

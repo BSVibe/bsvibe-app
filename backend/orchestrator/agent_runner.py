@@ -54,7 +54,11 @@ class AgentRunner:
         run = ExecutionRun(
             id=uuid.uuid4(),
             workspace_id=request.workspace_id,
-            product_id=None,
+            # L-P1: propagate product_id from the Request (the Request copies
+            # it from the TriggerEvent during intake). The previous hardcoded
+            # ``None`` is what dropped product binding on every run, so e.g.
+            # founder-direct submits never showed up on a product detail page.
+            product_id=request.product_id,
             request_id=request.id,
             status=RunStatus.OPEN,
             payload={"request_id": str(request.id)},

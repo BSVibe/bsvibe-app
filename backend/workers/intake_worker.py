@@ -113,11 +113,17 @@ class IntakeWorker(BaseWorker):
                     continue
 
                 now = datetime.now(tz=UTC)
+                # L-P1: propagate product_id from the trigger (set either by
+                # ``receive()`` resolving a webhook's ResourceBinding, or by
+                # the direct path resolving the founder's selected product).
+                # The Request row carries it forward so AgentRunner can mint
+                # the ExecutionRun with the same binding — no more NULL run.
                 session.add(
                     RequestRow(
                         id=uuid.uuid4(),
                         workspace_id=trig.workspace_id,
                         trigger_event_id=trig.id,
+                        product_id=outcome.product_id,
                         status=RequestStatus.OPEN,
                         payload=dict(outcome.request_payload),
                         created_at=now,
