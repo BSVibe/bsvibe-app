@@ -28,9 +28,21 @@ from pathlib import Path
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.execution.db import ExecutionRun, ExecutionRunHistory, RunStatus
+from backend.execution.db import (
+    Decision,
+    DecisionStatus,
+    ExecutionRun,
+    ExecutionRunHistory,
+    RunStatus,
+)
 from backend.execution.orchestrator import LoopResult, RunCompute
 from backend.intake.db import RequestRow
+
+#: L-P2: Decision kind synthesized when a run enters REVIEW_READY (verified
+#: + deliverable created, awaiting founder's ship/discard call). Reuses the
+#: shared one-click action map from :mod:`backend.api.v1.checkpoints` so the
+#: PWA renders the same buttons as for executor B2b Decisions.
+SHIP_OR_DISCARD_DECISION_KIND = "ship_or_discard"
 
 logger = structlog.get_logger(__name__)
 
@@ -139,7 +151,14 @@ class AgentRunner:
         to_status: RunStatus,
         reason: str | None = None,
     ) -> bool:
-        """Append history + flip ExecutionRun.status. Returns False on no-op."""
+        """Append history + flip ExecutionRun.status. Returns False on no-op.
+
+        L-P2: when transitioning to ``REVIEW_READY``, also synthesize a
+        ``ship_or_discard`` Decision so the run surfaces in the founder's
+        Decisions UI with one-click ship/discard buttons. Without this,
+        verified-but-unshipped runs sat invisible — the e2e-hello reality
+        audit hit exactly this case.
+        """
         run = await self._session.get(ExecutionRun, run_id)
         if run is None:
             return False
@@ -159,6 +178,8 @@ class AgentRunner:
                 created_at=datetime.now(tz=UTC),
             )
         )
+        if to_status is RunStatus.REVIEW_READY:
+            await self._mint_ship_or_discard_decision(run)
         await self._session.flush()
         logger.info(
             "agent_runner_transitioned",
@@ -167,6 +188,40 @@ class AgentRunner:
             to_status=to_status.value,
         )
         return True
+
+    async def _mint_ship_or_discard_decision(self, run: ExecutionRun) -> None:
+        """Synthesize a pending ``ship_or_discard`` Decision for ``run``.
+
+        Idempotent: a second transition into REVIEW_READY (or a retry) won't
+        mint duplicates; an already-pending Decision of this kind on this
+        run short-circuits. The Decision payload carries no question — the
+        founder-facing line comes from
+        :data:`backend.api.v1.checkpoints._EXECUTOR_DECISION_QUESTIONS`'s
+        kind-derived fallback.
+        """
+        from sqlalchemy import select  # noqa: PLC0415 — local-only
+
+        existing = (
+            await self._session.execute(
+                select(Decision).where(
+                    Decision.run_id == run.id,
+                    Decision.decision == SHIP_OR_DISCARD_DECISION_KIND,
+                    Decision.status == DecisionStatus.PENDING,
+                )
+            )
+        ).scalar_one_or_none()
+        if existing is not None:
+            return
+        self._session.add(
+            Decision(
+                id=uuid.uuid4(),
+                run_id=run.id,
+                workspace_id=run.workspace_id,
+                decision=SHIP_OR_DISCARD_DECISION_KIND,
+                payload={"reason": "review_ready"},
+                status=DecisionStatus.PENDING,
+            )
+        )
 
     async def _find_existing_run(self, *, request_id: uuid.UUID) -> ExecutionRun | None:
         from sqlalchemy import select  # noqa: PLC0415 — local-only lookup

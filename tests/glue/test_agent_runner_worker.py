@@ -11,13 +11,15 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from backend.execution.db import (
+    Decision,
+    DecisionStatus,
     ExecutionBase,
     ExecutionRun,
     ExecutionRunHistory,
     RunStatus,
 )
 from backend.intake.db import IntakeBase, RequestRow, RequestStatus, TriggerEventRow, TriggerKind
-from backend.orchestrator.agent_runner import AgentRunner
+from backend.orchestrator.agent_runner import SHIP_OR_DISCARD_DECISION_KIND, AgentRunner
 from backend.workers.agent_worker import AgentWorker, AgentWorkerConfig
 
 from .._support import db_engine
@@ -169,6 +171,65 @@ async def test_transition_history(session_factory) -> None:
             RunStatus.RUNNING,
             RunStatus.SHIPPED,
         ]
+
+
+async def test_transition_to_review_ready_mints_ship_or_discard_decision(
+    session_factory,
+) -> None:
+    """L-P2: AgentRunner.transition into REVIEW_READY synthesizes a pending
+    ``ship_or_discard`` Decision so the verified-but-unshipped run is
+    actionable on the founder's Decisions UI (e2e-hello reality-audit fix)."""
+    req = await _seed_request(session_factory)
+    async with session_factory() as s:
+        runner = AgentRunner(s)
+        run_id = await runner.open_run(request=req)
+        await runner.transition(run_id=run_id, to_status=RunStatus.RUNNING, reason="claim")
+        await runner.transition(run_id=run_id, to_status=RunStatus.REVIEW_READY, reason="verified")
+        await s.commit()
+
+    async with session_factory() as s:
+        decisions = (
+            (await s.execute(select(Decision).where(Decision.run_id == run_id))).scalars().all()
+        )
+        assert len(decisions) == 1
+        d = decisions[0]
+        assert d.decision == SHIP_OR_DISCARD_DECISION_KIND
+        assert d.status is DecisionStatus.PENDING
+
+
+async def test_transition_to_review_ready_is_idempotent_on_decision(
+    session_factory,
+) -> None:
+    """A retry that re-transitions to REVIEW_READY must NOT mint a second
+    Decision — the founder would see two duplicate items."""
+    req = await _seed_request(session_factory)
+    async with session_factory() as s:
+        runner = AgentRunner(s)
+        run_id = await runner.open_run(request=req)
+        await runner.transition(run_id=run_id, to_status=RunStatus.RUNNING, reason="claim")
+        await runner.transition(run_id=run_id, to_status=RunStatus.REVIEW_READY, reason="verified")
+        # Bounce: REVIEW_READY → RUNNING → REVIEW_READY (rare but legal).
+        await runner.transition(run_id=run_id, to_status=RunStatus.RUNNING, reason="resume")
+        await runner.transition(
+            run_id=run_id, to_status=RunStatus.REVIEW_READY, reason="verified again"
+        )
+        await s.commit()
+
+    async with session_factory() as s:
+        decisions = (
+            (
+                await s.execute(
+                    select(Decision).where(
+                        Decision.run_id == run_id,
+                        Decision.decision == SHIP_OR_DISCARD_DECISION_KIND,
+                        Decision.status == DecisionStatus.PENDING,
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        assert len(decisions) == 1
 
 
 async def test_transition_returns_false_for_same_status(session_factory) -> None:

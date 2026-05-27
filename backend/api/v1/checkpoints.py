@@ -149,6 +149,10 @@ class ResolveResponse(BaseModel):
 _EXECUTOR_DECISION_QUESTIONS: dict[str, str] = {
     "verification_failed": "BSVibe couldn't verify this work — review it before it ships?",
     "human_review_required": "This work needs your review before BSVibe can call it verified.",
+    # L-P2 — synthesized by AgentRunner.transition when a run enters
+    # REVIEW_READY (work verified, Deliverable already created). The
+    # founder picks ship vs discard via the same canned actions.
+    "ship_or_discard": "This work verified — ship it or discard?",
 }
 
 
@@ -168,6 +172,13 @@ _EXECUTOR_DECISION_ACTIONS: dict[str, list[DecisionAction]] = {
     ],
     "human_review_required": [
         DecisionAction(key=ACTION_SHIP, label_en="Approve & ship", label_ko="승인하고 출시"),
+        DecisionAction(key=ACTION_DISCARD, label_en="Discard", label_ko="폐기"),
+    ],
+    # L-P2: ship_or_discard runs already have a Deliverable from the
+    # verifier's PASS path; ``_ship_decision_run`` short-circuits the
+    # Deliverable mint when one exists so this case is idempotent.
+    "ship_or_discard": [
+        DecisionAction(key=ACTION_SHIP, label_en="Ship", label_ko="출시"),
         DecisionAction(key=ACTION_DISCARD, label_en="Discard", label_ko="폐기"),
     ],
 }
@@ -501,19 +512,28 @@ async def _ship_decision_run(
         # row recording the override (B4 trust integrity).
         work_step.proof_state = ProofState.PROVED
 
-    session.add(
-        Deliverable(
-            id=uuid.uuid4(),
-            run_id=run.id,
-            workspace_id=run.workspace_id,
-            deliverable_type=DeliverableType.CODE,
-            payload={
-                "shipped_by_founder": True,
-                "decision_id": str(decision.id),
-                "artifact_refs": artifact_refs,
-            },
+    # L-P2: ship_or_discard Decisions are minted on REVIEW_READY runs that
+    # ALREADY have a Deliverable from the verifier's PASS path. Don't mint
+    # a duplicate — the existing row already carries the verified artifact
+    # refs. For verification_failed / human_review_required Decisions there
+    # is no prior Deliverable, so the mint below is the first one.
+    existing_deliverable = (
+        await session.execute(select(Deliverable).where(Deliverable.run_id == run.id).limit(1))
+    ).scalar_one_or_none()
+    if existing_deliverable is None:
+        session.add(
+            Deliverable(
+                id=uuid.uuid4(),
+                run_id=run.id,
+                workspace_id=run.workspace_id,
+                deliverable_type=DeliverableType.CODE,
+                payload={
+                    "shipped_by_founder": True,
+                    "decision_id": str(decision.id),
+                    "artifact_refs": artifact_refs,
+                },
+            )
         )
-    )
 
     await runner.transition(
         run_id=run.id,
