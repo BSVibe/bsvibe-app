@@ -11,7 +11,7 @@
   --hair-strong: #e3e1db;
   --accent-bg: #efefee;
 
-  --amber-ink: #b25e09;
+  --amber-ink: #995108;
   --amber-dot: #e0922e;
   --green-ink: #4f8a5b;
   --green-dot: #5ba877;
@@ -423,7 +423,12 @@ main.login {
   height: 18px;
   padding: 0 5px;
   border-radius: 999px;
-  background: var(--amber-dot);
+  /* --amber-dot at the same lightness as --amber-ink (legible white text) fails
+     WCAG AA for the 11px badge text (2.52:1). The badge means "needs your
+     attention" — same semantic register as --amber-ink — so it inherits the
+     darker fill, lifting the white text well above AA. The --amber-dot token
+     stays available as the small status pip used elsewhere. */
+  background: var(--amber-ink);
   color: #fff;
   font-size: 0.68rem;
   font-weight: 650;
