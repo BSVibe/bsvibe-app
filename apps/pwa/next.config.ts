@@ -9,14 +9,8 @@ const config: NextConfig = {
   reactStrictMode: true,
   // The "Inside" surface was relabeled "Knowledge" and moved to /knowledge.
   // Keep any old /inside link (bookmark, external ref) working.
-  // /signup is the marketing-site "시작하기" / "Start" CTA target; we don't
-  // ship a separate signup form (Supabase OAuth auto-provisions on first
-  // login, email/pw users sign in directly), so /signup is an alias of /login.
   async redirects() {
-    return [
-      { source: "/inside", destination: "/knowledge", permanent: true },
-      { source: "/signup", destination: "/login", permanent: true },
-    ];
+    return [{ source: "/inside", destination: "/knowledge", permanent: true }];
   },
 };
 
