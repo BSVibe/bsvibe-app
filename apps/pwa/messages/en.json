@@ -38,7 +38,10 @@
     "decisions": "Decisions",
     "knowledge": "Knowledge",
     "skills": "Skills",
-    "settings": "Settings"
+    "settings": "Settings",
+    "deliverable": "Delivery",
+    "run": "Run",
+    "product": "Product"
   },
   "shell": {
     "wordmark": "BSVibe",
