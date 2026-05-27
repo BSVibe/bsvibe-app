@@ -81,6 +81,19 @@ button:disabled {
   cursor: default;
 }
 
+/* Inherit the html system-font stack on every form control. User-agent
+   stylesheets default <input>, <textarea>, <select> to the platform's UI
+   font — typically Arial on macOS — which broke the ui-sans-serif /
+   system-ui / -apple-system stack the rest of the app uses; /impeccable
+   audit observed inputs rendering Arial while their labels stayed in the
+   intended sans. Only the family is overridden (not the shorthand) so
+   per-component font-size / line-height stays exactly as authored. */
+input,
+textarea,
+select {
+  font-family: inherit;
+}
+
 /* Global keyboard-focus ring for interactive elements (WCAG 2.4.7 AA).
    The existing per-input/per-link rules scoped focus styling to ``.login
    input``, ``.decisions-row__input``, ``.lane__link`` and a dozen other
