@@ -61,7 +61,7 @@ describe("Direct compose", () => {
     fireEvent.click(screen.getByRole("button", { name: "Direct" }));
 
     await waitFor(() => {
-      expect(screen.getByText("Sent — working on it.")).toBeInTheDocument();
+      expect(screen.getByText("Sent. Working on it.")).toBeInTheDocument();
     });
 
     // Hit the real endpoint with a JSON body carrying the typed text.
@@ -85,7 +85,7 @@ describe("Direct compose", () => {
     fireEvent.click(screen.getByRole("button", { name: "Direct" }));
 
     await waitFor(() => {
-      expect(screen.getByText("Couldn’t send that — please try again.")).toBeInTheDocument();
+      expect(screen.getByText("Couldn’t send that. Please try again.")).toBeInTheDocument();
     });
   });
 });
