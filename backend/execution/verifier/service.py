@@ -142,7 +142,75 @@ class VerificationService:
     ) -> VerificationResult:
         """Run the contract's command + judge checks, persist a
         :class:`VerificationResult` (PASS = all commands pass AND the judge
-        passes), record a "verify" activity, and return the result."""
+        passes), record a "verify" activity, and return the result.
+
+        W2 — when ``run.product_id`` is set, prepend a merge step:
+
+        1. ``commit_worktree`` — stage the agent's writes as a real
+           commit on ``bsvibe/run/<rid>``
+        2. ``merge_main_into_worktree`` — pull main in. A clean merge
+           means the agent's branch is now a fast-forward of main;
+           ``verify`` proceeds to command/judge checks. A conflict means
+           the worktree carries conflict markers — verify fails with
+           ``reason="merge_conflict"`` + conflict paths, and the agent's
+           next loop round picks the markers up via standard
+           file_read/file_edit tools (Claude Code-style auto-resolution).
+
+        Non-product runs skip the merge step entirely — exactly the
+        Direct-path test invariant.
+        """
+        # W2 — merge check first for product-bound runs. Gated on the
+        # worktree actually being a real git worktree (the W1 provisioner
+        # adds it; glue tests that bypass the provisioner have a plain
+        # empty dir and should skip the merge step entirely).
+        merge_conflict_paths: list[str] = []
+        if run.product_id is not None and self._is_real_worktree(run):
+            from backend.storage.product_workspace import (  # noqa: PLC0415 — lazy
+                commit_worktree,
+                merge_main_into_worktree,
+            )
+
+            commit_message = f"work: {self._truncate_intent(run)} (run-{str(run.id)[:8]})"
+            await commit_worktree(run.product_id, run.id, message=commit_message)
+            merge_outcome = await merge_main_into_worktree(run.product_id, run.id)
+            if merge_outcome.status == "conflict":
+                merge_conflict_paths = merge_outcome.conflict_paths
+
+        if merge_conflict_paths:
+            # Skip command / judge checks — the worktree is in a
+            # conflict state. Persist a FAILED VerificationResult so
+            # the loop sees verification failed; the next agent round
+            # will read the conflict markers from disk.
+            vr = VerificationResult(
+                id=uuid.uuid4(),
+                run_id=run.id,
+                work_step_id=work_step.id,
+                workspace_id=run.workspace_id,
+                outcome=VerificationOutcome.FAILED,
+                contract=contract.to_dict(),
+                result={
+                    "merge_conflict": True,
+                    "conflict_paths": merge_conflict_paths,
+                },
+            )
+            self._session.add(vr)
+            self._session.add(
+                ExecutionRunActivity(
+                    id=uuid.uuid4(),
+                    run_id=run.id,
+                    workspace_id=run.workspace_id,
+                    activity_type="verify",
+                    payload={
+                        "attempt_id": str(attempt.id),
+                        "outcome": VerificationOutcome.FAILED.value,
+                        "reason": "merge_conflict",
+                        "conflict_paths": merge_conflict_paths,
+                    },
+                )
+            )
+            await self._session.flush()
+            return vr
+
         command_results = await self._run_command_checks(contract, box)
         all_cmd_pass = all(r["passed"] for r in command_results)
 
@@ -180,6 +248,34 @@ class VerificationService:
         )
         await self._session.flush()
         return vr
+
+    @staticmethod
+    def _is_real_worktree(run: ExecutionRun) -> bool:
+        """True iff this run's workspace dir is a git worktree.
+
+        A real worktree has a ``.git`` *file* (worktree pointer to the
+        product's ``.git/worktrees/<name>``); a regular empty scratch
+        dir from a non-product test has no ``.git`` entry at all. The
+        W2 merge step is no-op'd in the latter case so glue tests that
+        bypass the workspace provisioner aren't forced to also seed a
+        git workspace.
+        """
+        from backend.storage.product_workspace import run_worktree_path  # noqa: PLC0415
+
+        worktree = run_worktree_path(run.id)
+        return (worktree / ".git").exists()
+
+    @staticmethod
+    def _truncate_intent(run: ExecutionRun, *, max_chars: int = 60) -> str:
+        """Best-effort one-line summary of the run's intent for the
+        agent commit subject. Reads from ``run.payload['intent_text']``
+        when present; falls back to the run id when not. Newlines are
+        stripped so the subject stays one line."""
+        payload = run.payload or {}
+        intent = payload.get("intent_text") if isinstance(payload, dict) else None
+        text = intent if isinstance(intent, str) else f"run-{run.id}"
+        text = text.replace("\n", " ").strip()
+        return text[:max_chars]
 
     async def _run_command_checks(
         self, contract: VerificationContract, box: SandboxSession

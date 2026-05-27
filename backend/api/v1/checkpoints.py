@@ -26,6 +26,7 @@ import uuid
 from datetime import UTC, datetime
 from typing import Annotated, Any
 
+import structlog
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy import select
@@ -63,6 +64,8 @@ DECISION_RESOLUTION_SETTLE_KIND = "decision_resolution"
 #: note's body proportionate to the question + answer (mirrors
 #: :data:`~backend.execution.verified_deliverable._SETTLE_SUMMARY_CAP`).
 _SUMMARY_CAP = 500
+
+logger = structlog.get_logger(__name__)
 
 router = APIRouter()
 
@@ -526,6 +529,56 @@ async def _ship_decision_run(
             )
         )
 
+    # W2 — when the run is bound to a product workspace, ship_anyway means
+    # "force the run's version onto main" (the founder explicitly accepted
+    # the work even though verify failed). git -X theirs is the strategy
+    # that says "on conflict, take the merging-in branch's content"; the
+    # branch being merged in is the run branch, so the run wins.
+    if run.product_id is not None:
+        from backend.storage.product_workspace import (  # noqa: PLC0415
+            ProductWorkspaceBusy,
+            ProductWorkspaceError,
+            commit_worktree,
+            force_merge_theirs,
+            product_workspace_lock,
+            remove_run_worktree,
+        )
+
+        try:
+            # The agent may not have committed its uncommitted work yet
+            # (verification failed before the verify hook called
+            # commit_worktree). Force a commit now so force_merge_theirs
+            # has a branch to merge from.
+            await commit_worktree(
+                run.product_id,
+                run.id,
+                message=f"ship_anyway: decision {decision.id}",
+            )
+            async with product_workspace_lock(session, run.product_id):
+                await force_merge_theirs(run.product_id, run.id)
+            try:
+                await remove_run_worktree(run.product_id, run.id)
+            except ProductWorkspaceError:
+                logger.warning(
+                    "ship_anyway_worktree_cleanup_failed",
+                    run_id=str(run.id),
+                    exc_info=True,
+                )
+        except ProductWorkspaceBusy:
+            logger.warning("ship_anyway_lock_busy", run_id=str(run.id))
+            # Surface as HTTP 503-ish via existing exception path — let
+            # the founder retry. v1 keeps it simple.
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="product workspace busy; retry in a moment",
+            ) from None
+        except ProductWorkspaceError as exc:
+            logger.warning("ship_anyway_merge_failed", run_id=str(run.id), exc_info=True)
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"ship_anyway merge failed: {exc}",
+            ) from exc
+
     await runner.transition(
         run_id=run.id,
         to_status=RunStatus.REVIEW_READY,
@@ -549,6 +602,10 @@ async def _discard_decision_run(
     No deliverable is created and no proof override happens. The run goes
     straight to ABANDONED; any WorkStep already in a non-terminal state is
     moot since the abandonment is the terminal signal for the whole run.
+
+    W2 — when the run is bound to a product workspace, also clean up the
+    worktree + branch so the founder doesn't see a "ghost" branch in
+    ``git branch`` later.
     """
     # RunStatus enum has no ABANDONED — CANCELLED is the discard terminal.
     await runner.transition(
@@ -556,3 +613,18 @@ async def _discard_decision_run(
         to_status=RunStatus.CANCELLED,
         reason=f"founder discard via decision {decision.id}",
     )
+
+    if run.product_id is not None:
+        from backend.storage.product_workspace import (  # noqa: PLC0415
+            ProductWorkspaceError,
+            remove_run_worktree,
+        )
+
+        try:
+            await remove_run_worktree(run.product_id, run.id)
+        except ProductWorkspaceError:
+            logger.warning(
+                "discard_worktree_cleanup_failed",
+                run_id=str(run.id),
+                exc_info=True,
+            )
