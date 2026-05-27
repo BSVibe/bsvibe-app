@@ -236,6 +236,14 @@ main.login {
 }
 
 .login__forgot {
+  /* Bare-text link was a 102×15 tap target. inline-flex + 4px y-padding +
+     min-height matches the rest of the hit-area policy: 30px desktop floor,
+     44px AAA on mobile (see media block below). */
+  display: inline-flex;
+  align-items: center;
+  min-height: 30px;
+  padding: 4px 6px;
+  margin: -4px -6px;
   font-size: 0.76rem;
   color: var(--ink-3);
   text-decoration: none;
@@ -278,6 +286,11 @@ main.login {
   display: flex;
   align-items: center;
   justify-content: center;
+  /* Icon-only show/password toggle was 28×28 — under the desktop floor.
+     Explicit min sizing keeps the tap target at the 32px floor regardless of
+     the rendered eye-icon size. Mobile bumps to AAA 44 in the media block. */
+  min-width: 32px;
+  min-height: 32px;
   padding: 0.3rem;
   border: none;
   border-radius: var(--radius-sm);
@@ -465,6 +478,10 @@ main.login {
 
 .rail__item--sub {
   font-size: 0.85rem;
+  /* The smaller font dropped the inherited 32px row to ~28h. Bump the y-pad
+     to keep the products sub-list at the same desktop floor as the primary
+     rail items above. */
+  padding-block: 8px;
 }
 
 /* Account chip */
@@ -4131,7 +4148,15 @@ main.login {
   .stream__filter,
   .stream__report-link,
   .account-chip__signout,
-  .direct-fab {
+  .direct-fab,
+  .login__forgot,
+  .rail__item--sub,
+  .rail-products__item {
+    min-height: 44px;
+  }
+
+  .login__eye {
+    min-width: 44px;
     min-height: 44px;
   }
 
@@ -5400,7 +5425,9 @@ main.login {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 6px 10px;
+  /* 9px y-padding lifts the product entry from ~28px to ~32px tall — at the
+     same desktop hit-area floor as the primary rail items above. */
+  padding: 9px 10px;
   border-radius: var(--radius-sm);
   color: var(--ink-2);
   font-size: 0.86rem;
