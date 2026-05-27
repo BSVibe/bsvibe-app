@@ -81,6 +81,26 @@ button:disabled {
   cursor: default;
 }
 
+/* Global keyboard-focus ring for interactive elements (WCAG 2.4.7 AA).
+   The existing per-input/per-link rules scoped focus styling to ``.login
+   input``, ``.decisions-row__input``, ``.lane__link`` and a dozen other
+   selectors — every ``<button>`` outside those scopes fell back to the
+   browser default (1px solid CanvasText / 1px blue auto), which is
+   essentially invisible against the dark CTA fills (the Continue button
+   is ``#1f1d1a``, ``.needs-you__approve`` is the same near-black). The
+   default below kicks in only for tab/keyboard focus (``:focus-visible``,
+   not ``:focus``) so mouse interaction stays clean, and any rule that
+   already specifies its own outline above overrides this. ``--amber-dot``
+   matches the other focus surfaces and reads against both light and dark
+   backgrounds (3:1+ on every product fill). */
+button:focus-visible,
+a:focus-visible,
+[role="button"]:focus-visible,
+summary:focus-visible {
+  outline: 2px solid var(--amber-dot);
+  outline-offset: 2px;
+}
+
 /* ── Login (centered craft-bar card, UX §5) ───────────────────────────────── */
 
 main.login {
