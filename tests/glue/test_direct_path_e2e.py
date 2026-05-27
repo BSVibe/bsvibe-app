@@ -182,11 +182,27 @@ async def seeded_product(
     sf: async_sessionmaker[AsyncSession], workspace_id: uuid.UUID
 ) -> uuid.UUID:
     """L-P1: every direct-path test now needs a product to bind the run to;
-    the API rejects submissions on a workspace with zero products. Seed one
-    here so the fixture-level setup carries the invariant without each test
-    repeating it."""
+    the API rejects submissions on a workspace with zero products. Seeds
+    Workspace + Product (Postgres enforces ``products.workspace_id``→
+    ``workspaces.id`` FK; SQLite's default-off FK checks let the bare
+    Product insert succeed locally, but real-PG CI rejects it)."""
+    from backend.workspaces.db import WorkspaceRow
+
     product_id = uuid.uuid4()
     async with sf() as s:
+        s.add(
+            WorkspaceRow(
+                id=workspace_id,
+                name="test-workspace",
+                # Safe Mode default is True; the dispatcher-sink assertions
+                # in this file expect the direct path to dispatch, not
+                # enqueue into Safe Mode for human approval.
+                safe_mode=False,
+                created_at=datetime.now(tz=UTC),
+                updated_at=datetime.now(tz=UTC),
+            )
+        )
+        await s.flush()
         s.add(
             ProductRow(
                 id=product_id,

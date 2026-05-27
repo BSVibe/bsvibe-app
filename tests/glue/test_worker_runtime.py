@@ -81,11 +81,22 @@ def workspace_id() -> uuid.UUID:
 async def seeded_product(
     sf: async_sessionmaker[AsyncSession], workspace_id: uuid.UUID
 ) -> uuid.UUID:
-    """L-P1: every direct-path message now requires a product binding."""
-    from backend.workspaces.db import ProductRow
+    """L-P1: every direct-path message now requires a product binding.
+    Seeds Workspace + Product (PG enforces products.workspace_id FK)."""
+    from backend.workspaces.db import ProductRow, WorkspaceRow
 
     product_id = uuid.uuid4()
     async with sf() as s:
+        s.add(
+            WorkspaceRow(
+                id=workspace_id,
+                name="test-workspace",
+                safe_mode=False,
+                created_at=datetime.now(tz=UTC),
+                updated_at=datetime.now(tz=UTC),
+            )
+        )
+        await s.flush()
         s.add(
             ProductRow(
                 id=product_id,
