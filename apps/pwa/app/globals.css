@@ -157,8 +157,15 @@ main.login {
 
 .login__title {
   margin: 0;
-  font-size: 1.05rem;
-  font-weight: 600;
+  /* The h1 was 1.05rem — barely a 1.05 ratio over the 16px body, below the
+     shared design law's 1.25-step floor for hierarchy. Lifting to 1.5rem
+     matches every other product surface's page-heading scale
+     (.brief__heading, .decisions__heading, .inside__heading, etc.) and
+     makes the page heading the dominant element on the card, with the
+     wordmark + tagline serving as the brand block above it. */
+  font-size: 1.5rem;
+  font-weight: 650;
+  letter-spacing: -0.01em;
 }
 
 .login__subtitle {
