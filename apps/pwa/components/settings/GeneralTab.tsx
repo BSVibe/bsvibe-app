@@ -48,7 +48,13 @@ export default function GeneralTab() {
   const t = useTranslations("settings.general");
 
   const workspaceId = session?.personalAccountId ?? t("workspaceIdFallback");
-  const workspaceName = session?.email ?? t("workspaceNameFallback");
+  // The session has no workspace-name field yet — using the founder's email as
+  // a workspace name surface read as "this app thinks my address IS my
+  // workspace," which /impeccable audit flagged as confusing for new users.
+  // Show the i18n fallback (en: "Your workspace" / ko: "내 워크스페이스") until
+  // a real workspace-name field lands. The signed-in email is already surfaced
+  // in the account chip at the bottom of the rail / topbar, so no info is lost.
+  const workspaceName = t("workspaceNameFallback");
 
   function chooseLanguage(value: string) {
     // Keep the local preference in sync (the select reads from it) and apply
