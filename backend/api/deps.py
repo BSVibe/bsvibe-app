@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
+from pathlib import Path
 from typing import Annotated
 
 from fastapi import Depends, Header, HTTPException, status
@@ -38,6 +39,7 @@ from backend.identity.service import (
 )
 from backend.shared.authz.deps import get_current_user
 from backend.shared.authz.types import User
+from backend.storage.artifact_store import ArtifactStore, LocalFilesystemArtifactStore
 
 # Re-export so routes / tests refer to one canonical auth dependency.
 CurrentUser = Annotated[User, Depends(get_current_user)]
@@ -45,6 +47,7 @@ CurrentUser = Annotated[User, Depends(get_current_user)]
 __all__ = [
     "CurrentUser",
     "get_account_id",
+    "get_artifact_store",
     "get_current_membership",
     "get_current_user",
     "get_current_user_row",
@@ -88,6 +91,24 @@ async def get_db_session() -> AsyncIterator[AsyncSession]:
             yield session
         finally:
             await session.close()
+
+
+# ---------------------------------------------------------------------------
+# Artifact storage (per-run, swap-ready for R2/S3)
+# ---------------------------------------------------------------------------
+def get_artifact_store() -> ArtifactStore:
+    """Return the per-request :class:`ArtifactStore`.
+
+    Reads ``settings.run_workspace_root`` each call so tests that monkey-patch
+    the env / clear ``get_settings.cache_clear()`` see the override take
+    effect (the artifact endpoint tests rely on this — they point the root at
+    a tmp dir per-test). Construction is cheap (one ``Path.resolve``); no
+    singleton needed at this seam.
+    """
+    from backend.config import get_settings  # noqa: PLC0415
+
+    settings = get_settings()
+    return LocalFilesystemArtifactStore(Path(settings.run_workspace_root))
 
 
 # ---------------------------------------------------------------------------

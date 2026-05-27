@@ -49,7 +49,6 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from backend.accounts.crypto import CredentialCipher, _key_from_settings
 from backend.accounts.models import ModelAccount
 from backend.accounts.service import ModelAccountService
-from backend.api.v1.live_events import set_live_event_bus_redis
 from backend.config import Settings, get_settings
 from backend.delivery.connector_dispatch import (
     ConnectorDeliveryAdapter,
@@ -1119,6 +1118,12 @@ async def run_workers() -> None:
         # redis client held in the process-wide singleton leaks
         # connection-pool Futures across per-test event loops.
         if not os.environ.get("PYTEST_CURRENT_TEST"):
+            # Lazy import to avoid circular module-init: backend.api.v1
+            # re-exports safemode which imports backend.workers.run.
+            from backend.api.v1.live_events import (  # noqa: PLC0415
+                set_live_event_bus_redis,
+            )
+
             set_live_event_bus_redis(redis_client)
             logger.info("worker_live_event_bus_redis_bound", redis_url=settings.redis_url)
 

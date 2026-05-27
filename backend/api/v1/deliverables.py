@@ -30,8 +30,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.accounts.crypto import CredentialCipher
-from backend.api.deps import get_db_session, get_workspace_id
-from backend.config import get_settings
+from backend.api.deps import get_artifact_store, get_db_session, get_workspace_id
 from backend.connectors.db import ConnectorAccountRow
 from backend.execution.db import (
     Deliverable,
@@ -43,6 +42,7 @@ from backend.execution.db import (
 from backend.plugins.base import PluginMeta, PluginRunError
 from backend.plugins.context import SkillContext
 from backend.plugins.runner import PluginRunner
+from backend.storage.artifact_store import ArtifactStore
 
 logger = structlog.get_logger(__name__)
 
@@ -326,20 +326,23 @@ async def get_deliverable_artifact(
     ref: str,
     workspace_id: Annotated[uuid.UUID, Depends(get_workspace_id)],
     session: Annotated[AsyncSession, Depends(get_db_session)],
+    store: Annotated[ArtifactStore, Depends(get_artifact_store)],
 ) -> ArtifactContentResponse:
     """Serve one artifact file's CONTENT, read-only, scoped to the caller.
 
-    The file is read from the deliverable's PERSISTED run workspace
-    (``<run_workspace_root>/<run_id>/<ref>``) — the orchestrator/worker drives
-    each run inside that dir and the work LLM's writes land there, so no
-    orchestrator/git change is needed to surface real content.
+    The file is read from the deliverable's PERSISTED run workspace via the
+    per-run :class:`ArtifactStore` (today an FS-backed store under
+    ``<run_workspace_root>/<run_id>/<ref>``; tomorrow R2/S3 with no call-site
+    change). The orchestrator/worker drives each run inside that dir and the
+    work LLM's writes land there, so no orchestrator/git change is needed to
+    surface real content.
 
     Security (all 404 — never leak existence/contents across the boundary):
       * workspace scope — the deliverable must belong to the caller's workspace;
       * ref whitelist — ``ref`` MUST be one of the deliverable's own
         ``payload.artifact_refs`` (arbitrary paths are refused outright);
-      * path traversal — the resolved realpath MUST stay within the run dir, so
-        a whitelisted-but-malicious ``../`` ref cannot escape;
+      * path traversal — the store's centralized guard refuses any ref that
+        resolves outside the run dir (an absolute path / ``../`` segment);
       * missing file — a cleaned run dir / absent file 404s calmly.
 
     Content is UTF-8 with ``errors="replace"``, capped at 256 KiB
@@ -362,27 +365,29 @@ async def get_deliverable_artifact(
             detail="artifact not found for this deliverable",
         )
 
-    settings = get_settings()
-    run_dir = (Path(settings.run_workspace_root) / str(row.run_id)).resolve()
-    target = (run_dir / ref).resolve()
-
-    # Path-traversal defense: the resolved target must stay within the run dir
-    # (catches a whitelisted-but-malicious ``../`` ref). ``is_relative_to`` is
-    # the realpath containment check (Py 3.9+).
-    if not target.is_relative_to(run_dir):
+    try:
+        raw = store.read_bytes(row.run_id, ref)
+    except ValueError as exc:
+        # Traversal / absolute ref — refused by the store's centralized guard.
+        # Surface as 404 (never leak existence across the boundary).
+        logger.debug("artifact_traversal_refused", run_id=str(row.run_id), ref=ref, error=str(exc))
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="artifact not found for this deliverable",
-        )
-
-    if not target.is_file():
+        ) from exc
+    except FileNotFoundError as exc:
         # Run dir cleaned, or never written — calm not-found, not a 500.
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="artifact content is no longer available",
-        )
-
-    raw = target.read_bytes()
+        ) from exc
+    except IsADirectoryError as exc:
+        # ``ref`` resolves to a directory inside the run dir (e.g. ``src/``).
+        # Calm 404 — not a file, no content to serve.
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="artifact content is no longer available",
+        ) from exc
     if _looks_binary(raw):
         return ArtifactContentResponse(
             ref=ref,

@@ -26,10 +26,11 @@ from fastapi import APIRouter, Depends, Header, HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.api.deps import get_db_session, get_workspace_id, require_role
+from backend.api.deps import get_artifact_store, get_db_session, get_workspace_id, require_role
 from backend.config import get_settings
 from backend.executors import dispatch, service
 from backend.executors.db import WorkerRow
+from backend.storage.artifact_store import ArtifactStore
 
 # JWT-gated routes — mounted under the v1 aggregate (get_current_user upstream).
 router = APIRouter()
@@ -290,6 +291,7 @@ async def report_result(
     worker: Annotated[WorkerRow, Depends(get_current_worker)],
     session: Annotated[AsyncSession, Depends(get_db_session)],
     redis: Annotated[Any, Depends(get_poll_redis)],
+    artifact_store: Annotated[ArtifactStore, Depends(get_artifact_store)],
 ) -> HeartbeatResponse:
     """Record a worker's task result — flips the task row to done / failed.
 
@@ -298,6 +300,9 @@ async def report_result(
     :func:`dispatch.record_result` publishes the authoritative completion signal
     here (after the row flips terminal) — waking any orchestrator awaiting on it
     promptly instead of letting it block until its timeout.
+
+    The per-run :class:`ArtifactStore` is injected via deps (swap-ready for
+    R2/S3) — the worker's returned files are persisted through it.
     """
     _ = worker  # auth only; the task row carries its own workspace binding
     await dispatch.record_result(
@@ -308,7 +313,7 @@ async def report_result(
         output=body.output,
         error_message=body.error_message,
         files=[f.model_dump() for f in body.files],
-        run_workspace_root=get_settings().run_workspace_root,
+        artifact_store=artifact_store,
     )
     await session.commit()
     return HeartbeatResponse(status="ok")
