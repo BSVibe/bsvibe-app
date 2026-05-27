@@ -438,7 +438,13 @@ async def test_executor_run_contract_pass_verifies_and_review_ready(
         assert len(settle) == 1
         assert settle[0].payload.get("verified") is True
 
-        assert (await s.execute(select(Decision))).first() is None
+        # L-P2: a verified REVIEW_READY run now mints a ``ship_or_discard``
+        # Decision so the founder can ship / discard with one click. The
+        # only Decision on this run is that synthetic one (the executor
+        # verified-PASS path itself does not mint any other Decision).
+        decisions = (await s.execute(select(Decision))).scalars().all()
+        assert len(decisions) == 1
+        assert decisions[0].decision == "ship_or_discard"
 
     await redis.aclose()
 
