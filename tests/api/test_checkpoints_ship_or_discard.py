@@ -86,7 +86,12 @@ async def client(db, workspace_id: uuid.UUID):
 
 async def _seed_review_ready_run(db, *, ws: uuid.UUID) -> tuple[uuid.UUID, uuid.UUID]:
     """Seed an ExecutionRun in REVIEW_READY with an existing code Deliverable —
-    mirrors what the verifier's PASS path leaves on disk in production."""
+    mirrors what the verifier's PASS path leaves on disk in production.
+
+    PG enforces ``deliverables.run_id`` → ``execution_runs.id`` FK. Flush
+    the parent run before adding the child deliverable so the FK can see
+    the parent at INSERT time (real-PG won't auto-order siblings on
+    commit; SQLite's default-off FK checks hid this locally)."""
     run_id = uuid.uuid4()
     deliverable_id = uuid.uuid4()
     async with db() as s:
@@ -99,6 +104,7 @@ async def _seed_review_ready_run(db, *, ws: uuid.UUID) -> tuple[uuid.UUID, uuid.
                 created_at=_NOW - timedelta(minutes=10),
             )
         )
+        await s.flush()
         s.add(
             Deliverable(
                 id=deliverable_id,
