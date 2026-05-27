@@ -34,6 +34,8 @@ const CHECKPOINT_WITH_OPTIONS: PendingCheckpoint = {
   question: "Which database should I target?",
   rationale: null,
   options: ["postgres", "sqlite", "mysql"],
+  actions: null,
+  decision: "ask_user_question",
   createdAt: "2026-05-26T10:00:00Z",
 };
 
@@ -44,6 +46,8 @@ const CHECKPOINT_FREE_TEXT: PendingCheckpoint = {
   question: "What should I do here?",
   rationale: null,
   options: null,
+  actions: null,
+  decision: "ask_user_question",
   createdAt: "2026-05-26T10:00:00Z",
 };
 

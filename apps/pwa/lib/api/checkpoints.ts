@@ -21,9 +21,9 @@ export function listResolvedCheckpoints(): Promise<ResolvedCheckpointItem[]> {
   return apiFetch<ResolvedCheckpointItem[]>("/api/v1/checkpoints/resolved");
 }
 
-/** Resolve a paused-run checkpoint with the founder's answer and resume the
- *  run. The backend ResolveRequest is extra=forbid and requires a non-empty
- *  `answer` (min_length=1), so the caller must pass real text. */
+/** Resolve a paused-run checkpoint with the founder's free-text answer and
+ *  resume the run. Used for ask_user_question Decisions and the "Other"
+ *  free-text fallback (L-D1). The backend rejects empty answers. */
 export function resolveCheckpoint(
   checkpointId: string,
   answer: string,
@@ -31,5 +31,19 @@ export function resolveCheckpoint(
   return apiFetch<CheckpointResolveResponse>(`/api/v1/checkpoints/${checkpointId}/resolve`, {
     method: "POST",
     body: JSON.stringify({ answer }),
+  });
+}
+
+/** L-D2 — resolve a paused-run checkpoint via a one-click action
+ *  (`ship` / `discard`) on an executor B2b Decision. The backend dispatches
+ *  to the side-effecting handler; the response carries the new `run_status`
+ *  (shipped / cancelled) so the row UI can reflect terminal state. */
+export function resolveCheckpointAction(
+  checkpointId: string,
+  actionKey: string,
+): Promise<CheckpointResolveResponse> {
+  return apiFetch<CheckpointResolveResponse>(`/api/v1/checkpoints/${checkpointId}/resolve`, {
+    method: "POST",
+    body: JSON.stringify({ action_key: actionKey }),
   });
 }

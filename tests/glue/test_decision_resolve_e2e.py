@@ -375,5 +375,9 @@ async def test_resolve_rejects_empty_answer(
         await s.commit()
         decision_id = decision.id
 
+    # L-D2: an empty answer with no action_key is now a 400 from the handler
+    # (was a 422 from pydantic min_length when ``answer`` was strictly required;
+    # relaxed to ``answer: str = ""`` to allow action-only POSTs, which then
+    # carries the non-empty check into the resolve_checkpoint body).
     resp = await client.post(f"/api/v1/checkpoints/{decision_id}/resolve", json={"answer": ""})
-    assert resp.status_code == 422
+    assert resp.status_code == 400
