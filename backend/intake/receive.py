@@ -125,25 +125,40 @@ async def receive(session: AsyncSession, trigger: TriggerEventRow) -> ReceiveOut
 
     # Pass-through for non-webhook trigger kinds — direct / schedule /
     # decision_resolution don't have connector bindings.
+    # L-P1: forward the trigger's own product_id onto the outcome so the
+    # request mint propagates it (the founder-direct path already records
+    # product_id on the trigger via DirectTrigger; the webhook path
+    # populates it below from the resource binding when a binding matches).
     if trigger.trigger_kind != TriggerKind.WEBHOOK:
-        return ReceiveOutcome(filtered_out=False, request_payload=payload)
+        return ReceiveOutcome(
+            filtered_out=False,
+            request_payload=payload,
+            product_id=trigger.product_id,
+        )
 
     account_id = _coerce_account_id(payload.get(_PAYLOAD_KEY_ACCOUNT_ID))
     resource_id_raw = payload.get(_PAYLOAD_KEY_RESOURCE_ID)
     resource_id = resource_id_raw if isinstance(resource_id_raw, str) else None
 
     # Pass-through for webhook triggers that don't carry the routing keys —
-    # e.g. an inbound parser that hasn't been retrofitted yet.
+    # e.g. an inbound parser that hasn't been retrofitted yet. L-P1: forward
+    # the trigger's own product_id so it isn't dropped on the floor.
     if account_id is None or resource_id is None:
-        return ReceiveOutcome(filtered_out=False, request_payload=payload)
+        return ReceiveOutcome(
+            filtered_out=False,
+            request_payload=payload,
+            product_id=trigger.product_id,
+        )
 
     repo = ResourceBindingRepository(session)
     binding: ResourceBindingRow | None = await repo.find_binding(
         connector_account_id=account_id, resource_id=resource_id
     )
 
-    # No binding for this (account, resource) pair → pass-through (preserves
-    # today's behavior — the Request is minted with no product_id).
+    # No binding for this (account, resource) pair → pass-through. L-P1:
+    # carry the trigger's product_id forward when set (a webhook can land
+    # without a binding match yet still know its target product if the
+    # producer recorded it; honor that intent rather than minting NULL).
     if binding is None:
         logger.info(
             "receive_no_binding",
@@ -151,7 +166,11 @@ async def receive(session: AsyncSession, trigger: TriggerEventRow) -> ReceiveOut
             connector_account_id=str(account_id),
             resource_id=resource_id,
         )
-        return ReceiveOutcome(filtered_out=False, request_payload=payload)
+        return ReceiveOutcome(
+            filtered_out=False,
+            request_payload=payload,
+            product_id=trigger.product_id,
+        )
 
     # Apply the binding's filter (simple key-equality AND, Workflow §3 v1).
     trig_cfg = dict(binding.trigger or {})
