@@ -267,6 +267,8 @@
     "decline": "거절",
     "answerLabel": "답변",
     "answerPlaceholder": "이 작업을 재개하려면 답해 주세요…",
+    "otherOptionLabel": "직접 입력",
+    "otherAnswerPlaceholder": "직접 답변을 입력해 주세요…",
     "answer": "답하고 재개",
     "proposalRationale": "병합하면 같은 개념을 지식 그래프에 중복으로 두지 않게 돼요.",
     "resolveError": "처리하지 못했어요 — 다시 시도해 주세요.",
