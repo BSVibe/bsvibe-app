@@ -252,23 +252,46 @@ async def _seed(s: Any, *, executor_type: str = "claude_code") -> tuple[Executio
 
 
 def _shared_sqlite_sessionmaker() -> Any:
-    """A ``StaticPool`` in-memory SQLite sessionmaker so the orchestrator session
-    and the simulated worker's separate session see the SAME database (the B2b
-    verify path drives the worker concurrently, like the glue e2e)."""
+    """A FILE-backed SQLite sessionmaker (WAL) so the orchestrator session and
+    the concurrently-driven worker session each get their OWN connection — like
+    prod, where every session has a distinct connection.
+
+    The B2b verify path runs ``oc.run`` and the simulated worker concurrently.
+    The old ``StaticPool`` ``:memory:`` engine forced BOTH onto a single shared
+    DBAPI connection; their interleaved transactions on that one connection
+    serialized unpredictably under load (CI), occasionally starving the worker's
+    result-commit past the 30s await timeout → a ``system_error`` flake. A file
+    DB with the default pool gives each session an independent connection; WAL +
+    a busy timeout let a reader and a writer coexist without ``database is
+    locked``. Each call gets a fresh temp DB; the engine is disposed by the
+    caller's ``finally`` (the temp dir is left for the OS to reap)."""
+    import tempfile  # noqa: PLC0415
+
+    from sqlalchemy import event  # noqa: PLC0415
     from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine  # noqa: PLC0415
-    from sqlalchemy.pool import StaticPool  # noqa: PLC0415
 
     # Register the delivery tables on Base.metadata: write_verified_deliverable
     # writes a DeliveryEventRow, so its table must be materialised by create_all.
     import backend.delivery.db  # noqa: F401, PLC0415
     from backend.data import Base  # noqa: PLC0415
 
+    db_path = Path(tempfile.mkdtemp(prefix="bsvibe-exec-test-")) / "test.db"
     engine = create_async_engine(
-        "sqlite+aiosqlite:///:memory:",
+        f"sqlite+aiosqlite:///{db_path}",
         future=True,
         connect_args={"check_same_thread": False},
-        poolclass=StaticPool,
     )
+
+    # WAL + busy_timeout per connection: WAL lets the worker's commit and the
+    # orchestrator's poll reads proceed on separate connections concurrently;
+    # busy_timeout waits out the brief write lock instead of erroring.
+    @event.listens_for(engine.sync_engine, "connect")
+    def _sqlite_pragmas(dbapi_conn: Any, _record: Any) -> None:  # pragma: no cover - infra
+        cur = dbapi_conn.cursor()
+        cur.execute("PRAGMA journal_mode=WAL")
+        cur.execute("PRAGMA busy_timeout=5000")
+        cur.close()
+
     return engine, async_sessionmaker(engine, expire_on_commit=False), Base
 
 
