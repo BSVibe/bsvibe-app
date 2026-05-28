@@ -6138,21 +6138,24 @@ main.login {
  * established product-shipped row vocabulary + new-product-modal form styling so
  * the surface feels like the rest of the app. Self-contained block (no token
  * edits) to stay merge-safe alongside the parallel delivery-report lift. */
-.product-resources {
+.product-resources,
+.product-bindings {
   display: flex;
   flex-direction: column;
   gap: 10px;
   margin-top: 28px;
 }
 
-.product-resources__head {
+.product-resources__head,
+.product-bindings__head {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
   gap: 12px;
 }
 
-.product-resources__add {
+.product-resources__add,
+.product-bindings__add {
   border: 1px solid var(--hair-strong);
   border-radius: 999px;
   padding: 4px 12px;
@@ -6165,7 +6168,9 @@ main.login {
 }
 
 .product-resources__note,
-.product-resources__empty {
+.product-resources__empty,
+.product-bindings__note,
+.product-bindings__empty {
   margin: 0;
   font-size: 0.85rem;
   color: var(--ink-3);
