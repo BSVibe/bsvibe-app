@@ -24,6 +24,7 @@ from __future__ import annotations
 import os
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
+from typing import Any
 
 from sqlalchemy import MetaData, text
 from sqlalchemy.ext.asyncio import (
@@ -162,6 +163,41 @@ async def memory_session() -> AsyncIterator[AsyncSession]:
     try:
         async with maker() as session:
             yield session
+    finally:
+        await engine.dispose()
+
+
+@asynccontextmanager
+async def shared_file_sessionmaker() -> AsyncIterator[async_sessionmaker[AsyncSession]]:
+    """Yield a sessionmaker over a per-call FILE-backed SQLite DB in WAL mode.
+
+    Unlike :func:`memory_session` (one shared connection), this gives EACH
+    opened session its OWN connection — so two coroutines (e.g. an awaiter
+    polling the DB and a worker committing a result) can run concurrently
+    without sharing one ``AsyncSession``/connection, which is not concurrency
+    safe (``This session is in 'prepared' state`` / commit-in-progress
+    collisions). WAL + a busy timeout let a reader and a writer coexist. The
+    temp dir is left for the OS to reap; the engine is disposed on exit.
+    """
+    import tempfile  # noqa: PLC0415
+    from pathlib import Path  # noqa: PLC0415
+
+    from sqlalchemy import event  # noqa: PLC0415
+
+    db_path = Path(tempfile.mkdtemp(prefix="bsvibe-shared-test-")) / "test.db"
+    engine = create_async_engine(f"sqlite+aiosqlite:///{db_path}", future=True)
+
+    @event.listens_for(engine.sync_engine, "connect")
+    def _sqlite_pragmas(dbapi_conn: Any, _record: Any) -> None:
+        cur = dbapi_conn.cursor()
+        cur.execute("PRAGMA journal_mode=WAL")
+        cur.execute("PRAGMA busy_timeout=5000")
+        cur.close()
+
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    try:
+        yield async_sessionmaker(engine, expire_on_commit=False)
     finally:
         await engine.dispose()
 

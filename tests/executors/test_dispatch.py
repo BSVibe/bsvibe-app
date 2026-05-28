@@ -25,7 +25,7 @@ import backend.executors.db  # noqa: F401
 from backend.executors import dispatch, service
 from backend.executors.db import ExecutorTaskRow, WorkerRow
 
-from .._support import memory_session
+from .._support import memory_session, shared_file_sessionmaker
 
 pytestmark = pytest.mark.asyncio
 
@@ -588,26 +588,40 @@ async def test_record_result_skips_files_when_no_run_id(tmp_path: Any) -> None:
 async def test_await_completion_returns_on_done_signal() -> None:
     workspace_id = uuid.uuid4()
     redis = await _make_redis()
-    async with memory_session() as s:
-        task = await dispatch.create_task(
-            s, workspace_id=workspace_id, executor_type="claude_code", prompt="p"
-        )
-        await s.commit()
-        task_id = task.id
+    # The awaiter and the worker run CONCURRENTLY, so they must use SEPARATE
+    # sessions (an AsyncSession is not concurrency-safe — sharing one collides
+    # with "session is in 'prepared' state" when the poll's read races the
+    # worker's commit). A file-WAL engine gives each session its own connection.
+    async with shared_file_sessionmaker() as sf:
+        async with sf() as setup_s:
+            task = await dispatch.create_task(
+                setup_s, workspace_id=workspace_id, executor_type="claude_code", prompt="p"
+            )
+            await setup_s.commit()
+            task_id = task.id
 
         async def _simulate_worker() -> None:
-            # Give the awaiter time to subscribe, then write the result row.
-            # ``record_result`` itself publishes the done channel (the backend's
-            # /result path — a remote worker has no redis to publish from).
+            # Give the awaiter time to subscribe, then write the result row on
+            # its OWN session. ``record_result`` publishes the done channel
+            # (the backend's /result path — a remote worker can't publish).
             await asyncio.sleep(0.05)
-            await dispatch.record_result(
-                s, redis, task_id=task_id, success=True, output="done!", error_message=None
-            )
-            await s.commit()
+            async with sf() as worker_s:
+                await dispatch.record_result(
+                    worker_s,
+                    redis,
+                    task_id=task_id,
+                    success=True,
+                    output="done!",
+                    error_message=None,
+                )
+                await worker_s.commit()
 
-        worker_task = asyncio.create_task(_simulate_worker())
-        row = await dispatch.await_completion(redis, session=s, task_id=task_id, timeout_s=2.0)
-        await worker_task
+        async with sf() as awaiter_s:
+            worker_task = asyncio.create_task(_simulate_worker())
+            row = await dispatch.await_completion(
+                redis, session=awaiter_s, task_id=task_id, timeout_s=2.0
+            )
+            await worker_task
         assert row is not None
         assert row.status == "done"
         assert row.output == "done!"
@@ -620,30 +634,36 @@ async def test_await_completion_db_poll_resolves_without_signal() -> None:
     before ``timeout_s``, not at the deadline."""
     workspace_id = uuid.uuid4()
     redis = await _make_redis()
-    async with memory_session() as s:
-        task = await dispatch.create_task(
-            s, workspace_id=workspace_id, executor_type="claude_code", prompt="p"
-        )
-        await s.commit()
-        task_id = task.id
+    # Concurrent awaiter + worker → separate sessions on a shared file-WAL DB.
+    async with shared_file_sessionmaker() as sf:
+        async with sf() as setup_s:
+            task = await dispatch.create_task(
+                setup_s, workspace_id=workspace_id, executor_type="claude_code", prompt="p"
+            )
+            await setup_s.commit()
+            task_id = task.id
 
         async def _silent_worker() -> None:
             # Mark the row terminal but DO NOT publish — simulates a remote
             # worker whose backend somehow missed the publish entirely.
             await asyncio.sleep(0.05)
-            task.status = "done"
-            task.output = "silent"
-            await s.commit()
+            async with sf() as worker_s:
+                t = await worker_s.get(ExecutorTaskRow, task_id)
+                assert t is not None
+                t.status = "done"
+                t.output = "silent"
+                await worker_s.commit()
 
-        worker_task = asyncio.create_task(_silent_worker())
-        loop = asyncio.get_event_loop()
-        started = loop.time()
-        timeout_s = 30.0
-        row = await dispatch.await_completion(
-            redis, session=s, task_id=task_id, timeout_s=timeout_s
-        )
-        elapsed = loop.time() - started
-        await worker_task
+        async with sf() as awaiter_s:
+            worker_task = asyncio.create_task(_silent_worker())
+            loop = asyncio.get_event_loop()
+            started = loop.time()
+            timeout_s = 30.0
+            row = await dispatch.await_completion(
+                redis, session=awaiter_s, task_id=task_id, timeout_s=timeout_s
+            )
+            elapsed = loop.time() - started
+            await worker_task
         assert row is not None
         assert row.status == "done"
         assert row.output == "silent"
