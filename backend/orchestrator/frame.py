@@ -30,7 +30,7 @@ from typing import Any, Protocol, runtime_checkable
 import structlog
 
 from backend.intake.db import RequestRow
-from backend.orchestrator.schema import FramedRequest, PathClassification
+from backend.orchestrator.schema import FramedRequest, PathClassification, PipelineKind
 from backend.skills.loader import SkillLoader
 
 logger = structlog.get_logger(__name__)
@@ -70,6 +70,39 @@ class FrameConfig:
 # pure-answer ask). Used by the knowledge_only coherence guard in
 # :func:`_framed_from_llm` — any of these forces the agent loop.
 _WORK_ARTIFACT_TYPES = frozenset({"code", "page", "page_image", "pr"})
+
+# P1-L2 — a code/PR build whose intent reads "construct something" gets a
+# DESIGN stage before implementation. Conservative word set: a tiny tweak
+# ("fix the typo", "rename x") stays a single run. The orchestrator chains the
+# impl stage only when the frame marks ``design_then_impl``.
+_BUILD_INTENT_WORDS = frozenset(
+    {
+        "build",
+        "implement",
+        "feature",
+        "app",
+        "application",
+        "service",
+        "system",
+        "design",
+        "refactor",
+        "integrate",
+        "endpoint",
+        "api",
+        "module",
+        "component",
+        "pipeline",
+    }
+)
+
+
+def _derive_pipeline(artifact_hint: str | None, intent: str | None) -> PipelineKind:
+    """``design_then_impl`` for a code/PR build whose intent implies
+    construction; ``single`` otherwise (the default for everything else)."""
+    if artifact_hint not in ("code", "pr"):
+        return "single"
+    words = {w.strip(".,!?:;()") for w in (intent or "").lower().split()}
+    return "design_then_impl" if words & _BUILD_INTENT_WORDS else "single"
 
 
 _FRAME_SYSTEM_PROMPT = (
@@ -205,6 +238,7 @@ def _framed_from_llm(parsed: dict[str, Any], config: FrameConfig) -> FramedReque
         artifact_type_hint=artifact_hint,
         framed_intent=framed_intent,
         path_classification=path_classification,
+        pipeline=_derive_pipeline(artifact_hint, framed_intent or parsed.get("framed_intent")),
     )
 
 
@@ -227,6 +261,7 @@ def _frame_via_keyword(*, text: str, config: FrameConfig) -> FramedRequest:
         artifact_type_hint=artifact_hint,
         framed_intent=None,
         path_classification="agent_loop",
+        pipeline=_derive_pipeline(artifact_hint, text),
     )
 
 

@@ -26,9 +26,11 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import structlog
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.execution.db import (
+    Deliverable,
     ExecutionRun,
     ExecutionRunHistory,
     RunStatus,
@@ -189,6 +191,13 @@ class AgentRunner:
 
             if (run_worktree_path(run.id) / ".git").exists():
                 await self._auto_ship_product_run(run)
+
+        # P1-L2 — design→impl handoff. When a DESIGN-stage run in a
+        # ``design_then_impl`` pipeline reaches its verified terminal, spawn the
+        # IMPLEMENTATION run (seeded with the design run's id + produced refs).
+        # Gated on stage != "impl" so the impl run never re-spawns itself.
+        if to_status is RunStatus.REVIEW_READY:
+            await self._maybe_spawn_impl_run(run)
         return True
 
     async def _auto_ship_product_run(self, run: ExecutionRun) -> None:
@@ -275,9 +284,109 @@ class AgentRunner:
             # Leave at REVIEW_READY; next verify round will pull main
             # again and either succeed or surface a conflict.
 
-    async def _find_existing_run(self, *, request_id: uuid.UUID) -> ExecutionRun | None:
-        from sqlalchemy import select  # noqa: PLC0415 — local-only lookup
+    async def _maybe_spawn_impl_run(self, design_run: ExecutionRun) -> None:
+        """P1-L2: chain an IMPLEMENTATION run after a verified DESIGN run.
 
+        Fires only when ALL hold:
+        * the workspace has run-routing rules — i.e. it has OPTED IN to the
+          rule-routed / executor execution model. A rule-less workspace (every
+          existing single-account workspace) keeps today's single-run behaviour:
+          chaining a design→impl pair onto one model would just run the work
+          twice. The handoff is meaningful only when stages route distinctly.
+        * the run's frame marks the pipeline ``design_then_impl``;
+        * this run is NOT itself the impl stage (so the impl run can't spawn
+          another — the chain is exactly two runs).
+
+        The new run is OPEN (the next AgentWorker tick frames + drives it),
+        carries ``stage="impl"`` so routing targets the impl executor, and is
+        seeded with the design run's id + produced artifact refs so its context
+        (P1-L2b) can read the design spec.
+        """
+        payload = design_run.payload if isinstance(design_run.payload, dict) else {}
+        raw_frame = payload.get("frame")
+        frame = raw_frame if isinstance(raw_frame, dict) else {}
+        if frame.get("pipeline") != "design_then_impl":
+            return
+        if payload.get("stage") == "impl":
+            return
+        if not await self._workspace_has_routing_rules(design_run.workspace_id):
+            return
+
+        refs = await self._design_artifact_refs(design_run.id)
+        impl = ExecutionRun(
+            id=uuid.uuid4(),
+            workspace_id=design_run.workspace_id,
+            product_id=design_run.product_id,
+            request_id=design_run.request_id,
+            status=RunStatus.OPEN,
+            payload={
+                "request_id": (
+                    str(design_run.request_id) if design_run.request_id is not None else None
+                ),
+                "intent_text": payload.get("intent_text"),
+                "stage": "impl",
+                "pipeline": "design_then_impl",
+                "design_run_id": str(design_run.id),
+                "design_artifact_refs": refs,
+            },
+            created_at=datetime.now(tz=UTC),
+            updated_at=datetime.now(tz=UTC),
+        )
+        self._session.add(impl)
+        self._session.add(
+            ExecutionRunHistory(
+                id=uuid.uuid4(),
+                run_id=impl.id,
+                workspace_id=design_run.workspace_id,
+                from_status=None,
+                to_status=RunStatus.OPEN,
+                reason=f"impl stage spawned from design run {design_run.id}",
+                created_at=datetime.now(tz=UTC),
+            )
+        )
+        await self._session.flush()
+        logger.info(
+            "handoff_impl_run_spawned",
+            design_run_id=str(design_run.id),
+            impl_run_id=str(impl.id),
+            artifact_refs=len(refs),
+        )
+
+    async def _workspace_has_routing_rules(self, workspace_id: uuid.UUID) -> bool:
+        """True when the workspace has any run-routing rule (it has opted into
+        the rule-routed execution model — the gate for design→impl chaining)."""
+        from backend.routing.db import RunRoutingRuleRow  # noqa: PLC0415
+
+        row = (
+            await self._session.execute(
+                select(RunRoutingRuleRow.id)
+                .where(RunRoutingRuleRow.workspace_id == workspace_id)
+                .limit(1)
+            )
+        ).first()
+        return row is not None
+
+    async def _design_artifact_refs(self, design_run_id: uuid.UUID) -> list[str]:
+        """The artifact_refs the design run's deliverable(s) produced — the
+        spec files the impl stage will read. Dedupes, preserves order."""
+        rows = (
+            (
+                await self._session.execute(
+                    select(Deliverable).where(Deliverable.run_id == design_run_id)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        refs: list[str] = []
+        for row in rows:
+            row_payload = row.payload if isinstance(row.payload, dict) else {}
+            for ref in row_payload.get("artifact_refs") or []:
+                if isinstance(ref, str) and ref not in refs:
+                    refs.append(ref)
+        return refs
+
+    async def _find_existing_run(self, *, request_id: uuid.UUID) -> ExecutionRun | None:
         stmt = select(ExecutionRun).where(ExecutionRun.request_id == request_id).limit(1)
         return (await self._session.execute(stmt)).scalar_one_or_none()
 

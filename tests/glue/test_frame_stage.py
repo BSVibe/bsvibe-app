@@ -172,6 +172,66 @@ async def test_llm_framing_classifies_knowledge_only_path(tmp_path: Path) -> Non
 
 
 @pytest.mark.asyncio
+async def test_llm_frame_derives_design_then_impl_for_code_build(tmp_path: Path) -> None:
+    """P1-L2: a code artifact + a build-ish intent → design_then_impl pipeline."""
+    loader = SkillLoader(tmp_path)
+    loader.load_all()
+    llm = _StubFrameLlm(
+        {
+            "framed_intent": "Build an authentication service module.",
+            "skill_match": None,
+            "artifact_type_hint": "code",
+            "path_classification": "agent_loop",
+        }
+    )
+    framed = await FrameStage().frame(
+        request=_request({"text": "build an auth service"}),
+        config=FrameConfig(skill_loader=loader, llm=llm),
+    )
+    assert framed.pipeline == "design_then_impl"
+
+
+@pytest.mark.asyncio
+async def test_llm_frame_single_for_small_code_tweak(tmp_path: Path) -> None:
+    """A code change with no construction intent stays a single run."""
+    loader = SkillLoader(tmp_path)
+    loader.load_all()
+    llm = _StubFrameLlm(
+        {
+            "framed_intent": "Fix the typo in the error message.",
+            "skill_match": None,
+            "artifact_type_hint": "code",
+            "path_classification": "agent_loop",
+        }
+    )
+    framed = await FrameStage().frame(
+        request=_request({"text": "fix the typo"}),
+        config=FrameConfig(skill_loader=loader, llm=llm),
+    )
+    assert framed.pipeline == "single"
+
+
+@pytest.mark.asyncio
+async def test_llm_frame_single_for_non_code_artifact(tmp_path: Path) -> None:
+    """A non-code artifact never enters the design→impl pipeline."""
+    loader = SkillLoader(tmp_path)
+    loader.load_all()
+    llm = _StubFrameLlm(
+        {
+            "framed_intent": "Design and build the launch landing page.",
+            "skill_match": None,
+            "artifact_type_hint": "page",
+            "path_classification": "agent_loop",
+        }
+    )
+    framed = await FrameStage().frame(
+        request=_request({"text": "build the launch page"}),
+        config=FrameConfig(skill_loader=loader, llm=llm),
+    )
+    assert framed.pipeline == "single"
+
+
+@pytest.mark.asyncio
 async def test_llm_knowledge_only_with_concrete_artifact_coerced_to_agent_loop(
     tmp_path: Path,
 ) -> None:
