@@ -104,10 +104,14 @@ async def _await_dispatched_task_id(redis: Any, *, worker_id: uuid.UUID) -> uuid
 
 async def _make_redis() -> Any:
     try:
+        import fakeredis
         import fakeredis.aioredis as fakeredis_aio
     except ImportError:  # pragma: no cover - fakeredis is a declared dep
         pytest.skip("fakeredis not installed")
-    client = fakeredis_aio.FakeRedis(decode_responses=True)
+    # Isolated server per instance: the default shared server binds its async
+    # primitives to the first event loop that touches it, so reuse across
+    # pytest-asyncio's per-test loops raises cross-loop Future errors.
+    client = fakeredis_aio.FakeRedis(server=fakeredis.FakeServer(), decode_responses=True)
     await client.flushdb()
     return client
 

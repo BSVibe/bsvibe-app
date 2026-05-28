@@ -90,9 +90,12 @@ async def sf() -> Any:
 async def _make_redis() -> Any:
     """Return a connected async redis client, or ``None`` if none reachable."""
     try:
+        import fakeredis
         import fakeredis.aioredis as fakeredis_aio
 
-        return fakeredis_aio.FakeRedis(decode_responses=True)
+        # Isolated server per instance — the shared default server binds async
+        # primitives to one event loop, breaking pytest-asyncio's per-test loops.
+        return fakeredis_aio.FakeRedis(server=fakeredis.FakeServer(), decode_responses=True)
     except ImportError:
         pass
     try:

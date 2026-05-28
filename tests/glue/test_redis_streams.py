@@ -87,9 +87,12 @@ async def _make_redis() -> Any:
     so stream fields come back as ``str`` (matching the XADD field encoding).
     """
     try:
+        import fakeredis
         import fakeredis.aioredis as fakeredis_aio
 
-        return fakeredis_aio.FakeRedis(decode_responses=True)
+        # Isolated server per instance — the shared default server binds async
+        # primitives to one event loop, breaking pytest-asyncio's per-test loops.
+        return fakeredis_aio.FakeRedis(server=fakeredis.FakeServer(), decode_responses=True)
     except ImportError:
         pass
 

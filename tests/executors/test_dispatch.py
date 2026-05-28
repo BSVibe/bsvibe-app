@@ -33,10 +33,13 @@ pytestmark = pytest.mark.asyncio
 async def _make_redis() -> Any:
     """Return a connected fakeredis client, or skip when unavailable."""
     try:
+        import fakeredis
         import fakeredis.aioredis as fakeredis_aio
     except ImportError:  # pragma: no cover - fakeredis is a declared dep
         pytest.skip("fakeredis not installed")
-    client = fakeredis_aio.FakeRedis(decode_responses=True)
+    # Isolated server per instance — the shared default server binds async
+    # primitives to one event loop, breaking pytest-asyncio's per-test loops.
+    client = fakeredis_aio.FakeRedis(server=fakeredis.FakeServer(), decode_responses=True)
     await client.flushdb()
     return client
 
