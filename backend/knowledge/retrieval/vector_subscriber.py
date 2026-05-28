@@ -12,7 +12,7 @@ from backend.knowledge.graph.markdown_utils import body_after_frontmatter, extra
 if TYPE_CHECKING:
     from backend.knowledge.graph.vault import Vault
     from backend.knowledge.retrieval.embedder import Embedder
-    from backend.knowledge.retrieval.vector_store import VectorStore
+    from backend.knowledge.retrieval.storage.backend import NoteVectorBackend
 
 logger = structlog.get_logger(__name__)
 
@@ -28,7 +28,7 @@ class VectorSubscriber:
 
     def __init__(
         self,
-        vector_store: VectorStore,
+        vector_store: NoteVectorBackend,
         vault: Vault,
         embedder: Embedder,
         *,

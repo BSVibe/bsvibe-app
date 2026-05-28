@@ -18,7 +18,9 @@ import structlog
 
 from backend.knowledge.graph.graph_backend import GraphBackend
 from backend.knowledge.graph.graph_models import GraphEntity
-from backend.knowledge.retrieval.vector_store import _cosine_similarity
+from backend.knowledge.retrieval.storage.backend import (
+    cosine_similarity as _cosine_similarity,
+)
 
 logger = structlog.get_logger(__name__)
 

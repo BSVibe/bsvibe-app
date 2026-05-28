@@ -27,7 +27,9 @@ from backend.knowledge.canonicalization.evidence import EvidenceSource
 from backend.knowledge.canonicalization.evidence import envelope as _evidence_envelope
 from backend.knowledge.canonicalization.index import CanonicalizationIndex
 from backend.knowledge.canonicalization.store import NoteStore
-from backend.knowledge.retrieval.vector_store import _cosine_similarity
+from backend.knowledge.retrieval.storage.backend import (
+    cosine_similarity as _cosine_similarity,
+)
 
 logger = structlog.get_logger(__name__)
 
@@ -477,8 +479,8 @@ class BalancedProposer(DeterministicProposer):
                 got=len(vectors),
             )
             return {}
-        # Reuse the canonical cosine impl from vector_store rather than
-        # duplicating it (zero-norm guard included).
+        # Reuse the canonical cosine impl from the vector storage backend rather
+        # than duplicating it (zero-norm guard included).
         pairs: dict[tuple[str, str], float] = {}
         for i in range(len(ids)):
             for j in range(i + 1, len(ids)):
