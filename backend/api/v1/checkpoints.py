@@ -60,6 +60,16 @@ from backend.supervisor.audit.service import safe_emit
 #: (retriever, audit) key off it.
 DECISION_RESOLUTION_SETTLE_KIND = "decision_resolution"
 
+#: Payload ``kind`` on the *negative-pattern* settle activity the resolve
+#: endpoint emits when the founder DISCARDS a deliverable with a reason (G1).
+#: The same settle pipeline absorbs it into the vault as a ``negative_pattern``
+#: garden note; the
+#: :class:`~backend.knowledge.retrieval.negative_pattern_retriever.NegativePatternRetriever`
+#: surfaces it as "avoid this" guidance for a future run with similar signals —
+#: so a rejected approach is not silently repeated. Additive to (never replaces)
+#: the ``decision_resolution`` row.
+NEGATIVE_PATTERN_SETTLE_KIND = "negative_pattern"
+
 #: Cap on the settle-activity ``summary`` text — keeps the absorbed garden
 #: note's body proportionate to the question + answer (mirrors
 #: :data:`~backend.execution.verified_deliverable._SETTLE_SUMMARY_CAP`).
@@ -131,6 +141,11 @@ class ResolveRequest(BaseModel):
     # the recorded ``decision.resolution`` from the action key instead.
     answer: str = ""
     action_key: str | None = None
+    # G1: free-text "why I'm discarding this" the founder may supply alongside a
+    # ``discard`` action. When present on a discard, it becomes reusable negative
+    # knowledge (a ``negative_pattern`` settle); ignored for non-discard
+    # resolutions. Optional — a reasonless discard simply teaches nothing.
+    reason: str = ""
 
 
 class ResolveResponse(BaseModel):
@@ -402,6 +417,39 @@ async def resolve_checkpoint(
             payload=settle_payload,
         )
     )
+
+    # G1 — when the founder DISCARDS with a reason, capture that rejection as
+    # reusable negative knowledge. Emit a SECOND settle activity (additive to the
+    # decision_resolution row above) carrying ``kind = negative_pattern`` + the
+    # reason + the run's stable clustering context. The same SettleWorker drains
+    # it into the vault; the NegativePatternRetriever then surfaces it as "avoid
+    # this" guidance for a future run with overlapping signals — so the rejected
+    # approach is not repeated. Gated on a non-empty reason: a reasonless discard
+    # teaches nothing, so it writes no negative-pattern row.
+    reason = body.reason.strip()
+    if action_key == ACTION_DISCARD and reason:
+        negative_payload: dict[str, Any] = {
+            "kind": NEGATIVE_PATTERN_SETTLE_KIND,
+            "decision_id": str(decision.id),
+            "question": _question_text(decision),
+            "reason": reason,
+            "resolved_by": str(user_row.id),
+            "resolved_at": now.isoformat(),
+            # A rejection is an honest founder signal, NEVER verified-as-code.
+            "verified": False,
+            "summary": (f"Rejected approach — {reason}")[:_SUMMARY_CAP],
+            **await settle_run_context(session, run),
+        }
+        session.add(
+            ExecutionRunActivity(
+                id=uuid.uuid4(),
+                run_id=run.id,
+                workspace_id=run.workspace_id,
+                activity_type="settle",
+                payload=negative_payload,
+            )
+        )
+
     await session.flush()
 
     # L-D2: action-driven resolutions dispatch to side-effecting handlers

@@ -140,6 +140,9 @@ class KnowledgeFactory:
         from backend.knowledge.retrieval.composite_retriever import (  # noqa: PLC0415
             CompositeCanonRetriever,
         )
+        from backend.knowledge.retrieval.negative_pattern_retriever import (  # noqa: PLC0415
+            NegativePatternRetriever,
+        )
         from backend.knowledge.retrieval.resolved_decisions_retriever import (  # noqa: PLC0415
             ResolvedDecisionsRetriever,
         )
@@ -149,5 +152,9 @@ class KnowledgeFactory:
             [
                 CanonConceptRetriever(storage),
                 ResolvedDecisionsRetriever(storage),
+                # G1: prior rejections (discard-with-reason) surface as "avoid
+                # this" guidance so a future run doesn't repeat a rejected
+                # approach. Last source — lowest precedence under the total cap.
+                NegativePatternRetriever(storage),
             ]
         )
