@@ -83,6 +83,7 @@ from backend.execution.db import (
     WorkStep,
     WorkStepStatus,
 )
+from backend.execution.handoff import read_design_context
 from backend.execution.orchestrator import LoopResult
 from backend.execution.verified_deliverable import write_verified_deliverable
 from backend.execution.verifier.service import CanonRetriever, JudgeLlm, VerificationService
@@ -177,16 +178,22 @@ def _executor_system_prompt() -> str:
     return _EXECUTOR_SYSTEM_PROMPT
 
 
-def _assemble_executor_prompt(run: ExecutionRun, *, statements: list[str]) -> str:
-    """Frame the context-rich CLI prompt: intent + canon + resolved decisions.
+def _assemble_executor_prompt(
+    run: ExecutionRun, *, statements: list[str], design_context: str | None = None
+) -> str:
+    """Frame the context-rich CLI prompt: intent + canon + resolved decisions
+    + (P1-L2b) the prior design stage's spec.
 
     Pure + synchronous (testable in isolation) — the caller does the async canon
-    retrieval and passes the resulting ``statements``. Sections that have no
+    retrieval + design-spec read and passes the results. Sections that have no
     content are omitted entirely (no empty headers): an empty-knowledge,
     no-decisions run yields just the intent. Caps applied: the intent to
     :data:`_INTENT_MAX_CHARS`, canon to :data:`_KNOWLEDGE_MAX_RESULTS` × clamped
     statements (respect the local-model generation budget)."""
     parts: list[str] = [_intent_text(run, max_chars=_INTENT_MAX_CHARS)]
+
+    if design_context:
+        parts.append(design_context)
 
     cleaned = [
         s.strip()[:_KNOWLEDGE_MAX_CHARS_PER_STATEMENT] for s in statements if s and s.strip()
@@ -298,7 +305,12 @@ class ExecutorOrchestrator:
         # hiccup / no canon / no decisions degrades to intent-only — never raises
         # into dispatch.
         statements = await self._retrieve_canon(run)
-        prompt = _assemble_executor_prompt(run, statements=statements)
+        # P1-L2b — when this is the impl stage of a design→impl handoff, fold the
+        # prior design stage's spec into the prompt so the CLI implements it.
+        design_context = read_design_context(run, self._settings)
+        prompt = _assemble_executor_prompt(
+            run, statements=statements, design_context=design_context
+        )
         system = _executor_system_prompt()
         # NOTE: ``workspace_dir`` here is the BACKEND container's run path
         # (``/app/var/runs/<run_id>`` on the backend's appdata volume). A worker
