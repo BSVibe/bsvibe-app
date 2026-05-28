@@ -20,6 +20,7 @@ from backend.api.v1 import (
     presets,
     products,
     rules,
+    run_routing,
     runs,
     safemode,
     skills,
@@ -56,6 +57,7 @@ router.include_router(accounts.router, prefix="/accounts", tags=["accounts"])
 router.include_router(account.router, prefix="/account", tags=["account"])
 router.include_router(connectors.router, prefix="/connectors", tags=["connectors"])
 router.include_router(rules.router, prefix="/rules", tags=["rules"])
+router.include_router(run_routing.router, prefix="/run-routing", tags=["run-routing"])
 router.include_router(intents.router, prefix="/intents", tags=["intents"])
 router.include_router(presets.router, prefix="/presets", tags=["presets"])
 router.include_router(skills.router, prefix="/skills", tags=["skills"])

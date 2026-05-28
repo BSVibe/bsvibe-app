@@ -134,6 +134,10 @@ _OPERATORS: dict[str, Any] = {
     "not_in": lambda fv, ex: not _check_in(fv, ex),
 }
 
+#: The set of valid condition operators (the dispatch table's keys) — exported
+#: so the rule-authoring API validates against the SAME source of truth.
+VALID_OPERATORS: frozenset[str] = frozenset(_OPERATORS)
+
 
 def _evaluate_raw(field_value: Any, operator: str, expected: Any) -> bool:
     fn = _OPERATORS.get(operator)
@@ -232,4 +236,10 @@ async def resolve_route(session: AsyncSession, run: ExecutionRun) -> ModelAccoun
     return await resolve_workspace_model_account(session, run)
 
 
-__all__ = ["ALLOWED_FIELDS", "RoutingContext", "evaluate_rules", "resolve_route"]
+__all__ = [
+    "ALLOWED_FIELDS",
+    "VALID_OPERATORS",
+    "RoutingContext",
+    "evaluate_rules",
+    "resolve_route",
+]
