@@ -5,7 +5,7 @@ import { type OAuthProvider, login, startOAuth } from "@/lib/api/auth";
 import { useTranslations } from "next-intl";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { type FormEvent, useState } from "react";
+import { type FormEvent, useEffect, useState } from "react";
 
 /** Sign in against the REAL backend. Email+password → `/api/auth/login`;
  *  social → `/api/auth/oauth/{provider}/authorize` (PKCE start, then the
@@ -23,6 +23,14 @@ export default function LoginPage() {
   const [oauthBusy, setOauthBusy] = useState<OAuthProvider | null>(null);
 
   const disabled = busy || oauthBusy !== null;
+
+  // Warm the /brief route (its chunk + RSC payload) while the founder is still
+  // typing credentials, so the post-sign-in router.replace("/brief") paints
+  // from cache instead of fetching on the critical path. Pairs with the
+  // backend <link rel="preconnect"> (PR #170): connection warm + route warm.
+  useEffect(() => {
+    router.prefetch("/brief");
+  }, [router]);
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
