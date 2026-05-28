@@ -84,6 +84,15 @@
     "errorSend": "Couldn’t send that. Please try again.",
     "errorNetwork": "Network hiccup. Please try again."
   },
+  "productsIndex": {
+    "heading": "Products",
+    "lede": "Everything you’re building with BSVibe. Open one to give it a Direction or see what shipped.",
+    "newProduct": "New product",
+    "listLabel": "Products",
+    "loading": "Loading products…",
+    "loadError": "Couldn’t load your products. Try again in a moment.",
+    "empty": "No products yet. Create one to give BSVibe something to work on."
+  },
   "products": {
     "back": "‹ Brief",
     "region": "Product",

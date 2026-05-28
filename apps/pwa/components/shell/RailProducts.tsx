@@ -69,7 +69,11 @@ export default function RailProducts() {
   return (
     <section className="rail-products" aria-label={t("sectionLabel")}>
       <header className="rail-products__head">
-        <h2 className="rail-products__heading">{t("heading")}</h2>
+        {/* The heading links to the full /products overview — the compact list
+            below is the quick switcher, the index page is "see/manage all". */}
+        <Link href="/products" className="rail-products__heading-link">
+          <h2 className="rail-products__heading">{t("heading")}</h2>
+        </Link>
       </header>
 
       {list === null ? (
