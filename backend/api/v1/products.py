@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 import uuid
 from datetime import datetime
+from pathlib import Path
 from typing import Annotated, Any, Literal
 
 import structlog
@@ -15,9 +16,24 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.api.deps import get_db_session, get_workspace_id, require_role
+from backend.config import get_settings
 from backend.connectors.db import ConnectorAccountRow
+from backend.storage.artifact_store import LocalFilesystemArtifactStore
+from backend.storage.product_workspace import list_product_tree
 from backend.workspaces.db import ProductResourceRow, ProductRow
 from backend.workspaces.resource_bindings import ResourceBindingRepository
+
+# Read cap for product file content (mirrors the deliverable artifact viewer):
+# a source file is small; this guards against a large blob slipping into a JSON
+# body. Past the cap the leading bytes are returned with ``truncated: true``.
+_MAX_FILE_BYTES = 256 * 1024
+
+
+def _looks_binary(raw: bytes) -> bool:
+    """A NUL byte in the first 8 KiB ⇒ treat as binary (don't stream raw bytes
+    into a JSON text field)."""
+    return b"\x00" in raw[:8192]
+
 
 logger = structlog.get_logger(__name__)
 
@@ -470,3 +486,75 @@ async def delete_product_binding(
             detail=f"Binding {binding_id} not found",
         )
     await session.commit()
+
+
+# ---------------------------------------------------------------------------
+# Product files — a lazy, per-directory browser over the product's git main.
+#
+# Replaces the per-deliverable flat artifact_refs list (which only ever showed
+# the files a single run touched and never scaled to a real repo). The tree is
+# fetched one directory at a time so a large product repo stays cheap to browse,
+# and content is read from the product main checkout (the shipped state).
+# ---------------------------------------------------------------------------
+
+
+class FileTreeEntryResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str
+    path: str
+    kind: Literal["file", "dir"]
+
+
+class ProductFileContentResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    path: str
+    content: str
+    truncated: bool = False
+    binary: bool = False
+
+
+@router.get("/{product_id}/files")
+async def list_product_files(
+    product_id: uuid.UUID,
+    workspace_id: Annotated[uuid.UUID, Depends(get_workspace_id)],
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    path: str = "",
+) -> list[FileTreeEntryResponse]:
+    """List the immediate children of ``path`` (default root) in the product's
+    ``main`` tree. One level only — the browser fetches each directory on
+    demand. An uninitialised product / unsafe path yields ``[]``."""
+    await _resolve_product_in_workspace(session, product_id, workspace_id)
+    entries = await list_product_tree(product_id, path)
+    return [FileTreeEntryResponse(name=e.name, path=e.path, kind=e.kind) for e in entries]
+
+
+@router.get("/{product_id}/files/content")
+async def get_product_file_content(
+    product_id: uuid.UUID,
+    path: str,
+    workspace_id: Annotated[uuid.UUID, Depends(get_workspace_id)],
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+) -> ProductFileContentResponse:
+    """Serve one file's CONTENT from the product's ``main`` checkout, read-only.
+
+    Reuses the centralized traversal guard by rooting a
+    :class:`LocalFilesystemArtifactStore` at ``product_workspace_root`` and
+    keying it by ``product_id`` (resolves ``<root>/<product_id>/<path>``). A
+    traversal / absolute path, a directory, or a missing file all 404 calmly —
+    never a leak, never a 500. Binary files yield a short note; text is capped
+    at 256 KiB with ``truncated: true`` past the cap."""
+    await _resolve_product_in_workspace(session, product_id, workspace_id)
+    store = LocalFilesystemArtifactStore(Path(get_settings().product_workspace_root))
+    try:
+        raw = store.read_bytes(product_id, path)
+    except (ValueError, FileNotFoundError, IsADirectoryError) as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="file not found") from exc
+    if _looks_binary(raw):
+        return ProductFileContentResponse(
+            path=path, content=f"Binary file, {len(raw)} bytes — not shown.", binary=True
+        )
+    truncated = len(raw) > _MAX_FILE_BYTES
+    text = raw[:_MAX_FILE_BYTES].decode("utf-8", errors="replace")
+    return ProductFileContentResponse(path=path, content=text, truncated=truncated)

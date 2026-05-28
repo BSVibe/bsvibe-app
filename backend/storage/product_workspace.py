@@ -572,10 +572,83 @@ class ProductWorkspaceBusy(ProductWorkspaceError):
     """
 
 
+@dataclass(frozen=True, slots=True)
+class TreeEntry:
+    """One immediate child in a product's ``main`` tree.
+
+    ``path`` is the full repo-relative path (e.g. ``src/app.py``); ``name`` is
+    the leaf (``app.py``). ``kind`` is ``"file"`` (git blob) or ``"dir"`` (git
+    tree). Submodules / other object types are skipped by the lister."""
+
+    name: str
+    path: str
+    kind: Literal["file", "dir"]
+
+
+def _is_safe_subdir(subdir: str) -> bool:
+    """A listable subdir must be repo-relative and stay inside the repo: no
+    absolute paths, no ``..`` or empty segments. ``""`` (root) is always safe."""
+    if subdir == "":
+        return True
+    if subdir.startswith("/"):
+        return False
+    return all(part not in ("", "..") for part in subdir.split("/"))
+
+
+async def list_product_tree(product_id: uuid.UUID, subdir: str = "") -> list[TreeEntry]:
+    """List the IMMEDIATE children of ``subdir`` in the product's ``main`` tree.
+
+    One level only (lazy) — a tree browser fetches each directory on demand
+    rather than walking a whole (potentially huge) repo up front. Directories
+    sort before files, then by name. An unsafe ``subdir`` (absolute / ``..``)
+    or a path that isn't a directory in ``main`` returns ``[]`` (never raises
+    into the read path). An uninitialised product also returns ``[]``."""
+    subdir = subdir.strip("/")
+    if not _is_safe_subdir(subdir):
+        return []
+    repo = product_workspace_path(product_id)
+    if not (repo / ".git").exists():
+        return []
+    # ``git ls-tree main -- <subdir>/`` lists one level. The trailing slash
+    # scopes to the directory's children; an empty subdir lists the root.
+    spec = f"{subdir}/" if subdir else ""
+    args = ["ls-tree", "-z", "main"]
+    if spec:
+        args += ["--", spec]
+    result = await _git(*args, cwd=repo, check=False)
+    if result.returncode != 0:
+        return []
+    entries: list[TreeEntry] = []
+    for record in result.stdout.split("\0"):
+        if not record:
+            continue
+        # Format: "<mode> SP <type> SP <sha>\t<path>"
+        meta, _, path = record.partition("\t")
+        if not path:
+            continue
+        fields = meta.split(" ")
+        if len(fields) < 2:
+            continue
+        obj_type = fields[1]
+        if obj_type == "blob":
+            kind: Literal["file", "dir"] = "file"
+        elif obj_type == "tree":
+            kind = "dir"
+        else:
+            continue  # submodule / other — skip
+        entries.append(
+            TreeEntry(name=path.rstrip("/").split("/")[-1], path=path.rstrip("/"), kind=kind)
+        )
+    entries.sort(key=lambda e: (e.kind != "dir", e.name.lower()))
+    return entries
+
+
 __all__ = [
     "MergeOutcome",
     "ProductWorkspaceBusy",
     "ProductWorkspaceError",
+    "TreeEntry",
+    "list_product_tree",
     "abort_merge",
     "add_run_worktree",
     "commit_worktree",
