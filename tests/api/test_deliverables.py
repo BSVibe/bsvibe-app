@@ -375,9 +375,7 @@ async def test_report_empty_verification_does_not_error(
     assert body["request"] is None
 
 
-async def test_report_surfaces_referenced_knowledge(
-    configured_client, db, workspace_id
-) -> None:
+async def test_report_surfaces_referenced_knowledge(configured_client, db, workspace_id) -> None:
     """G2: the knowledge the agent referenced (canon / prior decisions / prior
     rejections folded into the verify contract) surfaces as a first-class
     ``references`` list — the "근거 포함 답변" the founder reads as "what BSVibe
