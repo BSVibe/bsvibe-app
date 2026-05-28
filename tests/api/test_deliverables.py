@@ -864,7 +864,9 @@ async def test_artifact_falls_back_to_product_main_when_run_dir_cleaned(
         )
     # Run dir intentionally NOT written (auto-ship cleaned it). The file lives
     # in the product workspace main checkout.
-    _write_product_file(product_workspace_root, product_id, "mathbox.py", "def subtract(a, b):\n    return a - b\n")
+    _write_product_file(
+        product_workspace_root, product_id, "mathbox.py", "def subtract(a, b):\n    return a - b\n"
+    )
 
     r = await configured_client.get(f"/api/v1/deliverables/{deliverable_id}/artifacts/mathbox.py")
     assert r.status_code == 200, r.text
