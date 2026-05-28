@@ -61,7 +61,7 @@ function needsYouFrom(proposals: Proposal[], queue: SafeModeItem[]): NeedsYouIte
     items.push({
       id: `safemode-${item.id}`,
       productSlug: "delivery",
-      question: "A delivery is held in Safe Mode — approve to send it out?",
+      question: "A delivery is held in Safe Mode. Approve to send it out?",
       // Resolvable in-place: approve dispatches it out, deny dismisses it.
       resolve: { kind: "safemode", itemId: item.id },
     });

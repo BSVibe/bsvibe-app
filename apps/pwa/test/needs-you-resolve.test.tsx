@@ -23,7 +23,7 @@ const SESSION: Session = {
 const SAFEMODE_ITEM: NeedsYouItem = {
   id: "safemode-sm-1",
   productSlug: "delivery",
-  question: "A delivery is held in Safe Mode — approve to send it out?",
+  question: "A delivery is held in Safe Mode. Approve to send it out?",
   resolve: { kind: "safemode", itemId: "sm-1" },
 };
 
