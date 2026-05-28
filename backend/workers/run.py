@@ -76,6 +76,7 @@ from backend.plugins.analyzer import DangerAnalyzer
 from backend.plugins.base import PluginMeta
 from backend.plugins.loader import PluginLoader
 from backend.plugins.runner import PluginRunner
+from backend.routing import resolve_route
 from backend.skills.loader import SkillLoader
 from backend.supervisor.audit.models import AuditOutboxRecord
 from backend.supervisor.sandbox import (
@@ -420,7 +421,10 @@ def build_agent_execution_deps(
         )
 
     async def _factory(session: AsyncSession, run: ExecutionRun) -> RunCompute | None:
-        account = await resolve_workspace_model_account(session, run)
+        # Phase 1: rule-based routing picks the account from the run's framed
+        # signals when the workspace has routing rules; otherwise it delegates
+        # to the legacy single-active resolver (zero behaviour change).
+        account = await resolve_route(session, run)
         if account is None:
             return None
         retriever = _retriever_for(run.workspace_id)

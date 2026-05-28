@@ -1,0 +1,235 @@
+"""Routing rule evaluation + account resolution (Phase 1).
+
+Priority-ordered, first-match rule engine (BSGateway-faithful): rules are
+sorted by ``priority`` ascending; the first non-default rule whose conditions
+ALL match wins; otherwise the ``is_default`` rule (if any) wins. Each rule's
+``target`` is matched against the workspace's active ModelAccounts by
+``litellm_model`` to pick the run's compute (native LLM or executor CLI).
+
+Conditions evaluate against a :class:`RoutingContext` built from the run's
+framed signals. Only whitelisted fields are addressable (a typoed field never
+matches and is logged) and the regex operator rejects ReDoS-prone patterns —
+both carried over from BSGateway's hardening.
+"""
+
+from __future__ import annotations
+
+import re
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any
+
+import structlog
+
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+    from backend.accounts.models import ModelAccount
+    from backend.execution.db import ExecutionRun
+    from backend.routing.db import RunRoutingRuleRow
+
+logger = structlog.get_logger(__name__)
+
+# Fields a condition may address — derived from the run's framed signals.
+# Anything outside this set never matches (logged), so a typo can't silently
+# persist as a no-op rule (BSGateway audit H4).
+ALLOWED_FIELDS: frozenset[str] = frozenset(
+    {
+        "artifact_type_hint",  # "code" | "page" | "page_image" | "pr" | None
+        "path_classification",  # "knowledge_only" | "agent_loop"
+        "skill_match",  # matched skill name | None
+        "intent_text",  # the run's intent / framed intent (text ops)
+        "stage",  # "single" | "design" | "impl" (pipeline stage)
+        "product_id",  # the run's product_id (str) | None
+    }
+)
+
+# Reject nested-quantifier regexes (ReDoS) — carried from BSGateway.
+_REDOS_PATTERN = re.compile(r"\(.+[*+]\)[*+?]|\[.+[*+]\][*+?]")
+
+
+@dataclass(frozen=True, slots=True)
+class RoutingContext:
+    """Pre-extracted run signals a rule evaluates against."""
+
+    artifact_type_hint: str | None = None
+    path_classification: str | None = None
+    skill_match: str | None = None
+    intent_text: str | None = None
+    stage: str = "single"
+    product_id: str | None = None
+
+    @classmethod
+    def from_run(cls, run: ExecutionRun) -> RoutingContext:
+        """Build the context from the run's payload (the frame the worker
+        recorded) + run columns. Tolerant of a missing/odd payload."""
+        payload: dict[str, Any] = run.payload if isinstance(run.payload, dict) else {}
+        raw_frame = payload.get("frame")
+        frame: dict[str, Any] = raw_frame if isinstance(raw_frame, dict) else {}
+        intent = payload.get("intent_text") or frame.get("framed_intent") or payload.get("text")
+        return cls(
+            artifact_type_hint=frame.get("artifact_type_hint"),
+            path_classification=frame.get("path_classification"),
+            skill_match=frame.get("skill_match"),
+            intent_text=intent if isinstance(intent, str) else None,
+            stage=str(payload.get("stage") or "single"),
+            product_id=str(run.product_id) if run.product_id is not None else None,
+        )
+
+
+def _field_value(ctx: RoutingContext, field: str) -> Any:
+    return getattr(ctx, field, None)
+
+
+def _contains(haystack: Any, needle: Any) -> bool:
+    if haystack is None:
+        return False
+    return str(needle).lower() in str(haystack).lower()
+
+
+def _numeric(value: Any) -> float:
+    if value is None:
+        return 0.0
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _check_in(field_value: Any, expected: Any) -> bool:
+    if not isinstance(expected, list):
+        return False
+    if isinstance(field_value, list):
+        return bool(set(field_value) & set(expected))
+    return field_value in expected
+
+
+def _regex(field_value: Any, expected: Any) -> bool:
+    pattern = str(expected)
+    if len(pattern) > 500 or _REDOS_PATTERN.search(pattern):
+        return False
+    try:
+        return bool(re.search(pattern, str(field_value), re.IGNORECASE))
+    except re.error:
+        return False
+
+
+def _between(field_value: Any, expected: Any) -> bool:
+    if not isinstance(expected, list) or len(expected) != 2:
+        return False
+    return _numeric(expected[0]) <= _numeric(field_value) <= _numeric(expected[1])
+
+
+# Operator dispatch — flat table keeps the branch/return count low and makes
+# the supported set self-documenting.
+_OPERATORS: dict[str, Any] = {
+    "eq": lambda fv, ex: bool(fv == ex),
+    "contains": _contains,
+    "regex": _regex,
+    "gt": lambda fv, ex: _numeric(fv) > _numeric(ex),
+    "lt": lambda fv, ex: _numeric(fv) < _numeric(ex),
+    "gte": lambda fv, ex: _numeric(fv) >= _numeric(ex),
+    "lte": lambda fv, ex: _numeric(fv) <= _numeric(ex),
+    "between": _between,
+    "in": _check_in,
+    "not_in": lambda fv, ex: not _check_in(fv, ex),
+}
+
+
+def _evaluate_raw(field_value: Any, operator: str, expected: Any) -> bool:
+    fn = _OPERATORS.get(operator)
+    return bool(fn(field_value, expected)) if fn is not None else False
+
+
+def _evaluate_condition(condition: dict[str, Any], ctx: RoutingContext) -> bool:
+    field = condition.get("field")
+    if field not in ALLOWED_FIELDS:
+        logger.warning("routing_condition_unknown_field", field=field)
+        return False
+    operator = condition.get("operator", "eq")
+    if operator not in _OPERATORS:
+        logger.warning("routing_condition_unknown_operator", operator=operator)
+        return False
+    result = _evaluate_raw(_field_value(ctx, field), operator, condition.get("value"))
+    return (not result) if condition.get("negate") else result
+
+
+def _rule_matches(rule: RunRoutingRuleRow, ctx: RoutingContext) -> bool:
+    """A rule matches when ALL its conditions match (AND). A rule with no
+    conditions matches everything (useful for a catch-all default)."""
+    conditions = rule.conditions if isinstance(rule.conditions, list) else []
+    return all(_evaluate_condition(c, ctx) for c in conditions if isinstance(c, dict))
+
+
+def evaluate_rules(rules: list[RunRoutingRuleRow], ctx: RoutingContext) -> str | None:
+    """Return the ``target`` of the first matching active rule by priority
+    (ascending), else the active default rule's target, else ``None``."""
+    default_target: str | None = None
+    for rule in sorted(rules, key=lambda r: r.priority):
+        if not rule.is_active:
+            continue
+        if rule.is_default:
+            if default_target is None:
+                default_target = rule.target
+            continue
+        if _rule_matches(rule, ctx):
+            return rule.target
+    return default_target
+
+
+async def resolve_route(session: AsyncSession, run: ExecutionRun) -> ModelAccount | None:
+    """Resolve the ModelAccount for ``run`` via routing rules.
+
+    * No rules for the workspace → delegate to the legacy single-active
+      resolver (unchanged behaviour for existing workspaces).
+    * A rule (or default) matches → return the active account whose
+      ``litellm_model`` equals the rule's ``target``.
+    * Rules exist but none match (no default), or the target isn't an active
+      account → delegate to the legacy resolver (which returns the lone active
+      account, or raises a founder Decision on zero/ambiguous). Never crashes,
+      never silently guesses.
+    """
+    from sqlalchemy import select  # noqa: PLC0415
+
+    from backend.routing.db import RunRoutingRuleRow  # noqa: PLC0415
+    from backend.workers.run import (  # noqa: PLC0415 — avoid import cycle
+        _list_active_workspace_accounts,
+        resolve_workspace_model_account,
+    )
+
+    rules = list(
+        (
+            await session.execute(
+                select(RunRoutingRuleRow).where(RunRoutingRuleRow.workspace_id == run.workspace_id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    if not rules:
+        return await resolve_workspace_model_account(session, run)
+
+    ctx = RoutingContext.from_run(run)
+    target = evaluate_rules(rules, ctx)
+    if target is not None:
+        accounts = await _list_active_workspace_accounts(session, run.workspace_id)
+        for account in accounts:
+            if account.litellm_model == target:
+                logger.info(
+                    "routing_rule_matched",
+                    run_id=str(run.id),
+                    workspace_id=str(run.workspace_id),
+                    target=target,
+                    stage=ctx.stage,
+                )
+                return account
+        logger.warning(
+            "routing_rule_target_not_active",
+            run_id=str(run.id),
+            target=target,
+            hint="rule matched but no active account has this litellm_model",
+        )
+    # No match / no default / target inactive → safe legacy fallback.
+    return await resolve_workspace_model_account(session, run)
+
+
+__all__ = ["ALLOWED_FIELDS", "RoutingContext", "evaluate_rules", "resolve_route"]
