@@ -163,17 +163,29 @@ async def _drive_with_worker_done(
     :func:`dispatch.record_result` (which publishes the done channel)."""
 
     async def _await_task_id() -> uuid.UUID:
-        stream = dispatch.worker_stream(worker_id)
-        last_id = "0"
-        for _ in range(500):
-            entries = await redis.xread({stream: last_id}, count=1, block=20)
-            if not entries:
-                continue
-            _name, messages = entries[0]
-            for msg_id, fields in messages:
-                last_id = msg_id
-                return uuid.UUID(fields["task_id"])
-        raise AssertionError(f"no task dispatched onto {stream}")
+        # Discover the dispatched task by polling the DB on its OWN session, not
+        # a blocking ``redis.xread`` on the worker stream. The blocking read
+        # raced the orchestrator's XADD under CI load: if the worker missed the
+        # entry it never recorded a result and await_completion timed out (30s)
+        # → a recurring ``system_error`` flake. The orchestrator commits the
+        # dispatched task (run-bound) before awaiting, so a fresh-session DB poll
+        # is deterministic — and safe now that this harness uses a file-WAL
+        # engine (each session its own connection; the StaticPool era raised
+        # StaleDataError on an extra session over the shared connection). The
+        # stream XADD path stays covered directly in test_dispatch.py.
+        from sqlalchemy import select  # noqa: PLC0415
+
+        for _ in range(2000):
+            async with sf() as poll_s:
+                row = (
+                    await poll_s.execute(
+                        select(ExecutorTaskRow).where(ExecutorTaskRow.run_id == run.id)
+                    )
+                ).scalar_one_or_none()
+            if row is not None:
+                return row.id
+            await asyncio.sleep(0.005)
+        raise AssertionError(f"no task dispatched for run {run.id}")
 
     async def _simulate_worker() -> None:
         task_id = await _await_task_id()
