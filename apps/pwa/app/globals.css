@@ -13,6 +13,11 @@
 
   --amber-ink: #995108;
   --amber-dot: #e0922e;
+  /* Text color that sits on an --amber-ink fill (alert badges). In light the
+     fill is dark (#995108) so the text is white; the dark theme overrides this
+     to a near-black because the dark fill (#e0a458) is light. Without this a
+     hardcoded white badge label was 2.18:1 on the dark amber fill. */
+  --on-amber: #ffffff;
   --green-ink: #4f8a5b;
   --green-dot: #5ba877;
   --green-pill-bg: #eef4ee;
@@ -48,6 +53,9 @@
 
   --amber-ink: #e0a458;
   --amber-dot: #e0922e;
+  /* Dark fill is light (#e0a458) → badge text must be near-black, not white.
+     --bg (#1c1b19) on #e0a458 ≈ 7.4:1. */
+  --on-amber: #1c1b19;
   --green-ink: #7cc08c;
   --green-dot: #5ba877;
   --green-pill-bg: #243027;
@@ -479,10 +487,12 @@ main.login {
   /* --amber-dot at the same lightness as --amber-ink (legible white text) fails
      WCAG AA for the 11px badge text (2.52:1). The badge means "needs your
      attention" — same semantic register as --amber-ink — so it inherits the
-     darker fill, lifting the white text well above AA. The --amber-dot token
-     stays available as the small status pip used elsewhere. */
+     darker fill, lifting the text well above AA. The --amber-dot token stays
+     available as the small status pip used elsewhere. --on-amber flips the
+     text from white (light theme, dark fill) to near-black (dark theme, light
+     fill) so the label clears AA in BOTH themes. */
   background: var(--amber-ink);
-  color: #fff;
+  color: var(--on-amber);
   font-size: 0.68rem;
   font-weight: 650;
   line-height: 18px;
@@ -4480,8 +4490,11 @@ main.login {
     height: 15px;
     padding: 0 4px;
     border-radius: 999px;
-    background: var(--amber-dot);
-    color: #fff;
+    /* Mirror .rail__badge: the darker --amber-ink fill + --on-amber text
+       clears AA in both themes. The previous --amber-dot fill with white text
+       was 2.52:1 (light) / 2.18:1 (dark) — failing on both. */
+    background: var(--amber-ink);
+    color: var(--on-amber);
     font-size: 0.6rem;
     font-weight: 650;
     line-height: 15px;
