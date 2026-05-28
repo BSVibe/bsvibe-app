@@ -375,6 +375,167 @@ async def test_report_empty_verification_does_not_error(
     assert body["request"] is None
 
 
+async def test_report_surfaces_referenced_knowledge(
+    configured_client, db, workspace_id
+) -> None:
+    """G2: the knowledge the agent referenced (canon / prior decisions / prior
+    rejections folded into the verify contract) surfaces as a first-class
+    ``references`` list — the "근거 포함 답변" the founder reads as "what BSVibe
+    referenced", distinct from the verification checklist."""
+    from backend.execution.verifier.service import RETRIEVED_KNOWLEDGE_RATIONALE
+
+    run_id = uuid.uuid4()
+    deliverable_id = uuid.uuid4()
+    contract = {
+        "checks": [
+            {"kind": "command", "command": "pytest -q", "rationale": "tests pass"},
+            {"kind": "judge", "criteria": ["reads cleanly"], "rationale": "style"},
+            {
+                "kind": "judge",
+                "criteria": [
+                    "Avoid (prior rejection) — never ship a payment change without a regression test",
+                    "Prior decision — Q: Which database? A: Use Postgres",
+                ],
+                "rationale": RETRIEVED_KNOWLEDGE_RATIONALE,
+            },
+        ]
+    }
+    async with db() as s:
+        await _seed_run(s, run_id=run_id, ws=workspace_id, payload={"intent_text": "payments"})
+        s.add(
+            Deliverable(
+                id=deliverable_id,
+                run_id=run_id,
+                workspace_id=workspace_id,
+                deliverable_type=DeliverableType.PR,
+                payload={"summary": "x"},
+                created_at=datetime.now(tz=UTC),
+            )
+        )
+        s.add(
+            VerificationResult(
+                id=uuid.uuid4(),
+                run_id=run_id,
+                work_step_id=None,
+                workspace_id=workspace_id,
+                outcome=VerificationOutcome.PASSED,
+                contract=contract,
+                result={},
+                created_at=datetime.now(tz=UTC),
+            )
+        )
+        await s.commit()
+
+    r = await configured_client.get(f"/api/v1/deliverables/{deliverable_id}/report")
+    assert r.status_code == 200, r.text
+    references = r.json()["references"]
+    assert references == [
+        "Avoid (prior rejection) — never ship a payment change without a regression test",
+        "Prior decision — Q: Which database? A: Use Postgres",
+    ]
+    # The non-knowledge judge check's criteria ("reads cleanly") must NOT leak
+    # into references — only the retrieved-knowledge check counts.
+    assert "reads cleanly" not in references
+
+
+async def test_report_references_deduped_across_verifications(
+    configured_client, db, workspace_id
+) -> None:
+    """A run may record several verifications (re-attempts); the same referenced
+    statement must appear once, in first-seen order."""
+    from backend.execution.verifier.service import RETRIEVED_KNOWLEDGE_RATIONALE
+
+    run_id = uuid.uuid4()
+    deliverable_id = uuid.uuid4()
+
+    def _contract(criteria: list[str]) -> dict:
+        return {
+            "checks": [
+                {"kind": "judge", "criteria": criteria, "rationale": RETRIEVED_KNOWLEDGE_RATIONALE}
+            ]
+        }
+
+    async with db() as s:
+        await _seed_run(s, run_id=run_id, ws=workspace_id)
+        s.add(
+            Deliverable(
+                id=deliverable_id,
+                run_id=run_id,
+                workspace_id=workspace_id,
+                deliverable_type=DeliverableType.PR,
+                payload={},
+                created_at=datetime.now(tz=UTC),
+            )
+        )
+        s.add_all(
+            [
+                VerificationResult(
+                    id=uuid.uuid4(),
+                    run_id=run_id,
+                    work_step_id=None,
+                    workspace_id=workspace_id,
+                    outcome=VerificationOutcome.FAILED,
+                    contract=_contract(["pattern A", "pattern B"]),
+                    result={},
+                    created_at=datetime.now(tz=UTC),
+                ),
+                VerificationResult(
+                    id=uuid.uuid4(),
+                    run_id=run_id,
+                    work_step_id=None,
+                    workspace_id=workspace_id,
+                    outcome=VerificationOutcome.PASSED,
+                    contract=_contract(["pattern B", "pattern C"]),
+                    result={},
+                    created_at=datetime.now(tz=UTC) + timedelta(seconds=1),
+                ),
+            ]
+        )
+        await s.commit()
+
+    r = await configured_client.get(f"/api/v1/deliverables/{deliverable_id}/report")
+    assert r.status_code == 200, r.text
+    assert r.json()["references"] == ["pattern A", "pattern B", "pattern C"]
+
+
+async def test_report_references_empty_without_retrieved_knowledge(
+    configured_client, db, workspace_id
+) -> None:
+    """A verification with only command / non-knowledge judge checks yields an
+    empty references list — never a fabricated reference."""
+    run_id = uuid.uuid4()
+    deliverable_id = uuid.uuid4()
+    async with db() as s:
+        await _seed_run(s, run_id=run_id, ws=workspace_id)
+        s.add(
+            Deliverable(
+                id=deliverable_id,
+                run_id=run_id,
+                workspace_id=workspace_id,
+                deliverable_type=DeliverableType.PR,
+                payload={},
+                created_at=datetime.now(tz=UTC),
+            )
+        )
+        s.add(
+            VerificationResult(
+                id=uuid.uuid4(),
+                run_id=run_id,
+                work_step_id=None,
+                workspace_id=workspace_id,
+                outcome=VerificationOutcome.PASSED,
+                contract={"checks": [{"kind": "command", "command": "pytest", "rationale": "t"}]},
+                result={},
+                created_at=datetime.now(tz=UTC),
+            )
+        )
+        await s.commit()
+
+    r = await configured_client.get(f"/api/v1/deliverables/{deliverable_id}/report")
+    assert r.status_code == 200, r.text
+    assert r.json()["references"] == []
+
+
 async def test_report_cross_workspace_404(configured_client, db, workspace_id) -> None:
     """A deliverable in another workspace's report is 404, never a leak."""
     other_run_id = uuid.uuid4()

@@ -60,6 +60,7 @@ const REPORT: DeliverableReport = {
       created_at: NOW,
     },
   ],
+  references: [],
 };
 
 const BLOG_CONTENT = "export function getRelatedPosts() {\n  return [];\n}\n";
@@ -160,6 +161,32 @@ describe("Delivery Report document", () => {
     });
   });
 
+  it("renders the 'What BSVibe referenced' section with the retrieved knowledge", async () => {
+    installFetch({
+      report: () => ({
+        ...REPORT,
+        references: [
+          "Avoid (prior rejection) — never ship a payment change without a regression test",
+          "Prior decision — Q: Which database? A: Use Postgres",
+        ],
+      }),
+    });
+    render(<DeliveryReport deliverableId="d1" />);
+
+    const referenced = await screen.findByRole("region", { name: /what bsvibe referenced/i });
+    expect(within(referenced).getByText(/never ship a payment change/i)).toBeInTheDocument();
+    expect(within(referenced).getByText(/Use Postgres/)).toBeInTheDocument();
+  });
+
+  it("hides the 'What BSVibe referenced' section when nothing was retrieved", async () => {
+    installFetch(); // REPORT.references === []
+    render(<DeliveryReport deliverableId="d1" />);
+
+    // Wait for the document to render, then assert the section is absent.
+    await screen.findByText("Add getRelatedPosts to blog.ts");
+    expect(screen.queryByRole("region", { name: /what bsvibe referenced/i })).toBeNull();
+  });
+
   it("omits 'Your request' when the report carries no request", async () => {
     installFetch({ report: () => ({ ...REPORT, request: null }) });
     render(<DeliveryReport deliverableId="d1" />);
@@ -177,6 +204,7 @@ describe("Delivery Report document", () => {
         request: null,
         verified: false,
         verifications: [],
+        references: [],
       }),
     });
     render(<DeliveryReport deliverableId="d1" />);
@@ -204,6 +232,7 @@ describe("Delivery Report document", () => {
             created_at: NOW,
           },
         ],
+        references: [],
       }),
     });
     render(<DeliveryReport deliverableId="d1" />);
@@ -241,6 +270,7 @@ describe("Delivery Report document", () => {
             created_at: NOW,
           },
         ],
+        references: [],
       }),
     });
     render(<DeliveryReport deliverableId="d1" />);

@@ -652,6 +652,8 @@
     },
     "yourRequest": "보내신 요청",
     "whatWasBuilt": "무엇을 만들었나요",
+    "referenced": "BSVibe가 참고한 지식",
+    "referencedHint": "이 작업에 반영된 과거 결정·선호·반려 기록이에요.",
     "howChecked": "BSVibe가 어떻게 확인했나요",
     "noVerification": "아직 이 산출물에 대한 검증 기록이 없어요.",
     "noChecksDeclared": "이 검증에 선언된 확인 항목이 없어요.",

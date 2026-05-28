@@ -277,6 +277,11 @@ export interface DeliverableReport {
    *  review — never a green "verified". */
   verified: boolean;
   verifications: VerificationReportItem[];
+  /** G2 "근거 포함 답변": the BSage knowledge the agent referenced for this work
+   *  — promoted canon patterns, prior resolved decisions, and prior rejections
+   *  folded into the verify contract. Deduped, first-seen order. Empty when
+   *  nothing was retrieved (never a fabricated reference). */
+  references: string[];
 }
 
 /** `GET /api/v1/deliverables/{id}/artifacts/{ref:path}` body (backend
