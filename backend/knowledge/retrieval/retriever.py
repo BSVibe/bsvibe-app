@@ -13,7 +13,7 @@ if TYPE_CHECKING:
     from backend.knowledge.ingest.index_reader import IndexReader
     from backend.knowledge.retrieval.embedder import Embedder
     from backend.knowledge.retrieval.graph_retriever import GraphRetriever
-    from backend.knowledge.retrieval.vector_store import VectorStore
+    from backend.knowledge.retrieval.storage.backend import NoteVectorBackend
 
 logger = structlog.get_logger(__name__)
 
@@ -32,7 +32,7 @@ class VaultRetriever:
         vault: Vault,
         index_reader: IndexReader | None = None,
         graph_retriever: GraphRetriever | None = None,
-        vector_store: VectorStore | None = None,
+        vector_store: NoteVectorBackend | None = None,
         embedder: Embedder | None = None,
     ) -> None:
         self._vault = vault

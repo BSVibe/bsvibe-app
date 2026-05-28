@@ -55,7 +55,7 @@ def test_alembic_history_loads():
         assert rev in result.stdout, f"missing revision {rev} in:\n{result.stdout}"
 
 
-def test_alembic_head_is_run_routing_rules():
+def test_alembic_head_is_note_embeddings():
     repo = Path(__file__).parent.parent
     result = subprocess.run(
         [sys.executable, "-m", "alembic", "heads"],
@@ -64,7 +64,7 @@ def test_alembic_head_is_run_routing_rules():
         text=True,
     )
     assert result.returncode == 0
-    assert "run_routing_rules" in result.stdout
+    assert "note_embeddings" in result.stdout
 
 
 def test_target_metadata_covers_all_bases():
