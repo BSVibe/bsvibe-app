@@ -524,6 +524,20 @@ class RunOrchestrator:
             ),
         }
 
+    def _design_seed_message(self, run: ExecutionRun) -> dict[str, Any] | None:
+        """P1-L2b — fold the prior design stage's spec into the loop-start
+        context when this run is the impl stage of a design→impl handoff.
+
+        ``None`` for a non-impl run (no design refs) or when no spec content is
+        readable — best-effort, never raises into the loop."""
+        from backend.execution.handoff import read_design_context  # noqa: PLC0415
+
+        content = read_design_context(run, self._settings)
+        if content is None:
+            return None
+        logger.info("design_seeded", run_id=str(run.id))
+        return {"role": "system", "content": content}
+
     def _suggested_skill_message(self) -> dict[str, Any] | None:
         """B9a — the frame-matched skill hint for the loop's initial context.
 
@@ -855,6 +869,11 @@ class RunOrchestrator:
         seed = await self._knowledge_seed_message(run)
         if seed is not None:
             messages.append(seed)
+        # P1-L2b — design→impl handoff: seed the prior design stage's spec so the
+        # impl run implements it. None for a non-impl run (loop unchanged).
+        design_seed = self._design_seed_message(run)
+        if design_seed is not None:
+            messages.append(design_seed)
         # B9a — the frame stage's matched skill, seeded as a first-invocation
         # hint. The frame chose this skill by matching the request against the
         # workspace skill catalog (by description); surfacing it here is how the
