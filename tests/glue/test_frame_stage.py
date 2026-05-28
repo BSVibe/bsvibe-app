@@ -172,6 +172,39 @@ async def test_llm_framing_classifies_knowledge_only_path(tmp_path: Path) -> Non
 
 
 @pytest.mark.asyncio
+async def test_llm_knowledge_only_with_concrete_artifact_coerced_to_agent_loop(
+    tmp_path: Path,
+) -> None:
+    """Coherence guard: a concrete ``artifact_type_hint`` (code/page/pr/...)
+    contradicts ``knowledge_only`` ("answerable with no work"). Producing an
+    artifact IS work, so the frame must coerce the path to ``agent_loop``.
+
+    Dogfood (2026-05-28, prod): the local model classified "Create a Python
+    file calc.py with a function multiply" as ``knowledge_only`` while also
+    hinting ``artifact_type_hint="code"``. B9b then routed it to the
+    KnowledgeAnswerOrchestrator, which answered with code-in-text and wrote
+    NO file, yet the run was marked shipped. We never trust an incoherent
+    classification — a concrete artifact wins over the knowledge_only flag."""
+    _write_skill(tmp_path, "weekly-digest", "Generate a weekly digest from notes")
+    loader = SkillLoader(tmp_path)
+    loader.load_all()
+    llm = _StubFrameLlm(
+        {
+            "framed_intent": "Create a Python file calc.py with multiply(a, b).",
+            "skill_match": None,
+            "artifact_type_hint": "code",
+            "path_classification": "knowledge_only",
+        }
+    )
+    request = _request({"text": "Create a Python file calc.py with multiply(a, b)."})
+    framed = await FrameStage().frame(
+        request=request, config=FrameConfig(skill_loader=loader, llm=llm)
+    )
+    assert framed.artifact_type_hint == "code"
+    assert framed.path_classification == "agent_loop"
+
+
+@pytest.mark.asyncio
 async def test_llm_framing_rejects_hallucinated_skill(tmp_path: Path) -> None:
     """An LLM that names a skill not in the catalog is ignored (no false match)."""
     _write_skill(tmp_path, "weekly-digest", "Generate a weekly digest from notes")
