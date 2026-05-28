@@ -9,6 +9,12 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+// Default pathname for the non-product cases. Individual tests override.
+let _currentPathname = "/brief";
+vi.mock("next/navigation", () => ({
+  usePathname: () => _currentPathname,
+}));
+
 const SESSION: Session = {
   accessToken: "tok",
   refreshToken: "ref",
@@ -73,6 +79,72 @@ describe("Direct compose", () => {
 
     expect(onSubmitted).toHaveBeenCalledTimes(1);
     window.removeEventListener(DIRECT_SUBMITTED_EVENT, onSubmitted);
+  });
+
+  it("passes product_id when submitting from a /products/<slug> route", async () => {
+    // W2 follow-up: dogfood found that a Direct submission from a product
+    // page silently fell back to the workspace's default product because
+    // the dialog ignored route context. Lock in the fix.
+    _currentPathname = "/products/w2-dogfood";
+
+    const PRODUCTS = [
+      {
+        id: "ab1c2d3e-1111-1111-1111-111111111111",
+        workspace_id: "ws-1",
+        name: "Other",
+        slug: "other-product",
+      },
+      {
+        id: "ef9b8a7c-2222-2222-2222-222222222222",
+        workspace_id: "ws-1",
+        name: "W2",
+        slug: "w2-dogfood",
+      },
+    ];
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : input.toString();
+      if (url.endsWith("/api/v1/products")) {
+        return new Response(JSON.stringify(PRODUCTS), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      return new Response(JSON.stringify(ACCEPTED), {
+        status: 202,
+        headers: { "Content-Type": "application/json" },
+      });
+    });
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    render(<DirectOverlay open onClose={() => {}} />);
+    // Wait for the slug→id lookup to settle before submitting.
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        expect.stringContaining("/api/v1/products"),
+        expect.anything(),
+      );
+    });
+
+    await userEvent.type(screen.getByRole("textbox"), "ship the add() helper");
+    fireEvent.click(screen.getByRole("button", { name: "Direct" }));
+
+    await waitFor(() => {
+      expect(screen.getByText("Sent. Working on it.")).toBeInTheDocument();
+    });
+
+    // The POST to /messages carries the resolved product_id.
+    const messagesCall = (fetchMock.mock.calls as unknown as Array<[string, RequestInit]>).find(
+      ([url]) => url.endsWith("/api/v1/messages"),
+    );
+    if (!messagesCall) throw new Error("expected a /messages POST");
+    const init = messagesCall[1];
+    expect(JSON.parse(init.body as string)).toEqual({
+      text: "ship the add() helper",
+      product_id: "ef9b8a7c-2222-2222-2222-222222222222",
+    });
+
+    // Reset for the next case.
+    _currentPathname = "/brief";
   });
 
   it("shows an error state when the submit fails", async () => {

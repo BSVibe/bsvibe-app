@@ -2,7 +2,9 @@
 
 import { ApiError } from "@/lib/api/client";
 import { submitMessage } from "@/lib/api/messages";
+import { listProducts } from "@/lib/api/products";
 import { useTranslations } from "next-intl";
+import { usePathname } from "next/navigation";
 import { type FormEvent, useEffect, useState } from "react";
 import { PlusIcon } from "./icons";
 
@@ -30,11 +32,54 @@ type SubmitState = "idle" | "submitting" | "success" | "error";
  * brief "sent — working on it", emits {@link DIRECT_SUBMITTED_EVENT} so the
  * Brief reflects the new run optimistically, then auto-closes.
  */
+/** Parse ``/products/<slug>`` (anywhere in the path — locale isn't in the
+ *  URL, but defensive regex covers any future prefixing). Returns the slug
+ *  segment or ``null`` when the founder isn't on a product page.
+ *
+ *  Without this, the Direct dialog on a product page submitted with no
+ *  product_id and the backend's smart-default sent the run to the
+ *  workspace's *earliest* product (L-P1 fallback) — surfaced in the W2
+ *  dogfood when a message on /products/w2-dogfood landed on e2e-hello.
+ */
+function _currentProductSlug(pathname: string | null): string | null {
+  if (!pathname) return null;
+  const match = pathname.match(/^\/products\/([^/?#]+)/);
+  return match ? decodeURIComponent(match[1]) : null;
+}
+
 export function DirectOverlay({ open, onClose }: { open: boolean; onClose: () => void }) {
   const [text, setText] = useState("");
   const [state, setState] = useState<SubmitState>("idle");
   const [error, setError] = useState<string | null>(null);
+  const [productId, setProductId] = useState<string | null>(null);
   const t = useTranslations("direct");
+  const pathname = usePathname();
+  const currentSlug = _currentProductSlug(pathname);
+
+  // Resolve the current product slug → product_id when the overlay opens
+  // on a product page. Best-effort: a failed list call falls back to
+  // submitting without product_id (the backend's workspace-default
+  // fallback still produces a valid run, just bound to the default
+  // product). Cached implicitly by the browser per request lifecycle.
+  useEffect(() => {
+    if (!open || !currentSlug) {
+      setProductId(null);
+      return;
+    }
+    let cancelled = false;
+    listProducts()
+      .then((products) => {
+        if (cancelled) return;
+        const match = products.find((p) => p.slug === currentSlug);
+        setProductId(match?.id ?? null);
+      })
+      .catch(() => {
+        if (!cancelled) setProductId(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open, currentSlug]);
 
   // Reset the form whenever the overlay (re)opens.
   useEffect(() => {
@@ -72,7 +117,10 @@ export function DirectOverlay({ open, onClose }: { open: boolean; onClose: () =>
     setState("submitting");
     setError(null);
     try {
-      await submitMessage({ text: trimmed });
+      await submitMessage({
+        text: trimmed,
+        ...(productId ? { product_id: productId } : {}),
+      });
       setState("success");
       // Optimistically nudge the Brief to re-read its lanes.
       window.dispatchEvent(new CustomEvent(DIRECT_SUBMITTED_EVENT));
