@@ -24,6 +24,7 @@ from backend.storage.product_workspace import (
     ProductWorkspaceError,
     add_run_worktree,
     init_product_workspace,
+    list_product_tree,
     product_workspace_path,
     remove_run_worktree,
     run_branch_name,
@@ -294,3 +295,57 @@ async def test_worktree_writes_do_not_touch_main_until_merge() -> None:
     # 2. The main branch's tree doesn't list it.
     main_tree = await _git("ls-tree", "-r", "--name-only", "main", cwd=product_path)
     assert "agent-file.txt" not in main_tree.splitlines()
+
+
+# ---------------------------------------------------------------------------
+# list_product_tree — lazy per-directory listing of product main
+# ---------------------------------------------------------------------------
+
+
+async def _commit_to_main(product_id, files: dict[str, str]) -> None:
+    """Write + commit ``{path: content}`` onto the product's main checkout."""
+    repo = product_workspace_path(product_id)
+    for rel, content in files.items():
+        target = repo / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content)
+    await _git("add", "-A", cwd=repo)
+    await _git("commit", "-m", "seed files", cwd=repo)
+
+
+async def test_list_product_tree_lists_one_level_dirs_before_files() -> None:
+    product_id = uuid.uuid4()
+    await init_product_workspace(product_id)
+    await _commit_to_main(
+        product_id,
+        {"README.md": "# hi\n", "src/app.py": "x = 1\n", "src/util/io.py": "y = 2\n"},
+    )
+
+    root = await list_product_tree(product_id)
+    # Directories sort before files; .bsvibe + src are dirs, README.md a file.
+    assert [(e.name, e.kind) for e in root] == [
+        (".bsvibe", "dir"),
+        ("src", "dir"),
+        ("README.md", "file"),
+    ]
+    # One level only: src/util is NOT walked into at the root.
+    assert all(e.path in (".bsvibe", "src", "README.md") for e in root)
+
+    # Listing a subdir returns its immediate children (full repo-relative path).
+    src = await list_product_tree(product_id, "src")
+    assert [(e.name, e.path, e.kind) for e in src] == [
+        ("util", "src/util", "dir"),
+        ("app.py", "src/app.py", "file"),
+    ]
+
+
+async def test_list_product_tree_uninitialised_product_returns_empty() -> None:
+    # No init_product_workspace → no repo → calm empty list, never raises.
+    assert await list_product_tree(uuid.uuid4()) == []
+
+
+async def test_list_product_tree_rejects_traversal() -> None:
+    product_id = uuid.uuid4()
+    await init_product_workspace(product_id)
+    assert await list_product_tree(product_id, "../..") == []
+    assert await list_product_tree(product_id, "/etc") == []
