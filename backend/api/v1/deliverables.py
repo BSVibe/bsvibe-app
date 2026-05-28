@@ -31,6 +31,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.accounts.crypto import CredentialCipher
 from backend.api.deps import get_artifact_store, get_db_session, get_workspace_id
+from backend.config import get_settings
 from backend.connectors.db import ConnectorAccountRow
 from backend.execution.db import (
     Deliverable,
@@ -42,7 +43,7 @@ from backend.execution.db import (
 from backend.plugins.base import PluginMeta, PluginRunError
 from backend.plugins.context import SkillContext
 from backend.plugins.runner import PluginRunner
-from backend.storage.artifact_store import ArtifactStore
+from backend.storage.artifact_store import ArtifactStore, LocalFilesystemArtifactStore
 
 logger = structlog.get_logger(__name__)
 
@@ -320,6 +321,29 @@ def _looks_binary(raw: bytes) -> bool:
     return b"\x00" in raw[:8192]
 
 
+async def _read_from_product_main(
+    session: AsyncSession, run_id: uuid.UUID, ref: str
+) -> bytes | None:
+    """Read ``ref`` from the run's product workspace main checkout, or ``None``.
+
+    The W2 ship-time merge lands the run's files under
+    ``<product_workspace_root>/<product_id>/`` (the product repo's main checkout)
+    and then removes the per-run worktree. A reused
+    :class:`LocalFilesystemArtifactStore` rooted at ``product_workspace_root`` and
+    keyed by ``product_id`` resolves ``<root>/<product_id>/<ref>`` with the SAME
+    centralized traversal guard. ``None`` when the run has no product_id (nothing
+    to fall back to) or the file is genuinely absent — the caller maps it to 404.
+    """
+    run = await session.get(ExecutionRun, run_id)
+    if run is None or run.product_id is None:
+        return None
+    product_store = LocalFilesystemArtifactStore(Path(get_settings().product_workspace_root))
+    try:
+        return product_store.read_bytes(run.product_id, ref)
+    except (ValueError, FileNotFoundError, IsADirectoryError):
+        return None
+
+
 @router.get("/{deliverable_id}/artifacts/{ref:path}")
 async def get_deliverable_artifact(
     deliverable_id: uuid.UUID,
@@ -376,11 +400,19 @@ async def get_deliverable_artifact(
             detail="artifact not found for this deliverable",
         ) from exc
     except FileNotFoundError as exc:
-        # Run dir cleaned, or never written — calm not-found, not a 500.
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="artifact content is no longer available",
-        ) from exc
+        # W1/W2: a product-bound run's worktree is REMOVED after auto-ship merges
+        # it to the product's main, so the produced file no longer lives in the
+        # run dir — it lives in the product workspace main checkout. Fall back
+        # there before declaring the content gone (else the Files viewer can
+        # never open a shipped product run's files). Non-product runs (no main to
+        # fall back to) keep the calm 404.
+        fallback = await _read_from_product_main(session, row.run_id, ref)
+        if fallback is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="artifact content is no longer available",
+            ) from exc
+        raw = fallback
     except IsADirectoryError as exc:
         # ``ref`` resolves to a directory inside the run dir (e.g. ``src/``).
         # Calm 404 — not a file, no content to serve.

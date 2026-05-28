@@ -71,7 +71,14 @@ async def configured_client(db, workspace_id: uuid.UUID):
         yield client
 
 
-async def _seed_run(s, *, run_id: uuid.UUID, ws: uuid.UUID, payload: dict | None = None) -> None:
+async def _seed_run(
+    s,
+    *,
+    run_id: uuid.UUID,
+    ws: uuid.UUID,
+    payload: dict | None = None,
+    product_id: uuid.UUID | None = None,
+) -> None:
     """Create the parent ExecutionRun so the deliverables FK resolves (PG).
 
     Flush immediately: there is no ORM ``relationship()`` linking Deliverable to
@@ -83,6 +90,7 @@ async def _seed_run(s, *, run_id: uuid.UUID, ws: uuid.UUID, payload: dict | None
         ExecutionRun(
             id=run_id,
             workspace_id=ws,
+            product_id=product_id,
             status=RunStatus.SHIPPED,
             payload=payload or {},
             created_at=datetime.now(tz=UTC),
@@ -660,10 +668,11 @@ async def _seed_deliverable_with_refs(
     run_id: uuid.UUID,
     ws: uuid.UUID,
     refs: list[str],
+    product_id: uuid.UUID | None = None,
 ) -> None:
     """Seed the parent run (flushed first for the PG FK) + a deliverable whose
     payload carries ``artifact_refs``."""
-    await _seed_run(s, run_id=run_id, ws=ws)
+    await _seed_run(s, run_id=run_id, ws=ws, product_id=product_id)
     s.add(
         Deliverable(
             id=deliverable_id,
@@ -806,6 +815,78 @@ async def test_artifact_missing_file_404(
             s, deliverable_id=deliverable_id, run_id=run_id, ws=workspace_id, refs=["gone.py"]
         )
     # No file written → the run dir / file is absent.
+
+    r = await configured_client.get(f"/api/v1/deliverables/{deliverable_id}/artifacts/gone.py")
+    assert r.status_code == 404
+
+
+@pytest.fixture
+def product_workspace_root(tmp_path: Path, monkeypatch) -> Path:
+    """Point ``product_workspace_root`` at a tmp dir + clear the settings cache,
+    mirroring :func:`run_workspace_root`. W1/W2 ship-time merge persists the
+    produced files under ``<product_workspace_root>/<product_id>/`` (the product
+    repo's main checkout)."""
+    root = tmp_path / "products"
+    root.mkdir()
+    monkeypatch.setenv("BSVIBE_PRODUCT_WORKSPACE_ROOT", str(root))
+    get_settings.cache_clear()
+    yield root
+    get_settings.cache_clear()
+
+
+def _write_product_file(root: Path, product_id: uuid.UUID, ref: str, content: str) -> Path:
+    path = root / str(product_id) / ref
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(content, encoding="utf-8")
+    return path
+
+
+async def test_artifact_falls_back_to_product_main_when_run_dir_cleaned(
+    configured_client, db, workspace_id, run_workspace_root, product_workspace_root
+) -> None:
+    """W3 dogfood (2026-05-28): after W2 auto-ship merges the run worktree to
+    the product's main and REMOVES the run worktree, the produced file lives
+    only under ``<product_workspace_root>/<product_id>/`` — the run dir is gone.
+    The artifact endpoint must fall back to the product main checkout for a
+    product-bound run instead of 404ing, or the Files viewer can never open a
+    shipped product run's files."""
+    run_id = uuid.uuid4()
+    product_id = uuid.uuid4()
+    deliverable_id = uuid.uuid4()
+    async with db() as s:
+        await _seed_deliverable_with_refs(
+            s,
+            deliverable_id=deliverable_id,
+            run_id=run_id,
+            ws=workspace_id,
+            refs=["mathbox.py"],
+            product_id=product_id,
+        )
+    # Run dir intentionally NOT written (auto-ship cleaned it). The file lives
+    # in the product workspace main checkout.
+    _write_product_file(
+        product_workspace_root, product_id, "mathbox.py", "def subtract(a, b):\n    return a - b\n"
+    )
+
+    r = await configured_client.get(f"/api/v1/deliverables/{deliverable_id}/artifacts/mathbox.py")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["ref"] == "mathbox.py"
+    assert body["content"] == "def subtract(a, b):\n    return a - b\n"
+    assert body["binary"] is False
+
+
+async def test_artifact_non_product_run_still_404_when_run_dir_cleaned(
+    configured_client, db, workspace_id, run_workspace_root, product_workspace_root
+) -> None:
+    """A run with NO product_id has no product main to fall back to — a cleaned
+    run dir stays a calm 404 (no cross-product leak, no 500)."""
+    run_id = uuid.uuid4()
+    deliverable_id = uuid.uuid4()
+    async with db() as s:
+        await _seed_deliverable_with_refs(
+            s, deliverable_id=deliverable_id, run_id=run_id, ws=workspace_id, refs=["gone.py"]
+        )
 
     r = await configured_client.get(f"/api/v1/deliverables/{deliverable_id}/artifacts/gone.py")
     assert r.status_code == 404
