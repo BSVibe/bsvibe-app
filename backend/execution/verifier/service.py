@@ -54,6 +54,14 @@ logger = structlog.get_logger(__name__)
 VERIFY_TIMEOUT_S = 60.0
 _JUDGE_FILE_CONTEXT_BYTES = 8 * 1024
 
+#: Rationale stamped on the judge check that folds retrieved BSage knowledge
+#: (canon patterns / prior decisions / prior rejections) into the verify
+#: contract. It is the stable marker the Delivery Report keys off to surface
+#: those statements as a first-class ``references`` section ("근거 포함 답변" —
+#: which past docs/decisions the agent referenced), distinct from the
+#: verification checklist. Changing this string is a wire-contract change.
+RETRIEVED_KNOWLEDGE_RATIONALE = "BSage canonical patterns retrieved for this change"
+
 
 @runtime_checkable
 class JudgeLlm(Protocol):
@@ -121,7 +129,7 @@ class VerificationService:
                     VerificationCheck(
                         kind="judge",
                         criteria=tuple(patterns),
-                        rationale="BSage canonical patterns retrieved for this change",
+                        rationale=RETRIEVED_KNOWLEDGE_RATIONALE,
                     )
                 )
 

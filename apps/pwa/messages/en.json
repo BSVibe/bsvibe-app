@@ -652,6 +652,8 @@
     },
     "yourRequest": "Your request",
     "whatWasBuilt": "What was built",
+    "referenced": "What BSVibe referenced",
+    "referencedHint": "Past decisions, preferences, and rejections that informed this work.",
     "howChecked": "How BSVibe checked this",
     "noVerification": "No verification recorded for this deliverable yet.",
     "noChecksDeclared": "No checks were declared for this verification.",

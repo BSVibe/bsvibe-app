@@ -40,6 +40,7 @@ from backend.execution.db import (
     VerificationOutcome,
     VerificationResult,
 )
+from backend.execution.verifier.service import RETRIEVED_KNOWLEDGE_RATIONALE
 from backend.plugins.base import PluginMeta, PluginRunError
 from backend.plugins.context import SkillContext
 from backend.plugins.runner import PluginRunner
@@ -113,6 +114,13 @@ class DeliverableReportResponse(BaseModel):
     # deliverable without a PASSED proof reads as needs-review, not verified.
     verified: bool = False
     verifications: list[VerificationReport] = []
+    # G2 "근거 포함 답변": the BSage knowledge the agent referenced for this work
+    # — promoted canon patterns, prior resolved decisions, and prior rejections
+    # the retriever folded into the verify contract. Surfaced as a first-class
+    # section (deduped, first-seen order) so the founder sees WHAT past docs /
+    # decisions informed the answer, separate from the verification checklist.
+    # Empty when nothing was retrieved — never a fabricated reference.
+    references: list[str] = []
 
 
 def _request_text_of(payload: dict[str, Any]) -> str | None:
@@ -203,6 +211,37 @@ async def _run_is_verified(
 ) -> bool:
     """True iff the run has at least one PASSED VerificationResult (single row)."""
     return bool(await _verified_run_ids(session, workspace_id, {run_id}))
+
+
+def _references_of(verifications: list[VerificationReport]) -> list[str]:
+    """The referenced-knowledge statements across a run's verifications (G2).
+
+    Pulls the criteria of every judge check stamped with
+    :data:`~backend.execution.verifier.service.RETRIEVED_KNOWLEDGE_RATIONALE`
+    (the retriever's canon / prior-decision / prior-rejection fold), deduped in
+    first-seen order. A run may record several verifications (re-attempts), so
+    the same statement can recur — it surfaces once. Defensive against malformed
+    contract JSON: any non-conforming shape contributes nothing, never raises."""
+    references: list[str] = []
+    seen: set[str] = set()
+    for verification in verifications:
+        checks = verification.contract.get("checks")
+        if not isinstance(checks, list):
+            continue
+        for check in checks:
+            if not isinstance(check, dict):
+                continue
+            if check.get("rationale") != RETRIEVED_KNOWLEDGE_RATIONALE:
+                continue
+            criteria = check.get("criteria")
+            if not isinstance(criteria, list):
+                continue
+            for item in criteria:
+                statement = str(item).strip()
+                if statement and statement not in seen:
+                    seen.add(statement)
+                    references.append(statement)
+    return references
 
 
 def _to_verification(row: VerificationResult) -> VerificationReport:
@@ -308,6 +347,7 @@ async def get_deliverable_report(
         request=request,
         verified=verified,
         verifications=verifications,
+        references=_references_of(verifications),
     )
 
 

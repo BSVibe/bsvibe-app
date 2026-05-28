@@ -132,6 +132,9 @@ export default function DeliveryReport({ deliverableId }: { deliverableId: strin
 function ReportDocument({ report }: { report: DeliverableReport }) {
   const t = useTranslations("report");
   const { deliverable, request, verified, verifications } = report;
+  // Defensive: an older / malformed payload may omit references — degrade to an
+  // empty list (the section simply doesn't render), never a crash.
+  const references = report.references ?? [];
   // Concise document title — the first sentence of the (often paragraph-long)
   // LLM summary, not the whole blob; the detail lives in the body + request.
   const summary = conciseSummary(deliverable.summary, t("untitled"));
@@ -167,6 +170,22 @@ function ReportDocument({ report }: { report: DeliverableReport }) {
         <h2 className="report-doc__label">{t("whatWasBuilt")}</h2>
         <WhatWasBuilt deliverable={deliverable} hasDiff={hasDiff} />
       </section>
+
+      {references.length > 0 && (
+        <section className="report-doc__section" aria-label={t("referenced")}>
+          <h2 className="report-doc__label">{t("referenced")}</h2>
+          <p className="report-doc__muted">{t("referencedHint")}</p>
+          <ul className="report-doc__references">
+            {references.map((reference, i) => (
+              // References are free-form statements that may repeat across
+              // re-attempts (deduped server-side); index keys the row.
+              <li key={`${i}-${reference}`} className="report-doc__reference">
+                {reference}
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
 
       <section className="report-doc__section" aria-label={t("howChecked")}>
         <h2 className="report-doc__label">{t("howChecked")}</h2>
