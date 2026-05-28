@@ -67,7 +67,7 @@ function describeStatus(status: RunStatus): { label: string; tone: ActivityTone 
  *  Calm and reassuring — never machinery (no rounds / cost). */
 function headlineFor(latest: Run | undefined): { status: string; tone: ActivityTone } {
   if (!latest) {
-    return { status: "Nothing running yet — give it a Direction.", tone: "neutral" };
+    return { status: "Nothing running yet. Give it a Direction.", tone: "neutral" };
   }
   const { tone } = describeStatus(latest.status);
   switch (latest.status) {
@@ -78,7 +78,7 @@ function headlineFor(latest: Run | undefined): { status: string; tone: ActivityT
     case "review_ready":
       return { status: "Ready for your review.", tone };
     case "shipped":
-      return { status: "All caught up — latest work shipped & verified.", tone };
+      return { status: "All caught up. Latest work shipped & verified.", tone };
     case "failed":
       return { status: "The latest run didn’t finish.", tone };
     default:
