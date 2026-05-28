@@ -299,7 +299,10 @@ async def test_production_deps_drive_direct_run_to_delivery(
 
     async with sf() as s:
         run = (await s.execute(select(ExecutionRun))).scalar_one()
-        assert run.status is RunStatus.REVIEW_READY
+        # W2: verified product runs auto-merge to main + transition to
+        # SHIPPED immediately (the Direct-path used to stop at
+        # REVIEW_READY before W2's auto-ship landed).
+        assert run.status is RunStatus.SHIPPED
         deliverable = (await s.execute(select(Deliverable))).scalar_one()
         assert "answer.txt" in (deliverable.payload.get("artifact_refs") or [])
         event = (await s.execute(select(DeliveryEventRow))).scalar_one()
