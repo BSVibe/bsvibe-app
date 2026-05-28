@@ -85,7 +85,7 @@ function NeedsYouRow({ item, onResolved }: { item: NeedsYouItem; onResolved?: ()
     <li className={`needs-you__row needs-you__row--${state}`}>
       <span className="needs-you__product">{item.productSlug}</span>
       <span className="needs-you__sep" aria-hidden="true">
-        —
+        ·
       </span>
       <span className="needs-you__q">{item.question}</span>
 
