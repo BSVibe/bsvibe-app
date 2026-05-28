@@ -1,128 +1,211 @@
 "use client";
 
-import { getDeliverableArtifact } from "@/lib/api/deliverables";
-import type { ArtifactContent, ProductFile } from "@/lib/api/types";
+import {
+  getProductFileContent as realGetContent,
+  listProductFiles as realListFiles,
+} from "@/lib/api/products";
+import type { FileTreeEntry, ProductFileContent } from "@/lib/api/types";
 import { useTranslations } from "next-intl";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 /**
- * "Files" — an inline viewer for the files this product has produced. Every
- * shipped deliverable's `artifact_refs` are flattened into one list (grouped by
- * the producing deliverable); selecting a file fetches its content from the
- * EXISTING whitelisted artifact endpoint (`GET /deliverables/{id}/artifacts/
- * {ref}`) and shows it read-only — no new backend, the same source the Delivery
- * Report reads. Modeled on BSNexus's WorkspaceIndex (list left, content right),
- * but flat over artifact refs rather than a directory tree.
+ * "Files" — a lazy file-tree browser over the product's git `main`. Replaces
+ * the old flat per-deliverable artifact_refs list (which only showed the files
+ * a single run touched and didn't scale to a real repo). Each directory's
+ * children are fetched on demand from `GET /products/{id}/files?path=` so a
+ * large repo stays cheap to browse; selecting a file fetches its content from
+ * `GET /products/{id}/files/content?path=`. List left, content right.
  *
- * A calm empty line when the product has produced nothing. A per-file fetch
- * failure (404 / cleaned run dir / oversize) degrades to a calm note rather
- * than blanking the surface.
+ * The list/content clients are injected so the surface is unit-testable.
  */
+type ListState =
+  | { state: "loading" }
+  | { state: "error" }
+  | { state: "ready"; entries: FileTreeEntry[] };
+
 type ContentState =
   | { state: "idle" }
   | { state: "loading" }
   | { state: "error" }
-  | { state: "ready"; content: ArtifactContent };
+  | { state: "ready"; content: ProductFileContent };
 
-/** The leaf name of an artifact ref, for a compact row label. */
-function leafOf(ref: string): string {
-  return ref.split("/").pop() || ref;
-}
-
-export default function ProductFiles({ files }: { files: ProductFile[] }) {
+export default function ProductFiles({
+  productId,
+  listFiles = realListFiles,
+  getContent = realGetContent,
+}: {
+  productId: string;
+  listFiles?: (productId: string, path?: string) => Promise<FileTreeEntry[]>;
+  getContent?: (productId: string, path: string) => Promise<ProductFileContent>;
+}) {
   const t = useTranslations("products");
-  const [selected, setSelected] = useState<ProductFile | null>(null);
+  const [root, setRoot] = useState<ListState>({ state: "loading" });
+  // Cached children per expanded directory path.
+  const [children, setChildren] = useState<Record<string, FileTreeEntry[]>>({});
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [loadingDirs, setLoadingDirs] = useState<Set<string>>(new Set());
+  const [selected, setSelected] = useState<string | null>(null);
   const [content, setContent] = useState<ContentState>({ state: "idle" });
 
+  // Load the root level on mount / product change. Reset all tree state so a
+  // product switch never shows the previous product's tree.
   useEffect(() => {
-    if (!selected) {
-      setContent({ state: "idle" });
-      return;
-    }
     let active = true;
-    setContent({ state: "loading" });
-    getDeliverableArtifact(selected.deliverableId, selected.ref)
-      .then((c) => active && setContent({ state: "ready", content: c }))
-      .catch(() => active && setContent({ state: "error" }));
+    setRoot({ state: "loading" });
+    setChildren({});
+    setExpanded(new Set());
+    setSelected(null);
+    setContent({ state: "idle" });
+    listFiles(productId)
+      .then((entries) => active && setRoot({ state: "ready", entries }))
+      .catch(() => active && setRoot({ state: "error" }));
     return () => {
       active = false;
     };
-  }, [selected]);
+  }, [productId, listFiles]);
 
-  if (files.length === 0) {
+  const toggleDir = useCallback(
+    async (path: string) => {
+      const willExpand = !expanded.has(path);
+      setExpanded((prev) => {
+        const next = new Set(prev);
+        if (willExpand) {
+          next.add(path);
+        } else {
+          next.delete(path);
+        }
+        return next;
+      });
+      // Lazy-load children the first time the folder is opened.
+      if (willExpand && children[path] === undefined) {
+        setLoadingDirs((s) => new Set(s).add(path));
+        try {
+          const entries = await listFiles(productId, path);
+          setChildren((c) => ({ ...c, [path]: entries }));
+        } catch {
+          setChildren((c) => ({ ...c, [path]: [] }));
+        } finally {
+          setLoadingDirs((s) => {
+            const n = new Set(s);
+            n.delete(path);
+            return n;
+          });
+        }
+      }
+    },
+    [expanded, children, listFiles, productId],
+  );
+
+  const selectFile = useCallback(
+    (path: string) => {
+      setSelected(path);
+      setContent({ state: "loading" });
+      getContent(productId, path)
+        .then((c) => setContent({ state: "ready", content: c }))
+        .catch(() => setContent({ state: "error" }));
+    },
+    [getContent, productId],
+  );
+
+  function renderNodes(entries: FileTreeEntry[], depth: number) {
     return (
-      <section className="product-files" aria-label={t("files")}>
-        <h2 className="section-label">{t("files")}</h2>
-        <p className="product-files__empty">{t("filesEmpty")}</p>
-      </section>
+      <ul className="product-files__tree">
+        {entries.map((entry) => (
+          <li key={entry.path}>
+            {entry.kind === "dir" ? (
+              <>
+                <button
+                  type="button"
+                  className="product-files__node product-files__node--dir"
+                  style={{ paddingLeft: `${depth * 14 + 8}px` }}
+                  aria-expanded={expanded.has(entry.path)}
+                  onClick={() => toggleDir(entry.path)}
+                >
+                  <span className="product-files__caret" aria-hidden="true">
+                    {expanded.has(entry.path) ? "▾" : "▸"}
+                  </span>
+                  {entry.name}
+                </button>
+                {expanded.has(entry.path) &&
+                  (loadingDirs.has(entry.path) ? (
+                    <p
+                      className="product-files__hint"
+                      style={{ paddingLeft: `${(depth + 1) * 14 + 8}px` }}
+                      aria-busy="true"
+                    >
+                      {t("fileLoading")}
+                    </p>
+                  ) : (
+                    renderNodes(children[entry.path] ?? [], depth + 1)
+                  ))}
+              </>
+            ) : (
+              <button
+                type="button"
+                className={`product-files__node product-files__node--file${
+                  selected === entry.path ? " product-files__node--active" : ""
+                }`}
+                style={{ paddingLeft: `${depth * 14 + 22}px` }}
+                onClick={() => selectFile(entry.path)}
+                title={entry.path}
+              >
+                {entry.name}
+              </button>
+            )}
+          </li>
+        ))}
+      </ul>
     );
-  }
-
-  // Group the flat file list by its producing deliverable for calm headers.
-  const groups = new Map<string, ProductFile[]>();
-  for (const f of files) {
-    const list = groups.get(f.deliverableTitle) ?? [];
-    list.push(f);
-    groups.set(f.deliverableTitle, list);
   }
 
   return (
     <section className="product-files" aria-label={t("files")}>
       <h2 className="section-label">{t("files")}</h2>
-      <div className="product-files__split">
-        <ul className="product-files__list">
-          {[...groups.entries()].map(([title, group]) => (
-            <li key={title} className="product-files__group">
-              <span className="product-files__group-title">{title}</span>
-              <ul className="product-files__refs">
-                {group.map((f) => (
-                  <li key={f.id}>
-                    <button
-                      type="button"
-                      className={`product-files__ref${
-                        selected?.id === f.id ? " product-files__ref--active" : ""
-                      }`}
-                      onClick={() => setSelected(f)}
-                      title={f.ref}
-                    >
-                      {leafOf(f.ref)}
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            </li>
-          ))}
-        </ul>
 
-        <div className="product-files__content">
-          {content.state === "idle" && (
-            <p className="product-files__hint">{t("filesSelectHint")}</p>
-          )}
-          {content.state === "loading" && (
-            <p className="product-files__hint" aria-busy="true">
-              {t("fileLoading")}
-            </p>
-          )}
-          {content.state === "error" && <p className="product-files__hint">{t("fileError")}</p>}
-          {content.state === "ready" && (
-            <>
-              <div className="product-files__file-head">
-                <span className="product-files__file-path">{content.content.ref}</span>
-              </div>
-              {content.content.binary ? (
-                <p className="product-files__hint">{t("fileBinary")}</p>
-              ) : (
-                <>
-                  {content.content.truncated && (
-                    <p className="product-files__truncated">{t("fileTruncated")}</p>
-                  )}
-                  <pre className="product-files__pre">{content.content.content}</pre>
-                </>
-              )}
-            </>
-          )}
+      {root.state === "loading" && (
+        <p className="product-files__empty" aria-busy="true">
+          {t("fileLoading")}
+        </p>
+      )}
+      {root.state === "error" && <p className="product-files__empty">{t("fileError")}</p>}
+      {root.state === "ready" && root.entries.length === 0 && (
+        <p className="product-files__empty">{t("filesEmpty")}</p>
+      )}
+
+      {root.state === "ready" && root.entries.length > 0 && (
+        <div className="product-files__split">
+          <div className="product-files__list">{renderNodes(root.entries, 0)}</div>
+
+          <div className="product-files__content">
+            {content.state === "idle" && (
+              <p className="product-files__hint">{t("filesSelectHint")}</p>
+            )}
+            {content.state === "loading" && (
+              <p className="product-files__hint" aria-busy="true">
+                {t("fileLoading")}
+              </p>
+            )}
+            {content.state === "error" && <p className="product-files__hint">{t("fileError")}</p>}
+            {content.state === "ready" && (
+              <>
+                <div className="product-files__file-head">
+                  <span className="product-files__file-path">{content.content.path}</span>
+                </div>
+                {content.content.binary ? (
+                  <p className="product-files__hint">{t("fileBinary")}</p>
+                ) : (
+                  <>
+                    {content.content.truncated && (
+                      <p className="product-files__truncated">{t("fileTruncated")}</p>
+                    )}
+                    <pre className="product-files__pre">{content.content.content}</pre>
+                  </>
+                )}
+              </>
+            )}
+          </div>
         </div>
-      </div>
+      )}
     </section>
   );
 }

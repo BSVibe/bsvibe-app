@@ -9,7 +9,7 @@
  *                             calmly. */
 
 import { apiFetch } from "./client";
-import type { Product, ProductCreate } from "./types";
+import type { FileTreeEntry, Product, ProductCreate, ProductFileContent } from "./types";
 
 /** Products in the caller's resolved active workspace. */
 export function listProducts(): Promise<Product[]> {
@@ -27,4 +27,21 @@ export function createProduct(input: ProductCreate): Promise<Product> {
     method: "POST",
     body: JSON.stringify(body),
   });
+}
+
+/** List one directory level of a product's repo `main` tree (lazy — call again
+ *  with a subdir `path` to expand a folder). Root when `path` is omitted. */
+export function listProductFiles(productId: string, path = ""): Promise<FileTreeEntry[]> {
+  const qs = path ? `?path=${encodeURIComponent(path)}` : "";
+  return apiFetch<FileTreeEntry[]>(`/api/v1/products/${productId}/files${qs}`);
+}
+
+/** Read one file's content from a product's repo `main` checkout. */
+export function getProductFileContent(
+  productId: string,
+  path: string,
+): Promise<ProductFileContent> {
+  return apiFetch<ProductFileContent>(
+    `/api/v1/products/${productId}/files/content?path=${encodeURIComponent(path)}`,
+  );
 }

@@ -37,7 +37,6 @@ import type {
   Product,
   ProductDetailRun,
   ProductDetailView,
-  ProductFile,
   Run,
   RunStatus,
   ShippedItem,
@@ -143,18 +142,6 @@ function toShippedItem(d: Deliverable, productSlug: string): ShippedItem {
   return item;
 }
 
-/** Flatten a deliverable's declared artifact_refs into viewer file rows, each
- *  tied back to the deliverable so its content fetch is scoped + whitelisted. */
-function toProductFiles(d: Deliverable): ProductFile[] {
-  const title = titleFor(d.summary);
-  return d.artifact_refs.map((ref) => ({
-    id: `${d.id}::${ref}`,
-    deliverableId: d.id,
-    deliverableTitle: title,
-    ref,
-  }));
-}
-
 function toDetailRun(run: Run): ProductDetailRun {
   const { label, tone } = describeStatus(run.status);
   return {
@@ -206,7 +193,6 @@ export async function getProductDetail(
   );
   const deliverables = perRun.flat();
   const shipped = deliverables.map((d) => toShippedItem(d, product.slug));
-  const files = deliverables.flatMap(toProductFiles);
 
   return {
     id: product.id,
@@ -217,6 +203,5 @@ export async function getProductDetail(
     currentTone,
     runs: detailRuns,
     shipped,
-    files,
   };
 }

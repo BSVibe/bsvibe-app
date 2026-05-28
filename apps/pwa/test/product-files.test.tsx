@@ -1,100 +1,84 @@
 /**
- * Product "Files" viewer (components/products/ProductFiles.tsx). The product
- * detail surface flattens every shipped deliverable's artifact_refs into one
- * list; selecting a file fetches its content from the EXISTING whitelisted
- * artifact endpoint (GET /deliverables/{id}/artifacts/{ref}) and shows it
- * read-only. Verified here:
- *  - a calm empty state when the product produced no files
- *  - files grouped by their producing deliverable
- *  - selecting a file fetches + renders its content from the scoped endpoint
- *  - a binary / failed read degrades to a calm note (no blank, no throw)
+ * Product "Files" viewer (components/products/ProductFiles.tsx) — a lazy
+ * file-tree browser over the product's git main. Verified here:
+ *  - the root level renders (dirs + files) on mount
+ *  - a folder expands LAZILY (children fetched only on first open, with the
+ *    subdir path) and collapses
+ *  - selecting a file fetches + renders its content from the product endpoint
+ *  - a failed content read degrades to a calm note (no blank, no throw)
  */
 
 import ProductFiles from "@/components/products/ProductFiles";
-import type { ArtifactContent, ProductFile } from "@/lib/api/types";
-import { setSession } from "@/lib/auth/session";
-// @testing-library/react is aliased (vitest.config) to an intl-wrapped render.
+import type { FileTreeEntry, ProductFileContent } from "@/lib/api/types";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
-const FILES: ProductFile[] = [
-  { id: "d1::fib.py", deliverableId: "d1", deliverableTitle: "Add fib", ref: "fib.py" },
-  { id: "d1::src/util.py", deliverableId: "d1", deliverableTitle: "Add fib", ref: "src/util.py" },
-  { id: "d2::greet.py", deliverableId: "d2", deliverableTitle: "Add greet", ref: "greet.py" },
+const ROOT: FileTreeEntry[] = [
+  { name: "src", path: "src", kind: "dir" },
+  { name: "README.md", path: "README.md", kind: "file" },
 ];
+const SRC: FileTreeEntry[] = [{ name: "app.py", path: "src/app.py", kind: "file" }];
 
-function json(body: unknown, status = 200) {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { "Content-Type": "application/json" },
+afterEach(() => vi.restoreAllMocks());
+
+it("renders the root level on mount", async () => {
+  const listFiles = vi.fn(async () => ROOT);
+  render(<ProductFiles productId="p1" listFiles={listFiles} getContent={vi.fn()} />);
+
+  await waitFor(() => expect(screen.getByRole("button", { name: /src/ })).toBeInTheDocument());
+  expect(screen.getByRole("button", { name: "README.md" })).toBeInTheDocument();
+  // Lazy: only the root was fetched (no eager walk into src/).
+  expect(listFiles).toHaveBeenCalledTimes(1);
+  expect(listFiles).toHaveBeenCalledWith("p1");
+});
+
+it("expands a folder lazily and fetches its children with the subdir path", async () => {
+  const listFiles = vi.fn(async (_pid: string, path = "") => (path === "src" ? SRC : ROOT));
+  render(<ProductFiles productId="p1" listFiles={listFiles} getContent={vi.fn()} />);
+
+  await waitFor(() => screen.getByRole("button", { name: /src/ }));
+  // app.py isn't fetched until the folder is opened.
+  expect(screen.queryByRole("button", { name: "app.py" })).not.toBeInTheDocument();
+
+  await userEvent.click(screen.getByRole("button", { name: /src/ }));
+  await waitFor(() => expect(screen.getByRole("button", { name: "app.py" })).toBeInTheDocument());
+  expect(listFiles).toHaveBeenCalledWith("p1", "src");
+});
+
+it("fetches + renders a file's content from the product endpoint", async () => {
+  const content: ProductFileContent = {
+    path: "README.md",
+    content: "# hello world",
+    truncated: false,
+    binary: false,
+  };
+  const getContent = vi.fn(async () => content);
+  render(
+    <ProductFiles productId="p1" listFiles={vi.fn(async () => ROOT)} getContent={getContent} />,
+  );
+
+  await waitFor(() => screen.getByRole("button", { name: "README.md" }));
+  await userEvent.click(screen.getByRole("button", { name: "README.md" }));
+
+  await waitFor(() => expect(screen.getByText("# hello world")).toBeInTheDocument());
+  expect(getContent).toHaveBeenCalledWith("p1", "README.md");
+});
+
+it("degrades a failed content read to a calm note", async () => {
+  const getContent = vi.fn(async () => {
+    throw new Error("404");
   });
-}
+  render(
+    <ProductFiles productId="p1" listFiles={vi.fn(async () => ROOT)} getContent={getContent} />,
+  );
 
-function renderFiles(files: ProductFile[]) {
-  return render(<ProductFiles files={files} />);
-}
+  await waitFor(() => screen.getByRole("button", { name: "README.md" }));
+  await userEvent.click(screen.getByRole("button", { name: "README.md" }));
+  await waitFor(() => expect(screen.getByText(/Couldn.t open this file/i)).toBeInTheDocument());
+});
 
-describe("ProductFiles", () => {
-  beforeEach(() => {
-    setSession({
-      accessToken: "tok",
-      refreshToken: "ref",
-      email: "f@bsvibe.dev",
-      userId: "u1",
-      expiresAt: Date.now() + 3_600_000,
-    });
-  });
-
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
-
-  it("shows a calm empty state when there are no files", () => {
-    renderFiles([]);
-    expect(screen.getByText(/No files produced/i)).toBeInTheDocument();
-  });
-
-  it("lists files grouped by their producing deliverable", () => {
-    global.fetch = vi.fn(async () => json({})) as unknown as typeof fetch;
-    renderFiles(FILES);
-
-    // Group headers (deliverable titles) + the file leaf names.
-    expect(screen.getByText("Add fib")).toBeInTheDocument();
-    expect(screen.getByText("Add greet")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "fib.py" })).toBeInTheDocument();
-    // Nested ref shows its leaf name, not the full path.
-    expect(screen.getByRole("button", { name: "util.py" })).toBeInTheDocument();
-  });
-
-  it("fetches + renders a file's content from the scoped artifact endpoint", async () => {
-    const content: ArtifactContent = {
-      ref: "fib.py",
-      content: "def fib(n):\n    return n",
-      truncated: false,
-      binary: false,
-    };
-    const fetchMock = vi.fn(async (_input: RequestInfo | URL) => json(content));
-    global.fetch = fetchMock as unknown as typeof fetch;
-
-    renderFiles(FILES);
-    await userEvent.click(screen.getByRole("button", { name: "fib.py" }));
-
-    await waitFor(() => {
-      expect(screen.getByText(/def fib\(n\)/)).toBeInTheDocument();
-    });
-    // Hit the deliverable-scoped, ref-whitelisted endpoint for d1/fib.py.
-    const url = String(fetchMock.mock.calls[0][0]);
-    expect(url).toBe("/api/v1/deliverables/d1/artifacts/fib.py");
-  });
-
-  it("degrades a failed content read to a calm note", async () => {
-    global.fetch = vi.fn(async () => json("nope", 404)) as unknown as typeof fetch;
-    renderFiles(FILES);
-
-    await userEvent.click(screen.getByRole("button", { name: "greet.py" }));
-    await waitFor(() => {
-      expect(screen.getByText(/Couldn.t open this file/i)).toBeInTheDocument();
-    });
-  });
+it("shows a calm empty state when the repo lists nothing", async () => {
+  render(<ProductFiles productId="p1" listFiles={vi.fn(async () => [])} getContent={vi.fn()} />);
+  await waitFor(() => expect(screen.getByText(/No files produced/i)).toBeInTheDocument());
 });

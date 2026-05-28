@@ -91,7 +91,7 @@ export default function ProductDetail({ slug }: { slug: string }) {
           <ProductHeader view={loaded.view} />
           <ProductRuns runs={loaded.view.runs} />
           <ProductShipped items={loaded.view.shipped} />
-          <ProductFiles files={loaded.view.files} />
+          <ProductFiles productId={loaded.view.id} />
           <ProductResources productId={loaded.view.id} />
           <ProductBindings productId={loaded.view.id} />
         </>
