@@ -66,6 +66,30 @@ async def _git(*args: str, cwd) -> str:
 
 
 # ---------------------------------------------------------------------------
+# path helpers
+# ---------------------------------------------------------------------------
+
+
+async def test_paths_are_absolute_even_when_settings_use_relative_root(
+    tmp_path, monkeypatch
+) -> None:
+    """W2 hotfix regression: in prod the settings carry a RELATIVE
+    workspace root (``"var/products"``). uvloop's subprocess transport
+    raises a bare ``FileNotFoundError`` when ``cwd`` is a relative path
+    pointing at a freshly-mkdir'd dir — even when the dir is visible to
+    ``mkdir`` and ``ls``. Forcing absolute resolution at the path-builder
+    layer keeps git invocations bulletproof across event loops."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(get_settings(), "product_workspace_root", "var/products", raising=False)
+    monkeypatch.setattr(get_settings(), "run_workspace_root", "var/runs", raising=False)
+
+    p = product_workspace_path(uuid.uuid4())
+    r = run_worktree_path(uuid.uuid4())
+    assert p.is_absolute(), f"product path must be absolute: {p}"
+    assert r.is_absolute(), f"run worktree path must be absolute: {r}"
+
+
+# ---------------------------------------------------------------------------
 # init_product_workspace
 # ---------------------------------------------------------------------------
 

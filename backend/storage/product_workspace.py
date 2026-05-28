@@ -91,15 +91,32 @@ class _GitResult:
 
 
 def product_workspace_path(product_id: uuid.UUID) -> Path:
-    """``var/products/<product_id>/`` — the canonical project state."""
-    return Path(get_settings().product_workspace_root) / str(product_id)
+    """``var/products/<product_id>/`` — the canonical project state.
+
+    Always returns an absolute path so the subprocess ``cwd`` for ``git``
+    is unambiguous. uvloop (production) interprets a relative ``cwd`` on
+    ``asyncio.create_subprocess_exec`` differently from the stock asyncio
+    selector loop and surfaces a bare ``FileNotFoundError`` even when the
+    dir exists relative to the worker's working directory. Resolving up
+    front keeps the behaviour identical across event loops.
+    """
+    root = Path(get_settings().product_workspace_root)
+    if not root.is_absolute():
+        root = Path.cwd() / root
+    return root / str(product_id)
 
 
 def run_worktree_path(run_id: uuid.UUID) -> Path:
     """``var/runs/<run_id>/`` — the per-run worktree. Aligns with the
     existing ``run_workspace_root`` setting so the sandbox manager's
-    mount layout is unchanged (sandbox already mounts this path)."""
-    return Path(get_settings().run_workspace_root) / str(run_id)
+    mount layout is unchanged (sandbox already mounts this path).
+
+    Returns an absolute path for the same uvloop-cwd reason as
+    :func:`product_workspace_path`."""
+    root = Path(get_settings().run_workspace_root)
+    if not root.is_absolute():
+        root = Path.cwd() / root
+    return root / str(run_id)
 
 
 def run_branch_name(run_id: uuid.UUID) -> str:
