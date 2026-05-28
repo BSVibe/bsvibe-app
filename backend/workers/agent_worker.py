@@ -236,6 +236,9 @@ class AgentWorker(BaseWorker):
                         "artifact_type_hint": framed.artifact_type_hint,
                         "framed_intent": framed.framed_intent,
                         "path_classification": framed.path_classification,
+                        # P1-L2 — design→impl pipeline signal the orchestrator
+                        # chaining acts on at the verified terminal.
+                        "pipeline": framed.pipeline,
                     },
                 }
                 await session.flush()

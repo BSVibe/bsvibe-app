@@ -37,6 +37,13 @@ class WorkflowState:
 # the default and behaves exactly as today.
 PathClassification = Literal["knowledge_only", "agent_loop"]
 
+# Phase 1 — the multi-stage pipeline shape. ``single`` is one run end-to-end
+# (today's behaviour). ``design_then_impl`` marks a build that runs a DESIGN
+# stage first (produce a spec), then has the orchestrator chain an
+# IMPLEMENTATION stage that consumes it (P1-L2). Recorded on the frame; the
+# orchestrator chaining + routing act on it.
+PipelineKind = Literal["single", "design_then_impl"]
+
 
 @dataclass
 class FramedRequest:
@@ -50,6 +57,8 @@ class FramedRequest:
     # B9a — the path branch (Workflow §1.2). ``agent_loop`` keeps today's
     # behaviour; ``knowledge_only`` is recorded for B9b to act on.
     path_classification: PathClassification = "agent_loop"
+    # P1-L2 — whether this request should run as a design→impl pipeline.
+    pipeline: PipelineKind = "single"
 
 
-__all__ = ["FramedRequest", "PathClassification", "Stage", "WorkflowState"]
+__all__ = ["FramedRequest", "PathClassification", "PipelineKind", "Stage", "WorkflowState"]
