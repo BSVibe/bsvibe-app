@@ -197,6 +197,12 @@ class Settlement:
     # the human-legible summary). ``None`` for verified-work observations.
     question: str | None = None
     answer: str | None = None
+    # G1: the founder's free-text rejection reason for a ``negative_pattern``
+    # settlement (a discard-with-reason). Threaded onto the absorbed note's
+    # extra-fields so the
+    # :class:`~backend.knowledge.retrieval.negative_pattern_retriever.NegativePatternRetriever`
+    # reads the guidance directly. ``None`` for every other settlement kind.
+    reason: str | None = None
 
 
 class SettleSink(Protocol):
@@ -333,6 +339,10 @@ class KnowledgeSettleSink:
         # so consumers can filter for it without parsing the body.
         if settlement.kind == "decision_resolution":
             tags.append("decision-resolution")
+        # G1: a negative-pattern settlement (discard-with-reason) gets its own
+        # structural tag so the NegativePatternRetriever filters on it cheaply.
+        if settlement.kind == "negative_pattern":
+            tags.append("negative-pattern")
         extra_fields: dict[str, object | None] = {
             "run_id": str(settlement.run_id),
             "activity_id": str(settlement.activity_id),
@@ -348,6 +358,8 @@ class KnowledgeSettleSink:
             extra_fields["question"] = settlement.question
         if settlement.answer is not None:
             extra_fields["answer"] = settlement.answer
+        if settlement.reason is not None:
+            extra_fields["reason"] = settlement.reason
         note = GardenNote(
             title=f"Settle: {headline}",
             content=_observation_body(settlement, summary),
@@ -844,6 +856,9 @@ def _to_settlement(row: ExecutionRunActivity, region: str) -> Settlement:
         kind=_opt_str(payload.get("kind")),
         question=_opt_str(payload.get("question")),
         answer=_opt_str(payload.get("answer")),
+        # G1 — rejection reason when this settle row came from a discard-with-
+        # reason; ``None`` for every other settlement kind.
+        reason=_opt_str(payload.get("reason")),
     )
 
 
