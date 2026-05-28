@@ -12,6 +12,22 @@ const config: NextConfig = {
   async redirects() {
     return [{ source: "/inside", destination: "/knowledge", permanent: true }];
   },
+  experimental: {
+    // Tree-shake barrel imports from libraries that ship a single index
+    // entry containing the whole API surface. Without this, importing one
+    // function from ``next-intl`` pulls in the whole runtime even though we
+    // only use the React + server bindings. ``d3-force`` and
+    // ``react-force-graph-2d`` are the Knowledge graph view's heavy
+    // dependencies — already lazy-loaded via ``next/dynamic``, but the
+    // inner-tree-shake here keeps THAT chunk lean too.
+    //
+    // Turbopack supports this flag in Next 16. The /impeccable audit's
+    // cold-load measurement was 3.4s DCL on /login; alongside the
+    // <link rel="preconnect"> emitted from the root layout (PR #170) this
+    // is one of the cheapest levers we can pull without restructuring the
+    // route graph.
+    optimizePackageImports: ["next-intl", "d3-force", "react-force-graph-2d"],
+  },
 };
 
 // next-intl WITHOUT i18n routing: the request config (i18n/request.ts) picks
