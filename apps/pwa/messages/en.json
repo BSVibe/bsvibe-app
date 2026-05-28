@@ -597,6 +597,11 @@
       "lede": "General: workspace basics.",
       "workspaceName": "Workspace name",
       "workspaceNameFallback": "Your workspace",
+      "workspaceNameEdit": "Rename",
+      "workspaceNameSave": "Save",
+      "workspaceNameSaving": "Saving…",
+      "workspaceNameCancel": "Cancel",
+      "workspaceNameSaveError": "Couldn’t save that change. Try again in a moment.",
       "theme": "Theme",
       "themeChoice": {
         "light": "Light",

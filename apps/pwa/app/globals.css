@@ -3230,6 +3230,82 @@ main.login {
   text-align: right;
 }
 
+/* Workspace name editable row — the value sits next to a quiet "Rename"
+   button until tapped; tapping swaps it for an inline form (input + Save +
+   Cancel). The form lives in the same flex row as the label so the layout
+   doesn't reflow vertically when entering edit mode. */
+.settings-field__value-with-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.settings-field__inline-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+  justify-content: flex-end;
+}
+
+.settings-field__input {
+  font: inherit;
+  font-size: 0.88rem;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--hair-strong);
+  border-radius: var(--radius-sm);
+  padding: 7px 10px;
+  min-width: 200px;
+}
+.settings-field__input:focus-visible {
+  outline: 2px solid var(--amber-dot);
+  outline-offset: 1px;
+}
+
+.settings-field__primary {
+  border: none;
+  border-radius: var(--radius-sm);
+  padding: 8px 14px;
+  background: #1f1d1a;
+  color: #fff;
+  font: inherit;
+  font-size: 0.84rem;
+  font-weight: 550;
+  cursor: pointer;
+}
+.settings-field__primary:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.settings-field__secondary {
+  border: 1px solid var(--hair-strong);
+  border-radius: var(--radius-sm);
+  padding: 8px 12px;
+  background: var(--surface);
+  color: var(--ink-2);
+  font: inherit;
+  font-size: 0.84rem;
+  cursor: pointer;
+}
+.settings-field__secondary:hover:not(:disabled) {
+  background: var(--accent-bg);
+  color: var(--ink);
+}
+.settings-field__secondary:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.settings-field__error {
+  flex: 1 0 100%;
+  font-size: 0.78rem;
+  color: var(--amber-ink);
+  text-align: right;
+}
+
 /* Theme segmented control (Light / System / Dark) */
 .theme-segmented {
   display: inline-flex;

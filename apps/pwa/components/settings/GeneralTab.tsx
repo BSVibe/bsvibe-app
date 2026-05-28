@@ -1,5 +1,7 @@
 "use client";
 
+import { ApiError } from "@/lib/api/client";
+import { getWorkspace, renameWorkspace } from "@/lib/api/workspace";
 import { useSession } from "@/lib/auth/session";
 import { type Locale, resolveLocale } from "@/lib/i18n/config";
 import { setLocaleCookie } from "@/lib/i18n/locale";
@@ -13,6 +15,7 @@ import type { ThemePreference } from "@/lib/theme/theme";
 import { useThemePreference } from "@/lib/theme/useTheme";
 import { useTranslations } from "next-intl";
 import { useRouter } from "next/navigation";
+import { type FormEvent, useEffect, useState } from "react";
 
 /**
  * Settings → General. Workspace basics + appearance.
@@ -40,6 +43,9 @@ const THEME_CHOICES: { value: ThemePreference; labelKey: "light" | "system" | "d
   { value: "dark", labelKey: "dark" },
 ];
 
+type WorkspaceState = { kind: "loading" } | { kind: "loaded"; name: string } | { kind: "failed" };
+type SaveState = "idle" | "saving" | "saved" | "error";
+
 export default function GeneralTab() {
   const session = useSession();
   const router = useRouter();
@@ -48,13 +54,64 @@ export default function GeneralTab() {
   const t = useTranslations("settings.general");
 
   const workspaceId = session?.personalAccountId ?? t("workspaceIdFallback");
-  // The session has no workspace-name field yet — using the founder's email as
-  // a workspace name surface read as "this app thinks my address IS my
-  // workspace," which /impeccable audit flagged as confusing for new users.
-  // Show the i18n fallback (en: "Your workspace" / ko: "내 워크스페이스") until
-  // a real workspace-name field lands. The signed-in email is already surfaced
-  // in the account chip at the bottom of the rail / topbar, so no info is lost.
-  const workspaceName = t("workspaceNameFallback");
+
+  // Workspace name: load + editable. Falls back to the i18n placeholder on
+  // load failure (so the field is never empty) and surfaces a calm inline
+  // error if the save itself fails. The signed-in email stays in the account
+  // chip — this field is a real workspace identity, not a person identity.
+  const [ws, setWs] = useState<WorkspaceState>({ kind: "loading" });
+  const [draft, setDraft] = useState("");
+  const [editing, setEditing] = useState(false);
+  const [saveState, setSaveState] = useState<SaveState>("idle");
+  const [saveError, setSaveError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    getWorkspace()
+      .then((w) => {
+        if (active) setWs({ kind: "loaded", name: w.name });
+      })
+      .catch(() => {
+        if (active) setWs({ kind: "failed" });
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  function beginEdit() {
+    const current = ws.kind === "loaded" ? ws.name : "";
+    setDraft(current);
+    setEditing(true);
+    setSaveError(null);
+    setSaveState("idle");
+  }
+  function cancelEdit() {
+    setEditing(false);
+    setSaveError(null);
+    setSaveState("idle");
+  }
+  async function onSaveName(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const trimmed = draft.trim();
+    if (!trimmed || saveState === "saving") return;
+    setSaveState("saving");
+    setSaveError(null);
+    try {
+      const updated = await renameWorkspace(trimmed);
+      setWs({ kind: "loaded", name: updated.name });
+      setSaveState("saved");
+      setEditing(false);
+    } catch (err) {
+      setSaveState("error");
+      setSaveError(
+        err instanceof ApiError ? t("workspaceNameSaveError") : t("workspaceNameSaveError"),
+      );
+    }
+  }
+
+  const workspaceName =
+    ws.kind === "loaded" ? ws.name : ws.kind === "failed" ? t("workspaceNameFallback") : "…";
 
   function chooseLanguage(value: string) {
     // Keep the local preference in sync (the select reads from it) and apply
@@ -72,7 +129,53 @@ export default function GeneralTab() {
 
       <section className="settings-field" aria-label={t("workspaceName")}>
         <span className="settings-field__label">{t("workspaceName")}</span>
-        <span className="settings-field__value">{workspaceName}</span>
+        {editing ? (
+          <form className="settings-field__inline-form" onSubmit={onSaveName}>
+            <input
+              type="text"
+              className="settings-field__input"
+              aria-label={t("workspaceName")}
+              value={draft}
+              maxLength={255}
+              onChange={(e) => setDraft(e.target.value)}
+              // biome-ignore lint/a11y/noAutofocus: focus the one editable field on open
+              autoFocus
+              disabled={saveState === "saving"}
+            />
+            <button
+              type="submit"
+              className="settings-field__primary"
+              disabled={!draft.trim() || saveState === "saving"}
+            >
+              {saveState === "saving" ? t("workspaceNameSaving") : t("workspaceNameSave")}
+            </button>
+            <button
+              type="button"
+              className="settings-field__secondary"
+              onClick={cancelEdit}
+              disabled={saveState === "saving"}
+            >
+              {t("workspaceNameCancel")}
+            </button>
+            {saveError && (
+              <span className="settings-field__error" aria-live="polite">
+                {saveError}
+              </span>
+            )}
+          </form>
+        ) : (
+          <span className="settings-field__value-with-action">
+            <span className="settings-field__value">{workspaceName}</span>
+            <button
+              type="button"
+              className="settings-field__secondary"
+              onClick={beginEdit}
+              disabled={ws.kind === "loading"}
+            >
+              {t("workspaceNameEdit")}
+            </button>
+          </span>
+        )}
       </section>
 
       <section className="settings-field">
