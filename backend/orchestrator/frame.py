@@ -66,6 +66,12 @@ class FrameConfig:
     llm: FrameLlm | None = None
 
 
+# Artifact-type hints that denote a concrete deliverable to PRODUCE (vs. a
+# pure-answer ask). Used by the knowledge_only coherence guard in
+# :func:`_framed_from_llm` — any of these forces the agent loop.
+_WORK_ARTIFACT_TYPES = frozenset({"code", "page", "page_image", "pr"})
+
+
 _FRAME_SYSTEM_PROMPT = (
     "You are the framing stage of an autonomous engineering workflow. Interpret "
     "the founder's request and respond with ONE JSON object (no prose, no code "
@@ -183,7 +189,15 @@ def _framed_from_llm(parsed: dict[str, Any], config: FrameConfig) -> FramedReque
 
     path = parsed.get("path_classification")
     path_classification: PathClassification = "agent_loop"
-    if path == "knowledge_only":
+    # Coherence guard: a concrete WORK artifact (code/page/page_image/pr) means
+    # there is something to PRODUCE, which contradicts ``knowledge_only``
+    # ("answerable from existing knowledge with no work"). Local models are
+    # unreliable on this binary and emit the incoherent pair — trusting it routes
+    # real work to a text-only answer that ships nothing (prod dogfood
+    # 2026-05-28: "Create a Python file calc.py" → knowledge_answer, no file,
+    # yet shipped). A concrete artifact always wins; only an artifact-less ask
+    # (None / direct_output) may stay knowledge_only.
+    if path == "knowledge_only" and artifact_hint not in _WORK_ARTIFACT_TYPES:
         path_classification = "knowledge_only"
 
     return FramedRequest(
