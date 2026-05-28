@@ -3097,30 +3097,16 @@ main.login {
   overflow-y: auto;
 }
 
-.product-files__group {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.product-files__group-title {
-  font-size: 0.72rem;
-  color: var(--ink-3);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.product-files__refs {
+.product-files__tree {
   list-style: none;
   margin: 0;
   padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
 }
 
-.product-files__ref {
+.product-files__node {
+  display: flex;
+  align-items: center;
+  gap: 5px;
   width: 100%;
   min-width: 0;
   text-align: left;
@@ -3130,18 +3116,33 @@ main.login {
   background: none;
   border: none;
   border-radius: var(--radius-sm);
-  padding: 5px 8px;
+  padding-top: 5px;
+  padding-bottom: 5px;
+  padding-right: 8px;
   cursor: pointer;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.product-files__ref:hover {
+.product-files__node:hover {
   background: var(--accent-bg);
 }
 
-.product-files__ref--active {
+.product-files__node--dir {
+  font-weight: 550;
+  color: var(--ink);
+}
+
+.product-files__caret {
+  display: inline-block;
+  width: 0.8em;
+  flex: none;
+  font-size: 0.7rem;
+  color: var(--ink-3);
+}
+
+.product-files__node--active {
   background: var(--accent-bg);
   color: var(--ink);
   font-weight: 550;

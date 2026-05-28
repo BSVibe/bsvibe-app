@@ -293,6 +293,24 @@ export interface ArtifactContent {
   binary: boolean;
 }
 
+/** One node in a product repo's `main` tree (backend FileTreeEntryResponse).
+ *  `path` is the full repo-relative path; `name` is the leaf; `kind` is the
+ *  git object kind mapped to file/dir. */
+export interface FileTreeEntry {
+  name: string;
+  path: string;
+  kind: "file" | "dir";
+}
+
+/** `GET /api/v1/products/{id}/files/content` (ProductFileContentResponse) —
+ *  one file's content from the product main checkout, capped + binary-aware. */
+export interface ProductFileContent {
+  path: string;
+  content: string;
+  truncated: boolean;
+  binary: boolean;
+}
+
 /** `POST /api/v1/messages` body — founder-direct submission. */
 export interface MessageCreate {
   text: string;
@@ -922,22 +940,6 @@ export interface ProductDetailView {
   currentTone: ActivityTone;
   runs: ProductDetailRun[];
   shipped: ShippedItem[];
-  /** Flat list of the product's produced files (every shipped deliverable's
-   *  `artifact_refs`), powering the inline file viewer. Empty when none. */
-  files: ProductFile[];
-}
-
-/** One produced file under a product — an artifact ref tied back to the
- *  deliverable that produced it, so the viewer can fetch its content via
- *  `GET /deliverables/{deliverableId}/artifacts/{ref}`. */
-export interface ProductFile {
-  /** Stable key — `<deliverableId>::<ref>`. */
-  id: string;
-  deliverableId: string;
-  /** The producing deliverable's title (a group header in the viewer). */
-  deliverableTitle: string;
-  /** The artifact path (whitelisted by the deliverable's own artifact_refs). */
-  ref: string;
 }
 
 /** The whole Glance surface.
