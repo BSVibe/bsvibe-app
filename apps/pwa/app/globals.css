@@ -1257,7 +1257,10 @@ main.login {
 .decisions-row__secondary {
   border: 1px solid var(--hair-strong);
   border-radius: 999px;
-  padding: 5px 14px;
+  /* 9px y-padding lifts the Accept / Decline row buttons from ~27px to ~32px
+     tall — matches the .needs-you__approve / __deny baseline from PR #158.
+     Mobile bumps to 44px in the @media block below. */
+  padding: 9px 14px;
   font-size: 0.8rem;
   font-weight: 550;
   background: var(--surface);
@@ -2175,12 +2178,19 @@ main.login {
 
 .kgraph__mode {
   flex: 1;
-  padding: 4px 10px;
+  /* 9px y-padding lifts the Type / Community group toggles from ~21px to ~30px
+     tall — at the desktop hit-area floor. Mobile bumps to 44px in the @media
+     block below. */
+  padding: 9px 10px;
   font: inherit;
   font-size: 0.72rem;
   font-weight: 600;
   letter-spacing: 0.02em;
-  color: var(--ink-3);
+  /* --ink-3 on the toggle's --accent-bg background was 4.43:1, just under
+     WCAG AA 4.5:1 for small text. --ink-2 is 4.64:1 on the same surface and
+     keeps the "inactive tab" register intact (the --on variant uses --ink
+     for the activated state, ~12:1). */
+  color: var(--ink-2);
   background: none;
   border: none;
   border-radius: calc(var(--radius-sm) - 2px);
@@ -2212,7 +2222,13 @@ main.login {
   gap: 8px;
   width: 100%;
   min-width: 0;
-  padding: 0;
+  /* Without explicit min-height the legend toggle was ~15px tall (just the
+     label/count line-height), well under the desktop hit-area floor. The 4px
+     y-pad + min-height 30 gives a comfortable tap target without expanding
+     the visible chrome (background stays transparent). Mobile bumps to 44px
+     in the @media block. */
+  min-height: 30px;
+  padding: 4px 0;
   font: inherit;
   background: none;
   border: none;
@@ -4185,7 +4201,11 @@ main.login {
   .direct-fab,
   .login__forgot,
   .rail__item--sub,
-  .rail-products__item {
+  .rail-products__item,
+  .decisions-row__primary,
+  .decisions-row__secondary,
+  .kgraph__mode,
+  .kgraph__legend-item {
     min-height: 44px;
   }
 
