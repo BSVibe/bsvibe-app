@@ -276,6 +276,68 @@ async def test_resolve_rule_selects_target_account_among_many_active() -> None:
         assert (await resolve_route(s, chat_run)).litellm_model == "ollama/qwen"
 
 
+def test_from_run_derives_design_stage_from_pipeline() -> None:
+    # Production NEVER sets an explicit ``stage`` on the first run — only the
+    # spawned impl run gets ``stage="impl"``. The first run of a
+    # ``design_then_impl`` pipeline must therefore be derived as ``stage="design"``
+    # from the frame so the ``stage==design`` rule can route it to the designer.
+    ws = uuid.uuid4()
+    design = RoutingContext.from_run(
+        _run(ws, {"frame": {"artifact_type_hint": "code", "pipeline": "design_then_impl"}})
+    )
+    assert design.stage == "design"
+
+    # An explicit stage always wins (the impl run carries ``stage="impl"``).
+    impl = RoutingContext.from_run(
+        _run(ws, {"stage": "impl", "frame": {"pipeline": "design_then_impl"}})
+    )
+    assert impl.stage == "impl"
+
+    # A single pipeline (no design handoff) stays ``single``.
+    single = RoutingContext.from_run(_run(ws, {"frame": {"pipeline": "single"}}))
+    assert single.stage == "single"
+
+
+async def test_resolve_design_then_impl_first_run_routes_to_codex_without_explicit_stage() -> None:
+    # The realistic case: the first run has NO explicit stage, only the frame's
+    # ``pipeline="design_then_impl"`` signal — it must still hit the codex rule.
+    ws = uuid.uuid4()
+    async with memory_session() as s:
+        s.add_all(
+            [
+                _account(ws, "ollama/qwen", provider="ollama"),
+                _account(ws, "executor/codex"),
+                _account(ws, "executor/opencode"),
+            ]
+        )
+        s.add(
+            _rule(
+                name="design",
+                target="executor/codex",
+                priority=10,
+                ws=ws,
+                conditions=[{"field": "stage", "operator": "eq", "value": "design"}],
+            )
+        )
+        s.add(
+            _rule(
+                name="impl",
+                target="executor/opencode",
+                priority=20,
+                ws=ws,
+                conditions=[{"field": "stage", "operator": "eq", "value": "impl"}],
+            )
+        )
+        s.add(_rule(name="fallback", target="ollama/qwen", is_default=True, priority=999, ws=ws))
+        first_run = _run(
+            ws, {"frame": {"artifact_type_hint": "code", "pipeline": "design_then_impl"}}
+        )
+        s.add(first_run)
+        await s.commit()
+
+        assert (await resolve_route(s, first_run)).litellm_model == "executor/codex"
+
+
 async def test_resolve_rule_target_inactive_falls_back_to_single_active() -> None:
     ws = uuid.uuid4()
     async with memory_session() as s:

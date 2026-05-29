@@ -71,9 +71,28 @@ class RoutingContext:
             path_classification=frame.get("path_classification"),
             skill_match=frame.get("skill_match"),
             intent_text=intent if isinstance(intent, str) else None,
-            stage=str(payload.get("stage") or "single"),
+            stage=_derive_stage(payload, frame),
             product_id=str(run.product_id) if run.product_id is not None else None,
         )
+
+
+def _derive_stage(payload: dict[str, Any], frame: dict[str, Any]) -> str:
+    """Resolve the run's pipeline stage for routing.
+
+    Only the spawned implementation run carries an explicit ``stage="impl"``;
+    the FIRST run of a ``design_then_impl`` pipeline never has its stage set
+    (the orchestrator chains impl off the frame's ``pipeline`` signal, not a
+    stage column). So when there is no explicit stage but the frame marks the
+    pipeline ``design_then_impl``, this is the design stage — derive it so the
+    ``stage==design`` rule routes the first run to the designer. Everything
+    else is a plain ``single`` run.
+    """
+    explicit = payload.get("stage")
+    if explicit:
+        return str(explicit)
+    if frame.get("pipeline") == "design_then_impl":
+        return "design"
+    return "single"
 
 
 def _field_value(ctx: RoutingContext, field: str) -> Any:
