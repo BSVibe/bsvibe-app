@@ -15,6 +15,7 @@ import uuid
 
 from backend.execution.db import ExecutionRun, RunStatus
 from backend.executors.orchestrator import (
+    _DESIGN_SPEC_DIRECTIVE,
     _EXECUTOR_SYSTEM_PROMPT,
     _INTENT_MAX_CHARS,
     _KNOWLEDGE_MAX_CHARS_PER_STATEMENT,
@@ -151,3 +152,74 @@ def test_resolved_decisions_parses_list() -> None:
 def test_resolved_decisions_empty_when_missing() -> None:
     assert _resolved_decisions(_run({"intent_text": "x"})) == []
     assert _resolved_decisions(_run({"resolved_decisions": "not-a-list"})) == []
+
+
+# -- D1b: design-stage runs are told to write a SPEC, not finished code --
+
+
+def _design_run(stage: str | None = None) -> ExecutionRun:
+    """A run whose frame marks a ``design_then_impl`` pipeline.
+
+    ``stage`` defaults to None — the FIRST run of the pipeline never has its
+    stage column set (the AgentRunner chains impl off the frame's pipeline
+    signal), so an unset stage on a ``design_then_impl`` run IS the design
+    stage. Pass ``"impl"`` for the spawned implementation run."""
+    payload: dict[str, object] = {
+        "intent_text": "build a JSON-backed key/value store with a typed client",
+        "frame": {"pipeline": "design_then_impl"},
+    }
+    if stage is not None:
+        payload["stage"] = stage
+    return _run(payload)
+
+
+def test_design_stage_prompt_contains_spec_only_directive() -> None:
+    # D1b — the DESIGN stage of a design_then_impl pipeline must be told to
+    # write a concise spec, NOT implement working code.
+    framed = _assemble_executor_prompt(_design_run(), statements=[])
+    assert _DESIGN_SPEC_DIRECTIVE in framed
+    # The intent is still present — the directive is additive.
+    assert "key/value store" in framed
+
+
+def test_single_pipeline_prompt_has_no_design_directive() -> None:
+    # A single-pipeline run is unchanged — no spec-only directive.
+    framed = _assemble_executor_prompt(
+        _run({"intent_text": "x", "frame": {"pipeline": "single"}}), statements=[]
+    )
+    assert _DESIGN_SPEC_DIRECTIVE not in framed
+
+
+def test_impl_stage_prompt_has_no_design_directive() -> None:
+    # The impl stage IMPLEMENTS the spec — it must NOT get the spec-only
+    # directive (that would tell it to spec instead of build).
+    framed = _assemble_executor_prompt(_design_run(stage="impl"), statements=[])
+    assert _DESIGN_SPEC_DIRECTIVE not in framed
+
+
+def test_no_frame_means_no_design_directive() -> None:
+    # A plain run with no frame (legacy / single) gets no directive.
+    framed = _assemble_executor_prompt(_run({"intent_text": "x"}), statements=[])
+    assert _DESIGN_SPEC_DIRECTIVE not in framed
+
+
+def test_design_directive_says_not_to_implement() -> None:
+    # The directive must explicitly forbid writing working code and ask for a
+    # concise markdown spec covering the four contract sections.
+    lower = _DESIGN_SPEC_DIRECTIVE.lower()
+    assert "spec" in lower
+    assert "not" in lower and "implement" in lower
+    assert "goal" in lower
+    assert "acceptance" in lower
+
+
+def test_single_pipeline_prompt_byte_for_byte_unchanged() -> None:
+    # The single/impl prompts must be unchanged by D1b — assert the design
+    # branch is the ONLY delta. A single run with identical inputs yields the
+    # same prompt it did before D1b (just intent here, no directive).
+    run_single = _run({"intent_text": "x", "frame": {"pipeline": "single"}})
+    run_no_frame = _run({"intent_text": "x"})
+    assert _assemble_executor_prompt(run_single, statements=[]) == _assemble_executor_prompt(
+        run_no_frame, statements=[]
+    )
+    assert _assemble_executor_prompt(run_single, statements=[]) == "x"
