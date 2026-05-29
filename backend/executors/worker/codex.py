@@ -18,6 +18,8 @@ Robustness:
 Flags track codex-cli's current contract:
 
 * ``exec --json`` — non-interactive run with the JSONL event stream;
+* ``--skip-git-repo-check`` — the per-task workspace is a fresh empty temp dir
+  (no git repo, untrusted), which codex otherwise refuses to run in;
 * ``--sandbox workspace-write`` — the supported sandbox policy;
 * ``--config model_instructions_file=<path>`` — the system-message override
   (the old ``experimental_instructions_file`` key silently drops it);
@@ -135,7 +137,17 @@ class CodexExecutor:
                     pass
 
     def _build_cmd(self, sys_path: str | None, model: str | None) -> list[str]:
-        cmd_args = [self._cmd, "exec", "--json", "--sandbox", "workspace-write"]
+        # The worker runs each task in a fresh, EMPTY temp dir — never a git repo
+        # and never in codex's trusted-projects list. Without --skip-git-repo-check
+        # the CLI refuses ("Not inside a trusted directory") and writes nothing.
+        cmd_args = [
+            self._cmd,
+            "exec",
+            "--json",
+            "--skip-git-repo-check",
+            "--sandbox",
+            "workspace-write",
+        ]
         if sys_path:
             cmd_args += ["--config", f"model_instructions_file={sys_path}"]
         if model:
