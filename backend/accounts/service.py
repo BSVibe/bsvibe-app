@@ -28,7 +28,10 @@ DEFAULT_ACCOUNT_LABEL = "default"
 # with a real key, so a NULL ``api_key_encrypted`` is allowed and resolves to
 # the empty string (litellm forwards it harmlessly). Every other provider
 # requires a populated key; NULL there is a bug, not a no-op.
-_LOCAL_INFERENCE_PROVIDERS = frozenset({"ollama", "lmstudio", "llama_cpp", "vllm"})
+LOCAL_INFERENCE_PROVIDERS = frozenset({"ollama", "lmstudio", "llama_cpp", "vllm"})
+# Back-compat private alias (the public name is the source of truth; the run
+# routing tier default imports it to identify the "local" account class).
+_LOCAL_INFERENCE_PROVIDERS = LOCAL_INFERENCE_PROVIDERS
 
 
 class ModelAccountService:
