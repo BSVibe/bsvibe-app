@@ -36,6 +36,7 @@ const VERIFICATION_FAILED: PendingCheckpoint = {
   options: null,
   actions: ACTIONS,
   decision: "verification_failed",
+  priorDecisions: [],
   createdAt: "2026-05-27T10:00:00Z",
 };
 

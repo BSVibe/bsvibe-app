@@ -366,6 +366,10 @@ export interface Checkpoint {
   options: string[] | null;
   actions: CheckpointAction[] | null;
   rationale: string | null;
+  /** G4 (proposal §5.5): the founder's relevant already-resolved decisions
+   *  ("Prior decision — Q: … A: …"), matched by signal overlap. Empty when
+   *  nothing similar was decided before — show consistency, never invent it. */
+  prior_decisions: string[];
   created_at: string;
 }
 
@@ -465,6 +469,9 @@ export interface PendingCheckpoint {
    *  "ask_user_question") — exposed so the UI can label / style by kind. */
   decision: string;
   rationale: string | null;
+  /** G4 (proposal §5.5): the founder's relevant already-resolved decisions, so
+   *  a recurring choice is answered consistently. Empty when none overlap. */
+  priorDecisions: string[];
   createdAt: string;
 }
 

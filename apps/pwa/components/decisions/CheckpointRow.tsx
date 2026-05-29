@@ -111,6 +111,21 @@ export default function CheckpointRow({
       </span>
       {item.rationale ? <p className="decisions-row__rationale">{item.rationale}</p> : null}
 
+      {item.priorDecisions.length > 0 ? (
+        <div className="decisions-row__prior" aria-label={t("priorDecisions")}>
+          <span className="decisions-row__prior-label">{t("priorDecisions")}</span>
+          <ul className="decisions-row__prior-list">
+            {item.priorDecisions.map((prior, i) => (
+              // Prior statements are free-form and may repeat across re-asks
+              // (deduped server-side); index keys the row.
+              <li key={`${i}-${prior}`} className="decisions-row__prior-item">
+                {prior}
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+
       {hasActions && actions !== null ? (
         <>
           <div className="decisions-row__action-buttons">

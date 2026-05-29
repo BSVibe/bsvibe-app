@@ -68,6 +68,8 @@ export function toPendingDecisions(
       actions: c.actions && c.actions.length > 0 ? c.actions : null,
       decision: c.decision,
       rationale: c.rationale,
+      // G4 — prior resolved decisions the founder can answer consistently with.
+      priorDecisions: c.prior_decisions ?? [],
       createdAt: c.created_at,
     });
   }
