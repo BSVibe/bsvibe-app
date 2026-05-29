@@ -16,6 +16,16 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 
+def _to_pgvector(embedding: list[float]) -> str:
+    """Encode a float list as pgvector's text input (``[v1,v2,...]``).
+
+    Raw ``text()`` SQL binds go straight to asyncpg, which has no codec for the
+    pgvector ``vector`` type — passing a Python ``list`` raises ``DataError:
+    expected str, got list``. pgvector accepts its text representation cast with
+    ``CAST(... AS vector)``, so every embedding bind goes through this."""
+    return "[" + ",".join(repr(float(x)) for x in embedding) + "]"
+
+
 class PgNoteVectorBackend:
     """Note vector store backed by ``note_embeddings``, scoped to one workspace.
 
@@ -37,7 +47,7 @@ class PgNoteVectorBackend:
                 INSERT INTO note_embeddings
                     (workspace_id, note_path, embedding, embedding_model, dimension, updated_at)
                 VALUES
-                    (:ws, :path, :emb, :model, :dim, now())
+                    (:ws, :path, CAST(:emb AS vector), :model, :dim, now())
                 ON CONFLICT (workspace_id, note_path) DO UPDATE SET
                     embedding = EXCLUDED.embedding,
                     embedding_model = EXCLUDED.embedding_model,
@@ -48,7 +58,7 @@ class PgNoteVectorBackend:
             {
                 "ws": self._workspace_id,
                 "path": note_path,
-                "emb": embedding,
+                "emb": _to_pgvector(embedding),
                 "model": self._embedding_model,
                 "dim": len(embedding),
             },
@@ -80,7 +90,7 @@ class PgNoteVectorBackend:
                 """
             ),
             {
-                "qv": query_embedding,
+                "qv": _to_pgvector(query_embedding),
                 "ws": self._workspace_id,
                 "model": self._embedding_model,
                 "lim": top_k,
