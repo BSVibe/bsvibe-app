@@ -55,6 +55,13 @@ services:
       BSVIBE_DEFAULT_WORKSPACE_REGION: ${BSVIBE_DEFAULT_WORKSPACE_REGION:-us-1}
       BSVIBE_KNOWLEDGE_VAULT_ROOT: ${BSVIBE_KNOWLEDGE_VAULT_ROOT:-/app/var/vault}
       BSVIBE_KNOWLEDGE_DEFAULT_REGION: ${BSVIBE_KNOWLEDGE_DEFAULT_REGION:-us-1}
+      # Knowledge semantic-search embedding (G6): the pgvector index DERIVED from
+      # the Markdown SoT. Deployment-level model — set it and every settled note
+      # is auto-embedded + queries embed against it; empty disables semantic
+      # search (canon/decision/rejection retrieval unaffected). e.g.
+      # ``ollama/bge-m3`` + api_base ``http://host.docker.internal:11434``.
+      BSVIBE_KNOWLEDGE_EMBEDDING_MODEL: ${BSVIBE_KNOWLEDGE_EMBEDDING_MODEL:-}
+      BSVIBE_KNOWLEDGE_EMBEDDING_API_BASE: ${BSVIBE_KNOWLEDGE_EMBEDDING_API_BASE:-}
       BSVIBE_SKILLS_ROOT: ${BSVIBE_SKILLS_ROOT:-/app/var/skills}
       BSVIBE_RUN_WORKSPACE_ROOT: ${BSVIBE_RUN_WORKSPACE_ROOT:-/app/var/runs}
       BSVIBE_AUDIT_RELAY_URL: ${BSVIBE_AUDIT_RELAY_URL:-}
@@ -81,6 +88,13 @@ services:
       BSVIBE_DEFAULT_WORKSPACE_REGION: ${BSVIBE_DEFAULT_WORKSPACE_REGION:-us-1}
       BSVIBE_KNOWLEDGE_VAULT_ROOT: ${BSVIBE_KNOWLEDGE_VAULT_ROOT:-/app/var/vault}
       BSVIBE_KNOWLEDGE_DEFAULT_REGION: ${BSVIBE_KNOWLEDGE_DEFAULT_REGION:-us-1}
+      # Knowledge semantic-search embedding (G6): the pgvector index DERIVED from
+      # the Markdown SoT. Deployment-level model — set it and every settled note
+      # is auto-embedded + queries embed against it; empty disables semantic
+      # search (canon/decision/rejection retrieval unaffected). e.g.
+      # ``ollama/bge-m3`` + api_base ``http://host.docker.internal:11434``.
+      BSVIBE_KNOWLEDGE_EMBEDDING_MODEL: ${BSVIBE_KNOWLEDGE_EMBEDDING_MODEL:-}
+      BSVIBE_KNOWLEDGE_EMBEDDING_API_BASE: ${BSVIBE_KNOWLEDGE_EMBEDDING_API_BASE:-}
       BSVIBE_SKILLS_ROOT: ${BSVIBE_SKILLS_ROOT:-/app/var/skills}
       BSVIBE_RUN_WORKSPACE_ROOT: ${BSVIBE_RUN_WORKSPACE_ROOT:-/app/var/runs}
       BSVIBE_AUDIT_RELAY_URL: ${BSVIBE_AUDIT_RELAY_URL:-}
