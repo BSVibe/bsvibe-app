@@ -572,6 +572,43 @@ async def test_settle_entity_extractor_factory_extracts_entities(
     get_settings.cache_clear()
 
 
+def _bare_account(provider: str) -> Any:
+    from backend.accounts.models import ModelAccount
+
+    return ModelAccount(
+        id=uuid.uuid4(),
+        workspace_id=uuid.uuid4(),
+        account_id=uuid.uuid4(),
+        provider=provider,
+        label=provider,
+        litellm_model=f"{provider}/model",
+        api_base=None,
+        api_key_encrypted=None,
+        data_jurisdiction="us",
+        is_active=True,
+        extra_params={},
+    )
+
+
+async def test_single_native_account_ignores_executor_accounts() -> None:
+    # The cheap-LLM resolvers (frame stage + settle extractor) must pick the
+    # lone active NON-executor account even when executor worker accounts
+    # coexist — registering an executor worker must not break native framing.
+    native = _bare_account("ollama")
+    execs = [_bare_account("executor"), _bare_account("executor")]
+
+    # 1 native + N executor → the native one (the regression case).
+    assert runtime._single_native_account([native, *execs]) is native
+    # exactly 1 native, any order → native.
+    assert runtime._single_native_account([execs[0], native]) is native
+    # 2 native → ambiguous → None (never guess among native models).
+    assert runtime._single_native_account([native, _bare_account("ollama")]) is None
+    # only executor accounts → None (can't drive cheap LLM).
+    assert runtime._single_native_account(execs) is None
+    # empty → None.
+    assert runtime._single_native_account([]) is None
+
+
 async def test_settle_entity_extractor_factory_none_when_no_account(
     sf: async_sessionmaker[AsyncSession],
     workspace_id: uuid.UUID,

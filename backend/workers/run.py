@@ -168,6 +168,21 @@ async def _list_active_workspace_accounts(
     return list((await session.execute(stmt)).scalars().all())
 
 
+def _single_native_account(accounts: list[ModelAccount]) -> ModelAccount | None:
+    """The lone active NON-executor account, or ``None`` when there are zero or
+    more than one.
+
+    The cheap-LLM resolvers (frame stage + settle entity extractor) drive a
+    native chat model and cannot use a ``provider='executor'`` CLI account. A
+    workspace that has registered an executor worker therefore carries the
+    native account PLUS one executor account per capability — so a naive
+    "exactly one active account" check returns nothing and silently drops these
+    stages to their keyword/soft fallback. Filter executor accounts out first,
+    then require exactly one native account (never guess among several)."""
+    native = [a for a in accounts if a.provider != "executor"]
+    return native[0] if len(native) == 1 else None
+
+
 async def resolve_workspace_model_account(
     session: AsyncSession, run: ExecutionRun
 ) -> ModelAccount | None:
@@ -402,15 +417,13 @@ def build_agent_execution_deps(
         framing never guesses a model (and an executor-only / accountless
         workspace keeps the pre-B9a behaviour)."""
         accounts = await _list_active_workspace_accounts(session, workspace_id)
-        if len(accounts) != 1:
+        account = _single_native_account(accounts)
+        if account is None:
             logger.info(
                 "frame_llm_account_unresolved",
                 workspace_id=str(workspace_id),
                 active_count=len(accounts),
             )
-            return None
-        account = accounts[0]
-        if account.provider == "executor":
             return None
         dispatcher = build_gateway_dispatcher(session, settings)
         return _GatewayFrameLlm(
@@ -730,14 +743,14 @@ def build_settle_entity_extractor_factory(
 
         async with session_factory() as session:
             accounts = await _list_active_workspace_accounts(session, workspace_id)
-            if len(accounts) != 1:
+            account = _single_native_account(accounts)
+            if account is None:
                 logger.info(
                     "settle_extractor_account_unresolved",
                     workspace_id=str(workspace_id),
                     active_count=len(accounts),
                 )
                 return None
-            account = accounts[0]
             dispatcher = build_gateway_dispatcher(session, settings)
             llm = _GatewayCompileLlm(
                 dispatcher=dispatcher,
