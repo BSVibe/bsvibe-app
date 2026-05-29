@@ -115,7 +115,14 @@ _FRAME_SYSTEM_PROMPT = (
     '  "artifact_type_hint": the likely deliverable type '
     '("code" | "page" | "page_image" | "pr" | null),\n'
     '  "path_classification": "knowledge_only" if the request can be answered '
-    'purely from existing knowledge with no work, otherwise "agent_loop".\n'
+    'purely from existing knowledge with no work, otherwise "agent_loop",\n'
+    '  "pipeline": "single" for a focused one-pass task, or "design_then_impl" '
+    "for substantial / multi-part work that genuinely benefits from a separate "
+    "design pass (producing a spec) before implementation. Judge by COMPLEXITY "
+    "and SCOPE, not keywords: a tiny tweak or a small focused endpoint is "
+    '"single"; a multi-component system or cross-cutting build is '
+    '"design_then_impl",\n'
+    '  "pipeline_reason": a one-line justification for the pipeline choice.\n'
     "Only choose a skill_match that appears verbatim in the catalog."
 )
 
@@ -233,13 +240,49 @@ def _framed_from_llm(parsed: dict[str, Any], config: FrameConfig) -> FramedReque
     if path == "knowledge_only" and artifact_hint not in _WORK_ARTIFACT_TYPES:
         path_classification = "knowledge_only"
 
+    pipeline = _resolve_pipeline(parsed, artifact_hint, framed_intent)
+
     return FramedRequest(
         skill_match=skill_match,
         artifact_type_hint=artifact_hint,
         framed_intent=framed_intent,
         path_classification=path_classification,
-        pipeline=_derive_pipeline(artifact_hint, framed_intent or parsed.get("framed_intent")),
+        pipeline=pipeline,
     )
+
+
+# Valid ``PipelineKind`` values, used to validate the LLM's ``pipeline`` field.
+# We never trust a hallucinated value: only a verbatim-valid kind is honoured.
+_VALID_PIPELINES: frozenset[str] = frozenset({"single", "design_then_impl"})
+
+
+def _resolve_pipeline(
+    parsed: dict[str, Any], artifact_hint: str | None, framed_intent: str | None
+) -> PipelineKind:
+    """Decide the pipeline kind from the LLM output, with defensive guards.
+
+    Precedence (P1-L2 / D1 — the complexity judgment is the LLM's, not a
+    keyword rule):
+
+    1. Honour the LLM's ``pipeline`` ONLY when it is a verbatim-valid
+       :data:`PipelineKind`. An absent / missing / hallucinated value is never
+       trusted — we fall back to :func:`_derive_pipeline` (the keyword rule, the
+       no-LLM behaviour), so a malformed frame degrades, never breaks.
+    2. Coherence guard (mirrors the ``path_classification`` guard above): a
+       ``single`` / ``design_then_impl`` distinction only makes sense for a
+       concrete WORK artifact (something to PRODUCE). A pure-answer ask
+       (artifact_hint not in :data:`_WORK_ARTIFACT_TYPES`) is always ``single``,
+       regardless of what the LLM emits — there is no implementation to stage.
+    """
+    if artifact_hint not in _WORK_ARTIFACT_TYPES:
+        return "single"
+    raw = parsed.get("pipeline")
+    if isinstance(raw, str) and raw in _VALID_PIPELINES:
+        # mypy: ``raw in _VALID_PIPELINES`` narrows to the Literal at runtime,
+        # but the type checker can't see it — cast via the known-good branch.
+        return "design_then_impl" if raw == "design_then_impl" else "single"
+    logger.info("frame_stage_pipeline_keyword_fallback", raw_pipeline=raw)
+    return _derive_pipeline(artifact_hint, framed_intent)
 
 
 # --------------------------------------------------------------------------
