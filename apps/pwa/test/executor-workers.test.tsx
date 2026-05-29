@@ -130,6 +130,12 @@ describe("Executor workers surface", () => {
     expect(screen.getByText(/won.t see (this|it) again/i)).toBeInTheDocument();
     // The run command (the worker-process invocation) is shown, copyable.
     expect(screen.getByText(/python -m backend\.executors\.worker/i)).toBeInTheDocument();
+    // It points the worker at THIS deployment's backend so a copy-paste run
+    // actually reaches the server instead of the localhost default. (No
+    // NEXT_PUBLIC_BACKEND_URL in the test env → the prod default URL.)
+    expect(
+      screen.getByText(/BSVIBE_WORKER_SERVER_URL=https:\/\/api\.bsvibe\.dev/i),
+    ).toBeInTheDocument();
 
     // The mint POST fired against the install-token endpoint.
     const mintCall = fetchMock.mock.calls[1] as unknown as [string, RequestInit];
