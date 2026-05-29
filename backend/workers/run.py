@@ -383,27 +383,59 @@ def build_agent_execution_deps(
         loader.load_all()
         return loader
 
-    def _retriever_for(workspace_id: uuid.UUID) -> CanonRetriever:
-        """The workspace-scoped BSage canon retriever (B3 / RC-2 fix).
+    async def _retriever_for(
+        session: AsyncSession,
+        workspace_id: uuid.UUID,
+        account: ModelAccount | None,
+    ) -> CanonRetriever:
+        """The workspace-scoped BSage canon retriever (B3 / RC-2 fix), now with
+        G5 semantic note search folded in when the account has an embedding model.
 
         Built per run from :class:`KnowledgeFactory` rooted at the SAME
         ``<vault_root>/<region>/<workspace_id>/`` boundary the settle/promotion
         pipeline writes to, so verify folds in THIS workspace's promoted
-        canonical patterns. Construction is cheap + forces no deps; an
-        empty-knowledge workspace yields ``[]`` and the retriever never raises
-        into the verify path (mirrors the settle-extractor's graceful
-        resolution). Wired into BOTH the native and executor orchestrators —
-        before B3 each got ``retriever=None``, so canon was never consulted."""
+        canonical patterns. An empty-knowledge workspace yields ``[]`` and the
+        retriever never raises into the verify path.
+
+        G5: when the run's account has an embedding model configured, a
+        :class:`SemanticNoteRetriever` (pgvector ``note_embeddings`` search) is
+        composed in alongside the canon/decision/rejection sources, so verify +
+        seed also see the semantically-nearest notes. With no embedding config
+        (or an executor account), the base canon-only retriever is returned —
+        identical to pre-G5 behaviour."""
         from backend.knowledge.factory import (  # noqa: PLC0415 — lazy heavy import
             KnowledgeFactory,
         )
+        from backend.knowledge.retrieval.composite_retriever import (  # noqa: PLC0415
+            CompositeCanonRetriever,
+        )
+        from backend.knowledge.retrieval.embedder_resolution import (  # noqa: PLC0415
+            resolve_embedder,
+        )
+        from backend.knowledge.retrieval.semantic_note_retriever import (  # noqa: PLC0415
+            SemanticNoteRetriever,
+        )
+        from backend.knowledge.retrieval.storage.pg import PgNoteVectorBackend  # noqa: PLC0415
 
-        knowledge = KnowledgeFactory(
+        base = KnowledgeFactory(
             region=settings.knowledge_default_region,
             workspace_id=str(workspace_id),
             vault_root=knowledge_vault_root,
+        ).retriever()
+        # Semantic search is opt-in per account + Postgres-only (pgvector). No
+        # embedding model, an executor account, or a non-PG dev DB → canon-only.
+        if account is None or account.provider == "executor":
+            return base
+        embedder = await resolve_embedder(
+            session, workspace_id=workspace_id, account_id=account.account_id
         )
-        return knowledge.retriever()
+        if not embedder.enabled or embedder.model is None:
+            return base
+        semantic = SemanticNoteRetriever(
+            embedder,
+            PgNoteVectorBackend(session, workspace_id=workspace_id, embedding_model=embedder.model),
+        )
+        return CompositeCanonRetriever([base, semantic])
 
     async def _frame_llm_for(session: AsyncSession, workspace_id: uuid.UUID) -> FrameLlm | None:
         """B9a — the per-workspace cheap-LLM for the frame stage.
@@ -440,7 +472,7 @@ def build_agent_execution_deps(
         account = await resolve_route(session, run)
         if account is None:
             return None
-        retriever = _retriever_for(run.workspace_id)
+        retriever = await _retriever_for(session, run.workspace_id, account)
         # B9a — CONSUME the frame: the worker recorded ``run.payload["frame"]``
         # (skill match by description) BEFORE this factory runs, so read the
         # matched skill + its description here and thread it into the native loop
