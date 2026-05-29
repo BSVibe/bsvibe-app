@@ -33,6 +33,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.api.deps import get_current_user_row, get_db_session, get_workspace_id
+from backend.api.v1.decisions import _vault_root
 from backend.execution.audit_events import DecisionResolved
 from backend.execution.db import (
     Decision,
@@ -48,6 +49,8 @@ from backend.execution.db import (
 )
 from backend.execution.verified_deliverable import settle_run_context
 from backend.identity.db import UserRow
+from backend.knowledge.graph.storage import FileSystemStorage
+from backend.knowledge.retrieval.resolved_decisions_retriever import ResolvedDecisionsRetriever
 from backend.orchestrator.agent_runner import AgentRunner
 from backend.supervisor.audit.events import AuditActor, AuditResource
 from backend.supervisor.audit.service import safe_emit
@@ -114,6 +117,13 @@ class CheckpointResponse(BaseModel):
     # ask_user_question Decisions — those use ``options`` + free-text only.
     actions: list[DecisionAction] | None = None
     rationale: str | None = None
+    # G4 (proposal §5.5): similar prior decisions the founder already resolved,
+    # matched by question/answer/intent token overlap via the workspace's
+    # ResolvedDecisionsRetriever — "Prior decision — Q: … A: …" lines so they
+    # can answer consistently instead of re-deciding. Empty when nothing
+    # overlaps (never fabricated); the current pending Decision can't self-match
+    # because only RESOLVED decisions are absorbed into the vault.
+    prior_decisions: list[str] = []
     created_at: datetime
 
 
@@ -233,12 +243,34 @@ def _decision_options(decision: Decision) -> list[str] | None:
     return cleaned or None
 
 
+def build_decisions_retriever(
+    workspace_id: Annotated[uuid.UUID, Depends(get_workspace_id)],
+) -> ResolvedDecisionsRetriever:
+    """The caller's workspace-scoped resolved-decisions retriever (G4).
+
+    Rooted at the same ``<vault_root>/<region>/<workspace_id>/`` storage the
+    settle pipeline writes decision-resolution notes into, so a pending
+    checkpoint can surface the founder's relevant prior answers. A FastAPI
+    dependency so tests can inject a tmp-vault-backed retriever (mirrors
+    :func:`backend.api.v1.inside.build_inside_storage`)."""
+    root = _vault_root(workspace_id)
+    root.mkdir(parents=True, exist_ok=True)
+    return ResolvedDecisionsRetriever(FileSystemStorage(root))
+
+
 @router.get("")
 async def list_checkpoints(
     workspace_id: Annotated[uuid.UUID, Depends(get_workspace_id)],
     session: Annotated[AsyncSession, Depends(get_db_session)],
+    retriever: Annotated[ResolvedDecisionsRetriever, Depends(build_decisions_retriever)],
 ) -> list[CheckpointResponse]:
-    """List PENDING execution Decisions for the workspace, newest first."""
+    """List PENDING execution Decisions for the workspace, newest first.
+
+    Each carries ``prior_decisions`` — the founder's relevant already-resolved
+    decisions (G4) — so a recurring choice is answered consistently. Retrieval
+    is graceful-empty + never raises, so an empty/corrupt vault degrades to no
+    suggestions rather than failing the inbox.
+    """
     stmt = (
         select(Decision)
         .where(
@@ -257,6 +289,7 @@ async def list_checkpoints(
             options=_decision_options(row),
             actions=_decision_actions(row),
             rationale=row.rationale,
+            prior_decisions=await retriever.retrieve_for_signals(_question_text(row)),
             created_at=row.created_at,
         )
         for row in rows

@@ -36,6 +36,7 @@ const CHECKPOINT_WITH_OPTIONS: PendingCheckpoint = {
   options: ["postgres", "sqlite", "mysql"],
   actions: null,
   decision: "ask_user_question",
+  priorDecisions: [],
   createdAt: "2026-05-26T10:00:00Z",
 };
 
@@ -48,6 +49,7 @@ const CHECKPOINT_FREE_TEXT: PendingCheckpoint = {
   options: null,
   actions: null,
   decision: "ask_user_question",
+  priorDecisions: [],
   createdAt: "2026-05-26T10:00:00Z",
 };
 
@@ -175,5 +177,21 @@ describe("CheckpointRow — structured options (B11a)", () => {
     await waitFor(() => expect(onResolved).toHaveBeenCalled());
     const [, init] = fetchMock.mock.calls[0];
     expect(JSON.parse((init as RequestInit).body as string)).toEqual({ answer: "ship it" });
+  });
+
+  it("surfaces similar prior decisions when present (G4)", async () => {
+    vi.stubGlobal("fetch", vi.fn());
+    const withPrior: PendingCheckpoint = {
+      ...CHECKPOINT_FREE_TEXT,
+      priorDecisions: ["Prior decision — Q: Which database? A: Use Postgres"],
+    };
+    render(<CheckpointRow item={withPrior} onResolved={() => {}} />);
+    expect(screen.getByText(/Use Postgres/)).toBeInTheDocument();
+  });
+
+  it("hides the prior-decisions section when none overlap (G4)", async () => {
+    vi.stubGlobal("fetch", vi.fn());
+    render(<CheckpointRow item={CHECKPOINT_FREE_TEXT} onResolved={() => {}} />);
+    expect(screen.queryByText(/decided similar before/i)).toBeNull();
   });
 });

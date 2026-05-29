@@ -119,6 +119,7 @@ const CHECKPOINT: Checkpoint = {
   options: null,
   actions: null,
   rationale: "The direction was ambiguous.",
+  prior_decisions: [],
   created_at: "2026-05-23T11:00:00Z",
 };
 
