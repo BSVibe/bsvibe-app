@@ -39,6 +39,7 @@ ALLOWED_FIELDS: frozenset[str] = frozenset(
         "skill_match",  # matched skill name | None
         "intent_text",  # the run's intent / framed intent (text ops)
         "stage",  # "single" | "design" | "impl" (pipeline stage)
+        "pipeline",  # "single" | "design_then_impl" (frame complexity verdict)
         "product_id",  # the run's product_id (str) | None
     }
 )
@@ -56,6 +57,7 @@ class RoutingContext:
     skill_match: str | None = None
     intent_text: str | None = None
     stage: str = "single"
+    pipeline: str = "single"
     product_id: str | None = None
 
     @classmethod
@@ -66,12 +68,14 @@ class RoutingContext:
         raw_frame = payload.get("frame")
         frame: dict[str, Any] = raw_frame if isinstance(raw_frame, dict) else {}
         intent = payload.get("intent_text") or frame.get("framed_intent") or payload.get("text")
+        pipeline = frame.get("pipeline")
         return cls(
             artifact_type_hint=frame.get("artifact_type_hint"),
             path_classification=frame.get("path_classification"),
             skill_match=frame.get("skill_match"),
             intent_text=intent if isinstance(intent, str) else None,
             stage=_derive_stage(payload, frame),
+            pipeline=pipeline if pipeline in ("single", "design_then_impl") else "single",
             product_id=str(run.product_id) if run.product_id is not None else None,
         )
 
@@ -200,25 +204,36 @@ def evaluate_rules(rules: list[RunRoutingRuleRow], ctx: RoutingContext) -> str |
 
 
 async def resolve_route(session: AsyncSession, run: ExecutionRun) -> ModelAccount | None:
-    """Resolve the ModelAccount for ``run`` via routing rules.
+    """Resolve the ModelAccount for ``run`` — precedence, highest → lowest:
 
-    * No rules for the workspace → delegate to the legacy single-active
-      resolver (unchanged behaviour for existing workspaces).
-    * A rule (or default) matches → return the active account whose
-      ``litellm_model`` equals the rule's ``target``.
-    * Rules exist but none match (no default), or the target isn't an active
-      account → delegate to the legacy resolver (which returns the lone active
-      account, or raises a founder Decision on zero/ambiguous). Never crashes,
-      never silently guesses.
+    1. **Explicit founder rule** — an active :class:`RunRoutingRuleRow` (or the
+       workspace's default rule) matches → return the active account whose
+       ``litellm_model`` equals the rule's ``target``.
+    2. **Built-in tier default** (D2 / §12) — no explicit rule matched: apply the
+       frame's complexity verdict. ``pipeline == "single"`` → the lone active
+       LOCAL account; ``pipeline == "design_then_impl"`` → the lone active
+       EXECUTOR (cloud/opencode) account. Fires ONLY when exactly one account of
+       the desired class is active (degrade loudly, gotcha #200).
+    3. **Legacy single-active fallback** — neither above resolved: the lone
+       active account, or a founder :class:`Decision` on zero/ambiguous. Never
+       crashes, never silently guesses.
+
+    The chosen tier + resolved target are recorded as an ``ExecutionRunActivity``
+    (``activity_type="routing_decision"``) so routing is glass-box.
     """
     from sqlalchemy import select  # noqa: PLC0415
 
     from backend.routing.db import RunRoutingRuleRow  # noqa: PLC0415
+    from backend.routing.tier_default import (  # noqa: PLC0415
+        select_tier_default_account,
+        tier_from_context,
+    )
     from backend.workers.run import (  # noqa: PLC0415 — avoid import cycle
         _list_active_workspace_accounts,
         resolve_workspace_model_account,
     )
 
+    ctx = RoutingContext.from_run(run)
     rules = list(
         (
             await session.execute(
@@ -228,31 +243,86 @@ async def resolve_route(session: AsyncSession, run: ExecutionRun) -> ModelAccoun
         .scalars()
         .all()
     )
-    if not rules:
-        return await resolve_workspace_model_account(session, run)
 
-    ctx = RoutingContext.from_run(run)
-    target = evaluate_rules(rules, ctx)
-    if target is not None:
-        accounts = await _list_active_workspace_accounts(session, run.workspace_id)
-        for account in accounts:
-            if account.litellm_model == target:
-                logger.info(
-                    "routing_rule_matched",
-                    run_id=str(run.id),
-                    workspace_id=str(run.workspace_id),
-                    target=target,
-                    stage=ctx.stage,
-                )
-                return account
-        logger.warning(
-            "routing_rule_target_not_active",
+    # (1) Explicit founder rules win when one matches an active account.
+    if rules:
+        target = evaluate_rules(rules, ctx)
+        if target is not None:
+            accounts = await _list_active_workspace_accounts(session, run.workspace_id)
+            for account in accounts:
+                if account.litellm_model == target:
+                    logger.info(
+                        "routing_rule_matched",
+                        run_id=str(run.id),
+                        workspace_id=str(run.workspace_id),
+                        target=target,
+                        stage=ctx.stage,
+                    )
+                    await _record_routing_decision(
+                        session, run, source="explicit_rule", tier=None, target=target
+                    )
+                    return account
+            logger.warning(
+                "routing_rule_target_not_active",
+                run_id=str(run.id),
+                target=target,
+                hint="rule matched but no active account has this litellm_model",
+            )
+
+    # (2) Built-in tier default — §12 auto-routing when no explicit rule matched.
+    accounts = await _list_active_workspace_accounts(session, run.workspace_id)
+    tier = tier_from_context(ctx)
+    tier_account = select_tier_default_account(tier, accounts)
+    if tier_account is not None:
+        logger.info(
+            "routing_tier_default_applied",
             run_id=str(run.id),
-            target=target,
-            hint="rule matched but no active account has this litellm_model",
+            workspace_id=str(run.workspace_id),
+            tier=tier,
+            target=tier_account.litellm_model,
+            pipeline=ctx.pipeline,
         )
-    # No match / no default / target inactive → safe legacy fallback.
+        await _record_routing_decision(
+            session,
+            run,
+            source="tier_default",
+            tier=tier,
+            target=tier_account.litellm_model,
+        )
+        return tier_account
+
+    # (3) Safe legacy fallback (lone active account, else founder Decision).
     return await resolve_workspace_model_account(session, run)
+
+
+async def _record_routing_decision(
+    session: AsyncSession,
+    run: ExecutionRun,
+    *,
+    source: str,
+    tier: str | None,
+    target: str,
+) -> None:
+    """Record the routing decision on the run's observability stream so the
+    resolved tier + target are glass-box. Soft-fail: an activity hiccup must
+    never break routing (resolution already succeeded)."""
+    import uuid as _uuid  # noqa: PLC0415
+
+    from backend.execution.db import ExecutionRunActivity  # noqa: PLC0415
+
+    try:
+        session.add(
+            ExecutionRunActivity(
+                id=_uuid.uuid4(),
+                run_id=run.id,
+                workspace_id=run.workspace_id,
+                activity_type="routing_decision",
+                payload={"source": source, "tier": tier, "target": target},
+            )
+        )
+        await session.flush()
+    except Exception:  # noqa: BLE001 — observability must never break routing
+        logger.warning("routing_decision_activity_failed", run_id=str(run.id), exc_info=True)
 
 
 __all__ = [
