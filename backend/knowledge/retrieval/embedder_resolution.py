@@ -1,39 +1,40 @@
-"""Resolve a workspace/account's note Embedder from its gateway config (G5).
+"""Resolve the knowledge-note Embedder from DEPLOYMENT settings (G6).
 
-Both the consumption seam (the run worker's retriever) and the population seam
-(the settle worker) need a :class:`~backend.knowledge.retrieval.embedder_adapter.GatewayEmbedder`
-for a given workspace + account. This shared resolver reads the account's
-per-account embedding config (``account_embedding_settings`` via
-:class:`~backend.gateway.embedding.repository.EmbeddingSettingsRepository`) and
-builds the litellm-backed service, or yields a disabled embedder when nothing is
-configured — so semantic search is a clean no-op rather than an error.
+The pgvector note index is DERIVED from the Markdown source-of-truth (proposal
+§5.4), so it must populate automatically — not be opted into per workspace. The
+embedding MODEL is therefore a deployment choice (``settings.knowledge_embedding_model``),
+not the gateway's per-account intent-routing config. Both seams — the settle-time
+population hook and the run-time retriever — resolve their embedder from here, so
+every settled note is embedded against the same model the queries use.
+
+Disabled (``GatewayEmbedder(None)``) when ``knowledge_embedding_model`` is empty:
+semantic search stays a clean no-op, canon/decision/rejection retrieval intact.
 """
 
 from __future__ import annotations
 
-import uuid
-
-from sqlalchemy.ext.asyncio import AsyncSession
-
-from backend.gateway.embedding.provider import build_provider
-from backend.gateway.embedding.repository import EmbeddingSettingsRepository
+from backend.config import Settings
+from backend.gateway.embedding.provider import LiteLLMEmbeddingProvider
 from backend.gateway.embedding.service import EmbeddingService
+from backend.gateway.embedding.settings import EmbeddingSettings
 from backend.knowledge.retrieval.embedder_adapter import GatewayEmbedder
 
 
-async def resolve_embedder(
-    session: AsyncSession, *, workspace_id: uuid.UUID, account_id: uuid.UUID
-) -> GatewayEmbedder:
-    """The note embedder for ``(workspace_id, account_id)``; disabled when the
-    account has no embedding model configured. Never raises — a missing/odd
-    config disables embedding (the consumers treat a disabled embedder as
-    no-op)."""
-    settings = await EmbeddingSettingsRepository(session).get(
-        workspace_id=workspace_id, account_id=account_id
+def resolve_knowledge_embedder(settings: Settings) -> GatewayEmbedder:
+    """The deployment's knowledge embedder; disabled when no model is configured.
+
+    Pure (no DB / no per-account lookup): the model is a deployment knob, the
+    note data is workspace-scoped at the storage layer
+    (:class:`~backend.knowledge.retrieval.storage.pg.PgNoteVectorBackend`)."""
+    model = (settings.knowledge_embedding_model or "").strip()
+    if not model:
+        return GatewayEmbedder(None)
+    embedding_settings = EmbeddingSettings(
+        model=model,
+        api_base=settings.knowledge_embedding_api_base,
+        timeout=settings.knowledge_embedding_timeout_s,
     )
-    provider = build_provider(settings)
-    service = EmbeddingService(provider) if provider is not None else None
-    return GatewayEmbedder(service)
+    return GatewayEmbedder(EmbeddingService(LiteLLMEmbeddingProvider(embedding_settings)))
 
 
-__all__ = ["resolve_embedder"]
+__all__ = ["resolve_knowledge_embedder"]
