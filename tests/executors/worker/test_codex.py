@@ -158,6 +158,19 @@ async def test_command_includes_exec_and_json(monkeypatch: pytest.MonkeyPatch) -
     assert "gpt-5" in argv
 
 
+async def test_command_includes_skip_git_repo_check(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The worker runs each task in a fresh, EMPTY temp dir (never a git repo and
+    # not in codex's trusted-projects list). Without --skip-git-repo-check the
+    # CLI refuses with "Not inside a trusted directory" and writes nothing, so
+    # the flag must always be passed.
+    proc = _FakeProcess(stdout_lines=[_agent_message_line("x")])
+    calls = _patch_subprocess(monkeypatch, proc)
+
+    await _drain(CodexExecutor().execute("p", {"workspace_dir": "."}))
+
+    assert "--skip-git-repo-check" in calls[0]
+
+
 # ── Failure paths ────────────────────────────────────────────────────────────
 
 
