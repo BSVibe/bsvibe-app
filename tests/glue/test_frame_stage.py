@@ -264,6 +264,131 @@ async def test_llm_knowledge_only_with_concrete_artifact_coerced_to_agent_loop(
     assert framed.path_classification == "agent_loop"
 
 
+# --------------------------------------------------------------------------
+# D1 — the LLM judges the pipeline by complexity; the keyword rule is fallback
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_llm_pipeline_single_overrides_keyword_build_match(tmp_path: Path) -> None:
+    """D1 regression fix (prod dogfood 2026-05-28 no-op merge): a trivial build
+    request whose text contains a ``_BUILD_INTENT_WORD`` ("endpoint") would be
+    keyword-derived to ``design_then_impl`` — wrongly giving a 3-line heartbeat
+    a design stage. When the LLM judges the scope and returns ``single``, that
+    judgment OVERRIDES the keyword match."""
+    loader = SkillLoader(tmp_path)
+    loader.load_all()
+    llm = _StubFrameLlm(
+        {
+            "framed_intent": "Add a 3-line health endpoint.",
+            "skill_match": None,
+            "artifact_type_hint": "code",
+            "path_classification": "agent_loop",
+            "pipeline": "single",
+            "pipeline_reason": "trivial focused change, no design pass needed",
+        }
+    )
+    framed = await FrameStage().frame(
+        request=_request({"text": "add a 3-line health endpoint"}),
+        config=FrameConfig(skill_loader=loader, llm=llm),
+    )
+    # The keyword rule would have returned design_then_impl ("endpoint" + "add"
+    # — well, "endpoint" alone matches). The LLM's complexity judgment wins.
+    assert framed.pipeline == "single"
+
+
+@pytest.mark.asyncio
+async def test_llm_pipeline_design_then_impl_for_substantial_work(tmp_path: Path) -> None:
+    """D1: a substantial multi-part build, with the LLM judging it benefits from
+    a design pass, yields ``design_then_impl``."""
+    loader = SkillLoader(tmp_path)
+    loader.load_all()
+    llm = _StubFrameLlm(
+        {
+            "framed_intent": "Build a multi-service auth system with SSO and RBAC.",
+            "skill_match": None,
+            "artifact_type_hint": "code",
+            "path_classification": "agent_loop",
+            "pipeline": "design_then_impl",
+            "pipeline_reason": "multi-service, cross-cutting — needs a design pass",
+        }
+    )
+    framed = await FrameStage().frame(
+        request=_request({"text": "build a multi-service auth system with SSO and RBAC"}),
+        config=FrameConfig(skill_loader=loader, llm=llm),
+    )
+    assert framed.pipeline == "design_then_impl"
+
+
+@pytest.mark.asyncio
+async def test_llm_invalid_pipeline_falls_back_to_keyword(tmp_path: Path) -> None:
+    """D1 precedence: a hallucinated/invalid ``pipeline`` value is never trusted —
+    the frame falls back to ``_derive_pipeline`` (the keyword rule). Here the
+    text "build an auth service" + code artifact keyword-derives to
+    ``design_then_impl``, so the fallback must reproduce that."""
+    loader = SkillLoader(tmp_path)
+    loader.load_all()
+    llm = _StubFrameLlm(
+        {
+            "framed_intent": "Build an auth service.",
+            "skill_match": None,
+            "artifact_type_hint": "code",
+            "path_classification": "agent_loop",
+            "pipeline": "ship_it_now",  # not a valid PipelineKind
+        }
+    )
+    framed = await FrameStage().frame(
+        request=_request({"text": "build an auth service"}),
+        config=FrameConfig(skill_loader=loader, llm=llm),
+    )
+    assert framed.pipeline == "design_then_impl"
+
+
+@pytest.mark.asyncio
+async def test_llm_missing_pipeline_falls_back_to_keyword(tmp_path: Path) -> None:
+    """D1 precedence: when the LLM omits ``pipeline`` entirely, the keyword rule
+    runs (unchanged behaviour). A small code tweak stays ``single``."""
+    loader = SkillLoader(tmp_path)
+    loader.load_all()
+    llm = _StubFrameLlm(
+        {
+            "framed_intent": "Fix the typo in the error message.",
+            "skill_match": None,
+            "artifact_type_hint": "code",
+            "path_classification": "agent_loop",
+        }
+    )
+    framed = await FrameStage().frame(
+        request=_request({"text": "fix the typo"}),
+        config=FrameConfig(skill_loader=loader, llm=llm),
+    )
+    assert framed.pipeline == "single"
+
+
+@pytest.mark.asyncio
+async def test_llm_pipeline_coherence_guard_pure_answer_is_single(tmp_path: Path) -> None:
+    """D1 coherence guard: a pure-answer ask (no WORK artifact) is always
+    ``single``, even if the LLM hallucinates ``design_then_impl`` — a
+    single/design distinction only makes sense for a thing to PRODUCE."""
+    loader = SkillLoader(tmp_path)
+    loader.load_all()
+    llm = _StubFrameLlm(
+        {
+            "framed_intent": "What is our deployment process?",
+            "skill_match": None,
+            "artifact_type_hint": None,
+            "path_classification": "knowledge_only",
+            "pipeline": "design_then_impl",  # incoherent for a pure answer
+        }
+    )
+    framed = await FrameStage().frame(
+        request=_request({"text": "what is our deploy process?"}),
+        config=FrameConfig(skill_loader=loader, llm=llm),
+    )
+    assert framed.artifact_type_hint is None
+    assert framed.pipeline == "single"
+
+
 @pytest.mark.asyncio
 async def test_llm_framing_rejects_hallucinated_skill(tmp_path: Path) -> None:
     """An LLM that names a skill not in the catalog is ignored (no false match)."""
