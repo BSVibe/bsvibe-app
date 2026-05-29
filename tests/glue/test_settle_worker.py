@@ -94,6 +94,52 @@ def _written_notes(vault_root, region: str, workspace_id: uuid.UUID) -> list:
     return list(ws_dir.rglob("*.md")) if ws_dir.exists() else []
 
 
+async def test_settle_worker_calls_embed_hook_per_absorbed_note(sf, tmp_path) -> None:
+    """G5b: when an embed hook is wired, the worker invokes it once per absorbed
+    settlement with the written note_ref, so note_embeddings get populated."""
+    ws = uuid.uuid4()
+    await _seed_settle_activity(sf, workspace_id=ws, summary="wired the cache")
+
+    calls: list[tuple[str, str]] = []
+
+    async def _hook(settlement, node_ref: str) -> None:
+        calls.append((settlement.summary, node_ref))
+
+    worker = SettleWorker(
+        session_factory=sf,
+        sink=KnowledgeSettleSink(vault_root=tmp_path),
+        config=SettleWorkerConfig(batch_size=10, poll_interval_s=0.01, default_region="us-1"),
+        embed_hook=_hook,
+    )
+    processed = await worker.drain_once()
+
+    assert processed == 1
+    assert len(calls) == 1
+    summary, node_ref = calls[0]
+    assert summary == "wired the cache"
+    assert node_ref  # the written note path was handed to the hook
+
+
+async def test_settle_worker_embed_hook_failure_is_soft(sf, tmp_path) -> None:
+    """A failing embed hook must NOT break the drain — the note is still absorbed
+    + drained (the settle SoT is independent of embedding population)."""
+    ws = uuid.uuid4()
+    await _seed_settle_activity(sf, workspace_id=ws, summary="wired the cache")
+
+    async def _boom(settlement, node_ref: str) -> None:
+        raise RuntimeError("embedding provider down")
+
+    worker = SettleWorker(
+        session_factory=sf,
+        sink=KnowledgeSettleSink(vault_root=tmp_path),
+        config=SettleWorkerConfig(batch_size=10, poll_interval_s=0.01, default_region="us-1"),
+        embed_hook=_boom,
+    )
+    assert await worker.drain_once() == 1
+    async with sf() as s:
+        assert len((await s.execute(select(SettleDrainRow))).scalars().all()) == 1
+
+
 async def test_settle_worker_writes_observation_to_bsage(sf, tmp_path) -> None:
     ws = uuid.uuid4()
     activity_id = await _seed_settle_activity(sf, workspace_id=ws, summary="wired the cache")
