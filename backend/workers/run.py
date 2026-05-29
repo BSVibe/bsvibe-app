@@ -388,10 +388,10 @@ def build_agent_execution_deps(
     async def _retriever_for(
         session: AsyncSession,
         workspace_id: uuid.UUID,
-        account: ModelAccount | None,
     ) -> CanonRetriever:
-        """The workspace-scoped BSage canon retriever (B3 / RC-2 fix), now with
-        G5 semantic note search folded in when the account has an embedding model.
+        """The workspace-scoped BSage canon retriever (B3 / RC-2 fix), with G5
+        semantic note search folded in when the deployment configures a knowledge
+        embedding model.
 
         Built per run from :class:`KnowledgeFactory` rooted at the SAME
         ``<vault_root>/<region>/<workspace_id>/`` boundary the settle/promotion
@@ -399,12 +399,12 @@ def build_agent_execution_deps(
         canonical patterns. An empty-knowledge workspace yields ``[]`` and the
         retriever never raises into the verify path.
 
-        G5: when the run's account has an embedding model configured, a
-        :class:`SemanticNoteRetriever` (pgvector ``note_embeddings`` search) is
-        composed in alongside the canon/decision/rejection sources, so verify +
-        seed also see the semantically-nearest notes. With no embedding config
-        (or an executor account), the base canon-only retriever is returned —
-        identical to pre-G5 behaviour."""
+        G6: the pgvector note index is the DERIVED search index of the Markdown
+        SoT (proposal §5.4), so semantic search is on whenever
+        ``settings.knowledge_embedding_model`` is set — a deployment knob, NOT a
+        per-account opt-in. When unset, the base canon-only retriever is
+        returned (pre-G5 behaviour). Postgres-only; SemanticNoteRetriever
+        degrades to [] on a non-PG dev DB."""
         from backend.knowledge.factory import (  # noqa: PLC0415 — lazy heavy import
             KnowledgeFactory,
         )
@@ -412,7 +412,7 @@ def build_agent_execution_deps(
             CompositeCanonRetriever,
         )
         from backend.knowledge.retrieval.embedder_resolution import (  # noqa: PLC0415
-            resolve_embedder,
+            resolve_knowledge_embedder,
         )
         from backend.knowledge.retrieval.semantic_note_retriever import (  # noqa: PLC0415
             SemanticNoteRetriever,
@@ -424,13 +424,7 @@ def build_agent_execution_deps(
             workspace_id=str(workspace_id),
             vault_root=knowledge_vault_root,
         ).retriever()
-        # Semantic search is opt-in per account + Postgres-only (pgvector). No
-        # embedding model, an executor account, or a non-PG dev DB → canon-only.
-        if account is None or account.provider == "executor":
-            return base
-        embedder = await resolve_embedder(
-            session, workspace_id=workspace_id, account_id=account.account_id
-        )
+        embedder = resolve_knowledge_embedder(settings)
         if not embedder.enabled or embedder.model is None:
             return base
         semantic = SemanticNoteRetriever(
@@ -474,7 +468,7 @@ def build_agent_execution_deps(
         account = await resolve_route(session, run)
         if account is None:
             return None
-        retriever = await _retriever_for(session, run.workspace_id, account)
+        retriever = await _retriever_for(session, run.workspace_id)
         # B9a — CONSUME the frame: the worker recorded ``run.payload["frame"]``
         # (skill match by description) BEFORE this factory runs, so read the
         # matched skill + its description here and thread it into the native loop
@@ -809,21 +803,22 @@ def build_note_embed_hook(
     session_factory: async_sessionmaker[AsyncSession],
     settings: Settings | None = None,
 ) -> NoteEmbedHook:
-    """Production :class:`NoteEmbedHook` for the settle sink (G5b).
+    """Production :class:`NoteEmbedHook` for the settle sink (G5b + G6).
 
-    Per absorbed note, resolves the workspace's single active (non-executor)
-    account + its embedding model, embeds the note summary, and upserts the
-    vector into ``note_embeddings`` (pgvector) keyed by the note's vault-relative
-    path — so :class:`SemanticNoteRetriever` (G5a) can find it. Opens its OWN
-    session + commit (decoupled from the settle transaction). No-op when the
-    workspace has no single active account or no embedding model configured —
-    semantic search simply stays empty rather than erroring."""
+    Per absorbed note, embeds the note summary with the DEPLOYMENT knowledge
+    embedder (``settings.knowledge_embedding_model`` — G6, not per-account) and
+    upserts the vector into ``note_embeddings`` (pgvector) keyed by the note's
+    vault-relative path, so :class:`SemanticNoteRetriever` can find it — the
+    pgvector index is the DERIVED index of the Markdown SoT (proposal §5.4).
+    Opens its OWN session + commit (decoupled from the settle transaction).
+    No-op when no knowledge embedding model is configured — the index simply
+    isn't built rather than erroring."""
     settings = settings or get_settings()
     vault_root = Path(settings.knowledge_vault_root)
 
     async def _hook(settlement: Settlement, node_ref: str) -> None:
         from backend.knowledge.retrieval.embedder_resolution import (  # noqa: PLC0415
-            resolve_embedder,
+            resolve_knowledge_embedder,
         )
         from backend.knowledge.retrieval.storage.pg import (  # noqa: PLC0415
             PgNoteVectorBackend,
@@ -832,22 +827,16 @@ def build_note_embed_hook(
         text = settlement.summary.strip()
         if not text:
             return
+        embedder = resolve_knowledge_embedder(settings)
+        if not embedder.enabled or embedder.model is None:
+            return
+        vector = await embedder.embed(text)
+        if not vector:
+            return
+        note_path = _relative_note_path(
+            node_ref, vault_root, settlement.region, settlement.workspace_id
+        )
         async with session_factory() as session:
-            accounts = await _list_active_workspace_accounts(session, settlement.workspace_id)
-            account = _single_native_account(accounts)
-            if account is None:
-                return
-            embedder = await resolve_embedder(
-                session, workspace_id=settlement.workspace_id, account_id=account.account_id
-            )
-            if not embedder.enabled or embedder.model is None:
-                return
-            vector = await embedder.embed(text)
-            if not vector:
-                return
-            note_path = _relative_note_path(
-                node_ref, vault_root, settlement.region, settlement.workspace_id
-            )
             backend = PgNoteVectorBackend(
                 session,
                 workspace_id=settlement.workspace_id,

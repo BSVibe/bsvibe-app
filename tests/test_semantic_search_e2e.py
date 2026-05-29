@@ -69,6 +69,21 @@ def _embedder() -> GatewayEmbedder:
     return GatewayEmbedder(EmbeddingService(LiteLLMEmbeddingProvider(settings)))
 
 
+def _deployment_settings(tmp_vault: str):
+    """App Settings with the knowledge embedding model configured at the
+    DEPLOYMENT level (G6) — the derived-index switch the prod hook reads."""
+    from backend.config import get_settings
+
+    return get_settings().model_copy(
+        update={
+            "knowledge_embedding_model": _EMBED_MODEL,
+            "knowledge_embedding_api_base": _OLLAMA_BASE,
+            "knowledge_embedding_timeout_s": 30.0,
+            "knowledge_vault_root": tmp_vault,
+        }
+    )
+
+
 async def test_semantic_note_search_e2e() -> None:
     url = await _pg_url()
     if url is None:
@@ -131,4 +146,82 @@ async def test_semantic_note_search_e2e() -> None:
             )
             await session.commit()
     finally:
+        await engine.dispose()
+
+
+async def test_settle_hook_auto_populates_pgvector_index_e2e(tmp_path) -> None:
+    """G6 derived-index: the PROD settle hook (build_note_embed_hook), with only
+    a DEPLOYMENT-level knowledge embedding model set (no per-account opt-in),
+    embeds a settled note into note_embeddings — and the same-settings retriever
+    finds it. Proves search auto-accumulates in pgvector alongside the md SoT."""
+    import uuid as _uuid
+    from datetime import UTC, datetime
+
+    from backend.knowledge.retrieval.embedder_resolution import resolve_knowledge_embedder
+    from backend.workers.run import build_note_embed_hook
+    from backend.workers.settle_worker import Settlement
+
+    url = await _pg_url()
+    if url is None:
+        pytest.skip("Postgres (with note_embeddings) not reachable — set BSVIBE_DATABASE_URL")
+    if not _ollama_up():
+        pytest.skip(f"Ollama not reachable at {_OLLAMA_BASE}")
+
+    settings = _deployment_settings(str(tmp_path / "vault"))
+    workspace_id = _uuid.uuid4()
+    engine = create_async_engine(url, future=True)
+    sf = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        hook = build_note_embed_hook(session_factory=sf, settings=settings)
+        # A settled note (the hook embeds the summary; node_ref keys the row).
+        node_ref = f"{settings.knowledge_vault_root}/us-1/{workspace_id}/garden/seedling/pay.md"
+        settlement = Settlement(
+            workspace_id=workspace_id,
+            region="us-1",
+            run_id=_uuid.uuid4(),
+            activity_id=_uuid.uuid4(),
+            verified=True,
+            summary="never ship a payment or billing change without a regression test",
+            occurred_at=datetime.now(tz=UTC),
+        )
+        await hook(settlement, node_ref)
+
+        # The note auto-landed in the pgvector index (derived from the md SoT).
+        async with sf() as session:
+            row = (
+                (
+                    await session.execute(
+                        text(
+                            "SELECT note_path, embedding_model, dimension FROM note_embeddings "
+                            "WHERE workspace_id = :ws"
+                        ),
+                        {"ws": workspace_id},
+                    )
+                )
+                .mappings()
+                .all()
+            )
+        assert len(row) == 1, row
+        assert row[0]["note_path"] == "garden/seedling/pay.md"
+        assert row[0]["embedding_model"] == _EMBED_MODEL
+        assert row[0]["dimension"] > 0
+
+        # And it's findable by the same-settings retriever (the consumption seam).
+        embedder = resolve_knowledge_embedder(settings)
+        async with sf() as session:
+            backend = PgNoteVectorBackend(
+                session, workspace_id=workspace_id, embedding_model=_EMBED_MODEL
+            )
+            retriever = SemanticNoteRetriever(embedder, backend, top_k=3, min_similarity=0.3)
+            hits = await retriever.retrieve_for_signals(
+                "we're changing the billing settings page — anything to watch for?"
+            )
+        assert any("garden/seedling/pay.md" in h for h in hits), hits
+    finally:
+        async with sf() as session:
+            await session.execute(
+                text("DELETE FROM note_embeddings WHERE workspace_id = :ws"),
+                {"ws": workspace_id},
+            )
+            await session.commit()
         await engine.dispose()

@@ -85,6 +85,19 @@ class Settings(BaseSettings):
     knowledge_vault_root: str = "var/vault"
     knowledge_default_region: str = "us-1"
 
+    # Knowledge semantic-search embedding (the pgvector index DERIVED from the
+    # Markdown source-of-truth, proposal §5.4). This is a DEPLOYMENT-level model
+    # — set it once and every settled note is embedded into ``note_embeddings``
+    # automatically, and queries embed against the same model. Empty disables
+    # semantic search (the index simply isn't built; canon/decision/rejection
+    # retrieval is unaffected). Distinct from the gateway's PER-ACCOUNT intent-
+    # routing embedding config — knowledge search is not opt-in per workspace.
+    # Example: ``ollama/bge-m3`` with ``knowledge_embedding_api_base`` pointing
+    # at the local Ollama.
+    knowledge_embedding_model: str = ""
+    knowledge_embedding_api_base: str | None = None
+    knowledge_embedding_timeout_s: float = 30.0
+
     # Skills settings (backend.skills) — per-workspace skill directory.
     # Layout: ``<skills_root>/<workspace_id>/*.md`` per Workflow §6 #5.
     skills_root: str = "var/skills"

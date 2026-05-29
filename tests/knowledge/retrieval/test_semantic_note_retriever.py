@@ -127,20 +127,30 @@ async def test_never_raises_on_backend_failure() -> None:
 # --- resolver ---------------------------------------------------------------
 
 
-async def test_resolve_embedder_disabled_without_account_settings() -> None:
-    """No ``account_embedding_settings`` row → a disabled embedder (semantic
-    search degrades to no-op rather than erroring)."""
-    import uuid
+async def test_resolve_knowledge_embedder_disabled_without_model() -> None:
+    """No ``knowledge_embedding_model`` → a disabled embedder (the derived index
+    simply isn't built; semantic search degrades to no-op rather than erroring)."""
+    from backend.config import get_settings
+    from backend.knowledge.retrieval.embedder_resolution import resolve_knowledge_embedder
 
-    from sqlalchemy.ext.asyncio import async_sessionmaker
-
-    from backend.gateway.embedding.db import GatewayEmbeddingBase
-    from backend.knowledge.retrieval.embedder_resolution import resolve_embedder
-    from tests._support import db_engine
-
-    async with db_engine(GatewayEmbeddingBase) as (engine, _is_pg):
-        sf = async_sessionmaker(engine, expire_on_commit=False)
-        async with sf() as s:
-            embedder = await resolve_embedder(s, workspace_id=uuid.uuid4(), account_id=uuid.uuid4())
+    settings = get_settings().model_copy(update={"knowledge_embedding_model": ""})
+    embedder = resolve_knowledge_embedder(settings)
     assert embedder.enabled is False
     assert embedder.model is None
+
+
+async def test_resolve_knowledge_embedder_enabled_with_deployment_model() -> None:
+    """A deployment-configured model → an enabled embedder (no per-account opt-in,
+    no DB) — the pgvector index derives from the Markdown SoT automatically."""
+    from backend.config import get_settings
+    from backend.knowledge.retrieval.embedder_resolution import resolve_knowledge_embedder
+
+    settings = get_settings().model_copy(
+        update={
+            "knowledge_embedding_model": "ollama/bge-m3",
+            "knowledge_embedding_api_base": "http://localhost:11434",
+        }
+    )
+    embedder = resolve_knowledge_embedder(settings)
+    assert embedder.enabled is True
+    assert embedder.model == "ollama/bge-m3"
