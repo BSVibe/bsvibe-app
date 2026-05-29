@@ -1,5 +1,6 @@
 "use client";
 
+import { backendBaseUrl } from "@/lib/api/client";
 import type { Worker } from "@/lib/api/types";
 import { listWorkers, mintInstallToken, revokeWorker } from "@/lib/api/workers";
 import { useTranslations } from "next-intl";
@@ -96,7 +97,11 @@ export default function ExecutorWorkers() {
           <CopyField label={t("tokenLabel")} value={token} secret />
 
           <p className="worker-token__run-title">{t("runTitle")}</p>
-          <CopyField label={t("runCommandLabel")} value={t("runCommand", { token })} secret />
+          <CopyField
+            label={t("runCommandLabel")}
+            value={t("runCommand", { token, serverUrl: backendBaseUrl() })}
+            secret
+          />
           <p className="worker-token__hint">{t("runHint")}</p>
 
           <button type="button" className="worker-token__done" onClick={() => setToken(null)}>

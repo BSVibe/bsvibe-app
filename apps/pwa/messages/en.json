@@ -400,7 +400,7 @@
         "tokenLabel": "Install token",
         "runTitle": "Then run the worker on that machine:",
         "runCommandLabel": "Run command",
-        "runCommand": "BSVIBE_WORKER_INSTALL_TOKEN={token} python -m backend.executors.worker",
+        "runCommand": "BSVIBE_WORKER_SERVER_URL={serverUrl} BSVIBE_WORKER_INSTALL_TOKEN={token} python -m backend.executors.worker",
         "runHint": "Run it where your coding-agent CLIs are signed in. The worker registers itself with this token, then starts polling for work.",
         "done": "Done. I’ve copied it",
         "credentialsLabel": "New worker install token"

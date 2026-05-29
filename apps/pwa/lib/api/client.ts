@@ -16,6 +16,17 @@ import { clearSession, getSession } from "@/lib/auth/session";
  */
 const base = process.env.NEXT_PUBLIC_BACKEND_URL ?? "";
 
+/**
+ * The backend base URL as an ABSOLUTE url, for surfaces that must show the
+ * founder a copy-pasteable value (e.g. the executor-worker install command's
+ * `BSVIBE_WORKER_SERVER_URL`). Unlike `base` (which is "" so requests stay
+ * relative), this falls back to the prod URL so the snippet is never blank /
+ * pointed at the worker's localhost default.
+ */
+export function backendBaseUrl(): string {
+  return process.env.NEXT_PUBLIC_BACKEND_URL || "https://api.bsvibe.dev";
+}
+
 export class ApiError extends Error {
   readonly status: number;
 
