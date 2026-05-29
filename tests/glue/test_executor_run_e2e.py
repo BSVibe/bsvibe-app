@@ -177,6 +177,22 @@ async def _open_run(s: AsyncSession, *, workspace_id: uuid.UUID, text: str) -> u
     return run.id
 
 
+async def _open_run_with_payload(
+    s: AsyncSession, *, workspace_id: uuid.UUID, payload: dict[str, Any]
+) -> uuid.UUID:
+    run = ExecutionRun(
+        id=uuid.uuid4(),
+        workspace_id=workspace_id,
+        product_id=None,
+        request_id=uuid.uuid4(),
+        status=RunStatus.OPEN,
+        payload=payload,
+    )
+    s.add(run)
+    await s.flush()
+    return run.id
+
+
 # --------------------------------------------------------------------------
 # B2b verify-convergence doubles — a scripted sandbox + judge LLM + retriever
 # so the verified-PASS path can be exercised end-to-end through AgentRunner.
@@ -916,6 +932,165 @@ async def test_factory_wires_retriever_into_native_orchestrator(
             "added structured logging throughout\napp.py"
         )
         assert "Use structlog for structured logging" in patterns
+
+
+# --------------------------------------------------------------------------
+# D1b — the DESIGN stage of a design_then_impl pipeline must be TOLD to write a
+# spec, not finished code. The integration delta: drive a real design-stage run
+# through the production ExecutorOrchestrator dispatch and assert the dispatched
+# task's prompt carries the spec-only directive — while an impl-stage run's
+# prompt does NOT (it implements the spec). This is the no-op fix at the boundary
+# being changed: design produces a SPEC, impl implements it; they are distinct.
+# --------------------------------------------------------------------------
+
+
+async def _dispatched_task_prompt(
+    sf: async_sessionmaker[AsyncSession],
+    *,
+    workspace_id: uuid.UUID,
+    redis: Any,
+    worker_id: uuid.UUID,
+    run_id: uuid.UUID,
+    tmp_path: Path,
+) -> str:
+    """Drive ``run_id`` through the production ExecutorOrchestrator (via the real
+    factory) + a simulated worker, then return the prompt the orchestrator
+    dispatched for that run's task — the exact text the CLI engineer receives."""
+    deps = build_agent_execution_deps(redis_client=redis, settings=_short_timeout_settings())
+    async with sf() as orch_s:
+        run = await orch_s.get(ExecutionRun, run_id)
+        assert run is not None
+        orchestrator = await deps.orchestrator_factory(orch_s, run)
+        assert isinstance(orchestrator, ExecutorOrchestrator)
+        runner = AgentRunner(orch_s)
+        drive_task = asyncio.create_task(
+            runner.drive(run_id=run_id, orchestrator=orchestrator, workspace_dir=tmp_path)
+        )
+        worker_task = asyncio.create_task(
+            _simulate_worker_done(redis, worker_id=worker_id, sf=sf, output="done")
+        )
+        await drive_task
+        await worker_task
+        await orch_s.commit()
+
+    async with sf() as s:
+        task = (
+            await s.execute(
+                select(dispatch.ExecutorTaskRow).where(dispatch.ExecutorTaskRow.run_id == run_id)
+            )
+        ).scalar_one()
+        return task.prompt
+
+
+async def test_design_stage_dispatch_prompt_carries_spec_only_directive(
+    sf: async_sessionmaker[AsyncSession],
+    tmp_path: Path,
+) -> None:
+    from backend.executors.orchestrator import _DESIGN_SPEC_DIRECTIVE
+
+    workspace_id = uuid.uuid4()
+    redis = await _make_redis()
+    executor_type = "claude_code"
+    async with sf() as s:
+        worker = await _seed_worker(s, workspace_id=workspace_id, capabilities=[executor_type])
+        await _seed_executor_account(
+            s, workspace_id=workspace_id, worker_id=worker.id, executor_type=executor_type
+        )
+        # First run of a design_then_impl pipeline: no explicit stage → DESIGN.
+        run_id = await _open_run_with_payload(
+            s,
+            workspace_id=workspace_id,
+            payload={
+                "intent_text": "build a JSON-backed key/value store with a typed client",
+                "frame": {"pipeline": "design_then_impl"},
+            },
+        )
+        await s.commit()
+
+    prompt = await _dispatched_task_prompt(
+        sf,
+        workspace_id=workspace_id,
+        redis=redis,
+        worker_id=worker.id,
+        run_id=run_id,
+        tmp_path=tmp_path,
+    )
+    # The DESIGN run is told to spec, not build (the no-op root-cause fix).
+    assert _DESIGN_SPEC_DIRECTIVE in prompt
+    assert "key/value store" in prompt
+    await redis.aclose()
+
+
+async def test_impl_stage_dispatch_prompt_has_no_spec_only_directive(
+    sf: async_sessionmaker[AsyncSession],
+    tmp_path: Path,
+) -> None:
+    from backend.executors.orchestrator import _DESIGN_SPEC_DIRECTIVE
+
+    workspace_id = uuid.uuid4()
+    redis = await _make_redis()
+    executor_type = "claude_code"
+    async with sf() as s:
+        worker = await _seed_worker(s, workspace_id=workspace_id, capabilities=[executor_type])
+        await _seed_executor_account(
+            s, workspace_id=workspace_id, worker_id=worker.id, executor_type=executor_type
+        )
+        # The spawned IMPL run carries stage="impl" — it implements the spec.
+        run_id = await _open_run_with_payload(
+            s,
+            workspace_id=workspace_id,
+            payload={
+                "intent_text": "build a JSON-backed key/value store with a typed client",
+                "frame": {"pipeline": "design_then_impl"},
+                "stage": "impl",
+            },
+        )
+        await s.commit()
+
+    prompt = await _dispatched_task_prompt(
+        sf,
+        workspace_id=workspace_id,
+        redis=redis,
+        worker_id=worker.id,
+        run_id=run_id,
+        tmp_path=tmp_path,
+    )
+    # The IMPL run must NOT be told to spec — it builds.
+    assert _DESIGN_SPEC_DIRECTIVE not in prompt
+    await redis.aclose()
+
+
+async def test_single_pipeline_dispatch_prompt_has_no_spec_only_directive(
+    sf: async_sessionmaker[AsyncSession],
+    tmp_path: Path,
+) -> None:
+    from backend.executors.orchestrator import _DESIGN_SPEC_DIRECTIVE
+
+    workspace_id = uuid.uuid4()
+    redis = await _make_redis()
+    executor_type = "claude_code"
+    async with sf() as s:
+        worker = await _seed_worker(s, workspace_id=workspace_id, capabilities=[executor_type])
+        await _seed_executor_account(
+            s, workspace_id=workspace_id, worker_id=worker.id, executor_type=executor_type
+        )
+        run_id = await _open_run_with_payload(
+            s,
+            workspace_id=workspace_id,
+            payload={"intent_text": "ship the feature", "frame": {"pipeline": "single"}},
+        )
+        await s.commit()
+
+    prompt = await _dispatched_task_prompt(
+        sf,
+        workspace_id=workspace_id,
+        redis=redis,
+        worker_id=worker.id,
+        run_id=run_id,
+        tmp_path=tmp_path,
+    )
+    assert _DESIGN_SPEC_DIRECTIVE not in prompt
+    await redis.aclose()
 
 
 async def test_factory_retriever_empty_workspace_folds_nothing(

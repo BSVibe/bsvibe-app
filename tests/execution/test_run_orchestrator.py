@@ -802,6 +802,84 @@ async def test_no_suggested_skill_hint_when_unset(tmp_path: Path) -> None:
     assert "suggested skill" not in blob
 
 
+# --------------------------------------------------------------------------
+# D1b — the DESIGN stage of a design_then_impl pipeline must be told (on turn 1)
+# to write a SPEC, not finished code. The native loop seeds a spec-only
+# directive into the initial context when the run is the design stage; the
+# single + impl runs are unchanged.
+# --------------------------------------------------------------------------
+
+
+async def _make_run_with_payload(session: AsyncSession, *, payload: dict[str, Any]) -> ExecutionRun:
+    run = ExecutionRun(
+        id=uuid.uuid4(),
+        workspace_id=uuid.uuid4(),
+        product_id=None,
+        request_id=None,
+        status=RunStatus.RUNNING,
+        payload=payload,
+    )
+    session.add(run)
+    await session.flush()
+    return run
+
+
+async def _first_turn_blob(tmp_path: Path, payload: dict[str, Any]) -> str:
+    """Drive the native loop once for a run with ``payload`` and return the
+    flattened text of the messages the LLM saw on its first turn."""
+    llm = ScriptedLlm([LoopTurn(content="nothing to do", tool_calls=())])
+    async with memory_session() as session:
+        run = await _make_run_with_payload(session, payload=payload)
+        orch = RunOrchestrator(session=session, llm=llm, sandbox_manager=NoopSandboxManager())
+        await orch.run(run=run, workspace_dir=tmp_path)
+    return _all_message_text(llm.calls[0]["messages"])
+
+
+async def test_native_design_stage_seeds_spec_only_directive(tmp_path: Path) -> None:
+    from backend.execution.orchestrator import _DESIGN_SPEC_DIRECTIVE
+
+    # First run of a design_then_impl pipeline (no explicit stage) → DESIGN.
+    blob = await _first_turn_blob(
+        tmp_path,
+        {
+            "intent_text": "build a JSON-backed key/value store",
+            "frame": {"pipeline": "design_then_impl"},
+        },
+    )
+    assert _DESIGN_SPEC_DIRECTIVE in blob
+
+
+async def test_native_single_pipeline_has_no_spec_only_directive(tmp_path: Path) -> None:
+    from backend.execution.orchestrator import _DESIGN_SPEC_DIRECTIVE
+
+    blob = await _first_turn_blob(
+        tmp_path,
+        {"intent_text": "ship the feature", "frame": {"pipeline": "single"}},
+    )
+    assert _DESIGN_SPEC_DIRECTIVE not in blob
+
+
+async def test_native_impl_stage_has_no_spec_only_directive(tmp_path: Path) -> None:
+    from backend.execution.orchestrator import _DESIGN_SPEC_DIRECTIVE
+
+    blob = await _first_turn_blob(
+        tmp_path,
+        {
+            "intent_text": "build a JSON-backed key/value store",
+            "frame": {"pipeline": "design_then_impl"},
+            "stage": "impl",
+        },
+    )
+    assert _DESIGN_SPEC_DIRECTIVE not in blob
+
+
+async def test_native_no_frame_has_no_spec_only_directive(tmp_path: Path) -> None:
+    from backend.execution.orchestrator import _DESIGN_SPEC_DIRECTIVE
+
+    blob = await _first_turn_blob(tmp_path, {"intent_text": "some work"})
+    assert _DESIGN_SPEC_DIRECTIVE not in blob
+
+
 def test_loop_protocols_are_runtime_checkable() -> None:
     assert isinstance(ScriptedLlm([]), LoopLlm)
     assert isinstance(StubRetriever([]), CanonRetriever)

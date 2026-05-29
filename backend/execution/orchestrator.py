@@ -362,6 +362,44 @@ _SYSTEM_PROMPT = (
     "should both coexist?'). Never paste raw conflict markers to the founder."
 )
 
+# D1b — when a run is the DESIGN stage of a ``design_then_impl`` pipeline, it
+# must produce a SPECIFICATION (a concise markdown spec the impl stage
+# implements), NOT finished code. Before D1b the design run got only the generic
+# work prompt, so it built working code the impl stage regenerated — a no-op
+# merge (2026-05-28 dogfood). This directive, seeded into the loop's initial
+# context for a design-stage run, redirects it to spec. One concise instruction
+# block (respect the local-model generation budget). The ``single`` + ``impl``
+# runs never get it (impl IMPLEMENTS the spec). Kept byte-identical to the
+# executor path's directive so both prompt-assembly sites tell the design run
+# the same thing.
+_DESIGN_SPEC_DIRECTIVE = (
+    "THIS IS THE DESIGN STAGE. Write ONE concise markdown specification — do NOT "
+    "implement it and do NOT write working code; a later implementation stage "
+    "will. The spec MUST cover: Goal (what to build and why), "
+    "Interface/Contract (the public API, signatures, inputs/outputs), File "
+    "layout (the files to create and what each holds), and Acceptance criteria "
+    "(observable conditions that prove the implementation is correct). Keep it "
+    "tight and implementable; output only the spec."
+)
+
+
+def _is_design_stage(run: ExecutionRun) -> bool:
+    """D1b — True when this run is the DESIGN stage of a ``design_then_impl``
+    pipeline (so the loop is told to spec, not build).
+
+    Mirrors routing's ``_derive_stage`` + the executor path's ``_is_design_stage``:
+    the FIRST run of a ``design_then_impl`` pipeline carries no explicit
+    ``stage`` (the AgentRunner chains impl off the frame's pipeline signal), so
+    an unset / non-``impl`` stage on such a run IS the design stage. The spawned
+    impl run (``stage="impl"``) is excluded — it implements the spec. Any other
+    pipeline (``single`` / no frame) is excluded. Tolerant of an odd payload."""
+    payload = run.payload if isinstance(run.payload, dict) else {}
+    raw_frame = payload.get("frame")
+    frame = raw_frame if isinstance(raw_frame, dict) else {}
+    if frame.get("pipeline") != "design_then_impl":
+        return False
+    return payload.get("stage") != "impl"
+
 
 class RunOrchestrator:
     """Drives the plan → act → verify → iterate loop for one run."""
@@ -523,6 +561,18 @@ class RunOrchestrator:
                 "(consider them as you work):\n" + body
             ),
         }
+
+    def _design_directive_message(self, run: ExecutionRun) -> dict[str, Any] | None:
+        """D1b — when this run is the DESIGN stage of a ``design_then_impl``
+        pipeline, seed the spec-only directive so the loop writes a spec rather
+        than finished code (the impl stage implements it).
+
+        ``None`` for a single run, an impl-stage run, or a run with no frame
+        (loop unchanged)."""
+        if not _is_design_stage(run):
+            return None
+        logger.info("design_directive_seeded", run_id=str(run.id))
+        return {"role": "system", "content": _DESIGN_SPEC_DIRECTIVE}
 
     def _design_seed_message(self, run: ExecutionRun) -> dict[str, Any] | None:
         """P1-L2b — fold the prior design stage's spec into the loop-start
@@ -874,6 +924,14 @@ class RunOrchestrator:
         design_seed = self._design_seed_message(run)
         if design_seed is not None:
             messages.append(design_seed)
+        # D1b — when THIS run is the DESIGN stage of a design_then_impl pipeline,
+        # tell the loop to write a spec, not finished code (else design builds
+        # working code the impl stage regenerates → a no-op merge). Mutually
+        # exclusive with the impl-side design_seed above. None for single / impl
+        # / no-frame runs (loop unchanged).
+        design_directive = self._design_directive_message(run)
+        if design_directive is not None:
+            messages.append(design_directive)
         # B9a — the frame stage's matched skill, seeded as a first-invocation
         # hint. The frame chose this skill by matching the request against the
         # workspace skill catalog (by description); surfacing it here is how the

@@ -137,6 +137,26 @@ _EXECUTOR_SYSTEM_PROMPT = (
     "ask for permission to proceed."
 )
 
+# D1b — when a run is the DESIGN stage of a ``design_then_impl`` pipeline, it
+# must produce a SPECIFICATION (a concise markdown spec a later impl stage
+# implements), NOT finished code. Today the design run gets the generic work
+# prompt above with nothing telling it to spec rather than build, so it builds
+# working code the impl stage then regenerates — a no-op merge (2026-05-28
+# dogfood). This directive, prepended to the design run's work prompt, redirects
+# it to spec. One concise instruction block (respect the local-model generation
+# budget — not a heavy multi-section template). The ``single`` + ``impl`` work
+# prompts never receive it (impl IMPLEMENTS the spec, so telling it to spec
+# would reintroduce the no-op).
+_DESIGN_SPEC_DIRECTIVE = (
+    "THIS IS THE DESIGN STAGE. Write ONE concise markdown specification — do NOT "
+    "implement it and do NOT write working code; a later implementation stage "
+    "will. The spec MUST cover: Goal (what to build and why), "
+    "Interface/Contract (the public API, signatures, inputs/outputs), File "
+    "layout (the files to create and what each holds), and Acceptance criteria "
+    "(observable conditions that prove the implementation is correct). Keep it "
+    "tight and implementable; output only the spec."
+)
+
 
 def _intent_text(run: ExecutionRun, *, max_chars: int = 512) -> str:
     """The run's stable intent — the same input the native loop seeds with
@@ -178,6 +198,25 @@ def _executor_system_prompt() -> str:
     return _EXECUTOR_SYSTEM_PROMPT
 
 
+def _is_design_stage(run: ExecutionRun) -> bool:
+    """D1b — True when this run is the DESIGN stage of a ``design_then_impl``
+    pipeline (so its work prompt is told to spec, not build).
+
+    The condition mirrors routing's ``_derive_stage``: the FIRST run of a
+    ``design_then_impl`` pipeline never carries an explicit ``stage`` (the
+    AgentRunner chains impl off the frame's pipeline signal, not a stage
+    column), so an unset / non-``impl`` stage on a ``design_then_impl`` run IS
+    the design stage. The spawned implementation run carries ``stage="impl"`` and
+    is excluded — it implements the spec. Any other pipeline (``single`` / no
+    frame) is excluded. Tolerant of a missing/odd payload."""
+    payload = run.payload if isinstance(run.payload, dict) else {}
+    raw_frame = payload.get("frame")
+    frame = raw_frame if isinstance(raw_frame, dict) else {}
+    if frame.get("pipeline") != "design_then_impl":
+        return False
+    return payload.get("stage") != "impl"
+
+
 def _assemble_executor_prompt(
     run: ExecutionRun, *, statements: list[str], design_context: str | None = None
 ) -> str:
@@ -191,6 +230,11 @@ def _assemble_executor_prompt(
     :data:`_INTENT_MAX_CHARS`, canon to :data:`_KNOWLEDGE_MAX_RESULTS` × clamped
     statements (respect the local-model generation budget)."""
     parts: list[str] = [_intent_text(run, max_chars=_INTENT_MAX_CHARS)]
+
+    # D1b — a DESIGN-stage run is told to write a spec, not build. Prepended
+    # (after the intent) so it frames the whole task. Excludes single + impl.
+    if _is_design_stage(run):
+        parts.append(_DESIGN_SPEC_DIRECTIVE)
 
     if design_context:
         parts.append(design_context)
