@@ -70,12 +70,24 @@ def _executor_accounts(accounts: list[ModelAccount]) -> list[ModelAccount]:
     return [a for a in accounts if a.provider == _EXECUTOR_PROVIDER]
 
 
+def tier_class_accounts(tier: Tier, accounts: list[ModelAccount]) -> list[ModelAccount]:
+    """The active accounts of ``tier``'s desired class (local / executor).
+
+    The single source of truth for D2's class membership, reused by D4
+    (``select_within_class``) so within-class selection never re-derives the
+    class — the class is D2's job, picking within it is D4's."""
+    return _local_accounts(accounts) if tier == "simple" else _executor_accounts(accounts)
+
+
 def select_tier_default_account(tier: Tier, accounts: list[ModelAccount]) -> ModelAccount | None:
     """Pick the account for ``tier`` from the workspace's ACTIVE accounts.
 
-    Returns ``None`` (caller falls back to single-active) when the desired class
-    is absent or ambiguous — degrade loudly, never guess (gotcha #200)."""
-    class_accounts = _local_accounts(accounts) if tier == "simple" else _executor_accounts(accounts)
+    Returns ``None`` (caller falls back to D4's within-class policy, then
+    single-active) when the desired class is absent or has 2+ accounts — this
+    function still fires ONLY on EXACTLY ONE (degrade loudly, gotcha #200). The
+    2+ case is D4's (``select_within_class``); the caller (``resolve_route``)
+    tries it next so 2+ no longer stalls."""
+    class_accounts = tier_class_accounts(tier, accounts)
     if len(class_accounts) == 1:
         return class_accounts[0]
     desired = "local" if tier == "simple" else "executor"
@@ -84,9 +96,9 @@ def select_tier_default_account(tier: Tier, accounts: list[ModelAccount]) -> Mod
         tier=tier,
         desired_class=desired,
         candidate_count=len(class_accounts),
-        hint="zero or ambiguous accounts of the desired class — degrading to single-active",
+        hint="zero or 2+ accounts of the desired class — D4 within-class policy handles 2+",
     )
     return None
 
 
-__all__ = ["Tier", "select_tier_default_account", "tier_from_context"]
+__all__ = ["Tier", "select_tier_default_account", "tier_class_accounts", "tier_from_context"]

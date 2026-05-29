@@ -210,13 +210,19 @@ async def resolve_route(session: AsyncSession, run: ExecutionRun) -> ModelAccoun
        workspace's default rule) matches → return the active account whose
        ``litellm_model`` equals the rule's ``target``.
     2. **Built-in tier default** (D2 / §12) — no explicit rule matched: apply the
-       frame's complexity verdict. ``pipeline == "single"`` → the lone active
-       LOCAL account; ``pipeline == "design_then_impl"`` → the lone active
-       EXECUTOR (cloud/opencode) account. Fires ONLY when exactly one account of
-       the desired class is active (degrade loudly, gotcha #200).
-    3. **Legacy single-active fallback** — neither above resolved: the lone
-       active account, or a founder :class:`Decision` on zero/ambiguous. Never
-       crashes, never silently guesses.
+       frame's complexity verdict. ``pipeline == "single"`` → the active LOCAL
+       account; ``pipeline == "design_then_impl"`` → the active EXECUTOR
+       (cloud/opencode) account. D2 picks the CLASS; when EXACTLY ONE account of
+       that class is active it returns it directly.
+    2b. **D4 within-class policy** — the desired class has 2+ active accounts
+       (D2 returned ``None`` here, gotcha #200). Rather than stall on the legacy
+       resolver's ``ambiguous_model_account`` Decision, pick deterministically
+       within the class (:func:`~backend.routing.multi_account.select_within_class`
+       — highest ``routing_priority``, tiebroken by ``created_at`` then ``id``).
+       The class is D2's job, picking within it is D4's.
+    3. **Legacy single-active fallback** — none above resolved (no class match at
+       all, or zero accounts): the lone active account, or a founder
+       :class:`Decision` on zero. Never crashes, never silently guesses.
 
     The chosen tier + resolved target are recorded as an ``ExecutionRunActivity``
     (``activity_type="routing_decision"``) so routing is glass-box.
@@ -224,8 +230,10 @@ async def resolve_route(session: AsyncSession, run: ExecutionRun) -> ModelAccoun
     from sqlalchemy import select  # noqa: PLC0415
 
     from backend.routing.db import RunRoutingRuleRow  # noqa: PLC0415
+    from backend.routing.multi_account import select_within_class  # noqa: PLC0415
     from backend.routing.tier_default import (  # noqa: PLC0415
         select_tier_default_account,
+        tier_class_accounts,
         tier_from_context,
     )
     from backend.workers.run import (  # noqa: PLC0415 — avoid import cycle
@@ -290,6 +298,29 @@ async def resolve_route(session: AsyncSession, run: ExecutionRun) -> ModelAccoun
             target=tier_account.litellm_model,
         )
         return tier_account
+
+    # (2b) D4 — the desired class has 2+ active accounts: pick within it
+    # deterministically instead of stalling on the legacy ambiguous Decision.
+    class_candidates = tier_class_accounts(tier, accounts)
+    multi_account = select_within_class(class_candidates)
+    if multi_account is not None:
+        logger.info(
+            "routing_multi_account_applied",
+            run_id=str(run.id),
+            workspace_id=str(run.workspace_id),
+            tier=tier,
+            target=multi_account.litellm_model,
+            pipeline=ctx.pipeline,
+            candidate_count=len(class_candidates),
+        )
+        await _record_routing_decision(
+            session,
+            run,
+            source="tier_default_multi",
+            tier=tier,
+            target=multi_account.litellm_model,
+        )
+        return multi_account
 
     # (3) Safe legacy fallback (lone active account, else founder Decision).
     return await resolve_workspace_model_account(session, run)
