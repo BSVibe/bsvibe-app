@@ -77,6 +77,13 @@ def read_design_context(run: ExecutionRun, settings: Settings) -> str | None:
         if raw is None:
             logger.info("design_spec_unreadable", run_id=str(run.id), ref=ref)
             continue
+        # Skip binary artifacts (e.g. a ``.pyc`` the design stage produced by
+        # running its tests). Their NUL bytes are valid UTF-8 but ILLEGAL in a
+        # Postgres text column, so folding one into the impl prompt crashes the
+        # executor-task write. A NUL byte is the reliable binary signal.
+        if b"\x00" in raw:
+            logger.info("design_spec_skipped_binary", run_id=str(run.id), ref=ref)
+            continue
         text = raw[:_MAX_SPEC_BYTES].decode("utf-8", errors="replace")
         sections.append(f"### {ref}\n{text}")
 
