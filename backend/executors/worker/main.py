@@ -54,6 +54,18 @@ _MAX_CAPTURED_FILES = 100
 _MAX_FILE_BYTES = 256 * 1024
 
 
+#: Directory names + suffixes that are build/cache junk, never real artifacts.
+_JUNK_DIRS = frozenset({"__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache", ".git"})
+_JUNK_SUFFIXES = (".pyc", ".pyo")
+
+
+def _is_build_junk(rel: Path) -> bool:
+    """True for build/cache artifacts (any segment a junk dir, or a junk suffix)."""
+    if rel.suffix in _JUNK_SUFFIXES:
+        return True
+    return any(part in _JUNK_DIRS for part in rel.parts)
+
+
 def _collect_workspace_files(work_dir: str) -> list[dict[str, Any]]:
     """Walk ``work_dir`` and return the files the CLI produced (B1).
 
@@ -63,11 +75,20 @@ def _collect_workspace_files(work_dir: str) -> list[dict[str, Any]]:
     out of the work dir); files over :data:`_MAX_FILE_BYTES` are reported as a
     truncation marker with empty content. At most :data:`_MAX_CAPTURED_FILES`
     files are returned (deterministic sort so the cap is stable).
+
+    Build/cache junk is skipped (``__pycache__`` / ``.pytest_cache`` dirs, ``.pyc``
+    files): an agent that RUNS its tests leaves these behind, they aren't real
+    deliverables, and being binary they would poison a downstream text consumer
+    (the design→impl handoff prompt → a Postgres text column).
     """
     root = Path(work_dir)
     if not root.is_dir():
         return []
-    candidates = sorted(p for p in root.rglob("*") if p.is_file() and not p.is_symlink())
+    candidates = sorted(
+        p
+        for p in root.rglob("*")
+        if p.is_file() and not p.is_symlink() and not _is_build_junk(p.relative_to(root))
+    )
     collected: list[dict[str, Any]] = []
     for path in candidates[:_MAX_CAPTURED_FILES]:
         rel = path.relative_to(root).as_posix()
