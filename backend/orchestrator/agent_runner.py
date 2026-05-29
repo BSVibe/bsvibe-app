@@ -57,6 +57,19 @@ class AgentRunner:
         if existing is not None:
             return existing.id
 
+        # D3: propagate the triggering Resource binding onto the run payload so
+        # the DeliveryWorker can key the per-Run Safe Mode gate off the binding's
+        # ``output_mode`` (Synthesis §11 / Workflow §10.5). The Receive stage
+        # writes ``binding_id`` onto the Request payload for connector-inbound
+        # triggers (a founder-direct / unbound run simply has none, which falls
+        # back to the workspace-flag behavior). Forwarding it here is the single
+        # point where a Run "learns" its triggering Resource.
+        run_payload: dict[str, object] = {"request_id": str(request.id)}
+        req_payload = request.payload if isinstance(request.payload, dict) else {}
+        binding_id = req_payload.get("binding_id")
+        if isinstance(binding_id, str) and binding_id:
+            run_payload["binding_id"] = binding_id
+
         run = ExecutionRun(
             id=uuid.uuid4(),
             workspace_id=request.workspace_id,
@@ -67,7 +80,7 @@ class AgentRunner:
             product_id=request.product_id,
             request_id=request.id,
             status=RunStatus.OPEN,
-            payload={"request_id": str(request.id)},
+            payload=run_payload,
             created_at=datetime.now(tz=UTC),
             updated_at=datetime.now(tz=UTC),
         )

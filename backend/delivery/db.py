@@ -22,13 +22,25 @@ DeliveryBase = Base
 
 
 class SafeModeStatus(StrEnum):
-    """Per Workflow §10.5 — queue item lifecycle."""
+    """Per Workflow §10.5 — queue item lifecycle.
+
+    D3 extends the lifecycle with terminal post-decision states so a queue item
+    has a full ``pending → approved → delivered → archived → deleted`` path (and
+    ``pending → denied``/``expired`` for the non-deliver outcomes). ``delivered``
+    records that an approved item's outbound dispatch actually succeeded;
+    ``archived`` parks a settled item out of the active queue; ``deleted`` is the
+    soft-tombstone the retention sweep flips after the archive window.
+    """
 
     PENDING = "pending"
     APPROVED = "approved"
     DENIED = "denied"
     EXPIRED = "expired"
     EXTENDED = "extended"
+    # D3 — post-decision lifecycle.
+    DELIVERED = "delivered"
+    ARCHIVED = "archived"
+    DELETED = "deleted"
 
 
 class DeliveryEventRow(DeliveryBase):

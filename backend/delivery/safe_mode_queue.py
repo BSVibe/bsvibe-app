@@ -163,6 +163,68 @@ class SafeModeQueue:
             to_status=SafeModeStatus.DENIED,
         )
 
+    async def mark_delivered(
+        self,
+        *,
+        workspace_id: uuid.UUID,
+        item_id: uuid.UUID,
+    ) -> bool:
+        """Flip ``approved → delivered`` (D3 lifecycle).
+
+        Records that an approved item's outbound dispatch actually succeeded.
+        Returns False if not found / not in ``approved`` — the edge is enforced,
+        so an un-approved (pending) item cannot be marked delivered.
+        """
+        return await self._transition(
+            workspace_id=workspace_id,
+            item_id=item_id,
+            from_status=SafeModeStatus.APPROVED,
+            to_status=SafeModeStatus.DELIVERED,
+            stamp_decided=False,
+        )
+
+    async def archive(
+        self,
+        *,
+        workspace_id: uuid.UUID,
+        item_id: uuid.UUID,
+    ) -> bool:
+        """Park a settled item out of the active queue → ``archived`` (D3).
+
+        Allowed from any terminal-decision state (``delivered`` / ``denied`` /
+        ``expired``). Returns False if not found or still pending/approved.
+        """
+        row = await self._session.get(SafeModeQueueItemRow, item_id)
+        if row is None or row.workspace_id != workspace_id:
+            return False
+        if row.status not in (
+            SafeModeStatus.DELIVERED,
+            SafeModeStatus.DENIED,
+            SafeModeStatus.EXPIRED,
+        ):
+            return False
+        row.status = SafeModeStatus.ARCHIVED
+        await self._session.flush()
+        return True
+
+    async def mark_deleted(
+        self,
+        *,
+        workspace_id: uuid.UUID,
+        item_id: uuid.UUID,
+    ) -> bool:
+        """Soft-tombstone an archived item → ``deleted`` (D3 retention sweep).
+
+        Returns False if not found / not ``archived``.
+        """
+        return await self._transition(
+            workspace_id=workspace_id,
+            item_id=item_id,
+            from_status=SafeModeStatus.ARCHIVED,
+            to_status=SafeModeStatus.DELETED,
+            stamp_decided=False,
+        )
+
     async def extend(
         self,
         *,
@@ -217,6 +279,7 @@ class SafeModeQueue:
         item_id: uuid.UUID,
         from_status: SafeModeStatus,
         to_status: SafeModeStatus,
+        stamp_decided: bool = True,
     ) -> bool:
         row = await self._session.get(SafeModeQueueItemRow, item_id)
         if row is None or row.workspace_id != workspace_id:
@@ -224,7 +287,11 @@ class SafeModeQueue:
         if row.status != from_status:
             return False
         row.status = to_status
-        row.decided_at = datetime.now(tz=UTC)
+        # ``decided_at`` marks WHEN the founder settled the item (approve/deny);
+        # the post-decision lifecycle transitions (delivered/deleted) preserve
+        # that original timestamp rather than overwrite it.
+        if stamp_decided:
+            row.decided_at = datetime.now(tz=UTC)
         await self._session.flush()
         return True
 

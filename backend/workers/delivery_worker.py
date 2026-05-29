@@ -61,13 +61,69 @@ class PluginDispatchAdapter(Protocol):
 async def _workspace_safe_mode(session: AsyncSession, workspace_id: uuid.UUID) -> bool:
     """Return the workspace's Safe Mode flag.
 
-    Policy v1 (Workflow §10.5): the gate is purely ``workspace.safe_mode``.
-    Trigger-source is intentionally NOT threaded through — founder-direct
-    bypass is a later refinement. A missing workspace row defaults to direct
-    dispatch (``False``) so an unseeded test workspace behaves as today.
+    The workspace flag is the GLOBAL OVERRIDE (D3): when on, every delivery
+    queues regardless of the per-Resource ``output_mode``. A missing workspace
+    row defaults to ``False`` (no override) so an unseeded test workspace falls
+    through to the per-Run ``output_mode`` decision / today's direct dispatch.
     """
     row = await session.get(WorkspaceRow, workspace_id)
     return bool(row.safe_mode) if row is not None else False
+
+
+def resolve_output_mode_gate(*, workspace_safe_mode: bool, output_mode: str | None) -> bool:
+    """Decide whether a delivery must be QUEUED (``True``) or delivered (``False``).
+
+    D3 / Synthesis §11 / Workflow §10.5 — the Safe Mode decision is keyed to the
+    triggering Resource's ``output_mode`` and applied per-Run, with the workspace
+    flag as a global override. Precedence:
+
+    1. ``workspace_safe_mode`` (global override) — when on, ALWAYS queue.
+    2. else the Resource's ``output_mode``: ``"safe"`` → queue, ``"direct"`` →
+       deliver.
+    3. else (no resolved ``output_mode`` — e.g. a founder-direct run with no
+       binding) → deliver. With the override off this matches today's behavior,
+       so a Resource with no explicit ``output_mode`` does not regress.
+    """
+    if workspace_safe_mode:
+        return True
+    if output_mode == "safe":
+        return True
+    # "direct" or None (no binding / no explicit mode) → deliver directly.
+    return False
+
+
+async def _run_output_mode(session: AsyncSession, run_id: uuid.UUID | None) -> str | None:
+    """Resolve the triggering Resource's ``output_mode`` for a Run.
+
+    A Run learns its triggering Resource via ``ExecutionRun.payload["binding_id"]``
+    — written by the Receive stage onto the Request payload and propagated onto
+    the run payload by :meth:`AgentRunner.open_run`. We load the run, read that
+    ``binding_id``, and return the binding's ``output_mode`` (``"safe"`` /
+    ``"direct"``). Returns ``None`` when there is no run_id, no binding_id, a
+    malformed id, or no matching binding — every degraded case falls back to the
+    workspace-flag behavior in :func:`resolve_output_mode_gate` (no regression).
+    """
+    if run_id is None:
+        return None
+    # Local imports keep the cross-domain dependency off module import time.
+    from backend.execution.db import ExecutionRun  # noqa: PLC0415
+    from backend.workspaces.db import ResourceBindingRow  # noqa: PLC0415
+
+    run = await session.get(ExecutionRun, run_id)
+    if run is None:
+        return None
+    payload = run.payload if isinstance(run.payload, dict) else {}
+    binding_id_raw = payload.get("binding_id")
+    if not isinstance(binding_id_raw, str):
+        return None
+    try:
+        binding_id = uuid.UUID(binding_id_raw)
+    except ValueError:
+        return None
+    binding = await session.get(ResourceBindingRow, binding_id)
+    if binding is None:
+        return None
+    return binding.output_mode
 
 
 def extract_compensation_handles(
@@ -221,12 +277,17 @@ class DeliveryWorker(BaseWorker):
             processed = 0
             for row in rows:
                 try:
-                    if await _workspace_safe_mode(session, row.workspace_id):
-                        # Safe Mode ON — hold for founder approval instead of
-                        # dispatching. The /api/v1/safemode routes drive it the
-                        # rest of the way. ``run_id`` (B12a) threads the
-                        # originating run onto the queue item so the founder
-                        # can approve all of a run's accumulated partial
+                    workspace_safe_mode = await _workspace_safe_mode(session, row.workspace_id)
+                    output_mode = await _run_output_mode(session, row.run_id)
+                    if resolve_output_mode_gate(
+                        workspace_safe_mode=workspace_safe_mode, output_mode=output_mode
+                    ):
+                        # Gate says QUEUE — hold for founder approval instead of
+                        # dispatching (D3: per-Run output_mode == "safe", OR the
+                        # workspace global override is on). The /api/v1/safemode
+                        # routes drive it the rest of the way. ``run_id`` (B12a)
+                        # threads the originating run onto the queue item so the
+                        # founder can approve all of a run's accumulated partial
                         # Deliver events as ONE transaction (Workflow §1.2).
                         await queue.enqueue(
                             workspace_id=row.workspace_id,
@@ -269,4 +330,5 @@ __all__ = [
     "DeliveryWorkerConfig",
     "PluginDispatchAdapter",
     "dispatch_delivery",
+    "resolve_output_mode_gate",
 ]
