@@ -32,6 +32,7 @@ import pytest_asyncio
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from backend.accounts.models import ModelAccount
 from backend.accounts.schemas import ModelAccountCreate
 from backend.accounts.service import ModelAccountService
 from backend.api.deps import (
@@ -370,7 +371,7 @@ async def test_zero_active_accounts_creates_decision_and_run_stays_running(
         assert (await s.execute(select(DeliveryEventRow))).first() is None
 
 
-async def test_ambiguous_active_accounts_creates_decision(
+async def test_two_active_same_class_accounts_resolve_via_d4_no_decision(
     client: httpx.AsyncClient,
     sf: async_sessionmaker[AsyncSession],
     workspace_id: uuid.UUID,
@@ -379,27 +380,47 @@ async def test_ambiguous_active_accounts_creates_decision(
     kms_key: None,
     tmp_path: Path,
 ) -> None:
-    # TWO active model accounts → ambiguous → Decision, no silent guess.
+    """D4 delta — TWO active same-class accounts no longer STALL.
+
+    Pre-D4 this raised an ``ambiguous_model_account`` :class:`Decision` (a stall
+    on 2+). D4 makes :func:`resolve_route` pick deterministically within the
+    class (highest ``routing_priority``, tiebroken by ``created_at`` then ``id``)
+    — a SPECIFIC account, never an ambiguous Decision."""
+    from backend.routing.engine import resolve_route  # noqa: PLC0415
+    from backend.routing.multi_account import ROUTING_PRIORITY_KEY  # noqa: PLC0415
+
+    # Two active local (ollama) accounts; "b" carries the higher priority.
     await _seed_active_account(sf, workspace_id=workspace_id, account_id=account_id, label="a")
     await _seed_active_account(sf, workspace_id=workspace_id, account_id=uuid.uuid4(), label="b")
-    resp = await client.post("/api/v1/messages", json={"text": "ambiguous run"})
+    resp = await client.post("/api/v1/messages", json={"text": "two accounts run"})
     assert resp.status_code == 202
     assert await IntakeWorker(session_factory=sf).drain_once() == 1
 
+    # Claim the Request into an ExecutionRun (the resolution input) without
+    # driving the loop — D4's contract is at resolution, not execution.
     deps = runtime.build_agent_execution_deps(
         settings=get_settings(), sandbox_manager=NoopSandboxManager()
     )
     deps.workspace_root = tmp_path
     agent = AgentWorker(session_factory=sf, execution=deps)
     assert await agent.claim_once() == 1
-    assert await agent.drive_once() == 1
 
     async with sf() as s:
+        # Give "b" an explicit higher routing priority so the winner is pinned.
+        accounts = list((await s.execute(select(ModelAccount))).scalars().all())
+        for acct in accounts:
+            if acct.label == "b":
+                acct.extra_params = {ROUTING_PRIORITY_KEY: 5}
+        await s.commit()
+
         run = (await s.execute(select(ExecutionRun))).scalar_one()
-        assert run.status is RunStatus.RUNNING
-        decision = (await s.execute(select(Decision))).scalar_one()
-        assert decision.decision == runtime.DECISION_AMBIGUOUS_MODEL_ACCOUNT
-        assert "ambiguous: 2" in (decision.rationale or "")
+        resolved = await resolve_route(s, run)
+        await s.commit()
+
+        # A specific account resolved — no stall, no ambiguous Decision.
+        assert resolved is not None
+        assert resolved.label == "b"
+        assert (await s.execute(select(Decision))).first() is None
 
 
 # --------------------------------------------------------------------------
