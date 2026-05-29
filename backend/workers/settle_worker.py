@@ -277,6 +277,19 @@ class PromoterFactory(Protocol):
     ) -> WorkspacePromoter | None: ...
 
 
+class NoteEmbedHook(Protocol):
+    """Populate the pgvector note store from a freshly absorbed note (G5b).
+
+    Called once per successfully absorbed + drained settlement with the
+    settlement and the written note's ``node_ref`` (its vault path). The
+    implementation resolves the workspace's embedder, computes + stores the
+    embedding, and owns its OWN DB session + commit — so it is fully decoupled
+    from the settle transaction. The worker invokes it soft-fail: any error is
+    logged and swallowed, never reverting the settle write."""
+
+    async def __call__(self, settlement: Settlement, node_ref: str) -> None: ...
+
+
 @dataclass(slots=True)
 class SettleWorkerConfig:
     batch_size: int = 50
@@ -682,6 +695,7 @@ class SettleWorker(BaseWorker):
         sink: SettleSink,
         config: SettleWorkerConfig | None = None,
         promoter_factory: PromoterFactory | None = None,
+        embed_hook: NoteEmbedHook | None = None,
     ) -> None:
         self._cfg = config or SettleWorkerConfig()
         super().__init__(name="settle_worker", poll_interval_s=self._cfg.poll_interval_s)
@@ -690,6 +704,11 @@ class SettleWorker(BaseWorker):
         # When unset, promotion is disabled (e.g. tests exercising only the
         # drain bookkeeping). The runtime entrypoint wires the default factory.
         self._promoter_factory = promoter_factory
+        # G5b: optional hook to populate the pgvector note store from a freshly
+        # absorbed note. Soft-fail + independent session (see NoteEmbedHook) so a
+        # missing/failed embedding never affects the settle SoT. Unset → no-op
+        # (tests + workspaces with no embedding model configured).
+        self._embed_hook = embed_hook
 
     async def _tick(self) -> int:
         return await self.drain_once()
@@ -745,6 +764,19 @@ class SettleWorker(BaseWorker):
                     workspace_id=str(row.workspace_id),
                     node_ref=node_ref,
                 )
+                # G5b — populate the pgvector note store (its own session +
+                # commit). Soft-fail: a missing/failed embedding never reverts
+                # the absorbed+drained note above. No-op when no hook is wired.
+                if self._embed_hook is not None and node_ref:
+                    try:
+                        await self._embed_hook(settlement, node_ref)
+                    except Exception:  # noqa: BLE001 — embedding is derived; never break the drain
+                        logger.warning(
+                            "settle_worker_embed_failed",
+                            activity_id=str(row.id),
+                            workspace_id=str(row.workspace_id),
+                            exc_info=True,
+                        )
 
             # Close the loop: promote each affected workspace's accumulated
             # observations into canon. Derived + soft-fail — never affects the
@@ -866,6 +898,7 @@ __all__ = [
     "EntityExtractor",
     "ExtractorFactory",
     "KnowledgeSettleSink",
+    "NoteEmbedHook",
     "PromoterFactory",
     "SettleSink",
     "SettleWorker",

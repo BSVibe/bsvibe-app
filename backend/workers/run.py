@@ -95,6 +95,8 @@ from backend.workers.settle_worker import (
     EntityExtractor,
     ExtractorFactory,
     KnowledgeSettleSink,
+    NoteEmbedHook,
+    Settlement,
     SettleWorker,
     SettleWorkerConfig,
     build_garden_promoter_factory,
@@ -802,6 +804,75 @@ def build_settle_entity_extractor_factory(
     return _factory
 
 
+def build_note_embed_hook(
+    *,
+    session_factory: async_sessionmaker[AsyncSession],
+    settings: Settings | None = None,
+) -> NoteEmbedHook:
+    """Production :class:`NoteEmbedHook` for the settle sink (G5b).
+
+    Per absorbed note, resolves the workspace's single active (non-executor)
+    account + its embedding model, embeds the note summary, and upserts the
+    vector into ``note_embeddings`` (pgvector) keyed by the note's vault-relative
+    path — so :class:`SemanticNoteRetriever` (G5a) can find it. Opens its OWN
+    session + commit (decoupled from the settle transaction). No-op when the
+    workspace has no single active account or no embedding model configured —
+    semantic search simply stays empty rather than erroring."""
+    settings = settings or get_settings()
+    vault_root = Path(settings.knowledge_vault_root)
+
+    async def _hook(settlement: Settlement, node_ref: str) -> None:
+        from backend.knowledge.retrieval.embedder_resolution import (  # noqa: PLC0415
+            resolve_embedder,
+        )
+        from backend.knowledge.retrieval.storage.pg import (  # noqa: PLC0415
+            PgNoteVectorBackend,
+        )
+
+        text = settlement.summary.strip()
+        if not text:
+            return
+        async with session_factory() as session:
+            accounts = await _list_active_workspace_accounts(session, settlement.workspace_id)
+            account = _single_native_account(accounts)
+            if account is None:
+                return
+            embedder = await resolve_embedder(
+                session, workspace_id=settlement.workspace_id, account_id=account.account_id
+            )
+            if not embedder.enabled or embedder.model is None:
+                return
+            vector = await embedder.embed(text)
+            if not vector:
+                return
+            note_path = _relative_note_path(
+                node_ref, vault_root, settlement.region, settlement.workspace_id
+            )
+            backend = PgNoteVectorBackend(
+                session,
+                workspace_id=settlement.workspace_id,
+                embedding_model=embedder.model,
+            )
+            await backend.store(note_path, vector)
+            await session.commit()
+
+    return _hook
+
+
+def _relative_note_path(
+    node_ref: str, vault_root: Path, region: str, workspace_id: uuid.UUID
+) -> str:
+    """The note's vault-relative path (e.g. ``garden/seedling/x.md``) for the
+    embedding key, so it matches how the other retrievers reference notes. Falls
+    back to the raw ``node_ref`` when it isn't under the workspace root (defensive
+    — never raises)."""
+    workspace_root = vault_root / region / str(workspace_id)
+    try:
+        return Path(node_ref).relative_to(workspace_root).as_posix()
+    except ValueError:
+        return node_ref
+
+
 # ---------------------------------------------------------------------------
 # Real delivery dispatch adapter
 # ---------------------------------------------------------------------------
@@ -1063,6 +1134,10 @@ def build_worker_runtime(
             promoter_factory=build_garden_promoter_factory(
                 vault_root=Path(settings.knowledge_vault_root)
             ),
+            # G5b — populate the pgvector note store from each absorbed note so
+            # G5a's SemanticNoteRetriever has data to search. No-op until a
+            # workspace configures an embedding model.
+            embed_hook=build_note_embed_hook(session_factory=session_factory, settings=settings),
         ),
         # Config-driven relay: HttpRelay when ``audit_relay_url`` is set,
         # else the no-sink LoggingRelay default (drain + ack, no delivery).
