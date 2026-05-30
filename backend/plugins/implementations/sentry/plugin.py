@@ -171,6 +171,84 @@ async def resolve_issue(context: SkillContext, issue_id: str) -> dict[str, Any]:
     }
 
 
+# M2 — read-only action: agent queries the project's current unresolved Sentry
+# issues mid-run for context (triaging a bug report, checking whether an error
+# the run is about to fix is already known). Read-only by construction (GET) so
+# the per-call DangerAnalyzer gate lets it through even when Safe Mode is on.
+@p.action(
+    name="list_issues",
+    mcp_exposed=True,
+    input_schema={
+        "type": "object",
+        "required": ["organization_slug", "project_slug"],
+        "properties": {
+            "organization_slug": {
+                "type": "string",
+                "description": "Sentry organization slug",
+            },
+            "project_slug": {
+                "type": "string",
+                "description": "Sentry project slug within the organization",
+            },
+            "query": {
+                "type": "string",
+                "description": (
+                    "Sentry issue search query (e.g. 'is:unresolved', "
+                    "'is:unresolved error.type:KeyError'). Defaults to "
+                    "'is:unresolved'."
+                ),
+            },
+            "limit": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 50,
+                "description": "Max issues to return (default 20, cap 50).",
+            },
+        },
+        "additionalProperties": False,
+    },
+)
+async def list_issues(
+    context: SkillContext,
+    organization_slug: str,
+    project_slug: str,
+    query: str = "is:unresolved",
+    limit: int = 20,
+) -> dict[str, Any]:
+    """Read-only — list issues for a Sentry project, shaped for the LLM.
+
+    Each entry is trimmed to ``id``, ``title``, ``status``, ``permalink``,
+    ``count``, ``culprit`` so the payload stays inside the LLM response budget."""
+    client = _client(context)
+    capped = max(1, min(int(limit), 50))
+    raw = await client.list_project_issues(
+        organization_slug, project_slug, query=query, per_page=capped
+    )
+    issues = []
+    for entry in raw:
+        if not isinstance(entry, dict):
+            continue
+        issues.append(
+            {
+                "id": str(entry.get("id", "")),
+                "title": str(entry.get("title", "")),
+                "status": str(entry.get("status", "")),
+                "permalink": entry.get("permalink"),
+                "count": entry.get("count"),
+                "culprit": entry.get("culprit"),
+            }
+        )
+        if len(issues) >= capped:
+            break
+    return {
+        "organization_slug": organization_slug,
+        "project_slug": project_slug,
+        "query": query,
+        "count": len(issues),
+        "issues": issues,
+    }
+
+
 # ── setup ────────────────────────────────────────────────────────────────────
 
 

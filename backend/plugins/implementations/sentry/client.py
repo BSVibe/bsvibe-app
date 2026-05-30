@@ -85,5 +85,31 @@ class SentryClient:
         resp = await self._request("PUT", f"/issues/{issue_id}/", json_body={"status": status})
         return self._json(resp)
 
+    async def list_project_issues(
+        self,
+        organization_slug: str,
+        project_slug: str,
+        *,
+        query: str = "is:unresolved",
+        per_page: int = 20,
+    ) -> list[dict[str, Any]]:
+        """List issues for a project. Read-only — exposed as the
+        ``sentry__list_issues`` agent-loop action (M2).
+
+        Mirrors ``GET /projects/{org_slug}/{project_slug}/issues/`` with a
+        Sentry ``query`` filter (default ``is:unresolved``). Returns the raw
+        list so the caller (the action) can shape it.
+        """
+        path = (
+            f"/projects/{organization_slug}/{project_slug}/issues/?query={query}&limit={per_page}"
+        )
+        resp = await self._request("GET", path)
+        if resp.status_code >= 400:
+            raise SentryApiError(resp.status_code, resp.text)
+        body: Any = resp.json()
+        if not isinstance(body, list):
+            return []
+        return body
+
 
 __all__ = ["DEFAULT_BASE_URL", "SentryApiError", "SentryClient"]

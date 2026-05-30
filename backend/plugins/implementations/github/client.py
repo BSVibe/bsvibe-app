@@ -110,5 +110,30 @@ class GithubClient:
             resp.raise_for_status()
         return resp.status_code
 
+    # ── issues (read) ────────────────────────────────────────────────────────
+
+    async def list_issues(
+        self,
+        owner: str,
+        repo: str,
+        *,
+        state: str = "open",
+        per_page: int = 20,
+    ) -> list[dict[str, Any]]:
+        """List issues in a repo. Read-only — exposed as the ``github__list_issues``
+        agent-loop action (M2).
+
+        Mirrors ``GET /repos/{owner}/{repo}/issues?state={state}``. Returns the
+        raw JSON list so the caller (the action) can shape it. The REST endpoint
+        includes pull requests by default — callers filter as needed.
+        """
+        path = f"/repos/{owner}/{repo}/issues?state={state}&per_page={per_page}"
+        resp = await self._request("GET", path)
+        resp.raise_for_status()
+        body: Any = resp.json()
+        if not isinstance(body, list):
+            return []
+        return body
+
 
 __all__ = ["DEFAULT_BASE_URL", "GithubClient"]

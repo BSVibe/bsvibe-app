@@ -64,6 +64,8 @@ class TestPluginMeta:
     def test_mcp_exposed_actions(self):
         assert P.meta.actions["open_pr"].mcp_exposed is True
         assert P.meta.actions["comment"].mcp_exposed is True
+        # M2 — new read-only @p.action exposed mid-run.
+        assert P.meta.actions["list_issues"].mcp_exposed is True
 
     def test_has_setup(self):
         assert P.meta.setup_fn is not None
@@ -310,6 +312,75 @@ class TestActions:
                 context=_Ctx(),
                 kwargs={"repo": "o/r"},  # missing required head/title
             )
+
+    # M2 — new read-only list_issues action
+    @respx.mock
+    async def test_list_issues_action_returns_shaped_issues(self):
+        respx.get(f"{API}/repos/o/r/issues").mock(
+            return_value=httpx.Response(
+                200,
+                json=[
+                    {
+                        "number": 1,
+                        "title": "Crash on boot",
+                        "state": "open",
+                        "html_url": f"{API}/repos/o/r/issues/1",
+                        "user": {"login": "octo"},
+                    },
+                    # PR mixed into the issues list — must be filtered.
+                    {
+                        "number": 2,
+                        "title": "PR",
+                        "state": "open",
+                        "html_url": f"{API}/repos/o/r/pull/2",
+                        "pull_request": {"url": "x"},
+                        "user": {"login": "octo"},
+                    },
+                ],
+            )
+        )
+        result = await _runner().dispatch_action(
+            P.meta,
+            action_name="list_issues",
+            context=_Ctx(),
+            kwargs={"repo": "o/r"},
+        )
+        assert result["repo"] == "o/r"
+        assert result["state"] == "open"
+        assert result["count"] == 1, "PR (issues+pulls union) must be filtered"
+        assert result["issues"] == [
+            {
+                "number": 1,
+                "title": "Crash on boot",
+                "state": "open",
+                "url": f"{API}/repos/o/r/issues/1",
+                "author": "octo",
+            }
+        ]
+
+    async def test_list_issues_action_requires_repo(self):
+        with pytest.raises(PluginRunError, match="schema"):
+            await _runner().dispatch_action(
+                P.meta,
+                action_name="list_issues",
+                context=_Ctx(),
+                kwargs={"state": "open"},  # missing required repo
+            )
+
+    @respx.mock
+    async def test_list_issues_caps_limit_at_50(self):
+        # The cap is enforced inside the action body (max(1, min(limit, 50))).
+        route = respx.get(f"{API}/repos/o/r/issues").mock(return_value=httpx.Response(200, json=[]))
+        await _runner().dispatch_action(
+            P.meta,
+            action_name="list_issues",
+            context=_Ctx(),
+            kwargs={"repo": "o/r", "limit": 50},  # max allowed by schema
+        )
+        assert route.called
+        # The request URL must carry per_page=50 (the capped limit).
+        called_url = str(route.calls[0].request.url)
+        assert "per_page=50" in called_url
 
 
 # ── setup ──────────────────────────────────────────────────────────────────

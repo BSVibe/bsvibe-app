@@ -44,6 +44,11 @@ import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.config import Settings, get_settings
+from backend.execution.action_danger import (
+    ActionDangerEvaluator,
+    DangerVerdict,
+    StaticActionDangerEvaluator,
+)
 from backend.execution.audit_events import (
     DecisionPending,
     LlmTurn,
@@ -414,6 +419,7 @@ class RunOrchestrator:
         retriever: CanonRetriever | None = None,
         skill_loader: SkillLoader | None = None,
         connector_actions: ConnectorActionProvider | None = None,
+        danger_evaluator: ActionDangerEvaluator | None = None,
         redis_client: Any = None,
         settings: Settings | None = None,
         suggested_skill: str | None = None,
@@ -438,6 +444,17 @@ class RunOrchestrator:
         # a workspace with no connector accounts) keeps the loop free of
         # connector tools — zero behaviour change.
         self._connector_actions = connector_actions
+        # M2 — per-call action danger evaluator. The default is the static AST
+        # gate (cached per (plugin, action) pair). The prior gate asked
+        # ``tool.is_dangerous`` once at registration — a LOAD-TIME per-PLUGIN
+        # snapshot — so a hot-reloaded plugin (or a per-action verdict that
+        # would differ from its plugin) never got rechecked at invocation. This
+        # seam re-evaluates at each call, sourced from the SAME static analyzer
+        # the loader runs at load-time so the heuristic stays one source of
+        # truth. Tests inject a fake to drive the gate deterministically.
+        self._danger_evaluator: ActionDangerEvaluator = (
+            danger_evaluator if danger_evaluator is not None else StaticActionDangerEvaluator()
+        )
         # B5a — the run's workspace SkillLoader. When set, the loop registers
         # the ``invoke_skill`` + ``knowledge_search`` tools so the work LLM can
         # discover skills and consult canonical knowledge mid-run. ``None`` (the
@@ -728,8 +745,27 @@ class RunOrchestrator:
         provider = self._connector_actions
         assert provider is not None  # registration only happens with a provider
 
+        evaluator = self._danger_evaluator
+
         async def handler(arguments: dict[str, Any]) -> str:
-            if tool.is_dangerous and safe_mode:
+            # M2 — re-evaluate danger PER CALL (the prior gate trusted the
+            # load-time per-plugin verdict; this asks the evaluator fresh so a
+            # dangerous action whose plugin loaded as safe still blocks here).
+            try:
+                verdict = await evaluator.evaluate(tool, arguments)
+            except Exception as exc:  # noqa: BLE001 — gate failure → fail-safe block
+                logger.warning(
+                    "connector_action_danger_evaluator_failed",
+                    run_id=str(run.id),
+                    connector=tool.connector,
+                    action=tool.action_name,
+                    error=str(exc),
+                )
+                verdict = DangerVerdict(
+                    is_dangerous=True,
+                    reason=f"per-call danger evaluator failed: {exc} — defaulting to dangerous",
+                )
+            if verdict.is_dangerous and safe_mode:
                 decision = await self._create_decision(
                     run,
                     work_step,
@@ -738,11 +774,13 @@ class RunOrchestrator:
                         "plugin": tool.connector,
                         "action": tool.action_name,
                         "args": arguments,
-                        "is_dangerous": tool.is_dangerous,
+                        "is_dangerous": True,
+                        "danger_reason": verdict.reason,
                     },
                     rationale=(
                         f"work LLM requested dangerous connector action "
-                        f"{tool.connector}.{tool.action_name} while Safe Mode is on"
+                        f"{tool.connector}.{tool.action_name} while Safe Mode is on "
+                        f"({verdict.reason})"
                     ),
                 )
                 logger.info(
@@ -751,6 +789,7 @@ class RunOrchestrator:
                     connector=tool.connector,
                     action=tool.action_name,
                     decision_id=str(decision.id),
+                    danger_reason=verdict.reason,
                 )
                 return json.dumps(
                     {
@@ -1639,9 +1678,11 @@ __all__ = [
     "EMIT_DELIVERABLE_TOOL",
     "KNOWLEDGE_SEARCH_NAME",
     "WORK_TOOLS",
+    "ActionDangerEvaluator",
     "CanonRetriever",
     "ConnectorActionProvider",
     "ConnectorActionTool",
+    "DangerVerdict",
     "LoopLlm",
     "LoopOutcome",
     "LoopResult",
@@ -1649,4 +1690,5 @@ __all__ = [
     "LoopTurn",
     "RunCompute",
     "RunOrchestrator",
+    "StaticActionDangerEvaluator",
 ]

@@ -253,6 +253,75 @@ async def comment(context: SkillContext, repo: str, issue_number: int, body: str
     return {"comment_id": int(data["id"]), "url": data.get("html_url")}
 
 
+# M2 — read-only action: agent reads open issues mid-run for repo context
+# (planning a PR / triaging a comment). Read-only by construction (GET /issues)
+# and so the per-call DangerAnalyzer gate lets it through even when Safe Mode is
+# on — there are no external side effects to compensate. Trimmed to a small
+# bounded shape so the result stays inside the LLM's response budget.
+@p.action(
+    name="list_issues",
+    mcp_exposed=True,
+    input_schema={
+        "type": "object",
+        "required": ["repo"],
+        "properties": {
+            "repo": {"type": "string", "description": "owner/repo"},
+            "state": {
+                "type": "string",
+                "enum": ["open", "closed", "all"],
+                "description": "Issue state filter; defaults to 'open'.",
+            },
+            "limit": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 50,
+                "description": "Max issues to return (default 20, cap 50).",
+            },
+        },
+        "additionalProperties": False,
+    },
+)
+async def list_issues(
+    context: SkillContext,
+    repo: str,
+    state: str = "open",
+    limit: int = 20,
+) -> dict[str, Any]:
+    """Read-only — list issues in ``repo`` for agent-loop context.
+
+    Returns at most ``limit`` issues (capped at 50). Each entry is trimmed to
+    ``number``, ``title``, ``state``, ``html_url``, ``user.login`` so the
+    payload stays inside the LLM response budget. PRs are filtered out (the
+    REST endpoint mixes them in by default; agents asking for issues do not
+    want PRs in the result)."""
+    owner, name = _split_repo(repo)
+    client = _client(context)
+    capped = max(1, min(int(limit), 50))
+    raw = await client.list_issues(owner, name, state=state, per_page=capped)
+    issues = []
+    for entry in raw:
+        if not isinstance(entry, dict):
+            continue
+        # The GitHub REST API mixes pull requests into the issues list
+        # (``pull_request`` key present) — skip them so an "issue" query
+        # actually returns issues.
+        if "pull_request" in entry:
+            continue
+        user = entry.get("user") or {}
+        issues.append(
+            {
+                "number": int(entry.get("number", 0)),
+                "title": str(entry.get("title", "")),
+                "state": str(entry.get("state", "")),
+                "url": entry.get("html_url"),
+                "author": str(user.get("login", "")) if isinstance(user, dict) else "",
+            }
+        )
+        if len(issues) >= capped:
+            break
+    return {"repo": f"{owner}/{name}", "state": state, "count": len(issues), "issues": issues}
+
+
 # ── setup ────────────────────────────────────────────────────────────────────
 
 
