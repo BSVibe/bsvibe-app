@@ -64,6 +64,44 @@ class TestUpdateIssueStatus:
         assert excinfo.value.status_code == 404
 
 
+class TestListProjectIssues:
+    @respx.mock
+    async def test_list_project_issues_returns_list(self, client):
+        respx.get(f"{API}/projects/org/proj/issues/").mock(
+            return_value=httpx.Response(
+                200,
+                json=[
+                    {"id": "1", "title": "x", "status": "unresolved"},
+                ],
+            )
+        )
+        rows = await client.list_project_issues("org", "proj")
+        assert len(rows) == 1
+        assert rows[0]["id"] == "1"
+
+    @respx.mock
+    async def test_list_project_issues_carries_query_and_limit(self, client):
+        route = respx.get(f"{API}/projects/org/proj/issues/").mock(
+            return_value=httpx.Response(200, json=[])
+        )
+        await client.list_project_issues(
+            "org", "proj", query="is:unresolved error.type:KeyError", per_page=5
+        )
+        url = str(route.calls[0].request.url)
+        assert "query=" in url
+        assert "KeyError" in url
+        assert "limit=5" in url
+
+    @respx.mock
+    async def test_list_project_issues_non_2xx_raises(self, client):
+        respx.get(f"{API}/projects/org/proj/issues/").mock(
+            return_value=httpx.Response(403, text="forbidden")
+        )
+        with pytest.raises(SentryApiError) as excinfo:
+            await client.list_project_issues("org", "proj")
+        assert excinfo.value.status_code == 403
+
+
 class TestInjectedClient:
     @respx.mock
     async def test_uses_injected_async_client(self):

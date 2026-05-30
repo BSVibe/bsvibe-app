@@ -8,6 +8,7 @@ end without touching a real model or Docker.
 
 from __future__ import annotations
 
+import os
 import uuid
 from pathlib import Path
 from typing import Any
@@ -17,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.connectors.db import ConnectorAccountRow
 from backend.delivery.db import DeliveryEventRow
+from backend.execution.action_danger import DangerVerdict
 from backend.execution.connector_actions import ConnectorActionTool
 from backend.execution.db import (
     Decision,
@@ -1425,3 +1427,469 @@ async def test_loop_without_connector_provider_omits_connector_tools(tmp_path: P
     names = _tool_names(llm.calls[0]["tools"])
     assert not any("__" in n for n in names)
     assert "file_write" in names
+
+
+# --------------------------------------------------------------------------
+# M2 — per-call DangerAnalyzer gate at the execution call
+# --------------------------------------------------------------------------
+
+
+class _PerCallEvaluator:
+    """A test :class:`ActionDangerEvaluator` that drives the gate deterministically.
+
+    Records every call (tool name + arguments) so the orchestrator's wiring can
+    be asserted — the gate must be re-asked on EACH agent invocation, not once
+    at registration."""
+
+    def __init__(self, verdict_for: dict[str, DangerVerdict]) -> None:
+        self._verdict_for = verdict_for
+        self.calls: list[tuple[str, dict[str, Any]]] = []
+
+    async def evaluate(self, tool: ConnectorActionTool, arguments: dict[str, Any]) -> DangerVerdict:
+        self.calls.append((tool.action_name, dict(arguments)))
+        return self._verdict_for[tool.action_name]
+
+
+async def test_per_call_danger_gate_blocks_action_safe_at_load_time(tmp_path: Path) -> None:
+    """The audit fix: a connector action whose load-time per-plugin verdict
+    was SAFE (``tool.is_dangerous=False``) must STILL be blocked at execution
+    time when the per-call evaluator returns dangerous. The prior gate would
+    silently let it through because it trusted the cached load-time bool.
+
+    This proves the orchestrator depends on the PER-CALL evaluator, not on
+    ``tool.is_dangerous``."""
+    ws = uuid.uuid4()
+    plugin = _fake_action_plugin("github", action_name="open_pr")
+    account = _fake_account(ws, "github")
+    # Load-time verdict says SAFE — this is what tripped the audit.
+    provider = FakeConnectorActionProvider([_tool(plugin, account, is_dangerous=False)])
+    # Per-call evaluator says DANGEROUS for THIS call.
+    evaluator = _PerCallEvaluator(
+        {"open_pr": DangerVerdict(is_dangerous=True, reason="per-call: dangerous")}
+    )
+    llm = ScriptedLlm(
+        [
+            LoopTurn(
+                content="opening",
+                tool_calls=(_tc("github__open_pr", title="Ship it"),),
+            ),
+            # After the gate the loop continues with real file work.
+            LoopTurn(
+                content="",
+                tool_calls=(
+                    _declare_command("test -f out.txt"),
+                    _tc("file_write", path="out.txt", content="x"),
+                ),
+            ),
+            LoopTurn(content="done", tool_calls=()),
+        ]
+    )
+    async with memory_session() as session:
+        session.add(WorkspaceRow(id=ws, name="ws", region="us-1", safe_mode=True))
+        await session.flush()
+        run = await _make_run(session, workspace_id=ws)
+        orch = RunOrchestrator(
+            session=session,
+            llm=llm,
+            sandbox_manager=NoopSandboxManager(),
+            connector_actions=provider,
+            danger_evaluator=evaluator,
+        )
+        result = await orch.run(run=run, workspace_dir=tmp_path)
+
+        assert result.outcome == "verified"
+        # The action was NOT dispatched — the per-call gate blocked it.
+        assert not provider.dispatched, (
+            "the per-call evaluator must block the action even when "
+            "tool.is_dangerous (load-time) was False"
+        )
+        # An approval Decision was created with the per-call reason.
+        decision = (await session.execute(select(Decision))).scalar_one()
+        assert decision.decision == "connector_action_approval"
+        assert decision.payload["plugin"] == "github"
+        assert decision.payload["action"] == "open_pr"
+        assert decision.payload["is_dangerous"] is True
+        assert "per-call" in decision.payload["danger_reason"]
+        # The evaluator was asked AT the call, with the LLM's arguments.
+        assert evaluator.calls == [("open_pr", {"title": "Ship it"})]
+
+
+async def test_per_call_evaluator_called_on_each_invocation(tmp_path: Path) -> None:
+    """The per-call gate must fire on EVERY agent-loop invocation of the action
+    (not just once-per-run). The audit's "load-time only" complaint is the
+    counter-shape: we prove the call site re-asks every time by invoking the
+    same action twice and asserting two evaluator calls."""
+    ws = uuid.uuid4()
+    plugin = _fake_action_plugin("github", action_name="comment")
+    account = _fake_account(ws, "github")
+    provider = FakeConnectorActionProvider([_tool(plugin, account, is_dangerous=False)])
+    evaluator = _PerCallEvaluator(
+        {"comment": DangerVerdict(is_dangerous=False, reason="per-call: safe")}
+    )
+    llm = ScriptedLlm(
+        [
+            LoopTurn(
+                content="first comment",
+                tool_calls=(_tc("github__comment", text="hi-1"),),
+            ),
+            LoopTurn(
+                content="second comment",
+                tool_calls=(_tc("github__comment", text="hi-2"),),
+            ),
+            LoopTurn(
+                content="",
+                tool_calls=(
+                    _declare_command("test -f out.txt"),
+                    _tc("file_write", path="out.txt", content="x"),
+                ),
+            ),
+            LoopTurn(content="done", tool_calls=()),
+        ]
+    )
+    async with memory_session() as session:
+        session.add(WorkspaceRow(id=ws, name="ws", region="us-1", safe_mode=True))
+        await session.flush()
+        run = await _make_run(session, workspace_id=ws)
+        orch = RunOrchestrator(
+            session=session,
+            llm=llm,
+            sandbox_manager=NoopSandboxManager(),
+            connector_actions=provider,
+            danger_evaluator=evaluator,
+        )
+        await orch.run(run=run, workspace_dir=tmp_path)
+
+        # Two agent calls → two evaluator invocations with each call's args.
+        assert evaluator.calls == [
+            ("comment", {"text": "hi-1"}),
+            ("comment", {"text": "hi-2"}),
+        ]
+        # Both dispatched (per-call verdict was safe both times).
+        assert len(provider.dispatched) == 2
+
+
+async def test_per_call_safe_action_runs_even_when_plugin_dangerous(tmp_path: Path) -> None:
+    """The flip side of the audit fix: a per-call evaluator returning SAFE
+    lets the action through even when the load-time per-plugin verdict was
+    dangerous. This proves the per-call seam is the authority — not the
+    load-time cache. (Useful for read-only actions on a plugin that ALSO has
+    dangerous write actions.)"""
+    ws = uuid.uuid4()
+    plugin = _fake_action_plugin("github", action_name="list_issues")
+    account = _fake_account(ws, "github")
+    # Load-time verdict: the WHOLE PLUGIN is dangerous (loader saw `import
+    # httpx` in the module). The per-call evaluator looks at the specific
+    # action's source and says SAFE.
+    provider = FakeConnectorActionProvider([_tool(plugin, account, is_dangerous=True)])
+    evaluator = _PerCallEvaluator(
+        {"list_issues": DangerVerdict(is_dangerous=False, reason="per-call: read-only")}
+    )
+    llm = ScriptedLlm(
+        [
+            LoopTurn(
+                content="reading",
+                tool_calls=(_tc("github__list_issues", repo="o/r"),),
+            ),
+            LoopTurn(
+                content="",
+                tool_calls=(
+                    _declare_command("test -f out.txt"),
+                    _tc("file_write", path="out.txt", content="x"),
+                ),
+            ),
+            LoopTurn(content="done", tool_calls=()),
+        ]
+    )
+    async with memory_session() as session:
+        session.add(WorkspaceRow(id=ws, name="ws", region="us-1", safe_mode=True))
+        await session.flush()
+        run = await _make_run(session, workspace_id=ws)
+        orch = RunOrchestrator(
+            session=session,
+            llm=llm,
+            sandbox_manager=NoopSandboxManager(),
+            connector_actions=provider,
+            danger_evaluator=evaluator,
+        )
+        await orch.run(run=run, workspace_dir=tmp_path)
+
+        # Dispatched — per-call SAFE beat the load-time DANGEROUS verdict.
+        assert provider.dispatched, (
+            "per-call SAFE must let the action through even when load-time "
+            "tool.is_dangerous was True"
+        )
+        # No approval Decision was created.
+        assert (await session.execute(select(Decision))).first() is None
+
+
+async def test_default_evaluator_used_when_none_injected(tmp_path: Path) -> None:
+    """When no ``danger_evaluator`` is supplied the orchestrator falls back to
+    the StaticActionDangerEvaluator — the production default. Verified by
+    asserting the gate still blocks a load-time-dangerous action in Safe Mode
+    (the previous behaviour stays observable through the default seam)."""
+    ws = uuid.uuid4()
+    plugin = _fake_action_plugin("slack", action_name="post_message")
+    account = _fake_account(ws, "slack")
+    provider = FakeConnectorActionProvider([_tool(plugin, account, is_dangerous=True)])
+    llm = ScriptedLlm(
+        [
+            LoopTurn(
+                content="posting",
+                tool_calls=(_tc("slack__post_message", text="hi"),),
+            ),
+            LoopTurn(
+                content="",
+                tool_calls=(
+                    _declare_command("test -f out.txt"),
+                    _tc("file_write", path="out.txt", content="x"),
+                ),
+            ),
+            LoopTurn(content="done", tool_calls=()),
+        ]
+    )
+    async with memory_session() as session:
+        session.add(WorkspaceRow(id=ws, name="ws", region="us-1", safe_mode=True))
+        await session.flush()
+        run = await _make_run(session, workspace_id=ws)
+        orch = RunOrchestrator(
+            session=session,
+            llm=llm,
+            sandbox_manager=NoopSandboxManager(),
+            connector_actions=provider,
+            # No danger_evaluator — default StaticActionDangerEvaluator kicks in.
+        )
+        await orch.run(run=run, workspace_dir=tmp_path)
+        # Blocked, because the OR-rule sees load-time is_dangerous=True.
+        assert not provider.dispatched
+
+
+# --------------------------------------------------------------------------
+# M2 — surface delta: two new @p.action's exposed mid-run (presence assertion)
+# --------------------------------------------------------------------------
+
+
+async def test_real_github_list_issues_action_appears_in_tool_schema(
+    tmp_path: Path,
+) -> None:
+    """Presence delta: ``github__list_issues`` (the new M2 read action) is
+    surfaced in the agent's tool list when the workspace has a github account.
+    Asserts against the real github plugin meta (not a fake) so the test is
+    tied to the deployed action declaration."""
+    from backend.plugins.implementations.github import plugin as github_module
+
+    ws = uuid.uuid4()
+    meta = github_module.p.meta
+    # The new action is declared (this is the static presence assertion).
+    assert "list_issues" in meta.actions, "M2: github plugin must declare list_issues @p.action"
+    assert meta.actions["list_issues"].mcp_exposed is True
+
+    account = _fake_account(ws, "github")
+    tool = ConnectorActionTool(
+        plugin=meta,
+        action=meta.actions["list_issues"],
+        account=account,
+        is_dangerous=False,
+    )
+    provider = FakeConnectorActionProvider([tool])
+    llm = ScriptedLlm([LoopTurn(content="done", tool_calls=())])
+    async with memory_session() as session:
+        session.add(WorkspaceRow(id=ws, name="ws", region="us-1", safe_mode=False))
+        await session.flush()
+        run = await _make_run(session, workspace_id=ws)
+        orch = RunOrchestrator(
+            session=session,
+            llm=llm,
+            sandbox_manager=NoopSandboxManager(),
+            connector_actions=provider,
+        )
+        await orch.run(run=run, workspace_dir=tmp_path)
+
+    names = _tool_names(llm.calls[0]["tools"])
+    assert "github__list_issues" in names
+
+
+async def test_real_sentry_list_issues_action_appears_in_tool_schema(
+    tmp_path: Path,
+) -> None:
+    """Presence delta for sentry's M2 read action."""
+    from backend.plugins.implementations.sentry import plugin as sentry_module
+
+    ws = uuid.uuid4()
+    meta = sentry_module.p.meta
+    assert "list_issues" in meta.actions, "M2: sentry plugin must declare list_issues @p.action"
+    assert meta.actions["list_issues"].mcp_exposed is True
+
+    account = _fake_account(ws, "sentry")
+    tool = ConnectorActionTool(
+        plugin=meta,
+        action=meta.actions["list_issues"],
+        account=account,
+        is_dangerous=False,
+    )
+    provider = FakeConnectorActionProvider([tool])
+    llm = ScriptedLlm([LoopTurn(content="done", tool_calls=())])
+    async with memory_session() as session:
+        session.add(WorkspaceRow(id=ws, name="ws", region="us-1", safe_mode=False))
+        await session.flush()
+        run = await _make_run(session, workspace_id=ws)
+        orch = RunOrchestrator(
+            session=session,
+            llm=llm,
+            sandbox_manager=NoopSandboxManager(),
+            connector_actions=provider,
+        )
+        await orch.run(run=run, workspace_dir=tmp_path)
+
+    names = _tool_names(llm.calls[0]["tools"])
+    assert "sentry__list_issues" in names
+
+
+async def test_new_action_absent_when_workspace_lacks_account(tmp_path: Path) -> None:
+    """A workspace WITHOUT an account for the connector surfaces no tool —
+    the negative half of the presence delta. (The new actions are not blanket-
+    exposed; they need an active workspace account, same as the existing
+    connector tools.)"""
+    from backend.plugins.implementations.github import plugin as github_module
+
+    meta = github_module.p.meta
+    other_ws = uuid.uuid4()
+    account = _fake_account(other_ws, "github")  # belongs to a different ws
+    tool = ConnectorActionTool(
+        plugin=meta,
+        action=meta.actions["list_issues"],
+        account=account,
+        is_dangerous=False,
+    )
+    provider = FakeConnectorActionProvider([tool])
+    llm = ScriptedLlm([LoopTurn(content="done", tool_calls=())])
+    async with memory_session() as session:
+        this_ws = uuid.uuid4()
+        session.add(WorkspaceRow(id=this_ws, name="ws", region="us-1", safe_mode=False))
+        await session.flush()
+        run = await _make_run(session, workspace_id=this_ws)
+        orch = RunOrchestrator(
+            session=session,
+            llm=llm,
+            sandbox_manager=NoopSandboxManager(),
+            connector_actions=provider,
+        )
+        await orch.run(run=run, workspace_dir=tmp_path)
+    names = _tool_names(llm.calls[0]["tools"])
+    assert "github__list_issues" not in names
+
+
+# --------------------------------------------------------------------------
+# M2 — successful call exercises real dispatch through the @p.action path
+# --------------------------------------------------------------------------
+
+
+async def test_real_github_list_issues_dispatches_through_real_pluginrunner(
+    tmp_path: Path,
+) -> None:
+    """Exercise the REAL ``@p.action`` dispatch path: the agent loop calls
+    ``github__list_issues``, the orchestrator hands the call to the real
+    :class:`PluginRunner` via the production
+    :class:`ConnectorActionResolver`, and the action's real function runs and
+    returns its shaped result back to the LLM as a tool message.
+
+    External HTTP is mocked at the SDK boundary (respx mocks httpx —  no real
+    GitHub call), so we exercise the framework's dispatch + the action body's
+    own filtering/shaping, not a fake provider stub."""
+    import httpx as _httpx
+    import respx
+
+    from backend.accounts.crypto import CredentialCipher
+    from backend.execution.connector_actions import ConnectorActionResolver
+    from backend.plugins.implementations.github import plugin as github_module
+
+    ws = uuid.uuid4()
+    meta = github_module.p.meta
+    # Seed a real ConnectorAccountRow (its encrypted secret is what the
+    # resolver decrypts at dispatch time).
+    cipher = CredentialCipher(os.urandom(32))
+    async with memory_session() as session:
+        session.add(WorkspaceRow(id=ws, name="ws", region="us-1", safe_mode=False))
+        account = ConnectorAccountRow(
+            id=uuid.uuid4(),
+            workspace_id=ws,
+            connector="github",
+            webhook_token=uuid.uuid4().hex,
+            signing_secret_ciphertext=cipher.encrypt("ghp_test_token"),
+            delivery_config={},
+            is_active=True,
+        )
+        session.add(account)
+        await session.flush()
+
+        resolver = ConnectorActionResolver(
+            session=session,
+            plugins_by_name={"github": meta},
+            danger_map={},  # plugin-level: safe
+            cipher=cipher,
+        )
+        # The LLM script: call list_issues, then do trivial verifiable file work.
+        llm = ScriptedLlm(
+            [
+                LoopTurn(
+                    content="reading",
+                    tool_calls=(_tc("github__list_issues", repo="o/r", state="open", limit=5),),
+                ),
+                LoopTurn(
+                    content="",
+                    tool_calls=(
+                        _declare_command("test -f out.txt"),
+                        _tc("file_write", path="out.txt", content="x"),
+                    ),
+                ),
+                LoopTurn(content="done", tool_calls=()),
+            ]
+        )
+        run = await _make_run(session, workspace_id=ws)
+        with respx.mock(assert_all_called=False) as r:
+            # The real GithubClient.list_issues hits this endpoint.
+            r.get("https://api.github.com/repos/o/r/issues").mock(
+                return_value=_httpx.Response(
+                    200,
+                    json=[
+                        {
+                            "number": 1,
+                            "title": "Bug",
+                            "state": "open",
+                            "html_url": "https://github.com/o/r/issues/1",
+                            "user": {"login": "octo"},
+                        },
+                        # A PR mixed into the issues list — must be filtered.
+                        {
+                            "number": 2,
+                            "title": "PR",
+                            "state": "open",
+                            "html_url": "https://github.com/o/r/pull/2",
+                            "pull_request": {"url": "x"},
+                            "user": {"login": "octo"},
+                        },
+                    ],
+                )
+            )
+            orch = RunOrchestrator(
+                session=session,
+                llm=llm,
+                sandbox_manager=NoopSandboxManager(),
+                connector_actions=resolver,
+            )
+            result = await orch.run(run=run, workspace_dir=tmp_path)
+
+        assert result.outcome == "verified"
+        # The action's result was fed back as a tool message — assert the
+        # SHAPED result the action function builds (filtered PR out, trimmed
+        # to the issue fields).
+        tool_msgs = [
+            m
+            for call in llm.calls
+            for m in call["messages"]
+            if m.get("role") == "tool" and '"issues"' in (m.get("content") or "")
+        ]
+        assert tool_msgs, "the action result must be appended as a tool message"
+        body = tool_msgs[0]["content"]
+        assert '"count": 1' in body, f"PR should have been filtered out; got {body}"
+        assert "Bug" in body
+        assert "PR" not in body or '"number": 2' not in body

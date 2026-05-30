@@ -91,6 +91,39 @@ class TestComments:
         assert status == 404
 
 
+class TestListIssues:
+    @respx.mock
+    async def test_list_issues_returns_list(self, client):
+        respx.get(f"{API}/repos/o/r/issues").mock(
+            return_value=httpx.Response(
+                200,
+                json=[
+                    {"number": 1, "title": "a", "state": "open"},
+                    {"number": 2, "title": "b", "state": "open"},
+                ],
+            )
+        )
+        issues = await client.list_issues("o", "r")
+        assert len(issues) == 2
+        assert issues[0]["number"] == 1
+
+    @respx.mock
+    async def test_list_issues_carries_state_and_per_page(self, client):
+        route = respx.get(f"{API}/repos/o/r/issues").mock(return_value=httpx.Response(200, json=[]))
+        await client.list_issues("o", "r", state="closed", per_page=5)
+        url = str(route.calls[0].request.url)
+        assert "state=closed" in url
+        assert "per_page=5" in url
+
+    @respx.mock
+    async def test_list_issues_unexpected_shape_returns_empty(self, client):
+        respx.get(f"{API}/repos/o/r/issues").mock(
+            return_value=httpx.Response(200, json={"unexpected": "dict"})
+        )
+        issues = await client.list_issues("o", "r")
+        assert issues == []
+
+
 class TestInjectedClient:
     @respx.mock
     async def test_uses_injected_async_client(self):

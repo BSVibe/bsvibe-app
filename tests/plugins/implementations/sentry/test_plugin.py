@@ -62,6 +62,8 @@ class TestPluginMeta:
 
     def test_mcp_exposed_action(self):
         assert P.meta.actions["resolve_issue"].mcp_exposed is True
+        # M2 — new read-only @p.action exposed mid-run.
+        assert P.meta.actions["list_issues"].mcp_exposed is True
 
     def test_has_setup(self):
         assert P.meta.setup_fn is not None
@@ -267,6 +269,68 @@ class TestActions:
                 context=_Ctx(),
                 kwargs={},  # missing required issue_id
             )
+
+    # M2 — new read-only list_issues action
+    @respx.mock
+    async def test_list_issues_action_returns_shaped_issues(self):
+        respx.get(f"{API}/projects/myorg/myproj/issues/").mock(
+            return_value=httpx.Response(
+                200,
+                json=[
+                    {
+                        "id": "1001",
+                        "title": "TypeError in handler",
+                        "status": "unresolved",
+                        "permalink": "https://sentry.io/myorg/myproj/issues/1001/",
+                        "count": "42",
+                        "culprit": "app.handler in process",
+                    },
+                ],
+            )
+        )
+        result = await _runner().dispatch_action(
+            P.meta,
+            action_name="list_issues",
+            context=_Ctx(),
+            kwargs={"organization_slug": "myorg", "project_slug": "myproj"},
+        )
+        assert result["organization_slug"] == "myorg"
+        assert result["project_slug"] == "myproj"
+        assert result["query"] == "is:unresolved"
+        assert result["count"] == 1
+        assert result["issues"][0]["id"] == "1001"
+        assert result["issues"][0]["title"] == "TypeError in handler"
+        assert result["issues"][0]["status"] == "unresolved"
+        assert result["issues"][0]["culprit"] == "app.handler in process"
+
+    async def test_list_issues_action_requires_slugs(self):
+        with pytest.raises(PluginRunError, match="schema"):
+            await _runner().dispatch_action(
+                P.meta,
+                action_name="list_issues",
+                context=_Ctx(),
+                kwargs={"organization_slug": "myorg"},  # missing project_slug
+            )
+
+    @respx.mock
+    async def test_list_issues_action_uses_custom_query(self):
+        route = respx.get(f"{API}/projects/myorg/myproj/issues/").mock(
+            return_value=httpx.Response(200, json=[])
+        )
+        await _runner().dispatch_action(
+            P.meta,
+            action_name="list_issues",
+            context=_Ctx(),
+            kwargs={
+                "organization_slug": "myorg",
+                "project_slug": "myproj",
+                "query": "is:unresolved error.type:KeyError",
+            },
+        )
+        assert route.called
+        url = str(route.calls[0].request.url)
+        assert "query=is" in url
+        assert "KeyError" in url
 
 
 # ── setup ──────────────────────────────────────────────────────────────────
