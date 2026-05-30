@@ -82,8 +82,13 @@ async def test_three_mid_loop_partials_all_gated_to_safe_mode_queue(
     account_id = uuid.uuid4()
 
     async with sf() as s:
-        # workspace flag OFF (per-Run gate is the only thing that should queue)
+        # workspace flag OFF (per-Run gate is the only thing that should queue).
+        # FK ordering matters on real PG: workspaces -> {products, connector_accounts}
+        # -> resource_bindings/execution_runs. Without explicit ``relationship()``
+        # links, SQLAlchemy can't infer the dependency, so we flush parent-first
+        # in stages (same pattern as ``test_safe_mode_output_mode_gate.py``).
         s.add(WorkspaceRow(id=ws, name="acme", safe_mode=False))
+        await s.flush()
         s.add(ProductRow(id=product_id, workspace_id=ws, name="P", slug="p"))
         s.add(
             ConnectorAccountRow(
