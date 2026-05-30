@@ -52,12 +52,17 @@ import structlog
 logger = structlog.get_logger(__name__)
 
 
-# The three high-signal event types this lift carries. Other event types
-# (LLM turns, tool calls, etc.) remain in the audit outbox only — adding more
-# SSE event types here is a future, focused lift.
+# The high-signal event types this surface carries. Other event types (LLM
+# turns, tool calls, etc.) remain in the audit outbox only — adding more SSE
+# event types here is a future, focused lift.
 EVENT_DECISION_PENDING = "decision.pending"
 EVENT_RUN_TERMINAL = "run.terminal"
 EVENT_DELIVERY_QUEUED = "delivery.queued"
+# D6 — a mid-loop partial Deliverable just landed (Synthesis §13 / Workflow §1).
+# Published DIRECTLY by the agent loop's ``emit_deliverable`` handler (not from
+# the audit bridge) so the Run / Brief views can render the partial AS IT IS
+# EMITTED instead of only on the verified terminal.
+EVENT_DELIVERABLE_PARTIAL = "deliverable.partial"
 
 # Audit ``event_type`` → SSE ``event_type`` for the producer bridge. The audit
 # stream uses dotted-prefix names (``execution.decision.pending``); the SSE
@@ -529,6 +534,7 @@ def encode_heartbeat() -> bytes:
 
 __all__ = [
     "EVENT_DECISION_PENDING",
+    "EVENT_DELIVERABLE_PARTIAL",
     "EVENT_DELIVERY_QUEUED",
     "EVENT_RUN_TERMINAL",
     "LiveEvent",

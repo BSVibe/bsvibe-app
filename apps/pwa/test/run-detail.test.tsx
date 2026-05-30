@@ -56,6 +56,7 @@ const TRIGGERED: RunDetailModel = {
   ],
   verification: { id: "v1", outcome: "passed", created_at: NOW },
   deliverable_id: "d1",
+  partial_deliverables: [],
   activities: [
     { type: "tool_call", label: "Delivered calculator.py", created_at: NOW },
     { type: "verify", label: "Verified the work", created_at: NOW },
@@ -169,6 +170,7 @@ describe("Run-detail surface (Triggered)", () => {
       decisions: [],
       verification: null,
       deliverable_id: null,
+      partial_deliverables: [],
       activities: [],
       timeline_source: "derived",
     };
@@ -296,5 +298,58 @@ describe("Run-detail surface (Triggered)", () => {
 
     const nextStep = await screen.findByRole("region", { name: /next step|what.s next/i });
     expect(within(nextStep).getByText(/didn.t finish|something went wrong/i)).toBeInTheDocument();
+  });
+
+  // D6 — mid-loop partial Deliverables render distinguished from the verified
+  // terminal in the Run-view (Synthesis §13 — continuous Deliver side channel).
+  it("renders mid-loop partial Deliverables in a list, distinguished from the verified-final", async () => {
+    const withPartials: RunDetailModel = {
+      ...REVIEW_READY,
+      partial_deliverables: [
+        {
+          id: "p1",
+          artifact_type: "pr",
+          summary: "opened PR #1",
+          channel: "github",
+          external_ref: "github://acme/site/pull/1",
+          created_at: NOW,
+        },
+        {
+          id: "p2",
+          artifact_type: "page",
+          summary: "updated runbook",
+          channel: "notion",
+          external_ref: null,
+          created_at: NOW,
+        },
+      ],
+    };
+    global.fetch = vi.fn(async () => json(withPartials)) as unknown as typeof fetch;
+
+    render(<RunDetail runId="rr" />);
+
+    // The verified-final's report link still resolves.
+    await screen.findByRole("link", { name: /view delivery report|see the proof/i });
+
+    // Each partial renders as a row tagged with data-partial="true" so the
+    // partial vs verified-final distinction lives in the DOM (not just text).
+    const partialRows = document.querySelectorAll('[data-partial="true"]');
+    expect(partialRows.length).toBe(2);
+    // The partials carry their founder-relevant fields.
+    expect(screen.getByText("opened PR #1")).toBeInTheDocument();
+    expect(screen.getByText("updated runbook")).toBeInTheDocument();
+
+    // The verified-final lives in a SEPARATE container marked data-verified
+    // — the founder can tell the terminal apart from the streaming partials.
+    expect(document.querySelector('[data-verified="true"]')).not.toBeNull();
+  });
+
+  it("a run with zero mid-loop partials renders unchanged from pre-D6", async () => {
+    global.fetch = vi.fn(async () => json(TRIGGERED)) as unknown as typeof fetch;
+    render(<RunDetail runId="r1" />);
+
+    await screen.findByRole("link", { name: /view delivery report|see the proof/i });
+    // No partials block — empty list yields no rows.
+    expect(document.querySelectorAll('[data-partial="true"]').length).toBe(0);
   });
 });

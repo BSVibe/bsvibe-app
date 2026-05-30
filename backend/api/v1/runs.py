@@ -26,6 +26,7 @@ from backend.execution.db import (
     VerificationOutcome,
     VerificationResult,
 )
+from backend.execution.verified_deliverable import PARTIAL_DELIVERABLE_KIND
 
 router = APIRouter()
 
@@ -109,6 +110,30 @@ class RunActivity(BaseModel):
     created_at: datetime
 
 
+class RunPartialDeliverable(BaseModel):
+    """D6 — one mid-loop partial Deliverable (Synthesis §13 / Workflow §1).
+
+    Distinct from the verified-final Deliverable: each one is a single external
+    artifact the agent loop emitted via ``emit_deliverable`` BEFORE reaching
+    the verified terminal (a PR, a Notion page, a comment, …). The Run-view
+    renders these in a streaming list, separated from the verified-final the
+    founder taps for the Delivery Report.
+
+    Fields read defensively from the Deliverable's free-form ``payload`` — a
+    sparse / malformed payload yields a calm minimal entry (id + timestamp)
+    rather than 500ing the response model.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: uuid.UUID
+    artifact_type: str
+    summary: str | None = None
+    channel: str | None = None
+    external_ref: str | None = None
+    created_at: datetime
+
+
 class RunDetailResponse(BaseModel):
     """The inspectable run-detail surface (Stitch "Triggered"): the run's
     status + timestamps, its trigger context, its paused-run Decisions, the
@@ -120,7 +145,14 @@ class RunDetailResponse(BaseModel):
     :class:`ExecutionRunActivity` rows drive the timeline, or ``"derived"`` when
     no activity rows exist and the timeline is synthesized from the deliverable +
     verification we already carry (the DEFER fallback — only what the schema
-    actually stores; no fabricated per-step LLM token traces)."""
+    actually stores; no fabricated per-step LLM token traces).
+
+    D6 — ``deliverable_id`` is the run's VERIFIED-FINAL Deliverable (the
+    terminal CODE row written by ``write_verified_deliverable``); mid-loop
+    partial Deliverables are surfaced separately in ``partial_deliverables``
+    (oldest-first, the order they were emitted). A run with zero mid-loop
+    emits keeps the prior shape exactly (empty list).
+    """
 
     model_config = ConfigDict(extra="forbid")
 
@@ -134,6 +166,7 @@ class RunDetailResponse(BaseModel):
     decisions: list[RunDecision] = []
     verification: RunVerification | None = None
     deliverable_id: uuid.UUID | None = None
+    partial_deliverables: list[RunPartialDeliverable] = []
     activities: list[RunActivity] = []
     timeline_source: str = "derived"
 
@@ -228,6 +261,30 @@ def _activity_label(activity_type: str, payload: dict[str, Any]) -> str | None:
         return "Hit a problem"
     # llm_turn and any unknown / low-signal type are skipped.
     return None
+
+
+def _partial_deliverable(row: Deliverable) -> RunPartialDeliverable:
+    """D6 — map a mid-loop partial Deliverable row onto the response shape.
+
+    All payload reads are defensive (a non-string ``summary``, missing
+    ``artifact_type``, etc. degrade to ``None`` / the raw enum value) so a
+    malformed payload never 500s the response model.
+    """
+    payload = row.payload if isinstance(row.payload, dict) else {}
+    raw_artifact_type = payload.get("artifact_type")
+    artifact_type = (
+        raw_artifact_type
+        if isinstance(raw_artifact_type, str) and raw_artifact_type.strip()
+        else row.deliverable_type.value
+    )
+    return RunPartialDeliverable(
+        id=row.id,
+        artifact_type=artifact_type,
+        summary=_opt_str(payload.get("summary")),
+        channel=_opt_str(payload.get("channel")),
+        external_ref=_opt_str(payload.get("external_ref")),
+        created_at=row.created_at,
+    )
 
 
 def _build_timeline(
@@ -365,18 +422,37 @@ async def get_run_detail(
     )
     verification_row = (await session.execute(latest_verification_stmt)).scalars().first()
 
-    latest_deliverable_stmt = (
-        select(Deliverable.id, Deliverable.created_at)
+    # D6 — Deliverables for this run: the verified-final + any mid-loop partials.
+    # We load all rows once and split by ``payload["kind"] == PARTIAL_DELIVERABLE_KIND``
+    # so ``deliverable_id`` returns the verified-final regardless of timing (a
+    # late-arriving partial must NOT shadow the terminal on the Run-view), and
+    # ``partial_deliverables`` returns the streaming list (oldest-first, the
+    # order they were emitted by the loop).
+    all_deliverables_stmt = (
+        select(Deliverable)
         .where(
             Deliverable.run_id == run_id,
             Deliverable.workspace_id == workspace_id,
         )
-        .order_by(Deliverable.created_at.desc())
-        .limit(1)
+        .order_by(Deliverable.created_at.asc())
     )
-    deliverable_row = (await session.execute(latest_deliverable_stmt)).first()
-    deliverable_id = deliverable_row[0] if deliverable_row is not None else None
-    deliverable_created_at = deliverable_row[1] if deliverable_row is not None else None
+    deliverable_rows = list((await session.execute(all_deliverables_stmt)).scalars().all())
+    partial_rows: list[Deliverable] = []
+    final_rows: list[Deliverable] = []
+    for row in deliverable_rows:
+        payload = row.payload if isinstance(row.payload, dict) else {}
+        if payload.get("kind") == PARTIAL_DELIVERABLE_KIND:
+            partial_rows.append(row)
+        else:
+            final_rows.append(row)
+    # When multiple non-partial Deliverables exist (legacy / future), the
+    # most-recent one wins — matches the prior "latest" semantics for non-partial
+    # rows and keeps the verified terminal nondegenerate.
+    final_row = final_rows[-1] if final_rows else None
+    deliverable_id = final_row.id if final_row is not None else None
+    deliverable_created_at = final_row.created_at if final_row is not None else None
+
+    partial_deliverables = [_partial_deliverable(row) for row in partial_rows]
 
     # The run's STORY: meaningful activity rows, oldest-first.
     activities_stmt = (
@@ -422,6 +498,7 @@ async def get_run_detail(
             else None
         ),
         deliverable_id=deliverable_id,
+        partial_deliverables=partial_deliverables,
         activities=activities,
         timeline_source=timeline_source,
     )

@@ -7,6 +7,7 @@ import type {
   RunActivity,
   RunDecision,
   RunDetail as RunDetailModel,
+  RunPartialDeliverable,
   RunStatus,
   RunVerification,
 } from "@/lib/api/types";
@@ -98,6 +99,10 @@ export default function RunDetail({ runId }: { runId: string }) {
     token: session?.accessToken ?? null,
     onRunTerminal: liveRefresh,
     onDecisionPending: liveRefresh,
+    // D6 — a mid-loop partial Deliverable for THIS run lands → refetch so the
+    // streaming partials list appears in real time (not only on the verified
+    // terminal). Other runs' partials are ignored (same per-run filter).
+    onDeliverablePartial: liveRefresh,
   });
 
   return (
@@ -148,10 +153,21 @@ function DetailBody({
   onResolved: () => void;
 }) {
   const t = useTranslations("run");
-  const { trigger, decisions, verification, deliverable_id, activities, timeline_source } = detail;
+  const {
+    trigger,
+    decisions,
+    verification,
+    deliverable_id,
+    partial_deliverables,
+    activities,
+    timeline_source,
+  } = detail;
   const title = trigger.intent_text?.trim() || t("untitled");
   // Only PENDING decisions are actionable; resolved ones are history.
   const pending = decisions.filter((d) => d.status === "pending");
+  // D6 — defensive read: an older backend (or a missing field on a sparse
+  // response) should not crash; default to an empty list.
+  const partials: RunPartialDeliverable[] = partial_deliverables ?? [];
 
   return (
     <article className="run-detail__body">
@@ -178,15 +194,55 @@ function DetailBody({
 
       <VerificationBlock verification={verification} />
 
-      {deliverable_id && (
-        <section className="run-deliverable" aria-label={t("deliverable")}>
-          <h2 className="section-label">{t("deliverable")}</h2>
-          <Link className="run-deliverable__link" href={`/deliverables/${deliverable_id}`}>
+      <DeliverablesBlock partials={partials} verifiedFinalId={deliverable_id} />
+    </article>
+  );
+}
+
+/** D6 — the run's Deliverables: the streaming list of mid-loop partials
+ *  (Synthesis §13: Deliver as a continuous side channel) and, when the run
+ *  has reached the verified terminal, the verified-final Deliverable the
+ *  founder taps for the Delivery Report. The two are visually distinguished
+ *  (each partial gets its own `run-partial` row, the verified-final lives in
+ *  its own bordered `run-deliverable` section with an explicit `--verified`
+ *  modifier). A run with no partials AND no verified-final renders nothing
+ *  (the pre-D6 sparse-state shape). */
+function DeliverablesBlock({
+  partials,
+  verifiedFinalId,
+}: {
+  partials: RunPartialDeliverable[];
+  verifiedFinalId: string | null;
+}) {
+  const t = useTranslations("run");
+  if (partials.length === 0 && !verifiedFinalId) return null;
+  return (
+    <section className="run-deliverables" aria-label={t("deliverable")}>
+      <h2 className="section-label">{t("deliverable")}</h2>
+      {partials.length > 0 && (
+        <ol className="run-partials">
+          {partials.map((p) => (
+            <li
+              key={p.id}
+              className="run-partial"
+              data-partial="true"
+              data-artifact-type={p.artifact_type}
+            >
+              <span className="run-partial__type">{p.artifact_type}</span>
+              {p.summary ? <span className="run-partial__summary">{p.summary}</span> : null}
+              {p.channel ? <span className="run-partial__channel">{p.channel}</span> : null}
+            </li>
+          ))}
+        </ol>
+      )}
+      {verifiedFinalId && (
+        <div className="run-deliverable run-deliverable--verified" data-verified="true">
+          <Link className="run-deliverable__link" href={`/deliverables/${verifiedFinalId}`}>
             {t("viewReport")}
           </Link>
-        </section>
+        </div>
       )}
-    </article>
+    </section>
   );
 }
 
