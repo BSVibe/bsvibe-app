@@ -18,6 +18,7 @@ from backend.intake.decision_resolution import DecisionResolutionTrigger
 from backend.intake.direct import DirectTrigger
 from backend.intake.idempotency import is_duplicate, record
 from backend.intake.schedule import ScheduleTrigger
+from backend.intake.schedule_db import WorkspaceScheduleRow
 from backend.intake.schema import TriggerEvent, TriggerKindLiteral
 from backend.intake.webhook import WebhookReceiver
 
@@ -33,6 +34,7 @@ __all__ = [
     "TriggerKind",
     "TriggerKindLiteral",
     "WebhookReceiver",
+    "WorkspaceScheduleRow",
     "is_duplicate",
     "record",
 ]
