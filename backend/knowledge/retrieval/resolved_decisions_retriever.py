@@ -65,10 +65,101 @@ _MIN_TOKEN_LEN = 3
 #: branches see the same "what does this signal talk about" view).
 _TOKEN_RE = re.compile(r"[a-z0-9]+")
 
+#: English stopwords stripped from BOTH query- and decision-side token sets
+#: before the overlap intersection. Without this, a 3-char function word like
+#: ``the`` / ``and`` / ``for`` slips past :data:`_MIN_TOKEN_LEN` and matches
+#: any decision whose body coincidentally contains it — a false positive that
+#: surfaces irrelevant prior answers in new runs (D5 retriever hardening
+#: carry-over). Korean stopwords are out of scope for v1 (founder primary
+#: language but no retrieval-path tokenization of Korean yet); add when the
+#: tokenizer learns CJK. Mirrors the deny-list discipline already used by the
+#: settle-worker's summary tokenizer (``_SUMMARY_STOPWORDS``) — kept tight on
+#: purpose: better to leave a borderline word in than over-prune signal.
+_STOPWORDS: frozenset[str] = frozenset(
+    {
+        # articles / determiners
+        "the",
+        "this",
+        "that",
+        "these",
+        "those",
+        "any",
+        "all",
+        "some",
+        # conjunctions
+        "and",
+        "but",
+        "for",
+        "nor",
+        "yet",
+        # prepositions (3+ chars only — shorter ones already filtered by length)
+        "from",
+        "into",
+        "onto",
+        "with",
+        "about",
+        "over",
+        "under",
+        # auxiliary / copula verbs
+        "are",
+        "was",
+        "were",
+        "been",
+        "being",
+        "has",
+        "had",
+        "have",
+        "did",
+        "does",
+        "can",
+        "could",
+        "will",
+        "would",
+        "should",
+        "may",
+        "might",
+        "must",
+        # negation / generic
+        "not",
+        "new",
+        "old",
+        "out",
+        "off",
+        "now",
+        "then",
+        "than",
+        # pronouns / possessives
+        "its",
+        "our",
+        "your",
+        "their",
+        "you",
+        "they",
+        "them",
+        "his",
+        "her",
+        "him",
+        "she",
+        "who",
+        "what",
+        "which",
+        "where",
+        "when",
+        "why",
+        "how",
+    }
+)
+
 
 def _tokens(text: str) -> set[str]:
-    """Lowercase salient tokens from ``text`` (length-filtered, deduped)."""
-    return {t for t in _TOKEN_RE.findall(text.casefold()) if len(t) >= _MIN_TOKEN_LEN}
+    """Lowercase salient tokens from ``text`` (length-filtered, deduped,
+    stopword-stripped). Stopwords are removed from BOTH query and decision
+    token sets so the intersection never matches on a generic function word."""
+    return {
+        t
+        for t in _TOKEN_RE.findall(text.casefold())
+        if len(t) >= _MIN_TOKEN_LEN and t not in _STOPWORDS
+    }
 
 
 class ResolvedDecisionsRetriever:
