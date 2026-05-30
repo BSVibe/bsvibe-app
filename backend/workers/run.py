@@ -56,6 +56,7 @@ from backend.delivery.connector_dispatch import (
     build_github_workspace_provisioner,
 )
 from backend.delivery.dispatcher import DeliveryDispatcher
+from backend.delivery.safe_mode_expiry import SafeModeExpirySweepRunner
 from backend.delivery.schema import DeliveryResult
 from backend.execution.connector_actions import ConnectorActionResolver
 from backend.execution.db import Decision, ExecutionRun
@@ -93,6 +94,7 @@ from backend.workers.relay_worker import RelayWorker
 from backend.workers.relays import build_relay
 from backend.workers.schedule_runner import (
     ScheduleWorker,
+    ScheduleWorkerConfig,
     build_db_poll_schedule_runner,
 )
 from backend.workers.settle_worker import (
@@ -1149,6 +1151,31 @@ def build_worker_runtime(
         ScheduleWorker(
             session_factory=session_factory,
             runner=build_db_poll_schedule_runner(),
+        ),
+        # D3a — Safe Mode expiry sweep. A SECOND ScheduleWorker against the
+        # SAME ScheduleRunnerProtocol seam but a different runner: the
+        # :class:`SafeModeExpirySweepRunner` selects every PENDING/EXTENDED
+        # safe_mode_queue_items row past ``expires_at`` (across ALL
+        # workspaces), transitions each via
+        # :meth:`SafeModeQueue.mark_expired`, and emits ONE
+        # ``safe_mode.expired`` AuditOutboxRecord per non-empty batch
+        # tagged ``trigger=schedule, source=system.safe_mode_expiry`` —
+        # the glass-box provenance D3b will subscribe to on the
+        # compensation side. ``workspace_schedules`` is intentionally NOT
+        # used here (it requires ``workspace_id NOT NULL`` — a system-wide
+        # sweep doesn't fit that invariant); the Protocol seam is what M1
+        # shipped, and one extra worker instance on the same seam is the
+        # honest reuse. A distinct ``name`` keeps the two workers'
+        # task-name + log-prefix separable.
+        ScheduleWorker(
+            session_factory=session_factory,
+            runner=SafeModeExpirySweepRunner(),
+            name="safe_mode_expiry_worker",
+            # Hourly is fine — TTLs are day-grained (90d initial + 30d
+            # extensions), and a row drifting one tick past ``expires_at``
+            # before the sweep catches it has no founder impact. Cheap
+            # poll, low write amplification.
+            config=ScheduleWorkerConfig(poll_interval_s=3600.0),
         ),
     ]
     return WorkerRuntime(workers=workers, _stop=asyncio.Event())

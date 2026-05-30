@@ -272,6 +272,64 @@ class SafeModeQueue:
             )
         return len(ids)
 
+    async def mark_expired(
+        self,
+        *,
+        workspace_id: uuid.UUID,
+        item_id: uuid.UUID,
+    ) -> bool:
+        """Flip ONE item ``pending → expired`` (or ``extended → expired``).
+
+        Mirrors the per-item :meth:`mark_delivered` / :meth:`mark_deleted`
+        vocabulary so the lifecycle is enum-shaped + glass-box (the
+        :class:`SafeModeStatus.EXPIRED` transition is named, not piggybacked on
+        ``mark_deleted`` with a reason). The system-wide sweep
+        (:meth:`expire_all_due`, driven by the M1 schedule runner) calls this
+        method per row so individual transitions stay observable.
+
+        Returns ``False`` if not found / not in ``PENDING`` or ``EXTENDED`` —
+        the edge is enforced, so an already-settled item (approved/denied/
+        delivered/archived/deleted/expired) cannot regress to ``EXPIRED``.
+        ``decided_at`` is stamped here (the founder didn't decide, but the
+        system did — the row LEFT the active queue at this instant, which is
+        the same semantic ``decided_at`` already carries for ``EXPIRED``-via-
+        :meth:`expire`).
+        """
+        row = await self._session.get(SafeModeQueueItemRow, item_id)
+        if row is None or row.workspace_id != workspace_id:
+            return False
+        if row.status not in (SafeModeStatus.PENDING, SafeModeStatus.EXTENDED):
+            return False
+        row.status = SafeModeStatus.EXPIRED
+        row.decided_at = datetime.now(tz=UTC)
+        await self._session.flush()
+        return True
+
+    async def list_due_expired(
+        self, *, now: datetime | None = None
+    ) -> list[SafeModeQueueItemRow]:
+        """Every PENDING / EXTENDED row past ``expires_at`` across ALL workspaces.
+
+        System-wide read (no workspace filter) — D3a / M1 plug-in for the
+        :class:`backend.delivery.safe_mode_expiry.SafeModeExpirySweepRunner`,
+        which transitions each returned row to ``EXPIRED`` via
+        :meth:`mark_expired` and emits ONE audit-outbox row for the batch (the
+        glass-box provenance — ``trigger=schedule``, ``source=system.safe_mode_expiry``).
+        Per-workspace callers should keep using :meth:`expire` (single-statement
+        update, no audit emission)."""
+        cutoff = now or datetime.now(tz=UTC)
+        stmt = (
+            select(SafeModeQueueItemRow)
+            .where(
+                SafeModeQueueItemRow.status.in_(
+                    [SafeModeStatus.PENDING, SafeModeStatus.EXTENDED]
+                ),
+                SafeModeQueueItemRow.expires_at <= cutoff,
+            )
+            .order_by(SafeModeQueueItemRow.expires_at.asc())
+        )
+        return list((await self._session.execute(stmt)).scalars().all())
+
     async def _transition(
         self,
         *,
@@ -302,3 +360,4 @@ __all__ = [
     "MAX_EXTENSIONS",
     "SafeModeQueue",
 ]
+
