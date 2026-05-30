@@ -250,9 +250,15 @@ class ScheduleWorker(BaseWorker):
         session_factory: async_sessionmaker[AsyncSession],
         runner: ScheduleRunnerProtocol,
         config: ScheduleWorkerConfig | None = None,
+        name: str = "schedule_worker",
     ) -> None:
+        # The default ``name="schedule_worker"`` preserves every existing
+        # caller's behaviour; D3a (Safe Mode expiry sweep) instantiates a
+        # SECOND ScheduleWorker against the SAME Protocol seam but a
+        # different runner, so the ``name`` override prevents the two
+        # workers from sharing a task name + log prefix in the runtime.
         self._cfg = config or ScheduleWorkerConfig()
-        super().__init__(name="schedule_worker", poll_interval_s=self._cfg.poll_interval_s)
+        super().__init__(name=name, poll_interval_s=self._cfg.poll_interval_s)
         self._session_factory = session_factory
         self._runner = runner
 

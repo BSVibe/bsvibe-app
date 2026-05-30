@@ -538,6 +538,11 @@ async def test_build_worker_runtime_constructs_all_workers(
         "relay_worker",
         # M1 — schedule runner now ships in the production worker set.
         "schedule_worker",
+        # D3a — Safe Mode expiry sweep. A SECOND ScheduleWorker against the
+        # same ScheduleRunnerProtocol seam, sweeping expired Safe Mode
+        # queue rows system-wide and emitting a ``safe_mode.expired`` audit
+        # row tagged ``trigger=schedule, source=system.safe_mode_expiry``.
+        "safe_mode_expiry_worker",
     }
     # start + graceful stop is idempotent and drains in-flight ticks.
     for w in rt.workers:
