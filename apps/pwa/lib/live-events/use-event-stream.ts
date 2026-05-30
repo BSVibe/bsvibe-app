@@ -40,6 +40,11 @@ export interface UseEventStreamOptions {
   onDecisionPending?: (payload: LiveEventPayload) => void;
   onRunTerminal?: (payload: LiveEventPayload) => void;
   onDeliveryQueued?: (payload: LiveEventPayload) => void;
+  /** D6 — a mid-loop partial Deliverable just landed. The payload carries
+   *  `run_id` + `deliverable_id` so the consumer can decide whether the partial
+   *  affects the currently-rendered run (refetch) or just a different run
+   *  elsewhere in the workspace (ignore). */
+  onDeliverablePartial?: (payload: LiveEventPayload) => void;
 }
 
 /**
@@ -56,15 +61,18 @@ export function useEventStream({
   onDecisionPending,
   onRunTerminal,
   onDeliveryQueued,
+  onDeliverablePartial,
 }: UseEventStreamOptions): void {
   // Keep latest handlers in refs so the effect can call the current version
   // without re-opening the EventSource on every render.
   const decisionPendingRef = useRef(onDecisionPending);
   const runTerminalRef = useRef(onRunTerminal);
   const deliveryQueuedRef = useRef(onDeliveryQueued);
+  const deliverablePartialRef = useRef(onDeliverablePartial);
   decisionPendingRef.current = onDecisionPending;
   runTerminalRef.current = onRunTerminal;
   deliveryQueuedRef.current = onDeliveryQueued;
+  deliverablePartialRef.current = onDeliverablePartial;
 
   useEffect(() => {
     if (!token) return;
@@ -96,15 +104,21 @@ export function useEventStream({
       const payload = parse(event.data);
       if (payload && deliveryQueuedRef.current) deliveryQueuedRef.current(payload);
     };
+    const onPartial = (event: MessageEvent): void => {
+      const payload = parse(event.data);
+      if (payload && deliverablePartialRef.current) deliverablePartialRef.current(payload);
+    };
 
     source.addEventListener("decision.pending", onDecision as EventListener);
     source.addEventListener("run.terminal", onRun as EventListener);
     source.addEventListener("delivery.queued", onDelivery as EventListener);
+    source.addEventListener("deliverable.partial", onPartial as EventListener);
 
     return () => {
       source.removeEventListener("decision.pending", onDecision as EventListener);
       source.removeEventListener("run.terminal", onRun as EventListener);
       source.removeEventListener("delivery.queued", onDelivery as EventListener);
+      source.removeEventListener("deliverable.partial", onPartial as EventListener);
       source.close();
     };
   }, [token]);

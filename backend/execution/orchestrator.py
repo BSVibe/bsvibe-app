@@ -418,6 +418,7 @@ class RunOrchestrator:
         settings: Settings | None = None,
         suggested_skill: str | None = None,
         suggested_skill_description: str | None = None,
+        live_event_bus: Any = None,
     ) -> None:
         self._session = session
         self._llm = llm
@@ -454,6 +455,12 @@ class RunOrchestrator:
         # behaviour: the verified terminal emits no stream notification. Emission
         # is gated + soft-fail inside :func:`emit_stream_notification`.
         self._redis_client = redis_client
+        # D6 — optional LiveEventBus override. Tests inject an isolated bus to
+        # observe ``deliverable.partial`` publishes without touching the
+        # process-wide singleton; production wires through the singleton via
+        # ``set_live_event_bus_redis`` so mid-loop publishes cross the
+        # worker→HTTP container boundary via the existing Redis transport.
+        self._live_event_bus = live_event_bus
 
     # -- B5a: skill + knowledge tools -------------------------------------
 
@@ -1365,6 +1372,18 @@ class RunOrchestrator:
                     ),
                 }
             )
+        # D6 — publish a tiny live-event so the PWA Run / Brief views wake up
+        # AS the partial lands, not only at the verified terminal (Synthesis
+        # §13 — Deliver as a continuous side channel). Soft-fail: a bus hiccup
+        # must NEVER break the loop or revert the persisted Deliverable + the
+        # DeliveryEventRow (those are the durable record; the bus is only the
+        # wake-up signal — mirrors the audit→bridge pattern in
+        # :mod:`backend.supervisor.audit.service`).
+        await self._publish_deliverable_partial_event(
+            run=run,
+            deliverable_id=deliverable.id,
+            artifact_type=artifact_type,
+        )
         return json.dumps(
             {
                 "status": "emitted",
@@ -1372,6 +1391,48 @@ class RunOrchestrator:
                 "artifact_type": artifact_type,
             }
         )
+
+    async def _publish_deliverable_partial_event(
+        self,
+        *,
+        run: ExecutionRun,
+        deliverable_id: uuid.UUID,
+        artifact_type: str,
+    ) -> None:
+        """Fire one ``deliverable.partial`` LiveEvent for a mid-loop emit (D6).
+
+        The payload is tiny — ids + the artifact_type label so the consumer can
+        decide whether to refetch (B16 wire contract: no LLM content, just a
+        wake-up). Uses the orchestrator-injected bus when set (tests), else the
+        process-wide singleton (production — Redis transport bound at worker
+        startup so the publish reaches the HTTP container's SSE subscribers).
+        """
+        try:
+            from backend.api.v1.live_events import (  # noqa: PLC0415 — local, avoids cycle
+                EVENT_DELIVERABLE_PARTIAL,
+                LiveEvent,
+                get_live_event_bus,
+            )
+
+            bus = self._live_event_bus or get_live_event_bus()
+            await bus.publish(
+                run.workspace_id,
+                LiveEvent(
+                    event_type=EVENT_DELIVERABLE_PARTIAL,
+                    data={
+                        "run_id": str(run.id),
+                        "deliverable_id": str(deliverable_id),
+                        "artifact_type": artifact_type,
+                    },
+                ),
+            )
+        except BaseException:  # noqa: BLE001 — last-resort guard, never propagate
+            logger.warning(
+                "deliverable_partial_live_event_failed",
+                run_id=str(run.id),
+                deliverable_id=str(deliverable_id),
+                exc_info=True,
+            )
 
     async def _create_decision(
         self,

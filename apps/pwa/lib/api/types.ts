@@ -199,13 +199,32 @@ export interface RunActivity {
   created_at: string;
 }
 
+/** D6 — one mid-loop partial Deliverable (Synthesis §13 / Workflow §1). One
+ *  external artifact the agent emitted via `emit_deliverable` BEFORE the
+ *  verified terminal — a PR, a Notion page, a comment, a draft. The Run-view
+ *  renders these in a streaming list, distinct from the verified-final the
+ *  founder taps for the Delivery Report. */
+export interface RunPartialDeliverable {
+  id: string;
+  artifact_type: string;
+  summary: string | null;
+  channel: string | null;
+  external_ref: string | null;
+  created_at: string;
+}
+
 /** `GET /api/v1/runs/{id}/detail` body (backend RunDetailResponse) — the
  *  inspectable run-detail surface (Stitch "Triggered"): status, trigger
  *  context, paused-run decisions, the latest verification outcome, the
  *  resulting Deliverable id (so the UI can link to its Delivery Report), and the
  *  run's activity timeline (the STORY of what the agent did). `timeline_source`
  *  is `"activities"` when real activity rows drive it, or `"derived"` when it's
- *  synthesized from the deliverable + verification we already carry. */
+ *  synthesized from the deliverable + verification we already carry.
+ *
+ *  D6 — `deliverable_id` is the run's verified-FINAL Deliverable; mid-loop
+ *  partial Deliverables are surfaced separately in `partial_deliverables`
+ *  (oldest-first, the order they were emitted). A run with zero mid-loop
+ *  emits keeps the prior shape exactly (empty list). */
 export interface RunDetail {
   id: string;
   workspace_id: string;
@@ -217,6 +236,7 @@ export interface RunDetail {
   decisions: RunDecision[];
   verification: RunVerification | null;
   deliverable_id: string | null;
+  partial_deliverables: RunPartialDeliverable[];
   activities: RunActivity[];
   timeline_source: "activities" | "derived";
 }
