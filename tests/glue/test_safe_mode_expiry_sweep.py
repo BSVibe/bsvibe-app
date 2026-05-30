@@ -101,9 +101,7 @@ async def test_past_expiry_flips_to_expired_within_one_tick(
     )
 
     runner = SafeModeExpirySweepRunner(now_fn=lambda: now)
-    worker = ScheduleWorker(
-        session_factory=sf, runner=runner, name="safe_mode_expiry_worker"
-    )
+    worker = ScheduleWorker(session_factory=sf, runner=runner, name="safe_mode_expiry_worker")
 
     expired = await worker.fire_due_once()
 
@@ -128,9 +126,7 @@ async def test_extended_state_also_expires(sf: async_sessionmaker[AsyncSession])
     )
 
     runner = SafeModeExpirySweepRunner(now_fn=lambda: now)
-    worker = ScheduleWorker(
-        session_factory=sf, runner=runner, name="safe_mode_expiry_worker"
-    )
+    worker = ScheduleWorker(session_factory=sf, runner=runner, name="safe_mode_expiry_worker")
     expired = await worker.fire_due_once()
     assert expired == 1
 
@@ -155,9 +151,7 @@ async def test_future_expiry_is_not_touched(sf: async_sessionmaker[AsyncSession]
     )
 
     runner = SafeModeExpirySweepRunner(now_fn=lambda: now)
-    worker = ScheduleWorker(
-        session_factory=sf, runner=runner, name="safe_mode_expiry_worker"
-    )
+    worker = ScheduleWorker(session_factory=sf, runner=runner, name="safe_mode_expiry_worker")
     expired = await worker.fire_due_once()
     assert expired == 0
 
@@ -189,9 +183,7 @@ async def test_terminal_states_are_not_touched(sf: async_sessionmaker[AsyncSessi
         )
 
     runner = SafeModeExpirySweepRunner(now_fn=lambda: now)
-    worker = ScheduleWorker(
-        session_factory=sf, runner=runner, name="safe_mode_expiry_worker"
-    )
+    worker = ScheduleWorker(session_factory=sf, runner=runner, name="safe_mode_expiry_worker")
     expired = await worker.fire_due_once()
     assert expired == 0
 
@@ -221,9 +213,7 @@ async def test_second_tick_does_not_double_fire(sf: async_sessionmaker[AsyncSess
     )
 
     runner = SafeModeExpirySweepRunner(now_fn=lambda: now)
-    worker = ScheduleWorker(
-        session_factory=sf, runner=runner, name="safe_mode_expiry_worker"
-    )
+    worker = ScheduleWorker(session_factory=sf, runner=runner, name="safe_mode_expiry_worker")
 
     first = await worker.fire_due_once()
     second = await worker.fire_due_once()
@@ -275,9 +265,7 @@ async def test_sweep_emits_audit_with_schedule_provenance(
     )
 
     runner = SafeModeExpirySweepRunner(now_fn=lambda: now)
-    worker = ScheduleWorker(
-        session_factory=sf, runner=runner, name="safe_mode_expiry_worker"
-    )
+    worker = ScheduleWorker(session_factory=sf, runner=runner, name="safe_mode_expiry_worker")
     await worker.fire_due_once()
 
     async with sf() as s:
@@ -320,9 +308,7 @@ async def test_sweep_with_no_expired_emits_no_audit(
     )
 
     runner = SafeModeExpirySweepRunner(now_fn=lambda: now)
-    worker = ScheduleWorker(
-        session_factory=sf, runner=runner, name="safe_mode_expiry_worker"
-    )
+    worker = ScheduleWorker(session_factory=sf, runner=runner, name="safe_mode_expiry_worker")
     fired = await worker.fire_due_once()
     assert fired == 0
 
@@ -356,17 +342,11 @@ async def test_sweep_is_system_wide_across_workspaces(
     ws_a = uuid.uuid4()
     ws_b = uuid.uuid4()
     now = datetime(2026, 5, 25, 12, 0, 0, tzinfo=UTC)
-    a_id = await _enqueue_with_expiry(
-        sf, workspace_id=ws_a, expires_at=now - timedelta(seconds=1)
-    )
-    b_id = await _enqueue_with_expiry(
-        sf, workspace_id=ws_b, expires_at=now - timedelta(seconds=1)
-    )
+    a_id = await _enqueue_with_expiry(sf, workspace_id=ws_a, expires_at=now - timedelta(seconds=1))
+    b_id = await _enqueue_with_expiry(sf, workspace_id=ws_b, expires_at=now - timedelta(seconds=1))
 
     runner = SafeModeExpirySweepRunner(now_fn=lambda: now)
-    worker = ScheduleWorker(
-        session_factory=sf, runner=runner, name="safe_mode_expiry_worker"
-    )
+    worker = ScheduleWorker(session_factory=sf, runner=runner, name="safe_mode_expiry_worker")
     expired = await worker.fire_due_once()
     assert expired == 2
 

@@ -120,9 +120,7 @@ class SafeModeExpirySweepRunner:
             await session.commit()
             return len(expired_ids)
 
-    async def _sweep_one_batch(
-        self, session: AsyncSession, cutoff: datetime
-    ) -> list[uuid.UUID]:
+    async def _sweep_one_batch(self, session: AsyncSession, cutoff: datetime) -> list[uuid.UUID]:
         """Transition every PENDING/EXTENDED row past ``cutoff`` to EXPIRED.
 
         Goes through :meth:`SafeModeQueue.mark_expired` per row (NOT a bulk

@@ -305,9 +305,7 @@ class SafeModeQueue:
         await self._session.flush()
         return True
 
-    async def list_due_expired(
-        self, *, now: datetime | None = None
-    ) -> list[SafeModeQueueItemRow]:
+    async def list_due_expired(self, *, now: datetime | None = None) -> list[SafeModeQueueItemRow]:
         """Every PENDING / EXTENDED row past ``expires_at`` across ALL workspaces.
 
         System-wide read (no workspace filter) — D3a / M1 plug-in for the
@@ -321,9 +319,7 @@ class SafeModeQueue:
         stmt = (
             select(SafeModeQueueItemRow)
             .where(
-                SafeModeQueueItemRow.status.in_(
-                    [SafeModeStatus.PENDING, SafeModeStatus.EXTENDED]
-                ),
+                SafeModeQueueItemRow.status.in_([SafeModeStatus.PENDING, SafeModeStatus.EXTENDED]),
                 SafeModeQueueItemRow.expires_at <= cutoff,
             )
             .order_by(SafeModeQueueItemRow.expires_at.asc())
@@ -360,4 +356,3 @@ __all__ = [
     "MAX_EXTENSIONS",
     "SafeModeQueue",
 ]
-
