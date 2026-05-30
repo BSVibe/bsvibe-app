@@ -20,13 +20,21 @@ DB-poll runner uses — honest reuse of M1's seam without bending the
 (:class:`~backend.workers.schedule_runner.ScheduleAdvancer`) is irrelevant here
 (the sweep is "every tick", not a cron expression), so it isn't plumbed in.
 
-**D3a vs D3b boundary.** D3a's deliverable is the EXPIRY TRANSITION + the audit
-hook. The transition flips ``PENDING/EXTENDED → EXPIRED`` via
+**D3a vs D3b boundary.** D3a's deliverable was the EXPIRY TRANSITION + the
+audit hook. The transition flips ``PENDING/EXTENDED → EXPIRED`` via
 :meth:`SafeModeQueue.mark_expired`, and ONE :class:`AuditOutboxRecord` per
 non-empty batch records the provenance (``trigger=schedule``,
-``source=system.safe_mode_expiry``). D3a does NOT fire ``compensation.py`` on
-the expire side — that's D3b, which subscribes to this audit hook (the seam is
-clean: D3b only needs to add a subscriber).
+``source=system.safe_mode_expiry``).
+
+**D3b is now wired in.** Each item successfully flipped to ``EXPIRED`` fans
+out a per-item :func:`fire_compensation_for_item` call right after the audit
+emission, in the same transaction. The fan-out is per-Deliverable (not per
+batch) because the supersede/revert/notify decision is per-Deliverable. The
+in-process direct call replaces the originally-anticipated outbox-subscriber
+path because no in-process audit subscriber framework exists today — the
+only outbox consumer is :class:`~backend.workers.relay_worker.RelayWorker`,
+which drains to an external sink, not to local handlers. Inventing in-process
+fan-out is a separate lift; the direct call keeps D3b a one-PR change.
 """
 
 from __future__ import annotations
@@ -114,13 +122,30 @@ class SafeModeExpirySweepRunner:
         """
         cutoff = self._now_fn()
         async with session_factory() as session:
-            expired_ids = await self._sweep_one_batch(session, cutoff)
-            if expired_ids:
+            expired_pairs = await self._sweep_one_batch(session, cutoff)
+            if expired_pairs:
+                expired_ids = [item_id for item_id, _ in expired_pairs]
                 await self._emit_batch_audit(session, expired_ids=expired_ids, now=cutoff)
-            await session.commit()
-            return len(expired_ids)
+                # D3b: per-item auto-compensation fan-out. The audit row is
+                # ONE per batch (operational event), but compensation decisions
+                # are per-Deliverable, so we fan out here. Soft-fail per item
+                # so one flaky evaluator doesn't poison the rest of the batch.
+                from backend.delivery.safe_mode_compensation_hook import (  # noqa: PLC0415
+                    fire_compensation_for_item,
+                )
 
-    async def _sweep_one_batch(self, session: AsyncSession, cutoff: datetime) -> list[uuid.UUID]:
+                for _, deliverable_id in expired_pairs:
+                    await fire_compensation_for_item(
+                        session,
+                        deliverable_id=deliverable_id,
+                        trigger="expire",
+                    )
+            await session.commit()
+            return len(expired_pairs)
+
+    async def _sweep_one_batch(
+        self, session: AsyncSession, cutoff: datetime
+    ) -> list[tuple[uuid.UUID, uuid.UUID]]:
         """Transition every PENDING/EXTENDED row past ``cutoff`` to EXPIRED.
 
         Goes through :meth:`SafeModeQueue.mark_expired` per row (NOT a bulk
@@ -128,14 +153,19 @@ class SafeModeExpirySweepRunner:
         lifecycle methods do — a row that races into a settled state
         between the SELECT and the per-row update is skipped (returns
         ``False``), not silently regressed.
+
+        Returns ``[(item_id, deliverable_id), ...]`` so D3b's per-item
+        compensation fan-out can drive ``CompensationHandler.evaluate`` with
+        the correct Deliverable id per expired row. The audit emitter only
+        consumes the item_id half (see :meth:`_emit_batch_audit`).
         """
         queue = SafeModeQueue(session)
         due = await queue.list_due_expired(now=cutoff)
-        expired: list[uuid.UUID] = []
+        expired: list[tuple[uuid.UUID, uuid.UUID]] = []
         for row in due:
             ok = await queue.mark_expired(workspace_id=row.workspace_id, item_id=row.id)
             if ok:
-                expired.append(row.id)
+                expired.append((row.id, row.deliverable_id))
         return expired
 
     async def _emit_batch_audit(
