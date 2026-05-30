@@ -91,6 +91,10 @@ from backend.workers.emit import STREAM_AGENT, STREAM_DELIVER, STREAM_INTAKE, ST
 from backend.workers.intake_worker import IntakeWorker
 from backend.workers.relay_worker import RelayWorker
 from backend.workers.relays import build_relay
+from backend.workers.schedule_runner import (
+    ScheduleWorker,
+    build_db_poll_schedule_runner,
+)
 from backend.workers.settle_worker import (
     EntityExtractor,
     ExtractorFactory,
@@ -1131,6 +1135,21 @@ def build_worker_runtime(
         # Config-driven relay: HttpRelay when ``audit_relay_url`` is set,
         # else the no-sink LoggingRelay default (drain + ack, no delivery).
         RelayWorker(session_factory=session_factory, relay=build_relay(settings)),
+        # M1 — schedule runner. DB-polls ``workspace_schedules`` for rows where
+        # ``enabled=True AND next_run_at <= now`` and fires
+        # :class:`ScheduleTrigger` on each (downstream IntakeWorker then drains
+        # the new TriggerEvent into a Request — exactly the same path a Direct
+        # or Connector trigger walks). Depends on the
+        # :class:`ScheduleRunnerProtocol` so the Redis-Streams wake-up
+        # substrate (Status §5 Phase-1 honest defer) can be dropped in later
+        # without touching the worker. Until then the DB-poll runner is the
+        # real mode; cron-algebra defaults to one-shot (see
+        # :class:`OneShotScheduleAdvancer`) — operators wire a recurring
+        # advancer via the factory.
+        ScheduleWorker(
+            session_factory=session_factory,
+            runner=build_db_poll_schedule_runner(),
+        ),
     ]
     return WorkerRuntime(workers=workers, _stop=asyncio.Event())
 

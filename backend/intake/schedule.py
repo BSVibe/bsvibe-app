@@ -48,7 +48,19 @@ class ScheduleTrigger:
             source=plugin_name,
             trigger_kind="schedule",
             idempotency_key=idem,
-            payload={"plugin": plugin_name, "cron_expr": cron_expr, "fired_at": now.isoformat()},
+            # ``trigger=schedule`` is the M1 glass-box marker — IntakeWorker
+            # copies the trigger payload onto ``RequestRow.payload`` via
+            # :func:`backend.intake.receive.receive`, so the Brief / Run views
+            # can tell the run came from a schedule (not a Direct ask, a
+            # connector inbound, or a decision resolution). Stamped here at
+            # the emitter site so EVERY caller (the M1 ``ScheduleWorker`` or a
+            # future direct-CLI ``schedule fire`` invocation) gets it for free.
+            payload={
+                "plugin": plugin_name,
+                "cron_expr": cron_expr,
+                "fired_at": now.isoformat(),
+                "trigger": "schedule",
+            },
             product_id=product_id,
             received_at=now,
         )
