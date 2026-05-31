@@ -211,8 +211,7 @@ def test_run_workers_still_registers_schedule_worker() -> None:
 
     src = inspect.getsource(run_mod)
     assert "backend.schedule.infrastructure.workers.schedule_worker" in src or (
-        "backend.schedule.infrastructure.db_poll_runner" in src
-        and "ScheduleWorker" in src
+        "backend.schedule.infrastructure.db_poll_runner" in src and "ScheduleWorker" in src
     )
     assert "from backend.workers" + ".schedule_runner" not in src
 

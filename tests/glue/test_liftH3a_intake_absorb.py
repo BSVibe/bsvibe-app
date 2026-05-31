@@ -159,9 +159,7 @@ def test_schedule_runner_imports_resolve() -> None:
     intent of this regression test is "the schedule worker symbol is
     still importable", so the path follows the lift.
     """
-    mod = importlib.import_module(
-        "backend.schedule.infrastructure.workers.schedule_worker"
-    )
+    mod = importlib.import_module("backend.schedule.infrastructure.workers.schedule_worker")
     assert hasattr(mod, "ScheduleWorker")
 
 
