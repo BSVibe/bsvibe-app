@@ -3,7 +3,7 @@
 Capabilities:
 
 * ``@p.inbound`` — parse a Sentry webhook (``issue`` / ``event_alert``
-  resources) into a :class:`backend.intake.schema.TriggerEvent`, with
+  resources) into a :class:`backend.workflow.domain.incoming.TriggerEvent`, with
   HMAC-SHA256 signature verification (``Sentry-Hook-Signature``, bare hex) and
   a stable idempotency key derived from the Sentry hook / issue / event id.
 * ``@p.outbound(artifact_types=["sentry_issue_update"])`` — resolve an issue

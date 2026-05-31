@@ -29,14 +29,14 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from backend.connectors.db import ConnectorAccountRow
-from backend.intake.db import RequestRow, TriggerEventRow, TriggerKind
-from backend.intake.receive import (
+from backend.workers.intake_worker import IntakeWorker
+from backend.workflow.application.stages.intake import (
     RECEIVE_FILTERED_KEY,
     ReceiveOutcome,
     receive,
 )
-from backend.intake.schema import TriggerEvent
-from backend.workers.intake_worker import IntakeWorker
+from backend.workflow.domain.incoming import TriggerEvent
+from backend.workflow.infrastructure.intake.db import RequestRow, TriggerEventRow, TriggerKind
 from backend.workspaces.db import ProductRow, WorkspaceRow
 from backend.workspaces.resource_bindings import ResourceBindingRepository
 

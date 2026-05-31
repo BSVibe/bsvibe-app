@@ -15,10 +15,10 @@ import structlog
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.intake.db import TriggerEventRow, TriggerKind
-from backend.intake.idempotency import is_duplicate, record
-from backend.intake.schema import TriggerEvent
-from backend.intake.webhook import WebhookOutcome
+from backend.workflow.application.intake.webhook import WebhookOutcome
+from backend.workflow.domain.incoming import TriggerEvent
+from backend.workflow.infrastructure.idempotency import is_duplicate, record
+from backend.workflow.infrastructure.intake.db import TriggerEventRow, TriggerKind
 
 logger = structlog.get_logger(__name__)
 

@@ -1,4 +1,4 @@
-"""Slack event parsing → :class:`backend.intake.schema.TriggerEvent`.
+"""Slack event parsing → :class:`backend.workflow.domain.incoming.TriggerEvent`.
 
 Pure functions (no I/O) so they unit-test without httpx. The inbound
 capability in :mod:`plugin.slack.plugin` wires the
@@ -26,7 +26,7 @@ from typing import Any
 
 import structlog
 
-from backend.intake.schema import TriggerEvent
+from backend.workflow.domain.incoming import TriggerEvent
 
 logger = structlog.get_logger(__name__)
 

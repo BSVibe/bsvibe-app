@@ -40,7 +40,7 @@ async def _seed_trigger_event(sf: Any, *, workspace_id: uuid.UUID) -> None:
     """Land one un-drained TriggerEvent the IntakeWorker will turn into a Request."""
     from datetime import UTC, datetime
 
-    from backend.intake.db import TriggerEventRow, TriggerKind
+    from backend.workflow.infrastructure.intake.db import TriggerEventRow, TriggerKind
 
     async with sf() as s:
         s.add(
@@ -370,7 +370,7 @@ async def test_intake_worker_drain_survives_redis_emit_failure(sf: Any) -> None:
     async with sf() as s:
         from sqlalchemy import func, select
 
-        from backend.intake.db import RequestRow
+        from backend.workflow.infrastructure.intake.db import RequestRow
 
         total = (await s.execute(select(func.count()).select_from(RequestRow))).scalar_one()
         assert total == 1

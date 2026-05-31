@@ -18,7 +18,7 @@ import os
 from typing import Any
 
 from backend.extensions.plugin.context import SkillContext
-from backend.intake.schema import TriggerEvent
+from backend.workflow.domain.incoming import TriggerEvent
 from bsvibe_sdk import plugin
 from plugin.github.client import DEFAULT_BASE_URL, GithubClient
 from plugin.github.webhook import parse_webhook

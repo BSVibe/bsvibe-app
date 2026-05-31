@@ -8,8 +8,8 @@ import pytest
 import pytest_asyncio
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from backend.intake.db import IntakeBase, TriggerEventRow
-from backend.intake.webhook import WebhookReceiver
+from backend.workflow.application.intake.webhook import WebhookReceiver
+from backend.workflow.infrastructure.intake.db import IntakeBase, TriggerEventRow
 
 from .._support import db_engine
 

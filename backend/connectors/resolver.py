@@ -36,8 +36,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.connectors.db import ConnectorAccountRow
-from backend.intake.schema import TriggerEvent
 from backend.router.accounts.crypto import CredentialCipher
+from backend.workflow.domain.incoming import TriggerEvent
 from plugin.discord.webhook import parse_interaction
 from plugin.github.webhook import parse_webhook
 from plugin.sentry.webhook import parse_webhook as parse_sentry_webhook

@@ -40,7 +40,6 @@ from backend.execution.knowledge_orchestrator import (
 )
 from backend.execution.orchestrator import RunOrchestrator
 from backend.executors.orchestrator import ExecutorOrchestrator
-from backend.intake.db import RequestRow, RequestStatus, TriggerEventRow, TriggerKind
 from backend.router.accounts.schemas import ModelAccountCreate
 from backend.router.accounts.service import ModelAccountService
 from backend.router.llm_client import LlmClient
@@ -48,6 +47,12 @@ from backend.supervisor.sandbox import NoopSandboxManager
 from backend.workers import run as runtime
 from backend.workers.agent_worker import AgentWorker
 from backend.workflow.application.agent_runner import AgentRunner
+from backend.workflow.infrastructure.intake.db import (
+    RequestRow,
+    RequestStatus,
+    TriggerEventRow,
+    TriggerKind,
+)
 
 from .._support import db_engine
 

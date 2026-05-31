@@ -3,7 +3,7 @@
 Capabilities:
 
 * ``@p.inbound`` — parse a Telegram Bot-API webhook Update (a plain
-  ``message``) into a :class:`backend.intake.schema.TriggerEvent`, verifying
+  ``message``) into a :class:`backend.workflow.domain.incoming.TriggerEvent`, verifying
   Telegram's secret-token scheme (the ``X-Telegram-Bot-Api-Secret-Token``
   header must equal the secret configured via ``setWebhook``, constant-time
   compare) and using the Telegram ``update_id`` as the idempotency key.

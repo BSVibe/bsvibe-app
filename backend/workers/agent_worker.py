@@ -43,11 +43,11 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from backend.execution.db import ExecutionRun, RunStatus
 from backend.execution.orchestrator import RunCompute
 from backend.extensions.skill.loader import SkillLoader
-from backend.intake.db import RequestRow, RequestStatus
 from backend.storage.artifact_store import ArtifactStore, LocalFilesystemArtifactStore
 from backend.workers.base import BaseWorker
 from backend.workflow.application.agent_runner import AgentRunner
 from backend.workflow.application.stages.frame import FrameConfig, FrameLlm, FrameStage
+from backend.workflow.infrastructure.intake.db import RequestRow, RequestStatus
 
 logger = structlog.get_logger(__name__)
 

@@ -3,7 +3,7 @@
 Capabilities:
 
 * ``@p.inbound`` — parse a GitHub webhook (issue / PR / comment) into a
-  :class:`backend.intake.schema.TriggerEvent`, with HMAC-SHA256 signature
+  :class:`backend.workflow.domain.incoming.TriggerEvent`, with HMAC-SHA256 signature
   verification and ``X-GitHub-Delivery`` as the idempotency key.
 * ``@p.outbound(artifact_types=["code", "pr"])`` — open / update a PR.
 * ``@p.outbound(artifact_types=["issue_comment"])`` — post a comment.

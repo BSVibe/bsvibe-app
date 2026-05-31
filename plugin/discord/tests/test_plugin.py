@@ -17,7 +17,7 @@ import respx
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from backend.extensions.plugin import PluginLoader, PluginRunError, PluginRunner
-from backend.intake.schema import TriggerEvent
+from backend.workflow.domain.incoming import TriggerEvent
 from plugin.discord import plugin as discord_module
 
 API = "https://discord.com/api/v10"

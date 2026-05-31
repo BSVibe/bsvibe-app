@@ -1,9 +1,10 @@
 """Intake persistence schema — trigger_events + requests.
 
-Workflow §12.5 #8 (Bundle G — Intake / Triggers). Per-workspace
-scoping is enforced via ``workspace_id NOT NULL`` on every row plus a
-composite unique on ``(workspace_id, source, idempotency_key)`` so
-duplicate triggers fail at the DB layer regardless of intake surface.
+Workflow §12.5 #8 (Bundle G — Intake / Triggers). v8 D29 absorbed this
+into the Workflow context (Lift H3a). Per-workspace scoping is enforced
+via ``workspace_id NOT NULL`` on every row plus a composite unique on
+``(workspace_id, source, idempotency_key)`` so duplicate triggers fail
+at the DB layer regardless of intake surface.
 
 We redeclare ``RequestStatus`` here as a local :class:`StrEnum` (rather
 than importing ``backend.workflow.domain._domain.RequestStatus``) to keep
@@ -28,7 +29,7 @@ IntakeBase = Base
 
 
 class TriggerKind(StrEnum):
-    """Mirrors :data:`backend.intake.schema.TriggerKindLiteral`."""
+    """Mirrors :data:`backend.workflow.domain.incoming.TriggerKindLiteral`."""
 
     WEBHOOK = "webhook"
     SCHEDULE = "schedule"

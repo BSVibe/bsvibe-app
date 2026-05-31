@@ -27,10 +27,14 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm.attributes import flag_modified
 
 from backend.config import Settings, get_settings
-from backend.intake.db import RequestRow, RequestStatus, TriggerEventRow
-from backend.intake.receive import RECEIVE_FILTERED_KEY, filtered_out_record, receive
 from backend.workers.base import BaseWorker
 from backend.workers.emit import STREAM_AGENT, emit_stream_notification
+from backend.workflow.application.stages.intake import (
+    RECEIVE_FILTERED_KEY,
+    filtered_out_record,
+    receive,
+)
+from backend.workflow.infrastructure.intake.db import RequestRow, RequestStatus, TriggerEventRow
 
 logger = structlog.get_logger(__name__)
 

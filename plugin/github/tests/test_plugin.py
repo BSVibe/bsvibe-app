@@ -17,7 +17,7 @@ import pytest
 import respx
 
 from backend.extensions.plugin import PluginLoader, PluginRunError, PluginRunner
-from backend.intake.schema import TriggerEvent
+from backend.workflow.domain.incoming import TriggerEvent
 from plugin.github import plugin as github_module
 
 API = "https://api.github.com"

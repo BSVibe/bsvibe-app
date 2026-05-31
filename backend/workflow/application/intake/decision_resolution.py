@@ -11,7 +11,7 @@ import uuid
 
 import structlog
 
-from backend.intake.schema import TriggerEvent
+from backend.workflow.domain.incoming import TriggerEvent
 
 logger = structlog.get_logger(__name__)
 

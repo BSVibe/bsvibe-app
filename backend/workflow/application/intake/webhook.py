@@ -5,8 +5,9 @@ Workflow §12.5 #8 (Bundle G — Intake / Triggers). The receiver:
 1. Computes a stable ``idempotency_key`` from a caller-supplied header
    (falls back to a SHA-256 hash of the body when absent).
 2. Checks the ``(workspace_id, source, idempotency_key)`` uniqueness against
-   ``backend.intake.db.TriggerEventRow``.
-3. Inserts a row + emits a :class:`backend.intake.schema.TriggerEvent`.
+   ``backend.workflow.infrastructure.intake.db.TriggerEventRow``.
+3. Inserts a row + emits a
+   :class:`backend.workflow.domain.incoming.TriggerEvent`.
 
 Per-plugin signature verification (HMAC, etc.) is left to the plugin
 adapter (Workflow §6 #2) — this module assumes the headers have already
@@ -26,9 +27,13 @@ import structlog
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.intake.db import RequestStatus, TriggerEventRow, TriggerKind
-from backend.intake.idempotency import is_duplicate, record
-from backend.intake.schema import TriggerEvent
+from backend.workflow.domain.incoming import TriggerEvent
+from backend.workflow.infrastructure.idempotency import is_duplicate, record
+from backend.workflow.infrastructure.intake.db import (
+    RequestStatus,
+    TriggerEventRow,
+    TriggerKind,
+)
 
 logger = structlog.get_logger(__name__)
 

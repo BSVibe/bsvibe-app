@@ -4,9 +4,9 @@ Workflow §12.5 #8 (Bundle G — Intake / Triggers). The
 ``(workspace_id, source, idempotency_key)`` composite is the canonical
 de-dup key for every TriggerEvent we accept.
 
-Persistence is via :class:`backend.intake.db.TriggerEventRow` and its
-unique constraint ``uq_trigger_events_ws_src_key`` — the DB is the source
-of truth, this module just exposes the read + write surface.
+Persistence is via :class:`backend.workflow.infrastructure.intake.db.TriggerEventRow`
+and its unique constraint ``uq_trigger_events_ws_src_key`` — the DB is the
+source of truth, this module just exposes the read + write surface.
 """
 
 from __future__ import annotations
@@ -17,7 +17,7 @@ import structlog
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.intake.db import TriggerEventRow
+from backend.workflow.infrastructure.intake.db import TriggerEventRow
 
 logger = structlog.get_logger(__name__)
 

@@ -13,7 +13,7 @@ import uuid
 import pytest
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
 
-from backend.intake.schema import TriggerEvent
+from backend.workflow.domain.incoming import TriggerEvent
 from plugin.discord.webhook import (
     SIGNATURE_HEADER,
     TIMESTAMP_HEADER,

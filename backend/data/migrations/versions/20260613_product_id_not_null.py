@@ -21,7 +21,7 @@ The forward-going guarantee is enforced today by:
 
 * ``backend.api.v1.messages._resolve_product_id`` (smart-default →
   400 if the workspace has zero products) for direct submissions
-* ``backend.intake.receive.receive`` threading
+* ``backend.workflow.application.stages.intake.receive`` threading
   ``trigger.product_id`` onto every outcome path (webhooks too)
 * ``backend.workers.intake_worker`` copying onto the new Request row
 * ``backend.workflow.application.agent_runner.open_run`` copying onto the new

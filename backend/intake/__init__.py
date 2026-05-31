@@ -1,40 +1,22 @@
-"""Intake — Workflow §12.5 #8 (Bundle G).
+"""Intake — Schedule context carry-over (post-H3a).
 
-Inbound trigger surface: every external signal (webhook / schedule /
-direct / decision_resolution) is adapted into a :class:`TriggerEvent`
-and persisted in :class:`TriggerEventRow` with an idempotency guard.
+After v8 D29 / Lift H3a, the inbound trigger surface (TriggerEvent +
+idempotency + Receive stage + Direct / Webhook / DecisionResolution
+adapters + the ``trigger_events`` / ``requests`` tables) was absorbed
+into the Workflow context (see :mod:`backend.workflow`).
+
+The two files left here are the **M1 Schedule context** carry-over —
+``schedule.py`` (cron-fired TriggerEvent producer) and ``schedule_db.py``
+(``workspace_schedules`` row). They will move under
+``backend/schedule/`` (v8 §3.5 / D30) in the Schedule-context lift.
 """
 
 from __future__ import annotations
 
-from backend.intake.db import (
-    IntakeBase,
-    RequestRow,
-    RequestStatus,
-    TriggerEventRow,
-    TriggerKind,
-)
-from backend.intake.decision_resolution import DecisionResolutionTrigger
-from backend.intake.direct import DirectTrigger
-from backend.intake.idempotency import is_duplicate, record
 from backend.intake.schedule import ScheduleTrigger
 from backend.intake.schedule_db import WorkspaceScheduleRow
-from backend.intake.schema import TriggerEvent, TriggerKindLiteral
-from backend.intake.webhook import WebhookReceiver
 
 __all__ = [
-    "DecisionResolutionTrigger",
-    "DirectTrigger",
-    "IntakeBase",
-    "RequestRow",
-    "RequestStatus",
     "ScheduleTrigger",
-    "TriggerEvent",
-    "TriggerEventRow",
-    "TriggerKind",
-    "TriggerKindLiteral",
-    "WebhookReceiver",
     "WorkspaceScheduleRow",
-    "is_duplicate",
-    "record",
 ]
