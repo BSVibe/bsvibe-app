@@ -79,6 +79,11 @@ from backend.router.dispatch import DispatchRequest, GatewayDispatcher
 from backend.router.dispatch.strategies import EXECUTOR_PROVIDER, is_executor_account
 from backend.router.llm_client import LlmClient
 from backend.router.routing.run_routing import resolve_route
+from backend.schedule.infrastructure.db_poll_runner import build_db_poll_schedule_runner
+from backend.schedule.infrastructure.workers.schedule_worker import (
+    ScheduleWorker,
+    ScheduleWorkerConfig,
+)
 from backend.supervisor.sandbox import (
     NoopSandboxManager,
     SandboxManager,
@@ -87,11 +92,6 @@ from backend.supervisor.sandbox import (
 from backend.workers.base import BaseWorker
 from backend.workers.emit import STREAM_AGENT, STREAM_DELIVER, STREAM_INTAKE, STREAM_SETTLE
 from backend.workers.relays import build_relay
-from backend.workers.schedule_runner import (
-    ScheduleWorker,
-    ScheduleWorkerConfig,
-    build_db_poll_schedule_runner,
-)
 from backend.workers.streams import RedisStreamConsumer, StreamHandler
 from backend.workflow.application.agent_loop import (
     CanonRetriever,

@@ -97,7 +97,9 @@ def test_old_worker_module_gone(module_name: str) -> None:
         "backend.workers.db",
         "backend.workers.emit",
         "backend.workers.streams",
-        "backend.workers.schedule_runner",
+        # ``backend.workers.schedule_runner`` was a carry-over from H3c
+        # that the Schedule lift retired — the schedule runner now lives
+        # under the Schedule bounded context.
         "backend.workers.relays",
     ],
 )

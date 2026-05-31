@@ -5,10 +5,10 @@ D3 (PR #215) added Safe Mode queue lifecycle methods (``mark_delivered`` /
 queue row past ``expires_at`` sat forever unless a per-workspace caller
 explicitly invoked :meth:`SafeModeQueue.expire`. D3a closes the loop by
 plugging the system-wide sweep into M1's
-:class:`~backend.workers.schedule_runner.ScheduleRunnerProtocol` (PR #219).
+:class:`~backend.schedule.domain.runner_protocol.ScheduleRunnerProtocol` (PR #219).
 
 **Why a custom runner, not a ``workspace_schedules`` row?** The
-:class:`~backend.intake.schedule_db.WorkspaceScheduleRow` schema requires
+:class:`~backend.schedule.infrastructure.schedule_db.WorkspaceScheduleRow` schema requires
 ``workspace_id NOT NULL`` — a system-wide periodic sweep would either need
 (a) widening that FK invariant for one sweep task or (b) a magic system-tenant
 UUID. Both leak architectural debt for what is a small periodic chore. Instead,
@@ -17,7 +17,7 @@ UUID. Both leak architectural debt for what is a small periodic chore. Instead,
 :class:`ScheduleWorker` instance can drive it on the same polling cadence the
 DB-poll runner uses — honest reuse of M1's seam without bending the
 ``workspace_schedules`` invariant. The cron-algebra seam
-(:class:`~backend.workers.schedule_runner.ScheduleAdvancer`) is irrelevant here
+(:class:`~backend.schedule.domain.advancer.ScheduleAdvancer`) is irrelevant here
 (the sweep is "every tick", not a cron expression), so it isn't plumbed in.
 
 **D3a vs Lift 0b boundary.** D3a's deliverable was the EXPIRY TRANSITION +

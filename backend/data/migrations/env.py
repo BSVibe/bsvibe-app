@@ -34,6 +34,7 @@ import backend.router.routing.db  # noqa: F401, E402
 import backend.router.rules.db  # noqa: F401, E402
 import backend.identity.db  # noqa: F401, E402
 import backend.workflow.infrastructure.intake.db  # noqa: F401, E402
+import backend.schedule.infrastructure.schedule_db  # noqa: F401, E402
 import backend.knowledge.canonicalization.db  # noqa: F401, E402
 import backend.knowledge.ingest.db  # noqa: F401, E402
 import backend.knowledge.retrieval.db  # noqa: F401, E402

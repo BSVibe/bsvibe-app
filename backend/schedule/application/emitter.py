@@ -1,11 +1,23 @@
 """ScheduleTrigger — cron-fired TriggerEvent producer.
 
-Workflow §12.5 #8 (Bundle G — Intake / Triggers). The cron evaluator itself
-lives in the scheduler (a separate worker, deferred); this adapter turns a
-*fire time* into a :class:`TriggerEvent` + persists it idempotently.
+Workflow §12.5 #8 (Bundle G — Intake / Triggers). The cron evaluator
+itself lives in the runner (:mod:`backend.schedule.infrastructure.db_poll_runner`);
+this adapter turns a *fire time* into a :class:`TriggerEvent` + persists
+it idempotently.
 
 The idempotency_key is ``<plugin_name>:<cron_fire_iso>`` so re-firing the
 same cron tick (e.g. on worker restart) is a no-op at the intake table.
+
+Cross-context note
+------------------
+
+Schedule is a *producer* of inbound triggers; the Workflow context owns
+the inbound queue. This module therefore writes into the Workflow
+context's persistence — :class:`TriggerEvent` (domain envelope),
+:class:`TriggerEventRow` (SQLAlchemy row), and the idempotency helpers
+all live in :mod:`backend.workflow`. The Schedule context's
+contribution is the ``ScheduleTrigger`` adapter + the
+``workspace_schedules`` table the runner polls.
 """
 
 from __future__ import annotations
@@ -50,11 +62,12 @@ class ScheduleTrigger:
             idempotency_key=idem,
             # ``trigger=schedule`` is the M1 glass-box marker — IntakeWorker
             # copies the trigger payload onto ``RequestRow.payload`` via
-            # :func:`backend.workflow.application.stages.intake.receive`, so the Brief / Run views
-            # can tell the run came from a schedule (not a Direct ask, a
-            # connector inbound, or a decision resolution). Stamped here at
-            # the emitter site so EVERY caller (the M1 ``ScheduleWorker`` or a
-            # future direct-CLI ``schedule fire`` invocation) gets it for free.
+            # :func:`backend.workflow.application.stages.intake.receive`, so
+            # the Brief / Run views can tell the run came from a schedule
+            # (not a Direct ask, a connector inbound, or a decision
+            # resolution). Stamped here at the emitter site so EVERY caller
+            # (the M1 ``ScheduleWorker`` or a future direct-CLI ``schedule
+            # fire`` invocation) gets it for free.
             payload={
                 "plugin": plugin_name,
                 "cron_expr": cron_expr,

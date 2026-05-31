@@ -1,20 +1,31 @@
 """Schedule emitter persistence — ``workspace_schedules``.
 
 Workflow §12.5 #8 (Bundle G — Intake / Triggers) carry-over (M1). The
-:class:`~backend.intake.schedule.ScheduleTrigger` adapter turns a *fire time*
-into a :class:`~backend.workflow.infrastructure.intake.db.TriggerEventRow`, but nothing in production
-told it WHEN to fire — there was no row whose ``next_run_at`` a runner could
-poll, and no consumer that drove the schedule end of the OS at all (Status §5).
+:class:`~backend.schedule.application.emitter.ScheduleTrigger` adapter
+turns a *fire time* into a
+:class:`~backend.workflow.infrastructure.intake.db.TriggerEventRow`, but
+nothing in production told it WHEN to fire — there was no row whose
+``next_run_at`` a runner could poll, and no consumer that drove the
+schedule end of the OS at all (Status §5).
 
-``WorkspaceScheduleRow`` is the durable schedule the runner polls. Each row is
-"plugin X on cron expr Y in workspace W, due next at ``next_run_at``." The
-runner (:class:`~backend.workers.schedule_runner.ScheduleWorker`) selects
-``enabled AND next_run_at <= now`` rows, fires the emitter, and advances
-``next_run_at`` via a swappable :class:`ScheduleAdvancer` seam — so the cron
-algebra itself can evolve (or be replaced) without rewriting the runner.
+``WorkspaceScheduleRow`` is the durable schedule the runner polls. Each
+row is "plugin X on cron expr Y in workspace W, due next at
+``next_run_at``." The runner
+(:class:`~backend.schedule.infrastructure.workers.schedule_worker.ScheduleWorker`)
+selects ``enabled AND next_run_at <= now`` rows, fires the emitter, and
+advances ``next_run_at`` via a swappable
+:class:`~backend.schedule.domain.advancer.ScheduleAdvancer` seam — so the
+cron algebra itself can evolve (or be replaced) without rewriting the
+runner.
 
-We deliberately keep the row minimal: this is the *trigger source* the runner
-needs, not a full per-plugin configuration store (the plugin owns that).
+We deliberately keep the row minimal: this is the *trigger source* the
+runner needs, not a full per-plugin configuration store (the plugin
+owns that).
+
+Note: the row registers on the shared ``backend.data.Base.metadata`` so
+alembic + the runtime ORM both see it. The corresponding migration stays
+at :mod:`backend.data.migrations.versions.20260619_workspace_schedules` —
+only the SQLAlchemy model moves with the Schedule lift.
 """
 
 from __future__ import annotations
@@ -25,16 +36,16 @@ from datetime import datetime
 from sqlalchemy import Boolean, DateTime, Index, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
-from backend.workflow.infrastructure.intake.db import IntakeBase
+from backend.data import Base
 
 
-class WorkspaceScheduleRow(IntakeBase):
+class WorkspaceScheduleRow(Base):
     """Durable schedule the schedule runner polls.
 
     A workspace may carry many rows (one per scheduled plugin × cron expr),
     each independently enabled. The ``(workspace_id, plugin_name, cron_expr)``
-    unique constraint blocks accidentally registering the same trigger twice;
-    a deliberately *different* cron expr is a different row.
+    unique constraint blocks accidentally registering the same trigger
+    twice; a deliberately *different* cron expr is a different row.
     """
 
     __tablename__ = "workspace_schedules"
@@ -60,7 +71,7 @@ class WorkspaceScheduleRow(IntakeBase):
     # The next time the runner should fire this schedule. The runner
     # selects rows with ``enabled=True AND next_run_at <= now``, fires the
     # emitter, then advances ``next_run_at`` via the
-    # :class:`~backend.workers.schedule_runner.ScheduleAdvancer` seam.
+    # :class:`~backend.schedule.domain.advancer.ScheduleAdvancer` seam.
     next_run_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, index=True
     )
