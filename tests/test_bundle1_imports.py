@@ -13,7 +13,6 @@ def test_all_three_modules_import():
     # bundles will depend on.
     assert backend.plugins.PluginRunner is not None
     assert backend.plugins.PluginBuilder is not None
-    assert backend.plugins.DangerAnalyzer is not None
 
     assert backend.supervisor.safe_emit is not None
     assert backend.supervisor.AuditEvent is not None

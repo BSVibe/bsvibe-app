@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-from unittest.mock import AsyncMock
 
 import pytest
 
@@ -54,7 +53,7 @@ class TestLoaderDiscovery:
         _write_plugin(tmp_path, "github", _SAMPLE_GITHUB)
         _write_plugin(tmp_path, "notion", _SAMPLE_NOTION)
 
-        loader = PluginLoader(plugins_dir=tmp_path, danger_analyzer=None)
+        loader = PluginLoader(plugins_dir=tmp_path)
         registry = await loader.load_all()
 
         assert set(registry.keys()) == {"github", "notion"}
@@ -66,65 +65,40 @@ class TestLoaderDiscovery:
         (tmp_path / "not_a_plugin").mkdir()
         _write_plugin(tmp_path, "github", _SAMPLE_GITHUB)
 
-        loader = PluginLoader(plugins_dir=tmp_path, danger_analyzer=None)
+        loader = PluginLoader(plugins_dir=tmp_path)
         registry = await loader.load_all()
 
         assert set(registry.keys()) == {"github"}
 
     async def test_missing_plugins_dir_returns_empty(self, tmp_path: Path):
-        loader = PluginLoader(plugins_dir=tmp_path / "missing", danger_analyzer=None)
+        loader = PluginLoader(plugins_dir=tmp_path / "missing")
         registry = await loader.load_all()
         assert registry == {}
 
     async def test_warns_when_no_plugin_declaration(self, tmp_path: Path):
         _write_plugin(tmp_path, "broken", _NO_PLUGIN_DECL)
-        loader = PluginLoader(plugins_dir=tmp_path, danger_analyzer=None)
+        loader = PluginLoader(plugins_dir=tmp_path)
         registry = await loader.load_all()
         assert registry == {}
 
     async def test_get_raises_for_unknown_plugin(self, tmp_path: Path):
-        loader = PluginLoader(plugins_dir=tmp_path, danger_analyzer=None)
+        loader = PluginLoader(plugins_dir=tmp_path)
         await loader.load_all()
         with pytest.raises(PluginLoadError):
             loader.get("nope")
 
     async def test_get_returns_registered_plugin(self, tmp_path: Path):
         _write_plugin(tmp_path, "github", _SAMPLE_GITHUB)
-        loader = PluginLoader(plugins_dir=tmp_path, danger_analyzer=None)
+        loader = PluginLoader(plugins_dir=tmp_path)
         await loader.load_all()
         meta = loader.get("github")
         assert meta.name == "github"
 
 
-class TestLoaderDangerAnalysis:
-    async def test_invokes_danger_analyzer_per_plugin(self, tmp_path: Path):
-        _write_plugin(tmp_path, "github", _SAMPLE_GITHUB)
-
-        analyzer = AsyncMock()
-        analyzer.analyze.return_value = (False, "ok")
-
-        loader = PluginLoader(plugins_dir=tmp_path, danger_analyzer=analyzer)
-        await loader.load_all()
-
-        analyzer.analyze.assert_awaited_once()
-        assert loader.danger_map["github"] is False
-
-    async def test_records_dangerous_verdict(self, tmp_path: Path):
-        _write_plugin(tmp_path, "github", _SAMPLE_GITHUB)
-
-        analyzer = AsyncMock()
-        analyzer.analyze.return_value = (True, "uses httpx")
-
-        loader = PluginLoader(plugins_dir=tmp_path, danger_analyzer=analyzer)
-        await loader.load_all()
-
-        assert loader.danger_map["github"] is True
-
-
 class TestScanNew:
     async def test_only_loads_new_plugins(self, tmp_path: Path):
         _write_plugin(tmp_path, "github", _SAMPLE_GITHUB)
-        loader = PluginLoader(plugins_dir=tmp_path, danger_analyzer=None)
+        loader = PluginLoader(plugins_dir=tmp_path)
         await loader.load_all()
 
         _write_plugin(tmp_path, "notion", _SAMPLE_NOTION)

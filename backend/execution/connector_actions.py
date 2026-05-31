@@ -1,17 +1,13 @@
 """Connector ``@p.action`` → agent-loop tool bridge (RC-1, part 2 / B5b).
 
-A prior audit found two gaps:
+A prior audit found a gap: connectors declare ``@p.action`` (github
+``open_pr``, notion ``create_page``, slack ``post_message`` …) with
+``mcp_exposed=True``, but the NATIVE agent loop
+(:class:`~backend.execution.orchestrator.RunOrchestrator`) never folded them
+into its tool set — so the work LLM could edit files + run shell yet could NOT
+take connector actions mid-run.
 
-* Connectors declare ``@p.action`` (github ``open_pr``, notion ``create_page``,
-  slack ``post_message`` …) with ``mcp_exposed=True``, but the NATIVE agent loop
-  (:class:`~backend.execution.orchestrator.RunOrchestrator`) never folded them
-  into its tool set — so the work LLM could edit files + run shell yet could NOT
-  take connector actions mid-run.
-* :class:`~backend.plugins.analyzer.DangerAnalyzer` computes ``is_dangerous`` at
-  plugin-load (the per-plugin ``danger_map``) but NOTHING ever gated execution
-  on it.
-
-This module is the seam that closes both. It mirrors the B5a knowledge/skill
+This module is the seam that closes it. It mirrors the B5a knowledge/skill
 extension point: a single injected provider the orchestrator depends on (one
 seam, never a Union of concretes — per the ``bsvibe-llm-wrapper-not-raw-litellm``
 rule). The provider:
@@ -21,18 +17,17 @@ rule). The provider:
    :class:`~backend.connectors.db.ConnectorAccountRow`. A workspace with no
    connector accounts → no actions (the orchestrator registers no connector
    tools, zero behaviour change).
-2. **Carries the danger verdict** for each action (from the plugin loader's
-   ``danger_map``, populated by :class:`DangerAnalyzer`).
-3. **Resolves + decrypts** the per-account credential into the action's
+2. **Resolves + decrypts** the per-account credential into the action's
    :class:`~backend.plugins.context.SkillContext`.
-4. **Dispatches** the action through
+3. **Dispatches** the action through
    :meth:`~backend.plugins.runner.PluginRunner.dispatch_action`.
 
-Approval-driven execution / resume is a LATER lift — for B5b, gating a dangerous
-action in safe_mode means *pausing* (a ``connector_action_approval``
-:class:`~backend.execution.db.Decision`), never silently running it. The
-orchestrator owns the gate decision (it knows the run + safe_mode + Decision
-machinery); this module owns resolution + dispatch.
+Lift 0c (YAGNI rollback) removed the static plugin-load DangerAnalyzer + the
+``is_dangerous`` flag it produced + the pre-M2 ``tool.is_dangerous and
+safe_mode`` gate that was its only consumer. Workspace ``safe_mode`` is
+preserved as a workspace-level setting, but per-call danger gating is gone —
+re-introduce it from a real producer (a manual ``@p.action(dangerous=True)``
+opt-in) when there is a concrete need.
 """
 
 from __future__ import annotations
@@ -60,14 +55,12 @@ class ConnectorActionTool:
 
     ``account`` is the workspace's active :class:`ConnectorAccountRow` for this
     connector (its encrypted secret is what gets decrypted into the action
-    context); ``is_dangerous`` is the plugin's :class:`DangerAnalyzer` verdict
-    from the loader ``danger_map``.
+    context).
     """
 
     plugin: PluginMeta
     action: ActionCapability
     account: ConnectorAccountRow
-    is_dangerous: bool
 
     @property
     def connector(self) -> str:
@@ -109,7 +102,7 @@ class ConnectorActionResolver:
     """Production :class:`ConnectorActionProvider`.
 
     Built per run by the worker factory with the run's session, the loaded
-    plugin registry + its ``danger_map``, and the settings-derived cipher.
+    plugin registry, and the settings-derived cipher.
     """
 
     def __init__(
@@ -117,12 +110,10 @@ class ConnectorActionResolver:
         *,
         session: AsyncSession,
         plugins_by_name: dict[str, PluginMeta],
-        danger_map: dict[str, bool],
         cipher: CredentialCipher,
     ) -> None:
         self._session = session
         self._plugins_by_name = plugins_by_name
-        self._danger_map = danger_map
         self._cipher = cipher
         self._runner = PluginRunner()
 
@@ -151,7 +142,6 @@ class ConnectorActionResolver:
             plugin = self._plugins_by_name.get(row.connector)
             if plugin is None:
                 continue
-            is_dangerous = bool(self._danger_map.get(plugin.name, False))
             for action in plugin.actions.values():
                 if not action.mcp_exposed:
                     continue
@@ -164,7 +154,6 @@ class ConnectorActionResolver:
                         plugin=plugin,
                         action=action,
                         account=row,
-                        is_dangerous=is_dangerous,
                     )
                 )
         return tools

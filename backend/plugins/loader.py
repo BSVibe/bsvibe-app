@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import importlib.util
 from pathlib import Path
-from typing import Any
 
 import structlog
 
@@ -24,16 +23,12 @@ class PluginLoader:
     def __init__(
         self,
         plugins_dir: Path,
-        danger_analyzer: Any | None = None,
     ) -> None:
         self._plugins_dir = plugins_dir
-        self._danger_analyzer = danger_analyzer
         self._registry: dict[str, PluginMeta] = {}
-        self.danger_map: dict[str, bool] = {}
 
     async def load_all(self) -> dict[str, PluginMeta]:
         self._registry.clear()
-        self.danger_map.clear()
 
         if not self._plugins_dir.is_dir():
             logger.warning("plugins_dir_missing", path=str(self._plugins_dir))
@@ -79,21 +74,6 @@ class PluginLoader:
         except Exception as exc:
             logger.warning("plugin_load_failed", path=str(plugin_py), error=str(exc))
             return None
-
-        if self._danger_analyzer is not None:
-            code = plugin_py.read_text(encoding="utf-8")  # noqa: ASYNC240
-            is_dangerous, reason = await self._danger_analyzer.analyze(
-                meta.name, code, meta.description
-            )
-            self.danger_map[meta.name] = bool(is_dangerous)
-            logger.info(
-                "plugin_danger_assessed",
-                name=meta.name,
-                is_dangerous=is_dangerous,
-                reason=reason,
-            )
-        else:
-            self.danger_map[meta.name] = False
 
         self._registry[meta.name] = meta
         logger.info("plugin_loaded", name=meta.name)

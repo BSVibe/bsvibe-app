@@ -433,10 +433,11 @@ class RunOrchestrator:
         self._suggested_skill_description = suggested_skill_description
         # B5b — the run's connector-action provider. When set, the loop surfaces
         # the workspace's available ``mcp_exposed`` connector actions (github
-        # open_pr, notion create_page, …) as tools, gated by DangerAnalyzer +
-        # workspace safe_mode. ``None`` (the default, every legacy caller/test +
-        # a workspace with no connector accounts) keeps the loop free of
-        # connector tools — zero behaviour change.
+        # open_pr, notion create_page, …) as tools. ``None`` (the default,
+        # every legacy caller/test + a workspace with no connector accounts)
+        # keeps the loop free of connector tools — zero behaviour change. Lift
+        # 0c removed the per-call + load-time danger gating that used to wrap
+        # each handler.
         self._connector_actions = connector_actions
         # B5a — the run's workspace SkillLoader. When set, the loop registers
         # the ``invoke_skill`` + ``knowledge_search`` tools so the work LLM can
@@ -639,7 +640,7 @@ class RunOrchestrator:
         lines.extend(f"- {s}" for s in statements)
         return "\n".join(lines)
 
-    # -- B5b: connector action tools (gated by DangerAnalyzer + safe_mode) --
+    # -- B5b: connector action tools -------------------------------------
 
     async def _register_connector_action_tools(
         self, registry: ToolRegistry, *, run: ExecutionRun, work_step: WorkStep
@@ -648,17 +649,21 @@ class RunOrchestrator:
 
         Only when the orchestrator was given a :class:`ConnectorActionProvider`
         (the production worker factory threads one in). Each tool's handler is
-        bound to THIS run + work_step + the resolved workspace ``safe_mode`` so
-        the danger-gate fires on call. Returns the surfaced tool names (namespaced
-        ``<connector>__<action>``). No provider, or a workspace with no connector
-        accounts → empty list (loop unchanged)."""
+        bound to THIS run + work_step. Returns the surfaced tool names
+        (namespaced ``<connector>__<action>``). No provider, or a workspace with
+        no connector accounts → empty list (loop unchanged).
+
+        Lift 0c removed the load-time + per-call danger gating that used to
+        wrap each handler. Per-call gating can be re-introduced from a real
+        producer (a manual ``@p.action(dangerous=True)`` opt-in) when there is
+        a concrete need.
+        """
         provider = self._connector_actions
         if provider is None:
             return []
         tools = await provider.list_actions(run.workspace_id)
         if not tools:
             return []
-        safe_mode = await self._resolve_safe_mode(run.workspace_id)
         names: list[str] = []
         for tool in tools:
             name = loop_tool_name(tool.connector, tool.action_name)
@@ -667,9 +672,7 @@ class RunOrchestrator:
                     name=name,
                     description=self._connector_action_description(tool),
                     parameters_schema=_connector_action_schema(tool),
-                    handler=self._make_connector_action_handler(
-                        tool, run=run, work_step=work_step, safe_mode=safe_mode
-                    ),
+                    handler=self._make_connector_action_handler(tool, run=run),
                 )
             )
             names.append(name)
@@ -678,93 +681,33 @@ class RunOrchestrator:
             run_id=str(run.id),
             workspace_id=str(run.workspace_id),
             tools=names,
-            safe_mode=safe_mode,
         )
         return names
 
     @staticmethod
     def _connector_action_description(tool: ConnectorActionTool) -> str:
-        base = (
+        return (
             f"Take the '{tool.action_name}' action on the '{tool.connector}' connector "
             "for this workspace. The connector credentials are injected automatically — "
             "supply only the action arguments."
         )
-        if tool.is_dangerous:
-            base += (
-                " This action has external side effects; in Safe Mode it pauses for "
-                "founder approval instead of running."
-            )
-        return base
-
-    async def _resolve_safe_mode(self, workspace_id: uuid.UUID) -> bool:
-        """The workspace ``safe_mode`` flag (default True — fail safe).
-
-        A missing workspace row → True so the danger-gate never silently runs a
-        dangerous action against an unknown workspace."""
-        from backend.workspaces.db import WorkspaceRow  # noqa: PLC0415 — break import cycle
-
-        row = await self._session.get(WorkspaceRow, workspace_id)
-        if row is None:
-            return True
-        return bool(row.safe_mode)
 
     def _make_connector_action_handler(
         self,
         tool: ConnectorActionTool,
         *,
         run: ExecutionRun,
-        work_step: WorkStep,
-        safe_mode: bool,
     ) -> Any:
         """Build the registry handler for one connector action.
 
         The handler resolves + decrypts the account credentials into the action
-        context, then applies the DangerAnalyzer gate: a dangerous action in
-        Safe Mode does NOT execute — it creates a ``connector_action_approval``
-        :class:`Decision` and returns a 'pending approval' result (status
-        needs_approval). Otherwise it dispatches the action and feeds the result
-        back to the loop. Never raises into the loop (failures become a readable
-        tool result)."""
+        context and dispatches the action, feeding the result back to the loop.
+        Never raises into the loop (failures become a readable tool result).
+        """
         provider = self._connector_actions
         assert provider is not None  # registration only happens with a provider
 
         async def handler(arguments: dict[str, Any]) -> str:
-            if tool.is_dangerous and safe_mode:
-                decision = await self._create_decision(
-                    run,
-                    work_step,
-                    kind="connector_action_approval",
-                    payload={
-                        "plugin": tool.connector,
-                        "action": tool.action_name,
-                        "args": arguments,
-                        "is_dangerous": tool.is_dangerous,
-                    },
-                    rationale=(
-                        f"work LLM requested dangerous connector action "
-                        f"{tool.connector}.{tool.action_name} while Safe Mode is on"
-                    ),
-                )
-                logger.info(
-                    "connector_action_gated_needs_approval",
-                    run_id=str(run.id),
-                    connector=tool.connector,
-                    action=tool.action_name,
-                    decision_id=str(decision.id),
-                )
-                return json.dumps(
-                    {
-                        "status": "needs_approval",
-                        "connector": tool.connector,
-                        "action": tool.action_name,
-                        "message": (
-                            "This action requires founder approval (Safe Mode). It has been "
-                            "queued as a pending decision and was NOT executed. Continue with "
-                            "other work; do not retry this action."
-                        ),
-                        "decision_id": str(decision.id),
-                    }
-                )
             try:
                 credentials = provider.credentials_for(tool)
                 result = await provider.dispatch(tool, credentials=credentials, kwargs=arguments)
@@ -899,9 +842,11 @@ class RunOrchestrator:
         # canonical knowledge during the run. Returns the extra surfaced names.
         extra_tool_names = self._register_knowledge_tools(registry)
         # B5b — register the workspace's available connector actions as loop
-        # tools (when a connector-action provider was threaded in). Each handler
-        # is gated by DangerAnalyzer + workspace safe_mode. No provider / no
-        # connector accounts → empty list (loop unchanged).
+        # tools (when a connector-action provider was threaded in). No
+        # provider / no connector accounts → empty list (loop unchanged).
+        # Lift 0c removed the per-call + load-time danger gating; workspace
+        # ``safe_mode`` remains as a workspace setting but no longer gates
+        # individual connector calls here.
         connector_tool_names = await self._register_connector_action_tools(
             registry, run=run, work_step=work_step
         )

@@ -25,7 +25,6 @@ others independently.
 
 from __future__ import annotations
 
-from backend.plugins.analyzer import DangerAnalyzer, StaticAnalyzer
 from backend.plugins.base import (
     VALID_COMPENSATION_TIERS,
     VALID_JURISDICTIONS,
@@ -55,7 +54,6 @@ __all__ = [
     "ActionCapability",
     "ChatInterface",
     "CompensateCapability",
-    "DangerAnalyzer",
     "InboundCapability",
     "KnowledgeBackend",
     "LLMClient",
@@ -70,7 +68,6 @@ __all__ = [
     "PluginRunner",
     "RetrieverInterface",
     "SkillContext",
-    "StaticAnalyzer",
     "VALID_COMPENSATION_TIERS",
     "VALID_JURISDICTIONS",
     "VALID_TRIGGER_TYPES",
