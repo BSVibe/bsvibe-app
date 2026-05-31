@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import ClassVar
 
-from backend.extensions.implementations.audit.events import AuditEventBase
+from plugin.audit.events import AuditEventBase
 
 
 class GatewayCompletionDispatched(AuditEventBase):

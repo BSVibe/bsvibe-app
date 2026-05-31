@@ -78,15 +78,15 @@ from backend.execution.verifier.contract import (
     VerificationContract,
 )
 from backend.execution.verifier.service import VerificationService
-from backend.extensions.implementations.audit.events import (
+from backend.extensions.skill.loader import SkillLoader
+from backend.extensions.skill.tool_binding import INVOKE_SKILL_NAME, register_invoke_skill
+from backend.supervisor.sandbox import SandboxManager, SandboxSession
+from plugin.audit.events import (
     AuditActor,
     AuditEventBase,
     AuditResource,
 )
-from backend.extensions.implementations.audit.service import safe_emit
-from backend.extensions.skill.loader import SkillLoader
-from backend.extensions.skill.tool_binding import INVOKE_SKILL_NAME, register_invoke_skill
-from backend.supervisor.sandbox import SandboxManager, SandboxSession
+from plugin.audit.service import safe_emit
 
 logger = structlog.get_logger(__name__)
 
@@ -1327,7 +1327,7 @@ class RunOrchestrator:
         # must NEVER break the loop or revert the persisted Deliverable + the
         # DeliveryEventRow (those are the durable record; the bus is only the
         # wake-up signal — mirrors the audit→bridge pattern in
-        # :mod:`backend.extensions.implementations.audit.service`).
+        # :mod:`plugin.audit.service`).
         await self._publish_deliverable_partial_event(
             run=run,
             deliverable_id=deliverable.id,

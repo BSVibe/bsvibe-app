@@ -21,10 +21,10 @@ from pydantic import BaseModel, ConfigDict
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.api.deps import get_db_session, get_workspace_id, require_account_id
-from backend.extensions.implementations.audit.events import AuditEventBase
 from backend.router.presets.models import ModelMapping
 from backend.router.presets.registry import PresetRegistry
 from backend.router.presets.service import AuditEmitterProtocol, PresetService
+from plugin.audit.events import AuditEventBase
 
 router = APIRouter()
 

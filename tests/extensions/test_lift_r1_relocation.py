@@ -51,12 +51,8 @@ def test_connector_old_path_gone(name: str) -> None:
         importlib.import_module(f"{_OLD}.{name}")
 
 
-def test_audit_still_at_old_path_pending_r2() -> None:
-    # R1 ships 9 connectors only. Audit relocation needs EventBus rewire of
-    # ~28 backend emission sites (see PR body). Keep this assertion green
-    # until R2 lands so the marker test forces R2 to delete it.
-    audit_mod = importlib.import_module(f"{_OLD}.audit")
-    assert hasattr(audit_mod, "safe_emit")
+# R1 marker test was removed by Lift R2a — audit now lives at
+# ``plugin.audit``; see ``tests/extensions/test_lift_r2a_audit_relocation.py``.
 
 
 def test_plugin_loader_discovers_all_at_new_path() -> None:

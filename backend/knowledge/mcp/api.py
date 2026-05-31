@@ -272,7 +272,7 @@ async def _safe_audit_emit(tool: Tool, ctx: ToolContext) -> None:
     if outbox is None or not getattr(outbox, "is_open", False):
         return
     try:
-        from backend.extensions.implementations.audit.events import (
+        from plugin.audit.events import (
             AuditActor,
             AuditEventBase,
             AuditResource,

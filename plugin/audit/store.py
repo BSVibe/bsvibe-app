@@ -13,7 +13,7 @@ from typing import Any
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.extensions.implementations.audit.models import AuditOutboxRecord
+from plugin.audit.models import AuditOutboxRecord
 
 
 def _utcnow() -> datetime:

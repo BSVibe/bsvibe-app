@@ -33,8 +33,6 @@ from backend.api.litellm_hook.audit_events import (
     GatewayCompletionFailed,
 )
 from backend.api.litellm_hook.chat_service import ChatCompletionContext, ChatService
-from backend.extensions.implementations.audit.events import AuditActor, AuditResource
-from backend.extensions.implementations.audit.service import safe_emit
 from backend.router.accounts.crypto import CredentialCipher, _key_from_settings
 from backend.router.accounts.service import ModelAccountService
 from backend.router.budget.errors import BudgetExceeded
@@ -49,6 +47,8 @@ from backend.router.dispatch import (
     ModelAccountNotFound,
 )
 from backend.router.llm_client import LlmClient
+from plugin.audit.events import AuditActor, AuditResource
+from plugin.audit.service import safe_emit
 
 router = APIRouter()
 

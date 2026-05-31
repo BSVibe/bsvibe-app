@@ -1,11 +1,11 @@
-"""Tests for backend.extensions.implementations.audit.events — pydantic event wire shape."""
+"""Tests for plugin.audit.events — pydantic event wire shape."""
 
 from __future__ import annotations
 
 import pytest
 from pydantic import ValidationError
 
-from backend.extensions.implementations.audit.events import (
+from plugin.audit.events import (
     AuditActor,
     AuditEventBase,
     AuditResource,

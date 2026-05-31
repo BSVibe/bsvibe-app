@@ -30,12 +30,12 @@ from backend.execution.db import (
     WorkStepStatus,
 )
 from backend.execution.orchestrator import LoopResult
-from backend.extensions.implementations.audit.events import (
+from plugin.audit.events import (
     AuditActor,
     AuditEventBase,
     AuditResource,
 )
-from backend.extensions.implementations.audit.service import safe_emit
+from plugin.audit.service import safe_emit
 
 logger = structlog.get_logger(__name__)
 
