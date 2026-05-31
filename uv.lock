@@ -6,6 +6,12 @@ resolution-markers = [
     "python_full_version < '3.15'",
 ]
 
+[manifest]
+members = [
+    "bsvibe-app",
+    "bsvibe-sdk",
+]
+
 [[package]]
 name = "aiohappyeyeballs"
 version = "2.6.2"
@@ -298,6 +304,7 @@ dependencies = [
     { name = "aiosqlite" },
     { name = "alembic" },
     { name = "asyncpg" },
+    { name = "bsvibe-sdk" },
     { name = "cryptography" },
     { name = "fastapi" },
     { name = "httpx" },
@@ -338,6 +345,7 @@ requires-dist = [
     { name = "alembic", specifier = ">=1.13" },
     { name = "anyio", marker = "extra == 'dev'", specifier = ">=4" },
     { name = "asyncpg", specifier = ">=0.29" },
+    { name = "bsvibe-sdk", editable = "bsvibe_sdk" },
     { name = "cryptography", specifier = ">=42" },
     { name = "fakeredis", marker = "extra == 'dev'", specifier = ">=2.21" },
     { name = "fastapi", specifier = ">=0.110" },
@@ -365,6 +373,11 @@ requires-dist = [
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.27" },
 ]
 provides-extras = ["dev"]
+
+[[package]]
+name = "bsvibe-sdk"
+version = "0.1.0"
+source = { editable = "bsvibe_sdk" }
 
 [[package]]
 name = "certifi"

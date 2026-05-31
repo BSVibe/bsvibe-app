@@ -24,6 +24,9 @@ ignore = [
 # Test code legitimately uses blocking FS calls inside async test functions
 # (ASYNC230 open(), ASYNC240 pathlib methods) — the sync hit is fine in a test.
 "tests/**/*.py" = ["S", "PL", "B008", "ASYNC230", "ASYNC240"]
+# Same allowances apply to the bsvibe_sdk package's own test suite
+# (Lift S — SDK ships its own pytest target).
+"bsvibe_sdk/tests/**/*.py" = ["S", "PL", "B008", "ASYNC230", "ASYNC240"]
 "backend/data/migrations/**" = ["E", "F", "I", "UP", "B"]
 # Lifted shared libraries: idiomatic FastAPI/settings patterns
 "backend/shared/**" = ["B008", "PLW0603", "PLR0911", "PLR0912", "PLR0915"]

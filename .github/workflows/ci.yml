@@ -61,19 +61,25 @@ jobs:
         run: uv sync --all-extras
 
       - name: Ruff (lint)
-        run: uv run ruff check backend/ tests/
+        run: uv run ruff check backend/ tests/ bsvibe_sdk/
 
       - name: Ruff (format check)
-        run: uv run ruff format --check backend/ tests/
+        run: uv run ruff format --check backend/ tests/ bsvibe_sdk/
 
       - name: mypy --strict (backend/)
         run: uv run mypy backend/
+
+      - name: mypy --strict (bsvibe_sdk/)
+        run: uv run mypy --strict --python-version 3.11 bsvibe_sdk/bsvibe_sdk/
 
       - name: alembic upgrade head (fresh-PG migration smoke)
         run: uv run alembic upgrade head
 
       - name: pytest with coverage (smoke + unit)
         run: uv run pytest --cov=backend --cov-fail-under=80 -v
+
+      - name: pytest (bsvibe_sdk)
+        run: uv run pytest bsvibe_sdk/tests/ -v
 
   pwa:
     runs-on: ubuntu-latest
