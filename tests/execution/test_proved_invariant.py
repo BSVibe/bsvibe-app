@@ -357,7 +357,12 @@ def test_known_call_sites_are_in_expected_modules() -> None:
     # Lift D split executors/orchestrator.py into 4 files (§17.8). The
     # verified-write call now lives in the verification-handoff sub-module
     # (executors/verify_handoff.py) — same one terminal, just moved.
+    #
+    # Lift H2a decomposed execution/orchestrator.py into the Workflow context
+    # (§17.1). The native terminal moved with ``finish_verified`` into
+    # ``workflow/application/run_persistence.py`` — same one terminal, just
+    # relocated to its new bounded context.
     assert callers == {
-        "execution/orchestrator.py",
+        "workflow/application/run_persistence.py",
         "executors/verify_handoff.py",
     }, f"unexpected caller surface for write_verified_deliverable: {callers}"
