@@ -13,13 +13,15 @@ through them, the existing call site (``AgentWorker._drive_run`` →
 move the worker through the state machine driver, at which point each
 event in the matrix below routes to one of these handlers.
 
-:class:`ResolveDecisionHandler` and :class:`RetryFailedHandler` stay as
-``NotImplementedError`` stubs — their side effect (re-entering the loop
-after a Decision row is resolved) is owned by the resolve REST endpoint
-(:mod:`backend.api.v1.checkpoints`), which today re-invokes
-``AgentRunner.drive`` directly. Until that endpoint routes through the
-driver, the handler stubs are placeholders; the driver still returns the
-matrix's next state so the smoke tests verify wiring shape.
+:class:`ResolveDecisionHandler` and :class:`RetryFailedHandler` are
+filled in Lift H3d — they reference the
+:class:`backend.workflow.application.intake.decision_resolution.DecisionResolutionTrigger`
+delegation target (relocated by H3a) and return the matrix's
+``to_state``. The actual side effect (re-entering the loop after a
+Decision row is resolved) is still owned by the resolve REST endpoint
+(:mod:`backend.api.v1.checkpoints`), which calls
+:meth:`AgentRunner.transition` directly. Future driver-routed callers
+will invoke the trigger through these handlers.
 
 Cross-stage handlers (``fail`` / ``abandon``) live here too — they apply
 from any state and trigger the same DB-side ``transition`` that
@@ -89,10 +91,15 @@ class RequireDecisionHandler:
 class ResolveDecisionHandler:
     """``needs_decision → dispatched`` via ``decision_resolved``.
 
-    The resolve REST endpoint (:mod:`backend.api.v1.checkpoints`) today
-    re-invokes :meth:`AgentRunner.drive` directly. Promoting that
-    re-entry into a Workflow-context service (so this handler can
-    delegate) is H3's work.
+    H3d wiring — the delegation target is
+    :class:`backend.workflow.application.intake.decision_resolution.DecisionResolutionTrigger`
+    (relocated from BSNexus into the workflow context by Lift H3a). The
+    REST endpoint at :mod:`backend.api.v1.checkpoints` still owns the
+    side effect today (records the answer + flips ExecutionRun to OPEN);
+    this handler is the H3+ driver entry point that future callers will
+    route through. Behaviorally identical to the 11 other H2c handlers:
+    it just advances the coarse state — the actual DB writes already
+    happened on the existing caller path.
     """
 
     async def handle(
@@ -102,23 +109,32 @@ class ResolveDecisionHandler:
         current_state: WorkflowState,
         event: WorkflowEvent,
     ) -> WorkflowState:
-        # TODO(H3): delegate to a Workflow-owned resume service. The
-        # REST endpoint at backend.api.v1.checkpoints currently inlines
-        # the resume logic — it will move into this handler when the
-        # endpoint routes through the driver.
-        raise NotImplementedError(
-            "ResolveDecisionHandler — H3 will lift backend.api.v1.checkpoints "
-            "resume logic into a Workflow-owned service."
+        # Delegation target — lazy import keeps the handler thin and
+        # avoids a hard dependency cycle. The actual resume side effect
+        # is owned by backend.api.v1.checkpoints.resolve_checkpoint
+        # today; this handler advances the state machine while the
+        # caller continues to execute the side effect inline.
+        from backend.workflow.application.intake import decision_resolution  # noqa: PLC0415
+
+        logger.debug(
+            "resolve_decision_handler",
+            run_id=str(getattr(run, "id", None)),
+            from_state=current_state.value,
+            workflow_event=event.value,
+            delegation_target=decision_resolution.DecisionResolutionTrigger.__qualname__,
         )
+        return WorkflowState.dispatched
 
 
 class RetryFailedHandler:
     """``failed → dispatched`` via ``decision_resolved`` (founder retry).
 
-    The retry path (founder-backed Decision flips a failed run back to
-    dispatched) shares its DB plumbing with
-    :class:`ResolveDecisionHandler`. H3 promotes both into a single
-    resume service.
+    H3d wiring — shares the delegation target with
+    :class:`ResolveDecisionHandler`: the failed→dispatched flip is the
+    same resume path keyed on a founder-resolved Decision. Today the
+    REST endpoint at :mod:`backend.api.v1.checkpoints` calls
+    :meth:`AgentRunner.transition` directly (RUNNING → OPEN on the
+    failed run); future callers route through this handler.
     """
 
     async def handle(
@@ -128,12 +144,20 @@ class RetryFailedHandler:
         current_state: WorkflowState,
         event: WorkflowEvent,
     ) -> WorkflowState:
-        # TODO(H3): delegate to the same Workflow-owned resume service
-        # as ResolveDecisionHandler.
-        raise NotImplementedError(
-            "RetryFailedHandler — H3 will lift the failed-retry path "
-            "into a Workflow-owned resume service."
+        # Delegation target identical to ResolveDecisionHandler; both
+        # share the single Workflow-owned resume path. The event payload
+        # differentiates "resume from needs_decision" vs "retry from
+        # failed" — both end at dispatched per the matrix.
+        from backend.workflow.application.intake import decision_resolution  # noqa: PLC0415
+
+        logger.debug(
+            "retry_failed_handler",
+            run_id=str(getattr(run, "id", None)),
+            from_state=current_state.value,
+            workflow_event=event.value,
+            delegation_target=decision_resolution.DecisionResolutionTrigger.__qualname__,
         )
+        return WorkflowState.dispatched
 
 
 class FailHandler:

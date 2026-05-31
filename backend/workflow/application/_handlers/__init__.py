@@ -11,12 +11,17 @@ effect (FrameStage / RunOrchestrator / VerificationService / settle
 drain / delivery worker), and they always return the matrix's
 ``to_state`` so the driver advances the state machine.
 
-A few handlers (``ResolveDecisionHandler``, ``RetryFailedHandler``,
-``SettleCompleteHandler``, ``DeliverCompleteHandler``) stay as
-``NotImplementedError`` stubs in H2c — their delegation targets aren't
-yet promoted out of ``workers/`` + ``backend.extensions.audit``. The
-driver still returns the next state for them so the matrix is
-verifiable; the side-effect implementations are H3+'s work.
+Lift H3d closes out the four stubs left by H2c
+(``ResolveDecisionHandler``, ``RetryFailedHandler``,
+``SettleCompleteHandler``, ``DeliverCompleteHandler``). Their
+delegation targets now live in the Workflow / Knowledge contexts —
+``decision_resolution`` under ``workflow/application/intake/`` (H3a),
+``DeliveryDispatcher`` under ``workflow/application/delivery/`` (H3b),
+and the Knowledge facade Protocol's ``settle`` (Lift A — concrete impl
+remains :class:`SettleWorker` in the Knowledge context until Lift I
+wires the facade). Each filled handler stays thin scaffolding: it logs
+the delegation target + returns the matrix's ``to_state``. No caller
+is migrated in H3d; the architecture is just complete.
 
 The driver in :mod:`backend.workflow.application.state_machine_driver`
 is the new single entry point. H2c does NOT migrate any caller through

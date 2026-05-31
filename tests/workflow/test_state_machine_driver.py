@@ -88,44 +88,47 @@ async def test_drive_transition_invalid_pair_raises() -> None:
 
 
 @pytest.mark.asyncio
-async def test_drive_transition_resolve_decision_stub_raises_not_implemented() -> None:
-    """ResolveDecisionHandler is a stub awaiting H3."""
-    with pytest.raises(NotImplementedError, match="ResolveDecisionHandler"):
-        await drive_transition(
-            run=MagicMock(),
-            current_state=WorkflowState.needs_decision,
-            event=WorkflowEvent.decision_resolved,
-        )
+async def test_drive_transition_resolve_decision_advances_state() -> None:
+    """H3d — ResolveDecisionHandler filled; returns the matrix's to_state."""
+    next_state = await drive_transition(
+        run=MagicMock(),
+        current_state=WorkflowState.needs_decision,
+        event=WorkflowEvent.decision_resolved,
+    )
+    assert next_state == WorkflowState.dispatched
 
 
 @pytest.mark.asyncio
-async def test_drive_transition_retry_failed_stub_raises_not_implemented() -> None:
-    with pytest.raises(NotImplementedError, match="RetryFailedHandler"):
-        await drive_transition(
-            run=MagicMock(),
-            current_state=WorkflowState.failed,
-            event=WorkflowEvent.decision_resolved,
-        )
+async def test_drive_transition_retry_failed_advances_state() -> None:
+    """H3d — RetryFailedHandler filled; returns the matrix's to_state."""
+    next_state = await drive_transition(
+        run=MagicMock(),
+        current_state=WorkflowState.failed,
+        event=WorkflowEvent.decision_resolved,
+    )
+    assert next_state == WorkflowState.dispatched
 
 
 @pytest.mark.asyncio
-async def test_drive_transition_settle_complete_stub_raises_not_implemented() -> None:
-    with pytest.raises(NotImplementedError, match="SettleCompleteHandler"):
-        await drive_transition(
-            run=MagicMock(),
-            current_state=WorkflowState.shipped,
-            event=WorkflowEvent.settle_complete,
-        )
+async def test_drive_transition_settle_complete_advances_state() -> None:
+    """H3d — SettleCompleteHandler filled; returns the matrix's to_state."""
+    next_state = await drive_transition(
+        run=MagicMock(),
+        current_state=WorkflowState.shipped,
+        event=WorkflowEvent.settle_complete,
+    )
+    assert next_state == WorkflowState.settled
 
 
 @pytest.mark.asyncio
-async def test_drive_transition_deliver_complete_stub_raises_not_implemented() -> None:
-    with pytest.raises(NotImplementedError, match="DeliverCompleteHandler"):
-        await drive_transition(
-            run=MagicMock(),
-            current_state=WorkflowState.settled,
-            event=WorkflowEvent.deliver_complete,
-        )
+async def test_drive_transition_deliver_complete_advances_state() -> None:
+    """H3d — DeliverCompleteHandler filled; returns the matrix's to_state."""
+    next_state = await drive_transition(
+        run=MagicMock(),
+        current_state=WorkflowState.settled,
+        event=WorkflowEvent.deliver_complete,
+    )
+    assert next_state == WorkflowState.delivered
 
 
 def test_drive_transition_handler_wiring_error_propagates() -> None:
