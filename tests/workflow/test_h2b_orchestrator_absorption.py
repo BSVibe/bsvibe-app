@@ -222,13 +222,15 @@ def test_safe_mode_boundary_is_class_with_gate_method() -> None:
     assert hasattr(SafeModeBoundary, "gate")
 
 
-# ─────────────────────── Bonus: orchestrator/ left with only H2c carryover ───
+# ─────────────────────── Bonus: orchestrator/ collapsed by H2c ───────────────
 
 
-def test_backend_orchestrator_dir_only_holds_agent_runner_after_h2b() -> None:
-    """After H2b, only ``agent_runner.py`` + ``__init__.py`` remain — H2c
-    will collapse them."""
+def test_backend_orchestrator_dir_collapsed_by_h2c() -> None:
+    """H2c (subsequent lift) collapses the entire ``backend/orchestrator/``
+    directory — ``agent_runner.py`` moves to
+    ``backend/workflow/application/agent_runner.py``. Asserting absence here
+    keeps H2b + H2c in lock-step: if a future lift accidentally re-creates
+    the directory, both this test and the H2c relocation test fail."""
     repo_root = Path(__file__).resolve().parents[2]
     orchestrator_dir = repo_root / "backend" / "orchestrator"
-    remaining = sorted(p.name for p in orchestrator_dir.glob("*.py"))
-    assert remaining == ["__init__.py", "agent_runner.py"], remaining
+    assert not orchestrator_dir.exists(), orchestrator_dir

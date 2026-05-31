@@ -23,9 +23,9 @@ from backend.execution.db import ExecutionRun, RunStatus
 from backend.execution.orchestrator import LoopTurn, RunOrchestrator
 from backend.extensions.skill.loader import SkillLoader
 from backend.intake.db import RequestRow, RequestStatus, TriggerEventRow, TriggerKind
-from backend.orchestrator.agent_runner import AgentRunner
 from backend.supervisor.sandbox import NoopSandboxManager
 from backend.workers.agent_worker import AgentExecutionDeps, AgentWorker
+from backend.workflow.application.agent_runner import AgentRunner
 
 from .._support import db_engine
 

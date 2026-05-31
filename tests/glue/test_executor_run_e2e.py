@@ -47,9 +47,9 @@ from backend.execution.db import (
 from backend.executors import dispatch
 from backend.executors.db import WorkerRow
 from backend.executors.orchestrator import ExecutorOrchestrator
-from backend.orchestrator.agent_runner import AgentRunner
 from backend.router.accounts.models import ModelAccount
 from backend.workers.run import build_agent_execution_deps
+from backend.workflow.application.agent_runner import AgentRunner
 
 from .._support import db_engine
 

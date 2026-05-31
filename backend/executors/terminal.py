@@ -58,7 +58,7 @@ async def fail_terminal(
 
     Mirrors :meth:`backend.execution.orchestrator.RunOrchestrator._finish_failed`
     — fail loudly, persist + audit, return a ``LoopResult`` the
-    :class:`~backend.orchestrator.agent_runner.AgentRunner` maps to FAILED."""
+    :class:`~backend.workflow.application.agent_runner.AgentRunner` maps to FAILED."""
     work_step.status = WorkStepStatus.FAILED
     attempt.phase = RunAttemptPhase.FAILED
     attempt.finished_at = _utcnow()

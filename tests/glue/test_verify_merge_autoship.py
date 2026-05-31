@@ -36,7 +36,6 @@ from backend.execution.db import (
 )
 from backend.execution.verifier.contract import VerificationContract
 from backend.execution.verifier.service import VerificationService
-from backend.orchestrator.agent_runner import AgentRunner
 from backend.storage.product_workspace import (
     add_run_worktree,
     init_product_workspace,
@@ -44,6 +43,7 @@ from backend.storage.product_workspace import (
     run_worktree_path,
 )
 from backend.supervisor.sandbox import NoopSandboxManager
+from backend.workflow.application.agent_runner import AgentRunner
 
 from .._support import db_engine
 

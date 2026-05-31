@@ -11,7 +11,7 @@ activity, via the shared :func:`write_verified_deliverable` helper).
 
 It satisfies the :class:`~backend.execution.orchestrator.RunCompute` Protocol —
 same ``run(*, run, workspace_dir) -> LoopResult`` signature as the native
-orchestrator — so :class:`~backend.orchestrator.agent_runner.AgentRunner.drive`
+orchestrator — so :class:`~backend.workflow.application.agent_runner.AgentRunner.drive`
 maps its outcome identically: ``verified → REVIEW_READY``,
 ``system_error → FAILED``, ``needs_decision`` leaves the run RUNNING (paused on
 a :class:`Decision`).

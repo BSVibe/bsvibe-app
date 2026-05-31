@@ -3,7 +3,7 @@
 Holds the pieces the live orchestration path depends on: the
 verification-contract parser, the tool registry, and the orchestration
 schema (``execution.db`` — ExecutionRun-centric, payload-JSON, driven by
-``backend.orchestrator.agent_runner`` + the Bundle G workers).
+``backend.workflow.application.agent_runner`` + the Bundle G workers).
 
 Lift H1 (Workflow context skeleton) relocated the state machine,
 per-domain enums, and advisory lock into

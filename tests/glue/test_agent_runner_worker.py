@@ -18,8 +18,8 @@ from backend.execution.db import (
     RunStatus,
 )
 from backend.intake.db import IntakeBase, RequestRow, RequestStatus, TriggerEventRow, TriggerKind
-from backend.orchestrator.agent_runner import AgentRunner
 from backend.workers.agent_worker import AgentWorker, AgentWorkerConfig
+from backend.workflow.application.agent_runner import AgentRunner
 
 from .._support import db_engine
 
