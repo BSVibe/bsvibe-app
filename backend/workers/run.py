@@ -113,9 +113,14 @@ logger = structlog.get_logger(__name__)
 
 # Default plugin-implementations directory (scanned at module import, in sync
 # context, so the async loader path stays free of filesystem-resolve calls).
-_PLUGINS_IMPLEMENTATIONS_DIR = (
-    Path(__file__).resolve().parent.parent / "extensions" / "implementations"
-)
+#
+# Lift R1 (v8 §D38): connector plugins live at repo-root ``plugin/<name>/``,
+# not under ``backend/extensions/implementations/`` (which now holds only the
+# yet-to-be-relocated audit plugin pending Lift R2's EventBus rewire).
+# Resolution: from ``backend/workers/run.py`` walk up to the repo root and
+# point at ``<repo_root>/plugin``. ``settings.plugins_dir`` overrides for
+# tests / non-standard deploy layouts.
+_PLUGINS_IMPLEMENTATIONS_DIR = Path(__file__).resolve().parents[2] / "plugin"
 
 
 # ---------------------------------------------------------------------------

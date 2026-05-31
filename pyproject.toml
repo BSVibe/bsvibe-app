@@ -58,11 +58,17 @@ packages = ["backend"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
-testpaths = ["tests"]
+# Lift R1 — connector plugins moved to repo-root ``plugin/<name>/`` and ship
+# their own ``tests/`` subtree. Discover those alongside the central
+# ``tests/`` suite so each plugin remains a self-contained unit.
+testpaths = ["plugin", "tests"]
 addopts = "-ra"
 
 [tool.coverage.run]
-source = ["backend"]
+# Lift R1 — connector plugins live at repo-root ``plugin/<name>/`` and ship
+# their own ``tests/`` subtree; include them in coverage so the 80% gate
+# reflects post-relocation reality.
+source = ["backend", "plugin"]
 omit = [
     "backend/*/migrations/*",
 ]

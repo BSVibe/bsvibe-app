@@ -35,7 +35,7 @@ class PluginLoader:
             return self._registry
 
         for entry in sorted(self._plugins_dir.iterdir()):
-            if not entry.is_dir():
+            if not self._is_candidate_dir(entry):
                 continue
             plugin_py = entry / "plugin.py"
             if not plugin_py.exists():
@@ -51,7 +51,7 @@ class PluginLoader:
             return new_entries
 
         for entry in sorted(self._plugins_dir.iterdir()):
-            if not entry.is_dir():
+            if not self._is_candidate_dir(entry):
                 continue
             plugin_py = entry / "plugin.py"
             if not plugin_py.exists():
@@ -62,6 +62,20 @@ class PluginLoader:
             if meta is not None and meta.name not in new_entries:
                 new_entries[meta.name] = meta
         return new_entries
+
+    @staticmethod
+    def _is_candidate_dir(entry: Path) -> bool:
+        """Filter scan noise: dotfiles, ``__pycache__``, and other dunder dirs.
+
+        Lift R1 moves plugins to repo-root ``plugin/<name>/``. Python may
+        write ``__pycache__/`` alongside them and pytest's discovery can
+        drop ``.pytest_cache``; neither is a plugin and emitting a
+        ``plugin_missing_file`` warning for each is noisy.
+        """
+        if not entry.is_dir():
+            return False
+        name = entry.name
+        return not (name.startswith(".") or name.startswith("__"))
 
     def get(self, name: str) -> PluginMeta:
         if name not in self._registry:

@@ -593,11 +593,15 @@ async def get_retract_handler() -> RetractHandler:  # pragma: no cover — overr
     in-test stub so a unit run never touches the loader / KMS.
     """
     from backend.api.deps import _get_session_factory  # noqa: PLC0415 — avoid import cycle
-    from backend.extensions.implementations import __path__ as _impl_path  # noqa: PLC0415
     from backend.extensions.plugin.loader import PluginLoader  # noqa: PLC0415
     from backend.router.accounts.crypto import _key_from_settings  # noqa: PLC0415
 
-    loader = PluginLoader(Path(_impl_path[0]))
+    # Lift R1 (v8 §D38) — connector plugins live at repo-root ``plugin/`` —
+    # walk up from this module to find it. Path resolution is one-time per
+    # request scope and cheap; noqa ASYNC240 mirrors the worker default at
+    # ``backend.workers.run._PLUGINS_IMPLEMENTATIONS_DIR``.
+    plugin_dir = Path(__file__).resolve().parents[3] / "plugin"  # noqa: ASYNC240
+    loader = PluginLoader(plugin_dir)
     registry = await loader.load_all()
     return PluginRetractHandler(
         session_factory=_get_session_factory(),
