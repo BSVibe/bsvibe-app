@@ -10,14 +10,14 @@ import pytest_asyncio
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from backend.execution.db import (
+from backend.workflow.application.agent_runner import AgentRunner
+from backend.workflow.infrastructure.db import (
     Decision,
     ExecutionBase,
     ExecutionRun,
     ExecutionRunHistory,
     RunStatus,
 )
-from backend.workflow.application.agent_runner import AgentRunner
 from backend.workflow.infrastructure.intake.db import (
     IntakeBase,
     RequestRow,

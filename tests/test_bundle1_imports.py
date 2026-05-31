@@ -8,7 +8,7 @@ def test_all_three_modules_import():
     import backend.extensions.plugin
     import backend.router
     import backend.router.accounts
-    import backend.supervisor
+    import backend.workflow.infrastructure.sandbox as sandbox_mod
     import plugin.audit as audit_mod
 
     # Each module re-exports the contract surface that downstream
@@ -17,10 +17,13 @@ def test_all_three_modules_import():
     assert backend.extensions.plugin.PluginBuilder is not None
 
     # Audit moved out of supervisor in Lift G — supervisor is sandbox-only.
+    # Lift I-0 folded sandbox into the Workflow context's infrastructure
+    # layer (per v8 D3 — Sandbox = Verifier internal swappable strategy);
+    # backend/supervisor/ no longer exists.
     assert audit_mod.safe_emit is not None
     assert audit_mod.AuditEvent is not None
-    assert backend.supervisor.sandbox.get_sandbox_manager is not None
-    assert backend.supervisor.sandbox.NoopSandboxManager is not None
+    assert sandbox_mod.get_sandbox_manager is not None
+    assert sandbox_mod.NoopSandboxManager is not None
 
     assert backend.router.GatewayDispatcher is not None
     assert backend.router.LlmClient is not None
@@ -45,7 +48,8 @@ def test_no_circular_imports_between_modules():
     forbidden = {
         m
         for m in sys.modules
-        if m.startswith("backend.router.") or m.startswith("backend.supervisor.")
+        if m.startswith("backend.router.")
+        or m.startswith("backend.workflow.infrastructure.sandbox")
     }
     assert not forbidden, f"backend.extensions.plugin pulled in: {forbidden}"
     assert plugin_modules

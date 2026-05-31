@@ -17,11 +17,12 @@ from typing import Any
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.execution.audit_events import (
+from backend.workflow.application.agent_loop import LoopResult
+from backend.workflow.application.audit_events import (
     DecisionPending,
     LoopTerminal,
 )
-from backend.execution.db import (
+from backend.workflow.infrastructure.db import (
     Decision,
     ExecutionRun,
     RunAttempt,
@@ -29,7 +30,6 @@ from backend.execution.db import (
     WorkStep,
     WorkStepStatus,
 )
-from backend.workflow.application.agent_loop import LoopResult
 from plugin.audit.events import (
     AuditActor,
     AuditEventBase,

@@ -1,7 +1,7 @@
 """Connector delivery end-to-end — verified Deliverable → external Notion page.
 
 This closes the last loop of the Direct path (Workflow §11.1 / §12.5 #8): a
-verified run produces a :class:`~backend.execution.db.Deliverable` and a
+verified run produces a :class:`~backend.workflow.infrastructure.db.Deliverable` and a
 :class:`~backend.workflow.infrastructure.delivery.db.DeliveryEventRow`; the
 :class:`~backend.workflow.infrastructure.workers.delivery_worker.DeliveryWorker` drains it through a
 :class:`~backend.workflow.application.delivery.connector_dispatch.ConnectorDeliveryAdapter` that
@@ -33,12 +33,12 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from backend.connectors.db import ConnectorAccountRow
-from backend.execution.db import Deliverable, DeliverableType, ExecutionRun, RunStatus
 from backend.extensions.plugin.loader import PluginLoader
 from backend.router.accounts.crypto import CredentialCipher
 from backend.workflow.application.delivery.connector_dispatch import (
     build_connector_delivery_adapter,
 )
+from backend.workflow.infrastructure.db import Deliverable, DeliverableType, ExecutionRun, RunStatus
 from backend.workflow.infrastructure.delivery.db import DeliveryEventRow
 from backend.workflow.infrastructure.workers.delivery_worker import (
     DeliveryWorker,

@@ -13,7 +13,7 @@ silently accepted the hollow executor for months. The defense is two-layered:
    verified without a real passing verdict linked to it.
 
 2. **Structural caller check.** A grep over the backend source for callers of
-   :func:`backend.execution.verified_deliverable.write_verified_deliverable`
+   :func:`backend.workflow.domain.verified_deliverable.write_verified_deliverable`
    asserts each call site lives in a code path that REFERENCES
    ``VerificationOutcome.PASSED`` upstream — so any future caller that tries
    to skip the verify gate trips a test that names the file. This is a
@@ -44,7 +44,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 # terminal contract; without the side-effect import, the runtime tests below
 # crash at flush with "no such table".
 import backend.workflow.infrastructure.delivery.db  # noqa: F401
-from backend.execution.db import (
+from backend.workflow.application.agent_loop import LoopToolCall, LoopTurn, RunOrchestrator
+from backend.workflow.infrastructure.db import (
     Deliverable,
     ProofState,
     VerificationOutcome,
@@ -52,8 +53,7 @@ from backend.execution.db import (
     WorkStep,
     WorkStepStatus,
 )
-from backend.supervisor.sandbox import NoopSandboxManager
-from backend.workflow.application.agent_loop import LoopToolCall, LoopTurn, RunOrchestrator
+from backend.workflow.infrastructure.sandbox import NoopSandboxManager
 from tests._support import memory_session
 
 # --------------------------------------------------------------------------
@@ -142,7 +142,7 @@ async def test_native_verified_run_satisfies_proved_invariant(tmp_path: Path) ->
     command-check contract that passes. The invariant checker then walks the
     DB and confirms the Deliverable links to a PASSED VerificationResult and
     the WorkStep is PROVED+VERIFIED."""
-    from backend.execution.db import ExecutionRun, RunStatus
+    from backend.workflow.infrastructure.db import ExecutionRun, RunStatus
 
     llm = _ScriptedLlm(
         [
@@ -188,7 +188,7 @@ async def test_native_no_contract_writes_no_deliverable(tmp_path: Path) -> None:
     delta is the *absence* of the Deliverable + the *absence* of a fake
     VerificationResult. Both are positive assertions, not "status was
     REVIEW_READY"."""
-    from backend.execution.db import ExecutionRun, RunStatus
+    from backend.workflow.infrastructure.db import ExecutionRun, RunStatus
 
     llm = _ScriptedLlm(
         [
@@ -232,7 +232,7 @@ async def test_native_failing_contract_writes_failed_verification_no_deliverable
     and assert the VerificationResult lands as FAILED, no Deliverable, no
     PROVED. This is the positive "honest fail" delta the audit asks for: the
     legacy hollow ship would have landed PROVED + Deliverable here."""
-    from backend.execution.db import ExecutionRun, RunStatus
+    from backend.workflow.infrastructure.db import ExecutionRun, RunStatus
 
     llm = _ScriptedLlm(
         [

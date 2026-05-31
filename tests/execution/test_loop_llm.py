@@ -5,10 +5,10 @@ from __future__ import annotations
 
 import uuid
 
-from backend.execution.loop_llm import GatewayLoopLlm
 from backend.router.classifier.base import ClassificationResult
 from backend.router.dispatch import DispatchRequest, DispatchResult
 from backend.router.llm_client import LlmResponse
+from backend.workflow.application.loop_llm import GatewayLoopLlm
 
 
 class _FakeDispatcher:

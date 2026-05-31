@@ -34,8 +34,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.api.deps import get_current_user_row, get_db_session, get_workspace_id
 from backend.api.v1.decisions import _vault_root
-from backend.execution.audit_events import DecisionResolved
-from backend.execution.db import (
+from backend.identity.db import UserRow
+from backend.knowledge.graph.storage import FileSystemStorage
+from backend.knowledge.retrieval.resolved_decisions_retriever import ResolvedDecisionsRetriever
+from backend.workflow.application.agent_runner import AgentRunner
+from backend.workflow.application.audit_events import DecisionResolved
+from backend.workflow.domain.verified_deliverable import settle_run_context
+from backend.workflow.infrastructure.db import (
     Decision,
     DecisionStatus,
     Deliverable,
@@ -47,11 +52,6 @@ from backend.execution.db import (
     WorkStep,
     WorkStepStatus,
 )
-from backend.execution.verified_deliverable import settle_run_context
-from backend.identity.db import UserRow
-from backend.knowledge.graph.storage import FileSystemStorage
-from backend.knowledge.retrieval.resolved_decisions_retriever import ResolvedDecisionsRetriever
-from backend.workflow.application.agent_runner import AgentRunner
 from plugin.audit.events import AuditActor, AuditResource
 from plugin.audit.service import safe_emit
 
@@ -75,7 +75,7 @@ NEGATIVE_PATTERN_SETTLE_KIND = "negative_pattern"
 
 #: Cap on the settle-activity ``summary`` text — keeps the absorbed garden
 #: note's body proportionate to the question + answer (mirrors
-#: :data:`~backend.execution.verified_deliverable._SETTLE_SUMMARY_CAP`).
+#: :data:`~backend.workflow.domain.verified_deliverable._SETTLE_SUMMARY_CAP`).
 _SUMMARY_CAP = 500
 
 logger = structlog.get_logger(__name__)

@@ -29,13 +29,13 @@ import structlog
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.execution.db import (
+from backend.workflow.application.agent_loop import LoopResult, RunCompute
+from backend.workflow.infrastructure.db import (
     Deliverable,
     ExecutionRun,
     ExecutionRunHistory,
     RunStatus,
 )
-from backend.workflow.application.agent_loop import LoopResult, RunCompute
 from backend.workflow.infrastructure.intake.db import RequestRow
 
 logger = structlog.get_logger(__name__)

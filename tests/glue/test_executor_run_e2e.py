@@ -33,7 +33,12 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 # Importing the module dbs registers their tables on the shared Base.metadata.
 import backend.executors.db  # noqa: F401
 from backend.config import get_settings
-from backend.execution.db import (
+from backend.executors import dispatch
+from backend.executors.db import WorkerRow
+from backend.executors.orchestrator import ExecutorOrchestrator
+from backend.router.accounts.models import ModelAccount
+from backend.workflow.application.agent_runner import AgentRunner
+from backend.workflow.infrastructure.db import (
     Decision,
     Deliverable,
     DeliverableType,
@@ -43,11 +48,6 @@ from backend.execution.db import (
     VerificationOutcome,
     VerificationResult,
 )
-from backend.executors import dispatch
-from backend.executors.db import WorkerRow
-from backend.executors.orchestrator import ExecutorOrchestrator
-from backend.router.accounts.models import ModelAccount
-from backend.workflow.application.agent_runner import AgentRunner
 from backend.workflow.infrastructure.delivery.db import DeliveryEventRow
 from backend.workflow.infrastructure.workers.run import build_agent_execution_deps
 
@@ -208,7 +208,7 @@ class _FakeBox:
         return "/work"
 
     async def exec(self, command: str, *, timeout_s: float, shell: bool = False):
-        from backend.supervisor.sandbox.protocol import SandboxResult  # noqa: PLC0415
+        from backend.workflow.infrastructure.sandbox.protocol import SandboxResult  # noqa: PLC0415
 
         return SandboxResult(exit_code=0, stdout="ok", stderr="", timed_out=False)
 
@@ -1099,7 +1099,7 @@ async def test_factory_retriever_empty_workspace_folds_nothing(
 ) -> None:
     """B3 graceful-empty: an empty-knowledge workspace's retriever yields [] →
     no canon folded → contract unchanged (no verify behaviour change)."""
-    from backend.execution.verifier.service import VerificationService
+    from backend.workflow.application.verification_service import VerificationService
 
     settings = _vault_root_settings(tmp_path)
     workspace_id = uuid.uuid4()

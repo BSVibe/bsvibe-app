@@ -542,7 +542,7 @@ async def product_workspace_lock(
     """Serialize verify→ship sequences on the same product workspace.
 
     Reuses the same Postgres ``pg_try_advisory_lock`` primitive
-    :mod:`backend.execution.advisory_lock` already uses for run-dispatch
+    :mod:`backend.workflow.infrastructure.advisory_lock` already uses for run-dispatch
     locking — the lock key is derived from the *product_id*, so it's a
     different lock from the run-dispatch ones (no conflict). When two
     sessions race for the same product, the loser raises

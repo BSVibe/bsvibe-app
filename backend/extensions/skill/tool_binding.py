@@ -16,9 +16,9 @@ import json
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-from backend.execution.tools import ToolDefinition, ToolRegistry
 from backend.extensions.skill.loader import SkillLoader
 from backend.extensions.skill.runner import CompletionFn, Searcher, invoke_skill
+from backend.workflow.infrastructure.tools import ToolDefinition, ToolRegistry
 
 INVOKE_SKILL_NAME = "invoke_skill"
 

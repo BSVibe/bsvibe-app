@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 
 import pytest
 
-from backend.supervisor.sandbox import (
+from backend.workflow.infrastructure.sandbox import (
     DockerSandboxManager,
     SandboxError,
     SandboxUnavailable,
@@ -102,7 +102,7 @@ class TestAcquireCreate:
     async def test_dind_unreachable_raises_unavailable(self, tmp_path):
         mgr, _ = _mgr_with_fake(version_ok=False)
         # shorten startup timeout via monkey-patch to keep the test fast
-        from backend.supervisor.sandbox import docker_manager as dm
+        from backend.workflow.infrastructure.sandbox import docker_manager as dm
 
         dm._DIND_STARTUP_TIMEOUT_S = 0.1  # noqa: SLF001
         try:

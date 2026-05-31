@@ -167,7 +167,7 @@ def test_deliverables_endpoint_imports_resolve() -> None:
 
 
 def test_verified_deliverable_imports_resolve() -> None:
-    mod = importlib.import_module("backend.execution.verified_deliverable")
+    mod = importlib.import_module("backend.workflow.domain.verified_deliverable")
     assert mod is not None
 
 

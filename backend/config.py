@@ -64,7 +64,7 @@ class Settings(BaseSettings):
     # Default region stamped onto workspaces created at signup (§10.2).
     default_workspace_region: str = "us-1"
 
-    # Sandbox settings (backend.supervisor.sandbox)
+    # Sandbox settings (backend.workflow.infrastructure.sandbox)
     sandbox_enabled: bool = False
     docker_host: str = ""
     sandbox_image: str = "bsvibe-sandbox:latest"

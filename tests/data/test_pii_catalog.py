@@ -9,10 +9,11 @@ loudly at import time, not silently rot.
 
 from __future__ import annotations
 
-# Importing the relevant db modules for table registration side effects.
-import backend.execution.db  # noqa: F401 — registers execution_decisions
 import backend.identity.db  # noqa: F401 — registers users + memberships
 import backend.notifications.db  # noqa: F401 — registers notification_prefs
+
+# Importing the relevant db modules for table registration side effects.
+import backend.workflow.infrastructure.db  # noqa: F401 — registers execution_decisions
 import backend.workflow.infrastructure.intake.db  # noqa: F401 — registers requests + trigger_events
 import backend.workspaces.db  # noqa: F401 — registers workspaces + products
 from backend.data import Base

@@ -7,9 +7,9 @@ import uuid
 from pathlib import Path
 from types import SimpleNamespace
 
-from backend.execution.db import ExecutionRun, RunStatus
-from backend.execution.handoff import read_design_context
 from backend.storage.artifact_store import LocalFilesystemArtifactStore
+from backend.workflow.application.handoff import read_design_context
+from backend.workflow.infrastructure.db import ExecutionRun, RunStatus
 
 
 def _settings(tmp_path: Path) -> SimpleNamespace:

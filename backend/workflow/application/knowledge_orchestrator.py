@@ -18,10 +18,10 @@ HONESTY (B4 trust integrity). A knowledge answer is NOT verified code. So this
 orchestrator:
 
 * makes NO sandbox acquisition, runs NO command/judge verification, writes NO
-  :class:`~backend.execution.db.VerificationResult`,
-* never sets :class:`~backend.execution.db.ProofState.PROVED` and never flips the
+  :class:`~backend.workflow.infrastructure.db.VerificationResult`,
+* never sets :class:`~backend.workflow.infrastructure.db.ProofState.PROVED` and never flips the
   WorkStep to ``VERIFIED`` (it lands ``UNTESTED`` — the work was not proven),
-* writes a :data:`~backend.execution.db.DeliverableType.DIRECT_OUTPUT` ANSWER
+* writes a :data:`~backend.workflow.infrastructure.db.DeliverableType.DIRECT_OUTPUT` ANSWER
   Deliverable (NOT ``CODE``) via :func:`write_answer_deliverable`, so a consumer
   renders an answer the founder reads, never a green "verified" code change.
 
@@ -39,7 +39,12 @@ from typing import Any
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.execution.db import (
+from backend.workflow.application.agent_loop import CanonRetriever, LoopLlm, LoopResult
+from backend.workflow.domain.verified_deliverable import (
+    ANSWER_DELIVERABLE_KIND,
+    write_answer_deliverable,
+)
+from backend.workflow.infrastructure.db import (
     ExecutionRun,
     ProofState,
     RunAttempt,
@@ -47,11 +52,6 @@ from backend.execution.db import (
     WorkStep,
     WorkStepStatus,
 )
-from backend.execution.verified_deliverable import (
-    ANSWER_DELIVERABLE_KIND,
-    write_answer_deliverable,
-)
-from backend.workflow.application.agent_loop import CanonRetriever, LoopLlm, LoopResult
 
 logger = structlog.get_logger(__name__)
 

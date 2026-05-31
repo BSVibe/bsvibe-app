@@ -16,26 +16,17 @@ import json
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from backend.execution.audit_events import (
+from backend.workflow.application._loop_context import (
+    _SYSTEM_PROMPT,
+    _intent_title,
+    _resumption_messages,
+)
+from backend.workflow.application.audit_events import (
     DecisionPending,
     LlmTurn,
     LoopTerminal,
     ToolCall,
     VerifyRun,
-)
-from backend.execution.db import (
-    ExecutionRun,
-    RunAttempt,
-    RunAttemptPhase,
-    VerificationOutcome,
-    WorkStep,
-)
-from backend.execution.tools import ToolRegistry
-from backend.supervisor.sandbox import SandboxSession
-from backend.workflow.application._loop_context import (
-    _SYSTEM_PROMPT,
-    _intent_title,
-    _resumption_messages,
 )
 from backend.workflow.application.tool_registry import (
     ASK_USER_QUESTION_TOOL,
@@ -51,6 +42,15 @@ from backend.workflow.domain.emit_deliverable import (
     _safe_args,
     handle_emit_deliverable,
 )
+from backend.workflow.infrastructure.db import (
+    ExecutionRun,
+    RunAttempt,
+    RunAttemptPhase,
+    VerificationOutcome,
+    WorkStep,
+)
+from backend.workflow.infrastructure.sandbox import SandboxSession
+from backend.workflow.infrastructure.tools import ToolRegistry
 
 if TYPE_CHECKING:
     from backend.workflow.application.agent_loop import LoopResult, RunOrchestrator

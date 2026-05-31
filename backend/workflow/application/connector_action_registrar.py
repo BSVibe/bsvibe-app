@@ -20,13 +20,13 @@ from typing import Any
 
 import structlog
 
-from backend.execution.connector_actions import (
+from backend.workflow.infrastructure.connector_actions import (
     ConnectorActionProvider,
     ConnectorActionTool,
     loop_tool_name,
 )
-from backend.execution.db import ExecutionRun, WorkStep
-from backend.execution.tools import ToolDefinition, ToolRegistry
+from backend.workflow.infrastructure.db import ExecutionRun, WorkStep
+from backend.workflow.infrastructure.tools import ToolDefinition, ToolRegistry
 
 logger = structlog.get_logger(__name__)
 

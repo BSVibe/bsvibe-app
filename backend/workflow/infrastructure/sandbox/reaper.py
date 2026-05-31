@@ -11,7 +11,7 @@ import asyncio
 
 import structlog
 
-from backend.supervisor.sandbox.protocol import SandboxManager
+from backend.workflow.infrastructure.sandbox.protocol import SandboxManager
 
 logger = structlog.get_logger(__name__)
 

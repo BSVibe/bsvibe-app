@@ -18,7 +18,7 @@ deliverable emit in :mod:`backend.workflow.domain.emit_deliverable`.
 
 The loop depends on ONE LLM seam — the :class:`LoopLlm` Protocol — so
 the caller can inject the production gateway adapter
-(:class:`~backend.execution.loop_llm.GatewayLoopLlm`) or a deterministic
+(:class:`~backend.workflow.application.loop_llm.GatewayLoopLlm`) or a deterministic
 test stub. (Per the ``bsvibe-llm-wrapper-not-raw-litellm`` rule: one
 Protocol, never a Union of concretes.)
 """
@@ -34,25 +34,7 @@ import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.config import Settings, get_settings
-from backend.execution.audit_events import (
-    LoopTerminal,
-    RunStarted,
-)
-from backend.execution.connector_actions import ConnectorActionProvider
-from backend.execution.db import (
-    ExecutionRun,
-    ProofState,
-    RunAttempt,
-    RunAttemptPhase,
-    VerificationResult,
-    WorkStep,
-    WorkStepStatus,
-)
-from backend.execution.tools import ToolRegistry
-from backend.execution.verifier.contract import VerificationContract
-from backend.execution.verifier.service import VerificationService
 from backend.extensions.skill.loader import SkillLoader
-from backend.supervisor.sandbox import SandboxManager, SandboxSession
 from backend.workflow.application._loop_context import (
     _DESIGN_SPEC_DIRECTIVE,
     _SYSTEM_PROMPT,
@@ -64,6 +46,10 @@ from backend.workflow.application._loop_context import (
     knowledge_seed_message,
     register_knowledge_tools,
     suggested_skill_message,
+)
+from backend.workflow.application.audit_events import (
+    LoopTerminal,
+    RunStarted,
 )
 from backend.workflow.application.connector_action_registrar import (
     register_connector_action_tools,
@@ -79,10 +65,24 @@ from backend.workflow.application.tool_registry import (
     ASK_USER_QUESTION_TOOL,
     WORK_TOOLS,
 )
+from backend.workflow.application.verification_service import VerificationService
 from backend.workflow.domain.emit_deliverable import (
     EMIT_DELIVERABLE_NAME,
     EMIT_DELIVERABLE_TOOL,
 )
+from backend.workflow.domain.verifier_contract import VerificationContract
+from backend.workflow.infrastructure.connector_actions import ConnectorActionProvider
+from backend.workflow.infrastructure.db import (
+    ExecutionRun,
+    ProofState,
+    RunAttempt,
+    RunAttemptPhase,
+    VerificationResult,
+    WorkStep,
+    WorkStepStatus,
+)
+from backend.workflow.infrastructure.sandbox import SandboxManager, SandboxSession
+from backend.workflow.infrastructure.tools import ToolRegistry
 
 logger = structlog.get_logger(__name__)
 

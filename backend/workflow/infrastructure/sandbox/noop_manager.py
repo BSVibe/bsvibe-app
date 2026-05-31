@@ -11,8 +11,8 @@ import shlex
 import uuid
 from pathlib import Path
 
-from backend.supervisor.sandbox.errors import SandboxError
-from backend.supervisor.sandbox.protocol import SandboxResult
+from backend.workflow.infrastructure.sandbox.errors import SandboxError
+from backend.workflow.infrastructure.sandbox.protocol import SandboxResult
 
 
 class NoopSandboxSession:

@@ -32,19 +32,19 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.api.deps import get_artifact_store, get_db_session, get_workspace_id
 from backend.config import get_settings
 from backend.connectors.db import ConnectorAccountRow
-from backend.execution.db import (
+from backend.extensions.plugin.base import PluginMeta, PluginRunError
+from backend.extensions.plugin.context import SkillContext
+from backend.extensions.plugin.runner import PluginRunner
+from backend.router.accounts.crypto import CredentialCipher
+from backend.storage.artifact_store import ArtifactStore, LocalFilesystemArtifactStore
+from backend.workflow.application.verification_service import RETRIEVED_KNOWLEDGE_RATIONALE
+from backend.workflow.infrastructure.db import (
     Deliverable,
     DeliverableType,
     ExecutionRun,
     VerificationOutcome,
     VerificationResult,
 )
-from backend.execution.verifier.service import RETRIEVED_KNOWLEDGE_RATIONALE
-from backend.extensions.plugin.base import PluginMeta, PluginRunError
-from backend.extensions.plugin.context import SkillContext
-from backend.extensions.plugin.runner import PluginRunner
-from backend.router.accounts.crypto import CredentialCipher
-from backend.storage.artifact_store import ArtifactStore, LocalFilesystemArtifactStore
 
 logger = structlog.get_logger(__name__)
 
@@ -217,7 +217,7 @@ def _references_of(verifications: list[VerificationReport]) -> list[str]:
     """The referenced-knowledge statements across a run's verifications (G2).
 
     Pulls the criteria of every judge check stamped with
-    :data:`~backend.execution.verifier.service.RETRIEVED_KNOWLEDGE_RATIONALE`
+    :data:`~backend.workflow.application.verification_service.RETRIEVED_KNOWLEDGE_RATIONALE`
     (the retriever's canon / prior-decision / prior-rejection fold), deduped in
     first-seen order. A run may record several verifications (re-attempts), so
     the same statement can recur — it surfaces once. Defensive against malformed

@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import uuid
 
-from backend.execution.db import ExecutionRun, RunStatus
 from backend.executors.orchestrator import (
     _DESIGN_SPEC_DIRECTIVE,
     _EXECUTOR_SYSTEM_PROMPT,
@@ -24,6 +23,7 @@ from backend.executors.orchestrator import (
     _executor_system_prompt,
     _resolved_decisions,
 )
+from backend.workflow.infrastructure.db import ExecutionRun, RunStatus
 
 
 def _run(payload: dict[str, object]) -> ExecutionRun:

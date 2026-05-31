@@ -21,8 +21,8 @@ from typing import Any
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.execution.db import ExecutionRun
-from backend.execution.verified_deliverable import write_partial_deliverable
+from backend.workflow.domain.verified_deliverable import write_partial_deliverable
+from backend.workflow.infrastructure.db import ExecutionRun
 
 logger = structlog.get_logger(__name__)
 

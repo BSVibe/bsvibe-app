@@ -14,14 +14,14 @@ import uuid
 from typing import Any
 
 from backend.connectors.db import ConnectorAccountRow
-from backend.execution.connector_actions import (
+from backend.extensions.plugin.base import ActionCapability, PluginMeta
+from backend.router.accounts.crypto import CredentialCipher
+from backend.workflow.infrastructure.connector_actions import (
     ConnectorActionProvider,
     ConnectorActionResolver,
     ConnectorActionTool,
     loop_tool_name,
 )
-from backend.extensions.plugin.base import ActionCapability, PluginMeta
-from backend.router.accounts.crypto import CredentialCipher
 
 from .._support import memory_session
 

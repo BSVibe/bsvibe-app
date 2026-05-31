@@ -22,7 +22,12 @@ from typing import Any
 import pytest
 from sqlalchemy import select
 
-from backend.execution.db import (
+from backend.workflow.application.agent_loop import LoopTurn
+from backend.workflow.application.knowledge_orchestrator import (
+    KNOWLEDGE_ANSWER_KIND,
+    KnowledgeAnswerOrchestrator,
+)
+from backend.workflow.infrastructure.db import (
     Deliverable,
     DeliverableType,
     ExecutionRun,
@@ -32,11 +37,6 @@ from backend.execution.db import (
     WorkStep,
     WorkStepStatus,
 )
-from backend.execution.knowledge_orchestrator import (
-    KNOWLEDGE_ANSWER_KIND,
-    KnowledgeAnswerOrchestrator,
-)
-from backend.workflow.application.agent_loop import LoopTurn
 from backend.workflow.infrastructure.delivery.db import (
     DeliveryEventRow,  # noqa: F401 — register table for memory_session
 )

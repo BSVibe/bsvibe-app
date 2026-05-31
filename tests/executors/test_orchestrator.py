@@ -24,7 +24,13 @@ import pytest
 # Register the executor tables on the shared Base.metadata for create_all.
 import backend.executors.db  # noqa: F401
 from backend.config import Settings
-from backend.execution.db import (
+from backend.executors import dispatch
+from backend.executors import orchestrator as orch
+from backend.executors.db import ExecutorTaskRow, WorkerRow
+from backend.executors.orchestrator import ExecutorOrchestrator, _parse_uuid
+from backend.router.accounts.models import ModelAccount
+from backend.workflow.application.agent_loop import LoopTurn
+from backend.workflow.infrastructure.db import (
     Decision,
     Deliverable,
     ExecutionRun,
@@ -37,13 +43,7 @@ from backend.execution.db import (
     WorkStep,
     WorkStepStatus,
 )
-from backend.executors import dispatch
-from backend.executors import orchestrator as orch
-from backend.executors.db import ExecutorTaskRow, WorkerRow
-from backend.executors.orchestrator import ExecutorOrchestrator, _parse_uuid
-from backend.router.accounts.models import ModelAccount
-from backend.supervisor.sandbox.protocol import SandboxResult
-from backend.workflow.application.agent_loop import LoopTurn
+from backend.workflow.infrastructure.sandbox.protocol import SandboxResult
 
 from .._support import memory_session
 

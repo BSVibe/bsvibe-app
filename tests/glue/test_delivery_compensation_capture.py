@@ -24,14 +24,14 @@ import pytest
 import pytest_asyncio
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
-from backend.execution.db import (
+from backend.workflow.domain.delivery import ActionResult, DeliveryResult
+from backend.workflow.infrastructure.db import (
     Deliverable,
     DeliverableType,
     ExecutionBase,
     ExecutionRun,
     RunStatus,
 )
-from backend.workflow.domain.delivery import ActionResult, DeliveryResult
 from backend.workflow.infrastructure.workers.delivery_worker import dispatch_delivery
 
 from .._support import db_engine

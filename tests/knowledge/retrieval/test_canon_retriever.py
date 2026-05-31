@@ -16,11 +16,11 @@ from pathlib import Path
 
 import pytest
 
-from backend.execution.verifier.service import CanonRetriever
 from backend.knowledge import KnowledgeFactory
 from backend.knowledge.canonicalization import models
 from backend.knowledge.canonicalization.store import NoteStore
 from backend.knowledge.graph.storage import FileSystemStorage
+from backend.workflow.application.verification_service import CanonRetriever
 
 pytestmark = pytest.mark.asyncio
 

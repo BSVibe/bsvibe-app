@@ -1,6 +1,6 @@
 """Lift H1 — advisory_lock at new path `backend.workflow.infrastructure`.
 
-The primitive itself is unchanged from `backend.execution.advisory_lock`
+The primitive itself is unchanged from `backend.workflow.infrastructure.advisory_lock`
 (verified at the old path by `tests/storage/...` indirectly). This
 test asserts the relocation: imports resolve at the new path and the
 SQLite fallback works in-process.

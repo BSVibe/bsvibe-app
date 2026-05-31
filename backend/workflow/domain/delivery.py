@@ -34,7 +34,7 @@ ArtifactType = Literal[
 """Workflow §3.1 — the canonical artifact-type tags downstream
 plugins understand.
 
-The first five mirror :class:`~backend.execution.db.DeliverableType` 1:1 (the
+The first five mirror :class:`~backend.workflow.infrastructure.db.DeliverableType` 1:1 (the
 *deliverable's own* type). The rest are connector-outbound dispatch tags: a
 connector's ``@p.outbound`` declares the artifact_type it accepts (slack →
 ``slack_message``, email-sender → ``email``, telegram → ``telegram_message``,

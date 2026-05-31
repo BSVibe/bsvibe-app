@@ -30,7 +30,7 @@ from typing import Any
 
 import structlog
 
-from backend.supervisor.sandbox import SandboxError, SandboxSession
+from backend.workflow.infrastructure.sandbox import SandboxError, SandboxSession
 
 logger = structlog.get_logger(__name__)
 
@@ -475,7 +475,9 @@ class ToolRegistry:
         # Imported here to keep the tools module free of a core import
         # cycle (verification_contract is pure, but the import site is
         # kept local for symmetry with the rest of the registry).
-        from backend.execution.verifier.contract import parse_verification_contract  # noqa: PLC0415
+        from backend.workflow.domain.verifier_contract import (
+            parse_verification_contract,  # noqa: PLC0415
+        )
 
         checks = args.get("checks")
         if not isinstance(checks, list) or not checks:

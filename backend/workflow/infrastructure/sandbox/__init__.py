@@ -7,7 +7,7 @@ fallback used while ``sandbox_enabled`` is false.
 
 Public surface::
 
-    from backend.supervisor.sandbox import (
+    from backend.workflow.infrastructure.sandbox import (
         SandboxManager, SandboxSession, SandboxResult,
         SandboxError, SandboxUnavailable,
         DockerSandboxManager, NoopSandboxManager,
@@ -22,22 +22,22 @@ ops bundle that wires DinD into the compose stack).
 
 from __future__ import annotations
 
-from backend.supervisor.sandbox.docker_manager import (
+from backend.workflow.infrastructure.sandbox.docker_manager import (
     DockerSandboxManager,
     DockerSandboxSession,
 )
-from backend.supervisor.sandbox.errors import SandboxError, SandboxUnavailable
-from backend.supervisor.sandbox.noop_manager import (
+from backend.workflow.infrastructure.sandbox.errors import SandboxError, SandboxUnavailable
+from backend.workflow.infrastructure.sandbox.noop_manager import (
     NoopSandboxManager,
     NoopSandboxSession,
 )
-from backend.supervisor.sandbox.protocol import (
+from backend.workflow.infrastructure.sandbox.protocol import (
     SandboxManager,
     SandboxResult,
     SandboxSession,
 )
-from backend.supervisor.sandbox.reaper import REAP_INTERVAL_S, sandbox_reaper_loop
-from backend.supervisor.sandbox.resolver import (
+from backend.workflow.infrastructure.sandbox.reaper import REAP_INTERVAL_S, sandbox_reaper_loop
+from backend.workflow.infrastructure.sandbox.resolver import (
     build_sandbox_manager,
     get_sandbox_manager,
     reset_sandbox_manager,

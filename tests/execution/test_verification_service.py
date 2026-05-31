@@ -19,7 +19,14 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.execution.db import (
+from backend.workflow.application.agent_loop import LoopTurn
+from backend.workflow.application.verification_service import VerificationService
+from backend.workflow.domain.verifier_contract import (
+    VerificationCheck,
+    VerificationContract,
+    parse_verification_contract,
+)
+from backend.workflow.infrastructure.db import (
     ExecutionRun,
     ExecutionRunActivity,
     RunAttempt,
@@ -30,14 +37,7 @@ from backend.execution.db import (
     WorkStep,
     WorkStepStatus,
 )
-from backend.execution.verifier.contract import (
-    VerificationCheck,
-    VerificationContract,
-    parse_verification_contract,
-)
-from backend.execution.verifier.service import VerificationService
-from backend.supervisor.sandbox.protocol import SandboxResult
-from backend.workflow.application.agent_loop import LoopTurn
+from backend.workflow.infrastructure.sandbox.protocol import SandboxResult
 from tests._support import memory_session
 
 # --------------------------------------------------------------------------

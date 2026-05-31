@@ -17,8 +17,8 @@ from dataclasses import dataclass
 
 import structlog
 
-from backend.supervisor.sandbox.errors import SandboxError, SandboxUnavailable
-from backend.supervisor.sandbox.protocol import SandboxResult
+from backend.workflow.infrastructure.sandbox.errors import SandboxError, SandboxUnavailable
+from backend.workflow.infrastructure.sandbox.protocol import SandboxResult
 
 logger = structlog.get_logger(__name__)
 

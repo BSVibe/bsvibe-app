@@ -17,8 +17,19 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.connectors.db import ConnectorAccountRow
-from backend.execution.connector_actions import ConnectorActionTool
-from backend.execution.db import (
+from backend.extensions.plugin.base import ActionCapability, PluginMeta
+from backend.extensions.plugin.context import SkillContext
+from backend.extensions.skill.loader import SkillLoader
+from backend.extensions.skill.tool_binding import INVOKE_SKILL_NAME
+from backend.workflow.application.agent_loop import (
+    CanonRetriever,
+    LoopLlm,
+    LoopToolCall,
+    LoopTurn,
+    RunOrchestrator,
+)
+from backend.workflow.infrastructure.connector_actions import ConnectorActionTool
+from backend.workflow.infrastructure.db import (
     Decision,
     Deliverable,
     ExecutionRun,
@@ -32,19 +43,8 @@ from backend.execution.db import (
     WorkStep,
     WorkStepStatus,
 )
-from backend.extensions.plugin.base import ActionCapability, PluginMeta
-from backend.extensions.plugin.context import SkillContext
-from backend.extensions.skill.loader import SkillLoader
-from backend.extensions.skill.tool_binding import INVOKE_SKILL_NAME
-from backend.supervisor.sandbox import NoopSandboxManager, SandboxUnavailable
-from backend.workflow.application.agent_loop import (
-    CanonRetriever,
-    LoopLlm,
-    LoopToolCall,
-    LoopTurn,
-    RunOrchestrator,
-)
 from backend.workflow.infrastructure.delivery.db import DeliveryEventRow
+from backend.workflow.infrastructure.sandbox import NoopSandboxManager, SandboxUnavailable
 from backend.workspaces.db import ProductRow, WorkspaceRow
 from tests._support import memory_session
 
@@ -1500,8 +1500,8 @@ async def test_real_github_list_issues_dispatches_through_real_pluginrunner(
     import httpx as _httpx
     import respx
 
-    from backend.execution.connector_actions import ConnectorActionResolver
     from backend.router.accounts.crypto import CredentialCipher
+    from backend.workflow.infrastructure.connector_actions import ConnectorActionResolver
     from plugin.github import plugin as github_module
 
     ws = uuid.uuid4()

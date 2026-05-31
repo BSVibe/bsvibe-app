@@ -31,7 +31,12 @@ from typing import Any, Protocol, runtime_checkable
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.execution.db import (
+from backend.workflow.domain.verifier_contract import (
+    VerificationCheck,
+    VerificationContract,
+    parse_verification_contract,
+)
+from backend.workflow.infrastructure.db import (
     ExecutionRun,
     ExecutionRunActivity,
     RunAttempt,
@@ -39,12 +44,7 @@ from backend.execution.db import (
     VerificationResult,
     WorkStep,
 )
-from backend.execution.verifier.contract import (
-    VerificationCheck,
-    VerificationContract,
-    parse_verification_contract,
-)
-from backend.supervisor.sandbox import SandboxError, SandboxSession
+from backend.workflow.infrastructure.sandbox import SandboxError, SandboxSession
 
 logger = structlog.get_logger(__name__)
 

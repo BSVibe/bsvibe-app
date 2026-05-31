@@ -7,7 +7,7 @@ budget, and the small helpers that translate a ``ToolRegistry.invoke``
 into a string the LLM can read.
 
 The ``ToolRegistry`` *class* itself still lives in
-:mod:`backend.execution.tools` (the sandboxed file-write surface — out of
+:mod:`backend.workflow.infrastructure.tools` (the sandboxed file-write surface — out of
 scope for H2a). This module is the loop-side companion: the things the
 agent loop reaches for when it wires schemas + dispatches the LLM's
 chosen tool calls.
@@ -18,7 +18,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from backend.execution.tools import ToolError, ToolRegistry
+from backend.workflow.infrastructure.tools import ToolError, ToolRegistry
 
 # Tools the work LLM may use during the loop. ``ask_user_question`` is a
 # loop-owned pseudo-tool (not in the shared ToolRegistry) handled inline.
@@ -51,7 +51,7 @@ _KNOWLEDGE_SEED_MAX_CHARS_PER_STATEMENT = 500
 
 # The per-command verify timeout, the judge file-context cap, and the judge
 # verdict parser now live with the shared VerificationService
-# (``backend.execution.verifier.service``) — the canonical home shared by both
+# (``backend.workflow.application.verification_service``) — the canonical home shared by both
 # the native loop and the executor orchestrator.
 MAX_NO_WORK_NUDGES = 2
 

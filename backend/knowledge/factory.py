@@ -27,10 +27,10 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from backend.execution.verifier.service import CanonRetriever
     from backend.knowledge.graph.restricted import RestrictedPluginGarden
     from backend.knowledge.graph.vault import Vault
     from backend.knowledge.graph.writer import GardenWriter
+    from backend.workflow.application.verification_service import CanonRetriever
 
 
 @dataclass(frozen=True, slots=True)
@@ -113,7 +113,7 @@ class KnowledgeFactory:
     def retriever(self) -> CanonRetriever:
         """Return a workspace-scoped read-only retriever (Workflow §1.2 + B11b).
 
-        Satisfies the :class:`~backend.execution.verifier.service.CanonRetriever`
+        Satisfies the :class:`~backend.workflow.application.verification_service.CanonRetriever`
         Protocol: ``retrieve_for_signals(signals) -> list[str]`` surfaces THIS
         workspace's relevant knowledge for a change's signals — folded by the
         verifier as judge criteria and by the orchestrator's B6 seed as the

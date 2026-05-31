@@ -19,17 +19,17 @@ import pytest
 import pytest_asyncio
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from backend.execution.db import ExecutionRun, RunStatus
 from backend.extensions.skill.loader import SkillLoader
-from backend.supervisor.sandbox import NoopSandboxManager
 from backend.workflow.application.agent_loop import LoopTurn, RunOrchestrator
 from backend.workflow.application.agent_runner import AgentRunner
+from backend.workflow.infrastructure.db import ExecutionRun, RunStatus
 from backend.workflow.infrastructure.intake.db import (
     RequestRow,
     RequestStatus,
     TriggerEventRow,
     TriggerKind,
 )
+from backend.workflow.infrastructure.sandbox import NoopSandboxManager
 from backend.workflow.infrastructure.workers.agent_worker import AgentExecutionDeps, AgentWorker
 
 from .._support import db_engine

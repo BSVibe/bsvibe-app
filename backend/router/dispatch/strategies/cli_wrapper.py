@@ -26,12 +26,12 @@ from typing import Any
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.config import Settings
-from backend.execution.db import ExecutionRun
-from backend.execution.verifier.service import CanonRetriever, JudgeLlm
 from backend.executors.coordinator import ExecutorOrchestrator
 from backend.router.accounts.models import ModelAccount
-from backend.supervisor.sandbox import SandboxManager
 from backend.workflow.application.agent_loop import LoopResult
+from backend.workflow.application.verification_service import CanonRetriever, JudgeLlm
+from backend.workflow.infrastructure.db import ExecutionRun
+from backend.workflow.infrastructure.sandbox import SandboxManager
 
 
 class CliWrapperStrategy:

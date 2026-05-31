@@ -3,7 +3,7 @@
 Adds two nullable columns to ``executor_tasks`` so a dispatched executor task
 can surface the files its CLI produced back to the run:
 
-* ``run_id`` — the :class:`backend.execution.db.ExecutionRun` the task belongs
+* ``run_id`` — the :class:`backend.workflow.infrastructure.db.ExecutionRun` the task belongs
   to. The :class:`backend.executors.orchestrator.ExecutorOrchestrator` sets it
   so the result path can resolve the run workspace
   (``run_workspace_root/<run_id>/``) to persist captured files into.

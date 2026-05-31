@@ -1,7 +1,7 @@
 """CanonRetriever — high-precision canonical-pattern retrieval for verify (B3).
 
 The verifier folds BSage canon into a verify contract through ONE read-only
-seam (:class:`~backend.execution.verifier.service.CanonRetriever`):
+seam (:class:`~backend.workflow.application.verification_service.CanonRetriever`):
 ``retrieve_for_signals(signals) -> list[str]``. Before B3 the production
 :func:`backend.workflow.infrastructure.workers.run._factory` always passed ``retriever=None``, so the
 workspace's settled knowledge was NEVER consulted at verify time — the product
@@ -76,7 +76,7 @@ class CanonConceptRetriever:
     Holds only its bound per-workspace ``storage``; it builds a fresh derived
     index per call (cheap for self-host v1 vault sizes, and keeps the retriever
     stateless so a long-lived instance never serves a stale snapshot). Satisfies
-    the :class:`~backend.execution.verifier.service.CanonRetriever` Protocol
+    the :class:`~backend.workflow.application.verification_service.CanonRetriever` Protocol
     structurally.
     """
 

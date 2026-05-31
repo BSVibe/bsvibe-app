@@ -26,7 +26,7 @@ import backend.router.accounts.account_models  # noqa: F401, E402
 import backend.router.accounts.models  # noqa: F401, E402
 import backend.connectors.db  # noqa: F401, E402
 import backend.workflow.infrastructure.delivery.db  # noqa: F401, E402
-import backend.execution.db  # noqa: F401, E402
+import backend.workflow.infrastructure.db  # noqa: F401, E402
 import backend.executors.db  # noqa: F401, E402
 import backend.router.budget.models  # noqa: F401, E402
 import backend.embedding.db  # noqa: F401, E402

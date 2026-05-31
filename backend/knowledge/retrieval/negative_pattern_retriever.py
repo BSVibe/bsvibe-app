@@ -52,7 +52,7 @@ def _tokens(text: str) -> set[str]:
 class NegativePatternRetriever:
     """Read-only retrieval of relevant rejection feedback from a workspace vault.
 
-    Satisfies the :class:`~backend.execution.verifier.service.CanonRetriever`
+    Satisfies the :class:`~backend.workflow.application.verification_service.CanonRetriever`
     Protocol structurally (same ``retrieve_for_signals`` shape), so it composes
     into :class:`~backend.knowledge.retrieval.composite_retriever.CompositeCanonRetriever`
     alongside the canon-concept and resolved-decisions sources.

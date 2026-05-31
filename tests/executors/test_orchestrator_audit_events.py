@@ -22,12 +22,12 @@ from sqlalchemy import select
 # Register executor tables on Base.metadata for create_all.
 import backend.executors.db  # noqa: F401
 from backend.config import Settings
-from backend.execution.audit_events import (
+from backend.executors.orchestrator import ExecutorOrchestrator
+from backend.workflow.application.audit_events import (
     DecisionPending,
     LoopTerminal,
     RunStarted,
 )
-from backend.executors.orchestrator import ExecutorOrchestrator
 from plugin.audit.models import AuditOutboxRecord
 
 from .._support import memory_session

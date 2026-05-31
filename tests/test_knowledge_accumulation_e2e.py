@@ -35,7 +35,6 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 import backend.executors.db  # noqa: F401 — register tables on the shared Base
 from backend.config import get_settings
-from backend.execution.db import ExecutionRun, ExecutionRunActivity, RunStatus
 from backend.knowledge.infrastructure.workers.settle_worker import (
     KnowledgeSettleSink,
     SettleWorker,
@@ -45,6 +44,7 @@ from backend.knowledge.infrastructure.workers.settle_worker import (
 from backend.knowledge.retrieval.embedder_resolution import resolve_knowledge_embedder
 from backend.knowledge.retrieval.semantic_note_retriever import SemanticNoteRetriever
 from backend.knowledge.retrieval.storage.pg import PgNoteVectorBackend
+from backend.workflow.infrastructure.db import ExecutionRun, ExecutionRunActivity, RunStatus
 from backend.workflow.infrastructure.workers.run import build_note_embed_hook
 
 pytestmark = pytest.mark.asyncio

@@ -49,9 +49,7 @@ from backend.api.deps import (
 )
 from backend.api.main import create_app
 from backend.config import Settings
-from backend.execution.db import Deliverable, ExecutionRun, RunStatus
 from backend.extensions.skill.loader import SkillLoader
-from backend.supervisor.sandbox import NoopSandboxManager
 from backend.workers import emit as emit_mod
 from backend.workers.emit import (
     STREAM_AGENT,
@@ -63,8 +61,10 @@ from backend.workers.emit import (
 from backend.workers.streams import RedisStreamConsumer
 from backend.workflow.application.agent_loop import LoopToolCall, LoopTurn, RunOrchestrator
 from backend.workflow.domain.delivery import ActionResult, DeliveryResult
+from backend.workflow.infrastructure.db import Deliverable, ExecutionRun, RunStatus
 from backend.workflow.infrastructure.delivery.db import DeliveryEventRow
 from backend.workflow.infrastructure.intake.db import RequestRow, RequestStatus, TriggerEventRow
+from backend.workflow.infrastructure.sandbox import NoopSandboxManager
 from backend.workflow.infrastructure.workers.agent_worker import AgentExecutionDeps, AgentWorker
 from backend.workflow.infrastructure.workers.delivery_worker import (
     DeliveryWorker,

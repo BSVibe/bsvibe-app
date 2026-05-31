@@ -8,8 +8,8 @@ paths run unchanged. Lifted from BSNexus.
 from __future__ import annotations
 
 from backend.config import get_settings
-from backend.supervisor.sandbox.docker_manager import DockerSandboxManager
-from backend.supervisor.sandbox.protocol import SandboxManager
+from backend.workflow.infrastructure.sandbox.docker_manager import DockerSandboxManager
+from backend.workflow.infrastructure.sandbox.protocol import SandboxManager
 
 _manager: SandboxManager | None = None
 _resolved = False
