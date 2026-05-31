@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from backend.router.embedding.settings import EmbeddingSettings
+from backend.embedding.settings import EmbeddingSettings
 
 
 class TestFromAccountSettings:

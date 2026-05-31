@@ -1,29 +1,29 @@
 """Embedding domain (Bundle 1.5b) — settings, providers, vector storage."""
 
-from backend.router.embedding.column import EmbeddingVector
-from backend.router.embedding.db import (
+from backend.embedding.column import EmbeddingVector
+from backend.embedding.db import (
     AccountEmbeddingSettingsRow,
     GatewayEmbeddingBase,
     IntentDefinitionRow,
     IntentExampleRow,
 )
-from backend.router.embedding.provider import (
+from backend.embedding.provider import (
     EmbeddingProvider,
     LiteLLMEmbeddingProvider,
     build_provider,
 )
-from backend.router.embedding.repository import (
+from backend.embedding.repository import (
     EmbeddingSettingsRepository,
     IntentDuplicateError,
     IntentRepository,
 )
-from backend.router.embedding.serialization import (
+from backend.embedding.serialization import (
     deserialize_embedding,
     serialize_embedding,
 )
-from backend.router.embedding.service import EmbeddedExample, EmbeddingService
-from backend.router.embedding.settings import EmbeddingSettings
-from backend.router.embedding.storage import (
+from backend.embedding.service import EmbeddedExample, EmbeddingService
+from backend.embedding.settings import EmbeddingSettings
+from backend.embedding.storage import (
     InMemoryVectorBackend,
     SearchHit,
     VectorEntry,

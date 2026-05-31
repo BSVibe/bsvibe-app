@@ -17,8 +17,8 @@ from backend.api.deps import (
     require_account_id,
 )
 from backend.api.main import create_app
+from backend.embedding.db import GatewayEmbeddingBase, IntentDefinitionRow
 from backend.execution.db import ExecutionBase, ExecutionRun, RunStatus
-from backend.router.embedding.db import GatewayEmbeddingBase, IntentDefinitionRow
 from backend.router.rules.db import GatewayRulesBase, RoutingRuleRow
 
 from .._support import db_engine, fake_current_user

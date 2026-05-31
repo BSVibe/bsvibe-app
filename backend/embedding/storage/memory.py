@@ -11,7 +11,7 @@ import math
 import uuid
 from collections.abc import Iterable
 
-from backend.router.embedding.storage.backend import (
+from backend.embedding.storage.backend import (
     SearchHit,
     VectorEntry,
     VectorSearchBackend,

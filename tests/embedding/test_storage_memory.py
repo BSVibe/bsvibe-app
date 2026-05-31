@@ -6,7 +6,7 @@ import uuid
 
 import pytest
 
-from backend.router.embedding.storage.memory import (
+from backend.embedding.storage.memory import (
     InMemoryVectorBackend,
     VectorEntry,
 )

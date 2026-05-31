@@ -11,7 +11,7 @@ from typing import Protocol, runtime_checkable
 
 import structlog
 
-from backend.router.embedding.settings import EmbeddingSettings
+from backend.embedding.settings import EmbeddingSettings
 
 logger = structlog.get_logger(__name__)
 

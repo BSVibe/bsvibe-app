@@ -28,8 +28,8 @@ import structlog
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.router.embedding.repository import IntentRepository
-from backend.router.embedding.service import EmbeddingService
+from backend.embedding.repository import IntentRepository
+from backend.embedding.service import EmbeddingService
 from backend.router.presets.events import PresetAppliedEvent
 from backend.router.presets.models import (
     ModelMapping,

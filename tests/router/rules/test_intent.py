@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import uuid
 
-from backend.router.embedding.storage.backend import VectorEntry
-from backend.router.embedding.storage.memory import InMemoryVectorBackend
+from backend.embedding.storage.backend import VectorEntry
+from backend.embedding.storage.memory import InMemoryVectorBackend
 from backend.router.rules.intent import IntentClassifier, IntentSpec
 
 WS = uuid.uuid4()

@@ -29,7 +29,7 @@ import backend.delivery.db  # noqa: F401, E402
 import backend.execution.db  # noqa: F401, E402
 import backend.executors.db  # noqa: F401, E402
 import backend.router.budget.models  # noqa: F401, E402
-import backend.router.embedding.db  # noqa: F401, E402
+import backend.embedding.db  # noqa: F401, E402
 import backend.router.routing.db  # noqa: F401, E402
 import backend.router.rules.db  # noqa: F401, E402
 import backend.identity.db  # noqa: F401, E402

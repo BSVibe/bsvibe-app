@@ -14,10 +14,10 @@ semantic search stays a clean no-op, canon/decision/rejection retrieval intact.
 from __future__ import annotations
 
 from backend.config import Settings
+from backend.embedding.provider import LiteLLMEmbeddingProvider
+from backend.embedding.service import EmbeddingService
+from backend.embedding.settings import EmbeddingSettings
 from backend.knowledge.retrieval.embedder_adapter import GatewayEmbedder
-from backend.router.embedding.provider import LiteLLMEmbeddingProvider
-from backend.router.embedding.service import EmbeddingService
-from backend.router.embedding.settings import EmbeddingSettings
 
 
 def resolve_knowledge_embedder(settings: Settings) -> GatewayEmbedder:

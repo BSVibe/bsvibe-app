@@ -1,6 +1,6 @@
 """Pack / unpack ``list[float]`` to packed-float32 bytes.
 
-Used by :class:`backend.router.embedding.column.EmbeddingVector` for the
+Used by :class:`backend.embedding.column.EmbeddingVector` for the
 SQLite test path, and as a general-purpose serializer for places that
 want a stable byte form (e.g. caches, audit logs).
 """

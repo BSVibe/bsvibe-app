@@ -10,7 +10,7 @@ from pydantic import BaseModel, ConfigDict
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.api.deps import get_db_session, get_workspace_id, require_account_id
-from backend.router.embedding.repository import IntentRepository
+from backend.embedding.repository import IntentRepository
 
 router = APIRouter()
 

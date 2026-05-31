@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import struct
 
-from backend.router.embedding.serialization import (
+from backend.embedding.serialization import (
     deserialize_embedding,
     serialize_embedding,
 )

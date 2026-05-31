@@ -23,8 +23,11 @@ Account classes
 ---------------
 * **local** — a native account whose ``provider`` is a host-local inference
   engine (:data:`backend.router.accounts.service.LOCAL_INFERENCE_PROVIDERS`).
-* **executor** — a ``provider == "executor"`` account, i.e. the cloud/opencode
-  CLI baseline (claude_code / codex / opencode capabilities).
+* **executor** — an account whose dispatch strategy is the CLI wrapper, i.e.
+  the cloud/opencode CLI baseline (claude_code / codex / opencode
+  capabilities). Membership is checked via
+  :func:`~backend.router.dispatch.strategies.is_executor_account` — the single
+  source of truth for the executor predicate after Lift D.
 
 Degrade-loudly invariant (gotcha #200,
 ``single-active-resolver-degrades-on-new-account-class``): the tier default only
@@ -41,6 +44,7 @@ from typing import TYPE_CHECKING, Literal
 import structlog
 
 from backend.router.accounts.service import LOCAL_INFERENCE_PROVIDERS
+from backend.router.dispatch.strategies import is_executor_account
 
 if TYPE_CHECKING:
     from backend.router.accounts.models import ModelAccount
@@ -49,9 +53,6 @@ if TYPE_CHECKING:
 logger = structlog.get_logger(__name__)
 
 Tier = Literal["simple", "substantial"]
-
-# Provider marking the executor (cloud/opencode CLI) account class.
-_EXECUTOR_PROVIDER = "executor"
 
 
 def tier_from_context(ctx: RoutingContext) -> Tier:
@@ -67,7 +68,7 @@ def _local_accounts(accounts: list[ModelAccount]) -> list[ModelAccount]:
 
 
 def _executor_accounts(accounts: list[ModelAccount]) -> list[ModelAccount]:
-    return [a for a in accounts if a.provider == _EXECUTOR_PROVIDER]
+    return [a for a in accounts if is_executor_account(a)]
 
 
 def tier_class_accounts(tier: Tier, accounts: list[ModelAccount]) -> list[ModelAccount]:

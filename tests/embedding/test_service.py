@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from backend.router.embedding.service import EmbeddedExample, EmbeddingService
+from backend.embedding.service import EmbeddedExample, EmbeddingService
 
 
 class _FakeProvider:

@@ -17,7 +17,7 @@ from sqlalchemy import LargeBinary
 from sqlalchemy.engine import Dialect
 from sqlalchemy.types import TypeDecorator
 
-from backend.router.embedding.serialization import (
+from backend.embedding.serialization import (
     deserialize_embedding,
     serialize_embedding,
 )
