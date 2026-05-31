@@ -1,8 +1,8 @@
 """HttpRelay — configurable HTTP audit sink + config-driven relay selection.
 
 The production worker runtime drains the ``audit_outbox`` via a
-:class:`~backend.workers.relay_worker.Relay`. By default that is the
-:class:`~backend.workers.run.LoggingRelay` (log + ack, no remote sink). When
+:class:`~backend.workflow.infrastructure.workers.relay_worker.Relay`. By default that is the
+:class:`~backend.workflow.infrastructure.workers.run.LoggingRelay` (log + ack, no remote sink). When
 ``settings.audit_relay_url`` is set, the runtime instead wires an
 :class:`~backend.workers.relays.HttpRelay` that POSTs the batch to that URL.
 
@@ -29,7 +29,7 @@ import respx
 
 from backend.config import Settings
 from backend.workers.relays import HttpRelay, build_relay
-from backend.workers.run import LoggingRelay
+from backend.workflow.infrastructure.workers.run import LoggingRelay
 from plugin.audit.models import AuditOutboxRecord
 
 pytestmark = pytest.mark.asyncio

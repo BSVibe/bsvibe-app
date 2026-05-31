@@ -38,7 +38,7 @@ from backend.api.deps import (
 from backend.api.main import create_app
 from backend.execution.db import Decision, DecisionStatus, ExecutionRun, RunStatus
 from backend.knowledge.factory import KnowledgeFactory
-from backend.workers.settle_worker import (
+from backend.knowledge.infrastructure.workers.settle_worker import (
     KnowledgeSettleSink,
     SettleWorker,
     SettleWorkerConfig,

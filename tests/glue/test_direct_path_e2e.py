@@ -42,15 +42,18 @@ from backend.api.deps import (
 )
 from backend.api.main import create_app
 from backend.execution.db import Deliverable, ExecutionRun, RunStatus
-from backend.execution.orchestrator import LoopToolCall, LoopTurn, RunOrchestrator
 from backend.extensions.skill.loader import SkillLoader
 from backend.supervisor.sandbox import NoopSandboxManager
-from backend.workers.agent_worker import AgentExecutionDeps, AgentWorker
-from backend.workers.delivery_worker import DeliveryWorker, DeliveryWorkerConfig
-from backend.workers.intake_worker import IntakeWorker
+from backend.workflow.application.agent_loop import LoopToolCall, LoopTurn, RunOrchestrator
 from backend.workflow.domain.delivery import ActionResult, DeliveryResult
 from backend.workflow.infrastructure.delivery.db import DeliveryEventRow
 from backend.workflow.infrastructure.intake.db import RequestRow, RequestStatus, TriggerEventRow
+from backend.workflow.infrastructure.workers.agent_worker import AgentExecutionDeps, AgentWorker
+from backend.workflow.infrastructure.workers.delivery_worker import (
+    DeliveryWorker,
+    DeliveryWorkerConfig,
+)
+from backend.workflow.infrastructure.workers.intake_worker import IntakeWorker
 from backend.workspaces.db import ProductRow
 
 from .._support import db_engine, fake_current_user

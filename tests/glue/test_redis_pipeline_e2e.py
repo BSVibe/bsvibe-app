@@ -50,12 +50,9 @@ from backend.api.deps import (
 from backend.api.main import create_app
 from backend.config import Settings
 from backend.execution.db import Deliverable, ExecutionRun, RunStatus
-from backend.execution.orchestrator import LoopToolCall, LoopTurn, RunOrchestrator
 from backend.extensions.skill.loader import SkillLoader
 from backend.supervisor.sandbox import NoopSandboxManager
 from backend.workers import emit as emit_mod
-from backend.workers.agent_worker import AgentExecutionDeps, AgentWorker
-from backend.workers.delivery_worker import DeliveryWorker, DeliveryWorkerConfig
 from backend.workers.emit import (
     STREAM_AGENT,
     STREAM_DELIVER,
@@ -63,11 +60,17 @@ from backend.workers.emit import (
     STREAM_SETTLE,
     emit_stream_notification,
 )
-from backend.workers.intake_worker import IntakeWorker
 from backend.workers.streams import RedisStreamConsumer
+from backend.workflow.application.agent_loop import LoopToolCall, LoopTurn, RunOrchestrator
 from backend.workflow.domain.delivery import ActionResult, DeliveryResult
 from backend.workflow.infrastructure.delivery.db import DeliveryEventRow
 from backend.workflow.infrastructure.intake.db import RequestRow, RequestStatus, TriggerEventRow
+from backend.workflow.infrastructure.workers.agent_worker import AgentExecutionDeps, AgentWorker
+from backend.workflow.infrastructure.workers.delivery_worker import (
+    DeliveryWorker,
+    DeliveryWorkerConfig,
+)
+from backend.workflow.infrastructure.workers.intake_worker import IntakeWorker
 
 from .._support import db_engine, fake_current_user
 
@@ -184,7 +187,7 @@ def _execution_deps(
     """Production-shaped deps but with the scripted LLM + Noop sandbox.
 
     Crucially the orchestrator is built WITH the redis client + redis-mode
-    settings (exactly as ``backend.workers.run.build_agent_execution_deps``
+    settings (exactly as ``backend.workflow.infrastructure.workers.run.build_agent_execution_deps``
     threads them in redis mode) so the verified terminal emits the
     ``deliver`` + ``settle`` notifications."""
     llm = _scripted_verified_run()
@@ -295,7 +298,7 @@ async def _drain_stream(
 
     Returns the number of stream entries the consumer processed + acked. The
     handler ignores the notification fields (the worker reads its own DB source
-    of truth) — exactly the ``backend.workers.run._tick_handler`` shape."""
+    of truth) — exactly the ``backend.workflow.infrastructure.workers.run._tick_handler`` shape."""
 
     async def _handler(_fields: dict[str, Any]) -> None:
         await tick()

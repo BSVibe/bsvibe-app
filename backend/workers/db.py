@@ -90,7 +90,7 @@ class AuditRelayStateRow(WorkersBase):
 class SettleDrainRow(WorkersBase):
     """One row per ``settle`` activity already absorbed into BSage.
 
-    The :class:`~backend.workers.settle_worker.SettleWorker` (the §4
+    The :class:`~backend.knowledge.infrastructure.workers.settle_worker.SettleWorker` (the §4
     ``worker-settle`` BSage write subscriber) inserts a row here after it
     writes a settle observation into a workspace's vault. The activity id
     is the primary key, so a re-drain that re-selects the same activity is

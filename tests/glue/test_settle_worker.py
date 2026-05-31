@@ -22,13 +22,13 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from backend.execution.db import ExecutionBase, ExecutionRun, ExecutionRunActivity, RunStatus
-from backend.workers.db import SettleDrainRow, WorkersBase
-from backend.workers.settle_worker import (
+from backend.knowledge.infrastructure.workers.settle_worker import (
     KnowledgeSettleSink,
     Settlement,
     SettleWorker,
     SettleWorkerConfig,
 )
+from backend.workers.db import SettleDrainRow, WorkersBase
 from backend.workspaces.db import WorkspaceRow, WorkspacesBase
 
 from .._support import db_engine

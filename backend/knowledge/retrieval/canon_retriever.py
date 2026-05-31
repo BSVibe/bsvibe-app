@@ -3,7 +3,7 @@
 The verifier folds BSage canon into a verify contract through ONE read-only
 seam (:class:`~backend.execution.verifier.service.CanonRetriever`):
 ``retrieve_for_signals(signals) -> list[str]``. Before B3 the production
-:func:`backend.workers.run._factory` always passed ``retriever=None``, so the
+:func:`backend.workflow.infrastructure.workers.run._factory` always passed ``retriever=None``, so the
 workspace's settled knowledge was NEVER consulted at verify time — the product
 premise (knowledge informs the agent) was dead at runtime (RC-2).
 
@@ -15,7 +15,7 @@ recurrence gate (Handoff §11 / :class:`TagResolver`), so precision is structura
 the retriever can only ever surface concepts the trust ratchet already settled.
 
 Discipline (matches the settle-extractor's graceful resolution in
-``backend.workers.run``):
+``backend.workflow.infrastructure.workers.run``):
 
 * **Graceful-empty** — an empty vault / no active concepts / no matching signal
   → ``[]``. An empty-knowledge workspace therefore sees NO change to verify

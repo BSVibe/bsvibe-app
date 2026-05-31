@@ -1,7 +1,7 @@
 """SettleWorker — drain ``settle`` activities into the BSage graph.
 
 Workflow §4: ``worker-settle`` is the **BSage write subscriber**. The agent
-loop (:class:`backend.execution.orchestrator.RunOrchestrator`) records a
+loop (:class:`backend.workflow.application.agent_loop.RunOrchestrator`) records a
 ``settle``-class :class:`~backend.execution.db.ExecutionRunActivity` for every
 verified work step — the continuous "writes knowledge" side channel. This
 worker drains those rows into each workspace's BSage vault, completing the
@@ -11,7 +11,7 @@ monotonically accumulates).
 Design notes
 ------------
 * **DB-polling, not Redis Streams** — same Phase 1 justification as
-  :class:`~backend.workers.delivery_worker.DeliveryWorker`. The Redis
+  :class:`~backend.workflow.infrastructure.workers.delivery_worker.DeliveryWorker`. The Redis
   Streams variant is deferred.
 * **Idempotent via a marker table, not a deletable queue.** Unlike
   ``delivery_events``, the source ``execution_run_activities`` rows are

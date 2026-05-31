@@ -12,6 +12,8 @@ from __future__ import annotations
 import importlib
 import inspect
 
+import pytest
+
 
 def test_agent_loop_module_carries_loop_conductor() -> None:
     mod = importlib.import_module("backend.workflow.application.agent_loop")
@@ -80,36 +82,19 @@ def test_run_persistence_module_carries_run_persistence_helpers() -> None:
         assert hasattr(mod, name), f"run_persistence missing {name}"
 
 
-def test_legacy_shim_reexports_public_surface() -> None:
-    """The thin shim at ``backend.execution.orchestrator`` re-exports every
-    name external callers + glue tests still depend on (caller-update is a
-    subsequent lift). The shim's source MUST NOT carry the dead Lift 0c
-    identifiers (``is_dangerous`` / ``danger_map`` / ``DangerAnalyzer``) so
-    ``test_lift0c_no_static_danger_analyzer`` still holds.
-    """
-    mod = importlib.import_module("backend.execution.orchestrator")
-    for name in (
-        "ASK_USER_QUESTION_TOOL",
-        "EMIT_DELIVERABLE_NAME",
-        "EMIT_DELIVERABLE_TOOL",
-        "KNOWLEDGE_SEARCH_NAME",
-        "WORK_TOOLS",
-        "CanonRetriever",
-        "LoopLlm",
-        "LoopOutcome",
-        "LoopResult",
-        "LoopToolCall",
-        "LoopTurn",
-        "RunCompute",
-        "RunOrchestrator",
-        "_DESIGN_SPEC_DIRECTIVE",
-    ):
-        assert hasattr(mod, name), f"legacy shim missing re-export {name}"
+def test_legacy_shim_deleted_post_h3c() -> None:
+    """Post-Lift H3c (v8 §13 Lift H final), the temporary back-compat shim at
+    ``backend.execution.orchestrator`` is DELETED — every caller imports from
+    the H2a-decomposed locations directly. The shim was a one-window
+    migration aid; H3c closed the window.
 
-    src = inspect.getsource(mod)
-    assert "is_dangerous" not in src
-    assert "danger_map" not in src
-    assert "DangerAnalyzer" not in src
+    The dead Lift 0c identifiers (``is_dangerous`` / ``danger_map`` /
+    ``DangerAnalyzer``) absence is now asserted against the H2a successor
+    modules directly (see
+    ``tests/glue/test_lift0c_no_static_danger_analyzer.py``).
+    """
+    with pytest.raises(ModuleNotFoundError):
+        importlib.import_module("backend.execution" + ".orchestrator")
 
 
 def test_no_new_file_exceeds_god_file_threshold() -> None:

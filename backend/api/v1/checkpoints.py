@@ -56,7 +56,7 @@ from plugin.audit.events import AuditActor, AuditResource
 from plugin.audit.service import safe_emit
 
 #: Payload ``kind`` on the settle activity emitted by the resolve endpoint
-#: (B11b). The :class:`~backend.workers.settle_worker.SettleWorker` drains the
+#: (B11b). The :class:`~backend.knowledge.infrastructure.workers.settle_worker.SettleWorker` drains the
 #: row into the workspace's BSage vault — turning the answered Decision into
 #: reusable knowledge so a future run with similar signals doesn't re-ask the
 #: same question. The kind is stable wire shape; downstream consumers
@@ -418,7 +418,7 @@ async def resolve_checkpoint(
 
     # B11b — Knowledge-ize the resolution. Emit a ``settle`` ExecutionRunActivity
     # carrying the decision-resolution payload + the run's stable clustering
-    # context (intent/product). The :class:`~backend.workers.settle_worker.SettleWorker`
+    # context (intent/product). The :class:`~backend.knowledge.infrastructure.workers.settle_worker.SettleWorker`
     # drains this row into the workspace's BSage vault, exactly like a
     # verified-work observation — so a future run with similar signals can
     # surface the prior decision via the retriever (the SAME seam B3 verify

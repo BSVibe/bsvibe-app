@@ -37,13 +37,13 @@ from backend.execution.db import (
     WorkStep,
     WorkStepStatus,
 )
-from backend.execution.orchestrator import LoopTurn
 from backend.executors import dispatch
 from backend.executors import orchestrator as orch
 from backend.executors.db import ExecutorTaskRow, WorkerRow
 from backend.executors.orchestrator import ExecutorOrchestrator, _parse_uuid
 from backend.router.accounts.models import ModelAccount
 from backend.supervisor.sandbox.protocol import SandboxResult
+from backend.workflow.application.agent_loop import LoopTurn
 
 from .._support import memory_session
 

@@ -38,14 +38,12 @@ from backend.execution.knowledge_orchestrator import (
     KNOWLEDGE_ANSWER_KIND,
     KnowledgeAnswerOrchestrator,
 )
-from backend.execution.orchestrator import RunOrchestrator
 from backend.executors.orchestrator import ExecutorOrchestrator
 from backend.router.accounts.schemas import ModelAccountCreate
 from backend.router.accounts.service import ModelAccountService
 from backend.router.llm_client import LlmClient
 from backend.supervisor.sandbox import NoopSandboxManager
-from backend.workers import run as runtime
-from backend.workers.agent_worker import AgentWorker
+from backend.workflow.application.agent_loop import RunOrchestrator
 from backend.workflow.application.agent_runner import AgentRunner
 from backend.workflow.infrastructure.intake.db import (
     RequestRow,
@@ -53,6 +51,8 @@ from backend.workflow.infrastructure.intake.db import (
     TriggerEventRow,
     TriggerKind,
 )
+from backend.workflow.infrastructure.workers import run as runtime
+from backend.workflow.infrastructure.workers.agent_worker import AgentWorker
 
 from .._support import db_engine
 

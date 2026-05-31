@@ -157,9 +157,9 @@ async def test_settle_hook_auto_populates_pgvector_index_e2e(tmp_path) -> None:
     import uuid as _uuid
     from datetime import UTC, datetime
 
+    from backend.knowledge.infrastructure.workers.settle_worker import Settlement
     from backend.knowledge.retrieval.embedder_resolution import resolve_knowledge_embedder
-    from backend.workers.run import build_note_embed_hook
-    from backend.workers.settle_worker import Settlement
+    from backend.workflow.infrastructure.workers.run import build_note_embed_hook
 
     url = await _pg_url()
     if url is None:

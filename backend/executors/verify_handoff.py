@@ -36,7 +36,6 @@ from backend.execution.db import (
     WorkStep,
     WorkStepStatus,
 )
-from backend.execution.orchestrator import LoopResult
 from backend.execution.verified_deliverable import write_verified_deliverable
 from backend.execution.verifier.service import CanonRetriever, JudgeLlm, VerificationService
 from backend.executors.terminal import (
@@ -47,6 +46,7 @@ from backend.executors.terminal import (
     fail_terminal,
 )
 from backend.supervisor.sandbox import SandboxManager
+from backend.workflow.application.agent_loop import LoopResult
 
 logger = structlog.get_logger(__name__)
 

@@ -29,7 +29,7 @@ from backend.execution.db import (
     WorkStep,
     WorkStepStatus,
 )
-from backend.execution.orchestrator import LoopResult
+from backend.workflow.application.agent_loop import LoopResult
 from plugin.audit.events import (
     AuditActor,
     AuditEventBase,

@@ -8,7 +8,7 @@ it WHEN to fire. ``ScheduleWorker`` is that "when": a
 :class:`~backend.intake.schedule_db.WorkspaceScheduleRow` for rows where
 ``enabled=True AND next_run_at <= now`` and calls
 :class:`~backend.intake.schedule.ScheduleTrigger` on each one. The downstream
-:class:`~backend.workers.intake_worker.IntakeWorker` drains the new
+:class:`~backend.workflow.infrastructure.workers.intake_worker.IntakeWorker` drains the new
 TriggerEvent into a Request, and the agent loop takes it from there — the
 same path a Direct or Connector trigger walks.
 

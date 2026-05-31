@@ -9,7 +9,7 @@ proves the *opt-in* Redis Streams path:
   stream entry is only a notification;
 * :class:`backend.workers.streams.RedisStreamConsumer` — XGROUP CREATE MKSTREAM
   → XREADGROUP → handler → XACK (at-least-once: un-acked redelivered);
-* :func:`backend.workers.run.build_stream_consumers` — wires each worker's
+* :func:`backend.workflow.infrastructure.workers.run.build_stream_consumers` — wires each worker's
   EXISTING single-tick handler (``drain_once`` / ``claim_once`` / ``_tick``) as
   the consumer handler, never duplicating business logic.
 
@@ -275,7 +275,7 @@ async def test_build_stream_consumers_reuses_existing_worker_handlers() -> None:
     binding whose handler is the worker's OWN single-tick method — proving the
     Redis path is just a different *trigger* for the same logic, not a rewrite.
     """
-    from backend.workers.run import build_stream_consumers
+    from backend.workflow.infrastructure.workers.run import build_stream_consumers
 
     # Stub worker set exposing the real single-tick method names. Each returns
     # an awaitable count exactly like the production workers.
@@ -320,7 +320,7 @@ async def test_build_stream_consumers_reuses_existing_worker_handlers() -> None:
 async def test_intake_worker_emits_agent_notification_in_redis_mode(
     redis_client: Any, sf: Any
 ) -> None:
-    from backend.workers.intake_worker import IntakeWorker
+    from backend.workflow.infrastructure.workers.intake_worker import IntakeWorker
 
     ws = uuid.uuid4()
     await _seed_trigger_event(sf, workspace_id=ws)
@@ -339,7 +339,7 @@ async def test_intake_worker_emits_agent_notification_in_redis_mode(
 async def test_intake_worker_does_not_emit_in_db_polling_default(
     redis_client: Any, sf: Any
 ) -> None:
-    from backend.workers.intake_worker import IntakeWorker
+    from backend.workflow.infrastructure.workers.intake_worker import IntakeWorker
 
     ws = uuid.uuid4()
     await _seed_trigger_event(sf, workspace_id=ws)
@@ -351,7 +351,7 @@ async def test_intake_worker_does_not_emit_in_db_polling_default(
 
 
 async def test_intake_worker_drain_survives_redis_emit_failure(sf: Any) -> None:
-    from backend.workers.intake_worker import IntakeWorker
+    from backend.workflow.infrastructure.workers.intake_worker import IntakeWorker
 
     class _BrokenRedis:
         async def xadd(self, *_a: Any, **_k: Any) -> str:
@@ -390,7 +390,7 @@ async def test_run_stream_consumers_drives_worker_tick_from_a_stream(
     """
     import asyncio
 
-    from backend.workers.run import run_stream_consumers
+    from backend.workflow.infrastructure.workers.run import run_stream_consumers
 
     ticks = asyncio.Event()
 
@@ -446,8 +446,8 @@ async def test_build_worker_runtime_wires_redis_client_into_intake_in_redis_mode
 
     Execution + delivery deps are stubbed (the focus is the IntakeWorker
     producer wiring, not the gateway/KMS/delivery graph)."""
-    from backend.workers import run as runtime
-    from backend.workers.intake_worker import IntakeWorker
+    from backend.workflow.infrastructure.workers import run as runtime
+    from backend.workflow.infrastructure.workers.intake_worker import IntakeWorker
 
     settings = Settings(worker_mode="redis_streams")
     execution = SimpleNamespace()  # AgentWorker only stores it; no method called here.

@@ -38,7 +38,6 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from backend.intake.schedule import ScheduleTrigger
 from backend.intake.schedule_db import WorkspaceScheduleRow
-from backend.workers.intake_worker import IntakeWorker
 from backend.workers.schedule_runner import (
     DbPollScheduleRunner,
     ScheduleRunnerProtocol,
@@ -50,6 +49,7 @@ from backend.workflow.infrastructure.intake.db import (
     TriggerEventRow,
     TriggerKind,
 )
+from backend.workflow.infrastructure.workers.intake_worker import IntakeWorker
 
 from .._support import db_engine
 

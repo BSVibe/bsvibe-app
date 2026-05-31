@@ -30,7 +30,6 @@ from backend.execution.db import (
     WorkStep,
     WorkStepStatus,
 )
-from backend.execution.orchestrator import LoopTurn
 from backend.execution.verifier.contract import (
     VerificationCheck,
     VerificationContract,
@@ -38,6 +37,7 @@ from backend.execution.verifier.contract import (
 )
 from backend.execution.verifier.service import VerificationService
 from backend.supervisor.sandbox.protocol import SandboxResult
+from backend.workflow.application.agent_loop import LoopTurn
 from tests._support import memory_session
 
 # --------------------------------------------------------------------------

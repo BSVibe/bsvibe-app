@@ -30,7 +30,7 @@ import pytest
 
 from backend.knowledge.canonicalization.paths import is_valid_concept_id
 from backend.knowledge.canonicalization.resolver import TagResolver
-from backend.workers.settle_worker import (
+from backend.knowledge.infrastructure.workers.settle_worker import (
     _MAX_CONTENT_TAGS,
     Settlement,
     derive_content_tags,
@@ -371,7 +371,7 @@ async def _sink_tags(sink, settlement) -> list[str]:
 async def test_sink_uses_extracted_entities_as_content_tags(tmp_path) -> None:
     """With an extractor wired, content tags are the LLM-extracted entity names
     (normalized), NOT summary word-tokens."""
-    from backend.workers.settle_worker import KnowledgeSettleSink
+    from backend.knowledge.infrastructure.workers.settle_worker import KnowledgeSettleSink
 
     extractor = _StubExtractor(["calculator", "Python"])
 
@@ -404,7 +404,7 @@ async def test_sink_uses_extracted_entities_as_content_tags(tmp_path) -> None:
 @pytest.mark.asyncio
 async def test_sink_soft_fallback_when_no_extractor(tmp_path) -> None:
     """No extractor factory → deterministic fallback (current behavior)."""
-    from backend.workers.settle_worker import KnowledgeSettleSink
+    from backend.knowledge.infrastructure.workers.settle_worker import KnowledgeSettleSink
 
     sink = KnowledgeSettleSink(vault_root=tmp_path)
     tags = await _sink_tags(sink, _settlement(summary="configured the reverse proxy"))
@@ -414,7 +414,7 @@ async def test_sink_soft_fallback_when_no_extractor(tmp_path) -> None:
 @pytest.mark.asyncio
 async def test_sink_soft_fallback_when_factory_returns_none(tmp_path) -> None:
     """Factory returns None (no active model account) → deterministic fallback."""
-    from backend.workers.settle_worker import KnowledgeSettleSink
+    from backend.knowledge.infrastructure.workers.settle_worker import KnowledgeSettleSink
 
     async def _factory(*, region: str, workspace_id):  # noqa: ANN001, ARG001
         return None
@@ -428,7 +428,7 @@ async def test_sink_soft_fallback_when_factory_returns_none(tmp_path) -> None:
 async def test_sink_soft_fallback_when_extractor_raises(tmp_path) -> None:
     """An extractor that raises must NOT break the settle write — the sink logs
     + degrades to the deterministic fallback."""
-    from backend.workers.settle_worker import KnowledgeSettleSink
+    from backend.knowledge.infrastructure.workers.settle_worker import KnowledgeSettleSink
 
     async def _factory(*, region: str, workspace_id):  # noqa: ANN001, ARG001
         return _StubExtractor(raises=True)
@@ -443,7 +443,7 @@ async def test_sink_soft_fallback_when_extractor_raises(tmp_path) -> None:
 async def test_sink_soft_fallback_when_no_entities_extracted(tmp_path) -> None:
     """A thin summary yielding zero entities → fallback (never an empty tag set
     when deterministic signal exists)."""
-    from backend.workers.settle_worker import KnowledgeSettleSink
+    from backend.knowledge.infrastructure.workers.settle_worker import KnowledgeSettleSink
 
     async def _factory(*, region: str, workspace_id):  # noqa: ANN001, ARG001
         return _StubExtractor([])
@@ -456,7 +456,10 @@ async def test_sink_soft_fallback_when_no_entities_extracted(tmp_path) -> None:
 @pytest.mark.asyncio
 async def test_sink_entity_tags_are_capped_and_normalized(tmp_path) -> None:
     """Extracted entity names are normalized + capped at _MAX_CONTENT_TAGS."""
-    from backend.workers.settle_worker import _MAX_CONTENT_TAGS, KnowledgeSettleSink
+    from backend.knowledge.infrastructure.workers.settle_worker import (
+        _MAX_CONTENT_TAGS,
+        KnowledgeSettleSink,
+    )
 
     many = [f"Entity{i:02d}" for i in range(_MAX_CONTENT_TAGS + 5)]
 

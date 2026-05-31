@@ -31,8 +31,8 @@ from backend.execution.db import (
     ExecutionRun,
     RunStatus,
 )
-from backend.workers.delivery_worker import dispatch_delivery
 from backend.workflow.domain.delivery import ActionResult, DeliveryResult
+from backend.workflow.infrastructure.workers.delivery_worker import dispatch_delivery
 
 from .._support import db_engine
 

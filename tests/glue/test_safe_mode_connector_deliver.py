@@ -62,7 +62,6 @@ from backend.execution.db import (
 )
 from backend.extensions.plugin.loader import PluginLoader
 from backend.router.accounts.crypto import CredentialCipher
-from backend.workers.delivery_worker import DeliveryWorker, DeliveryWorkerConfig
 from backend.workflow.application.delivery.connector_dispatch import (
     ConnectorDeliveryAdapter,
     build_connector_delivery_adapter,
@@ -71,6 +70,10 @@ from backend.workflow.infrastructure.delivery.db import (
     DeliveryEventRow,
     SafeModeQueueItemRow,
     SafeModeStatus,
+)
+from backend.workflow.infrastructure.workers.delivery_worker import (
+    DeliveryWorker,
+    DeliveryWorkerConfig,
 )
 from backend.workspaces.db import WorkspaceRow
 from plugin.notion import plugin as notion_module

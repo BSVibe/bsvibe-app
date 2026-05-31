@@ -36,7 +36,7 @@ from backend.execution.knowledge_orchestrator import (
     KNOWLEDGE_ANSWER_KIND,
     KnowledgeAnswerOrchestrator,
 )
-from backend.execution.orchestrator import LoopTurn
+from backend.workflow.application.agent_loop import LoopTurn
 from backend.workflow.infrastructure.delivery.db import (
     DeliveryEventRow,  # noqa: F401 — register table for memory_session
 )

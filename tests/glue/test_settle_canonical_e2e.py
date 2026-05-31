@@ -49,13 +49,13 @@ from backend.knowledge.canonicalization.models import DecisionEntry
 from backend.knowledge.canonicalization.resolver import TagResolver
 from backend.knowledge.canonicalization.store import NoteStore
 from backend.knowledge.graph.storage import FileSystemStorage
-from backend.workers.db import SettleDrainRow, WorkersBase
-from backend.workers.settle_worker import (
+from backend.knowledge.infrastructure.workers.settle_worker import (
     KnowledgeSettleSink,
     SettleWorker,
     SettleWorkerConfig,
     build_garden_promoter_factory,
 )
+from backend.workers.db import SettleDrainRow, WorkersBase
 from backend.workspaces.db import WorkspaceRow, WorkspacesBase
 
 from .._support import db_engine

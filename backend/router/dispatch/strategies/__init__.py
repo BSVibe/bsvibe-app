@@ -44,7 +44,7 @@ from backend.router.accounts.models import ModelAccount
 #: ask :func:`is_executor_account` / :func:`resolve_strategy_kind`; they do not
 #: re-compare against this constant inline. The SQL-side queries in
 #: :mod:`backend.router.accounts.repository` and the executor-pool health probe
-#: in :mod:`backend.workers.run` use a column predicate (`ModelAccount.provider
+#: in :mod:`backend.workflow.infrastructure.workers.run` use a column predicate (`ModelAccount.provider
 #: == "executor"`) — those are SQL filters, not invariant checks, so they reach
 #: for the literal directly rather than through this constant.
 EXECUTOR_PROVIDER: str = "executor"

@@ -28,7 +28,7 @@ from backend.storage.product_workspace import (
     run_branch_name,
     run_worktree_path,
 )
-from backend.workers.run import (
+from backend.workflow.infrastructure.workers.run import (
     _build_composite_workspace_provisioner,
     _product_workspace_provisioner,
 )

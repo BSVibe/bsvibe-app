@@ -7,7 +7,7 @@ written paths).
 The ship side effect lives in :meth:`AgentRunner._auto_ship_product_run`
 today; the settle drain lives in
 :mod:`backend.knowledge.settle` and is wired via the
-:class:`backend.workers.settle_worker.SettleWorker`. H2c keeps both
+:class:`backend.knowledge.infrastructure.workers.settle_worker.SettleWorker`. H2c keeps both
 intact and wires the handlers as scaffolding — the driver returns the
 next coarse state; the existing services continue to do the work.
 
@@ -59,7 +59,7 @@ class SettleCompleteHandler:
 
     The settle drain (knowledge ingestion of the run's written paths +
     canon pattern fold) runs inside
-    :class:`backend.workers.settle_worker.SettleWorker`. H3 will lift the
+    :class:`backend.knowledge.infrastructure.workers.settle_worker.SettleWorker`. H3 will lift the
     drain into a Workflow-context service this handler can delegate to.
     """
 

@@ -2,7 +2,7 @@
 
 Before B15 only ``backend.api.litellm_hook`` emitted audit events: a run could
 plan, act, verify, raise a Decision, and terminate without the supervisor audit
-stream (drained by :class:`backend.workers.relay_worker.RelayWorker`) ever
+stream (drained by :class:`backend.workflow.infrastructure.workers.relay_worker.RelayWorker`) ever
 seeing it. These tests pin the high-signal event SET — ``RunStarted``,
 ``LlmTurn``, ``ToolCall``, ``VerifyRun``, ``DecisionPending``,
 ``DecisionResolved`` (in ``tests/api/test_checkpoints_audit.py``),
@@ -32,9 +32,9 @@ from backend.execution.audit_events import (
     ToolCall,
     VerifyRun,
 )
-from backend.execution.orchestrator import LoopTurn as LlmLoopTurn
-from backend.execution.orchestrator import RunOrchestrator
 from backend.supervisor.sandbox import NoopSandboxManager
+from backend.workflow.application.agent_loop import LoopTurn as LlmLoopTurn
+from backend.workflow.application.agent_loop import RunOrchestrator
 from plugin.audit.models import AuditOutboxRecord
 
 from .._support import memory_session
@@ -183,7 +183,7 @@ async def test_audit_emit_failure_does_not_break_run(
 ) -> None:
     """If the outbox insert raises, the run must still drive to verified
     (the audit layer's soft-fail contract — exactly like chat completions)."""
-    from backend.execution import orchestrator as orch_mod
+    from backend.workflow.application import agent_loop as orch_mod
     from plugin.audit.store import OutboxStore
 
     async def _boom(*args: Any, **kwargs: Any) -> None:

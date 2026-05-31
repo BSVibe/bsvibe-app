@@ -246,7 +246,7 @@ async def test_local_subscriber_still_receives_when_redis_publish_fails(
 
 # --------------------------------------------------------------------------
 # Wire-up: get_live_event_bus accepts a redis client at FIRST call, so
-# backend.api.main + backend.workers.run can inject a process-wide client.
+# backend.api.main + backend.workflow.infrastructure.workers.run can inject a process-wide client.
 # --------------------------------------------------------------------------
 
 

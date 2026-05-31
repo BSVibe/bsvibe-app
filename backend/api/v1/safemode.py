@@ -1,7 +1,7 @@
 """/api/v1/safemode — founder approval gate for outbound deliveries.
 
 Workflow §10.5 (Safe Mode) / §11.2 (deliver-side). When a workspace is in
-Safe Mode the :class:`backend.workers.delivery_worker.DeliveryWorker` enqueues
+Safe Mode the :class:`backend.workflow.infrastructure.workers.delivery_worker.DeliveryWorker` enqueues
 each verified deliverable into the :class:`SafeModeQueue` (status ``pending``)
 instead of dispatching it out. This surface lets the founder:
 
@@ -36,14 +36,14 @@ from backend.api.deps import (
 )
 from backend.execution.db import Deliverable
 from backend.identity.db import UserRow
-from backend.workers.delivery_worker import (
+from backend.workflow.application.safe_mode_queue import SafeModeQueue
+from backend.workflow.domain.delivery import ArtifactType
+from backend.workflow.infrastructure.workers.delivery_worker import (
     PluginDispatchAdapter,
     dispatch_delivery,
     persist_compensation_handles,
 )
-from backend.workers.run import build_delivery_adapter
-from backend.workflow.application.safe_mode_queue import SafeModeQueue
-from backend.workflow.domain.delivery import ArtifactType
+from backend.workflow.infrastructure.workers.run import build_delivery_adapter
 
 router = APIRouter()
 
@@ -55,7 +55,7 @@ async def get_delivery_dispatcher() -> PluginDispatchAdapter:
     """The outbound dispatcher used when a queued delivery is approved.
 
     Builds the SAME :class:`~backend.workflow.application.delivery.connector_dispatch.ConnectorDeliveryAdapter`
-    the Direct path uses (``backend.workers.run.build_delivery_adapter``): it
+    the Direct path uses (``backend.workflow.infrastructure.workers.run.build_delivery_adapter``): it
     loads every connector plugin, carries the settings-derived
     :class:`~backend.router.accounts.crypto.CredentialCipher`, and opens its own
     session per dispatch (it resolves the workspace's ``connector_accounts``

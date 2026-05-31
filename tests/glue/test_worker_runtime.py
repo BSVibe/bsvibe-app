@@ -3,7 +3,7 @@
 This proves the worker-runtime chunk's contract: a seeded workspace WITH one
 active ModelAccount drives a Direct run to REVIEW_READY + a delivered artifact
 through the **real** dependency-construction path
-(:func:`backend.workers.run.build_agent_execution_deps` →
+(:func:`backend.workflow.infrastructure.workers.run.build_agent_execution_deps` →
 :func:`resolve_workspace_model_account` → :func:`build_gateway_dispatcher` →
 :class:`GatewayLoopLlm`), and the model-account resolution policy creates a
 :class:`Decision` (run stays RUNNING) when there is no active account.
@@ -46,12 +46,15 @@ from backend.router.accounts.schemas import ModelAccountCreate
 from backend.router.accounts.service import ModelAccountService
 from backend.router.llm_client import LlmClient
 from backend.supervisor.sandbox import NoopSandboxManager
-from backend.workers import run as runtime
-from backend.workers.agent_worker import AgentWorker
-from backend.workers.delivery_worker import DeliveryWorker, DeliveryWorkerConfig
-from backend.workers.intake_worker import IntakeWorker
 from backend.workflow.infrastructure.delivery.db import DeliveryEventRow
 from backend.workflow.infrastructure.intake.db import RequestRow, RequestStatus
+from backend.workflow.infrastructure.workers import run as runtime
+from backend.workflow.infrastructure.workers.agent_worker import AgentWorker
+from backend.workflow.infrastructure.workers.delivery_worker import (
+    DeliveryWorker,
+    DeliveryWorkerConfig,
+)
+from backend.workflow.infrastructure.workers.intake_worker import IntakeWorker
 
 from .._support import db_engine, fake_current_user
 

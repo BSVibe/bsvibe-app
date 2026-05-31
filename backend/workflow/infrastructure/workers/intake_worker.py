@@ -8,7 +8,7 @@ pick it up.
 
 The Redis Streams variant (consumer-group + XACK) remains a TODO — for
 Phase 1 the DB-polling path is simpler to reason about and
-integration-test, mirroring :mod:`backend.workers.agent_worker`. A
+integration-test, mirroring :mod:`backend.workflow.infrastructure.workers.agent_worker`. A
 TriggerEvent is "drained" exactly once because the unprocessed query is
 ``NOT EXISTS (request with this trigger_event_id)``; once the Request is
 committed the event no longer matches.
@@ -49,7 +49,7 @@ class IntakeWorker(BaseWorker):
     """DB-polling worker that turns un-drained TriggerEvents into Requests.
 
     Doubles as the *producer* for the ``agent`` stream: each minted Request is
-    a row the :class:`~backend.workers.agent_worker.AgentWorker` would poll, so
+    a row the :class:`~backend.workflow.infrastructure.workers.agent_worker.AgentWorker` would poll, so
     when ``worker_mode="redis_streams"`` the worker ALSO emits a notification
     (best-effort, soft-fail) to wake the agent consumer immediately. The DB row
     stays the source of truth — emission only happens AFTER the commit, and a

@@ -44,12 +44,15 @@ from backend.execution.db import (
     ExecutionRun,
     RunStatus,
 )
-from backend.workers.delivery_worker import DeliveryWorker, DeliveryWorkerConfig
 from backend.workflow.domain.delivery import ActionResult, DeliveryResult
 from backend.workflow.infrastructure.delivery.db import (
     DeliveryEventRow,
     SafeModeQueueItemRow,
     SafeModeStatus,
+)
+from backend.workflow.infrastructure.workers.delivery_worker import (
+    DeliveryWorker,
+    DeliveryWorkerConfig,
 )
 from backend.workspaces.db import WorkspaceRow
 

@@ -21,10 +21,13 @@ from backend.execution.db import (
     WorkStep,
     WorkStepStatus,
 )
-from backend.workers.delivery_worker import DeliveryWorker, DeliveryWorkerConfig
-from backend.workers.verifier_worker import VerifierConfig, VerifierWorker
 from backend.workflow.domain.delivery import ActionResult, DeliveryResult
 from backend.workflow.infrastructure.delivery.db import DeliveryBase, DeliveryEventRow
+from backend.workflow.infrastructure.workers.delivery_worker import (
+    DeliveryWorker,
+    DeliveryWorkerConfig,
+)
+from backend.workflow.infrastructure.workers.verifier_worker import VerifierConfig, VerifierWorker
 
 from .._support import db_engine
 

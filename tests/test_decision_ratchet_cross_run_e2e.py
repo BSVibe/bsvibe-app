@@ -21,7 +21,7 @@ The pieces all exist and are individually tested:
 This module closes the gap with a single CROSS-RUN test that chains the REAL
 producer (resolve endpoint + SettleWorker, no pre-seeded vault) into the
 production retriever (``KnowledgeFactory.retriever()`` — the same composite
-``backend.workers.run._retriever_for`` injects into the orchestrator's
+``backend.workflow.infrastructure.workers.run._retriever_for`` injects into the orchestrator's
 work/verify context), and asserts BOTH halves of the ratchet:
 
 * POSITIVE — with Run A's resolution deposited via the real path, Run B's
@@ -68,7 +68,7 @@ from backend.execution.db import (
     RunStatus,
 )
 from backend.knowledge.factory import KnowledgeFactory
-from backend.workers.settle_worker import (
+from backend.knowledge.infrastructure.workers.settle_worker import (
     KnowledgeSettleSink,
     SettleWorker,
     SettleWorkerConfig,
@@ -176,7 +176,7 @@ async def _seed_run_a_pending(
 def _production_retriever(vault_root: Path, workspace_id: uuid.UUID):
     """The retriever Run B's work/verify context actually uses.
 
-    Reproduces the filesystem branch of ``backend.workers.run._retriever_for``:
+    Reproduces the filesystem branch of ``backend.workflow.infrastructure.workers.run._retriever_for``:
     with the embedder disabled (default), it is exactly
     ``KnowledgeFactory.retriever()`` — the composite of CanonConceptRetriever +
     ResolvedDecisionsRetriever + NegativePatternRetriever rooted at the same
