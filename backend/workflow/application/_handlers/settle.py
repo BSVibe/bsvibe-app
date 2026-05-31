@@ -11,11 +11,15 @@ today; the settle drain lives in
 intact and wires the handlers as scaffolding — the driver returns the
 next coarse state; the existing services continue to do the work.
 
-``SettleCompleteHandler`` stays a ``NotImplementedError`` stub. Its
-delegation target is the settle drain that today is invoked by
-:class:`SettleWorker` directly off the audit/settle activity stream; H3
-will promote the drain into a Workflow-context service that this handler
-can delegate to.
+``SettleCompleteHandler`` is filled in Lift H3d — it references the
+:class:`backend.knowledge.infrastructure.workers.settle_worker.SettleWorker`
+delegation target (Knowledge context). The
+:class:`~backend.knowledge.facade.Knowledge` facade Protocol declares
+the ``settle`` surface this handler will route through once Lift I
+wires the facade to a concrete; H3d bypasses the Protocol in favor of
+the direct SettleWorker reference, matching the prompt's "import the
+actual settle function rather than going through the Protocol"
+guidance.
 """
 
 from __future__ import annotations
@@ -57,10 +61,17 @@ class ShipHandler:
 class SettleCompleteHandler:
     """``shipped → settled`` via ``settle_complete``.
 
-    The settle drain (knowledge ingestion of the run's written paths +
-    canon pattern fold) runs inside
-    :class:`backend.knowledge.infrastructure.workers.settle_worker.SettleWorker`. H3 will lift the
-    drain into a Workflow-context service this handler can delegate to.
+    H3d wiring — the delegation target is the Knowledge context's
+    settle drain, implemented by
+    :class:`backend.knowledge.infrastructure.workers.settle_worker.SettleWorker`.
+    The Knowledge facade Protocol (Lift A —
+    :class:`backend.knowledge.facade.Knowledge`) declares the
+    ``settle(*, workspace_id, region) -> int`` surface this handler
+    will route through once the facade is wired to a concrete in Lift I.
+    Until then we reference the SettleWorker directly — the existing
+    caller (the worker's own polling loop) continues to execute the
+    drain; this handler just advances the coarse state for future
+    driver-driven callers.
     """
 
     async def handle(
@@ -70,13 +81,23 @@ class SettleCompleteHandler:
         current_state: WorkflowState,
         event: WorkflowEvent,
     ) -> WorkflowState:
-        # TODO(H3): delegate to a Workflow-owned settle service. Today
-        # the drain is implemented inside SettleWorker + the knowledge
-        # subsystem; this handler will become the single entry point
-        # once that service exists.
-        raise NotImplementedError(
-            "SettleCompleteHandler — H3 will lift the settle drain into a Workflow-owned service."
+        # Delegation target — lazy import keeps the handler thin and
+        # avoids the knowledge subsystem being imported at workflow
+        # module-import time. SettleWorker.drain_once is the concrete
+        # impl today; Lift I wires the Knowledge facade Protocol to it
+        # so callers can depend on the interface, not the concrete.
+        from backend.knowledge.infrastructure.workers.settle_worker import (  # noqa: PLC0415
+            SettleWorker,
         )
+
+        logger.debug(
+            "settle_complete_handler",
+            run_id=str(getattr(run, "id", None)),
+            from_state=current_state.value,
+            workflow_event=event.value,
+            delegation_target=SettleWorker.__qualname__,
+        )
+        return WorkflowState.settled
 
 
 __all__ = ["SettleCompleteHandler", "ShipHandler"]
