@@ -11,7 +11,7 @@ be driven deterministically in a test:
 * :meth:`claim_once` — claim ``OPEN`` Requests → ``open_run`` an
   ExecutionRun (status ``OPEN``) + flip the Request to ``RUNNING``.
 * :meth:`drive_once` — for each ExecutionRun still ``OPEN``, *frame* the
-  Request (:class:`~backend.orchestrator.frame.FrameStage`) then *drive*
+  Request (:class:`~backend.workflow.application.stages.frame.FrameStage`) then *drive*
   the agent loop (:class:`~backend.orchestrator.agent_runner.AgentRunner`
   delegating compute to :class:`~backend.execution.orchestrator.RunOrchestrator`),
   mapping ``verified → review_ready`` etc.
@@ -45,9 +45,9 @@ from backend.execution.orchestrator import RunCompute
 from backend.extensions.skill.loader import SkillLoader
 from backend.intake.db import RequestRow, RequestStatus
 from backend.orchestrator.agent_runner import AgentRunner
-from backend.orchestrator.frame import FrameConfig, FrameLlm, FrameStage
 from backend.storage.artifact_store import ArtifactStore, LocalFilesystemArtifactStore
 from backend.workers.base import BaseWorker
+from backend.workflow.application.stages.frame import FrameConfig, FrameLlm, FrameStage
 
 logger = structlog.get_logger(__name__)
 
@@ -108,13 +108,13 @@ class AgentExecutionDeps:
     default_artifact_type: str | None = "direct_output"
     #: B9a — the cheap-LLM framing seam, resolved per-workspace (mirrors the
     #: settle-extractor's gateway resolution). Either a static
-    #: :class:`~backend.orchestrator.frame.FrameLlm`, or a factory
+    #: :class:`~backend.workflow.application.stages.frame.FrameLlm`, or a factory
     #: ``(session, workspace_id) -> FrameLlm | None`` (sync or async) that
     #: resolves the workspace's active model account → a gateway cheap-LLM,
     #: BOUND to the worker's active framing session (so it shares the run's
     #: transaction, exactly like ``orchestrator_factory``). ``None`` (the
     #: default — executor-only / no account / legacy caller) makes
-    #: :class:`~backend.orchestrator.frame.FrameStage` fall back to the keyword
+    #: :class:`~backend.workflow.application.stages.frame.FrameStage` fall back to the keyword
     #: heuristic — the pre-B9a behaviour, no regression.
     frame_llm: (
         FrameLlm

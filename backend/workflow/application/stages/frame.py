@@ -25,15 +25,45 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, Literal, Protocol, runtime_checkable
 
 import structlog
 
 from backend.extensions.skill.loader import SkillLoader
 from backend.intake.db import RequestRow
-from backend.orchestrator.schema import FramedRequest, PathClassification, PipelineKind
 
 logger = structlog.get_logger(__name__)
+
+
+# The path branch the frame stage classifies (Workflow §1.2 "Frame path
+# branch"). B9a records the classification; B9b is the branch that ACTS on
+# ``knowledge_only`` (answer from BSage, skip the loop). The agent-loop path is
+# the default and behaves exactly as today.
+PathClassification = Literal["knowledge_only", "agent_loop"]
+
+# Phase 1 — the multi-stage pipeline shape. ``single`` is one run end-to-end
+# (today's behaviour). ``design_then_impl`` marks a build that runs a DESIGN
+# stage first (produce a spec), then has the orchestrator chain an
+# IMPLEMENTATION stage that consumes it (P1-L2). Recorded on the frame; the
+# orchestrator chaining + routing act on it.
+PipelineKind = Literal["single", "design_then_impl"]
+
+
+@dataclass
+class FramedRequest:
+    """Output of the ``frame`` stage — Workflow §1 stage 2."""
+
+    skill_match: str | None
+    artifact_type_hint: str | None
+    # B9a — the LLM's refined natural-language intent (``None`` on the keyword
+    # fallback path, which has no LLM to refine with).
+    framed_intent: str | None = None
+    # B9a — the path branch (Workflow §1.2). ``agent_loop`` keeps today's
+    # behaviour; ``knowledge_only`` is recorded for B9b to act on.
+    path_classification: PathClassification = "agent_loop"
+    # P1-L2 — whether this request should run as a design→impl pipeline.
+    pipeline: PipelineKind = "single"
+
 
 # Cap the skill catalog we send to the cheap LLM so a workspace with many skills
 # cannot blow the (local-model) framing budget. Descriptions are the match
@@ -356,4 +386,11 @@ def _guess_artifact_type(skill_name: str | None, loader: SkillLoader) -> str | N
     return None
 
 
-__all__ = ["FrameConfig", "FrameLlm", "FrameStage"]
+__all__ = [
+    "FrameConfig",
+    "FrameLlm",
+    "FrameStage",
+    "FramedRequest",
+    "PathClassification",
+    "PipelineKind",
+]

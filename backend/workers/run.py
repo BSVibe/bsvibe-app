@@ -65,7 +65,6 @@ from backend.extensions.plugin.base import PluginMeta
 from backend.extensions.plugin.loader import PluginLoader
 from backend.extensions.plugin.runner import PluginRunner
 from backend.extensions.skill.loader import SkillLoader
-from backend.orchestrator.frame import FrameLlm
 from backend.router.accounts.crypto import CredentialCipher, _key_from_settings
 from backend.router.accounts.models import ModelAccount
 from backend.router.accounts.service import ModelAccountService
@@ -107,6 +106,7 @@ from backend.workers.settle_worker import (
     build_garden_promoter_factory,
 )
 from backend.workers.streams import RedisStreamConsumer, StreamHandler
+from backend.workflow.application.stages.frame import FrameLlm
 from plugin.audit.models import AuditOutboxRecord
 
 logger = structlog.get_logger(__name__)
