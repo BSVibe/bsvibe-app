@@ -68,7 +68,11 @@ def test_audit_plugin_registers_subscriber_on_import() -> None:
 _BACKEND_PRODUCER_SITES = (
     "backend/api/v1/chat.py",
     "backend/api/v1/checkpoints.py",
-    "backend/execution/orchestrator.py",
+    # Lift H2a decomposed the native loop's audit producer out of
+    # backend/execution/orchestrator.py (now a thin re-export shim) into
+    # backend/workflow/application/run_persistence.py — the canonical home
+    # for the loop's DB + audit side effects.
+    "backend/workflow/application/run_persistence.py",
     "backend/executors/terminal.py",
 )
 
