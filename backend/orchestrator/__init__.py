@@ -1,23 +1,23 @@
-"""Orchestrator — Workflow §12.5 #8 (Bundle G).
+"""Orchestrator — H2c carry-over only.
 
-Drives Requests through the 3+ε state machine (Workflow §1) and
-hands off to the execution layer (Bundle X) for the agent loop.
+Pre-H2b this package hosted the 4-stage state machine + Frame stage +
+Safe Mode boundary + AgentRunner. H2b moved the first three into the
+Workflow bounded context:
+
+* :class:`~backend.workflow.domain.state.LegacyWorkflowStateMachine` (+
+  :class:`~backend.workflow.domain.state.LegacyWorkflowState`,
+  ``LegacyStage``, :class:`~backend.workflow.domain.state.InvalidLegacyTransitionError`)
+* :class:`~backend.workflow.application.stages.frame.FrameStage` (+
+  :class:`~backend.workflow.application.stages.frame.FramedRequest` etc.)
+* :class:`~backend.workflow.application.safe_mode.SafeModeBoundary`
+
+What remains here — :class:`AgentRunner` — is H2c's responsibility to
+relocate to :mod:`backend.workflow.application.agent_runner`. Until
+then this package is a thin re-export.
 """
 
 from __future__ import annotations
 
 from backend.orchestrator.agent_runner import AgentRunner
-from backend.orchestrator.frame import FrameStage
-from backend.orchestrator.safe_mode import SafeModeBoundary
-from backend.orchestrator.schema import FramedRequest, Stage, WorkflowState
-from backend.orchestrator.workflow_sm import WorkflowStateMachine
 
-__all__ = [
-    "AgentRunner",
-    "FrameStage",
-    "FramedRequest",
-    "SafeModeBoundary",
-    "Stage",
-    "WorkflowState",
-    "WorkflowStateMachine",
-]
+__all__ = ["AgentRunner"]
