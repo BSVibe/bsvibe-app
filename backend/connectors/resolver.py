@@ -36,13 +36,13 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.connectors.db import ConnectorAccountRow
-from backend.extensions.implementations.discord.webhook import parse_interaction
-from backend.extensions.implementations.github.webhook import parse_webhook
-from backend.extensions.implementations.sentry.webhook import parse_webhook as parse_sentry_webhook
-from backend.extensions.implementations.slack.webhook import parse_event
-from backend.extensions.implementations.telegram.webhook import parse_update
 from backend.intake.schema import TriggerEvent
 from backend.router.accounts.crypto import CredentialCipher
+from plugin.discord.webhook import parse_interaction
+from plugin.github.webhook import parse_webhook
+from plugin.sentry.webhook import parse_webhook as parse_sentry_webhook
+from plugin.slack.webhook import parse_event
+from plugin.telegram.webhook import parse_update
 
 logger = structlog.get_logger(__name__)
 

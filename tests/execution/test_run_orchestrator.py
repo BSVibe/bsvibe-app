@@ -1374,7 +1374,7 @@ async def test_real_github_list_issues_action_appears_in_tool_schema(
     surfaced in the agent's tool list when the workspace has a github account.
     Asserts against the real github plugin meta (not a fake) so the test is
     tied to the deployed action declaration."""
-    from backend.extensions.implementations.github import plugin as github_module
+    from plugin.github import plugin as github_module
 
     ws = uuid.uuid4()
     meta = github_module.p.meta
@@ -1410,7 +1410,7 @@ async def test_real_sentry_list_issues_action_appears_in_tool_schema(
     tmp_path: Path,
 ) -> None:
     """Presence delta for sentry's M2 read action."""
-    from backend.extensions.implementations.sentry import plugin as sentry_module
+    from plugin.sentry import plugin as sentry_module
 
     ws = uuid.uuid4()
     meta = sentry_module.p.meta
@@ -1446,7 +1446,7 @@ async def test_new_action_absent_when_workspace_lacks_account(tmp_path: Path) ->
     the negative half of the presence delta. (The new actions are not blanket-
     exposed; they need an active workspace account, same as the existing
     connector tools.)"""
-    from backend.extensions.implementations.github import plugin as github_module
+    from plugin.github import plugin as github_module
 
     meta = github_module.p.meta
     other_ws = uuid.uuid4()
@@ -1495,8 +1495,8 @@ async def test_real_github_list_issues_dispatches_through_real_pluginrunner(
     import respx
 
     from backend.execution.connector_actions import ConnectorActionResolver
-    from backend.extensions.implementations.github import plugin as github_module
     from backend.router.accounts.crypto import CredentialCipher
+    from plugin.github import plugin as github_module
 
     ws = uuid.uuid4()
     meta = github_module.p.meta

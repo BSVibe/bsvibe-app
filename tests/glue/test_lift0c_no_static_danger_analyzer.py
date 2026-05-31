@@ -180,7 +180,7 @@ def test_connector_action_resolver_constructor_drops_danger_map() -> None:
 
 async def test_github_list_issues_still_in_agent_tool_schema(tmp_path: Path) -> None:
     """The github connector's ``list_issues`` @p.action still surfaces."""
-    from backend.extensions.implementations.github import plugin as github_module
+    from plugin.github import plugin as github_module
 
     ws = uuid.uuid4()
     meta = github_module.p.meta
@@ -227,7 +227,7 @@ async def test_github_list_issues_still_in_agent_tool_schema(tmp_path: Path) -> 
 
 async def test_sentry_list_issues_still_in_agent_tool_schema(tmp_path: Path) -> None:
     """The sentry connector's ``list_issues`` @p.action still surfaces."""
-    from backend.extensions.implementations.sentry import plugin as sentry_module
+    from plugin.sentry import plugin as sentry_module
 
     ws = uuid.uuid4()
     meta = sentry_module.p.meta

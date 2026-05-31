@@ -39,24 +39,24 @@ from backend.api.deps import get_db_session
 from backend.config import get_settings
 from backend.connectors.handshake import handshake_response
 from backend.connectors.resolver import ConnectorInboundResolver, UnknownConnectorError
-from backend.extensions.implementations.discord.webhook import (
-    WebhookSignatureError as DiscordSignatureError,
-)
-from backend.extensions.implementations.github.webhook import (
-    WebhookSignatureError as GithubSignatureError,
-)
-from backend.extensions.implementations.sentry.webhook import (
-    WebhookSignatureError as SentrySignatureError,
-)
-from backend.extensions.implementations.slack.webhook import (
-    WebhookSignatureError as SlackSignatureError,
-)
-from backend.extensions.implementations.telegram.webhook import (
-    WebhookSignatureError as TelegramSignatureError,
-)
 from backend.intake.webhook import WebhookReceiver
 from backend.router.accounts.crypto import CredentialCipher, _key_from_settings
 from backend.workers.emit import STREAM_INTAKE, emit_stream_notification, get_emit_redis_client
+from plugin.discord.webhook import (
+    WebhookSignatureError as DiscordSignatureError,
+)
+from plugin.github.webhook import (
+    WebhookSignatureError as GithubSignatureError,
+)
+from plugin.sentry.webhook import (
+    WebhookSignatureError as SentrySignatureError,
+)
+from plugin.slack.webhook import (
+    WebhookSignatureError as SlackSignatureError,
+)
+from plugin.telegram.webhook import (
+    WebhookSignatureError as TelegramSignatureError,
+)
 
 logger = structlog.get_logger(__name__)
 

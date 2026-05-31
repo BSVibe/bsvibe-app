@@ -61,10 +61,10 @@ jobs:
         run: uv sync --all-extras
 
       - name: Ruff (lint)
-        run: uv run ruff check backend/ tests/ bsvibe_sdk/
+        run: uv run ruff check backend/ tests/ bsvibe_sdk/ plugin/
 
       - name: Ruff (format check)
-        run: uv run ruff format --check backend/ tests/ bsvibe_sdk/
+        run: uv run ruff format --check backend/ tests/ bsvibe_sdk/ plugin/
 
       - name: mypy --strict (backend/)
         run: uv run mypy backend/
@@ -76,7 +76,7 @@ jobs:
         run: uv run alembic upgrade head
 
       - name: pytest with coverage (smoke + unit)
-        run: uv run pytest --cov=backend --cov-fail-under=80 -v
+        run: uv run pytest --cov=backend --cov=plugin --cov-fail-under=80 -v
 
       - name: pytest (bsvibe_sdk)
         run: uv run pytest bsvibe_sdk/tests/ -v

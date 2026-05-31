@@ -69,11 +69,11 @@ from backend.execution.db import (
     ExecutionRun,
     RunStatus,
 )
-from backend.extensions.implementations.notion import plugin as notion_module
 from backend.extensions.plugin.loader import PluginLoader
 from backend.router.accounts.crypto import CredentialCipher
 from backend.workers.delivery_worker import DeliveryWorker, DeliveryWorkerConfig
 from backend.workspaces.db import WorkspaceRow
+from plugin.notion import plugin as notion_module
 
 from .._support import db_engine, fake_current_user
 
