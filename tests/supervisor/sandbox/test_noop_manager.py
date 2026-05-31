@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from backend.supervisor.sandbox import (
+from backend.workflow.infrastructure.sandbox import (
     NoopSandboxManager,
     NoopSandboxSession,
     SandboxError,

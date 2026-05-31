@@ -1,7 +1,7 @@
 """Connector-bound outbound delivery — close the verified-Deliverable loop.
 
 Workflow §11.1 / §12.5 #8 (Bundle G — Delivery). A verified run mints a
-:class:`~backend.execution.db.Deliverable` and the orchestrator writes a
+:class:`~backend.workflow.infrastructure.db.Deliverable` and the orchestrator writes a
 :class:`~backend.workflow.infrastructure.delivery.db.DeliveryEventRow`; the
 :class:`~backend.workflow.infrastructure.workers.delivery_worker.DeliveryWorker` drains it. Until now
 the drain dispatched over every plugin filtered only by the deliverable's own
@@ -47,13 +47,13 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from backend.connectors.db import ConnectorAccountRow
-from backend.execution.db import Deliverable
 from backend.extensions.plugin.base import PluginMeta
 from backend.extensions.plugin.context import SkillContext
 from backend.extensions.plugin.runner import PluginRunner
 from backend.router.accounts.crypto import CredentialCipher
 from backend.workflow.application.delivery.dispatcher import DeliveryDispatcher
 from backend.workflow.domain.delivery import ActionResult, ArtifactType, DeliveryResult
+from backend.workflow.infrastructure.db import Deliverable
 from backend.workflow.infrastructure.delivery.git_ops import GitOps
 
 logger = structlog.get_logger(__name__)

@@ -1,6 +1,6 @@
 """Verify-stage transition handlers.
 
-Verify is owned by :class:`backend.execution.verifier.service.VerificationService`
+Verify is owned by :class:`backend.workflow.application.verification_service.VerificationService`
 today. The Run stage's ``RunOrchestrator._verify(...)`` call invokes the
 service inline at the end of each plan→act cycle (Lift B2a).
 
@@ -25,7 +25,7 @@ class StartVerifyHandler:
     """``dispatched → verifying`` via ``verify_start``.
 
     The work loop transitions through ``verifying`` inline (via
-    :class:`~backend.execution.db.WorkStepStatus.VERIFYING`) before
+    :class:`~backend.workflow.infrastructure.db.WorkStepStatus.VERIFYING`) before
     invoking the verifier service. This handler is the H3+ driver entry
     point; today's call site is inside
     :meth:`RunOrchestrator._drive_loop`.

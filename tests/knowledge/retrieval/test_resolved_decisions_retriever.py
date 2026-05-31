@@ -20,12 +20,12 @@ from pathlib import Path
 
 import pytest
 
-from backend.execution.verifier.service import CanonRetriever
 from backend.knowledge.factory import KnowledgeFactory
 from backend.knowledge.graph.storage import FileSystemStorage
 from backend.knowledge.graph.vault import Vault
 from backend.knowledge.graph.writer import GardenNote
 from backend.knowledge.graph.writer_core import GardenWriter
+from backend.workflow.application.verification_service import CanonRetriever
 
 pytestmark = pytest.mark.asyncio
 

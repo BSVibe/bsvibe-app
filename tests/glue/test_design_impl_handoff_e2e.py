@@ -38,8 +38,6 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 import backend.executors.db  # noqa: F401 — register tables on the shared Base
 from backend.config import get_settings
-from backend.execution.db import Deliverable, ExecutionRun, RunStatus
-from backend.execution.handoff import read_design_context
 from backend.executors import dispatch
 from backend.executors.orchestrator import ExecutorOrchestrator
 from backend.executors.worker.codex import CodexExecutor
@@ -48,6 +46,8 @@ from backend.executors.worker.opencode import OpenCodeExecutor
 from backend.router.routing.run_routing.db import RunRoutingRuleRow
 from backend.router.routing.run_routing.engine import resolve_route
 from backend.workflow.application.agent_runner import AgentRunner
+from backend.workflow.application.handoff import read_design_context
+from backend.workflow.infrastructure.db import Deliverable, ExecutionRun, RunStatus
 
 from .._support import db_engine
 from .test_executor_run_e2e import (

@@ -25,8 +25,9 @@ if TYPE_CHECKING:
     from backend.workflow.application.agent_loop import LoopResult
 
 from backend.config import Settings
-from backend.execution.audit_events import LoopTerminal
-from backend.execution.db import (
+from backend.workflow.application.audit_events import LoopTerminal
+from backend.workflow.domain.verified_deliverable import write_verified_deliverable
+from backend.workflow.infrastructure.db import (
     Decision,
     ExecutionRun,
     ExecutionRunActivity,
@@ -37,7 +38,6 @@ from backend.execution.db import (
     WorkStep,
     WorkStepStatus,
 )
-from backend.execution.verified_deliverable import write_verified_deliverable
 from plugin.audit.events import AuditActor, AuditEventBase, AuditResource
 from plugin.audit.service import safe_emit
 
@@ -243,7 +243,7 @@ async def audit_event(
 
 
 # Re-export so the agent loop can emit ``LoopTerminal`` events without
-# pulling :mod:`backend.execution.audit_events` directly (one canonical
+# pulling :mod:`backend.workflow.application.audit_events` directly (one canonical
 # import sink for the run-persistence concern).
 __all__ = [
     "LoopTerminal",

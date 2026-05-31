@@ -43,7 +43,6 @@ import pytest_asyncio
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
-from backend.execution.db import ExecutionBase, ExecutionRun, ExecutionRunActivity, RunStatus
 from backend.knowledge.canonicalization.index import InMemoryCanonicalizationIndex
 from backend.knowledge.canonicalization.models import DecisionEntry
 from backend.knowledge.canonicalization.resolver import TagResolver
@@ -56,6 +55,12 @@ from backend.knowledge.infrastructure.workers.settle_worker import (
     build_garden_promoter_factory,
 )
 from backend.workers.db import SettleDrainRow, WorkersBase
+from backend.workflow.infrastructure.db import (
+    ExecutionBase,
+    ExecutionRun,
+    ExecutionRunActivity,
+    RunStatus,
+)
 from backend.workspaces.db import WorkspaceRow, WorkspacesBase
 
 from .._support import db_engine

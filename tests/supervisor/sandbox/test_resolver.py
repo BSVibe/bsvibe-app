@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from backend.supervisor.sandbox import (
+from backend.workflow.infrastructure.sandbox import (
     DockerSandboxManager,
     build_sandbox_manager,
     get_sandbox_manager,

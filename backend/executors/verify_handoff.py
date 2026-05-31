@@ -26,8 +26,22 @@ from typing import Any
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.execution.audit_events import LoopTerminal, VerifyRun
-from backend.execution.db import (
+from backend.executors.terminal import (
+    _utcnow,
+    create_decision,
+    decision_terminal,
+    emit_audit,
+    fail_terminal,
+)
+from backend.workflow.application.agent_loop import LoopResult
+from backend.workflow.application.audit_events import LoopTerminal, VerifyRun
+from backend.workflow.application.verification_service import (
+    CanonRetriever,
+    JudgeLlm,
+    VerificationService,
+)
+from backend.workflow.domain.verified_deliverable import write_verified_deliverable
+from backend.workflow.infrastructure.db import (
     ExecutionRun,
     ProofState,
     RunAttempt,
@@ -36,17 +50,7 @@ from backend.execution.db import (
     WorkStep,
     WorkStepStatus,
 )
-from backend.execution.verified_deliverable import write_verified_deliverable
-from backend.execution.verifier.service import CanonRetriever, JudgeLlm, VerificationService
-from backend.executors.terminal import (
-    _utcnow,
-    create_decision,
-    decision_terminal,
-    emit_audit,
-    fail_terminal,
-)
-from backend.supervisor.sandbox import SandboxManager
-from backend.workflow.application.agent_loop import LoopResult
+from backend.workflow.infrastructure.sandbox import SandboxManager
 
 logger = structlog.get_logger(__name__)
 

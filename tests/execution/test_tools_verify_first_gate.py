@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from backend.execution.tools import ToolError, ToolRegistry
+from backend.workflow.infrastructure.tools import ToolError, ToolRegistry
 
 _DECLARE_HINT = "declare_verification"
 

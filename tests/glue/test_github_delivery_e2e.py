@@ -34,17 +34,17 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from backend.connectors.db import ConnectorAccountRow
-from backend.execution.db import Deliverable, ExecutionRun, RunStatus
 from backend.extensions.plugin.loader import PluginLoader
 from backend.extensions.skill.loader import SkillLoader
 from backend.router.accounts.crypto import CredentialCipher
-from backend.supervisor.sandbox import NoopSandboxManager
 from backend.workflow.application.agent_loop import LoopToolCall, LoopTurn, RunOrchestrator
 from backend.workflow.application.delivery.connector_dispatch import (
     build_connector_delivery_adapter,
     build_github_workspace_provisioner,
 )
+from backend.workflow.infrastructure.db import Deliverable, ExecutionRun, RunStatus
 from backend.workflow.infrastructure.delivery.db import DeliveryEventRow
+from backend.workflow.infrastructure.sandbox import NoopSandboxManager
 from backend.workflow.infrastructure.workers.agent_worker import AgentExecutionDeps, AgentWorker
 from backend.workflow.infrastructure.workers.delivery_worker import (
     DeliveryWorker,

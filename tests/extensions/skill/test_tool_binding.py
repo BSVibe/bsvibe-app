@@ -7,9 +7,9 @@ from pathlib import Path
 
 import pytest
 
-from backend.execution.tools import ToolRegistry
 from backend.extensions.skill.loader import SkillLoader
 from backend.extensions.skill.tool_binding import INVOKE_SKILL_NAME, register_invoke_skill
+from backend.workflow.infrastructure.tools import ToolRegistry
 
 
 def _write_skill(dir_: Path, name: str, body: str, description: str = "desc") -> None:

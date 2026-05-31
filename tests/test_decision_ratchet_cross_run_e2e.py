@@ -61,17 +61,17 @@ from backend.api.deps import (
     get_workspace_id,
 )
 from backend.api.main import create_app
-from backend.execution.db import (
-    Decision,
-    DecisionStatus,
-    ExecutionRun,
-    RunStatus,
-)
 from backend.knowledge.factory import KnowledgeFactory
 from backend.knowledge.infrastructure.workers.settle_worker import (
     KnowledgeSettleSink,
     SettleWorker,
     SettleWorkerConfig,
+)
+from backend.workflow.infrastructure.db import (
+    Decision,
+    DecisionStatus,
+    ExecutionRun,
+    RunStatus,
 )
 
 from ._support import db_engine, fake_current_user

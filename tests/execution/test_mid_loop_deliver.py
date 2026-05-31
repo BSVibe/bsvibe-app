@@ -28,15 +28,15 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.execution.db import (
+from backend.workflow.application.agent_loop import LoopToolCall, LoopTurn, RunOrchestrator
+from backend.workflow.infrastructure.db import (
     Deliverable,
     DeliverableType,
     ExecutionRun,
     RunStatus,
 )
-from backend.supervisor.sandbox import NoopSandboxManager
-from backend.workflow.application.agent_loop import LoopToolCall, LoopTurn, RunOrchestrator
 from backend.workflow.infrastructure.delivery.db import DeliveryEventRow
+from backend.workflow.infrastructure.sandbox import NoopSandboxManager
 from tests._support import memory_session
 
 pytestmark = pytest.mark.asyncio

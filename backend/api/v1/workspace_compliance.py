@@ -35,9 +35,14 @@ from backend.api.deps import (
     get_db_session,
     get_workspace_id,
 )
-from backend.execution.db import Decision, Deliverable, ExecutionRun, ExecutionRunActivity
 from backend.identity.db import MembershipRow, UserRow
 from backend.knowledge.canonicalization.db import CanonicalAnchor
+from backend.workflow.infrastructure.db import (
+    Decision,
+    Deliverable,
+    ExecutionRun,
+    ExecutionRunActivity,
+)
 from backend.workflow.infrastructure.intake.db import RequestRow
 from backend.workspaces.db import ProductResourceRow, ProductRow, ResourceBindingRow, WorkspaceRow
 

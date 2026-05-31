@@ -18,8 +18,6 @@ from typing import Any
 import structlog
 
 from backend.config import Settings
-from backend.execution.db import ExecutionRun
-from backend.execution.tools import ToolDefinition, ToolRegistry
 from backend.extensions.skill.loader import SkillLoader
 from backend.extensions.skill.tool_binding import INVOKE_SKILL_NAME, register_invoke_skill
 from backend.workflow.application.tool_registry import (
@@ -28,6 +26,8 @@ from backend.workflow.application.tool_registry import (
     _KNOWLEDGE_SEED_MAX_RESULTS,
     KNOWLEDGE_SEARCH_NAME,
 )
+from backend.workflow.infrastructure.db import ExecutionRun
+from backend.workflow.infrastructure.tools import ToolDefinition, ToolRegistry
 
 logger = structlog.get_logger(__name__)
 
@@ -213,7 +213,7 @@ def design_seed_message(run: ExecutionRun, *, settings: Settings) -> dict[str, A
 
     ``None`` for a non-impl run (no design refs) or when no spec content is
     readable — best-effort, never raises into the loop."""
-    from backend.execution.handoff import read_design_context  # noqa: PLC0415
+    from backend.workflow.application.handoff import read_design_context  # noqa: PLC0415
 
     content = read_design_context(run, settings)
     if content is None:

@@ -25,8 +25,8 @@ from backend.api.deps import (
     get_workspace_id,
 )
 from backend.api.main import create_app
-from backend.execution.audit_events import DecisionResolved
-from backend.execution.db import (
+from backend.workflow.application.audit_events import DecisionResolved
+from backend.workflow.infrastructure.db import (
     Decision,
     DecisionStatus,
     ExecutionRun,

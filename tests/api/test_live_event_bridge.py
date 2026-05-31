@@ -30,7 +30,7 @@ from backend.api.v1.live_events import (
     get_live_event_bus,
     reset_live_event_bus_for_testing,
 )
-from backend.execution.audit_events import (
+from backend.workflow.application.audit_events import (
     DecisionPending,
     DecisionResolved,
     LlmTurn,

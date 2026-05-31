@@ -5,7 +5,7 @@ change's signals and runs a pgvector similarity search over the workspace's note
 embeddings, surfacing the most relevant notes as statements folded into the
 SAME composite the verifier (B3) + work-start seed (B6) consume.
 
-Satisfies the :class:`~backend.execution.verifier.service.CanonRetriever`
+Satisfies the :class:`~backend.workflow.application.verification_service.CanonRetriever`
 Protocol (``retrieve_for_signals(signals) -> list[str]``). Discipline matches the
 other sources: graceful-empty (embedding disabled / no signals / no hits → ``[]``)
 and never-raises into the verify path. Auxiliary by design (proposal §5.4): a

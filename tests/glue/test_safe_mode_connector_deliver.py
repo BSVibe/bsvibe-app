@@ -54,17 +54,17 @@ from backend.api.main import create_app
 from backend.api.v1.safemode import get_delivery_dispatcher
 from backend.config import get_settings
 from backend.connectors.db import ConnectorAccountRow
-from backend.execution.db import (
-    Deliverable,
-    DeliverableType,
-    ExecutionRun,
-    RunStatus,
-)
 from backend.extensions.plugin.loader import PluginLoader
 from backend.router.accounts.crypto import CredentialCipher
 from backend.workflow.application.delivery.connector_dispatch import (
     ConnectorDeliveryAdapter,
     build_connector_delivery_adapter,
+)
+from backend.workflow.infrastructure.db import (
+    Deliverable,
+    DeliverableType,
+    ExecutionRun,
+    RunStatus,
 )
 from backend.workflow.infrastructure.delivery.db import (
     DeliveryEventRow,

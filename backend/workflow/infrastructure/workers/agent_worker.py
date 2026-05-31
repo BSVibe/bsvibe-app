@@ -40,13 +40,13 @@ import structlog
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from backend.execution.db import ExecutionRun, RunStatus
 from backend.extensions.skill.loader import SkillLoader
 from backend.storage.artifact_store import ArtifactStore, LocalFilesystemArtifactStore
 from backend.workers.base import BaseWorker
 from backend.workflow.application.agent_loop import RunCompute
 from backend.workflow.application.agent_runner import AgentRunner
 from backend.workflow.application.stages.frame import FrameConfig, FrameLlm, FrameStage
+from backend.workflow.infrastructure.db import ExecutionRun, RunStatus
 from backend.workflow.infrastructure.intake.db import RequestRow, RequestStatus
 
 logger = structlog.get_logger(__name__)
@@ -77,10 +77,10 @@ class AgentExecutionDeps:
       driven in (so compute + transactional lifecycle share one transaction)
       AND to the *specific* run, so the factory can resolve the run's
       per-workspace work-LLM identity (the
-      :class:`~backend.execution.db.ExecutionRun` carries only a
+      :class:`~backend.workflow.infrastructure.db.ExecutionRun` carries only a
       ``workspace_id``; production resolves that workspace's active
       ModelAccount → ``account_id`` + ``model_account_id`` for the gateway
-      work-LLM). It may also create a :class:`~backend.execution.db.Decision`
+      work-LLM). It may also create a :class:`~backend.workflow.infrastructure.db.Decision`
       and return ``None`` when the run cannot be resolved (e.g. zero / many
       active model accounts) — in which case ``drive_once`` skips driving the
       run, leaving it RUNNING (paused on the Decision, never silently stalled).

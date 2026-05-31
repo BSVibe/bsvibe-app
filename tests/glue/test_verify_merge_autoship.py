@@ -25,7 +25,16 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from backend.config import get_settings
-from backend.execution.db import (
+from backend.storage.product_workspace import (
+    add_run_worktree,
+    init_product_workspace,
+    product_workspace_path,
+    run_worktree_path,
+)
+from backend.workflow.application.agent_runner import AgentRunner
+from backend.workflow.application.verification_service import VerificationService
+from backend.workflow.domain.verifier_contract import VerificationContract
+from backend.workflow.infrastructure.db import (
     ExecutionBase,
     ExecutionRun,
     RunAttempt,
@@ -34,16 +43,7 @@ from backend.execution.db import (
     WorkStep,
     WorkStepStatus,
 )
-from backend.execution.verifier.contract import VerificationContract
-from backend.execution.verifier.service import VerificationService
-from backend.storage.product_workspace import (
-    add_run_worktree,
-    init_product_workspace,
-    product_workspace_path,
-    run_worktree_path,
-)
-from backend.supervisor.sandbox import NoopSandboxManager
-from backend.workflow.application.agent_runner import AgentRunner
+from backend.workflow.infrastructure.sandbox import NoopSandboxManager
 
 from .._support import db_engine
 

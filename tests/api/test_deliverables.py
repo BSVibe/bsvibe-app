@@ -25,7 +25,7 @@ from backend.api.deps import (
 )
 from backend.api.main import create_app
 from backend.config import get_settings
-from backend.execution.db import (
+from backend.workflow.infrastructure.db import (
     Deliverable,
     DeliverableType,
     ExecutionBase,
@@ -380,7 +380,7 @@ async def test_report_surfaces_referenced_knowledge(configured_client, db, works
     rejections folded into the verify contract) surfaces as a first-class
     ``references`` list — the "근거 포함 답변" the founder reads as "what BSVibe
     referenced", distinct from the verification checklist."""
-    from backend.execution.verifier.service import RETRIEVED_KNOWLEDGE_RATIONALE
+    from backend.workflow.application.verification_service import RETRIEVED_KNOWLEDGE_RATIONALE
 
     run_id = uuid.uuid4()
     deliverable_id = uuid.uuid4()
@@ -441,7 +441,7 @@ async def test_report_references_deduped_across_verifications(
 ) -> None:
     """A run may record several verifications (re-attempts); the same referenced
     statement must appear once, in first-seen order."""
-    from backend.execution.verifier.service import RETRIEVED_KNOWLEDGE_RATIONALE
+    from backend.workflow.application.verification_service import RETRIEVED_KNOWLEDGE_RATIONALE
 
     run_id = uuid.uuid4()
     deliverable_id = uuid.uuid4()

@@ -164,7 +164,7 @@ class FailHandler:
     """Cross-stage ``fail`` event → ``failed``.
 
     Today :meth:`AgentRunner.transition` does the actual DB flip to
-    :class:`~backend.execution.db.RunStatus.FAILED`. H3+ routes the
+    :class:`~backend.workflow.infrastructure.db.RunStatus.FAILED`. H3+ routes the
     caller through this handler.
     """
 

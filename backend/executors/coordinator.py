@@ -51,17 +51,6 @@ import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.config import Settings, get_settings
-from backend.execution.audit_events import RunStarted
-from backend.execution.db import (
-    ExecutionRun,
-    ProofState,
-    RunAttempt,
-    RunAttemptPhase,
-    WorkStep,
-    WorkStepStatus,
-)
-from backend.execution.handoff import read_design_context
-from backend.execution.verifier.service import CanonRetriever, JudgeLlm
 from backend.executors import dispatch
 from backend.executors.dispatch import TaskTimeout
 from backend.executors.prompt import (
@@ -78,8 +67,19 @@ from backend.executors.terminal import (
 )
 from backend.executors.verify_handoff import verify_and_finish
 from backend.router.accounts.models import ModelAccount
-from backend.supervisor.sandbox import SandboxManager
 from backend.workflow.application.agent_loop import LoopResult
+from backend.workflow.application.audit_events import RunStarted
+from backend.workflow.application.handoff import read_design_context
+from backend.workflow.application.verification_service import CanonRetriever, JudgeLlm
+from backend.workflow.infrastructure.db import (
+    ExecutionRun,
+    ProofState,
+    RunAttempt,
+    RunAttemptPhase,
+    WorkStep,
+    WorkStepStatus,
+)
+from backend.workflow.infrastructure.sandbox import SandboxManager
 
 logger = structlog.get_logger(__name__)
 

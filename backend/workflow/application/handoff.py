@@ -23,7 +23,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from backend.config import Settings
-    from backend.execution.db import ExecutionRun
+    from backend.workflow.infrastructure.db import ExecutionRun
 
 logger = structlog.get_logger(__name__)
 

@@ -2,12 +2,12 @@
 
 Workflow §12.5 #8 (Bundle G — Workers). Pulls WorkStep rows in the
 ``running`` state, hands each to a caller-supplied verifier (typically
-:class:`backend.execution.verifier.contract.VerificationContract`-backed),
+:class:`backend.workflow.domain.verifier_contract.VerificationContract`-backed),
 and writes a VerificationResult row + flips WorkStep.proof_state.
 
 The verifier adapter is a Protocol so tests can pass a fake; production
 wiring (Bundle G) constructs the real verifier from a parsed
-``backend.execution.verifier.contract.VerificationContract``.
+``backend.workflow.domain.verifier_contract.VerificationContract``.
 """
 
 from __future__ import annotations
@@ -20,14 +20,14 @@ import structlog
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from backend.execution.db import (
+from backend.workers.base import BaseWorker
+from backend.workflow.infrastructure.db import (
     ProofState,
     VerificationOutcome,
     VerificationResult,
     WorkStep,
     WorkStepStatus,
 )
-from backend.workers.base import BaseWorker
 
 logger = structlog.get_logger(__name__)
 

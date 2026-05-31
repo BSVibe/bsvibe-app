@@ -18,8 +18,8 @@ from backend.api.deps import (
 )
 from backend.api.main import create_app
 from backend.embedding.db import GatewayEmbeddingBase, IntentDefinitionRow
-from backend.execution.db import ExecutionBase, ExecutionRun, RunStatus
 from backend.router.rules.db import GatewayRulesBase, RoutingRuleRow
+from backend.workflow.infrastructure.db import ExecutionBase, ExecutionRun, RunStatus
 
 from .._support import db_engine, fake_current_user
 

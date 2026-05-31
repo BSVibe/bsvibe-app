@@ -7,7 +7,7 @@ resumption — so every new run re-asks the same question.
 B11b closes the loop:
 
 * On resolve, ``POST /api/v1/checkpoints/{id}/resolve`` writes a ``settle``
-  :class:`~backend.execution.db.ExecutionRunActivity` with payload kind
+  :class:`~backend.workflow.infrastructure.db.ExecutionRunActivity` with payload kind
   ``"decision_resolution"`` (the absorption pipeline already drains it into the
   workspace BSage vault as a garden note).
 * This retriever reads that same vault state and surfaces RELEVANT resolved
@@ -169,7 +169,7 @@ class ResolvedDecisionsRetriever:
     call walks the garden seedling subdir, parses frontmatter, filters by
     ``kind = decision_resolution`` and signal overlap, and returns a capped
     list of human-legible statements. Satisfies the
-    :class:`~backend.execution.verifier.service.CanonRetriever` Protocol
+    :class:`~backend.workflow.application.verification_service.CanonRetriever` Protocol
     structurally (same method shape).
     """
 

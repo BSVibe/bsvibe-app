@@ -21,13 +21,13 @@ from pathlib import Path
 import pytest
 
 from backend.config import get_settings
-from backend.execution.db import ExecutionRun, RunStatus
 from backend.storage.product_workspace import (
     init_product_workspace,
     product_workspace_path,
     run_branch_name,
     run_worktree_path,
 )
+from backend.workflow.infrastructure.db import ExecutionRun, RunStatus
 from backend.workflow.infrastructure.workers.run import (
     _build_composite_workspace_provisioner,
     _product_workspace_provisioner,

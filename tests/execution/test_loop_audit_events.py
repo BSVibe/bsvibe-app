@@ -24,7 +24,9 @@ from typing import Any
 import pytest
 from sqlalchemy import select
 
-from backend.execution.audit_events import (
+from backend.workflow.application.agent_loop import LoopTurn as LlmLoopTurn
+from backend.workflow.application.agent_loop import RunOrchestrator
+from backend.workflow.application.audit_events import (
     DecisionPending,
     LlmTurn,
     LoopTerminal,
@@ -32,9 +34,7 @@ from backend.execution.audit_events import (
     ToolCall,
     VerifyRun,
 )
-from backend.supervisor.sandbox import NoopSandboxManager
-from backend.workflow.application.agent_loop import LoopTurn as LlmLoopTurn
-from backend.workflow.application.agent_loop import RunOrchestrator
+from backend.workflow.infrastructure.sandbox import NoopSandboxManager
 from plugin.audit.models import AuditOutboxRecord
 
 from .._support import memory_session

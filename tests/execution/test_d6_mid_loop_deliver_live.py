@@ -37,15 +37,15 @@ from backend.api.v1.live_events import (
     LiveEvent,
     LiveEventBus,
 )
-from backend.execution.db import (
+from backend.workflow.application.agent_loop import LoopToolCall, LoopTurn, RunOrchestrator
+from backend.workflow.domain.verified_deliverable import PARTIAL_DELIVERABLE_KIND
+from backend.workflow.infrastructure.db import (
     Deliverable,
     DeliverableType,
     ExecutionRun,
     RunStatus,
 )
-from backend.execution.verified_deliverable import PARTIAL_DELIVERABLE_KIND
-from backend.supervisor.sandbox import NoopSandboxManager
-from backend.workflow.application.agent_loop import LoopToolCall, LoopTurn, RunOrchestrator
+from backend.workflow.infrastructure.sandbox import NoopSandboxManager
 from tests._support import memory_session
 
 pytestmark = pytest.mark.asyncio

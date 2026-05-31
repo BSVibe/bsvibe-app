@@ -24,12 +24,17 @@ from datetime import UTC, datetime
 
 from sqlalchemy import select
 
-from backend.execution.db import Decision, ExecutionRun, ExecutionRunActivity, RunStatus
 from backend.router.accounts.models import ModelAccount
 from backend.router.routing.run_routing.engine import resolve_route
 from backend.router.routing.run_routing.multi_account import (
     ROUTING_PRIORITY_KEY,
     select_within_class,
+)
+from backend.workflow.infrastructure.db import (
+    Decision,
+    ExecutionRun,
+    ExecutionRunActivity,
+    RunStatus,
 )
 
 from ...._support import memory_session

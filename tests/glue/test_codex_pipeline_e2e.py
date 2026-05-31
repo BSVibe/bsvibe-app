@@ -32,12 +32,12 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 import backend.executors.db  # noqa: F401 — register tables on the shared Base
 from backend.config import get_settings
-from backend.execution.db import Deliverable, DeliverableType, ExecutionRun, RunStatus
 from backend.executors import dispatch
 from backend.executors.orchestrator import ExecutorOrchestrator
 from backend.executors.worker.codex import CodexExecutor
 from backend.executors.worker.main import _collect_workspace_files
 from backend.workflow.application.agent_runner import AgentRunner
+from backend.workflow.infrastructure.db import Deliverable, DeliverableType, ExecutionRun, RunStatus
 
 from .._support import db_engine
 

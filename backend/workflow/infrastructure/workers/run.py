@@ -16,7 +16,7 @@ This module stands up the production runtime:
   workspace ModelAccount.
 * :func:`resolve_workspace_model_account` — the Phase 2 v1 resolution
   policy (exactly one active account → use it; zero / many → create a
-  :class:`~backend.execution.db.Decision`, leave the run RUNNING — never a
+  :class:`~backend.workflow.infrastructure.db.Decision`, leave the run RUNNING — never a
   silent guess or stall).
 * :class:`RealPluginDispatchAdapter` — bridges the worker's
   :class:`~backend.workflow.infrastructure.workers.delivery_worker.PluginDispatchAdapter` Protocol to
@@ -47,10 +47,6 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from backend.config import Settings, get_settings
-from backend.execution.connector_actions import ConnectorActionResolver
-from backend.execution.db import Decision, ExecutionRun
-from backend.execution.knowledge_orchestrator import KnowledgeAnswerOrchestrator
-from backend.execution.loop_llm import GatewayLoopLlm
 from backend.executors.orchestrator import ExecutorOrchestrator
 from backend.extensions.plugin.base import PluginMeta
 from backend.extensions.plugin.loader import PluginLoader
@@ -84,11 +80,6 @@ from backend.schedule.infrastructure.workers.schedule_worker import (
     ScheduleWorker,
     ScheduleWorkerConfig,
 )
-from backend.supervisor.sandbox import (
-    NoopSandboxManager,
-    SandboxManager,
-    build_sandbox_manager,
-)
 from backend.workers.base import BaseWorker
 from backend.workers.emit import STREAM_AGENT, STREAM_DELIVER, STREAM_INTAKE, STREAM_SETTLE
 from backend.workers.relays import build_relay
@@ -104,9 +95,18 @@ from backend.workflow.application.delivery.connector_dispatch import (
     build_github_workspace_provisioner,
 )
 from backend.workflow.application.delivery.dispatcher import DeliveryDispatcher
+from backend.workflow.application.knowledge_orchestrator import KnowledgeAnswerOrchestrator
+from backend.workflow.application.loop_llm import GatewayLoopLlm
 from backend.workflow.application.safe_mode_expiry import SafeModeExpirySweepRunner
 from backend.workflow.application.stages.frame import FrameLlm
 from backend.workflow.domain.delivery import DeliveryResult
+from backend.workflow.infrastructure.connector_actions import ConnectorActionResolver
+from backend.workflow.infrastructure.db import Decision, ExecutionRun
+from backend.workflow.infrastructure.sandbox import (
+    NoopSandboxManager,
+    SandboxManager,
+    build_sandbox_manager,
+)
 from backend.workflow.infrastructure.workers.agent_worker import (
     AgentExecutionDeps,
     AgentWorker,
@@ -216,7 +216,7 @@ async def resolve_workspace_model_account(
 
     * exactly one active account → return it.
     * ZERO or MORE-THAN-ONE → do NOT crash, do NOT silently guess: create a
-      :class:`~backend.execution.db.Decision` (so the run is paused on a
+      :class:`~backend.workflow.infrastructure.db.Decision` (so the run is paused on a
       founder decision, staying RUNNING) and return ``None``. Honors the
       founder-in-the-loop invariant — stuck → Decision, never a silent stall.
     """
@@ -634,7 +634,7 @@ class _GatewayCompileLlm:
     Maps a single ``chat(system, messages, ...)`` call to a ``DispatchRequest``
     and returns the response content string. The account/model identity is
     resolved once (per workspace) by the factory and held for the call. Mirrors
-    :class:`~backend.execution.loop_llm.GatewayLoopLlm`, but for the plain
+    :class:`~backend.workflow.application.loop_llm.GatewayLoopLlm`, but for the plain
     chat-completion (no tools) extraction call."""
 
     # Substantial-tier features — extraction is a structured-output task that

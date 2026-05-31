@@ -34,10 +34,10 @@ from backend.api.deps import (
     get_db_session,
     get_workspace_id,
 )
-from backend.execution.db import Deliverable
 from backend.identity.db import UserRow
 from backend.workflow.application.safe_mode_queue import SafeModeQueue
 from backend.workflow.domain.delivery import ArtifactType
+from backend.workflow.infrastructure.db import Deliverable
 from backend.workflow.infrastructure.workers.delivery_worker import (
     PluginDispatchAdapter,
     dispatch_delivery,

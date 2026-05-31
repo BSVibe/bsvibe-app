@@ -23,9 +23,9 @@ import structlog
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
 
-    from backend.execution.db import ExecutionRun
     from backend.router.accounts.models import ModelAccount
     from backend.router.routing.run_routing.db import RunRoutingRuleRow
+    from backend.workflow.infrastructure.db import ExecutionRun
 
 logger = structlog.get_logger(__name__)
 
@@ -341,7 +341,7 @@ async def _record_routing_decision(
     never break routing (resolution already succeeded)."""
     import uuid as _uuid  # noqa: PLC0415
 
-    from backend.execution.db import ExecutionRunActivity  # noqa: PLC0415
+    from backend.workflow.infrastructure.db import ExecutionRunActivity  # noqa: PLC0415
 
     try:
         session.add(

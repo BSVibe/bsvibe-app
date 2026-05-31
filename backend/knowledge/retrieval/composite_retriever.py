@@ -1,7 +1,7 @@
 """CompositeCanonRetriever — multi-source workspace knowledge retrieval (B11b).
 
 The verifier (B3) and the orchestrator's B6 seed inject one
-:class:`~backend.execution.verifier.service.CanonRetriever` per run. Before
+:class:`~backend.workflow.application.verification_service.CanonRetriever` per run. Before
 B11b, that was a single :class:`~backend.knowledge.retrieval.canon_retriever.CanonConceptRetriever`
 returning promoted canonical patterns — resolved decisions were invisible to
 the next run, so the same question got re-asked.
@@ -23,7 +23,7 @@ from collections.abc import Sequence
 
 import structlog
 
-from backend.execution.verifier.service import CanonRetriever
+from backend.workflow.application.verification_service import CanonRetriever
 
 logger = structlog.get_logger(__name__)
 

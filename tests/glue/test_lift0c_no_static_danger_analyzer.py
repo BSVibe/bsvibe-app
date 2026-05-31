@@ -58,14 +58,14 @@ from pathlib import Path
 import pytest
 from sqlalchemy import select
 
-from backend.execution.connector_actions import (
+from backend.extensions.plugin.loader import PluginLoader
+from backend.workflow.application.agent_loop import RunOrchestrator
+from backend.workflow.infrastructure.connector_actions import (
     ConnectorActionResolver,
     ConnectorActionTool,
 )
-from backend.execution.db import Decision
-from backend.extensions.plugin.loader import PluginLoader
-from backend.supervisor.sandbox import NoopSandboxManager
-from backend.workflow.application.agent_loop import RunOrchestrator
+from backend.workflow.infrastructure.db import Decision
+from backend.workflow.infrastructure.sandbox import NoopSandboxManager
 from backend.workspaces.db import WorkspaceRow
 from tests._support import memory_session
 

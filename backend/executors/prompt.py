@@ -19,7 +19,7 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
-from backend.execution.db import ExecutionRun
+from backend.workflow.infrastructure.db import ExecutionRun
 
 # The intent is the REAL instruction (not a title), so the legacy 512-char cap
 # is lifted to a few KB — still bounded so a runaway intent never blows the

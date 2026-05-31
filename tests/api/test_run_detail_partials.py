@@ -31,14 +31,14 @@ from backend.api.deps import (
     get_workspace_id,
 )
 from backend.api.main import create_app
-from backend.execution.db import (
+from backend.workflow.domain.verified_deliverable import PARTIAL_DELIVERABLE_KIND
+from backend.workflow.infrastructure.db import (
     Deliverable,
     DeliverableType,
     ExecutionBase,
     ExecutionRun,
     RunStatus,
 )
-from backend.execution.verified_deliverable import PARTIAL_DELIVERABLE_KIND
 from tests._support import db_engine, fake_current_user
 
 pytestmark = pytest.mark.asyncio

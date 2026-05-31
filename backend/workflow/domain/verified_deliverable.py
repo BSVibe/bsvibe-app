@@ -29,7 +29,7 @@ import structlog
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.execution.db import (
+from backend.workflow.infrastructure.db import (
     Deliverable,
     DeliverableType,
     ExecutionRun,

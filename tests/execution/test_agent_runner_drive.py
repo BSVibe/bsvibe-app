@@ -9,10 +9,10 @@ from typing import Any
 
 from sqlalchemy import select
 
-from backend.execution.db import ExecutionRun, ExecutionRunHistory, RunStatus
-from backend.supervisor.sandbox import NoopSandboxManager, SandboxUnavailable
 from backend.workflow.application.agent_loop import LoopToolCall, LoopTurn, RunOrchestrator
 from backend.workflow.application.agent_runner import AgentRunner
+from backend.workflow.infrastructure.db import ExecutionRun, ExecutionRunHistory, RunStatus
+from backend.workflow.infrastructure.sandbox import NoopSandboxManager, SandboxUnavailable
 from tests._support import memory_session
 
 

@@ -31,12 +31,12 @@ from backend.api.deps import (
 )
 from backend.api.main import create_app
 from backend.api.v1.checkpoints import build_decisions_retriever
-from backend.execution.db import Decision, DecisionStatus, ExecutionRun, RunStatus
 from backend.knowledge.graph.storage import FileSystemStorage
 from backend.knowledge.graph.vault import Vault
 from backend.knowledge.graph.writer import GardenNote
 from backend.knowledge.graph.writer_core import GardenWriter
 from backend.knowledge.retrieval.resolved_decisions_retriever import ResolvedDecisionsRetriever
+from backend.workflow.infrastructure.db import Decision, DecisionStatus, ExecutionRun, RunStatus
 
 from .._support import db_engine, fake_current_user
 

@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 from unittest.mock import AsyncMock
 
-from backend.supervisor.sandbox import sandbox_reaper_loop
+from backend.workflow.infrastructure.sandbox import sandbox_reaper_loop
 
 
 class TestReaperLoop:

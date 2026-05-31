@@ -21,7 +21,6 @@ import pytest_asyncio
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
-from backend.execution.db import ExecutionBase, ExecutionRun, ExecutionRunActivity, RunStatus
 from backend.knowledge.infrastructure.workers.settle_worker import (
     KnowledgeSettleSink,
     Settlement,
@@ -29,6 +28,12 @@ from backend.knowledge.infrastructure.workers.settle_worker import (
     SettleWorkerConfig,
 )
 from backend.workers.db import SettleDrainRow, WorkersBase
+from backend.workflow.infrastructure.db import (
+    ExecutionBase,
+    ExecutionRun,
+    ExecutionRunActivity,
+    RunStatus,
+)
 from backend.workspaces.db import WorkspaceRow, WorkspacesBase
 
 from .._support import db_engine

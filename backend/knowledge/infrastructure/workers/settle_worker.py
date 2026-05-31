@@ -2,7 +2,7 @@
 
 Workflow §4: ``worker-settle`` is the **BSage write subscriber**. The agent
 loop (:class:`backend.workflow.application.agent_loop.RunOrchestrator`) records a
-``settle``-class :class:`~backend.execution.db.ExecutionRunActivity` for every
+``settle``-class :class:`~backend.workflow.infrastructure.db.ExecutionRunActivity` for every
 verified work step — the continuous "writes knowledge" side channel. This
 worker drains those rows into each workspace's BSage vault, completing the
 *learning half* of the §5 trust ratchet (BSage knowledge is one-way and
@@ -57,9 +57,9 @@ import structlog
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from backend.execution.db import ExecutionRunActivity
 from backend.workers.base import BaseWorker
 from backend.workers.db import SettleDrainRow
+from backend.workflow.infrastructure.db import ExecutionRunActivity
 from backend.workspaces.db import WorkspaceRow
 
 logger = structlog.get_logger(__name__)

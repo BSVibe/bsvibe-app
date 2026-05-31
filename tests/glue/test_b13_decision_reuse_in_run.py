@@ -50,7 +50,14 @@ from backend.api.deps import (
     get_workspace_id,
 )
 from backend.api.main import create_app
-from backend.execution.db import (
+from backend.knowledge.factory import KnowledgeFactory
+from backend.knowledge.infrastructure.workers.settle_worker import (
+    KnowledgeSettleSink,
+    SettleWorker,
+    SettleWorkerConfig,
+)
+from backend.workflow.application.agent_loop import LoopToolCall, LoopTurn, RunOrchestrator
+from backend.workflow.infrastructure.db import (
     Decision,
     DecisionStatus,
     Deliverable,
@@ -62,14 +69,7 @@ from backend.execution.db import (
     WorkStep,
     WorkStepStatus,
 )
-from backend.knowledge.factory import KnowledgeFactory
-from backend.knowledge.infrastructure.workers.settle_worker import (
-    KnowledgeSettleSink,
-    SettleWorker,
-    SettleWorkerConfig,
-)
-from backend.supervisor.sandbox import NoopSandboxManager
-from backend.workflow.application.agent_loop import LoopToolCall, LoopTurn, RunOrchestrator
+from backend.workflow.infrastructure.sandbox import NoopSandboxManager
 from tests._support import db_engine, fake_current_user
 
 pytestmark = pytest.mark.asyncio

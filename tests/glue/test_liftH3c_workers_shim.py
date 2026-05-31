@@ -121,13 +121,16 @@ def test_h2a_shim_module_gone() -> None:
 
 
 def test_h2a_shim_file_deleted() -> None:
-    """The shim file itself is removed from the source tree."""
-    import backend.execution as execution_pkg
+    """The shim file itself is removed from the source tree.
 
-    pkg_root = Path(next(iter(execution_pkg.__path__)))
-    assert not (pkg_root / "orchestrator.py").exists(), (
-        "backend/execution/orchestrator.py should be deleted by Lift H3c"
-    )
+    Lift I-0 went further and deleted the whole ``backend/execution/`` package;
+    asserting against the repo root is the durable form of this check.
+    """
+    import backend
+
+    backend_root = Path(next(iter(backend.__path__))).parent
+    assert not (backend_root / "backend" / "execution" / "orchestrator.py").exists()
+    assert not (backend_root / "backend" / "execution").exists()
 
 
 def test_no_consumer_imports_from_h2a_shim() -> None:

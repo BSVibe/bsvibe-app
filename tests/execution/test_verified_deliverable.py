@@ -14,13 +14,13 @@ import uuid
 import pytest
 from sqlalchemy import select
 
-from backend.execution.db import (
+from backend.workflow.domain.verified_deliverable import write_verified_deliverable
+from backend.workflow.infrastructure.db import (
     DeliverableType,
     ExecutionRun,
     ExecutionRunActivity,
     RunStatus,
 )
-from backend.execution.verified_deliverable import write_verified_deliverable
 from backend.workflow.infrastructure.delivery.db import DeliveryEventRow
 
 from .._support import memory_session
