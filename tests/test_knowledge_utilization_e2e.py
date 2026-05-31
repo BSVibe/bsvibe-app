@@ -41,17 +41,17 @@ from backend.execution.verifier.service import RETRIEVED_KNOWLEDGE_RATIONALE, Ve
 from backend.knowledge.graph.vault import Vault
 from backend.knowledge.graph.writer import GardenNote
 from backend.knowledge.graph.writer_core import GardenWriter
-from backend.knowledge.retrieval.composite_retriever import CompositeCanonRetriever
-from backend.knowledge.retrieval.embedder_resolution import resolve_knowledge_embedder
-from backend.knowledge.retrieval.semantic_note_retriever import SemanticNoteRetriever
-from backend.knowledge.retrieval.storage.pg import PgNoteVectorBackend
-from backend.workers.run import build_note_embed_hook
-from backend.workers.settle_worker import (
+from backend.knowledge.infrastructure.workers.settle_worker import (
     KnowledgeSettleSink,
     SettleWorker,
     SettleWorkerConfig,
     build_garden_promoter_factory,
 )
+from backend.knowledge.retrieval.composite_retriever import CompositeCanonRetriever
+from backend.knowledge.retrieval.embedder_resolution import resolve_knowledge_embedder
+from backend.knowledge.retrieval.semantic_note_retriever import SemanticNoteRetriever
+from backend.knowledge.retrieval.storage.pg import PgNoteVectorBackend
+from backend.workflow.infrastructure.workers.run import build_note_embed_hook
 
 pytestmark = pytest.mark.asyncio
 
@@ -140,7 +140,7 @@ def _seed_prior_decision(vault_root: Path, workspace_id: uuid.UUID, *, question:
 
 
 def _production_retriever(session, *, settings, workspace_id: uuid.UUID):
-    """Reproduces ``backend.workers.run._retriever_for`` (the retriever verify +
+    """Reproduces ``backend.workflow.infrastructure.workers.run._retriever_for`` (the retriever verify +
     seed use): canon + resolved-decisions + negative + G6 semantic note search."""
     from backend.knowledge.factory import KnowledgeFactory
 

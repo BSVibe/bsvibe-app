@@ -157,7 +157,7 @@ class RedisStreamConsumer:
     ) -> None:
         """Loop :meth:`consume_once` (new entries) until ``stop_event`` is set.
 
-        The daemon entrypoint (``backend.workers.run`` in Redis mode) runs one
+        The daemon entrypoint (``backend.workflow.infrastructure.workers.run`` in Redis mode) runs one
         of these per worker. We deliberately use a *non-blocking* read + a short
         ``idle_sleep_s`` between empty passes rather than a server-side BLOCK
         read: the poll cooperates cleanly with ``stop_event`` / task

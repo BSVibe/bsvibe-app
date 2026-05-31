@@ -62,18 +62,14 @@ from backend.execution.db import (
     WorkStep,
     WorkStepStatus,
 )
-from backend.execution.orchestrator import (
-    LoopToolCall,
-    LoopTurn,
-    RunOrchestrator,
-)
 from backend.knowledge.factory import KnowledgeFactory
-from backend.supervisor.sandbox import NoopSandboxManager
-from backend.workers.settle_worker import (
+from backend.knowledge.infrastructure.workers.settle_worker import (
     KnowledgeSettleSink,
     SettleWorker,
     SettleWorkerConfig,
 )
+from backend.supervisor.sandbox import NoopSandboxManager
+from backend.workflow.application.agent_loop import LoopToolCall, LoopTurn, RunOrchestrator
 from tests._support import db_engine, fake_current_user
 
 pytestmark = pytest.mark.asyncio

@@ -10,7 +10,7 @@ has framed + routed.
 
 The handlers do NOT replace today's call sites — they're the entry
 points the H3+ driver-driven workers will use. Until then,
-:class:`backend.workers.agent_worker.AgentWorker` continues to call
+:class:`backend.workflow.infrastructure.workers.agent_worker.AgentWorker` continues to call
 ``FrameStage.frame(...)`` directly and these handlers are wired only
 through the state machine driver smoke tests.
 """
@@ -29,7 +29,7 @@ logger = structlog.get_logger(__name__)
 class FrameCompleteHandler:
     """``received → framed`` via ``frame_complete``.
 
-    Today's :class:`backend.workers.agent_worker.AgentWorker._drive_run`
+    Today's :class:`backend.workflow.infrastructure.workers.agent_worker.AgentWorker._drive_run`
     already calls ``FrameStage.frame(run, request)`` and writes the
     frame onto ``ExecutionRun.payload`` before any compute. This handler
     is the H3+ entry point — the worker will route through the driver,

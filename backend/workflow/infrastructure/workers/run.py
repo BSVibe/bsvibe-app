@@ -9,7 +9,7 @@ TriggerEvent and then nothing drove it.
 This module stands up the production runtime:
 
 * :func:`build_agent_execution_deps` — the real
-  :class:`~backend.workers.agent_worker.AgentExecutionDeps`: the gateway
+  :class:`~backend.workflow.infrastructure.workers.agent_worker.AgentExecutionDeps`: the gateway
   work-LLM (built the same way ``backend.api.v1.chat`` builds its
   dispatcher), the real (or Noop) sandbox manager, the workspace skill
   loader, and a per-run orchestrator factory that resolves the run's
@@ -19,7 +19,7 @@ This module stands up the production runtime:
   :class:`~backend.execution.db.Decision`, leave the run RUNNING — never a
   silent guess or stall).
 * :class:`RealPluginDispatchAdapter` — bridges the worker's
-  :class:`~backend.workers.delivery_worker.PluginDispatchAdapter` Protocol to
+  :class:`~backend.workflow.infrastructure.workers.delivery_worker.PluginDispatchAdapter` Protocol to
   the real :class:`~backend.workflow.application.delivery.dispatcher.DeliveryDispatcher` over the
   plugins discovered by :class:`~backend.extensions.plugin.loader.PluginLoader`.
 * :class:`WorkerRuntime` / :func:`run_workers` — construct + concurrently run
@@ -51,12 +51,21 @@ from backend.execution.connector_actions import ConnectorActionResolver
 from backend.execution.db import Decision, ExecutionRun
 from backend.execution.knowledge_orchestrator import KnowledgeAnswerOrchestrator
 from backend.execution.loop_llm import GatewayLoopLlm
-from backend.execution.orchestrator import CanonRetriever, RunCompute, RunOrchestrator
 from backend.executors.orchestrator import ExecutorOrchestrator
 from backend.extensions.plugin.base import PluginMeta
 from backend.extensions.plugin.loader import PluginLoader
 from backend.extensions.plugin.runner import PluginRunner
 from backend.extensions.skill.loader import SkillLoader
+from backend.knowledge.infrastructure.workers.settle_worker import (
+    EntityExtractor,
+    ExtractorFactory,
+    KnowledgeSettleSink,
+    NoteEmbedHook,
+    Settlement,
+    SettleWorker,
+    SettleWorkerConfig,
+    build_garden_promoter_factory,
+)
 from backend.router.accounts.crypto import CredentialCipher, _key_from_settings
 from backend.router.accounts.models import ModelAccount
 from backend.router.accounts.service import ModelAccountService
@@ -75,29 +84,20 @@ from backend.supervisor.sandbox import (
     SandboxManager,
     build_sandbox_manager,
 )
-from backend.workers.agent_worker import AgentExecutionDeps, AgentWorker
 from backend.workers.base import BaseWorker
-from backend.workers.delivery_worker import DeliveryWorker, PluginDispatchAdapter
 from backend.workers.emit import STREAM_AGENT, STREAM_DELIVER, STREAM_INTAKE, STREAM_SETTLE
-from backend.workers.intake_worker import IntakeWorker
-from backend.workers.relay_worker import RelayWorker
 from backend.workers.relays import build_relay
 from backend.workers.schedule_runner import (
     ScheduleWorker,
     ScheduleWorkerConfig,
     build_db_poll_schedule_runner,
 )
-from backend.workers.settle_worker import (
-    EntityExtractor,
-    ExtractorFactory,
-    KnowledgeSettleSink,
-    NoteEmbedHook,
-    Settlement,
-    SettleWorker,
-    SettleWorkerConfig,
-    build_garden_promoter_factory,
-)
 from backend.workers.streams import RedisStreamConsumer, StreamHandler
+from backend.workflow.application.agent_loop import (
+    CanonRetriever,
+    RunCompute,
+    RunOrchestrator,
+)
 from backend.workflow.application.delivery.connector_dispatch import (
     ConnectorDeliveryAdapter,
     build_connector_delivery_adapter,
@@ -107,6 +107,16 @@ from backend.workflow.application.delivery.dispatcher import DeliveryDispatcher
 from backend.workflow.application.safe_mode_expiry import SafeModeExpirySweepRunner
 from backend.workflow.application.stages.frame import FrameLlm
 from backend.workflow.domain.delivery import DeliveryResult
+from backend.workflow.infrastructure.workers.agent_worker import (
+    AgentExecutionDeps,
+    AgentWorker,
+)
+from backend.workflow.infrastructure.workers.delivery_worker import (
+    DeliveryWorker,
+    PluginDispatchAdapter,
+)
+from backend.workflow.infrastructure.workers.intake_worker import IntakeWorker
+from backend.workflow.infrastructure.workers.relay_worker import RelayWorker
 from plugin.audit.models import AuditOutboxRecord
 
 logger = structlog.get_logger(__name__)
@@ -117,10 +127,11 @@ logger = structlog.get_logger(__name__)
 # Lift R1 (v8 §D38): connector plugins live at repo-root ``plugin/<name>/``,
 # not under ``backend/extensions/implementations/`` (which now holds only the
 # yet-to-be-relocated audit plugin pending Lift R2's EventBus rewire).
-# Resolution: from ``backend/workers/run.py`` walk up to the repo root and
-# point at ``<repo_root>/plugin``. ``settings.plugins_dir`` overrides for
-# tests / non-standard deploy layouts.
-_PLUGINS_IMPLEMENTATIONS_DIR = Path(__file__).resolve().parents[2] / "plugin"
+# Resolution: from ``backend/workflow/infrastructure/workers/run.py`` walk up
+# to the repo root (5 parents: workers → infrastructure → workflow → backend
+# → repo root) and point at ``<repo_root>/plugin``. ``settings.plugins_dir``
+# overrides for tests / non-standard deploy layouts.
+_PLUGINS_IMPLEMENTATIONS_DIR = Path(__file__).resolve().parents[4] / "plugin"
 
 
 # ---------------------------------------------------------------------------
@@ -724,7 +735,7 @@ class _GatewayFrameLlm:
 def _is_knowledge_only(run: ExecutionRun) -> bool:
     """Read the frame's ``path_classification`` off ``run.payload`` (B9b).
 
-    The :class:`~backend.workers.agent_worker.AgentWorker` records the full frame
+    The :class:`~backend.workflow.infrastructure.workers.agent_worker.AgentWorker` records the full frame
     onto ``run.payload["frame"]`` BEFORE the orchestrator factory runs, so the
     knowledge-only branch is available here. ``True`` only when the frame
     explicitly classified the ask ``knowledge_only`` — any other value, a missing
@@ -740,7 +751,7 @@ def _frame_skill_hint(
 ) -> tuple[str | None, str | None]:
     """Read the frame's matched skill off ``run.payload`` + resolve its description.
 
-    The :class:`~backend.workers.agent_worker.AgentWorker` records the frame onto
+    The :class:`~backend.workflow.infrastructure.workers.agent_worker.AgentWorker` records the frame onto
     ``run.payload["frame"]`` BEFORE the orchestrator factory runs, so the matched
     skill is available here to thread into the loop as a first-invocation hint
     (B9a — the frame output is finally consumed). The description is looked up in
@@ -978,7 +989,7 @@ async def load_connector_plugins(
 
 
 class LoggingRelay:
-    """A :class:`~backend.workers.relay_worker.Relay` that acknowledges every
+    """A :class:`~backend.workflow.infrastructure.workers.relay_worker.Relay` that acknowledges every
     record after logging it.
 
     The remote audit sink (HTTP/gRPC connector) is out of scope for the
@@ -1341,7 +1352,7 @@ async def run_workers() -> None:
         # connection-pool Futures across per-test event loops.
         if not os.environ.get("PYTEST_CURRENT_TEST"):
             # Lazy import to avoid circular module-init: backend.api.v1
-            # re-exports safemode which imports backend.workers.run.
+            # re-exports safemode which imports backend.workflow.infrastructure.workers.run.
             from backend.api.v1.live_events import (  # noqa: PLC0415
                 set_live_event_bus_redis,
             )

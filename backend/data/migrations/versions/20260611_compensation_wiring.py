@@ -11,7 +11,7 @@ the migration unchanged:
 
 * ``deliverables.compensation_handles JSON NULL`` — list of
   ``{"plugin", "artifact_type", "handle"}`` entries, populated by
-  :func:`backend.workers.delivery_worker.dispatch_delivery` after a successful
+  :func:`backend.workflow.infrastructure.workers.delivery_worker.dispatch_delivery` after a successful
   outbound action. ``NULL`` → nothing to revert (pre-B12b or plugin opted out).
 * ``deliverables.retracted_at TIMESTAMPTZ NULL`` — set by
   ``POST /api/v1/deliverables/{deliverable_id}/retract`` after the plugin

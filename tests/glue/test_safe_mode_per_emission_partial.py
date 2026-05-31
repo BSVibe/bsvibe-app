@@ -34,12 +34,15 @@ from backend.execution.db import (
     RunStatus,
 )
 from backend.execution.verified_deliverable import PARTIAL_DELIVERABLE_KIND
-from backend.workers.delivery_worker import DeliveryWorker, DeliveryWorkerConfig
 from backend.workflow.domain.delivery import ActionResult, DeliveryResult
 from backend.workflow.infrastructure.delivery.db import (
     DeliveryEventRow,
     SafeModeQueueItemRow,
     SafeModeStatus,
+)
+from backend.workflow.infrastructure.workers.delivery_worker import (
+    DeliveryWorker,
+    DeliveryWorkerConfig,
 )
 from backend.workspaces.db import ProductRow, ResourceBindingRow, WorkspaceRow
 from tests._support import db_engine

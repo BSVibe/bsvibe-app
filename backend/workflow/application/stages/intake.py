@@ -21,7 +21,7 @@ Pass-through cases (no resolution, no filtering) — ``direct`` / ``schedule``
 ``connector_account_id`` + ``resource_id`` payload keys.
 
 The module is intentionally pure — no I/O outside the supplied
-:class:`AsyncSession`. The :class:`backend.workers.intake_worker.IntakeWorker`
+:class:`AsyncSession`. The :class:`backend.workflow.infrastructure.workers.intake_worker.IntakeWorker`
 is the one place that calls :func:`receive`; tests can call it directly.
 """
 
@@ -104,7 +104,7 @@ def _filters_match(filters: dict[str, Any], payload: dict[str, Any]) -> bool:
 def filtered_out_record(*, filters: dict[str, Any], reason: str) -> dict[str, Any]:
     """Build the audit record stamped onto a filter-rejected TriggerEvent row.
 
-    Used by :class:`backend.workers.intake_worker.IntakeWorker` to mark a
+    Used by :class:`backend.workflow.infrastructure.workers.intake_worker.IntakeWorker` to mark a
     trigger as "received but rejected by the binding filter" — the operator
     sees the trigger landed, no Request was minted, and *why*.
     """

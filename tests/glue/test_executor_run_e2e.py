@@ -7,7 +7,7 @@ external worker and, on the worker reporting success, produce the SAME
 verified artifacts the native path produces (Deliverable type CODE +
 DeliveryEventRow + settle activity), landing the run REVIEW_READY.
 
-This drives the *real* :func:`backend.workers.run._factory` branch (so the
+This drives the *real* :func:`backend.workflow.infrastructure.workers.run._factory` branch (so the
 provider switch + ExecutorOrchestrator construction are exercised, not a
 hand-built orchestrator) through :meth:`AgentRunner.drive`, and SIMULATES
 the worker with ``fakeredis`` + :func:`dispatch.record_result` + a publish on
@@ -47,9 +47,9 @@ from backend.executors import dispatch
 from backend.executors.db import WorkerRow
 from backend.executors.orchestrator import ExecutorOrchestrator
 from backend.router.accounts.models import ModelAccount
-from backend.workers.run import build_agent_execution_deps
 from backend.workflow.application.agent_runner import AgentRunner
 from backend.workflow.infrastructure.delivery.db import DeliveryEventRow
+from backend.workflow.infrastructure.workers.run import build_agent_execution_deps
 
 from .._support import db_engine
 
@@ -247,7 +247,7 @@ class _StubJudge:
         self._passed = passed
 
     async def complete(self, *, messages: list[dict[str, Any]], tools: Any):
-        from backend.execution.orchestrator import LoopTurn  # noqa: PLC0415
+        from backend.workflow.application.agent_loop import LoopTurn  # noqa: PLC0415
 
         verdict = "true" if self._passed else "false"
         return LoopTurn(content=f'{{"passed": {verdict}, "reasoning": "x"}}')
@@ -705,9 +705,9 @@ async def test_non_executor_account_builds_native_orchestrator(
     import base64
 
     from backend.config import get_settings as _get_settings
-    from backend.execution.orchestrator import RunOrchestrator
     from backend.router.llm_client import LlmClient
-    from backend.workers import run as run_module
+    from backend.workflow.application.agent_loop import RunOrchestrator
+    from backend.workflow.infrastructure.workers import run as run_module
 
     # The native path eagerly builds the credential cipher (to decrypt the
     # account's api key) — provide a test KMS key so it constructs. It also
@@ -885,9 +885,9 @@ async def test_factory_wires_retriever_into_native_orchestrator(
     import base64
 
     from backend.config import get_settings as _get_settings
-    from backend.execution.orchestrator import RunOrchestrator
     from backend.router.llm_client import LlmClient
-    from backend.workers import run as run_module
+    from backend.workflow.application.agent_loop import RunOrchestrator
+    from backend.workflow.infrastructure.workers import run as run_module
 
     monkeypatch.setenv("BSVIBE_GATEWAY_KMS_KEY_B64", base64.urlsafe_b64encode(b"0" * 32).decode())
     _get_settings.cache_clear()

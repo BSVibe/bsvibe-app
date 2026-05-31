@@ -19,9 +19,9 @@ import json
 import uuid
 from typing import Any
 
-from backend.execution.orchestrator import LoopToolCall, LoopTurn
 from backend.router.classifier.base import ClassificationFeatures
 from backend.router.dispatch import DispatchRequest, GatewayDispatcher
+from backend.workflow.application.agent_loop import LoopToolCall, LoopTurn
 
 # Substantial-tier default features — high enough complexity that the
 # classifier routes plan/act to the heavy model.

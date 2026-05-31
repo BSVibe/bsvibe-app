@@ -1,17 +1,17 @@
 """Relay sinks for the audit outbox + config-driven relay selection.
 
-The :class:`~backend.workers.relay_worker.RelayWorker` drains
+The :class:`~backend.workflow.infrastructure.workers.relay_worker.RelayWorker` drains
 ``audit_outbox`` and ships each batch through a
-:class:`~backend.workers.relay_worker.Relay`. Two relays exist:
+:class:`~backend.workflow.infrastructure.workers.relay_worker.Relay`. Two relays exist:
 
-* :class:`~backend.workers.run.LoggingRelay` — the no-sink default (log + ack
+* :class:`~backend.workflow.infrastructure.workers.run.LoggingRelay` — the no-sink default (log + ack
   the whole batch so audit rows do not accumulate, but no remote delivery).
 * :class:`HttpRelay` — POSTs the batch as JSON to a configured HTTP endpoint.
 
 :func:`build_relay` selects between them by ``settings.audit_relay_url``:
 non-empty → :class:`HttpRelay`, empty → :class:`LoggingRelay`.
 
-``HttpRelay`` honors the :class:`~backend.workers.relay_worker.Relay`
+``HttpRelay`` honors the :class:`~backend.workflow.infrastructure.workers.relay_worker.Relay`
 ``send`` contract precisely — it returns ONLY the ids the sink accepted:
 
 * on a 2xx response → ack the whole batch (every id).
@@ -34,7 +34,7 @@ from plugin.audit.models import AuditOutboxRecord
 
 if TYPE_CHECKING:
     from backend.config import Settings
-    from backend.workers.relay_worker import Relay
+    from backend.workflow.infrastructure.workers.relay_worker import Relay
 
 logger = structlog.get_logger(__name__)
 
@@ -53,7 +53,7 @@ def _serialize(record: AuditOutboxRecord) -> dict[str, Any]:
 
 
 class HttpRelay:
-    """A :class:`~backend.workers.relay_worker.Relay` that POSTs the batch to
+    """A :class:`~backend.workflow.infrastructure.workers.relay_worker.Relay` that POSTs the batch to
     ``url`` and acks the whole batch only on a 2xx response.
 
     On any failure (non-2xx or transport error) it acks NOTHING — the records
@@ -104,15 +104,17 @@ def build_relay(settings: Settings) -> Relay:
     """Select the audit relay by config.
 
     ``settings.audit_relay_url`` set → :class:`HttpRelay` (remote HTTP sink).
-    Empty → :class:`~backend.workers.run.LoggingRelay` (the explicit no-sink
+    Empty → :class:`~backend.workflow.infrastructure.workers.run.LoggingRelay` (the explicit no-sink
     default: drain + ack, never deliver). Returned typed as the
-    :class:`~backend.workers.relay_worker.Relay` Protocol the worker consumes.
+    :class:`~backend.workflow.infrastructure.workers.relay_worker.Relay` Protocol the worker consumes.
     """
     # Imported here (not at module top) to avoid a circular import:
-    # ``backend.workers.run`` imports this module to build the worker set, so a
-    # top-level ``from backend.workers.run import ...`` would hit a half-defined
+    # ``backend.workflow.infrastructure.workers.run`` imports this module to build the worker set, so a
+    # top-level ``from backend.workflow.infrastructure.workers.run import ...`` would hit a half-defined
     # ``run`` module during its own import.
-    from backend.workers.run import LoggingRelay  # noqa: PLC0415 — circular-import guard
+    from backend.workflow.infrastructure.workers.run import (  # noqa: PLC0415 — circular-import guard
+        LoggingRelay,
+    )
 
     url = settings.audit_relay_url.strip()
     if url:

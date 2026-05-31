@@ -3,7 +3,7 @@
 This closes the last loop of the Direct path (Workflow §11.1 / §12.5 #8): a
 verified run produces a :class:`~backend.execution.db.Deliverable` and a
 :class:`~backend.workflow.infrastructure.delivery.db.DeliveryEventRow`; the
-:class:`~backend.workers.delivery_worker.DeliveryWorker` drains it through a
+:class:`~backend.workflow.infrastructure.workers.delivery_worker.DeliveryWorker` drains it through a
 :class:`~backend.workflow.application.delivery.connector_dispatch.ConnectorDeliveryAdapter` that
 resolves the workspace's configured ``connector_accounts`` (binding =
 ``delivery_config``), shapes the connector's outbound event from the
@@ -36,11 +36,14 @@ from backend.connectors.db import ConnectorAccountRow
 from backend.execution.db import Deliverable, DeliverableType, ExecutionRun, RunStatus
 from backend.extensions.plugin.loader import PluginLoader
 from backend.router.accounts.crypto import CredentialCipher
-from backend.workers.delivery_worker import DeliveryWorker, DeliveryWorkerConfig
 from backend.workflow.application.delivery.connector_dispatch import (
     build_connector_delivery_adapter,
 )
 from backend.workflow.infrastructure.delivery.db import DeliveryEventRow
+from backend.workflow.infrastructure.workers.delivery_worker import (
+    DeliveryWorker,
+    DeliveryWorkerConfig,
+)
 from plugin.notion import plugin as notion_module
 
 from .._support import db_engine

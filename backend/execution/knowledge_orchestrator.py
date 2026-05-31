@@ -47,11 +47,11 @@ from backend.execution.db import (
     WorkStep,
     WorkStepStatus,
 )
-from backend.execution.orchestrator import CanonRetriever, LoopLlm, LoopResult
 from backend.execution.verified_deliverable import (
     ANSWER_DELIVERABLE_KIND,
     write_answer_deliverable,
 )
+from backend.workflow.application.agent_loop import CanonRetriever, LoopLlm, LoopResult
 
 logger = structlog.get_logger(__name__)
 

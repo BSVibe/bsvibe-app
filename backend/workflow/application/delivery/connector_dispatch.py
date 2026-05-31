@@ -3,7 +3,7 @@
 Workflow §11.1 / §12.5 #8 (Bundle G — Delivery). A verified run mints a
 :class:`~backend.execution.db.Deliverable` and the orchestrator writes a
 :class:`~backend.workflow.infrastructure.delivery.db.DeliveryEventRow`; the
-:class:`~backend.workers.delivery_worker.DeliveryWorker` drains it. Until now
+:class:`~backend.workflow.infrastructure.workers.delivery_worker.DeliveryWorker` drains it. Until now
 the drain dispatched over every plugin filtered only by the deliverable's own
 ``artifact_type`` (``code``), with no event payload and no credentials — so a
 verified deliverable was never actually delivered OUT through a connector.
@@ -25,7 +25,7 @@ This module supplies the missing two halves:
    eight connectors are a deliberate seam: no builder → skipped, no error.
 
 :class:`ConnectorDeliveryAdapter` implements the worker's
-:class:`~backend.workers.delivery_worker.PluginDispatchAdapter` Protocol: it
+:class:`~backend.workflow.infrastructure.workers.delivery_worker.PluginDispatchAdapter` Protocol: it
 loads the Deliverable, resolves the binding(s), shapes the event from config +
 content, and dispatches THAT connector's outbound through the existing
 :class:`~backend.workflow.application.delivery.dispatcher.DeliveryDispatcher` /
@@ -579,7 +579,7 @@ def _build_context(*, credentials: dict[str, Any], config: dict[str, Any]) -> Sk
 class ConnectorDeliveryAdapter:
     """Resolve the connector binding(s), shape the event, dispatch the outbound.
 
-    Implements :class:`~backend.workers.delivery_worker.PluginDispatchAdapter`.
+    Implements :class:`~backend.workflow.infrastructure.workers.delivery_worker.PluginDispatchAdapter`.
     The worker hands ``(workspace_id, deliverable_id, artifact_type)``; this
     adapter loads the Deliverable's content, resolves the workspace's delivery
     bindings, and for each shapes + dispatches the connector outbound through

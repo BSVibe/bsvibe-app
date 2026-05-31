@@ -34,12 +34,8 @@ from backend.execution.db import (
     ExecutionRun,
     RunStatus,
 )
-from backend.execution.orchestrator import (
-    LoopToolCall,
-    LoopTurn,
-    RunOrchestrator,
-)
 from backend.supervisor.sandbox import NoopSandboxManager
+from backend.workflow.application.agent_loop import LoopToolCall, LoopTurn, RunOrchestrator
 from backend.workflow.infrastructure.delivery.db import DeliveryEventRow
 from tests._support import memory_session
 

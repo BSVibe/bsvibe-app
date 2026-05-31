@@ -52,12 +52,8 @@ from backend.execution.db import (
     WorkStep,
     WorkStepStatus,
 )
-from backend.execution.orchestrator import (
-    LoopToolCall,
-    LoopTurn,
-    RunOrchestrator,
-)
 from backend.supervisor.sandbox import NoopSandboxManager
+from backend.workflow.application.agent_loop import LoopToolCall, LoopTurn, RunOrchestrator
 from tests._support import memory_session
 
 # --------------------------------------------------------------------------

@@ -63,9 +63,9 @@ from backend.execution.connector_actions import (
     ConnectorActionTool,
 )
 from backend.execution.db import Decision
-from backend.execution.orchestrator import RunOrchestrator
 from backend.extensions.plugin.loader import PluginLoader
 from backend.supervisor.sandbox import NoopSandboxManager
+from backend.workflow.application.agent_loop import RunOrchestrator
 from backend.workspaces.db import WorkspaceRow
 from tests._support import memory_session
 
@@ -278,22 +278,32 @@ async def test_sentry_list_issues_still_in_agent_tool_schema(tmp_path: Path) -> 
 
 
 def test_orchestrator_source_no_longer_references_is_dangerous() -> None:
-    """Source-level delta: ``backend.execution.orchestrator`` no longer
-    references ``is_dangerous`` anywhere — the gate restored in Lift 0a
-    is removed in 0c since the flag has no producer.
+    """Source-level delta: the workflow loop modules no longer reference
+    ``is_dangerous`` anywhere — the gate restored in Lift 0a is removed in 0c
+    since the flag has no producer.
 
-    We assert the call-site identifier is gone. ``DangerAnalyzer`` /
-    ``danger_map`` docstring fragments referencing the rolled-back surface
-    are also cleaned so the file does not advertise a dead concept.
+    Post-Lift H3c the legacy ``backend.execution.orchestrator`` shim is
+    deleted; the loop now lives in :mod:`backend.workflow.application` (H2a
+    decomposition: agent_loop, tool_registry, run_persistence, etc). Assert
+    the call-site identifier is gone across every successor module.
     """
-    import backend.execution.orchestrator as mod
+    import backend.workflow.application.agent_loop as agent_loop_mod
+    import backend.workflow.application.run_persistence as run_persistence_mod
+    import backend.workflow.application.tool_registry as tool_registry_mod
+    import backend.workflow.domain.emit_deliverable as emit_deliverable_mod
 
-    src = inspect.getsource(mod)
-    assert "is_dangerous" not in src, (
-        "Lift 0c — the tool.is_dangerous gate is dead code and must be removed."
-    )
-    assert "danger_map" not in src
-    assert "DangerAnalyzer" not in src
+    for mod in (
+        agent_loop_mod,
+        tool_registry_mod,
+        run_persistence_mod,
+        emit_deliverable_mod,
+    ):
+        src = inspect.getsource(mod)
+        assert "is_dangerous" not in src, (
+            f"Lift 0c — the tool.is_dangerous gate is dead code in {mod.__name__}."
+        )
+        assert "danger_map" not in src, mod.__name__
+        assert "DangerAnalyzer" not in src, mod.__name__
 
 
 async def test_safe_mode_workspace_dispatches_connector_action_directly(
@@ -381,10 +391,10 @@ async def test_safe_mode_workspace_dispatches_connector_action_directly(
 
 
 def test_workers_run_does_not_load_connector_plugins_with_analyzer() -> None:
-    """Surface delta: ``backend.workers.run`` no longer imports
+    """Surface delta: ``backend.workflow.infrastructure.workers.run`` no longer imports
     ``DangerAnalyzer`` nor exposes ``load_connector_plugins`` returning a
     danger_map tuple."""
-    import backend.workers.run as mod
+    import backend.workflow.infrastructure.workers.run as mod
 
     src = inspect.getsource(mod)
     assert "DangerAnalyzer" not in src

@@ -599,7 +599,7 @@ async def get_retract_handler() -> RetractHandler:  # pragma: no cover — overr
     # Lift R1 (v8 §D38) — connector plugins live at repo-root ``plugin/`` —
     # walk up from this module to find it. Path resolution is one-time per
     # request scope and cheap; noqa ASYNC240 mirrors the worker default at
-    # ``backend.workers.run._PLUGINS_IMPLEMENTATIONS_DIR``.
+    # ``backend.workflow.infrastructure.workers.run._PLUGINS_IMPLEMENTATIONS_DIR``.
     plugin_dir = Path(__file__).resolve().parents[3] / "plugin"  # noqa: ASYNC240
     loader = PluginLoader(plugin_dir)
     registry = await loader.load_all()

@@ -93,7 +93,7 @@ def _channel_for(workspace_id: uuid.UUID) -> str:
 # have wide overloaded signatures (``publish(channel: bytes | str | ...,
 # message: int | float | bytes | str | ...) -> Awaitable[Any] | Any``)
 # that don't structurally satisfy a narrow Protocol without a cast at
-# every wire-up site. The existing :mod:`backend.workers.run` /
+# every wire-up site. The existing :mod:`backend.workflow.infrastructure.workers.run` /
 # :mod:`backend.executors.dispatch` modules use the same ``Any`` convention
 # for the redis client kwarg — matching that choice keeps the wire-up
 # call sites cast-free.
@@ -474,7 +474,7 @@ def set_live_event_bus_redis(redis: _RedisPubSub | None) -> None:
     * :func:`backend.api.main.create_app` → wires the HTTP container's
       singleton against the configured Redis URL so SSE subscribers
       receive cross-process publishes.
-    * :func:`backend.workers.run.run_workers` → wires the worker container's
+    * :func:`backend.workflow.infrastructure.workers.run.run_workers` → wires the worker container's
       singleton against the SAME Redis URL so audit-emit publishes land
       on the channel the HTTP container is subscribed to.
 

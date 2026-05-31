@@ -41,10 +41,10 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from backend.execution.db import ExecutionRun, RunStatus
-from backend.execution.orchestrator import RunCompute
 from backend.extensions.skill.loader import SkillLoader
 from backend.storage.artifact_store import ArtifactStore, LocalFilesystemArtifactStore
 from backend.workers.base import BaseWorker
+from backend.workflow.application.agent_loop import RunCompute
 from backend.workflow.application.agent_runner import AgentRunner
 from backend.workflow.application.stages.frame import FrameConfig, FrameLlm, FrameStage
 from backend.workflow.infrastructure.intake.db import RequestRow, RequestStatus
@@ -70,7 +70,7 @@ class AgentExecutionDeps:
       loader — otherwise every workspace would frame against a single
       root-level skill set (a multi-tenancy scoping gap).
     * ``orchestrator_factory`` — builds a :class:`RunCompute` (the native
-      :class:`~backend.execution.orchestrator.RunOrchestrator` for api-llm
+      :class:`~backend.workflow.application.agent_loop.RunOrchestrator` for api-llm
       accounts, or the
       :class:`~backend.executors.orchestrator.ExecutorOrchestrator` for
       ``provider='executor'`` accounts) bound to the *same* session the run is

@@ -61,7 +61,6 @@ from backend.execution.db import (
     WorkStepStatus,
 )
 from backend.execution.handoff import read_design_context
-from backend.execution.orchestrator import LoopResult
 from backend.execution.verifier.service import CanonRetriever, JudgeLlm
 from backend.executors import dispatch
 from backend.executors.dispatch import TaskTimeout
@@ -80,6 +79,7 @@ from backend.executors.terminal import (
 from backend.executors.verify_handoff import verify_and_finish
 from backend.router.accounts.models import ModelAccount
 from backend.supervisor.sandbox import SandboxManager
+from backend.workflow.application.agent_loop import LoopResult
 
 logger = structlog.get_logger(__name__)
 

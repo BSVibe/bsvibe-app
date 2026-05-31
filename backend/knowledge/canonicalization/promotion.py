@@ -1,7 +1,7 @@
 """GardenObservationPromoter — promote garden/observation patterns into canon.
 
 The trust-ratchet learning loop deposits each verified work step as a BSage
-**garden observation** note (see :class:`backend.workers.settle_worker.KnowledgeSettleSink`).
+**garden observation** note (see :class:`backend.knowledge.infrastructure.workers.settle_worker.KnowledgeSettleSink`).
 Those observations accumulate forever, but until promotion runs they are inert:
 the tags they carry (the recurring entity names / patterns) never become
 **canonical anchors**, so deterministic retrieval can't collapse variant

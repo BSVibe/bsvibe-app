@@ -23,7 +23,7 @@ The forward-going guarantee is enforced today by:
   400 if the workspace has zero products) for direct submissions
 * ``backend.workflow.application.stages.intake.receive`` threading
   ``trigger.product_id`` onto every outcome path (webhooks too)
-* ``backend.workers.intake_worker`` copying onto the new Request row
+* ``backend.workflow.infrastructure.workers.intake_worker`` copying onto the new Request row
 * ``backend.workflow.application.agent_runner.open_run`` copying onto the new
   ExecutionRun
 

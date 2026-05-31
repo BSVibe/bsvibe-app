@@ -238,7 +238,7 @@ async def resolve_route(session: AsyncSession, run: ExecutionRun) -> ModelAccoun
         tier_class_accounts,
         tier_from_context,
     )
-    from backend.workers.run import (  # noqa: PLC0415 — avoid import cycle
+    from backend.workflow.infrastructure.workers.run import (  # noqa: PLC0415 — avoid import cycle
         _list_active_workspace_accounts,
         resolve_workspace_model_account,
     )

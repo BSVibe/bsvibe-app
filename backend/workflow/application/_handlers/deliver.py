@@ -1,6 +1,6 @@
 """Deliver-stage transition handlers — ``deliver_complete`` + ``expire``.
 
-Delivery is owned by :class:`backend.workers.delivery_worker.DeliveryWorker`
+Delivery is owned by :class:`backend.workflow.infrastructure.workers.delivery_worker.DeliveryWorker`
 today: it consumes the delivery activity stream, applies the per-Run
 Safe Mode gate (binding ``output_mode``), and pushes the Deliverable
 through the connector tail. The handler here is the H3+ driver entry
@@ -43,7 +43,7 @@ class DeliverCompleteHandler:
         event: WorkflowEvent,
     ) -> WorkflowState:
         # TODO(H3): delegate to a Workflow-owned delivery service.
-        # Currently inside backend.workers.delivery_worker.
+        # Currently inside backend.workflow.infrastructure.workers.delivery_worker.
         raise NotImplementedError(
             "DeliverCompleteHandler — H3 will lift the delivery dispatch "
             "into a Workflow-owned service."

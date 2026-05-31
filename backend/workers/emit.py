@@ -53,7 +53,7 @@ class _RedisXadd(Protocol):
 # mode. Producers that have no client of their own to inject (the HTTP routes:
 # messages.py / webhooks.py) acquire it via :func:`get_emit_redis_client`. The
 # long-running worker daemon builds + owns its client explicitly in
-# ``backend.workers.run`` instead (so it can ``aclose`` it on shutdown) — this
+# ``backend.workflow.infrastructure.workers.run`` instead (so it can ``aclose`` it on shutdown) — this
 # cache is for the request-path producers that have no such lifecycle hook.
 # Held in a single-element list so the lazy build mutates the container, not a
 # rebound module global (keeps the acquirer free of a ``global`` statement).

@@ -218,7 +218,7 @@ async def audit_event(
 ) -> None:
     """Emit one audit event onto the supervisor outbox (B15).
 
-    The supervisor :class:`backend.workers.relay_worker.RelayWorker` drains
+    The supervisor :class:`backend.workflow.infrastructure.workers.relay_worker.RelayWorker` drains
     the outbox onto the audit stream — exactly the same seam the gateway
     chat path uses. ``safe_emit`` swallows any emitter failure so the run
     is NEVER broken by audit infrastructure trouble (the soft-fail contract

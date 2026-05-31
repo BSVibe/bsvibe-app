@@ -41,7 +41,7 @@ from backend.execution.db import (
     ExecutionRunActivity,
     RunStatus,
 )
-from backend.workers.settle_worker import (
+from backend.knowledge.infrastructure.workers.settle_worker import (
     KnowledgeSettleSink,
     SettleWorker,
     SettleWorkerConfig,

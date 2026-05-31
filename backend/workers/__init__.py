@@ -1,12 +1,27 @@
-"""Workers — Workflow §12.5 #8 (Bundle G).
+"""Workers — shared infrastructure module.
 
-Consumer-group workers binding the orchestrator, delivery, execution,
-and audit-relay surfaces to Redis Streams.
+Per v8 D34 (Lift H3c) the per-context workers moved to their owning
+contexts. What stays here is the cross-context common worker infra:
+
+* :class:`~backend.workers.base.BaseWorker` — the poll-loop base.
+* :mod:`backend.workers.db` — worker registration + drain marker tables.
+* :mod:`backend.workers.emit` — Redis Streams emit helpers + stream names.
+* :mod:`backend.workers.streams` — :class:`RedisStreamConsumer` +
+  :class:`StreamHandler` (consumer-group plumbing).
+* :mod:`backend.workers.schedule_runner` — Schedule context (pending its
+  own context lift).
+* :mod:`backend.workers.relays` — relay-adapter wiring for RelayWorker.
+* :mod:`backend.workers.__main__` — production daemon entrypoint.
+
+The per-context workers now live at:
+
+* :mod:`backend.workflow.infrastructure.workers` — agent / verifier /
+  relay / intake / delivery + the production ``run`` module.
+* :mod:`backend.knowledge.infrastructure.workers` — settle worker.
 """
 
 from __future__ import annotations
 
-from backend.workers.agent_worker import AgentWorker
 from backend.workers.db import (
     AuditRelayStateRow,
     SettleDrainRow,
@@ -15,39 +30,13 @@ from backend.workers.db import (
     WorkersBase,
     WorkerStatus,
 )
-from backend.workers.delivery_worker import DeliveryWorker
-
-# NOTE: ``ExecutorDispatchWorker`` (formerly backend.workers.executor_dispatch)
-# was an orphaned alt-dispatch design — never wired into
-# :func:`backend.workers.run.build_worker_runtime`. Real executor dispatch lives
-# inline in :class:`backend.executors.orchestrator.ExecutorOrchestrator` (B14).
-from backend.workers.intake_worker import IntakeWorker
-from backend.workers.relay_worker import RelayWorker
-from backend.workers.settle_worker import (
-    KnowledgeSettleSink,
-    Settlement,
-    SettleSink,
-    SettleWorker,
-    SettleWorkerConfig,
-)
 from backend.workers.streams import RedisStreamConsumer, StreamHandler
-from backend.workers.verifier_worker import VerifierWorker
 
 __all__ = [
-    "AgentWorker",
     "AuditRelayStateRow",
-    "DeliveryWorker",
-    "IntakeWorker",
-    "KnowledgeSettleSink",
     "RedisStreamConsumer",
-    "RelayWorker",
     "SettleDrainRow",
-    "SettleSink",
-    "SettleWorker",
-    "SettleWorkerConfig",
-    "Settlement",
     "StreamHandler",
-    "VerifierWorker",
     "WorkerInstallTokenRow",
     "WorkerRow",
     "WorkerStatus",

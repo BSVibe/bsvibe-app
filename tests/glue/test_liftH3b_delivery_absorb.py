@@ -139,14 +139,14 @@ def test_delivery_directory_deleted() -> None:
 
 
 def test_delivery_worker_imports_resolve() -> None:
-    """``backend.workers.delivery_worker`` imports from new Workflow paths."""
-    mod = importlib.import_module("backend.workers.delivery_worker")
+    """``backend.workflow.infrastructure.workers.delivery_worker`` imports from new Workflow paths."""
+    mod = importlib.import_module("backend.workflow.infrastructure.workers.delivery_worker")
     assert hasattr(mod, "DeliveryWorker")
 
 
 def test_run_worker_imports_resolve() -> None:
-    """``backend.workers.run`` consumes DeliveryEventRow + queue."""
-    mod = importlib.import_module("backend.workers.run")
+    """``backend.workflow.infrastructure.workers.run`` consumes DeliveryEventRow + queue."""
+    mod = importlib.import_module("backend.workflow.infrastructure.workers.run")
     assert mod is not None
 
 
@@ -223,7 +223,7 @@ def test_delivery_worker_uses_new_delivery_path() -> None:
     """The worker must reference the new Workflow paths."""
     import inspect
 
-    import backend.workers.delivery_worker as mod
+    import backend.workflow.infrastructure.workers.delivery_worker as mod
 
     src = inspect.getsource(mod)
     assert _OLD_FROM not in src

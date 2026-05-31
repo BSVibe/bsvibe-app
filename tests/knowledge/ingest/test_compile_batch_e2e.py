@@ -12,7 +12,7 @@ NEVER a real LLM or network call:
 
 Workspace isolation is structural: the vault is rooted at
 ``<vault_root>/<region>/<workspace_id>/`` via :class:`KnowledgeFactory`,
-exactly the convention :class:`backend.workers.settle_worker.KnowledgeSettleSink`
+exactly the convention :class:`backend.knowledge.infrastructure.workers.settle_worker.KnowledgeSettleSink`
 uses. A second workspace's compile lands in its own vault and never bleeds
 into the first.
 """

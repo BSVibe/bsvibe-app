@@ -32,18 +32,18 @@ from backend.execution.db import (
     WorkStep,
     WorkStepStatus,
 )
-from backend.execution.orchestrator import (
+from backend.extensions.plugin.base import ActionCapability, PluginMeta
+from backend.extensions.plugin.context import SkillContext
+from backend.extensions.skill.loader import SkillLoader
+from backend.extensions.skill.tool_binding import INVOKE_SKILL_NAME
+from backend.supervisor.sandbox import NoopSandboxManager, SandboxUnavailable
+from backend.workflow.application.agent_loop import (
     CanonRetriever,
     LoopLlm,
     LoopToolCall,
     LoopTurn,
     RunOrchestrator,
 )
-from backend.extensions.plugin.base import ActionCapability, PluginMeta
-from backend.extensions.plugin.context import SkillContext
-from backend.extensions.skill.loader import SkillLoader
-from backend.extensions.skill.tool_binding import INVOKE_SKILL_NAME
-from backend.supervisor.sandbox import NoopSandboxManager, SandboxUnavailable
 from backend.workflow.infrastructure.delivery.db import DeliveryEventRow
 from backend.workspaces.db import ProductRow, WorkspaceRow
 from tests._support import memory_session
@@ -480,7 +480,7 @@ async def test_ask_user_question_tool_schema_advertises_options() -> None:
     """B11a: the work LLM's ``ask_user_question`` tool advertises a structured
     optional ``options`` field (an array of plain strings) so the model can
     present concrete choices to the founder, not just free text."""
-    from backend.execution.orchestrator import ASK_USER_QUESTION_TOOL
+    from backend.workflow.application.tool_registry import ASK_USER_QUESTION_TOOL
 
     params = ASK_USER_QUESTION_TOOL["function"]["parameters"]
     assert params["type"] == "object"
@@ -837,7 +837,7 @@ async def _first_turn_blob(tmp_path: Path, payload: dict[str, Any]) -> str:
 
 
 async def test_native_design_stage_seeds_spec_only_directive(tmp_path: Path) -> None:
-    from backend.execution.orchestrator import _DESIGN_SPEC_DIRECTIVE
+    from backend.workflow.application.agent_loop import _DESIGN_SPEC_DIRECTIVE
 
     # First run of a design_then_impl pipeline (no explicit stage) → DESIGN.
     blob = await _first_turn_blob(
@@ -851,7 +851,7 @@ async def test_native_design_stage_seeds_spec_only_directive(tmp_path: Path) -> 
 
 
 async def test_native_single_pipeline_has_no_spec_only_directive(tmp_path: Path) -> None:
-    from backend.execution.orchestrator import _DESIGN_SPEC_DIRECTIVE
+    from backend.workflow.application.agent_loop import _DESIGN_SPEC_DIRECTIVE
 
     blob = await _first_turn_blob(
         tmp_path,
@@ -861,7 +861,7 @@ async def test_native_single_pipeline_has_no_spec_only_directive(tmp_path: Path)
 
 
 async def test_native_impl_stage_has_no_spec_only_directive(tmp_path: Path) -> None:
-    from backend.execution.orchestrator import _DESIGN_SPEC_DIRECTIVE
+    from backend.workflow.application.agent_loop import _DESIGN_SPEC_DIRECTIVE
 
     blob = await _first_turn_blob(
         tmp_path,
@@ -875,7 +875,7 @@ async def test_native_impl_stage_has_no_spec_only_directive(tmp_path: Path) -> N
 
 
 async def test_native_no_frame_has_no_spec_only_directive(tmp_path: Path) -> None:
-    from backend.execution.orchestrator import _DESIGN_SPEC_DIRECTIVE
+    from backend.workflow.application.agent_loop import _DESIGN_SPEC_DIRECTIVE
 
     blob = await _first_turn_blob(tmp_path, {"intent_text": "some work"})
     assert _DESIGN_SPEC_DIRECTIVE not in blob
@@ -1337,15 +1337,21 @@ async def test_loop_without_connector_provider_omits_connector_tools(tmp_path: P
 def test_orchestrator_module_does_not_re_export_m2_danger_symbols() -> None:
     """Surface delta: the M2 evaluator symbols (``ActionDangerEvaluator``,
     ``DangerVerdict``, ``StaticActionDangerEvaluator``) are no longer
-    re-exported from ``backend.execution.orchestrator``. Mirrors the
-    deletion of ``backend.execution.action_danger`` (the import would fail
-    before this assertion is even reached, but the assertion locks the
-    surface delta in place against accidental re-introduction)."""
-    from backend.execution import orchestrator as orch_mod
+    re-exported from the workflow loop modules. Mirrors the deletion of
+    ``backend.execution.action_danger`` (the import would fail before this
+    assertion is even reached, but the assertion locks the surface delta in
+    place against accidental re-introduction).
 
-    assert not hasattr(orch_mod, "ActionDangerEvaluator")
-    assert not hasattr(orch_mod, "DangerVerdict")
-    assert not hasattr(orch_mod, "StaticActionDangerEvaluator")
+    Post-Lift H3c the legacy ``backend.execution.orchestrator`` shim is
+    deleted; the loop now lives in :mod:`backend.workflow.application` (H2a
+    decomposition). Assert across every successor module."""
+    from backend.workflow.application import agent_loop, run_persistence, tool_registry
+    from backend.workflow.domain import emit_deliverable
+
+    for mod in (agent_loop, tool_registry, run_persistence, emit_deliverable):
+        assert not hasattr(mod, "ActionDangerEvaluator"), mod.__name__
+        assert not hasattr(mod, "DangerVerdict"), mod.__name__
+        assert not hasattr(mod, "StaticActionDangerEvaluator"), mod.__name__
 
 
 def test_action_danger_module_is_deleted() -> None:

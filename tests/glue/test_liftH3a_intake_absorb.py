@@ -159,12 +159,12 @@ def test_intake_directory_only_holds_schedule_files() -> None:
 
 def test_intake_worker_imports_resolve() -> None:
     """The intake worker (still in backend/workers/) loads from new paths."""
-    mod = importlib.import_module("backend.workers.intake_worker")
+    mod = importlib.import_module("backend.workflow.infrastructure.workers.intake_worker")
     assert hasattr(mod, "IntakeWorker")
 
 
 def test_agent_worker_imports_resolve() -> None:
-    mod = importlib.import_module("backend.workers.agent_worker")
+    mod = importlib.import_module("backend.workflow.infrastructure.workers.agent_worker")
     assert hasattr(mod, "AgentWorker")
 
 
