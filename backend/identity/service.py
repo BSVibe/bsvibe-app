@@ -15,8 +15,8 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.accounts.account_service import ensure_personal_account
 from backend.identity.db import MembershipRow, UserRow
+from backend.router.accounts.account_service import ensure_personal_account
 from backend.workspaces.db import WorkspaceRow
 
 

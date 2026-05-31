@@ -10,10 +10,10 @@ import pytest
 from backend.api.litellm_hook import ChatService, LiteLLMHook
 from backend.api.litellm_hook.chat_service import ChatCompletionContext
 from backend.api.litellm_hook.hook import HookContext, HookDependencies
-from backend.gateway.budget.errors import BudgetExceeded
-from backend.gateway.budget.policy import BudgetCheckResult
-from backend.gateway.rules.engine import RuleEngine
-from backend.gateway.rules.models import RoutingRule, RuleMatch
+from backend.router.budget.errors import BudgetExceeded
+from backend.router.budget.policy import BudgetCheckResult
+from backend.router.rules.engine import RuleEngine
+from backend.router.rules.models import RoutingRule, RuleMatch
 
 
 def _ctx(account_id: uuid.UUID | None = None) -> HookContext:

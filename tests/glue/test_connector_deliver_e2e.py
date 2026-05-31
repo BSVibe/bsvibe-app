@@ -32,13 +32,13 @@ import respx
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from backend.accounts.crypto import CredentialCipher
 from backend.connectors.db import ConnectorAccountRow
 from backend.delivery.connector_dispatch import build_connector_delivery_adapter
 from backend.delivery.db import DeliveryEventRow
 from backend.execution.db import Deliverable, DeliverableType, ExecutionRun, RunStatus
 from backend.plugins.implementations.notion import plugin as notion_module
 from backend.plugins.loader import PluginLoader
+from backend.router.accounts.crypto import CredentialCipher
 from backend.workers.delivery_worker import DeliveryWorker, DeliveryWorkerConfig
 
 from .._support import db_engine

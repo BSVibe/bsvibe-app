@@ -9,8 +9,7 @@ from sqlalchemy import select
 
 # Imported for table registration on the shared Base.metadata (bootstrap now
 # seeds a personal Account alongside the workspace).
-import backend.accounts.account_models  # noqa: F401
-from backend.accounts.account_models import Account
+import backend.router.accounts.account_models  # noqa: F401
 from backend.identity import service
 from backend.identity.db import MembershipRow, UserRow
 from backend.identity.service import (
@@ -19,6 +18,7 @@ from backend.identity.service import (
     get_user_by_supabase_id,
     resolve_workspace_id,
 )
+from backend.router.accounts.account_models import Account
 from backend.workspaces.db import WorkspaceRow
 
 from .._support import memory_session

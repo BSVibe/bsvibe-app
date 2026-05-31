@@ -24,8 +24,8 @@ from datetime import UTC, datetime
 
 from sqlalchemy import select
 
-from backend.accounts.models import ModelAccount
 from backend.execution.db import Decision, ExecutionRun, ExecutionRunActivity, RunStatus
+from backend.router.accounts.models import ModelAccount
 from backend.routing.engine import resolve_route
 from backend.routing.multi_account import ROUTING_PRIORITY_KEY, select_within_class
 

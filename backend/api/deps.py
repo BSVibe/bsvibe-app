@@ -244,7 +244,7 @@ async def require_account_id(
     """
     if account_id is not None:
         return account_id
-    from backend.accounts.account_service import ensure_personal_account  # noqa: PLC0415
+    from backend.router.accounts.account_service import ensure_personal_account  # noqa: PLC0415
 
     account = await ensure_personal_account(session, workspace_id=workspace_id)
     await session.commit()

@@ -1,7 +1,7 @@
 """RunRoutingRuleRow — a per-workspace RUN routing rule (Phase 1).
 
 Distinct from the gateway's account-scoped chat/model rules
-(:mod:`backend.gateway.rules`, table ``routing_rules`` — which picks the LLM
+(:mod:`backend.router.rules`, table ``routing_rules`` — which picks the LLM
 *model within a native run* via the litellm hook). Run routing is a layer
 ABOVE that: it picks WHICH ModelAccount (native vs executor CLI) drives a run,
 keyed on the run's framed signals. Hence a separate table + context.

@@ -13,7 +13,6 @@ import os
 import uuid
 from typing import Any
 
-from backend.accounts.crypto import CredentialCipher
 from backend.connectors.db import ConnectorAccountRow
 from backend.execution.connector_actions import (
     ConnectorActionProvider,
@@ -22,6 +21,7 @@ from backend.execution.connector_actions import (
     loop_tool_name,
 )
 from backend.plugins.base import ActionCapability, PluginMeta
+from backend.router.accounts.crypto import CredentialCipher
 
 from .._support import memory_session
 

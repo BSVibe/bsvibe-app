@@ -1,7 +1,7 @@
 """Embedder protocol — minimal surface VaultRetriever / VectorSubscriber need.
 
 BSage's concrete ``Embedder`` is dropped in favor of structural typing. Wire-time
-adapters can wrap ``backend.gateway.embedding.EmbeddingService`` (or any other
+adapters can wrap ``backend.router.embedding.EmbeddingService`` (or any other
 embedding provider) so long as the adapter implements this Protocol.
 """
 

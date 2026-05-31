@@ -57,7 +57,7 @@ async def get_delivery_dispatcher() -> PluginDispatchAdapter:
     Builds the SAME :class:`~backend.delivery.connector_dispatch.ConnectorDeliveryAdapter`
     the Direct path uses (``backend.workers.run.build_delivery_adapter``): it
     loads every connector plugin, carries the settings-derived
-    :class:`~backend.accounts.crypto.CredentialCipher`, and opens its own
+    :class:`~backend.router.accounts.crypto.CredentialCipher`, and opens its own
     session per dispatch (it resolves the workspace's ``connector_accounts``
     delivery binding itself). So an approved delivery shapes + delivers the
     connector outbound event exactly as a Safe-Mode-off delivery does — one

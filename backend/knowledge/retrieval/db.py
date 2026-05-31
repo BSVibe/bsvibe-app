@@ -10,7 +10,7 @@ from sqlalchemy import DateTime, Index, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from backend.data import Base
-from backend.gateway.embedding.column import EmbeddingVector
+from backend.router.embedding.column import EmbeddingVector
 
 RetrievalBase = Base
 
@@ -19,7 +19,7 @@ class NoteEmbeddingRow(RetrievalBase):
     """One note's dense embedding for semantic search (G3).
 
     Mirrors the gateway's ``intent_examples`` embedding policy: the
-    :class:`~backend.gateway.embedding.column.EmbeddingVector` column is a
+    :class:`~backend.router.embedding.column.EmbeddingVector` column is a
     pgvector ``vector`` on Postgres (enabling the ``<=>`` cosine-distance
     operator) and a packed-float BLOB on SQLite (so the broad test suite needs
     no live Postgres). Scoped by ``workspace_id`` so the shared table is

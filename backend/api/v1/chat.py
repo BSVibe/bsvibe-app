@@ -1,7 +1,7 @@
 """OpenAI-compatible chat completions endpoint.
 
 Wires :class:`backend.api.litellm_hook.chat_service.ChatService` against the
-existing :class:`backend.gateway.dispatch.GatewayDispatcher`. The dispatcher
+existing :class:`backend.router.dispatch.GatewayDispatcher`. The dispatcher
 itself is constructed per-request from the request-scoped AsyncSession +
 the workspace's ModelAccountService + Classifier + BudgetPolicyService +
 LlmClient.
@@ -27,26 +27,26 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.accounts.crypto import CredentialCipher, _key_from_settings
-from backend.accounts.service import ModelAccountService
 from backend.api.deps import get_db_session, get_workspace_id, require_account_id
 from backend.api.litellm_hook.audit_events import (
     GatewayCompletionDispatched,
     GatewayCompletionFailed,
 )
 from backend.api.litellm_hook.chat_service import ChatCompletionContext, ChatService
-from backend.gateway.budget.errors import BudgetExceeded
-from backend.gateway.budget.policy import BudgetPolicyService
-from backend.gateway.budget.repository import BudgetPolicyRepository
-from backend.gateway.budget.tracker import BudgetTracker, InMemoryBudgetStore
-from backend.gateway.classifier.local_vs_cloud import LocalVsCloudClassifier
-from backend.gateway.classifier.static import StaticClassifier
-from backend.gateway.dispatch import (
+from backend.router.accounts.crypto import CredentialCipher, _key_from_settings
+from backend.router.accounts.service import ModelAccountService
+from backend.router.budget.errors import BudgetExceeded
+from backend.router.budget.policy import BudgetPolicyService
+from backend.router.budget.repository import BudgetPolicyRepository
+from backend.router.budget.tracker import BudgetTracker, InMemoryBudgetStore
+from backend.router.classifier.local_vs_cloud import LocalVsCloudClassifier
+from backend.router.classifier.static import StaticClassifier
+from backend.router.dispatch import (
     DispatchError,
     GatewayDispatcher,
     ModelAccountNotFound,
 )
-from backend.gateway.llm_client import LlmClient
+from backend.router.llm_client import LlmClient
 from backend.supervisor.audit.events import AuditActor, AuditResource
 from backend.supervisor.audit.service import safe_emit
 
@@ -101,7 +101,7 @@ async def chat_completions(
     account_id: Annotated[uuid.UUID, Depends(require_account_id)],
     session: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> dict[str, Any]:
-    """OpenAI-shape chat completions — dispatches via backend.gateway."""
+    """OpenAI-shape chat completions — dispatches via backend.router."""
     md = payload.metadata or ChatCompletionMetadata()
     model_account_id = md.bsvibe_model_account_id
     if model_account_id is None:

@@ -20,11 +20,11 @@ import pytest
 import pytest_asyncio
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
-from backend.accounts.account_models import Account
-from backend.accounts.models import AccountsBase
 from backend.api.deps import get_current_user, get_db_session, get_workspace_id
 from backend.api.main import create_app
 from backend.config import get_settings
+from backend.router.accounts.account_models import Account
+from backend.router.accounts.models import AccountsBase
 
 from .._support import db_engine, fake_current_user
 
@@ -176,7 +176,7 @@ async def test_get_account_persists_single_row(client, db) -> None:
 async def test_model_accounts_list_excludes_executor_rows(client, db) -> None:
     """Lift 5a: a provider=executor row is a routable account but must NOT
     surface in the api-llm Models list (workers are shown separately)."""
-    from backend.accounts.models import ModelAccount
+    from backend.router.accounts.models import ModelAccount
 
     # Create a real LLM account through the API so the personal account exists.
     create_body = {

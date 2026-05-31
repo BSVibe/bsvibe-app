@@ -5,7 +5,7 @@ Apply path:
     POST /api/v1/presets/{name}/apply
     body: { "model_mapping": { "economy": "...", "balanced": "...", "premium": "..." } }
 
-Wires :class:`backend.gateway.presets.PresetService.apply_preset` against
+Wires :class:`backend.router.presets.PresetService.apply_preset` against
 the current (workspace, account). EmbeddingService is wired when present
 (intent examples get embedded inline); when not configured, examples land
 unembedded and the operator can run a re-embed pass later.
@@ -21,9 +21,9 @@ from pydantic import BaseModel, ConfigDict
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.api.deps import get_db_session, get_workspace_id, require_account_id
-from backend.gateway.presets.models import ModelMapping
-from backend.gateway.presets.registry import PresetRegistry
-from backend.gateway.presets.service import AuditEmitterProtocol, PresetService
+from backend.router.presets.models import ModelMapping
+from backend.router.presets.registry import PresetRegistry
+from backend.router.presets.service import AuditEmitterProtocol, PresetService
 from backend.supervisor.audit.events import AuditEventBase
 
 router = APIRouter()

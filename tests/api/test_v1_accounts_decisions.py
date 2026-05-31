@@ -16,7 +16,6 @@ import pytest
 import pytest_asyncio
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
-from backend.accounts.models import AccountsBase
 from backend.api.deps import (
     get_current_user,
     get_db_session,
@@ -26,6 +25,7 @@ from backend.api.deps import (
 from backend.api.main import create_app
 from backend.config import get_settings
 from backend.knowledge.canonicalization.db import CanonicalizationBase
+from backend.router.accounts.models import AccountsBase
 
 from .._support import db_engine, fake_current_user
 

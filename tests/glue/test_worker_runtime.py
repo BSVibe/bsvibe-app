@@ -32,9 +32,6 @@ import pytest_asyncio
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from backend.accounts.models import ModelAccount
-from backend.accounts.schemas import ModelAccountCreate
-from backend.accounts.service import ModelAccountService
 from backend.api.deps import (
     get_current_user,
     get_current_user_row,
@@ -45,8 +42,11 @@ from backend.api.main import create_app
 from backend.config import get_settings
 from backend.delivery.db import DeliveryEventRow
 from backend.execution.db import Decision, Deliverable, ExecutionRun, RunStatus
-from backend.gateway.llm_client import LlmClient
 from backend.intake.db import RequestRow, RequestStatus
+from backend.router.accounts.models import ModelAccount
+from backend.router.accounts.schemas import ModelAccountCreate
+from backend.router.accounts.service import ModelAccountService
+from backend.router.llm_client import LlmClient
 from backend.supervisor.sandbox import NoopSandboxManager
 from backend.workers import run as runtime
 from backend.workers.agent_worker import AgentWorker
@@ -601,7 +601,7 @@ async def test_settle_entity_extractor_factory_extracts_entities(
 
 
 def _bare_account(provider: str) -> Any:
-    from backend.accounts.models import ModelAccount
+    from backend.router.accounts.models import ModelAccount
 
     return ModelAccount(
         id=uuid.uuid4(),

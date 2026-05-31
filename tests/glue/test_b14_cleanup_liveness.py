@@ -28,7 +28,7 @@ import pytest_asyncio
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from backend.accounts.models import ModelAccount
+from backend.router.accounts.models import ModelAccount
 from backend.workers.run import check_executor_dispatch_health
 
 from .._support import db_engine

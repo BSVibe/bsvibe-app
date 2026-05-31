@@ -32,7 +32,6 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 # Importing the module dbs registers their tables on the shared Base.metadata.
 import backend.executors.db  # noqa: F401
-from backend.accounts.models import ModelAccount
 from backend.config import get_settings
 from backend.delivery.db import DeliveryEventRow
 from backend.execution.db import (
@@ -49,6 +48,7 @@ from backend.executors import dispatch
 from backend.executors.db import WorkerRow
 from backend.executors.orchestrator import ExecutorOrchestrator
 from backend.orchestrator.agent_runner import AgentRunner
+from backend.router.accounts.models import ModelAccount
 from backend.workers.run import build_agent_execution_deps
 
 from .._support import db_engine
@@ -706,7 +706,7 @@ async def test_non_executor_account_builds_native_orchestrator(
 
     from backend.config import get_settings as _get_settings
     from backend.execution.orchestrator import RunOrchestrator
-    from backend.gateway.llm_client import LlmClient
+    from backend.router.llm_client import LlmClient
     from backend.workers import run as run_module
 
     # The native path eagerly builds the credential cipher (to decrypt the
@@ -886,7 +886,7 @@ async def test_factory_wires_retriever_into_native_orchestrator(
 
     from backend.config import get_settings as _get_settings
     from backend.execution.orchestrator import RunOrchestrator
-    from backend.gateway.llm_client import LlmClient
+    from backend.router.llm_client import LlmClient
     from backend.workers import run as run_module
 
     monkeypatch.setenv("BSVIBE_GATEWAY_KMS_KEY_B64", base64.urlsafe_b64encode(b"0" * 32).decode())

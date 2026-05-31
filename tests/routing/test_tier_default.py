@@ -21,8 +21,8 @@ from datetime import UTC, datetime
 
 from sqlalchemy import select
 
-from backend.accounts.models import ModelAccount
 from backend.execution.db import ExecutionRun, ExecutionRunActivity, RunStatus
+from backend.router.accounts.models import ModelAccount
 from backend.routing.db import RunRoutingRuleRow
 from backend.routing.engine import RoutingContext, resolve_route
 

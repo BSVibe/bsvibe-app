@@ -2,8 +2,8 @@
 
 Per-request orchestrator wired against:
 
-* :class:`backend.gateway.rules.RuleEngine.evaluate` for routing
-* :class:`backend.gateway.budget.BudgetPolicyService.check_request_cost` for caps
+* :class:`backend.router.rules.RuleEngine.evaluate` for routing
+* :class:`backend.router.budget.BudgetPolicyService.check_request_cost` for caps
 
 The hook stays a thin coordinator; rules and budgets each own their domain
 logic. Concrete repository / classifier / audit wiring lands when Bundle G
@@ -18,10 +18,10 @@ from typing import Any
 
 import structlog
 
-from backend.gateway.budget.errors import BudgetExceeded
-from backend.gateway.budget.policy import BudgetPolicyService
-from backend.gateway.rules.engine import RuleEngine
-from backend.gateway.rules.models import RoutingRule, RuleMatch
+from backend.router.budget.errors import BudgetExceeded
+from backend.router.budget.policy import BudgetPolicyService
+from backend.router.rules.engine import RuleEngine
+from backend.router.rules.models import RoutingRule, RuleMatch
 
 logger = structlog.get_logger(__name__)
 
@@ -66,7 +66,7 @@ class LiteLLMHook:
         """Evaluate routing rules + check budget. Returns possibly-mutated ``data``.
 
         Raises:
-            :class:`backend.gateway.budget.errors.BudgetExceeded` if a budget
+            :class:`backend.router.budget.errors.BudgetExceeded` if a budget
                 policy is breached with ``enforcement="block"``. Callers
                 translate this into HTTP 429.
 

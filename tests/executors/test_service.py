@@ -18,14 +18,15 @@ import uuid
 import pytest
 from sqlalchemy import select
 
+import backend.executors.db  # noqa: F401
+
 # Importing the module db registers the tables on the shared Base.metadata so
 # ``memory_session``'s create_all materialises them.
-import backend.accounts.account_models  # noqa: F401
-import backend.accounts.models  # noqa: F401
-import backend.executors.db  # noqa: F401
-from backend.accounts.models import ModelAccount
+import backend.router.accounts.account_models  # noqa: F401
+import backend.router.accounts.models  # noqa: F401
 from backend.executors import service
 from backend.executors.db import WorkerRow
+from backend.router.accounts.models import ModelAccount
 
 from .._support import memory_session
 
@@ -285,7 +286,7 @@ async def test_register_worker_executor_accounts_are_idempotent() -> None:
         before = await _executor_accounts(s, worker.workspace_id)
         assert len(before) == 2
         # Re-upsert directly (simulates re-register / re-mint of the same worker).
-        from backend.accounts.account_service import ensure_personal_account
+        from backend.router.accounts.account_service import ensure_personal_account
 
         account = await ensure_personal_account(s, workspace_id=worker.workspace_id)
         await service._upsert_executor_model_accounts(

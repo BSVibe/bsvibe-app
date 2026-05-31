@@ -1,7 +1,7 @@
 """GatewayLoopLlm — the production :class:`LoopLlm` for the agent loop.
 
 Routes every plan/act/judge turn through the
-:class:`~backend.gateway.dispatch.GatewayDispatcher` (substantial tier;
+:class:`~backend.router.dispatch.GatewayDispatcher` (substantial tier;
 the gateway resolves the account + model + budget). The work loop in
 :mod:`backend.execution.orchestrator` depends only on the ``LoopLlm``
 Protocol, so this adapter and a deterministic test stub are
@@ -20,8 +20,8 @@ import uuid
 from typing import Any
 
 from backend.execution.orchestrator import LoopToolCall, LoopTurn
-from backend.gateway.classifier.base import ClassificationFeatures
-from backend.gateway.dispatch import DispatchRequest, GatewayDispatcher
+from backend.router.classifier.base import ClassificationFeatures
+from backend.router.dispatch import DispatchRequest, GatewayDispatcher
 
 # Substantial-tier default features — high enough complexity that the
 # classifier routes plan/act to the heavy model.

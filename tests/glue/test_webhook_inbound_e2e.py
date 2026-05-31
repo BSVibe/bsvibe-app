@@ -32,12 +32,12 @@ import pytest_asyncio
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from backend.accounts.crypto import CredentialCipher
 from backend.api.deps import get_db_session
 from backend.api.main import create_app
 from backend.api.webhooks import get_credential_cipher
 from backend.connectors.db import ConnectorAccountRow
 from backend.intake.db import TriggerEventRow
+from backend.router.accounts.crypto import CredentialCipher
 
 from .._support import db_engine
 

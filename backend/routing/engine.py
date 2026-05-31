@@ -23,8 +23,8 @@ import structlog
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
 
-    from backend.accounts.models import ModelAccount
     from backend.execution.db import ExecutionRun
+    from backend.router.accounts.models import ModelAccount
     from backend.routing.db import RunRoutingRuleRow
 
 logger = structlog.get_logger(__name__)

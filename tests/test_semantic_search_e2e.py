@@ -27,12 +27,12 @@ import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from backend.gateway.embedding.provider import LiteLLMEmbeddingProvider
-from backend.gateway.embedding.service import EmbeddingService
-from backend.gateway.embedding.settings import EmbeddingSettings
 from backend.knowledge.retrieval.embedder_adapter import GatewayEmbedder
 from backend.knowledge.retrieval.semantic_note_retriever import SemanticNoteRetriever
 from backend.knowledge.retrieval.storage.pg import PgNoteVectorBackend
+from backend.router.embedding.provider import LiteLLMEmbeddingProvider
+from backend.router.embedding.service import EmbeddingService
+from backend.router.embedding.settings import EmbeddingSettings
 
 pytestmark = pytest.mark.asyncio
 

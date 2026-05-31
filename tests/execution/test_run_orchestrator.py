@@ -1494,9 +1494,9 @@ async def test_real_github_list_issues_dispatches_through_real_pluginrunner(
     import httpx as _httpx
     import respx
 
-    from backend.accounts.crypto import CredentialCipher
     from backend.execution.connector_actions import ConnectorActionResolver
     from backend.plugins.implementations.github import plugin as github_module
+    from backend.router.accounts.crypto import CredentialCipher
 
     ws = uuid.uuid4()
     meta = github_module.p.meta

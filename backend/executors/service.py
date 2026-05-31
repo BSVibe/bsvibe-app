@@ -26,9 +26,9 @@ import structlog
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.accounts.account_service import ensure_personal_account
-from backend.accounts.repository import ModelAccountRepository
 from backend.executors.db import WorkerInstallTokenRow, WorkerRow
+from backend.router.accounts.account_service import ensure_personal_account
+from backend.router.accounts.repository import ModelAccountRepository
 
 logger = structlog.get_logger(__name__)
 

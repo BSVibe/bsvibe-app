@@ -15,8 +15,8 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.accounts.account_service import ensure_personal_account
 from backend.api.deps import get_db_session, get_workspace_id
+from backend.router.accounts.account_service import ensure_personal_account
 
 router = APIRouter()
 

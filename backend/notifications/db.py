@@ -12,7 +12,7 @@ stored as ``"HH:MM"`` strings, the same shape the PWA time inputs emit, so no
 minutes-since-midnight conversion is needed on either side.
 
 Follows the model/Base style of :mod:`backend.connectors.db` /
-:mod:`backend.accounts.account_models`: a single-table declarative model on the
+:mod:`backend.router.accounts.account_models`: a single-table declarative model on the
 shared :class:`backend.data.Base`, ``workspace_id``-scoped, with a per-module
 ``<Module>Base`` alias for back-compat.
 """

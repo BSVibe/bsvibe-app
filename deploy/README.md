@@ -43,7 +43,7 @@ head` concurrently.
 ## 2. Generate secrets
 
 **Credential encryption key** (`BSVIBE_GATEWAY_KMS_KEY_B64`) — AES-256-GCM,
-32-byte key in **URL-safe** base64. `backend/accounts/crypto.py` does
+32-byte key in **URL-safe** base64. `backend/router/accounts/crypto.py` does
 `base64.urlsafe_b64decode(...)` and asserts exactly 32 decoded bytes:
 
 ```sh

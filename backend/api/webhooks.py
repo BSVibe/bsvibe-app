@@ -35,7 +35,6 @@ from fastapi import APIRouter, Depends, Path, Request, status
 from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.accounts.crypto import CredentialCipher, _key_from_settings
 from backend.api.deps import get_db_session
 from backend.config import get_settings
 from backend.connectors.handshake import handshake_response
@@ -56,6 +55,7 @@ from backend.plugins.implementations.slack.webhook import (
 from backend.plugins.implementations.telegram.webhook import (
     WebhookSignatureError as TelegramSignatureError,
 )
+from backend.router.accounts.crypto import CredentialCipher, _key_from_settings
 from backend.workers.emit import STREAM_INTAKE, emit_stream_notification, get_emit_redis_client
 
 logger = structlog.get_logger(__name__)
