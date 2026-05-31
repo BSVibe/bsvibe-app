@@ -1108,7 +1108,7 @@ async def test_loop_without_skill_loader_omits_skill_tools(tmp_path: Path) -> No
 
 
 # --------------------------------------------------------------------------
-# B5b — connector @p.action surfaced as loop tools, gated by DangerAnalyzer
+# B5b — connector @p.action surfaced as loop tools
 # --------------------------------------------------------------------------
 
 
@@ -1185,13 +1185,9 @@ class FakeConnectorActionProvider:
         )
 
 
-def _tool(
-    plugin: PluginMeta, account: ConnectorAccountRow, *, is_dangerous: bool
-) -> ConnectorActionTool:
+def _tool(plugin: PluginMeta, account: ConnectorAccountRow) -> ConnectorActionTool:
     action = next(iter(plugin.actions.values()))
-    return ConnectorActionTool(
-        plugin=plugin, action=action, account=account, is_dangerous=is_dangerous
-    )
+    return ConnectorActionTool(plugin=plugin, action=action, account=account)
 
 
 async def test_connector_action_in_schema_when_workspace_has_account(tmp_path: Path) -> None:
@@ -1201,7 +1197,7 @@ async def test_connector_action_in_schema_when_workspace_has_account(tmp_path: P
     ws = uuid.uuid4()
     plugin = _fake_action_plugin("github", action_name="open_pr")
     account = _fake_account(ws, "github")
-    provider = FakeConnectorActionProvider([_tool(plugin, account, is_dangerous=False)])
+    provider = FakeConnectorActionProvider([_tool(plugin, account)])
     async with memory_session() as session:
         session.add(WorkspaceRow(id=ws, name="ws", region="us-1", safe_mode=False))
         await session.flush()
@@ -1228,7 +1224,7 @@ async def test_connector_action_excluded_when_workspace_lacks_account(tmp_path: 
     other_ws = uuid.uuid4()
     plugin = _fake_action_plugin("github", action_name="open_pr")
     account = _fake_account(other_ws, "github")  # belongs to a DIFFERENT workspace
-    provider = FakeConnectorActionProvider([_tool(plugin, account, is_dangerous=False)])
+    provider = FakeConnectorActionProvider([_tool(plugin, account)])
     async with memory_session() as session:
         this_ws = uuid.uuid4()
         session.add(WorkspaceRow(id=this_ws, name="ws", region="us-1", safe_mode=False))
@@ -1262,7 +1258,7 @@ async def test_non_dangerous_action_runs_and_feeds_result_back(tmp_path: Path) -
         },
     )
     account = _fake_account(ws, "github")
-    provider = FakeConnectorActionProvider([_tool(plugin, account, is_dangerous=False)])
+    provider = FakeConnectorActionProvider([_tool(plugin, account)])
     llm = ScriptedLlm(
         [
             LoopTurn(
@@ -1317,103 +1313,6 @@ async def test_non_dangerous_action_runs_and_feeds_result_back(tmp_path: Path) -
         assert tool_msgs  # built-ins / action result tool messages exist
 
 
-async def test_dangerous_action_in_safe_mode_creates_approval_decision(tmp_path: Path) -> None:
-    """The key danger gate: the LLM calls a DANGEROUS action while safe_mode=True
-    → NO execution, a ``connector_action_approval`` Decision is created, and the
-    LLM gets a 'pending approval' tool result."""
-    ws = uuid.uuid4()
-    plugin = _fake_action_plugin("slack", action_name="post_message")
-    account = _fake_account(ws, "slack")
-    provider = FakeConnectorActionProvider([_tool(plugin, account, is_dangerous=True)])
-    llm = ScriptedLlm(
-        [
-            LoopTurn(
-                content="posting to slack",
-                tool_calls=(_tc("slack__post_message", channel="C1", text="hi"),),
-            ),
-            # After the gate, the loop continues; the model does real file work.
-            LoopTurn(
-                content="",
-                tool_calls=(
-                    _declare_command("test -f out.txt"),
-                    _tc("file_write", path="out.txt", content="x"),
-                ),
-            ),
-            LoopTurn(content="done", tool_calls=()),
-        ]
-    )
-    async with memory_session() as session:
-        session.add(WorkspaceRow(id=ws, name="ws", region="us-1", safe_mode=True))
-        await session.flush()
-        run = await _make_run(session, workspace_id=ws)
-        orch = RunOrchestrator(
-            session=session,
-            llm=llm,
-            sandbox_manager=NoopSandboxManager(),
-            connector_actions=provider,
-        )
-        result = await orch.run(run=run, workspace_dir=tmp_path)
-
-        assert result.outcome == "verified"
-        # The dangerous action did NOT execute.
-        assert not provider.dispatched, "a dangerous action must not run in safe mode"
-        # An approval Decision was created with the action details.
-        decision = (await session.execute(select(Decision))).scalar_one()
-        assert decision.decision == "connector_action_approval"
-        assert decision.payload["plugin"] == "slack"
-        assert decision.payload["action"] == "post_message"
-        assert decision.payload["is_dangerous"] is True
-        assert decision.payload["args"] == {"channel": "C1", "text": "hi"}
-        # The LLM was told the action is pending approval.
-        pending_msgs = [
-            m
-            for call in llm.calls
-            for m in call["messages"]
-            if m.get("role") == "tool" and "needs_approval" in (m.get("content") or "")
-        ]
-        assert pending_msgs, "the gate must feed back a needs_approval tool result"
-
-
-async def test_dangerous_action_runs_when_not_in_safe_mode(tmp_path: Path) -> None:
-    """A dangerous action with safe_mode OFF runs directly (the gate is danger AND
-    safe_mode — neither alone blocks a non-safe-mode workspace)."""
-    ws = uuid.uuid4()
-    plugin = _fake_action_plugin("slack", action_name="post_message")
-    account = _fake_account(ws, "slack")
-    provider = FakeConnectorActionProvider([_tool(plugin, account, is_dangerous=True)])
-    llm = ScriptedLlm(
-        [
-            LoopTurn(
-                content="posting",
-                tool_calls=(_tc("slack__post_message", text="hi"),),
-            ),
-            LoopTurn(
-                content="",
-                tool_calls=(
-                    _declare_command("test -f out.txt"),
-                    _tc("file_write", path="out.txt", content="x"),
-                ),
-            ),
-            LoopTurn(content="done", tool_calls=()),
-        ]
-    )
-    async with memory_session() as session:
-        session.add(WorkspaceRow(id=ws, name="ws", region="us-1", safe_mode=False))
-        await session.flush()
-        run = await _make_run(session, workspace_id=ws)
-        orch = RunOrchestrator(
-            session=session,
-            llm=llm,
-            sandbox_manager=NoopSandboxManager(),
-            connector_actions=provider,
-        )
-        result = await orch.run(run=run, workspace_dir=tmp_path)
-
-        assert result.outcome == "verified"
-        assert provider.dispatched, "a dangerous action must run when safe_mode is off"
-        assert (await session.execute(select(Decision))).first() is None
-
-
 async def test_loop_without_connector_provider_omits_connector_tools(tmp_path: Path) -> None:
     """Backward-compat: a run with no connector-action provider surfaces no
     connector tool — the loop is unchanged (and matches every legacy caller)."""
@@ -1430,73 +1329,9 @@ async def test_loop_without_connector_provider_omits_connector_tools(tmp_path: P
 
 # --------------------------------------------------------------------------
 # Lift 0a — per-call DangerAnalyzer evaluator removed (YAGNI rollback)
+# Lift 0c — load-time DangerAnalyzer + Safe Mode gate removed (asserted in
+# tests/glue/test_lift0c_no_static_danger_analyzer.py)
 # --------------------------------------------------------------------------
-
-
-async def test_action_safe_at_load_time_dispatches_without_decision(
-    tmp_path: Path,
-) -> None:
-    """Behavior delta vs M2 (PR #220): the per-call DangerAnalyzer evaluator
-    is gone. An action whose load-time per-plugin verdict was SAFE
-    (``tool.is_dangerous=False``) must now dispatch directly — NO Decision
-    gets created, regardless of whether its content would have flagged at
-    call-time.
-
-    Pre-Lift-0a (M2 wired): the per-call evaluator could declare the action
-    dangerous and the orchestrator created a ``connector_action_approval``
-    Decision with a ``danger_reason`` payload field. Post-Lift-0a: the only
-    surviving gate is the pre-M2 ``tool.is_dangerous and safe_mode`` check,
-    so a load-time-safe action runs even in Safe Mode.
-
-    This is the YAGNI-rollback delta — the M2 wiring no longer affects
-    execution.
-    """
-    ws = uuid.uuid4()
-    plugin = _fake_action_plugin("github", action_name="open_pr")
-    account = _fake_account(ws, "github")
-    # Load-time verdict: SAFE (the prior M2 audit complaint scenario).
-    provider = FakeConnectorActionProvider([_tool(plugin, account, is_dangerous=False)])
-    llm = ScriptedLlm(
-        [
-            LoopTurn(
-                content="opening",
-                tool_calls=(_tc("github__open_pr", title="Ship it"),),
-            ),
-            LoopTurn(
-                content="",
-                tool_calls=(
-                    _declare_command("test -f out.txt"),
-                    _tc("file_write", path="out.txt", content="x"),
-                ),
-            ),
-            LoopTurn(content="done", tool_calls=()),
-        ]
-    )
-    async with memory_session() as session:
-        session.add(WorkspaceRow(id=ws, name="ws", region="us-1", safe_mode=True))
-        await session.flush()
-        run = await _make_run(session, workspace_id=ws)
-        orch = RunOrchestrator(
-            session=session,
-            llm=llm,
-            sandbox_manager=NoopSandboxManager(),
-            connector_actions=provider,
-        )
-        result = await orch.run(run=run, workspace_dir=tmp_path)
-
-        assert result.outcome == "verified"
-        # The action DID dispatch — there is no per-call gate left to block it.
-        assert provider.dispatched, (
-            "load-time-safe action must dispatch directly post-Lift-0a "
-            "(the per-call evaluator that would have blocked it is gone)"
-        )
-        # No connector_action_approval Decision was created.
-        decisions = (await session.execute(select(Decision))).scalars().all()
-        approval_decisions = [d for d in decisions if d.decision == "connector_action_approval"]
-        assert approval_decisions == [], (
-            "no connector_action_approval Decision must be created for a "
-            "load-time-safe action — Lift 0a removed the M2 per-call gate"
-        )
 
 
 def test_orchestrator_module_does_not_re_export_m2_danger_symbols() -> None:
@@ -1552,7 +1387,6 @@ async def test_real_github_list_issues_action_appears_in_tool_schema(
         plugin=meta,
         action=meta.actions["list_issues"],
         account=account,
-        is_dangerous=False,
     )
     provider = FakeConnectorActionProvider([tool])
     llm = ScriptedLlm([LoopTurn(content="done", tool_calls=())])
@@ -1588,7 +1422,6 @@ async def test_real_sentry_list_issues_action_appears_in_tool_schema(
         plugin=meta,
         action=meta.actions["list_issues"],
         account=account,
-        is_dangerous=False,
     )
     provider = FakeConnectorActionProvider([tool])
     llm = ScriptedLlm([LoopTurn(content="done", tool_calls=())])
@@ -1622,7 +1455,6 @@ async def test_new_action_absent_when_workspace_lacks_account(tmp_path: Path) ->
         plugin=meta,
         action=meta.actions["list_issues"],
         account=account,
-        is_dangerous=False,
     )
     provider = FakeConnectorActionProvider([tool])
     llm = ScriptedLlm([LoopTurn(content="done", tool_calls=())])
@@ -1688,7 +1520,6 @@ async def test_real_github_list_issues_dispatches_through_real_pluginrunner(
         resolver = ConnectorActionResolver(
             session=session,
             plugins_by_name={"github": meta},
-            danger_map={},  # plugin-level: safe
             cipher=cipher,
         )
         # The LLM script: call list_issues, then do trivial verifiable file work.

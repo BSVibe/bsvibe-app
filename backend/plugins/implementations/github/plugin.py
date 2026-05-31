@@ -255,8 +255,7 @@ async def comment(context: SkillContext, repo: str, issue_number: int, body: str
 
 # M2 — read-only action: agent reads open issues mid-run for repo context
 # (planning a PR / triaging a comment). Read-only by construction (GET /issues)
-# and so the per-call DangerAnalyzer gate lets it through even when Safe Mode is
-# on — there are no external side effects to compensate. Trimmed to a small
+# — there are no external side effects to compensate. Trimmed to a small
 # bounded shape so the result stays inside the LLM's response budget.
 @p.action(
     name="list_issues",

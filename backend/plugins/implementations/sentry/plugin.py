@@ -173,8 +173,7 @@ async def resolve_issue(context: SkillContext, issue_id: str) -> dict[str, Any]:
 
 # M2 — read-only action: agent queries the project's current unresolved Sentry
 # issues mid-run for context (triaging a bug report, checking whether an error
-# the run is about to fix is already known). Read-only by construction (GET) so
-# the per-call DangerAnalyzer gate lets it through even when Safe Mode is on.
+# the run is about to fix is already known). Read-only by construction (GET).
 @p.action(
     name="list_issues",
     mcp_exposed=True,

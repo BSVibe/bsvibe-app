@@ -73,7 +73,6 @@ from backend.gateway.classifier.static import StaticClassifier
 from backend.gateway.dispatch import DispatchRequest, GatewayDispatcher
 from backend.gateway.llm_client import LlmClient
 from backend.orchestrator.frame import FrameLlm
-from backend.plugins.analyzer import DangerAnalyzer
 from backend.plugins.base import PluginMeta
 from backend.plugins.loader import PluginLoader
 from backend.plugins.runner import PluginRunner
@@ -347,7 +346,6 @@ def build_agent_execution_deps(
     sandbox_manager: SandboxManager | None = None,
     redis_client: Any = None,
     connector_plugins: dict[str, PluginMeta] | None = None,
-    connector_danger_map: dict[str, bool] | None = None,
 ) -> AgentExecutionDeps:
     """The production execution backend for :class:`AgentWorker`.
 
@@ -373,13 +371,13 @@ def build_agent_execution_deps(
     the ``deliver`` + ``settle`` wake-up notifications. ``None`` (the default)
     keeps the pure DB-polling behaviour — the orchestrator emits nothing.
 
-    ``connector_plugins`` + ``connector_danger_map`` (B5b) are the loaded plugin
-    registry and its :class:`DangerAnalyzer` verdicts. When provided, each per-run
-    native :class:`RunOrchestrator` is given a :class:`ConnectorActionResolver` so
-    the work LLM can take the workspace's ``mcp_exposed`` connector actions
-    mid-run (gated by danger + safe_mode). ``None`` (the default, every existing
-    caller/test) surfaces no connector tools — zero behaviour change. They are
-    loaded once at process start (``run_workers``) and shared across runs.
+    ``connector_plugins`` (B5b) is the loaded plugin registry. When provided,
+    each per-run native :class:`RunOrchestrator` is given a
+    :class:`ConnectorActionResolver` so the work LLM can take the workspace's
+    ``mcp_exposed`` connector actions mid-run. ``None`` (the default, every
+    existing caller/test) surfaces no connector tools — zero behaviour change.
+    The registry is loaded once at process start (``run_workers``) and shared
+    across runs. Lift 0c retired the load-time danger verdict map.
     """
     settings = settings or get_settings()
     box: SandboxManager = sandbox_manager or build_sandbox_manager() or NoopSandboxManager()
@@ -545,16 +543,15 @@ def build_agent_execution_deps(
         # never call them, and it could not consult knowledge on demand.
         skill_loader = _skill_loader_for(run.workspace_id)
         # B5b — connector-action provider. When the worker loaded the plugin
-        # registry + danger_map (``run_workers`` does), the native loop can take
-        # the workspace's ``mcp_exposed`` connector actions mid-run, gated by
-        # DangerAnalyzer + safe_mode. None (no plugins loaded — every legacy
-        # caller/test) → no connector tools, loop unchanged. Built per-run with
-        # the run's session (mirrors the orchestrator itself).
+        # registry (``run_workers`` does), the native loop can take the
+        # workspace's ``mcp_exposed`` connector actions mid-run. None (no
+        # plugins loaded — every legacy caller/test) → no connector tools,
+        # loop unchanged. Built per-run with the run's session (mirrors the
+        # orchestrator itself). Lift 0c removed the load-time danger gating.
         connector_actions = (
             ConnectorActionResolver(
                 session=session,
                 plugins_by_name=connector_plugins,
-                danger_map=connector_danger_map or {},
                 cipher=CredentialCipher(_key_from_settings()),
             )
             if connector_plugins
@@ -951,30 +948,22 @@ async def load_connector_plugins(
     *,
     settings: Settings | None = None,
     plugins_dir: Path | None = None,
-) -> tuple[dict[str, PluginMeta], dict[str, bool]]:
-    """Load the plugin registry + its :class:`DangerAnalyzer` verdicts (B5b).
+) -> dict[str, PluginMeta]:
+    """Load the plugin registry (B5b).
 
-    Returns ``(plugins_by_name, danger_map)`` so the native agent loop can
-    surface the workspace's ``mcp_exposed`` connector actions as tools and gate
-    the dangerous ones (the ``danger_map`` is what DangerAnalyzer populated at
-    load). The cache lives under ``<run_workspace_root>/.danger_cache.json`` so
-    re-detection is skipped across restarts. The LLM fallback is intentionally
-    left off here — built-in connectors are AST-classifiable (they import
-    ``httpx`` etc.), so static analysis suffices and the load stays
-    network-free."""
+    Returns ``plugins_by_name`` so the native agent loop can surface the
+    workspace's ``mcp_exposed`` connector actions as tools. Lift 0c removed
+    the load-time danger scanner — the returned registry no longer carries a
+    verdict map."""
     settings = settings or get_settings()
     root = plugins_dir or _PLUGINS_IMPLEMENTATIONS_DIR
-    cache_path = Path(settings.run_workspace_root) / ".danger_cache.json"
-    analyzer = DangerAnalyzer(cache_path=cache_path)
-    loader = PluginLoader(root, danger_analyzer=analyzer)
+    loader = PluginLoader(root)
     registry = await loader.load_all()
-    danger_map = dict(loader.danger_map)
     logger.info(
         "connector_action_plugins_loaded",
         count=len(registry),
-        dangerous=sorted(n for n, d in danger_map.items() if d),
     )
-    return dict(registry), danger_map
+    return dict(registry)
 
 
 # ---------------------------------------------------------------------------
@@ -1362,16 +1351,15 @@ async def run_workers() -> None:
         session_factory=session_factory, redis_url=settings.redis_url
     )
 
-    # B5b — load the plugin registry + DangerAnalyzer verdicts ONCE so each
-    # per-run native loop can surface the workspace's connector actions as tools
-    # (gated by danger + safe_mode). Shared across runs; the per-run resolver
-    # only adds the run's session.
-    connector_plugins, connector_danger_map = await load_connector_plugins(settings=settings)
+    # B5b — load the plugin registry ONCE so each per-run native loop can
+    # surface the workspace's connector actions as tools. Shared across runs;
+    # the per-run resolver only adds the run's session. Lift 0c removed the
+    # load-time danger verdict map.
+    connector_plugins = await load_connector_plugins(settings=settings)
     execution = build_agent_execution_deps(
         settings=settings,
         redis_client=redis_client,
         connector_plugins=connector_plugins,
-        connector_danger_map=connector_danger_map,
     )
     delivery_adapter = await build_delivery_adapter(session_factory=session_factory)
     runtime = build_worker_runtime(

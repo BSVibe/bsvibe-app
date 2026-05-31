@@ -77,7 +77,6 @@ def test_resolver_satisfies_provider_protocol() -> None:
         ConnectorActionResolver(
             session=object(),  # type: ignore[arg-type]
             plugins_by_name={},
-            danger_map={},
             cipher=_cipher(),
         ),
         ConnectorActionProvider,
@@ -96,14 +95,11 @@ async def test_list_actions_only_for_workspace_accounts() -> None:
         await _seed_account(
             session, workspace_id=ws, connector="github", cipher=cipher, secret="ghp"
         )
-        resolver = ConnectorActionResolver(
-            session=session, plugins_by_name=plugins, danger_map={"github": True}, cipher=cipher
-        )
+        resolver = ConnectorActionResolver(session=session, plugins_by_name=plugins, cipher=cipher)
         tools = await resolver.list_actions(ws)
         assert len(tools) == 1
         assert tools[0].connector == "github"
         assert tools[0].action_name == "open_pr"
-        assert tools[0].is_dangerous is True
         # A different workspace with no account → no actions.
         assert await resolver.list_actions(uuid.uuid4()) == []
 
@@ -128,14 +124,10 @@ async def test_list_actions_skips_non_mcp_exposed_and_unloaded() -> None:
         await _seed_account(
             session, workspace_id=ws, connector="unknown", cipher=cipher, secret="x"
         )
-        resolver = ConnectorActionResolver(
-            session=session, plugins_by_name=plugins, danger_map={}, cipher=cipher
-        )
+        resolver = ConnectorActionResolver(session=session, plugins_by_name=plugins, cipher=cipher)
         tools = await resolver.list_actions(ws)
         names = {t.action_name for t in tools}
         assert names == {"open_pr"}  # non-exposed + unloaded both excluded
-        # No danger_map entry → defaults to not dangerous.
-        assert tools[0].is_dangerous is False
 
 
 async def test_list_actions_skips_inactive_account() -> None:
@@ -148,9 +140,7 @@ async def test_list_actions_skips_inactive_account() -> None:
         )
         row.is_active = False
         await session.flush()
-        resolver = ConnectorActionResolver(
-            session=session, plugins_by_name=plugins, danger_map={}, cipher=cipher
-        )
+        resolver = ConnectorActionResolver(session=session, plugins_by_name=plugins, cipher=cipher)
         assert await resolver.list_actions(ws) == []
 
 
@@ -162,9 +152,7 @@ async def test_credentials_for_decrypts_account_secret() -> None:
         await _seed_account(
             session, workspace_id=ws, connector="github", cipher=cipher, secret="super-secret"
         )
-        resolver = ConnectorActionResolver(
-            session=session, plugins_by_name=plugins, danger_map={}, cipher=cipher
-        )
+        resolver = ConnectorActionResolver(session=session, plugins_by_name=plugins, cipher=cipher)
         tool = (await resolver.list_actions(ws))[0]
         creds = resolver.credentials_for(tool)
         assert creds == {"token": "super-secret"}
@@ -179,9 +167,7 @@ async def test_dispatch_injects_credentials_into_action_context() -> None:
         await _seed_account(
             session, workspace_id=ws, connector="github", cipher=cipher, secret="tkn"
         )
-        resolver = ConnectorActionResolver(
-            session=session, plugins_by_name=plugins, danger_map={}, cipher=cipher
-        )
+        resolver = ConnectorActionResolver(session=session, plugins_by_name=plugins, cipher=cipher)
         tool = (await resolver.list_actions(ws))[0]
         creds = resolver.credentials_for(tool)
         result = await resolver.dispatch(tool, credentials=creds, kwargs={"title": "T"})
@@ -209,7 +195,6 @@ def test_tool_is_frozen_dataclass() -> None:
         plugin=plugin,
         action=plugin.actions["open_pr"],
         account=account,
-        is_dangerous=False,
     )
     assert tool.connector == "github"
     assert tool.action_name == "open_pr"
