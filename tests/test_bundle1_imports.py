@@ -5,11 +5,11 @@ from __future__ import annotations
 
 def test_all_three_modules_import():
     import backend.extensions
-    import backend.extensions.implementations.audit as audit_mod
     import backend.extensions.plugin
     import backend.router
     import backend.router.accounts
     import backend.supervisor
+    import plugin.audit as audit_mod
 
     # Each module re-exports the contract surface that downstream
     # bundles will depend on.

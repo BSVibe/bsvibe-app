@@ -5,9 +5,9 @@ from __future__ import annotations
 import structlog
 from sqlalchemy import select
 
-from backend.extensions.implementations.audit.emitter import AuditEmitter
-from backend.extensions.implementations.audit.events import AuditActor, AuditEventBase
-from backend.extensions.implementations.audit.models import AuditOutboxRecord
+from plugin.audit.emitter import AuditEmitter
+from plugin.audit.events import AuditActor, AuditEventBase
+from plugin.audit.models import AuditOutboxRecord
 
 
 class _Event(AuditEventBase):

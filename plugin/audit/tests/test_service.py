@@ -6,10 +6,10 @@ from unittest.mock import AsyncMock
 
 from sqlalchemy import select
 
-from backend.extensions.implementations.audit.emitter import AuditEmitter
-from backend.extensions.implementations.audit.events import AuditActor, AuditEventBase
-from backend.extensions.implementations.audit.models import AuditOutboxRecord
-from backend.extensions.implementations.audit.service import make_actor, safe_emit
+from plugin.audit.emitter import AuditEmitter
+from plugin.audit.events import AuditActor, AuditEventBase
+from plugin.audit.models import AuditOutboxRecord
+from plugin.audit.service import make_actor, safe_emit
 
 
 class _Event(AuditEventBase):
@@ -52,7 +52,7 @@ class TestSafeEmitSwallowsErrors:
     async def test_no_outbox_row_inserted_when_emit_raises(self, session):
         from sqlalchemy import select
 
-        from backend.extensions.implementations.audit.models import AuditOutboxRecord
+        from plugin.audit.models import AuditOutboxRecord
 
         bad_emitter = AuditEmitter()
         bad_emitter._store.insert = AsyncMock(  # type: ignore[method-assign]

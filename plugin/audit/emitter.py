@@ -5,8 +5,8 @@ from __future__ import annotations
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.extensions.implementations.audit.events import AuditEventBase
-from backend.extensions.implementations.audit.store import OutboxStore
+from plugin.audit.events import AuditEventBase
+from plugin.audit.store import OutboxStore
 
 
 def _ambient_trace_id() -> str | None:
@@ -22,7 +22,7 @@ class AuditEmitter:
 
     def __init__(self, *, store: OutboxStore | None = None) -> None:
         self._store = store or OutboxStore()
-        self._logger = structlog.get_logger("backend.extensions.implementations.audit.emitter")
+        self._logger = structlog.get_logger("plugin.audit.emitter")
 
     async def emit(self, event: AuditEventBase, *, session: AsyncSession) -> None:
         if event.trace_id is None:

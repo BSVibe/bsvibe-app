@@ -32,7 +32,7 @@ from backend.execution.db import (
     ExecutionRun,
     RunStatus,
 )
-from backend.extensions.implementations.audit.models import AuditOutboxRecord
+from plugin.audit.models import AuditOutboxRecord
 
 from .._support import db_engine, fake_current_user
 

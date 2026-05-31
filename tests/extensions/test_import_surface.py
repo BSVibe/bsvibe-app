@@ -18,6 +18,9 @@ import pytest
 _PLUGINS = "backend." + "plugins"
 _SKILLS = "backend." + "skills"
 _SUP_AUDIT = "backend." + "supervisor.audit"
+# Lift R2a — audit relocated from backend.extensions.implementations.audit
+# to repo-root plugin.audit. The old extensions path is also dead now.
+_EXT_AUDIT = "backend." + "extensions.implementations.audit"
 
 
 def test_new_engine_paths_importable() -> None:
@@ -48,8 +51,10 @@ def test_extension_protocols_importable() -> None:
         assert hasattr(protocols, name), f"missing protocol: {name}"
 
 
-def test_audit_relocated_under_extensions() -> None:
-    audit_mod = importlib.import_module("backend.extensions.implementations.audit")
+def test_audit_relocated_to_repo_root_plugin() -> None:
+    # Lift R2a — audit lives at repo-root ``plugin.audit`` (was under
+    # ``backend.extensions.implementations.audit`` between Lift G and R1).
+    audit_mod = importlib.import_module("plugin.audit")
     for name in (
         "AuditEmitter",
         "AuditEvent",
@@ -95,6 +100,14 @@ def test_extensions_top_level_union_reexport() -> None:
         f"{_SUP_AUDIT}.models",
         f"{_SUP_AUDIT}.service",
         f"{_SUP_AUDIT}.store",
+        # Lift R2a — extensions/implementations/audit path retired in favor
+        # of repo-root plugin/audit/.
+        _EXT_AUDIT,
+        f"{_EXT_AUDIT}.emitter",
+        f"{_EXT_AUDIT}.events",
+        f"{_EXT_AUDIT}.models",
+        f"{_EXT_AUDIT}.service",
+        f"{_EXT_AUDIT}.store",
     ],
 )
 def test_stale_import_paths_gone(stale: str) -> None:

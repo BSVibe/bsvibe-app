@@ -48,12 +48,12 @@ from backend.execution.db import (
     WorkStepStatus,
 )
 from backend.execution.verified_deliverable import settle_run_context
-from backend.extensions.implementations.audit.events import AuditActor, AuditResource
-from backend.extensions.implementations.audit.service import safe_emit
 from backend.identity.db import UserRow
 from backend.knowledge.graph.storage import FileSystemStorage
 from backend.knowledge.retrieval.resolved_decisions_retriever import ResolvedDecisionsRetriever
 from backend.orchestrator.agent_runner import AgentRunner
+from plugin.audit.events import AuditActor, AuditResource
+from plugin.audit.service import safe_emit
 
 #: Payload ``kind`` on the settle activity emitted by the resolve endpoint
 #: (B11b). The :class:`~backend.workers.settle_worker.SettleWorker` drains the

@@ -6,8 +6,8 @@ from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import select
 
-from backend.extensions.implementations.audit.models import AuditOutboxRecord
-from backend.extensions.implementations.audit.store import OutboxStore
+from plugin.audit.models import AuditOutboxRecord
+from plugin.audit.store import OutboxStore
 
 
 def _now() -> datetime:

@@ -61,7 +61,6 @@ from backend.execution.knowledge_orchestrator import KnowledgeAnswerOrchestrator
 from backend.execution.loop_llm import GatewayLoopLlm
 from backend.execution.orchestrator import CanonRetriever, RunCompute, RunOrchestrator
 from backend.executors.orchestrator import ExecutorOrchestrator
-from backend.extensions.implementations.audit.models import AuditOutboxRecord
 from backend.extensions.plugin.base import PluginMeta
 from backend.extensions.plugin.loader import PluginLoader
 from backend.extensions.plugin.runner import PluginRunner
@@ -108,6 +107,7 @@ from backend.workers.settle_worker import (
     build_garden_promoter_factory,
 )
 from backend.workers.streams import RedisStreamConsumer, StreamHandler
+from plugin.audit.models import AuditOutboxRecord
 
 logger = structlog.get_logger(__name__)
 

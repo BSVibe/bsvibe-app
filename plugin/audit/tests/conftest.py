@@ -8,7 +8,7 @@ import pytest_asyncio
 from sqlalchemy.ext.asyncio import AsyncSession
 
 # Imported for table-registration side effects on the shared Base.metadata.
-import backend.extensions.implementations.audit.models  # noqa: F401
+import plugin.audit.models  # noqa: F401
 from tests._support import memory_session
 
 

@@ -76,7 +76,6 @@ def test_target_metadata_covers_all_bases():
     from backend.embedding.db import GatewayEmbeddingBase
     from backend.execution.db import ExecutionBase
     from backend.executors.db import ExecutorsBase
-    from backend.extensions.implementations.audit.models import AuditOutboxBase, SupervisorBase
     from backend.identity.db import IdentityBase
     from backend.intake.db import IntakeBase
     from backend.knowledge.canonicalization.db import CanonicalizationBase
@@ -89,6 +88,7 @@ def test_target_metadata_covers_all_bases():
     from backend.router.rules.db import GatewayRulesBase
     from backend.workers.db import WorkersBase
     from backend.workspaces.db import WorkspacesBase
+    from plugin.audit.models import AuditOutboxBase, SupervisorBase
 
     expected_tables = {
         # Bundle 1

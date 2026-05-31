@@ -9,7 +9,7 @@ import pytest_asyncio
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-from backend.extensions.implementations.audit.models import (
+from plugin.audit.models import (
     AuditEvent,
     AuditOutboxBase,
     AuditOutboxRecord,

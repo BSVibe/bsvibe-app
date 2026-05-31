@@ -37,9 +37,9 @@ from backend.execution.audit_events import (
     LoopTerminal,
     ToolCall,
 )
-from backend.extensions.implementations.audit.emitter import AuditEmitter
-from backend.extensions.implementations.audit.events import AuditActor, AuditResource
-from backend.extensions.implementations.audit.service import safe_emit
+from plugin.audit.emitter import AuditEmitter
+from plugin.audit.events import AuditActor, AuditResource
+from plugin.audit.service import safe_emit
 
 pytestmark = pytest.mark.asyncio
 
@@ -193,7 +193,7 @@ async def test_bridge_failure_does_not_propagate() -> None:
 
     # Monkey-patch the bus accessor to raise so the bridge's except clause
     # fires. The caller must still return normally.
-    import backend.extensions.implementations.audit.service as service_mod
+    import plugin.audit.service as service_mod
 
     original_safe_emit = service_mod.safe_emit
     # The bridge soft-imports inside the function — patching that import
