@@ -9,12 +9,12 @@ from sqlalchemy import or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.router.embedding.db import (
+from backend.embedding.db import (
     AccountEmbeddingSettingsRow,
     IntentDefinitionRow,
     IntentExampleRow,
 )
-from backend.router.embedding.settings import EmbeddingSettings
+from backend.embedding.settings import EmbeddingSettings
 
 
 class IntentDuplicateError(Exception):

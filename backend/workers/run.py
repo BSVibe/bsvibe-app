@@ -75,6 +75,7 @@ from backend.router.classifier.base import ClassificationFeatures
 from backend.router.classifier.local_vs_cloud import LocalVsCloudClassifier
 from backend.router.classifier.static import StaticClassifier
 from backend.router.dispatch import DispatchRequest, GatewayDispatcher
+from backend.router.dispatch.strategies import EXECUTOR_PROVIDER, is_executor_account
 from backend.router.llm_client import LlmClient
 from backend.router.routing.run_routing import resolve_route
 from backend.skills.loader import SkillLoader
@@ -186,7 +187,7 @@ def _single_native_account(accounts: list[ModelAccount]) -> ModelAccount | None:
     "exactly one active account" check returns nothing and silently drops these
     stages to their keyword/soft fallback. Filter executor accounts out first,
     then require exactly one native account (never guess among several)."""
-    native = [a for a in accounts if a.provider != "executor"]
+    native = [a for a in accounts if not is_executor_account(a)]
     return native[0] if len(native) == 1 else None
 
 
@@ -255,7 +256,7 @@ async def _resolve_judge_llm(
     verify without a judge.
     """
     accounts = await _list_active_workspace_accounts(session, run.workspace_id)
-    judge_account = next((a for a in accounts if a.provider != "executor"), None)
+    judge_account = next((a for a in accounts if not is_executor_account(a)), None)
     if judge_account is None:
         logger.info(
             "executor_judge_llm_unresolved",
@@ -486,7 +487,7 @@ def build_agent_execution_deps(
         # path below is unchanged. The redis client is threaded in by
         # ``run_workers`` (built whenever a Redis URL is configured); a None
         # client → the orchestrator raises a Decision (cannot dispatch).
-        if account.provider == "executor":
+        if is_executor_account(account):
             # B2b — executor verification convergence. The orchestrator now runs
             # the SAME verification the native loop runs, so it needs the same
             # sandbox manager (mount the run dir to run command checks) and a
@@ -1052,7 +1053,7 @@ async def check_executor_dispatch_health(
             select(func.count())
             .select_from(ModelAccount)
             .where(
-                ModelAccount.provider == "executor",
+                ModelAccount.provider == EXECUTOR_PROVIDER,
                 ModelAccount.is_active.is_(True),
             )
         )

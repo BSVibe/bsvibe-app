@@ -31,7 +31,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column
 
 from backend.data import Base
-from backend.router.embedding.column import EmbeddingVector
+from backend.embedding.column import EmbeddingVector
 
 GatewayRoutingBase = Base
 

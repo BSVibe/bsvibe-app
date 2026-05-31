@@ -73,6 +73,7 @@ def test_target_metadata_covers_all_bases():
     import backend.router.accounts.account_models  # noqa: F401 — registers `accounts` table
     from backend.connectors.db import ConnectorsBase
     from backend.delivery.db import DeliveryBase
+    from backend.embedding.db import GatewayEmbeddingBase
     from backend.execution.db import ExecutionBase
     from backend.executors.db import ExecutorsBase
     from backend.identity.db import IdentityBase
@@ -83,7 +84,6 @@ def test_target_metadata_covers_all_bases():
     from backend.notifications.db import NotificationsBase
     from backend.router.accounts.models import AccountsBase
     from backend.router.budget.models import GatewayBudgetBase
-    from backend.router.embedding.db import GatewayEmbeddingBase
     from backend.router.routing.db import GatewayRoutingBase
     from backend.router.rules.db import GatewayRulesBase
     from backend.supervisor.audit.models import AuditOutboxBase, SupervisorBase

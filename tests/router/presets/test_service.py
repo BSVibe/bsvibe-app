@@ -7,8 +7,8 @@ from typing import Any
 
 import pytest
 
-from backend.router.embedding.repository import IntentRepository
-from backend.router.embedding.service import EmbeddedExample
+from backend.embedding.repository import IntentRepository
+from backend.embedding.service import EmbeddedExample
 from backend.router.presets.models import ModelMapping
 from backend.router.presets.service import PresetService
 from backend.router.routing.catalog_repository import ModelCatalogRepository

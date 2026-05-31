@@ -5,7 +5,7 @@ from __future__ import annotations
 from sqlalchemy import Column
 from sqlalchemy.dialects import postgresql, sqlite
 
-from backend.router.embedding.column import EmbeddingVector
+from backend.embedding.column import EmbeddingVector
 
 
 class TestDialectCompile:

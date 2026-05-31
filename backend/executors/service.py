@@ -29,6 +29,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.executors.db import WorkerInstallTokenRow, WorkerRow
 from backend.router.accounts.account_service import ensure_personal_account
 from backend.router.accounts.repository import ModelAccountRepository
+from backend.router.dispatch.strategies import EXECUTOR_PROVIDER
 
 logger = structlog.get_logger(__name__)
 
@@ -131,7 +132,7 @@ async def _upsert_executor_model_accounts(
         await repo.create(
             workspace_id=workspace_id,
             account_id=account_id,
-            provider="executor",
+            provider=EXECUTOR_PROVIDER,
             label=_executor_label(name, capability, single=single),
             litellm_model=f"executor/{capability}",
             api_base=None,

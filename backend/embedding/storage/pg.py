@@ -19,8 +19,8 @@ from collections.abc import Iterable
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.router.embedding.db import IntentExampleRow
-from backend.router.embedding.storage.backend import (
+from backend.embedding.db import IntentExampleRow
+from backend.embedding.storage.backend import (
     SearchHit,
     VectorEntry,
     VectorSearchBackend,

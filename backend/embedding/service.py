@@ -13,7 +13,7 @@ from dataclasses import dataclass
 
 import structlog
 
-from backend.router.embedding.provider import EmbeddingProvider
+from backend.embedding.provider import EmbeddingProvider
 
 logger = structlog.get_logger(__name__)
 

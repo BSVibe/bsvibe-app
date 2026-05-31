@@ -10,6 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.router.accounts.models import ModelAccount
+from backend.router.dispatch.strategies import EXECUTOR_PROVIDER
 
 
 class ModelAccountRepository:
@@ -76,7 +77,7 @@ class ModelAccountRepository:
         stmt = select(ModelAccount).where(
             ModelAccount.workspace_id == workspace_id,
             ModelAccount.account_id == account_id,
-            ModelAccount.provider != "executor",
+            ModelAccount.provider != EXECUTOR_PROVIDER,
         )
         if only_active:
             stmt = stmt.where(ModelAccount.is_active.is_(True))
@@ -95,7 +96,7 @@ class ModelAccountRepository:
         """
         stmt = select(ModelAccount).where(
             ModelAccount.workspace_id == workspace_id,
-            ModelAccount.provider == "executor",
+            ModelAccount.provider == EXECUTOR_PROVIDER,
         )
         rows = (await self._session.execute(stmt)).scalars().all()
         target = str(worker_id)

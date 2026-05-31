@@ -353,7 +353,11 @@ def test_known_call_sites_are_in_expected_modules() -> None:
     # The two known terminals (native + executor). If this set changes, a
     # human should look at the new caller and confirm the verify gate is in
     # place — and then update the expected set here.
+    #
+    # Lift D split executors/orchestrator.py into 4 files (§17.8). The
+    # verified-write call now lives in the verification-handoff sub-module
+    # (executors/verify_handoff.py) — same one terminal, just moved.
     assert callers == {
         "execution/orchestrator.py",
-        "executors/orchestrator.py",
+        "executors/verify_handoff.py",
     }, f"unexpected caller surface for write_verified_deliverable: {callers}"

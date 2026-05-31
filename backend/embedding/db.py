@@ -23,7 +23,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from backend.data import Base
-from backend.router.embedding.column import EmbeddingVector
+from backend.embedding.column import EmbeddingVector
 
 GatewayEmbeddingBase = Base
 

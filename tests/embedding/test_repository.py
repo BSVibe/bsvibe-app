@@ -6,12 +6,12 @@ import uuid
 
 import pytest
 
-from backend.router.embedding.repository import (
+from backend.embedding.repository import (
     EmbeddingSettingsRepository,
     IntentDuplicateError,
     IntentRepository,
 )
-from backend.router.embedding.settings import EmbeddingSettings
+from backend.embedding.settings import EmbeddingSettings
 
 
 @pytest.fixture

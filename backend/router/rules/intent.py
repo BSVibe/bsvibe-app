@@ -17,7 +17,7 @@ from typing import Protocol, runtime_checkable
 
 import structlog
 
-from backend.router.embedding.storage.backend import VectorSearchBackend
+from backend.embedding.storage.backend import VectorSearchBackend
 
 logger = structlog.get_logger(__name__)
 
