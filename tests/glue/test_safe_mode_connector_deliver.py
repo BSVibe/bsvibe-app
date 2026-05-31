@@ -69,8 +69,8 @@ from backend.execution.db import (
     ExecutionRun,
     RunStatus,
 )
-from backend.plugins.implementations.notion import plugin as notion_module
-from backend.plugins.loader import PluginLoader
+from backend.extensions.implementations.notion import plugin as notion_module
+from backend.extensions.plugin.loader import PluginLoader
 from backend.router.accounts.crypto import CredentialCipher
 from backend.workers.delivery_worker import DeliveryWorker, DeliveryWorkerConfig
 from backend.workspaces.db import WorkspaceRow

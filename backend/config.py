@@ -98,7 +98,7 @@ class Settings(BaseSettings):
     knowledge_embedding_api_base: str | None = None
     knowledge_embedding_timeout_s: float = 30.0
 
-    # Skills settings (backend.skills) — per-workspace skill directory.
+    # Skills settings (backend.extensions.skill) — per-workspace skill directory.
     # Layout: ``<skills_root>/<workspace_id>/*.md`` per Workflow §6 #5.
     skills_root: str = "var/skills"
 

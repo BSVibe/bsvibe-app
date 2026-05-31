@@ -8,12 +8,12 @@ the third + FINAL Lift-0 PR (after #224's per-call evaluator rollback and
 
 The deltas attributable to this lift:
 
-1. **Module gone.** ``backend.plugins.analyzer`` no longer importable —
+1. **Module gone.** ``backend.extensions.plugin.analyzer`` no longer importable —
    ``DangerAnalyzer`` / ``StaticAnalyzer`` symbols are removed, and the
    package no longer re-exports them.
 
 2. **Plugin load does not invoke a static danger scan.** Loading a plugin
-   directory via :class:`backend.plugins.loader.PluginLoader` does NOT
+   directory via :class:`backend.extensions.plugin.loader.PluginLoader` does NOT
    read the plugin source for AST scan nor await any LLM scan. The
    loader's constructor no longer accepts a ``danger_analyzer`` arg, and
    no ``danger_map`` attribute remains. Real PG when ``BSVIBE_DATABASE_URL``
@@ -64,7 +64,7 @@ from backend.execution.connector_actions import (
 )
 from backend.execution.db import Decision
 from backend.execution.orchestrator import RunOrchestrator
-from backend.plugins.loader import PluginLoader
+from backend.extensions.plugin.loader import PluginLoader
 from backend.supervisor.sandbox import NoopSandboxManager
 from backend.workspaces.db import WorkspaceRow
 from tests._support import memory_session
@@ -86,19 +86,19 @@ from tests.execution.test_run_orchestrator import (
 )
 
 # ---------------------------------------------------------------------------
-# Delta 1: backend.plugins.analyzer module is gone
+# Delta 1: backend.extensions.plugin.analyzer module is gone
 # ---------------------------------------------------------------------------
 
 
 def test_analyzer_module_deleted() -> None:
-    """``backend.plugins.analyzer`` is fully removed (D7 / Lift 0)."""
+    """``backend.extensions.plugin.analyzer`` is fully removed (D7 / Lift 0)."""
     with pytest.raises(ModuleNotFoundError):
-        importlib.import_module("backend.plugins.analyzer")
+        importlib.import_module("backend.extensions.plugin.analyzer")
 
 
 def test_plugins_init_does_not_reexport_analyzer_symbols() -> None:
-    """``backend.plugins`` no longer exposes the dead surface."""
-    import backend.plugins as pkg
+    """``backend.extensions.plugin`` no longer exposes the dead surface."""
+    import backend.extensions.plugin as pkg
 
     assert not hasattr(pkg, "DangerAnalyzer")
     assert not hasattr(pkg, "StaticAnalyzer")
@@ -134,13 +134,13 @@ def test_plugin_loader_source_does_not_invoke_analyzer() -> None:
     analyzer or any ``danger_*`` symbol. Catches a regression where
     someone wires a renamed hook back without re-running the substrate
     fixture."""
-    import backend.plugins.loader as mod
+    import backend.extensions.plugin.loader as mod
 
     src = inspect.getsource(mod)
     assert "DangerAnalyzer" not in src
     assert "danger_analyzer" not in src
     assert "danger_map" not in src
-    assert "from backend.plugins.analyzer" not in src
+    assert "from backend.extensions.plugin.analyzer" not in src
 
 
 # ---------------------------------------------------------------------------
@@ -180,7 +180,7 @@ def test_connector_action_resolver_constructor_drops_danger_map() -> None:
 
 async def test_github_list_issues_still_in_agent_tool_schema(tmp_path: Path) -> None:
     """The github connector's ``list_issues`` @p.action still surfaces."""
-    from backend.plugins.implementations.github import plugin as github_module
+    from backend.extensions.implementations.github import plugin as github_module
 
     ws = uuid.uuid4()
     meta = github_module.p.meta
@@ -227,7 +227,7 @@ async def test_github_list_issues_still_in_agent_tool_schema(tmp_path: Path) -> 
 
 async def test_sentry_list_issues_still_in_agent_tool_schema(tmp_path: Path) -> None:
     """The sentry connector's ``list_issues`` @p.action still surfaces."""
-    from backend.plugins.implementations.sentry import plugin as sentry_module
+    from backend.extensions.implementations.sentry import plugin as sentry_module
 
     ws = uuid.uuid4()
     meta = sentry_module.p.meta

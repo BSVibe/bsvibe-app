@@ -8,7 +8,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-# Allow-list matches backend.plugins.VALID_JURISDICTIONS — single source
+# Allow-list matches backend.extensions.plugin.VALID_JURISDICTIONS — single source
 # of truth lives in workspace + plugin spec; ModelAccount mirrors the same
 # values so the validator chain is uniform.
 Jurisdiction = Literal["us", "eu", "kr", "local", "unknown"]

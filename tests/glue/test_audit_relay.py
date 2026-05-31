@@ -28,7 +28,7 @@ import pytest
 import respx
 
 from backend.config import Settings
-from backend.supervisor.audit.models import AuditOutboxRecord
+from backend.extensions.implementations.audit.models import AuditOutboxRecord
 from backend.workers.relays import HttpRelay, build_relay
 from backend.workers.run import LoggingRelay
 

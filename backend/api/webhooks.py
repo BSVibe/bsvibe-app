@@ -39,22 +39,22 @@ from backend.api.deps import get_db_session
 from backend.config import get_settings
 from backend.connectors.handshake import handshake_response
 from backend.connectors.resolver import ConnectorInboundResolver, UnknownConnectorError
-from backend.intake.webhook import WebhookReceiver
-from backend.plugins.implementations.discord.webhook import (
+from backend.extensions.implementations.discord.webhook import (
     WebhookSignatureError as DiscordSignatureError,
 )
-from backend.plugins.implementations.github.webhook import (
+from backend.extensions.implementations.github.webhook import (
     WebhookSignatureError as GithubSignatureError,
 )
-from backend.plugins.implementations.sentry.webhook import (
+from backend.extensions.implementations.sentry.webhook import (
     WebhookSignatureError as SentrySignatureError,
 )
-from backend.plugins.implementations.slack.webhook import (
+from backend.extensions.implementations.slack.webhook import (
     WebhookSignatureError as SlackSignatureError,
 )
-from backend.plugins.implementations.telegram.webhook import (
+from backend.extensions.implementations.telegram.webhook import (
     WebhookSignatureError as TelegramSignatureError,
 )
+from backend.intake.webhook import WebhookReceiver
 from backend.router.accounts.crypto import CredentialCipher, _key_from_settings
 from backend.workers.emit import STREAM_INTAKE, emit_stream_notification, get_emit_redis_client
 

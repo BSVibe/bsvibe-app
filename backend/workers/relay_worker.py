@@ -1,13 +1,13 @@
 """RelayWorker — drain ``audit_outbox`` into a remote sink.
 
 Workflow §12.5 #8 (Bundle G — Workers). Uses
-:class:`backend.supervisor.audit.OutboxStore` for read + ack, and a caller-
+:class:`backend.extensions.implementations.audit.OutboxStore` for read + ack, and a caller-
 supplied :class:`Relay` adapter to ship each batch. The adapter is a
 Protocol so this module stays transport-agnostic — HTTP, gRPC, or in-memory
 test sink all satisfy it.
 
 Closes the long-deferred Subscriber_Durability_Followup #1 site: audit emit
-no longer fires-and-forgets — :func:`backend.supervisor.audit.safe_emit`
+no longer fires-and-forgets — :func:`backend.extensions.implementations.audit.safe_emit`
 lands a row in ``audit_outbox`` inside the request transaction, this worker
 drains it on its own schedule, and persistent failures dead-letter via
 :meth:`OutboxStore.record_failure`.
@@ -22,8 +22,8 @@ from typing import Protocol
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from backend.supervisor.audit.models import AuditOutboxRecord
-from backend.supervisor.audit.store import OutboxStore
+from backend.extensions.implementations.audit.models import AuditOutboxRecord
+from backend.extensions.implementations.audit.store import OutboxStore
 from backend.workers.base import BaseWorker
 
 logger = structlog.get_logger(__name__)

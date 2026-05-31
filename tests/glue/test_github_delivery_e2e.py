@@ -41,10 +41,10 @@ from backend.delivery.connector_dispatch import (
 from backend.delivery.db import DeliveryEventRow
 from backend.execution.db import Deliverable, ExecutionRun, RunStatus
 from backend.execution.orchestrator import LoopToolCall, LoopTurn, RunOrchestrator
-from backend.plugins.implementations.github import plugin as github_module
-from backend.plugins.loader import PluginLoader
+from backend.extensions.implementations.github import plugin as github_module
+from backend.extensions.plugin.loader import PluginLoader
+from backend.extensions.skill.loader import SkillLoader
 from backend.router.accounts.crypto import CredentialCipher
-from backend.skills.loader import SkillLoader
 from backend.supervisor.sandbox import NoopSandboxManager
 from backend.workers.agent_worker import AgentExecutionDeps, AgentWorker
 from backend.workers.delivery_worker import DeliveryWorker, DeliveryWorkerConfig

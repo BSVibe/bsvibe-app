@@ -30,6 +30,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.embedding.repository import IntentRepository
 from backend.embedding.service import EmbeddingService
+from backend.extensions.implementations.audit.events import AuditActor, AuditEventBase
 from backend.router.presets.events import PresetAppliedEvent
 from backend.router.presets.models import (
     ModelMapping,
@@ -41,13 +42,12 @@ from backend.router.presets.registry import PresetRegistry
 from backend.router.routing.catalog_repository import ModelCatalogRepository
 from backend.router.rules.db import RoutingRuleRow
 from backend.router.rules.repository import RulesRepository
-from backend.supervisor.audit.events import AuditActor, AuditEventBase
 
 logger = structlog.get_logger(__name__)
 
 
 class AuditEmitterProtocol(Protocol):
-    """Just the slice of :class:`backend.supervisor.audit.emitter.AuditEmitter`
+    """Just the slice of :class:`backend.extensions.implementations.audit.emitter.AuditEmitter`
     that :class:`PresetService` needs — kept as a Protocol so tests can
     inject a stub without touching the real outbox."""
 

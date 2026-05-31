@@ -9,8 +9,8 @@ import pytest
 import pytest_asyncio
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from backend.supervisor.audit.models import AuditOutboxBase, AuditOutboxRecord
-from backend.supervisor.audit.store import OutboxStore
+from backend.extensions.implementations.audit.models import AuditOutboxBase, AuditOutboxRecord
+from backend.extensions.implementations.audit.store import OutboxStore
 from backend.workers.relay_worker import RelayConfig, RelayWorker
 
 from .._support import db_engine

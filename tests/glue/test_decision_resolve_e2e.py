@@ -41,8 +41,8 @@ from backend.api.deps import (
 from backend.api.main import create_app
 from backend.execution.db import Decision, DecisionStatus, ExecutionRun, RunStatus
 from backend.execution.orchestrator import LoopToolCall, LoopTurn, RunOrchestrator
+from backend.extensions.skill.loader import SkillLoader
 from backend.intake.db import RequestRow, RequestStatus, TriggerEventRow, TriggerKind
-from backend.skills.loader import SkillLoader
 from backend.supervisor.sandbox import NoopSandboxManager
 from backend.workers.agent_worker import AgentExecutionDeps, AgentWorker
 

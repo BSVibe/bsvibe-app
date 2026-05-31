@@ -1,7 +1,7 @@
 """Cross-module Protocols used by knowledge sub-packages.
 
 ``RunnerLike`` and ``ContextBuilderLike`` are forward-declared with ``Any`` for
-the context type — the concrete ``SkillContext`` lives in ``backend.skills`` and
+the context type — the concrete ``SkillContext`` lives in ``backend.extensions.skill`` and
 is wired at runtime via dependency injection (Bundle S).
 """
 

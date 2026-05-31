@@ -10,9 +10,9 @@ from typing import Any
 
 import pytest
 
+from backend.extensions.skill.loader import SkillLoader
 from backend.intake.db import RequestRow, RequestStatus
 from backend.orchestrator.frame import FrameConfig, FrameLlm, FrameStage
-from backend.skills.loader import SkillLoader
 
 
 class _StubFrameLlm:

@@ -20,7 +20,7 @@ from backend.execution.connector_actions import (
     ConnectorActionTool,
     loop_tool_name,
 )
-from backend.plugins.base import ActionCapability, PluginMeta
+from backend.extensions.plugin.base import ActionCapability, PluginMeta
 from backend.router.accounts.crypto import CredentialCipher
 
 from .._support import memory_session

@@ -44,7 +44,7 @@ import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from backend.delivery.safe_mode_queue import SafeModeQueue
-from backend.supervisor.audit.store import OutboxStore
+from backend.extensions.implementations.audit.store import OutboxStore
 
 logger = structlog.get_logger(__name__)
 

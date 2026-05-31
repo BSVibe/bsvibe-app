@@ -17,7 +17,7 @@ Every event mirrors the chat-completions pattern (small Pydantic class extending
 :class:`AuditEventBase`, ``DEFAULT_EVENT_TYPE`` pinning the wire shape) so the
 relay loop drains them through the SAME outbox + delivery path — no new stream,
 no new schema. Emission goes through
-:func:`backend.supervisor.audit.service.safe_emit` which already swallows
+:func:`backend.extensions.implementations.audit.service.safe_emit` which already swallows
 failures, so an audit hiccup can NEVER break a run.
 """
 
@@ -25,7 +25,7 @@ from __future__ import annotations
 
 from typing import ClassVar
 
-from backend.supervisor.audit.events import AuditEventBase
+from backend.extensions.implementations.audit.events import AuditEventBase
 
 
 class RunStarted(AuditEventBase):

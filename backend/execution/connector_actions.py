@@ -18,9 +18,9 @@ rule). The provider:
    connector accounts → no actions (the orchestrator registers no connector
    tools, zero behaviour change).
 2. **Resolves + decrypts** the per-account credential into the action's
-   :class:`~backend.plugins.context.SkillContext`.
+   :class:`~backend.extensions.plugin.context.SkillContext`.
 3. **Dispatches** the action through
-   :meth:`~backend.plugins.runner.PluginRunner.dispatch_action`.
+   :meth:`~backend.extensions.plugin.runner.PluginRunner.dispatch_action`.
 
 Lift 0c (YAGNI rollback) removed the static plugin-load DangerAnalyzer + the
 ``is_dangerous`` flag it produced + the pre-M2 ``tool.is_dangerous and
@@ -41,9 +41,9 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.connectors.db import ConnectorAccountRow
-from backend.plugins.base import ActionCapability, PluginMeta
-from backend.plugins.context import SkillContext
-from backend.plugins.runner import PluginRunner
+from backend.extensions.plugin.base import ActionCapability, PluginMeta
+from backend.extensions.plugin.context import SkillContext
+from backend.extensions.plugin.runner import PluginRunner
 from backend.router.accounts.crypto import CredentialCipher
 
 logger = structlog.get_logger(__name__)
