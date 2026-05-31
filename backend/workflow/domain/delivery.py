@@ -39,7 +39,7 @@ The first five mirror :class:`~backend.execution.db.DeliverableType` 1:1 (the
 connector's ``@p.outbound`` declares the artifact_type it accepts (slack →
 ``slack_message``, email-sender → ``email``, telegram → ``telegram_message``,
 discord → ``discord_message``, linear → ``issue``, trello → ``card``), and the
-connector event-builders in :mod:`backend.delivery.connector_dispatch` dispatch
+connector event-builders in :mod:`backend.workflow.application.delivery.connector_dispatch` dispatch
 the shaped event under that tag so the dispatcher's
 ``artifact_type in cap.artifact_types`` match selects the right outbound."""
 

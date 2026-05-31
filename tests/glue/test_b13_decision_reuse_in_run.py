@@ -42,7 +42,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 # Side-effect imports — register cross-domain tables on the shared
 # ``Base.metadata`` so ``db_engine`` materialises them in the SQLite path.
-import backend.delivery.db  # noqa: F401
+import backend.workflow.infrastructure.delivery.db  # noqa: F401
 from backend.api.deps import (
     get_current_user,
     get_current_user_row,

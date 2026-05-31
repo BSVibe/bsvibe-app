@@ -27,7 +27,7 @@ class SafeModeBoundary:
         queued. When off, the policy decides.
         """
         # TODO(bundle-g-integration): SELECT workspace.safe_mode + apply
-        # per-artifact policy from backend.delivery.safe_mode_queue.
+        # per-artifact policy from backend.workflow.application.safe_mode_queue.
         logger.debug(
             "safe_mode_gate_stub",
             deliverable_id=str(deliverable_id),

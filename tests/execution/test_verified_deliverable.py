@@ -14,7 +14,6 @@ import uuid
 import pytest
 from sqlalchemy import select
 
-from backend.delivery.db import DeliveryEventRow
 from backend.execution.db import (
     DeliverableType,
     ExecutionRun,
@@ -22,6 +21,7 @@ from backend.execution.db import (
     RunStatus,
 )
 from backend.execution.verified_deliverable import write_verified_deliverable
+from backend.workflow.infrastructure.delivery.db import DeliveryEventRow
 
 from .._support import memory_session
 

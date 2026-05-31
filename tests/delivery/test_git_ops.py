@@ -1,6 +1,6 @@
 """Unit tests for the git-ops subprocess wrapper.
 
-Exercises :mod:`backend.delivery.git_ops` against a LOCAL bare repository
+Exercises :mod:`backend.workflow.infrastructure.delivery.git_ops` against a LOCAL bare repository
 (``git init --bare`` in ``tmp_path``) standing in for the "remote" — no
 network, no real github. Covers the full clone → branch → write → commit →
 push round-trip, the no-change ``commit_all`` returning ``False``, and the
@@ -12,7 +12,7 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
-from backend.delivery.git_ops import GitOps, scrub_token
+from backend.workflow.infrastructure.delivery.git_ops import GitOps, scrub_token
 
 
 async def _run(*args: str, cwd: Path | None = None) -> str:

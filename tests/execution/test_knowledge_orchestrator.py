@@ -22,7 +22,6 @@ from typing import Any
 import pytest
 from sqlalchemy import select
 
-from backend.delivery.db import DeliveryEventRow  # noqa: F401 — register table for memory_session
 from backend.execution.db import (
     Deliverable,
     DeliverableType,
@@ -38,6 +37,9 @@ from backend.execution.knowledge_orchestrator import (
     KnowledgeAnswerOrchestrator,
 )
 from backend.execution.orchestrator import LoopTurn
+from backend.workflow.infrastructure.delivery.db import (
+    DeliveryEventRow,  # noqa: F401 — register table for memory_session
+)
 from tests._support import memory_session
 
 pytestmark = pytest.mark.asyncio

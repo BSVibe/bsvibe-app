@@ -21,9 +21,9 @@ from typing import Any
 
 import structlog
 
-from backend.delivery.schema import ActionResult, ArtifactType, DeliveryResult
 from backend.extensions.plugin.base import PluginMeta, PluginRunError
 from backend.extensions.plugin.runner import PluginRunner
+from backend.workflow.domain.delivery import ActionResult, ArtifactType, DeliveryResult
 
 logger = structlog.get_logger(__name__)
 

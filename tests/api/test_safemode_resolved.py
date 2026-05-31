@@ -22,7 +22,11 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from backend.api.deps import get_current_user, get_db_session, get_workspace_id
 from backend.api.main import create_app
-from backend.delivery.db import DeliveryBase, SafeModeQueueItemRow, SafeModeStatus
+from backend.workflow.infrastructure.delivery.db import (
+    DeliveryBase,
+    SafeModeQueueItemRow,
+    SafeModeStatus,
+)
 
 from .._support import db_engine, fake_current_user
 

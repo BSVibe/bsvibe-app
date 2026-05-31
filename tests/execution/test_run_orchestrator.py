@@ -17,7 +17,6 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.connectors.db import ConnectorAccountRow
-from backend.delivery.db import DeliveryEventRow
 from backend.execution.connector_actions import ConnectorActionTool
 from backend.execution.db import (
     Decision,
@@ -45,6 +44,7 @@ from backend.extensions.plugin.context import SkillContext
 from backend.extensions.skill.loader import SkillLoader
 from backend.extensions.skill.tool_binding import INVOKE_SKILL_NAME
 from backend.supervisor.sandbox import NoopSandboxManager, SandboxUnavailable
+from backend.workflow.infrastructure.delivery.db import DeliveryEventRow
 from backend.workspaces.db import ProductRow, WorkspaceRow
 from tests._support import memory_session
 

@@ -6,12 +6,12 @@ import uuid
 
 import pytest
 
-from backend.delivery.dispatcher import DeliveryDispatcher
 from backend.extensions.plugin.base import (
     OutboundCapability,
     PluginMeta,
     PluginRunError,
 )
+from backend.workflow.application.delivery.dispatcher import DeliveryDispatcher
 
 
 def _meta(name: str, *, artifact_types: list[str], outbound_fn) -> PluginMeta:

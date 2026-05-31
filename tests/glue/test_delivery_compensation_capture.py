@@ -24,7 +24,6 @@ import pytest
 import pytest_asyncio
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
-from backend.delivery.schema import ActionResult, DeliveryResult
 from backend.execution.db import (
     Deliverable,
     DeliverableType,
@@ -33,6 +32,7 @@ from backend.execution.db import (
     RunStatus,
 )
 from backend.workers.delivery_worker import dispatch_delivery
+from backend.workflow.domain.delivery import ActionResult, DeliveryResult
 
 from .._support import db_engine
 

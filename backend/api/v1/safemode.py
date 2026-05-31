@@ -34,8 +34,6 @@ from backend.api.deps import (
     get_db_session,
     get_workspace_id,
 )
-from backend.delivery.safe_mode_queue import SafeModeQueue
-from backend.delivery.schema import ArtifactType
 from backend.execution.db import Deliverable
 from backend.identity.db import UserRow
 from backend.workers.delivery_worker import (
@@ -44,6 +42,8 @@ from backend.workers.delivery_worker import (
     persist_compensation_handles,
 )
 from backend.workers.run import build_delivery_adapter
+from backend.workflow.application.safe_mode_queue import SafeModeQueue
+from backend.workflow.domain.delivery import ArtifactType
 
 router = APIRouter()
 
@@ -54,7 +54,7 @@ router = APIRouter()
 async def get_delivery_dispatcher() -> PluginDispatchAdapter:
     """The outbound dispatcher used when a queued delivery is approved.
 
-    Builds the SAME :class:`~backend.delivery.connector_dispatch.ConnectorDeliveryAdapter`
+    Builds the SAME :class:`~backend.workflow.application.delivery.connector_dispatch.ConnectorDeliveryAdapter`
     the Direct path uses (``backend.workers.run.build_delivery_adapter``): it
     loads every connector plugin, carries the settings-derived
     :class:`~backend.router.accounts.crypto.CredentialCipher`, and opens its own

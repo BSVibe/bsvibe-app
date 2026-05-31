@@ -9,11 +9,15 @@ import pytest
 import pytest_asyncio
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from backend.delivery.db import DeliveryBase, SafeModeQueueItemRow, SafeModeStatus
-from backend.delivery.safe_mode_queue import (
+from backend.workflow.application.safe_mode_queue import (
     INITIAL_TTL_DAYS,
     MAX_EXTENSIONS,
     SafeModeQueue,
+)
+from backend.workflow.infrastructure.delivery.db import (
+    DeliveryBase,
+    SafeModeQueueItemRow,
+    SafeModeStatus,
 )
 
 from .._support import db_engine

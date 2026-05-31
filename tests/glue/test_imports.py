@@ -1,4 +1,8 @@
-"""Sweep-imports every backend.{intake,delivery,workflow,workers}.* module."""
+"""Sweep-imports every backend.{intake,workflow,workers}.* module.
+
+Per Lift H3b, ``backend.delivery`` is absorbed into ``backend.workflow`` —
+the delivery submodules are walked transitively via the workflow root.
+"""
 
 from __future__ import annotations
 
@@ -12,7 +16,6 @@ def _iter_modules() -> list[str]:
     names: list[str] = []
     for pkg_name in (
         "backend.intake",
-        "backend.delivery",
         "backend.workflow",
         "backend.workers",
     ):

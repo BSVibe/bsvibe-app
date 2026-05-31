@@ -284,7 +284,7 @@ def _shared_sqlite_sessionmaker() -> Any:
 
     # Register the delivery tables on Base.metadata: write_verified_deliverable
     # writes a DeliveryEventRow, so its table must be materialised by create_all.
-    import backend.delivery.db  # noqa: F401, PLC0415
+    import backend.workflow.infrastructure.delivery.db  # noqa: F401, PLC0415
     from backend.data import Base  # noqa: PLC0415
 
     db_path = Path(tempfile.mkdtemp(prefix="bsvibe-exec-test-")) / "test.db"

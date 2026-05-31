@@ -13,7 +13,8 @@ import uuid
 import pytest
 
 from backend.connectors.db import ConnectorAccountRow
-from backend.delivery.connector_dispatch import (
+from backend.extensions.plugin.base import OutboundCapability, PluginMeta
+from backend.workflow.application.delivery.connector_dispatch import (
     OUTBOUND_EVENT_BUILDERS,
     ConnectorDeliveryAdapter,
     GithubBinding,
@@ -31,7 +32,6 @@ from backend.delivery.connector_dispatch import (
     resolve_github_binding,
     run_branch_name,
 )
-from backend.extensions.plugin.base import OutboundCapability, PluginMeta
 
 from .._support import memory_session
 

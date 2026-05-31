@@ -10,7 +10,7 @@ This worker:
    the orchestrator side, but the worker treats it as a queue).
 2. Consults the deliverable's workspace Safe Mode (Workflow §10.5). When
    ``workspaces.safe_mode`` is True the delivery is **enqueued** into the
-   :class:`backend.delivery.safe_mode_queue.SafeModeQueue` (status
+   :class:`backend.workflow.application.safe_mode_queue.SafeModeQueue` (status
    ``pending``) instead of dispatching — the founder approves/denies via
    the ``/api/v1/safemode`` routes, and approval re-uses the *same*
    :func:`dispatch_delivery` helper this worker calls. When Safe Mode is
@@ -33,11 +33,11 @@ import structlog
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from backend.delivery.db import DeliveryEventRow
-from backend.delivery.safe_mode_queue import SafeModeQueue
-from backend.delivery.schema import ActionResult, DeliveryResult
 from backend.execution.db import Deliverable
 from backend.workers.base import BaseWorker
+from backend.workflow.application.safe_mode_queue import SafeModeQueue
+from backend.workflow.domain.delivery import ActionResult, DeliveryResult
+from backend.workflow.infrastructure.delivery.db import DeliveryEventRow
 from backend.workspaces.db import WorkspaceRow
 
 logger = structlog.get_logger(__name__)
@@ -132,8 +132,8 @@ def extract_compensation_handles(
     """B12b — pull ``compensation_handle`` from successful actions.
 
     Each :class:`ActionResult.action` is shaped ``"<plugin>:outbound:<artifact>"``
-    (see :class:`backend.delivery.dispatcher.DeliveryDispatcher` and
-    :class:`backend.delivery.connector_dispatch.ConnectorDeliveryAdapter`). A
+    (see :class:`backend.workflow.application.delivery.dispatcher.DeliveryDispatcher` and
+    :class:`backend.workflow.application.delivery.connector_dispatch.ConnectorDeliveryAdapter`). A
     successful action whose ``output`` carries ``compensation_handle`` (a
     plugin-private revert token — Workflow §3.1) produces one entry:
     ``{"plugin": "<name>", "artifact_type": "<type>", "handle": {...}}``.

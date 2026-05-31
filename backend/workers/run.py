@@ -20,7 +20,7 @@ This module stands up the production runtime:
   silent guess or stall).
 * :class:`RealPluginDispatchAdapter` — bridges the worker's
   :class:`~backend.workers.delivery_worker.PluginDispatchAdapter` Protocol to
-  the real :class:`~backend.delivery.dispatcher.DeliveryDispatcher` over the
+  the real :class:`~backend.workflow.application.delivery.dispatcher.DeliveryDispatcher` over the
   plugins discovered by :class:`~backend.extensions.plugin.loader.PluginLoader`.
 * :class:`WorkerRuntime` / :func:`run_workers` — construct + concurrently run
   every worker with a shared session factory and graceful SIGINT/SIGTERM
@@ -47,14 +47,6 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from backend.config import Settings, get_settings
-from backend.delivery.connector_dispatch import (
-    ConnectorDeliveryAdapter,
-    build_connector_delivery_adapter,
-    build_github_workspace_provisioner,
-)
-from backend.delivery.dispatcher import DeliveryDispatcher
-from backend.delivery.safe_mode_expiry import SafeModeExpirySweepRunner
-from backend.delivery.schema import DeliveryResult
 from backend.execution.connector_actions import ConnectorActionResolver
 from backend.execution.db import Decision, ExecutionRun
 from backend.execution.knowledge_orchestrator import KnowledgeAnswerOrchestrator
@@ -106,7 +98,15 @@ from backend.workers.settle_worker import (
     build_garden_promoter_factory,
 )
 from backend.workers.streams import RedisStreamConsumer, StreamHandler
+from backend.workflow.application.delivery.connector_dispatch import (
+    ConnectorDeliveryAdapter,
+    build_connector_delivery_adapter,
+    build_github_workspace_provisioner,
+)
+from backend.workflow.application.delivery.dispatcher import DeliveryDispatcher
+from backend.workflow.application.safe_mode_expiry import SafeModeExpirySweepRunner
 from backend.workflow.application.stages.frame import FrameLlm
+from backend.workflow.domain.delivery import DeliveryResult
 from plugin.audit.models import AuditOutboxRecord
 
 logger = structlog.get_logger(__name__)
@@ -928,7 +928,7 @@ async def build_delivery_adapter(
     outbound event from the Deliverable content + that stable config, and
     dispatches THAT connector's ``@p.outbound`` — closing the verified-Deliverable
     → external-delivery loop. v1 ships the notion event mapper; other connectors
-    are a registered seam (see :mod:`backend.delivery.connector_dispatch`).
+    are a registered seam (see :mod:`backend.workflow.application.delivery.connector_dispatch`).
 
     The adapter decrypts the per-account outbound credential
     (``signing_secret_ciphertext``) with the settings-derived

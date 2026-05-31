@@ -104,7 +104,9 @@ async def write_verified_deliverable(
     # as transactional container): the DeliveryWorker threads it onto the
     # SafeModeQueueItemRow so the founder can approve every queued item of a
     # run together.
-    from backend.delivery.db import DeliveryEventRow  # noqa: PLC0415 — cross-domain, local
+    from backend.workflow.infrastructure.delivery.db import (
+        DeliveryEventRow,  # noqa: PLC0415 — cross-domain, local
+    )
 
     session.add(
         DeliveryEventRow(
@@ -234,7 +236,9 @@ async def write_partial_deliverable(
     session.add(deliverable)
     await session.flush()
 
-    from backend.delivery.db import DeliveryEventRow  # noqa: PLC0415 — cross-domain, local
+    from backend.workflow.infrastructure.delivery.db import (
+        DeliveryEventRow,  # noqa: PLC0415 — cross-domain, local
+    )
 
     session.add(
         DeliveryEventRow(
@@ -308,7 +312,9 @@ async def write_answer_deliverable(
     session.add(deliverable)
     await session.flush()
 
-    from backend.delivery.db import DeliveryEventRow  # noqa: PLC0415 — cross-domain, local
+    from backend.workflow.infrastructure.delivery.db import (
+        DeliveryEventRow,  # noqa: PLC0415 — cross-domain, local
+    )
 
     session.add(
         DeliveryEventRow(
