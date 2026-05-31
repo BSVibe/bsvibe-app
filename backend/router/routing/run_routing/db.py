@@ -7,7 +7,7 @@ ABOVE that: it picks WHICH ModelAccount (native vs executor CLI) drives a run,
 keyed on the run's framed signals. Hence a separate table + context.
 
 ``conditions`` is a JSON list of ``{field, operator, value, negate}`` objects
-(see :mod:`backend.routing.engine` for the evaluation semantics). ``target``
+(see :mod:`backend.router.routing.run_routing.engine` for the evaluation semantics). ``target``
 is a ModelAccount selector — matched against an active account's
 ``litellm_model`` (e.g. ``"executor/codex"`` or a native model name).
 """

@@ -1,7 +1,7 @@
 """/api/v1/run-routing — author the per-workspace RUN routing rules (P1-L1b).
 
 These rules pick WHICH ModelAccount (native vs executor CLI) drives a run,
-keyed on the run's framed signals (see :mod:`backend.routing.engine`). Distinct
+keyed on the run's framed signals (see :mod:`backend.router.routing.run_routing.engine`). Distinct
 from ``/api/v1/rules`` (the gateway's account-scoped chat/model routing). An
 admin/infra surface — rule-less workspaces keep the legacy single-active
 behaviour, so creating the first rule is opt-in.
@@ -25,8 +25,8 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.api.deps import get_db_session, get_workspace_id
-from backend.routing.db import RunRoutingRuleRow
-from backend.routing.engine import ALLOWED_FIELDS, VALID_OPERATORS
+from backend.router.routing.run_routing.db import RunRoutingRuleRow
+from backend.router.routing.run_routing.engine import ALLOWED_FIELDS, VALID_OPERATORS
 
 logger = structlog.get_logger(__name__)
 

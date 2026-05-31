@@ -9,7 +9,7 @@ import pytest
 import pytest_asyncio
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
-import backend.routing.db  # noqa: F401 — register run_routing_rules table
+import backend.router.routing.run_routing.db  # noqa: F401 — register run_routing_rules table
 from backend.api.deps import get_current_user, get_db_session, get_workspace_id
 from backend.api.main import create_app
 from backend.identity.db import MembershipRow, UserRow  # noqa: F401 — register tables

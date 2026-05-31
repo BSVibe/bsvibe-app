@@ -76,7 +76,7 @@ from backend.router.classifier.local_vs_cloud import LocalVsCloudClassifier
 from backend.router.classifier.static import StaticClassifier
 from backend.router.dispatch import DispatchRequest, GatewayDispatcher
 from backend.router.llm_client import LlmClient
-from backend.routing import resolve_route
+from backend.router.routing.run_routing import resolve_route
 from backend.skills.loader import SkillLoader
 from backend.supervisor.audit.models import AuditOutboxRecord
 from backend.supervisor.sandbox import (

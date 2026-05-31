@@ -368,7 +368,7 @@ class AgentRunner:
     async def _workspace_has_routing_rules(self, workspace_id: uuid.UUID) -> bool:
         """True when the workspace has any run-routing rule (it has opted into
         the rule-routed execution model — the gate for design→impl chaining)."""
-        from backend.routing.db import RunRoutingRuleRow  # noqa: PLC0415
+        from backend.router.routing.run_routing.db import RunRoutingRuleRow  # noqa: PLC0415
 
         row = (
             await self._session.execute(

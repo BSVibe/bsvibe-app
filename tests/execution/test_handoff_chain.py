@@ -16,7 +16,7 @@ from backend.execution.db import (
     RunStatus,
 )
 from backend.orchestrator.agent_runner import AgentRunner
-from backend.routing.db import RunRoutingRuleRow
+from backend.router.routing.run_routing.db import RunRoutingRuleRow
 from tests._support import memory_session
 
 

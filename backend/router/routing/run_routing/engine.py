@@ -25,7 +25,7 @@ if TYPE_CHECKING:
 
     from backend.execution.db import ExecutionRun
     from backend.router.accounts.models import ModelAccount
-    from backend.routing.db import RunRoutingRuleRow
+    from backend.router.routing.run_routing.db import RunRoutingRuleRow
 
 logger = structlog.get_logger(__name__)
 
@@ -217,7 +217,7 @@ async def resolve_route(session: AsyncSession, run: ExecutionRun) -> ModelAccoun
     2b. **D4 within-class policy** — the desired class has 2+ active accounts
        (D2 returned ``None`` here, gotcha #200). Rather than stall on the legacy
        resolver's ``ambiguous_model_account`` Decision, pick deterministically
-       within the class (:func:`~backend.routing.multi_account.select_within_class`
+       within the class (:func:`~backend.router.routing.run_routing.multi_account.select_within_class`
        — highest ``routing_priority``, tiebroken by ``created_at`` then ``id``).
        The class is D2's job, picking within it is D4's.
     3. **Legacy single-active fallback** — none above resolved (no class match at
@@ -229,9 +229,11 @@ async def resolve_route(session: AsyncSession, run: ExecutionRun) -> ModelAccoun
     """
     from sqlalchemy import select  # noqa: PLC0415
 
-    from backend.routing.db import RunRoutingRuleRow  # noqa: PLC0415
-    from backend.routing.multi_account import select_within_class  # noqa: PLC0415
-    from backend.routing.tier_default import (  # noqa: PLC0415
+    from backend.router.routing.run_routing.db import RunRoutingRuleRow  # noqa: PLC0415
+    from backend.router.routing.run_routing.multi_account import (  # noqa: PLC0415
+        select_within_class,
+    )
+    from backend.router.routing.run_routing.tier_default import (  # noqa: PLC0415
         select_tier_default_account,
         tier_class_accounts,
         tier_from_context,
