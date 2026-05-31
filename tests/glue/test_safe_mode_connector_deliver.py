@@ -1,7 +1,7 @@
 """Safe-Mode approve path delivers through the connector adapter — §10.5 / §11.1.
 
 The Direct path (Safe Mode OFF) already delivers a verified Deliverable OUT
-through :class:`~backend.delivery.connector_dispatch.ConnectorDeliveryAdapter`
+through :class:`~backend.workflow.application.delivery.connector_dispatch.ConnectorDeliveryAdapter`
 (proved by ``test_connector_deliver_e2e``). But Safe Mode defaults ON, so MOST
 deliveries flow through the founder-approval gate
 (``POST /api/v1/safemode/{id}/approve``). This proves that the approve path uses
@@ -54,15 +54,6 @@ from backend.api.main import create_app
 from backend.api.v1.safemode import get_delivery_dispatcher
 from backend.config import get_settings
 from backend.connectors.db import ConnectorAccountRow
-from backend.delivery.connector_dispatch import (
-    ConnectorDeliveryAdapter,
-    build_connector_delivery_adapter,
-)
-from backend.delivery.db import (
-    DeliveryEventRow,
-    SafeModeQueueItemRow,
-    SafeModeStatus,
-)
 from backend.execution.db import (
     Deliverable,
     DeliverableType,
@@ -72,6 +63,15 @@ from backend.execution.db import (
 from backend.extensions.plugin.loader import PluginLoader
 from backend.router.accounts.crypto import CredentialCipher
 from backend.workers.delivery_worker import DeliveryWorker, DeliveryWorkerConfig
+from backend.workflow.application.delivery.connector_dispatch import (
+    ConnectorDeliveryAdapter,
+    build_connector_delivery_adapter,
+)
+from backend.workflow.infrastructure.delivery.db import (
+    DeliveryEventRow,
+    SafeModeQueueItemRow,
+    SafeModeStatus,
+)
 from backend.workspaces.db import WorkspaceRow
 from plugin.notion import plugin as notion_module
 

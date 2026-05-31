@@ -21,7 +21,7 @@ import structlog
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.delivery.db import SafeModeQueueItemRow, SafeModeStatus
+from backend.workflow.infrastructure.delivery.db import SafeModeQueueItemRow, SafeModeStatus
 
 logger = structlog.get_logger(__name__)
 
@@ -135,7 +135,7 @@ class SafeModeQueue:
         """Flip ``pending → approved``. Returns False if not found / not pending.
 
         The caller is responsible for handing the deliverable to the
-        :class:`backend.delivery.dispatcher.DeliveryDispatcher` AFTER the
+        :class:`backend.workflow.application.delivery.dispatcher.DeliveryDispatcher` AFTER the
         commit succeeds.
         """
         del actor_id  # surface for audit hook (Bundle G integration)
@@ -316,7 +316,7 @@ class SafeModeQueue:
         """Every PENDING / EXTENDED row past ``expires_at`` across ALL workspaces.
 
         System-wide read (no workspace filter) — D3a / M1 plug-in for the
-        :class:`backend.delivery.safe_mode_expiry.SafeModeExpirySweepRunner`,
+        :class:`backend.workflow.application.safe_mode_expiry.SafeModeExpirySweepRunner`,
         which transitions each returned row to ``EXPIRED`` via
         :meth:`mark_expired` and emits ONE audit-outbox row for the batch (the
         glass-box provenance — ``trigger=schedule``, ``source=system.safe_mode_expiry``).

@@ -49,9 +49,13 @@ import pytest_asyncio
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from backend.delivery.db import DeliveryBase, SafeModeQueueItemRow, SafeModeStatus
-from backend.delivery.safe_mode_expiry import SafeModeExpirySweepRunner
-from backend.delivery.safe_mode_queue import SafeModeQueue
+from backend.workflow.application.safe_mode_expiry import SafeModeExpirySweepRunner
+from backend.workflow.application.safe_mode_queue import SafeModeQueue
+from backend.workflow.infrastructure.delivery.db import (
+    DeliveryBase,
+    SafeModeQueueItemRow,
+    SafeModeStatus,
+)
 
 from .._support import db_engine
 
@@ -108,13 +112,12 @@ def test_safe_mode_compensation_hook_deleted() -> None:
 
 
 def test_delivery_init_does_not_reexport_compensation() -> None:
-    """``backend.delivery`` no longer exposes the dead surface."""
-    import backend.delivery as pkg
-
-    assert not hasattr(pkg, "CompensationHandler")
-    assert not hasattr(pkg, "CompensationResult")
-    assert "CompensationHandler" not in pkg.__all__
-    assert "CompensationResult" not in pkg.__all__
+    """Per Lift H3b the whole ``backend.delivery`` package is gone — that
+    subsumes the Lift 0b assertion (no re-exported dead surface possible)
+    and we re-state it as the strongest form: the module no longer exists.
+    """
+    with pytest.raises(ModuleNotFoundError):
+        importlib.import_module("backend" + ".delivery")
 
 
 # ---------------------------------------------------------------------------
@@ -133,7 +136,7 @@ def test_safe_mode_queue_does_not_import_compensation_hook() -> None:
     identifier (``fire_compensation_for_item``) — not the word "compensation"
     in docstrings, which legitimately appears in the rollback context note.
     """
-    import backend.delivery.safe_mode_queue as mod
+    import backend.workflow.application.safe_mode_queue as mod
 
     src = inspect.getsource(mod)
     assert "fire_compensation_for_item" not in src
@@ -189,7 +192,7 @@ async def test_deny_does_not_fire_compensation(
 
 def test_safe_mode_expiry_does_not_import_compensation_hook() -> None:
     """Static: the sweep runner doesn't import / call the removed hook."""
-    import backend.delivery.safe_mode_expiry as mod
+    import backend.workflow.application.safe_mode_expiry as mod
 
     src = inspect.getsource(mod)
     assert "fire_compensation_for_item" not in src

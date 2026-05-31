@@ -41,8 +41,6 @@ from backend.api.deps import (
     get_workspace_id,
 )
 from backend.api.main import create_app
-from backend.delivery.db import DeliveryEventRow
-from backend.delivery.schema import ActionResult, DeliveryResult
 from backend.execution.db import Deliverable, ExecutionRun, RunStatus
 from backend.execution.orchestrator import LoopToolCall, LoopTurn, RunOrchestrator
 from backend.extensions.skill.loader import SkillLoader
@@ -50,6 +48,8 @@ from backend.supervisor.sandbox import NoopSandboxManager
 from backend.workers.agent_worker import AgentExecutionDeps, AgentWorker
 from backend.workers.delivery_worker import DeliveryWorker, DeliveryWorkerConfig
 from backend.workers.intake_worker import IntakeWorker
+from backend.workflow.domain.delivery import ActionResult, DeliveryResult
+from backend.workflow.infrastructure.delivery.db import DeliveryEventRow
 from backend.workflow.infrastructure.intake.db import RequestRow, RequestStatus, TriggerEventRow
 from backend.workspaces.db import ProductRow
 

@@ -43,7 +43,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 # write_verified_deliverable inserts into delivery_events as part of the verified
 # terminal contract; without the side-effect import, the runtime tests below
 # crash at flush with "no such table".
-import backend.delivery.db  # noqa: F401
+import backend.workflow.infrastructure.delivery.db  # noqa: F401
 from backend.execution.db import (
     Deliverable,
     ProofState,

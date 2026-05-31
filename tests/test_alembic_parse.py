@@ -72,7 +72,6 @@ def test_target_metadata_covers_all_bases():
     every base we expect — Bundle 1 + Bundle 1.5a/1.5b + Bundle K + Bundle X."""
     import backend.router.accounts.account_models  # noqa: F401 — registers `accounts` table
     from backend.connectors.db import ConnectorsBase
-    from backend.delivery.db import DeliveryBase
     from backend.embedding.db import GatewayEmbeddingBase
     from backend.execution.db import ExecutionBase
     from backend.executors.db import ExecutorsBase
@@ -86,6 +85,7 @@ def test_target_metadata_covers_all_bases():
     from backend.router.routing.db import GatewayRoutingBase
     from backend.router.rules.db import GatewayRulesBase
     from backend.workers.db import WorkersBase
+    from backend.workflow.infrastructure.delivery.db import DeliveryBase
     from backend.workflow.infrastructure.intake.db import IntakeBase
     from backend.workspaces.db import WorkspacesBase
     from plugin.audit.models import AuditOutboxBase, SupervisorBase

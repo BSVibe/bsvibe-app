@@ -49,8 +49,6 @@ from backend.api.deps import (
 )
 from backend.api.main import create_app
 from backend.config import Settings
-from backend.delivery.db import DeliveryEventRow
-from backend.delivery.schema import ActionResult, DeliveryResult
 from backend.execution.db import Deliverable, ExecutionRun, RunStatus
 from backend.execution.orchestrator import LoopToolCall, LoopTurn, RunOrchestrator
 from backend.extensions.skill.loader import SkillLoader
@@ -67,6 +65,8 @@ from backend.workers.emit import (
 )
 from backend.workers.intake_worker import IntakeWorker
 from backend.workers.streams import RedisStreamConsumer
+from backend.workflow.domain.delivery import ActionResult, DeliveryResult
+from backend.workflow.infrastructure.delivery.db import DeliveryEventRow
 from backend.workflow.infrastructure.intake.db import RequestRow, RequestStatus, TriggerEventRow
 
 from .._support import db_engine, fake_current_user

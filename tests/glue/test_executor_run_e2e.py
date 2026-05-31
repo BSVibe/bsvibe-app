@@ -33,7 +33,6 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 # Importing the module dbs registers their tables on the shared Base.metadata.
 import backend.executors.db  # noqa: F401
 from backend.config import get_settings
-from backend.delivery.db import DeliveryEventRow
 from backend.execution.db import (
     Decision,
     Deliverable,
@@ -50,6 +49,7 @@ from backend.executors.orchestrator import ExecutorOrchestrator
 from backend.router.accounts.models import ModelAccount
 from backend.workers.run import build_agent_execution_deps
 from backend.workflow.application.agent_runner import AgentRunner
+from backend.workflow.infrastructure.delivery.db import DeliveryEventRow
 
 from .._support import db_engine
 

@@ -577,7 +577,7 @@ class _NoLlm:
 
     Compensation handlers call external APIs to revert artifacts — they should
     never invoke the LLM. Calling this raises rather than silently no-opping.
-    Mirrors :class:`backend.delivery.connector_dispatch._NoLlm`.
+    Mirrors :class:`backend.workflow.application.delivery.connector_dispatch._NoLlm`.
     """
 
     async def chat(self, *args: Any, **kwargs: Any) -> str:

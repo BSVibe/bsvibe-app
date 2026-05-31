@@ -3,7 +3,7 @@
  *
  * PR #45 built KNOWN_CONNECTORS before the email-sender backend builder landed,
  * so it was excluded. email-sender is now a valid OUTBOUND connector
- * (backend/delivery/connector_dispatch.py OUTBOUND_EVENT_BUILDERS), and the
+ * (backend/workflow/application/delivery/connector_dispatch.py OUTBOUND_EVENT_BUILDERS), and the
  * create validator (backend/api/v1/connectors.py) accepts it via the outbound
  * branch. This test pins that:
  *

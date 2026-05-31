@@ -11,8 +11,6 @@ import pytest_asyncio
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
-from backend.delivery.db import DeliveryBase, DeliveryEventRow
-from backend.delivery.schema import ActionResult, DeliveryResult
 from backend.execution.db import (
     ExecutionBase,
     ExecutionRun,
@@ -25,6 +23,8 @@ from backend.execution.db import (
 )
 from backend.workers.delivery_worker import DeliveryWorker, DeliveryWorkerConfig
 from backend.workers.verifier_worker import VerifierConfig, VerifierWorker
+from backend.workflow.domain.delivery import ActionResult, DeliveryResult
+from backend.workflow.infrastructure.delivery.db import DeliveryBase, DeliveryEventRow
 
 from .._support import db_engine
 

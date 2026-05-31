@@ -41,10 +41,14 @@ import pytest_asyncio
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from backend.delivery.db import DeliveryBase, SafeModeQueueItemRow, SafeModeStatus
-from backend.delivery.safe_mode_expiry import SafeModeExpirySweepRunner
-from backend.delivery.safe_mode_queue import SafeModeQueue
 from backend.workers.schedule_runner import ScheduleWorker
+from backend.workflow.application.safe_mode_expiry import SafeModeExpirySweepRunner
+from backend.workflow.application.safe_mode_queue import SafeModeQueue
+from backend.workflow.infrastructure.delivery.db import (
+    DeliveryBase,
+    SafeModeQueueItemRow,
+    SafeModeStatus,
+)
 from plugin.audit.models import AuditOutboxRecord
 
 from .._support import db_engine

@@ -722,7 +722,7 @@ export interface KnowledgeGraph {
  *  connector the server rejects.
  *
  *  Note: the email connector's backend name is `email-sender` (NOT `email`) —
- *  it is an outbound-only delivery builder (backend/delivery/connector_dispatch
+ *  it is an outbound-only delivery builder (backend/workflow/application/delivery/connector_dispatch
  *  .py OUTBOUND_EVENT_BUILDERS), so it has no inbound parser but is registerable
  *  via the outbound branch of the validator.
  *

@@ -55,7 +55,6 @@ ignore = [
 # (TODO(bundle-x-integration) sites). When Bundle G / Bundle API land those
 # integrations, F821 can be re-enabled on a per-file basis.
 "backend/intake/**" = ["PLW0108"]
-"backend/delivery/**" = ["PLW0108"]
 "backend/orchestrator/**" = ["PLW0108"]
 "backend/workers/**" = ["PLW0108"]
 "backend/workspaces/**" = ["PLW0108"]
@@ -88,6 +87,13 @@ ignore = [
 "backend/workflow/infrastructure/intake/**" = ["PLW0108"]
 "backend/workflow/domain/incoming.py" = ["PLW0108"]
 "backend/workflow/application/intake/**" = ["PLW0108"]
+# Lift H3b — files moved from ``backend/delivery/`` retain the same
+# default-factory lambdas (PLW0108) ignore the original location had.
+"backend/workflow/infrastructure/delivery/**" = ["PLW0108"]
+"backend/workflow/domain/delivery.py" = ["PLW0108"]
+"backend/workflow/application/delivery/**" = ["PLW0108"]
+"backend/workflow/application/safe_mode_queue.py" = ["PLW0108"]
+"backend/workflow/application/safe_mode_expiry.py" = ["PLW0108"]
 
 [format]
 quote-style = "double"

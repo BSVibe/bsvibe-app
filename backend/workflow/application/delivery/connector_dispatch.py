@@ -2,7 +2,7 @@
 
 Workflow §11.1 / §12.5 #8 (Bundle G — Delivery). A verified run mints a
 :class:`~backend.execution.db.Deliverable` and the orchestrator writes a
-:class:`~backend.delivery.db.DeliveryEventRow`; the
+:class:`~backend.workflow.infrastructure.delivery.db.DeliveryEventRow`; the
 :class:`~backend.workers.delivery_worker.DeliveryWorker` drains it. Until now
 the drain dispatched over every plugin filtered only by the deliverable's own
 ``artifact_type`` (``code``), with no event payload and no credentials — so a
@@ -28,7 +28,7 @@ This module supplies the missing two halves:
 :class:`~backend.workers.delivery_worker.PluginDispatchAdapter` Protocol: it
 loads the Deliverable, resolves the binding(s), shapes the event from config +
 content, and dispatches THAT connector's outbound through the existing
-:class:`~backend.delivery.dispatcher.DeliveryDispatcher` /
+:class:`~backend.workflow.application.delivery.dispatcher.DeliveryDispatcher` /
 :class:`~backend.extensions.plugin.runner.PluginRunner`. Resolving zero bindings is a
 no-op success — the in-app Deliverable still exists, nothing is delivered out,
 no error (the event still drains so the queue never wedges).
@@ -47,14 +47,14 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from backend.connectors.db import ConnectorAccountRow
-from backend.delivery.dispatcher import DeliveryDispatcher
-from backend.delivery.git_ops import GitOps
-from backend.delivery.schema import ActionResult, ArtifactType, DeliveryResult
 from backend.execution.db import Deliverable
 from backend.extensions.plugin.base import PluginMeta
 from backend.extensions.plugin.context import SkillContext
 from backend.extensions.plugin.runner import PluginRunner
 from backend.router.accounts.crypto import CredentialCipher
+from backend.workflow.application.delivery.dispatcher import DeliveryDispatcher
+from backend.workflow.domain.delivery import ActionResult, ArtifactType, DeliveryResult
+from backend.workflow.infrastructure.delivery.git_ops import GitOps
 
 logger = structlog.get_logger(__name__)
 

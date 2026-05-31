@@ -40,7 +40,6 @@ from backend.api.deps import (
 )
 from backend.api.main import create_app
 from backend.config import get_settings
-from backend.delivery.db import DeliveryEventRow
 from backend.execution.db import Decision, Deliverable, ExecutionRun, RunStatus
 from backend.router.accounts.models import ModelAccount
 from backend.router.accounts.schemas import ModelAccountCreate
@@ -51,6 +50,7 @@ from backend.workers import run as runtime
 from backend.workers.agent_worker import AgentWorker
 from backend.workers.delivery_worker import DeliveryWorker, DeliveryWorkerConfig
 from backend.workers.intake_worker import IntakeWorker
+from backend.workflow.infrastructure.delivery.db import DeliveryEventRow
 from backend.workflow.infrastructure.intake.db import RequestRow, RequestStatus
 
 from .._support import db_engine, fake_current_user

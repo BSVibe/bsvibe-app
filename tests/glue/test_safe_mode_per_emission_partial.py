@@ -27,12 +27,6 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from backend.connectors.db import ConnectorAccountRow
-from backend.delivery.db import (
-    DeliveryEventRow,
-    SafeModeQueueItemRow,
-    SafeModeStatus,
-)
-from backend.delivery.schema import ActionResult, DeliveryResult
 from backend.execution.db import (
     Deliverable,
     DeliverableType,
@@ -41,6 +35,12 @@ from backend.execution.db import (
 )
 from backend.execution.verified_deliverable import PARTIAL_DELIVERABLE_KIND
 from backend.workers.delivery_worker import DeliveryWorker, DeliveryWorkerConfig
+from backend.workflow.domain.delivery import ActionResult, DeliveryResult
+from backend.workflow.infrastructure.delivery.db import (
+    DeliveryEventRow,
+    SafeModeQueueItemRow,
+    SafeModeStatus,
+)
 from backend.workspaces.db import ProductRow, ResourceBindingRow, WorkspaceRow
 from tests._support import db_engine
 

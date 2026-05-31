@@ -28,7 +28,6 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.delivery.db import DeliveryEventRow
 from backend.execution.db import (
     Deliverable,
     DeliverableType,
@@ -41,6 +40,7 @@ from backend.execution.orchestrator import (
     RunOrchestrator,
 )
 from backend.supervisor.sandbox import NoopSandboxManager
+from backend.workflow.infrastructure.delivery.db import DeliveryEventRow
 from tests._support import memory_session
 
 pytestmark = pytest.mark.asyncio

@@ -8,7 +8,7 @@ from datetime import UTC, datetime
 import pytest
 from pydantic import ValidationError
 
-from backend.delivery.schema import ActionResult, DeliveryResult
+from backend.workflow.domain.delivery import ActionResult, DeliveryResult
 from backend.workflow.domain.incoming import TriggerEvent
 
 
