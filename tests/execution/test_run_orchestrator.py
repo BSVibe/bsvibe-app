@@ -18,7 +18,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.connectors.db import ConnectorAccountRow
 from backend.delivery.db import DeliveryEventRow
-from backend.execution.action_danger import DangerVerdict
 from backend.execution.connector_actions import ConnectorActionTool
 from backend.execution.db import (
     Decision,
@@ -1430,50 +1429,39 @@ async def test_loop_without_connector_provider_omits_connector_tools(tmp_path: P
 
 
 # --------------------------------------------------------------------------
-# M2 — per-call DangerAnalyzer gate at the execution call
+# Lift 0a — per-call DangerAnalyzer evaluator removed (YAGNI rollback)
 # --------------------------------------------------------------------------
 
 
-class _PerCallEvaluator:
-    """A test :class:`ActionDangerEvaluator` that drives the gate deterministically.
+async def test_action_safe_at_load_time_dispatches_without_decision(
+    tmp_path: Path,
+) -> None:
+    """Behavior delta vs M2 (PR #220): the per-call DangerAnalyzer evaluator
+    is gone. An action whose load-time per-plugin verdict was SAFE
+    (``tool.is_dangerous=False``) must now dispatch directly — NO Decision
+    gets created, regardless of whether its content would have flagged at
+    call-time.
 
-    Records every call (tool name + arguments) so the orchestrator's wiring can
-    be asserted — the gate must be re-asked on EACH agent invocation, not once
-    at registration."""
+    Pre-Lift-0a (M2 wired): the per-call evaluator could declare the action
+    dangerous and the orchestrator created a ``connector_action_approval``
+    Decision with a ``danger_reason`` payload field. Post-Lift-0a: the only
+    surviving gate is the pre-M2 ``tool.is_dangerous and safe_mode`` check,
+    so a load-time-safe action runs even in Safe Mode.
 
-    def __init__(self, verdict_for: dict[str, DangerVerdict]) -> None:
-        self._verdict_for = verdict_for
-        self.calls: list[tuple[str, dict[str, Any]]] = []
-
-    async def evaluate(self, tool: ConnectorActionTool, arguments: dict[str, Any]) -> DangerVerdict:
-        self.calls.append((tool.action_name, dict(arguments)))
-        return self._verdict_for[tool.action_name]
-
-
-async def test_per_call_danger_gate_blocks_action_safe_at_load_time(tmp_path: Path) -> None:
-    """The audit fix: a connector action whose load-time per-plugin verdict
-    was SAFE (``tool.is_dangerous=False``) must STILL be blocked at execution
-    time when the per-call evaluator returns dangerous. The prior gate would
-    silently let it through because it trusted the cached load-time bool.
-
-    This proves the orchestrator depends on the PER-CALL evaluator, not on
-    ``tool.is_dangerous``."""
+    This is the YAGNI-rollback delta — the M2 wiring no longer affects
+    execution.
+    """
     ws = uuid.uuid4()
     plugin = _fake_action_plugin("github", action_name="open_pr")
     account = _fake_account(ws, "github")
-    # Load-time verdict says SAFE — this is what tripped the audit.
+    # Load-time verdict: SAFE (the prior M2 audit complaint scenario).
     provider = FakeConnectorActionProvider([_tool(plugin, account, is_dangerous=False)])
-    # Per-call evaluator says DANGEROUS for THIS call.
-    evaluator = _PerCallEvaluator(
-        {"open_pr": DangerVerdict(is_dangerous=True, reason="per-call: dangerous")}
-    )
     llm = ScriptedLlm(
         [
             LoopTurn(
                 content="opening",
                 tool_calls=(_tc("github__open_pr", title="Ship it"),),
             ),
-            # After the gate the loop continues with real file work.
             LoopTurn(
                 content="",
                 tool_calls=(
@@ -1493,178 +1481,54 @@ async def test_per_call_danger_gate_blocks_action_safe_at_load_time(tmp_path: Pa
             llm=llm,
             sandbox_manager=NoopSandboxManager(),
             connector_actions=provider,
-            danger_evaluator=evaluator,
         )
         result = await orch.run(run=run, workspace_dir=tmp_path)
 
         assert result.outcome == "verified"
-        # The action was NOT dispatched — the per-call gate blocked it.
-        assert not provider.dispatched, (
-            "the per-call evaluator must block the action even when "
-            "tool.is_dangerous (load-time) was False"
-        )
-        # An approval Decision was created with the per-call reason.
-        decision = (await session.execute(select(Decision))).scalar_one()
-        assert decision.decision == "connector_action_approval"
-        assert decision.payload["plugin"] == "github"
-        assert decision.payload["action"] == "open_pr"
-        assert decision.payload["is_dangerous"] is True
-        assert "per-call" in decision.payload["danger_reason"]
-        # The evaluator was asked AT the call, with the LLM's arguments.
-        assert evaluator.calls == [("open_pr", {"title": "Ship it"})]
-
-
-async def test_per_call_evaluator_called_on_each_invocation(tmp_path: Path) -> None:
-    """The per-call gate must fire on EVERY agent-loop invocation of the action
-    (not just once-per-run). The audit's "load-time only" complaint is the
-    counter-shape: we prove the call site re-asks every time by invoking the
-    same action twice and asserting two evaluator calls."""
-    ws = uuid.uuid4()
-    plugin = _fake_action_plugin("github", action_name="comment")
-    account = _fake_account(ws, "github")
-    provider = FakeConnectorActionProvider([_tool(plugin, account, is_dangerous=False)])
-    evaluator = _PerCallEvaluator(
-        {"comment": DangerVerdict(is_dangerous=False, reason="per-call: safe")}
-    )
-    llm = ScriptedLlm(
-        [
-            LoopTurn(
-                content="first comment",
-                tool_calls=(_tc("github__comment", text="hi-1"),),
-            ),
-            LoopTurn(
-                content="second comment",
-                tool_calls=(_tc("github__comment", text="hi-2"),),
-            ),
-            LoopTurn(
-                content="",
-                tool_calls=(
-                    _declare_command("test -f out.txt"),
-                    _tc("file_write", path="out.txt", content="x"),
-                ),
-            ),
-            LoopTurn(content="done", tool_calls=()),
-        ]
-    )
-    async with memory_session() as session:
-        session.add(WorkspaceRow(id=ws, name="ws", region="us-1", safe_mode=True))
-        await session.flush()
-        run = await _make_run(session, workspace_id=ws)
-        orch = RunOrchestrator(
-            session=session,
-            llm=llm,
-            sandbox_manager=NoopSandboxManager(),
-            connector_actions=provider,
-            danger_evaluator=evaluator,
-        )
-        await orch.run(run=run, workspace_dir=tmp_path)
-
-        # Two agent calls → two evaluator invocations with each call's args.
-        assert evaluator.calls == [
-            ("comment", {"text": "hi-1"}),
-            ("comment", {"text": "hi-2"}),
-        ]
-        # Both dispatched (per-call verdict was safe both times).
-        assert len(provider.dispatched) == 2
-
-
-async def test_per_call_safe_action_runs_even_when_plugin_dangerous(tmp_path: Path) -> None:
-    """The flip side of the audit fix: a per-call evaluator returning SAFE
-    lets the action through even when the load-time per-plugin verdict was
-    dangerous. This proves the per-call seam is the authority — not the
-    load-time cache. (Useful for read-only actions on a plugin that ALSO has
-    dangerous write actions.)"""
-    ws = uuid.uuid4()
-    plugin = _fake_action_plugin("github", action_name="list_issues")
-    account = _fake_account(ws, "github")
-    # Load-time verdict: the WHOLE PLUGIN is dangerous (loader saw `import
-    # httpx` in the module). The per-call evaluator looks at the specific
-    # action's source and says SAFE.
-    provider = FakeConnectorActionProvider([_tool(plugin, account, is_dangerous=True)])
-    evaluator = _PerCallEvaluator(
-        {"list_issues": DangerVerdict(is_dangerous=False, reason="per-call: read-only")}
-    )
-    llm = ScriptedLlm(
-        [
-            LoopTurn(
-                content="reading",
-                tool_calls=(_tc("github__list_issues", repo="o/r"),),
-            ),
-            LoopTurn(
-                content="",
-                tool_calls=(
-                    _declare_command("test -f out.txt"),
-                    _tc("file_write", path="out.txt", content="x"),
-                ),
-            ),
-            LoopTurn(content="done", tool_calls=()),
-        ]
-    )
-    async with memory_session() as session:
-        session.add(WorkspaceRow(id=ws, name="ws", region="us-1", safe_mode=True))
-        await session.flush()
-        run = await _make_run(session, workspace_id=ws)
-        orch = RunOrchestrator(
-            session=session,
-            llm=llm,
-            sandbox_manager=NoopSandboxManager(),
-            connector_actions=provider,
-            danger_evaluator=evaluator,
-        )
-        await orch.run(run=run, workspace_dir=tmp_path)
-
-        # Dispatched — per-call SAFE beat the load-time DANGEROUS verdict.
+        # The action DID dispatch — there is no per-call gate left to block it.
         assert provider.dispatched, (
-            "per-call SAFE must let the action through even when load-time "
-            "tool.is_dangerous was True"
+            "load-time-safe action must dispatch directly post-Lift-0a "
+            "(the per-call evaluator that would have blocked it is gone)"
         )
-        # No approval Decision was created.
-        assert (await session.execute(select(Decision))).first() is None
+        # No connector_action_approval Decision was created.
+        decisions = (await session.execute(select(Decision))).scalars().all()
+        approval_decisions = [d for d in decisions if d.decision == "connector_action_approval"]
+        assert approval_decisions == [], (
+            "no connector_action_approval Decision must be created for a "
+            "load-time-safe action — Lift 0a removed the M2 per-call gate"
+        )
 
 
-async def test_default_evaluator_used_when_none_injected(tmp_path: Path) -> None:
-    """When no ``danger_evaluator`` is supplied the orchestrator falls back to
-    the StaticActionDangerEvaluator — the production default. Verified by
-    asserting the gate still blocks a load-time-dangerous action in Safe Mode
-    (the previous behaviour stays observable through the default seam)."""
-    ws = uuid.uuid4()
-    plugin = _fake_action_plugin("slack", action_name="post_message")
-    account = _fake_account(ws, "slack")
-    provider = FakeConnectorActionProvider([_tool(plugin, account, is_dangerous=True)])
-    llm = ScriptedLlm(
-        [
-            LoopTurn(
-                content="posting",
-                tool_calls=(_tc("slack__post_message", text="hi"),),
-            ),
-            LoopTurn(
-                content="",
-                tool_calls=(
-                    _declare_command("test -f out.txt"),
-                    _tc("file_write", path="out.txt", content="x"),
-                ),
-            ),
-            LoopTurn(content="done", tool_calls=()),
-        ]
-    )
-    async with memory_session() as session:
-        session.add(WorkspaceRow(id=ws, name="ws", region="us-1", safe_mode=True))
-        await session.flush()
-        run = await _make_run(session, workspace_id=ws)
-        orch = RunOrchestrator(
-            session=session,
-            llm=llm,
-            sandbox_manager=NoopSandboxManager(),
-            connector_actions=provider,
-            # No danger_evaluator — default StaticActionDangerEvaluator kicks in.
-        )
-        await orch.run(run=run, workspace_dir=tmp_path)
-        # Blocked, because the OR-rule sees load-time is_dangerous=True.
-        assert not provider.dispatched
+def test_orchestrator_module_does_not_re_export_m2_danger_symbols() -> None:
+    """Surface delta: the M2 evaluator symbols (``ActionDangerEvaluator``,
+    ``DangerVerdict``, ``StaticActionDangerEvaluator``) are no longer
+    re-exported from ``backend.execution.orchestrator``. Mirrors the
+    deletion of ``backend.execution.action_danger`` (the import would fail
+    before this assertion is even reached, but the assertion locks the
+    surface delta in place against accidental re-introduction)."""
+    from backend.execution import orchestrator as orch_mod
+
+    assert not hasattr(orch_mod, "ActionDangerEvaluator")
+    assert not hasattr(orch_mod, "DangerVerdict")
+    assert not hasattr(orch_mod, "StaticActionDangerEvaluator")
+
+
+def test_action_danger_module_is_deleted() -> None:
+    """Surface delta: the per-call evaluator module is gone — importing it
+    raises ``ModuleNotFoundError``. Keeps Lift 0a from silently regressing
+    into a "module-still-present-but-unused" half-state."""
+    import importlib
+
+    try:
+        importlib.import_module("backend.execution.action_danger")
+    except ModuleNotFoundError:
+        return
+    raise AssertionError("backend.execution.action_danger must be deleted (Lift 0a YAGNI rollback)")
 
 
 # --------------------------------------------------------------------------
-# M2 — surface delta: two new @p.action's exposed mid-run (presence assertion)
+# Connector surface — two read-only @p.action's kept on the agent surface
+# (their surface stays; only the M2 per-call gate around them was removed)
 # --------------------------------------------------------------------------
 
 
