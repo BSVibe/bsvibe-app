@@ -20,8 +20,8 @@ from __future__ import annotations
 import os
 from typing import Any
 
-from backend.extensions.plugin import plugin
 from backend.extensions.plugin.context import SkillContext
+from bsvibe_sdk import plugin
 from plugin.notion.client import DEFAULT_BASE_URL, NotionClient
 
 p = plugin(

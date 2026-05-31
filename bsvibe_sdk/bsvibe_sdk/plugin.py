@@ -1,21 +1,21 @@
-"""Plugin Protocol + the public ``plugin(...)`` builder factory.
+"""Plugin Protocol, capability records, validation, and the ``plugin(...)`` builder.
 
-This is the SDK-facing equivalent of the engine builder at
-``backend.extensions.plugin.decorator`` — plugin authors import
-``plugin`` from ``bsvibe_sdk`` and declare capabilities via the returned
-:class:`PluginBuilder`. The engine loader (Lift S keeps this internally
-at ``backend.extensions.plugin.loader``) understands both the SDK
-builder and the historical engine builder; both publish identically
-shaped :class:`PluginSpec` records.
+Lift R2b unification: this module is the canonical home of the
+``PluginBuilder`` class and the ``plugin(...)`` factory. The engine's
+historical ``backend.extensions.plugin.decorator`` module is now a thin
+re-export of the symbols defined here, and every connector (and the engine
+loader/runner) consumes the same single class.
 
-Per v8 §D42 the SDK stays dependency-light: this module uses only the
-standard library, so the eventual external publication of ``bsvibe_sdk``
-on PyPI carries no backend coupling.
+Per v8 §13 D38/D39/D42 the SDK stays dependency-light — this module uses
+only the standard library, so the eventual external publication of
+``bsvibe_sdk`` on PyPI carries no backend coupling. The author-facing
+validations live here so plugin authors get the same protection whether
+they install ``bsvibe_sdk`` standalone or run inside the BSVibe engine.
 
-Lift S keeps the engine's richer registration validation
-(trigger types, jurisdictions, compensation tiers) inside
-``backend.extensions.plugin.base``; the SDK builder publishes the
-minimal author-facing surface. The engine adapts.
+The SDK is currently at v0.1.0 (unpublished). Lift R2b promotes
+``PluginBuilder`` / ``PluginMeta`` / capability dataclasses onto the
+public surface — all data-only types that any future external publication
+will keep as the stable contract.
 """
 
 from __future__ import annotations
@@ -27,42 +27,90 @@ from typing import Any, Protocol, runtime_checkable
 
 _NAME_RE = re.compile(r"^[a-z][a-z0-9-]*$")
 
+# --------------------------------------------------------------------------- #
+# Validation constants — Workflow §6 #4 + §9.1.                                #
+# --------------------------------------------------------------------------- #
 
-class PluginDeclarationError(ValueError):
-    """Raised when a plugin declaration violates the SDK contract."""
+VALID_TRIGGER_TYPES: frozenset[str] = frozenset(
+    {"cron", "webhook", "on_input", "write_event", "on_demand", "on_deliver"}
+)
+"""Trigger ``type`` values accepted on ``@p.inbound``."""
+
+VALID_JURISDICTIONS: frozenset[str] = frozenset({"us", "eu", "kr", "local", "unknown"})
+"""``data_jurisdiction`` values accepted on ``plugin(...)``."""
+
+VALID_COMPENSATION_TIERS: frozenset[str] = frozenset(
+    {"t1_clean", "t2_trail", "t3_new_artifact", "t4_irreversible"}
+)
+"""Workflow §9.1 four-tier compensation taxonomy."""
 
 
-@runtime_checkable
-class Plugin(Protocol):
-    """A declared plugin instance.
+class PluginRegistrationError(ValueError):
+    """Raised when a plugin declaration violates the SDK contract.
 
-    Concrete engine carrier is
-    :class:`backend.extensions.plugin.base.PluginMeta`. This Protocol
-    publishes only the surface used by tooling that introspects loaded
-    plugins (e.g. MCP listings, admin UIs).
+    Historical alias: ``PluginDeclarationError``. Re-exported under the
+    legacy name below for the very few callers that imported it.
     """
 
-    name: str
 
-    def list_actions(self) -> list[str]: ...
+# Back-compat alias — Lift S originally introduced this name; nothing in
+# the live codebase uses it but we keep the symbol so external authors who
+# adopted the SDK pre-R2b don't break on upgrade.
+PluginDeclarationError = PluginRegistrationError
+
+
+# --------------------------------------------------------------------------- #
+# Capability dataclasses — runner consumes these directly.                     #
+# --------------------------------------------------------------------------- #
 
 
 @dataclass
-class _Capability:
-    """Author-declared capability record. Engine reads + validates these."""
-
-    kind: str  # one of: "inbound", "outbound", "action", "compensate", "setup"
+class InboundCapability:
     fn: Callable[..., Awaitable[Any]]
-    options: dict[str, Any] = field(default_factory=dict)
+    trigger: dict[str, Any]
 
 
 @dataclass
-class PluginSpec:
-    """Public, dependency-free plugin declaration.
+class OutboundCapability:
+    fn: Callable[..., Awaitable[Any]]
+    artifact_types: tuple[str, ...]
+    # Workflow §9.2 — compensation tier declared per artifact_type at outbound
+    # registration. ``compensation_supported`` mirrors whether the plugin paired
+    # this outbound with an ``@p.compensate`` handler (T1-T3).
+    compensation_tier: str | None = None
+    compensation_supported: bool = False
 
-    Carries the data the engine loader needs to materialize a runtime
-    :class:`backend.extensions.plugin.base.PluginMeta`. Authors do not
-    construct this directly — they go through :func:`plugin`.
+
+@dataclass
+class CompensateCapability:
+    """Workflow §9.2 — undo handler for one or more delivered artifact_types."""
+
+    fn: Callable[..., Awaitable[Any]]
+    artifact_types: tuple[str, ...]
+
+
+@dataclass
+class ActionCapability:
+    fn: Callable[..., Awaitable[Any]]
+    name: str
+    mcp_exposed: bool = False
+    input_schema: dict[str, Any] | None = None
+
+
+# --------------------------------------------------------------------------- #
+# PluginMeta — the canonical loaded-plugin record. Engine PluginRunner +       #
+# registry consume it directly; ``backend.extensions.plugin.base.PluginMeta``  #
+# is now an alias of this symbol.                                              #
+# --------------------------------------------------------------------------- #
+
+
+@dataclass
+class PluginMeta:
+    """All metadata + runtime references for a single plugin.
+
+    Authors do not construct this directly — they go through
+    :func:`plugin` and the capability decorators on the returned
+    :class:`PluginBuilder`, which mutate ``self.meta`` in place.
     """
 
     name: str
@@ -71,44 +119,70 @@ class PluginSpec:
     author: str
     data_jurisdiction: str
     credentials: list[dict[str, Any]]
-    capabilities: list[_Capability] = field(default_factory=list)
 
-    def list_actions(self) -> list[str]:
-        return [
-            cap.options["name"]
-            for cap in self.capabilities
-            if cap.kind == "action" and "name" in cap.options
-        ]
+    inbounds: list[InboundCapability] = field(default_factory=list)
+    outbounds: list[OutboundCapability] = field(default_factory=list)
+    compensates: list[CompensateCapability] = field(default_factory=list)
+    actions: dict[str, ActionCapability] = field(default_factory=dict)
+    setup_fn: Callable[..., Awaitable[Any]] | None = None
+
+
+@runtime_checkable
+class Plugin(Protocol):
+    """A declared plugin instance.
+
+    Concrete carrier is :class:`PluginMeta`. This Protocol publishes only
+    the surface used by tooling that introspects loaded plugins
+    (e.g. MCP listings, admin UIs).
+    """
+
+    name: str
+
+    def list_actions(self) -> list[str]: ...
+
+
+# --------------------------------------------------------------------------- #
+# PluginBuilder — the author-facing API.                                       #
+# --------------------------------------------------------------------------- #
 
 
 class PluginBuilder:
-    """Returned by :func:`plugin`. Exposes capability decorators."""
+    """Holds a :class:`PluginMeta` and exposes the capability decorators.
 
-    def __init__(self, *, spec: PluginSpec) -> None:
-        self.spec = spec
+    Returned by :func:`plugin`. Plugin authors call ``@p.inbound(...)``,
+    ``@p.outbound(...)``, ``@p.action(...)``, ``@p.compensate(...)``,
+    ``@p.setup`` on the returned instance to register capabilities.
+    """
+
+    def __init__(self, *, meta: PluginMeta) -> None:
+        self.meta = meta
 
     @property
     def name(self) -> str:
-        return self.spec.name
+        return self.meta.name
 
     def list_actions(self) -> list[str]:
-        return self.spec.list_actions()
+        return list(self.meta.actions.keys())
 
     # ----------------------------------------------------------------- inbound
     def inbound(
         self, *, trigger: dict[str, Any]
     ) -> Callable[[Callable[..., Awaitable[Any]]], Callable[..., Awaitable[Any]]]:
-        if not isinstance(trigger, dict) or not trigger.get("type"):
-            raise PluginDeclarationError(
-                f"Plugin {self.spec.name!r}: @inbound trigger missing 'type'"
+        trigger_type = trigger.get("type") if isinstance(trigger, dict) else None
+        if not trigger_type:
+            raise PluginRegistrationError(
+                f"Plugin {self.meta.name!r}: @inbound trigger missing 'type'"
+            )
+        if trigger_type not in VALID_TRIGGER_TYPES:
+            raise PluginRegistrationError(
+                f"Plugin {self.meta.name!r}: invalid trigger type {trigger_type!r}; "
+                f"must be one of {sorted(VALID_TRIGGER_TYPES)}"
             )
 
         def register(
             fn: Callable[..., Awaitable[Any]],
         ) -> Callable[..., Awaitable[Any]]:
-            self.spec.capabilities.append(
-                _Capability(kind="inbound", fn=fn, options={"trigger": dict(trigger)})
-            )
+            self.meta.inbounds.append(InboundCapability(fn=fn, trigger=dict(trigger)))
             return fn
 
         return register
@@ -122,22 +196,31 @@ class PluginBuilder:
         compensation_supported: bool = False,
     ) -> Callable[[Callable[..., Awaitable[Any]]], Callable[..., Awaitable[Any]]]:
         if not artifact_types:
-            raise PluginDeclarationError(
-                f"Plugin {self.spec.name!r}: @outbound artifact_types must be non-empty"
+            raise PluginRegistrationError(
+                f"Plugin {self.meta.name!r}: @outbound artifact_types must be non-empty"
+            )
+        if compensation_tier is not None and compensation_tier not in VALID_COMPENSATION_TIERS:
+            raise PluginRegistrationError(
+                f"Plugin {self.meta.name!r}: invalid compensation_tier {compensation_tier!r}; "
+                f"must be one of {sorted(VALID_COMPENSATION_TIERS)}"
+            )
+        ats = tuple(artifact_types)
+        existing = {t for cap in self.meta.outbounds for t in cap.artifact_types}
+        overlap = existing & set(ats)
+        if overlap:
+            raise PluginRegistrationError(
+                f"Plugin {self.meta.name!r}: @outbound artifact_type overlap: {sorted(overlap)}"
             )
 
         def register(
             fn: Callable[..., Awaitable[Any]],
         ) -> Callable[..., Awaitable[Any]]:
-            self.spec.capabilities.append(
-                _Capability(
-                    kind="outbound",
+            self.meta.outbounds.append(
+                OutboundCapability(
                     fn=fn,
-                    options={
-                        "artifact_types": tuple(artifact_types),
-                        "compensation_tier": compensation_tier,
-                        "compensation_supported": compensation_supported,
-                    },
+                    artifact_types=ats,
+                    compensation_tier=compensation_tier,
+                    compensation_supported=compensation_supported,
                 )
             )
             return fn
@@ -148,21 +231,29 @@ class PluginBuilder:
     def compensate(
         self, *, artifact_types: list[str]
     ) -> Callable[[Callable[..., Awaitable[Any]]], Callable[..., Awaitable[Any]]]:
+        """Register an undo handler for one or more delivered artifact_types.
+
+        Workflow §9.2 — pairs with ``@p.outbound`` for tiers T1-T3. The
+        handler receives ``(context, handle)`` where ``handle`` is the
+        ``compensation_handle`` dict the matching outbound returned, and must
+        be idempotent (re-call after success is a silent no-op).
+        """
         if not artifact_types:
-            raise PluginDeclarationError(
-                f"Plugin {self.spec.name!r}: @compensate artifact_types must be non-empty"
+            raise PluginRegistrationError(
+                f"Plugin {self.meta.name!r}: @compensate artifact_types must be non-empty"
+            )
+        ats = tuple(artifact_types)
+        existing = {t for cap in self.meta.compensates for t in cap.artifact_types}
+        overlap = existing & set(ats)
+        if overlap:
+            raise PluginRegistrationError(
+                f"Plugin {self.meta.name!r}: @compensate artifact_type overlap: {sorted(overlap)}"
             )
 
         def register(
             fn: Callable[..., Awaitable[Any]],
         ) -> Callable[..., Awaitable[Any]]:
-            self.spec.capabilities.append(
-                _Capability(
-                    kind="compensate",
-                    fn=fn,
-                    options={"artifact_types": tuple(artifact_types)},
-                )
-            )
+            self.meta.compensates.append(CompensateCapability(fn=fn, artifact_types=ats))
             return fn
 
         return register
@@ -176,30 +267,19 @@ class PluginBuilder:
         input_schema: dict[str, Any] | None = None,
     ) -> Callable[[Callable[..., Awaitable[Any]]], Callable[..., Awaitable[Any]]]:
         if not name:
-            raise PluginDeclarationError(
-                f"Plugin {self.spec.name!r}: @action requires non-empty name"
+            raise PluginRegistrationError(
+                f"Plugin {self.meta.name!r}: @action requires non-empty name"
             )
-        if any(
-            cap.kind == "action" and cap.options.get("name") == name
-            for cap in self.spec.capabilities
-        ):
-            raise PluginDeclarationError(
-                f"Plugin {self.spec.name!r}: action {name!r} already registered"
+        if name in self.meta.actions:
+            raise PluginRegistrationError(
+                f"Plugin {self.meta.name!r}: action {name!r} already registered"
             )
 
         def register(
             fn: Callable[..., Awaitable[Any]],
         ) -> Callable[..., Awaitable[Any]]:
-            self.spec.capabilities.append(
-                _Capability(
-                    kind="action",
-                    fn=fn,
-                    options={
-                        "name": name,
-                        "mcp_exposed": mcp_exposed,
-                        "input_schema": input_schema,
-                    },
-                )
+            self.meta.actions[name] = ActionCapability(
+                fn=fn, name=name, mcp_exposed=mcp_exposed, input_schema=input_schema
             )
             return fn
 
@@ -207,10 +287,15 @@ class PluginBuilder:
 
     # ------------------------------------------------------------------- setup
     def setup(self, fn: Callable[..., Awaitable[Any]]) -> Callable[..., Awaitable[Any]]:
-        if any(cap.kind == "setup" for cap in self.spec.capabilities):
-            raise PluginDeclarationError(f"Plugin {self.spec.name!r}: @setup already registered")
-        self.spec.capabilities.append(_Capability(kind="setup", fn=fn))
+        if self.meta.setup_fn is not None:
+            raise PluginRegistrationError(f"Plugin {self.meta.name!r}: @setup already registered")
+        self.meta.setup_fn = fn
         return fn
+
+
+# --------------------------------------------------------------------------- #
+# Factory.                                                                    #
+# --------------------------------------------------------------------------- #
 
 
 def plugin(
@@ -222,7 +307,7 @@ def plugin(
     description: str = "",
     author: str = "",
 ) -> PluginBuilder:
-    """Declare a plugin. Returns a :class:`PluginBuilder` with capability decorators.
+    """Declare a plugin. Returns a :class:`PluginBuilder`.
 
     Example::
 
@@ -234,8 +319,15 @@ def plugin(
         async def open_pr(context, *, branch, title, body): ...
     """
     if not _NAME_RE.match(name):
-        raise PluginDeclarationError(f"Invalid plugin name {name!r}: must match {_NAME_RE.pattern}")
-    spec = PluginSpec(
+        raise PluginRegistrationError(
+            f"Invalid plugin name {name!r}: must match {_NAME_RE.pattern}"
+        )
+    if data_jurisdiction not in VALID_JURISDICTIONS:
+        raise PluginRegistrationError(
+            f"Invalid data_jurisdiction {data_jurisdiction!r}: "
+            f"must be one of {sorted(VALID_JURISDICTIONS)}"
+        )
+    meta = PluginMeta(
         name=name,
         version=version,
         description=description,
@@ -243,7 +335,21 @@ def plugin(
         data_jurisdiction=data_jurisdiction,
         credentials=list(credentials),
     )
-    return PluginBuilder(spec=spec)
+    return PluginBuilder(meta=meta)
 
 
-__all__ = ["Plugin", "PluginBuilder", "PluginDeclarationError", "PluginSpec", "plugin"]
+__all__ = [
+    "VALID_COMPENSATION_TIERS",
+    "VALID_JURISDICTIONS",
+    "VALID_TRIGGER_TYPES",
+    "ActionCapability",
+    "CompensateCapability",
+    "InboundCapability",
+    "OutboundCapability",
+    "Plugin",
+    "PluginBuilder",
+    "PluginDeclarationError",
+    "PluginMeta",
+    "PluginRegistrationError",
+    "plugin",
+]
