@@ -11,7 +11,7 @@ It satisfies the :class:`~backend.execution.orchestrator.RunCompute` Protocol
 (``run(*, run, workspace_dir) -> LoopResult``), so the worker-runtime factory can
 return it wherever it returns the native :class:`RunOrchestrator` /
 :class:`~backend.executors.orchestrator.ExecutorOrchestrator`, and
-:class:`~backend.orchestrator.agent_runner.AgentRunner.drive` maps its outcome
+:class:`~backend.workflow.application.agent_runner.AgentRunner.drive` maps its outcome
 identically — ``verified → REVIEW_READY``.
 
 HONESTY (B4 trust integrity). A knowledge answer is NOT verified code. So this

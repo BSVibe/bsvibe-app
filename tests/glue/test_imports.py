@@ -1,4 +1,4 @@
-"""Sweep-imports every backend.{intake,delivery,orchestrator,workers}.* module."""
+"""Sweep-imports every backend.{intake,delivery,workflow,workers}.* module."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ def _iter_modules() -> list[str]:
     for pkg_name in (
         "backend.intake",
         "backend.delivery",
-        "backend.orchestrator",
+        "backend.workflow",
         "backend.workers",
     ):
         pkg = importlib.import_module(pkg_name)

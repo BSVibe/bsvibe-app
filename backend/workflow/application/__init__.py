@@ -3,8 +3,9 @@
 H1 placeholder. H2a populates the loop conductor + the three sibling
 modules it leans on (tool_registry, connector_action_registrar,
 run_persistence); H2b absorbs the legacy ``orchestrator/`` stage machine;
-H2c implements the transition handlers; H3 absorbs ``intake/`` +
-``delivery/`` into ``application/stages/``.
+H2c relocates :class:`AgentRunner` here and lands the transition
+handlers + state machine driver; H3 absorbs ``intake/`` + ``delivery/``
+into ``application/stages/``.
 
 D36 invariant — external callers MUST import from this package (or its
 submodules) only. The legacy ``backend.execution.orchestrator`` shim
@@ -23,8 +24,10 @@ from backend.workflow.application.agent_loop import (
     RunCompute,
     RunOrchestrator,
 )
+from backend.workflow.application.agent_runner import AgentRunner
 
 __all__ = [
+    "AgentRunner",
     "CanonRetriever",
     "LoopLlm",
     "LoopOutcome",

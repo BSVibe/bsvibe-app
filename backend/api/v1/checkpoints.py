@@ -51,7 +51,7 @@ from backend.execution.verified_deliverable import settle_run_context
 from backend.identity.db import UserRow
 from backend.knowledge.graph.storage import FileSystemStorage
 from backend.knowledge.retrieval.resolved_decisions_retriever import ResolvedDecisionsRetriever
-from backend.orchestrator.agent_runner import AgentRunner
+from backend.workflow.application.agent_runner import AgentRunner
 from plugin.audit.events import AuditActor, AuditResource
 from plugin.audit.service import safe_emit
 

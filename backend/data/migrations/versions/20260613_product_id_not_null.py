@@ -24,7 +24,7 @@ The forward-going guarantee is enforced today by:
 * ``backend.intake.receive.receive`` threading
   ``trigger.product_id`` onto every outcome path (webhooks too)
 * ``backend.workers.intake_worker`` copying onto the new Request row
-* ``backend.orchestrator.agent_runner.open_run`` copying onto the new
+* ``backend.workflow.application.agent_runner.open_run`` copying onto the new
   ExecutionRun
 
 Despite no DB constraint yet, the data path no longer produces NULL.

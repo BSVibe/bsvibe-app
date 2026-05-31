@@ -147,7 +147,7 @@ class LoopResult:
 
 @runtime_checkable
 class RunCompute(Protocol):
-    """The single compute seam :class:`~backend.orchestrator.agent_runner.AgentRunner`
+    """The single compute seam :class:`~backend.workflow.application.agent_runner.AgentRunner`
     drives.
 
     Both the native :class:`RunOrchestrator` (api-llm path) and the

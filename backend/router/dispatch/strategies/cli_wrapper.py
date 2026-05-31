@@ -12,7 +12,7 @@ resolver for a strategy and gets one entry point to construct the orchestrator
 
 The wrapping is intentionally minimal. The executor invoke side already
 satisfies the :class:`~backend.execution.orchestrator.RunCompute` Protocol the
-:class:`~backend.orchestrator.agent_runner.AgentRunner` calls today; rewiring
+:class:`~backend.workflow.application.agent_runner.AgentRunner` calls today; rewiring
 the AgentRunner to ``Router.invoke`` is a later lift, NOT this one (per the
 v8 §13 Lift D scope-control invariant: build the strategy infrastructure, do
 NOT collapse the call sites further than the predicate).

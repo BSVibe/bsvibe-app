@@ -7,8 +7,8 @@ bridge between the workflow state machine and the execution layer
 the resulting run_id.
 
 It opens the run, then delegates the compute loop to
-``backend.execution.orchestrator.RunOrchestrator`` and maps the loop's
-terminal outcome back onto the run status:
+:class:`backend.workflow.application.agent_loop.RunOrchestrator` and
+maps the loop's terminal outcome back onto the run status:
 
 * ``verified`` → ``review_ready`` (work done, awaiting ship/delivery).
 * ``needs_decision`` → run stays ``running`` (paused on a Decision row;
@@ -35,8 +35,8 @@ from backend.execution.db import (
     ExecutionRunHistory,
     RunStatus,
 )
-from backend.execution.orchestrator import LoopResult, RunCompute
 from backend.intake.db import RequestRow
+from backend.workflow.application.agent_loop import LoopResult, RunCompute
 
 logger = structlog.get_logger(__name__)
 
@@ -115,8 +115,9 @@ class AgentRunner:
         with the transactional run status.
 
         ``orchestrator`` is any :class:`RunCompute` — the native
-        :class:`~backend.execution.orchestrator.RunOrchestrator` (api-llm) or
-        the :class:`~backend.executors.orchestrator.ExecutorOrchestrator`
+        :class:`~backend.workflow.application.agent_loop.RunOrchestrator`
+        (api-llm) or the
+        :class:`~backend.executors.orchestrator.ExecutorOrchestrator`
         (CLI-worker dispatch). Both have the same ``run(...) -> LoopResult``
         shape, so the outcome mapping below is backend-agnostic.
 

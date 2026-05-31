@@ -6,7 +6,7 @@ its own git worktree on a ``bsvibe/run/<run_id>`` branch.
 
 This module owns the *filesystem + git* lifecycle. The transactional state
 (``RunStatus``, ``Decision``) lives in
-:class:`~backend.orchestrator.agent_runner.AgentRunner` — this module
+:class:`~backend.workflow.application.agent_runner.AgentRunner` — this module
 just shells out to git for the FS-level operations.
 
 W1 scope:

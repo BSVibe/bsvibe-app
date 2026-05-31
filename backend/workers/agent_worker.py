@@ -3,7 +3,7 @@
 Workflow §12.5 #8 (Bundle G — Workers). DB-polling implementation (not
 Redis Streams) — pulls ``status=OPEN`` Requests from the ``requests``
 table, claims them via row-update, and hands each to
-:class:`backend.orchestrator.AgentRunner` to mint an ExecutionRun.
+:class:`backend.workflow.application.agent_runner.AgentRunner` to mint an ExecutionRun.
 
 The worker advances a Request through two single-tick phases so each can
 be driven deterministically in a test:
@@ -12,8 +12,8 @@ be driven deterministically in a test:
   ExecutionRun (status ``OPEN``) + flip the Request to ``RUNNING``.
 * :meth:`drive_once` — for each ExecutionRun still ``OPEN``, *frame* the
   Request (:class:`~backend.workflow.application.stages.frame.FrameStage`) then *drive*
-  the agent loop (:class:`~backend.orchestrator.agent_runner.AgentRunner`
-  delegating compute to :class:`~backend.execution.orchestrator.RunOrchestrator`),
+  the agent loop (:class:`~backend.workflow.application.agent_runner.AgentRunner`
+  delegating compute to :class:`~backend.workflow.application.agent_loop.RunOrchestrator`),
   mapping ``verified → review_ready`` etc.
 
 ``drive_once`` needs an execution backend (a work-LLM seam + a sandbox +
@@ -44,9 +44,9 @@ from backend.execution.db import ExecutionRun, RunStatus
 from backend.execution.orchestrator import RunCompute
 from backend.extensions.skill.loader import SkillLoader
 from backend.intake.db import RequestRow, RequestStatus
-from backend.orchestrator.agent_runner import AgentRunner
 from backend.storage.artifact_store import ArtifactStore, LocalFilesystemArtifactStore
 from backend.workers.base import BaseWorker
+from backend.workflow.application.agent_runner import AgentRunner
 from backend.workflow.application.stages.frame import FrameConfig, FrameLlm, FrameStage
 
 logger = structlog.get_logger(__name__)

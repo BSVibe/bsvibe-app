@@ -45,9 +45,9 @@ from backend.executors.orchestrator import ExecutorOrchestrator
 from backend.executors.worker.codex import CodexExecutor
 from backend.executors.worker.main import _collect_workspace_files
 from backend.executors.worker.opencode import OpenCodeExecutor
-from backend.orchestrator.agent_runner import AgentRunner
 from backend.router.routing.run_routing.db import RunRoutingRuleRow
 from backend.router.routing.run_routing.engine import resolve_route
+from backend.workflow.application.agent_runner import AgentRunner
 
 from .._support import db_engine
 from .test_executor_run_e2e import (

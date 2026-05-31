@@ -37,7 +37,7 @@ from backend.executors import dispatch
 from backend.executors.orchestrator import ExecutorOrchestrator
 from backend.executors.worker.codex import CodexExecutor
 from backend.executors.worker.main import _collect_workspace_files
-from backend.orchestrator.agent_runner import AgentRunner
+from backend.workflow.application.agent_runner import AgentRunner
 
 from .._support import db_engine
 
