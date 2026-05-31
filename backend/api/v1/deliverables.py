@@ -29,7 +29,6 @@ from pydantic import BaseModel, ConfigDict
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.accounts.crypto import CredentialCipher
 from backend.api.deps import get_artifact_store, get_db_session, get_workspace_id
 from backend.config import get_settings
 from backend.connectors.db import ConnectorAccountRow
@@ -44,6 +43,7 @@ from backend.execution.verifier.service import RETRIEVED_KNOWLEDGE_RATIONALE
 from backend.plugins.base import PluginMeta, PluginRunError
 from backend.plugins.context import SkillContext
 from backend.plugins.runner import PluginRunner
+from backend.router.accounts.crypto import CredentialCipher
 from backend.storage.artifact_store import ArtifactStore, LocalFilesystemArtifactStore
 
 logger = structlog.get_logger(__name__)
@@ -592,10 +592,10 @@ async def get_retract_handler() -> RetractHandler:  # pragma: no cover — overr
     settings-derived :class:`CredentialCipher`. Tests override this with an
     in-test stub so a unit run never touches the loader / KMS.
     """
-    from backend.accounts.crypto import _key_from_settings  # noqa: PLC0415
     from backend.api.deps import _get_session_factory  # noqa: PLC0415 — avoid import cycle
     from backend.plugins.implementations import __path__ as _impl_path  # noqa: PLC0415
     from backend.plugins.loader import PluginLoader  # noqa: PLC0415
+    from backend.router.accounts.crypto import _key_from_settings  # noqa: PLC0415
 
     loader = PluginLoader(Path(_impl_path[0]))
     registry = await loader.load_all()

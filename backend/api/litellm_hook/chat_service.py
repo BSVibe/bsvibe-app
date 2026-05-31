@@ -1,6 +1,6 @@
 """ChatService — OpenAI-shape chat completions dispatcher.
 
-Thin coordinator over :class:`backend.gateway.dispatch.GatewayDispatcher`.
+Thin coordinator over :class:`backend.router.dispatch.GatewayDispatcher`.
 Caller constructs the dispatcher (with its concrete deps: ModelAccountService,
 Classifier, BudgetPolicyService, LlmClient) and hands it to the service for
 the lifetime of one request.
@@ -19,8 +19,8 @@ from typing import Any
 
 import structlog
 
-from backend.gateway.classifier.base import ClassificationFeatures
-from backend.gateway.dispatch import DispatchRequest, GatewayDispatcher
+from backend.router.classifier.base import ClassificationFeatures
+from backend.router.dispatch import DispatchRequest, GatewayDispatcher
 
 logger = structlog.get_logger(__name__)
 

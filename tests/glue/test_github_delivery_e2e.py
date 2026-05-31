@@ -33,7 +33,6 @@ import respx
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from backend.accounts.crypto import CredentialCipher
 from backend.connectors.db import ConnectorAccountRow
 from backend.delivery.connector_dispatch import (
     build_connector_delivery_adapter,
@@ -44,6 +43,7 @@ from backend.execution.db import Deliverable, ExecutionRun, RunStatus
 from backend.execution.orchestrator import LoopToolCall, LoopTurn, RunOrchestrator
 from backend.plugins.implementations.github import plugin as github_module
 from backend.plugins.loader import PluginLoader
+from backend.router.accounts.crypto import CredentialCipher
 from backend.skills.loader import SkillLoader
 from backend.supervisor.sandbox import NoopSandboxManager
 from backend.workers.agent_worker import AgentExecutionDeps, AgentWorker

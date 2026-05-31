@@ -46,9 +46,6 @@ import structlog
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-from backend.accounts.crypto import CredentialCipher, _key_from_settings
-from backend.accounts.models import ModelAccount
-from backend.accounts.service import ModelAccountService
 from backend.config import Settings, get_settings
 from backend.delivery.connector_dispatch import (
     ConnectorDeliveryAdapter,
@@ -64,18 +61,21 @@ from backend.execution.knowledge_orchestrator import KnowledgeAnswerOrchestrator
 from backend.execution.loop_llm import GatewayLoopLlm
 from backend.execution.orchestrator import CanonRetriever, RunCompute, RunOrchestrator
 from backend.executors.orchestrator import ExecutorOrchestrator
-from backend.gateway.budget.policy import BudgetPolicyService
-from backend.gateway.budget.repository import BudgetPolicyRepository
-from backend.gateway.budget.tracker import BudgetTracker, InMemoryBudgetStore
-from backend.gateway.classifier.base import ClassificationFeatures
-from backend.gateway.classifier.local_vs_cloud import LocalVsCloudClassifier
-from backend.gateway.classifier.static import StaticClassifier
-from backend.gateway.dispatch import DispatchRequest, GatewayDispatcher
-from backend.gateway.llm_client import LlmClient
 from backend.orchestrator.frame import FrameLlm
 from backend.plugins.base import PluginMeta
 from backend.plugins.loader import PluginLoader
 from backend.plugins.runner import PluginRunner
+from backend.router.accounts.crypto import CredentialCipher, _key_from_settings
+from backend.router.accounts.models import ModelAccount
+from backend.router.accounts.service import ModelAccountService
+from backend.router.budget.policy import BudgetPolicyService
+from backend.router.budget.repository import BudgetPolicyRepository
+from backend.router.budget.tracker import BudgetTracker, InMemoryBudgetStore
+from backend.router.classifier.base import ClassificationFeatures
+from backend.router.classifier.local_vs_cloud import LocalVsCloudClassifier
+from backend.router.classifier.static import StaticClassifier
+from backend.router.dispatch import DispatchRequest, GatewayDispatcher
+from backend.router.llm_client import LlmClient
 from backend.routing import resolve_route
 from backend.skills.loader import SkillLoader
 from backend.supervisor.audit.models import AuditOutboxRecord

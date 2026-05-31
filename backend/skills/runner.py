@@ -13,7 +13,7 @@ Per Workflow §6 #5 invocation flow:
 3. Compose system prompt = skill body + retrieved context
 4. Filter caller-supplied tool list by ``meta.allowed_tools`` if set
 5. Call LLM via ``completion_fn`` (caller injects — typically
-   ``backend.gateway.llm_client``)
+   ``backend.router.llm_client``)
 6. Return ``SkillRunResult``
 """
 
@@ -48,7 +48,7 @@ CompletionFn = Callable[..., Awaitable[str]]
 """``async (system_prompt: str, user_input: str, *, model: str | None,
 allowed_tools: list[str]) -> str`` — caller adapts.
 
-The runner stays provider-agnostic; ``backend.gateway.llm_client`` is the
+The runner stays provider-agnostic; ``backend.router.llm_client`` is the
 intended concrete implementation but tests pass a fake.
 """
 

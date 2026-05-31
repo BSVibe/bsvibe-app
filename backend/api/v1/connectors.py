@@ -12,7 +12,7 @@ never-return-secret pattern):
 
 * On create the server mints an unguessable ``webhook_token``
   (``secrets.token_urlsafe(32)``) and encrypts ``signing_secret`` via
-  :class:`backend.accounts.crypto.CredentialCipher` — the plaintext secret
+  :class:`backend.router.accounts.crypto.CredentialCipher` — the plaintext secret
   never touches disk and is never returned over the API.
 * The ``webhook_token`` (and the full webhook URL built from it) is returned
   ONLY in the create response, exactly once, like an API key. List responses
@@ -36,7 +36,6 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.accounts.crypto import CredentialCipher
 from backend.api.deps import get_db_session, get_workspace_id
 
 # Reuse the ingress's cipher dependency so the create-side encrypt and the
@@ -45,6 +44,7 @@ from backend.api.webhooks import get_credential_cipher
 from backend.connectors.db import ConnectorAccountRow
 from backend.connectors.resolver import ConnectorInboundResolver
 from backend.delivery.connector_dispatch import OUTBOUND_EVENT_BUILDERS
+from backend.router.accounts.crypto import CredentialCipher
 
 router = APIRouter()
 

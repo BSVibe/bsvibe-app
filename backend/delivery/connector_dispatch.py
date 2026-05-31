@@ -46,7 +46,6 @@ import structlog
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from backend.accounts.crypto import CredentialCipher
 from backend.connectors.db import ConnectorAccountRow
 from backend.delivery.dispatcher import DeliveryDispatcher
 from backend.delivery.git_ops import GitOps
@@ -55,6 +54,7 @@ from backend.execution.db import Deliverable
 from backend.plugins.base import PluginMeta
 from backend.plugins.context import SkillContext
 from backend.plugins.runner import PluginRunner
+from backend.router.accounts.crypto import CredentialCipher
 
 logger = structlog.get_logger(__name__)
 

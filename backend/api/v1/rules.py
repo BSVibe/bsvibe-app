@@ -8,14 +8,14 @@ to another workspace or account is invisible (404 on patch / delete, never
 returned by list).
 
 These endpoints only ADD a read/write API over the EXISTING
-:class:`~backend.gateway.rules.repository.RulesRepository`. They do NOT touch
+:class:`~backend.router.rules.repository.RulesRepository`. They do NOT touch
 how rules are evaluated at runtime — the :class:`RuleEngine` keeps consuming
 the same rows it always has.
 
 Condition support is intentionally minimal (the design's ROUTING block, not a
 full classifier editor): a rule may be created with no conditions (a catch-all
 / default) or with simple conditions whose ``field`` must be in the evaluator's
-:data:`~backend.gateway.rules.conditions.ALLOWED_FIELDS` whitelist — a field
+:data:`~backend.router.rules.conditions.ALLOWED_FIELDS` whitelist — a field
 outside it would never match, so we reject it at the boundary rather than
 persist a dead rule. Complex multi-condition editing is deferred.
 """
@@ -30,9 +30,9 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.api.deps import get_db_session, get_workspace_id, require_account_id
-from backend.gateway.rules.conditions import ALLOWED_FIELDS
-from backend.gateway.rules.db import RoutingRuleRow
-from backend.gateway.rules.repository import RuleDuplicateError, RulesRepository
+from backend.router.rules.conditions import ALLOWED_FIELDS
+from backend.router.rules.db import RoutingRuleRow
+from backend.router.rules.repository import RuleDuplicateError, RulesRepository
 
 router = APIRouter()
 

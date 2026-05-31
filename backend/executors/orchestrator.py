@@ -65,7 +65,6 @@ from typing import Any
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.accounts.models import ModelAccount
 from backend.config import Settings, get_settings
 from backend.execution.audit_events import (
     DecisionPending,
@@ -89,6 +88,7 @@ from backend.execution.verified_deliverable import write_verified_deliverable
 from backend.execution.verifier.service import CanonRetriever, JudgeLlm, VerificationService
 from backend.executors import dispatch
 from backend.executors.dispatch import TaskTimeout
+from backend.router.accounts.models import ModelAccount
 from backend.supervisor.audit.events import AuditActor, AuditEventBase, AuditResource
 from backend.supervisor.audit.service import safe_emit
 from backend.supervisor.sandbox import SandboxManager

@@ -1,7 +1,7 @@
 """/api/v1/rules — create / list / patch / delete routing rules.
 
 These exercise the founder-facing CRUD over the EXISTING
-:class:`~backend.gateway.rules.repository.RulesRepository`. The endpoints are
+:class:`~backend.router.rules.repository.RulesRepository`. The endpoints are
 workspace + billing-account scoped exactly like the pre-existing list route
 (``get_workspace_id`` + ``require_account_id``); a rule that belongs to another
 workspace / account is invisible (404 on patch / delete, never returned by
@@ -34,7 +34,7 @@ from backend.api.deps import (
 from backend.api.main import create_app
 
 # Importing the ORM rows registers routing_rules + rule_conditions on Base.
-from backend.gateway.rules.db import RoutingRuleRow  # noqa: F401
+from backend.router.rules.db import RoutingRuleRow  # noqa: F401
 
 from .._support import db_engine, fake_current_user
 

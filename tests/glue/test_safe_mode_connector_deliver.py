@@ -44,7 +44,6 @@ import respx
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from backend.accounts.crypto import CredentialCipher
 from backend.api.deps import (
     get_current_user,
     get_current_user_row,
@@ -72,6 +71,7 @@ from backend.execution.db import (
 )
 from backend.plugins.implementations.notion import plugin as notion_module
 from backend.plugins.loader import PluginLoader
+from backend.router.accounts.crypto import CredentialCipher
 from backend.workers.delivery_worker import DeliveryWorker, DeliveryWorkerConfig
 from backend.workspaces.db import WorkspaceRow
 

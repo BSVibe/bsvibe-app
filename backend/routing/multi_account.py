@@ -13,7 +13,7 @@ D4 closes that gap: **the class is D2's job; picking WITHIN the class is D4's.**
 Given 2+ eligible same-class active accounts, this module returns a *specific*
 account by a deterministic, glass-box policy — never a stall.
 
-Policy signals (real :class:`~backend.accounts.models.ModelAccount` fields only)
+Policy signals (real :class:`~backend.router.accounts.models.ModelAccount` fields only)
 -------------------------------------------------------------------------------
 The recommended ordering is *budget headroom → health/last-success → explicit
 priority → stable tiebreak*. The first two signals have **no backing field** on
@@ -39,7 +39,7 @@ from typing import TYPE_CHECKING
 import structlog
 
 if TYPE_CHECKING:
-    from backend.accounts.models import ModelAccount
+    from backend.router.accounts.models import ModelAccount
 
 logger = structlog.get_logger(__name__)
 

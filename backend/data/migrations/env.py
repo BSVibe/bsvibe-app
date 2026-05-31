@@ -22,16 +22,16 @@ from backend.config import get_settings
 from backend.data import Base
 
 # noqa: F401 — imported for table-registration side effects only.
-import backend.accounts.account_models  # noqa: F401, E402
-import backend.accounts.models  # noqa: F401, E402
+import backend.router.accounts.account_models  # noqa: F401, E402
+import backend.router.accounts.models  # noqa: F401, E402
 import backend.connectors.db  # noqa: F401, E402
 import backend.delivery.db  # noqa: F401, E402
 import backend.execution.db  # noqa: F401, E402
 import backend.executors.db  # noqa: F401, E402
-import backend.gateway.budget.models  # noqa: F401, E402
-import backend.gateway.embedding.db  # noqa: F401, E402
-import backend.gateway.routing.db  # noqa: F401, E402
-import backend.gateway.rules.db  # noqa: F401, E402
+import backend.router.budget.models  # noqa: F401, E402
+import backend.router.embedding.db  # noqa: F401, E402
+import backend.router.routing.db  # noqa: F401, E402
+import backend.router.rules.db  # noqa: F401, E402
 import backend.identity.db  # noqa: F401, E402
 import backend.intake.db  # noqa: F401, E402
 import backend.knowledge.canonicalization.db  # noqa: F401, E402

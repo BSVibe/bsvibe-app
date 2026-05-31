@@ -8,7 +8,7 @@ unguessable path component an external provider calls
 
 The connector's signing secret is stored encrypted
 (``signing_secret_ciphertext``) via the same
-:class:`backend.accounts.crypto.CredentialCipher` pattern as
+:class:`backend.router.accounts.crypto.CredentialCipher` pattern as
 ``model_accounts.api_key_encrypted`` — plaintext secrets never touch disk.
 """
 

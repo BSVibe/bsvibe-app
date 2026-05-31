@@ -1,6 +1,6 @@
 """accounts — per-workspace personal billing account (the account axis).
 
-One row per workspace's personal :class:`backend.accounts.account_models.Account`,
+One row per workspace's personal :class:`backend.router.accounts.account_models.Account`,
 auto-seeded at login bootstrap. It is the partition key the model-accounts
 surface scopes on via ``X-BSVibe-Account-Id``. NO unique constraint on
 ``workspace_id`` (room for future multi-account workspaces); resolution is

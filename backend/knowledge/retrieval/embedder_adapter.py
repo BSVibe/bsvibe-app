@@ -2,7 +2,7 @@
 ``Embedder`` Protocol (G5).
 
 The note vector store (G3) needs query/note embeddings; the production embedding
-path is :class:`~backend.gateway.embedding.service.EmbeddingService` (litellm,
+path is :class:`~backend.router.embedding.service.EmbeddingService` (litellm,
 per-account model). This thin adapter wraps it so the knowledge consumers
 (:class:`~backend.knowledge.retrieval.semantic_note_retriever.SemanticNoteRetriever`,
 the settle-time population) depend only on the ``Embedder`` Protocol.
@@ -16,7 +16,7 @@ semantic search is a no-op rather than an error when embedding isn't set up.
 
 from __future__ import annotations
 
-from backend.gateway.embedding.service import EmbeddingService
+from backend.router.embedding.service import EmbeddingService
 
 
 class GatewayEmbedder:

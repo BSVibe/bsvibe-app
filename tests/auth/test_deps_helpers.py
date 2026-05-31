@@ -38,8 +38,8 @@ async def test_get_account_id_rejects_garbage() -> None:
 async def test_require_account_id_resolves_personal_account_when_missing() -> None:
     """No header → resolve (create-on-read) the workspace's personal account
     instead of 400ing, so a logged-in founder is never blocked."""
-    import backend.accounts.account_models  # noqa: F401, PLC0415 — table registration
-    from backend.accounts.account_models import Account  # noqa: PLC0415
+    import backend.router.accounts.account_models  # noqa: F401, PLC0415 — table registration
+    from backend.router.accounts.account_models import Account  # noqa: PLC0415
 
     ws = uuid.uuid4()
     async with memory_session() as s:

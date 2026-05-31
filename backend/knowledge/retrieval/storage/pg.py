@@ -5,7 +5,7 @@ scoped to one ``workspace_id``. Requires the ``vector`` extension (created in th
 alembic revision that adds the table). **Prod-only** — it relies on the pgvector
 column type, which SQLite lacks; the real ``<=>`` path is exercised by the
 fresh-PG migration test + a ``BSVIBE_DATABASE_URL``-gated smoke test (mirrors
-:class:`~backend.gateway.embedding.storage.pg.PgVectorBackend`).
+:class:`~backend.router.embedding.storage.pg.PgVectorBackend`).
 """
 
 from __future__ import annotations

@@ -13,7 +13,7 @@ The frame already carries the complexity verdict — D1 (#212) had the LLM judge
 ``pipeline`` by COMPLEXITY and SCOPE (a tiny tweak → ``single``; a
 multi-component / cross-cutting build → ``design_then_impl``). That IS the
 run-level tier signal; D2 reuses it rather than inventing a parallel classifier
-(the gateway :class:`~backend.gateway.classifier.base.Classifier` needs
+(the gateway :class:`~backend.router.classifier.base.Classifier` needs
 per-request token counts the run doesn't carry):
 
 * ``pipeline == "single"``          → ``simple``       → the LOCAL account
@@ -22,7 +22,7 @@ per-request token counts the run doesn't carry):
 Account classes
 ---------------
 * **local** — a native account whose ``provider`` is a host-local inference
-  engine (:data:`backend.accounts.service.LOCAL_INFERENCE_PROVIDERS`).
+  engine (:data:`backend.router.accounts.service.LOCAL_INFERENCE_PROVIDERS`).
 * **executor** — a ``provider == "executor"`` account, i.e. the cloud/opencode
   CLI baseline (claude_code / codex / opencode capabilities).
 
@@ -40,10 +40,10 @@ from typing import TYPE_CHECKING, Literal
 
 import structlog
 
-from backend.accounts.service import LOCAL_INFERENCE_PROVIDERS
+from backend.router.accounts.service import LOCAL_INFERENCE_PROVIDERS
 
 if TYPE_CHECKING:
-    from backend.accounts.models import ModelAccount
+    from backend.router.accounts.models import ModelAccount
     from backend.routing.engine import RoutingContext
 
 logger = structlog.get_logger(__name__)

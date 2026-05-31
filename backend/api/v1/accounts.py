@@ -8,14 +8,14 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.accounts.crypto import CredentialCipher, _key_from_settings
-from backend.accounts.schemas import (
+from backend.api.deps import get_db_session, get_workspace_id, require_account_id
+from backend.router.accounts.crypto import CredentialCipher, _key_from_settings
+from backend.router.accounts.schemas import (
     ModelAccountCreate,
     ModelAccountOut,
     ModelAccountUpdate,
 )
-from backend.accounts.service import ModelAccountService
-from backend.api.deps import get_db_session, get_workspace_id, require_account_id
+from backend.router.accounts.service import ModelAccountService
 
 router = APIRouter()
 

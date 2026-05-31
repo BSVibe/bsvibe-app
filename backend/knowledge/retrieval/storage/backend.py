@@ -1,6 +1,6 @@
 """Note vector-search backend abstraction (G3).
 
-Mirrors the gateway embedding policy (:mod:`backend.gateway.embedding.storage`):
+Mirrors the gateway embedding policy (:mod:`backend.router.embedding.storage`):
 production uses :class:`~backend.knowledge.retrieval.storage.pg.PgNoteVectorBackend`
 (pgvector ``<=>``); tests + in-memory dev use
 :class:`~backend.knowledge.retrieval.storage.memory.InMemoryNoteVectorBackend`

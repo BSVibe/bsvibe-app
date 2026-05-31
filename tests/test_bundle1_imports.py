@@ -4,9 +4,9 @@ from __future__ import annotations
 
 
 def test_all_three_modules_import():
-    import backend.accounts
-    import backend.gateway
     import backend.plugins
+    import backend.router
+    import backend.router.accounts
     import backend.supervisor
 
     # Each module re-exports the contract surface that downstream
@@ -19,11 +19,11 @@ def test_all_three_modules_import():
     assert backend.supervisor.sandbox.get_sandbox_manager is not None
     assert backend.supervisor.sandbox.NoopSandboxManager is not None
 
-    assert backend.gateway.GatewayDispatcher is not None
-    assert backend.gateway.LlmClient is not None
-    assert backend.accounts.ModelAccountService is not None
-    assert backend.gateway.budget.BudgetPolicyService is not None
-    assert backend.gateway.classifier.LocalVsCloudClassifier is not None
+    assert backend.router.GatewayDispatcher is not None
+    assert backend.router.LlmClient is not None
+    assert backend.router.accounts.ModelAccountService is not None
+    assert backend.router.budget.BudgetPolicyService is not None
+    assert backend.router.classifier.LocalVsCloudClassifier is not None
 
 
 def test_no_circular_imports_between_modules():
@@ -42,7 +42,7 @@ def test_no_circular_imports_between_modules():
     forbidden = {
         m
         for m in sys.modules
-        if m.startswith("backend.gateway.") or m.startswith("backend.supervisor.")
+        if m.startswith("backend.router.") or m.startswith("backend.supervisor.")
     }
     assert not forbidden, f"backend.plugins pulled in: {forbidden}"
     assert plugin_modules

@@ -6,9 +6,9 @@ from __future__ import annotations
 import uuid
 
 from backend.execution.loop_llm import GatewayLoopLlm
-from backend.gateway.classifier.base import ClassificationResult
-from backend.gateway.dispatch import DispatchRequest, DispatchResult
-from backend.gateway.llm_client import LlmResponse
+from backend.router.classifier.base import ClassificationResult
+from backend.router.dispatch import DispatchRequest, DispatchResult
+from backend.router.llm_client import LlmResponse
 
 
 class _FakeDispatcher:
