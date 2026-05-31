@@ -45,8 +45,8 @@ from backend.delivery.db import DeliveryEventRow
 from backend.delivery.schema import ActionResult, DeliveryResult
 from backend.execution.db import Deliverable, ExecutionRun, RunStatus
 from backend.execution.orchestrator import LoopToolCall, LoopTurn, RunOrchestrator
+from backend.extensions.skill.loader import SkillLoader
 from backend.intake.db import RequestRow, RequestStatus, TriggerEventRow
-from backend.skills.loader import SkillLoader
 from backend.supervisor.sandbox import NoopSandboxManager
 from backend.workers.agent_worker import AgentExecutionDeps, AgentWorker
 from backend.workers.delivery_worker import DeliveryWorker, DeliveryWorkerConfig

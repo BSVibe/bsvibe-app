@@ -31,7 +31,7 @@ from backend.delivery.connector_dispatch import (
     resolve_github_binding,
     run_branch_name,
 )
-from backend.plugins.base import OutboundCapability, PluginMeta
+from backend.extensions.plugin.base import OutboundCapability, PluginMeta
 
 from .._support import memory_session
 

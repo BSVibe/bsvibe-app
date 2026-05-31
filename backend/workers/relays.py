@@ -30,7 +30,7 @@ from typing import TYPE_CHECKING, Any
 import httpx
 import structlog
 
-from backend.supervisor.audit.models import AuditOutboxRecord
+from backend.extensions.implementations.audit.models import AuditOutboxRecord
 
 if TYPE_CHECKING:
     from backend.config import Settings

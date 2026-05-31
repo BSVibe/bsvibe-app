@@ -29,9 +29,9 @@ from typing import Any, Protocol, runtime_checkable
 
 import structlog
 
+from backend.extensions.skill.loader import SkillLoader
 from backend.intake.db import RequestRow
 from backend.orchestrator.schema import FramedRequest, PathClassification, PipelineKind
-from backend.skills.loader import SkillLoader
 
 logger = structlog.get_logger(__name__)
 

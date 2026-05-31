@@ -42,10 +42,10 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from backend.execution.db import ExecutionRun, RunStatus
 from backend.execution.orchestrator import RunCompute
+from backend.extensions.skill.loader import SkillLoader
 from backend.intake.db import RequestRow, RequestStatus
 from backend.orchestrator.agent_runner import AgentRunner
 from backend.orchestrator.frame import FrameConfig, FrameLlm, FrameStage
-from backend.skills.loader import SkillLoader
 from backend.storage.artifact_store import ArtifactStore, LocalFilesystemArtifactStore
 from backend.workers.base import BaseWorker
 

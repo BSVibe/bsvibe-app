@@ -44,7 +44,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from backend.delivery.db import DeliveryBase, SafeModeQueueItemRow, SafeModeStatus
 from backend.delivery.safe_mode_expiry import SafeModeExpirySweepRunner
 from backend.delivery.safe_mode_queue import SafeModeQueue
-from backend.supervisor.audit.models import AuditOutboxRecord
+from backend.extensions.implementations.audit.models import AuditOutboxRecord
 from backend.workers.schedule_runner import ScheduleWorker
 
 from .._support import db_engine

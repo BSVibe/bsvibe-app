@@ -4,18 +4,21 @@ from __future__ import annotations
 
 
 def test_all_three_modules_import():
-    import backend.plugins
+    import backend.extensions
+    import backend.extensions.implementations.audit as audit_mod
+    import backend.extensions.plugin
     import backend.router
     import backend.router.accounts
     import backend.supervisor
 
     # Each module re-exports the contract surface that downstream
     # bundles will depend on.
-    assert backend.plugins.PluginRunner is not None
-    assert backend.plugins.PluginBuilder is not None
+    assert backend.extensions.plugin.PluginRunner is not None
+    assert backend.extensions.plugin.PluginBuilder is not None
 
-    assert backend.supervisor.safe_emit is not None
-    assert backend.supervisor.AuditEvent is not None
+    # Audit moved out of supervisor in Lift G — supervisor is sandbox-only.
+    assert audit_mod.safe_emit is not None
+    assert audit_mod.AuditEvent is not None
     assert backend.supervisor.sandbox.get_sandbox_manager is not None
     assert backend.supervisor.sandbox.NoopSandboxManager is not None
 
@@ -36,13 +39,13 @@ def test_no_circular_imports_between_modules():
     for mod in [m for m in list(sys.modules) if m.startswith("backend.")]:
         del sys.modules[mod]
 
-    import backend.plugins  # noqa: F401
+    import backend.extensions.plugin  # noqa: F401
 
-    plugin_modules = {m for m in sys.modules if m.startswith("backend.plugins")}
+    plugin_modules = {m for m in sys.modules if m.startswith("backend.extensions.plugin")}
     forbidden = {
         m
         for m in sys.modules
         if m.startswith("backend.router.") or m.startswith("backend.supervisor.")
     }
-    assert not forbidden, f"backend.plugins pulled in: {forbidden}"
+    assert not forbidden, f"backend.extensions.plugin pulled in: {forbidden}"
     assert plugin_modules

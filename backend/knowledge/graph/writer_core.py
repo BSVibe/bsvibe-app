@@ -42,7 +42,7 @@ if TYPE_CHECKING:
 
     # TODO(bundle-k-integration): out-of-scope source dep -- original: from bsage.core.skill_context import GraphInterface
     GraphInterface = Any
-    # TODO(bundle-k-integration): wire to backend.supervisor.audit -- original: from bsage.garden.audit_outbox import AiosqliteAuditOutbox
+    # TODO(bundle-k-integration): wire to backend.extensions.implementations.audit -- original: from bsage.garden.audit_outbox import AiosqliteAuditOutbox
     AiosqliteAuditOutbox = Any
     from backend.knowledge.graph.sync import SyncManager
     from backend.knowledge.retrieval.ontology import OntologyRegistry
@@ -1030,7 +1030,7 @@ class GardenWriter(_WriterIOMixin, _WriterMutationMixin, _WriterToolHandlersMixi
         Failures here NEVER raise — audit observability must not break a
         successful vault write. The handler logs and continues.
         """
-        # TODO(bundle-k-integration): rewire to backend.supervisor.audit.safe_emit.
+        # TODO(bundle-k-integration): rewire to backend.extensions.implementations.audit.safe_emit.
         # The BSVibe surface needs an AsyncSession + AuditEventBase shape that
         # GardenWriter does not yet thread through. Audit emission is therefore
         # a no-op for Phase 1 — Bundle G (request-handler glue) will wire it.

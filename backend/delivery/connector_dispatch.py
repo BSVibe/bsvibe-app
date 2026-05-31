@@ -29,7 +29,7 @@ This module supplies the missing two halves:
 loads the Deliverable, resolves the binding(s), shapes the event from config +
 content, and dispatches THAT connector's outbound through the existing
 :class:`~backend.delivery.dispatcher.DeliveryDispatcher` /
-:class:`~backend.plugins.runner.PluginRunner`. Resolving zero bindings is a
+:class:`~backend.extensions.plugin.runner.PluginRunner`. Resolving zero bindings is a
 no-op success — the in-app Deliverable still exists, nothing is delivered out,
 no error (the event still drains so the queue never wedges).
 """
@@ -51,9 +51,9 @@ from backend.delivery.dispatcher import DeliveryDispatcher
 from backend.delivery.git_ops import GitOps
 from backend.delivery.schema import ActionResult, ArtifactType, DeliveryResult
 from backend.execution.db import Deliverable
-from backend.plugins.base import PluginMeta
-from backend.plugins.context import SkillContext
-from backend.plugins.runner import PluginRunner
+from backend.extensions.plugin.base import PluginMeta
+from backend.extensions.plugin.context import SkillContext
+from backend.extensions.plugin.runner import PluginRunner
 from backend.router.accounts.crypto import CredentialCipher
 
 logger = structlog.get_logger(__name__)

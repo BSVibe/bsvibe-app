@@ -21,7 +21,7 @@ This module stands up the production runtime:
 * :class:`RealPluginDispatchAdapter` — bridges the worker's
   :class:`~backend.workers.delivery_worker.PluginDispatchAdapter` Protocol to
   the real :class:`~backend.delivery.dispatcher.DeliveryDispatcher` over the
-  plugins discovered by :class:`~backend.plugins.loader.PluginLoader`.
+  plugins discovered by :class:`~backend.extensions.plugin.loader.PluginLoader`.
 * :class:`WorkerRuntime` / :func:`run_workers` — construct + concurrently run
   every worker with a shared session factory and graceful SIGINT/SIGTERM
   shutdown (reusing each worker's :meth:`BaseWorker.start` / ``stop`` —
@@ -61,10 +61,12 @@ from backend.execution.knowledge_orchestrator import KnowledgeAnswerOrchestrator
 from backend.execution.loop_llm import GatewayLoopLlm
 from backend.execution.orchestrator import CanonRetriever, RunCompute, RunOrchestrator
 from backend.executors.orchestrator import ExecutorOrchestrator
+from backend.extensions.implementations.audit.models import AuditOutboxRecord
+from backend.extensions.plugin.base import PluginMeta
+from backend.extensions.plugin.loader import PluginLoader
+from backend.extensions.plugin.runner import PluginRunner
+from backend.extensions.skill.loader import SkillLoader
 from backend.orchestrator.frame import FrameLlm
-from backend.plugins.base import PluginMeta
-from backend.plugins.loader import PluginLoader
-from backend.plugins.runner import PluginRunner
 from backend.router.accounts.crypto import CredentialCipher, _key_from_settings
 from backend.router.accounts.models import ModelAccount
 from backend.router.accounts.service import ModelAccountService
@@ -78,8 +80,6 @@ from backend.router.dispatch import DispatchRequest, GatewayDispatcher
 from backend.router.dispatch.strategies import EXECUTOR_PROVIDER, is_executor_account
 from backend.router.llm_client import LlmClient
 from backend.router.routing.run_routing import resolve_route
-from backend.skills.loader import SkillLoader
-from backend.supervisor.audit.models import AuditOutboxRecord
 from backend.supervisor.sandbox import (
     NoopSandboxManager,
     SandboxManager,
@@ -114,7 +114,7 @@ logger = structlog.get_logger(__name__)
 # Default plugin-implementations directory (scanned at module import, in sync
 # context, so the async loader path stays free of filesystem-resolve calls).
 _PLUGINS_IMPLEMENTATIONS_DIR = (
-    Path(__file__).resolve().parent.parent / "plugins" / "implementations"
+    Path(__file__).resolve().parent.parent / "extensions" / "implementations"
 )
 
 

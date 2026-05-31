@@ -24,7 +24,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from backend.api.deps import get_workspace_id
 from backend.config import get_settings
-from backend.skills import SkillLoader, SkillMeta
+from backend.extensions.skill import SkillLoader, SkillMeta
 
 router = APIRouter()
 

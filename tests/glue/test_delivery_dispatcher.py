@@ -7,7 +7,7 @@ import uuid
 import pytest
 
 from backend.delivery.dispatcher import DeliveryDispatcher
-from backend.plugins.base import (
+from backend.extensions.plugin.base import (
     OutboundCapability,
     PluginMeta,
     PluginRunError,

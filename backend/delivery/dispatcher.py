@@ -7,7 +7,7 @@ plugin runner (which talks to external products).
 Phase 1 wiring: ``dispatch`` iterates the caller-supplied plugin list,
 filters by ``artifact_type`` match (Workflow §6 #2 — outbound capability
 declares the artifact_types it accepts), and runs each plugin's
-``@p.outbound`` callable via :meth:`backend.plugins.PluginRunner.dispatch_outbound`.
+``@p.outbound`` callable via :meth:`backend.extensions.plugin.PluginRunner.dispatch_outbound`.
 Per-plugin failures aggregate into the :class:`DeliveryResult.actions`
 list — one failed plugin does NOT abort the rest. Workflow §3.1.
 """
@@ -22,8 +22,8 @@ from typing import Any
 import structlog
 
 from backend.delivery.schema import ActionResult, ArtifactType, DeliveryResult
-from backend.plugins.base import PluginMeta, PluginRunError
-from backend.plugins.runner import PluginRunner
+from backend.extensions.plugin.base import PluginMeta, PluginRunError
+from backend.extensions.plugin.runner import PluginRunner
 
 logger = structlog.get_logger(__name__)
 

@@ -28,7 +28,7 @@ from backend.execution.audit_events import (
     RunStarted,
 )
 from backend.executors.orchestrator import ExecutorOrchestrator
-from backend.supervisor.audit.models import AuditOutboxRecord
+from backend.extensions.implementations.audit.models import AuditOutboxRecord
 
 from .._support import memory_session
 from .test_orchestrator import FakeBox, FakeSandboxManager, _make_redis, _seed

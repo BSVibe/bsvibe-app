@@ -34,7 +34,7 @@ from backend.execution.audit_events import (
 )
 from backend.execution.orchestrator import LoopTurn as LlmLoopTurn
 from backend.execution.orchestrator import RunOrchestrator
-from backend.supervisor.audit.models import AuditOutboxRecord
+from backend.extensions.implementations.audit.models import AuditOutboxRecord
 from backend.supervisor.sandbox import NoopSandboxManager
 
 from .._support import memory_session
@@ -184,7 +184,7 @@ async def test_audit_emit_failure_does_not_break_run(
     """If the outbox insert raises, the run must still drive to verified
     (the audit layer's soft-fail contract — exactly like chat completions)."""
     from backend.execution import orchestrator as orch_mod
-    from backend.supervisor.audit.store import OutboxStore
+    from backend.extensions.implementations.audit.store import OutboxStore
 
     async def _boom(*args: Any, **kwargs: Any) -> None:
         raise RuntimeError("outbox on fire")
