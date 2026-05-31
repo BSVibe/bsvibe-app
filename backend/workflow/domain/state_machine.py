@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from backend.execution._domain import (
+from backend.workflow.domain._domain import (
     ProofState,
     RequestStatus,
     RunAttemptPhase,

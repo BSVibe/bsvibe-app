@@ -45,7 +45,7 @@ import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.config import get_settings
-from backend.execution.advisory_lock import (
+from backend.workflow.infrastructure.advisory_lock import (
     release_run_dispatch_lock,
     try_run_dispatch_lock,
 )
