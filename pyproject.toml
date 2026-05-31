@@ -25,7 +25,15 @@ dependencies = [
     "mcp>=1",
     "aiosqlite>=0.20",
     "litellm>=1.50",
+    # Lift S — plugin SDK at repo root, consumed via uv workspace.
+    "bsvibe-sdk",
 ]
+
+[tool.uv.sources]
+bsvibe-sdk = { workspace = true }
+
+[tool.uv.workspace]
+members = ["bsvibe_sdk"]
 
 [project.optional-dependencies]
 dev = [

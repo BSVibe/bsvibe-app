@@ -1,18 +1,23 @@
-"""Extension Protocols — Lift G publication-only surface.
+"""Extension Protocols — Lift G publication surface, Lift S SDK re-export.
 
 Design source: ``~/Docs/BSVibe_Class_Architecture_Design_2026-05-30.md``
-v8 §13 Lift G + D33 + v2 §7 extension hooks.
+v8 §13 Lift G + Lift S + D33 + D39 + D42 + v2 §7 extension hooks.
 
-These Protocols formalize what the (newly-merged) plugin engine + skill
-engine already produce, *plus* three forward-looking hook surfaces
+Lift G formalized the engine-facing Protocols (``Plugin``, ``Skill``,
+``Action``) and published three forward-looking hook surfaces
 (``ActionDispatchInterceptor``, ``SettlementSubscriber``, ``EventBus`` +
-``EventBusSubscriber``) that have **zero registered implementations** in
-this lift. Lift I subdivides this single file into proper domain layer
-modules; Lift S publishes them as part of the external ``bsvibe_sdk``.
+``EventBusSubscriber``) with zero registered implementations.
 
-NOTE: This is a *staging* location. Importers should treat these as the
-authoritative extension surface, not the engine internals under
-``backend.extensions.plugin`` / ``backend.extensions.skill``.
+Lift S introduces the external ``bsvibe_sdk`` package. The
+plugin-author-facing Protocols (``Plugin``, ``Action``,
+``EventBusSubscriber``, ``Event``) now live there and are re-exported
+here so existing backend importers keep working unchanged. Per v8 §D42
+the SDK is plugin-only — ``Skill`` and the hook Protocols
+(``ActionDispatchInterceptor``, ``SettlementSubscriber``, ``EventBus``,
+plus their dataclass payloads) remain backend-only and continue to live
+in this module.
+
+Lift I subdivides this single file into proper domain-layer modules.
 """
 
 from __future__ import annotations
@@ -21,8 +26,18 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any, Protocol, runtime_checkable
 
+# Re-export the plugin-author-facing Protocols from the external SDK.
+# Identity equality is preserved — ``backend.extensions.domain.protocols.Plugin``
+# IS the same class as ``bsvibe_sdk.Plugin``.
+from bsvibe_sdk import (
+    Action,
+    Event,
+    EventBusSubscriber,
+    Plugin,
+)
+
 # ---------------------------------------------------------------------------
-# Extension-shaped value objects (Lift G — minimal, expand in Lift I/S)
+# Backend-only value objects (Lift G — minimal, expand in Lift I)
 # ---------------------------------------------------------------------------
 
 
@@ -66,51 +81,20 @@ class SettlementOutcome:
     detail: dict[str, Any]
 
 
-@dataclass(frozen=True)
-class Event:
-    """Generic envelope for :class:`EventBus`. ``kind`` is a dotted
-    namespace (e.g. ``"audit.action.dispatched"``); ``payload`` is opaque
-    to the bus."""
-
-    kind: str
-    payload: dict[str, Any]
-
-
 # ---------------------------------------------------------------------------
-# Engine-formalizing Protocols (what the loader/runner already produce)
+# Backend-only engine-formalizing Protocols
 # ---------------------------------------------------------------------------
-
-
-@runtime_checkable
-class Action(Protocol):
-    """An exposed action surface inside a plugin (``@p.action(...)`` decorator).
-
-    The concrete capability dataclass lives at
-    ``backend.extensions.plugin.base.ActionCapability``; this Protocol
-    publishes only the call shape relied on by the dispatch path."""
-
-    name: str
-
-    async def __call__(self, context: Any, /, **kwargs: Any) -> Any: ...
-
-
-@runtime_checkable
-class Plugin(Protocol):
-    """A loaded plugin instance (``PluginMeta``-shaped).
-
-    The concrete carrier is
-    ``backend.extensions.plugin.base.PluginMeta``; this Protocol publishes
-    the engine-facing surface used outside the loader."""
-
-    name: str
-
-    def list_actions(self) -> list[str]: ...
 
 
 @runtime_checkable
 class Skill(Protocol):
     """A loaded skill manifest (``SkillMeta``-shaped). Concrete carrier at
-    ``backend.extensions.skill.meta.SkillMeta``."""
+    ``backend.extensions.skill.meta.SkillMeta``.
+
+    Skills are yaml + md *data*, not an SDK author contract (v8 §D42), so
+    this Protocol stays backend-internal — it formalizes what the engine
+    loader produces, not what an external author writes.
+    """
 
     name: str
     version: str
@@ -144,16 +128,6 @@ class SettlementSubscriber(Protocol):
 
 
 @runtime_checkable
-class EventBusSubscriber(Protocol):
-    """Bus subscriber — receives :class:`Event` instances filtered by
-    ``kind`` prefix. Audit is the first *concrete* user surfaced under
-    ``backend.extensions.implementations.audit`` but is not registered as
-    a subscriber in this lift — Lift I/N wires it."""
-
-    async def on_event(self, event: Event) -> None: ...
-
-
-@runtime_checkable
 class EventBus(Protocol):
     """In-process event bus surface."""
 
@@ -170,14 +144,16 @@ class EventBus(Protocol):
 
 
 __all__ = [
+    # SDK re-exports (Lift S)
     "Action",
+    "Event",
+    "EventBusSubscriber",
+    "Plugin",
+    # Backend-only
     "ActionDispatchInterceptor",
     "ActionInvocation",
     "DispatchDecision",
-    "Event",
     "EventBus",
-    "EventBusSubscriber",
-    "Plugin",
     "SettlementOutcome",
     "SettlementSubscriber",
     "Skill",
