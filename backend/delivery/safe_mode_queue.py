@@ -156,43 +156,19 @@ class SafeModeQueue:
     ) -> bool:
         """Flip ``pending → denied``. Returns False if not found / not pending.
 
-        D3b: on a successful transition we ALSO fire the auto-compensation
-        hook for the underlying Deliverable. The hook is best-effort
-        (soft-fails so a downstream blip can't revert the founder's deny
-        decision). Only the *successful* flip fires the hook — a no-op
-        return (already-denied row, wrong workspace, etc.) skips it, which
-        gives us free idempotence: a second deny on the same row neither
-        re-transitions NOR re-fires compensation.
+        The caller is responsible for any downstream notification — the
+        deny is purely a state transition. (D3b's auto-compensation wiring
+        was rolled back under Lift 0 / v8 §13 D7 as YAGNI; the surface that
+        actually shipped — :class:`backend.delivery.compensation.CompensationHandler` —
+        was never carried by a real workflow other than this one fan-out.)
         """
         del actor_id, reason  # surface for audit hook
-        # The hook needs the deliverable_id; capture it before the flip so a
-        # successful transition can drive the per-Deliverable evaluation. The
-        # row may not exist (workspace mismatch / unknown id) — that branch
-        # short-circuits at ``_transition`` and returns False below.
-        row = await self._session.get(SafeModeQueueItemRow, item_id)
-        deliverable_id = row.deliverable_id if row is not None else None
-
-        ok = await self._transition(
+        return await self._transition(
             workspace_id=workspace_id,
             item_id=item_id,
             from_status=SafeModeStatus.PENDING,
             to_status=SafeModeStatus.DENIED,
         )
-        if ok and deliverable_id is not None:
-            # Local import: this module is imported by SafeModeExpirySweepRunner
-            # which would otherwise create a circular boot dependency via the
-            # compensation handler's execution-db imports. The cost is one
-            # attribute lookup per deny — negligible vs. the DB I/O.
-            from backend.delivery.safe_mode_compensation_hook import (  # noqa: PLC0415
-                fire_compensation_for_item,
-            )
-
-            await fire_compensation_for_item(
-                self._session,
-                deliverable_id=deliverable_id,
-                trigger="deny",
-            )
-        return ok
 
     async def mark_delivered(
         self,

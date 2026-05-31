@@ -7,7 +7,6 @@ outbound adapters into a :class:`DeliveryResult`, gated by the
 
 from __future__ import annotations
 
-from backend.delivery.compensation import CompensationHandler
 from backend.delivery.db import (
     DeliveryBase,
     DeliveryEventRow,
@@ -19,17 +18,12 @@ from backend.delivery.safe_mode_queue import SafeModeQueue
 from backend.delivery.schema import (
     ActionResult,
     ArtifactType,
-    CompensationAction,
-    CompensationResult,
     DeliveryResult,
 )
 
 __all__ = [
     "ActionResult",
     "ArtifactType",
-    "CompensationAction",
-    "CompensationHandler",
-    "CompensationResult",
     "DeliveryBase",
     "DeliveryDispatcher",
     "DeliveryEventRow",

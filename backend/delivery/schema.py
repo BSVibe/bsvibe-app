@@ -44,9 +44,6 @@ the shaped event under that tag so the dispatcher's
 ``artifact_type in cap.artifact_types`` match selects the right outbound."""
 
 
-CompensationAction = Literal["revert", "supersede", "notify"]
-
-
 class ActionResult(BaseModel):
     """Per-action outcome inside one delivery fan-out — Workflow §3.1."""
 
@@ -71,20 +68,8 @@ class DeliveryResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
-class CompensationResult(BaseModel):
-    """Outcome of a compensation evaluation — Workflow §3.1 / §10.5."""
-
-    deliverable_id: uuid.UUID
-    action: CompensationAction
-    reason: str
-
-    model_config = ConfigDict(extra="forbid")
-
-
 __all__ = [
     "ActionResult",
     "ArtifactType",
-    "CompensationAction",
-    "CompensationResult",
     "DeliveryResult",
 ]
