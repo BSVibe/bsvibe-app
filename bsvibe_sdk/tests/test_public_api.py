@@ -174,6 +174,17 @@ def test_all_export_is_complete() -> None:
 
     expected = {
         "Plugin",
+        "PluginBuilder",
+        "PluginMeta",
+        "PluginRegistrationError",
+        "PluginDeclarationError",
+        "InboundCapability",
+        "OutboundCapability",
+        "CompensateCapability",
+        "ActionCapability",
+        "VALID_TRIGGER_TYPES",
+        "VALID_JURISDICTIONS",
+        "VALID_COMPENSATION_TIERS",
         "plugin",
         "Action",
         "action",

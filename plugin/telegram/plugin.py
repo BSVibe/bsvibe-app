@@ -17,9 +17,9 @@ from __future__ import annotations
 import os
 from typing import Any
 
-from backend.extensions.plugin import plugin
 from backend.extensions.plugin.context import SkillContext
 from backend.intake.schema import TriggerEvent
+from bsvibe_sdk import plugin
 from plugin.telegram.client import DEFAULT_BASE_URL, TelegramClient
 from plugin.telegram.webhook import parse_update
 
