@@ -1,17 +1,18 @@
 """workspace_schedules — durable schedule rows for the M1 schedule runner.
 
 Workflow §12.5 #8 (Bundle G — Intake / Triggers) carry-over (Status §5
-medium-term M1). ``backend/intake/schedule.py`` emits a TriggerEvent from a
-fired schedule but nothing in prod fired it on a real interval — there was
-no row whose ``next_run_at`` a runner could poll. This migration adds that
-row.
+medium-term M1). ``backend.schedule.application.emitter`` emits a
+TriggerEvent from a fired schedule but nothing in prod fired it on a
+real interval — there was no row whose ``next_run_at`` a runner could
+poll. This migration adds that row.
 
 One row per ``(workspace, plugin_name, cron_expr)``; the runner
-(:class:`~backend.workers.schedule_runner.ScheduleWorker`) DB-polls
-``enabled=True AND next_run_at <= now``, fires the emitter, and advances
-``next_run_at`` via the :class:`~backend.workers.schedule_runner.ScheduleAdvancer`
-seam. The (enabled, next_run_at) composite index keeps the polling SELECT
-on an index scan as the table grows past a few hundred rows.
+(:class:`~backend.schedule.infrastructure.workers.schedule_worker.ScheduleWorker`)
+DB-polls ``enabled=True AND next_run_at <= now``, fires the emitter, and
+advances ``next_run_at`` via the
+:class:`~backend.schedule.domain.advancer.ScheduleAdvancer` seam. The
+(enabled, next_run_at) composite index keeps the polling SELECT on an
+index scan as the table grows past a few hundred rows.
 
 Revision ID: workspace_schedules
 Revises: safe_mode_lifecycle

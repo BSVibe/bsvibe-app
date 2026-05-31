@@ -107,49 +107,31 @@ def test_old_intake_module_gone(module_name: str) -> None:
 
 
 def test_backend_intake_init_does_not_reexport_moved_symbols() -> None:
-    """The intake package's __init__ exposes ONLY Schedule-context symbols
-    (or nothing) — the lifted symbols are gone from ``__all__``.
+    """The intake package is now entirely gone — Schedule lift moved the
+    last two carry-over files to ``backend/schedule/`` and deleted the
+    ``backend/intake/`` package.
     """
-    pkg = importlib.import_module("backend.intake")
-    for moved in (
-        "TriggerEvent",
-        "TriggerKindLiteral",
-        "TriggerEventRow",
-        "RequestRow",
-        "RequestStatus",
-        "TriggerKind",
-        "IntakeBase",
-        "DirectTrigger",
-        "WebhookReceiver",
-        "DecisionResolutionTrigger",
-        "is_duplicate",
-        "record",
-    ):
-        assert moved not in getattr(pkg, "__all__", ()), (
-            f"{moved} still re-exported from backend.intake"
-        )
+    with pytest.raises(ModuleNotFoundError):
+        importlib.import_module("backend.intake")
 
 
 # ---------------------------------------------------------------------------
-# Delta 4: ``backend/intake/`` directory: only schedule files remain
+# Delta 4: ``backend/intake/`` directory: entirely removed
 # ---------------------------------------------------------------------------
 
 
 def test_intake_directory_only_holds_schedule_files() -> None:
-    """The directory survives BUT only for the Schedule context carry-over.
-
-    Per the H3a scope ruling, ``schedule.py`` and ``schedule_db.py`` are
-    Schedule-context concerns (future M1 ``backend/schedule/``) and stay
-    put — moving them is a different lift.
+    """``backend/intake/`` no longer exists — the Schedule lift moved the
+    final two files (``schedule.py`` + ``schedule_db.py``) to the new
+    ``backend/schedule/`` bounded context and the now-empty package was
+    deleted.
     """
-    intake_pkg = importlib.import_module("backend.intake")
-    pkg_path = Path(next(iter(intake_pkg.__path__)))
-    remaining = sorted(p.name for p in pkg_path.iterdir() if p.suffix == ".py")
-    assert remaining == [
-        "__init__.py",
-        "schedule.py",
-        "schedule_db.py",
-    ], f"unexpected files left in backend/intake/: {remaining}"
+    import backend
+
+    backend_root = Path(next(iter(backend.__path__)))
+    assert not (backend_root / "intake").exists(), (
+        "backend/intake/ should be gone after the Schedule lift"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -169,8 +151,17 @@ def test_agent_worker_imports_resolve() -> None:
 
 
 def test_schedule_runner_imports_resolve() -> None:
-    """Schedule runner depends on the deliberately-left ``backend.intake.schedule``."""
-    mod = importlib.import_module("backend.workers.schedule_runner")
+    """Schedule worker is reachable post-Schedule-lift at the new context.
+
+    H3a originally left ``backend.intake.schedule`` in place pending the
+    Schedule context lift; that lift moved the runner to
+    :mod:`backend.schedule.infrastructure.workers.schedule_worker`. The
+    intent of this regression test is "the schedule worker symbol is
+    still importable", so the path follows the lift.
+    """
+    mod = importlib.import_module(
+        "backend.schedule.infrastructure.workers.schedule_worker"
+    )
     assert hasattr(mod, "ScheduleWorker")
 
 

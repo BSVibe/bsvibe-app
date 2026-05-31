@@ -10,7 +10,7 @@ import pytest_asyncio
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from backend.intake.schedule import ScheduleTrigger
+from backend.schedule.application.emitter import ScheduleTrigger
 from backend.workflow.application.intake.direct import DirectTrigger
 from backend.workflow.infrastructure.intake.db import IntakeBase, TriggerEventRow
 
