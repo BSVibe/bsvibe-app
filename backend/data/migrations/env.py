@@ -38,7 +38,7 @@ import backend.knowledge.canonicalization.db  # noqa: F401, E402
 import backend.knowledge.ingest.db  # noqa: F401, E402
 import backend.knowledge.retrieval.db  # noqa: F401, E402
 import backend.notifications.db  # noqa: F401, E402
-import backend.routing.db  # noqa: F401, E402
+import backend.router.routing.run_routing.db  # noqa: F401, E402
 import backend.supervisor.audit.models  # noqa: F401, E402
 import backend.workers.db  # noqa: F401, E402
 import backend.workspaces.db  # noqa: F401, E402

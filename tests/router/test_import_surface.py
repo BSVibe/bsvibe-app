@@ -102,7 +102,9 @@ def test_router_routing_subpackage_importable() -> None:
     assert mod is not None
 
 
-def test_top_level_backend_routing_still_present() -> None:
-    """Lift B does NOT fold top-level routing/ into router/ — that's Lift C."""
-    mod = importlib.import_module("backend.routing")
-    assert mod is not None
+def test_top_level_backend_routing_removed_by_lift_c() -> None:
+    """Lift C folds top-level ``backend.routing`` into
+    ``backend.router.routing.run_routing`` (asserted positively by the smoke
+    test under ``tests/router/routing/run_routing/test_import_surface.py``)."""
+    with pytest.raises(ModuleNotFoundError):
+        importlib.import_module("backend." + "routing")

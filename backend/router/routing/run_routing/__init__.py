@@ -10,8 +10,8 @@ When a workspace has no routing rules, resolution falls back to the legacy
 are unaffected.
 """
 
-from backend.routing.db import RunRoutingRuleRow
-from backend.routing.engine import (
+from backend.router.routing.run_routing.db import RunRoutingRuleRow
+from backend.router.routing.run_routing.engine import (
     ALLOWED_FIELDS,
     RoutingContext,
     evaluate_rules,

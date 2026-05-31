@@ -44,7 +44,7 @@ from backend.router.accounts.service import LOCAL_INFERENCE_PROVIDERS
 
 if TYPE_CHECKING:
     from backend.router.accounts.models import ModelAccount
-    from backend.routing.engine import RoutingContext
+    from backend.router.routing.run_routing.engine import RoutingContext
 
 logger = structlog.get_logger(__name__)
 

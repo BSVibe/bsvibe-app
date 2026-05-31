@@ -386,8 +386,10 @@ async def test_two_active_same_class_accounts_resolve_via_d4_no_decision(
     on 2+). D4 makes :func:`resolve_route` pick deterministically within the
     class (highest ``routing_priority``, tiebroken by ``created_at`` then ``id``)
     — a SPECIFIC account, never an ambiguous Decision."""
-    from backend.routing.engine import resolve_route  # noqa: PLC0415
-    from backend.routing.multi_account import ROUTING_PRIORITY_KEY  # noqa: PLC0415
+    from backend.router.routing.run_routing.engine import resolve_route  # noqa: PLC0415
+    from backend.router.routing.run_routing.multi_account import (
+        ROUTING_PRIORITY_KEY,  # noqa: PLC0415
+    )
 
     # Two active local (ollama) accounts; "b" carries the higher priority.
     await _seed_active_account(sf, workspace_id=workspace_id, account_id=account_id, label="a")
