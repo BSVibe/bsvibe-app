@@ -9,7 +9,7 @@ import uuid
 
 import pytest
 
-from backend.intake.schema import TriggerEvent
+from backend.workflow.domain.incoming import TriggerEvent
 from plugin.telegram.webhook import (
     SECRET_TOKEN_HEADER,
     WebhookError,

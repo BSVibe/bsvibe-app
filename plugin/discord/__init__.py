@@ -3,7 +3,7 @@
 Capabilities:
 
 * ``@p.inbound`` — parse a Discord **interaction** webhook into a
-  :class:`backend.intake.schema.TriggerEvent`, verifying Discord's
+  :class:`backend.workflow.domain.incoming.TriggerEvent`, verifying Discord's
   **Ed25519** request-signing scheme (``X-Signature-Ed25519`` over
   ``X-Signature-Timestamp + raw_body``, public key supplied as the
   ``public_key`` credential) and using the interaction ``id`` as the

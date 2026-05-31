@@ -15,7 +15,7 @@ DB terminal). This router is the founder's re-entry point:
   the founder's decision in context.
 
 v1 resumes the run *inline* here (not via the event-driven
-:class:`~backend.intake.decision_resolution.DecisionResolutionTrigger`, which
+:class:`~backend.workflow.application.intake.decision_resolution.DecisionResolutionTrigger`, which
 remains a future option). This is simpler — no phantom Request, the paused run
 is resumed directly.
 """

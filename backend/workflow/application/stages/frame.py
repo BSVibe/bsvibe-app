@@ -30,7 +30,7 @@ from typing import Any, Literal, Protocol, runtime_checkable
 import structlog
 
 from backend.extensions.skill.loader import SkillLoader
-from backend.intake.db import RequestRow
+from backend.workflow.infrastructure.intake.db import RequestRow
 
 logger = structlog.get_logger(__name__)
 

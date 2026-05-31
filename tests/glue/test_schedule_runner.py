@@ -36,7 +36,6 @@ import pytest_asyncio
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from backend.intake.db import IntakeBase, RequestRow, TriggerEventRow, TriggerKind
 from backend.intake.schedule import ScheduleTrigger
 from backend.intake.schedule_db import WorkspaceScheduleRow
 from backend.workers.intake_worker import IntakeWorker
@@ -44,6 +43,12 @@ from backend.workers.schedule_runner import (
     DbPollScheduleRunner,
     ScheduleRunnerProtocol,
     ScheduleWorker,
+)
+from backend.workflow.infrastructure.intake.db import (
+    IntakeBase,
+    RequestRow,
+    TriggerEventRow,
+    TriggerKind,
 )
 
 from .._support import db_engine

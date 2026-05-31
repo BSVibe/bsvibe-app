@@ -37,8 +37,8 @@ from backend.api.deps import (
 )
 from backend.execution.db import Decision, Deliverable, ExecutionRun, ExecutionRunActivity
 from backend.identity.db import MembershipRow, UserRow
-from backend.intake.db import RequestRow
 from backend.knowledge.canonicalization.db import CanonicalAnchor
+from backend.workflow.infrastructure.intake.db import RequestRow
 from backend.workspaces.db import ProductResourceRow, ProductRow, ResourceBindingRow, WorkspaceRow
 
 router = APIRouter()

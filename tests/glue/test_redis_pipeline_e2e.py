@@ -54,7 +54,6 @@ from backend.delivery.schema import ActionResult, DeliveryResult
 from backend.execution.db import Deliverable, ExecutionRun, RunStatus
 from backend.execution.orchestrator import LoopToolCall, LoopTurn, RunOrchestrator
 from backend.extensions.skill.loader import SkillLoader
-from backend.intake.db import RequestRow, RequestStatus, TriggerEventRow
 from backend.supervisor.sandbox import NoopSandboxManager
 from backend.workers import emit as emit_mod
 from backend.workers.agent_worker import AgentExecutionDeps, AgentWorker
@@ -68,6 +67,7 @@ from backend.workers.emit import (
 )
 from backend.workers.intake_worker import IntakeWorker
 from backend.workers.streams import RedisStreamConsumer
+from backend.workflow.infrastructure.intake.db import RequestRow, RequestStatus, TriggerEventRow
 
 from .._support import db_engine, fake_current_user
 
@@ -479,7 +479,7 @@ async def test_orchestrator_verified_survives_redis_emit_failure(
     """A broken Redis on the deliver/settle producer must not revert the
     verified terminal — the run reaches REVIEW_READY + the Deliverable +
     DeliveryEvent + settle activity are all written regardless."""
-    from backend.intake.db import TriggerKind
+    from backend.workflow.infrastructure.intake.db import TriggerKind
 
     class _BrokenRedis:
         async def xadd(self, *_a: Any, **_k: Any) -> str:

@@ -83,6 +83,11 @@ ignore = [
 # standard rules.
 "backend/workflow/domain/_domain.py" = ["UP042"]
 "backend/workflow/domain/state_machine.py" = ["UP042"]
+# Lift H3a — files moved from ``backend/intake/`` retain the
+# default-factory lambdas (PLW0108) ignore that the original location had.
+"backend/workflow/infrastructure/intake/**" = ["PLW0108"]
+"backend/workflow/domain/incoming.py" = ["PLW0108"]
+"backend/workflow/application/intake/**" = ["PLW0108"]
 
 [format]
 quote-style = "double"

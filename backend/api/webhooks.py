@@ -5,7 +5,7 @@ The connector-inbound entrypoint (Workflow §11.2). An external provider
 the ``(connector, webhook_token)`` pair to a workspace, verify the signature
 via the matching plugin parser, and land a
 ``TriggerEvent(source=<connector>, trigger_kind=webhook)`` on the EXISTING
-intake path (:class:`backend.intake.webhook.WebhookReceiver`). From there the
+intake path (:class:`backend.workflow.application.intake.webhook.WebhookReceiver`). From there the
 IntakeWorker → Request → ... → Safe Mode delivery pipeline already wired
 (PR #17) drives it; because ``workspace.safe_mode`` defaults True, connector
 deliveries queue for founder approval — exactly the §11.2 intent.
@@ -39,9 +39,9 @@ from backend.api.deps import get_db_session
 from backend.config import get_settings
 from backend.connectors.handshake import handshake_response
 from backend.connectors.resolver import ConnectorInboundResolver, UnknownConnectorError
-from backend.intake.webhook import WebhookReceiver
 from backend.router.accounts.crypto import CredentialCipher, _key_from_settings
 from backend.workers.emit import STREAM_INTAKE, emit_stream_notification, get_emit_redis_client
+from backend.workflow.application.intake.webhook import WebhookReceiver
 from plugin.discord.webhook import (
     WebhookSignatureError as DiscordSignatureError,
 )

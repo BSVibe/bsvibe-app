@@ -17,10 +17,10 @@ import structlog
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.intake.db import TriggerEventRow, TriggerKind
-from backend.intake.idempotency import is_duplicate, record
-from backend.intake.schema import TriggerEvent
-from backend.intake.webhook import WebhookOutcome
+from backend.workflow.application.intake.webhook import WebhookOutcome
+from backend.workflow.domain.incoming import TriggerEvent
+from backend.workflow.infrastructure.idempotency import is_duplicate, record
+from backend.workflow.infrastructure.intake.db import TriggerEventRow, TriggerKind
 
 logger = structlog.get_logger(__name__)
 
@@ -50,7 +50,7 @@ class ScheduleTrigger:
             idempotency_key=idem,
             # ``trigger=schedule`` is the M1 glass-box marker — IntakeWorker
             # copies the trigger payload onto ``RequestRow.payload`` via
-            # :func:`backend.intake.receive.receive`, so the Brief / Run views
+            # :func:`backend.workflow.application.stages.intake.receive`, so the Brief / Run views
             # can tell the run came from a schedule (not a Direct ask, a
             # connector inbound, or a decision resolution). Stamped here at
             # the emitter site so EVERY caller (the M1 ``ScheduleWorker`` or a

@@ -9,7 +9,7 @@ import pytest
 from pydantic import ValidationError
 
 from backend.delivery.schema import ActionResult, DeliveryResult
-from backend.intake.schema import TriggerEvent
+from backend.workflow.domain.incoming import TriggerEvent
 
 
 def test_trigger_event_minimal() -> None:

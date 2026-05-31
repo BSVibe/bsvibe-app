@@ -2,7 +2,7 @@
 
 The Direct path entrypoint (Workflow §11.1). A founder types a request and
 we land it on the workflow exactly as an inbound webhook would, via
-:class:`backend.intake.direct.DirectTrigger` (``source="direct"``). The
+:class:`backend.workflow.application.intake.direct.DirectTrigger` (``source="direct"``). The
 agent workers (intake → agent → delivery) drive it the rest of the way to
 a delivered artifact — this surface only accepts the trigger.
 
@@ -23,8 +23,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.api.deps import get_current_user_row, get_db_session, get_workspace_id
 from backend.config import get_settings
 from backend.identity.db import UserRow
-from backend.intake.direct import DirectTrigger
 from backend.workers.emit import STREAM_INTAKE, emit_stream_notification, get_emit_redis_client
+from backend.workflow.application.intake.direct import DirectTrigger
 from backend.workspaces.db import ProductRow
 
 router = APIRouter()

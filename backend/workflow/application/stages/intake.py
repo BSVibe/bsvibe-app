@@ -35,7 +35,7 @@ from typing import Any
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.intake.db import TriggerEventRow, TriggerKind
+from backend.workflow.infrastructure.intake.db import TriggerEventRow, TriggerKind
 from backend.workspaces.db import ResourceBindingRow
 from backend.workspaces.resource_bindings import ResourceBindingRepository
 

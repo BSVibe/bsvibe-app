@@ -35,8 +35,8 @@ from backend.execution.db import (
     ExecutionRunHistory,
     RunStatus,
 )
-from backend.intake.db import RequestRow
 from backend.workflow.application.agent_loop import LoopResult, RunCompute
+from backend.workflow.infrastructure.intake.db import RequestRow
 
 logger = structlog.get_logger(__name__)
 

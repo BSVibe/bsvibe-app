@@ -2,7 +2,7 @@
 
 Workflow §12.5 #8 (Bundle G — Intake / Triggers) / Status §5 medium-term.
 :mod:`backend.intake.schedule` already turns a *fire time* into a
-:class:`~backend.intake.db.TriggerEventRow` — but nothing in production told
+:class:`~backend.workflow.infrastructure.intake.db.TriggerEventRow` — but nothing in production told
 it WHEN to fire. ``ScheduleWorker`` is that "when": a
 :class:`~backend.workers.base.BaseWorker` that DB-polls
 :class:`~backend.intake.schedule_db.WorkspaceScheduleRow` for rows where

@@ -40,12 +40,12 @@ class TriggerEvent(BaseModel):
 
     Idempotency is enforced at intake time via the composite
     ``(workspace_id, source, idempotency_key)`` key — see
-    :mod:`backend.intake.idempotency`.
+    :mod:`backend.workflow.infrastructure.idempotency`.
 
     Routing hints (``connector`` / ``connector_account_id`` / ``resource_id``
     / ``suggested_artifact_type`` / ``suggested_skill``) are populated by the
     Receive stage (Workflow §0 / §1, B10b) and refined by Frame; see
-    :mod:`backend.intake.receive`.
+    :mod:`backend.workflow.application.stages.intake`.
     """
 
     workspace_id: uuid.UUID

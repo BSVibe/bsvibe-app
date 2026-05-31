@@ -39,8 +39,8 @@ from backend.api.deps import get_current_user, get_db_session, get_workspace_id
 from backend.api.main import create_app
 from backend.api.webhooks import get_credential_cipher
 from backend.connectors.db import ConnectorAccountRow
-from backend.intake.db import TriggerEventRow  # noqa: F401 — register table
 from backend.router.accounts.crypto import CredentialCipher
+from backend.workflow.infrastructure.intake.db import TriggerEventRow  # noqa: F401 — register table
 
 from .._support import db_engine, fake_current_user
 

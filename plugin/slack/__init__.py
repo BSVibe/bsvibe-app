@@ -3,7 +3,7 @@
 Capabilities:
 
 * ``@p.inbound`` — parse a Slack Events-API delivery (app_mention / message)
-  into a :class:`backend.intake.schema.TriggerEvent`, with signing-secret
+  into a :class:`backend.workflow.domain.incoming.TriggerEvent`, with signing-secret
   HMAC-SHA256 verification (+ five-minute replay window) and the Slack
   ``event_id`` as the idempotency key.
 * ``@p.outbound(artifact_types=["slack_message"])`` — post a chat message

@@ -2,7 +2,7 @@
 
 Workflow §12.5 #8 (Bundle G — Intake / Triggers) carry-over (M1). The
 :class:`~backend.intake.schedule.ScheduleTrigger` adapter turns a *fire time*
-into a :class:`~backend.intake.db.TriggerEventRow`, but nothing in production
+into a :class:`~backend.workflow.infrastructure.intake.db.TriggerEventRow`, but nothing in production
 told it WHEN to fire — there was no row whose ``next_run_at`` a runner could
 poll, and no consumer that drove the schedule end of the OS at all (Status §5).
 
@@ -25,7 +25,7 @@ from datetime import datetime
 from sqlalchemy import Boolean, DateTime, Index, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
-from backend.intake.db import IntakeBase
+from backend.workflow.infrastructure.intake.db import IntakeBase
 
 
 class WorkspaceScheduleRow(IntakeBase):

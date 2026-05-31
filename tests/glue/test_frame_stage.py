@@ -11,8 +11,8 @@ from typing import Any
 import pytest
 
 from backend.extensions.skill.loader import SkillLoader
-from backend.intake.db import RequestRow, RequestStatus
 from backend.workflow.application.stages.frame import FrameConfig, FrameLlm, FrameStage
+from backend.workflow.infrastructure.intake.db import RequestRow, RequestStatus
 
 
 class _StubFrameLlm:
