@@ -20,21 +20,17 @@ DB-poll runner uses — honest reuse of M1's seam without bending the
 (:class:`~backend.workers.schedule_runner.ScheduleAdvancer`) is irrelevant here
 (the sweep is "every tick", not a cron expression), so it isn't plumbed in.
 
-**D3a vs D3b boundary.** D3a's deliverable was the EXPIRY TRANSITION + the
-audit hook. The transition flips ``PENDING/EXTENDED → EXPIRED`` via
+**D3a vs Lift 0b boundary.** D3a's deliverable was the EXPIRY TRANSITION +
+the audit hook. The transition flips ``PENDING/EXTENDED → EXPIRED`` via
 :meth:`SafeModeQueue.mark_expired`, and ONE :class:`AuditOutboxRecord` per
 non-empty batch records the provenance (``trigger=schedule``,
 ``source=system.safe_mode_expiry``).
 
-**D3b is now wired in.** Each item successfully flipped to ``EXPIRED`` fans
-out a per-item :func:`fire_compensation_for_item` call right after the audit
-emission, in the same transaction. The fan-out is per-Deliverable (not per
-batch) because the supersede/revert/notify decision is per-Deliverable. The
-in-process direct call replaces the originally-anticipated outbox-subscriber
-path because no in-process audit subscriber framework exists today — the
-only outbox consumer is :class:`~backend.workers.relay_worker.RelayWorker`,
-which drains to an external sink, not to local handlers. Inventing in-process
-fan-out is a separate lift; the direct call keeps D3b a one-PR change.
+D3b (PR #223) briefly added a per-item auto-compensation fan-out here, but
+Lift 0b (v8 §13 / D7) rolled that wiring back as YAGNI — the only consumer
+was the now-deleted ``backend.delivery.compensation`` module. The audit
+row remains; any future audit-side subscriber can drive per-item logic
+off the ``safe_mode.expired`` event_type without rejoining this sweep.
 """
 
 from __future__ import annotations
@@ -56,9 +52,9 @@ logger = structlog.get_logger(__name__)
 SAFE_MODE_EXPIRED_EVENT_TYPE = "safe_mode.expired"
 """The audit event_type for the per-batch sweep record.
 
-Stable wire string — D3b subscribes by exact match. Mirrors the
-``backend/supervisor/audit/events.py`` ``DEFAULT_EVENT_TYPE`` convention
-(``<domain>.<action>``).
+Stable wire string. Mirrors the ``backend/supervisor/audit/events.py``
+``DEFAULT_EVENT_TYPE`` convention (``<domain>.<action>``); any future
+audit-side subscriber matches on this exact string.
 """
 
 SAFE_MODE_EXPIRY_SOURCE = "system.safe_mode_expiry"
@@ -68,7 +64,7 @@ A founder reading the audit log can tell the expiry came from the SYSTEM
 sweep (this exact source string), NOT from a per-workspace
 :meth:`SafeModeQueue.expire` call or a user retract. The pairing
 ``trigger=schedule`` + ``source=system.safe_mode_expiry`` is the glass-box
-contract D3b can later filter on.
+contract any future audit subscriber filters on.
 """
 
 
@@ -85,9 +81,9 @@ class SafeModeExpirySweepRunner:
     The single audit row per BATCH (not per item) is deliberate: a thousand
     rows expiring in one tick is one operational event, not a thousand. The
     payload carries the full ``item_ids`` list so a founder can still
-    cross-reference any specific item in the queue. D3b will subscribe to
-    THIS event to drive compensation on the expire side; the per-item
-    fan-out happens there, behind the founder's compensation policy.
+    cross-reference any specific item in the queue. Any future subscriber
+    (e.g. a real notify-side handler) can match on the audit ``event_type``
+    and fan out per-item there — the audit hook is the clean seam.
 
     ``now_fn`` lets tests inject a deterministic clock (the worker shell
     calls :meth:`fire_due` with its own wall-clock ``now`` argument, but the
@@ -122,30 +118,13 @@ class SafeModeExpirySweepRunner:
         """
         cutoff = self._now_fn()
         async with session_factory() as session:
-            expired_pairs = await self._sweep_one_batch(session, cutoff)
-            if expired_pairs:
-                expired_ids = [item_id for item_id, _ in expired_pairs]
+            expired_ids = await self._sweep_one_batch(session, cutoff)
+            if expired_ids:
                 await self._emit_batch_audit(session, expired_ids=expired_ids, now=cutoff)
-                # D3b: per-item auto-compensation fan-out. The audit row is
-                # ONE per batch (operational event), but compensation decisions
-                # are per-Deliverable, so we fan out here. Soft-fail per item
-                # so one flaky evaluator doesn't poison the rest of the batch.
-                from backend.delivery.safe_mode_compensation_hook import (  # noqa: PLC0415
-                    fire_compensation_for_item,
-                )
-
-                for _, deliverable_id in expired_pairs:
-                    await fire_compensation_for_item(
-                        session,
-                        deliverable_id=deliverable_id,
-                        trigger="expire",
-                    )
             await session.commit()
-            return len(expired_pairs)
+            return len(expired_ids)
 
-    async def _sweep_one_batch(
-        self, session: AsyncSession, cutoff: datetime
-    ) -> list[tuple[uuid.UUID, uuid.UUID]]:
+    async def _sweep_one_batch(self, session: AsyncSession, cutoff: datetime) -> list[uuid.UUID]:
         """Transition every PENDING/EXTENDED row past ``cutoff`` to EXPIRED.
 
         Goes through :meth:`SafeModeQueue.mark_expired` per row (NOT a bulk
@@ -154,18 +133,19 @@ class SafeModeExpirySweepRunner:
         between the SELECT and the per-row update is skipped (returns
         ``False``), not silently regressed.
 
-        Returns ``[(item_id, deliverable_id), ...]`` so D3b's per-item
-        compensation fan-out can drive ``CompensationHandler.evaluate`` with
-        the correct Deliverable id per expired row. The audit emitter only
-        consumes the item_id half (see :meth:`_emit_batch_audit`).
+        Returns the list of successfully-transitioned ``item_id`` values
+        for the audit emitter to record. (D3b briefly returned
+        ``(item_id, deliverable_id)`` pairs to drive a per-item fan-out;
+        Lift 0b reverted that — the audit row carries the item_ids as the
+        cross-reference handle, and that's enough.)
         """
         queue = SafeModeQueue(session)
         due = await queue.list_due_expired(now=cutoff)
-        expired: list[tuple[uuid.UUID, uuid.UUID]] = []
+        expired: list[uuid.UUID] = []
         for row in due:
             ok = await queue.mark_expired(workspace_id=row.workspace_id, item_id=row.id)
             if ok:
-                expired.append((row.id, row.deliverable_id))
+                expired.append(row.id)
         return expired
 
     async def _emit_batch_audit(
@@ -183,7 +163,7 @@ class SafeModeExpirySweepRunner:
         fields. We use the lower-level :class:`OutboxStore` directly (vs.
         defining a typed event class) because the sweep emits at most one
         wire shape — the cost of a tiny typed model + its ``ClassVar`` ID
-        would exceed the benefit. D3b's subscriber matches on
+        would exceed the benefit. Any future subscriber matches on
         ``event_type == "safe_mode.expired"``; the ``data`` dict carries the
         forward-compatible payload.
         """
@@ -198,7 +178,8 @@ class SafeModeExpirySweepRunner:
                 # ``trigger=schedule`` (came from the periodic sweep, NOT
                 # a per-workspace expire / user retract) AND ``source=
                 # system.safe_mode_expiry`` (the specific sweep, vs. other
-                # schedule-driven events). D3b filters on this exact pair.
+                # schedule-driven events). Future subscribers filter on the
+                # exact pair.
                 "trigger": "schedule",
                 "source": SAFE_MODE_EXPIRY_SOURCE,
                 "count": len(expired_ids),

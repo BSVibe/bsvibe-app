@@ -8,7 +8,7 @@ from datetime import UTC, datetime
 import pytest
 from pydantic import ValidationError
 
-from backend.delivery.schema import ActionResult, CompensationResult, DeliveryResult
+from backend.delivery.schema import ActionResult, DeliveryResult
 from backend.intake.schema import TriggerEvent
 
 
@@ -50,21 +50,3 @@ def test_delivery_result_with_actions() -> None:
     )
     assert len(dr.actions) == 2
     assert dr.actions[1].succeeded is False
-
-
-def test_compensation_result_action_literal() -> None:
-    cr = CompensationResult(
-        deliverable_id=uuid.uuid4(),
-        action="revert",
-        reason="upstream rejected",
-    )
-    assert cr.action == "revert"
-
-
-def test_compensation_result_rejects_bad_action() -> None:
-    with pytest.raises(ValidationError):
-        CompensationResult(
-            deliverable_id=uuid.uuid4(),
-            action="explode",
-            reason="nope",  # type: ignore[arg-type]
-        )
