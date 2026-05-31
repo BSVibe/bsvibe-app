@@ -6,7 +6,7 @@ composite unique on ``(workspace_id, source, idempotency_key)`` so
 duplicate triggers fail at the DB layer regardless of intake surface.
 
 We redeclare ``RequestStatus`` here as a local :class:`StrEnum` (rather
-than importing ``backend.execution._domain.RequestStatus``) to keep
+than importing ``backend.workflow.domain._domain.RequestStatus``) to keep
 SQLAlchemy enum naming stable across module boundaries — see the
 Phase 1 note in :mod:`backend.knowledge.canonicalization.db`.
 """
@@ -37,7 +37,7 @@ class TriggerKind(StrEnum):
 
 
 class RequestStatus(StrEnum):
-    """Mirror of :class:`backend.execution._domain.RequestStatus`.
+    """Mirror of :class:`backend.workflow.domain._domain.RequestStatus`.
 
     Redeclared locally so SQLAlchemy owns a named Postgres ENUM scoped
     to the intake schema, decoupled from the execution module's enum
