@@ -192,9 +192,13 @@ def test_application_layer_decoupled_from_sqlalchemy_for_chosen_repos() -> None:
         "safe_mode_queue.py should not session.get(SafeModeQueueItemRow ...) directly"
     )
 
-    deliverables_rest = (repo_root / "backend/api/v1/deliverables.py").read_text()
+    # Lift §17.9 — deliverables REST is now a package; assertion still holds
+    # across all sub-files (none of them should select(Deliverable) directly —
+    # the Repository is the only seam).
+    deliverables_pkg = repo_root / "backend/api/v1/deliverables"
+    deliverables_rest = "\n".join(p.read_text() for p in sorted(deliverables_pkg.glob("*.py")))
     assert "select(Deliverable)" not in deliverables_rest, (
-        "deliverables.py REST list should use DeliverableRepository now"
+        "backend/api/v1/deliverables/* should use DeliverableRepository, not select(Deliverable)"
     )
 
     # Lift I-Repo-Workflow-3 — Request + Idempotency.
