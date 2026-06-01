@@ -202,14 +202,18 @@ def test_safe_mode_expiry_satisfies_schedule_runner_protocol() -> None:
 
 
 def test_run_workers_still_registers_schedule_worker() -> None:
-    """``backend.workflow.infrastructure.workers.run`` still imports the
-    Schedule symbols (from the new location) and registers ``ScheduleWorker``
-    in build_worker_runtime."""
+    """``build_worker_runtime`` still imports the Schedule symbols (from the new
+    location) and registers ``ScheduleWorker``.
+
+    Lift §17.2a: ``build_worker_runtime`` moved out of
+    ``backend.workflow.infrastructure.workers.run`` into the runtime/ layer at
+    ``backend.workflow.application.runtime.worker_runtime``. The legacy module
+    is now a thin re-export shim, so the source-grep target moved with it."""
     import inspect
 
-    import backend.workflow.infrastructure.workers.run as run_mod
+    import backend.workflow.application.runtime.worker_runtime as worker_runtime_mod
 
-    src = inspect.getsource(run_mod)
+    src = inspect.getsource(worker_runtime_mod)
     assert "backend.schedule.infrastructure.workers.schedule_worker" in src or (
         "backend.schedule.infrastructure.db_poll_runner" in src and "ScheduleWorker" in src
     )
