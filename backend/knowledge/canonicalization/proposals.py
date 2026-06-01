@@ -12,6 +12,14 @@ default signal). The ``balanced`` strategy in slice 4 layers embedding KNN
 Per §12, proposal generation MAY create draft action notes through
 ``service.create_action_draft``. We do exactly that — each proposal links
 to a paired ``actions/merge-concepts/...md`` draft via ``action_drafts``.
+
+Lift M2 (v8 §20.3 Pattern B audit, 2026-06-02) — **NOT a Pattern B
+violation, skipped.** This is a Strategy/algorithm class (Proposer ABC +
+two concrete strategies), not a service.py with validator + state-advance
++ persistence. Persistence is delegated to ``NoteStore`` (a Repository).
+Module-level helpers (``_ngrams``, ``_confidence_from_jaccard``,
+``_envelope``, ``_UnionFind``) already factored out. Cohesion is high;
+further split would harm readability.
 """
 
 from __future__ import annotations
