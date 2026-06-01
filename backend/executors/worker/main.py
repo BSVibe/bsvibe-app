@@ -17,6 +17,24 @@ backend (inject an ``httpx.AsyncClient`` over a MockTransport) or a real Redis
 Usage::
 
     python -m backend.executors.worker
+
+Lift M3 (v8 §20.4 Pattern C audit, 2026-06-02) — **SRP-clean, skipped.**
+Pattern C = worker file bundling config + business logic + poll-loop
+boilerplate. The worker config dataclass (:class:`WorkerSettings`) is
+already extracted to ``backend.executors.worker.config``; the executor
+selection + capability detection are extracted to
+``backend.executors.worker.executors``. What remains here is the
+process entry point: registration, the single-task body
+(:func:`handle_task`), the one-tick body (:func:`run_once`), the main
+loop (:func:`poll_and_execute`), tiny ``.env`` upsert helpers, and the
+signal-wired :func:`main` entry point. These are bundled because this
+file *is* the headless worker process — splitting registration /
+artifact-capture / loop / wiring into 4 modules creates 4 modules with
+1-2 functions each and no shared seam beyond the process itself. The
+narrow ``_RedisPublisher`` Protocol is a port defined where used. The
+public surface (:func:`handle_task`, :func:`poll_and_execute`,
+:func:`register`, :func:`run_once`) keeps every existing test injection
+point. No split needed.
 """
 
 from __future__ import annotations
