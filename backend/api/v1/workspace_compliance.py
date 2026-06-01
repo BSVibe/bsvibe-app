@@ -25,7 +25,7 @@ import uuid
 from datetime import UTC, datetime
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -35,7 +35,15 @@ from backend.api.deps import (
     get_db_session,
     get_workspace_id,
 )
-from backend.identity.db import MembershipRow, UserRow
+from backend.api.v1._identity_deps import (
+    get_membership_repository,
+    get_workspace_repository,
+)
+from backend.identity.db import UserRow
+from backend.identity.domain.repositories import (
+    MembershipRepository,
+    WorkspaceRepository,
+)
 from backend.knowledge.domain.repositories import CanonicalAnchorRepository
 from backend.knowledge.infrastructure.repositories import (
     SqlAlchemyCanonicalAnchorRepository,
@@ -153,6 +161,7 @@ async def _build_export(
     *,
     workspace: WorkspaceRow,
     user: UserRow,
+    memberships: MembershipRepository,
 ) -> dict[str, Any]:
     """Materialise the export document. All children are workspace-scoped by
     layer 2; the explicit workspace_id filters here are defense-in-depth and
@@ -160,15 +169,7 @@ async def _build_export(
     """
     ws_id = workspace.id
 
-    membership = (
-        await session.execute(
-            select(MembershipRow).where(
-                MembershipRow.user_id == user.id,
-                MembershipRow.workspace_id == ws_id,
-                MembershipRow.left_at.is_(None),
-            )
-        )
-    ).scalar_one_or_none()
+    membership = await memberships.active_for_user_in_workspace(user.id, ws_id)
 
     products = (
         (await session.execute(select(ProductRow).where(ProductRow.workspace_id == ws_id)))
@@ -361,27 +362,29 @@ async def export_workspace(
     workspace_id: Annotated[uuid.UUID, Depends(get_workspace_id)],
     user: Annotated[UserRow, Depends(get_current_user_row)],
     session: Annotated[AsyncSession, Depends(get_db_session)],
+    workspaces: Annotated[WorkspaceRepository, Depends(get_workspace_repository)],
+    memberships: Annotated[MembershipRepository, Depends(get_membership_repository)],
 ) -> dict[str, Any]:
     """Return the caller's workspace data as a single JSON document.
 
     Art. 15 (right of access) + Art. 20 (portability). Workspace-scoped via
     the resolved ``workspace_id`` contextvar; defense layers 2/3 also engage.
     """
-    workspace = (
-        await session.execute(select(WorkspaceRow).where(WorkspaceRow.id == workspace_id))
-    ).scalar_one()
-    return await _build_export(session, workspace=workspace, user=user)
+    workspace = await workspaces.get(workspace_id)
+    if workspace is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+    return await _build_export(session, workspace=workspace, user=user, memberships=memberships)
 
 
 @router.get("/processing-record")
 async def processing_record(
     workspace_id: Annotated[uuid.UUID, Depends(get_workspace_id)],
-    session: Annotated[AsyncSession, Depends(get_db_session)],
+    workspaces: Annotated[WorkspaceRepository, Depends(get_workspace_repository)],
 ) -> dict[str, Any]:
     """Return the Art. 30 record-of-processing-activities doc for the workspace."""
-    workspace = (
-        await session.execute(select(WorkspaceRow).where(WorkspaceRow.id == workspace_id))
-    ).scalar_one()
+    workspace = await workspaces.get(workspace_id)
+    if workspace is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
     return _processing_record(workspace)
 
 
