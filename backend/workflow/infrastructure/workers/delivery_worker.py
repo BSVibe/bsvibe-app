@@ -24,6 +24,20 @@ This worker:
 
 DB-polling, not Redis Streams. Same justification as AgentWorker.
 
+Lift M3 (v8 §20.4 Pattern C audit, 2026-06-02) — **SRP-clean, skipped.**
+Pattern C = worker file bundling config + business logic + poll-loop
+boilerplate. The poll-loop shell is already extracted to
+:class:`~backend.workers.base.BaseWorker` (DeliveryWorker overrides
+``_tick`` only). The config dataclass (:class:`DeliveryWorkerConfig`)
+is a constructor input; the :class:`PluginDispatchAdapter` Protocol is
+a narrow port the worker consumes (port defined where used — *not* a
+Protocol + concrete cohabit, which would be Pattern D). Module-level
+helpers (``_workspace_safe_mode``, ``_run_output_mode``,
+``resolve_output_mode_gate``, ``extract_compensation_handles``,
+``persist_compensation_handles``, ``dispatch_delivery``,
+``build_delivery_claim_stmt``) all serve the single delivery-drain
+concern and are tested individually. No split needed.
+
 Multi-server safety (Lift J / v8 §11.5)
 ---------------------------------------
 

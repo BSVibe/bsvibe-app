@@ -26,6 +26,19 @@ both phases.
 The Redis Streams variant (with proper consumer-group semantics + XACK)
 remains a TODO — for Phase 1 the DB-polling path is simpler to reason
 about and integration-test, and the load is bounded by Request volume.
+
+Lift M3 (v8 §20.4 Pattern C audit, 2026-06-02) — **SRP-clean, skipped.**
+Pattern C = worker file bundling config + business logic + poll-loop
+boilerplate. The poll-loop shell (``start`` / ``stop`` / ``_run``) is
+already extracted to :class:`~backend.workers.base.BaseWorker` (Template
+Method — subclasses implement ``_tick`` only). The config dataclass
+(:class:`AgentWorkerConfig`) and the execution-backend deps
+(:class:`AgentExecutionDeps`) live alongside the worker class because
+both are constructor inputs that the worker reads on every tick; moving
+them to sibling modules would force every caller (production wiring +
+tests) to thread a second import without changing any seam. The worker
+class itself owns one cohesive responsibility (claim → frame → drive →
+status-map). No split needed.
 """
 
 from __future__ import annotations
