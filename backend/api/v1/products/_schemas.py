@@ -1,0 +1,184 @@
+"""Shared Pydantic schemas + regex constants for ``/api/v1/products``.
+
+Used by the four endpoint groups (``products_crud`` / ``resources`` /
+``bindings`` / ``files``). Pulled into one module so each endpoint file
+stays a thin adapter (D35).
+"""
+
+from __future__ import annotations
+
+import re
+import uuid
+from datetime import datetime
+from typing import Any, Literal
+
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+_SLUG_RE = re.compile(r"^[a-z][a-z0-9-]*$")
+# A resource URL, when present, must look like a real http(s) (or mailto) link —
+# enough to reject "not a url" without smuggling a strict URL parser in. Empty
+# is allowed only via the field being absent/None (see ResourceCreate).
+_URL_RE = re.compile(r"^(https?://|mailto:).+", re.IGNORECASE)
+
+_OutputMode = Literal["safe", "direct"]
+
+
+# --- Products -----------------------------------------------------------------
+
+
+class ProductCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1, max_length=255)
+    slug: str = Field(min_length=1, max_length=64)
+    repo_url: str | None = Field(default=None, max_length=512)
+
+    @field_validator("slug")
+    @classmethod
+    def _slug_format(cls, v: str) -> str:
+        if not _SLUG_RE.match(v):
+            raise ValueError("slug must match ^[a-z][a-z0-9-]*$")
+        return v
+
+
+class ProductUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str | None = Field(default=None, min_length=1, max_length=255)
+    repo_url: str | None = Field(default=None, max_length=512)
+
+
+class ProductResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", from_attributes=True)
+
+    id: uuid.UUID
+    workspace_id: uuid.UUID
+    name: str
+    slug: str
+    repo_url: str | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+# --- Product resources --------------------------------------------------------
+
+
+class ResourceCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    kind: str = Field(min_length=1, max_length=32)
+    title: str = Field(min_length=1, max_length=255)
+    url: str | None = Field(default=None, max_length=2048)
+    note: str | None = Field(default=None, max_length=2048)
+
+    @field_validator("kind", "title")
+    @classmethod
+    def _not_blank(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("must not be blank")
+        return v.strip()
+
+    @field_validator("url")
+    @classmethod
+    def _url_shape(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        v = v.strip()
+        if not v:
+            return None
+        if not _URL_RE.match(v):
+            raise ValueError("url must be an http(s):// or mailto: link")
+        return v
+
+
+class ResourceResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", from_attributes=True)
+
+    id: uuid.UUID
+    product_id: uuid.UUID
+    workspace_id: uuid.UUID
+    kind: str
+    title: str
+    url: str | None = None
+    note: str | None = None
+    created_at: datetime
+
+
+# --- Resource bindings (per-Product × ConnectorAccount 3-knob binding) -------
+
+
+class TriggerKnob(BaseModel):
+    """The trigger knob — ``{"enabled": bool, "filters": dict}``."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    filters: dict[str, Any] = Field(default_factory=dict)
+
+
+class ResourceBindingCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    connector_account_id: uuid.UUID
+    resource_id: str = Field(min_length=1, max_length=512)
+    selection: dict[str, Any] = Field(default_factory=dict)
+    trigger: TriggerKnob = Field(default_factory=TriggerKnob)
+    output_mode: _OutputMode = "safe"
+
+
+class ResourceBindingUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    selection: dict[str, Any] | None = None
+    trigger: TriggerKnob | None = None
+    output_mode: _OutputMode | None = None
+
+
+class ResourceBindingResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", from_attributes=True)
+
+    id: uuid.UUID
+    workspace_id: uuid.UUID
+    product_id: uuid.UUID
+    connector_account_id: uuid.UUID
+    resource_id: str
+    selection: dict[str, Any]
+    trigger: dict[str, Any]
+    output_mode: str
+    created_at: datetime
+    updated_at: datetime
+
+
+# --- Product files -----------------------------------------------------------
+
+
+class FileTreeEntryResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str
+    path: str
+    kind: Literal["file", "dir"]
+
+
+class ProductFileContentResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    path: str
+    content: str
+    truncated: bool = False
+    binary: bool = False
+
+
+__all__ = [
+    "FileTreeEntryResponse",
+    "ProductCreate",
+    "ProductFileContentResponse",
+    "ProductResponse",
+    "ProductUpdate",
+    "ResourceBindingCreate",
+    "ResourceBindingResponse",
+    "ResourceBindingUpdate",
+    "ResourceCreate",
+    "ResourceResponse",
+    "TriggerKnob",
+]
