@@ -18,10 +18,11 @@ import uuid
 from datetime import UTC, datetime, timedelta
 
 import structlog
-from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.workflow.domain.repositories import SafeModeQueueRepository
 from backend.workflow.infrastructure.delivery.db import SafeModeQueueItemRow, SafeModeStatus
+from backend.workflow.infrastructure.repositories import SqlAlchemySafeModeQueueRepository
 
 logger = structlog.get_logger(__name__)
 
@@ -31,10 +32,25 @@ MAX_EXTENSIONS = 2
 
 
 class SafeModeQueue:
-    """Pull-based approval queue for outbound deliveries."""
+    """Pull-based approval queue for outbound deliveries.
 
-    def __init__(self, session: AsyncSession) -> None:
+    Lifecycle service over :class:`SafeModeQueueItemRow`. Persistence is
+    delegated to a :class:`SafeModeQueueRepository` (Lift I-Repo-Workflow-2);
+    this class owns the transitions, retention math, and audit/log surface.
+    """
+
+    def __init__(
+        self,
+        session: AsyncSession,
+        *,
+        repository: SafeModeQueueRepository | None = None,
+    ) -> None:
         self._session = session
+        # Default-constructed for backward compat with existing call sites
+        # (``SafeModeQueue(session)``). Tests + new callers inject a Protocol.
+        self._repo: SafeModeQueueRepository = repository or SqlAlchemySafeModeQueueRepository(
+            session
+        )
 
     async def enqueue(
         self,
@@ -60,7 +76,7 @@ class SafeModeQueue:
             extension_count=0,
             created_at=now,
         )
-        self._session.add(row)
+        await self._repo.add(row)
         await self._session.flush()
         logger.info(
             "safe_mode_enqueued",
@@ -72,15 +88,7 @@ class SafeModeQueue:
 
     async def list_pending(self, *, workspace_id: uuid.UUID) -> list[SafeModeQueueItemRow]:
         """Founder-facing list of items awaiting approval (newest first)."""
-        stmt = (
-            select(SafeModeQueueItemRow)
-            .where(
-                SafeModeQueueItemRow.workspace_id == workspace_id,
-                SafeModeQueueItemRow.status == SafeModeStatus.PENDING,
-            )
-            .order_by(SafeModeQueueItemRow.created_at.desc())
-        )
-        return list((await self._session.execute(stmt)).scalars().all())
+        return await self._repo.list_pending_by_workspace(workspace_id)
 
     async def list_pending_for_run(
         self, *, workspace_id: uuid.UUID, run_id: uuid.UUID
@@ -90,40 +98,14 @@ class SafeModeQueue:
         Returned in creation order (oldest first) so dispatch happens in the
         same order the agent loop emitted the artifacts. Empty list when the
         run has no pending items (or never existed)."""
-        stmt = (
-            select(SafeModeQueueItemRow)
-            .where(
-                SafeModeQueueItemRow.workspace_id == workspace_id,
-                SafeModeQueueItemRow.run_id == run_id,
-                SafeModeQueueItemRow.status == SafeModeStatus.PENDING,
-            )
-            .order_by(SafeModeQueueItemRow.created_at.asc())
-        )
-        return list((await self._session.execute(stmt)).scalars().all())
+        return await self._repo.list_pending_for_run(workspace_id=workspace_id, run_id=run_id)
 
     async def list_resolved(self, *, workspace_id: uuid.UUID) -> list[SafeModeQueueItemRow]:
         """Founder-facing list of decided items (approved / denied / expired),
         most-recently-decided first. Powers the Decisions "Resolved" tab's
         delivery side; ``decided_at`` is the sort key (created_at as a stable
         tiebreaker for a defensively-undecided row)."""
-        stmt = (
-            select(SafeModeQueueItemRow)
-            .where(
-                SafeModeQueueItemRow.workspace_id == workspace_id,
-                SafeModeQueueItemRow.status.in_(
-                    [
-                        SafeModeStatus.APPROVED,
-                        SafeModeStatus.DENIED,
-                        SafeModeStatus.EXPIRED,
-                    ]
-                ),
-            )
-            .order_by(
-                SafeModeQueueItemRow.decided_at.desc(),
-                SafeModeQueueItemRow.created_at.desc(),
-            )
-        )
-        return list((await self._session.execute(stmt)).scalars().all())
+        return await self._repo.list_resolved_by_workspace(workspace_id)
 
     async def approve(
         self,
@@ -201,7 +183,7 @@ class SafeModeQueue:
         Allowed from any terminal-decision state (``delivered`` / ``denied`` /
         ``expired``). Returns False if not found or still pending/approved.
         """
-        row = await self._session.get(SafeModeQueueItemRow, item_id)
+        row = await self._repo.get(item_id)
         if row is None or row.workspace_id != workspace_id:
             return False
         if row.status not in (
@@ -242,7 +224,7 @@ class SafeModeQueue:
 
         Returns False if not found OR already at ``MAX_EXTENSIONS``.
         """
-        row = await self._session.get(SafeModeQueueItemRow, item_id)
+        row = await self._repo.get(item_id)
         if row is None or row.workspace_id != workspace_id:
             return False
         if row.status not in (SafeModeStatus.PENDING, SafeModeStatus.EXTENDED):
@@ -258,26 +240,14 @@ class SafeModeQueue:
     async def expire(self, *, workspace_id: uuid.UUID) -> int:
         """Sweep pending items past ``expires_at`` to ``expired``. Returns count."""
         now = datetime.now(tz=UTC)
-        stmt = (
-            update(SafeModeQueueItemRow)
-            .where(
-                SafeModeQueueItemRow.workspace_id == workspace_id,
-                SafeModeQueueItemRow.status.in_([SafeModeStatus.PENDING, SafeModeStatus.EXTENDED]),
-                SafeModeQueueItemRow.expires_at <= now,
-            )
-            .values(status=SafeModeStatus.EXPIRED, decided_at=now)
-            .returning(SafeModeQueueItemRow.id)
-        )
-        result = await self._session.execute(stmt)
-        ids = result.scalars().all()
-        await self._session.flush()
-        if ids:
+        count = await self._repo.mark_expired_bulk(workspace_id=workspace_id, now=now)
+        if count:
             logger.info(
                 "safe_mode_expired",
                 workspace_id=str(workspace_id),
-                count=len(ids),
+                count=count,
             )
-        return len(ids)
+        return count
 
     async def mark_expired(
         self,
@@ -302,7 +272,7 @@ class SafeModeQueue:
         the same semantic ``decided_at`` already carries for ``EXPIRED``-via-
         :meth:`expire`).
         """
-        row = await self._session.get(SafeModeQueueItemRow, item_id)
+        row = await self._repo.get(item_id)
         if row is None or row.workspace_id != workspace_id:
             return False
         if row.status not in (SafeModeStatus.PENDING, SafeModeStatus.EXTENDED):
@@ -322,16 +292,7 @@ class SafeModeQueue:
         glass-box provenance — ``trigger=schedule``, ``source=system.safe_mode_expiry``).
         Per-workspace callers should keep using :meth:`expire` (single-statement
         update, no audit emission)."""
-        cutoff = now or datetime.now(tz=UTC)
-        stmt = (
-            select(SafeModeQueueItemRow)
-            .where(
-                SafeModeQueueItemRow.status.in_([SafeModeStatus.PENDING, SafeModeStatus.EXTENDED]),
-                SafeModeQueueItemRow.expires_at <= cutoff,
-            )
-            .order_by(SafeModeQueueItemRow.expires_at.asc())
-        )
-        return list((await self._session.execute(stmt)).scalars().all())
+        return await self._repo.list_due_expired(now=now)
 
     async def _transition(
         self,
@@ -342,7 +303,7 @@ class SafeModeQueue:
         to_status: SafeModeStatus,
         stamp_decided: bool = True,
     ) -> bool:
-        row = await self._session.get(SafeModeQueueItemRow, item_id)
+        row = await self._repo.get(item_id)
         if row is None or row.workspace_id != workspace_id:
             return False
         if row.status != from_status:

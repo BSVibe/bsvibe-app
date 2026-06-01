@@ -44,12 +44,58 @@ def test_decision_repository_protocol_surface() -> None:
         assert inspect.iscoroutinefunction(method), f"{name} must be async"
 
 
+def test_deliverable_repository_protocol_surface() -> None:
+    from typing import Protocol
+
+    from backend.workflow.domain.repositories import DeliverableRepository
+
+    assert issubclass(DeliverableRepository, Protocol)  # type: ignore[arg-type]
+    for name in (
+        "get",
+        "list_by_workspace",
+        "list_by_run",
+        "list_by_run_id",
+        "find_first_by_run",
+        "add",
+    ):
+        method = getattr(DeliverableRepository, name, None)
+        assert method is not None, f"DeliverableRepository missing {name}"
+        assert inspect.iscoroutinefunction(method), f"{name} must be async"
+
+
+def test_safe_mode_queue_repository_protocol_surface() -> None:
+    from typing import Protocol
+
+    from backend.workflow.domain.repositories import SafeModeQueueRepository
+
+    assert issubclass(SafeModeQueueRepository, Protocol)  # type: ignore[arg-type]
+    for name in (
+        "get",
+        "list_pending_by_workspace",
+        "list_pending_for_run",
+        "list_resolved_by_workspace",
+        "list_due_expired",
+        "mark_expired_bulk",
+        "add",
+    ):
+        method = getattr(SafeModeQueueRepository, name, None)
+        assert method is not None, f"SafeModeQueueRepository missing {name}"
+        assert inspect.iscoroutinefunction(method), f"{name} must be async"
+
+
 def test_concrete_implementations_satisfy_protocols() -> None:
     """The SQLAlchemy concrete classes must be runtime-checkable as the Protocol."""
-    from backend.workflow.domain.repositories import DecisionRepository, RunRepository
+    from backend.workflow.domain.repositories import (
+        DecisionRepository,
+        DeliverableRepository,
+        RunRepository,
+        SafeModeQueueRepository,
+    )
     from backend.workflow.infrastructure.repositories import (
         SqlAlchemyDecisionRepository,
+        SqlAlchemyDeliverableRepository,
         SqlAlchemyRunRepository,
+        SqlAlchemySafeModeQueueRepository,
     )
 
     # The Protocols are @runtime_checkable, so isinstance must accept the
@@ -60,8 +106,12 @@ def test_concrete_implementations_satisfy_protocols() -> None:
 
     run_repo = SqlAlchemyRunRepository(session=_StubSession())  # type: ignore[arg-type]
     dec_repo = SqlAlchemyDecisionRepository(session=_StubSession())  # type: ignore[arg-type]
+    del_repo = SqlAlchemyDeliverableRepository(session=_StubSession())  # type: ignore[arg-type]
+    smq_repo = SqlAlchemySafeModeQueueRepository(session=_StubSession())  # type: ignore[arg-type]
     assert isinstance(run_repo, RunRepository)
     assert isinstance(dec_repo, DecisionRepository)
+    assert isinstance(del_repo, DeliverableRepository)
+    assert isinstance(smq_repo, SafeModeQueueRepository)
 
 
 def test_application_layer_decoupled_from_sqlalchemy_for_chosen_repos() -> None:
@@ -85,6 +135,25 @@ def test_application_layer_decoupled_from_sqlalchemy_for_chosen_repos() -> None:
     agent_runner = (repo_root / "backend/workflow/application/agent_runner.py").read_text()
     assert "select(ExecutionRun)" not in agent_runner, (
         "agent_runner.py should query ExecutionRun via RunRepository now"
+    )
+
+    # Lift I-Repo-Workflow-2 — Deliverable + SafeModeQueue.
+    assert "select(Deliverable)" not in agent_runner, (
+        "agent_runner.py should query Deliverable via DeliverableRepository now"
+    )
+
+    safe_mode_queue = (repo_root / "backend/workflow/application/safe_mode_queue.py").read_text()
+    assert "select(SafeModeQueueItemRow)" not in safe_mode_queue, (
+        "safe_mode_queue.py should query items via SafeModeQueueRepository now"
+    )
+    # _session.get(SafeModeQueueItemRow ...) — same seam, routed through repo
+    assert "_session.get(SafeModeQueueItemRow" not in safe_mode_queue, (
+        "safe_mode_queue.py should not session.get(SafeModeQueueItemRow ...) directly"
+    )
+
+    deliverables_rest = (repo_root / "backend/api/v1/deliverables.py").read_text()
+    assert "select(Deliverable)" not in deliverables_rest, (
+        "deliverables.py REST list should use DeliverableRepository now"
     )
 
 

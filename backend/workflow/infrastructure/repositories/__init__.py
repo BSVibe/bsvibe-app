@@ -10,6 +10,17 @@ from __future__ import annotations
 from backend.workflow.infrastructure.repositories.decision_repository_sql import (
     SqlAlchemyDecisionRepository,
 )
+from backend.workflow.infrastructure.repositories.deliverable_repository_sql import (
+    SqlAlchemyDeliverableRepository,
+)
 from backend.workflow.infrastructure.repositories.run_repository_sql import SqlAlchemyRunRepository
+from backend.workflow.infrastructure.repositories.safe_mode_queue_repository_sql import (
+    SqlAlchemySafeModeQueueRepository,
+)
 
-__all__ = ["SqlAlchemyDecisionRepository", "SqlAlchemyRunRepository"]
+__all__ = [
+    "SqlAlchemyDecisionRepository",
+    "SqlAlchemyDeliverableRepository",
+    "SqlAlchemyRunRepository",
+    "SqlAlchemySafeModeQueueRepository",
+]

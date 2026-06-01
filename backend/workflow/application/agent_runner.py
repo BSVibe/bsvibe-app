@@ -30,15 +30,17 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.workflow.application.agent_loop import LoopResult, RunCompute
-from backend.workflow.domain.repositories import RunRepository
+from backend.workflow.domain.repositories import DeliverableRepository, RunRepository
 from backend.workflow.infrastructure.db import (
-    Deliverable,
     ExecutionRun,
     ExecutionRunHistory,
     RunStatus,
 )
 from backend.workflow.infrastructure.intake.db import RequestRow
-from backend.workflow.infrastructure.repositories import SqlAlchemyRunRepository
+from backend.workflow.infrastructure.repositories import (
+    SqlAlchemyDeliverableRepository,
+    SqlAlchemyRunRepository,
+)
 
 logger = structlog.get_logger(__name__)
 
@@ -51,12 +53,18 @@ class AgentRunner:
         session: AsyncSession,
         *,
         run_repository: RunRepository | None = None,
+        deliverable_repository: DeliverableRepository | None = None,
     ) -> None:
         self._session = session
         # Repository constructed from the session by default — the Lift
         # I-Repo-Workflow seam. Tests may inject a fake; production callers
         # rely on the default ``SqlAlchemyRunRepository(session)``.
         self._runs: RunRepository = run_repository or SqlAlchemyRunRepository(session)
+        # Lift I-Repo-Workflow-2 — the spec-handoff path reads the design run's
+        # Deliverable(s) via this Repository instead of a raw select().
+        self._deliverables: DeliverableRepository = (
+            deliverable_repository or SqlAlchemyDeliverableRepository(session)
+        )
 
     async def open_run(self, *, request: RequestRow) -> uuid.UUID:
         """Mint an ExecutionRun row tied to ``request``; returns run_id.
@@ -394,15 +402,7 @@ class AgentRunner:
     async def _design_artifact_refs(self, design_run_id: uuid.UUID) -> list[str]:
         """The artifact_refs the design run's deliverable(s) produced — the
         spec files the impl stage will read. Dedupes, preserves order."""
-        rows = (
-            (
-                await self._session.execute(
-                    select(Deliverable).where(Deliverable.run_id == design_run_id)
-                )
-            )
-            .scalars()
-            .all()
-        )
+        rows = await self._deliverables.list_by_run_id(design_run_id)
         refs: list[str] = []
         for row in rows:
             row_payload = row.payload if isinstance(row.payload, dict) else {}

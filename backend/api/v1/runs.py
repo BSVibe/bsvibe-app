@@ -16,8 +16,16 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.api.deps import get_db_session, get_workspace_id
-from backend.api.v1._workflow_deps import get_decision_repository, get_run_repository
-from backend.workflow.domain.repositories import DecisionRepository, RunRepository
+from backend.api.v1._workflow_deps import (
+    get_decision_repository,
+    get_deliverable_repository,
+    get_run_repository,
+)
+from backend.workflow.domain.repositories import (
+    DecisionRepository,
+    DeliverableRepository,
+    RunRepository,
+)
 from backend.workflow.domain.verified_deliverable import PARTIAL_DELIVERABLE_KIND
 from backend.workflow.infrastructure.db import (
     Decision,
@@ -385,6 +393,7 @@ async def get_run_detail(
     session: Annotated[AsyncSession, Depends(get_db_session)],
     runs: Annotated[RunRepository, Depends(get_run_repository)],
     decisions: Annotated[DecisionRepository, Depends(get_decision_repository)],
+    deliverables: Annotated[DeliverableRepository, Depends(get_deliverable_repository)],
 ) -> RunDetailResponse:
     """The inspectable run-detail surface for one ExecutionRun (Stitch
     "Triggered"), scoped to the caller's workspace.
@@ -419,15 +428,7 @@ async def get_run_detail(
     # late-arriving partial must NOT shadow the terminal on the Run-view), and
     # ``partial_deliverables`` returns the streaming list (oldest-first, the
     # order they were emitted by the loop).
-    all_deliverables_stmt = (
-        select(Deliverable)
-        .where(
-            Deliverable.run_id == run_id,
-            Deliverable.workspace_id == workspace_id,
-        )
-        .order_by(Deliverable.created_at.asc())
-    )
-    deliverable_rows = list((await session.execute(all_deliverables_stmt)).scalars().all())
+    deliverable_rows = await deliverables.list_by_run(run_id, workspace_id)
     partial_rows: list[Deliverable] = []
     final_rows: list[Deliverable] = []
     for row in deliverable_rows:

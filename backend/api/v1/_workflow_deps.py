@@ -20,10 +20,17 @@ from fastapi import Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.api.deps import get_db_session
-from backend.workflow.domain.repositories import DecisionRepository, RunRepository
+from backend.workflow.domain.repositories import (
+    DecisionRepository,
+    DeliverableRepository,
+    RunRepository,
+    SafeModeQueueRepository,
+)
 from backend.workflow.infrastructure.repositories import (
     SqlAlchemyDecisionRepository,
+    SqlAlchemyDeliverableRepository,
     SqlAlchemyRunRepository,
+    SqlAlchemySafeModeQueueRepository,
 )
 
 
@@ -41,4 +48,23 @@ def get_decision_repository(
     return SqlAlchemyDecisionRepository(session)
 
 
-__all__ = ["get_decision_repository", "get_run_repository"]
+def get_deliverable_repository(
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+) -> DeliverableRepository:
+    """One :class:`DeliverableRepository` per request scope, backed by the request session."""
+    return SqlAlchemyDeliverableRepository(session)
+
+
+def get_safe_mode_queue_repository(
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+) -> SafeModeQueueRepository:
+    """One :class:`SafeModeQueueRepository` per request scope, backed by the request session."""
+    return SqlAlchemySafeModeQueueRepository(session)
+
+
+__all__ = [
+    "get_decision_repository",
+    "get_deliverable_repository",
+    "get_run_repository",
+    "get_safe_mode_queue_repository",
+]
