@@ -27,13 +27,11 @@ import structlog
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.workflow.application.intake._factories import _new_trigger_row
 from backend.workflow.domain.incoming import TriggerEvent
-from backend.workflow.infrastructure.idempotency import is_duplicate, record
-from backend.workflow.infrastructure.intake.db import (
-    RequestStatus,
-    TriggerEventRow,
-    TriggerKind,
-)
+from backend.workflow.domain.repositories import IdempotencyRepository
+from backend.workflow.infrastructure.intake.db import RequestStatus, TriggerKind
+from backend.workflow.infrastructure.repositories import SqlAlchemyIdempotencyRepository
 
 logger = structlog.get_logger(__name__)
 
@@ -70,8 +68,18 @@ def _derive_idempotency_key(headers: dict[str, str], body: dict[str, Any]) -> st
 class WebhookReceiver:
     """Adapt one inbound plugin webhook into a :class:`TriggerEvent`."""
 
-    def __init__(self, session: AsyncSession) -> None:
+    def __init__(
+        self,
+        session: AsyncSession,
+        *,
+        idempotency_repository: IdempotencyRepository | None = None,
+    ) -> None:
         self._session = session
+        # Lift I-Repo-Workflow-3 — idempotency persistence routed through the
+        # Repository Protocol; tests may inject a fake.
+        self._idempotency: IdempotencyRepository = (
+            idempotency_repository or SqlAlchemyIdempotencyRepository(session)
+        )
 
     async def handle(
         self,
@@ -97,8 +105,7 @@ class WebhookReceiver:
             received_at=now,
         )
 
-        if await is_duplicate(
-            self._session,
+        if await self._idempotency.is_duplicate(
             workspace_id=workspace_id,
             source=source,
             idempotency_key=idem,
@@ -111,19 +118,18 @@ class WebhookReceiver:
             )
             return WebhookOutcome(event=event, duplicate=True)
 
-        row = TriggerEventRow(
-            id=uuid.uuid4(),
+        row = _new_trigger_row(
             workspace_id=workspace_id,
             product_id=product_id,
             source=source,
-            trigger_kind=TriggerKind.WEBHOOK,
-            idempotency_key=idem,
+            kind=TriggerKind.WEBHOOK,
+            idem=idem,
             payload=body,
             trace_id=trace_id,
             received_at=now,
         )
         try:
-            await record(self._session, row=row)
+            await self._idempotency.record(row)
         except IntegrityError:
             # Race: another writer landed the same key between the
             # is_duplicate check and the INSERT. Surface as duplicate.

@@ -23,12 +23,16 @@ from backend.api.deps import get_db_session
 from backend.workflow.domain.repositories import (
     DecisionRepository,
     DeliverableRepository,
+    IdempotencyRepository,
+    RequestRepository,
     RunRepository,
     SafeModeQueueRepository,
 )
 from backend.workflow.infrastructure.repositories import (
     SqlAlchemyDecisionRepository,
     SqlAlchemyDeliverableRepository,
+    SqlAlchemyIdempotencyRepository,
+    SqlAlchemyRequestRepository,
     SqlAlchemyRunRepository,
     SqlAlchemySafeModeQueueRepository,
 )
@@ -62,9 +66,25 @@ def get_safe_mode_queue_repository(
     return SqlAlchemySafeModeQueueRepository(session)
 
 
+def get_request_repository(
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+) -> RequestRepository:
+    """One :class:`RequestRepository` per request scope, backed by the request session."""
+    return SqlAlchemyRequestRepository(session)
+
+
+def get_idempotency_repository(
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+) -> IdempotencyRepository:
+    """One :class:`IdempotencyRepository` per request scope, backed by the request session."""
+    return SqlAlchemyIdempotencyRepository(session)
+
+
 __all__ = [
     "get_decision_repository",
     "get_deliverable_repository",
+    "get_idempotency_repository",
+    "get_request_repository",
     "get_run_repository",
     "get_safe_mode_queue_repository",
 ]

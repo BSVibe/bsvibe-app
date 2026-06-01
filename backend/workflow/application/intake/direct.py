@@ -15,10 +15,12 @@ import structlog
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.workflow.application.intake._factories import _new_trigger_row
 from backend.workflow.application.intake.webhook import WebhookOutcome
 from backend.workflow.domain.incoming import TriggerEvent
-from backend.workflow.infrastructure.idempotency import is_duplicate, record
-from backend.workflow.infrastructure.intake.db import TriggerEventRow, TriggerKind
+from backend.workflow.domain.repositories import IdempotencyRepository
+from backend.workflow.infrastructure.intake.db import TriggerKind
+from backend.workflow.infrastructure.repositories import SqlAlchemyIdempotencyRepository
 
 logger = structlog.get_logger(__name__)
 
@@ -31,8 +33,18 @@ class DirectTrigger:
     different founders typing the same text produce distinct events.
     """
 
-    def __init__(self, session: AsyncSession) -> None:
+    def __init__(
+        self,
+        session: AsyncSession,
+        *,
+        idempotency_repository: IdempotencyRepository | None = None,
+    ) -> None:
         self._session = session
+        # Lift I-Repo-Workflow-3 — idempotency persistence routed through the
+        # Repository Protocol; tests may inject a fake.
+        self._idempotency: IdempotencyRepository = (
+            idempotency_repository or SqlAlchemyIdempotencyRepository(session)
+        )
 
     async def submit(
         self,
@@ -57,8 +69,7 @@ class DirectTrigger:
             trace_id=trace_id,
             received_at=now,
         )
-        if await is_duplicate(
-            self._session,
+        if await self._idempotency.is_duplicate(
             workspace_id=workspace_id,
             source="direct",
             idempotency_key=idem,
@@ -70,19 +81,18 @@ class DirectTrigger:
             )
             return WebhookOutcome(event=event, duplicate=True)
 
-        row = TriggerEventRow(
-            id=uuid.uuid4(),
+        row = _new_trigger_row(
             workspace_id=workspace_id,
             product_id=product_id,
             source="direct",
-            trigger_kind=TriggerKind.DIRECT,
-            idempotency_key=idem,
+            kind=TriggerKind.DIRECT,
+            idem=idem,
             payload=event.payload,
             trace_id=trace_id,
             received_at=now,
         )
         try:
-            await record(self._session, row=row)
+            await self._idempotency.record(row)
         except IntegrityError:
             await self._session.rollback()
             return WebhookOutcome(event=event, duplicate=True)

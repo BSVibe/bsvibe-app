@@ -22,7 +22,6 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 
 import structlog
-from sqlalchemy import exists, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm.attributes import flag_modified
 
@@ -35,6 +34,10 @@ from backend.workflow.application.stages.intake import (
     receive,
 )
 from backend.workflow.infrastructure.intake.db import RequestRow, RequestStatus, TriggerEventRow
+from backend.workflow.infrastructure.repositories import (
+    SqlAlchemyIdempotencyRepository,
+    SqlAlchemyRequestRepository,
+)
 
 logger = structlog.get_logger(__name__)
 
@@ -122,7 +125,8 @@ class IntakeWorker(BaseWorker):
                 # the direct path resolving the founder's selected product).
                 # The Request row carries it forward so AgentRunner can mint
                 # the ExecutionRun with the same binding — no more NULL run.
-                session.add(
+                request_repo = SqlAlchemyRequestRepository(session)
+                await request_repo.add(
                     RequestRow(
                         id=uuid.uuid4(),
                         workspace_id=trig.workspace_id,
@@ -167,15 +171,8 @@ class IntakeWorker(BaseWorker):
         Postgres/SQLite test tiers, and an extra in-process filter is cheap
         for a small batch.
         """
-        already_drained = exists().where(RequestRow.trigger_event_id == TriggerEventRow.id)
-        stmt = (
-            select(TriggerEventRow)
-            .where(~already_drained)
-            .order_by(TriggerEventRow.received_at.asc())
-            .limit(self._cfg.batch_size)
-            .with_for_update(skip_locked=True)
-        )
-        rows = (await session.execute(stmt)).scalars().all()
+        repo = SqlAlchemyIdempotencyRepository(session)
+        rows = await repo.list_undrained(limit=self._cfg.batch_size)
         for r in rows:
             if (r.payload or {}).get(RECEIVE_FILTERED_KEY) is not None:
                 continue
