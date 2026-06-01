@@ -36,7 +36,10 @@ from backend.api.deps import (
     get_workspace_id,
 )
 from backend.identity.db import MembershipRow, UserRow
-from backend.knowledge.canonicalization.db import CanonicalAnchor
+from backend.knowledge.domain.repositories import CanonicalAnchorRepository
+from backend.knowledge.infrastructure.repositories import (
+    SqlAlchemyCanonicalAnchorRepository,
+)
 from backend.workflow.domain.repositories import RequestRepository
 from backend.workflow.infrastructure.db import (
     Decision,
@@ -217,15 +220,8 @@ async def _build_export(
     )
     request_repo: RequestRepository = SqlAlchemyRequestRepository(session)
     requests = await request_repo.list_by_workspace(ws_id)
-    canon = (
-        (
-            await session.execute(
-                select(CanonicalAnchor).where(CanonicalAnchor.workspace_id == ws_id)
-            )
-        )
-        .scalars()
-        .all()
-    )
+    anchor_repo: CanonicalAnchorRepository = SqlAlchemyCanonicalAnchorRepository(session)
+    canon = await anchor_repo.list_by_workspace(ws_id)
 
     return {
         "exported_at": datetime.now(UTC).isoformat(),

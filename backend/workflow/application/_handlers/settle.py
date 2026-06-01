@@ -11,15 +11,15 @@ today; the settle drain lives in
 intact and wires the handlers as scaffolding — the driver returns the
 next coarse state; the existing services continue to do the work.
 
-``SettleCompleteHandler`` is filled in Lift H3d — it references the
-:class:`backend.knowledge.infrastructure.workers.settle_worker.SettleWorker`
-delegation target (Knowledge context). The
-:class:`~backend.knowledge.facade.Knowledge` facade Protocol declares
-the ``settle`` surface this handler will route through once Lift I
-wires the facade to a concrete; H3d bypasses the Protocol in favor of
-the direct SettleWorker reference, matching the prompt's "import the
-actual settle function rather than going through the Protocol"
-guidance.
+``SettleCompleteHandler`` is filled in Lift H3d and wired to the
+:class:`~backend.knowledge.facade.Knowledge` facade Protocol surface
+in Lift I-Repo-Knowledge. The handler now references the facade
+Protocol's ``settle`` method as the documented delegation target; the
+existing :class:`~backend.knowledge.infrastructure.workers.settle_worker.SettleWorker`
+polling loop continues to execute the drain on a polling cadence, and
+the facade's concrete (:class:`~backend.knowledge.application.knowledge.SqlAlchemyKnowledge`)
+routes the per-call settle through the same drain implementation, so
+no behavior changes — only the coupling does.
 """
 
 from __future__ import annotations
@@ -61,16 +61,15 @@ class ShipHandler:
 class SettleCompleteHandler:
     """``shipped → settled`` via ``settle_complete``.
 
-    H3d wiring — the delegation target is the Knowledge context's
-    settle drain, implemented by
-    :class:`backend.knowledge.infrastructure.workers.settle_worker.SettleWorker`.
-    The Knowledge facade Protocol (Lift A —
-    :class:`backend.knowledge.facade.Knowledge`) declares the
-    ``settle(*, workspace_id, region) -> int`` surface this handler
-    will route through once the facade is wired to a concrete in Lift I.
-    Until then we reference the SettleWorker directly — the existing
-    caller (the worker's own polling loop) continues to execute the
-    drain; this handler just advances the coarse state for future
+    Lift I-Repo-Knowledge wiring — the delegation target is the
+    :class:`~backend.knowledge.facade.Knowledge` facade Protocol's
+    ``settle(*, workspace_id, region) -> int`` surface. The concrete
+    (:class:`~backend.knowledge.application.knowledge.SqlAlchemyKnowledge`)
+    forwards the call through to
+    :meth:`backend.knowledge.infrastructure.workers.settle_worker.SettleWorker.drain_once`
+    so behavior is unchanged from the H3d direct reference — only the
+    coupling. The existing worker polling loop is still the canonical
+    drain cadence; this handler advances the coarse state for
     driver-driven callers.
     """
 
@@ -83,19 +82,17 @@ class SettleCompleteHandler:
     ) -> WorkflowState:
         # Delegation target — lazy import keeps the handler thin and
         # avoids the knowledge subsystem being imported at workflow
-        # module-import time. SettleWorker.drain_once is the concrete
-        # impl today; Lift I wires the Knowledge facade Protocol to it
-        # so callers can depend on the interface, not the concrete.
-        from backend.knowledge.infrastructure.workers.settle_worker import (  # noqa: PLC0415
-            SettleWorker,
-        )
+        # module-import time. Importing the facade Protocol (not the
+        # concrete) is the v8 §5.2 invariant: workflow code depends on
+        # the Knowledge interface, not the SettleWorker class.
+        from backend.knowledge.facade import Knowledge  # noqa: PLC0415
 
         logger.debug(
             "settle_complete_handler",
             run_id=str(getattr(run, "id", None)),
             from_state=current_state.value,
             workflow_event=event.value,
-            delegation_target=SettleWorker.__qualname__,
+            delegation_target=Knowledge.__qualname__,
         )
         return WorkflowState.settled
 
