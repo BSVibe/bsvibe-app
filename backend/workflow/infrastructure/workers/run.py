@@ -178,18 +178,20 @@ async def _list_active_workspace_accounts(
 ) -> list[ModelAccount]:
     """All ``is_active`` ModelAccounts for ``workspace_id`` (across accounts).
 
-    The :class:`ModelAccountRepository` scopes by ``(workspace_id, account_id)``
-    — too narrow here: a run carries only ``workspace_id``, so resolution must
-    look across every account in the workspace."""
-    stmt = (
-        select(ModelAccount)
-        .where(
-            ModelAccount.workspace_id == workspace_id,
-            ModelAccount.is_active.is_(True),
-        )
-        .order_by(ModelAccount.created_at.asc())
+    Lift I-Repo-Router — delegates to
+    :meth:`ModelAccountRepository.list_active_for_workspace` so the run
+    resolver depends on the Protocol seam, not on a raw
+    raw SQLAlchemy query. The wrapper is kept (rather than inlining the
+    Repository at every call-site) because several call-sites in this file
+    share the same workspace-scoped fetch + the integer-len fallback logic
+    around it."""
+    from backend.router.infrastructure.repositories import (  # noqa: PLC0415 — avoid import cycle
+        SqlAlchemyModelAccountRepository,
     )
-    return list((await session.execute(stmt)).scalars().all())
+
+    repo = SqlAlchemyModelAccountRepository(session)
+    rows = await repo.list_active_for_workspace(workspace_id=workspace_id)
+    return list(rows)
 
 
 def _single_native_account(accounts: list[ModelAccount]) -> ModelAccount | None:

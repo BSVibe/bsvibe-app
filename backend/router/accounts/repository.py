@@ -1,63 +1,41 @@
-"""ModelAccount repository — SQL CRUD scoped to (workspace_id, account_id)."""
+"""Back-compat shim — the canonical ModelAccount Repository now lives at
+:mod:`backend.router.infrastructure.repositories.model_account_repository_sql`
+(Lift I-Repo-Router).
+
+The legacy ``ModelAccountRepository`` symbol is preserved as a sub-class of
+the new ``SqlAlchemyModelAccountRepository`` so the existing callers
+(:class:`backend.router.accounts.service.ModelAccountService` and the
+executor worker register/revoke path in :mod:`backend.executors.service`)
+keep working without a one-shot rename ripple. The legacy class exposed
+``list_(...)`` instead of the cleaner :meth:`list_for_account`; the alias
+below keeps the method available.
+
+New code should import the Protocol from
+:mod:`backend.router.domain.repositories` and the SQL impl from
+:mod:`backend.router.infrastructure.repositories`. This shim exists so
+the lift's diff stays narrow.
+"""
 
 from __future__ import annotations
 
-import uuid
 from collections.abc import Sequence
-from typing import Any
+from typing import TYPE_CHECKING
 
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
+from backend.router.infrastructure.repositories.model_account_repository_sql import (
+    SqlAlchemyModelAccountRepository,
+)
 
-from backend.router.accounts.models import ModelAccount
-from backend.router.dispatch.strategies import EXECUTOR_PROVIDER
+if TYPE_CHECKING:
+    import uuid
+
+    from backend.router.accounts.models import ModelAccount
 
 
-class ModelAccountRepository:
-    def __init__(self, session: AsyncSession) -> None:
-        self._session = session
+class ModelAccountRepository(SqlAlchemyModelAccountRepository):
+    """Legacy alias — keeps the pre-Lift-I name available for in-tree callers.
 
-    async def create(
-        self,
-        *,
-        workspace_id: uuid.UUID,
-        account_id: uuid.UUID,
-        provider: str,
-        label: str,
-        litellm_model: str,
-        api_base: str | None,
-        api_key_encrypted: str | None,
-        data_jurisdiction: str,
-        extra_params: dict[str, Any],
-    ) -> ModelAccount:
-        row = ModelAccount(
-            workspace_id=workspace_id,
-            account_id=account_id,
-            provider=provider,
-            label=label,
-            litellm_model=litellm_model,
-            api_base=api_base,
-            api_key_encrypted=api_key_encrypted,
-            data_jurisdiction=data_jurisdiction,
-            extra_params=extra_params,
-        )
-        self._session.add(row)
-        await self._session.flush()
-        return row
-
-    async def get(
-        self,
-        *,
-        workspace_id: uuid.UUID,
-        account_id: uuid.UUID,
-        model_account_id: uuid.UUID,
-    ) -> ModelAccount | None:
-        stmt = select(ModelAccount).where(
-            ModelAccount.id == model_account_id,
-            ModelAccount.workspace_id == workspace_id,
-            ModelAccount.account_id == account_id,
-        )
-        return (await self._session.execute(stmt)).scalar_one_or_none()
+    Adds a thin ``list_`` alias around the renamed :meth:`list_for_account`
+    so the legacy method name (which is the same query) keeps working."""
 
     async def list_(
         self,
@@ -66,63 +44,11 @@ class ModelAccountRepository:
         account_id: uuid.UUID,
         only_active: bool = False,
     ) -> Sequence[ModelAccount]:
-        """List the api-llm ModelAccounts for ``(workspace_id, account_id)``.
-
-        Executor-pool accounts (``provider='executor'``, Lift 5a) are EXCLUDED
-        here — they are routable model rows but the founder-facing api-llm
-        Models surface shows them separately (workers in the PWA). They remain
-        reachable by id via :meth:`get` (Lift 5b resolution) and by worker via
-        :meth:`list_executor_accounts_for_worker`.
-        """
-        stmt = select(ModelAccount).where(
-            ModelAccount.workspace_id == workspace_id,
-            ModelAccount.account_id == account_id,
-            ModelAccount.provider != EXECUTOR_PROVIDER,
-        )
-        if only_active:
-            stmt = stmt.where(ModelAccount.is_active.is_(True))
-        stmt = stmt.order_by(ModelAccount.created_at.asc())
-        return (await self._session.execute(stmt)).scalars().all()
-
-    async def list_executor_accounts_for_worker(
-        self, *, workspace_id: uuid.UUID, worker_id: uuid.UUID
-    ) -> Sequence[ModelAccount]:
-        """Return the workspace's executor ModelAccounts bound to ``worker_id``.
-
-        Matches on the ``extra_params.worker_id`` tag the executor upsert
-        writes. Used by ``revoke_worker`` to remove a worker's routable models.
-        Filtering on the JSON tag in Python keeps it portable across the
-        SQLite test tier and Postgres (JSON vs JSONB operator differences).
-        """
-        stmt = select(ModelAccount).where(
-            ModelAccount.workspace_id == workspace_id,
-            ModelAccount.provider == EXECUTOR_PROVIDER,
-        )
-        rows = (await self._session.execute(stmt)).scalars().all()
-        target = str(worker_id)
-        return [r for r in rows if r.extra_params.get("worker_id") == target]
-
-    async def delete(
-        self,
-        *,
-        workspace_id: uuid.UUID,
-        account_id: uuid.UUID,
-        model_account_id: uuid.UUID,
-    ) -> bool:
-        row = await self.get(
+        return await self.list_for_account(
             workspace_id=workspace_id,
             account_id=account_id,
-            model_account_id=model_account_id,
+            only_active=only_active,
         )
-        if row is None:
-            return False
-        await self._session.delete(row)
-        await self._session.flush()
-        return True
 
-    async def update(self, row: ModelAccount, **fields: Any) -> ModelAccount:
-        for k, v in fields.items():
-            if v is not None:
-                setattr(row, k, v)
-        await self._session.flush()
-        return row
+
+__all__ = ["ModelAccountRepository"]

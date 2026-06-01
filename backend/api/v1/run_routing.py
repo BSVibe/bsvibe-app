@@ -20,11 +20,12 @@ from typing import Annotated, Any
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field, field_validator
-from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.api.deps import get_db_session, get_workspace_id
+from backend.api.v1._router_deps import get_run_routing_rule_repository
+from backend.router.domain.repositories import RunRoutingRuleRepository
 from backend.router.routing.run_routing.db import RunRoutingRuleRow
 from backend.router.routing.run_routing.engine import ALLOWED_FIELDS, VALID_OPERATORS
 
@@ -101,19 +102,9 @@ def _to_response(row: RunRoutingRuleRow) -> RunRuleResponse:
 @router.get("")
 async def list_run_rules(
     workspace_id: Annotated[uuid.UUID, Depends(get_workspace_id)],
-    session: Annotated[AsyncSession, Depends(get_db_session)],
+    rules: Annotated[RunRoutingRuleRepository, Depends(get_run_routing_rule_repository)],
 ) -> list[RunRuleResponse]:
-    rows = (
-        (
-            await session.execute(
-                select(RunRoutingRuleRow)
-                .where(RunRoutingRuleRow.workspace_id == workspace_id)
-                .order_by(RunRoutingRuleRow.priority.asc())
-            )
-        )
-        .scalars()
-        .all()
-    )
+    rows = await rules.list_by_workspace(workspace_id=workspace_id)
     return [_to_response(r) for r in rows]
 
 
@@ -121,6 +112,7 @@ async def list_run_rules(
 async def create_run_rule(
     payload: RunRuleCreate,
     workspace_id: Annotated[uuid.UUID, Depends(get_workspace_id)],
+    rules: Annotated[RunRoutingRuleRepository, Depends(get_run_routing_rule_repository)],
     session: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> RunRuleResponse:
     row = RunRoutingRuleRow(
@@ -133,8 +125,8 @@ async def create_run_rule(
         conditions=[c.model_dump() for c in payload.conditions],
         is_active=payload.is_active,
     )
-    session.add(row)
     try:
+        await rules.add(row)
         await session.commit()
     except IntegrityError:
         await session.rollback()
@@ -150,12 +142,13 @@ async def create_run_rule(
 async def delete_run_rule(
     rule_id: uuid.UUID,
     workspace_id: Annotated[uuid.UUID, Depends(get_workspace_id)],
+    rules: Annotated[RunRoutingRuleRepository, Depends(get_run_routing_rule_repository)],
     session: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> None:
-    row = await session.get(RunRoutingRuleRow, rule_id)
-    if row is None or row.workspace_id != workspace_id:
+    row = await rules.get(workspace_id=workspace_id, rule_id=rule_id)
+    if row is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail=f"rule {rule_id} not found"
         )
-    await session.delete(row)
+    await rules.delete(row)
     await session.commit()
