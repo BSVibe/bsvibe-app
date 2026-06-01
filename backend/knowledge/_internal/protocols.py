@@ -1,3 +1,5 @@
+# bsvibe:stable-internal — modifications require a design doc update.
+# Owners: knowledge/_internal
 """Cross-module Protocols used by knowledge sub-packages.
 
 ``RunnerLike`` and ``ContextBuilderLike`` are forward-declared with ``Any`` for

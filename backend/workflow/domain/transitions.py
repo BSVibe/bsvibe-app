@@ -1,3 +1,5 @@
+# bsvibe:stable-internal — modifications require a design doc update.
+# Owners: workflow/domain
 """v8 §7.3 — ``(WorkflowState, WorkflowEvent) → TransitionEntry`` matrix.
 
 The matrix is the *data*. The handler classes referenced by

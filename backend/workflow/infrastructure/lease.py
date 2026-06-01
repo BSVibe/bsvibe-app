@@ -1,3 +1,5 @@
+# bsvibe:stable-internal — modifications require a design doc update.
+# Owners: workflow/infrastructure
 """Lift J — per-workspace advisory leases for worker-scope mutexes.
 
 Companion to :mod:`backend.workflow.infrastructure.advisory_lock` (which

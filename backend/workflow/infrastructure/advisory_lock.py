@@ -1,3 +1,5 @@
+# bsvibe:stable-internal — modifications require a design doc update.
+# Owners: workflow/infrastructure
 """S3-1 — Postgres advisory locks for cross-instance run dispatch coordination.
 
 When BSNexus runs as multiple uvicorn instances (autoscale, blue/green

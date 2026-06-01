@@ -1,5 +1,16 @@
 """Router context — unified module (Lift A facade + Lift B gateway/accounts merge).
 
+Contract (Lift N-Coverage pattern #8):
+
+* **Owns** model accounts, budget policy, request classification, and the
+  LLM dispatch path — i.e. every decision that turns a ``LlmRequest`` into
+  a routed ``LlmResult``.
+* **Facade**: ``backend.router.facade.Router`` Protocol with a single
+  ``invoke(request: LlmRequest) -> LlmResult`` method (v8 §5.1).
+* **Not exposed**: dispatch internals, classifier scoring tables, budget
+  ledger rows, and per-provider LLM wire formats are private — callers
+  depend on the ``Router`` facade only.
+
 Lift A introduced the public facade Protocol (``Router``) plus the
 ``LlmRequest`` / ``LlmResult`` / ``LlmRoutingHints`` dataclasses — the surface
 callers will depend on once the dispatch path is rewired.

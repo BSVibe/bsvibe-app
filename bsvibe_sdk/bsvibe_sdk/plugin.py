@@ -1,3 +1,5 @@
+# bsvibe:stable-internal — modifications require a design doc update.
+# Owners: bsvibe_sdk
 """Plugin Protocol, capability records, validation, and the ``plugin(...)`` builder.
 
 Lift R2b unification: this module is the canonical home of the
