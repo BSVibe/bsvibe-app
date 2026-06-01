@@ -227,9 +227,9 @@ async def resolve_route(session: AsyncSession, run: ExecutionRun) -> ModelAccoun
     The chosen tier + resolved target are recorded as an ``ExecutionRunActivity``
     (``activity_type="routing_decision"``) so routing is glass-box.
     """
-    from sqlalchemy import select  # noqa: PLC0415
-
-    from backend.router.routing.run_routing.db import RunRoutingRuleRow  # noqa: PLC0415
+    from backend.router.infrastructure.repositories import (  # noqa: PLC0415
+        SqlAlchemyRunRoutingRuleRepository,
+    )
     from backend.router.routing.run_routing.multi_account import (  # noqa: PLC0415
         select_within_class,
     )
@@ -244,15 +244,8 @@ async def resolve_route(session: AsyncSession, run: ExecutionRun) -> ModelAccoun
     )
 
     ctx = RoutingContext.from_run(run)
-    rules = list(
-        (
-            await session.execute(
-                select(RunRoutingRuleRow).where(RunRoutingRuleRow.workspace_id == run.workspace_id)
-            )
-        )
-        .scalars()
-        .all()
-    )
+    rules_repo = SqlAlchemyRunRoutingRuleRepository(session)
+    rules = await rules_repo.list_by_workspace(workspace_id=run.workspace_id)
 
     # (1) Explicit founder rules win when one matches an active account.
     if rules:

@@ -26,9 +26,10 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import structlog
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.router.domain.repositories import RunRoutingRuleRepository
+from backend.router.infrastructure.repositories import SqlAlchemyRunRoutingRuleRepository
 from backend.workflow.application.agent_loop import LoopResult, RunCompute
 from backend.workflow.domain.repositories import DeliverableRepository, RunRepository
 from backend.workflow.infrastructure.db import (
@@ -54,6 +55,7 @@ class AgentRunner:
         *,
         run_repository: RunRepository | None = None,
         deliverable_repository: DeliverableRepository | None = None,
+        run_routing_rule_repository: RunRoutingRuleRepository | None = None,
     ) -> None:
         self._session = session
         # Repository constructed from the session by default — the Lift
@@ -64,6 +66,13 @@ class AgentRunner:
         # Deliverable(s) via this Repository instead of a raw select().
         self._deliverables: DeliverableRepository = (
             deliverable_repository or SqlAlchemyDeliverableRepository(session)
+        )
+        # Lift I-Repo-Router — the design→impl handoff gate consults the
+        # Router context's rule set via Protocol instead of issuing a raw
+        # SQLAlchemy query. Workflow → Router cross-context dependency
+        # travels through the Protocol seam.
+        self._run_routing_rules: RunRoutingRuleRepository = (
+            run_routing_rule_repository or SqlAlchemyRunRoutingRuleRepository(session)
         )
 
     async def open_run(self, *, request: RequestRow) -> uuid.UUID:
@@ -388,16 +397,7 @@ class AgentRunner:
     async def _workspace_has_routing_rules(self, workspace_id: uuid.UUID) -> bool:
         """True when the workspace has any run-routing rule (it has opted into
         the rule-routed execution model — the gate for design→impl chaining)."""
-        from backend.router.routing.run_routing.db import RunRoutingRuleRow  # noqa: PLC0415
-
-        row = (
-            await self._session.execute(
-                select(RunRoutingRuleRow.id)
-                .where(RunRoutingRuleRow.workspace_id == workspace_id)
-                .limit(1)
-            )
-        ).first()
-        return row is not None
+        return await self._run_routing_rules.has_any(workspace_id=workspace_id)
 
     async def _design_artifact_refs(self, design_run_id: uuid.UUID) -> list[str]:
         """The artifact_refs the design run's deliverable(s) produced — the
