@@ -1,3 +1,5 @@
+# bsvibe:stable-internal — modifications require a design doc update.
+# Owners: workflow/domain/repositories
 """DeliverableRepository Protocol — read/write seam for the Deliverable aggregate.
 
 v8 D44/D45. The Deliverable aggregate is the produced artifact tied to a run

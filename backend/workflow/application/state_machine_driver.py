@@ -1,3 +1,5 @@
+# bsvibe:stable-internal — modifications require a design doc update.
+# Owners: workflow/application
 """State machine driver — v8 §7.3 (matrix) + Lift H2c (handlers).
 
 The driver is the single entry point for applying a

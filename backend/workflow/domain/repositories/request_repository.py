@@ -1,3 +1,5 @@
+# bsvibe:stable-internal — modifications require a design doc update.
+# Owners: workflow/domain/repositories
 """RequestRepository Protocol — read/write seam for the Request aggregate.
 
 v8 D44/D45. The :class:`Request` (workflow §1's unit of work) lives in

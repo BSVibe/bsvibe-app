@@ -1,3 +1,5 @@
+# bsvibe:stable-internal — modifications require a design doc update.
+# Owners: workflow/domain/repositories
 """DecisionRepository Protocol — read/write seam for the Decision aggregate.
 
 v8 D44/D45. The Decision aggregate is the founder's re-entry point for a

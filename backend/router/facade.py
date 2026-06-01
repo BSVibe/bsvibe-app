@@ -1,3 +1,5 @@
+# bsvibe:stable-internal — modifications require a design doc update.
+# Owners: router/facade
 """Router context — facade Protocol (Lift A).
 
 This module defines the public surface of the future Router context. No callers

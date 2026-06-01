@@ -1,5 +1,17 @@
 """BSVibe Extensions context — Lift G.
 
+Contract (Lift N-Coverage pattern #8):
+
+* **Owns** the BSVibe extensibility surface — the capability decorator
+  framework, the Markdown-manifest skill engine, the EventBus +
+  ActionDispatchInterceptor seams in ``domain/protocols.py``, and the
+  concrete extension implementations under ``implementations/``.
+* **Facade**: ``backend.extensions.domain.protocols`` — the published
+  Protocol surface (Lift G).
+* **Not exposed**: per-implementation internals (audit/github/slack/...
+  modules under ``implementations/``) are private — callers depend on
+  the protocol surface and the loader / decorator engines.
+
 Merges the former ``backend/plugins/`` capability decorator framework and
 ``backend/skills/`` skill-manifest engine into a single bounded context,
 plus relocates ``backend/supervisor/audit/`` underneath as the first

@@ -1,3 +1,5 @@
+# bsvibe:stable-internal — modifications require a design doc update.
+# Owners: extensions/domain
 """Extension Protocols — Lift G publication surface, Lift S SDK re-export.
 
 Design source: ``~/Docs/BSVibe_Class_Architecture_Design_2026-05-30.md``

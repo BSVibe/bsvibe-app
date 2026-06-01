@@ -1,3 +1,5 @@
+# bsvibe:stable-internal — modifications require a design doc update.
+# Owners: workflow/domain/repositories
 """Repository Protocols — application-layer seam onto Workflow persistence.
 
 v8 §22 #11 + D44/D45. The application layer depends on the Protocols here,

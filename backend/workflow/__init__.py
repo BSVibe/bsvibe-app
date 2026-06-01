@@ -1,5 +1,17 @@
 """Workflow bounded context — v8 §7.
 
+Contract (Lift N-Coverage pattern #8):
+
+* **Owns** every Request from intake through delivery — the v8 state
+  machine, advisory-lock + lease serialization, agent loop execution,
+  verification, safe-mode queueing, and deliverable emission.
+* **Facade**: ``backend.workflow.application`` is the public surface
+  (D36 invariant); ``state_machine_driver`` + the stage services are
+  the entry seams.
+* **Not exposed**: ``domain/`` enums + transitions and ``infrastructure/``
+  adapters (advisory lock, lease, repositories, workers) are private —
+  only ``application/__init__.py`` exports are public.
+
 The single bounded context that owns a Request's lifecycle from
 ``Receive`` through ``Deliver``. Built in 3 layers:
 

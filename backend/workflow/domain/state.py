@@ -1,3 +1,5 @@
+# bsvibe:stable-internal — modifications require a design doc update.
+# Owners: workflow/domain
 """v8 §7.2 — coarse top-level ``WorkflowState`` + ``WorkflowEvent`` enums.
 
 The Workflow context's externally visible stage is a **projection** over

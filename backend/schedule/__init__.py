@@ -1,5 +1,17 @@
 """Schedule — the 5th bounded context (v8 §3.5 / D30).
 
+Contract (Lift N-Coverage pattern #8):
+
+* **Owns** *when* the system fires periodic work — the wake-up
+  substrate seam, cron-algebra seam, and the emitter that turns a fire
+  time into a Workflow-side ``TriggerEvent``.
+* **Facade**: published Protocols in ``backend.schedule.domain``
+  (``ScheduleRunnerProtocol``, ``ScheduleAdvancer``) — v1 ships in-process
+  implementations.
+* **Not exposed**: infrastructure (DB-polling runner row +
+  ``ScheduleWorker``) is private — callers depend on the domain
+  Protocols, not the v1 polling implementation.
+
 Per v8's 6-context model (Router · Knowledge · Workflow · Identity ·
 **Schedule** · Extensions), the Schedule context owns *when* the system
 fires periodic work and the seam by which a wake-up substrate is plugged

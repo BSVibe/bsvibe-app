@@ -1,3 +1,5 @@
+# bsvibe:stable-internal — modifications require a design doc update.
+# Owners: workflow/domain/repositories
 """RunRepository Protocol — read/write seam for the ExecutionRun aggregate.
 
 v8 D44/D45. Application-layer code (REST handlers, AgentRunner, workers)
