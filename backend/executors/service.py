@@ -13,6 +13,14 @@ Only SHA-256 hashes are persisted; plaintext is returned once and never stored.
 The session is owned by the caller (router / test) — these functions ``add``/
 ``delete`` and ``flush`` but never ``commit``, so the caller controls the
 transaction boundary.
+
+Lift M2 (v8 §20.3 Pattern B audit, 2026-06-02) — **already module-level
+function decomposition (Pattern E), skipped.** No class bundles validator
++ state-advance + persistence. Token-hashing primitives (``_hash_token``,
+``_generate_token``) are already module-level helpers. Validation
+(``InvalidInstallToken``) is its own exception. Executor-model-account
+persistence is delegated to ``ModelAccountRepository`` (Lift I-Repo
+seam). Each function has a single, narrow responsibility.
 """
 
 from __future__ import annotations

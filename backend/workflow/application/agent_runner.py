@@ -17,6 +17,18 @@ maps the loop's terminal outcome back onto the run status:
 
 This module owns the *transactional* lifecycle; ``RunOrchestrator`` owns
 the *compute* lifecycle.
+
+Lift M2 (v8 §20.3 Pattern B audit, 2026-06-02) — **legitimate coordinator,
+skipped.** AgentRunner owns one cohesive responsibility: transactional
+ExecutionRun lifecycle (open, transition, post-transition reactions —
+auto-ship at REVIEW_READY for product-bound runs, design→impl handoff
+spawning). Persistence is delegated to ``RunRepository`` /
+``DeliverableRepository`` / ``RunRoutingRuleRepository`` (Lift I-Repo
+seam). The post-transition reactions (``_auto_ship_product_run``,
+``_maybe_spawn_impl_run``) are tightly coupled to the transition that
+triggers them — extracting as policy strategies would force the caller
+to re-derive trigger conditions externally, harming the invariant that
+status transitions atomically advance the run.
 """
 
 from __future__ import annotations

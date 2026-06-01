@@ -4,6 +4,15 @@ Reuses ``markdown_utils.extract_frontmatter`` / ``extract_title`` /
 ``body_after_frontmatter`` and ``note.build_frontmatter`` (per Class_Diagram §10).
 Handles ISO 8601 datetime serialization (Handoff §2) and frontmatter shape
 discipline (Handoff §0.2 — path/frontmatter have different jobs).
+
+Lift M2 (v8 §20.3 Pattern B audit, 2026-06-02) — **NOT a Pattern B
+violation, skipped.** This is a typed-storage Repository facade: pure
+read/write per record kind (concept / action / proposal / decision /
+policy / garden / tombstone). No state-advance, no validation beyond
+frontmatter shape parsing. Module-level helpers (``_iso``, ``_parse_iso``,
+``_drop_nones``, ``_serialize_record``) already extracted. Path-derived
+kind classifiers (``_*_kind_from_path``) are tightly coupled to read
+parsers and stay with the Repository.
 """
 
 from __future__ import annotations
