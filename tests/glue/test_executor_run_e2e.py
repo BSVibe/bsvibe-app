@@ -707,16 +707,22 @@ async def test_non_executor_account_builds_native_orchestrator(
     from backend.config import get_settings as _get_settings
     from backend.router.llm_client import LlmClient
     from backend.workflow.application.agent_loop import RunOrchestrator
-    from backend.workflow.infrastructure.workers import run as run_module
+    from backend.workflow.application.runtime import dispatcher as runtime_dispatcher
+    from backend.workflow.infrastructure.workers import (
+        run as run_module,  # noqa: F401 — legacy alias
+    )
 
     # The native path eagerly builds the credential cipher (to decrypt the
     # account's api key) — provide a test KMS key so it constructs. It also
     # builds ``LlmClient()`` which lazily imports litellm (not a declared dep);
     # patch it to a no-op client so the smoke test exercises the *branch* (native
     # RunOrchestrator built, not ExecutorOrchestrator) without a real LLM dep.
+    # Lift §17.2a: LlmClient lookup moved to runtime.dispatcher.
     monkeypatch.setenv("BSVIBE_GATEWAY_KMS_KEY_B64", base64.urlsafe_b64encode(b"0" * 32).decode())
     _get_settings.cache_clear()
-    monkeypatch.setattr(run_module, "LlmClient", lambda: LlmClient(completion_fn=lambda **_: None))
+    monkeypatch.setattr(
+        runtime_dispatcher, "LlmClient", lambda: LlmClient(completion_fn=lambda **_: None)
+    )
 
     workspace_id = uuid.uuid4()
     async with sf() as s:
@@ -887,11 +893,17 @@ async def test_factory_wires_retriever_into_native_orchestrator(
     from backend.config import get_settings as _get_settings
     from backend.router.llm_client import LlmClient
     from backend.workflow.application.agent_loop import RunOrchestrator
-    from backend.workflow.infrastructure.workers import run as run_module
+    from backend.workflow.application.runtime import dispatcher as runtime_dispatcher
+    from backend.workflow.infrastructure.workers import (
+        run as run_module,  # noqa: F401 — legacy alias
+    )
 
+    # Lift §17.2a: LlmClient lookup moved to runtime.dispatcher.
     monkeypatch.setenv("BSVIBE_GATEWAY_KMS_KEY_B64", base64.urlsafe_b64encode(b"0" * 32).decode())
     _get_settings.cache_clear()
-    monkeypatch.setattr(run_module, "LlmClient", lambda: LlmClient(completion_fn=lambda **_: None))
+    monkeypatch.setattr(
+        runtime_dispatcher, "LlmClient", lambda: LlmClient(completion_fn=lambda **_: None)
+    )
 
     settings = _vault_root_settings(tmp_path)
     workspace_id = uuid.uuid4()

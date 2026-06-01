@@ -210,7 +210,12 @@ def _patch_scripted_llm(monkeypatch: pytest.MonkeyPatch, script: _ScriptedComple
     """Make ``build_gateway_dispatcher``'s ``LlmClient()`` use the scripted
     completion, leaving the rest of the real deps graph untouched."""
     scripted_client = LlmClient(completion_fn=script)
-    monkeypatch.setattr(runtime, "LlmClient", lambda: scripted_client)
+    # Lift §17.2a: build_gateway_dispatcher moved to
+    # backend.workflow.application.runtime.dispatcher; patch the binding at
+    # its new home where the lookup happens.
+    from backend.workflow.application.runtime import dispatcher as runtime_dispatcher
+
+    monkeypatch.setattr(runtime_dispatcher, "LlmClient", lambda: scripted_client)
 
 
 @pytest_asyncio.fixture

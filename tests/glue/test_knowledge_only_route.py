@@ -104,7 +104,12 @@ class _ScriptedCompletion:
 
 def _patch_scripted_llm(monkeypatch: pytest.MonkeyPatch, script: _ScriptedCompletion) -> None:
     scripted_client = LlmClient(completion_fn=script)
-    monkeypatch.setattr(runtime, "LlmClient", lambda: scripted_client)
+    # Lift §17.2a: build_gateway_dispatcher moved to
+    # backend.workflow.application.runtime.dispatcher; patch the binding at
+    # its new home where the lookup happens.
+    from backend.workflow.application.runtime import dispatcher as runtime_dispatcher
+
+    monkeypatch.setattr(runtime_dispatcher, "LlmClient", lambda: scripted_client)
 
 
 async def _seed_active_account(
