@@ -227,4 +227,10 @@ def test_workspace_compliance_endpoint_uses_new_intake_path() -> None:
 
     src = inspect.getsource(mod)
     assert "from backend.intake.db" not in src
-    assert "backend.workflow.infrastructure.intake.db" in src
+    # Lift I-Repo-Workflow-3 — the workspace-compliance export now lists
+    # Requests via the :class:`RequestRepository` (workflow context
+    # Repository pass), so the direct import of the intake.db
+    # ``RequestRow`` ORM type was removed. The Workflow Repository surface
+    # is the new path; assert it (and its concrete impl) appears instead.
+    assert "backend.workflow.domain.repositories" in src
+    assert "backend.workflow.infrastructure.repositories" in src

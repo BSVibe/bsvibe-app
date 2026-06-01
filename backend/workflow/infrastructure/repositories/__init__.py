@@ -13,6 +13,12 @@ from backend.workflow.infrastructure.repositories.decision_repository_sql import
 from backend.workflow.infrastructure.repositories.deliverable_repository_sql import (
     SqlAlchemyDeliverableRepository,
 )
+from backend.workflow.infrastructure.repositories.idempotency_repository_sql import (
+    SqlAlchemyIdempotencyRepository,
+)
+from backend.workflow.infrastructure.repositories.request_repository_sql import (
+    SqlAlchemyRequestRepository,
+)
 from backend.workflow.infrastructure.repositories.run_repository_sql import SqlAlchemyRunRepository
 from backend.workflow.infrastructure.repositories.safe_mode_queue_repository_sql import (
     SqlAlchemySafeModeQueueRepository,
@@ -21,6 +27,8 @@ from backend.workflow.infrastructure.repositories.safe_mode_queue_repository_sql
 __all__ = [
     "SqlAlchemyDecisionRepository",
     "SqlAlchemyDeliverableRepository",
+    "SqlAlchemyIdempotencyRepository",
+    "SqlAlchemyRequestRepository",
     "SqlAlchemyRunRepository",
     "SqlAlchemySafeModeQueueRepository",
 ]

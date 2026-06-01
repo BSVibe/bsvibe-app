@@ -37,13 +37,14 @@ from backend.api.deps import (
 )
 from backend.identity.db import MembershipRow, UserRow
 from backend.knowledge.canonicalization.db import CanonicalAnchor
+from backend.workflow.domain.repositories import RequestRepository
 from backend.workflow.infrastructure.db import (
     Decision,
     Deliverable,
     ExecutionRun,
     ExecutionRunActivity,
 )
-from backend.workflow.infrastructure.intake.db import RequestRow
+from backend.workflow.infrastructure.repositories import SqlAlchemyRequestRepository
 from backend.workspaces.db import ProductResourceRow, ProductRow, ResourceBindingRow, WorkspaceRow
 
 router = APIRouter()
@@ -214,11 +215,8 @@ async def _build_export(
         .scalars()
         .all()
     )
-    requests = (
-        (await session.execute(select(RequestRow).where(RequestRow.workspace_id == ws_id)))
-        .scalars()
-        .all()
-    )
+    request_repo: RequestRepository = SqlAlchemyRequestRepository(session)
+    requests = await request_repo.list_by_workspace(ws_id)
     canon = (
         (
             await session.execute(

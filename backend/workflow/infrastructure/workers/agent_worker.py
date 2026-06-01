@@ -48,6 +48,7 @@ from backend.workflow.application.agent_runner import AgentRunner
 from backend.workflow.application.stages.frame import FrameConfig, FrameLlm, FrameStage
 from backend.workflow.infrastructure.db import ExecutionRun, RunStatus
 from backend.workflow.infrastructure.intake.db import RequestRow, RequestStatus
+from backend.workflow.infrastructure.repositories import SqlAlchemyRequestRepository
 
 logger = structlog.get_logger(__name__)
 
@@ -207,7 +208,8 @@ class AgentWorker(BaseWorker):
         """Frame the run's Request, fold the hints + intent text into the run
         payload, then drive the agent loop to a terminal outcome."""
         if run.request_id is not None:
-            request = await session.get(RequestRow, run.request_id)
+            request_repo = SqlAlchemyRequestRepository(session)
+            request = await request_repo.get(run.request_id)
             if request is not None:
                 # Per-workspace skill scoping: frame against the loader rooted
                 # at THIS run's ``<skills_root>/<workspace_id>/`` (Workflow §6 #5),
@@ -284,14 +286,8 @@ class AgentWorker(BaseWorker):
 
     async def _claim_batch(self, session: AsyncSession) -> AsyncIterator[RequestRow]:
         """Yield up to ``batch_size`` OPEN requests within ``session``."""
-        stmt = (
-            select(RequestRow)
-            .where(RequestRow.status == RequestStatus.OPEN)
-            .order_by(RequestRow.created_at.asc())
-            .limit(self._cfg.batch_size)
-            .with_for_update(skip_locked=True)
-        )
-        rows = (await session.execute(stmt)).scalars().all()
+        repo = SqlAlchemyRequestRepository(session)
+        rows = await repo.list_open_for_claim(limit=self._cfg.batch_size)
         for r in rows:
             yield r
 

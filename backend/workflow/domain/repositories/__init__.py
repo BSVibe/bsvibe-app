@@ -6,9 +6,11 @@ not on SQLAlchemy directly. Concrete implementations live in
 
 The first per-context Repository extraction (Lift I-Repo-Workflow) shipped
 :class:`RunRepository` + :class:`DecisionRepository`. Lift I-Repo-Workflow-2
-adds :class:`DeliverableRepository` + :class:`SafeModeQueueRepository`.
-Further repositories (Request, Idempotency, VerificationResult, WorkStep)
-are deferred to follow-up sub-lifts.
+adds :class:`DeliverableRepository` + :class:`SafeModeQueueRepository`. Lift
+I-Repo-Workflow-3 closes the Workflow-context Repository pass with
+:class:`RequestRepository` + :class:`IdempotencyRepository`. Further
+repositories (VerificationResult / WorkStep / RunAttempt — execution-detail
+rows) are deferred to a future sub-lift in the Router context.
 
 Pragmatic choice: the Repositories return the existing ORM row types
 (:class:`~backend.workflow.infrastructure.db.ExecutionRun`,
@@ -25,6 +27,10 @@ from backend.workflow.domain.repositories.decision_repository import DecisionRep
 from backend.workflow.domain.repositories.deliverable_repository import (
     DeliverableRepository,
 )
+from backend.workflow.domain.repositories.idempotency_repository import (
+    IdempotencyRepository,
+)
+from backend.workflow.domain.repositories.request_repository import RequestRepository
 from backend.workflow.domain.repositories.run_repository import RunRepository
 from backend.workflow.domain.repositories.safe_mode_queue_repository import (
     SafeModeQueueRepository,
@@ -33,6 +39,8 @@ from backend.workflow.domain.repositories.safe_mode_queue_repository import (
 __all__ = [
     "DecisionRepository",
     "DeliverableRepository",
+    "IdempotencyRepository",
+    "RequestRepository",
     "RunRepository",
     "SafeModeQueueRepository",
 ]
