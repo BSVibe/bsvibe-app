@@ -17,3 +17,8 @@ of the cron parser) and :class:`FixedIntervalScheduleAdvancer` (fixed
 ``timedelta``, for callers that want recurrence without full cron
 semantics yet).
 """
+
+from __future__ import annotations
+
+# Lift N defensive pattern #1 (v8 §22) — namespace-only, no re-exports.
+__all__: list[str] = []

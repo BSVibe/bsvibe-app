@@ -47,6 +47,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import uuid
+from typing import Final
 
 import structlog
 from sqlalchemy import text
@@ -55,13 +56,46 @@ from sqlalchemy.ext.asyncio import AsyncSession
 logger = structlog.get_logger(__name__)
 
 
-# Process-local fallback for non-Postgres dialects (test SQLite).
-# Keyed by run_id (UUID) — the value is the asyncio.Lock instance.
-# We track the holder task so a second acquire from a different task
-# observes ``False`` instead of re-entering the same lock.
-_FALLBACK_LOCKS: dict[uuid.UUID, asyncio.Lock] = {}
-_FALLBACK_HOLDERS: dict[uuid.UUID, asyncio.Task[object] | None] = {}
-_FALLBACK_REGISTRY_LOCK = asyncio.Lock()
+class _FallbackRegistry:
+    """Process-local advisory-lock fallback for non-Postgres dialects.
+
+    Lift N defensive pattern #3 (v8 §22 / D45): replaces three module-level
+    mutable globals (``_FALLBACK_LOCKS`` / ``_FALLBACK_HOLDERS`` /
+    ``_FALLBACK_REGISTRY_LOCK``) with a single ``Final`` instance whose
+    *binding* is immutable; only its internal dicts mutate, behind the
+    registry lock. Used only on SQLite (``aiosqlite``) test backends — the
+    Postgres path uses ``pg_try_advisory_lock`` and never touches these dicts.
+    """
+
+    __slots__ = ("_holders", "_locks", "_registry_lock")
+
+    def __init__(self) -> None:
+        # Keyed by run_id (UUID) — value is the per-run asyncio.Lock instance.
+        self._locks: dict[uuid.UUID, asyncio.Lock] = {}
+        # Track the holder task so a second acquire from a different task
+        # observes ``False`` instead of re-entering the same lock.
+        self._holders: dict[uuid.UUID, asyncio.Task[object] | None] = {}
+        # The registry-level lock that guards check-and-acquire over the dicts.
+        self._registry_lock = asyncio.Lock()
+
+    @property
+    def registry_lock(self) -> asyncio.Lock:
+        return self._registry_lock
+
+    def get_or_create_lock(self, run_id: uuid.UUID) -> asyncio.Lock:
+        return self._locks.setdefault(run_id, asyncio.Lock())
+
+    def get_lock(self, run_id: uuid.UUID) -> asyncio.Lock | None:
+        return self._locks.get(run_id)
+
+    def set_holder(self, run_id: uuid.UUID, task: asyncio.Task[object] | None) -> None:
+        self._holders[run_id] = task
+
+    def drop_holder(self, run_id: uuid.UUID) -> None:
+        self._holders.pop(run_id, None)
+
+
+_FALLBACK: Final[_FallbackRegistry] = _FallbackRegistry()
 
 
 def advisory_key_for_run(run_id: uuid.UUID) -> int:
@@ -104,8 +138,8 @@ async def try_run_dispatch_lock(session: AsyncSession, run_id: uuid.UUID) -> boo
     # Hold the registry lock for the whole check-and-acquire so two
     # concurrent callers can't both see ``locked() == False`` and each
     # acquire the per-run lock in turn.
-    async with _FALLBACK_REGISTRY_LOCK:
-        lock = _FALLBACK_LOCKS.setdefault(run_id, asyncio.Lock())
+    async with _FALLBACK.registry_lock:
+        lock = _FALLBACK.get_or_create_lock(run_id)
         if lock.locked():
             return False
         # asyncio.Lock has no non-blocking try_acquire, but holding the
@@ -117,7 +151,7 @@ async def try_run_dispatch_lock(session: AsyncSession, run_id: uuid.UUID) -> boo
             current = asyncio.current_task()
         except RuntimeError:
             current = None
-        _FALLBACK_HOLDERS[run_id] = current
+        _FALLBACK.set_holder(run_id, current)
         return True
 
 
@@ -143,8 +177,8 @@ async def release_run_dispatch_lock(session: AsyncSession, run_id: uuid.UUID) ->
         return
 
     # In-process fallback.
-    async with _FALLBACK_REGISTRY_LOCK:
-        lock = _FALLBACK_LOCKS.get(run_id)
+    async with _FALLBACK.registry_lock:
+        lock = _FALLBACK.get_lock(run_id)
     if lock is None or not lock.locked():
         return
     try:
@@ -152,4 +186,4 @@ async def release_run_dispatch_lock(session: AsyncSession, run_id: uuid.UUID) ->
     except RuntimeError:
         # Already released — idempotent no-op.
         pass
-    _FALLBACK_HOLDERS.pop(run_id, None)
+    _FALLBACK.drop_holder(run_id)

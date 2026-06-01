@@ -27,6 +27,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import uuid
+from typing import Final
 
 import structlog
 from sqlalchemy import text
@@ -35,11 +36,32 @@ from sqlalchemy.ext.asyncio import AsyncSession
 logger = structlog.get_logger(__name__)
 
 
-# Per-key process-local fallback for non-Postgres (SQLite tests). The
-# registry lock guards the check-and-acquire so two concurrent callers
-# can't both observe ``locked()==False`` and each acquire in turn.
-_FALLBACK_LOCKS: dict[uuid.UUID, asyncio.Lock] = {}
-_FALLBACK_REGISTRY_LOCK = asyncio.Lock()
+class _WorkspaceFallbackRegistry:
+    """Process-local workspace-lease fallback for non-Postgres dialects.
+
+    Lift N defensive pattern #3 (v8 §22 / D45). The registry lock guards
+    the check-and-acquire so two concurrent callers can't both observe
+    ``locked()==False`` and each acquire in turn.
+    """
+
+    __slots__ = ("_locks", "_registry_lock")
+
+    def __init__(self) -> None:
+        self._locks: dict[uuid.UUID, asyncio.Lock] = {}
+        self._registry_lock = asyncio.Lock()
+
+    @property
+    def registry_lock(self) -> asyncio.Lock:
+        return self._registry_lock
+
+    def get_or_create_lock(self, workspace_id: uuid.UUID) -> asyncio.Lock:
+        return self._locks.setdefault(workspace_id, asyncio.Lock())
+
+    def get_lock(self, workspace_id: uuid.UUID) -> asyncio.Lock | None:
+        return self._locks.get(workspace_id)
+
+
+_FALLBACK: Final[_WorkspaceFallbackRegistry] = _WorkspaceFallbackRegistry()
 
 # Domain salt — distinguishes the workspace-lease key space from the
 # run-dispatch key space in :mod:`advisory_lock`. Two leases keyed off
@@ -81,8 +103,8 @@ async def try_workspace_promote_lock(session: AsyncSession, workspace_id: uuid.U
         return acquired
 
     # In-process fallback for SQLite tests.
-    async with _FALLBACK_REGISTRY_LOCK:
-        lock = _FALLBACK_LOCKS.setdefault(workspace_id, asyncio.Lock())
+    async with _FALLBACK.registry_lock:
+        lock = _FALLBACK.get_or_create_lock(workspace_id)
         if lock.locked():
             return False
         # ``asyncio.Lock`` has no non-blocking try_acquire, but holding the
@@ -120,8 +142,8 @@ async def release_workspace_promote_lock(session: AsyncSession, workspace_id: uu
             )
         return
 
-    async with _FALLBACK_REGISTRY_LOCK:
-        lock = _FALLBACK_LOCKS.get(workspace_id)
+    async with _FALLBACK.registry_lock:
+        lock = _FALLBACK.get_lock(workspace_id)
     if lock is None or not lock.locked():
         return
     try:

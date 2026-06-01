@@ -53,6 +53,11 @@ dev = [
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
+[dependency-groups]
+dev = [
+    "import-linter>=2.0",
+]
+
 [tool.hatch.build.targets.wheel]
 packages = ["backend"]
 
@@ -72,3 +77,127 @@ source = ["backend", "plugin"]
 omit = [
     "backend/*/migrations/*",
 ]
+
+# Lift N defensive pattern #2 / #9 (v8 §22 / D45) — import-linter contracts.
+#
+# These contracts pin the architectural invariants that survived through
+# Lift J + Lift L: SDK isolation, common-leaf one-way dependency, plugin
+# allow-list, and the cross-context boundary direction. They run as a
+# **critical** CI gate (test-mode-independent — invariant #10) alongside
+# ruff + mypy in ``.github/workflows/ci.yml``.
+#
+# Tighter contracts (cross-context-only-via-application, no-SQLAlchemy
+# in application/) are deferred to the N-Coverage follow-up — they
+# require call-site refactors that Lift N foundation does not own.
+[tool.importlinter]
+root_packages = ["backend", "bsvibe_sdk", "plugin"]
+include_external_packages = false
+
+[[tool.importlinter.contracts]]
+name = "bsvibe_sdk has zero backend / plugin imports"
+type = "forbidden"
+source_modules = ["bsvibe_sdk"]
+forbidden_modules = ["backend", "plugin"]
+
+[[tool.importlinter.contracts]]
+# Common-leaf modules are pure infrastructure (JWT/RBAC, logging, env
+# config, DB session factory). They may NOT depend on any bounded
+# context — that direction belongs to the contexts themselves. Lift N
+# documents two pre-existing leaks (storage/product_workspace.py and
+# connectors/resolver.py) as ``ignore_imports`` exceptions; cleanup
+# scheduled for the N-Coverage follow-up.
+name = "common leaves do not import bounded contexts"
+type = "forbidden"
+source_modules = [
+    "backend.shared",
+    "backend.data",
+    "backend.auth",
+    "backend.embedding",
+    "backend.notifications",
+    "backend.workers",
+]
+forbidden_modules = [
+    "backend.router",
+    "backend.knowledge",
+    "backend.workflow",
+    "backend.identity",
+    "backend.schedule",
+    "backend.extensions",
+    "backend.executors",
+    "backend.api",
+]
+ignore_imports = [
+    # ``backend.workers`` is a thin entry-point shim — its ``__main__``
+    # and ``relays`` modules deliberately import workflow workers as the
+    # production worker daemon's bootstrap site. The leaf invariant is
+    # held by ``base.py`` / ``db.py`` / ``emit.py`` / ``streams.py``.
+    "backend.workers.__main__ -> backend.shared.core.logging",
+    "backend.workers.__main__ -> backend.workflow.infrastructure.workers.run",
+    "backend.workers.relays -> backend.workflow.infrastructure.workers.relay_worker",
+    "backend.workers.relays -> backend.workflow.infrastructure.workers.run",
+    # Alembic env.py imports every context's SQLAlchemy models so they
+    # register on the shared ``Base.metadata`` for autogenerate. This is
+    # the canonical Alembic pattern — there is no "domain" version of it.
+    "backend.data.migrations.env -> backend.executors.db",
+    "backend.data.migrations.env -> backend.identity.db",
+    "backend.data.migrations.env -> backend.identity.workspaces_db",
+    "backend.data.migrations.env -> backend.knowledge.canonicalization.db",
+    "backend.data.migrations.env -> backend.knowledge.ingest.db",
+    "backend.data.migrations.env -> backend.knowledge.retrieval.db",
+    "backend.data.migrations.env -> backend.router.accounts.account_models",
+    "backend.data.migrations.env -> backend.router.accounts.models",
+    "backend.data.migrations.env -> backend.router.budget.models",
+    "backend.data.migrations.env -> backend.router.routing.db",
+    "backend.data.migrations.env -> backend.router.routing.run_routing.db",
+    "backend.data.migrations.env -> backend.router.rules.db",
+    "backend.data.migrations.env -> backend.schedule.infrastructure.schedule_db",
+    "backend.data.migrations.env -> backend.workflow.infrastructure.db",
+    "backend.data.migrations.env -> backend.workflow.infrastructure.delivery.db",
+    "backend.data.migrations.env -> backend.workflow.infrastructure.intake.db",
+]
+
+[[tool.importlinter.contracts]]
+# Plugins may depend on the SDK + a small allow-list of backend
+# **published** seams (extensions/plugin for SkillContext + capability
+# decorators, workflow.domain for TriggerEvent, extensions.eventbus for
+# pub-sub). They must NOT depend on any other context — that would
+# invert the direction-of-dependency (plugins are leaves, like the SDK).
+#
+# ``plugin.audit`` predates the v8 plugin discipline (it's an in-tree
+# transactional-outbox subscriber, not a connector); its existing
+# back-channels are whitelisted and tracked as the N-Coverage cleanup
+# candidate.
+name = "connector plugins only depend on bsvibe_sdk + published seams"
+type = "forbidden"
+source_modules = [
+    "plugin.discord",
+    "plugin.email_sender",
+    "plugin.github",
+    "plugin.linear",
+    "plugin.notion",
+    "plugin.sentry",
+    "plugin.slack",
+    "plugin.telegram",
+    "plugin.trello",
+]
+forbidden_modules = [
+    "backend.router",
+    "backend.knowledge",
+    "backend.identity",
+    "backend.schedule",
+    "backend.executors",
+    "backend.api",
+    "backend.shared",
+    "backend.data",
+    "backend.auth",
+    "backend.embedding",
+    "backend.notifications",
+    "backend.workers",
+    "backend.storage",
+    "backend.connectors",
+    "backend.workflow.infrastructure",
+    "backend.workflow.application",
+    "backend.extensions.skill",
+    "backend.extensions.eventbus",
+]
+

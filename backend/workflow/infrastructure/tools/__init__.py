@@ -547,3 +547,15 @@ def _read_text_capped(path: Path, cap: int) -> str:
 def _write_text(path: Path, content: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content, encoding="utf-8")
+
+
+__all__ = [
+    "FILE_READ_MAX_BYTES",
+    "FILE_WRITE_MAX_BYTES",
+    "SHELL_DENYLIST_PATTERNS",
+    "SHELL_TIMEOUT_S",
+    "ToolDefinition",
+    "ToolError",
+    "ToolRegistry",
+    "VERIFY_FIRST_REFUSAL",
+]
