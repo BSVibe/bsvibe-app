@@ -33,12 +33,14 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.api.deps import get_current_user_row, get_db_session, get_workspace_id
+from backend.api.v1._workflow_deps import get_decision_repository, get_run_repository
 from backend.api.v1.decisions import _vault_root
 from backend.identity.db import UserRow
 from backend.knowledge.graph.storage import FileSystemStorage
 from backend.knowledge.retrieval.resolved_decisions_retriever import ResolvedDecisionsRetriever
 from backend.workflow.application.agent_runner import AgentRunner
 from backend.workflow.application.audit_events import DecisionResolved
+from backend.workflow.domain.repositories import DecisionRepository, RunRepository
 from backend.workflow.domain.verified_deliverable import settle_run_context
 from backend.workflow.infrastructure.db import (
     Decision,
@@ -261,7 +263,7 @@ def build_decisions_retriever(
 @router.get("")
 async def list_checkpoints(
     workspace_id: Annotated[uuid.UUID, Depends(get_workspace_id)],
-    session: Annotated[AsyncSession, Depends(get_db_session)],
+    decisions: Annotated[DecisionRepository, Depends(get_decision_repository)],
     retriever: Annotated[ResolvedDecisionsRetriever, Depends(build_decisions_retriever)],
 ) -> list[CheckpointResponse]:
     """List PENDING execution Decisions for the workspace, newest first.
@@ -271,15 +273,7 @@ async def list_checkpoints(
     is graceful-empty + never raises, so an empty/corrupt vault degrades to no
     suggestions rather than failing the inbox.
     """
-    stmt = (
-        select(Decision)
-        .where(
-            Decision.workspace_id == workspace_id,
-            Decision.status == DecisionStatus.PENDING,
-        )
-        .order_by(Decision.created_at.desc())
-    )
-    rows = (await session.execute(stmt)).scalars().all()
+    rows = await decisions.list_pending_by_workspace(workspace_id)
     return [
         CheckpointResponse(
             id=row.id,
@@ -299,19 +293,11 @@ async def list_checkpoints(
 @router.get("/resolved")
 async def list_resolved_checkpoints(
     workspace_id: Annotated[uuid.UUID, Depends(get_workspace_id)],
-    session: Annotated[AsyncSession, Depends(get_db_session)],
+    decisions: Annotated[DecisionRepository, Depends(get_decision_repository)],
 ) -> list[ResolvedCheckpointResponse]:
     """List RESOLVED execution Decisions for the Decisions "Resolved" tab,
     most-recently-resolved first (created_at as a stable tiebreaker)."""
-    stmt = (
-        select(Decision)
-        .where(
-            Decision.workspace_id == workspace_id,
-            Decision.status == DecisionStatus.RESOLVED,
-        )
-        .order_by(Decision.resolved_at.desc(), Decision.created_at.desc())
-    )
-    rows = (await session.execute(stmt)).scalars().all()
+    rows = await decisions.list_resolved_by_workspace(workspace_id)
     return [
         ResolvedCheckpointResponse(
             id=row.id,
@@ -331,6 +317,8 @@ async def resolve_checkpoint(
     workspace_id: Annotated[uuid.UUID, Depends(get_workspace_id)],
     user_row: Annotated[UserRow, Depends(get_current_user_row)],
     session: Annotated[AsyncSession, Depends(get_db_session)],
+    decisions: Annotated[DecisionRepository, Depends(get_decision_repository)],
+    runs: Annotated[RunRepository, Depends(get_run_repository)],
 ) -> ResolveResponse:
     """Resolve a pending Decision with the founder's answer and resume the run.
 
@@ -339,7 +327,7 @@ async def resolve_checkpoint(
     ``payload["resolved_decisions"]``, and transition the run RUNNING → OPEN so
     the worker re-picks it (the loop then sees the answer in its messages).
     """
-    decision = await session.get(Decision, checkpoint_id)
+    decision = await decisions.get(checkpoint_id)
     if (
         decision is None
         or decision.workspace_id != workspace_id
@@ -392,7 +380,7 @@ async def resolve_checkpoint(
     decision.resolved_at = now
     decision.resolved_by = user_row.id
 
-    run = await session.get(ExecutionRun, decision.run_id)
+    run = await runs.get(decision.run_id)
     if run is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
