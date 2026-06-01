@@ -4,10 +4,13 @@ Workflow §12.5 #8 (Bundle G — Workers). The orchestrator writes a
 DeliveryEventRow whenever a Deliverable lands in a ``shipped`` state.
 This worker:
 
-1. Polls ``delivery_events`` for unprocessed rows (LEFT JOIN-like check
-   via a paired ``processed_at`` column would be ideal; for Phase 1 we
-   simply delete the row after dispatch — the schema is append-only on
-   the orchestrator side, but the worker treats it as a queue).
+1. Polls ``delivery_events`` for unprocessed rows under a row-level
+   ``SELECT … FOR UPDATE SKIP LOCKED`` claim (Lift J / v8 §11.5) — two
+   server instances drain the SAME queue concurrently and the lock hint
+   guarantees each row is claimed by exactly one worker. The PG lock
+   releases at transaction commit (the same transaction that DELETEs
+   the row). On SQLite the hint is a dialect no-op (the existing
+   single-server tests still pass), but production PG honours it.
 2. Consults the deliverable's workspace Safe Mode (Workflow §10.5). When
    ``workspaces.safe_mode`` is True the delivery is **enqueued** into the
    :class:`backend.workflow.application.safe_mode_queue.SafeModeQueue` (status
@@ -20,6 +23,19 @@ This worker:
    so the test sink + the real PluginRunner share one shape.
 
 DB-polling, not Redis Streams. Same justification as AgentWorker.
+
+Multi-server safety (Lift J / v8 §11.5)
+---------------------------------------
+
+The claim site is :func:`build_delivery_claim_stmt` — a SELECT with
+``FOR UPDATE SKIP LOCKED``. Idempotence is naturally provided by the
+DELETE-on-success at the end of :meth:`DeliveryWorker.drain_once`: an
+event row is either claimed + delivered + deleted (the happy path) or
+left in place for the next tick (any failure path). State-transition
+side effects (Deliverable updates) inside :func:`dispatch_delivery` are
+themselves idempotent against the Deliverable row — re-dispatching the
+same deliverable in a Safe Mode approval flow runs the same code path
+and the per-Deliverable compensation_handle append is safe to repeat.
 """
 
 from __future__ import annotations
@@ -30,7 +46,7 @@ from dataclasses import dataclass
 from typing import Any, Protocol
 
 import structlog
-from sqlalchemy import delete, select
+from sqlalchemy import Select, delete, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from backend.identity.workspaces_db import WorkspaceRow
@@ -238,6 +254,26 @@ async def dispatch_delivery(
     return result
 
 
+def build_delivery_claim_stmt(*, batch_size: int) -> Select[tuple[DeliveryEventRow]]:
+    """Lift J — multi-server safe claim of pending delivery events.
+
+    ``FOR UPDATE SKIP LOCKED`` makes the SELECT atomic w.r.t. a second
+    worker on the same DB: one server's transaction locks its claimed
+    rows, the other server's SELECT skips them and picks the rest. The
+    lock releases when the worker commits the batch's DELETE — exactly
+    one drain pass per row, no double-dispatch.
+
+    Extracted as a builder so the unit test can pin the rendered SQL
+    carries ``FOR UPDATE SKIP LOCKED`` (the load-bearing prod guard).
+    """
+    return (
+        select(DeliveryEventRow)
+        .order_by(DeliveryEventRow.created_at.asc())
+        .limit(batch_size)
+        .with_for_update(skip_locked=True)
+    )
+
+
 @dataclass(slots=True)
 class DeliveryWorkerConfig:
     batch_size: int = 50
@@ -263,13 +299,15 @@ class DeliveryWorker(BaseWorker):
         return await self.drain_once()
 
     async def drain_once(self) -> int:
-        """Pull a batch of pending events + dispatch each. Returns count delivered."""
+        """Pull a batch of pending events + dispatch each. Returns count delivered.
+
+        Lift J — uses :func:`build_delivery_claim_stmt`'s ``FOR UPDATE SKIP
+        LOCKED`` to multi-server safe the claim. The lock releases when the
+        batch DELETE commits; a second worker on the same DB never sees the
+        rows this worker claimed in the meantime.
+        """
         async with self._session_factory() as session:
-            stmt = (
-                select(DeliveryEventRow)
-                .order_by(DeliveryEventRow.created_at.asc())
-                .limit(self._cfg.batch_size)
-            )
+            stmt = build_delivery_claim_stmt(batch_size=self._cfg.batch_size)
             rows = (await session.execute(stmt)).scalars().all()
             if not rows:
                 return 0
@@ -329,6 +367,7 @@ __all__ = [
     "DeliveryWorker",
     "DeliveryWorkerConfig",
     "PluginDispatchAdapter",
+    "build_delivery_claim_stmt",
     "dispatch_delivery",
     "resolve_output_mode_gate",
 ]

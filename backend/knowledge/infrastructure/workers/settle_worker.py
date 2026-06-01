@@ -28,6 +28,20 @@ Design notes
   bound to *that activity's* ``workspace_id`` — the factory roots the vault
   at ``<vault_root>/<region>/<workspace_id>/``, so a settle for workspace A
   can never land in workspace B's vault.
+* **Multi-server safety (Lift J / v8 §11).** Two layers:
+
+  1. **Row-claim** — :func:`build_settle_claim_stmt` selects with
+     ``FOR UPDATE SKIP LOCKED`` so two instances drain disjoint subsets
+     of the un-drained activity rows (SQLite ignores the hint at the
+     dialect level; PG honours it).
+  2. **Per-workspace promote-lease** —
+     :meth:`SettleWorker._promote_affected` wraps each workspace's
+     promote call in
+     :func:`~backend.workflow.infrastructure.lease.try_workspace_promote_lock`
+     so two servers don't run the same workspace's promoter concurrently.
+     The skip is a no-op (the OTHER server is promoting; the promoter is
+     idempotent so the missed call is recovered on the next drain).
+
 * **Promotion closes the §5 ratchet loop.** Depositing the raw observation is
   only the *learning* half. After a drain batch writes garden notes, the
   worker runs a :class:`~backend.knowledge.canonicalization.promotion.GardenObservationPromoter`
@@ -54,13 +68,17 @@ from pathlib import Path, PurePosixPath
 from typing import Protocol
 
 import structlog
-from sqlalchemy import select
+from sqlalchemy import Select, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from backend.identity.workspaces_db import WorkspaceRow
 from backend.workers.base import BaseWorker
 from backend.workers.db import SettleDrainRow
 from backend.workflow.infrastructure.db import ExecutionRunActivity
+from backend.workflow.infrastructure.lease import (
+    release_workspace_promote_lock,
+    try_workspace_promote_lock,
+)
 
 logger = structlog.get_logger(__name__)
 
@@ -794,44 +812,55 @@ class SettleWorker(BaseWorker):
         Per-workspace, idempotent, policy-honoring, and soft-fail: each
         promotion is isolated so one workspace's failure can't stop another's,
         and no promotion error reverts the settlement writes (the SoT).
+
+        Lift J — wraps each per-workspace promote in
+        :func:`~backend.workflow.infrastructure.lease.try_workspace_promote_lock`.
+        Two servers draining settle activities for the same workspace see one
+        acquire + one ``busy`` skip (the skip is a no-op, NOT a failure — the
+        OTHER server is already promoting; idempotent semantics make a single
+        run sufficient). Acquires a fresh session per workspace so the lock
+        scope is tightly bounded; the lock releases on session close even if
+        the explicit ``release`` is skipped due to an unexpected exit.
         """
         if self._promoter_factory is None:
             return
         for workspace_id in sorted(workspace_ids, key=str):
             policy = policies.get(workspace_id, _WorkspacePolicy(self._cfg.default_region, True))
-            try:
-                promoter = self._promoter_factory(
-                    region=policy.region,
-                    workspace_id=workspace_id,
-                    safe_mode=policy.safe_mode,
-                )
-                if promoter is None:
+            async with self._session_factory() as lease_session:
+                acquired = await try_workspace_promote_lock(lease_session, workspace_id)
+                if not acquired:
+                    logger.info(
+                        "settle_worker_promotion_skipped_busy",
+                        workspace_id=str(workspace_id),
+                    )
                     continue
-                await promoter.promote()
-            except Exception:  # noqa: BLE001 — promotion is derived; never break the drain
-                logger.exception(
-                    "settle_worker_promotion_failed",
-                    workspace_id=str(workspace_id),
-                    safe_mode=policy.safe_mode,
-                )
-                continue
-            logger.info(
-                "settle_worker_promotion_complete",
-                workspace_id=str(workspace_id),
-                safe_mode=policy.safe_mode,
-            )
+                try:
+                    promoter = self._promoter_factory(
+                        region=policy.region,
+                        workspace_id=workspace_id,
+                        safe_mode=policy.safe_mode,
+                    )
+                    if promoter is None:
+                        continue
+                    await promoter.promote()
+                except Exception:  # noqa: BLE001 — promotion is derived; never break the drain
+                    logger.exception(
+                        "settle_worker_promotion_failed",
+                        workspace_id=str(workspace_id),
+                        safe_mode=policy.safe_mode,
+                    )
+                    continue
+                else:
+                    logger.info(
+                        "settle_worker_promotion_complete",
+                        workspace_id=str(workspace_id),
+                        safe_mode=policy.safe_mode,
+                    )
+                finally:
+                    await release_workspace_promote_lock(lease_session, workspace_id)
 
     async def _claim_undrained(self, session: AsyncSession) -> list[ExecutionRunActivity]:
-        already_drained = select(SettleDrainRow.activity_id)
-        stmt = (
-            select(ExecutionRunActivity)
-            .where(
-                ExecutionRunActivity.activity_type == SETTLE_ACTIVITY_TYPE,
-                ExecutionRunActivity.id.notin_(already_drained),
-            )
-            .order_by(ExecutionRunActivity.created_at.asc())
-            .limit(self._cfg.batch_size)
-        )
+        stmt = build_settle_claim_stmt(batch_size=self._cfg.batch_size)
         return list((await session.execute(stmt)).scalars().all())
 
     async def _resolve_workspaces(
@@ -853,6 +882,32 @@ class SettleWorker(BaseWorker):
             wid: _WorkspacePolicy(region, bool(safe_mode))
             for wid, region, safe_mode in (await session.execute(stmt)).all()
         }
+
+
+def build_settle_claim_stmt(*, batch_size: int) -> Select[tuple[ExecutionRunActivity]]:
+    """Lift J — multi-server safe claim of un-drained settle activities.
+
+    ``FOR UPDATE SKIP LOCKED`` makes the SELECT atomic w.r.t. a second
+    server: each worker's claim sees a disjoint set of rows. The
+    ``NOT EXISTS`` filter against :class:`SettleDrainRow` is the existing
+    at-least-once idempotence; the lock hint is the layer that prevents
+    two workers from racing into ``sink.absorb`` for the same activity
+    in the gap between SELECT and the per-row marker commit.
+
+    Extracted as a builder so the unit test pins the rendered SQL
+    carries ``FOR UPDATE SKIP LOCKED``.
+    """
+    already_drained = select(SettleDrainRow.activity_id)
+    return (
+        select(ExecutionRunActivity)
+        .where(
+            ExecutionRunActivity.activity_type == SETTLE_ACTIVITY_TYPE,
+            ExecutionRunActivity.id.notin_(already_drained),
+        )
+        .order_by(ExecutionRunActivity.created_at.asc())
+        .limit(batch_size)
+        .with_for_update(skip_locked=True)
+    )
 
 
 def _opt_str(value: object) -> str | None:

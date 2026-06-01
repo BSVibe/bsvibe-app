@@ -10,7 +10,7 @@ from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import select, update
+from sqlalchemy import Select, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from plugin.audit.models import AuditOutboxRecord
@@ -47,15 +47,22 @@ class OutboxStore:
         await session.flush()
         return record
 
-    async def select_undelivered(
-        self,
-        session: AsyncSession,
-        *,
-        batch_size: int,
-        now: datetime | None = None,
-    ) -> Sequence[AuditOutboxRecord]:
+    def build_select_undelivered_stmt(
+        self, *, batch_size: int, now: datetime | None = None
+    ) -> Select[tuple[AuditOutboxRecord]]:
+        """Lift J — multi-server safe claim of un-relayed outbox rows.
+
+        ``FOR UPDATE SKIP LOCKED`` makes the SELECT atomic w.r.t. a
+        second RelayWorker on the same DB: each instance claims a
+        disjoint set of rows and one row is never relayed twice. The
+        lock releases when the worker's ``mark_delivered`` or
+        ``record_failure`` commit closes the transaction.
+
+        Extracted as a builder so the multi-server safety unit test
+        pins the rendered SQL carries ``FOR UPDATE SKIP LOCKED``.
+        """
         cutoff = now or _utcnow()
-        stmt = (
+        return (
             select(AuditOutboxRecord)
             .where(
                 AuditOutboxRecord.delivered_at.is_(None),
@@ -67,7 +74,17 @@ class OutboxStore:
             )
             .order_by(AuditOutboxRecord.id.asc())
             .limit(batch_size)
+            .with_for_update(skip_locked=True)
         )
+
+    async def select_undelivered(
+        self,
+        session: AsyncSession,
+        *,
+        batch_size: int,
+        now: datetime | None = None,
+    ) -> Sequence[AuditOutboxRecord]:
+        stmt = self.build_select_undelivered_stmt(batch_size=batch_size, now=now)
         result = await session.execute(stmt)
         return result.scalars().all()
 
