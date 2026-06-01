@@ -16,12 +16,13 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.api.deps import get_db_session, get_workspace_id
+from backend.api.v1._workflow_deps import get_decision_repository, get_run_repository
+from backend.workflow.domain.repositories import DecisionRepository, RunRepository
 from backend.workflow.domain.verified_deliverable import PARTIAL_DELIVERABLE_KIND
 from backend.workflow.infrastructure.db import (
     Decision,
     DecisionStatus,
     Deliverable,
-    ExecutionRun,
     ExecutionRunActivity,
     RunStatus,
     VerificationOutcome,
@@ -334,19 +335,12 @@ def _build_timeline(
 @router.get("")
 async def list_runs(
     workspace_id: Annotated[uuid.UUID, Depends(get_workspace_id)],
-    session: Annotated[AsyncSession, Depends(get_db_session)],
+    runs: Annotated[RunRepository, Depends(get_run_repository)],
     limit: int = 50,
 ) -> list[RunResponse]:
     """List recent ExecutionRun rows for the workspace, newest first."""
     limit = max(1, min(limit, 200))
-    stmt = (
-        select(ExecutionRun)
-        .where(ExecutionRun.workspace_id == workspace_id)
-        .order_by(ExecutionRun.created_at.desc())
-        .limit(limit)
-    )
-    result = await session.execute(stmt)
-    rows = result.scalars().all()
+    rows = await runs.list_by_workspace(workspace_id, limit=limit)
     return [
         RunResponse(
             id=row.id,
@@ -366,10 +360,10 @@ async def list_runs(
 async def get_run(
     run_id: uuid.UUID,
     workspace_id: Annotated[uuid.UUID, Depends(get_workspace_id)],
-    session: Annotated[AsyncSession, Depends(get_db_session)],
+    runs: Annotated[RunRepository, Depends(get_run_repository)],
 ) -> RunResponse:
     """Fetch one ExecutionRun by id, scoped to the caller's workspace."""
-    row = await session.get(ExecutionRun, run_id)
+    row = await runs.get(run_id)
     if row is None or row.workspace_id != workspace_id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Run {run_id} not found")
     return RunResponse(
@@ -389,6 +383,8 @@ async def get_run_detail(
     run_id: uuid.UUID,
     workspace_id: Annotated[uuid.UUID, Depends(get_workspace_id)],
     session: Annotated[AsyncSession, Depends(get_db_session)],
+    runs: Annotated[RunRepository, Depends(get_run_repository)],
+    decisions: Annotated[DecisionRepository, Depends(get_decision_repository)],
 ) -> RunDetailResponse:
     """The inspectable run-detail surface for one ExecutionRun (Stitch
     "Triggered"), scoped to the caller's workspace.
@@ -400,16 +396,11 @@ async def get_run_detail(
     Report). A cross-workspace / unknown id is 404, never a leak; a run with a
     sparse payload degrades to a calm minimal detail rather than erroring.
     """
-    run = await session.get(ExecutionRun, run_id)
+    run = await runs.get(run_id)
     if run is None or run.workspace_id != workspace_id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Run {run_id} not found")
 
-    decisions_stmt = (
-        select(Decision)
-        .where(Decision.run_id == run_id, Decision.workspace_id == workspace_id)
-        .order_by(Decision.created_at.desc())
-    )
-    decision_rows = (await session.execute(decisions_stmt)).scalars().all()
+    decision_rows = await decisions.list_by_run(run_id, workspace_id)
 
     latest_verification_stmt = (
         select(VerificationResult)

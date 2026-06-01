@@ -30,6 +30,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.workflow.application.agent_loop import LoopResult, RunCompute
+from backend.workflow.domain.repositories import RunRepository
 from backend.workflow.infrastructure.db import (
     Deliverable,
     ExecutionRun,
@@ -37,6 +38,7 @@ from backend.workflow.infrastructure.db import (
     RunStatus,
 )
 from backend.workflow.infrastructure.intake.db import RequestRow
+from backend.workflow.infrastructure.repositories import SqlAlchemyRunRepository
 
 logger = structlog.get_logger(__name__)
 
@@ -44,8 +46,17 @@ logger = structlog.get_logger(__name__)
 class AgentRunner:
     """Spawn + supervise one ExecutionRun for a Request."""
 
-    def __init__(self, session: AsyncSession) -> None:
+    def __init__(
+        self,
+        session: AsyncSession,
+        *,
+        run_repository: RunRepository | None = None,
+    ) -> None:
         self._session = session
+        # Repository constructed from the session by default — the Lift
+        # I-Repo-Workflow seam. Tests may inject a fake; production callers
+        # rely on the default ``SqlAlchemyRunRepository(session)``.
+        self._runs: RunRepository = run_repository or SqlAlchemyRunRepository(session)
 
     async def open_run(self, *, request: RequestRow) -> uuid.UUID:
         """Mint an ExecutionRun row tied to ``request``; returns run_id.
@@ -53,7 +64,7 @@ class AgentRunner:
         Idempotent: if a run for this request already exists, returns its
         id without creating a duplicate.
         """
-        existing = await self._find_existing_run(request_id=request.id)
+        existing = await self._runs.find_by_request_id(request.id)
         if existing is not None:
             return existing.id
 
@@ -125,7 +136,7 @@ class AgentRunner:
         terminal outcome: ``verified → review_ready``, ``system_error →
         failed``, ``needs_decision`` leaves the run ``running`` (paused).
         """
-        run = await self._session.get(ExecutionRun, run_id)
+        run = await self._runs.get(run_id)
         if run is None:
             raise ValueError(f"ExecutionRun {run_id} not found")
 
@@ -167,7 +178,7 @@ class AgentRunner:
         product binding) transition to REVIEW_READY and stay there
         unchanged, matching pre-W1 behavior for tests + legacy code paths.
         """
-        run = await self._session.get(ExecutionRun, run_id)
+        run = await self._runs.get(run_id)
         if run is None:
             return False
         if run.status is to_status:
@@ -399,10 +410,6 @@ class AgentRunner:
                 if isinstance(ref, str) and ref not in refs:
                     refs.append(ref)
         return refs
-
-    async def _find_existing_run(self, *, request_id: uuid.UUID) -> ExecutionRun | None:
-        stmt = select(ExecutionRun).where(ExecutionRun.request_id == request_id).limit(1)
-        return (await self._session.execute(stmt)).scalar_one_or_none()
 
 
 __all__ = ["AgentRunner"]
