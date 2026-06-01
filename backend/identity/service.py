@@ -5,17 +5,27 @@ upserted into ``users`` and, if the user has no active membership, a personal
 ``Workspace`` + ``Membership(role='owner')`` is created. The onboarding steps
 (§10.3 model→product→connector→direction) and the vault / BSage partition are
 out of scope for this chunk.
+
+Lift I-Repo-Identity (v8 §22 #11 + D44/D45): persistence access here goes
+through :class:`UserRepository`, :class:`MembershipRepository`, and
+:class:`WorkspaceRepository` rather than raw ``select`` / ``session.get``.
+Transaction boundaries are unchanged — :func:`ensure_user_bootstrapped` still
+owns the commit; the Repositories never commit.
 """
 
 from __future__ import annotations
 
 import uuid
 
-from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.identity.db import MembershipRow, UserRow
+from backend.identity.infrastructure.repositories import (
+    SqlAlchemyMembershipRepository,
+    SqlAlchemyUserRepository,
+    SqlAlchemyWorkspaceRepository,
+)
 from backend.router.accounts.account_service import ensure_personal_account
 from backend.workspaces.db import WorkspaceRow
 
@@ -27,21 +37,24 @@ def _default_workspace_name(email: str | None) -> str:
 
 
 async def get_user_by_supabase_id(session: AsyncSession, supabase_user_id: str) -> UserRow | None:
-    result = await session.execute(
-        select(UserRow).where(UserRow.supabase_user_id == supabase_user_id)
-    )
-    return result.scalar_one_or_none()
+    """Return the :class:`UserRow` whose Supabase subject is ``supabase_user_id``.
+
+    Thin pass-through onto :class:`SqlAlchemyUserRepository.get_by_supabase_id`,
+    kept as a top-level coroutine for back-compat with the many callers
+    (deps.py, the API routes) that import this name directly.
+    """
+    return await SqlAlchemyUserRepository(session).get_by_supabase_id(supabase_user_id)
 
 
 async def active_membership_for_user(
     session: AsyncSession, user_id: uuid.UUID
 ) -> MembershipRow | None:
-    result = await session.execute(
-        select(MembershipRow)
-        .where(MembershipRow.user_id == user_id, MembershipRow.left_at.is_(None))
-        .order_by(MembershipRow.joined_at.asc())
-    )
-    return result.scalars().first()
+    """Return the user's oldest active membership, or ``None``.
+
+    Thin pass-through onto
+    :class:`SqlAlchemyMembershipRepository.first_active_for_user`.
+    """
+    return await SqlAlchemyMembershipRepository(session).first_active_for_user(user_id)
 
 
 async def resolve_workspace_id(session: AsyncSession, *, supabase_user_id: str) -> uuid.UUID | None:
@@ -63,19 +76,20 @@ async def _get_or_create_user(
     winner created is re-fetched and reused. The rollback is safe because
     bootstrap is the first DB work in the request transaction.
     """
-    user = await get_user_by_supabase_id(session, supabase_user_id)
+    users = SqlAlchemyUserRepository(session)
+    user = await users.get_by_supabase_id(supabase_user_id)
     if user is not None:
         if email and user.email != email:
             user.email = email
         return user
 
     user = UserRow(id=uuid.uuid4(), supabase_user_id=supabase_user_id, email=email)
-    session.add(user)
+    await users.add(user)
     try:
         await session.flush()
     except IntegrityError:
         await session.rollback()
-        existing = await get_user_by_supabase_id(session, supabase_user_id)
+        existing = await users.get_by_supabase_id(supabase_user_id)
         if existing is None:  # pragma: no cover — a unique violation implies it exists
             raise
         return existing
@@ -101,14 +115,18 @@ async def ensure_user_bootstrapped(
     suite runs single-connection). Two simultaneous first-logins therefore
     converge on one user + one workspace.
     """
+    users = SqlAlchemyUserRepository(session)
+    memberships = SqlAlchemyMembershipRepository(session)
+    workspaces = SqlAlchemyWorkspaceRepository(session)
+
     user = await _get_or_create_user(session, supabase_user_id, email)
 
     # Serialize the membership bootstrap on the user row: the second of two
     # racing logins blocks here until the first commits, then sees its
     # membership and skips creating a duplicate workspace.
-    await session.execute(select(UserRow).where(UserRow.id == user.id).with_for_update())
+    await users.lock_for_update(user.id)
 
-    membership = await active_membership_for_user(session, user.id)
+    membership = await memberships.first_active_for_user(user.id)
     if membership is None:
         workspace = WorkspaceRow(
             id=uuid.uuid4(),
@@ -116,7 +134,7 @@ async def ensure_user_bootstrapped(
             region=region,
             safe_mode=True,
         )
-        session.add(workspace)
+        await workspaces.add(workspace)
         await session.flush()
         membership = MembershipRow(
             id=uuid.uuid4(),
@@ -124,7 +142,7 @@ async def ensure_user_bootstrapped(
             workspace_id=workspace.id,
             role="owner",
         )
-        session.add(membership)
+        await memberships.add(membership)
         await session.flush()
 
     # Seed (or backfill) the workspace's personal billing account so the

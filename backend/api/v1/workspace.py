@@ -26,11 +26,11 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.api.deps import get_db_session, get_workspace_id
-from backend.workspaces.db import WorkspaceRow
+from backend.api.v1._identity_deps import get_workspace_repository
+from backend.identity.domain.repositories import WorkspaceRepository
 
 router = APIRouter()
 
@@ -58,12 +58,10 @@ class WorkspaceUpdate(BaseModel):
 @router.get("", response_model=WorkspaceOut)
 async def get_workspace(
     workspace_id: Annotated[uuid.UUID, Depends(get_workspace_id)],
-    session: Annotated[AsyncSession, Depends(get_db_session)],
+    workspaces: Annotated[WorkspaceRepository, Depends(get_workspace_repository)],
 ) -> WorkspaceOut:
     """Return the active workspace's id + name."""
-    workspace = (
-        await session.execute(select(WorkspaceRow).where(WorkspaceRow.id == workspace_id))
-    ).scalar_one_or_none()
+    workspace = await workspaces.get(workspace_id)
     if workspace is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
     return WorkspaceOut(id=workspace.id, name=workspace.name)
@@ -73,6 +71,7 @@ async def get_workspace(
 async def update_workspace(
     payload: WorkspaceUpdate,
     workspace_id: Annotated[uuid.UUID, Depends(get_workspace_id)],
+    workspaces: Annotated[WorkspaceRepository, Depends(get_workspace_repository)],
     session: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> WorkspaceOut:
     """Update the workspace name on the active workspace.
@@ -81,9 +80,7 @@ async def update_workspace(
     write a different workspace's row, defense-in-depth from the RLS GUC on
     the same connection.
     """
-    workspace = (
-        await session.execute(select(WorkspaceRow).where(WorkspaceRow.id == workspace_id))
-    ).scalar_one_or_none()
+    workspace = await workspaces.get(workspace_id)
     if workspace is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
     workspace.name = payload.name.strip()
