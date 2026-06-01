@@ -21,7 +21,7 @@ pytestmark = pytest.mark.asyncio
 
 @pytest_asyncio.fixture
 async def db():
-    from backend.workspaces.db import WorkspacesBase
+    from backend.identity.workspaces_db import WorkspacesBase
 
     async with db_engine(WorkspacesBase) as (engine, _is_pg):
         yield async_sessionmaker(engine, expire_on_commit=False)

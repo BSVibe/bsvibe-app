@@ -13,7 +13,7 @@ from backend.data.scoping import (
     reset_current_workspace_id,
     set_current_workspace_id,
 )
-from backend.workspaces.db import ProductRow, WorkspaceRow
+from backend.identity.workspaces_db import ProductRow, WorkspaceRow
 
 pytestmark = pytest.mark.asyncio
 

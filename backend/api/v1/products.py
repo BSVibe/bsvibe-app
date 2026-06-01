@@ -18,10 +18,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.api.deps import get_db_session, get_workspace_id, require_role
 from backend.config import get_settings
 from backend.connectors.db import ConnectorAccountRow
+from backend.identity.infrastructure.repositories import (
+    SqlAlchemyResourceBindingRepository,
+)
+from backend.identity.workspaces_db import ProductResourceRow, ProductRow
 from backend.storage.artifact_store import LocalFilesystemArtifactStore
 from backend.storage.product_workspace import list_product_tree
-from backend.workspaces.db import ProductResourceRow, ProductRow
-from backend.workspaces.resource_bindings import ResourceBindingRepository
 
 # Read cap for product file content (mirrors the deliverable artifact viewer):
 # a source file is small; this guards against a large blob slipping into a JSON
@@ -400,7 +402,7 @@ async def list_product_bindings(
     session: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> list[ResourceBindingResponse]:
     await _resolve_product_in_workspace(session, product_id, workspace_id)
-    repo = ResourceBindingRepository(session)
+    repo = SqlAlchemyResourceBindingRepository(session)
     rows = await repo.list_for_product(workspace_id=workspace_id, product_id=product_id)
     return [ResourceBindingResponse.model_validate(r) for r in rows]
 
@@ -416,7 +418,7 @@ async def create_product_binding(
     await _resolve_connector_account_in_workspace(
         session, payload.connector_account_id, workspace_id
     )
-    repo = ResourceBindingRepository(session)
+    repo = SqlAlchemyResourceBindingRepository(session)
     row = await repo.create(
         workspace_id=workspace_id,
         product_id=product_id,
@@ -440,7 +442,7 @@ async def update_product_binding(
     session: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> ResourceBindingResponse:
     await _resolve_product_in_workspace(session, product_id, workspace_id)
-    repo = ResourceBindingRepository(session)
+    repo = SqlAlchemyResourceBindingRepository(session)
     row = await repo.get(workspace_id=workspace_id, binding_id=binding_id)
     if row is None or row.product_id != product_id:
         raise HTTPException(
@@ -471,7 +473,7 @@ async def delete_product_binding(
     await _resolve_product_in_workspace(session, product_id, workspace_id)
     # Scope check: the binding must belong to this product (and the repo's get
     # already enforces workspace scope).
-    repo = ResourceBindingRepository(session)
+    repo = SqlAlchemyResourceBindingRepository(session)
     row = await repo.get(workspace_id=workspace_id, binding_id=binding_id)
     if row is None or row.product_id != product_id:
         raise HTTPException(

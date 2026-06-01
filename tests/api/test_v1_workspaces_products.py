@@ -16,7 +16,7 @@ from backend.api.deps import (
 )
 from backend.api.main import create_app
 from backend.identity.db import MembershipRow, UserRow  # noqa: F401 — register tables
-from backend.workspaces.db import WorkspacesBase
+from backend.identity.workspaces_db import WorkspacesBase
 
 from .._support import db_engine, fake_current_user
 
@@ -49,7 +49,7 @@ async def client_with_ws(db):
     # Seed the workspace row so /api/v1/products has a parent, plus an owner
     # membership for the fake principal so role-gated routes (product DELETE
     # requires admin+) resolve a real Membership.role.
-    from backend.workspaces.db import WorkspaceRow
+    from backend.identity.workspaces_db import WorkspaceRow
 
     async with db() as s:
         s.add(WorkspaceRow(id=workspace_id, name="test", region="us-1", safe_mode=True))
@@ -193,7 +193,7 @@ async def test_product_workspace_isolation(db) -> None:
 
     app.dependency_overrides[get_db_session] = _session
     app.dependency_overrides[get_current_user] = fake_current_user()
-    from backend.workspaces.db import ProductRow, WorkspaceRow
+    from backend.identity.workspaces_db import ProductRow, WorkspaceRow
 
     product_id = uuid.uuid4()
     async with db() as s:

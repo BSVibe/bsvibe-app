@@ -35,9 +35,11 @@ from typing import Any
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.identity.infrastructure.repositories import (
+    SqlAlchemyResourceBindingRepository,
+)
+from backend.identity.workspaces_db import ResourceBindingRow
 from backend.workflow.infrastructure.intake.db import TriggerEventRow, TriggerKind
-from backend.workspaces.db import ResourceBindingRow
-from backend.workspaces.resource_bindings import ResourceBindingRepository
 
 logger = structlog.get_logger(__name__)
 
@@ -150,7 +152,7 @@ async def receive(session: AsyncSession, trigger: TriggerEventRow) -> ReceiveOut
             product_id=trigger.product_id,
         )
 
-    repo = ResourceBindingRepository(session)
+    repo = SqlAlchemyResourceBindingRepository(session)
     binding: ResourceBindingRow | None = await repo.find_binding(
         connector_account_id=account_id, resource_id=resource_id
     )

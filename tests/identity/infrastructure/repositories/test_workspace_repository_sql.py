@@ -9,7 +9,7 @@ import pytest
 
 from backend.identity.db import MembershipRow, UserRow
 from backend.identity.infrastructure.repositories import SqlAlchemyWorkspaceRepository
-from backend.workspaces.db import WorkspaceRow
+from backend.identity.workspaces_db import WorkspaceRow
 from tests._support import memory_session
 
 

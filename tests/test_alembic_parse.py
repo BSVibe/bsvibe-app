@@ -75,6 +75,7 @@ def test_target_metadata_covers_all_bases():
     from backend.embedding.db import GatewayEmbeddingBase
     from backend.executors.db import ExecutorsBase
     from backend.identity.db import IdentityBase
+    from backend.identity.workspaces_db import WorkspacesBase
     from backend.knowledge.canonicalization.db import CanonicalizationBase
     from backend.knowledge.ingest.db import IngestBase
     from backend.knowledge.retrieval.db import RetrievalBase
@@ -87,7 +88,6 @@ def test_target_metadata_covers_all_bases():
     from backend.workflow.infrastructure.db import ExecutionBase
     from backend.workflow.infrastructure.delivery.db import DeliveryBase
     from backend.workflow.infrastructure.intake.db import IntakeBase
-    from backend.workspaces.db import WorkspacesBase
     from plugin.audit.models import AuditOutboxBase, SupervisorBase
 
     expected_tables = {

@@ -44,6 +44,12 @@ from backend.identity.domain.repositories import (
     MembershipRepository,
     WorkspaceRepository,
 )
+from backend.identity.workspaces_db import (
+    ProductResourceRow,
+    ProductRow,
+    ResourceBindingRow,
+    WorkspaceRow,
+)
 from backend.knowledge.domain.repositories import CanonicalAnchorRepository
 from backend.knowledge.infrastructure.repositories import (
     SqlAlchemyCanonicalAnchorRepository,
@@ -56,7 +62,6 @@ from backend.workflow.infrastructure.db import (
     ExecutionRunActivity,
 )
 from backend.workflow.infrastructure.repositories import SqlAlchemyRequestRepository
-from backend.workspaces.db import ProductResourceRow, ProductRow, ResourceBindingRow, WorkspaceRow
 
 router = APIRouter()
 

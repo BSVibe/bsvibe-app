@@ -23,9 +23,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.api.deps import get_current_user_row, get_db_session, get_workspace_id
 from backend.config import get_settings
 from backend.identity.db import UserRow
+from backend.identity.workspaces_db import ProductRow
 from backend.workers.emit import STREAM_INTAKE, emit_stream_notification, get_emit_redis_client
 from backend.workflow.application.intake.direct import DirectTrigger
-from backend.workspaces.db import ProductRow
 
 router = APIRouter()
 

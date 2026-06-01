@@ -1,21 +1,15 @@
-"""ResourceBindingRepository — CRUD + Receive lookup for the 3-knob binding.
+"""SqlAlchemyResourceBindingRepository — concrete over one AsyncSession.
 
-A *Resource binding* (Workflow §3) is the per-Product × ConnectorAccount row
-carrying ``selection`` / ``trigger`` / ``output_mode``. The repository is the
-single typed surface for working with bindings:
+Lift I-Repo-Final Phase A. Concrete impl of
+:class:`~backend.identity.domain.repositories.resource_binding_repository.ResourceBindingRepository`
+backed by SQLAlchemy. One instance per request / worker tick (sharing the
+session that owns the transaction boundary). All SQLAlchemy concerns live
+here; callers see only the Protocol.
 
-* :meth:`create` / :meth:`get` / :meth:`list_for_product` / :meth:`update` /
-  :meth:`delete` — workspace-scoped CRUD (every read/mutation filters on
-  ``workspace_id`` so cross-workspace access is impossible at the SQL layer).
-* :meth:`find_binding` — the Receive-stage lookup the B10b inbound path will
-  call: given ``(connector_account_id, resource_id)`` return the binding (or
-  ``None`` — a miss is not an error). This is the index the schema's
-  ``ix_resource_bindings_lookup`` is shaped for.
-
-Side note on output_mode validation: TEXT column + app-side validation (here +
-in the API schema) rather than a Postgres ENUM keeps the SQLite test tier
-honest and dodges the alembic-enum-create-type traps (no DROP-TYPE / no double
-``CREATE TYPE`` on migration rerun).
+Behaviour is a verbatim port of the legacy
+``backend.workspaces.resource_bindings.ResourceBindingRepository`` (which
+mixed the Protocol shape + SQL into one class). The split into Protocol +
+concrete matches the Lift I-Repo-Identity convention.
 """
 
 from __future__ import annotations
@@ -27,10 +21,10 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.workspaces.db import ResourceBindingRow
-
-# Allowed values for the ``output_mode`` knob (Workflow §3 / §1).
-OUTPUT_MODES: frozenset[str] = frozenset({"safe", "direct"})
+from backend.identity.domain.repositories.resource_binding_repository import (
+    OUTPUT_MODES,
+)
+from backend.identity.workspaces_db import ResourceBindingRow
 
 
 def _validate_output_mode(value: str) -> str:
@@ -43,8 +37,14 @@ def _default_trigger() -> dict[str, Any]:
     return {"enabled": False, "filters": {}}
 
 
-class ResourceBindingRepository:
-    """SQL CRUD + Receive lookup for ``resource_bindings`` rows."""
+class SqlAlchemyResourceBindingRepository:
+    """SQLAlchemy-backed :class:`ResourceBindingRepository`.
+
+    Constructor-injected with one :class:`AsyncSession`. The session owns
+    the transaction; the repository never calls ``commit`` and never opens
+    a new transaction. Mutation methods flush so the in-memory row carries
+    the DB-assigned ids by the time the caller proceeds.
+    """
 
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
@@ -108,8 +108,8 @@ class ResourceBindingRepository:
         """Apply the provided knob updates to ``row``.
 
         ``None`` means "leave as-is" — so callers can patch a single knob
-        without shipping the others. A dict knob value is REPLACED, not merged
-        (the caller decided the new shape).
+        without shipping the others. A dict knob value is REPLACED, not
+        merged (the caller decided the new shape).
         """
         if output_mode is not None:
             _validate_output_mode(output_mode)
@@ -122,7 +122,7 @@ class ResourceBindingRepository:
         return row
 
     async def delete(self, *, workspace_id: uuid.UUID, binding_id: uuid.UUID) -> bool:
-        """Hard-delete the binding. Returns False if not present (or in another workspace)."""
+        """Hard-delete the binding. Returns ``False`` if not present (or other workspace)."""
         row = await self.get(workspace_id=workspace_id, binding_id=binding_id)
         if row is None:
             return False
@@ -133,13 +133,12 @@ class ResourceBindingRepository:
     async def find_binding(
         self, *, connector_account_id: uuid.UUID, resource_id: str
     ) -> ResourceBindingRow | None:
-        """Receive-stage lookup — resolve an inbound (account, resource) to a binding.
+        """Receive-stage lookup — resolve ``(account, resource)`` to a binding.
 
         Returns ``None`` on a miss (the inbound path turns that into "no
-        product bound for this resource — skip" without raising). Used by B10b;
-        does NOT take ``workspace_id`` because the inbound trail already
-        resolved the account to a workspace upstream (the binding's
-        ``workspace_id`` matches the account's by construction).
+        product bound for this resource — skip" without raising). Does NOT
+        take ``workspace_id`` because the inbound trail already resolved
+        the account to a workspace upstream.
         """
         stmt = select(ResourceBindingRow).where(
             ResourceBindingRow.connector_account_id == connector_account_id,
@@ -148,4 +147,4 @@ class ResourceBindingRepository:
         return (await self._session.execute(stmt)).scalar_one_or_none()
 
 
-__all__ = ["OUTPUT_MODES", "ResourceBindingRepository"]
+__all__ = ["SqlAlchemyResourceBindingRepository"]

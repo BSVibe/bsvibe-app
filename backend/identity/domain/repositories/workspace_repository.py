@@ -21,7 +21,7 @@ from __future__ import annotations
 import uuid
 from typing import Protocol, runtime_checkable
 
-from backend.workspaces.db import WorkspaceRow
+from backend.identity.workspaces_db import WorkspaceRow
 
 
 @runtime_checkable

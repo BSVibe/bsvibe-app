@@ -59,6 +59,7 @@ import pytest
 from sqlalchemy import select
 
 from backend.extensions.plugin.loader import PluginLoader
+from backend.identity.workspaces_db import WorkspaceRow
 from backend.workflow.application.agent_loop import RunOrchestrator
 from backend.workflow.infrastructure.connector_actions import (
     ConnectorActionResolver,
@@ -66,7 +67,6 @@ from backend.workflow.infrastructure.connector_actions import (
 )
 from backend.workflow.infrastructure.db import Decision
 from backend.workflow.infrastructure.sandbox import NoopSandboxManager
-from backend.workspaces.db import WorkspaceRow
 from tests._support import memory_session
 
 # Helpers from the orchestrator's own test module — these are the documented

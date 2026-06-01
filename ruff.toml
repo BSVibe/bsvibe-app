@@ -56,7 +56,10 @@ ignore = [
 # integrations, F821 can be re-enabled on a per-file basis.
 "backend/orchestrator/**" = ["PLW0108"]
 "backend/workers/**" = ["PLW0108"]
-"backend/workspaces/**" = ["PLW0108"]
+# Lift I-Repo-Final — ``backend/workspaces/`` absorbed into
+# ``backend/identity/workspaces_db.py``; the moved file retains its
+# default-factory lambdas (PLW0108).
+"backend/identity/workspaces_db.py" = ["PLW0108"]
 # Lift I-0 — files moved from ``backend/execution/`` retain the same
 # legacy patterns. New v8 code under ``backend/workflow/`` (state.py /
 # transitions.py / Lift H2+ modules) is held to the standard rules.

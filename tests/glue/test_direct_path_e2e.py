@@ -42,6 +42,7 @@ from backend.api.deps import (
 )
 from backend.api.main import create_app
 from backend.extensions.skill.loader import SkillLoader
+from backend.identity.workspaces_db import ProductRow
 from backend.workflow.application.agent_loop import LoopToolCall, LoopTurn, RunOrchestrator
 from backend.workflow.domain.delivery import ActionResult, DeliveryResult
 from backend.workflow.infrastructure.db import Deliverable, ExecutionRun, RunStatus
@@ -54,7 +55,6 @@ from backend.workflow.infrastructure.workers.delivery_worker import (
     DeliveryWorkerConfig,
 )
 from backend.workflow.infrastructure.workers.intake_worker import IntakeWorker
-from backend.workspaces.db import ProductRow
 
 from .._support import db_engine, fake_current_user
 
@@ -189,7 +189,7 @@ async def seeded_product(
     Workspace + Product (Postgres enforces ``products.workspace_id``→
     ``workspaces.id`` FK; SQLite's default-off FK checks let the bare
     Product insert succeed locally, but real-PG CI rejects it)."""
-    from backend.workspaces.db import WorkspaceRow
+    from backend.identity.workspaces_db import WorkspaceRow
 
     product_id = uuid.uuid4()
     async with sf() as s:

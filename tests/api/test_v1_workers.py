@@ -23,7 +23,7 @@ import backend.executors.db  # noqa: F401
 from backend.api.deps import get_current_user, get_db_session, get_workspace_id
 from backend.api.main import create_app
 from backend.identity.db import MembershipRow, UserRow
-from backend.workspaces.db import WorkspaceRow
+from backend.identity.workspaces_db import WorkspaceRow
 
 from .._support import db_engine, fake_current_user
 

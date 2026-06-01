@@ -1,4 +1,17 @@
-"""Workspace + Product persistence schema (Workflow §3)."""
+"""Workspace + Product + ResourceBinding persistence schema (Workflow §3).
+
+Lift I-Repo-Final Phase A: absorbed from the deleted ``backend.workspaces``
+common-leaf package into the :mod:`backend.identity` bounded context. The
+Workspace + Product + ProductResource + ResourceBinding rows are
+identity-domain entities (the workspace is the multi-tenancy unit; products
+are per-workspace shipping units; bindings are the founder-owned 3-knob
+identity for each connector resource a product cares about). Keeping them
+under :mod:`backend.identity` puts the SQLAlchemy schema next to the
+Repository Protocols + concrete impls (Lift I-Repo-Identity).
+
+The legacy module path ``backend.workspaces.db`` is REMOVED — callers must
+import from :mod:`backend.identity.workspaces_db`.
+"""
 
 from __future__ import annotations
 
@@ -11,6 +24,9 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from backend.data import Base
 
+# Kept as an alias for back-compat with old call-sites that imported
+# ``WorkspacesBase`` from the legacy ``backend.workspaces.db`` path. Points at
+# the same :class:`backend.data.Base` the rest of the schema uses.
 WorkspacesBase = Base
 
 # GDPR L1 — Art. 6 legal-basis marker. v1 carries only the two bases that

@@ -13,7 +13,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.identity.db import MembershipRow
-from backend.workspaces.db import WorkspaceRow
+from backend.identity.workspaces_db import WorkspaceRow
 
 
 class SqlAlchemyWorkspaceRepository:

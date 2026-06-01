@@ -28,7 +28,7 @@ from backend.identity.domain.repositories import (
     MembershipRepository,
     WorkspaceRepository,
 )
-from backend.workspaces.db import WorkspaceRow
+from backend.identity.workspaces_db import WorkspaceRow
 
 router = APIRouter()
 

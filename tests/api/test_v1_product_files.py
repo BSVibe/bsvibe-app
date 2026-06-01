@@ -41,7 +41,7 @@ def product_root(tmp_path: Path, monkeypatch):
 
 @pytest_asyncio.fixture
 async def db():
-    from backend.workspaces.db import WorkspacesBase
+    from backend.identity.workspaces_db import WorkspacesBase
 
     async with db_engine(WorkspacesBase) as (engine, _is_pg):
         yield async_sessionmaker(engine, expire_on_commit=False)
@@ -49,7 +49,7 @@ async def db():
 
 @pytest_asyncio.fixture
 async def client_ws(db):
-    from backend.workspaces.db import WorkspaceRow
+    from backend.identity.workspaces_db import WorkspaceRow
 
     app = create_app()
     workspace_id = uuid.uuid4()

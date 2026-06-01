@@ -19,15 +19,18 @@ The first Identity Repository extraction (Lift I-Repo-Identity) ships:
   access control (active membership for caller, membership for the GDPR
   export, role-based routing).
 
+Lift I-Repo-Final (Phase A) closes out the Identity Repository pass by
+absorbing the deleted ``backend.workspaces.resource_bindings`` module into
+the Identity context as a proper Protocol + concrete pair:
+
+* :class:`ResourceBindingRepository` — workspace-scoped CRUD + Receive-stage
+  ``find_binding`` lookup for the 3-knob (selection / trigger / output_mode)
+  binding (Workflow §3). Concrete impl is
+  :class:`SqlAlchemyResourceBindingRepository`.
+
 Deferred to follow-up sub-lifts (I-Repo-Identity-2):
 
 * :class:`TenantRepository` — once the Tenant aggregate has its own row.
-* :class:`ConnectorBindingRepository` — once the
-  :mod:`backend.workspaces.resource_bindings` workspace ↔ OAuth account
-  binding is migrated into the Identity context. The
-  :class:`ResourceBindingRepository` already exists at the current path
-  (``backend/workspaces/resource_bindings.py``); this lift does NOT move
-  it (scope control — see header).
 
 Pragmatic choice (matches Lift I-Repo-Workflow and Lift I-Repo-Knowledge):
 SQL repositories return the existing ORM row types
@@ -42,13 +45,19 @@ from __future__ import annotations
 from backend.identity.domain.repositories.membership_repository import (
     MembershipRepository,
 )
+from backend.identity.domain.repositories.resource_binding_repository import (
+    OUTPUT_MODES,
+    ResourceBindingRepository,
+)
 from backend.identity.domain.repositories.user_repository import UserRepository
 from backend.identity.domain.repositories.workspace_repository import (
     WorkspaceRepository,
 )
 
 __all__ = [
+    "OUTPUT_MODES",
     "MembershipRepository",
+    "ResourceBindingRepository",
     "UserRepository",
     "WorkspaceRepository",
 ]

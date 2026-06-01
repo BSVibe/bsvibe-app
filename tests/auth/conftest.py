@@ -20,8 +20,8 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 # Import model modules so their tables register on the shared Base.metadata.
 from backend.data import Base
 from backend.identity.db import MembershipRow, UserRow
+from backend.identity.workspaces_db import ProductRow, WorkspaceRow  # noqa: F401
 from backend.workflow.infrastructure import db as _execution_db  # noqa: F401
-from backend.workspaces.db import ProductRow, WorkspaceRow  # noqa: F401
 
 # ruff: noqa: PLC0415
 
