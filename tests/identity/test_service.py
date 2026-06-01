@@ -18,8 +18,8 @@ from backend.identity.service import (
     get_user_by_supabase_id,
     resolve_workspace_id,
 )
+from backend.identity.workspaces_db import WorkspaceRow
 from backend.router.accounts.account_models import Account
-from backend.workspaces.db import WorkspaceRow
 
 from .._support import memory_session
 

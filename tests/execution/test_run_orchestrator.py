@@ -21,6 +21,7 @@ from backend.extensions.plugin.base import ActionCapability, PluginMeta
 from backend.extensions.plugin.context import SkillContext
 from backend.extensions.skill.loader import SkillLoader
 from backend.extensions.skill.tool_binding import INVOKE_SKILL_NAME
+from backend.identity.workspaces_db import ProductRow, WorkspaceRow
 from backend.workflow.application.agent_loop import (
     CanonRetriever,
     LoopLlm,
@@ -45,7 +46,6 @@ from backend.workflow.infrastructure.db import (
 )
 from backend.workflow.infrastructure.delivery.db import DeliveryEventRow
 from backend.workflow.infrastructure.sandbox import NoopSandboxManager, SandboxUnavailable
-from backend.workspaces.db import ProductRow, WorkspaceRow
 from tests._support import memory_session
 
 # --------------------------------------------------------------------------

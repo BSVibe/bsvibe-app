@@ -57,7 +57,7 @@ async def settle_run_context(session: AsyncSession, run: ExecutionRun) -> dict[s
     if isinstance(intent_text, str) and intent_text.strip():
         context["intent_text"] = intent_text
     if run.product_id is not None:
-        from backend.workspaces.db import ProductRow  # noqa: PLC0415 — cross-domain, local
+        from backend.identity.workspaces_db import ProductRow  # noqa: PLC0415 — cross-domain, local
 
         product = await session.get(ProductRow, run.product_id)
         if product is not None:

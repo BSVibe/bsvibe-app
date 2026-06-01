@@ -21,10 +21,9 @@ import pytest_asyncio
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from backend.connectors.db import ConnectorAccountRow
-from backend.workspaces.db import ProductRow, WorkspaceRow, WorkspacesBase
-from backend.workspaces.resource_bindings import ResourceBindingRepository
-
-from .._support import db_engine
+from backend.identity.infrastructure.repositories import SqlAlchemyResourceBindingRepository
+from backend.identity.workspaces_db import ProductRow, WorkspaceRow, WorkspacesBase
+from tests._support import db_engine
 
 pytestmark = pytest.mark.asyncio
 
@@ -68,7 +67,7 @@ async def test_create_persists_three_knobs(sf) -> None:
     product_id, conn_id = await _seed_parents(sf, workspace_id=ws)
 
     async with sf() as s:
-        repo = ResourceBindingRepository(s)
+        repo = SqlAlchemyResourceBindingRepository(s)
         row = await repo.create(
             workspace_id=ws,
             product_id=product_id,
@@ -82,7 +81,7 @@ async def test_create_persists_three_knobs(sf) -> None:
         binding_id = row.id
 
     async with sf() as s:
-        repo = ResourceBindingRepository(s)
+        repo = SqlAlchemyResourceBindingRepository(s)
         got = await repo.get(workspace_id=ws, binding_id=binding_id)
         assert got is not None
         assert got.product_id == product_id
@@ -98,7 +97,7 @@ async def test_create_defaults_safe_and_disabled_trigger(sf) -> None:
     product_id, conn_id = await _seed_parents(sf, workspace_id=ws)
 
     async with sf() as s:
-        repo = ResourceBindingRepository(s)
+        repo = SqlAlchemyResourceBindingRepository(s)
         row = await repo.create(
             workspace_id=ws,
             product_id=product_id,
@@ -117,7 +116,7 @@ async def test_list_by_product_scoped_to_workspace(sf) -> None:
     product_id, conn_id = await _seed_parents(sf, workspace_id=ws)
 
     async with sf() as s:
-        repo = ResourceBindingRepository(s)
+        repo = SqlAlchemyResourceBindingRepository(s)
         await repo.create(
             workspace_id=ws, product_id=product_id, connector_account_id=conn_id, resource_id="a"
         )
@@ -127,7 +126,7 @@ async def test_list_by_product_scoped_to_workspace(sf) -> None:
         await s.commit()
 
     async with sf() as s:
-        repo = ResourceBindingRepository(s)
+        repo = SqlAlchemyResourceBindingRepository(s)
         rows = await repo.list_for_product(workspace_id=ws, product_id=product_id)
         assert {r.resource_id for r in rows} == {"a", "b"}
 
@@ -137,7 +136,7 @@ async def test_update_changes_knobs(sf) -> None:
     product_id, conn_id = await _seed_parents(sf, workspace_id=ws)
 
     async with sf() as s:
-        repo = ResourceBindingRepository(s)
+        repo = SqlAlchemyResourceBindingRepository(s)
         row = await repo.create(
             workspace_id=ws,
             product_id=product_id,
@@ -148,7 +147,7 @@ async def test_update_changes_knobs(sf) -> None:
         binding_id = row.id
 
     async with sf() as s:
-        repo = ResourceBindingRepository(s)
+        repo = SqlAlchemyResourceBindingRepository(s)
         row = await repo.get(workspace_id=ws, binding_id=binding_id)
         assert row is not None
         await repo.update(
@@ -160,7 +159,7 @@ async def test_update_changes_knobs(sf) -> None:
         await s.commit()
 
     async with sf() as s:
-        repo = ResourceBindingRepository(s)
+        repo = SqlAlchemyResourceBindingRepository(s)
         got = await repo.get(workspace_id=ws, binding_id=binding_id)
         assert got is not None
         assert got.output_mode == "direct"
@@ -173,7 +172,7 @@ async def test_delete(sf) -> None:
     product_id, conn_id = await _seed_parents(sf, workspace_id=ws)
 
     async with sf() as s:
-        repo = ResourceBindingRepository(s)
+        repo = SqlAlchemyResourceBindingRepository(s)
         row = await repo.create(
             workspace_id=ws, product_id=product_id, connector_account_id=conn_id, resource_id="r"
         )
@@ -181,13 +180,13 @@ async def test_delete(sf) -> None:
         binding_id = row.id
 
     async with sf() as s:
-        repo = ResourceBindingRepository(s)
+        repo = SqlAlchemyResourceBindingRepository(s)
         deleted = await repo.delete(workspace_id=ws, binding_id=binding_id)
         await s.commit()
         assert deleted is True
 
     async with sf() as s:
-        repo = ResourceBindingRepository(s)
+        repo = SqlAlchemyResourceBindingRepository(s)
         assert await repo.get(workspace_id=ws, binding_id=binding_id) is None
         # Deleting again is a no-op False (already gone).
         assert await repo.delete(workspace_id=ws, binding_id=binding_id) is False
@@ -199,7 +198,7 @@ async def test_find_binding_resolves_connector_and_resource(sf) -> None:
     product_id, conn_id = await _seed_parents(sf, workspace_id=ws)
 
     async with sf() as s:
-        repo = ResourceBindingRepository(s)
+        repo = SqlAlchemyResourceBindingRepository(s)
         await repo.create(
             workspace_id=ws,
             product_id=product_id,
@@ -210,7 +209,7 @@ async def test_find_binding_resolves_connector_and_resource(sf) -> None:
         await s.commit()
 
     async with sf() as s:
-        repo = ResourceBindingRepository(s)
+        repo = SqlAlchemyResourceBindingRepository(s)
         found = await repo.find_binding(
             connector_account_id=conn_id, resource_id="bsvibe/bsvibe-site#42"
         )
@@ -229,7 +228,7 @@ async def test_workspace_isolation_get_and_list(sf) -> None:
     product_b, _conn_b = await _seed_parents(sf, workspace_id=ws_b)
 
     async with sf() as s:
-        repo = ResourceBindingRepository(s)
+        repo = SqlAlchemyResourceBindingRepository(s)
         row = await repo.create(
             workspace_id=ws_a,
             product_id=product_a,
@@ -240,7 +239,7 @@ async def test_workspace_isolation_get_and_list(sf) -> None:
         binding_id = row.id
 
     async with sf() as s:
-        repo = ResourceBindingRepository(s)
+        repo = SqlAlchemyResourceBindingRepository(s)
         # B can't get A's binding.
         assert await repo.get(workspace_id=ws_b, binding_id=binding_id) is None
         # B's product list is empty.

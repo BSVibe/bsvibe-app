@@ -5,7 +5,7 @@ Two compliance gaps from the B17 audit:
 1. **GDPR L1**: ``Workspace.legal_basis`` was missing. Adds a TEXT column with
    ``server_default='contract'`` so existing rows get the production-correct
    value with no app-tier migration. Validation lives in the ORM layer via
-   :data:`backend.workspaces.db.validate_legal_basis` (``Literal["contract",
+   :data:`backend.identity.workspaces_db.validate_legal_basis` (``Literal["contract",
    "consent"]``).
 
 2. **Postgres RLS defense layer 3**: enables ROW LEVEL SECURITY on a focused

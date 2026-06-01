@@ -32,8 +32,8 @@ from backend.api.v1.live_events import (
     reset_live_event_bus_for_testing,
 )
 from backend.identity.db import MembershipRow, UserRow
+from backend.identity.workspaces_db import WorkspaceRow
 from backend.shared.authz.settings import get_settings as get_auth_settings
-from backend.workspaces.db import WorkspaceRow
 
 from .._support import db_engine
 

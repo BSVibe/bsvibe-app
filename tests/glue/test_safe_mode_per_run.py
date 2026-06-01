@@ -35,6 +35,7 @@ from backend.api.deps import (
 )
 from backend.api.main import create_app
 from backend.api.v1.safemode import get_delivery_dispatcher
+from backend.identity.workspaces_db import WorkspaceRow
 from backend.workflow.application.safe_mode_queue import SafeModeQueue
 from backend.workflow.domain.delivery import ActionResult, DeliveryResult
 from backend.workflow.infrastructure.db import (
@@ -52,7 +53,6 @@ from backend.workflow.infrastructure.workers.delivery_worker import (
     DeliveryWorker,
     DeliveryWorkerConfig,
 )
-from backend.workspaces.db import WorkspaceRow
 
 from .._support import db_engine, fake_current_user
 

@@ -34,11 +34,16 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 
 import structlog
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from backend.schedule.application.emitter import ScheduleTrigger
 from backend.schedule.domain.advancer import OneShotScheduleAdvancer, ScheduleAdvancer
+from backend.schedule.domain.repositories.workspace_schedule_repository import (
+    WorkspaceScheduleRepository,
+)
+from backend.schedule.infrastructure.repositories.workspace_schedule_repository_sql import (
+    SqlAlchemyWorkspaceScheduleRepository,
+)
 from backend.schedule.infrastructure.schedule_db import WorkspaceScheduleRow
 
 logger = structlog.get_logger(__name__)
@@ -66,9 +71,16 @@ class DbPollScheduleRunner:
         *,
         advancer: ScheduleAdvancer,
         now_fn: Callable[[], datetime] | None = None,
+        repository_factory: Callable[[AsyncSession], WorkspaceScheduleRepository] | None = None,
     ) -> None:
         self._advancer = advancer
         self._now_fn = now_fn or (lambda: datetime.now(tz=UTC))
+        # ``repository_factory`` is the Lift I-Repo-Final Phase B seam.
+        # Tests / future Redis-Streams impl can swap the persistence side
+        # of the runner without touching the fire/advance algebra. The
+        # default factory wraps the per-tick session in the SQLAlchemy
+        # concrete impl — matches the v1 pre-refactor behaviour 1:1.
+        self._repository_factory = repository_factory or SqlAlchemyWorkspaceScheduleRepository
 
     async def fire_due(
         self,
@@ -83,39 +95,19 @@ class DbPollScheduleRunner:
         # batch still uses ONE consistent clock across every row.
         effective_now = self._now_fn()
         async with session_factory() as session:
-            rows = await self._claim_due(session, effective_now)
+            repo = self._repository_factory(session)
+            rows = await repo.claim_due(now=effective_now)
             fired = 0
             for sched in rows:
-                if await self._fire_one(session, sched, effective_now):
+                if await self._fire_one(session, repo, sched, effective_now):
                     fired += 1
             await session.commit()
             return fired
 
-    async def _claim_due(self, session: AsyncSession, now: datetime) -> list[WorkspaceScheduleRow]:
-        """Select every due, enabled schedule for this tick.
-
-        ``with_for_update(skip_locked=True)`` matters under multi-worker
-        prod (the launchd ``com.bsvibe.worker`` + any future replicas) —
-        a second worker that lands on the same row at the same time
-        skips it rather than blocking, and the next tick catches it. On
-        SQLite the ``skip_locked`` hint is a no-op (the dialect ignores
-        it), which is fine for tests that drive ``fire_due_once`` from a
-        single coroutine.
-        """
-        stmt = (
-            select(WorkspaceScheduleRow)
-            .where(
-                WorkspaceScheduleRow.enabled.is_(True),
-                WorkspaceScheduleRow.next_run_at <= now,
-            )
-            .order_by(WorkspaceScheduleRow.next_run_at.asc())
-            .with_for_update(skip_locked=True)
-        )
-        return list((await session.execute(stmt)).scalars().all())
-
     async def _fire_one(
         self,
         session: AsyncSession,
+        repo: WorkspaceScheduleRepository,
         sched: WorkspaceScheduleRow,
         now: datetime,
     ) -> bool:
@@ -142,13 +134,11 @@ class DbPollScheduleRunner:
         # spawn site just means another worker already fired the SAME
         # window, and advancing here is still correct (we've consumed
         # our turn).
-        sched.next_run_at = self._advancer.next_after(
-            cron_expr=sched.cron_expr, after=sched.next_run_at
-        )
-        sched.last_fired_at = now
-        # ``flush`` keeps the row update inside the same transaction as the
-        # trigger insert — partial failure rolls both back.
-        await session.flush()
+        next_run_at = self._advancer.next_after(cron_expr=sched.cron_expr, after=sched.next_run_at)
+        # ``WorkspaceScheduleRepository.advance`` flushes so the row update
+        # stays inside the same transaction as the trigger insert — partial
+        # failure rolls both back.
+        await repo.advance(sched, next_run_at=next_run_at, last_fired_at=now)
 
         logger.info(
             "schedule_runner_fired",

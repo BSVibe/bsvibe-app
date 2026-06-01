@@ -33,12 +33,12 @@ import structlog
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from backend.identity.workspaces_db import WorkspaceRow
 from backend.workers.base import BaseWorker
 from backend.workflow.application.safe_mode_queue import SafeModeQueue
 from backend.workflow.domain.delivery import ActionResult, DeliveryResult
 from backend.workflow.infrastructure.db import Deliverable
 from backend.workflow.infrastructure.delivery.db import DeliveryEventRow
-from backend.workspaces.db import WorkspaceRow
 
 logger = structlog.get_logger(__name__)
 
@@ -106,8 +106,8 @@ async def _run_output_mode(session: AsyncSession, run_id: uuid.UUID | None) -> s
     if run_id is None:
         return None
     # Local imports keep the cross-domain dependency off module import time.
+    from backend.identity.workspaces_db import ResourceBindingRow  # noqa: PLC0415
     from backend.workflow.infrastructure.db import ExecutionRun  # noqa: PLC0415
-    from backend.workspaces.db import ResourceBindingRow  # noqa: PLC0415
 
     run = await session.get(ExecutionRun, run_id)
     if run is None:

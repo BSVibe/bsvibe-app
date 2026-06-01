@@ -43,6 +43,7 @@ import pytest_asyncio
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
+from backend.identity.workspaces_db import WorkspaceRow, WorkspacesBase
 from backend.knowledge.canonicalization.index import InMemoryCanonicalizationIndex
 from backend.knowledge.canonicalization.models import DecisionEntry
 from backend.knowledge.canonicalization.resolver import TagResolver
@@ -61,7 +62,6 @@ from backend.workflow.infrastructure.db import (
     ExecutionRunActivity,
     RunStatus,
 )
-from backend.workspaces.db import WorkspaceRow, WorkspacesBase
 
 from .._support import db_engine
 

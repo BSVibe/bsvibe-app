@@ -27,6 +27,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from backend.connectors.db import ConnectorAccountRow
+from backend.identity.workspaces_db import ProductRow, ResourceBindingRow, WorkspaceRow
 from backend.workflow.domain.delivery import ActionResult, DeliveryResult
 from backend.workflow.domain.verified_deliverable import PARTIAL_DELIVERABLE_KIND
 from backend.workflow.infrastructure.db import (
@@ -44,7 +45,6 @@ from backend.workflow.infrastructure.workers.delivery_worker import (
     DeliveryWorker,
     DeliveryWorkerConfig,
 )
-from backend.workspaces.db import ProductRow, ResourceBindingRow, WorkspaceRow
 from tests._support import db_engine
 
 pytestmark = pytest.mark.asyncio

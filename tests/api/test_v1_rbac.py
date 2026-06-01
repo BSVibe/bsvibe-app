@@ -18,7 +18,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 from backend.api.deps import get_current_user, get_db_session
 from backend.api.main import create_app
 from backend.identity.db import MembershipRow, UserRow
-from backend.workspaces.db import ProductRow, WorkspaceRow
+from backend.identity.workspaces_db import ProductRow, WorkspaceRow
 
 from .._support import db_engine, fake_current_user
 

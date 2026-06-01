@@ -55,6 +55,7 @@ from backend.api.v1.safemode import get_delivery_dispatcher
 from backend.config import get_settings
 from backend.connectors.db import ConnectorAccountRow
 from backend.extensions.plugin.loader import PluginLoader
+from backend.identity.workspaces_db import WorkspaceRow
 from backend.router.accounts.crypto import CredentialCipher
 from backend.workflow.application.delivery.connector_dispatch import (
     ConnectorDeliveryAdapter,
@@ -75,7 +76,6 @@ from backend.workflow.infrastructure.workers.delivery_worker import (
     DeliveryWorker,
     DeliveryWorkerConfig,
 )
-from backend.workspaces.db import WorkspaceRow
 from plugin.notion import plugin as notion_module
 
 from .._support import db_engine, fake_current_user

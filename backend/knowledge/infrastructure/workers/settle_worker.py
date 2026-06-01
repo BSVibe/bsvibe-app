@@ -57,10 +57,10 @@ import structlog
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from backend.identity.workspaces_db import WorkspaceRow
 from backend.workers.base import BaseWorker
 from backend.workers.db import SettleDrainRow
 from backend.workflow.infrastructure.db import ExecutionRunActivity
-from backend.workspaces.db import WorkspaceRow
 
 logger = structlog.get_logger(__name__)
 

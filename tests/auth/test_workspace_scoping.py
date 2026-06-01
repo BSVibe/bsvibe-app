@@ -17,8 +17,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from backend.identity.db import MembershipRow, UserRow
+from backend.identity.workspaces_db import ProductRow, WorkspaceRow
 from backend.workflow.infrastructure.db import ExecutionRun, RunStatus
-from backend.workspaces.db import ProductRow, WorkspaceRow
 
 from .conftest import seed_user_workspace
 

@@ -29,6 +29,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from backend.connectors.db import ConnectorAccountRow
+from backend.identity.infrastructure.repositories import SqlAlchemyResourceBindingRepository
+from backend.identity.workspaces_db import ProductRow, WorkspaceRow
 from backend.workflow.application.stages.intake import (
     RECEIVE_FILTERED_KEY,
     ReceiveOutcome,
@@ -37,8 +39,6 @@ from backend.workflow.application.stages.intake import (
 from backend.workflow.domain.incoming import TriggerEvent
 from backend.workflow.infrastructure.intake.db import RequestRow, TriggerEventRow, TriggerKind
 from backend.workflow.infrastructure.workers.intake_worker import IntakeWorker
-from backend.workspaces.db import ProductRow, WorkspaceRow
-from backend.workspaces.resource_bindings import ResourceBindingRepository
 
 from .._support import db_engine
 
@@ -160,7 +160,7 @@ async def test_receive_resolves_binding_and_populates_routing_hints(sf: Any) -> 
     workspace_id = uuid.uuid4()
     product_id, account_id = await _seed_workspace_product_account(sf, workspace_id=workspace_id)
     async with sf() as s:
-        repo = ResourceBindingRepository(s)
+        repo = SqlAlchemyResourceBindingRepository(s)
         await repo.create(
             workspace_id=workspace_id,
             product_id=product_id,
@@ -200,7 +200,7 @@ async def test_receive_applies_filter_pass(sf: Any) -> None:
     workspace_id = uuid.uuid4()
     product_id, account_id = await _seed_workspace_product_account(sf, workspace_id=workspace_id)
     async with sf() as s:
-        repo = ResourceBindingRepository(s)
+        repo = SqlAlchemyResourceBindingRepository(s)
         await repo.create(
             workspace_id=workspace_id,
             product_id=product_id,
@@ -231,7 +231,7 @@ async def test_receive_applies_filter_reject(sf: Any) -> None:
     workspace_id = uuid.uuid4()
     product_id, account_id = await _seed_workspace_product_account(sf, workspace_id=workspace_id)
     async with sf() as s:
-        repo = ResourceBindingRepository(s)
+        repo = SqlAlchemyResourceBindingRepository(s)
         await repo.create(
             workspace_id=workspace_id,
             product_id=product_id,
@@ -323,7 +323,7 @@ async def test_receive_filter_multi_key_must_all_match(sf: Any) -> None:
     workspace_id = uuid.uuid4()
     product_id, account_id = await _seed_workspace_product_account(sf, workspace_id=workspace_id)
     async with sf() as s:
-        repo = ResourceBindingRepository(s)
+        repo = SqlAlchemyResourceBindingRepository(s)
         await repo.create(
             workspace_id=workspace_id,
             product_id=product_id,
@@ -375,7 +375,7 @@ async def test_intake_worker_creates_request_with_routing_hints(sf: Any) -> None
     workspace_id = uuid.uuid4()
     product_id, account_id = await _seed_workspace_product_account(sf, workspace_id=workspace_id)
     async with sf() as s:
-        repo = ResourceBindingRepository(s)
+        repo = SqlAlchemyResourceBindingRepository(s)
         await repo.create(
             workspace_id=workspace_id,
             product_id=product_id,
@@ -423,7 +423,7 @@ async def test_intake_worker_skips_request_on_filter_reject(sf: Any) -> None:
     workspace_id = uuid.uuid4()
     product_id, account_id = await _seed_workspace_product_account(sf, workspace_id=workspace_id)
     async with sf() as s:
-        repo = ResourceBindingRepository(s)
+        repo = SqlAlchemyResourceBindingRepository(s)
         await repo.create(
             workspace_id=workspace_id,
             product_id=product_id,

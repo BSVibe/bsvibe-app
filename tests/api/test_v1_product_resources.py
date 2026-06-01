@@ -22,7 +22,12 @@ from backend.api.deps import (
 )
 from backend.api.main import create_app
 from backend.identity.db import MembershipRow, UserRow  # noqa: F401 — register tables
-from backend.workspaces.db import ProductResourceRow, ProductRow, WorkspaceRow, WorkspacesBase
+from backend.identity.workspaces_db import (
+    ProductResourceRow,
+    ProductRow,
+    WorkspaceRow,
+    WorkspacesBase,
+)
 
 from .._support import db_engine, fake_current_user
 

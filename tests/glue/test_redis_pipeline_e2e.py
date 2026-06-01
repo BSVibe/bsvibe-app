@@ -258,7 +258,7 @@ async def seeded_product(
 ) -> uuid.UUID:
     """L-P1: messages API requires a workspace to have at least one product.
     Seeds Workspace + Product (PG enforces products.workspace_id FK)."""
-    from backend.workspaces.db import ProductRow, WorkspaceRow
+    from backend.identity.workspaces_db import ProductRow, WorkspaceRow
 
     product_id = uuid.uuid4()
     async with sf() as s:

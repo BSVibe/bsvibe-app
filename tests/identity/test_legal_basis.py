@@ -13,7 +13,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 import backend.connectors.db  # noqa: F401 — FK target for resource_bindings
-from backend.workspaces.db import WorkspaceRow, WorkspacesBase
+from backend.identity.workspaces_db import WorkspaceRow, WorkspacesBase
 from tests._support import db_engine
 
 pytestmark = pytest.mark.asyncio
@@ -62,7 +62,7 @@ async def test_legal_basis_persists_consent(session_factory) -> None:
 @pytest.mark.parametrize("invalid", ["legitimate_interest", "", "CONTRACT"])
 async def test_legal_basis_literal_validation_rejects_garbage(invalid: str) -> None:
     """The validator on the column must reject values outside the Literal."""
-    from backend.workspaces.db import validate_legal_basis
+    from backend.identity.workspaces_db import validate_legal_basis
 
     assert validate_legal_basis("contract") == "contract"
     assert validate_legal_basis("consent") == "consent"

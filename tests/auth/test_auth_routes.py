@@ -14,7 +14,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from backend.identity.db import MembershipRow, UserRow
-from backend.workspaces.db import WorkspaceRow
+from backend.identity.workspaces_db import WorkspaceRow
 
 pytestmark = pytest.mark.asyncio
 

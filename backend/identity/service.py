@@ -26,8 +26,8 @@ from backend.identity.infrastructure.repositories import (
     SqlAlchemyUserRepository,
     SqlAlchemyWorkspaceRepository,
 )
+from backend.identity.workspaces_db import WorkspaceRow
 from backend.router.accounts.account_service import ensure_personal_account
-from backend.workspaces.db import WorkspaceRow
 
 
 def _default_workspace_name(email: str | None) -> str:
