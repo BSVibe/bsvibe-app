@@ -27,7 +27,7 @@ Stream names are stable identifiers shared by producer + consumer:
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Protocol, cast
+from typing import TYPE_CHECKING, Any, Final, Protocol, cast
 
 import structlog
 
@@ -49,15 +49,39 @@ class _RedisXadd(Protocol):
     async def xadd(self, name: str, fields: dict[str, Any], **kwargs: Any) -> Any: ...
 
 
-# A process-wide lazy client, created at most once and ONLY in redis_streams
-# mode. Producers that have no client of their own to inject (the HTTP routes:
-# messages.py / webhooks.py) acquire it via :func:`get_emit_redis_client`. The
-# long-running worker daemon builds + owns its client explicitly in
-# ``backend.workflow.infrastructure.workers.run`` instead (so it can ``aclose`` it on shutdown) — this
-# cache is for the request-path producers that have no such lifecycle hook.
-# Held in a single-element list so the lazy build mutates the container, not a
-# rebound module global (keeps the acquirer free of a ``global`` statement).
-_EMIT_CLIENT_CACHE: list[_RedisXadd | None] = [None]
+class _EmitClientCache:
+    """Process-wide lazy client holder — Lift N defensive pattern #3.
+
+    A small encapsulation so the *binding* is immutable (``Final``) and only
+    the instance's internal slot mutates. Replaces the pre-Lift-N single-
+    element ``list[X | None]`` module-level mutable; same semantics, cleaner
+    boundary for the no-module-level-mutable invariant (v8 §22 #3 / D45).
+
+    Producers that have no client of their own to inject (the HTTP routes:
+    ``messages.py`` / ``webhooks.py``) acquire it via
+    :func:`get_emit_redis_client`. The long-running worker daemon builds +
+    owns its client explicitly in
+    :mod:`backend.workflow.infrastructure.workers.run` instead (so it can
+    ``aclose`` it on shutdown) — this cache is for the request-path producers
+    that have no such lifecycle hook.
+    """
+
+    __slots__ = ("_client",)
+
+    def __init__(self) -> None:
+        self._client: _RedisXadd | None = None
+
+    def get(self) -> _RedisXadd | None:
+        return self._client
+
+    def set(self, client: _RedisXadd | None) -> None:
+        self._client = client
+
+    def reset(self) -> None:
+        self._client = None
+
+
+_EMIT_CACHE: Final[_EmitClientCache] = _EmitClientCache()
 
 
 def get_emit_redis_client(settings: Settings) -> _RedisXadd | None:
@@ -75,18 +99,18 @@ def get_emit_redis_client(settings: Settings) -> _RedisXadd | None:
     """
     if settings.worker_mode != "redis_streams":
         return None
-    if _EMIT_CLIENT_CACHE[0] is None:
+    if _EMIT_CACHE.get() is None:
         import redis.asyncio as redis_aio  # noqa: PLC0415 — only imported in redis mode
 
-        _EMIT_CLIENT_CACHE[0] = cast(
-            "_RedisXadd", redis_aio.from_url(settings.redis_url, decode_responses=True)
+        _EMIT_CACHE.set(
+            cast("_RedisXadd", redis_aio.from_url(settings.redis_url, decode_responses=True))
         )
-    return _EMIT_CLIENT_CACHE[0]
+    return _EMIT_CACHE.get()
 
 
 def reset_emit_redis_client() -> None:
     """Drop the cached emit client (test isolation hook)."""
-    _EMIT_CLIENT_CACHE[0] = None
+    _EMIT_CACHE.reset()
 
 
 async def emit_stream_notification(

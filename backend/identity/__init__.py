@@ -6,3 +6,8 @@ first-class ``UserRow`` and, through ``MembershipRow``, to the workspace the
 request operates within. Workspace bootstrap (§10.1) lives in
 :mod:`backend.identity.service`.
 """
+
+from __future__ import annotations
+
+# Lift N defensive pattern #1 (v8 §22) — namespace-only, no re-exports.
+__all__: list[str] = []

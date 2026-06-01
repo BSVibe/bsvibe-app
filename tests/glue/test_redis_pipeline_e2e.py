@@ -443,7 +443,7 @@ async def test_get_emit_redis_client_builds_nothing_in_db_polling() -> None:
     emit_mod.reset_emit_redis_client()
     assert emit_mod.get_emit_redis_client(Settings()) is None
     # And the cache stays empty.
-    assert emit_mod._EMIT_CLIENT_CACHE[0] is None
+    assert emit_mod._EMIT_CACHE.get() is None
 
 
 # --------------------------------------------------------------------------

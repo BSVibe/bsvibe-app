@@ -6,3 +6,6 @@ repositories + worker entry points.
 """
 
 from __future__ import annotations
+
+# Lift N defensive pattern #1 (v8 §22) — public surface lives in nested modules.
+__all__: list[str] = []

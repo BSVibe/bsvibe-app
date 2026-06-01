@@ -66,6 +66,11 @@ jobs:
       - name: Ruff (format check)
         run: uv run ruff format --check backend/ tests/ bsvibe_sdk/ plugin/
 
+      - name: Import contracts (import-linter)
+        # Lift N defensive pattern #2 / #9 (v8 §22 / D45) — critical CI gate.
+        # SDK isolation, common-leaf one-way, connector-plugin allow-list.
+        run: uv run lint-imports
+
       - name: mypy --strict (backend/)
         run: uv run mypy backend/
 
