@@ -33,14 +33,22 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.api.deps import get_current_user_row, get_db_session, get_workspace_id
-from backend.api.v1._workflow_deps import get_decision_repository, get_run_repository
+from backend.api.v1._workflow_deps import (
+    get_decision_repository,
+    get_deliverable_repository,
+    get_run_repository,
+)
 from backend.api.v1.decisions import _vault_root
 from backend.identity.db import UserRow
 from backend.knowledge.graph.storage import FileSystemStorage
 from backend.knowledge.retrieval.resolved_decisions_retriever import ResolvedDecisionsRetriever
 from backend.workflow.application.agent_runner import AgentRunner
 from backend.workflow.application.audit_events import DecisionResolved
-from backend.workflow.domain.repositories import DecisionRepository, RunRepository
+from backend.workflow.domain.repositories import (
+    DecisionRepository,
+    DeliverableRepository,
+    RunRepository,
+)
 from backend.workflow.domain.verified_deliverable import settle_run_context
 from backend.workflow.infrastructure.db import (
     Decision,
@@ -319,6 +327,7 @@ async def resolve_checkpoint(
     session: Annotated[AsyncSession, Depends(get_db_session)],
     decisions: Annotated[DecisionRepository, Depends(get_decision_repository)],
     runs: Annotated[RunRepository, Depends(get_run_repository)],
+    deliverables: Annotated[DeliverableRepository, Depends(get_deliverable_repository)],
 ) -> ResolveResponse:
     """Resolve a pending Decision with the founder's answer and resume the run.
 
@@ -480,7 +489,9 @@ async def resolve_checkpoint(
     # the same handler serves every Decision kind that opts into that action.
     runner = AgentRunner(session)
     if action_key == ACTION_SHIP:
-        await _ship_decision_run(session, runner, run=run, decision=decision)
+        await _ship_decision_run(
+            session, runner, run=run, decision=decision, deliverables=deliverables
+        )
     elif action_key == ACTION_DISCARD:
         await _discard_decision_run(runner, run=run, decision=decision)
     else:
@@ -532,6 +543,7 @@ async def _ship_decision_run(
     *,
     run: ExecutionRun,
     decision: Decision,
+    deliverables: DeliverableRepository,
 ) -> None:
     """L-D2 ``ship`` handler — founder overrides verification.
 
@@ -580,11 +592,9 @@ async def _ship_decision_run(
     # a duplicate — the existing row already carries the verified artifact
     # refs. For verification_failed / human_review_required Decisions there
     # is no prior Deliverable, so the mint below is the first one.
-    existing_deliverable = (
-        await session.execute(select(Deliverable).where(Deliverable.run_id == run.id).limit(1))
-    ).scalar_one_or_none()
+    existing_deliverable = await deliverables.find_first_by_run(run.id)
     if existing_deliverable is None:
-        session.add(
+        await deliverables.add(
             Deliverable(
                 id=uuid.uuid4(),
                 run_id=run.id,

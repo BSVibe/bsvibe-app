@@ -30,6 +30,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.api.deps import get_artifact_store, get_db_session, get_workspace_id
+from backend.api.v1._workflow_deps import get_deliverable_repository
 from backend.config import get_settings
 from backend.connectors.db import ConnectorAccountRow
 from backend.extensions.plugin.base import PluginMeta, PluginRunError
@@ -38,6 +39,7 @@ from backend.extensions.plugin.runner import PluginRunner
 from backend.router.accounts.crypto import CredentialCipher
 from backend.storage.artifact_store import ArtifactStore, LocalFilesystemArtifactStore
 from backend.workflow.application.verification_service import RETRIEVED_KNOWLEDGE_RATIONALE
+from backend.workflow.domain.repositories import DeliverableRepository
 from backend.workflow.infrastructure.db import (
     Deliverable,
     DeliverableType,
@@ -260,6 +262,7 @@ def _to_verification(row: VerificationResult) -> VerificationReport:
 async def list_deliverables(
     workspace_id: Annotated[uuid.UUID, Depends(get_workspace_id)],
     session: Annotated[AsyncSession, Depends(get_db_session)],
+    deliverables: Annotated[DeliverableRepository, Depends(get_deliverable_repository)],
     run_id: uuid.UUID | None = None,
     limit: int = 50,
 ) -> list[DeliverableResponse]:
@@ -268,12 +271,7 @@ async def list_deliverables(
     Optional ``run_id`` narrows to one run's deliverables.
     """
     limit = max(1, min(limit, 200))
-    stmt = select(Deliverable).where(Deliverable.workspace_id == workspace_id)
-    if run_id is not None:
-        stmt = stmt.where(Deliverable.run_id == run_id)
-    stmt = stmt.order_by(Deliverable.created_at.desc()).limit(limit)
-    result = await session.execute(stmt)
-    rows = list(result.scalars().all())
+    rows = await deliverables.list_by_workspace(workspace_id, run_id=run_id, limit=limit)
     verified = await _verified_run_ids(session, workspace_id, {row.run_id for row in rows})
     return [_to_response(row, verified=row.run_id in verified) for row in rows]
 
@@ -283,9 +281,10 @@ async def get_deliverable(
     deliverable_id: uuid.UUID,
     workspace_id: Annotated[uuid.UUID, Depends(get_workspace_id)],
     session: Annotated[AsyncSession, Depends(get_db_session)],
+    deliverables: Annotated[DeliverableRepository, Depends(get_deliverable_repository)],
 ) -> DeliverableResponse:
     """Fetch one Deliverable by id, scoped to the caller's workspace."""
-    row = await session.get(Deliverable, deliverable_id)
+    row = await deliverables.get(deliverable_id)
     if row is None or row.workspace_id != workspace_id:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -300,6 +299,7 @@ async def get_deliverable_report(
     deliverable_id: uuid.UUID,
     workspace_id: Annotated[uuid.UUID, Depends(get_workspace_id)],
     session: Annotated[AsyncSession, Depends(get_db_session)],
+    deliverables: Annotated[DeliverableRepository, Depends(get_deliverable_repository)],
 ) -> DeliverableReportResponse:
     """The glass-box proof for one deliverable, scoped to the caller's workspace.
 
@@ -310,7 +310,7 @@ async def get_deliverable_report(
     verdict. 404 when the deliverable isn't in the caller's workspace. A run
     with no verification yields a calm empty list rather than erroring.
     """
-    row = await session.get(Deliverable, deliverable_id)
+    row = await deliverables.get(deliverable_id)
     if row is None or row.workspace_id != workspace_id:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -391,6 +391,7 @@ async def get_deliverable_artifact(
     workspace_id: Annotated[uuid.UUID, Depends(get_workspace_id)],
     session: Annotated[AsyncSession, Depends(get_db_session)],
     store: Annotated[ArtifactStore, Depends(get_artifact_store)],
+    deliverables: Annotated[DeliverableRepository, Depends(get_deliverable_repository)],
 ) -> ArtifactContentResponse:
     """Serve one artifact file's CONTENT, read-only, scoped to the caller.
 
@@ -413,7 +414,7 @@ async def get_deliverable_artifact(
     (``truncated: true`` past the cap). A binary file yields a short
     "binary file, N bytes" note (``binary: true``) instead of raw bytes.
     """
-    row = await session.get(Deliverable, deliverable_id)
+    row = await deliverables.get(deliverable_id)
     if row is None or row.workspace_id != workspace_id:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -642,6 +643,7 @@ async def retract_deliverable(
     workspace_id: Annotated[uuid.UUID, Depends(get_workspace_id)],
     session: Annotated[AsyncSession, Depends(get_db_session)],
     handler: Annotated[RetractHandler, Depends(get_retract_handler)],
+    deliverables: Annotated[DeliverableRepository, Depends(get_deliverable_repository)],
 ) -> RetractResponse:
     """Roll a delivered direct-mode artifact back (B12b / Workflow §1.2 + §9).
 
@@ -662,7 +664,7 @@ async def retract_deliverable(
       short-circuit no-op (the plugin handlers are idempotent, but the API
       avoids even attempting them).
     """
-    row = await session.get(Deliverable, deliverable_id)
+    row = await deliverables.get(deliverable_id)
     if row is None or row.workspace_id != workspace_id:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
