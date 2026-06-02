@@ -766,3 +766,84 @@ async def test_trello_missing_api_key_soft_fails_no_call_no_wedge(
 
     async with sf() as s:
         assert (await s.execute(select(DeliveryEventRow))).first() is None
+
+
+# ── idempotence (Q3-Slack+Telegram dogfood, Roadmap §2 (4)) ────────────────────
+
+
+@respx.mock
+async def test_slack_re_drain_does_not_double_post(
+    sf: async_sessionmaker[AsyncSession], cipher: CredentialCipher
+) -> None:
+    """A second :meth:`DeliveryWorker.drain_once` after the first success makes
+    NO additional Slack call — idempotence comes from the DELETE-on-success at
+    the end of ``drain_once`` (multi-server safety, Lift J / v8 §11.5). Concrete
+    proof for the Slack outbound dogfood: the same verified Deliverable is never
+    posted to Slack twice through repeated worker ticks."""
+    workspace_id = uuid.uuid4()
+    route = respx.post(f"{SLACK_API}/chat.postMessage").mock(
+        return_value=httpx.Response(200, json={"ok": True, "ts": "171.99", "channel": "C123"})
+    )
+
+    async with sf() as s:
+        await _seed_slack_connector(s, cipher, workspace_id)
+        await _seed_verified_deliverable(s, workspace_id)
+
+    registry = await _plugins()
+    adapter = build_connector_delivery_adapter(
+        session_factory=sf, plugins=list(registry.values()), cipher=cipher
+    )
+    worker = DeliveryWorker(
+        session_factory=sf,
+        dispatcher=adapter,
+        config=DeliveryWorkerConfig(batch_size=10, poll_interval_s=0.01),
+    )
+
+    assert await worker.drain_once() == 1
+    assert route.call_count == 1
+
+    # A second tick has no event to claim → no additional Slack call.
+    assert await worker.drain_once() == 0
+    assert route.call_count == 1
+
+    async with sf() as s:
+        assert (await s.execute(select(DeliveryEventRow))).first() is None
+
+
+@respx.mock
+async def test_telegram_re_drain_does_not_double_post(
+    sf: async_sessionmaker[AsyncSession], cipher: CredentialCipher
+) -> None:
+    """A second :meth:`DeliveryWorker.drain_once` after the first success makes
+    NO additional Telegram call — same idempotence guarantee as Slack, asserted
+    against the Telegram sendMessage path for the Q3 outbound dogfood."""
+    workspace_id = uuid.uuid4()
+    route = respx.post(f"{TELEGRAM_API}/bot123:bot-token/sendMessage").mock(
+        return_value=httpx.Response(
+            200, json={"ok": True, "result": {"message_id": 42, "chat": {"id": 555}}}
+        )
+    )
+
+    async with sf() as s:
+        await _seed_telegram_connector(s, cipher, workspace_id)
+        await _seed_verified_deliverable(s, workspace_id)
+
+    registry = await _plugins()
+    adapter = build_connector_delivery_adapter(
+        session_factory=sf, plugins=list(registry.values()), cipher=cipher
+    )
+    worker = DeliveryWorker(
+        session_factory=sf,
+        dispatcher=adapter,
+        config=DeliveryWorkerConfig(batch_size=10, poll_interval_s=0.01),
+    )
+
+    assert await worker.drain_once() == 1
+    assert route.call_count == 1
+
+    # A second tick has no event to claim → no additional Telegram call.
+    assert await worker.drain_once() == 0
+    assert route.call_count == 1
+
+    async with sf() as s:
+        assert (await s.execute(select(DeliveryEventRow))).first() is None
