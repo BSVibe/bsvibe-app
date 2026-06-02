@@ -49,6 +49,9 @@ EXPECTED_ROUTES: dict[str, set[tuple[str, str]]] = {
         ("POST", "/nodes/{node_ref:path}/retract"),
         ("POST", "/nodes/{node_ref:path}/correct"),
         ("POST", "/corrections/{correction_id}/undo"),
+        # Lift M4a — proof surface (Fleet + Inside trust panel).
+        ("GET", "/trust/fleet"),
+        ("GET", "/trust/{product_id}"),
     },
     "backend.api.v1.products": {
         ("GET", ""),
@@ -155,6 +158,7 @@ EXPECTED_SUBMODULES: dict[str, list[str]] = {
         "backend.api.v1.inside.observations",
         "backend.api.v1.inside.graph",
         "backend.api.v1.inside.retraction",
+        "backend.api.v1.inside.trust",
         "backend.api.v1.inside._schemas",
         "backend.api.v1.inside._dependencies",
         "backend.api.v1.inside._helpers",

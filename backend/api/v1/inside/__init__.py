@@ -34,14 +34,20 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
-from . import concepts, graph, observations, retraction
+from . import concepts, graph, observations, retraction, trust
 from ._dependencies import build_inside_graph, build_inside_index, build_inside_storage
 
 # Single aggregator router — see deliverables/__init__.py for the rationale
 # behind ``routes.extend(...)`` over ``include_router(child)`` (empty-path
 # routes under a non-prefixed child router).
 router = APIRouter()
-for _sub in (concepts.router, observations.router, graph.router, retraction.router):
+for _sub in (
+    concepts.router,
+    observations.router,
+    graph.router,
+    retraction.router,
+    trust.router,
+):
     router.routes.extend(_sub.routes)
 
 __all__ = [
