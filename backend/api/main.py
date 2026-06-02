@@ -13,13 +13,6 @@ import structlog
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-# Eager import — registers AuditEventSubscriber on the EventBus singleton
-# at module load (Lift R2a: audit subscribes on `plugin.audit` import).
-# Without this, audit emissions fall back to logging-relay and audit_outbox
-# stays empty. PluginLoader (extensions/plugin/loader.py) doesn't reach
-# audit because audit has no plugin.py — it uses the standard library
-# `plugin.audit` package self-registration instead.
-import plugin.audit  # noqa: F401
 from backend.api.auth import router as auth_router
 from backend.api.health import router as health_router
 from backend.api.middleware import WorkspaceContextMiddleware
@@ -30,6 +23,7 @@ from backend.api.v1.workers import public_router as workers_public_router
 from backend.api.webhooks import router as webhooks_router
 from backend.config import get_settings
 from backend.shared.core.logging import configure_logging
+from plugin.audit import register_audit_subscriber
 
 logger = structlog.get_logger(__name__)
 
@@ -37,6 +31,7 @@ logger = structlog.get_logger(__name__)
 def create_app() -> FastAPI:
     settings = get_settings()
     configure_logging(level="INFO", service_name="bsvibe-app")
+    register_audit_subscriber()
 
     app = FastAPI(
         title="BSVibe",
