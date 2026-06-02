@@ -164,7 +164,9 @@ async def test_product_trust_detail_shape(
         drained_at=_NOW - timedelta(days=2),
     )
     async with sf() as s:
-        s.add_all([run, decision, drain])
+        s.add(run)
+        await s.flush()
+        s.add_all([decision, drain])
         await s.commit()
 
     r = await client.get(f"/api/v1/inside/trust/{product_id}")
