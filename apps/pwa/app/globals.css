@@ -7037,3 +7037,364 @@ main.login {
   opacity: 0.6;
 }
 /* ── END feat/decisions-unify block ────────────────────────────────────── */
+
+/* ── Ontology Inspect / Correct (Lift M3b) ─────────────────────────────────
+   Founder-facing write surface on the Knowledge inspector panel: the calm
+   Retract + Correct buttons inside the panel body, the centered pre-flight
+   modal, the 30-second undo toast that floats over the bottom of the canvas.
+   Reuses the existing palette tokens (--ink, --ink-2, --ink-3, --hair-strong,
+   --surface, --accent-bg, --radius, --radius-sm) so it inherits both themes
+   without explicit overrides. */
+
+/* Inspector action row — sits at the bottom of the .kgraph__panel-body.
+   Right-aligns so the Retract button reads as the rightmost / heaviest
+   verb, matching the design ASCII's `[ Correct ]   [ Retract ]` layout. */
+.kgraph__block--actions {
+  margin-top: auto;
+  padding-top: 12px;
+  border-top: 1px solid var(--hair-strong);
+}
+
+.ontology-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.ontology-actions__button {
+  appearance: none;
+  padding: 8px 14px;
+  font: inherit;
+  font-size: 0.86rem;
+  font-weight: 550;
+  letter-spacing: -0.01em;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--hair-strong);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: border-color 120ms ease, color 120ms ease;
+}
+
+.ontology-actions__button:hover {
+  border-color: var(--ink-3);
+}
+
+.ontology-actions__button:focus-visible {
+  outline: 2px solid var(--ink-3);
+  outline-offset: 1px;
+}
+
+.ontology-actions__button--secondary {
+  color: var(--ink-2);
+}
+
+.ontology-actions__button--danger {
+  color: var(--ink);
+}
+
+.ontology-actions__button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+/* Retracted-node visual signal — opacity dial + strikethrough on the heading
+   name. Scoped to the panel so the surrounding chrome (close button, eyebrow)
+   stays legible. */
+.kgraph__panel--retracted .kgraph__panel-body {
+  opacity: 0.55;
+}
+
+.node--retracted {
+  text-decoration: line-through;
+  text-decoration-color: var(--ink-3);
+  color: var(--ink-2);
+}
+
+/* Edited-badge — small pill next to the heading name. */
+.kgraph__panel-edited-badge {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 8px;
+  padding: 2px 8px;
+  font-size: 0.66rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--ink-2);
+  background: var(--accent-bg);
+  border-radius: 999px;
+  vertical-align: middle;
+}
+
+/* Modal — calm centered card on a dimmed backdrop. */
+.ontology-modal__backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: color-mix(in srgb, var(--ink) 35%, transparent);
+}
+
+/* The backdrop is a full-bleed transparent button so a click anywhere outside
+   the modal closes it AND keyboard activation (Enter/Space) works without a
+   custom keydown handler on the wrapping div. */
+.ontology-modal__backdrop-button {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  background: transparent;
+  border: none;
+  cursor: default;
+}
+
+.ontology-modal {
+  position: relative;
+  z-index: 1;
+}
+
+.ontology-modal {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  width: min(440px, 100%);
+  max-height: calc(100vh - 48px);
+  padding: 22px;
+  overflow-y: auto;
+  background: var(--surface);
+  border: 1px solid var(--hair-strong);
+  border-radius: var(--radius);
+  box-shadow: 0 20px 50px color-mix(in srgb, var(--ink) 20%, transparent);
+}
+
+.ontology-modal:focus {
+  outline: none;
+}
+
+.ontology-modal__heading {
+  margin: 0;
+  font-size: 1.05rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--ink);
+}
+
+.ontology-modal__subheading {
+  margin: 0 0 6px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+
+.ontology-modal__lede {
+  margin: 0;
+  font-size: 0.88rem;
+  color: var(--ink-2);
+}
+
+.ontology-modal__dependents {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px;
+  font-size: 0.85rem;
+  color: var(--ink-2);
+  background: var(--accent-bg);
+  border-radius: var(--radius-sm);
+}
+
+.ontology-modal__field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.ontology-modal__field-label {
+  font-size: 0.78rem;
+  font-weight: 550;
+  color: var(--ink-2);
+}
+
+.ontology-modal__input,
+.ontology-modal__textarea {
+  width: 100%;
+  padding: 8px 10px;
+  font: inherit;
+  font-size: 0.88rem;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--hair-strong);
+  border-radius: var(--radius-sm);
+  resize: vertical;
+}
+
+.ontology-modal__textarea--large {
+  min-height: 140px;
+}
+
+.ontology-modal__input:focus-visible,
+.ontology-modal__textarea:focus-visible {
+  outline: 2px solid var(--ink-3);
+  outline-offset: 1px;
+}
+
+.ontology-modal__error {
+  margin: 0;
+  font-size: 0.82rem;
+  color: #c2569e;
+}
+
+.ontology-modal__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.ontology-modal__button {
+  appearance: none;
+  padding: 9px 16px;
+  font: inherit;
+  font-size: 0.88rem;
+  font-weight: 550;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  border: 1px solid var(--hair-strong);
+  background: var(--surface);
+  color: var(--ink);
+  transition: border-color 120ms ease, background 120ms ease;
+}
+
+.ontology-modal__button:hover {
+  border-color: var(--ink-3);
+}
+
+.ontology-modal__button:focus-visible {
+  outline: 2px solid var(--ink-3);
+  outline-offset: 1px;
+}
+
+.ontology-modal__button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.ontology-modal__button--secondary {
+  color: var(--ink-2);
+}
+
+.ontology-modal__button--primary {
+  background: var(--ink);
+  color: var(--surface);
+  border-color: var(--ink);
+}
+
+.ontology-modal__button--primary:hover {
+  background: var(--ink-2);
+  border-color: var(--ink-2);
+}
+
+.ontology-modal__button--danger {
+  background: var(--ink);
+  color: var(--surface);
+  border-color: var(--ink);
+}
+
+.ontology-modal__button--danger:hover {
+  background: var(--ink-2);
+  border-color: var(--ink-2);
+}
+
+/* Undo toast — floats over the bottom-center of the canvas with the live
+   countdown. Lasts 30s in countdown state, then stays until dismissed in a
+   terminal state (undone / expired / error). */
+.ontology-toast {
+  position: fixed;
+  z-index: 250;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  min-width: min(420px, calc(100vw - 32px));
+  padding: 12px 16px;
+  background: var(--surface);
+  border: 1px solid var(--hair-strong);
+  border-radius: var(--radius);
+  box-shadow: 0 12px 32px color-mix(in srgb, var(--ink) 18%, transparent);
+}
+
+.ontology-toast__body {
+  flex: 1;
+}
+
+.ontology-toast__message {
+  margin: 0;
+  font-size: 0.88rem;
+  color: var(--ink);
+}
+
+.ontology-toast__actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.ontology-toast__undo {
+  appearance: none;
+  padding: 7px 14px;
+  font: inherit;
+  font-size: 0.84rem;
+  font-weight: 550;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--hair-strong);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.ontology-toast__undo:hover {
+  border-color: var(--ink-3);
+}
+
+.ontology-toast__undo:focus-visible {
+  outline: 2px solid var(--ink-3);
+  outline-offset: 1px;
+}
+
+.ontology-toast__undo:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.ontology-toast__dismiss {
+  appearance: none;
+  width: 28px;
+  height: 28px;
+  font-size: 1.1rem;
+  line-height: 1;
+  color: var(--ink-3);
+  background: none;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.ontology-toast__dismiss:hover {
+  color: var(--ink);
+  border-color: var(--hair-strong);
+}
+
+.ontology-toast--undone .ontology-toast__message,
+.ontology-toast--expired .ontology-toast__message,
+.ontology-toast--error .ontology-toast__message {
+  color: var(--ink-2);
+}
+/* ── END Lift M3b block ───────────────────────────────────────────────── */

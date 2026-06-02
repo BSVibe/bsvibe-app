@@ -711,6 +711,74 @@ export interface KnowledgeGraph {
   edges: KnowledgeGraphEdge[];
 }
 
+// ── Ontology retraction / correction (REAL endpoints, Lift M3a backend) ────
+
+/** The action a `RetractionSignal` carries — one of `retract` (queue a tombstone
+ *  write after the 30s undo window) or `correct` (queue a field rewrite). The
+ *  literal mirrors `backend/knowledge/domain/retraction.py:OntologyAction`. */
+export type OntologyAction = "retract" | "correct";
+
+/** Mirror of backend `RetractionSignal` (extra=forbid, frozen). Returned by the
+ *  retract/correct endpoints inside `RetractResponse.signal`. Identity
+ *  (`id`/`workspace_id`/`actor_id`) is the idempotency key; `apply_at` is the
+ *  server-stamped deadline before which `/corrections/{id}/undo` is honored.
+ *
+ *  `id` is the `correction_id` the undo endpoint expects (UUID-as-string over
+ *  the wire). `apply_at` / `issued_at` are ISO-8601 strings server-stamped at
+ *  intake. `reason` is the optional founder-typed free text (max 280 chars).
+ */
+export interface RetractionSignal {
+  id: string;
+  workspace_id: string;
+  actor_id: string;
+  node_ref: string;
+  action: OntologyAction;
+  issued_at: string;
+  apply_at: string;
+  reason: string | null;
+  source: string;
+}
+
+/** `POST /api/v1/inside/nodes/{node_ref}/retract` + `…/correct` response (backend
+ *  `RetractResponse`, extra=forbid). The issued signal + an idempotency flag
+ *  (`created=false` when re-POSTing the same `correction_id`) + the undo window
+ *  in seconds the UI uses to render the countdown. */
+export interface RetractResponse {
+  signal: RetractionSignal;
+  created: boolean;
+  undo_window_seconds: number;
+}
+
+/** `POST /api/v1/inside/corrections/{id}/undo` response (backend `UndoResponse`).
+ *  Terminal status the toast renders into "Restored" / "Undo window expired"
+ *  / "Already…". `not_found` is surfaced as an `ApiError` 404 by the wire
+ *  layer and never lands here. */
+export type UndoStatus = "undone" | "expired" | "already_applied" | "already_undone";
+
+export interface UndoCorrectionResponse {
+  correction_id: string;
+  status: UndoStatus;
+}
+
+/** `POST /api/v1/inside/nodes/{node_ref}/retract` body (backend `RetractRequest`,
+ *  extra=forbid). Both fields optional; `correction_id` lets clients retry
+ *  safely (idempotency key). `reason` is founder-typed free text (max 280
+ *  chars; design Q2 locks low-friction optional). */
+export interface RetractRequestBody {
+  correction_id?: string;
+  reason?: string;
+}
+
+/** `POST /api/v1/inside/nodes/{node_ref}/correct` body (backend `CorrectRequest`,
+ *  extra=forbid). `corrections` is a whitelisted field → new-value mapping
+ *  the writer applies on apply_at — M3b PWA surfaces only `question` /
+ *  `answer` / `body` per design §3.3. */
+export interface CorrectRequestBody {
+  correction_id?: string;
+  reason?: string;
+  corrections?: Record<string, string>;
+}
+
 // ── Connectors (REAL endpoint /api/v1/connectors) ─────────────────────────
 
 /** The connector names the backend's `ConnectorCreate.connector` validator
