@@ -745,5 +745,42 @@
     "nextWorking": "Working on it…",
     "nextShipped": "Shipped. Nothing needed from you.",
     "nextFailed": "This didn't finish. Nothing for you to do right now."
+  },
+  "trust": {
+    "glyphLabel": {
+      "rising": "Trust rising",
+      "flat": "Trust steady",
+      "falling": "Trust falling",
+      "dormant": "Dormant"
+    },
+    "legend": {
+      "title": "Trust arrows",
+      "rising": "↗ Touch time dropping — trust rising",
+      "flat": "→ Touch time stable",
+      "falling": "↘ Touch time rising — trust falling",
+      "dormant": "· Dormant or not enough data yet",
+      "dismiss": "Got it"
+    },
+    "panel": {
+      "regionLabel": "Trust for this product",
+      "heading": "Trust",
+      "loading": "Looking at the trust signals…",
+      "error": "Couldn't read the trust signals just now.",
+      "trendLabel": "Trend",
+      "trendRising": "Touch time is dropping",
+      "trendFlat": "Touch time is stable",
+      "trendFalling": "Touch time is rising",
+      "trendDormant": "Not enough data yet",
+      "touchLabel": "Touch time",
+      "touchValue": "{hours} hours of human review in the last {days} days",
+      "touchHoursNone": "—",
+      "depositLabel": "Deposits",
+      "depositValue": "{count} verified knowledge points ({slope})",
+      "slopeSteady": "steady",
+      "contractLabel": "Contract",
+      "contractSteady": "Contract strength steady ✓",
+      "contractAmber": "Contract amber — {reason}",
+      "contractAmberFallback": "cross-check triggered"
+    }
   }
 }

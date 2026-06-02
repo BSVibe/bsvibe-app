@@ -95,6 +95,24 @@ function installFetch(opts: {
       const d = opts.deliverables?.(runId) ?? [];
       return d instanceof Response ? d : json(d);
     }
+    // M4b: TrustPanel reads /api/v1/inside/trust/{id} on mount. The
+    // ProductDetail tests don't care about trust content — just that the
+    // request doesn't blow up. Return a minimal dormant payload so the
+    // panel renders quietly and the other assertions stay focused.
+    if (url.startsWith("/api/v1/inside/trust/")) {
+      return json({
+        product_id: BLOG.id,
+        touch_time: {
+          total_touch_time_hours: 0,
+          decisions_resolved_count: 0,
+          decisions_pending_count: 0,
+          window_days: 14,
+        },
+        deposit_rate: { deposit_count: 0, slope_per_day: 0, window_days: 14 },
+        trend_arrow: { glyph: "·", reason: "no activity in window" },
+        contract_strength: { is_steady: true, amber_reason: null },
+      });
+    }
     throw new Error(`unexpected fetch ${url}`);
   });
 }

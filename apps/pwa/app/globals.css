@@ -7398,3 +7398,147 @@ main.login {
   color: var(--ink-2);
 }
 /* ── END Lift M3b block ───────────────────────────────────────────────── */
+
+/* ── BEGIN Lift M4b: Fleet trend-arrow glyph + Inside trust panel ─────── */
+
+/* The Fleet glyph itself — design §3.2 wants ONE visual element per product
+   lane: the four-state ↗ → ↘ · character. Render in the body-text register
+   (no badge / no pill) so it stays calm next to the product name. The
+   ".trend-arrow--falling" tone is the only one that warms — and only to
+   ink, never to background — so it remains "hint" not "alarm" per §3.2. */
+.trend-arrow {
+  font-size: 0.95em;
+  line-height: 1;
+  display: inline-block;
+  color: var(--ink-2);
+  cursor: help;
+  user-select: none;
+}
+.trend-arrow--rising {
+  color: var(--ink-1, var(--ink-2));
+}
+.trend-arrow--flat {
+  color: var(--ink-2);
+}
+.trend-arrow--falling {
+  color: var(--amber-ink);
+}
+.trend-arrow--dormant {
+  color: var(--ink-2);
+  opacity: 0.6;
+}
+
+/* Placement modifiers — context-specific (rail vs. products-index row vs.
+   trust panel) so each surface controls its own spacing. */
+.products-index__arrow {
+  margin-left: 0.5rem;
+  margin-right: 0.25rem;
+}
+.rail-products__arrow {
+  margin-left: auto;
+  padding-left: 0.5rem;
+}
+
+/* First-visit legend popover — sits below the products list, calm and
+   dismissable. Visually a quiet card; not a floating modal. */
+.trend-arrow-legend {
+  margin: 0.75rem 0 0;
+  padding: 0.75rem 1rem;
+  border: 1px solid var(--border, rgba(0, 0, 0, 0.08));
+  border-radius: 8px;
+  background: var(--bg-2, transparent);
+  font-size: 0.875rem;
+  color: var(--ink-2);
+  max-width: 28rem;
+}
+.trend-arrow-legend__title {
+  margin: 0 0 0.5rem;
+  font-weight: 600;
+  color: var(--ink-1, inherit);
+}
+.trend-arrow-legend__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+.trend-arrow-legend__row {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+}
+.trend-arrow-legend__dismiss {
+  margin-top: 0.5rem;
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--ink-2);
+  font: inherit;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.trend-arrow-legend__dismiss:hover {
+  color: var(--ink-1, inherit);
+}
+
+/* L3 Inside trust panel (design §4.3) — calm four-line summary above the
+   product detail. No background fill, no chart; just a quiet heading and
+   four label/value rows. */
+.trust-panel {
+  margin: 1rem 0 1.25rem;
+  padding: 0.75rem 0;
+  border-top: 1px solid var(--border, rgba(0, 0, 0, 0.08));
+  border-bottom: 1px solid var(--border, rgba(0, 0, 0, 0.08));
+}
+.trust-panel--loading,
+.trust-panel--error {
+  border-bottom: 1px solid var(--border, rgba(0, 0, 0, 0.08));
+}
+.trust-panel__heading {
+  margin: 0 0 0.5rem;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--ink-2);
+}
+.trust-panel__loading,
+.trust-panel__error {
+  margin: 0;
+  color: var(--ink-2);
+  font-size: 0.875rem;
+}
+.trust-panel__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+.trust-panel__line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.5rem;
+  font-size: 0.9375rem;
+  color: var(--ink-1, inherit);
+}
+.trust-panel__label {
+  min-width: 6.5rem;
+  color: var(--ink-2);
+  font-size: 0.8125rem;
+}
+.trust-panel__value {
+  flex: 1 1 auto;
+}
+/* Goodhart cross-check amber treatment — design §2.1 + Q5: a single calm
+   colour shift on line 4 only when the contract-strength check fires.
+   Calm, not loud — text-colour only, no background fill, no banner, no icon. */
+.trust-panel__line--amber .trust-panel__value {
+  color: var(--amber-ink);
+}
+/* ── END Lift M4b block ───────────────────────────────────────────────── */

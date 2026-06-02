@@ -11,6 +11,7 @@ import ProductHeader from "./ProductHeader";
 import ProductResources from "./ProductResources";
 import ProductRuns from "./ProductRuns";
 import ProductShipped from "./ProductShipped";
+import TrustPanel from "./TrustPanel";
 
 /**
  * The Product detail surface (`/products/[slug]`) — a focused per-product
@@ -89,6 +90,12 @@ export default function ProductDetail({ slug }: { slug: string }) {
       {loaded.state === "ready" && (
         <>
           <ProductHeader view={loaded.view} />
+          {/* L3 Inside trust strip (Lift M4b, design §4.3) — calm four-line
+              summary above the per-product detail. Mounted between the header
+              and the runs list so it sits as the design's right-rail / header
+              strip, but in the linear ProductDetail layout this is the
+              natural position (above the per-product activity). */}
+          <TrustPanel productId={loaded.view.id} />
           <ProductRuns runs={loaded.view.runs} />
           <ProductShipped items={loaded.view.shipped} />
           <ProductFiles productId={loaded.view.id} />
