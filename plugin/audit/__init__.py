@@ -51,28 +51,26 @@ from plugin.audit.subscriber import (
     AuditEventSubscriber,
 )
 
-# Lift R2a — register the audit subscriber on the in-process bus singleton
-# on first import. Guarded so re-import (e.g. test reload) does not
-# duplicate the subscription.
-_REGISTERED = False
 _SUBSCRIBER: AuditEventSubscriber | None = None
 
 
-def _register_subscriber() -> None:
-    global _REGISTERED, _SUBSCRIBER  # noqa: PLW0603 — import-time singleton wiring
-    if _REGISTERED:
-        return
+def register_audit_subscriber() -> AuditEventSubscriber:
+    """Register the audit subscriber on the in-process EventBus singleton.
+
+    Idempotent: a second call returns the existing subscriber without
+    re-subscribing. Callers wire this once per process (FastAPI app + worker
+    runtime); see :mod:`backend.api.main` and
+    :mod:`backend.workflow.application.runtime.lifecycle`.
+    """
+    global _SUBSCRIBER  # noqa: PLW0603 — process-wide singleton wiring
     bus = get_event_bus()
     if AUDIT_KIND_PREFIX in bus.registered_prefixes():
-        # Already wired (singleton survived across imports).
-        _REGISTERED = True
-        return
+        if _SUBSCRIBER is None:
+            _SUBSCRIBER = AuditEventSubscriber()
+        return _SUBSCRIBER
     _SUBSCRIBER = AuditEventSubscriber()
     bus.subscribe(AUDIT_KIND_PREFIX, _SUBSCRIBER)
-    _REGISTERED = True
-
-
-_register_subscriber()
+    return _SUBSCRIBER
 
 
 __all__ = [
@@ -90,5 +88,6 @@ __all__ = [
     "OutboxStore",
     "SupervisorBase",
     "make_actor",
+    "register_audit_subscriber",
     "safe_emit",
 ]

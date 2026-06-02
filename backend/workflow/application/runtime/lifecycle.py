@@ -20,13 +20,6 @@ import redis.asyncio as redis_aio
 import structlog
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-# Eager import — registers AuditEventSubscriber on the EventBus singleton at
-# module load (Lift R2a: audit subscribes on `plugin.audit` package import).
-# Without this, audit emissions fall back to the logging-relay and
-# audit_outbox stays empty in the worker process. Workflow runtime is the
-# layer allowed to wire cross-cutting infrastructure (vs workers/__main__
-# which is a common leaf per import-linter contracts).
-import plugin.audit  # noqa: F401, E402
 from backend.config import get_settings
 from backend.workflow.application.runtime.agent_runtime import build_agent_execution_deps
 from backend.workflow.application.runtime.delivery_runtime import (
@@ -38,6 +31,7 @@ from backend.workflow.application.runtime.worker_runtime import (
     check_executor_dispatch_health,
     run_stream_consumers,
 )
+from plugin.audit import register_audit_subscriber
 
 logger = structlog.get_logger(__name__)
 
@@ -50,6 +44,7 @@ async def run_workers() -> None:
     before; ``worker_mode="redis_streams"`` runs the Redis-consumer runtime.
     """
     settings = get_settings()
+    register_audit_subscriber()
     engine = create_async_engine(settings.database_url, future=True)
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
 
