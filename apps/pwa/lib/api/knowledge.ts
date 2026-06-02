@@ -1,24 +1,44 @@
 /** Knowledge API — REAL backend `/api/v1/inside` (backend/api/v1/inside.py):
- *  the founder's read-only window into what the AI has learned. The deployed
- *  surface was relabeled "Knowledge" (지식); the backend router keeps the
- *  `/inside` prefix (it ships with the same surface), so these paths are
- *  unchanged.
- *   GET /api/v1/inside/concepts      — canonical anchors (settled concepts),
- *                                       newest first, `limit` (default 50, ≤200)
- *   GET /api/v1/inside/observations  — recent garden observations (raw,
- *                                       unpromoted), newest first, `limit`
- *                                       (default 25, ≤100)
- *   GET /api/v1/inside/graph         — the workspace knowledge graph as
- *                                       nodes + edges for the force-directed
- *                                       view (`{ nodes: [], edges: [] }` for a
- *                                       fresh/sparse workspace)
+ *  the founder's window into what the AI has learned, and (Lift M3a backend +
+ *  M3b PWA surface) the founder-issued retract / correct write path.
+ *   GET  /api/v1/inside/concepts                     — canonical anchors,
+ *                                                       newest first, `limit`
+ *                                                       (default 50, ≤200)
+ *   GET  /api/v1/inside/observations                 — recent garden
+ *                                                       observations (raw,
+ *                                                       unpromoted), newest
+ *                                                       first, `limit` (default
+ *                                                       25, ≤100)
+ *   GET  /api/v1/inside/graph                        — the workspace knowledge
+ *                                                       graph (`{ nodes, edges }`
+ *                                                       for the force-directed
+ *                                                       view; sparse → empty)
+ *   GET  /api/v1/inside/concepts/{id}                — inspect detail for one
+ *                                                       canonical concept
+ *   POST /api/v1/inside/nodes/{node_ref}/retract     — open a retract for a
+ *                                                       garden note (queued,
+ *                                                       undo-able 30s)
+ *   POST /api/v1/inside/nodes/{node_ref}/correct     — open a correct for a
+ *                                                       garden note (queued,
+ *                                                       undo-able 30s)
+ *   POST /api/v1/inside/corrections/{id}/undo        — undo a queued
+ *                                                       correction inside the
+ *                                                       30s window
  *
- *  All read-only — there is no write path on this surface. The backend clamps
- *  `limit` to its per-list range; we default to the backend's own defaults so a
- *  plain call asks for exactly the calm snapshot it serves. */
+ *  The lists default to the backend's own defaults so a plain call asks for
+ *  exactly the calm snapshot it serves. */
 
 import { apiFetch } from "./client";
-import type { Concept, ConceptDetail, KnowledgeGraph, Observation } from "./types";
+import type {
+  Concept,
+  ConceptDetail,
+  CorrectRequestBody,
+  KnowledgeGraph,
+  Observation,
+  RetractRequestBody,
+  RetractResponse,
+  UndoCorrectionResponse,
+} from "./types";
 
 /** The workspace's canonical anchors (settled concepts), newest first.
  *  Backend default limit is 50 (clamped 1..200). */
@@ -43,4 +63,53 @@ export function listObservations(limit = 25): Promise<Observation[]> {
  *  A fresh/sparse workspace yields `{ nodes: [], edges: [] }`. */
 export function getKnowledgeGraph(): Promise<KnowledgeGraph> {
   return apiFetch<KnowledgeGraph>("/api/v1/inside/graph");
+}
+
+/** Path-encode a `node_ref` for the retract/correct endpoints. `node_ref` is a
+ *  vault-relative path (`garden/seedling/foo.md`) which the backend mounts via
+ *  the `:path` converter — so `/` MUST stay literal, only the other unsafe
+ *  characters (`?`, `#`, `%`, spaces, …) get encoded. `encodeURIComponent`
+ *  is too aggressive (it eats `/`), so we re-allow the slashes after. */
+function encodeNodeRef(nodeRef: string): string {
+  return encodeURIComponent(nodeRef).replace(/%2F/gi, "/");
+}
+
+/** Open a retract for a garden note. Queued — the tombstone is committed when
+ *  the 30s undo window closes (or sooner if a subsequent call to
+ *  `undoCorrection` cancels it). Idempotent on `body.correction_id`.
+ *
+ *  The retract endpoint validates the node exists in the caller's vault and
+ *  404s otherwise; this surfaces as an `ApiError` with `status=404`. */
+export function retractNode(
+  nodeRef: string,
+  body: RetractRequestBody = {},
+): Promise<RetractResponse> {
+  return apiFetch<RetractResponse>(`/api/v1/inside/nodes/${encodeNodeRef(nodeRef)}/retract`, {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+/** Open a correction for a garden note. Same 30s undo discipline as retract;
+ *  `body.corrections` is the whitelisted field → new-value mapping the writer
+ *  applies on apply_at. Idempotent on `body.correction_id`. */
+export function correctNode(
+  nodeRef: string,
+  body: CorrectRequestBody = {},
+): Promise<RetractResponse> {
+  return apiFetch<RetractResponse>(`/api/v1/inside/nodes/${encodeNodeRef(nodeRef)}/correct`, {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+/** Undo a queued retraction / correction inside the 30s window. The wire
+ *  contract returns the terminal status (`undone` / `expired` / `already_*`)
+ *  for the UI toast to render into "Restored." / "Undo window expired."
+ *  Idempotent: a second call after `undone` is `already_undone`. */
+export function undoCorrection(correctionId: string): Promise<UndoCorrectionResponse> {
+  return apiFetch<UndoCorrectionResponse>(
+    `/api/v1/inside/corrections/${encodeURIComponent(correctionId)}/undo`,
+    { method: "POST" },
+  );
 }

@@ -14,6 +14,7 @@ import { forceCollide, forceX, forceY } from "d3-force";
 import { useTranslations } from "next-intl";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ForceGraph2D from "react-force-graph-2d";
+import InspectorActions, { type ActionKind } from "./InspectorActions";
 
 /**
  * The Knowledge graph view — ported from BSage's `KnowledgeGraphView` and
@@ -125,6 +126,30 @@ export default function KnowledgeGraphView({ graph }: { graph: KnowledgeGraph })
   const [colorMode, setColorMode] = useState<ColorMode>("type");
   const [detail, setDetail] = useState<DetailState>({ status: "idle" });
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  // Session-local "this node was just acted on" markers so the inspector
+  // renders the calm visual indicators (design §3 → fade for retracted, edited
+  // badge for corrected) without a graph refetch. On next graph reload the
+  // backend retriever's `retracted_at` filter naturally hides retracted nodes
+  // (design Q6 founder-locked option a). These sets persist for the lifetime
+  // of the view component.
+  const [retractedIds, setRetractedIds] = useState<Set<string>>(() => new Set());
+  const [correctedIds, setCorrectedIds] = useState<Set<string>>(() => new Set());
+
+  const markActionApplied = useCallback((nodeId: string, action: ActionKind) => {
+    if (action === "retract") {
+      setRetractedIds((prev) => {
+        const next = new Set(prev);
+        next.add(nodeId);
+        return next;
+      });
+    } else {
+      setCorrectedIds((prev) => {
+        const next = new Set(prev);
+        next.add(nodeId);
+        return next;
+      });
+    }
+  }, []);
 
   const containerRef = useRef<HTMLDivElement>(null);
   // biome-ignore lint/suspicious/noExplicitAny: the lib's ref is untyped.
@@ -560,11 +585,26 @@ export default function KnowledgeGraphView({ graph }: { graph: KnowledgeGraph })
 
       {/* Node Inspector — docks right, slides in on a node tap. */}
       {detail.status !== "idle" && (
-        <aside className="kgraph__panel" aria-label={t("inspectorLabel")}>
+        <aside
+          className={`kgraph__panel${selectedId && retractedIds.has(selectedId) ? " kgraph__panel--retracted" : ""}`}
+          aria-label={t("inspectorLabel")}
+          data-testid="inspector-panel"
+        >
           <header className="kgraph__panel-head">
             <div className="kgraph__panel-eyebrow">{t("inspectorLabel")}</div>
-            <h2 className="kgraph__panel-name">
+            <h2
+              className={`kgraph__panel-name${selectedId && retractedIds.has(selectedId) ? " node--retracted" : ""}`}
+            >
               {detail.status === "ready" ? detail.detail.name : detail.name}
+              {selectedId && correctedIds.has(selectedId) ? (
+                <span
+                  className="kgraph__panel-edited-badge"
+                  data-testid="inspector-edited-badge"
+                  title={t("inspectorEditedBadgeTitle")}
+                >
+                  {t("inspectorEditedBadgeLabel")}
+                </span>
+              ) : null}
             </h2>
             <button
               type="button"
@@ -673,6 +713,19 @@ export default function KnowledgeGraphView({ graph }: { graph: KnowledgeGraph })
                       </li>
                     ))}
                   </ul>
+                </section>
+              )}
+
+              {/* Actions — the founder-facing write surface. The actions are
+                  hidden once the node has been retracted in this session so a
+                  founder can't double-fire after the toast lands. */}
+              {!retractedIds.has(detail.detail.id) && (
+                <section className="kgraph__block kgraph__block--actions">
+                  <InspectorActions
+                    nodeRef={detail.detail.id}
+                    nodeName={detail.detail.name}
+                    onApplied={(action) => markActionApplied(detail.detail.id, action)}
+                  />
                 </section>
               )}
             </div>
