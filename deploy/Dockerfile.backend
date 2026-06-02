@@ -20,6 +20,13 @@ WORKDIR /app
 # Cache deps separately from source.
 COPY pyproject.toml uv.lock ./
 COPY backend/ ./backend/
+# bsvibe_sdk is a uv workspace member (per pyproject.toml [tool.uv.workspace])
+# — must be present when `uv sync` resolves the lockfile.
+COPY bsvibe_sdk/ ./bsvibe_sdk/
+# plugin/ is discovered at runtime by backend.extensions.plugin.loader
+# (Lift R1 — scans `<repo_root>/plugin/<name>/`). Required for audit + 9
+# connector plugins to load on startup.
+COPY plugin/ ./plugin/
 RUN uv sync --no-dev --frozen
 
 # alembic.ini lives at the repo root; the backend image needs it (+ the
