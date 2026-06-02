@@ -144,7 +144,9 @@ async def test_touch_time_sums_resolved_deltas(sf, workspace_id, product_id):
         status=DecisionStatus.RESOLVED,
     )
     async with sf() as s:
-        s.add_all([run, d1, d2])
+        s.add(run)
+        await s.flush()
+        s.add_all([d1, d2])
         await s.commit()
     async with sf() as s:
         svc = TrustSurfaceService(s)
@@ -169,7 +171,9 @@ async def test_touch_time_clamps_at_4_hours(sf, workspace_id, product_id):
         status=DecisionStatus.RESOLVED,
     )
     async with sf() as s:
-        s.add_all([run, d_overnight])
+        s.add(run)
+        await s.flush()
+        s.add(d_overnight)
         await s.commit()
     async with sf() as s:
         svc = TrustSurfaceService(s)
@@ -202,7 +206,9 @@ async def test_touch_time_excludes_auto_resolved(sf, workspace_id, product_id):
         status=DecisionStatus.RESOLVED,
     )
     async with sf() as s:
-        s.add_all([run, d_human, d_auto])
+        s.add(run)
+        await s.flush()
+        s.add_all([d_human, d_auto])
         await s.commit()
     async with sf() as s:
         svc = TrustSurfaceService(s)
@@ -234,7 +240,9 @@ async def test_touch_time_only_within_window(sf, workspace_id, product_id):
         status=DecisionStatus.RESOLVED,
     )
     async with sf() as s:
-        s.add_all([run, d_outside, d_inside])
+        s.add(run)
+        await s.flush()
+        s.add_all([d_outside, d_inside])
         await s.commit()
     async with sf() as s:
         svc = TrustSurfaceService(s)
@@ -254,7 +262,9 @@ async def test_touch_time_pending_counted_separately(sf, workspace_id, product_i
         status=DecisionStatus.PENDING,
     )
     async with sf() as s:
-        s.add_all([run, d_pending])
+        s.add(run)
+        await s.flush()
+        s.add(d_pending)
         await s.commit()
     async with sf() as s:
         svc = TrustSurfaceService(s)
@@ -279,7 +289,9 @@ async def test_deposit_rate_counts_verified_run_drains(sf, workspace_id, product
         _make_settle(workspace_id, failed_run.id, drained_at=_NOW - timedelta(days=1)),
     ]
     async with sf() as s:
-        s.add_all([shipped_run, failed_run, *drains])
+        s.add_all([shipped_run, failed_run])
+        await s.flush()
+        s.add_all(list(drains))
         await s.commit()
     async with sf() as s:
         svc = TrustSurfaceService(s)
@@ -322,7 +334,9 @@ async def test_trend_arrow_new_product_returns_flat(sf, workspace_id, product_id
         status=DecisionStatus.RESOLVED,
     )
     async with sf() as s:
-        s.add_all([run, d])
+        s.add(run)
+        await s.flush()
+        s.add(d)
         await s.commit()
     async with sf() as s:
         svc = TrustSurfaceService(s)
@@ -361,7 +375,9 @@ async def test_trend_arrow_rising_when_ratio_falls(sf, workspace_id, product_id)
         for i in range(1, 7)
     ]
     async with sf() as s:
-        s.add_all([older_run, newer_run, d_old, d_new, drain_old, *drains_new])
+        s.add_all([older_run, newer_run])
+        await s.flush()
+        s.add_all([d_old, d_new, drain_old, *drains_new])
         await s.commit()
     async with sf() as s:
         svc = TrustSurfaceService(s)
@@ -398,7 +414,9 @@ async def test_trend_arrow_falling_when_ratio_rises(sf, workspace_id, product_id
     )
     drain_new = _make_settle(workspace_id, newer_run.id, drained_at=_NOW - timedelta(days=2))
     async with sf() as s:
-        s.add_all([older_run, newer_run, d_old, d_new, drain_new, *drains_old])
+        s.add_all([older_run, newer_run])
+        await s.flush()
+        s.add_all([d_old, d_new, drain_new, *drains_old])
         await s.commit()
     async with sf() as s:
         svc = TrustSurfaceService(s)
@@ -423,7 +441,9 @@ async def test_contract_strength_steady_when_runs_have_verifications(sf, workspa
         created_at=_NOW - timedelta(days=1),
     )
     async with sf() as s:
-        s.add_all([run, verif])
+        s.add(run)
+        await s.flush()
+        s.add(verif)
         await s.commit()
     async with sf() as s:
         svc = TrustSurfaceService(s)
@@ -520,7 +540,9 @@ async def test_compute_product_trust_composes_all_four(sf, workspace_id, product
         created_at=_NOW - timedelta(days=1),
     )
     async with sf() as s:
-        s.add_all([run, d, drain, verif])
+        s.add(run)
+        await s.flush()
+        s.add_all([d, drain, verif])
         await s.commit()
     async with sf() as s:
         svc = TrustSurfaceService(s)
