@@ -1,0 +1,59 @@
+[
+  {
+    "uuid": "conv-001",
+    "name": "Brainstorming about marketing",
+    "created_at": "2026-04-12T10:30:00Z",
+    "updated_at": "2026-04-20T11:00:00Z",
+    "chat_messages": [
+      {
+        "uuid": "msg-1",
+        "text": "Help me think about marketing for my startup",
+        "sender": "human",
+        "created_at": "2026-04-12T10:30:00Z"
+      },
+      {
+        "uuid": "msg-2",
+        "text": "Sure! Let me help with that.",
+        "sender": "assistant",
+        "created_at": "2026-04-12T10:30:15Z"
+      }
+    ]
+  },
+  {
+    "name": "Bad conversation — no uuid, should be skipped",
+    "created_at": "2026-04-01T00:00:00Z",
+    "updated_at": "2026-04-01T00:00:00Z",
+    "chat_messages": [
+      {"text": "lost in the void", "sender": "human"}
+    ]
+  },
+  {
+    "uuid": "conv-003",
+    "name": "Mixed senders + content-block text",
+    "created_at": "2026-04-15T09:00:00Z",
+    "updated_at": "2026-04-15T09:10:00Z",
+    "chat_messages": [
+      {
+        "uuid": "msg-a",
+        "text": "what's the weather?",
+        "sender": "human",
+        "created_at": "2026-04-15T09:00:00Z"
+      },
+      {
+        "uuid": "msg-b",
+        "text": [
+          {"type": "text", "text": "Sunny"},
+          {"type": "text", "text": "with a chance of rain."}
+        ],
+        "sender": "assistant",
+        "created_at": "2026-04-15T09:00:15Z"
+      },
+      {
+        "uuid": "msg-c",
+        "text": "tool invocation logged",
+        "sender": "tool",
+        "created_at": "2026-04-15T09:00:30Z"
+      }
+    ]
+  }
+]
