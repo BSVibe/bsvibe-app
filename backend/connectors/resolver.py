@@ -7,18 +7,19 @@ built-in connector parser:
    ``(connector, webhook_token)``. Missing / inactive → ``None`` (the HTTP
    route turns this into a 404 without leaking which half failed).
 2. Decrypt the per-account signing secret.
-3. Call the connector's pure parser (``backend.extensions.implementations.*``)
-   with the raw body + headers + secret. The parser verifies the signature
-   (raising :class:`WebhookSignatureError` on a forged delivery) and returns
-   a :class:`TriggerEvent`, or ``None`` to skip (handshake / unsupported).
+3. Call the connector's pure parser, sourced from the engine's
+   :class:`WebhookParserRegistry` (Lift Q3 / R2c) which the plugin loader
+   populates from ``@bsvibe_sdk.webhook(...)``-decorated functions in each
+   plugin. The parser verifies the signature (raising
+   :class:`bsvibe_sdk.WebhookSignatureError` on a forged delivery) and
+   returns a :class:`TriggerEvent`, or ``None`` to skip
+   (handshake / unsupported).
 
-Why a direct import map instead of :class:`backend.extensions.plugin.PluginLoader`:
-the four built-in inbound parsers are pure ``(workspace_id, headers,
-raw_body, secret) -> TriggerEvent | None`` functions with no I/O and no
-``SkillContext``/credential-injection dependency. Dispatching to them
-directly keeps the ingress surface small and side-effect-free — the loader
-path (with its context + credential store) is the right tool for the agent
-loop, not for a stateless signature-verify-and-parse hop.
+Lift Q3 / R2c — this module used to ``from plugin.<name>.webhook import
+parse_<x>`` directly, a reverse-direction coupling (backend → plugin). The
+fix routes every parser through the engine's :class:`WebhookParserRegistry`
+so the resolver depends only on the engine surface; plugins register their
+parsers via the SDK ``@webhook(connector)`` decorator at load time.
 
 Handshake answers (Slack ``url_verification`` challenge echo, Discord PING
 PONG) are the route's responsibility — see
@@ -28,7 +29,6 @@ PONG) are the route's responsibility — see
 from __future__ import annotations
 
 import uuid
-from collections.abc import Callable
 from dataclasses import dataclass
 
 import structlog
@@ -36,47 +36,14 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.connectors.db import ConnectorAccountRow
+from backend.extensions.plugin.webhook_registry import (
+    ConnectorParser,
+    WebhookParserRegistry,
+)
 from backend.router.accounts.crypto import CredentialCipher
 from backend.workflow.domain.incoming import TriggerEvent
-from plugin.discord.webhook import parse_interaction
-from plugin.github.webhook import parse_webhook
-from plugin.sentry.webhook import parse_webhook as parse_sentry_webhook
-from plugin.slack.webhook import parse_event
-from plugin.telegram.webhook import parse_update
 
 logger = structlog.get_logger(__name__)
-
-
-# A connector parser: verify the signature with ``secret`` and map the raw
-# delivery to a TriggerEvent (or None to skip). Each built-in parser already
-# matches this shape; the discord parser's secret kwarg is the Ed25519
-# ``public_key`` (semantically still the verifying secret), wrapped below.
-ConnectorParser = Callable[..., TriggerEvent | None]
-
-
-def _discord_parser(
-    *, workspace_id: uuid.UUID, headers: dict[str, str], raw_body: bytes, secret: str | None
-) -> TriggerEvent | None:
-    # Discord's verifying material is the application's Ed25519 public key;
-    # we store it in the same ``signing_secret`` slot for uniform resolution.
-    return parse_interaction(
-        workspace_id=workspace_id, headers=headers, raw_body=raw_body, public_key=secret
-    )
-
-
-# connector name → parser. The names match the plugin ``name=`` (Workflow §6)
-# and the ``TriggerEvent.source`` each parser emits.
-_PARSERS: dict[str, ConnectorParser] = {
-    "github": parse_webhook,
-    "slack": parse_event,
-    "telegram": parse_update,
-    "discord": _discord_parser,
-    # Sentry's parser already matches the
-    # ``(workspace_id, headers, raw_body, secret) -> TriggerEvent | None``
-    # shape (bare-hex HMAC-SHA256 on ``Sentry-Hook-Signature``), so it is
-    # registered directly — no adapter needed.
-    "sentry": parse_sentry_webhook,
-}
 
 
 class UnknownConnectorError(ValueError):
@@ -95,13 +62,19 @@ class ConnectorDispatchResult:
 class ConnectorInboundResolver:
     """Resolve + dispatch one external connector webhook delivery."""
 
-    def __init__(self, session: AsyncSession, *, cipher: CredentialCipher) -> None:
+    def __init__(
+        self,
+        session: AsyncSession,
+        *,
+        cipher: CredentialCipher,
+        parsers: WebhookParserRegistry,
+    ) -> None:
         self._session = session
         self._cipher = cipher
+        self._parsers = parsers
 
-    @staticmethod
-    def is_known(connector: str) -> bool:
-        return connector in _PARSERS
+    def is_known(self, connector: str) -> bool:
+        return self._parsers.is_known(connector)
 
     async def resolve_account(
         self, *, connector: str, webhook_token: str
@@ -133,7 +106,7 @@ class ConnectorInboundResolver:
         propagates the parser's ``WebhookSignatureError`` on a forged
         delivery (the route turns that into a 401).
         """
-        parser = _PARSERS.get(connector)
+        parser: ConnectorParser | None = self._parsers.get(connector)
         if parser is None:
             raise UnknownConnectorError(connector)
 

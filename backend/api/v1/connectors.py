@@ -20,8 +20,10 @@ never-return-secret pattern):
   a capability (it is half of the ingress auth).
 
 The allowed connector set is the set of built-in inbound parsers; it is read
-from :meth:`backend.connectors.resolver.ConnectorInboundResolver.is_known` so
-the CRUD and the ingress agree on exactly which connectors exist.
+from the engine's process-wide
+:func:`backend.extensions.plugin.webhook_registry.get_default_registry` so
+the CRUD and the ingress agree on exactly which connectors exist (the same
+registry the :class:`ConnectorInboundResolver` dispatches through).
 """
 
 from __future__ import annotations
@@ -42,7 +44,7 @@ from backend.api.deps import get_db_session, get_workspace_id
 # webhook-side decrypt share one (test-overridable) cipher.
 from backend.api.webhooks import get_credential_cipher
 from backend.connectors.db import ConnectorAccountRow
-from backend.connectors.resolver import ConnectorInboundResolver
+from backend.extensions.plugin.webhook_registry import get_default_registry
 from backend.router.accounts.crypto import CredentialCipher
 from backend.workflow.application.delivery.connector_dispatch import OUTBOUND_EVENT_BUILDERS
 
@@ -76,7 +78,7 @@ class ConnectorCreate(BaseModel):
         # ingress) OR an outbound delivery binding (a v1 event-shaping mapper).
         # notion is outbound-only — it has no inbound parser but is a valid
         # delivery target, so the inbound-known check alone would reject it.
-        if not ConnectorInboundResolver.is_known(v) and v not in OUTBOUND_EVENT_BUILDERS:
+        if not get_default_registry().is_known(v) and v not in OUTBOUND_EVENT_BUILDERS:
             raise ValueError(f"unknown connector {v!r}")
         return v
 

@@ -4,10 +4,20 @@ Each ``<plugins_dir>/<name>/plugin.py`` should define a single
 ``backend.extensions.plugin.PluginBuilder`` via the ``plugin(...)`` factory and the
 capability decorators. The loader picks up the builder by attribute scan
 and stores the resulting :class:`PluginMeta` in the registry.
+
+Lift Q3 / R2c — the loader also discovers any sibling ``webhook.py``
+module and registers ``@bsvibe_sdk.webhook(...)``-decorated parsers with
+the engine's :class:`WebhookParserRegistry`. Callers that need to dispatch
+inbound deliveries (e.g.
+:class:`backend.connectors.resolver.ConnectorInboundResolver`) read
+parsers out of the registry instead of importing
+``plugin.<name>.webhook`` directly, removing the reverse-direction
+coupling Lift R1 flagged (R2c).
 """
 
 from __future__ import annotations
 
+import importlib
 import importlib.util
 from pathlib import Path
 
@@ -15,6 +25,11 @@ import structlog
 
 from backend.extensions.plugin.base import PluginLoadError, PluginMeta
 from backend.extensions.plugin.decorator import PluginBuilder
+from backend.extensions.plugin.webhook_registry import (
+    WebhookParserRegistry,
+    discover_in_module,
+    get_default_registry,
+)
 
 logger = structlog.get_logger(__name__)
 
@@ -23,9 +38,23 @@ class PluginLoader:
     def __init__(
         self,
         plugins_dir: Path,
+        webhook_registry: WebhookParserRegistry | None = None,
     ) -> None:
         self._plugins_dir = plugins_dir
         self._registry: dict[str, PluginMeta] = {}
+        # Default to the process-wide singleton so the HTTP-boundary
+        # webhook route + the founder-facing CRUD validator (both of which
+        # consult ``get_default_registry()`` at request time) automatically
+        # see the parsers this loader discovers at bootstrap. Tests pass an
+        # explicit instance to avoid touching the singleton.
+        self._webhook_registry = (
+            webhook_registry if webhook_registry is not None else get_default_registry()
+        )
+
+    @property
+    def webhook_registry(self) -> WebhookParserRegistry:
+        """Engine-side webhook parser registry (populated during plugin load)."""
+        return self._webhook_registry
 
     async def load_all(self) -> dict[str, PluginMeta]:
         self._registry.clear()
@@ -91,7 +120,28 @@ class PluginLoader:
 
         self._registry[meta.name] = meta
         logger.info("plugin_loaded", name=meta.name)
+        self._discover_webhook_parsers(plugin_py.parent.name)
         return meta
+
+    def _discover_webhook_parsers(self, plugin_dir_name: str) -> None:
+        """Import ``plugin.<dir>.webhook`` (if present) and register parsers.
+
+        Soft-fails: a plugin without a ``webhook.py`` sibling, or one whose
+        webhook module fails to import, is skipped with a logged warning.
+        The plugin's other capabilities (action / outbound / compensate)
+        remain available — only the inbound surface is affected.
+        """
+        module_name = f"plugin.{plugin_dir_name}.webhook"
+        try:
+            module = importlib.import_module(module_name)
+        except ModuleNotFoundError:
+            return
+        except Exception as exc:
+            logger.warning("plugin_webhook_import_failed", module=module_name, error=str(exc))
+            return
+
+        for connector, fn in discover_in_module(module):
+            self._webhook_registry.register(connector, fn)
 
     @staticmethod
     def _import_plugin(path: Path) -> PluginMeta:
