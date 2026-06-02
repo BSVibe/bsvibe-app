@@ -58,6 +58,14 @@ class SqlAlchemyWorkspaceRepository:
         result = await self._session.execute(stmt)
         return [(wid, region, safe) for wid, region, safe in result.all()]
 
+    async def list_with_audit_retention(self) -> list[tuple[uuid.UUID, int]]:
+        stmt = select(WorkspaceRow.id, WorkspaceRow.audit_retention_days).where(
+            WorkspaceRow.deleted_at.is_(None),
+            WorkspaceRow.audit_retention_days.is_not(None),
+        )
+        result = await self._session.execute(stmt)
+        return [(wid, int(days)) for wid, days in result.all()]
+
     async def add(self, workspace: WorkspaceRow) -> None:
         self._session.add(workspace)
 

@@ -124,6 +124,55 @@ async def test_list_active_regions_excludes_soft_deleted() -> None:
 
 
 @pytest.mark.asyncio
+async def test_list_with_audit_retention_returns_only_non_null_retention() -> None:
+    """Lift Q1 — ``list_with_audit_retention`` filters out NULL-retention
+    (forever) workspaces AND soft-deleted ones.
+
+    ``NULL`` retention is the architectural default and means *forever*;
+    the sweep must never see those workspaces (no deletion). The DB-level
+    filter keeps the sweep loop tight even when most workspaces leave the
+    knob un-set.
+    """
+    async with memory_session() as session:
+        repo = SqlAlchemyWorkspaceRepository(session)
+        forever = WorkspaceRow(id=uuid.uuid4(), name="forever")  # NULL retention
+        rotates_30 = WorkspaceRow(id=uuid.uuid4(), name="r30", audit_retention_days=30)
+        rotates_7 = WorkspaceRow(id=uuid.uuid4(), name="r7", audit_retention_days=7)
+        dead = WorkspaceRow(
+            id=uuid.uuid4(),
+            name="dead",
+            audit_retention_days=14,
+            deleted_at=datetime.now(UTC),
+        )
+        for ws in (forever, rotates_30, rotates_7, dead):
+            await repo.add(ws)
+        await session.flush()
+
+        rows = await repo.list_with_audit_retention()
+        ids = {wid for wid, _ in rows}
+        assert forever.id not in ids  # NULL filtered out
+        assert dead.id not in ids  # soft-deleted filtered out
+        assert rotates_30.id in ids
+        assert rotates_7.id in ids
+        assert (rotates_30.id, 30) in rows
+        assert (rotates_7.id, 7) in rows
+
+
+@pytest.mark.asyncio
+async def test_list_with_audit_retention_empty_when_no_workspace_opted_in() -> None:
+    """No row has a non-NULL retention — the sweep gets an empty list and no-ops."""
+    async with memory_session() as session:
+        repo = SqlAlchemyWorkspaceRepository(session)
+        a = WorkspaceRow(id=uuid.uuid4(), name="a")  # NULL retention
+        b = WorkspaceRow(id=uuid.uuid4(), name="b")  # NULL retention
+        for ws in (a, b):
+            await repo.add(ws)
+        await session.flush()
+
+        assert await repo.list_with_audit_retention() == []
+
+
+@pytest.mark.asyncio
 async def test_repository_does_not_commit() -> None:
     """Repository :meth:`add` must NOT commit — the caller owns the txn."""
     async with memory_session() as session:

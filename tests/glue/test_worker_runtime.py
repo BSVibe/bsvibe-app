@@ -553,6 +553,13 @@ async def test_build_worker_runtime_constructs_all_workers(
         # queue rows system-wide and emitting a ``safe_mode.expired`` audit
         # row tagged ``trigger=schedule, source=system.safe_mode_expiry``.
         "safe_mode_expiry_worker",
+        # Lift Q1 — per-workspace ``audit_outbox`` retention sweep. A
+        # THIRD ScheduleWorker against the same ScheduleRunnerProtocol
+        # seam; daily-poll cadence; iterates workspaces with non-NULL
+        # ``audit_retention_days`` and rotates rows past the per-workspace
+        # cutoff. Emits a ``audit.retention.swept`` row per workspace
+        # tagged ``trigger=schedule, source=system.audit_retention``.
+        "audit_retention_sweep_worker",
     }
     # start + graceful stop is idempotent and drains in-flight ticks.
     for w in rt.workers:

@@ -78,14 +78,24 @@ async def test_get_workspace_returns_id_and_name(client_with_ws) -> None:
     r = await c.get("/api/v1/workspace")
     assert r.status_code == 200, r.text
     body = r.json()
-    assert body == {"id": str(workspace_id), "name": "Acme"}
+    # Lift Q1 — ``audit_retention_days`` surfaces on the GET response; default ``None``
+    # (= forever) until a PATCH sets it.
+    assert body == {
+        "id": str(workspace_id),
+        "name": "Acme",
+        "audit_retention_days": None,
+    }
 
 
 async def test_patch_workspace_renames_and_persists(client_with_ws) -> None:
     c, workspace_id, db = client_with_ws
     r = await c.patch("/api/v1/workspace", json={"name": "Acme Inc."})
     assert r.status_code == 200, r.text
-    assert r.json() == {"id": str(workspace_id), "name": "Acme Inc."}
+    assert r.json() == {
+        "id": str(workspace_id),
+        "name": "Acme Inc.",
+        "audit_retention_days": None,
+    }
 
     # The row in the database actually changed.
     async with db() as s:
@@ -93,6 +103,49 @@ async def test_patch_workspace_renames_and_persists(client_with_ws) -> None:
             await s.execute(select(WorkspaceRow).where(WorkspaceRow.id == workspace_id))
         ).scalar_one()
         assert row.name == "Acme Inc."
+        assert row.audit_retention_days is None
+
+
+async def test_patch_workspace_sets_audit_retention_days(client_with_ws) -> None:
+    """Lift Q1 — a workspace opts INTO N-day rotation by PATCHing the field."""
+    c, workspace_id, db = client_with_ws
+    r = await c.patch("/api/v1/workspace", json={"audit_retention_days": 30})
+    assert r.status_code == 200, r.text
+    assert r.json() == {
+        "id": str(workspace_id),
+        "name": "Acme",  # unchanged
+        "audit_retention_days": 30,
+    }
+    async with db() as s:
+        row = (
+            await s.execute(select(WorkspaceRow).where(WorkspaceRow.id == workspace_id))
+        ).scalar_one()
+        assert row.audit_retention_days == 30
+        assert row.name == "Acme"  # untouched by retention-only PATCH
+
+
+async def test_patch_workspace_unsets_audit_retention_days_to_forever(client_with_ws) -> None:
+    """Lift Q1 — explicit ``null`` clears the retention back to forever (the default)."""
+    c, _workspace_id, db = client_with_ws
+    # First opt-in.
+    r = await c.patch("/api/v1/workspace", json={"audit_retention_days": 14})
+    assert r.status_code == 200
+    # Then explicitly unset.
+    r = await c.patch("/api/v1/workspace", json={"audit_retention_days": None})
+    assert r.status_code == 200, r.text
+    assert r.json()["audit_retention_days"] is None
+    async with db() as s:
+        row = (await s.execute(select(WorkspaceRow))).scalar_one()
+        assert row.audit_retention_days is None
+
+
+async def test_patch_workspace_rejects_zero_or_negative_retention(client_with_ws) -> None:
+    """Lift Q1 — ``ge=1`` enforces "N >= 1 days" half of the column's contract."""
+    c, _workspace_id, _ = client_with_ws
+    r = await c.patch("/api/v1/workspace", json={"audit_retention_days": 0})
+    assert r.status_code == 422
+    r = await c.patch("/api/v1/workspace", json={"audit_retention_days": -7})
+    assert r.status_code == 422
 
 
 async def test_patch_workspace_trims_whitespace(client_with_ws) -> None:

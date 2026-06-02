@@ -4,7 +4,7 @@ Runs the full migration chain against a live Postgres + pgvector
 instance:
 
 1. ``alembic upgrade head`` — every revision applies on a clean DB.
-2. The expected head revision (``workspace_schedules``) is stamped
+2. The expected head revision (``workspace_audit_retention``) is stamped
    in ``alembic_version``.
 3. ``alembic downgrade base`` then ``alembic upgrade head`` — verifies
    downgrade paths are reversible (production safety: bad deploy →
@@ -121,7 +121,9 @@ def test_fresh_pg_upgrade_round_trip():
     # Phase 1 — fresh upgrade.
     _alembic(["upgrade", "head"], env_extra=env_extra)
     stamped = asyncio.run(_stamped_head(url))
-    assert stamped == "workspace_schedules", f"expected head workspace_schedules, got {stamped}"
+    assert stamped == "workspace_audit_retention", (
+        f"expected head workspace_audit_retention, got {stamped}"
+    )
 
     # Phase 2 — full downgrade. Verifies every revision's downgrade path.
     _alembic(["downgrade", "base"], env_extra=env_extra)
@@ -129,7 +131,7 @@ def test_fresh_pg_upgrade_round_trip():
     # Phase 3 — re-upgrade. Verifies the chain is idempotent.
     _alembic(["upgrade", "head"], env_extra=env_extra)
     stamped = asyncio.run(_stamped_head(url))
-    assert stamped == "workspace_schedules"
+    assert stamped == "workspace_audit_retention"
 
 
 def test_model_account_api_key_encrypted_is_nullable_after_upgrade():

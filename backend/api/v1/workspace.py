@@ -42,17 +42,34 @@ class WorkspaceOut(BaseModel):
 
     id: uuid.UUID
     name: str
+    # Lift Q1 — per-workspace audit_outbox retention knob. ``None`` =
+    # forever (roadmap §6 결정 로그 Q1 default), ``N >= 1`` = the daily
+    # retention sweep rotates ``audit_outbox`` rows past N days.
+    audit_retention_days: int | None = None
 
 
 class WorkspaceUpdate(BaseModel):
-    """PATCH body — only the editable name field for now. The schema is the
-    extension seam: adding a future-editable field (e.g. avatar_url, locale
-    default) ships as another optional field here rather than another
-    endpoint."""
+    """PATCH body — the editable workspace surface. ``extra="forbid"``
+    rejects unknown fields so writes can't quietly mutate columns the
+    route doesn't own.
+
+    ``name`` is optional so a PATCH can target ``audit_retention_days``
+    alone (and vice-versa); an empty PATCH (``{}``) is a no-op, which
+    matches the standard PATCH semantics. Pydantic's ``model_fields_set``
+    is what tells the handler which fields the caller actually sent vs.
+    left absent — important for ``audit_retention_days`` where
+    explicit-``null`` (unset to forever) is a distinct intent from
+    "field absent" (leave it alone)."""
 
     model_config = ConfigDict(extra="forbid")
 
-    name: str = Field(min_length=1, max_length=255)
+    name: str | None = Field(default=None, min_length=1, max_length=255)
+    # Lift Q1 — per-workspace audit_outbox retention knob. ``ge=1``
+    # enforces the "N >= 1 days" half of the column's contract; a caller
+    # sending ``null`` (the OTHER valid value, = forever) clears the
+    # column. The "no change" case is "field absent from PATCH body" —
+    # not the same as ``null`` (use ``model_fields_set`` to distinguish).
+    audit_retention_days: int | None = Field(default=None, ge=1)
 
 
 @router.get("", response_model=WorkspaceOut)
@@ -60,11 +77,15 @@ async def get_workspace(
     workspace_id: Annotated[uuid.UUID, Depends(get_workspace_id)],
     workspaces: Annotated[WorkspaceRepository, Depends(get_workspace_repository)],
 ) -> WorkspaceOut:
-    """Return the active workspace's id + name."""
+    """Return the active workspace's id + name + audit retention."""
     workspace = await workspaces.get(workspace_id)
     if workspace is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
-    return WorkspaceOut(id=workspace.id, name=workspace.name)
+    return WorkspaceOut(
+        id=workspace.id,
+        name=workspace.name,
+        audit_retention_days=workspace.audit_retention_days,
+    )
 
 
 @router.patch("", response_model=WorkspaceOut)
@@ -74,18 +95,35 @@ async def update_workspace(
     workspaces: Annotated[WorkspaceRepository, Depends(get_workspace_repository)],
     session: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> WorkspaceOut:
-    """Update the workspace name on the active workspace.
+    """Update the workspace name and/or audit_retention_days.
 
     The workspace_id contextvar is what selects the row — the caller cannot
     write a different workspace's row, defense-in-depth from the RLS GUC on
     the same connection.
+
+    PATCH semantics: only fields PRESENT in the request body are written;
+    omitted fields are left untouched. For ``audit_retention_days``,
+    explicit ``null`` (in the body) UNSETS to forever; absence leaves the
+    existing value alone. ``model_fields_set`` is what distinguishes the
+    two cases.
     """
     workspace = await workspaces.get(workspace_id)
     if workspace is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
-    workspace.name = payload.name.strip()
+    sent = payload.model_fields_set
+    if "name" in sent:
+        # ``min_length=1`` already rejected the empty string; we only
+        # have to strip whitespace.
+        assert payload.name is not None  # noqa: S101 — guarded by min_length=1
+        workspace.name = payload.name.strip()
+    if "audit_retention_days" in sent:
+        workspace.audit_retention_days = payload.audit_retention_days
     await session.commit()
-    return WorkspaceOut(id=workspace.id, name=workspace.name)
+    return WorkspaceOut(
+        id=workspace.id,
+        name=workspace.name,
+        audit_retention_days=workspace.audit_retention_days,
+    )
 
 
 __all__ = ["router"]
