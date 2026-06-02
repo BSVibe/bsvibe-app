@@ -192,6 +192,7 @@ source_modules = [
     "plugin.discord",
     "plugin.email_sender",
     "plugin.github",
+    "plugin.gpt",
     "plugin.linear",
     "plugin.notion",
     "plugin.obsidian",

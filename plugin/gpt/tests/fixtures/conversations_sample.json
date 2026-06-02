@@ -1,0 +1,114 @@
+[
+  {
+    "id": "conv-abc-123",
+    "title": "Brainstorming about marketing",
+    "create_time": 1712927400.123,
+    "update_time": 1713187200.0,
+    "mapping": {
+      "root-1": {
+        "id": "root-1",
+        "message": null,
+        "parent": null,
+        "children": ["sys-1"]
+      },
+      "sys-1": {
+        "id": "sys-1",
+        "message": {
+          "id": "sys-msg-1",
+          "author": {"role": "system"},
+          "content": {"content_type": "text", "parts": ["You are ChatGPT."]},
+          "create_time": 1712927400.0
+        },
+        "parent": "root-1",
+        "children": ["msg-1"]
+      },
+      "msg-1": {
+        "id": "msg-1",
+        "message": {
+          "id": "msg-1-inner",
+          "author": {"role": "user"},
+          "content": {"content_type": "text", "parts": ["Help me think about marketing for my startup"]},
+          "create_time": 1712927400.0
+        },
+        "parent": "sys-1",
+        "children": ["msg-2"]
+      },
+      "msg-2": {
+        "id": "msg-2",
+        "message": {
+          "id": "msg-2-inner",
+          "author": {"role": "assistant"},
+          "content": {"content_type": "text", "parts": ["Sure! Let me help."]},
+          "create_time": 1712927415.0
+        },
+        "parent": "msg-1",
+        "children": []
+      }
+    }
+  },
+  {
+    "id": "conv-def-456",
+    "title": "Conversation with tool call",
+    "create_time": 1713100000.0,
+    "update_time": 1713200000.0,
+    "mapping": {
+      "r2": {
+        "id": "r2",
+        "message": null,
+        "parent": null,
+        "children": ["u2"]
+      },
+      "u2": {
+        "id": "u2",
+        "message": {
+          "id": "u2-inner",
+          "author": {"role": "user"},
+          "content": {"content_type": "text", "parts": ["search the web for python tips"]},
+          "create_time": 1713100000.0
+        },
+        "parent": "r2",
+        "children": ["t2"]
+      },
+      "t2": {
+        "id": "t2",
+        "message": {
+          "id": "t2-inner",
+          "author": {"role": "tool", "name": "web_search"},
+          "content": {"content_type": "text", "parts": ["[search results]"]},
+          "create_time": 1713100010.0
+        },
+        "parent": "u2",
+        "children": ["a2"]
+      },
+      "a2": {
+        "id": "a2",
+        "message": {
+          "id": "a2-inner",
+          "author": {"role": "assistant"},
+          "content": {"content_type": "multimodal_text", "parts": ["Here are some tips:", {"content_type": "image_asset_pointer", "asset_pointer": "file-service://img-001"}]},
+          "create_time": 1713100020.0
+        },
+        "parent": "t2",
+        "children": []
+      }
+    }
+  },
+  {
+    "title": "Bad conversation — no id, should be skipped",
+    "create_time": 1712000000.0,
+    "update_time": 1712000000.0,
+    "mapping": {
+      "x": {
+        "id": "x",
+        "message": {
+          "id": "x-inner",
+          "author": {"role": "user"},
+          "content": {"content_type": "text", "parts": ["lost in the void"]},
+          "create_time": 1712000000.0
+        },
+        "parent": null,
+        "children": []
+      }
+    }
+  }
+]
