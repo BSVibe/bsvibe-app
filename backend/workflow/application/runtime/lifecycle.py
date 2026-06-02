@@ -18,6 +18,14 @@ from typing import Any
 
 import redis.asyncio as redis_aio
 import structlog
+
+# Eager import — registers AuditEventSubscriber on the EventBus singleton at
+# module load (Lift R2a: audit subscribes on `plugin.audit` package import).
+# Without this, audit emissions fall back to the logging-relay and
+# audit_outbox stays empty in the worker process. Workflow runtime is the
+# layer allowed to wire cross-cutting infrastructure (vs workers/__main__
+# which is a common leaf per import-linter contracts).
+import plugin.audit  # noqa: F401, E402
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from backend.config import get_settings

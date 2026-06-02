@@ -13,6 +13,14 @@ import structlog
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+# Eager import — registers AuditEventSubscriber on the EventBus singleton
+# at module load (Lift R2a: audit subscribes on `plugin.audit` import).
+# Without this, audit emissions fall back to logging-relay and audit_outbox
+# stays empty. PluginLoader (extensions/plugin/loader.py) doesn't reach
+# audit because audit has no plugin.py — it uses the standard library
+# `plugin.audit` package self-registration instead.
+import plugin.audit  # noqa: F401
+
 from backend.api.auth import router as auth_router
 from backend.api.health import router as health_router
 from backend.api.middleware import WorkspaceContextMiddleware
