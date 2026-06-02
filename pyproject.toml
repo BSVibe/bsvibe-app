@@ -193,6 +193,7 @@ source_modules = [
     "plugin.github",
     "plugin.linear",
     "plugin.notion",
+    "plugin.obsidian",
     "plugin.sentry",
     "plugin.slack",
     "plugin.telegram",
