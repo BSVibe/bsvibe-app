@@ -19,7 +19,7 @@ import uuid
 from datetime import datetime
 from typing import Any, Literal, get_args
 
-from sqlalchemy import JSON, DateTime, ForeignKey, Index, String, UniqueConstraint
+from sqlalchemy import JSON, DateTime, ForeignKey, Index, Integer, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from backend.data import Base
@@ -66,6 +66,17 @@ class WorkspaceRow(WorkspacesBase):
     legal_basis: Mapped[str] = mapped_column(
         String(32), nullable=False, default="contract", server_default="contract"
     )
+    # Lift Q1 — per-workspace audit_outbox retention knob (roadmap §6 결정 로그 Q1).
+    # ``NULL`` = forever (the architectural default, what most workspaces
+    # leave untouched). An integer ``N >= 1`` = the daily retention sweep
+    # (:class:`plugin.audit.retention_sweep.AuditRetentionSweepRunner`)
+    # deletes ``audit_outbox`` rows for this workspace whose
+    # ``occurred_at < now - N * 1d``. The knob being THERE (vs. a system
+    # constant) is the architectural deliverable; most workspaces never set
+    # it. Validation (``N >= 1``) lives at the REST surface — the column is
+    # an open INTEGER so a future settings-row migration doesn't need a
+    # schema change.
+    audit_retention_days: Mapped[int | None] = mapped_column(Integer, nullable=True, default=None)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=lambda: datetime.now()
     )

@@ -59,6 +59,20 @@ class WorkspaceRepository(Protocol):
         soft-deleted rows.
         """
 
+    async def list_with_audit_retention(self) -> list[tuple[uuid.UUID, int]]:
+        """Every live workspace with a non-NULL ``audit_retention_days``.
+
+        Powers the Lift Q1 retention sweep
+        (:class:`plugin.audit.retention_sweep.AuditRetentionSweepRunner`).
+        NULL-retention workspaces are filtered OUT at the DB level — the
+        sweep should never see them, because ``NULL`` means *forever*
+        (no deletion). Excludes soft-deleted workspaces.
+
+        The list is bounded by the workspace count (small — tens to
+        hundreds), so loading all rows in one query is fine; no batch /
+        cursor needed at this scale.
+        """
+
     async def add(self, workspace: WorkspaceRow) -> None:
         """Stage a new workspace for INSERT on the next flush.
 

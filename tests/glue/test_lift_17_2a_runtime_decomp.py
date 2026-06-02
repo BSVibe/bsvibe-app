@@ -211,7 +211,7 @@ def test_build_worker_runtime_constructs_expected_workers() -> None:
         delivery_adapter=delivery_adapter,
     )
     assert isinstance(runtime, WorkerRuntime)
-    assert len(runtime.workers) == 7
+    assert len(runtime.workers) == 8
     names = {getattr(w, "_name", None) for w in runtime.workers}
     expected = {
         "intake_worker",
@@ -221,5 +221,8 @@ def test_build_worker_runtime_constructs_expected_workers() -> None:
         "relay_worker",
         "schedule_worker",
         "safe_mode_expiry_worker",
+        # Lift Q1 — third ScheduleWorker driving the audit_outbox
+        # retention sweep on a daily cadence.
+        "audit_retention_sweep_worker",
     }
     assert names == expected, f"got {names}, expected {expected}"

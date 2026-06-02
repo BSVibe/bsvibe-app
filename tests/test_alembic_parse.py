@@ -51,11 +51,13 @@ def test_alembic_history_loads():
         "backfill_ship_or_discard",
         "w1_workspace_cleanup",
         "run_routing_rules",
+        "workspace_schedules",
+        "workspace_audit_retention",
     ):
         assert rev in result.stdout, f"missing revision {rev} in:\n{result.stdout}"
 
 
-def test_alembic_head_is_workspace_schedules():
+def test_alembic_head_is_workspace_audit_retention():
     repo = Path(__file__).parent.parent
     result = subprocess.run(
         [sys.executable, "-m", "alembic", "heads"],
@@ -64,7 +66,7 @@ def test_alembic_head_is_workspace_schedules():
         text=True,
     )
     assert result.returncode == 0
-    assert "workspace_schedules" in result.stdout
+    assert "workspace_audit_retention" in result.stdout
 
 
 def test_target_metadata_covers_all_bases():

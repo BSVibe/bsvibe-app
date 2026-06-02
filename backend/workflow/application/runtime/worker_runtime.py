@@ -62,6 +62,7 @@ from backend.workflow.infrastructure.workers.delivery_worker import (
 )
 from backend.workflow.infrastructure.workers.intake_worker import IntakeWorker
 from backend.workflow.infrastructure.workers.relay_worker import RelayWorker
+from plugin.audit.retention_sweep import AuditRetentionSweepRunner
 
 logger = structlog.get_logger(__name__)
 
@@ -224,6 +225,23 @@ def build_worker_runtime(
             # extensions), and a row drifting one tick past ``expires_at``
             # before the sweep catches it has no founder impact.
             config=ScheduleWorkerConfig(poll_interval_s=3600.0),
+        ),
+        # Lift Q1 — per-workspace audit_outbox retention sweep. A THIRD
+        # :class:`ScheduleWorker` against the SAME
+        # :class:`ScheduleRunnerProtocol` seam but a different runner:
+        # :class:`AuditRetentionSweepRunner` iterates every workspace with
+        # a non-NULL ``audit_retention_days`` (NULL = forever, the
+        # default), DELETEs ``audit_outbox`` rows past
+        # ``occurred_at < now - retention_days * 1d``, and emits ONE
+        # ``audit.retention.swept`` row per workspace per non-empty
+        # batch tagged ``trigger=schedule, source=system.audit_retention``.
+        # Daily poll — retention is day-grained; a row drifting a few
+        # ticks past cutoff before deletion is no founder impact.
+        ScheduleWorker(
+            session_factory=session_factory,
+            runner=AuditRetentionSweepRunner(),
+            name="audit_retention_sweep_worker",
+            config=ScheduleWorkerConfig(poll_interval_s=86400.0),
         ),
     ]
     return WorkerRuntime(workers=workers, _stop=asyncio.Event())
