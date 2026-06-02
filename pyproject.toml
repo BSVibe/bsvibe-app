@@ -188,6 +188,7 @@ forbidden_modules = ["plugin"]
 name = "connector plugins only depend on bsvibe_sdk + published seams"
 type = "forbidden"
 source_modules = [
+    "plugin.claude",
     "plugin.discord",
     "plugin.email_sender",
     "plugin.github",
