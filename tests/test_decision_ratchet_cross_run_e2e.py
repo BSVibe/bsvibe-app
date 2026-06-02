@@ -268,3 +268,36 @@ async def test_resolved_decision_ratchets_across_runs_e2e(
         "decision surfaced on an UNRELATED signal — retrieval is not "
         f"relevance-gated: {surfaced_unrelated}"
     )
+
+    # === 5. RETRACTED HALF — Lift M3a — tombstoned decision stops surfacing ==
+    # The fifth half of the ratchet (per ontology-inspect/correct design §4.2):
+    # once a prior decision is retracted via the tombstone path (frontmatter
+    # ``retracted_at`` set, file NOT deleted), the production retriever's
+    # skip-retracted predicate must stop surfacing it for the SAME signal that
+    # surfaced it in step 3. The garden note must still exist on disk
+    # (provenance preserved); only the retriever's filter changes.
+    from datetime import UTC  # noqa: PLC0415
+    from datetime import datetime as _dt
+
+    import yaml as _yaml  # noqa: PLC0415
+
+    note_path = notes[0]
+    text = note_path.read_text(encoding="utf-8")
+    assert text.startswith("---\n"), text
+    closing = text.index("\n---\n", 4)
+    fm = _yaml.safe_load(text[4:closing]) or {}
+    fm["retracted_at"] = _dt.now(tz=UTC).isoformat()
+    fm["retracted_by"] = "founder"
+    new_text = (
+        f"---\n{_yaml.dump(fm, default_flow_style=False).strip()}\n---\n" + text[closing + 5 :]
+    )
+    note_path.write_text(new_text, encoding="utf-8")
+
+    assert note_path.exists(), "tombstone must NOT delete the note from disk — provenance lost"
+
+    retriever_retracted = _production_retriever(vault_root, workspace_id)
+    surfaced_retracted = await retriever_retracted.retrieve_for_signals(_RUN_B_SIGNAL)
+    assert not any("token-bucket" in s for s in surfaced_retracted), (
+        "retracted decision still surfacing — D5 retriever did not skip "
+        f"frontmatter ``retracted_at``: {surfaced_retracted}"
+    )

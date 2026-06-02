@@ -34,6 +34,7 @@ from backend.knowledge.graph.writer_core._entity_stub import (
 )
 from backend.knowledge.graph.writer_core._io import _WriterIOMixin
 from backend.knowledge.graph.writer_core._mutation import _WriterMutationMixin
+from backend.knowledge.graph.writer_core._tombstone import _WriterTombstoneMixin
 from backend.knowledge.graph.writer_core._tool_handlers import _WriterToolHandlersMixin
 
 __all__ = [
@@ -41,6 +42,7 @@ __all__ = [
     "GardenWriter",
     "_WriterIOMixin",
     "_WriterMutationMixin",
+    "_WriterTombstoneMixin",
     "_WriterToolHandlersMixin",
     "_create_entity_stub",
     "_maturity_from_status",

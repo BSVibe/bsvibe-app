@@ -142,6 +142,7 @@ ignore_imports = [
     "backend.data.migrations.env -> backend.identity.db",
     "backend.data.migrations.env -> backend.identity.workspaces_db",
     "backend.data.migrations.env -> backend.knowledge.canonicalization.db",
+    "backend.data.migrations.env -> backend.knowledge.infrastructure.ontology_db",
     "backend.data.migrations.env -> backend.knowledge.ingest.db",
     "backend.data.migrations.env -> backend.knowledge.retrieval.db",
     "backend.data.migrations.env -> backend.router.accounts.account_models",

@@ -207,6 +207,15 @@ class ResolvedDecisionsRetriever:
             fm = extract_frontmatter(content)
             if fm.get("kind") != _DECISION_KIND:
                 continue
+            # Lift M3a — D5 ratchet preserved by skipping tombstoned notes
+            # (frontmatter ``retracted_at`` is the single tombstone marker the
+            # ontology retraction service writes; design §1.3 + §4.2 invariant).
+            # Provenance stays on disk; future runs simply stop seeing this
+            # decision. Falsy values ('', None) are treated as "not retracted"
+            # so a half-written note fails open (mirrors the design's operational
+            # invariant in §4.2).
+            if fm.get("retracted_at"):
+                continue
             question = str(fm.get("question") or "").strip()
             answer = str(fm.get("answer") or "").strip()
             if not question or not answer:
