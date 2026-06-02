@@ -18,6 +18,7 @@ from typing import Any
 
 import redis.asyncio as redis_aio
 import structlog
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 # Eager import — registers AuditEventSubscriber on the EventBus singleton at
 # module load (Lift R2a: audit subscribes on `plugin.audit` package import).
@@ -26,8 +27,6 @@ import structlog
 # layer allowed to wire cross-cutting infrastructure (vs workers/__main__
 # which is a common leaf per import-linter contracts).
 import plugin.audit  # noqa: F401, E402
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
-
 from backend.config import get_settings
 from backend.workflow.application.runtime.agent_runtime import build_agent_execution_deps
 from backend.workflow.application.runtime.delivery_runtime import (

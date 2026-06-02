@@ -20,7 +20,6 @@ from fastapi.middleware.cors import CORSMiddleware
 # audit because audit has no plugin.py — it uses the standard library
 # `plugin.audit` package self-registration instead.
 import plugin.audit  # noqa: F401
-
 from backend.api.auth import router as auth_router
 from backend.api.health import router as health_router
 from backend.api.middleware import WorkspaceContextMiddleware
