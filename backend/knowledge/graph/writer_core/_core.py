@@ -18,6 +18,7 @@ import structlog
 from backend.knowledge.graph.vault import Vault
 from backend.knowledge.graph.writer_core._io import _WriterIOMixin
 from backend.knowledge.graph.writer_core._mutation import _WriterMutationMixin
+from backend.knowledge.graph.writer_core._tombstone import _WriterTombstoneMixin
 from backend.knowledge.graph.writer_core._tool_handlers import _WriterToolHandlersMixin
 
 if TYPE_CHECKING:
@@ -31,7 +32,12 @@ if TYPE_CHECKING:
 logger = structlog.get_logger(__name__)
 
 
-class GardenWriter(_WriterIOMixin, _WriterMutationMixin, _WriterToolHandlersMixin):
+class GardenWriter(
+    _WriterIOMixin,
+    _WriterMutationMixin,
+    _WriterTombstoneMixin,
+    _WriterToolHandlersMixin,
+):
     """Writes seeds, garden notes, and action logs to the vault.
 
     Optionally notifies a SyncManager after each write so that

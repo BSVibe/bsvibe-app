@@ -45,6 +45,10 @@ EXPECTED_ROUTES: dict[str, set[tuple[str, str]]] = {
         ("GET", "/concepts/{concept_id}"),
         ("GET", "/observations"),
         ("GET", "/graph"),
+        # Lift M3a — ontology retraction / correction surface.
+        ("POST", "/nodes/{node_ref:path}/retract"),
+        ("POST", "/nodes/{node_ref:path}/correct"),
+        ("POST", "/corrections/{correction_id}/undo"),
     },
     "backend.api.v1.products": {
         ("GET", ""),
@@ -150,6 +154,7 @@ EXPECTED_SUBMODULES: dict[str, list[str]] = {
         "backend.api.v1.inside.concepts",
         "backend.api.v1.inside.observations",
         "backend.api.v1.inside.graph",
+        "backend.api.v1.inside.retraction",
         "backend.api.v1.inside._schemas",
         "backend.api.v1.inside._dependencies",
         "backend.api.v1.inside._helpers",

@@ -53,11 +53,12 @@ def test_alembic_history_loads():
         "run_routing_rules",
         "workspace_schedules",
         "workspace_audit_retention",
+        "ontology_corrections",
     ):
         assert rev in result.stdout, f"missing revision {rev} in:\n{result.stdout}"
 
 
-def test_alembic_head_is_workspace_audit_retention():
+def test_alembic_head_is_ontology_corrections():
     repo = Path(__file__).parent.parent
     result = subprocess.run(
         [sys.executable, "-m", "alembic", "heads"],
@@ -66,7 +67,7 @@ def test_alembic_head_is_workspace_audit_retention():
         text=True,
     )
     assert result.returncode == 0
-    assert "workspace_audit_retention" in result.stdout
+    assert "ontology_corrections" in result.stdout
 
 
 def test_target_metadata_covers_all_bases():
