@@ -96,6 +96,152 @@ class TestAppendBlock:
         assert b"hello world" in route.calls.last.request.content
 
 
+class TestSearchPages:
+    @respx.mock
+    async def test_search_pages_filters_to_pages_only(self, client):
+        route = respx.post(f"{API}/v1/search").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "results": [{"object": "page", "id": "p-1"}],
+                    "has_more": False,
+                    "next_cursor": None,
+                },
+            )
+        )
+        pages = [p async for p in client.search_pages()]
+        assert pages == [{"object": "page", "id": "p-1"}]
+        sent = route.calls.last.request
+        # MUST filter to pages (the spec gotcha — search mixes pages + databases).
+        # httpx serialises without whitespace; assert against the wire form.
+        assert b'"property":"object"' in sent.content
+        assert b'"value":"page"' in sent.content
+
+    @respx.mock
+    async def test_search_pages_paginates_via_next_cursor(self, client):
+        responses = [
+            httpx.Response(
+                200,
+                json={
+                    "results": [{"object": "page", "id": "p-1"}],
+                    "has_more": True,
+                    "next_cursor": "cur-2",
+                },
+            ),
+            httpx.Response(
+                200,
+                json={
+                    "results": [{"object": "page", "id": "p-2"}],
+                    "has_more": False,
+                    "next_cursor": None,
+                },
+            ),
+        ]
+        route = respx.post(f"{API}/v1/search").mock(side_effect=responses)
+        pages = [p async for p in client.search_pages()]
+        ids = [p["id"] for p in pages]
+        assert ids == ["p-1", "p-2"]
+        assert route.call_count == 2
+        # Second request body MUST include start_cursor=cur-2.
+        second_body = route.calls[1].request.content
+        assert b"cur-2" in second_body
+
+    @respx.mock
+    async def test_search_pages_401_raises(self, client):
+        respx.post(f"{API}/v1/search").mock(
+            return_value=httpx.Response(401, json={"message": "bad token"})
+        )
+        with pytest.raises(httpx.HTTPStatusError):
+            [_ async for _ in client.search_pages()]
+
+
+class TestQueryDatabase:
+    @respx.mock
+    async def test_query_database_yields_pages(self, client):
+        respx.post(f"{API}/v1/databases/db-1/query").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "results": [{"object": "page", "id": "p-a"}],
+                    "has_more": False,
+                    "next_cursor": None,
+                },
+            )
+        )
+        pages = [p async for p in client.query_database("db-1")]
+        assert pages == [{"object": "page", "id": "p-a"}]
+
+    @respx.mock
+    async def test_query_database_paginates(self, client):
+        respx.post(f"{API}/v1/databases/db-1/query").mock(
+            side_effect=[
+                httpx.Response(
+                    200,
+                    json={
+                        "results": [{"id": "p-a"}],
+                        "has_more": True,
+                        "next_cursor": "n1",
+                    },
+                ),
+                httpx.Response(
+                    200,
+                    json={
+                        "results": [{"id": "p-b"}],
+                        "has_more": False,
+                        "next_cursor": None,
+                    },
+                ),
+            ]
+        )
+        pages = [p async for p in client.query_database("db-1")]
+        assert [p["id"] for p in pages] == ["p-a", "p-b"]
+
+
+class TestListBlockChildren:
+    @respx.mock
+    async def test_list_block_children_yields_blocks(self, client):
+        respx.get(f"{API}/v1/blocks/blk/children").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "results": [
+                        {"object": "block", "id": "b1", "type": "paragraph"},
+                        {"object": "block", "id": "b2", "type": "paragraph"},
+                    ],
+                    "has_more": False,
+                    "next_cursor": None,
+                },
+            )
+        )
+        blocks = [b async for b in client.list_block_children("blk")]
+        assert [b["id"] for b in blocks] == ["b1", "b2"]
+
+    @respx.mock
+    async def test_list_block_children_paginates(self, client):
+        respx.get(f"{API}/v1/blocks/blk/children").mock(
+            side_effect=[
+                httpx.Response(
+                    200,
+                    json={
+                        "results": [{"id": "b1"}],
+                        "has_more": True,
+                        "next_cursor": "n",
+                    },
+                ),
+                httpx.Response(
+                    200,
+                    json={
+                        "results": [{"id": "b2"}],
+                        "has_more": False,
+                        "next_cursor": None,
+                    },
+                ),
+            ]
+        )
+        blocks = [b async for b in client.list_block_children("blk")]
+        assert [b["id"] for b in blocks] == ["b1", "b2"]
+
+
 class TestInjectedClient:
     @respx.mock
     async def test_uses_injected_async_client(self):

@@ -12,12 +12,21 @@ Tests mock httpx at the transport layer (respx), so no real network I/O.
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
 from typing import Any
 
 import httpx
 
 DEFAULT_BASE_URL = "https://api.notion.com"
+# Hardcoded per Lift Q3-Notion spec (gotcha #1). Notion treats this
+# header as a contract — bumping it can change response shapes (e.g.
+# property schemas), so we pin to a known-good version.
 _NOTION_VERSION = "2022-06-28"
+
+# Notion's documented limits: 3 requests/sec/integration. The plugin
+# action throttles between paginated calls; the client itself doesn't
+# enforce per-request to keep the unit surface pure.
+_PAGE_SIZE = 100  # max allowed by /search and database queries
 
 
 class NotionClient:
@@ -128,6 +137,92 @@ class NotionClient:
             json_body={"children": self._paragraph_blocks(text) or self._paragraph_blocks(" ")},
         )
         return self._json(resp)
+
+    # ── knowledge import (Lift Q3-Notion) ──────────────────────────────────
+
+    async def _paginated_post(
+        self,
+        path: str,
+        *,
+        base_body: dict[str, Any] | None = None,
+    ) -> AsyncIterator[dict[str, Any]]:
+        """Walk a Notion paginated POST endpoint, yielding each result item.
+
+        Notion paginates via ``has_more`` / ``next_cursor``: when ``has_more``
+        is ``True`` the caller must re-POST the same body with
+        ``start_cursor`` set to the previous response's ``next_cursor``.
+        ``page_size`` is set to the maximum (100) to minimise round-trips.
+        """
+        cursor: str | None = None
+        while True:
+            body: dict[str, Any] = dict(base_body or {})
+            body["page_size"] = _PAGE_SIZE
+            if cursor:
+                body["start_cursor"] = cursor
+            resp = await self._request("POST", path, json_body=body)
+            data = self._json(resp)
+            for item in data.get("results") or []:
+                yield item
+            if not data.get("has_more"):
+                return
+            cursor = data.get("next_cursor")
+            if not cursor:
+                return
+
+    async def _paginated_get(
+        self,
+        path: str,
+    ) -> AsyncIterator[dict[str, Any]]:
+        """Walk a Notion paginated GET endpoint (``/v1/blocks/{id}/children``).
+
+        Same shape as ``_paginated_post`` but cursor is passed via the
+        ``start_cursor`` query string parameter per Notion's REST contract.
+        """
+        cursor: str | None = None
+        while True:
+            url = f"{path}?page_size={_PAGE_SIZE}"
+            if cursor:
+                url = f"{url}&start_cursor={cursor}"
+            resp = await self._request("GET", url)
+            data = self._json(resp)
+            for item in data.get("results") or []:
+                yield item
+            if not data.get("has_more"):
+                return
+            cursor = data.get("next_cursor")
+            if not cursor:
+                return
+
+    def search_pages(self) -> AsyncIterator[dict[str, Any]]:
+        """Yield every page object the integration has access to.
+
+        Notion's ``/v1/search`` returns *pages + databases mixed*; we
+        filter to pages only (spec gotcha #2) so the import action does
+        not have to defend against database objects appearing in the
+        page stream.
+        """
+        body: dict[str, Any] = {
+            "filter": {"property": "object", "value": "page"},
+        }
+        return self._paginated_post("/v1/search", base_body=body)
+
+    def query_database(self, database_id: str) -> AsyncIterator[dict[str, Any]]:
+        """Yield every page in a Notion database.
+
+        Pagination follows the same ``has_more`` / ``next_cursor`` shape
+        as ``/search``; we pass no filter so every page is yielded
+        (the action selects bindings, not per-page logic).
+        """
+        return self._paginated_post(f"/v1/databases/{database_id}/query")
+
+    def list_block_children(self, block_id: str) -> AsyncIterator[dict[str, Any]]:
+        """Yield every direct child block of a page or block.
+
+        The caller recurses one level into ``has_children: true`` blocks
+        (nested lists, toggles) but stops at ``child_page`` blocks —
+        those are links to other pages, not embedded content (gotcha #4).
+        """
+        return self._paginated_get(f"/v1/blocks/{block_id}/children")
 
 
 __all__ = ["DEFAULT_BASE_URL", "NotionClient"]
