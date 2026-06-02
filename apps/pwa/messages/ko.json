@@ -745,5 +745,42 @@
     "nextWorking": "작업하고 있어요…",
     "nextShipped": "완료됐어요. 따로 하실 일은 없어요.",
     "nextFailed": "완료하지 못했어요. 지금 하실 일은 없어요."
+  },
+  "trust": {
+    "glyphLabel": {
+      "rising": "신뢰가 올라가고 있음",
+      "flat": "신뢰 평탄",
+      "falling": "신뢰가 내려가고 있음",
+      "dormant": "휴면"
+    },
+    "legend": {
+      "title": "신뢰 화살표",
+      "rising": "↗ 손이 덜 들고 있음 — 신뢰 상승",
+      "flat": "→ 손이 들어가는 정도가 비슷함",
+      "falling": "↘ 손이 더 들고 있음 — 신뢰 하락",
+      "dormant": "· 휴면 또는 아직 데이터 부족",
+      "dismiss": "확인"
+    },
+    "panel": {
+      "regionLabel": "이 제품의 신뢰",
+      "heading": "신뢰",
+      "loading": "신뢰 신호를 보고 있어요…",
+      "error": "지금은 신뢰 신호를 읽을 수 없어요.",
+      "trendLabel": "흐름",
+      "trendRising": "사람 손이 덜 들어가고 있어요",
+      "trendFlat": "사람 손이 들어가는 정도가 비슷해요",
+      "trendFalling": "사람 손이 더 들어가고 있어요",
+      "trendDormant": "아직 판단하기엔 데이터가 부족해요",
+      "touchLabel": "사람 손",
+      "touchValue": "최근 {days}일 동안 사람이 검토한 시간 {hours}시간",
+      "touchHoursNone": "—",
+      "depositLabel": "쌓인 지식",
+      "depositValue": "검증된 지식 {count}건 ({slope})",
+      "slopeSteady": "변화 없음",
+      "contractLabel": "검증 계약",
+      "contractSteady": "검증 강도가 안정적임 ✓",
+      "contractAmber": "검증 주의 — {reason}",
+      "contractAmberFallback": "교차 검증이 트리거됨"
+    }
   }
 }

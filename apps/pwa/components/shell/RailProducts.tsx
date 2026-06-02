@@ -1,6 +1,9 @@
 "use client";
 
+import TrendArrowGlyph from "@/components/products/TrendArrowGlyph";
 import { listProducts } from "@/lib/api/products";
+import { getFleetTrust } from "@/lib/api/trust";
+import type { TrendArrow } from "@/lib/api/trust.types";
 import type { Product } from "@/lib/api/types";
 import { useTranslations } from "next-intl";
 import Link from "next/link";
@@ -25,6 +28,9 @@ type ListState = { data: Product[]; failed: boolean } | null;
 
 export default function RailProducts() {
   const [list, setList] = useState<ListState>(null);
+  // Fleet trust glyphs (Lift M4b), keyed by product_id. Missing/failed entries
+  // fall back to "no glyph" — the rail must never blank on a trust regression.
+  const [trust, setTrust] = useState<Map<string, TrendArrow>>(new Map());
   const [creating, setCreating] = useState(false);
   const dialogRef = useRef<HTMLDialogElement>(null);
   const pathname = usePathname();
@@ -43,6 +49,24 @@ export default function RailProducts() {
     listProducts()
       .then((data) => active && setList({ data, failed: false }))
       .catch(() => active && setList({ data: [], failed: true }));
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  // Fleet trust glyphs (design §3.4). One read on mount; no live updates.
+  useEffect(() => {
+    let active = true;
+    getFleetTrust()
+      .then((res) => {
+        if (!active) return;
+        const next = new Map<string, TrendArrow>();
+        for (const entry of res.products) next.set(entry.product_id, entry.trend_arrow);
+        setTrust(next);
+      })
+      .catch(() => {
+        /* calm: trust failure leaves glyph-less product rows. */
+      });
     return () => {
       active = false;
     };
@@ -91,6 +115,7 @@ export default function RailProducts() {
           {products.map((p) => {
             const href = `/products/${p.slug}`;
             const active = pathname === href;
+            const arrow = trust.get(p.id);
             return (
               <li key={p.id}>
                 <Link
@@ -100,6 +125,9 @@ export default function RailProducts() {
                 >
                   <span className="rail-products__dot" aria-hidden="true" />
                   <span className="rail-products__name">{p.name}</span>
+                  {arrow ? (
+                    <TrendArrowGlyph arrow={arrow} className="rail-products__arrow" />
+                  ) : null}
                 </Link>
               </li>
             );
