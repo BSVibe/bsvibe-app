@@ -49,11 +49,16 @@ from backend.extensions.plugin.context import (
 from backend.extensions.plugin.decorator import PluginBuilder, plugin
 from backend.extensions.plugin.loader import PluginLoader
 from backend.extensions.plugin.runner import PluginRunner
+from backend.extensions.plugin.webhook_registry import (
+    ConnectorParser,
+    WebhookParserRegistry,
+)
 
 __all__ = [
     "ActionCapability",
     "ChatInterface",
     "CompensateCapability",
+    "ConnectorParser",
     "InboundCapability",
     "KnowledgeBackend",
     "LLMClient",
@@ -71,5 +76,6 @@ __all__ = [
     "VALID_COMPENSATION_TIERS",
     "VALID_JURISDICTIONS",
     "VALID_TRIGGER_TYPES",
+    "WebhookParserRegistry",
     "plugin",
 ]

@@ -37,6 +37,9 @@ from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
 from backend.workflow.domain.incoming import TriggerEvent
+from bsvibe_sdk import WebhookError as _SdkWebhookError
+from bsvibe_sdk import WebhookSignatureError as _SdkWebhookSignatureError
+from bsvibe_sdk import webhook
 
 logger = structlog.get_logger(__name__)
 
@@ -53,11 +56,11 @@ INTERACTION_PING = 1
 SUPPORTED_INTERACTION_TYPES = frozenset({2, 3, 4, 5})
 
 
-class WebhookError(ValueError):
+class WebhookError(_SdkWebhookError):
     """Raised when an interaction cannot be parsed (malformed / missing fields)."""
 
 
-class WebhookSignatureError(WebhookError):
+class WebhookSignatureError(_SdkWebhookSignatureError, WebhookError):
     """Raised when Ed25519 verification fails — treat as forged."""
 
 
@@ -98,6 +101,7 @@ def _lower_headers(headers: dict[str, str]) -> dict[str, str]:
     return {k.lower(): v for k, v in headers.items()}
 
 
+@webhook("discord")
 def parse_interaction(
     *,
     workspace_id: uuid.UUID,

@@ -193,6 +193,11 @@ def test_all_export_is_complete() -> None:
         "Event",
         "Context",
         "Result",
+        # Lift Q3 / R2c — inbound webhook hook.
+        "InboundWebhookParser",
+        "WebhookError",
+        "WebhookSignatureError",
+        "webhook",
         "__version__",
     }
     assert set(bsvibe_sdk.__all__) == expected, (

@@ -23,6 +23,9 @@ from typing import Any
 import structlog
 
 from backend.workflow.domain.incoming import TriggerEvent
+from bsvibe_sdk import WebhookError as _SdkWebhookError
+from bsvibe_sdk import WebhookSignatureError as _SdkWebhookSignatureError
+from bsvibe_sdk import webhook
 
 logger = structlog.get_logger(__name__)
 
@@ -35,11 +38,11 @@ SECRET_TOKEN_HEADER = "x-telegram-bot-api-secret-token"  # noqa: S105
 SUPPORTED_UPDATE_KEYS = frozenset({"message"})
 
 
-class WebhookError(ValueError):
+class WebhookError(_SdkWebhookError):
     """Raised when an update cannot be parsed (malformed / missing fields)."""
 
 
-class WebhookSignatureError(WebhookError):
+class WebhookSignatureError(_SdkWebhookSignatureError, WebhookError):
     """Raised when secret-token verification fails — treat as forged."""
 
 
@@ -61,6 +64,7 @@ def _lower_headers(headers: dict[str, str]) -> dict[str, str]:
     return {k.lower(): v for k, v in headers.items()}
 
 
+@webhook("telegram")
 def parse_update(
     *,
     workspace_id: uuid.UUID,

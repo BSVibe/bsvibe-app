@@ -158,6 +158,23 @@ ignore_imports = [
 ]
 
 [[tool.importlinter.contracts]]
+# Lift Q3 / R2c — the engine inbound layer must NOT reach into plugin
+# webhook modules. Parsers are dispatched through
+# ``backend.extensions.plugin.webhook_registry.WebhookParserRegistry``
+# which the loader populates from ``@bsvibe_sdk.webhook(...)`` markers.
+# ``plugin.audit`` is the lone in-tree transactional-outbox subscriber
+# (whitelisted in the "connector plugins only depend on..." contract
+# above) — and these two engine modules never imported it; if they ever
+# do, this gate surfaces it as the reverse-direction violation it is.
+name = "engine inbound layer has zero plugin imports (R2c)"
+type = "forbidden"
+source_modules = [
+    "backend.connectors.resolver",
+    "backend.api.webhooks",
+]
+forbidden_modules = ["plugin"]
+
+[[tool.importlinter.contracts]]
 # Plugins may depend on the SDK + a small allow-list of backend
 # **published** seams (extensions/plugin for SkillContext + capability
 # decorators, workflow.domain for TriggerEvent, extensions.eventbus for

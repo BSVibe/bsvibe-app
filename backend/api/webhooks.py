@@ -1,14 +1,23 @@
 """Public connector webhook ingress — ``POST /api/webhooks/{connector}/{token}``.
 
 The connector-inbound entrypoint (Workflow §11.2). An external provider
-(github / slack / telegram / discord) POSTs a signed delivery here; we resolve
-the ``(connector, webhook_token)`` pair to a workspace, verify the signature
-via the matching plugin parser, and land a
+(github / slack / telegram / discord / sentry) POSTs a signed delivery here;
+we resolve the ``(connector, webhook_token)`` pair to a workspace, verify
+the signature via the registered plugin parser, and land a
 ``TriggerEvent(source=<connector>, trigger_kind=webhook)`` on the EXISTING
 intake path (:class:`backend.workflow.application.intake.webhook.WebhookReceiver`). From there the
 IntakeWorker → Request → ... → Safe Mode delivery pipeline already wired
 (PR #17) drives it; because ``workspace.safe_mode`` defaults True, connector
 deliveries queue for founder approval — exactly the §11.2 intent.
+
+Lift Q3 / R2c — this route used to import each plugin's local
+``WebhookSignatureError`` subclass directly (``from plugin.github.webhook
+import WebhookSignatureError as GithubSignatureError`` ...). After Lift
+Q3 every plugin's local subclass extends the SDK base
+:class:`bsvibe_sdk.WebhookSignatureError`, and parsers are dispatched via
+the engine's :class:`WebhookParserRegistry`; a single
+``except bsvibe_sdk.WebhookSignatureError`` here catches every connector's
+forgery. The reverse-direction imports from ``plugin.*.webhook`` are gone.
 
 This route is **PUBLIC** (no founder auth): it is an external callback. The
 ``webhook_token`` is the unguessable capability (``secrets.token_urlsafe(32)``)
@@ -39,43 +48,34 @@ from backend.api.deps import get_db_session
 from backend.config import get_settings
 from backend.connectors.handshake import handshake_response
 from backend.connectors.resolver import ConnectorInboundResolver, UnknownConnectorError
+from backend.extensions.plugin.webhook_registry import (
+    WebhookParserRegistry,
+    get_default_registry,
+)
 from backend.router.accounts.crypto import CredentialCipher, _key_from_settings
 from backend.workers.emit import STREAM_INTAKE, emit_stream_notification, get_emit_redis_client
 from backend.workflow.application.intake.webhook import WebhookReceiver
-from plugin.discord.webhook import (
-    WebhookSignatureError as DiscordSignatureError,
-)
-from plugin.github.webhook import (
-    WebhookSignatureError as GithubSignatureError,
-)
-from plugin.sentry.webhook import (
-    WebhookSignatureError as SentrySignatureError,
-)
-from plugin.slack.webhook import (
-    WebhookSignatureError as SlackSignatureError,
-)
-from plugin.telegram.webhook import (
-    WebhookSignatureError as TelegramSignatureError,
-)
+from bsvibe_sdk import WebhookSignatureError
 
 logger = structlog.get_logger(__name__)
 
 router = APIRouter()
 
-# Every connector parser raises its own module-local subclass of
-# WebhookSignatureError on a forged delivery; catch the union → 401.
-_SIGNATURE_ERRORS: tuple[type[Exception], ...] = (
-    SlackSignatureError,
-    GithubSignatureError,
-    TelegramSignatureError,
-    DiscordSignatureError,
-    SentrySignatureError,
-)
-
 
 def get_credential_cipher() -> CredentialCipher:
     """Build the credential cipher from settings (test-overridable)."""
     return CredentialCipher(_key_from_settings())
+
+
+def get_webhook_parser_registry() -> WebhookParserRegistry:
+    """Engine-side parser registry dependency (test-overridable).
+
+    Defaults to the process-wide singleton the plugin loader populates at
+    bootstrap. Tests inject a tailored :class:`WebhookParserRegistry`
+    instance via FastAPI's ``dependency_overrides`` to drive specific
+    connector / parser combinations without touching the singleton.
+    """
+    return get_default_registry()
 
 
 @router.post("/webhooks/{connector}/{webhook_token}")
@@ -85,15 +85,16 @@ async def receive_connector_webhook(
     webhook_token: Annotated[str, Path(max_length=128)],
     session: Annotated[AsyncSession, Depends(get_db_session)],
     cipher: Annotated[CredentialCipher, Depends(get_credential_cipher)],
+    parsers: Annotated[WebhookParserRegistry, Depends(get_webhook_parser_registry)],
 ) -> Any:
     """Ingest one external signed connector webhook delivery (PUBLIC)."""
-    resolver = ConnectorInboundResolver(session, cipher=cipher)
+    resolver = ConnectorInboundResolver(session, cipher=cipher, parsers=parsers)
 
     # Unknown connector OR no active account for the (connector, token) pair →
     # one opaque 404 (do not leak which half failed).
     account = (
         await resolver.resolve_account(connector=connector, webhook_token=webhook_token)
-        if ConnectorInboundResolver.is_known(connector)
+        if resolver.is_known(connector)
         else None
     )
     if account is None:
@@ -109,7 +110,7 @@ async def receive_connector_webhook(
             headers=headers,
             raw_body=raw_body,
         )
-    except _SIGNATURE_ERRORS:
+    except WebhookSignatureError:
         logger.info(
             "connector_inbound_signature_rejected",
             connector=connector,
@@ -177,4 +178,9 @@ def _not_found() -> JSONResponse:
     )
 
 
-__all__ = ["get_credential_cipher", "receive_connector_webhook", "router"]
+__all__ = [
+    "get_credential_cipher",
+    "get_webhook_parser_registry",
+    "receive_connector_webhook",
+    "router",
+]

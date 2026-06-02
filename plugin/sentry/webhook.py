@@ -27,15 +27,18 @@ from typing import Any
 import structlog
 
 from backend.workflow.domain.incoming import TriggerEvent
+from bsvibe_sdk import WebhookError as _SdkWebhookError
+from bsvibe_sdk import WebhookSignatureError as _SdkWebhookSignatureError
+from bsvibe_sdk import webhook
 
 logger = structlog.get_logger(__name__)
 
 
-class WebhookError(ValueError):
+class WebhookError(_SdkWebhookError):
     """Raised when a webhook cannot be parsed (malformed / missing fields)."""
 
 
-class WebhookSignatureError(WebhookError):
+class WebhookSignatureError(_SdkWebhookSignatureError, WebhookError):
     """Raised when HMAC signature verification fails — treat as forged."""
 
 
@@ -100,6 +103,7 @@ def _idempotency_key(body: dict[str, Any], issue: dict[str, Any], resource: str)
     return None
 
 
+@webhook("sentry")
 def parse_webhook(
     *,
     workspace_id: uuid.UUID,

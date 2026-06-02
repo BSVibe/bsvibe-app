@@ -22,6 +22,7 @@ from backend.api.v1.live_events import set_live_event_bus_redis
 from backend.api.v1.workers import public_router as workers_public_router
 from backend.api.webhooks import router as webhooks_router
 from backend.config import get_settings
+from backend.extensions.plugin.bootstrap import discover_webhook_parsers
 from backend.shared.core.logging import configure_logging
 from plugin.audit import register_audit_subscriber
 
@@ -32,6 +33,13 @@ def create_app() -> FastAPI:
     settings = get_settings()
     configure_logging(level="INFO", service_name="bsvibe-app")
     register_audit_subscriber()
+    # Lift Q3 / R2c — populate the process-wide WebhookParserRegistry so the
+    # public webhook ingress (``/api/webhooks/{connector}/{token}``) can
+    # dispatch to each plugin's ``@webhook(...)``-decorated parser. Scans
+    # ``plugin/<name>/webhook.py`` at app startup; soft-fails per plugin so
+    # one missing module never blocks the API. Idempotent (every connector
+    # the loader sees re-registers into the same singleton).
+    discover_webhook_parsers()
 
     app = FastAPI(
         title="BSVibe",

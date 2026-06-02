@@ -47,6 +47,12 @@ from bsvibe_sdk.plugin import (
     plugin,
 )
 from bsvibe_sdk.version import __version__
+from bsvibe_sdk.webhook import (
+    InboundWebhookParser,
+    WebhookError,
+    WebhookSignatureError,
+    webhook,
+)
 
 __all__ = [
     "VALID_COMPENSATION_TIERS",
@@ -59,6 +65,7 @@ __all__ = [
     "Event",
     "EventBusSubscriber",
     "InboundCapability",
+    "InboundWebhookParser",
     "OutboundCapability",
     "Plugin",
     "PluginBuilder",
@@ -66,8 +73,11 @@ __all__ = [
     "PluginMeta",
     "PluginRegistrationError",
     "Result",
+    "WebhookError",
+    "WebhookSignatureError",
     "__version__",
     "action",
     "on_event",
     "plugin",
+    "webhook",
 ]

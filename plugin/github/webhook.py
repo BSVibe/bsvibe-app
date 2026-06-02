@@ -7,6 +7,14 @@ configured ``webhook_secret`` into :func:`parse_webhook`.
 Security: when a secret is configured, the raw request body is HMAC-SHA256
 verified against the ``X-Hub-Signature-256`` header (GitHub's scheme) using a
 constant-time compare before any payload is trusted.
+
+Lift Q3 / R2c — :func:`parse_webhook` is marked with the SDK
+``@webhook("github")`` decorator so the engine's PluginLoader registers
+it with the :class:`WebhookParserRegistry`; ``backend.connectors.resolver``
+dispatches via that registry instead of importing this module directly.
+``WebhookSignatureError`` extends the SDK base so a single
+``except bsvibe_sdk.WebhookSignatureError`` covers every connector's
+forgery flavour.
 """
 
 from __future__ import annotations
@@ -20,15 +28,18 @@ from typing import Any
 import structlog
 
 from backend.workflow.domain.incoming import TriggerEvent
+from bsvibe_sdk import WebhookError as _SdkWebhookError
+from bsvibe_sdk import WebhookSignatureError as _SdkWebhookSignatureError
+from bsvibe_sdk import webhook
 
 logger = structlog.get_logger(__name__)
 
 
-class WebhookError(ValueError):
+class WebhookError(_SdkWebhookError):
     """Raised when a webhook cannot be parsed (malformed / missing headers)."""
 
 
-class WebhookSignatureError(WebhookError):
+class WebhookSignatureError(_SdkWebhookSignatureError, WebhookError):
     """Raised when HMAC signature verification fails — treat as forged."""
 
 
@@ -62,6 +73,7 @@ def _lower_headers(headers: dict[str, str]) -> dict[str, str]:
     return {k.lower(): v for k, v in headers.items()}
 
 
+@webhook("github")
 def parse_webhook(
     *,
     workspace_id: uuid.UUID,
