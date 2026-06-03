@@ -35,7 +35,7 @@ from pathlib import Path
 
 import structlog
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import async_sessionmaker
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from backend.config import get_settings
 from backend.data.session import make_engine
@@ -58,7 +58,7 @@ class _Target:
 
 
 async def _resolve_targets(
-    session_factory: async_sessionmaker,
+    session_factory: async_sessionmaker[AsyncSession],
     *,
     product_slug: str | None,
     workspace_id: uuid.UUID | None,
@@ -123,7 +123,7 @@ async def _retrofit_target(target: _Target, vault_root: Path, *, dry_run: bool) 
 
 async def run_backfill(
     *,
-    session_factory: async_sessionmaker,
+    session_factory: async_sessionmaker[AsyncSession],
     product_slug: str | None,
     workspace_id: uuid.UUID | None,
     vault_root: Path,
