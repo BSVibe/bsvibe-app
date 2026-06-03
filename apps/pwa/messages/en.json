@@ -492,7 +492,10 @@
         "discord": "Discord",
         "sentry": "Sentry",
         "notion": "Notion",
-        "email-sender": "Email"
+        "email-sender": "Email",
+        "obsidian": "Obsidian",
+        "claude": "Claude",
+        "gpt": "ChatGPT"
       },
       "blurbs": {
         "github": "issues, PRs and pushes",
@@ -501,7 +504,10 @@
         "discord": "messages and channels",
         "sentry": "errors and issues",
         "notion": "pages and databases",
-        "email-sender": "outbound delivery"
+        "email-sender": "outbound delivery",
+        "obsidian": "import a local vault",
+        "claude": "import Claude conversation history",
+        "gpt": "import ChatGPT conversation history"
       },
       "aspirational": {
         "figma": {
@@ -535,7 +541,11 @@
         "cancel": "Cancel",
         "configureTitle": "Configuring a connected service isn’t available yet. Coming soon.",
         "configure": "Configure",
-        "revoke": "Revoke"
+        "revoke": "Revoke",
+        "importNow": "Import now",
+        "importing": "Importing…",
+        "importError": "Import failed. Check the connector config and try again.",
+        "lastImported": "Last imported {count} · {at}"
       },
       "form": {
         "credentialsLabel": "New connector credentials",
@@ -557,7 +567,55 @@
         "createError": "Couldn’t register that connector. Check the details and try again.",
         "cancel": "Cancel",
         "adding": "Adding…",
-        "addConnector": "Add connector"
+        "addConnector": "Add connector",
+        "fields": {
+          "signingSecret": {
+            "label": "Signing secret",
+            "placeholder": "The service's webhook signing secret"
+          },
+          "vaultPath": {
+            "label": "Vault path",
+            "placeholder": "/Users/you/Documents/MyVault"
+          },
+          "excludePatterns": {
+            "label": "Exclude patterns",
+            "placeholder": ".obsidian/**\nTemplates/**"
+          },
+          "defaultRegion": {
+            "label": "Region",
+            "placeholder": "imported"
+          },
+          "exportPath": {
+            "label": "Export path",
+            "placeholder": "/Users/you/Downloads/conversations.json"
+          },
+          "notionApiToken": {
+            "label": "Notion API token",
+            "placeholder": "secret_…"
+          },
+          "notionDatabaseIds": {
+            "label": "Database IDs (one per line, optional)",
+            "placeholder": "abcd1234ef…"
+          }
+        },
+        "inbound": {
+          "obsidian": {
+            "heading": "Vault to import",
+            "hint": "I’ll scan this path and seed every note. Excluded paths are skipped."
+          },
+          "claude": {
+            "heading": "Conversation export",
+            "hint": "Point me at the conversations.json from your Claude data export."
+          },
+          "gpt": {
+            "heading": "Conversation export",
+            "hint": "Point me at the conversations.json from your ChatGPT data export."
+          },
+          "notion": {
+            "heading": "Import from Notion (optional)",
+            "hint": "Add an integration token to also import pages from Notion. Leave both blank to use Notion only for outbound delivery."
+          }
+        }
       }
     },
     "notifications": {

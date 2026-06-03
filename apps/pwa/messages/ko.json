@@ -492,7 +492,10 @@
         "discord": "Discord",
         "sentry": "Sentry",
         "notion": "Notion",
-        "email-sender": "이메일"
+        "email-sender": "이메일",
+        "obsidian": "Obsidian",
+        "claude": "Claude",
+        "gpt": "ChatGPT"
       },
       "blurbs": {
         "github": "이슈, PR, 푸시",
@@ -501,7 +504,10 @@
         "discord": "메시지와 채널",
         "sentry": "오류와 이슈",
         "notion": "페이지와 데이터베이스",
-        "email-sender": "아웃바운드 전송"
+        "email-sender": "아웃바운드 전송",
+        "obsidian": "로컬 볼트 가져오기",
+        "claude": "Claude 대화 내역 가져오기",
+        "gpt": "ChatGPT 대화 내역 가져오기"
       },
       "aspirational": {
         "figma": {
@@ -535,7 +541,11 @@
         "cancel": "취소",
         "configureTitle": "연결된 서비스 구성은 아직 사용할 수 없어요. 준비 중이에요.",
         "configure": "구성",
-        "revoke": "해지"
+        "revoke": "해지",
+        "importNow": "지금 가져오기",
+        "importing": "가져오는 중…",
+        "importError": "가져오기에 실패했어요. 커넥터 설정을 확인하고 다시 시도해 주세요.",
+        "lastImported": "마지막 가져오기 {count}건 · {at}"
       },
       "form": {
         "credentialsLabel": "새 커넥터 자격 증명",
@@ -557,7 +567,55 @@
         "createError": "커넥터를 등록하지 못했어요. 정보를 확인하고 다시 시도해 주세요.",
         "cancel": "취소",
         "adding": "추가 중…",
-        "addConnector": "커넥터 추가"
+        "addConnector": "커넥터 추가",
+        "fields": {
+          "signingSecret": {
+            "label": "서명 시크릿",
+            "placeholder": "서비스의 웹훅 서명 시크릿"
+          },
+          "vaultPath": {
+            "label": "볼트 경로",
+            "placeholder": "/Users/you/Documents/MyVault"
+          },
+          "excludePatterns": {
+            "label": "제외 패턴",
+            "placeholder": ".obsidian/**\nTemplates/**"
+          },
+          "defaultRegion": {
+            "label": "영역",
+            "placeholder": "imported"
+          },
+          "exportPath": {
+            "label": "내보내기 경로",
+            "placeholder": "/Users/you/Downloads/conversations.json"
+          },
+          "notionApiToken": {
+            "label": "Notion API 토큰",
+            "placeholder": "secret_…"
+          },
+          "notionDatabaseIds": {
+            "label": "데이터베이스 ID (한 줄에 하나, 선택)",
+            "placeholder": "abcd1234ef…"
+          }
+        },
+        "inbound": {
+          "obsidian": {
+            "heading": "가져올 볼트",
+            "hint": "이 경로를 스캔해 모든 노트를 시드로 등록해요. 제외 경로는 건너뛰어요."
+          },
+          "claude": {
+            "heading": "대화 내보내기",
+            "hint": "Claude 데이터 내보내기의 conversations.json을 가리켜 주세요."
+          },
+          "gpt": {
+            "heading": "대화 내보내기",
+            "hint": "ChatGPT 데이터 내보내기의 conversations.json을 가리켜 주세요."
+          },
+          "notion": {
+            "heading": "Notion에서 가져오기 (선택)",
+            "hint": "API 토큰을 추가하면 Notion 페이지도 가져올 수 있어요. 비워 두면 아웃바운드 전송 전용으로 동작해요."
+          }
+        }
       }
     },
     "notifications": {

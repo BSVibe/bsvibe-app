@@ -1,10 +1,11 @@
 "use client";
 
-import type { Connector } from "@/lib/api/types";
+import type { Connector, ConnectorImportResult } from "@/lib/api/types";
+import { isImportableConnector } from "@/lib/api/types";
 import { useTranslations } from "next-intl";
 import { useState } from "react";
 
-type RowState = "idle" | "confirming" | "revoking" | "error";
+type RowState = "idle" | "confirming" | "revoking" | "importing" | "import-error" | "error";
 
 /**
  * One connected connector, rendered as a CONNECTED catalog card. Shows the
@@ -12,7 +13,12 @@ type RowState = "idle" | "confirming" | "revoking" | "error";
  * never the full capability), a "Connected" status pill, and any delivery_config
  * keys (the outbound routing the founder set).
  *
- * Two actions:
+ * Three actions:
+ *  - Import now (Lift B) — REAL, but ONLY when the connector is inbound or
+ *    both AND has a bulk-import action (isImportableConnector). Fires
+ *    `POST /api/v1/connectors/{id}/import`. Shows inline status (importing /
+ *    done / error). On success, surfaces the imported count + last-imported
+ *    timestamp and re-reads the list so the row reflects the new state.
  *  - Configure → present per the catalog design but DISABLED (there is NO
  *    backend update endpoint yet); a `title` makes the "coming soon" reason
  *    discoverable without a tooltip-only hint.
@@ -22,20 +28,31 @@ type RowState = "idle" | "confirming" | "revoking" | "error";
  *    reflects the new state. A failed revoke shows a calm inline note and keeps
  *    the card actionable — it never crashes the surface.
  *
- * `revoke` is injected (defaults to the real client) for unit testability.
+ * `revoke` and `triggerImport` are injected (default to the real client) for
+ * unit testability.
  */
 export default function ConnectorRow({
   connector,
   onRevoked,
+  onImported,
   revoke,
+  triggerImport,
 }: {
   connector: Connector;
   onRevoked: () => void;
+  onImported?: () => void;
   revoke: (id: string) => Promise<void>;
+  triggerImport?: (id: string) => Promise<ConnectorImportResult>;
 }) {
   const [state, setState] = useState<RowState>("idle");
+  const [lastImport, setLastImport] = useState<ConnectorImportResult | null>(null);
   const t = useTranslations("settings.connectors.row");
   const tConnectors = useTranslations("settings.connectors");
+
+  const showImport =
+    connector.is_active &&
+    triggerImport !== undefined &&
+    isImportableConnector(connector.connector);
 
   async function confirmRevoke() {
     if (state === "revoking") return;
@@ -50,7 +67,25 @@ export default function ConnectorRow({
     }
   }
 
+  async function runImport() {
+    if (state === "importing" || !triggerImport) return;
+    setState("importing");
+    try {
+      const result = await triggerImport(connector.id);
+      setLastImport(result);
+      setState("idle");
+      onImported?.();
+    } catch {
+      setState("import-error");
+    }
+  }
+
   const configKeys = Object.keys(connector.delivery_config ?? {});
+  // "Last imported" — prefer the just-completed import (fresh in memory)
+  // over the row's stored value, so the success state is reflected
+  // immediately without waiting for the list refetch to land.
+  const lastImportAt = lastImport?.last_import_at ?? connector.last_import_at;
+  const lastImportCount = lastImport?.imported_count ?? connector.last_import_count;
 
   return (
     <li className="connector-card connector-card--connected">
@@ -80,12 +115,25 @@ export default function ConnectorRow({
             {connector.token_hint}
           </span>
         </p>
+        {lastImportAt !== null && lastImportAt !== undefined ? (
+          <p className="connector-card__import-stamp" aria-live="polite">
+            {t("lastImported", {
+              count: lastImportCount ?? 0,
+              at: lastImportAt,
+            })}
+          </p>
+        ) : null}
       </div>
 
       <div className="connector-card__actions">
         {state === "error" && (
           <span className="connector-card__error" aria-live="polite">
             {t("revokeError")}
+          </span>
+        )}
+        {state === "import-error" && (
+          <span className="connector-card__error" aria-live="polite">
+            {t("importError")}
           </span>
         )}
 
@@ -110,6 +158,16 @@ export default function ConnectorRow({
           </>
         ) : (
           <>
+            {showImport ? (
+              <button
+                type="button"
+                className="connector-card__import"
+                onClick={runImport}
+                disabled={state === "importing"}
+              >
+                {state === "importing" ? t("importing") : t("importNow")}
+              </button>
+            ) : null}
             <button
               type="button"
               className="connector-card__ghost"
