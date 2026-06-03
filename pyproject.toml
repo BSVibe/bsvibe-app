@@ -140,6 +140,7 @@ ignore_imports = [
     # the canonical Alembic pattern — there is no "domain" version of it.
     "backend.data.migrations.env -> backend.executors.db",
     "backend.data.migrations.env -> backend.identity.db",
+    "backend.data.migrations.env -> backend.identity.oauth_db",
     "backend.data.migrations.env -> backend.identity.workspaces_db",
     "backend.data.migrations.env -> backend.knowledge.canonicalization.db",
     "backend.data.migrations.env -> backend.knowledge.infrastructure.ontology_db",

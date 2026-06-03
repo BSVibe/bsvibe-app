@@ -6,7 +6,7 @@ import type { ReactNode } from "react";
 import SettingsTabs, { type SettingsTabSlug } from "./SettingsTabs";
 
 /**
- * The Settings surface chrome: the "Settings" heading + the 5-tab bar, hosting
+ * The Settings surface chrome: the "Settings" heading + the 6-tab bar, hosting
  * the active tab's content below. Used by the settings segment layout so every
  * tab shares one header/nav and only the body swaps per route.
  *
@@ -14,7 +14,14 @@ import SettingsTabs, { type SettingsTabSlug } from "./SettingsTabs";
  * to "general" — keeping per-tab pages content-only.
  */
 
-const SLUGS: SettingsTabSlug[] = ["general", "models", "connectors", "notifications", "account"];
+const SLUGS: SettingsTabSlug[] = [
+  "general",
+  "models",
+  "connectors",
+  "notifications",
+  "developer",
+  "account",
+];
 
 function activeSlug(pathname: string | null): SettingsTabSlug {
   const last = (pathname ?? "").split("/").filter(Boolean).pop();

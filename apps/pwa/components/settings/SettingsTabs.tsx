@@ -15,13 +15,20 @@ import { useEffect, useRef } from "react";
  * `settings.tabs` catalog, keyed by slug.
  */
 
-export type SettingsTabSlug = "general" | "models" | "connectors" | "notifications" | "account";
+export type SettingsTabSlug =
+  | "general"
+  | "models"
+  | "connectors"
+  | "notifications"
+  | "developer"
+  | "account";
 
 export const TABS: SettingsTabSlug[] = [
   "general",
   "models",
   "connectors",
   "notifications",
+  "developer",
   "account",
 ];
 

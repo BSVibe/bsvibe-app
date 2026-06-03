@@ -64,6 +64,20 @@ class Settings(BaseSettings):
     # Default region stamped onto workspaces created at signup (§10.2).
     default_workspace_region: str = "us-1"
 
+    # Embedded OAuth 2.0 authorization server (Lift D1, backend.identity.oauth_*).
+    # PEM-encoded ECDSA P-256 private key used to sign OAuth access tokens.
+    # When empty (local dev), an ephemeral keypair is generated at first
+    # use — tokens are NOT portable across process restarts. Generate a
+    # stable prod key with:
+    #     openssl ecparam -genkey -name prime256v1 -noout -out oauth_key.pem
+    # Then base64 the file contents into the env var (or paste the PEM
+    # directly between quotes in .env).
+    oauth_private_key_pem: str = ""
+    # Issuer claim stamped onto issued JWTs and advertised in the RFC 8414
+    # authorization-server metadata. Defaults to a sane local value;
+    # set ``BSVIBE_OAUTH_ISSUER=https://api.bsvibe.dev`` in prod.
+    oauth_issuer: str = "http://localhost:8000"
+
     # Sandbox settings (backend.workflow.infrastructure.sandbox)
     sandbox_enabled: bool = False
     docker_host: str = ""

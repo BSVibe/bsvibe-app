@@ -381,7 +381,8 @@
       "connectors": "커넥터",
       "notifications": "알림",
       "account": "계정",
-      "sectionsLabel": "설정 섹션"
+      "sectionsLabel": "설정 섹션",
+      "developer": "개발자"
     },
     "models": {
       "lede": "모델: BSVibe가 어떻게 사고하는지.",
@@ -731,6 +732,30 @@
       "workspaceIdFallback": "아직 사용할 수 없음",
       "legalBasis": "법적 근거",
       "legalBasisValue": "계약 (Art. 6(1)(b))"
+    },
+    "developer": {
+      "lede": "bsvibe-app에 연결하는 OAuth 클라이언트를 관리해요. Claude Code의 MCP 드라이버, IDE 플러그인, 커스텀 연동.",
+      "loading": "불러오는 중…",
+      "clients": {
+        "title": "OAuth 클라이언트",
+        "add": "클라이언트 추가",
+        "cancel": "취소",
+        "empty": "등록된 OAuth 클라이언트가 없어요. 클라이언트를 추가해 Claude Code나 다른 MCP 클라이언트를 연결할 수 있어요.",
+        "nameLabel": "클라이언트 이름",
+        "redirectLabel": "리다이렉트 URI (줄바꿈 또는 공백으로 구분)",
+        "redirectHint": "네이티브 CLI 클라이언트에는 http://127.0.0.1/callback을 사용하세요. RFC 8252에 따라 어떤 포트든 런타임에 동작해요.",
+        "scopesLabel": "허용 스코프",
+        "submit": "클라이언트 생성",
+        "submitting": "생성 중…",
+        "created": "클라이언트가 생성됐어요",
+        "createdHint": "아래 client_id를 외부 앱 설정에 복사해 넣으세요. 나머지는 OAuth 플로우가 처리해요.",
+        "done": "완료",
+        "scopes": "스코프",
+        "redirects": "리다이렉트",
+        "revoke": "취소",
+        "revoking": "취소 중…",
+        "revoked": "취소됨"
+      }
     }
   },
   "report": {

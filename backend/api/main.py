@@ -15,6 +15,10 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from backend.api.auth import router as auth_router
 from backend.api.health import router as health_router
+from backend.api.oauth import (
+    metadata_router as oauth_metadata_router,
+    public_router as oauth_public_router,
+)
 from backend.api.middleware import WorkspaceContextMiddleware
 from backend.api.v1 import router as v1_router
 from backend.api.v1.events import public_router as events_public_router
@@ -75,6 +79,15 @@ def create_app() -> FastAPI:
     # (a headless worker has no Supabase session JWT) — mounted under /api/v1
     # directly, NOT under the auth-gated v1 router, like the webhooks ingress.
     app.include_router(workers_public_router, prefix="/api/v1")
+    # Embedded OAuth 2.0 authorization server (Lift D1).
+    # ``/api/oauth/{authorize,token,introspect,revoke}`` are the public
+    # OAuth surface (mounted under /api, NOT v1, since the OAuth flow is
+    # itself the authentication surface). ``/api/v1/oauth/clients`` is
+    # the founder-facing DCR management UI surface — Supabase-JWT
+    # authed via the v1 router. The two ``/.well-known/`` metadata
+    # documents + JWKS hang off the root /api prefix.
+    app.include_router(oauth_public_router, prefix="/api")
+    app.include_router(oauth_metadata_router, prefix="/api")
     # SSE live-events stream (B16) — query-param token auth because the
     # browser EventSource cannot send Authorization headers
     # (eventsource-sse-auth-trap). Mounted OUTSIDE the auth-gated v1 router
