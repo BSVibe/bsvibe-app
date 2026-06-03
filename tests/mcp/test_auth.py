@@ -67,7 +67,13 @@ def _issue(*, jti: uuid.UUID, user_id: uuid.UUID, workspace_id: uuid.UUID, scope
 
 
 async def _seed_row(session, *, jti, user_id, workspace_id, scope, revoked: bool = False):
+    from backend.identity.db import UserRow
+    from backend.identity.workspaces_db import WorkspaceRow
+
     now = datetime.now(UTC)
+    session.add(WorkspaceRow(id=workspace_id, name="ws", region="us-1"))
+    session.add(UserRow(id=user_id, supabase_user_id=f"u-{user_id}", email=f"{user_id}@t.co"))
+    await session.flush()
     row = OAuthAccessTokenRow(
         id=jti,
         workspace_id=workspace_id,

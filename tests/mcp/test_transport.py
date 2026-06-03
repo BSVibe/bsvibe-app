@@ -181,6 +181,7 @@ async def test_streamable_app_delegates_to_manager_when_token_valid(db, monkeypa
     async with db() as s:
         s.add(WorkspaceRow(id=workspace_id, name="ws", region="us-1"))
         s.add(UserRow(id=user_id, supabase_user_id="t", email="t@e.co"))
+        await s.flush()
         now = datetime.now(UTC)
         s.add(
             OAuthAccessTokenRow(

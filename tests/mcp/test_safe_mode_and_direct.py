@@ -82,6 +82,7 @@ async def seeded(db, workspace_id, user_id) -> AsyncIterator[uuid.UUID]:
     async with db() as s:
         s.add(WorkspaceRow(id=workspace_id, name="ws", region="us-1"))
         s.add(UserRow(id=user_id, supabase_user_id="test-user", email="t@example.com"))
+        await s.flush()
         run = ExecutionRun(
             id=uuid.uuid4(),
             workspace_id=workspace_id,
@@ -92,6 +93,7 @@ async def seeded(db, workspace_id, user_id) -> AsyncIterator[uuid.UUID]:
             updated_at=datetime.now(UTC),
         )
         s.add(run)
+        await s.flush()
         deliverable = Deliverable(
             id=uuid.uuid4(),
             run_id=run.id,
@@ -232,6 +234,7 @@ async def test_direct_accepts_with_product(
     async with db() as s:
         s.add(WorkspaceRow(id=workspace_id, name="ws", region="us-1"))
         s.add(UserRow(id=user_id, supabase_user_id="t", email="t@e.co"))
+        await s.flush()
         s.add(ProductRow(workspace_id=workspace_id, name="A", slug="a"))
         await s.commit()
     async with db() as s:
@@ -256,6 +259,7 @@ async def test_direct_requires_write_scope(db, workspace_id, user_id, registry) 
     async with db() as s:
         s.add(WorkspaceRow(id=workspace_id, name="ws", region="us-1"))
         s.add(UserRow(id=user_id, supabase_user_id="t", email="t@e.co"))
+        await s.flush()
         s.add(ProductRow(workspace_id=workspace_id, name="A", slug="a"))
         await s.commit()
     async with db() as s:
