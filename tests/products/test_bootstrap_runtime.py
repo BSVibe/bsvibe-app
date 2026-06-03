@@ -33,6 +33,7 @@ async def test_sqlalchemy_repository_marks_status(session_factory):
     product_id = uuid.uuid4()
     async with session_factory() as s:
         s.add(WorkspaceRow(id=workspace_id, name="t", region="us-1", safe_mode=True))
+        await s.flush()
         s.add(
             ProductRow(
                 id=product_id,
@@ -70,6 +71,7 @@ async def test_sqlalchemy_repository_fetch_progress_workspace_scoped(session_fac
     async with session_factory() as s:
         s.add(WorkspaceRow(id=ws_a, name="a", region="us-1", safe_mode=True))
         s.add(WorkspaceRow(id=ws_b, name="b", region="us-1", safe_mode=True))
+        await s.flush()
         s.add(ProductRow(id=product_id, workspace_id=ws_a, name="p", slug="p"))
         await s.commit()
 
@@ -83,6 +85,7 @@ async def test_run_job_writes_failed_clone_on_git_error(session_factory, tmp_pat
     product_id = uuid.uuid4()
     async with session_factory() as s:
         s.add(WorkspaceRow(id=workspace_id, name="t", region="us-1", safe_mode=True))
+        await s.flush()
         s.add(
             ProductRow(
                 id=product_id,
@@ -128,6 +131,7 @@ async def test_run_job_writes_failed_when_workspace_missing(session_factory, tmp
         # No WorkspaceRow on purpose. Add a ProductRow whose FK might be
         # un-enforced on SQLite.
         s.add(WorkspaceRow(id=workspace_id, name="t", region="us-1", safe_mode=True))
+        await s.flush()
         s.add(
             ProductRow(
                 id=product_id,
