@@ -98,10 +98,12 @@ def verify_access_token(
             break
     if match is None:
         raise InvalidTokenError(f"unknown kid: {kid}")
+    # PyJWT's ECAlgorithm.from_jwk returns an EC private-or-public key union;
+    # cast away to the public-key shape jwt.decode accepts.
     public_key = ECAlgorithm.from_jwk(match)
     return jwt.decode(
         token,
-        public_key,
+        public_key,  # type: ignore[arg-type]
         algorithms=["ES256"],
         audience=ACCESS_TOKEN_AUDIENCE,
         issuer=issuer,

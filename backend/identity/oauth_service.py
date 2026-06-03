@@ -332,7 +332,7 @@ async def revoke_token(
         try:
             claims = verify_access_token(token, issuer=issuer, jwks=jwks_payload())
             jti = uuid.UUID(claims["jti"])
-            stmt = (
+            update_stmt = (
                 update(OAuthAccessTokenRow)
                 .where(
                     OAuthAccessTokenRow.id == jti,
@@ -340,15 +340,15 @@ async def revoke_token(
                 )
                 .values(revoked_at=n)
             )
-            result = await session.execute(stmt)
-            if result.rowcount > 0:
+            update_result = await session.execute(update_stmt)
+            if (getattr(update_result, "rowcount", 0) or 0) > 0:
                 return True
         except Exception:  # noqa: BLE001, S110 — RFC 7009 §2.2 mandates this
             pass
     # Refresh-token path.
     hash_ = _sha256(token)
-    stmt = select(OAuthRefreshTokenRow).where(OAuthRefreshTokenRow.token_hash == hash_)
-    row = (await session.execute(stmt)).scalar_one_or_none()
+    select_stmt = select(OAuthRefreshTokenRow).where(OAuthRefreshTokenRow.token_hash == hash_)
+    row = (await session.execute(select_stmt)).scalar_one_or_none()
     if row is None:
         return False
     parent = await session.get(OAuthAccessTokenRow, row.access_token_id)

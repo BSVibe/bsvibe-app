@@ -421,20 +421,20 @@ async def token(  # noqa: PLR0911 — OAuth state machine
     if grant_type == "refresh_token":
         if not refresh_token:
             return _OAuthError(400, "invalid_request", "refresh_token is required")
-        outcome, pair = await rotate_refresh_token(
+        rotate_outcome, rotated = await rotate_refresh_token(
             session,
             refresh_token=refresh_token,
             client_id=client_id,
             issuer=issuer,
         )
-        if outcome is not RefreshRotateOutcome.ROTATED or pair is None:
-            return _OAuthError(401, "invalid_grant", outcome.value)
+        if rotate_outcome is not RefreshRotateOutcome.ROTATED or rotated is None:
+            return _OAuthError(401, "invalid_grant", rotate_outcome.value)
         await session.commit()
         return TokenResponse(
-            access_token=pair.access_token,
-            expires_in=pair.expires_in,
-            refresh_token=pair.refresh_token,
-            scope=" ".join(pair.scope),
+            access_token=rotated.access_token,
+            expires_in=rotated.expires_in,
+            refresh_token=rotated.refresh_token,
+            scope=" ".join(rotated.scope),
         )
     return _OAuthError(
         400,
