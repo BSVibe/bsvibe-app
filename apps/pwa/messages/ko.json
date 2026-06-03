@@ -68,6 +68,10 @@
         "slugPlaceholder": "related-posts",
         "slugHint": "소문자, 숫자, 하이픈만 사용. URL에 쓰여요.",
         "slugError": "소문자, 숫자, 하이픈만 사용하고 글자로 시작해 주세요.",
+        "repoUrl": "Git 저장소 URL",
+        "repoUrlPlaceholder": "https://github.com/org/repo",
+        "repoUrlHint": "비워두면 빈 작업 공간으로 시작하고, 입력하면 백그라운드에서 저장소를 받아 분석해요.",
+        "repoUrlError": "http(s):// 형식의 URL을 입력해 주세요.",
         "create": "제품 만들기",
         "creating": "만드는 중…",
         "createError": "제품을 만들지 못했어요. 그 이름은 이미 사용 중일 수 있어요.",
@@ -116,6 +120,17 @@
     "fileError": "이 파일을 열지 못했어요. 저장소를 확인하세요.",
     "fileTruncated": "큰 파일의 앞부분만 보여드려요.",
     "fileBinary": "바이너리 파일. 여기서는 보여드리지 않아요.",
+    "bootstrap": {
+      "pending": "저장소를 받아 분석할 준비를 하고 있어요…",
+      "cloning": "저장소를 받는 중…",
+      "analyzing": "저장소를 분석하는 중…",
+      "ingesting": "지식에 색인하는 중…",
+      "complete": "저장소 분석을 완료했어요.",
+      "failedClone": "그 저장소를 가져오지 못했어요.",
+      "failedTooLarge": "그 저장소는 너무 커서 분석할 수 없어요.",
+      "failedIngest": "그 저장소를 분석하지 못했어요.",
+      "errorPrefix": "자세히: "
+    },
     "resources": {
       "heading": "리소스",
       "add": "리소스 추가",

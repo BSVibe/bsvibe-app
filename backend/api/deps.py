@@ -52,6 +52,7 @@ __all__ = [
     "get_current_user",
     "get_current_user_row",
     "get_db_session",
+    "get_db_session_factory",
     "get_workspace_id",
     "require_account_id",
     "require_role",
@@ -91,6 +92,18 @@ async def get_db_session() -> AsyncIterator[AsyncSession]:
             yield session
         finally:
             await session.close()
+
+
+def get_db_session_factory() -> async_sessionmaker[AsyncSession]:
+    """Return the process-wide :class:`async_sessionmaker`.
+
+    FastAPI dep — used by handlers that schedule background tasks
+    (e.g. the Product bootstrap job, Lift A v2) and therefore need a
+    session factory that OUTLIVES the request, not a single session.
+    Tests override this dep with the test sessionmaker so the background
+    task runs against the same DB as the request body.
+    """
+    return _get_session_factory()
 
 
 # ---------------------------------------------------------------------------

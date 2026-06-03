@@ -8,7 +8,7 @@
  */
 
 import { ApiError } from "@/lib/api/client";
-import { createProduct, listProducts } from "@/lib/api/products";
+import { createProduct, getProductBootstrap, listProducts } from "@/lib/api/products";
 import { type Session, clearSession, setSession } from "@/lib/auth/session";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -124,5 +124,25 @@ describe("products client", () => {
     await expect(createProduct({ name: "Widgets", slug: "widgets" })).rejects.toBeInstanceOf(
       ApiError,
     );
+  });
+
+  it("Lift A v2 — getProductBootstrap GETs /api/v1/products/{id}/bootstrap", async () => {
+    const body = {
+      product_id: "33333333-3333-3333-3333-333333333333",
+      status: "ingesting",
+      artifacts_count: null,
+      error: null,
+      run_id: null,
+      started_at: "2026-06-03T00:00:00Z",
+      completed_at: null,
+    };
+    const fetchMock = okFetch(body);
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    const res = await getProductBootstrap("33333333-3333-3333-3333-333333333333");
+
+    expect(res).toEqual(body);
+    const [url] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe("/api/v1/products/33333333-3333-3333-3333-333333333333/bootstrap");
   });
 });

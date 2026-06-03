@@ -33,6 +33,9 @@ const BLOG: Product = {
   name: "Blog",
   slug: "blog",
   repo_url: "https://github.com/acme/blog",
+  bootstrap_status: null,
+  bootstrap_artifacts_count: null,
+  bootstrap_error: null,
   created_at: NOW,
   updated_at: NOW,
 };

@@ -59,6 +59,8 @@ EXPECTED_ROUTES: dict[str, set[tuple[str, str]]] = {
         ("GET", "/{product_id}"),
         ("PATCH", "/{product_id}"),
         ("DELETE", "/{product_id}"),
+        # Lift A v2 — repo-bootstrap progress endpoint.
+        ("GET", "/{product_id}/bootstrap"),
         ("GET", "/{product_id}/resources"),
         ("POST", "/{product_id}/resources"),
         ("DELETE", "/{product_id}/resources/{resource_id}"),

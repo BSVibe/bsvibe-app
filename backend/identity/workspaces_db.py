@@ -19,7 +19,17 @@ import uuid
 from datetime import datetime
 from typing import Any, Literal, get_args
 
-from sqlalchemy import JSON, DateTime, ForeignKey, Index, Integer, String, UniqueConstraint
+from sqlalchemy import (
+    JSON,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+    Uuid,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from backend.data import Base
@@ -95,7 +105,13 @@ class ProductRow(WorkspacesBase):
     """Per-workspace shipping unit."""
 
     __tablename__ = "products"
-    __table_args__ = (UniqueConstraint("workspace_id", "slug", name="uq_products_ws_slug"),)
+    __table_args__ = (
+        UniqueConstraint("workspace_id", "slug", name="uq_products_ws_slug"),
+        # Lift A v2 — founder UI hits this on every Product detail page that
+        # carries an in-flight bootstrap. Composite so the workspace scope is
+        # already pruned by the same index seek.
+        Index("ix_products_ws_bootstrap_status", "workspace_id", "bootstrap_status"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
     workspace_id: Mapped[uuid.UUID] = mapped_column(
@@ -104,6 +120,16 @@ class ProductRow(WorkspacesBase):
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     slug: Mapped[str] = mapped_column(String(64), nullable=False)
     repo_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    # Lift A v2 — repo-URL bootstrap telemetry. All four columns are NULL on a
+    # product created without a ``repo_url`` (the bootstrap job is skipped).
+    # ``bootstrap_status`` walks the lifecycle vocabulary documented on the
+    # migration (``pending`` → ``cloning`` → ``analyzing`` → ``ingesting`` →
+    # ``complete`` / ``failed:<reason>``). ``bootstrap_run_id`` is a loose
+    # correlation id for log lookup (not a FK — the job is in-process today).
+    bootstrap_status: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    bootstrap_run_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(), nullable=True)
+    bootstrap_artifacts_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    bootstrap_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=lambda: datetime.now()
     )

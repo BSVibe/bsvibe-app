@@ -68,6 +68,10 @@
         "slugPlaceholder": "related-posts",
         "slugHint": "Lowercase letters, numbers and hyphens. Used in the URL.",
         "slugError": "Use lowercase letters, numbers and hyphens, starting with a letter.",
+        "repoUrl": "Git repository URL",
+        "repoUrlPlaceholder": "https://github.com/org/repo",
+        "repoUrlHint": "Leave blank for a fresh workspace; the repo gets cloned and analyzed in the background if provided.",
+        "repoUrlError": "Use an http(s):// URL.",
         "create": "Create product",
         "creating": "Creating…",
         "createError": "Couldn’t create that product. That name may already be taken.",
@@ -116,6 +120,17 @@
     "fileError": "Couldn’t open this file. See the repo.",
     "fileTruncated": "Showing the first part of a large file.",
     "fileBinary": "Binary file. Not shown here.",
+    "bootstrap": {
+      "pending": "Queued to clone and analyze the repository…",
+      "cloning": "Cloning the repository…",
+      "analyzing": "Analyzing the repository…",
+      "ingesting": "Indexing the repository into knowledge…",
+      "complete": "Repository analyzed.",
+      "failedClone": "Couldn’t clone that repository.",
+      "failedTooLarge": "That repository is too large to analyze.",
+      "failedIngest": "Couldn’t analyze that repository.",
+      "errorPrefix": "Details: "
+    },
     "resources": {
       "heading": "Resources",
       "add": "Add resource",
