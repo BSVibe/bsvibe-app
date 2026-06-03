@@ -1,6 +1,11 @@
 "use client";
 
-import { createConnector, listConnectors, revokeConnector } from "@/lib/api/connectors";
+import {
+  createConnector,
+  listConnectors,
+  revokeConnector,
+  triggerImport,
+} from "@/lib/api/connectors";
 import type { Connector, ConnectorName } from "@/lib/api/types";
 import { KNOWN_CONNECTORS } from "@/lib/api/types";
 import { useTranslations } from "next-intl";
@@ -121,7 +126,14 @@ export default function Connectors() {
         ) : (
           <ul className="connectors__grid" aria-label={t("connectedServices")}>
             {connected.map((c) => (
-              <ConnectorRow key={c.id} connector={c} onRevoked={load} revoke={revokeConnector} />
+              <ConnectorRow
+                key={c.id}
+                connector={c}
+                onRevoked={load}
+                onImported={load}
+                revoke={revokeConnector}
+                triggerImport={triggerImport}
+              />
             ))}
           </ul>
         )}

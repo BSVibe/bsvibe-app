@@ -806,9 +806,56 @@ export const KNOWN_CONNECTORS = [
   "sentry",
   "notion",
   "email-sender",
+  // Lift B — inbound knowledge-import connectors. These have NEITHER an
+  // inbound webhook parser NOR an outbound delivery builder; the backend
+  // validator recognises them via the kind map
+  // (`backend.connectors.kinds.CONNECTOR_KINDS`). Their binding's
+  // `delivery_config` carries the import-time config (vault_path /
+  // export_path / api_token + page_id) rather than outbound routing.
+  "obsidian",
+  "claude",
+  "gpt",
 ] as const;
 
 export type ConnectorName = (typeof KNOWN_CONNECTORS)[number];
+
+/** Mirror of `backend.connectors.kinds.CONNECTOR_KINDS` — the founder UI
+ *  branches the create form (inbound config fields vs outbound delivery
+ *  JSON) and the connector row's "Import now" button on this map.
+ *
+ *  Keep in sync with the backend; a mismatch causes the form to render
+ *  the wrong fields (and the import endpoint to 422 the founder's tap). */
+export type ConnectorKind = "inbound" | "outbound" | "both";
+
+export const CONNECTOR_KINDS: Record<ConnectorName, ConnectorKind> = {
+  github: "outbound",
+  slack: "both",
+  telegram: "outbound",
+  discord: "outbound",
+  sentry: "outbound",
+  "email-sender": "outbound",
+  obsidian: "inbound",
+  claude: "inbound",
+  gpt: "inbound",
+  notion: "both",
+};
+
+/** Connectors that expose a bulk-import action via
+ *  `POST /api/v1/connectors/{id}/import`. Mirrors the backend's
+ *  `INBOUND_IMPORT_ACTIONS` keys. Used by `ConnectorRow` to decide
+ *  whether to show "Import now" — `slack` is kind="both" but its inbound
+ *  is webhook-driven, so it's NOT in this set (the backend would 422 on
+ *  it). */
+export const CONNECTORS_WITH_IMPORT: readonly ConnectorName[] = [
+  "obsidian",
+  "claude",
+  "gpt",
+  "notion",
+] as const;
+
+export function isImportableConnector(name: string): boolean {
+  return (CONNECTORS_WITH_IMPORT as readonly string[]).includes(name);
+}
 
 /** `POST /api/v1/connectors` body (backend ConnectorCreate, extra=forbid).
  *  `delivery_config` is founder-set outbound routing config (e.g. notion
@@ -833,6 +880,12 @@ export interface ConnectorCreated {
   delivery_config: Record<string, unknown>;
   webhook_token: string;
   webhook_url: string;
+  /** Lift B — the connector's classification (inbound / outbound / both).
+   *  `null` for an unrecognised connector — the validator would normally
+   *  reject it before reaching here, so callers can treat this as
+   *  effectively always present for a known connector. Optional on the
+   *  wire so legacy clients (and pre-Lift-B fixtures) keep validating. */
+  kind?: ConnectorKind | null;
 }
 
 /** `GET /api/v1/connectors` element (backend ConnectorOut). Never the secret,
@@ -845,6 +898,31 @@ export interface Connector {
   created_at: string;
   delivery_config: Record<string, unknown>;
   token_hint: string;
+  /** Lift B — connector kind so the row UI can branch (Import-now button
+   *  for inbound/both, hidden otherwise). `null` for an unrecognised
+   *  connector (defensive). Optional on the wire so legacy fixtures
+   *  (pre-Lift-B) keep validating. */
+  kind?: ConnectorKind | null;
+  /** ISO timestamp of the last successful import, or `null` if the
+   *  binding has never been imported. Surfaced as "Last imported …" in
+   *  the row's detail line. */
+  last_import_at?: string | null;
+  /** Count from the last successful import (notes / conversations /
+   *  pages depending on connector). `null` until the first import. */
+  last_import_count?: number | null;
+}
+
+/** `POST /api/v1/connectors/{id}/import` response (backend
+ *  `ConnectorImportResult`). `imported_count` is the connector-agnostic
+ *  count normalised on the server; `detail` is the raw per-connector
+ *  summary the plugin's import action returned (notes_count /
+ *  scanned_count for obsidian; pages_count / blocks_count for notion;
+ *  etc.) — surfaced unchanged so the PWA can show a connector-specific
+ *  breakdown without per-connector backend re-shaping. */
+export interface ConnectorImportResult {
+  imported_count: number;
+  last_import_at: string;
+  detail: Record<string, unknown>;
 }
 
 // ── Model accounts (REAL endpoint /api/v1/accounts) ────────────────────────

@@ -16,7 +16,7 @@
  *  omitted entirely when blank rather than sent as an empty string. */
 
 import { apiFetch } from "./client";
-import type { Connector, ConnectorCreate, ConnectorCreated } from "./types";
+import type { Connector, ConnectorCreate, ConnectorCreated, ConnectorImportResult } from "./types";
 
 /** Registered connectors for the active workspace (newest first). */
 export function listConnectors(): Promise<Connector[]> {
@@ -48,4 +48,26 @@ export function revokeConnector(connectorId: string): Promise<void> {
   return apiFetch<void>(`/api/v1/connectors/${encodeURIComponent(connectorId)}`, {
     method: "DELETE",
   });
+}
+
+/** Lift B — trigger an inbound bulk import for a connector (Obsidian vault
+ *  scan, Claude/GPT conversation export, Notion page walk). The route reads
+ *  the binding's `delivery_config` as the import config so the founder
+ *  doesn't re-type it. Returns `{ imported_count, last_import_at, detail }`;
+ *  the row re-reads the list afterwards so the new "Last imported" stamp
+ *  appears.
+ *
+ *  Failure modes the server returns:
+ *   - 404 — id unknown / revoked for this workspace
+ *   - 422 — connector is outbound-only (e.g. github) OR push-only inbound
+ *           (slack — its inbound is webhook-driven)
+ *   - 502 — the plugin import action failed (e.g. vault path missing) */
+export function triggerImport(connectorId: string): Promise<ConnectorImportResult> {
+  return apiFetch<ConnectorImportResult>(
+    `/api/v1/connectors/${encodeURIComponent(connectorId)}/import`,
+    {
+      method: "POST",
+      body: JSON.stringify({}),
+    },
+  );
 }

@@ -18,7 +18,7 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import JSON, Boolean, DateTime, Index, String, UniqueConstraint
+from sqlalchemy import JSON, Boolean, DateTime, Index, Integer, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from backend.data import Base
@@ -56,6 +56,11 @@ class ConnectorAccountRow(ConnectorsBase):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=_utcnow
     )
+    # Lift B — surface "last imported at / count" on every inbound binding so
+    # the founder UI ("Import now" button) can show when the last run was and
+    # how many items it pulled. NULL until the first import succeeds.
+    last_import_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_import_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
 
 __all__: list[str] = ["ConnectorAccountRow", "ConnectorsBase"]
