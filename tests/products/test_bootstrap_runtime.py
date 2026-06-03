@@ -124,27 +124,30 @@ async def test_run_job_writes_failed_clone_on_git_error(session_factory, tmp_pat
 
 
 async def test_run_job_writes_failed_when_workspace_missing(session_factory, tmp_path):
-    """Job lifecycle: missing workspace row → ``failed:ingest`` (defensive)."""
-    workspace_id = uuid.uuid4()
+    """Job lifecycle: workspace_id not in DB → ``failed:ingest`` (defensive).
+
+    PG ON DELETE CASCADE makes "delete workspace, keep product" impossible;
+    instead, the runner is called with a bogus ``workspace_id`` while the
+    product lives under a real workspace. The defensive branch in
+    :func:`run_product_bootstrap_job` looks up the runner-supplied
+    workspace_id and finds nothing, then marks ``failed:ingest`` on the
+    product row (``mark_status`` does not scope by workspace).
+    """
+    real_workspace_id = uuid.uuid4()
+    bogus_workspace_id = uuid.uuid4()
     product_id = uuid.uuid4()
     async with session_factory() as s:
-        # No WorkspaceRow on purpose. Add a ProductRow whose FK might be
-        # un-enforced on SQLite.
-        s.add(WorkspaceRow(id=workspace_id, name="t", region="us-1", safe_mode=True))
+        s.add(WorkspaceRow(id=real_workspace_id, name="t", region="us-1", safe_mode=True))
         await s.flush()
         s.add(
             ProductRow(
                 id=product_id,
-                workspace_id=workspace_id,
+                workspace_id=real_workspace_id,
                 name="p",
                 slug="p",
                 repo_url="https://x/y",
             )
         )
-        await s.commit()
-        # Now delete the workspace row (simulates the race).
-        ws = await s.get(WorkspaceRow, workspace_id)
-        await s.delete(ws)
         await s.commit()
 
     fake_git = MagicMock()
@@ -152,7 +155,7 @@ async def test_run_job_writes_failed_when_workspace_missing(session_factory, tmp
 
     await run_product_bootstrap_job(
         product_id=product_id,
-        workspace_id=workspace_id,
+        workspace_id=bogus_workspace_id,
         repo_url="https://x/y",
         session_factory=session_factory,
         git_ops=fake_git,
