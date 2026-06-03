@@ -56,6 +56,7 @@ def test_alembic_history_loads():
         "ontology_corrections",
         "connector_last_import",
         "product_bootstrap",
+        "oauth_authorization_server",
     ):
         assert rev in result.stdout, f"missing revision {rev} in:\n{result.stdout}"
 
@@ -72,7 +73,7 @@ def test_alembic_head_is_connector_last_import():
     # Lift A v2 bumped the head; keep the test name (function name was the
     # historical revision id, kept for git-blame stability) and assert the
     # new tip.
-    assert "product_bootstrap" in result.stdout
+    assert "oauth_authorization_server" in result.stdout
 
 
 def test_target_metadata_covers_all_bases():

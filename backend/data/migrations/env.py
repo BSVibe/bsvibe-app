@@ -44,6 +44,7 @@ import backend.router.routing.run_routing.db  # noqa: F401, E402
 import plugin.audit.models  # noqa: F401, E402
 import backend.workers.db  # noqa: F401, E402
 import backend.identity.workspaces_db  # noqa: F401, E402
+import backend.identity.oauth_db  # noqa: F401, E402
 
 config = context.config
 

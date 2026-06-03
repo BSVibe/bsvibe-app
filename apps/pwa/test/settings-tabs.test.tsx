@@ -1,20 +1,27 @@
 /**
- * Settings tab IA — the top tab bar that fronts the 5-tab Settings surface.
+ * Settings tab IA — the top tab bar that fronts the 6-tab Settings surface.
  *
- * This is the serialization point: the nav MUST enumerate all five tabs
- * (General / Models / Connectors / Notifications / Account) in order, as real
- * shareable links under /settings/*, so later lifts only fill content and never
- * touch the nav. The active tab is marked `aria-current="page"`.
+ * This is the serialization point: the nav MUST enumerate all six tabs
+ * (General / Models / Connectors / Notifications / Developer / Account) in
+ * order, as real shareable links under /settings/*, so later lifts only fill
+ * content and never touch the nav. The active tab is marked `aria-current="page"`.
  */
 
 import SettingsTabs from "@/components/settings/SettingsTabs";
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
-const LABELS = ["General", "Models", "Connectors", "Notifications", "Account"] as const;
+const LABELS = [
+  "General",
+  "Models",
+  "Connectors",
+  "Notifications",
+  "Developer",
+  "Account",
+] as const;
 
 describe("Settings tab nav", () => {
-  it("renders all five tabs in order as links", () => {
+  it("renders all six tabs in order as links", () => {
     render(<SettingsTabs active="general" />);
     const links = screen.getAllByRole("link");
     const names = links.map((l) => l.textContent?.trim());
@@ -39,6 +46,10 @@ describe("Settings tab nav", () => {
       "href",
       "/settings/notifications",
     );
+    expect(screen.getByRole("link", { name: "Developer" })).toHaveAttribute(
+      "href",
+      "/settings/developer",
+    );
     expect(screen.getByRole("link", { name: "Account" })).toHaveAttribute(
       "href",
       "/settings/account",
@@ -52,8 +63,8 @@ describe("Settings tab nav", () => {
     expect(screen.getByRole("link", { name: "General" })).not.toHaveAttribute("aria-current");
   });
 
-  it("renders the row on the scrollable nav class and keeps all five tabs (incl. the active last tab) when narrow", () => {
-    // At 390px the row can't fit all five tabs; the `.settings-tabs` class is
+  it("renders the row on the scrollable nav class and keeps all six tabs (incl. the active last tab) when narrow", () => {
+    // At 390px the row can't fit all six tabs; the `.settings-tabs` class is
     // the horizontal-scroll container, so every tab — including the active last
     // one (Account) — stays present and reachable rather than being clipped.
     const { container } = render(<SettingsTabs active="account" />);

@@ -76,4 +76,12 @@ router.include_router(notifications.router, prefix="/notifications", tags=["noti
 # at /api/v1/workers directly, bypassing the get_current_user gate.
 router.include_router(workers.router, prefix="/workers", tags=["workers"])
 
+# Embedded OAuth client management (Lift D1, RFC 7591). The DCR public
+# endpoints (authorize/token/introspect/revoke) live on
+# ``backend.api.oauth.public_router`` which :mod:`backend.api.main` mounts
+# at /api/oauth — outside this auth-gated aggregate.
+from backend.api.oauth import v1_router as _oauth_v1_router  # noqa: E402, PLC0415
+
+router.include_router(_oauth_v1_router)
+
 __all__ = ["router"]

@@ -381,7 +381,8 @@
       "connectors": "Connectors",
       "notifications": "Notifications",
       "account": "Account",
-      "sectionsLabel": "Settings sections"
+      "sectionsLabel": "Settings sections",
+      "developer": "Developer"
     },
     "models": {
       "lede": "Models: how BSVibe gets its thinking done.",
@@ -731,6 +732,30 @@
       "workspaceIdFallback": "Not available yet",
       "legalBasis": "Legal basis",
       "legalBasisValue": "Contract (Art. 6(1)(b))"
+    },
+    "developer": {
+      "lede": "Manage OAuth clients that connect to your bsvibe-app — Claude Code's MCP driver, IDE plugins, custom integrations.",
+      "loading": "Loading…",
+      "clients": {
+        "title": "OAuth clients",
+        "add": "Add client",
+        "cancel": "Cancel",
+        "empty": "No OAuth clients registered. Add one to connect Claude Code or another MCP client.",
+        "nameLabel": "Client name",
+        "redirectLabel": "Redirect URIs (one per line, whitespace-separated)",
+        "redirectHint": "Use http://127.0.0.1/callback for native CLI clients (any port works at runtime per RFC 8252).",
+        "scopesLabel": "Allowed scopes",
+        "submit": "Create client",
+        "submitting": "Creating…",
+        "created": "Client created",
+        "createdHint": "Copy the client_id below into your external app's config. The OAuth flow handles the rest.",
+        "done": "Done",
+        "scopes": "Scopes",
+        "redirects": "Redirects",
+        "revoke": "Revoke",
+        "revoking": "Revoking…",
+        "revoked": "Revoked"
+      }
     }
   },
   "report": {
