@@ -15,11 +15,9 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from backend.api.auth import router as auth_router
 from backend.api.health import router as health_router
-from backend.api.oauth import (
-    metadata_router as oauth_metadata_router,
-    public_router as oauth_public_router,
-)
 from backend.api.middleware import WorkspaceContextMiddleware
+from backend.api.oauth import metadata_router as oauth_metadata_router
+from backend.api.oauth import public_router as oauth_public_router
 from backend.api.v1 import router as v1_router
 from backend.api.v1.events import public_router as events_public_router
 from backend.api.v1.live_events import set_live_event_bus_redis

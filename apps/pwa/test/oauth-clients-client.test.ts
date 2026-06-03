@@ -4,11 +4,7 @@
  */
 
 import { ApiError } from "@/lib/api/client";
-import {
-  createOAuthClient,
-  deleteOAuthClient,
-  listOAuthClients,
-} from "@/lib/api/oauth-clients";
+import { createOAuthClient, deleteOAuthClient, listOAuthClients } from "@/lib/api/oauth-clients";
 import { type Session, clearSession, setSession } from "@/lib/auth/session";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
