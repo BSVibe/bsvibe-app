@@ -181,6 +181,100 @@ async def test_create_product_initialises_git_workspace(client_with_ws) -> None:
     )
 
 
+async def test_create_with_repo_url_schedules_bootstrap(client_with_ws) -> None:
+    """Lift A v2 — create with ``repo_url`` stamps pending + schedules job."""
+    from backend.api.v1.products.products_crud import get_bootstrap_scheduler  # noqa: PLC0415
+
+    c, _ = client_with_ws
+    captured: dict[str, object] = {}
+
+    def _fake_scheduler(**kwargs):
+        captured.update(kwargs)
+        return None
+
+    c._transport.app.dependency_overrides[get_bootstrap_scheduler] = (  # type: ignore[attr-defined]
+        lambda: _fake_scheduler
+    )
+
+    r = await c.post(
+        "/api/v1/products",
+        json={
+            "name": "Repo bound",
+            "slug": "repo-bound",
+            "repo_url": "https://github.com/org/repo",
+        },
+    )
+    assert r.status_code == 201, r.text
+    body = r.json()
+    assert body["bootstrap_status"] == "pending"
+    assert body["bootstrap_artifacts_count"] is None
+    assert body["bootstrap_error"] is None
+
+    # The fake scheduler captured the kwargs the runtime will receive.
+    assert "product_id" in captured
+    assert captured["repo_url"] == "https://github.com/org/repo"
+
+
+async def test_create_without_repo_url_skips_bootstrap(client_with_ws) -> None:
+    """Lift A v2 — no repo_url → no bootstrap_status, scheduler not called."""
+    from backend.api.v1.products.products_crud import get_bootstrap_scheduler  # noqa: PLC0415
+
+    c, _ = client_with_ws
+    invoked = []
+
+    def _fake_scheduler(**kwargs):
+        invoked.append(kwargs)
+        return None
+
+    c._transport.app.dependency_overrides[get_bootstrap_scheduler] = (  # type: ignore[attr-defined]
+        lambda: _fake_scheduler
+    )
+
+    r = await c.post("/api/v1/products", json={"name": "Plain", "slug": "plain"})
+    assert r.status_code == 201, r.text
+    body = r.json()
+    assert body["bootstrap_status"] is None
+    assert invoked == []
+
+
+async def test_get_bootstrap_returns_progress(client_with_ws) -> None:
+    """Lift A v2 — ``GET /products/{id}/bootstrap`` reads the row's status."""
+    from backend.api.v1.products.products_crud import get_bootstrap_scheduler  # noqa: PLC0415
+
+    c, _ = client_with_ws
+    c._transport.app.dependency_overrides[get_bootstrap_scheduler] = (  # type: ignore[attr-defined]
+        lambda: lambda **_: None
+    )
+
+    r = await c.post(
+        "/api/v1/products",
+        json={
+            "name": "With repo",
+            "slug": "with-repo",
+            "repo_url": "https://github.com/x/y",
+        },
+    )
+    assert r.status_code == 201
+    pid = r.json()["id"]
+
+    r = await c.get(f"/api/v1/products/{pid}/bootstrap")
+    assert r.status_code == 200, r.text
+    progress = r.json()
+    assert progress["product_id"] == pid
+    assert progress["status"] == "pending"
+    assert progress["artifacts_count"] is None
+    assert progress["error"] is None
+
+
+async def test_get_bootstrap_404_for_unknown_product(client_with_ws) -> None:
+    """Lift A v2 — bootstrap endpoint is workspace-scoped (404 on miss)."""
+    import uuid as _uuid  # noqa: PLC0415 — local-only
+
+    c, _ = client_with_ws
+    r = await c.get(f"/api/v1/products/{_uuid.uuid4()}/bootstrap")
+    assert r.status_code == 404
+
+
 async def test_product_workspace_isolation(db) -> None:
     """A product in workspace A is NOT visible / patchable from workspace B."""
     app = create_app()

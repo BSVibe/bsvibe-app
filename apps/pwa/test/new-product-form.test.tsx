@@ -34,6 +34,9 @@ function product(slug: string, name: string): Product {
     name,
     slug,
     repo_url: null,
+    bootstrap_status: null,
+    bootstrap_artifacts_count: null,
+    bootstrap_error: null,
     created_at: "2026-05-23T00:00:00Z",
     updated_at: "2026-05-23T00:00:00Z",
   };
@@ -91,9 +94,52 @@ describe("New product form", () => {
     expect(onCreated).toHaveBeenCalled();
   });
 
-  it("has no Repo URL field (repo binding is github-connector-only)", () => {
-    render(<NewProductForm onCreated={() => {}} createProduct={vi.fn()} />);
-    expect(screen.queryByLabelText(/Repo URL/i)).not.toBeInTheDocument();
+  it("Lift A v2 — submits with repo_url when the founder provides one", async () => {
+    const createProduct = vi
+      .fn<(input: ProductCreate) => Promise<Product>>()
+      .mockResolvedValue(product("with-repo", "With Repo"));
+    render(<NewProductForm onCreated={() => {}} createProduct={createProduct} />);
+
+    await userEvent.type(screen.getByLabelText(/^Name$/i), "With Repo");
+    await userEvent.type(
+      screen.getByLabelText(/Git repository URL/i),
+      "https://github.com/org/repo",
+    );
+    await userEvent.click(screen.getByRole("button", { name: /Create product/i }));
+
+    await waitFor(() => {
+      expect(createProduct).toHaveBeenCalledWith({
+        name: "With Repo",
+        slug: "with-repo",
+        repo_url: "https://github.com/org/repo",
+      });
+    });
+  });
+
+  it("Lift A v2 — omits repo_url when the founder leaves the field blank", async () => {
+    const createProduct = vi
+      .fn<(input: ProductCreate) => Promise<Product>>()
+      .mockResolvedValue(product("plain", "Plain"));
+    render(<NewProductForm onCreated={() => {}} createProduct={createProduct} />);
+
+    await userEvent.type(screen.getByLabelText(/^Name$/i), "Plain");
+    await userEvent.click(screen.getByRole("button", { name: /Create product/i }));
+
+    await waitFor(() => {
+      expect(createProduct).toHaveBeenCalledWith({ name: "Plain", slug: "plain" });
+    });
+  });
+
+  it("Lift A v2 — blocks submit on a malformed repo URL", async () => {
+    const createProduct = vi.fn();
+    render(<NewProductForm onCreated={() => {}} createProduct={createProduct} />);
+
+    await userEvent.type(screen.getByLabelText(/^Name$/i), "With Repo");
+    await userEvent.type(screen.getByLabelText(/Git repository URL/i), "ftp://nope/not-http");
+    await userEvent.click(screen.getByRole("button", { name: /Create product/i }));
+
+    expect(createProduct).not.toHaveBeenCalled();
+    expect(await screen.findByText(/http\(s\):\/\//i)).toBeInTheDocument();
   });
 
   it("blocks submit on an invalid slug — no request fired", async () => {

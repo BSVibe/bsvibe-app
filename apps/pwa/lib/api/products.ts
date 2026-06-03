@@ -9,7 +9,13 @@
  *                             calmly. */
 
 import { apiFetch } from "./client";
-import type { FileTreeEntry, Product, ProductCreate, ProductFileContent } from "./types";
+import type {
+  FileTreeEntry,
+  Product,
+  ProductBootstrap,
+  ProductCreate,
+  ProductFileContent,
+} from "./types";
 
 /** Products in the caller's resolved active workspace. */
 export function listProducts(): Promise<Product[]> {
@@ -44,4 +50,13 @@ export function getProductFileContent(
   return apiFetch<ProductFileContent>(
     `/api/v1/products/${productId}/files/content?path=${encodeURIComponent(path)}`,
   );
+}
+
+/** Lift A v2 — fetch the current bootstrap progress snapshot for a product.
+ *
+ *  Returns the full {@link ProductBootstrap} shape every time (including
+ *  `status: null` for products created without a `repo_url`). The detail page
+ *  polls this while a non-null, non-`complete` status is in flight. */
+export function getProductBootstrap(productId: string): Promise<ProductBootstrap> {
+  return apiFetch<ProductBootstrap>(`/api/v1/products/${productId}/bootstrap`);
 }

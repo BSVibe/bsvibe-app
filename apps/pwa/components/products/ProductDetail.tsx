@@ -5,6 +5,7 @@ import type { ProductDetailView } from "@/lib/api/types";
 import { useTranslations } from "next-intl";
 import Link from "next/link";
 import { useEffect, useState } from "react";
+import BootstrapStatusPanel from "./BootstrapStatusPanel";
 import ProductBindings from "./ProductBindings";
 import ProductFiles from "./ProductFiles";
 import ProductHeader from "./ProductHeader";
@@ -90,6 +91,11 @@ export default function ProductDetail({ slug }: { slug: string }) {
       {loaded.state === "ready" && (
         <>
           <ProductHeader view={loaded.view} />
+          {/* Lift A v2 — calm one-line status while the repo bootstrap runs
+              in the background. Renders null when there's nothing to show
+              (no repo_url at create time, or the bootstrap already
+              completed) so it adds zero chrome to a static product. */}
+          <BootstrapStatusPanel productId={loaded.view.id} />
           {/* L3 Inside trust strip (Lift M4b, design §4.3) — calm four-line
               summary above the per-product detail. Mounted between the header
               and the runs list so it sits as the design's right-rail / header

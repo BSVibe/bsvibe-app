@@ -56,8 +56,34 @@ class ProductResponse(BaseModel):
     name: str
     slug: str
     repo_url: str | None = None
+    # Lift A v2 — surfaced so the founder UI can render a calm "분석 중…"
+    # panel during the background bootstrap. ``None`` on every product
+    # created without a ``repo_url`` (bootstrap is skipped entirely).
+    bootstrap_status: str | None = None
+    bootstrap_artifacts_count: int | None = None
+    bootstrap_error: str | None = None
     created_at: datetime
     updated_at: datetime
+
+
+class ProductBootstrapResponse(BaseModel):
+    """``GET /api/v1/products/{id}/bootstrap`` — progress snapshot.
+
+    Carries the same lifecycle vocabulary the migration documents (see
+    :mod:`backend.workflow.application.runtime.product_bootstrap_runtime`
+    constants). ``started_at`` / ``completed_at`` are best-effort surfaced
+    from the row timestamps — see the repository's ``fetch_progress``.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    product_id: uuid.UUID
+    status: str | None
+    artifacts_count: int | None
+    error: str | None
+    run_id: uuid.UUID | None
+    started_at: datetime | None
+    completed_at: datetime | None
 
 
 # --- Product resources --------------------------------------------------------
@@ -171,6 +197,7 @@ class ProductFileContentResponse(BaseModel):
 
 __all__ = [
     "FileTreeEntryResponse",
+    "ProductBootstrapResponse",
     "ProductCreate",
     "ProductFileContentResponse",
     "ProductResponse",

@@ -41,8 +41,29 @@ export interface Product {
   name: string;
   slug: string;
   repo_url: string | null;
+  /** Lift A v2 — repo-bootstrap lifecycle marker.
+   *
+   *  `null` on every product created without a `repo_url`. Carries one of
+   *  `pending` / `cloning` / `analyzing` / `ingesting` / `complete` /
+   *  `failed:clone` / `failed:too_large` / `failed:ingest` while the
+   *  background job runs. The detail page renders a calm BootstrapStatusPanel
+   *  for every non-null, non-`complete` value. */
+  bootstrap_status: string | null;
+  bootstrap_artifacts_count: number | null;
+  bootstrap_error: string | null;
   created_at: string;
   updated_at: string;
+}
+
+/** `GET /api/v1/products/{id}/bootstrap` body — progress snapshot. */
+export interface ProductBootstrap {
+  product_id: string;
+  status: string | null;
+  artifacts_count: number | null;
+  error: string | null;
+  run_id: string | null;
+  started_at: string | null;
+  completed_at: string | null;
 }
 
 /** `POST /api/v1/products` body (backend ProductCreate, extra=forbid). The slug
