@@ -87,7 +87,117 @@ export default function DeveloperTab() {
           </ul>
         )}
       </section>
+
+      <McpEndpointSection />
     </div>
+  );
+}
+
+/**
+ * MCP server endpoint subsection — Lift D2.
+ *
+ * Surfaces the embedded MCP server URL + a copy-pasteable Claude Code
+ * config snippet so the founder can paste a single block into their
+ * client. No token is included; Claude Code discovers the OAuth flow
+ * via the WWW-Authenticate header that the /mcp endpoint sends on the
+ * first unauthenticated request (RFC 9728 / RFC 6750).
+ */
+function McpEndpointSection() {
+  const t = useTranslations("settings.developer.mcp");
+  const [endpoint, setEndpoint] = useState<string>("");
+  const [copiedKey, setCopiedKey] = useState<string | null>(null);
+
+  useEffect(() => {
+    // The MCP endpoint sits at the SAME origin as the backend API — derived
+    // from window.location at runtime so dev/preview/prod all surface the
+    // right URL without an env var. Production sets api.bsvibe.dev; dev uses
+    // localhost:8000; preview maps via Vercel's per-PR domain.
+    const origin =
+      typeof window !== "undefined" ? window.location.origin : "https://api.bsvibe.dev";
+    // The PWA is hosted on a separate domain (app.bsvibe.dev) from the API
+    // (api.bsvibe.dev); when the PWA origin differs from the API origin we
+    // derive the API host from the PWA host by swapping app→api. Production
+    // wires VITE_API_URL but a runtime fallback keeps the snippet correct
+    // even when the env var is unset (Vercel preview, local dev, etc.).
+    let apiOrigin = origin;
+    try {
+      const url = new URL(origin);
+      if (url.hostname.startsWith("app.")) {
+        url.hostname = `api.${url.hostname.slice(4)}`;
+        apiOrigin = url.origin;
+      }
+    } catch {
+      // Leave the derived origin as-is if URL parsing failed.
+    }
+    setEndpoint(`${apiOrigin}/mcp`);
+  }, []);
+
+  const configSnippet = endpoint
+    ? `{
+  "mcpServers": {
+    "bsvibe": {
+      "url": "${endpoint}"
+    }
+  }
+}`
+    : "";
+
+  async function copy(key: string, text: string) {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopiedKey(key);
+      window.setTimeout(() => setCopiedKey((v) => (v === key ? null : v)), 1500);
+    } catch {
+      // Clipboard API failures (no HTTPS in dev, locked-down browser) are
+      // soft-failed — the values are still selectable on screen.
+    }
+  }
+
+  return (
+    <section className="account-section" aria-label={t("title")}>
+      <header className="developer-tab__header">
+        <h2 className="section-label">{t("title")}</h2>
+      </header>
+      <p className="developer-tab__hint">{t("lede")}</p>
+
+      <div className="developer-tab__row">
+        <div className="developer-tab__row-main">
+          <span className="developer-tab__row-name">{t("endpointLabel")}</span>
+          <code className="developer-tab__row-id">{endpoint || "—"}</code>
+        </div>
+        <button
+          type="button"
+          className="developer-tab__add"
+          onClick={() => endpoint && copy("endpoint", endpoint)}
+          disabled={!endpoint}
+        >
+          {copiedKey === "endpoint" ? t("copied") : t("copy")}
+        </button>
+      </div>
+
+      <div className="developer-tab__form">
+        <label className="developer-tab__label">
+          <span>{t("configLabel")}</span>
+          <textarea readOnly rows={6} value={configSnippet} />
+          <span className="developer-tab__hint-sm">{t("configHint")}</span>
+        </label>
+        <button
+          type="button"
+          className="developer-tab__add"
+          onClick={() => configSnippet && copy("config", configSnippet)}
+          disabled={!configSnippet}
+        >
+          {copiedKey === "config" ? t("copied") : t("copy")}
+        </button>
+      </div>
+
+      <fieldset className="developer-tab__scopes">
+        <legend>{t("scopesLabel")}</legend>
+        <p className="developer-tab__hint-sm">{t("scopeRead")}</p>
+        <p className="developer-tab__hint-sm">{t("scopeWrite")}</p>
+        <p className="developer-tab__hint-sm">{t("scopeAdmin")}</p>
+      </fieldset>
+    </section>
   );
 }
 

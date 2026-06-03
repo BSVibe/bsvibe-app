@@ -755,6 +755,19 @@
         "revoke": "Revoke",
         "revoking": "Revoking…",
         "revoked": "Revoked"
+      },
+      "mcp": {
+        "title": "MCP server endpoint",
+        "lede": "bsvibe-app fronts an MCP server at the URL below. Claude Code (and any RFC 9728-compliant MCP client) discovers the OAuth flow automatically — you only need the URL.",
+        "endpointLabel": "Endpoint URL",
+        "copy": "Copy",
+        "copied": "Copied",
+        "configLabel": "Claude Code config snippet",
+        "configHint": "Add this entry to `~/.config/claude-code/mcp.json` (or run `claude mcp add bsvibe <url>`). The CLI handles the OAuth dance via the WWW-Authenticate header — no token in this file.",
+        "scopesLabel": "OAuth scopes",
+        "scopeRead": "mcp:read — list products, runs, deliverables, Safe Mode queue; search and read vault notes.",
+        "scopeWrite": "mcp:write — create products, post Direct messages, approve/deny Safe Mode items, write vault seeds.",
+        "scopeAdmin": "mcp:admin — reserved for future admin tools (settings mutations, dangerous deletes)."
       }
     }
   },

@@ -6,7 +6,10 @@ Entrypoint:
 
 from __future__ import annotations
 
+import contextlib
 import os
+from collections.abc import AsyncIterator
+from typing import Any
 
 import redis.asyncio as redis_aio
 import structlog
@@ -14,6 +17,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from backend.api.auth import router as auth_router
+from backend.api.deps import _get_session_factory
 from backend.api.health import router as health_router
 from backend.api.middleware import WorkspaceContextMiddleware
 from backend.api.oauth import metadata_router as oauth_metadata_router
@@ -25,6 +29,7 @@ from backend.api.v1.workers import public_router as workers_public_router
 from backend.api.webhooks import router as webhooks_router
 from backend.config import get_settings
 from backend.extensions.plugin.bootstrap import discover_webhook_parsers
+from backend.mcp.lifespan import mcp_lifespan
 from backend.shared.core.logging import configure_logging
 from plugin.audit import register_audit_subscriber
 
@@ -43,11 +48,19 @@ def create_app() -> FastAPI:
     # the loader sees re-registers into the same singleton).
     discover_webhook_parsers()
 
+    session_factory = _get_session_factory()
+
+    @contextlib.asynccontextmanager
+    async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
+        async with mcp_lifespan(app, session_factory=session_factory):
+            yield
+
     app = FastAPI(
         title="BSVibe",
         version=settings.version,
         docs_url="/api/docs",
         openapi_url="/api/openapi.json",
+        lifespan=_lifespan,
     )
     # Brackets each request so the workspace contextvar (defense layer 1)
     # starts unset and is reset afterwards — no scope leaks across requests.
@@ -92,6 +105,36 @@ def create_app() -> FastAPI:
     # for the same reason, like webhooks + worker register/heartbeat.
     app.include_router(events_public_router, prefix="/api/v1")
     app.include_router(v1_router, prefix="/api")
+
+    # Embedded MCP server (Lift D2) — mounted at /mcp (NOT under /api — MCP
+    # convention is a top-level path so clients construct a clean server
+    # URL). The Streamable HTTP transport authenticates the Bearer token
+    # against the embedded OAuth server's JWKS (Lift D1) and verifies the
+    # ``jti`` against ``OAuthAccessTokenRow.revoked_at`` per request.
+    # 401s carry the RFC 6750 + RFC 9728 ``WWW-Authenticate`` header so
+    # Claude Code discovers the authorization server via the resource
+    # metadata document. The ASGI app is built inside the lifespan and
+    # delegated to here through ``app.state.mcp_asgi``.
+    async def _mcp_entrypoint(scope: Any, receive: Any, send: Any) -> None:
+        asgi = getattr(app.state, "mcp_asgi", None)
+        if asgi is None:  # pragma: no cover — lifespan must run first in prod
+            await send(
+                {
+                    "type": "http.response.start",
+                    "status": 503,
+                    "headers": [(b"content-type", b"application/json")],
+                }
+            )
+            await send(
+                {
+                    "type": "http.response.body",
+                    "body": b'{"error":"mcp_lifespan_not_ready"}',
+                }
+            )
+            return
+        await asgi(scope, receive, send)
+
+    app.mount("/mcp", _mcp_entrypoint)
 
     # C2 — bind the LiveEventBus singleton to the configured Redis transport
     # so SSE subscribers in THIS container see publishes from the worker

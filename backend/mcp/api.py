@@ -1,35 +1,33 @@
-"""First-class MCP API primitives — Phase 7 / TASK-002.
+"""First-class MCP API primitives — Lift D2.
 
-This module elevates MCP tools to a first-class API surface alongside
-the REST routers in :mod:`bsage.gateway.routes`. Each tool ships with:
+Mirrors the FastAPI router contract for the in-process MCP surface:
 
-* a typed Pydantic ``input_schema`` (drives ListTools' JSON Schema)
-* a typed Pydantic ``output_schema`` (validates handler return values)
-* an async ``handler`` that talks to the same service layer the REST
-  routes use — never the CLI / typer command function
-* an optional ``required_permission`` — retained as descriptive metadata.
-  OpenFGA was retired (BSVibe is a single backend); the dispatcher now
-  only requires that the caller be authenticated. Fine-grained role
-  gating, when a tool needs it, is the RBAC layer's job
-  (``Membership.role`` via :func:`backend.api.deps.require_role`).
-* an optional ``audit_event`` — emitted on success via the same
-  audit outbox the REST routes use, so every mutating tool is
-  observable identically to its REST sibling.
+1. validate input against a Pydantic schema,
+2. enforce OAuth scopes against the authenticated principal,
+3. invoke the typed handler,
+4. validate output,
+5. (optionally) emit one audit event.
 
-The dispatcher (``ToolRegistry``) deliberately mirrors how FastAPI
-routers behave: validate input → enforce auth → run handler →
-validate output → audit emit on success.
+The dispatcher is intentionally a small replica of how FastAPI behaves so
+that tool authors can think in REST-shaped primitives even though the
+wire is JSON-over-MCP. Authentication is performed by the Streamable HTTP
+transport (:mod:`backend.mcp.streamable_http`) which verifies the ES256
+Bearer access token issued by the embedded OAuth server (Lift D1) and
+stashes the resolved :class:`McpPrincipal` on a contextvar; the
+dispatcher reads that back when building :class:`ToolContext`.
 """
 
 from __future__ import annotations
 
+import uuid
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Protocol, runtime_checkable
 
 import structlog
 from mcp.types import Tool as McpTool
 from pydantic import BaseModel, ValidationError
+from sqlalchemy.ext.asyncio import AsyncSession
 
 logger = structlog.get_logger(__name__)
 
@@ -47,22 +45,38 @@ class ToolError(Exception):
 
 
 class ToolScopeDenied(ToolError):  # noqa: N818 — wire-stable public API name
-    """Raised when the principal is denied a tool's ``required_permission``.
+    """Raised when the principal lacks a required OAuth scope.
 
-    Name is kept for wire/import stability — Tier 5 Phase 3a moved the
-    underlying check from JWT scope claims to an OpenFGA permission check.
+    Distinct from a generic ToolError so callers (and the Streamable
+    HTTP transport) can map it to a 403 in the MCP error frame.
     """
 
 
-# Backwards-compatible alias — Tier 5 Phase 3a renamed the concept from
-# "scope" to "permission"; new code may import either name.
-ToolPermissionDenied = ToolScopeDenied
+# ---------------------------------------------------------------------------
+# Principal — embedded OAuth (D1) materialised view.
+# ---------------------------------------------------------------------------
+@dataclass(frozen=True)
+class McpPrincipal:
+    """The verified OAuth principal for one MCP request.
+
+    Built by :mod:`backend.mcp.auth` from the access-token JWT claims and
+    the row lookup behind it. The dispatcher reads ``scopes`` to enforce
+    ``Tool.required_scopes``; handlers read ``user_id`` / ``workspace_id``
+    to scope every repository call.
+    """
+
+    user_id: uuid.UUID
+    workspace_id: uuid.UUID
+    client_id: str
+    scopes: frozenset[str]
+    jti: uuid.UUID
+
+    def has_scope(self, scope: str) -> bool:
+        return scope in self.scopes
 
 
 # ---------------------------------------------------------------------------
-# Audit outbox protocol — mirrors the surface used by REST routes (see
-# ``bsage.garden.audit_outbox.AiosqliteAuditOutbox``) without forcing the
-# tooling layer to depend on the concrete implementation.
+# Audit outbox protocol — matches the REST surface's audit pipeline.
 # ---------------------------------------------------------------------------
 @runtime_checkable
 class AuditOutboxLike(Protocol):
@@ -77,22 +91,22 @@ class AuditOutboxLike(Protocol):
 # ---------------------------------------------------------------------------
 @dataclass
 class ToolContext:
-    """Runtime context handed to every tool handler.
+    """Per-call context handed to every tool handler.
 
-    ``user`` mirrors :class:`backend.shared.authz.User`. The dispatcher only
-    reads ``user.id``, ``user.email`` and ``user.is_service`` (for audit
-    attribution), so a duck-typed test fixture works without dragging in the
-    real authz package.
+    The MCP dispatcher constructs one of these per ``CallTool`` request.
+    Handlers depend on it for the principal, the workspace-scoped DB
+    session, and (optionally) an audit outbox.
     """
 
-    user: Any | None = None
+    principal: McpPrincipal
+    session: AsyncSession
     audit_outbox: AuditOutboxLike | None = None
-    state: Any | None = None
     request_id: str | None = None
+    extras: dict[str, Any] = field(default_factory=dict)
 
 
-# Handlers may return a ``BaseModel`` or a plain ``dict`` — the dispatcher
-# (``model_validate``) accepts both, so the contract is intentionally permissive.
+# Handlers may return a ``BaseModel`` or a plain ``dict`` — the
+# dispatcher's ``model_validate`` accepts both.
 ToolHandler = Callable[[Any, ToolContext], Awaitable[Any]]
 
 
@@ -100,10 +114,11 @@ ToolHandler = Callable[[Any, ToolContext], Awaitable[Any]]
 class Tool:
     """First-class MCP tool definition.
 
-    ``required_permission`` is descriptive metadata (a
-    ``<product>.<resource>.<action>`` dot-string). It no longer drives an
-    OpenFGA check — the dispatcher only requires authentication. ``None``
-    means no annotation; either way an authenticated principal may call.
+    ``required_scopes`` is the OAuth-scope guard. The dispatcher denies
+    when *any* declared scope is absent from the principal. An empty
+    tuple means "any authenticated principal" (the principal still has
+    to verify — the Streamable HTTP transport already enforced that
+    before the dispatcher even ran).
     """
 
     name: str
@@ -111,7 +126,7 @@ class Tool:
     input_schema: type[BaseModel]
     output_schema: type[BaseModel]
     handler: ToolHandler
-    required_permission: str | None = None
+    required_scopes: tuple[str, ...] = ()
     audit_event: str | None = None
 
 
@@ -119,12 +134,7 @@ class Tool:
 # Registry / dispatcher
 # ---------------------------------------------------------------------------
 class ToolRegistry:
-    """In-process registry + dispatcher for first-class MCP tools.
-
-    Mounted from both transports (HTTP ``/mcp``, stdio ``bsage mcp serve
-    --transport stdio``) so that domain + admin tools share one
-    catalog.
-    """
+    """In-process registry + dispatcher for first-class MCP tools."""
 
     def __init__(self) -> None:
         self._tools: dict[str, Tool] = {}
@@ -166,12 +176,7 @@ class ToolRegistry:
         arguments: dict[str, Any] | None,
         ctx: ToolContext,
     ) -> dict[str, Any]:
-        """Validate args → enforce auth → run → validate output → audit emit.
-
-        Returns the validated output as a JSON-safe ``dict``. The MCP
-        transport wraps that into a ``TextContent`` payload — that
-        translation lives in the transport layer, not here.
-        """
+        """Validate args → enforce scopes → run → validate output → audit emit."""
         tool = self._tools.get(name)
         if tool is None:
             raise ToolError(f"unknown tool: {name}")
@@ -180,29 +185,18 @@ class ToolRegistry:
         try:
             args_model = tool.input_schema.model_validate(arguments or {})
         except ValidationError as exc:
-            # Pydantic errors are user-facing (caller-visible) and safe
-            # to surface — they describe the schema violation, not
-            # internal state.
             raise ToolError(f"invalid arguments for {name}: {exc.errors()}") from exc
 
-        # 2. Authentication enforcement.
-        _enforce_authenticated(tool, ctx)
+        # 2. Scope enforcement.
+        _enforce_scopes(tool, ctx)
 
         # 3. Handler invocation — wrap any internal failure so the wire
         #    response never leaks implementation detail.
         try:
             output = await tool.handler(args_model, ctx)
         except ToolError:
-            # Handlers may raise dispatcher-shaped errors directly;
-            # propagate them unchanged.
             raise
         except Exception as exc:  # noqa: BLE001 — boundary translation
-            # Round 4 Finding 21: surface the exception class so an LLM
-            # caller can distinguish "PermissionError" vs "FileNotFoundError"
-            # vs "ValidationError" and self-correct. The exception MESSAGE
-            # stays redacted (it can carry DB columns, file paths, secrets);
-            # class names are public stdlib/lib types and safe to expose.
-            # The full traceback + message stays in the structured log.
             logger.exception(
                 "mcp_tool_handler_failed",
                 tool=name,
@@ -234,60 +228,54 @@ class ToolRegistry:
 def _pydantic_to_json_schema(model: type[BaseModel]) -> dict[str, Any]:
     """Render a Pydantic model's JSON Schema for the MCP wire."""
     schema = model.model_json_schema()
-    # Pydantic returns a $defs-style schema; keep it intact — the MCP
-    # SDK's clients (and Claude Desktop) follow JSON Schema 2020-12.
     if "type" not in schema:
         schema["type"] = "object"
     return schema
 
 
-def _enforce_authenticated(tool: Tool, ctx: ToolContext) -> None:
-    """Require an authenticated principal for a permissioned tool.
-
-    OpenFGA was retired (single backend). A tool that carries a
-    ``required_permission`` annotation still demands authentication; the
-    annotation no longer maps to an OpenFGA relation. Fine-grained role
-    gating is the RBAC layer's job (``Membership.role``) and is applied at
-    the REST surface, not in this in-process MCP dispatcher.
-    """
-    if not tool.required_permission:
+def _enforce_scopes(tool: Tool, ctx: ToolContext) -> None:
+    """Require every declared scope to be present on the principal."""
+    if not tool.required_scopes:
         return
-    if ctx.user is None:
-        raise ToolScopeDenied(f"tool {tool.name!r} requires authentication")
+    missing = [s for s in tool.required_scopes if not ctx.principal.has_scope(s)]
+    if missing:
+        raise ToolScopeDenied(
+            f"tool {tool.name!r} requires scope(s) {missing} — token has {sorted(ctx.principal.scopes)}"
+        )
 
 
 async def _safe_audit_emit(tool: Tool, ctx: ToolContext) -> None:
     """Emit ``tool.audit_event`` via the audit outbox.
 
-    Failures are swallowed — identical contract to
-    :func:`bsage.garden.audit_outbox.safe_emit` so an outage in the
-    audit pipeline cannot break a successful tool call.
-
-    Sensitive arguments are NOT echoed in the event payload — only the
-    tool name + actor land on the wire. Handlers wanting richer audit
-    payloads should emit their own typed events from inside the
-    handler body, identical to how REST routes do.
+    Failures are swallowed — an audit-pipeline outage cannot break a
+    successful tool call. The payload carries only the tool name + the
+    actor; richer event payloads are the handler's job (matches the REST
+    audit convention).
     """
     outbox = ctx.audit_outbox
     if outbox is None or not getattr(outbox, "is_open", False):
         return
     try:
-        from plugin.audit.events import (
+        from plugin.audit.events import (  # noqa: PLC0415 — lazy to avoid cycle
             AuditActor,
             AuditEventBase,
             AuditResource,
         )
 
-        actor = _actor_from_user(ctx.user, AuditActor)
+        actor = AuditActor(
+            type="user",
+            id=str(ctx.principal.user_id),
+            email=None,
+        )
         event = AuditEventBase(
-            event_type=tool.audit_event or f"bsage.mcp.{tool.name}.invoked",
+            event_type=tool.audit_event or f"bsvibe.mcp.{tool.name}.invoked",
             actor=actor,
             tenant_id=None,
             resource=AuditResource(type="mcp_tool", id=tool.name),
-            data={"tool": tool.name},
+            data={"tool": tool.name, "client_id": ctx.principal.client_id},
         )
         await outbox.insert_event(event)
-    except Exception:  # noqa: BLE001 - audit must never break the call
+    except Exception:  # noqa: BLE001 — audit must never break the call
         logger.warning(
             "mcp_audit_emit_failed",
             tool=tool.name,
@@ -296,27 +284,13 @@ async def _safe_audit_emit(tool: Tool, ctx: ToolContext) -> None:
         )
 
 
-def _actor_from_user(user: Any, actor_cls: type) -> Any:
-    """Build an AuditActor from a principal — system fallback when None."""
-    if user is None:
-        return actor_cls(type="system", id="bsage")
-    pid = getattr(user, "id", None) or "anonymous"
-    email = getattr(user, "email", None)
-    actor_type = "service" if getattr(user, "is_service", False) else "user"
-    return actor_cls(
-        type=actor_type,
-        id=str(pid),
-        email=email if isinstance(email, str) else None,
-    )
-
-
 __all__ = [
     "AuditOutboxLike",
+    "McpPrincipal",
     "Tool",
     "ToolContext",
     "ToolError",
     "ToolHandler",
-    "ToolPermissionDenied",
     "ToolRegistry",
     "ToolScopeDenied",
 ]

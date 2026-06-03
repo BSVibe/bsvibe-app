@@ -21,7 +21,6 @@ def _iter_modules() -> list[str]:
         "backend.knowledge.ingest",
         "backend.knowledge.retrieval",
         "backend.knowledge.canonicalization",
-        "backend.knowledge.mcp",
     ):
         pkg = importlib.import_module(pkg_name)
         if not hasattr(pkg, "__path__"):
