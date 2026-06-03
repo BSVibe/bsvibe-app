@@ -131,7 +131,10 @@ async def test_oauth_protected_resource_metadata(client: httpx.AsyncClient) -> N
     r = await client.get("/api/.well-known/oauth-protected-resource")
     assert r.status_code == 200
     body = r.json()
-    assert body["resource"].endswith("/api/mcp")
+    # D2 mounted the MCP server at /mcp (NOT /api/mcp) — top-level path
+    # so MCP clients construct a clean server URL.
+    assert body["resource"].endswith("/mcp")
+    assert not body["resource"].endswith("/api/mcp")
     assert "mcp:read" in body["scopes_supported"]
 
 

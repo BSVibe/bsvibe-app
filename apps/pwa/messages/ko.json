@@ -755,6 +755,19 @@
         "revoke": "취소",
         "revoking": "취소 중…",
         "revoked": "취소됨"
+      },
+      "mcp": {
+        "title": "MCP 서버 엔드포인트",
+        "lede": "bsvibe-app는 아래 URL에서 MCP 서버를 운영해요. Claude Code(그리고 RFC 9728을 지원하는 모든 MCP 클라이언트)는 OAuth 플로우를 자동으로 발견하므로 URL만 알면 돼요.",
+        "endpointLabel": "엔드포인트 URL",
+        "copy": "복사",
+        "copied": "복사됨",
+        "configLabel": "Claude Code 설정 스니펫",
+        "configHint": "`~/.config/claude-code/mcp.json`에 아래 항목을 추가하거나 `claude mcp add bsvibe <url>` 명령을 실행하세요. CLI가 WWW-Authenticate 헤더로 OAuth를 처리하므로 토큰을 직접 넣을 필요는 없어요.",
+        "scopesLabel": "OAuth 스코프",
+        "scopeRead": "mcp:read — 제품·런·산출물·Safe Mode 큐 조회, 볼트 검색·읽기.",
+        "scopeWrite": "mcp:write — 제품 생성, Direct 메시지 전송, Safe Mode 승인/거절, 볼트 시드 작성.",
+        "scopeAdmin": "mcp:admin — 미래의 관리자 도구(설정 변경, 파괴적 삭제)에 예약."
       }
     }
   },

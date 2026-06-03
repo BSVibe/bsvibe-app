@@ -1,0 +1,345 @@
+"""Workflow tools — products / runs / deliverables read+write surface.
+
+Renames the legacy BSNexus ``bsnexus_projects_*`` taxonomy to bsvibe-app's
+``bsvibe_products_*`` — bsvibe-app's first-class shipping unit is the
+Product, not a "Project". Handlers depend on the typed repositories the
+REST surface already uses (Workflow §D44/D45) so the MCP wire and the
+HTTP wire share one canonical query path.
+"""
+
+from __future__ import annotations
+
+import uuid
+from typing import Any
+
+from pydantic import BaseModel, ConfigDict, Field, RootModel, field_validator
+from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
+
+from backend.identity.workspaces_db import ProductRow
+from backend.mcp.api import Tool, ToolContext, ToolError, ToolRegistry
+from backend.workflow.infrastructure.repositories import (
+    SqlAlchemyDeliverableRepository,
+    SqlAlchemyRunRepository,
+)
+
+
+class _Envelope(RootModel[Any]):
+    """Permissive output envelope — preserves the natural JSON shape."""
+
+
+# ---------------------------------------------------------------------------
+# Helpers — domain → dict serializers (small, transport-stable shapes).
+# ---------------------------------------------------------------------------
+def _product_to_dict(row: ProductRow) -> dict[str, Any]:
+    return {
+        "id": str(row.id),
+        "workspace_id": str(row.workspace_id),
+        "name": row.name,
+        "slug": row.slug,
+        "repo_url": row.repo_url,
+        "bootstrap_status": row.bootstrap_status,
+        "bootstrap_artifacts_count": row.bootstrap_artifacts_count,
+        "bootstrap_error": row.bootstrap_error,
+        "created_at": row.created_at.isoformat() if row.created_at else None,
+        "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+    }
+
+
+def _run_to_dict(row: Any) -> dict[str, Any]:
+    payload = row.payload or {}
+    intent: str | None = None
+    if isinstance(payload, dict):
+        candidate = payload.get("intent_text") or payload.get("text")
+        if isinstance(candidate, str):
+            intent = candidate
+    return {
+        "id": str(row.id),
+        "workspace_id": str(row.workspace_id),
+        "product_id": str(row.product_id) if row.product_id else None,
+        "request_id": str(row.request_id) if row.request_id else None,
+        "status": getattr(row.status, "value", str(row.status)),
+        "intent": intent,
+        "created_at": row.created_at.isoformat() if row.created_at else None,
+        "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+    }
+
+
+def _deliverable_to_dict(row: Any) -> dict[str, Any]:
+    return {
+        "id": str(row.id),
+        "run_id": str(row.run_id),
+        "workspace_id": str(row.workspace_id),
+        "deliverable_type": getattr(row.deliverable_type, "value", str(row.deliverable_type)),
+        "artifact_uri": row.artifact_uri,
+        "diff_url": row.diff_url,
+        "retracted_at": row.retracted_at.isoformat() if row.retracted_at else None,
+        "created_at": row.created_at.isoformat() if row.created_at else None,
+    }
+
+
+# ---------------------------------------------------------------------------
+# bsvibe_products_list
+# ---------------------------------------------------------------------------
+class ProductsListInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    limit: int = Field(50, ge=1, le=200)
+
+
+async def _h_products_list(args: ProductsListInput, ctx: ToolContext) -> Any:
+    rows = (
+        (
+            await ctx.session.execute(
+                select(ProductRow)
+                .where(ProductRow.workspace_id == ctx.principal.workspace_id)
+                .order_by(ProductRow.created_at.desc())
+                .limit(args.limit)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    return _Envelope([_product_to_dict(r) for r in rows])
+
+
+# ---------------------------------------------------------------------------
+# bsvibe_products_show
+# ---------------------------------------------------------------------------
+class ProductsShowInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    slug_or_id: str = Field(..., min_length=1, max_length=64)
+
+
+async def _resolve_product(ctx: ToolContext, slug_or_id: str) -> ProductRow:
+    workspace_id = ctx.principal.workspace_id
+    # Try UUID first.
+    try:
+        pid = uuid.UUID(slug_or_id)
+    except ValueError:
+        pid = None
+    if pid is not None:
+        row = await ctx.session.get(ProductRow, pid)
+        if row is not None and row.workspace_id == workspace_id:
+            return row
+    # Fall through to slug.
+    row = (
+        await ctx.session.execute(
+            select(ProductRow).where(
+                ProductRow.workspace_id == workspace_id,
+                ProductRow.slug == slug_or_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if row is None:
+        raise ToolError(f"product not found: {slug_or_id}")
+    return row
+
+
+async def _h_products_show(args: ProductsShowInput, ctx: ToolContext) -> Any:
+    row = await _resolve_product(ctx, args.slug_or_id)
+    return _Envelope(_product_to_dict(row))
+
+
+# ---------------------------------------------------------------------------
+# bsvibe_products_create — mirrors REST ProductCreate (extra="forbid")
+# ---------------------------------------------------------------------------
+import re  # noqa: E402
+
+_SLUG_RE = re.compile(r"^[a-z][a-z0-9-]*$")
+
+
+class ProductsCreateInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    name: str = Field(..., min_length=1, max_length=255)
+    slug: str = Field(..., min_length=1, max_length=64)
+    repo_url: str | None = Field(default=None, max_length=512)
+
+    @field_validator("slug")
+    @classmethod
+    def _slug_format(cls, v: str) -> str:
+        if not _SLUG_RE.match(v):
+            raise ValueError("slug must match ^[a-z][a-z0-9-]*$")
+        return v
+
+
+async def _h_products_create(args: ProductsCreateInput, ctx: ToolContext) -> Any:
+    initial_status = "pending" if args.repo_url else None
+    row = ProductRow(
+        id=uuid.uuid4(),
+        workspace_id=ctx.principal.workspace_id,
+        name=args.name,
+        slug=args.slug,
+        repo_url=args.repo_url,
+        bootstrap_status=initial_status,
+    )
+    ctx.session.add(row)
+    try:
+        await ctx.session.commit()
+    except IntegrityError as exc:
+        await ctx.session.rollback()
+        raise ToolError(f"slug {args.slug!r} already exists in this workspace") from exc
+    # NOTE: MCP create does NOT schedule the bootstrap background task — the
+    # founder UI's create path owns that orchestration today (the scheduler
+    # depends on the FastAPI app's session-factory DI). MCP create produces
+    # the product row; the founder can trigger bootstrap via the PWA, or a
+    # follow-up lift can add a dedicated `bsvibe_products_bootstrap` tool.
+    return _Envelope(_product_to_dict(row))
+
+
+# ---------------------------------------------------------------------------
+# bsvibe_runs_list
+# ---------------------------------------------------------------------------
+class RunsListInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    product_slug_or_id: str | None = Field(default=None, max_length=64)
+    limit: int = Field(50, ge=1, le=200)
+
+
+async def _h_runs_list(args: RunsListInput, ctx: ToolContext) -> Any:
+    runs_repo = SqlAlchemyRunRepository(ctx.session)
+    rows = await runs_repo.list_by_workspace(ctx.principal.workspace_id, limit=args.limit)
+    if args.product_slug_or_id:
+        product = await _resolve_product(ctx, args.product_slug_or_id)
+        rows = [r for r in rows if r.product_id == product.id]
+    return _Envelope([_run_to_dict(r) for r in rows])
+
+
+# ---------------------------------------------------------------------------
+# bsvibe_runs_show
+# ---------------------------------------------------------------------------
+class RunsShowInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    run_id: uuid.UUID
+
+
+async def _h_runs_show(args: RunsShowInput, ctx: ToolContext) -> Any:
+    runs_repo = SqlAlchemyRunRepository(ctx.session)
+    row = await runs_repo.get(args.run_id)
+    if row is None or row.workspace_id != ctx.principal.workspace_id:
+        raise ToolError(f"run not found: {args.run_id}")
+    return _Envelope(_run_to_dict(row))
+
+
+# ---------------------------------------------------------------------------
+# bsvibe_deliverables_list
+# ---------------------------------------------------------------------------
+class DeliverablesListInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    run_id: uuid.UUID | None = None
+    limit: int = Field(50, ge=1, le=200)
+
+
+async def _h_deliverables_list(args: DeliverablesListInput, ctx: ToolContext) -> Any:
+    repo = SqlAlchemyDeliverableRepository(ctx.session)
+    rows = await repo.list_by_workspace(
+        ctx.principal.workspace_id, run_id=args.run_id, limit=args.limit
+    )
+    return _Envelope([_deliverable_to_dict(r) for r in rows])
+
+
+# ---------------------------------------------------------------------------
+# bsvibe_deliverables_show
+# ---------------------------------------------------------------------------
+class DeliverablesShowInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    deliverable_id: uuid.UUID
+
+
+async def _h_deliverables_show(args: DeliverablesShowInput, ctx: ToolContext) -> Any:
+    repo = SqlAlchemyDeliverableRepository(ctx.session)
+    row = await repo.get(args.deliverable_id)
+    if row is None or row.workspace_id != ctx.principal.workspace_id:
+        raise ToolError(f"deliverable not found: {args.deliverable_id}")
+    out = _deliverable_to_dict(row)
+    out["payload"] = row.payload if isinstance(row.payload, dict) else {}
+    return _Envelope(out)
+
+
+# ---------------------------------------------------------------------------
+# Registration
+# ---------------------------------------------------------------------------
+def register_workflow_tools(registry: ToolRegistry) -> None:
+    registry.register(
+        Tool(
+            name="bsvibe_products_list",
+            description="List products in the active workspace, newest first.",
+            input_schema=ProductsListInput,
+            output_schema=_Envelope,
+            handler=_h_products_list,
+            required_scopes=("mcp:read",),
+        )
+    )
+    registry.register(
+        Tool(
+            name="bsvibe_products_show",
+            description="Show one product by slug or UUID, scoped to the active workspace.",
+            input_schema=ProductsShowInput,
+            output_schema=_Envelope,
+            handler=_h_products_show,
+            required_scopes=("mcp:read",),
+        )
+    )
+    registry.register(
+        Tool(
+            name="bsvibe_products_create",
+            description=(
+                "Create a new product in the active workspace. Returns the new row. "
+                "Bootstrap from `repo_url` is NOT auto-scheduled here — use the PWA "
+                "to start the clone+ingest job."
+            ),
+            input_schema=ProductsCreateInput,
+            output_schema=_Envelope,
+            handler=_h_products_create,
+            required_scopes=("mcp:write",),
+            audit_event="bsvibe.mcp.products_create.invoked",
+        )
+    )
+    registry.register(
+        Tool(
+            name="bsvibe_runs_list",
+            description=(
+                "List recent ExecutionRuns in the active workspace, newest first. "
+                "Pass `product_slug_or_id` to narrow to one product."
+            ),
+            input_schema=RunsListInput,
+            output_schema=_Envelope,
+            handler=_h_runs_list,
+            required_scopes=("mcp:read",),
+        )
+    )
+    registry.register(
+        Tool(
+            name="bsvibe_runs_show",
+            description="Show one ExecutionRun by id, scoped to the active workspace.",
+            input_schema=RunsShowInput,
+            output_schema=_Envelope,
+            handler=_h_runs_show,
+            required_scopes=("mcp:read",),
+        )
+    )
+    registry.register(
+        Tool(
+            name="bsvibe_deliverables_list",
+            description=(
+                "List recent Deliverables in the active workspace, newest first. "
+                "Pass `run_id` to narrow to one run's outputs."
+            ),
+            input_schema=DeliverablesListInput,
+            output_schema=_Envelope,
+            handler=_h_deliverables_list,
+            required_scopes=("mcp:read",),
+        )
+    )
+    registry.register(
+        Tool(
+            name="bsvibe_deliverables_show",
+            description="Show one Deliverable by id (includes its payload).",
+            input_schema=DeliverablesShowInput,
+            output_schema=_Envelope,
+            handler=_h_deliverables_show,
+            required_scopes=("mcp:read",),
+        )
+    )
+
+
+__all__ = ["register_workflow_tools"]

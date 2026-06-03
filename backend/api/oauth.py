@@ -604,11 +604,17 @@ async def oauth_authorization_server_metadata() -> dict[str, Any]:
 
 @metadata_router.get("/.well-known/oauth-protected-resource")
 async def oauth_protected_resource_metadata() -> dict[str, Any]:
-    """RFC 9728 — resource-server metadata for the embedded MCP (D2)."""
+    """RFC 9728 — resource-server metadata for the embedded MCP (D2).
+
+    The embedded MCP server is mounted at ``/mcp`` (NOT ``/api/mcp``) —
+    MCP convention is a top-level path so clients construct a clean
+    server URL. Claude Code follows the ``WWW-Authenticate`` 401 header
+    here to discover the authorization server.
+    """
     settings = get_settings()
     issuer = settings.oauth_issuer
     return {
-        "resource": f"{issuer}/api/mcp",
+        "resource": f"{issuer.rstrip('/')}/mcp",
         "authorization_servers": [issuer],
         "bearer_methods_supported": ["header"],
         "resource_documentation": "https://bsvibe.dev/docs/mcp",
