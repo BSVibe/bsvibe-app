@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import uuid
-from pathlib import Path
-from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -13,7 +11,6 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from backend.identity.workspaces_db import ProductRow, WorkspaceRow, WorkspacesBase
 from backend.workflow.application.runtime.product_bootstrap_runtime import (
-    STATUS_COMPLETE,
     STATUS_FAILED_CLONE,
     SqlAlchemyBootstrapRepository,
     run_product_bootstrap_job,
