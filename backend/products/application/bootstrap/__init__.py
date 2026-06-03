@@ -22,6 +22,9 @@ Public surface:
 
 from __future__ import annotations
 
+from backend.products.application.bootstrap.anchor_backfill import (
+    register_bootstrap_anchors,
+)
 from backend.products.application.bootstrap.orchestrator import (
     BootstrapTooLargeError,
     run_repo_bootstrap,
@@ -35,5 +38,6 @@ __all__ = [
     "BootstrapProgress",
     "BootstrapRepository",
     "BootstrapTooLargeError",
+    "register_bootstrap_anchors",
     "run_repo_bootstrap",
 ]

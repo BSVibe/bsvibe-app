@@ -47,6 +47,7 @@ from backend.products.application.bootstrap import (
     BootstrapProgress,
     BootstrapRepository,
     BootstrapTooLargeError,
+    register_bootstrap_anchors,
     run_repo_bootstrap,
 )
 from backend.storage.product_workspace import (
@@ -205,11 +206,44 @@ def _build_bootstrap_knowledge_inner(
 ) -> Knowledge | None:
     # Lazy imports keep the runtime layer's top-level cheap and avoid the
     # heavy Knowledge subsystem at module load.
+    from backend.knowledge.canonicalization.index import (  # noqa: PLC0415
+        InMemoryCanonicalizationIndex,
+    )
+    from backend.knowledge.canonicalization.lock import AsyncIOMutationLock  # noqa: PLC0415
+    from backend.knowledge.canonicalization.resolver import TagResolver  # noqa: PLC0415
+    from backend.knowledge.canonicalization.service import (  # noqa: PLC0415
+        CanonicalizationService,
+    )
+    from backend.knowledge.canonicalization.store import NoteStore  # noqa: PLC0415
     from backend.knowledge.factory import KnowledgeFactory  # noqa: PLC0415
+    from backend.knowledge.graph.storage import FileSystemStorage  # noqa: PLC0415
     from backend.knowledge.ingest.ingest_compiler import (  # noqa: PLC0415
         BatchItem,
         IngestCompiler,
     )
+
+    async def _build_canonicalization_service(
+        ws_id: uuid.UUID, region_str: str
+    ) -> CanonicalizationService:
+        """Build a vault-scoped service so ingest-time tags auto-create concepts.
+
+        Lift A-fix — passing this service to the IngestCompiler closes the gap
+        where ``canonicalize_tags`` was a no-op (no service → tags pass through
+        unresolved → no ``concepts/active/<id>.md`` written → empty graph view).
+        Default permissive policy (Safe Mode off) lets the resolver auto-apply
+        a ``create-concept`` action per new tag at write time.
+        """
+        vault_root = Path(settings.knowledge_vault_root) / region_str / str(ws_id)
+        vault_root.mkdir(parents=True, exist_ok=True)
+        storage = FileSystemStorage(vault_root)
+        index = InMemoryCanonicalizationIndex()
+        await index.initialize(storage)
+        return CanonicalizationService(
+            store=NoteStore(storage),
+            lock=AsyncIOMutationLock(),
+            index=index,
+            resolver=TagResolver(index=index),
+        )
 
     async def _ingest_callable(
         *,
@@ -238,7 +272,12 @@ def _build_bootstrap_knowledge_inner(
             workspace_id=str(workspace_id),
             vault_root=Path(settings.knowledge_vault_root),
         )
-        compiler = IngestCompiler(garden_writer=factory.writer(), llm_client=llm)
+        canon_service = await _build_canonicalization_service(workspace_id, region)
+        compiler = IngestCompiler(
+            garden_writer=factory.writer(),
+            llm_client=llm,
+            canonicalization_service=canon_service,
+        )
         items = [
             BatchItem(label=str(a.get("label", "")), content=str(a.get("content", "")))
             for a in artifacts
@@ -391,6 +430,18 @@ async def run_product_bootstrap_job(
                 region=region,
                 knowledge=knowledge,
             )
+            # Lift A-fix — promote LLM-classified seedling tags into
+            # ``concepts/active/<id>.md`` canonical anchors so the PWA
+            # Knowledge graph view (which reads ``list_active_concepts``)
+            # has nodes to render. Failure here is a soft warning: the
+            # seedlings + entity stubs are already on disk and the next
+            # bootstrap/settle pass (or the founder's manual promotion)
+            # will fill the anchors in.
+            await _register_anchors_soft(
+                workspace_id=workspace_id,
+                region=region,
+                settings=settings,
+            )
         except BootstrapTooLargeError as exc:
             await repo.mark_status(
                 product_id,
@@ -481,6 +532,58 @@ def _on_task_done(task: asyncio.Task[None]) -> None:
             error=str(exc),
             exc_info=exc,
         )
+
+
+async def _register_anchors_soft(
+    *,
+    workspace_id: uuid.UUID,
+    region: str,
+    settings: Settings,
+) -> None:
+    """Run :func:`register_bootstrap_anchors` against the workspace vault.
+
+    Lift A-fix — after ingest writes seedlings + entity stubs the bootstrap
+    needs one promotion pass to land ``concepts/active/<id>.md`` canonical
+    anchors, otherwise the PWA Knowledge graph view stays empty (it reads
+    :meth:`InMemoryCanonicalizationIndex.list_active_concepts` which scans
+    ``concepts/active/``). The vault path mirrors
+    :class:`KnowledgeFactory`'s per-workspace root so the promoter and the
+    graph endpoint address the same notes.
+
+    Any failure is logged and swallowed: the seedlings + entity stubs are
+    already on disk and the next bootstrap/settle pass (or a CLI backfill)
+    can retrofit anchors later. A canonicalization hiccup must not turn a
+    successful ingest into ``failed:ingest``.
+    """
+    vault_root = Path(settings.knowledge_vault_root) / region / str(workspace_id)
+    if not vault_root.exists():
+        logger.info(
+            "bootstrap_anchor_registration_vault_missing",
+            workspace_id=str(workspace_id),
+            region=region,
+        )
+        return
+
+    from backend.knowledge.graph.storage import FileSystemStorage  # noqa: PLC0415
+
+    try:
+        result = await register_bootstrap_anchors(FileSystemStorage(vault_root))
+    except Exception as exc:  # noqa: BLE001 — soft-fail per docstring
+        logger.warning(
+            "bootstrap_anchor_registration_failed",
+            workspace_id=str(workspace_id),
+            region=region,
+            error=str(exc),
+            exc_info=True,
+        )
+        return
+    logger.info(
+        "bootstrap_anchor_registration_done",
+        workspace_id=str(workspace_id),
+        region=region,
+        created_concepts=len(result.created_concepts),
+        candidate_tags=len(result.candidate_tags),
+    )
 
 
 async def _remove_dir(path: Path) -> None:
