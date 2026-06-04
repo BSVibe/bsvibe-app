@@ -219,6 +219,94 @@ async def test_register_client_rejects_unknown_scope(
 
 
 # ---------------------------------------------------------------------------
+# Anonymous DCR (RFC 7591 §3 open) — Lift D2 followup
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def _reset_anon_dcr_buckets():
+    """Clear the in-process anonymous-DCR rate-limit table between tests."""
+    from backend.api import oauth as oauth_mod
+
+    oauth_mod._anon_dcr_buckets.clear()
+    yield
+    oauth_mod._anon_dcr_buckets.clear()
+
+
+async def test_anon_register_loopback_succeeds(client: httpx.AsyncClient) -> None:
+    r = await client.post(
+        "/api/oauth/register",
+        json={
+            "client_name": "Claude Code",
+            "redirect_uris": ["http://127.0.0.1:54321/callback"],
+            "allowed_scopes": ["mcp:read"],
+        },
+    )
+    assert r.status_code == 201, r.text
+    body = r.json()
+    assert body["client_id"].startswith("dcr-")
+    assert body["client_name"] == "Claude Code"
+    assert "client_secret" not in body
+
+
+async def test_anon_register_rejects_external_host(client: httpx.AsyncClient) -> None:
+    r = await client.post(
+        "/api/oauth/register",
+        json={
+            "client_name": "Phish",
+            "redirect_uris": ["http://evil.com/callback"],
+        },
+    )
+    assert r.status_code == 422
+
+
+async def test_anon_register_rejects_https_redirect(client: httpx.AsyncClient) -> None:
+    r = await client.post(
+        "/api/oauth/register",
+        json={
+            "client_name": "Web",
+            "redirect_uris": ["https://example.com/callback"],
+        },
+    )
+    assert r.status_code == 422
+
+
+async def test_anon_register_rejects_unknown_scope(client: httpx.AsyncClient) -> None:
+    r = await client.post(
+        "/api/oauth/register",
+        json={
+            "client_name": "X",
+            "redirect_uris": ["http://localhost/cb"],
+            "allowed_scopes": ["mcp:read", "root:owner"],
+        },
+    )
+    assert r.status_code == 422
+
+
+async def test_anon_register_rate_limit_kicks_in(client: httpx.AsyncClient) -> None:
+    body = {
+        "client_name": "burst",
+        "redirect_uris": ["http://127.0.0.1/cb"],
+    }
+    # 10 successful registrations consume the bucket.
+    for _ in range(10):
+        r = await client.post("/api/oauth/register", json=body)
+        assert r.status_code == 201, r.text
+    r = await client.post("/api/oauth/register", json=body)
+    assert r.status_code == 429
+
+
+async def test_metadata_registration_endpoint_is_open_dcr(
+    client: httpx.AsyncClient,
+) -> None:
+    r = await client.get("/api/.well-known/oauth-authorization-server")
+    assert r.status_code == 200
+    meta = r.json()
+    # Open DCR endpoint must be advertised, NOT the founder-authed v1 route.
+    assert meta["registration_endpoint"].endswith("/api/oauth/register")
+
+
+# ---------------------------------------------------------------------------
 # Authorization-code flow end-to-end
 # ---------------------------------------------------------------------------
 

@@ -15,6 +15,7 @@ import redis.asyncio as redis_aio
 import structlog
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
 from backend.api.auth import router as auth_router
 from backend.api.deps import _get_session_factory
@@ -61,10 +62,24 @@ def create_app() -> FastAPI:
         docs_url="/api/docs",
         openapi_url="/api/openapi.json",
         lifespan=_lifespan,
+        # Lift D2 followup — `redirect_slashes=True` (FastAPI default)
+        # turned `POST /mcp` into a 307 redirect to `/mcp/` with a
+        # `Location: http://...` URL generated from `scope.scheme` —
+        # which is `http` behind Cloudflare since the inner uvicorn
+        # never sees TLS. That brittle HTTPS-downgrade-then-CF-upgrade
+        # dance breaks MCP clients that don't follow 307. We register
+        # `/mcp` AND `/mcp/` as the same transport below, so the
+        # redirect is unnecessary in the first place.
+        redirect_slashes=False,
     )
     # Brackets each request so the workspace contextvar (defense layer 1)
     # starts unset and is reset afterwards — no scope leaks across requests.
     app.add_middleware(WorkspaceContextMiddleware)
+    # Lift D2 followup — honor X-Forwarded-Proto so URL builders + redirects
+    # emit `https://` behind Cloudflare instead of the inner `http://`.
+    # Trust any upstream (`*`) because Cloudflare terminates TLS and the
+    # backend container only ever sees the CF→origin hop.
+    app.add_middleware(ProxyHeadersMiddleware, trusted_hosts="*")
     # CORS for the browser PWA calling the backend cross-origin (Bearer-header
     # auth, NOT cookies → allow_credentials=False; explicit allow-list, never
     # "*"). Added LAST so it is OUTERMOST: in Starlette the middleware added

@@ -18,11 +18,15 @@ auth). They use the ``v1_router`` exposed below, which is mounted under
 
 from __future__ import annotations
 
+import re
+import time
 import uuid
 from datetime import datetime
+from threading import Lock
 from typing import Annotated, Any
 from urllib.parse import urlencode, urlsplit
 
+import structlog
 from fastapi import APIRouter, Depends, Form, HTTPException, Request, status
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from pydantic import BaseModel, ConfigDict, Field
@@ -58,6 +62,8 @@ from backend.identity.oauth_service import (
     rotate_refresh_token,
 )
 
+logger = structlog.get_logger(__name__)
+
 # Public (no auth) — mounted at /api/oauth.
 public_router = APIRouter(prefix="/oauth", tags=["oauth"])
 # Authenticated founder management — mounted at /api/v1/oauth.
@@ -71,6 +77,58 @@ metadata_router = APIRouter(tags=["oauth-metadata"])
 # set is additive — never remove.
 ALLOWED_SCOPES = ("mcp:read", "mcp:write", "mcp:admin")
 DEFAULT_SCOPE = "mcp:read"
+
+
+# RFC 8252 loopback redirect URI — native clients (Claude Code,
+# `claude mcp add`, etc.) listen on a random localhost port for the
+# authorization-code callback. The anonymous DCR endpoint accepts ONLY
+# these so the open-DCR surface can't be weaponised into an open redirect.
+_LOOPBACK_REDIRECT_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"^http://127\.0\.0\.1(:[0-9]+)?(/.*)?$"),
+    re.compile(r"^http://localhost(:[0-9]+)?(/.*)?$"),
+)
+
+
+def _is_loopback_redirect_uri(uri: str) -> bool:
+    return any(p.match(uri) for p in _LOOPBACK_REDIRECT_PATTERNS)
+
+
+# ---------------------------------------------------------------------------
+# Anonymous DCR rate limiter
+# ---------------------------------------------------------------------------
+# Simple per-IP sliding-window counter. Used to throttle the unauthenticated
+# ``POST /api/oauth/register`` endpoint so a flood of bot registrations
+# can't pollute the client table. In-process / single-worker only — v1
+# deliberately ships without a Redis dependency; if we later move to
+# multi-worker uvicorn we can swap this for a Redis-backed counter.
+_ANON_DCR_WINDOW_SECS = 3600
+_ANON_DCR_MAX_PER_WINDOW = 10
+_anon_dcr_lock = Lock()
+_anon_dcr_buckets: dict[str, list[float]] = {}
+
+
+def _anon_dcr_rate_check(ip: str, *, now: float | None = None) -> bool:
+    """Return ``True`` if the IP may register one more client.
+
+    Side-effect: on success, records ``now`` into the IP's bucket.
+    Buckets older than the window are pruned lazily on every call.
+    """
+    t = time.monotonic() if now is None else now
+    cutoff = t - _ANON_DCR_WINDOW_SECS
+    with _anon_dcr_lock:
+        bucket = [ts for ts in _anon_dcr_buckets.get(ip, ()) if ts > cutoff]
+        if len(bucket) >= _ANON_DCR_MAX_PER_WINDOW:
+            _anon_dcr_buckets[ip] = bucket
+            return False
+        bucket.append(t)
+        _anon_dcr_buckets[ip] = bucket
+        return True
+
+
+def _reset_anon_dcr_rate_limit_for_tests() -> None:
+    """Test-only: clear the per-IP buckets between cases."""
+    with _anon_dcr_lock:
+        _anon_dcr_buckets.clear()
 
 
 # ---------------------------------------------------------------------------
@@ -125,6 +183,37 @@ class ClientResponse(BaseModel):
     allowed_scopes: list[str]
     created_at: datetime
     revoked_at: datetime | None
+
+
+class AnonymousClientCreateRequest(BaseModel):
+    """RFC 7591 §3 open DCR — Lift D2 followup.
+
+    Tight constraints (vs the founder-authed v1 schema): max 100-char
+    name, max 4 redirect URIs, **loopback-only** redirect_uris. PKCE is
+    already enforced everywhere downstream.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    client_name: str = Field(min_length=1, max_length=100)
+    redirect_uris: list[str] = Field(min_length=1, max_length=4)
+    allowed_scopes: list[str] | None = None
+
+
+class AnonymousClientResponse(BaseModel):
+    """Response shape for ``POST /api/oauth/register``.
+
+    Same fields as :class:`ClientResponse` minus the founder-only id
+    columns; no ``client_secret`` (public clients only).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    client_id: str
+    client_name: str
+    redirect_uris: list[str]
+    allowed_scopes: list[str]
+    created_at: datetime
 
 
 def _client_to_response(row: OAuthClientRow) -> ClientResponse:
@@ -186,7 +275,7 @@ async def _authorize_impl(  # noqa: PLR0911, PLR0912 — OAuth state machine
     GET renders the consent screen; POST commits the consent and 302's
     back to the client's ``redirect_uri`` with a single-use code.
     """
-    del user_row  # bootstrap-side-effects only
+    consenting_user_id = user_row.id
     if request.method == "POST":
         form = await request.form()
         params = {k: v for k, v in form.multi_items() if isinstance(v, str)}
@@ -240,11 +329,14 @@ async def _authorize_impl(  # noqa: PLR0911, PLR0912 — OAuth state machine
     if action == "deny":
         return _redirect_with_error(redirect_uri, state, "access_denied", "user denied the request")
 
-    # Approve — mint code + 302 to client.
+    # Approve — mint code + 302 to client. The OAuth subject is the user
+    # who clicked "approve" (the consenting session user), NOT the client's
+    # registrar. For anonymous DCR clients `client.created_by_user_id` is
+    # NULL; even for founder-authed clients we want the live consent user.
     code = await issue_authorization_code(
         session,
         client_id=client.client_id,
-        user_id=client.created_by_user_id,
+        user_id=consenting_user_id,
         workspace_id=workspace_id,
         scope=parsed_scope,
         redirect_uri=redirect_uri,
@@ -493,6 +585,95 @@ async def revoke(
 
 
 # ---------------------------------------------------------------------------
+# Anonymous DCR (RFC 7591 §3 open) — Lift D2 followup
+# ---------------------------------------------------------------------------
+
+
+@public_router.post(
+    "/register",
+    response_model=AnonymousClientResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def register_client_anonymous(
+    request: Request,
+    payload: AnonymousClientCreateRequest,
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+) -> AnonymousClientResponse:
+    """RFC 7591 §3 — open dynamic client registration for MCP clients.
+
+    Unauthenticated by design: native MCP clients (``claude mcp add``,
+    Claude Code, etc.) discover this endpoint from the
+    ``.well-known/oauth-authorization-server`` metadata BEFORE they hold
+    any token. Abuse is constrained by:
+
+    * **Loopback-only redirect URIs** (RFC 8252) — open registration
+      cannot mint open-redirect clients to phishing-grade hostnames.
+    * Per-IP rate limit (10/hour, in-process).
+    * ``client_name`` ≤ 100 chars, ≤ 4 redirect URIs, scopes ⊆ server set.
+    * Public client only — no ``client_secret`` returned. PKCE mandatory
+      everywhere downstream.
+
+    The row's ``workspace_id`` / ``created_by_user_id`` stay NULL. The
+    *user* binds a workspace at ``/authorize`` time (which DOES run on a
+    real PWA session).
+    """
+    # Resolve caller IP. Honors X-Forwarded-For if the ProxyHeaders
+    # middleware (see backend.api.main) has rewritten scope.client; falls
+    # back to the raw socket address for direct connections (dev / tests).
+    ip = request.client.host if request.client else "unknown"
+
+    # Validate redirect URIs — strict loopback only. We do this before
+    # the rate-limit check so a bot probing the surface with garbage
+    # input doesn't get to fill its bucket with cheap 422s.
+    for u in payload.redirect_uris:
+        if not _is_loopback_redirect_uri(u):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=(f"redirect_uri must be http://127.0.0.1 or http://localhost (got {u})"),
+            )
+    # Scope subset check.
+    scopes = payload.allowed_scopes or [DEFAULT_SCOPE]
+    for s in scopes:
+        if s not in ALLOWED_SCOPES:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"unknown scope: {s}",
+            )
+    # Rate limit AFTER input validation. ``_anon_dcr_rate_check`` mutates
+    # the bucket on success only.
+    if not _anon_dcr_rate_check(ip):
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="anonymous DCR rate limit exceeded — try again later",
+        )
+
+    row = await register_client(
+        session,
+        workspace_id=None,
+        created_by_user_id=None,
+        client_name=payload.client_name,
+        redirect_uris=payload.redirect_uris,
+        allowed_scopes=scopes,
+    )
+    await session.commit()
+    logger.info(
+        "audit.oauth.client_registered_anonymous",
+        ip=ip,
+        client_id=row.client_id,
+        client_name=row.client_name,
+        redirect_uris=list(row.redirect_uris),
+        allowed_scopes=list(row.allowed_scopes),
+    )
+    return AnonymousClientResponse(
+        client_id=row.client_id,
+        client_name=row.client_name,
+        redirect_uris=list(row.redirect_uris),
+        allowed_scopes=list(row.allowed_scopes),
+        created_at=row.created_at,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Founder-managed clients (authenticated)
 # ---------------------------------------------------------------------------
 
@@ -591,7 +772,12 @@ async def oauth_authorization_server_metadata() -> dict[str, Any]:
         "token_endpoint": f"{issuer}/api/oauth/token",
         "introspection_endpoint": f"{issuer}/api/oauth/introspect",
         "revocation_endpoint": f"{issuer}/api/oauth/revoke",
-        "registration_endpoint": f"{issuer}/api/v1/oauth/clients",
+        # RFC 8414 — registration_endpoint advertises the OPEN
+        # (unauthenticated) DCR surface so MCP clients discover the
+        # right URL during ``claude mcp add``. The founder-authed
+        # ``/api/v1/oauth/clients`` route is for the Settings UI only
+        # and is intentionally NOT in this metadata document.
+        "registration_endpoint": f"{issuer}/api/oauth/register",
         "jwks_uri": f"{issuer}/api/.well-known/jwks.json",
         "response_types_supported": ["code"],
         "grant_types_supported": ["authorization_code", "refresh_token"],
