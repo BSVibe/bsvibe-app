@@ -63,8 +63,12 @@ class OAuthClientRow(Base):
     # (Codes / access tokens override this — see below.)
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
-    workspace_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("workspaces.id", ondelete="CASCADE"), nullable=False, index=True
+    # Nullable since Lift D2 followup: anonymous (RFC 7591 §3 open) DCR
+    # rows are NOT bound to a workspace at registration — the USER binds
+    # one later during ``/authorize`` (which runs on a real PWA session).
+    # Founder-created rows from the Settings UI still populate this.
+    workspace_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("workspaces.id", ondelete="CASCADE"), nullable=True, index=True
     )
     # RFC 7591 client_id — the externally-visible identifier. We prefix
     # ``dcr-`` to dynamically-registered clients so static seeding (none
@@ -76,8 +80,10 @@ class OAuthClientRow(Base):
     client_type: Mapped[str] = mapped_column(String(16), nullable=False, default="public")
     redirect_uris: Mapped[list[str]] = mapped_column(JSON, nullable=False)
     allowed_scopes: Mapped[list[str]] = mapped_column(JSON, nullable=False)
-    created_by_user_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    # Nullable since Lift D2 followup — anonymous DCR has no authenticated
+    # caller to attribute. Founder-created rows still populate this.
+    created_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=True
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=_utcnow

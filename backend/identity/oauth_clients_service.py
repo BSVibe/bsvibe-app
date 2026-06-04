@@ -40,14 +40,19 @@ def _gen_client_id() -> str:
 async def register_client(
     session: AsyncSession,
     *,
-    workspace_id: uuid.UUID,
-    created_by_user_id: uuid.UUID,
+    workspace_id: uuid.UUID | None,
+    created_by_user_id: uuid.UUID | None,
     client_name: str,
     redirect_uris: list[str],
     allowed_scopes: list[str],
     now: datetime | None = None,
 ) -> OAuthClientRow:
-    """Register a new OAuth client. Returns the persisted row."""
+    """Register a new OAuth client. Returns the persisted row.
+
+    ``workspace_id`` and ``created_by_user_id`` may be ``None`` for
+    anonymous DCR rows (Lift D2 followup) — see :mod:`backend.api.oauth`
+    for the open ``POST /api/oauth/register`` endpoint that uses this.
+    """
     n = now or _utcnow()
     row = OAuthClientRow(
         workspace_id=workspace_id,
