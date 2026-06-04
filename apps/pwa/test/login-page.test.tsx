@@ -86,16 +86,14 @@ describe("LoginPage", () => {
     // The OAuth consent page bounces unauthenticated visitors here with
     // a return_to that lands them back on the consent screen.
     searchParams = new URLSearchParams(
-      "return_to=" + encodeURIComponent("/oauth/consent?client_id=dcr-abc"),
+      `return_to=${encodeURIComponent("/oauth/consent?client_id=dcr-abc")}`,
     );
     login.mockResolvedValue(undefined);
     render(<LoginPage />);
     await userEvent.type(screen.getByLabelText("Email"), "founder@bsvibe.dev");
     await userEvent.type(screen.getByLabelText("Password"), "pw");
     fireEvent.click(screen.getByRole("button", { name: "Continue" }));
-    await waitFor(() =>
-      expect(replace).toHaveBeenCalledWith("/oauth/consent?client_id=dcr-abc"),
-    );
+    await waitFor(() => expect(replace).toHaveBeenCalledWith("/oauth/consent?client_id=dcr-abc"));
   });
 
   it("rejects an external return_to to prevent open redirect", async () => {
