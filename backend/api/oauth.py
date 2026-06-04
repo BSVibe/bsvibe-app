@@ -275,7 +275,7 @@ async def _authorize_impl(  # noqa: PLR0911, PLR0912 — OAuth state machine
     GET renders the consent screen; POST commits the consent and 302's
     back to the client's ``redirect_uri`` with a single-use code.
     """
-    del user_row  # bootstrap-side-effects only
+    consenting_user_id = user_row.id
     if request.method == "POST":
         form = await request.form()
         params = {k: v for k, v in form.multi_items() if isinstance(v, str)}
@@ -329,11 +329,14 @@ async def _authorize_impl(  # noqa: PLR0911, PLR0912 — OAuth state machine
     if action == "deny":
         return _redirect_with_error(redirect_uri, state, "access_denied", "user denied the request")
 
-    # Approve — mint code + 302 to client.
+    # Approve — mint code + 302 to client. The OAuth subject is the user
+    # who clicked "approve" (the consenting session user), NOT the client's
+    # registrar. For anonymous DCR clients `client.created_by_user_id` is
+    # NULL; even for founder-authed clients we want the live consent user.
     code = await issue_authorization_code(
         session,
         client_id=client.client_id,
-        user_id=client.created_by_user_id,
+        user_id=consenting_user_id,
         workspace_id=workspace_id,
         scope=parsed_scope,
         redirect_uri=redirect_uri,
