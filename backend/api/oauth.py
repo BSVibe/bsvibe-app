@@ -778,7 +778,7 @@ async def oauth_authorization_server_metadata() -> dict[str, Any]:
         # ``/api/v1/oauth/clients`` route is for the Settings UI only
         # and is intentionally NOT in this metadata document.
         "registration_endpoint": f"{issuer}/api/oauth/register",
-        "jwks_uri": f"{issuer}/api/.well-known/jwks.json",
+        "jwks_uri": f"{issuer}/.well-known/jwks.json",
         "response_types_supported": ["code"],
         "grant_types_supported": ["authorization_code", "refresh_token"],
         "code_challenge_methods_supported": ["S256"],

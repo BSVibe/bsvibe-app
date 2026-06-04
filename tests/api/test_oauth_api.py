@@ -115,7 +115,7 @@ async def client(db, workspace_id, seeded_user) -> AsyncIterator[httpx.AsyncClie
 
 
 async def test_oauth_authorization_server_metadata(client: httpx.AsyncClient) -> None:
-    r = await client.get("/api/.well-known/oauth-authorization-server")
+    r = await client.get("/.well-known/oauth-authorization-server")
     assert r.status_code == 200
     body = r.json()
     assert body["issuer"] == "http://test"
@@ -128,7 +128,7 @@ async def test_oauth_authorization_server_metadata(client: httpx.AsyncClient) ->
 
 
 async def test_oauth_protected_resource_metadata(client: httpx.AsyncClient) -> None:
-    r = await client.get("/api/.well-known/oauth-protected-resource")
+    r = await client.get("/.well-known/oauth-protected-resource")
     assert r.status_code == 200
     body = r.json()
     # D2 mounted the MCP server at /mcp (NOT /api/mcp) — top-level path
@@ -139,7 +139,7 @@ async def test_oauth_protected_resource_metadata(client: httpx.AsyncClient) -> N
 
 
 async def test_jwks_returns_es256(client: httpx.AsyncClient) -> None:
-    r = await client.get("/api/.well-known/jwks.json")
+    r = await client.get("/.well-known/jwks.json")
     assert r.status_code == 200
     body = r.json()
     assert "keys" in body
@@ -321,7 +321,7 @@ async def test_anon_register_rate_limit_kicks_in(client: httpx.AsyncClient) -> N
 async def test_metadata_registration_endpoint_is_open_dcr(
     client: httpx.AsyncClient,
 ) -> None:
-    r = await client.get("/api/.well-known/oauth-authorization-server")
+    r = await client.get("/.well-known/oauth-authorization-server")
     assert r.status_code == 200
     meta = r.json()
     # Open DCR endpoint must be advertised, NOT the founder-authed v1 route.
