@@ -157,6 +157,15 @@ class Settings(BaseSettings):
     # long-lived. Operator-tunable per deployment.
     executor_task_timeout_s: float = 1800.0
 
+    # PWA origin — the browser app at https://app.bsvibe.dev. The OAuth
+    # ``GET /api/oauth/authorize`` endpoint redirects the user agent to
+    # ``<pwa_url>/oauth/consent`` so the consent screen renders inside the
+    # PWA (where the Supabase session is reachable). Browser-driven OAuth
+    # flows cannot carry a Bearer header through a top-level navigation;
+    # hosting consent on the API origin would force every MCP client to
+    # die at the consent step. Local dev default mirrors the PWA dev port.
+    pwa_url: str = "http://localhost:3700"
+
     # CORS allow-list for the browser PWA calling the backend cross-origin.
     # ``Annotated[list[str], NoDecode]`` + a ``mode="before"`` validator opts
     # out of pydantic-settings' default JSON decode so a deployer can set

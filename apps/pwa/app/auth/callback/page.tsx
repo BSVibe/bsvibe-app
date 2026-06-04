@@ -23,7 +23,16 @@ export default function CallbackPage() {
     if (!code || ran.current) return;
     ran.current = true;
     completeOAuth(getPendingOAuthProvider(), code)
-      .then(() => router.replace("/brief"))
+      .then(() => {
+        // Honour the `return_to` the login page stashed before the
+        // social-provider hand-off so the OAuth consent flow lands back
+        // on the consent screen instead of /brief.
+        const target = readReturnTo();
+        if (typeof window !== "undefined") {
+          sessionStorage.removeItem("bsvibe.return_to");
+        }
+        router.replace(target);
+      })
       .catch(() => setFailed(true));
   }, [code, router]);
 
@@ -50,4 +59,15 @@ export default function CallbackPage() {
       </div>
     </main>
   );
+}
+
+/** Pull the same-origin `return_to` the login page stashed in sessionStorage
+ *  before the IdP round-trip. Rejects anything but a relative path so this
+ *  page can't be turned into an open redirector. */
+function readReturnTo(): string {
+  if (typeof window === "undefined") return "/brief";
+  const raw = sessionStorage.getItem("bsvibe.return_to");
+  if (!raw) return "/brief";
+  if (!raw.startsWith("/") || raw.startsWith("//")) return "/brief";
+  return raw;
 }

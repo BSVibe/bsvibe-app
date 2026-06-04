@@ -5,10 +5,24 @@ Public (unauthenticated) endpoints under ``/api/oauth/`` + the two
 :mod:`backend.api.main` directly, NOT under the JWT-gated v1 router,
 because the OAuth surface IS the authentication surface.
 
-The ``/authorize`` endpoint requires the founder's Supabase session via
-the existing :func:`backend.shared.authz.deps.get_current_user`
-dependency — this is the "user must be logged in to authorize a client"
-gate. ``/token`` is unauthenticated by design (clients send PKCE).
+The ``/authorize`` endpoint is split across two HTTP methods:
+
+* ``GET`` is **unauthenticated** — a browser top-level navigation cannot
+  carry an ``Authorization`` header, so requiring a Bearer here would
+  hard-break every OAuth-based MCP client (Claude Code, MCP Inspector,
+  IDE plugins). Instead it validates the OAuth params and 302-redirects
+  the user agent to the PWA-hosted consent page at
+  ``<pwa_url>/oauth/consent?<same query>``, where a real Supabase session
+  IS available to the React app.
+* ``POST`` stays **authenticated** — the PWA consent page calls it via
+  ``fetch`` with the Supabase Bearer attached, then JS navigates the
+  browser to the JSON response's ``redirect_to`` (a fetch can't follow a
+  302 cross-origin to the client's loopback redirect URI, hence the JSON
+  shape). For backwards compatibility with existing curl/tests, when
+  the request's ``Accept`` header lacks ``application/json`` the route
+  preserves the original 302 behaviour.
+
+``/token`` is unauthenticated by design (clients send PKCE).
 
 Two auth-gated endpoints live here too — they manage the founder's own
 OAuth clients (RFC 7591 §3 lets the AS gate DCR; we require founder
@@ -28,7 +42,7 @@ from urllib.parse import urlencode, urlsplit
 
 import structlog
 from fastapi import APIRouter, Depends, Form, HTTPException, Request, status
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -250,6 +264,20 @@ def _client_to_response(row: OAuthClientRow) -> ClientResponse:
 # Authorization endpoint
 # ---------------------------------------------------------------------------
 
+# Pre-validated OAuth params + the resolved client row. Carried from the GET
+# validator through the helper that builds the PWA-consent redirect URL, and
+# (in a separate code path) from the POST validator into the code-mint step.
+_AUTHORIZE_FORWARDED_PARAMS: tuple[str, ...] = (
+    "response_type",
+    "client_id",
+    "redirect_uri",
+    "scope",
+    "state",
+    "code_challenge",
+    "code_challenge_method",
+    "resource",
+)
+
 
 def _parse_scope(raw: str | None, allowed: list[str]) -> tuple[list[str], str | None]:
     """Split ``scope`` on whitespace and return (parsed, error-or-None).
@@ -268,9 +296,10 @@ def _parse_scope(raw: str | None, allowed: list[str]) -> tuple[list[str], str | 
     return parts, None
 
 
-def _redirect_with_error(
+def _redirect_to_client_with_error(
     redirect_uri: str, state: str | None, error: str, description: str
 ) -> RedirectResponse:
+    """RFC 6749 §4.1.2.1 — bounce a known-good ``redirect_uri`` an error."""
     params = {"error": error, "error_description": description}
     if state:
         params["state"] = state
@@ -281,23 +310,142 @@ def _redirect_with_error(
     )
 
 
-async def _authorize_impl(  # noqa: PLR0911, PLR0912 — OAuth state machine
-    request: Request,
-    user_row: UserRow,
-    workspace_id: uuid.UUID,
-    session: AsyncSession,
-) -> Any:
-    """RFC 6749 §3.1 authorization endpoint.
+def _client_bounce_url(redirect_uri: str, query: dict[str, str]) -> str:
+    sep = "&" if "?" in redirect_uri else "?"
+    return f"{redirect_uri}{sep}{urlencode(query)}"
 
-    GET renders the consent screen; POST commits the consent and 302's
-    back to the client's ``redirect_uri`` with a single-use code.
+
+def _pwa_consent_url(query: dict[str, str], *, error: str | None = None) -> str:
+    """Build the PWA-side consent URL: ``<pwa_url>/oauth/consent?<query>``.
+
+    When ``error`` is set, only the error params are forwarded — we never
+    leak a half-validated ``client_id`` into a PWA error UI. The user can
+    re-issue the flow from their MCP client.
     """
-    consenting_user_id = user_row.id
-    if request.method == "POST":
-        form = await request.form()
-        params = {k: v for k, v in form.multi_items() if isinstance(v, str)}
-    else:
-        params = dict(request.query_params)
+    pwa = get_settings().pwa_url.rstrip("/")
+    if error is not None:
+        return f"{pwa}/oauth/consent?{urlencode({'error': error, **query})}"
+    return f"{pwa}/oauth/consent?{urlencode(query)}"
+
+
+@public_router.get("/authorize", operation_id="oauth_authorize_get")
+async def authorize_get(  # noqa: PLR0911 — OAuth validator
+    request: Request,
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+) -> RedirectResponse:
+    """RFC 6749 §3.1 — authorization endpoint, GET (consent entry).
+
+    Unauthenticated by design. A browser top-level navigation cannot
+    carry an ``Authorization`` header, so this endpoint validates the
+    OAuth params and 302-redirects to the PWA-hosted consent page where
+    the Supabase session IS available. The POST handler below — which
+    the PWA calls via ``fetch`` after the founder clicks "Allow" — is
+    the one that mints the authorization code.
+
+    Errors:
+
+    * Bad / unknown ``client_id``, missing required param, or invalid
+      ``redirect_uri`` → 302 to ``<pwa>/oauth/consent?error=…`` so the
+      PWA renders a clean explanation instead of a raw JSON 400.
+    * After ``redirect_uri`` is known-good (registered for the client),
+      protocol-level errors (missing PKCE, bad scope) 302 back to the
+      client's redirect URI per RFC 6749 §4.1.2.1.
+    """
+    params = dict(request.query_params)
+    response_type = params.get("response_type")
+    client_id = params.get("client_id")
+    redirect_uri = params.get("redirect_uri")
+    scope = params.get("scope")
+    state = params.get("state")
+    code_challenge = params.get("code_challenge")
+    code_challenge_method = params.get("code_challenge_method")
+
+    if response_type != "code":
+        return RedirectResponse(
+            _pwa_consent_url({}, error="unsupported_response_type"),
+            status_code=302,
+        )
+    if not client_id:
+        return RedirectResponse(
+            _pwa_consent_url({}, error="invalid_request"),
+            status_code=302,
+        )
+    client = await lookup_client_by_client_id(session, client_id)
+    if client is None or client.revoked_at is not None:
+        return RedirectResponse(
+            _pwa_consent_url({}, error="invalid_client"),
+            status_code=302,
+        )
+    if not redirect_uri:
+        return RedirectResponse(
+            _pwa_consent_url({"client_id": client_id}, error="invalid_request"),
+            status_code=302,
+        )
+    if not match_redirect_uri(list(client.redirect_uris), redirect_uri):
+        return RedirectResponse(
+            _pwa_consent_url({"client_id": client_id}, error="invalid_request"),
+            status_code=302,
+        )
+    # Past this point we can safely 302 errors back to the client.
+    if not code_challenge:
+        return _redirect_to_client_with_error(
+            redirect_uri, state, "invalid_request", "code_challenge is required"
+        )
+    if code_challenge_method != "S256":
+        return _redirect_to_client_with_error(
+            redirect_uri,
+            state,
+            "invalid_request",
+            "code_challenge_method must be 'S256'",
+        )
+    _, scope_err = _parse_scope(scope, list(client.allowed_scopes))
+    if scope_err is not None:
+        return _redirect_to_client_with_error(redirect_uri, state, "invalid_scope", scope_err)
+
+    # All params valid — forward to PWA consent page. The PWA will fetch
+    # this client's metadata via /api/oauth/clients/by-client-id/{cid} and
+    # render the Allow/Deny UI, then POST back here with the Supabase
+    # bearer attached.
+    forwarded = {k: params[k] for k in _AUTHORIZE_FORWARDED_PARAMS if params.get(k)}
+    return RedirectResponse(_pwa_consent_url(forwarded), status_code=302)
+
+
+def _wants_json(request: Request) -> bool:
+    """True when the caller's ``Accept`` header lists ``application/json``.
+
+    The PWA fetches POST /authorize and needs a JSON ``{redirect_to}``
+    because a 302 cross-origin to a loopback port can't be followed by
+    the browser fetch. Legacy curl / form-POST callers — and the existing
+    test suite — keep the 302 behaviour.
+    """
+    accept = request.headers.get("accept", "")
+    return "application/json" in accept.lower()
+
+
+@public_router.post("/authorize", operation_id="oauth_authorize_post")
+async def authorize_post(  # noqa: PLR0911 — OAuth state machine
+    request: Request,
+    user: CurrentUser,
+    user_row: Annotated[UserRow, Depends(get_current_user_row)],
+    workspace_id: Annotated[uuid.UUID, Depends(get_workspace_id)],
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+) -> Any:
+    """RFC 6749 §3.1 — authorization endpoint, POST (consent commit).
+
+    Authenticated: the PWA consent page calls this with a Supabase
+    bearer + the original OAuth params + ``action=approve|deny``. On
+    approve we mint a single-use code; on deny we synthesise an
+    ``access_denied`` error per §4.1.2.1.
+
+    Response shape depends on the ``Accept`` header:
+
+    * ``application/json`` → 200 with ``{"redirect_to": "<client_uri>"}``
+      so a fetch can do ``window.location.href = redirect_to``.
+    * anything else → 302 to the same URL (legacy curl + existing tests).
+    """
+    del user
+    form = await request.form()
+    params = {k: v for k, v in form.multi_items() if isinstance(v, str)}
 
     response_type = params.get("response_type")
     client_id = params.get("client_id")
@@ -306,165 +454,125 @@ async def _authorize_impl(  # noqa: PLR0911, PLR0912 — OAuth state machine
     state = params.get("state")
     code_challenge = params.get("code_challenge")
     code_challenge_method = params.get("code_challenge_method")
-    action = params.get("action")  # POST only — "approve" or "deny"
+    action = params.get("action")
 
-    if response_type != "code":
-        return _consent_error(
-            "unsupported_response_type",
-            "response_type must be 'code'",
-        )
-    if not client_id:
-        return _consent_error("invalid_request", "client_id is required")
+    if response_type != "code" or not client_id:
+        return _OAuthError(400, "invalid_request", "missing or invalid OAuth params")
     client = await lookup_client_by_client_id(session, client_id)
     if client is None or client.revoked_at is not None:
-        return _consent_error("invalid_client", "unknown or revoked client")
-    if not redirect_uri:
-        return _consent_error("invalid_request", "redirect_uri is required")
-    if not match_redirect_uri(list(client.redirect_uris), redirect_uri):
-        return _consent_error("invalid_request", "redirect_uri is not registered for this client")
-    # Past this point we can safely 302 errors back to the client.
-    if not code_challenge:
-        return _redirect_with_error(
-            redirect_uri, state, "invalid_request", "code_challenge is required"
-        )
-    if code_challenge_method != "S256":
-        return _redirect_with_error(
-            redirect_uri,
-            state,
-            "invalid_request",
-            "code_challenge_method must be 'S256'",
+        return _OAuthError(400, "invalid_client", "unknown or revoked client")
+    if not redirect_uri or not match_redirect_uri(list(client.redirect_uris), redirect_uri):
+        return _OAuthError(400, "invalid_request", "redirect_uri is not registered")
+    if not code_challenge or code_challenge_method != "S256":
+        return _redirect_or_json(
+            request,
+            _redirect_to_client_with_error(
+                redirect_uri,
+                state,
+                "invalid_request",
+                "code_challenge / code_challenge_method missing or invalid",
+            ),
         )
     parsed_scope, scope_err = _parse_scope(scope, list(client.allowed_scopes))
     if scope_err is not None:
-        return _redirect_with_error(redirect_uri, state, "invalid_scope", scope_err)
-
-    # GET → render consent. POST without "approve"/"deny" → also render
-    # (defensive; the form always sends action).
-    if request.method == "GET" or action not in ("approve", "deny"):
-        return HTMLResponse(_render_consent(client, parsed_scope, params))
+        return _redirect_or_json(
+            request,
+            _redirect_to_client_with_error(redirect_uri, state, "invalid_scope", scope_err),
+        )
 
     if action == "deny":
-        return _redirect_with_error(redirect_uri, state, "access_denied", "user denied the request")
+        return _redirect_or_json(
+            request,
+            _redirect_to_client_with_error(
+                redirect_uri, state, "access_denied", "user denied the request"
+            ),
+        )
+    if action != "approve":
+        return _OAuthError(400, "invalid_request", "action must be 'approve' or 'deny'")
 
-    # Approve — mint code + 302 to client. The OAuth subject is the user
-    # who clicked "approve" (the consenting session user), NOT the client's
-    # registrar. For anonymous DCR clients `client.created_by_user_id` is
-    # NULL; even for founder-authed clients we want the live consent user.
+    # Approve — mint code. The OAuth subject is the consenting session user.
     code = await issue_authorization_code(
         session,
         client_id=client.client_id,
-        user_id=consenting_user_id,
+        user_id=user_row.id,
         workspace_id=workspace_id,
         scope=parsed_scope,
         redirect_uri=redirect_uri,
         code_challenge=code_challenge,
     )
     await session.commit()
-    sep = "&" if "?" in redirect_uri else "?"
-    bounce = {"code": code}
+    bounce: dict[str, str] = {"code": code}
     if state:
         bounce["state"] = state
-    return RedirectResponse(f"{redirect_uri}{sep}{urlencode(bounce)}", status_code=302)
-
-
-@public_router.get("/authorize", operation_id="oauth_authorize_get")
-async def authorize_get(
-    request: Request,
-    user: CurrentUser,
-    user_row: Annotated[UserRow, Depends(get_current_user_row)],
-    workspace_id: Annotated[uuid.UUID, Depends(get_workspace_id)],
-    session: Annotated[AsyncSession, Depends(get_db_session)],
-) -> Any:
-    del user
-    return await _authorize_impl(request, user_row, workspace_id, session)
-
-
-@public_router.post("/authorize", operation_id="oauth_authorize_post")
-async def authorize_post(
-    request: Request,
-    user: CurrentUser,
-    user_row: Annotated[UserRow, Depends(get_current_user_row)],
-    workspace_id: Annotated[uuid.UUID, Depends(get_workspace_id)],
-    session: Annotated[AsyncSession, Depends(get_db_session)],
-) -> Any:
-    del user
-    return await _authorize_impl(request, user_row, workspace_id, session)
-
-
-def _consent_error(error: str, description: str) -> HTMLResponse:
-    """Render an HTML error when redirect_uri isn't known-good yet."""
-    html = (
-        "<!doctype html><html><head><meta charset='utf-8'>"
-        "<title>OAuth error</title>"
-        "<style>body{font-family:system-ui,sans-serif;max-width:520px;"
-        "margin:48px auto;padding:0 16px}.code{font-family:ui-monospace,"
-        "Menlo,monospace;background:#f3f3f3;padding:.25rem .5rem;"
-        "border-radius:.25rem}</style></head><body>"
-        "<h1>OAuth error</h1>"
-        f"<p>error: <span class='code'>{_escape(error)}</span></p>"
-        f"<p>{_escape(description)}</p>"
-        "</body></html>"
-    )
-    return HTMLResponse(html, status_code=400)
-
-
-def _escape(s: str) -> str:
-    return (
-        s.replace("&", "&amp;")
-        .replace("<", "&lt;")
-        .replace(">", "&gt;")
-        .replace('"', "&quot;")
-        .replace("'", "&#39;")
+    return _redirect_or_json(
+        request,
+        RedirectResponse(_client_bounce_url(redirect_uri, bounce), status_code=302),
     )
 
 
-def _render_consent(client: OAuthClientRow, scope: list[str], params: dict[str, str]) -> str:
-    """Server-rendered consent HTML.
+def _redirect_or_json(request: Request, redirect: RedirectResponse) -> Any:
+    """Negotiate the response shape — JSON for fetch callers, 302 for the rest.
 
-    The POST form re-submits every preserved param so the same handler
-    can re-validate + commit.
+    The PWA consent page asks for JSON so it can do
+    ``window.location.href = redirect_to`` (a cross-origin fetch can't
+    follow a 302 to ``http://localhost:49921``). Curl + the legacy test
+    suite keep the original 302 behaviour.
     """
-    preserved = {
-        k: params[k]
-        for k in (
-            "response_type",
-            "client_id",
-            "redirect_uri",
-            "scope",
-            "state",
-            "code_challenge",
-            "code_challenge_method",
-        )
-        if params.get(k)
-    }
-    hidden = "\n".join(
-        f'<input type="hidden" name="{_escape(k)}" value="{_escape(v)}">'
-        for k, v in preserved.items()
-    )
-    scope_items = "".join(f"<li><code>{_escape(s)}</code></li>" for s in scope)
-    return (
-        "<!doctype html><html lang='en'><head><meta charset='utf-8'>"
-        f"<title>Authorize {_escape(client.client_name)}</title>"
-        "<style>body{font-family:system-ui,sans-serif;max-width:520px;"
-        "margin:48px auto;padding:0 16px;color:#111}h1{font-size:1.4rem}"
-        ".client{font-family:ui-monospace,Menlo,monospace;background:#f3f3f3;"
-        "padding:.25rem .5rem;border-radius:.25rem}ul{padding-left:1.25rem}"
-        ".actions{margin-top:1.5rem;display:flex;gap:.75rem}"
-        "button{padding:.5rem 1rem;border-radius:.375rem;border:1px solid "
-        "#cdcdcd;background:#fff;cursor:pointer;font-size:1rem}"
-        "button.approve{background:#0070f3;color:#fff;border-color:#0070f3}"
-        "</style></head><body>"
-        f"<h1>Authorize <span class='client'>{_escape(client.client_name)}</span></h1>"
-        "<p>This application is requesting access to your bsvibe-app account.</p>"
-        "<dl><dt><strong>Client ID</strong></dt>"
-        f"<dd><code>{_escape(client.client_id)}</code></dd>"
-        f"<dt><strong>Scopes</strong></dt><dd><ul>{scope_items}</ul></dd></dl>"
-        "<form method='POST' action='/api/oauth/authorize'>"
-        f"{hidden}"
-        "<div class='actions'>"
-        "<button type='submit' name='action' value='deny'>Deny</button>"
-        "<button type='submit' name='action' value='approve' class='approve'>"
-        "Approve</button></div></form></body></html>"
+    if _wants_json(request):
+        return JSONResponse({"redirect_to": redirect.headers["location"]})
+    return redirect
+
+
+# ---------------------------------------------------------------------------
+# Public client-info endpoint (powers the PWA consent screen)
+# ---------------------------------------------------------------------------
+
+
+class PublicClientResponse(BaseModel):
+    """Public-facing OAuth client metadata for the consent screen.
+
+    Intentionally a subset of :class:`ClientResponse` — no internal id,
+    no ``created_at``, no revoked timestamp. The client_id is already in
+    the URL the user is looking at, so exposing the human name + scope
+    set + registered redirect URIs leaks nothing the OAuth client itself
+    couldn't put on its own about page.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    client_id: str
+    client_name: str
+    client_type: str
+    redirect_uris: list[str]
+    allowed_scopes: list[str]
+
+
+@public_router.get(
+    "/clients/by-client-id/{client_id}",
+    response_model=PublicClientResponse,
+    operation_id="oauth_public_client_lookup",
+)
+async def lookup_public_client(
+    client_id: str,
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+) -> PublicClientResponse:
+    """Return public client metadata so the PWA consent page can render
+    "Allow {client_name}…".
+
+    Unauthenticated by design — the ``client_id`` is already visible in
+    the user-facing URL, and the returned data is what the OAuth client
+    itself would advertise. Revoked + unknown both 404 (don't disclose
+    that a row exists in a soft-revoked state).
+    """
+    row = await lookup_client_by_client_id(session, client_id)
+    if row is None or row.revoked_at is not None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="unknown client")
+    return PublicClientResponse(
+        client_id=row.client_id,
+        client_name=row.client_name,
+        client_type=row.client_type,
+        redirect_uris=list(row.redirect_uris),
+        allowed_scopes=list(row.allowed_scopes),
     )
 
 
@@ -865,6 +973,7 @@ __all__ = [
     "ACCESS_TOKEN_AUDIENCE",
     "ALLOWED_SCOPES",
     "DEFAULT_SCOPE",
+    "PublicClientResponse",
     "metadata_router",
     "public_router",
     "v1_router",

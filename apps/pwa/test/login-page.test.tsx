@@ -13,9 +13,11 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const replace = vi.fn();
+let searchParams = new URLSearchParams();
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ replace, push: vi.fn(), prefetch: vi.fn() }),
   usePathname: () => "/login",
+  useSearchParams: () => searchParams,
 }));
 
 const login = vi.fn();
@@ -28,6 +30,7 @@ vi.mock("@/lib/api/auth", () => ({
 describe("LoginPage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    searchParams = new URLSearchParams();
   });
 
   afterEach(() => {
@@ -76,6 +79,32 @@ describe("LoginPage", () => {
     fireEvent.click(screen.getByRole("button", { name: "Continue" }));
 
     await waitFor(() => expect(login).toHaveBeenCalledWith("founder@bsvibe.dev", "pw"));
+    await waitFor(() => expect(replace).toHaveBeenCalledWith("/brief"));
+  });
+
+  it("routes to ?return_to= on success when one is provided", async () => {
+    // The OAuth consent page bounces unauthenticated visitors here with
+    // a return_to that lands them back on the consent screen.
+    searchParams = new URLSearchParams(
+      "return_to=" + encodeURIComponent("/oauth/consent?client_id=dcr-abc"),
+    );
+    login.mockResolvedValue(undefined);
+    render(<LoginPage />);
+    await userEvent.type(screen.getByLabelText("Email"), "founder@bsvibe.dev");
+    await userEvent.type(screen.getByLabelText("Password"), "pw");
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    await waitFor(() =>
+      expect(replace).toHaveBeenCalledWith("/oauth/consent?client_id=dcr-abc"),
+    );
+  });
+
+  it("rejects an external return_to to prevent open redirect", async () => {
+    searchParams = new URLSearchParams("return_to=https://evil.com/steal");
+    login.mockResolvedValue(undefined);
+    render(<LoginPage />);
+    await userEvent.type(screen.getByLabelText("Email"), "founder@bsvibe.dev");
+    await userEvent.type(screen.getByLabelText("Password"), "pw");
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
     await waitFor(() => expect(replace).toHaveBeenCalledWith("/brief"));
   });
 
