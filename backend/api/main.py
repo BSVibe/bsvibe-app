@@ -13,8 +13,9 @@ from typing import Any
 
 import redis.asyncio as redis_aio
 import structlog
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.responses import RedirectResponse
 from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
 from backend.api.auth import router as auth_router
@@ -150,6 +151,20 @@ def create_app() -> FastAPI:
         await asgi(scope, receive, send)
 
     app.mount("/mcp", _mcp_entrypoint)
+
+    # Starlette ``app.mount("/mcp", ...)`` matches the trailing-slash form
+    # (``/mcp/``) but NOT a request to the bare ``/mcp`` — it 404s.
+    # FastAPI ``redirect_slashes=False`` (Lift D2 followup) means no auto
+    # redirect from ``/mcp`` to ``/mcp/`` either. Add an explicit redirect
+    # so MCP clients that construct the no-slash URL (Claude Code, manual
+    # curl smoke-tests) still reach the transport. 307 preserves both the
+    # request body and the HTTP method, and `ProxyHeadersMiddleware` makes
+    # the `Location` header an ``https://`` URL.
+    @app.api_route("/mcp", methods=["GET", "POST", "HEAD"], include_in_schema=False)
+    async def _mcp_no_slash_redirect(request: Request) -> RedirectResponse:
+        query = request.url.query
+        target = "/mcp/" + (f"?{query}" if query else "")
+        return RedirectResponse(url=target, status_code=307)
 
     # C2 — bind the LiveEventBus singleton to the configured Redis transport
     # so SSE subscribers in THIS container see publishes from the worker
