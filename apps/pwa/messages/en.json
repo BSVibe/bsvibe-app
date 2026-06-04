@@ -33,6 +33,27 @@
     "completingSignIn": "Completing sign-in…",
     "oauthCallbackError": "Sign-in couldn’t be completed. Please try again."
   },
+  "oauthConsent": {
+    "title": "Allow {clientName} to access BSVibe?",
+    "subtitle": "Review what this application is asking for before approving.",
+    "scopesLabel": "Requested permissions",
+    "scopesHeading": "Permissions",
+    "scopeReadDesc": "Read your products, runs, and knowledge.",
+    "scopeWriteDesc": "Create direct messages and approve Safe Mode actions.",
+    "scopeAdminDesc": "Manage workspace settings and billing.",
+    "scopeUnknownDesc": "Permission requested by the application.",
+    "allow": "Allow",
+    "deny": "Cancel",
+    "allowing": "Allowing…",
+    "denying": "Cancelling…",
+    "loading": "Loading…",
+    "errorTitle": "We couldn’t open this consent screen",
+    "errorUnknownClient": "We don’t recognise this application. Ask the developer to re-register it.",
+    "errorInvalidRequest": "The sign-in link is missing required information. Try again from the app that sent you here.",
+    "errorLoadFailed": "Something went wrong loading the consent screen. Try again.",
+    "errorSubmitFailed": "We couldn’t record your decision. Please try again.",
+    "backHome": "Back to BSVibe"
+  },
   "nav": {
     "brief": "Brief",
     "decisions": "Decisions",

@@ -7542,3 +7542,61 @@ main.login {
   color: var(--amber-ink);
 }
 /* ── END Lift M4b block ───────────────────────────────────────────────── */
+
+/* ── OAuth consent (PWA-hosted Allow/Deny screen, hotfix-oauth-pwa-consent) ── */
+
+.oauth-consent__scopes {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.85rem 0.95rem;
+  border: 1px solid var(--hair);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+
+.oauth-consent__scopes-title {
+  margin: 0;
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--ink-3);
+}
+
+.oauth-consent__scope-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.oauth-consent__scope-item {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.oauth-consent__scope-name {
+  font-size: 0.78rem;
+  font-family: ui-monospace, Menlo, monospace;
+  color: var(--ink-2);
+}
+
+.oauth-consent__scope-desc {
+  font-size: 0.85rem;
+  color: var(--ink-1, inherit);
+}
+
+.oauth-consent__actions {
+  display: flex;
+  gap: 0.6rem;
+}
+
+.oauth-consent__actions > button {
+  flex: 1 1 0;
+  margin-top: 0;
+}
+/* ── END OAuth consent block ──────────────────────────────────────────── */

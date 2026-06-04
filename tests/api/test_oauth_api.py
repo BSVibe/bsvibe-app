@@ -395,7 +395,13 @@ async def _register(client: httpx.AsyncClient) -> dict:
     return r.json()
 
 
-async def test_authorize_get_renders_consent(client: httpx.AsyncClient) -> None:
+async def test_authorize_get_redirects_to_pwa_consent(client: httpx.AsyncClient) -> None:
+    """A valid GET /authorize 302s to the PWA-hosted consent page.
+
+    Browser top-level navigations can't carry a Bearer header, so the
+    consent screen lives in the PWA (where the Supabase session is
+    reachable). This endpoint is auth-free + just a redirector.
+    """
     reg = await _register(client)
     r = await client.get(
         "/api/oauth/authorize",
@@ -408,13 +414,25 @@ async def test_authorize_get_renders_consent(client: httpx.AsyncClient) -> None:
             "code_challenge": CHALLENGE,
             "code_challenge_method": "S256",
         },
+        follow_redirects=False,
     )
-    assert r.status_code == 200
-    assert "Authorize" in r.text
-    assert "mcp:read" in r.text
+    assert r.status_code == 302
+    location = r.headers["location"]
+    # In tests BSVIBE_PWA_URL is unset → default ``http://localhost:3700``.
+    assert location.startswith("http://localhost:3700/oauth/consent?")
+    assert f"client_id={reg['client_id']}" in location
+    assert "scope=mcp%3Aread" in location
+    assert "state=xyz" in location
+    assert f"code_challenge={CHALLENGE}" in location
 
 
-async def test_authorize_unknown_client(client: httpx.AsyncClient) -> None:
+async def test_authorize_unknown_client_redirects_to_consent_with_error(
+    client: httpx.AsyncClient,
+) -> None:
+    """Unknown client_id → 302 to PWA consent with ``?error=invalid_client``.
+
+    The PWA renders a clean "unknown client" UI instead of a JSON 400.
+    """
     r = await client.get(
         "/api/oauth/authorize",
         params={
@@ -424,9 +442,38 @@ async def test_authorize_unknown_client(client: httpx.AsyncClient) -> None:
             "code_challenge": CHALLENGE,
             "code_challenge_method": "S256",
         },
+        follow_redirects=False,
     )
-    assert r.status_code == 400
-    assert "OAuth error" in r.text
+    assert r.status_code == 302
+    location = r.headers["location"]
+    assert location.startswith("http://localhost:3700/oauth/consent?")
+    assert "error=invalid_client" in location
+
+
+async def test_authorize_get_is_auth_free(client: httpx.AsyncClient) -> None:
+    """No Bearer + no test dependency_overrides: GET /authorize still 302s.
+
+    The browser navigation that opens this endpoint cannot carry an
+    Authorization header — that's the whole reason this lift exists.
+    Validates the endpoint never trips a 401/403 path.
+    """
+    reg = await _register(client)
+    # Build a NEW transport with NO test-fixture session bearer attached,
+    # mirroring what an actual browser navigation produces.
+    r = await client.get(
+        "/api/oauth/authorize",
+        params={
+            "response_type": "code",
+            "client_id": reg["client_id"],
+            "redirect_uri": "http://127.0.0.1:54321/callback",
+            "code_challenge": CHALLENGE,
+            "code_challenge_method": "S256",
+        },
+        headers={"authorization": ""},  # explicitly drop any harness Authorization
+        follow_redirects=False,
+    )
+    assert r.status_code == 302
+    assert r.headers["location"].startswith("http://localhost:3700/oauth/consent?")
 
 
 async def test_authorize_post_approve_redirects_with_code(
@@ -618,7 +665,8 @@ async def test_authorize_redirect_uri_loopback_port_flex(
     client: httpx.AsyncClient,
 ) -> None:
     """RFC 8252 §7.3 — registered ``http://127.0.0.1/cb`` matches request
-    URI ``http://127.0.0.1:54321/cb``."""
+    URI ``http://127.0.0.1:54321/cb``. Validates by reaching the PWA
+    consent redirect (vs the ``invalid_request`` error path)."""
     reg = await _register(client)
     r = await client.get(
         "/api/oauth/authorize",
@@ -629,13 +677,23 @@ async def test_authorize_redirect_uri_loopback_port_flex(
             "code_challenge": CHALLENGE,
             "code_challenge_method": "S256",
         },
+        follow_redirects=False,
     )
-    assert r.status_code == 200
+    assert r.status_code == 302
+    location = r.headers["location"]
+    assert location.startswith("http://localhost:3700/oauth/consent?")
+    assert "error=" not in location
 
 
 async def test_authorize_rejects_non_loopback_http(
     client: httpx.AsyncClient,
 ) -> None:
+    """Unknown redirect_uri → 302 back to PWA consent with ``?error=…``.
+
+    Same pattern as ``test_authorize_unknown_client_redirects_to_consent_with_error``
+    — we never bounce a request to an unverified redirect_uri (would be
+    an open redirect), so the PWA renders the error.
+    """
     reg = await _register(client)
     r = await client.get(
         "/api/oauth/authorize",
@@ -646,8 +704,12 @@ async def test_authorize_rejects_non_loopback_http(
             "code_challenge": CHALLENGE,
             "code_challenge_method": "S256",
         },
+        follow_redirects=False,
     )
-    assert r.status_code == 400
+    assert r.status_code == 302
+    location = r.headers["location"]
+    assert location.startswith("http://localhost:3700/oauth/consent?")
+    assert "error=invalid_request" in location
 
 
 async def test_authorize_requires_pkce(client: httpx.AsyncClient) -> None:
@@ -673,3 +735,120 @@ async def test_unsupported_grant_type(client: httpx.AsyncClient) -> None:
     )
     assert r.status_code == 400
     assert r.json()["error"] == "unsupported_grant_type"
+
+
+# ---------------------------------------------------------------------------
+# POST /authorize JSON shape — PWA consent fetch
+# ---------------------------------------------------------------------------
+
+
+async def test_authorize_post_json_approve_returns_redirect_to(
+    client: httpx.AsyncClient,
+) -> None:
+    """PWA-style POST (``Accept: application/json``) returns JSON, not 302.
+
+    A cross-origin browser ``fetch`` to the API origin can't follow a
+    302 to ``http://localhost:49921/callback`` — the JS has to do
+    ``window.location.href = response.redirect_to``. Hence this shape.
+    """
+    reg = await _register(client)
+    r = await client.post(
+        "/api/oauth/authorize",
+        headers={"accept": "application/json"},
+        data={
+            "response_type": "code",
+            "client_id": reg["client_id"],
+            "redirect_uri": "http://127.0.0.1:54321/callback",
+            "scope": "mcp:read",
+            "state": "xyz",
+            "code_challenge": CHALLENGE,
+            "code_challenge_method": "S256",
+            "action": "approve",
+        },
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert set(body) == {"redirect_to"}
+    assert body["redirect_to"].startswith("http://127.0.0.1:54321/callback")
+    assert "code=" in body["redirect_to"]
+    assert "state=xyz" in body["redirect_to"]
+
+
+async def test_authorize_post_json_deny_returns_access_denied(
+    client: httpx.AsyncClient,
+) -> None:
+    """``action=deny`` + JSON-Accept returns the access_denied bounce URL."""
+    reg = await _register(client)
+    r = await client.post(
+        "/api/oauth/authorize",
+        headers={"accept": "application/json"},
+        data={
+            "response_type": "code",
+            "client_id": reg["client_id"],
+            "redirect_uri": "http://127.0.0.1:54321/callback",
+            "scope": "mcp:read",
+            "state": "xyz",
+            "code_challenge": CHALLENGE,
+            "code_challenge_method": "S256",
+            "action": "deny",
+        },
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert "error=access_denied" in body["redirect_to"]
+    assert "state=xyz" in body["redirect_to"]
+
+
+async def test_authorize_post_unknown_action_400(client: httpx.AsyncClient) -> None:
+    """An action other than approve/deny is a hard 400 (programmer error)."""
+    reg = await _register(client)
+    r = await client.post(
+        "/api/oauth/authorize",
+        data={
+            "response_type": "code",
+            "client_id": reg["client_id"],
+            "redirect_uri": "http://127.0.0.1:54321/callback",
+            "scope": "mcp:read",
+            "code_challenge": CHALLENGE,
+            "code_challenge_method": "S256",
+            "action": "nope",
+        },
+    )
+    assert r.status_code == 400
+
+
+# ---------------------------------------------------------------------------
+# GET /api/oauth/clients/by-client-id/{client_id} — PWA consent fetch
+# ---------------------------------------------------------------------------
+
+
+async def test_public_client_lookup_returns_metadata(client: httpx.AsyncClient) -> None:
+    """The PWA consent page fetches this to render "Allow {name}…"."""
+    reg = await _register(client)
+    r = await client.get(f"/api/oauth/clients/by-client-id/{reg['client_id']}")
+    assert r.status_code == 200
+    body = r.json()
+    assert body == {
+        "client_id": reg["client_id"],
+        "client_name": "Claude Code",
+        "client_type": "public",
+        "redirect_uris": ["http://127.0.0.1/callback"],
+        "allowed_scopes": ["mcp:read", "mcp:write"],
+    }
+
+
+async def test_public_client_lookup_unknown_returns_404(
+    client: httpx.AsyncClient,
+) -> None:
+    r = await client.get("/api/oauth/clients/by-client-id/dcr-nope")
+    assert r.status_code == 404
+
+
+async def test_public_client_lookup_revoked_returns_404(
+    client: httpx.AsyncClient,
+) -> None:
+    """A revoked client is hidden — don't disclose it sat in a soft state."""
+    reg = await _register(client)
+    await client.delete(f"/api/v1/oauth/clients/{reg['client_id']}")
+    r = await client.get(f"/api/oauth/clients/by-client-id/{reg['client_id']}")
+    assert r.status_code == 404

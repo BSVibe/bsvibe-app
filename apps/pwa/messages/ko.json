@@ -33,6 +33,27 @@
     "completingSignIn": "로그인 완료 중…",
     "oauthCallbackError": "로그인을 완료하지 못했어요. 다시 시도해 주세요."
   },
+  "oauthConsent": {
+    "title": "{clientName}에 BSVibe 접근을 허용할까요?",
+    "subtitle": "허용 전에 이 앱이 요청하는 권한을 확인하세요.",
+    "scopesLabel": "요청한 권한",
+    "scopesHeading": "권한",
+    "scopeReadDesc": "제품·실행·지식을 읽어요.",
+    "scopeWriteDesc": "다이렉트 메시지 작성과 Safe Mode 승인을 해요.",
+    "scopeAdminDesc": "워크스페이스 설정과 결제를 관리해요.",
+    "scopeUnknownDesc": "앱이 요청한 권한이에요.",
+    "allow": "허용",
+    "deny": "취소",
+    "allowing": "허용 중…",
+    "denying": "취소 중…",
+    "loading": "불러오는 중…",
+    "errorTitle": "동의 화면을 열지 못했어요",
+    "errorUnknownClient": "이 앱을 인식하지 못했어요. 개발자에게 다시 등록을 요청하세요.",
+    "errorInvalidRequest": "로그인 링크에 필요한 정보가 빠졌어요. 보내준 앱에서 다시 시도해 주세요.",
+    "errorLoadFailed": "동의 화면을 불러오는 중 문제가 생겼어요. 다시 시도해 주세요.",
+    "errorSubmitFailed": "결정을 기록하지 못했어요. 다시 시도해 주세요.",
+    "backHome": "BSVibe로 돌아가기"
+  },
   "nav": {
     "brief": "요약",
     "decisions": "결정",

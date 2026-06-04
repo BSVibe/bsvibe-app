@@ -4,16 +4,21 @@ import { AuthBrand } from "@/components/auth/AuthBrand";
 import { type OAuthProvider, login, startOAuth } from "@/lib/api/auth";
 import { useTranslations } from "next-intl";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { type FormEvent, useEffect, useState } from "react";
 
 /** Sign in against the REAL backend. Email+password → `/api/auth/login`;
  *  social → `/api/auth/oauth/{provider}/authorize` (PKCE start, then the
- *  provider returns to `/auth/callback`). On success we land on /brief.
- *  Notion-craft centered card (UX §5): light surface, hairline card, social
- *  first, color reserved for the error line only. */
+ *  provider returns to `/auth/callback`). On success we land on `/brief`
+ *  by default — or on the `?return_to=…` URL when one is present (the
+ *  OAuth consent page bounces here with one so the user lands back on
+ *  the consent screen after sign-in).
+ *
+ *  Notion-craft centered card (UX §5): light surface, hairline card,
+ *  social first, color reserved for the error line only. */
 export default function LoginPage() {
   const router = useRouter();
+  const params = useSearchParams();
   const t = useTranslations("auth");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -24,13 +29,30 @@ export default function LoginPage() {
 
   const disabled = busy || oauthBusy !== null;
 
-  // Warm the /brief route (its chunk + RSC payload) while the founder is still
-  // typing credentials, so the post-sign-in router.replace("/brief") paints
+  // Resolve the post-sign-in destination. We accept ONLY same-origin paths
+  // (starting with `/`) so a crafted `?return_to=https://evil.com` can't
+  // turn /login into an open redirector.
+  const returnTo = safeReturnTo(params.get("return_to")) ?? "/brief";
+
+  // Warm the destination route (its chunk + RSC payload) while the founder
+  // is still typing credentials, so the post-sign-in router.replace paints
   // from cache instead of fetching on the critical path. Pairs with the
   // backend <link rel="preconnect"> (PR #170): connection warm + route warm.
   useEffect(() => {
-    router.prefetch("/brief");
-  }, [router]);
+    router.prefetch(returnTo);
+  }, [router, returnTo]);
+
+  // Persist `return_to` across the social-provider round trip. `startOAuth`
+  // hands the browser off to the IdP, which sends the user back to
+  // `/auth/callback` — that page reads this key + redirects there.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (returnTo === "/brief") {
+      sessionStorage.removeItem("bsvibe.return_to");
+    } else {
+      sessionStorage.setItem("bsvibe.return_to", returnTo);
+    }
+  }, [returnTo]);
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -38,7 +60,7 @@ export default function LoginPage() {
     setBusy(true);
     try {
       await login(email, password);
-      router.replace("/brief");
+      router.replace(returnTo);
     } catch {
       setError(t("signInError"));
       setBusy(false);
@@ -151,6 +173,17 @@ export default function LoginPage() {
       </div>
     </main>
   );
+}
+
+/** Reject anything other than a same-origin path. A `?return_to=…` value
+ *  that's not a relative path beginning with `/` (and not `//…` — the
+ *  protocol-relative shape that would land cross-origin) is dropped so
+ *  /login can't be turned into an open redirector. */
+function safeReturnTo(raw: string | null): string | null {
+  if (!raw) return null;
+  if (!raw.startsWith("/")) return null;
+  if (raw.startsWith("//")) return null;
+  return raw;
 }
 
 function GoogleIcon() {
