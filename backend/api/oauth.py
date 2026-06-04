@@ -191,13 +191,30 @@ class AnonymousClientCreateRequest(BaseModel):
     Tight constraints (vs the founder-authed v1 schema): max 100-char
     name, max 4 redirect URIs, **loopback-only** redirect_uris. PKCE is
     already enforced everywhere downstream.
+
+    Accepts the full RFC 7591 §2 client-metadata vocabulary so spec-
+    compliant SDKs (Claude Code, MCP Inspector, etc.) register without
+    a 422. Fields not represented on our row are validated against
+    server capabilities and then dropped — accepting them silently is
+    the path RFC 7591 expects when the AS doesn't surface them in the
+    response.
     """
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
     client_name: str = Field(min_length=1, max_length=100)
     redirect_uris: list[str] = Field(min_length=1, max_length=4)
+    # Accept either the BSVibe-native `allowed_scopes` list or RFC 7591's
+    # `scope` (space-separated string). The endpoint normalises both into
+    # the row's scope list.
     allowed_scopes: list[str] | None = None
+    scope: str | None = None
+    # RFC 7591 §2 standard fields we validate against server capability.
+    # We do NOT echo these back; the metadata document already tells the
+    # client what the server supports.
+    grant_types: list[str] | None = None
+    response_types: list[str] | None = None
+    token_endpoint_auth_method: str | None = None
 
 
 class AnonymousClientResponse(BaseModel):
@@ -594,7 +611,7 @@ async def revoke(
     response_model=AnonymousClientResponse,
     status_code=status.HTTP_201_CREATED,
 )
-async def register_client_anonymous(
+async def register_client_anonymous(  # noqa: PLR0912 — RFC 7591 §2 capability matrix
     request: Request,
     payload: AnonymousClientCreateRequest,
     session: Annotated[AsyncSession, Depends(get_db_session)],
@@ -631,14 +648,44 @@ async def register_client_anonymous(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail=(f"redirect_uri must be http://127.0.0.1 or http://localhost (got {u})"),
             )
-    # Scope subset check.
-    scopes = payload.allowed_scopes or [DEFAULT_SCOPE]
+    # Scope subset check — accept BOTH ``allowed_scopes`` (BSVibe-native
+    # list) and RFC 7591 ``scope`` (space-separated string). Latter wins
+    # if both present.
+    scope_list: list[str] | None = payload.allowed_scopes
+    if payload.scope is not None:
+        scope_list = [s for s in payload.scope.split() if s]
+    scopes = scope_list or [DEFAULT_SCOPE]
     for s in scopes:
         if s not in ALLOWED_SCOPES:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail=f"unknown scope: {s}",
             )
+    # RFC 7591 §2 capability checks — fail loudly if the client asks for
+    # something we don't support (better than silently registering a
+    # client that won't be able to use the AS).
+    if payload.grant_types is not None:
+        for g in payload.grant_types:
+            if g not in ("authorization_code", "refresh_token"):
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail=f"unsupported grant_type: {g}",
+                )
+    if payload.response_types is not None:
+        for r in payload.response_types:
+            if r != "code":
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail=f"unsupported response_type: {r}",
+                )
+    if payload.token_endpoint_auth_method not in (None, "none"):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                f"unsupported token_endpoint_auth_method: "
+                f"{payload.token_endpoint_auth_method} (only 'none' = PKCE-public)"
+            ),
+        )
     # Rate limit AFTER input validation. ``_anon_dcr_rate_check`` mutates
     # the bucket on success only.
     if not _anon_dcr_rate_check(ip):

@@ -305,6 +305,55 @@ async def test_anon_register_rejects_unknown_scope(client: httpx.AsyncClient) ->
     assert r.status_code == 422
 
 
+async def test_anon_register_accepts_rfc7591_full_metadata(
+    client: httpx.AsyncClient,
+) -> None:
+    """Claude Code / MCP Inspector send the full RFC 7591 §2 vocabulary."""
+    r = await client.post(
+        "/api/oauth/register",
+        json={
+            "client_name": "Claude Code",
+            "redirect_uris": ["http://127.0.0.1:54321/callback"],
+            "grant_types": ["authorization_code", "refresh_token"],
+            "response_types": ["code"],
+            "token_endpoint_auth_method": "none",
+            "scope": "mcp:read mcp:write",
+        },
+    )
+    assert r.status_code == 201, r.text
+    body = r.json()
+    assert body["client_id"].startswith("dcr-")
+    assert sorted(body["allowed_scopes"]) == ["mcp:read", "mcp:write"]
+
+
+async def test_anon_register_rejects_unsupported_grant_type(
+    client: httpx.AsyncClient,
+) -> None:
+    r = await client.post(
+        "/api/oauth/register",
+        json={
+            "client_name": "x",
+            "redirect_uris": ["http://127.0.0.1/cb"],
+            "grant_types": ["client_credentials"],
+        },
+    )
+    assert r.status_code == 422
+
+
+async def test_anon_register_rejects_token_endpoint_auth_method_other_than_none(
+    client: httpx.AsyncClient,
+) -> None:
+    r = await client.post(
+        "/api/oauth/register",
+        json={
+            "client_name": "x",
+            "redirect_uris": ["http://127.0.0.1/cb"],
+            "token_endpoint_auth_method": "client_secret_basic",
+        },
+    )
+    assert r.status_code == 422
+
+
 async def test_anon_register_rate_limit_kicks_in(client: httpx.AsyncClient) -> None:
     body = {
         "client_name": "burst",
