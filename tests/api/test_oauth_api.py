@@ -219,6 +219,28 @@ async def test_register_client_rejects_unknown_scope(
 
 
 # ---------------------------------------------------------------------------
+# MCP no-slash redirect — Lift D2 hotfix
+# ---------------------------------------------------------------------------
+
+
+async def test_mcp_no_slash_redirects_to_trailing_slash(
+    client: httpx.AsyncClient,
+) -> None:
+    # 307 preserves method + body so the MCP transport eventually handles it.
+    r = await client.post("/mcp", follow_redirects=False)
+    assert r.status_code == 307
+    assert r.headers["location"] == "/mcp/"
+
+
+async def test_mcp_no_slash_preserves_query_string(
+    client: httpx.AsyncClient,
+) -> None:
+    r = await client.get("/mcp?token=foo", follow_redirects=False)
+    assert r.status_code == 307
+    assert r.headers["location"] == "/mcp/?token=foo"
+
+
+# ---------------------------------------------------------------------------
 # Anonymous DCR (RFC 7591 §3 open) — Lift D2 followup
 # ---------------------------------------------------------------------------
 
