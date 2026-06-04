@@ -68,7 +68,7 @@ async def fastapi_client(db) -> AsyncIterator[httpx.AsyncClient]:
 
 
 async def test_metadata_resource_url_uses_top_level_mcp(fastapi_client) -> None:
-    r = await fastapi_client.get("/api/.well-known/oauth-protected-resource")
+    r = await fastapi_client.get("/.well-known/oauth-protected-resource")
     assert r.status_code == 200
     body = r.json()
     # D2 mounted MCP at /mcp (NOT /api/mcp) — Claude Code parses this URL

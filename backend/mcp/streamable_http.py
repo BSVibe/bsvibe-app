@@ -34,7 +34,7 @@ logger = structlog.get_logger(__name__)
 # ---------------------------------------------------------------------------
 def _www_authenticate(issuer: str, error: str | None = None) -> str:
     """Build the ``WWW-Authenticate: Bearer ...`` header value."""
-    metadata_url = f"{issuer.rstrip('/')}/api/.well-known/oauth-protected-resource"
+    metadata_url = f"{issuer.rstrip('/')}/.well-known/oauth-protected-resource"
     parts = [f'Bearer resource_metadata="{metadata_url}"']
     if error is not None:
         parts.append(f'error="{error}"')

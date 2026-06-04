@@ -111,10 +111,16 @@ def create_app() -> FastAPI:
     # OAuth surface (mounted under /api, NOT v1, since the OAuth flow is
     # itself the authentication surface). ``/api/v1/oauth/clients`` is
     # the founder-facing DCR management UI surface — Supabase-JWT
-    # authed via the v1 router. The two ``/.well-known/`` metadata
-    # documents + JWKS hang off the root /api prefix.
+    # authed via the v1 router.
     app.include_router(oauth_public_router, prefix="/api")
-    app.include_router(oauth_metadata_router, prefix="/api")
+    # RFC 8414 §3 — the AS metadata document MUST be served at
+    # ``<issuer>/.well-known/oauth-authorization-server``. Our issuer is
+    # ``https://api.bsvibe.dev`` (no ``/api`` suffix), so the well-known
+    # routes mount at root, NOT under ``/api``. Mounting under ``/api``
+    # makes Claude Code / other strict MCP clients 404 during OAuth
+    # discovery — the SDK chokes on FastAPI's ``{"detail":"Not Found"}``
+    # body that lacks the OAuth ``error`` field.
+    app.include_router(oauth_metadata_router)
     # SSE live-events stream (B16) — query-param token auth because the
     # browser EventSource cannot send Authorization headers
     # (eventsource-sse-auth-trap). Mounted OUTSIDE the auth-gated v1 router
