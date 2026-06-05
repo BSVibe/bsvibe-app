@@ -73,7 +73,9 @@ export default function LoginPage() {
     try {
       // On success this navigates away (window.location), so we never reset
       // oauthBusy on the happy path — the page is unmounting.
-      await startOAuth(provider);
+      // Pass return_to to startOAuth so it embeds in the callback URL —
+      // surviving the IdP round-trip without relying on sessionStorage.
+      await startOAuth(provider, returnTo === "/brief" ? undefined : returnTo);
     } catch {
       setError(t("oauthError"));
       setOauthBusy(null);

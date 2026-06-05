@@ -75,18 +75,28 @@ async function challengeFor(verifier: string): Promise<string> {
  *  ask the backend for the GoTrue authorize URL with the matching challenge,
  *  then hand the browser off to it. The provider sends the user back to
  *  `/auth/callback?code=…`, where `completeOAuth` finishes the exchange. */
-export async function startOAuth(provider: OAuthProvider): Promise<void> {
+export async function startOAuth(provider: OAuthProvider, returnTo?: string): Promise<void> {
   const verifier = randomVerifier();
   sessionStorage.setItem(PKCE_VERIFIER_KEY, verifier);
   sessionStorage.setItem(PKCE_PROVIDER_KEY, provider);
   const codeChallenge = await challengeFor(verifier);
+  // Encode return_to into the redirect_to URL so the callback can recover
+  // it from URL params — Supabase OAuth round-trip is not guaranteed to
+  // preserve sessionStorage across the IdP redirect chain in all
+  // browsers / privacy modes, and we hit a real-world regression where
+  // the founder landed on /brief after Google sign-in because the key
+  // was missing post-redirect.
+  const callbackUrl = new URL(`${window.location.origin}/auth/callback`);
+  if (returnTo) {
+    callbackUrl.searchParams.set("return_to", returnTo);
+  }
   const { authorize_url } = await apiFetch<{ authorize_url: string }>(
     `/api/auth/oauth/${provider}/authorize`,
     {
       method: "POST",
       body: JSON.stringify({
         code_challenge: codeChallenge,
-        redirect_to: `${window.location.origin}/auth/callback`,
+        redirect_to: callbackUrl.toString(),
       }),
     },
   );
