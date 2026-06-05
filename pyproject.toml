@@ -275,5 +275,14 @@ ignore_imports = [
     # the REST surface uses); the contract still bounds every other backend.mcp
     # module from those subtrees.
     "backend.mcp.tools.connectors_tools -> backend.workflow.application.delivery.connector_dispatch",
+    # Lift D3b — UI-parity workflow tools (bindings / decisions / routing
+    # rules). Same pattern as D3a: each new tool module calls the SAME repo /
+    # service primitives the REST surface uses so MCP and PWA paths stay one
+    # canonical mutation chain.
+    "backend.mcp.tools.bindings_tools -> backend.connectors.db",
+    "backend.mcp.tools.routing_rules_tools -> backend.router.accounts.account_service",
+    "backend.mcp.tools.routing_rules_tools -> backend.router.rules.conditions",
+    "backend.mcp.tools.routing_rules_tools -> backend.router.rules.db",
+    "backend.mcp.tools.routing_rules_tools -> backend.router.rules.repository",
 ]
 
