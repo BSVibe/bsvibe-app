@@ -296,5 +296,12 @@ ignore_imports = [
     # internally. The MCP touch-point is the application service the REST
     # surface uses; the audit pipeline is a leaf concern not under MCP's control.
     "backend.mcp.tools.knowledge_retraction_tools -> backend.knowledge.application.retraction_service",
+    # Lift D3d — UI-parity Inside Trust + Account read-only tools. The
+    # account-get tool calls the SAME ``ensure_personal_account`` service the
+    # REST /api/v1/account discovery endpoint calls — one canonical
+    # create-on-read chain across MCP + PWA. Inside trust uses
+    # backend.workflow.application.metrics.trust_surface directly (already in
+    # the allowlist — workflow.application is permitted).
+    "backend.mcp.tools.account_tools -> backend.router.accounts.account_service",
 ]
 
