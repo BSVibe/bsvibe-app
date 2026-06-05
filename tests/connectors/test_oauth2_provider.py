@@ -63,9 +63,7 @@ def test_satisfies_protocol() -> None:
 
 
 def test_authorize_url_basic_fields() -> None:
-    url = _body_provider().authorize_url(
-        state="st", code_challenge="ch", redirect_uri="https://cb"
-    )
+    url = _body_provider().authorize_url(state="st", code_challenge="ch", redirect_uri="https://cb")
     q = parse_qs(urlsplit(url).query)
     assert q["client_id"] == ["cid"]
     assert q["state"] == ["st"]

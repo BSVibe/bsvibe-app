@@ -59,9 +59,7 @@ router.include_router(account.router, prefix="/account", tags=["account"])
 router.include_router(connectors.router, prefix="/connectors", tags=["connectors"])
 # OAuth connect (founder-authed /start only; the public /callback is mounted
 # outside this auth-gated router in backend.api.main).
-router.include_router(
-    connector_oauth.router, prefix="/connectors/oauth", tags=["connectors"]
-)
+router.include_router(connector_oauth.router, prefix="/connectors/oauth", tags=["connectors"])
 router.include_router(rules.router, prefix="/rules", tags=["rules"])
 router.include_router(run_routing.router, prefix="/run-routing", tags=["run-routing"])
 router.include_router(intents.router, prefix="/intents", tags=["intents"])
