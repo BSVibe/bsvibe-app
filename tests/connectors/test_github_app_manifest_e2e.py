@@ -114,9 +114,7 @@ async def test_start_returns_github_post_target_and_manifest(
     assert manifest["redirect_url"] == (
         f"{issuer}/api/v1/connectors/oauth/github/app-manifest/callback"
     )
-    assert manifest["callback_urls"] == [
-        f"{issuer}/api/v1/connectors/oauth/github/callback"
-    ]
+    assert manifest["callback_urls"] == [f"{issuer}/api/v1/connectors/oauth/github/callback"]
     # Not derived from the request host.
     assert "test" not in urlsplit(manifest["redirect_url"]).netloc
 
@@ -184,3 +182,41 @@ async def test_callback_bad_state_400(client: httpx.AsyncClient) -> None:
         params={"code": "x", "state": "nope"},
     )
     assert r.status_code == 400
+
+
+async def test_app_status_not_configured(client: httpx.AsyncClient) -> None:
+    # Nothing set up yet (isolated registry, no DB creds) → not configured.
+    s0 = await client.get("/api/v1/connectors/oauth/github/app-status")
+    assert s0.status_code == 200, s0.text
+    assert s0.json()["configured"] is False
+
+
+@respx.mock(assert_all_mocked=False)
+async def test_app_status_configured_after_manifest(
+    respx_mock: respx.MockRouter, client: httpx.AsyncClient
+) -> None:
+    respx_mock.post(_CONVERSIONS).mock(
+        return_value=httpx.Response(
+            201,
+            json={
+                "id": 1,
+                "slug": "bsvibe-dev",
+                "client_id": "Iv1.x",
+                "client_secret": "s",
+                "pem": _PEM,
+                "html_url": "https://github.com/apps/bsvibe-dev",
+            },
+        )
+    )
+    start = await client.post("/api/v1/connectors/oauth/github/app-manifest/start")
+    state = parse_qs(urlsplit(start.json()["post_url"]).query)["state"][0]
+    await client.get(
+        "/api/v1/connectors/oauth/github/app-manifest/callback",
+        params={"code": "the-code", "state": state},
+    )
+
+    status_resp = await client.get("/api/v1/connectors/oauth/github/app-status")
+    body = status_resp.json()
+    assert body["configured"] is True
+    assert body["app_slug"] == "bsvibe-dev"
+    assert body["html_url"] == "https://github.com/apps/bsvibe-dev"

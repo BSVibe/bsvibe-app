@@ -35,7 +35,7 @@ from backend.api.deps import get_db_session, get_workspace_id
 from backend.api.webhooks import get_credential_cipher
 from backend.config import get_settings
 from backend.connectors.auth import store
-from backend.connectors.auth.app_credentials import upsert_app_credentials
+from backend.connectors.auth.app_credentials import get_app_credentials, upsert_app_credentials
 from backend.connectors.auth.bootstrap import load_app_credential_providers
 from backend.connectors.auth.github_manifest import (
     build_manifest,
@@ -190,6 +190,26 @@ async def oauth_callback(
 # ── GitHub App Manifest flow (Lift 1.5) ────────────────────────────────
 
 
+@router.get("/github/app-status")
+async def github_app_status(
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    cipher: Annotated[CredentialCipher, Depends(get_credential_cipher)],
+) -> dict[str, object]:
+    """Whether the GitHub App is set up — drives Set-up vs Connect in the UI.
+
+    ``configured`` is true once a provider is registered (env or manifest-minted
+    DB creds). ``app_slug`` / ``html_url`` come from the DB creds (None when the
+    App was configured via env only).
+    """
+    creds = await get_app_credentials(session, provider="github", cipher=cipher)
+    configured = get_provider("github") is not None or creds is not None
+    return {
+        "configured": configured,
+        "app_slug": creds.app_slug if creds else None,
+        "html_url": creds.html_url if creds else None,
+    }
+
+
 @router.post("/github/app-manifest/start")
 async def start_github_app_manifest(
     workspace_id: Annotated[uuid.UUID, Depends(get_workspace_id)],
@@ -230,9 +250,7 @@ async def github_app_manifest_callback(
     cipher: Annotated[CredentialCipher, Depends(get_credential_cipher)],
 ) -> RedirectResponse:
     """Complete App creation: exchange the code, store creds, register provider."""
-    pending = await store.claim_pending(
-        session, state=state, provider=_MANIFEST_PENDING_PROVIDER
-    )
+    pending = await store.claim_pending(session, state=state, provider=_MANIFEST_PENDING_PROVIDER)
     if pending is None:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
