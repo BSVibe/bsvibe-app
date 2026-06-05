@@ -4,7 +4,7 @@ import type { Connector, ConnectorImportResult, ConnectorName } from "@/lib/api/
 import { isImportableConnector } from "@/lib/api/types";
 import { useTranslations } from "next-intl";
 import { useState } from "react";
-import { ConnectorOAuthButton } from "./ConnectorOAuthButton";
+import { GithubAppSetup } from "./GithubAppSetup";
 import { isOAuthConnector } from "./connector-fields";
 
 type RowState = "idle" | "confirming" | "revoking" | "importing" | "import-error" | "error";
@@ -106,10 +106,10 @@ export default function ConnectorRow({
         </div>
         {isOAuthConnector(connector.connector as ConnectorName) ? (
           <div className="connector-card__oauth">
-            <ConnectorOAuthButton
-              provider={connector.connector}
-              connectedLabel={connector.oauth_account_label}
-            />
+            {/* A binding already exists → the App is set up; skip the probe and
+                show Connect / Connected. First-run "Set up GitHub App" lives in
+                the Add-connector form. */}
+            <GithubAppSetup configured connectedLabel={connector.oauth_account_label} />
           </div>
         ) : null}
         <p className="connector-card__detail">
