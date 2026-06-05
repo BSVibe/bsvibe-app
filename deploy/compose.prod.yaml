@@ -66,6 +66,7 @@ services:
       BSVIBE_RUN_WORKSPACE_ROOT: ${BSVIBE_RUN_WORKSPACE_ROOT:-/app/var/runs}
       BSVIBE_AUDIT_RELAY_URL: ${BSVIBE_AUDIT_RELAY_URL:-}
       BSVIBE_OAUTH_ISSUER: ${BSVIBE_OAUTH_ISSUER:-https://api.bsvibe.dev}
+      BSVIBE_PWA_URL: ${BSVIBE_PWA_URL:-https://app.bsvibe.dev}
       # Sandbox stays off until the LLM phase (see runbook staged rollout).
       BSVIBE_SANDBOX_ENABLED: ${BSVIBE_SANDBOX_ENABLED:-false}
       BSVIBE_SANDBOX_IMAGE: ${BSVIBE_SANDBOX_IMAGE:-bsvibe-sandbox:latest}
