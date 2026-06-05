@@ -71,3 +71,18 @@ export function triggerImport(connectorId: string): Promise<ConnectorImportResul
     },
   );
 }
+
+/** Response of `POST /api/v1/connectors/oauth/{provider}/start`. */
+export interface ConnectorOAuthStart {
+  authorize_url: string;
+}
+
+/** Begin the OAuth connect dance for `provider` (github / slack / …). The
+ *  backend mints CSRF state + PKCE and returns the provider authorize URL the
+ *  browser must navigate to. */
+export function startConnectorOAuth(provider: string): Promise<ConnectorOAuthStart> {
+  return apiFetch<ConnectorOAuthStart>(
+    `/api/v1/connectors/oauth/${encodeURIComponent(provider)}/start`,
+    { method: "POST" },
+  );
+}

@@ -35,7 +35,7 @@
 
 import type { ConnectorCreate, ConnectorName } from "@/lib/api/types";
 
-export type FieldKind = "text" | "password" | "textarea";
+export type FieldKind = "text" | "password" | "textarea" | "oauth";
 
 export interface FieldDescriptor {
   /** State key inside the form. */
@@ -49,6 +49,10 @@ export interface FieldDescriptor {
    *  section (notion's both-mode `api_token` + `database_ids`) so the
    *  layout can group them under a sub-heading. */
   group?: "inbound" | "outbound";
+  /** For `kind: "oauth"` — the provider to connect (e.g. "github"). The form
+   *  renders a "Connect with X" button instead of an input. No descriptor
+   *  uses this yet; Lift 1 flips github's descriptor over to it. */
+  oauthProvider?: string;
 }
 
 export interface ConnectorFormDescriptor {
