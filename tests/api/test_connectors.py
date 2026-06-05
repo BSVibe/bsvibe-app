@@ -190,6 +190,52 @@ async def test_create_defaults_delivery_config_to_empty(client: httpx.AsyncClien
     assert r.json()["delivery_config"] == {}
 
 
+async def test_list_surfaces_oauth_account_label_when_connected(
+    client: httpx.AsyncClient,
+    sf: async_sessionmaker[AsyncSession],
+    cipher: CredentialCipher,
+    workspace_id: uuid.UUID,
+) -> None:
+    """A github binding with an OAuth token row reports its @login to the UI."""
+    from backend.connectors.auth import store  # noqa: PLC0415
+    from backend.connectors.auth.tokenset import TokenSet  # noqa: PLC0415
+
+    r = await client.post(
+        "/api/v1/connectors",
+        json={"connector": "github", "signing_secret": "no-webhook-secret"},
+    )
+    assert r.status_code == 201, r.text
+    account_id = uuid.UUID(r.json()["id"])
+
+    async with sf() as s:
+        await store.upsert_token(
+            s,
+            connector_account_id=account_id,
+            provider="github",
+            token=TokenSet(access_token="ghu_x", account_label="@octocat"),
+            cipher=cipher,
+        )
+        await s.commit()
+
+    listed = await client.get("/api/v1/connectors")
+    assert listed.status_code == 200
+    row = next(x for x in listed.json() if x["id"] == str(account_id))
+    assert row["oauth_account_label"] == "@octocat"
+
+
+async def test_list_oauth_account_label_none_when_not_connected(
+    client: httpx.AsyncClient,
+) -> None:
+    """A connector with no OAuth token row reports a null label (not connected)."""
+    r = await client.post(
+        "/api/v1/connectors",
+        json={"connector": "slack", "signing_secret": "x"},
+    )
+    assert r.status_code == 201, r.text
+    listed = await client.get("/api/v1/connectors")
+    assert listed.json()[0]["oauth_account_label"] is None
+
+
 async def test_create_rejects_unknown_connector(client: httpx.AsyncClient) -> None:
     r = await client.post(
         "/api/v1/connectors",

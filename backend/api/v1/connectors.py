@@ -56,6 +56,7 @@ from backend.api.deps import get_db_session, get_workspace_id
 # Reuse the ingress's cipher dependency so the create-side encrypt and the
 # webhook-side decrypt share one (test-overridable) cipher.
 from backend.api.webhooks import get_credential_cipher
+from backend.connectors.auth.db import ConnectorOAuthTokenRow
 from backend.connectors.auth.resolve import resolve_connector_credentials
 from backend.connectors.db import ConnectorAccountRow
 from backend.connectors.kinds import (
@@ -163,6 +164,11 @@ class ConnectorOut(BaseModel):
     kind: ConnectorKind | None
     last_import_at: datetime | None
     last_import_count: int | None
+    # Lift 1 — for oauth2 connectors (github, …): the connected account's
+    # ``@login`` / workspace name when an OAuth token is bound, else None.
+    # ``None`` means "not connected via OAuth" so the UI shows "Connect with X"
+    # instead of "Connected as …". Never the token itself.
+    oauth_account_label: str | None = None
 
 
 class ConnectorImportResult(BaseModel):
@@ -187,7 +193,9 @@ def _token_hint(webhook_token: str) -> str:
     return f"...{webhook_token[-4:]}"
 
 
-def _row_to_out(row: ConnectorAccountRow) -> ConnectorOut:
+def _row_to_out(
+    row: ConnectorAccountRow, *, oauth_account_label: str | None = None
+) -> ConnectorOut:
     return ConnectorOut(
         id=row.id,
         connector=row.connector,
@@ -199,6 +207,7 @@ def _row_to_out(row: ConnectorAccountRow) -> ConnectorOut:
         kind=connector_kind(row.connector),
         last_import_at=row.last_import_at,
         last_import_count=row.last_import_count,
+        oauth_account_label=oauth_account_label,
     )
 
 
@@ -218,7 +227,18 @@ async def list_connectors(
         .scalars()
         .all()
     )
-    return [_row_to_out(r) for r in rows]
+    # One query for every bound OAuth token's account label, keyed by binding —
+    # so the list can show "Connected as @login" without an N+1 fan-out.
+    label_rows = (
+        await session.execute(
+            select(
+                ConnectorOAuthTokenRow.connector_account_id,
+                ConnectorOAuthTokenRow.account_label,
+            ).where(ConnectorOAuthTokenRow.connector_account_id.in_([r.id for r in rows]))
+        )
+    ).all()
+    labels: dict[uuid.UUID, str | None] = {account_id: label for account_id, label in label_rows}
+    return [_row_to_out(r, oauth_account_label=labels.get(r.id)) for r in rows]
 
 
 @router.post("", status_code=status.HTTP_201_CREATED)
