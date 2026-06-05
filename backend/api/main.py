@@ -31,6 +31,7 @@ from backend.api.v1.live_events import set_live_event_bus_redis
 from backend.api.v1.workers import public_router as workers_public_router
 from backend.api.webhooks import router as webhooks_router
 from backend.config import get_settings
+from backend.connectors.auth.bootstrap import register_configured_providers
 from backend.extensions.plugin.bootstrap import discover_webhook_parsers
 from backend.mcp.lifespan import mcp_lifespan
 from backend.shared.core.logging import configure_logging
@@ -50,6 +51,11 @@ def create_app() -> FastAPI:
     # one missing module never blocks the API. Idempotent (every connector
     # the loader sees re-registers into the same singleton).
     discover_webhook_parsers()
+    # Lift 1 — register the credential-gated connector OAuth providers
+    # (GitHubAppProvider, …) so "Connect with X" works. No-op for providers
+    # whose App credentials are unset; those connectors keep the legacy
+    # signing-secret path.
+    register_configured_providers(settings)
 
     session_factory = _get_session_factory()
 

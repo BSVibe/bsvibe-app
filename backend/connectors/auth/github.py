@@ -30,6 +30,7 @@ from urllib.parse import urlencode
 import httpx
 import jwt
 
+from backend.connectors.auth.providers import TokenExchangeAuth
 from backend.connectors.auth.tokenset import TokenSet
 
 _AUTHORIZE_URL = "https://github.com/login/oauth/authorize"
@@ -47,7 +48,7 @@ class GitHubAppProvider:
     """Acquire + refresh GitHub credentials for the github connector."""
 
     name = "github"
-    token_exchange_auth = "body"  # noqa: S105 — auth-style label, not a secret
+    token_exchange_auth: TokenExchangeAuth = "body"  # noqa: S105 — auth-style label
     refreshable = True
 
     def __init__(
@@ -64,11 +65,10 @@ class GitHubAppProvider:
         self._app_id = app_id
         self._private_key_pem = private_key_pem
         self._scopes = scopes
-
-    @property
-    def supports_service_token(self) -> bool:
-        """Installation tokens need App credentials (app_id + private key)."""
-        return bool(self._app_id and self._private_key_pem)
+        # Installation tokens need App credentials (app_id + private key); the
+        # capability is off without them. Plain instance attribute (not a
+        # property) so it satisfies the settable OAuthProvider Protocol member.
+        self.supports_service_token = bool(app_id and private_key_pem)
 
     def authorize_url(self, *, state: str, code_challenge: str, redirect_uri: str) -> str:
         # GitHub does not support PKCE; ``code_challenge`` is intentionally
