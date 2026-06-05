@@ -27,7 +27,7 @@ from typing import Any, Protocol, runtime_checkable
 import structlog
 from mcp.types import Tool as McpTool
 from pydantic import BaseModel, ValidationError
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 logger = structlog.get_logger(__name__)
 
@@ -103,6 +103,11 @@ class ToolContext:
     audit_outbox: AuditOutboxLike | None = None
     request_id: str | None = None
     extras: dict[str, Any] = field(default_factory=dict)
+    # The same factory the FastAPI app threads into REST handlers — used
+    # by handlers that need to spawn background tasks with their own
+    # session (e.g. ``products_create``'s post-commit bootstrap). Optional
+    # so existing tests that build a ``ToolContext`` directly stay valid.
+    session_factory: async_sessionmaker[AsyncSession] | None = None
 
 
 # Handlers may return a ``BaseModel`` or a plain ``dict`` — the
