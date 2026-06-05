@@ -490,6 +490,18 @@ async def authorize_post(  # noqa: PLR0911 — OAuth state machine
     if action != "approve":
         return _OAuthError(400, "invalid_request", "action must be 'approve' or 'deny'")
 
+    # Claim anonymous DCR clients (workspace_id IS NULL from the open
+    # /api/oauth/register flow — `claude mcp add`, MCP Inspector, etc.)
+    # for the consenting workspace. Without this, the row stays
+    # workspace-less and the Settings UI's list_clients_for_workspace
+    # query never surfaces it. First consent decides ownership — RFC 7591
+    # doesn't speak to this; we treat "the first user to bind" as the
+    # owner. Idempotent: re-consent for a claimed client is a no-op.
+    if client.workspace_id is None:
+        client.workspace_id = workspace_id
+        if client.created_by_user_id is None:
+            client.created_by_user_id = user_row.id
+
     # Approve — mint code. The OAuth subject is the consenting session user.
     code = await issue_authorization_code(
         session,
