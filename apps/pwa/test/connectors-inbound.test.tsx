@@ -136,11 +136,13 @@ describe("AddConnector — per-connector field branching", () => {
     expect(screen.getByLabelText(/Delivery config/i)).toBeInTheDocument();
   });
 
-  it("renders the outbound default (signing secret + JSON delivery_config) for github", () => {
+  it("renders github as an OAuth Connect (no signing secret) + JSON delivery_config", () => {
+    // Lift 1 — github flipped from a pasted PAT/secret to "Connect with GitHub".
     render(
       <AddConnector onCreated={() => {}} createConnector={vi.fn()} initialConnector="github" />,
     );
-    expect(screen.getByLabelText(/Signing secret/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /connect with github/i })).toBeInTheDocument();
+    expect(screen.queryByLabelText(/Signing secret/i)).not.toBeInTheDocument();
     expect(screen.getByLabelText(/Delivery config/i)).toBeInTheDocument();
     expect(screen.queryByLabelText(/Vault path/i)).not.toBeInTheDocument();
     expect(screen.queryByLabelText(/Export path/i)).not.toBeInTheDocument();

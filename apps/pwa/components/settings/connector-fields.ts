@@ -203,8 +203,47 @@ const NOTION: ConnectorFormDescriptor = {
   },
 };
 
+/** OAuth-method connectors (design §3.1 Bucket A). The credential is acquired
+ *  via "Connect with X" (the backend ``/oauth/{provider}/start`` dance), not a
+ *  pasted secret — so the form renders the Connect button instead of a password
+ *  field. Lift 1 ships github; slack / discord / notion / sentry cascade. */
+const OAUTH_CONNECTORS = new Set<ConnectorName>(["github"]);
+
+/** True when ``connector``'s primary credential is acquired via OAuth (so its
+ *  card shows Connect / "Connected as …" instead of a masked secret hint). */
+export function isOAuthConnector(connector: ConnectorName): boolean {
+  return OAUTH_CONNECTORS.has(connector);
+}
+
+/** github (Lift 1): "Connect with GitHub" replaces the old PAT/signing-secret
+ *  field; the OAuth token is the outbound API credential (stored separately in
+ *  connector_oauth_tokens). The delivery_config JSON stays for PR routing
+ *  (``{"repo":"owner/name"}``). The backend signing_secret column is NOT NULL,
+ *  so pack sends a non-secret placeholder — the real outbound credential is the
+ *  OAuth token, attached by the callback to this binding. */
+const GITHUB_OAUTH: ConnectorFormDescriptor = {
+  fields: [
+    {
+      key: "github",
+      i18nKey: "githubConnect",
+      kind: "oauth",
+      required: false,
+      oauthProvider: "github",
+    },
+  ],
+  showDeliveryConfigJson: true,
+  pack: (values, connector, externalRef) => ({
+    connector,
+    signing_secret: INBOUND_SECRET_PLACEHOLDER,
+    external_ref: externalRef,
+    delivery_config: values.deliveryConfigParsed
+      ? (JSON.parse(values.deliveryConfigParsed) as Record<string, unknown>)
+      : {},
+  }),
+};
+
 const DESCRIPTORS: Record<ConnectorName, ConnectorFormDescriptor> = {
-  github: OUTBOUND_DEFAULT,
+  github: GITHUB_OAUTH,
   slack: OUTBOUND_DEFAULT,
   telegram: OUTBOUND_DEFAULT,
   discord: OUTBOUND_DEFAULT,

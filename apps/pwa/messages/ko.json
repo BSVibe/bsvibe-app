@@ -633,6 +633,10 @@
           "notionDatabaseIds": {
             "label": "데이터베이스 ID (한 줄에 하나, 선택)",
             "placeholder": "abcd1234ef…"
+          },
+          "githubConnect": {
+            "label": "GitHub 계정",
+            "placeholder": "GitHub 계정을 연결하면 풀 리퀘스트를 전달해요"
           }
         },
         "inbound": {
