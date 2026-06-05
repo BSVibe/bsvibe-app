@@ -143,15 +143,18 @@ describe("Connectors catalog surface", () => {
   });
 
   it("Connect → opens the create panel, fires POST with the body, reveals the one-time token, then re-reads", async () => {
+    // telegram is a secret-based (non-OAuth) connector, so the Add form's
+    // signing-secret + delivery_config create path is exercised here (notion
+    // flipped to OAuth in Lift 3).
     const created = {
       id: "22222222-2222-2222-2222-222222222222",
-      connector: "notion",
+      connector: "telegram",
       external_ref: "ops",
       is_active: true,
       created_at: "2026-05-23T00:00:00Z",
-      delivery_config: { parent_page_id: "pp-1" },
+      delivery_config: { chat_id: "123" },
       webhook_token: "ONE-TIME-TOKEN-abcd",
-      webhook_url: "/api/webhooks/notion/ONE-TIME-TOKEN-abcd",
+      webhook_url: "/api/webhooks/telegram/ONE-TIME-TOKEN-abcd",
     };
     const fetchMock = vi
       .fn()
@@ -160,32 +163,32 @@ describe("Connectors catalog surface", () => {
       // create
       .mockResolvedValueOnce(jsonResponse(created, 201))
       // re-read list after create
-      .mockResolvedValueOnce(jsonResponse([{ ...GITHUB_ROW, connector: "notion" }]));
+      .mockResolvedValueOnce(jsonResponse([{ ...GITHUB_ROW, connector: "telegram" }]));
     global.fetch = fetchMock as unknown as typeof fetch;
 
     render(<Connectors />);
 
-    // Open the create panel from notion's Connect card.
+    // Open the create panel from telegram's Connect card.
     const available = await screen.findByRole("list", { name: /available/i });
-    const notionCard = within(available).getByText("Notion").closest("li") as HTMLElement;
-    await userEvent.click(within(notionCard).getByRole("button", { name: /^Connect$/i }));
+    const telegramCard = within(available).getByText("Telegram").closest("li") as HTMLElement;
+    await userEvent.click(within(telegramCard).getByRole("button", { name: /^Connect$/i }));
 
-    // The panel is pre-selected to notion.
+    // The panel is pre-selected to telegram.
     const select = (await screen.findByLabelText("Connector")) as HTMLSelectElement;
-    expect(select.value).toBe("notion");
+    expect(select.value).toBe("telegram");
 
     await userEvent.type(screen.getByLabelText(/Signing secret/i), "shh");
     await userEvent.type(screen.getByLabelText(/Reference/i), "ops");
     // fireEvent.change sets the textarea value directly — userEvent.type would
     // mis-parse the JSON braces as keyboard modifiers.
     fireEvent.change(screen.getByLabelText(/Delivery config/i), {
-      target: { value: '{"parent_page_id":"pp-1"}' },
+      target: { value: '{"chat_id":"123"}' },
     });
     await userEvent.click(screen.getByRole("button", { name: /^Add connector$/i }));
 
     // The one-time secret panel appears with both the URL and the token.
     await waitFor(() => {
-      expect(screen.getByText("/api/webhooks/notion/ONE-TIME-TOKEN-abcd")).toBeInTheDocument();
+      expect(screen.getByText("/api/webhooks/telegram/ONE-TIME-TOKEN-abcd")).toBeInTheDocument();
     });
     expect(screen.getByText("ONE-TIME-TOKEN-abcd")).toBeInTheDocument();
     expect(screen.getByText(/won.t see (this|it) again/i)).toBeInTheDocument();
@@ -195,10 +198,10 @@ describe("Connectors catalog surface", () => {
     expect(createCall[0]).toBe("/api/v1/connectors");
     expect(createCall[1].method).toBe("POST");
     expect(JSON.parse(createCall[1].body as string)).toEqual({
-      connector: "notion",
+      connector: "telegram",
       signing_secret: "shh",
       external_ref: "ops",
-      delivery_config: { parent_page_id: "pp-1" },
+      delivery_config: { chat_id: "123" },
     });
 
     // A re-read fired (3rd call is the list GET).
@@ -212,8 +215,8 @@ describe("Connectors catalog surface", () => {
     render(<Connectors />);
 
     const available = await screen.findByRole("list", { name: /available/i });
-    const notionCard = within(available).getByText("Notion").closest("li") as HTMLElement;
-    await userEvent.click(within(notionCard).getByRole("button", { name: /^Connect$/i }));
+    const telegramCard = within(available).getByText("Telegram").closest("li") as HTMLElement;
+    await userEvent.click(within(telegramCard).getByRole("button", { name: /^Connect$/i }));
 
     await userEvent.type(screen.getByLabelText(/Signing secret/i), "shh");
     fireEvent.change(screen.getByLabelText(/Delivery config/i), {
@@ -236,8 +239,8 @@ describe("Connectors catalog surface", () => {
     render(<Connectors />);
 
     const available = await screen.findByRole("list", { name: /available/i });
-    const notionCard = within(available).getByText("Notion").closest("li") as HTMLElement;
-    await userEvent.click(within(notionCard).getByRole("button", { name: /^Connect$/i }));
+    const telegramCard = within(available).getByText("Telegram").closest("li") as HTMLElement;
+    await userEvent.click(within(telegramCard).getByRole("button", { name: /^Connect$/i }));
 
     await userEvent.type(screen.getByLabelText(/Signing secret/i), "shh");
     await userEvent.click(screen.getByRole("button", { name: /^Add connector$/i }));

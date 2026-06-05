@@ -159,55 +159,11 @@ const CONVERSATION_EXPORT = (defaultRegionField: boolean): ConnectorFormDescript
   },
 });
 
-const NOTION: ConnectorFormDescriptor = {
-  fields: [
-    { key: "secret", i18nKey: "signingSecret", kind: "password", required: true },
-    // Inbound block — both fields optional; supplying them turns the
-    // binding into "both" by giving the import action what it needs to
-    // walk the Notion workspace.
-    {
-      key: "api_token",
-      i18nKey: "notionApiToken",
-      kind: "password",
-      required: false,
-      group: "inbound",
-    },
-    {
-      key: "database_ids",
-      i18nKey: "notionDatabaseIds",
-      kind: "textarea",
-      required: false,
-      group: "inbound",
-    },
-  ],
-  // Notion still surfaces the JSON delivery_config for the outbound side
-  // (parent_page_id). The inbound fields above are packed alongside it.
-  showDeliveryConfigJson: true,
-  pack: (values, connector, externalRef) => {
-    const config: Record<string, unknown> = values.deliveryConfigParsed
-      ? (JSON.parse(values.deliveryConfigParsed) as Record<string, unknown>)
-      : {};
-    const apiToken = (values.api_token ?? "").trim();
-    if (apiToken.length > 0) config.api_token = apiToken;
-    const databaseIds = (values.database_ids ?? "")
-      .split("\n")
-      .map((s) => s.trim())
-      .filter((s) => s.length > 0);
-    if (databaseIds.length > 0) config.database_ids = databaseIds;
-    return {
-      connector,
-      signing_secret: values.secret ?? "",
-      external_ref: externalRef,
-      delivery_config: config,
-    };
-  },
-};
-
 /** OAuth-method connectors (design §3.1 Bucket A). The credential is acquired
  *  via "Connect with X" (the backend ``/oauth/{provider}/start`` dance), not a
  *  pasted secret — so the form renders the Connect button instead of a password
  *  field. Lift 1 ships github; slack / discord / notion / sentry cascade. */
-const OAUTH_CONNECTORS = new Set<ConnectorName>(["github"]);
+const OAUTH_CONNECTORS = new Set<ConnectorName>(["github", "slack", "discord", "notion"]);
 
 /** True when ``connector``'s primary credential is acquired via OAuth (so its
  *  card shows Connect / "Connected as …" instead of a masked secret hint). */
@@ -242,17 +198,83 @@ const GITHUB_OAUTH: ConnectorFormDescriptor = {
   }),
 };
 
+/** Generic "Connect with X" descriptor (Lift 2-4) for vanilla-OAuth connectors
+ *  whose only binding config is the optional outbound delivery_config JSON
+ *  (slack channel routing, discord webhook target). Like GITHUB_OAUTH but with
+ *  the shared `oauthConnect` label and no provider-specific extras. */
+function oauthSimple(provider: ConnectorName): ConnectorFormDescriptor {
+  return {
+    fields: [
+      {
+        key: provider,
+        i18nKey: "oauthConnect",
+        kind: "oauth",
+        required: false,
+        oauthProvider: provider,
+      },
+    ],
+    showDeliveryConfigJson: true,
+    pack: (values, connector, externalRef) => ({
+      connector,
+      signing_secret: INBOUND_SECRET_PLACEHOLDER,
+      external_ref: externalRef,
+      delivery_config: values.deliveryConfigParsed
+        ? (JSON.parse(values.deliveryConfigParsed) as Record<string, unknown>)
+        : {},
+    }),
+  };
+}
+
+/** notion (Lift 3): "Connect with Notion" replaces the api_token/secret fields
+ *  (OAuth provides the token); the optional inbound `database_ids` block + the
+ *  outbound delivery_config (parent_page_id) stay. */
+const NOTION_OAUTH: ConnectorFormDescriptor = {
+  fields: [
+    {
+      key: "notion",
+      i18nKey: "oauthConnect",
+      kind: "oauth",
+      required: false,
+      oauthProvider: "notion",
+    },
+    {
+      key: "database_ids",
+      i18nKey: "notionDatabaseIds",
+      kind: "textarea",
+      required: false,
+      group: "inbound",
+    },
+  ],
+  showDeliveryConfigJson: true,
+  pack: (values, connector, externalRef) => {
+    const config: Record<string, unknown> = values.deliveryConfigParsed
+      ? (JSON.parse(values.deliveryConfigParsed) as Record<string, unknown>)
+      : {};
+    const databaseIds = (values.database_ids ?? "")
+      .split("\n")
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0);
+    if (databaseIds.length > 0) config.database_ids = databaseIds;
+    return {
+      connector,
+      signing_secret: INBOUND_SECRET_PLACEHOLDER,
+      external_ref: externalRef,
+      delivery_config: config,
+    };
+  },
+};
+
 const DESCRIPTORS: Record<ConnectorName, ConnectorFormDescriptor> = {
   github: GITHUB_OAUTH,
-  slack: OUTBOUND_DEFAULT,
+  slack: oauthSimple("slack"),
   telegram: OUTBOUND_DEFAULT,
-  discord: OUTBOUND_DEFAULT,
+  discord: oauthSimple("discord"),
   sentry: OUTBOUND_DEFAULT,
   "email-sender": OUTBOUND_DEFAULT,
   obsidian: OBSIDIAN,
   claude: CONVERSATION_EXPORT(true),
   gpt: CONVERSATION_EXPORT(true),
-  notion: NOTION,
+  notion: NOTION_OAUTH,
 };
 
 export function descriptorFor(connector: ConnectorName): ConnectorFormDescriptor {

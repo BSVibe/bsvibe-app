@@ -125,14 +125,16 @@ describe("AddConnector — per-connector field branching", () => {
     expect(screen.getByLabelText(/Export path/i)).toBeInTheDocument();
   });
 
-  it("renders notion in both mode — signing secret + optional inbound api_token + database_ids", () => {
+  it("renders notion as OAuth Connect (no secret/api_token) + database_ids + delivery_config", () => {
+    // Lift 3 — notion flipped to "Connect with Notion"; OAuth provides the
+    // token, so the signing-secret + api_token password fields are gone.
     render(
       <AddConnector onCreated={() => {}} createConnector={vi.fn()} initialConnector="notion" />,
     );
-    expect(screen.getByLabelText(/Signing secret/i)).toBeInTheDocument();
-    expect(screen.getByLabelText(/Notion API token/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /connect with notion/i })).toBeInTheDocument();
+    expect(screen.queryByLabelText(/Signing secret/i)).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/Notion API token/i)).not.toBeInTheDocument();
     expect(screen.getByLabelText(/Database IDs/i)).toBeInTheDocument();
-    // Outbound JSON delivery_config still shown for notion.
     expect(screen.getByLabelText(/Delivery config/i)).toBeInTheDocument();
   });
 
