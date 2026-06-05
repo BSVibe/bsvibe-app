@@ -59,6 +59,7 @@ def test_alembic_history_loads():
         "oauth_authorization_server",
         "oauth_anonymous_dcr",
         "connector_oauth_tokens",
+        "connector_oauth_app_credentials",
     ):
         assert rev in result.stdout, f"missing revision {rev} in:\n{result.stdout}"
 
@@ -75,7 +76,7 @@ def test_alembic_head_is_connector_last_import():
     # Lift A v2 bumped the head; keep the test name (function name was the
     # historical revision id, kept for git-blame stability) and assert the
     # new tip.
-    assert "connector_oauth_tokens" in result.stdout
+    assert "connector_oauth_app_credentials" in result.stdout
 
 
 def test_target_metadata_covers_all_bases():

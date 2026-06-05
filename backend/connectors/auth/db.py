@@ -68,6 +68,36 @@ class ConnectorOAuthTokenRow(Base):
     )
 
 
+class ConnectorOAuthAppCredentialRow(Base):
+    """Instance-global OAuth *App* credentials for one provider (1 row each).
+
+    bsvibe acts as an OAuth client of a third party; that requires a registered
+    App (client_id/secret + — for GitHub Apps — app_id + a private key). These
+    are NOT per-workspace (the standard SaaS pattern is one app, per-workspace
+    *tokens*), so ``provider`` is the primary key. Populated either by the
+    GitHub App Manifest flow (founder clicks "Set up GitHub App", GitHub mints
+    everything and we store it) or, as a fallback, from env settings. Every
+    secret is encrypted via :class:`backend.router.accounts.crypto.CredentialCipher`.
+    """
+
+    __tablename__ = "connector_oauth_app_credentials"
+
+    provider: Mapped[str] = mapped_column(String(64), primary_key=True)
+    app_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    app_slug: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    client_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    client_secret_ciphertext: Mapped[str] = mapped_column(String(2048), nullable=False)
+    private_key_pem_ciphertext: Mapped[str] = mapped_column(String(8192), nullable=False)
+    webhook_secret_ciphertext: Mapped[str | None] = mapped_column(String(2048), nullable=True)
+    html_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_utcnow
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_utcnow, onupdate=_utcnow
+    )
+
+
 class ConnectorOAuthPendingRow(Base):
     """Short-lived CSRF state + PKCE verifier for an in-flight OAuth connect."""
 
@@ -86,4 +116,8 @@ class ConnectorOAuthPendingRow(Base):
     )
 
 
-__all__ = ["ConnectorOAuthPendingRow", "ConnectorOAuthTokenRow"]
+__all__ = [
+    "ConnectorOAuthAppCredentialRow",
+    "ConnectorOAuthPendingRow",
+    "ConnectorOAuthTokenRow",
+]
