@@ -61,7 +61,11 @@ def build_server(
             # before the dispatcher ever runs. Belt-and-braces guard.
             raise ToolError("unauthenticated")
         async with session_factory() as session:
-            ctx = ToolContext(principal=principal, session=session)
+            ctx = ToolContext(
+                principal=principal,
+                session=session,
+                session_factory=session_factory,
+            )
             try:
                 result = await reg.call_tool(name, arguments or {}, ctx)
             except ToolScopeDenied:

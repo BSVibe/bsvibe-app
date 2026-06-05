@@ -303,5 +303,13 @@ ignore_imports = [
     # backend.workflow.application.metrics.trust_surface directly (already in
     # the allowlist — workflow.application is permitted).
     "backend.mcp.tools.account_tools -> backend.router.accounts.account_service",
+    # Hotfix — UI-parity for ``products_create``. The MCP path now
+    # schedules the same post-commit bootstrap the REST path schedules
+    # (Lift A v2). The scheduler module pulls in
+    # ``account_resolution`` (workflow.application.runtime) which itself
+    # depends on ``router.dispatch.strategies`` for the LLM gateway.
+    # The MCP touch-point is the same scheduler entry the REST handler
+    # uses — no second copy of the orchestration.
+    "backend.mcp.tools.workflow_tools -> backend.workflow.application.runtime.product_bootstrap_runtime",
 ]
 
