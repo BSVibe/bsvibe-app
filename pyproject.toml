@@ -250,4 +250,30 @@ forbidden_modules = [
     "backend.connectors",
     "backend.api",
 ]
+ignore_imports = [
+    # Lift D3a — UI-parity setup tools (model accounts / connectors /
+    # notifications). Each new tool module calls the SAME service /
+    # row / kind primitives the REST surface uses so the MCP and PWA
+    # paths stay one canonical mutation chain (no second copy of the
+    # encryption logic, the webhook-token mint, the kind validator, the
+    # inbound-import dispatcher, etc.). The exceptions are narrowly
+    # scoped to the three new tool modules; the rest of backend.mcp is
+    # still bound by the contract above.
+    "backend.mcp.tools.model_accounts_tools -> backend.router.accounts.account_service",
+    "backend.mcp.tools.model_accounts_tools -> backend.router.accounts.crypto",
+    "backend.mcp.tools.model_accounts_tools -> backend.router.accounts.schemas",
+    "backend.mcp.tools.model_accounts_tools -> backend.router.accounts.service",
+    "backend.mcp.tools.connectors_tools -> backend.api.v1.connectors",
+    "backend.mcp.tools.connectors_tools -> backend.connectors.db",
+    "backend.mcp.tools.connectors_tools -> backend.connectors.kinds",
+    "backend.mcp.tools.connectors_tools -> backend.extensions.plugin.base",
+    "backend.mcp.tools.connectors_tools -> backend.extensions.plugin.webhook_registry",
+    "backend.mcp.tools.connectors_tools -> backend.router.accounts.crypto",
+    # Transitive chain head — connector_dispatch pulls in router.accounts /
+    # connectors.db / extensions.plugin internally. The single MCP touch-point
+    # is the OUTBOUND_EVENT_BUILDERS map (the same registerable-connector gate
+    # the REST surface uses); the contract still bounds every other backend.mcp
+    # module from those subtrees.
+    "backend.mcp.tools.connectors_tools -> backend.workflow.application.delivery.connector_dispatch",
+]
 
