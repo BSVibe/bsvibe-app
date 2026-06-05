@@ -84,6 +84,7 @@ class FakeDispatcher:
         *,
         row: ConnectorAccountRow,
         workspace_id: uuid.UUID,
+        session: Any = None,
     ) -> dict[str, Any]:
         self.calls.append(
             {

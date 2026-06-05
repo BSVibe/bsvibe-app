@@ -56,6 +56,7 @@ from backend.api.deps import get_db_session, get_workspace_id
 # Reuse the ingress's cipher dependency so the create-side encrypt and the
 # webhook-side decrypt share one (test-overridable) cipher.
 from backend.api.webhooks import get_credential_cipher
+from backend.connectors.auth.resolve import resolve_connector_credentials
 from backend.connectors.db import ConnectorAccountRow
 from backend.connectors.kinds import (
     ConnectorKind,
@@ -302,6 +303,7 @@ class ImportDispatcher:
         *,
         row: ConnectorAccountRow,
         workspace_id: uuid.UUID,
+        session: AsyncSession,
     ) -> dict[str, Any]:
         meta = self._plugins_by_name.get(row.connector)
         if meta is None:
@@ -311,12 +313,14 @@ class ImportDispatcher:
             # The kind gate should reject this earlier; defensive guard.
             raise PluginRunError(f"import: no bulk-import action for connector {row.connector!r}")
 
-        # Decrypted secret carried under the same ``token`` slot the
-        # connector-action bridge uses (Notion's import reads it as
-        # ``token`` from credentials; obsidian/claude/gpt ignore it).
-        credentials: dict[str, Any] = {
-            "token": self._cipher.decrypt(row.signing_secret_ciphertext),
-        }
+        # The API credential carried under the ``token`` slot the connector-
+        # action bridge uses (Notion's import reads it; obsidian/claude/gpt
+        # ignore it). Routed through the unified resolver: an OAuth token if
+        # one is bound, else the legacy signing secret (behavior-preserving
+        # for every connector that hasn't been moved to OAuth yet).
+        credentials: dict[str, Any] = await resolve_connector_credentials(
+            session, account=row, cipher=self._cipher
+        )
         knowledge = self._knowledge_factory(workspace_id)
         ctx = SkillContext(
             llm=_NoLlm(),
@@ -471,7 +475,7 @@ async def trigger_import(
         workspace_id=str(workspace_id),
     )
     try:
-        detail = await dispatcher.import_for(row=row, workspace_id=workspace_id)
+        detail = await dispatcher.import_for(row=row, workspace_id=workspace_id, session=session)
     except PluginRunError as exc:
         logger.warning(
             _AUDIT_IMPORT_FAILED,
