@@ -284,5 +284,17 @@ ignore_imports = [
     "backend.mcp.tools.routing_rules_tools -> backend.router.rules.conditions",
     "backend.mcp.tools.routing_rules_tools -> backend.router.rules.db",
     "backend.mcp.tools.routing_rules_tools -> backend.router.rules.repository",
+    # Lift D3c — UI-parity Knowledge retract/correct + Skills + Workspace.
+    # Same pattern as D3a/b: each new tool module calls the SAME service /
+    # loader the REST surface uses so MCP and PWA paths stay one canonical
+    # chain (no second copy of the skill loader, no second slug rule, no
+    # second markdown renderer).
+    "backend.mcp.tools.skills_tools -> backend.extensions.skill",
+    # Transitive chain through plugin.audit — RetractionService emits via
+    # plugin.audit.service, which pulls in plugin.audit.subscriber (which
+    # imports backend.api.v1.live_events for SSE relay) + backend.extensions.eventbus
+    # internally. The MCP touch-point is the application service the REST
+    # surface uses; the audit pipeline is a leaf concern not under MCP's control.
+    "backend.mcp.tools.knowledge_retraction_tools -> backend.knowledge.application.retraction_service",
 ]
 
