@@ -20,9 +20,6 @@ Lift 0 ships only the StubProvider; real providers register from Lift 1.
 
 from __future__ import annotations
 
-import base64
-import hashlib
-import secrets
 import uuid
 from typing import Annotated
 
@@ -34,22 +31,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.api.deps import get_db_session, get_workspace_id
 from backend.api.webhooks import get_credential_cipher
 from backend.config import get_settings
-from backend.connectors.auth import store
-from backend.connectors.auth.app_credentials import get_app_credentials, upsert_app_credentials
+from backend.connectors.auth import service, store
+from backend.connectors.auth.app_credentials import upsert_app_credentials
 from backend.connectors.auth.bootstrap import load_app_credential_providers
-from backend.connectors.auth.github_manifest import (
-    build_manifest,
-    convert_manifest_code,
-    manifest_post_url,
-)
+from backend.connectors.auth.github_manifest import convert_manifest_code
 from backend.connectors.auth.providers import get_provider
+from backend.connectors.auth.service import (
+    MANIFEST_PENDING_PROVIDER as _MANIFEST_PENDING_PROVIDER,
+)
 from backend.router.accounts.crypto import CredentialCipher
 
 logger = structlog.get_logger(__name__)
-
-# Pending-row marker for the App Manifest flow's CSRF state — distinct from the
-# user-OAuth ``github`` pending rows so the two never collide.
-_MANIFEST_PENDING_PROVIDER = "github:app-manifest"  # noqa: S105 — marker, not a secret
 
 # ``router`` carries the founder-authed ``/start`` and is mounted under the
 # auth-gated v1 router (/api/v1/connectors/oauth). ``public_router`` carries
@@ -59,39 +51,11 @@ _MANIFEST_PENDING_PROVIDER = "github:app-manifest"  # noqa: S105 — marker, not
 router = APIRouter()
 public_router = APIRouter()
 
-_STATE_BYTES = 32
-_VERIFIER_BYTES = 48
-
-
-def _pkce_pair() -> tuple[str, str]:
-    """Return ``(code_verifier, code_challenge)`` for PKCE S256."""
-    verifier = secrets.token_urlsafe(_VERIFIER_BYTES)
-    digest = hashlib.sha256(verifier.encode("ascii")).digest()
-    challenge = base64.urlsafe_b64encode(digest).rstrip(b"=").decode("ascii")
-    return verifier, challenge
-
-
-def _callback_redirect_uri(provider: str) -> str:
-    """The CONFIGURED callback URL the provider redirects back to."""
-    base = get_settings().oauth_issuer.rstrip("/")
-    return f"{base}/api/v1/connectors/oauth/{provider}/callback"
-
 
 def _pwa_return_url(provider: str, *, ok: bool) -> str:
     base = get_settings().pwa_url.rstrip("/")
     key = "connected" if ok else "connect_error"
     return f"{base}/settings/connectors?{key}={provider}"
-
-
-def _manifest_redirect_uri() -> str:
-    """Where GitHub returns the manifest creation ``code`` (CONFIGURED base)."""
-    base = get_settings().oauth_issuer.rstrip("/")
-    return f"{base}/api/v1/connectors/oauth/github/app-manifest/callback"
-
-
-def _github_webhook_base() -> str:
-    base = get_settings().oauth_issuer.rstrip("/")
-    return f"{base}/api/webhooks/github"
 
 
 def _pwa_manifest_return_url(*, ok: bool) -> str:
@@ -108,29 +72,16 @@ async def start_oauth(
     session: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> dict[str, str]:
     """Begin a connect: stash CSRF+PKCE, return the provider authorize URL."""
-    prov = get_provider(provider)
-    if prov is None:
+    try:
+        authorize_url = await service.begin_oauth_connect(
+            session, provider=provider, workspace_id=workspace_id
+        )
+    except service.UnknownProviderError as exc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"unknown or unregistered provider: {provider}",
-        )
-    state = secrets.token_urlsafe(_STATE_BYTES)
-    verifier, challenge = _pkce_pair()
-    redirect_uri = _callback_redirect_uri(provider)
-    await store.create_pending(
-        session,
-        state=state,
-        provider=provider,
-        workspace_id=workspace_id,
-        code_verifier=verifier,
-        redirect_uri=redirect_uri,
-    )
-    await session.commit()
-    return {
-        "authorize_url": prov.authorize_url(
-            state=state, code_challenge=challenge, redirect_uri=redirect_uri
-        )
-    }
+        ) from exc
+    return {"authorize_url": authorize_url}
 
 
 @public_router.get("/connectors/oauth/{provider}/callback")
@@ -201,13 +152,7 @@ async def github_app_status(
     DB creds). ``app_slug`` / ``html_url`` come from the DB creds (None when the
     App was configured via env only).
     """
-    creds = await get_app_credentials(session, provider="github", cipher=cipher)
-    configured = get_provider("github") is not None or creds is not None
-    return {
-        "configured": configured,
-        "app_slug": creds.app_slug if creds else None,
-        "html_url": creds.html_url if creds else None,
-    }
+    return await service.compute_github_app_status(session, cipher=cipher)
 
 
 @router.post("/github/app-manifest/start")
@@ -221,25 +166,7 @@ async def start_github_app_manifest(
     to ``post_url``. GitHub creates the App, then redirects to the manifest's
     ``redirect_url`` with a ``code`` (and the echoed ``state``).
     """
-    settings = get_settings()
-    state = secrets.token_urlsafe(_STATE_BYTES)
-    redirect_uri = _manifest_redirect_uri()
-    await store.create_pending(
-        session,
-        state=state,
-        provider=_MANIFEST_PENDING_PROVIDER,
-        workspace_id=workspace_id,
-        code_verifier="-",  # manifest flow has no PKCE; column is NOT NULL
-        redirect_uri=redirect_uri,
-    )
-    await session.commit()
-    manifest = build_manifest(
-        homepage_url=settings.pwa_url.rstrip("/"),
-        redirect_url=redirect_uri,
-        oauth_callback_url=_callback_redirect_uri("github"),
-        webhook_url=_github_webhook_base(),
-    )
-    return {"post_url": manifest_post_url(state), "manifest": manifest}
+    return await service.begin_github_app_manifest(session, workspace_id=workspace_id)
 
 
 @public_router.get("/connectors/oauth/github/app-manifest/callback")
