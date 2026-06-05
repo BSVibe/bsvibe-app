@@ -61,12 +61,23 @@ export default function CallbackPage() {
   );
 }
 
-/** Pull the same-origin `return_to` the login page stashed in sessionStorage
- *  before the IdP round-trip. Rejects anything but a relative path so this
- *  page can't be turned into an open redirector. */
+/** Resolve the same-origin `return_to` for the post-OAuth redirect.
+ *
+ *  Primary source: the ``?return_to=…`` query param the login page bakes
+ *  into the IdP redirect_to URL via ``startOAuth``. Surviving in the URL
+ *  is robust against IdP redirect chains that don't preserve
+ *  sessionStorage (hit in the wild on Google OAuth → Supabase →
+ *  app.bsvibe.dev; user landed on /brief because the key was gone).
+ *
+ *  Fallback: the legacy ``bsvibe.return_to`` sessionStorage key, for any
+ *  caller that still stashes there.
+ *
+ *  Rejects anything but a relative path so this page can't be turned
+ *  into an open redirector. */
 function readReturnTo(): string {
   if (typeof window === "undefined") return "/brief";
-  const raw = sessionStorage.getItem("bsvibe.return_to");
+  const fromUrl = new URLSearchParams(window.location.search).get("return_to");
+  const raw = fromUrl ?? sessionStorage.getItem("bsvibe.return_to");
   if (!raw) return "/brief";
   if (!raw.startsWith("/") || raw.startsWith("//")) return "/brief";
   return raw;

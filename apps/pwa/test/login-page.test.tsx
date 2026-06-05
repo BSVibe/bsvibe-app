@@ -68,7 +68,17 @@ describe("LoginPage", () => {
     startOAuth.mockResolvedValue(undefined);
     render(<LoginPage />);
     await userEvent.click(screen.getByRole("button", { name: "Continue with Google" }));
-    expect(startOAuth).toHaveBeenCalledWith("google");
+    // Default return_to is /brief → pass `undefined` so the login page
+    // doesn't bake the boring default into the IdP callback URL.
+    expect(startOAuth).toHaveBeenCalledWith("google", undefined);
+  });
+
+  it("forwards return_to into startOAuth when one is present", async () => {
+    searchParams = new URLSearchParams(`return_to=${encodeURIComponent("/oauth/consent?x=1")}`);
+    startOAuth.mockResolvedValue(undefined);
+    render(<LoginPage />);
+    await userEvent.click(screen.getByRole("button", { name: "Continue with Google" }));
+    expect(startOAuth).toHaveBeenCalledWith("google", "/oauth/consent?x=1");
   });
 
   it("logs in and routes to /brief on success", async () => {
