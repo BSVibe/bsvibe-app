@@ -80,15 +80,18 @@ export async function startOAuth(provider: OAuthProvider, returnTo?: string): Pr
   sessionStorage.setItem(PKCE_VERIFIER_KEY, verifier);
   sessionStorage.setItem(PKCE_PROVIDER_KEY, provider);
   const codeChallenge = await challengeFor(verifier);
-  // Encode return_to into the redirect_to URL so the callback can recover
-  // it from URL params — Supabase OAuth round-trip is not guaranteed to
-  // preserve sessionStorage across the IdP redirect chain in all
-  // browsers / privacy modes, and we hit a real-world regression where
-  // the founder landed on /brief after Google sign-in because the key
-  // was missing post-redirect.
+  // Encode return_to into a HASH FRAGMENT (not a query param). Supabase's
+  // redirect URL allow-list is exact-match on path + query; a callback URL
+  // with a `?return_to=…` query param doesn't match the configured
+  // `https://app.bsvibe.dev/auth/callback` and Supabase falls back to the
+  // Site URL — the founder lands on /brief instead of the consent page.
+  // Hash fragments are NEVER sent to the server, so the allow-list match
+  // passes; the browser preserves the fragment through the 302 chain and
+  // /auth/callback reads it via window.location.hash. sessionStorage is
+  // also unreliable across the IdP round-trip.
   const callbackUrl = new URL(`${window.location.origin}/auth/callback`);
   if (returnTo) {
-    callbackUrl.searchParams.set("return_to", returnTo);
+    callbackUrl.hash = `return_to=${encodeURIComponent(returnTo)}`;
   }
   const { authorize_url } = await apiFetch<{ authorize_url: string }>(
     `/api/auth/oauth/${provider}/authorize`,
