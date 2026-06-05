@@ -63,21 +63,26 @@ export default function CallbackPage() {
 
 /** Resolve the same-origin `return_to` for the post-OAuth redirect.
  *
- *  Primary source: the ``?return_to=…`` query param the login page bakes
- *  into the IdP redirect_to URL via ``startOAuth``. Surviving in the URL
- *  is robust against IdP redirect chains that don't preserve
- *  sessionStorage (hit in the wild on Google OAuth → Supabase →
- *  app.bsvibe.dev; user landed on /brief because the key was gone).
+ *  Primary source: the ``#return_to=…`` HASH FRAGMENT the login page bakes
+ *  into the IdP redirect_to URL via ``startOAuth``. Hash is used because
+ *  Supabase's redirect URL allow-list is exact-match on path + query — a
+ *  query param breaks the match and Supabase falls back to the Site URL.
+ *  Hash fragments are never sent to the server, so the allow-list check
+ *  passes; the browser preserves the fragment through the IdP 302 chain.
  *
- *  Fallback: the legacy ``bsvibe.return_to`` sessionStorage key, for any
- *  caller that still stashes there.
+ *  Fallback chain: legacy ``?return_to=…`` query param (still emitted by
+ *  callers that haven't redeployed yet) → legacy ``bsvibe.return_to``
+ *  sessionStorage key (for sessions started before the URL-encoded shape).
  *
  *  Rejects anything but a relative path so this page can't be turned
  *  into an open redirector. */
 function readReturnTo(): string {
   if (typeof window === "undefined") return "/brief";
+  const fromHash = new URLSearchParams(
+    window.location.hash.startsWith("#") ? window.location.hash.slice(1) : "",
+  ).get("return_to");
   const fromUrl = new URLSearchParams(window.location.search).get("return_to");
-  const raw = fromUrl ?? sessionStorage.getItem("bsvibe.return_to");
+  const raw = fromHash ?? fromUrl ?? sessionStorage.getItem("bsvibe.return_to");
   if (!raw) return "/brief";
   if (!raw.startsWith("/") || raw.startsWith("//")) return "/brief";
   return raw;
