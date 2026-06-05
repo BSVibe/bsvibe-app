@@ -189,9 +189,10 @@ async def test_delete_client_marks_revoked(client: httpx.AsyncClient) -> None:
     client_id = r.json()["client_id"]
     r2 = await client.delete(f"/api/v1/oauth/clients/{client_id}")
     assert r2.status_code == 204
-    # List still includes it but revoked_at is set.
+    # Listing hides revoked rows (Settings UI noise reduction); the row
+    # stays in the table for audit + FK integrity but is filtered out.
     listed = (await client.get("/api/v1/oauth/clients")).json()
-    assert any(c["client_id"] == client_id and c["revoked_at"] for c in listed)
+    assert not any(c["client_id"] == client_id for c in listed)
 
 
 async def test_register_client_rejects_http_external_host(
