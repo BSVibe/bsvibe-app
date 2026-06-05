@@ -21,17 +21,28 @@ Idempotent: re-registering overwrites the same provider slot.
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.config import Settings, get_settings
 from backend.connectors.auth.app_credentials import AppCredentials, get_app_credentials
 from backend.connectors.auth.github import GitHubAppProvider
-from backend.connectors.auth.providers import register_provider
+from backend.connectors.auth.providers import OAuthProvider, register_provider
+from backend.connectors.auth.slack import build_slack_provider
 from backend.router.accounts.crypto import CredentialCipher
 
 # Providers loadable from the DB app-credentials table (manifest flow). github
-# only for now; slack / discord / notion / sentry cascade.
+# only for now; the others are env-only (no GitHub-App-style manifest).
 _DB_PROVIDERS = ("github",)
+
+# Vanilla OAuth2 connectors registered from env: (name, builder, id_attr,
+# secret_attr). Each builder takes client_id/client_secret and returns a
+# configured provider. github (App args) + sentry (install→grant) are handled
+# separately below.
+_ENV_PROVIDERS: tuple[tuple[str, Callable[..., OAuthProvider], str, str], ...] = (
+    ("slack", build_slack_provider, "slack_client_id", "slack_client_secret"),
+)
 
 
 def register_configured_providers(settings: Settings | None = None) -> list[str]:
@@ -49,6 +60,13 @@ def register_configured_providers(settings: Settings | None = None) -> list[str]
             )
         )
         registered.append("github")
+
+    for name, build, id_attr, secret_attr in _ENV_PROVIDERS:
+        client_id = getattr(settings, id_attr)
+        client_secret = getattr(settings, secret_attr)
+        if client_id and client_secret:
+            register_provider(build(client_id=client_id, client_secret=client_secret))
+            registered.append(name)
 
     return registered
 

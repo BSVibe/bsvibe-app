@@ -91,6 +91,18 @@ class Settings(BaseSettings):
     github_app_client_secret: str = ""
     github_app_id: str = ""
     github_app_private_key_pem: str = ""
+    # Vanilla OAuth2 connectors (authorization_code) — one App per provider,
+    # registered from env when both id + secret are set (no manifest flow;
+    # GitHub-App-only). slack: bot OAuth v2; notion / discord: Basic-auth
+    # token exchange; sentry: install→grant integration.
+    slack_client_id: str = ""
+    slack_client_secret: str = ""
+    notion_client_id: str = ""
+    notion_client_secret: str = ""
+    discord_client_id: str = ""
+    discord_client_secret: str = ""
+    sentry_client_id: str = ""
+    sentry_client_secret: str = ""
 
     # Sandbox settings (backend.workflow.infrastructure.sandbox)
     sandbox_enabled: bool = False

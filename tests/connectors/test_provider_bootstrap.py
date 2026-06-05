@@ -62,3 +62,18 @@ def test_no_creds_register_nothing() -> None:
     registered = register_configured_providers(settings)
     assert registered == []
     assert get_provider("github") is None
+
+
+def test_slack_registered_from_env() -> None:
+    settings = Settings(slack_client_id="cid", slack_client_secret="sec")
+    registered = register_configured_providers(settings)
+    assert "slack" in registered
+    prov = get_provider("slack")
+    assert prov is not None
+    assert prov.name == "slack"
+
+
+def test_vanilla_provider_not_registered_without_both_creds() -> None:
+    settings = Settings(slack_client_id="cid", slack_client_secret="")
+    registered = register_configured_providers(settings)
+    assert "slack" not in registered
