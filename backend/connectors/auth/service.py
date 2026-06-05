@@ -22,7 +22,13 @@ from backend.connectors.auth import store
 from backend.connectors.auth.app_credentials import get_app_credentials
 from backend.connectors.auth.github_manifest import build_manifest, manifest_post_url
 from backend.connectors.auth.providers import get_provider
-from backend.router.accounts.crypto import CredentialCipher
+from backend.router.accounts.crypto import CredentialCipher, _key_from_settings
+
+
+def build_credential_cipher() -> CredentialCipher:
+    """Construct the credential cipher from settings (one place callers reuse)."""
+    return CredentialCipher(_key_from_settings())
+
 
 # Pending-row marker for the App Manifest flow's CSRF state — distinct from the
 # user-OAuth ``github`` pending rows so the two never collide.
@@ -125,6 +131,7 @@ __all__ = [
     "UnknownProviderError",
     "begin_github_app_manifest",
     "begin_oauth_connect",
+    "build_credential_cipher",
     "callback_redirect_uri",
     "compute_github_app_status",
     "manifest_redirect_uri",

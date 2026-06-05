@@ -247,7 +247,17 @@ forbidden_modules = [
     "backend.schedule",
     "backend.executors",
     "backend.extensions",
-    "backend.connectors",
     "backend.api",
+]
+# ``backend.connectors`` is now an MCP-orchestrated context: the MCP-UI parity
+# rule requires every PWA Settings → Connectors action to be an MCP tool too
+# (``backend.mcp.tools.connector_tools``), so MCP legitimately depends on the
+# connector OAuth service. The connector layer pervasively uses the shared
+# credential cipher, which physically lives under ``backend.router.accounts.crypto``
+# (a credential-encryption utility, NOT model routing) — so MCP transitively
+# reaches that one module through connectors. That single utility edge is
+# whitelisted; ``backend.router`` stays otherwise forbidden.
+ignore_imports = [
+    "backend.connectors.auth.* -> backend.router.accounts.crypto",
 ]
 

@@ -25,15 +25,10 @@ from backend.connectors.auth.db import ConnectorOAuthTokenRow
 from backend.connectors.db import ConnectorAccountRow
 from backend.connectors.kinds import connector_kind, is_known_connector
 from backend.mcp.api import Tool, ToolContext, ToolError, ToolRegistry
-from backend.router.accounts.crypto import CredentialCipher, _key_from_settings
 
 logger = structlog.get_logger(__name__)
 
 _TOKEN_BYTES = 32
-
-
-def _cipher() -> CredentialCipher:
-    return CredentialCipher(_key_from_settings())
 
 
 # ── list ───────────────────────────────────────────────────────────────
@@ -126,7 +121,7 @@ async def _h_create(args: ConnectorCreateInput, ctx: ToolContext) -> ConnectorCr
         workspace_id=ctx.principal.workspace_id,
         connector=args.connector,
         webhook_token=webhook_token,
-        signing_secret_ciphertext=_cipher().encrypt(args.signing_secret),
+        signing_secret_ciphertext=service.build_credential_cipher().encrypt(args.signing_secret),
         external_ref=args.external_ref,
         delivery_config=args.delivery_config,
         is_active=True,
@@ -216,7 +211,9 @@ class GithubAppStatusOutput(BaseModel):
 
 
 async def _h_github_app_status(_: GithubAppStatusInput, ctx: ToolContext) -> GithubAppStatusOutput:
-    data = await service.compute_github_app_status(ctx.session, cipher=_cipher())
+    data = await service.compute_github_app_status(
+        ctx.session, cipher=service.build_credential_cipher()
+    )
     return GithubAppStatusOutput(**data)
 
 
