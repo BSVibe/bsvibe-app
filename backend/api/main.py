@@ -25,6 +25,7 @@ from backend.api.middleware import WorkspaceContextMiddleware
 from backend.api.oauth import metadata_router as oauth_metadata_router
 from backend.api.oauth import public_router as oauth_public_router
 from backend.api.v1 import router as v1_router
+from backend.api.v1.connector_oauth import public_router as connector_oauth_public_router
 from backend.api.v1.events import public_router as events_public_router
 from backend.api.v1.live_events import set_live_event_bus_redis
 from backend.api.v1.workers import public_router as workers_public_router
@@ -126,6 +127,10 @@ def create_app() -> FastAPI:
     # (eventsource-sse-auth-trap). Mounted OUTSIDE the auth-gated v1 router
     # for the same reason, like webhooks + worker register/heartbeat.
     app.include_router(events_public_router, prefix="/api/v1")
+    # Connector OAuth callback — public (the third party's browser redirect has
+    # no bsvibe session), mounted outside the auth-gated v1 router like the
+    # other public callbacks.
+    app.include_router(connector_oauth_public_router, prefix="/api/v1")
     app.include_router(v1_router, prefix="/api")
 
     # Embedded MCP server (Lift D2) — mounted at /mcp (NOT under /api — MCP
