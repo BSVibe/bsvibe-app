@@ -35,10 +35,21 @@ from backend.api.deps import get_db_session, get_workspace_id
 from backend.api.webhooks import get_credential_cipher
 from backend.config import get_settings
 from backend.connectors.auth import store
+from backend.connectors.auth.app_credentials import upsert_app_credentials
+from backend.connectors.auth.bootstrap import load_app_credential_providers
+from backend.connectors.auth.github_manifest import (
+    build_manifest,
+    convert_manifest_code,
+    manifest_post_url,
+)
 from backend.connectors.auth.providers import get_provider
 from backend.router.accounts.crypto import CredentialCipher
 
 logger = structlog.get_logger(__name__)
+
+# Pending-row marker for the App Manifest flow's CSRF state — distinct from the
+# user-OAuth ``github`` pending rows so the two never collide.
+_MANIFEST_PENDING_PROVIDER = "github:app-manifest"  # noqa: S105 — marker, not a secret
 
 # ``router`` carries the founder-authed ``/start`` and is mounted under the
 # auth-gated v1 router (/api/v1/connectors/oauth). ``public_router`` carries
@@ -70,6 +81,24 @@ def _pwa_return_url(provider: str, *, ok: bool) -> str:
     base = get_settings().pwa_url.rstrip("/")
     key = "connected" if ok else "connect_error"
     return f"{base}/settings/connectors?{key}={provider}"
+
+
+def _manifest_redirect_uri() -> str:
+    """Where GitHub returns the manifest creation ``code`` (CONFIGURED base)."""
+    base = get_settings().oauth_issuer.rstrip("/")
+    return f"{base}/api/v1/connectors/oauth/github/app-manifest/callback"
+
+
+def _github_webhook_base() -> str:
+    base = get_settings().oauth_issuer.rstrip("/")
+    return f"{base}/api/webhooks/github"
+
+
+def _pwa_manifest_return_url(*, ok: bool) -> str:
+    base = get_settings().pwa_url.rstrip("/")
+    key = "github_app" if ok else "github_app_error"
+    value = "ready" if ok else "1"
+    return f"{base}/settings/connectors?{key}={value}"
 
 
 @router.post("/{provider}/start")
@@ -154,6 +183,87 @@ async def oauth_callback(
     )
     return RedirectResponse(
         _pwa_return_url(provider, ok=True),
+        status_code=status.HTTP_302_FOUND,
+    )
+
+
+# ── GitHub App Manifest flow (Lift 1.5) ────────────────────────────────
+
+
+@router.post("/github/app-manifest/start")
+async def start_github_app_manifest(
+    workspace_id: Annotated[uuid.UUID, Depends(get_workspace_id)],
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+) -> dict[str, object]:
+    """Begin App creation: stash CSRF state, return the GitHub POST target + manifest.
+
+    The PWA renders a hidden, auto-submitting form that POSTs ``manifest`` (JSON)
+    to ``post_url``. GitHub creates the App, then redirects to the manifest's
+    ``redirect_url`` with a ``code`` (and the echoed ``state``).
+    """
+    settings = get_settings()
+    state = secrets.token_urlsafe(_STATE_BYTES)
+    redirect_uri = _manifest_redirect_uri()
+    await store.create_pending(
+        session,
+        state=state,
+        provider=_MANIFEST_PENDING_PROVIDER,
+        workspace_id=workspace_id,
+        code_verifier="-",  # manifest flow has no PKCE; column is NOT NULL
+        redirect_uri=redirect_uri,
+    )
+    await session.commit()
+    manifest = build_manifest(
+        homepage_url=settings.pwa_url.rstrip("/"),
+        redirect_url=redirect_uri,
+        oauth_callback_url=_callback_redirect_uri("github"),
+        webhook_url=_github_webhook_base(),
+    )
+    return {"post_url": manifest_post_url(state), "manifest": manifest}
+
+
+@public_router.get("/connectors/oauth/github/app-manifest/callback")
+async def github_app_manifest_callback(
+    code: str,
+    state: str,
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    cipher: Annotated[CredentialCipher, Depends(get_credential_cipher)],
+) -> RedirectResponse:
+    """Complete App creation: exchange the code, store creds, register provider."""
+    pending = await store.claim_pending(
+        session, state=state, provider=_MANIFEST_PENDING_PROVIDER
+    )
+    if pending is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="invalid or expired state",
+        )
+
+    result = await convert_manifest_code(code)
+    await upsert_app_credentials(
+        session,
+        provider="github",
+        app_id=result.app_id,
+        app_slug=result.app_slug,
+        client_id=result.client_id,
+        client_secret=result.client_secret,
+        private_key_pem=result.private_key_pem,
+        webhook_secret=result.webhook_secret,
+        html_url=result.html_url,
+        cipher=cipher,
+    )
+    await session.commit()
+    # Register the GitHubAppProvider now so "Connect with GitHub" works without
+    # a restart (DB load also re-registers it on the next boot).
+    await load_app_credential_providers(session, cipher)
+    logger.info(
+        "github_app_manifest_created",
+        app_id=result.app_id,
+        app_slug=result.app_slug,
+        workspace_id=str(pending.workspace_id),
+    )
+    return RedirectResponse(
+        _pwa_manifest_return_url(ok=True),
         status_code=status.HTTP_302_FOUND,
     )
 
