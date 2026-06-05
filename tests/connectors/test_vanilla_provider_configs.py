@@ -8,9 +8,13 @@ label path is caught.
 
 from __future__ import annotations
 
+from urllib.parse import parse_qs, urlsplit
+
 import httpx
 import respx
 
+from backend.connectors.auth.discord import build_discord_provider
+from backend.connectors.auth.notion import build_notion_provider
 from backend.connectors.auth.providers import OAuthProvider
 from backend.connectors.auth.slack import build_slack_provider
 
@@ -46,3 +50,56 @@ async def test_slack_exchange_label_is_team_name() -> None:
     )
     assert tok.access_token == "xoxb-tok"
     assert tok.account_label == "Acme Inc"
+
+
+# ── Notion ─────────────────────────────────────────────────────────────
+
+
+def test_notion_knobs_and_owner_param() -> None:
+    p = build_notion_provider(client_id="cid", client_secret="sec")
+    assert p.name == "notion"
+    assert p.token_exchange_auth == "basic"
+    assert p.refreshable is False
+    url = p.authorize_url(state="s", code_challenge="c", redirect_uri="https://cb")
+    assert parse_qs(urlsplit(url).query)["owner"] == ["user"]
+
+
+@respx.mock
+async def test_notion_exchange_label_is_workspace_name() -> None:
+    respx.post("https://api.notion.com/v1/oauth/token").mock(
+        return_value=httpx.Response(200, json={"access_token": "ntn", "workspace_name": "Docs HQ"})
+    )
+    tok = await build_notion_provider(client_id="c", client_secret="s").exchange_code(
+        code="c", code_verifier="v", redirect_uri="https://cb"
+    )
+    assert tok.access_token == "ntn"
+    assert tok.account_label == "Docs HQ"
+
+
+# ── Discord ────────────────────────────────────────────────────────────
+
+
+def test_discord_knobs() -> None:
+    p = build_discord_provider(client_id="cid", client_secret="sec")
+    assert p.name == "discord"
+    assert p.token_exchange_auth == "basic"
+    assert p.refreshable is True
+    assert p.userinfo_endpoint == "https://discord.com/api/users/@me"
+
+
+@respx.mock
+async def test_discord_exchange_label_from_userinfo() -> None:
+    respx.post("https://discord.com/api/oauth2/token").mock(
+        return_value=httpx.Response(
+            200, json={"access_token": "dtok", "refresh_token": "dref", "expires_in": 604800}
+        )
+    )
+    respx.get("https://discord.com/api/users/@me").mock(
+        return_value=httpx.Response(200, json={"username": "trinity"})
+    )
+    tok = await build_discord_provider(client_id="c", client_secret="s").exchange_code(
+        code="c", code_verifier="v", redirect_uri="https://cb"
+    )
+    assert tok.access_token == "dtok"
+    assert tok.refresh_token == "dref"
+    assert tok.account_label == "trinity"

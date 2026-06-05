@@ -27,7 +27,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.config import Settings, get_settings
 from backend.connectors.auth.app_credentials import AppCredentials, get_app_credentials
+from backend.connectors.auth.discord import build_discord_provider
 from backend.connectors.auth.github import GitHubAppProvider
+from backend.connectors.auth.notion import build_notion_provider
 from backend.connectors.auth.providers import OAuthProvider, register_provider
 from backend.connectors.auth.slack import build_slack_provider
 from backend.router.accounts.crypto import CredentialCipher
@@ -42,6 +44,8 @@ _DB_PROVIDERS = ("github",)
 # separately below.
 _ENV_PROVIDERS: tuple[tuple[str, Callable[..., OAuthProvider], str, str], ...] = (
     ("slack", build_slack_provider, "slack_client_id", "slack_client_secret"),
+    ("notion", build_notion_provider, "notion_client_id", "notion_client_secret"),
+    ("discord", build_discord_provider, "discord_client_id", "discord_client_secret"),
 )
 
 

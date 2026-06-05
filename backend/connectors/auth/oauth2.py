@@ -54,6 +54,9 @@ class OAuth2Provider:
     # tuple of nested keys, e.g. ("team", "name").
     label_path: tuple[str, ...] | None = None
     userinfo_endpoint: str | None = None
+    # Extra static query params on the authorize URL (e.g. Notion's
+    # ``owner=user``). Merged after the standard params.
+    extra_authorize_params: dict[str, str] = field(default_factory=dict)
     supports_service_token: bool = field(default=False)
 
     def authorize_url(self, *, state: str, code_challenge: str, redirect_uri: str) -> str:
@@ -68,11 +71,10 @@ class OAuth2Provider:
         if self.supports_pkce:
             params["code_challenge"] = code_challenge
             params["code_challenge_method"] = "S256"
+        params.update(self.extra_authorize_params)
         return f"{self.authorize_endpoint}?{urlencode(params)}"
 
-    async def exchange_code(
-        self, *, code: str, code_verifier: str, redirect_uri: str
-    ) -> TokenSet:
+    async def exchange_code(self, *, code: str, code_verifier: str, redirect_uri: str) -> TokenSet:
         data: dict[str, str] = {
             "grant_type": "authorization_code",
             "code": code,
@@ -99,9 +101,9 @@ class OAuth2Provider:
         headers = {"Accept": "application/json"}
         body = dict(data)
         if self.token_exchange_auth == "basic":  # noqa: S105 — auth-style label, not a secret
-            creds = base64.b64encode(
-                f"{self.client_id}:{self.client_secret}".encode()
-            ).decode("ascii")
+            creds = base64.b64encode(f"{self.client_id}:{self.client_secret}".encode()).decode(
+                "ascii"
+            )
             headers["Authorization"] = f"Basic {creds}"
         else:  # body
             body["client_id"] = self.client_id

@@ -77,3 +77,17 @@ def test_vanilla_provider_not_registered_without_both_creds() -> None:
     settings = Settings(slack_client_id="cid", slack_client_secret="")
     registered = register_configured_providers(settings)
     assert "slack" not in registered
+
+
+def test_notion_and_discord_registered_from_env() -> None:
+    settings = Settings(
+        notion_client_id="n",
+        notion_client_secret="ns",
+        discord_client_id="d",
+        discord_client_secret="ds",
+    )
+    registered = register_configured_providers(settings)
+    assert "notion" in registered
+    assert "discord" in registered
+    assert get_provider("notion") is not None
+    assert get_provider("discord") is not None
