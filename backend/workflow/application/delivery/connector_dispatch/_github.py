@@ -21,8 +21,9 @@ from pathlib import Path
 from typing import Any
 
 import structlog
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from backend.connectors.auth.resolve import resolve_connector_credentials
 from backend.extensions.plugin.base import PluginMeta
 from backend.extensions.plugin.runner import PluginRunner
 from backend.router.accounts.crypto import CredentialCipher
@@ -83,7 +84,13 @@ def build_github_workspace_provisioner(
         binding = await resolve_github_binding(session, workspace_id=run.workspace_id)
         if binding is None:
             return
-        token = _resolve_cipher().decrypt(binding.account.signing_secret_ciphertext)
+        # OAuth token (if the workspace connected via "Connect with GitHub")
+        # takes precedence over the legacy signing secret — both clone, push,
+        # and PR creation must use the SAME resolved credential.
+        creds = await resolve_connector_credentials(
+            session, account=binding.account, cipher=_resolve_cipher()
+        )
+        token = creds["token"]
         # The provisioner is handed a freshly-created (empty) workspace_dir; git
         # clone refuses a non-empty target, so remove the empty dir and let
         # clone create it. (Local FS calls — the run setup is not hot-path I/O.)
@@ -117,6 +124,10 @@ class GithubDeliveryDeps:
     git_ops: GitOps
     remote_url_for: Callable[[str], str]
     runner: PluginRunner
+    # Opens a fresh session to resolve the github API credential (OAuth token
+    # else legacy secret) at delivery time — the binding was resolved in an
+    # already-closed session, so credential resolution needs its own.
+    session_factory: async_sessionmaker[AsyncSession]
 
 
 async def deliver_github(
@@ -172,7 +183,6 @@ async def deliver_github(
             )
         ]
 
-    token = deps.cipher.decrypt(binding.account.signing_secret_ciphertext)
     branch = run_branch_name(run_id)
     summary = str(content.get("summary") or "")
     title, body = _split_summary(summary)
@@ -194,11 +204,23 @@ async def deliver_github(
             )
         ]
 
-    # 2. Push the branch to the (real-or-test) remote.
+    # 2. Resolve the github API credential — OAuth token (Connect with GitHub)
+    #    takes precedence over the legacy signing secret. Resolved AFTER the
+    #    no-op check so a no-change run never opens a DB session. A fresh
+    #    session is needed because the binding came from an already-closed one.
+    async with deps.session_factory() as session:
+        creds = await resolve_connector_credentials(
+            session, account=binding.account, cipher=deps.cipher
+        )
+        # Persist any token refresh resolve performed under the hood.
+        await session.commit()
+    token = creds["token"]
+
+    # 3. Push the branch to the (real-or-test) remote.
     remote_url = deps.remote_url_for(binding.repo)
     await deps.git_ops.push(checkout, branch, token=token)
 
-    # 3. Open the PR via the github plugin's open_pr action. Routing
+    # 4. Open the PR via the github plugin's open_pr action. Routing
     #    (repo/base) is the stable founder-set config; head is the run
     #    branch; title/body come from the deliverable summary (content).
     plugin = deps.plugins_by_name.get("github")
