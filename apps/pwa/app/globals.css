@@ -7600,3 +7600,263 @@ main.login {
   margin-top: 0;
 }
 /* ── END OAuth consent block ──────────────────────────────────────────── */
+
+/* ── BEGIN Developer tab (Lift D1 + D2) ──────────────────────────────────
+   Settings → Developer: OAuth clients + MCP endpoint. Follows the
+   add-resource-form / account-section token vocabulary so it looks
+   consistent with the rest of Settings. */
+
+.developer-tab__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.developer-tab__add {
+  border: 1px solid var(--hair-strong);
+  border-radius: 999px;
+  padding: 6px 14px;
+  font: inherit;
+  font-size: 0.82rem;
+  font-weight: 550;
+  background: var(--surface);
+  color: var(--ink);
+  cursor: pointer;
+}
+
+.developer-tab__add:hover:not(:disabled) {
+  background: var(--accent-bg);
+}
+
+.developer-tab__add:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.developer-tab__hint {
+  margin: 8px 0 0;
+  font-size: 0.85rem;
+  color: var(--ink-3);
+}
+
+.developer-tab__hint-sm {
+  font-size: 0.76rem;
+  color: var(--ink-3);
+}
+
+.developer-tab__error {
+  margin: 8px 0 0;
+  font-size: 0.8rem;
+  color: var(--amber-ink);
+}
+
+.developer-tab__list {
+  list-style: none;
+  padding: 0;
+  margin: 12px 0 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.developer-tab__row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--hair);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+
+.developer-tab__row[data-revoked] {
+  opacity: 0.55;
+}
+
+.developer-tab__row-main {
+  flex: 1 1 240px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.developer-tab__row-name {
+  font-size: 0.9rem;
+  font-weight: 550;
+  color: var(--ink);
+}
+
+.developer-tab__row-id {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 0.78rem;
+  color: var(--ink-2);
+  word-break: break-all;
+}
+
+.developer-tab__row-meta {
+  flex: 1 1 240px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 0.76rem;
+  color: var(--ink-3);
+}
+
+.developer-tab__revoke {
+  border: 1px solid var(--hair-strong);
+  border-radius: 999px;
+  padding: 5px 12px;
+  font: inherit;
+  font-size: 0.78rem;
+  font-weight: 550;
+  background: var(--surface);
+  color: var(--ink-2);
+  cursor: pointer;
+}
+
+.developer-tab__revoke:hover:not(:disabled) {
+  background: var(--accent-bg);
+}
+
+.developer-tab__revoke:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.developer-tab__revoked {
+  font-size: 0.76rem;
+  color: var(--ink-3);
+  font-style: italic;
+}
+
+.developer-tab__form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  margin-top: 12px;
+  padding: 14px;
+  border: 1px solid var(--hair);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+
+.developer-tab__label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--ink-2);
+}
+
+.developer-tab__label input,
+.developer-tab__label textarea {
+  width: 100%;
+  padding: 9px 11px;
+  border: 1px solid var(--hair-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+  font-size: 0.88rem;
+  font-family: var(--font-mono, ui-monospace, monospace);
+}
+
+.developer-tab__label input:focus-visible,
+.developer-tab__label textarea:focus-visible {
+  outline: 2px solid var(--amber-dot);
+  outline-offset: 1px;
+}
+
+.developer-tab__scopes {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px 14px;
+  border: 1px solid var(--hair);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+
+.developer-tab__scopes legend {
+  padding: 0 6px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--ink-2);
+}
+
+.developer-tab__scope {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.84rem;
+  font-weight: 400;
+  color: var(--ink-2);
+}
+
+.developer-tab__scope code {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 0.82rem;
+  color: var(--ink);
+}
+
+.developer-tab__submit {
+  align-self: flex-end;
+  border: 1px solid var(--hair-strong);
+  border-radius: 999px;
+  padding: 6px 18px;
+  font: inherit;
+  font-size: 0.82rem;
+  font-weight: 550;
+  background: var(--ink);
+  color: var(--bg);
+  cursor: pointer;
+}
+
+.developer-tab__submit:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.developer-tab__created {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 12px;
+  padding: 14px;
+  border: 1px solid var(--hair);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+
+.developer-tab__created-title {
+  margin: 0;
+  font-size: 0.92rem;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.developer-tab__created-hint {
+  margin: 0;
+  font-size: 0.8rem;
+  color: var(--ink-3);
+}
+
+.developer-tab__copy {
+  padding: 10px 12px;
+  border: 1px solid var(--hair);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+}
+
+.developer-tab__copy code {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 0.84rem;
+  color: var(--ink);
+  word-break: break-all;
+}
+/* ── END Developer tab block ───────────────────────────────────────────── */
