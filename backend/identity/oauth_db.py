@@ -58,9 +58,18 @@ class OAuthClientRow(Base):
     """
 
     __tablename__ = "oauth_clients"
-    # Workspace-scoped: a client belongs to the workspace whose owner
-    # registered it. The auto-filter engages on listings.
-    # (Codes / access tokens override this — see below.)
+    # Workspace scope on this table is *advisory*, NOT enforced by the
+    # auto-filter. Two flows need to find clients across workspaces:
+    #   1. Anonymous DCR (open RFC 7591 §3) writes rows with
+    #      ``workspace_id IS NULL`` — the user binds a workspace at
+    #      ``/authorize`` time on a real PWA session. The auto-filter's
+    #      ``workspace_id == ws`` excludes NULL rows, breaking consent.
+    #   2. ``/authorize`` + ``/token`` look the client up before the
+    #      caller's workspace context is necessarily relevant.
+    # Founder-facing listings (``list_clients_for_workspace``) still
+    # apply an explicit ``WHERE workspace_id = ?`` so the Settings UI
+    # stays workspace-isolated.
+    __exclude_workspace_filter__ = True
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
     # Nullable since Lift D2 followup: anonymous (RFC 7591 §3 open) DCR
