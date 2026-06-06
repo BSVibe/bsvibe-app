@@ -246,7 +246,22 @@ def build_agent_execution_deps(
     async def _frame_llm_for(session: AsyncSession, workspace_id: uuid.UUID) -> FrameLlm | None:
         """B9a — the per-workspace cheap-LLM for the frame stage. Returns
         ``None`` (keyword fallback) for zero / ambiguous / executor-only
-        workspaces."""
+        workspaces.
+
+        Lift E1: when ``settings.dispatch_use_new_resolver`` is set, try
+        the new caller-id → adapter chain FIRST (caller_id =
+        ``workflow.frame``). On miss / hard fail, fall back to the
+        legacy single-active-native-account path so existing workspaces
+        are unaffected. E2 deletes the fallback.
+        """
+        if settings.dispatch_use_new_resolver:
+            from backend.workflow.application.runtime.dispatch_bridge import (  # noqa: PLC0415
+                _resolve_frame_via_new_path,
+            )
+
+            resolved = await _resolve_frame_via_new_path(session, workspace_id, settings)
+            if resolved is not None:
+                return resolved
         accounts = await _list_active_workspace_accounts(session, workspace_id)
         account = _single_native_account(accounts)
         if account is None:

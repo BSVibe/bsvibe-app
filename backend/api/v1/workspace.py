@@ -46,6 +46,12 @@ class WorkspaceOut(BaseModel):
     # forever (roadmap §6 결정 로그 Q1 default), ``N >= 1`` = the daily
     # retention sweep rotates ``audit_outbox`` rows past N days.
     audit_retention_days: int | None = None
+    # Lift E1 — workspace-default ModelAccount for the new
+    # :class:`backend.dispatch.resolver.ModelAccountResolver`. ``None`` =
+    # the founder has not picked one yet; the resolver will raise
+    # ``NoMatchingRouteError`` when no rule matches and this is unset
+    # (BSVibe NEVER auto-stamps it per ``bsvibe-no-implicit-routing``).
+    default_account_id: uuid.UUID | None = None
 
 
 class WorkspaceUpdate(BaseModel):
@@ -70,6 +76,14 @@ class WorkspaceUpdate(BaseModel):
     # column. The "no change" case is "field absent from PATCH body" —
     # not the same as ``null`` (use ``model_fields_set`` to distinguish).
     audit_retention_days: int | None = Field(default=None, ge=1)
+    # Lift E1 — workspace-default ModelAccount fallback for the new
+    # :class:`backend.dispatch.resolver.ModelAccountResolver`. Same PATCH
+    # semantics as ``audit_retention_days``: omit to leave unchanged,
+    # send ``null`` to UNSET (= no fallback, resolver hard-fails on
+    # unmatched rules), send a UUID to set. The handler validates that
+    # the target account exists in this workspace + is active — a
+    # cross-workspace pointer is a 422.
+    default_account_id: uuid.UUID | None = Field(default=None)
 
 
 @router.get("", response_model=WorkspaceOut)
@@ -85,6 +99,7 @@ async def get_workspace(
         id=workspace.id,
         name=workspace.name,
         audit_retention_days=workspace.audit_retention_days,
+        default_account_id=workspace.default_account_id,
     )
 
 
@@ -118,12 +133,39 @@ async def update_workspace(
         workspace.name = payload.name.strip()
     if "audit_retention_days" in sent:
         workspace.audit_retention_days = payload.audit_retention_days
+    if "default_account_id" in sent:
+        # Validate the target is in this workspace + active — a stale or
+        # cross-workspace pointer would be a silent-wrong-route bug
+        # later. ``null`` UNSETs (= no fallback).
+        if payload.default_account_id is not None:
+            await _ensure_account_in_workspace(session, workspace_id, payload.default_account_id)
+        workspace.default_account_id = payload.default_account_id
     await session.commit()
     return WorkspaceOut(
         id=workspace.id,
         name=workspace.name,
         audit_retention_days=workspace.audit_retention_days,
+        default_account_id=workspace.default_account_id,
     )
+
+
+async def _ensure_account_in_workspace(
+    session: AsyncSession,
+    workspace_id: uuid.UUID,
+    account_id: uuid.UUID,
+) -> None:
+    """Reject the PATCH if the target ModelAccount isn't active in this workspace."""
+    from backend.router.infrastructure.repositories import (  # noqa: PLC0415
+        SqlAlchemyModelAccountRepository,
+    )
+
+    repo = SqlAlchemyModelAccountRepository(session)
+    accounts = await repo.list_active_for_workspace(workspace_id=workspace_id)
+    if not any(a.id == account_id for a in accounts):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=("default_account_id must reference an active ModelAccount in this workspace"),
+        )
 
 
 __all__ = ["router"]

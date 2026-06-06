@@ -87,6 +87,20 @@ class WorkspaceRow(WorkspacesBase):
     # an open INTEGER so a future settings-row migration doesn't need a
     # schema change.
     audit_retention_days: Mapped[int | None] = mapped_column(Integer, nullable=True, default=None)
+    # Lift E1 — workspace-default ModelAccount fallback for the new
+    # :class:`backend.dispatch.resolver.ModelAccountResolver`. The founder
+    # picks this through Settings → Models or the MCP tool
+    # ``bsvibe_workspace_set_default_account`` once a workspace has at
+    # least one active :class:`ModelAccount`. ``NULL`` (the default) is
+    # the architectural baseline — BSVibe NEVER auto-stamps it (founder
+    # policy ``bsvibe-no-implicit-routing``: routing is the user's
+    # decision). When the resolver finds no matching rule and the
+    # column is ``NULL`` it raises
+    # :class:`~backend.dispatch.resolver.NoMatchingRouteError` rather
+    # than silently picking a model. The FK is ``ON DELETE SET NULL`` so
+    # deleting the model account leaves the workspace row intact (the
+    # founder will be re-prompted to pick a default).
+    default_account_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=lambda: datetime.now()
     )
