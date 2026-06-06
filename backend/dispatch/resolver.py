@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass
+from typing import Any
 
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -107,6 +108,7 @@ class ModelAccountResolver:
         accounts: ModelAccountService | None = None,
         cipher: CredentialCipher | None = None,
         skill_names: list[str] | None = None,
+        redis: Any = None,
     ) -> None:
         self._session = session
         self._settings = settings
@@ -118,6 +120,12 @@ class ModelAccountResolver:
         self._cipher = cipher
         self._accounts = accounts
         self._skill_names = skill_names or []
+        # Redis is threaded into the ExecutorAdapter so the worker stream
+        # XADD has a transport (Lift E3). LiteLLM accounts never touch
+        # it; an executor account with no redis raises
+        # :class:`~backend.dispatch.adapter.ExecutorAdapterUnavailable`
+        # at chat() time.
+        self._redis = redis
 
     def _ensure_accounts(self) -> ModelAccountService:
         if self._accounts is not None:
@@ -177,6 +185,7 @@ class ModelAccountResolver:
             session=self._session,
             settings=self._settings,
             api_key=api_key,
+            redis=self._redis,
         )
 
         # Defensive validation — rule creation is supposed to catch this

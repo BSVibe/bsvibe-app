@@ -6,8 +6,11 @@
   the resolver hands back to call sites. ``chat(system, messages, tools)``
   is the only verb; :class:`LiteLLMAdapter` wraps
   :class:`~backend.router.llm_client.LlmClient`;
-  :class:`ExecutorAdapter` is a stub that raises until Lift E3 wires the
-  subprocess executor (claude_code / codex / opencode).
+  :class:`ExecutorAdapter` (Lift E3) dispatches a single-shot CLI
+  subprocess task through the existing
+  :mod:`backend.executors.dispatch` substrate (worker stream XADD →
+  ``claude --print`` / ``codex -p`` / ``opencode -p`` → result POST →
+  :class:`ChatResponse`).
 * :class:`~backend.dispatch.resolver.ModelAccountResolver` — looks up the
   account for ``(caller_id, workspace_id)``: first an active
   :class:`~backend.router.routing.run_routing.db.RunRoutingRuleRow`, then
@@ -31,6 +34,7 @@ from backend.dispatch.adapter import (
     ChatResponse,
     ChatToolCall,
     ExecutorAdapter,
+    ExecutorAdapterUnavailable,
     LiteLLMAdapter,
     ModelAccountAdapter,
     adapter_for,
@@ -54,6 +58,7 @@ __all__ = [
     "ChatResponse",
     "ChatToolCall",
     "ExecutorAdapter",
+    "ExecutorAdapterUnavailable",
     "LiteLLMAdapter",
     "ModelAccountAdapter",
     "ModelAccountResolver",

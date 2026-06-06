@@ -1,4 +1,4 @@
-"""Production :class:`AgentExecutionDeps` factory (Lift E2 — resolver-only).
+"""Production :class:`AgentExecutionDeps` factory (Lift E3 — adapter-only).
 
 Constructs the run-orchestrator factory + skill-loader factory + frame-LLM
 factory + composite workspace provisioner that the
@@ -9,6 +9,14 @@ After Lift E2 every LLM call site (frame / plan / act / judge / settle /
 bootstrap) flows through
 :class:`backend.dispatch.resolver.ModelAccountResolver` keyed on a
 ``caller_id``. No classifier, no tier, no provider allow-list.
+
+After Lift E3 the executor-account bypass is GONE — every account, whether
+LiteLLM or executor, routes through :class:`RunOrchestrator` (the native
+BSVibe agent loop), and the executor's CLI subprocess is reached via
+:class:`backend.dispatch.adapter.ExecutorAdapter.chat` instead of the legacy
+:class:`backend.executors.coordinator.ExecutorOrchestrator` full-run wrapper.
+``ExecutorOrchestrator`` is still importable for the integration tests that
+construct it directly, but the runtime factory no longer reaches for it.
 """
 
 from __future__ import annotations
@@ -26,11 +34,9 @@ from backend.dispatch.caller_registry import (
     CALLER_AGENT_LOOP_ACT,
     CALLER_FRAME,
 )
-from backend.executors.orchestrator import ExecutorOrchestrator
 from backend.extensions.plugin.base import PluginMeta
 from backend.extensions.skill.loader import SkillLoader
 from backend.router.accounts.crypto import CredentialCipher, _key_from_settings
-from backend.router.accounts.predicates import is_executor_account
 from backend.workflow.application.agent_loop import (
     CanonRetriever,
     RunCompute,
@@ -42,7 +48,6 @@ from backend.workflow.application.delivery.connector_dispatch import (
 from backend.workflow.application.knowledge_orchestrator import KnowledgeAnswerOrchestrator
 from backend.workflow.application.loop_llm import ResolverLoopLlm
 from backend.workflow.application.runtime.account_resolution import (
-    _resolve_judge_llm,
     _resolve_via_caller,
 )
 from backend.workflow.application.runtime.dispatcher import _ResolverFrameLlm
@@ -193,6 +198,7 @@ def build_agent_execution_deps(
             caller_id=CALLER_FRAME,
             workspace_id=workspace_id,
             settings=settings,
+            redis=redis_client,
         )
         if resolved is None:
             logger.info(
@@ -204,10 +210,21 @@ def build_agent_execution_deps(
         return _ResolverFrameLlm(adapter=resolved.adapter)
 
     async def _factory(session: AsyncSession, run: ExecutionRun) -> RunCompute | None:
-        """Per-run orchestrator factory — resolves the account for the
-        agent loop's act turn first; executor accounts route to
-        :class:`ExecutorOrchestrator`, the rest to the native loop. On
-        no-match writes the historical ``DECISION_NO_MODEL_ACCOUNT``
+        """Per-run orchestrator factory — Lift E3 unifies the path.
+
+        Every account (LiteLLM OR executor) routes through
+        :class:`RunOrchestrator` (the native BSVibe agent loop). For an
+        executor account the resolver hands back an
+        :class:`~backend.dispatch.adapter.ExecutorAdapter`, so each
+        plan/act/judge turn becomes a single-shot CLI subprocess call
+        through the worker; the agent loop, tool set, and verification
+        contract are BSVibe's. The legacy
+        :class:`~backend.executors.coordinator.ExecutorOrchestrator`
+        full-run wrapper is no longer reached from this factory (the
+        bypass is gone — per design ``BSVibe_Dispatch_Redesign_2026-06-05.md``
+        §2.1 and Lift E3 invariant in :mod:`backend.dispatch.adapter`).
+
+        On no-match writes the historical ``DECISION_NO_MODEL_ACCOUNT``
         :class:`Decision` so the founder UI surfaces the missing-route
         condition (Lift E1/E2 invariant).
         """
@@ -220,6 +237,7 @@ def build_agent_execution_deps(
             caller_id=CALLER_AGENT_LOOP_ACT,
             workspace_id=run.workspace_id,
             settings=settings,
+            redis=redis_client,
         )
         if resolved is None:
             # Fallthrough writes a Decision when there's truly no LLM
@@ -232,24 +250,9 @@ def build_agent_execution_deps(
                 caller_id=CALLER_AGENT_LOOP_ACT,
             )
             return None
-        account = resolved.account
 
         retriever = await _retriever_for(session, run.workspace_id)
         suggested_skill, suggested_skill_description = _frame_skill_hint(run, _skill_loader_for)
-
-        # Executor accounts route to the worker / CLI orchestrator. The
-        # judge LLM is resolved independently (different caller_id).
-        if is_executor_account(account):
-            verify_llm = await _resolve_judge_llm(session, run, settings)
-            return ExecutorOrchestrator(
-                session=session,
-                redis=redis_client,
-                account=account,
-                sandbox_manager=box,
-                settings=settings,
-                retriever=retriever,
-                verify_llm=verify_llm,
-            )
 
         llm = ResolverLoopLlm(adapter=resolved.adapter)
 

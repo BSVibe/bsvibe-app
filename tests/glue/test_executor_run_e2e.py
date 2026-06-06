@@ -317,6 +317,13 @@ async def _simulate_worker_done(
 # --------------------------------------------------------------------------
 
 
+@pytest.mark.skip(
+    reason="Lift E3 — factory now routes executor accounts through RunOrchestrator + "
+    "ExecutorAdapter.chat. The full-run ExecutorOrchestrator wrapper is no longer "
+    "factory-built; the integration is exercised by test_adapter.py's chat happy path. "
+    "The direct-construction ExecutorOrchestrator tests (verifies-and-review-ready, "
+    "captures-artifact) remain green."
+)
 async def test_executor_run_success_no_contract_routes_to_human_review(
     sf: async_sessionmaker[AsyncSession],
     tmp_path: Path,
@@ -612,6 +619,11 @@ async def test_executor_run_captures_artifact_and_serves_via_endpoint(
 # --------------------------------------------------------------------------
 
 
+@pytest.mark.skip(
+    reason="Lift E3 — factory no longer routes executor accounts to ExecutorOrchestrator. "
+    "The no-worker condition surfaces through ExecutorAdapter.chat raising "
+    "ExecutorAdapterUnavailable (covered in test_adapter.py)."
+)
 async def test_executor_run_no_worker_creates_decision(
     sf: async_sessionmaker[AsyncSession],
     tmp_path: Path,
@@ -657,6 +669,11 @@ async def test_executor_run_no_worker_creates_decision(
 # --------------------------------------------------------------------------
 
 
+@pytest.mark.skip(
+    reason="Lift E3 — factory no longer routes executor accounts to ExecutorOrchestrator. "
+    "Worker-reported failure now surfaces as ExecutorAdapterUnavailable in the "
+    "chat path (covered in test_adapter.py)."
+)
 async def test_executor_run_worker_failure_fails_run(
     sf: async_sessionmaker[AsyncSession],
     tmp_path: Path,
@@ -796,6 +813,53 @@ async def test_non_executor_account_builds_native_orchestrator(
 # --------------------------------------------------------------------------
 
 
+# --------------------------------------------------------------------------
+# 5b. Lift E3 — executor accounts route through RunOrchestrator (NOT
+#     ExecutorOrchestrator). The executor's CLI subprocess is reached one
+#     turn at a time through ExecutorAdapter.chat; the legacy full-run
+#     wrapper is no longer factory-built.
+# --------------------------------------------------------------------------
+
+
+async def test_lift_e3_executor_account_routes_through_native_run_orchestrator(
+    sf: async_sessionmaker[AsyncSession],
+    tmp_path: Path,
+) -> None:
+    """Lift E3 invariant: executor account → RunOrchestrator (not ExecutorOrchestrator).
+
+    The factory used to branch on ``is_executor_account`` and build an
+    :class:`ExecutorOrchestrator` wrapper that drove the whole run via a
+    single CLI subprocess. After Lift E3 every account routes through the
+    native :class:`RunOrchestrator`; an executor account just means each
+    plan/act/judge LLM turn dispatches a one-shot CLI subprocess via
+    :class:`backend.dispatch.adapter.ExecutorAdapter`.
+    """
+    from backend.workflow.application.agent_loop import RunOrchestrator
+
+    workspace_id = uuid.uuid4()
+    redis = await _make_redis()
+    async with sf() as s:
+        worker = await _seed_worker(s, workspace_id=workspace_id, capabilities=["claude_code"])
+        await _seed_executor_account(
+            s, workspace_id=workspace_id, worker_id=worker.id, executor_type="claude_code"
+        )
+        run_id = await _open_run(s, workspace_id=workspace_id, text="ship it")
+        await s.commit()
+
+    deps = build_agent_execution_deps(redis_client=redis, settings=_short_timeout_settings())
+    async with sf() as s:
+        run = await s.get(ExecutionRun, run_id)
+        assert run is not None
+        orchestrator = await deps.orchestrator_factory(s, run)
+        assert isinstance(orchestrator, RunOrchestrator)
+        assert not isinstance(orchestrator, ExecutorOrchestrator)
+    await redis.aclose()
+
+
+@pytest.mark.skip(
+    reason="Lift E3 — factory no longer routes executor accounts to ExecutorOrchestrator. "
+    "Missing redis surfaces through ExecutorAdapter.chat (covered in test_adapter.py)."
+)
 async def test_executor_run_without_redis_creates_decision(
     sf: async_sessionmaker[AsyncSession],
     tmp_path: Path,
@@ -880,6 +944,11 @@ async def _seed_canon_concept(
     )
 
 
+@pytest.mark.skip(
+    reason="Lift E3 — factory no longer builds ExecutorOrchestrator. The native "
+    "RunOrchestrator's retriever wiring is covered by "
+    "test_factory_wires_retriever_into_native_orchestrator."
+)
 async def test_factory_wires_retriever_into_executor_orchestrator(
     sf: async_sessionmaker[AsyncSession],
     tmp_path: Path,
@@ -1048,6 +1117,12 @@ async def _dispatched_task_prompt(
         return task.prompt
 
 
+@pytest.mark.skip(
+    reason="Lift E3 — factory no longer builds ExecutorOrchestrator, so the design/impl "
+    "directive on the orchestrator's dispatched prompt is exercised only through "
+    "direct construction. The _DESIGN_SPEC_DIRECTIVE branch in "
+    "backend.executors.prompt is covered by tests/executors/test_context_assembly.py."
+)
 async def test_design_stage_dispatch_prompt_carries_spec_only_directive(
     sf: async_sessionmaker[AsyncSession],
     tmp_path: Path,
@@ -1087,6 +1162,9 @@ async def test_design_stage_dispatch_prompt_carries_spec_only_directive(
     await redis.aclose()
 
 
+@pytest.mark.skip(
+    reason="Lift E3 — see test_design_stage_dispatch_prompt_carries_spec_only_directive."
+)
 async def test_impl_stage_dispatch_prompt_has_no_spec_only_directive(
     sf: async_sessionmaker[AsyncSession],
     tmp_path: Path,
@@ -1126,6 +1204,9 @@ async def test_impl_stage_dispatch_prompt_has_no_spec_only_directive(
     await redis.aclose()
 
 
+@pytest.mark.skip(
+    reason="Lift E3 — see test_design_stage_dispatch_prompt_carries_spec_only_directive."
+)
 async def test_single_pipeline_dispatch_prompt_has_no_spec_only_directive(
     sf: async_sessionmaker[AsyncSession],
     tmp_path: Path,
@@ -1159,6 +1240,11 @@ async def test_single_pipeline_dispatch_prompt_has_no_spec_only_directive(
     await redis.aclose()
 
 
+@pytest.mark.skip(
+    reason="Lift E3 — factory no longer builds ExecutorOrchestrator. The graceful-empty "
+    "retriever invariant for the native path is covered by "
+    "test_factory_wires_retriever_into_native_orchestrator."
+)
 async def test_factory_retriever_empty_workspace_folds_nothing(
     sf: async_sessionmaker[AsyncSession],
     tmp_path: Path,
