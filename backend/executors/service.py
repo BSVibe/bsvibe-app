@@ -166,24 +166,21 @@ async def _remove_executor_model_accounts(
 # ── Worker registration ───────────────────────────────────────────────────────
 
 
-async def register_worker(
+async def register_worker_for_workspace(
     session: AsyncSession,
     *,
-    install_token: str,
+    workspace_id: uuid.UUID,
     name: str,
     labels: list[str],
     capabilities: list[str],
 ) -> tuple[WorkerRow, str]:
-    """Validate ``install_token`` and create a worker, returning ``(row, plaintext)``.
+    """Create a worker bound to ``workspace_id``, returning ``(row, plaintext)``.
 
-    The fresh per-worker token's plaintext is returned once; only its hash is
-    persisted. Raises :class:`InvalidInstallToken` when the install token is
-    absent or does not match any workspace.
+    The new Lift E4 path — workspace is derived upstream from the OAuth bearer
+    (Supabase session JWT or MCP access token) so no install_token round-trip
+    is required. The fresh per-worker token's plaintext is returned once; only
+    its hash is persisted.
     """
-    workspace_id = await resolve_install_token_workspace(session, install_token)
-    if workspace_id is None:
-        raise InvalidInstallToken("invalid or missing install token")
-
     token = _generate_token()
     worker = WorkerRow(
         workspace_id=workspace_id,
@@ -217,6 +214,37 @@ async def register_worker(
         capabilities=list(capabilities),
     )
     return worker, token
+
+
+async def register_worker(
+    session: AsyncSession,
+    *,
+    install_token: str,
+    name: str,
+    labels: list[str],
+    capabilities: list[str],
+) -> tuple[WorkerRow, str]:
+    """Validate ``install_token`` and create a worker, returning ``(row, plaintext)``.
+
+    **Deprecated (Lift E4)** — the install-token path is kept for backward
+    compatibility while existing worker hosts cut over to the OAuth-bearer
+    flow. Lift E5 removes this entry point + the underlying
+    ``executor_install_tokens`` table. Prefer
+    :func:`register_worker_for_workspace` for new callers.
+
+    Raises :class:`InvalidInstallToken` when the install token is absent or
+    does not match any workspace.
+    """
+    workspace_id = await resolve_install_token_workspace(session, install_token)
+    if workspace_id is None:
+        raise InvalidInstallToken("invalid or missing install token")
+    return await register_worker_for_workspace(
+        session,
+        workspace_id=workspace_id,
+        name=name,
+        labels=labels,
+        capabilities=capabilities,
+    )
 
 
 async def authenticate_worker(session: AsyncSession, token: str) -> WorkerRow | None:
@@ -301,6 +329,7 @@ __all__ = [
     "mint_install_token",
     "record_heartbeat",
     "register_worker",
+    "register_worker_for_workspace",
     "resolve_install_token_workspace",
     "revoke_worker",
 ]

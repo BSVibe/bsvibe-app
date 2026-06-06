@@ -29,6 +29,13 @@ dependencies = [
     "bsvibe-sdk",
 ]
 
+[project.scripts]
+# Lift E4 — GitHub-Actions-runner-style worker UX. ``bsvibe login`` runs the
+# PKCE loopback flow on the founder's host; ``bsvibe-worker register`` reads
+# the resulting credential and registers a worker against the backend.
+bsvibe = "backend.executors.worker.cli:run_bsvibe_cli"
+bsvibe-worker = "backend.executors.worker.cli:run_bsvibe_worker_cli"
+
 [tool.uv.sources]
 bsvibe-sdk = { workspace = true }
 
@@ -322,5 +329,14 @@ ignore_imports = [
     # The MCP touch-point is the same scheduler entry the REST handler
     # uses — no second copy of the orchestration.
     "backend.mcp.tools.workflow_tools -> backend.workflow.application.runtime.product_bootstrap_runtime",
+    # Lift E4 — UI-parity for the Settings → Workers tab (list / revoke).
+    # The MCP path calls the SAME executors.service primitives the REST
+    # surface uses so the founder operating through Claude Code sees an
+    # identical list / revoke chain. ``executors.service`` reaches into
+    # ``router.accounts`` because revoking a worker also detaches its
+    # routable ``provider='executor'`` model account rows — that
+    # one-step cascade lives in the service layer.
+    "backend.mcp.tools.workers_tools -> backend.executors.service",
+    "backend.mcp.tools.workers_tools -> backend.executors.db",
 ]
 

@@ -254,3 +254,175 @@ async def test_revoke_then_worker_auth_401(db, ws_client, admin_client) -> None:
 async def test_revoke_unknown_worker_is_404(ws_client) -> None:
     r = await ws_client.delete(f"/api/v1/workers/{uuid.uuid4()}")
     assert r.status_code == 404, r.text
+
+
+# ── Lift E4 — bearer-token register path ──────────────────────────────────────
+
+
+async def test_install_token_endpoint_advertises_deprecation_header(admin_client) -> None:
+    r = await admin_client.post("/api/v1/workers/install-token")
+    assert r.status_code == 200
+    assert r.headers.get("deprecation") == "true"
+    assert "successor-version" in (r.headers.get("link") or "")
+
+
+async def test_register_with_supabase_bearer_resolves_workspace(db, workspace_id) -> None:
+    """Lift E4 — register with ``Authorization: Bearer`` (Supabase JWT)."""
+    sub = "bearer-register-sub"
+    await _seed_member(db, workspace_id, "owner", sub)
+
+    from backend.api.v1 import workers_register_auth
+
+    async def _ok_bearer(bearer, session):  # noqa: ARG001
+        return workers_register_auth.ResolvedRegisterPrincipal(
+            workspace_id=workspace_id, auth_kind="supabase_jwt"
+        )
+
+    app = create_app()
+    # The route hits the standalone resolver — patch that, not get_current_user.
+    import backend.api.v1.workers as workers_mod
+
+    workers_mod.resolve_workspace_for_bearer = _ok_bearer  # type: ignore[assignment]
+    try:
+        async with _client(app, db) as c:
+            r = await c.post(
+                "/api/v1/workers/register",
+                headers={"Authorization": "Bearer fake-but-resolved"},
+                json={"name": "mac-mini", "labels": [], "capabilities": ["claude_code"]},
+            )
+        assert r.status_code == 201, r.text
+        body = r.json()
+        assert uuid.UUID(body["id"])
+        assert body["token"]
+        assert "deprecation" not in {k.lower() for k in r.headers}
+    finally:
+        # restore
+        from backend.api.v1.workers_register_auth import (
+            resolve_workspace_for_bearer as real_resolver,
+        )
+
+        workers_mod.resolve_workspace_for_bearer = real_resolver  # type: ignore[assignment]
+
+
+async def test_register_with_invalid_bearer_is_401(db) -> None:
+    """A bearer that fails BOTH MCP and Supabase JWT verification → 401."""
+    app = create_app()
+    async with _client(app, db) as c:
+        r = await c.post(
+            "/api/v1/workers/register",
+            headers={"Authorization": "Bearer obviously-not-a-jwt"},
+            json={"name": "x", "labels": [], "capabilities": []},
+        )
+    assert r.status_code == 401, r.text
+    assert "invalid bearer token" in r.json()["detail"]
+
+
+async def test_register_without_any_auth_is_401(db) -> None:
+    app = create_app()
+    async with _client(app, db) as c:
+        r = await c.post(
+            "/api/v1/workers/register",
+            json={"name": "x", "labels": [], "capabilities": []},
+        )
+    assert r.status_code == 401, r.text
+    assert "Authorization bearer or X-Install-Token" in r.json()["detail"]
+
+
+async def test_register_bearer_ignores_body_workspace_id(db, workspace_id) -> None:
+    """The body has no workspace_id field — extra='forbid' rejects sneaky inputs.
+
+    Workspace MUST come from the verified bearer, never the body. This test
+    asserts the schema-level guard: even sending a workspace_id field 422s.
+    """
+    sub = "owner-sub"
+    await _seed_member(db, workspace_id, "owner", sub)
+
+    from backend.api.v1 import workers_register_auth
+
+    async def _ok_bearer(bearer, session):  # noqa: ARG001
+        return workers_register_auth.ResolvedRegisterPrincipal(
+            workspace_id=workspace_id, auth_kind="supabase_jwt"
+        )
+
+    app = create_app()
+    import backend.api.v1.workers as workers_mod
+
+    workers_mod.resolve_workspace_for_bearer = _ok_bearer  # type: ignore[assignment]
+    try:
+        async with _client(app, db) as c:
+            r = await c.post(
+                "/api/v1/workers/register",
+                headers={"Authorization": "Bearer fake"},
+                json={
+                    "name": "x",
+                    "labels": [],
+                    "capabilities": [],
+                    "workspace_id": str(uuid.uuid4()),  # forbidden extra
+                },
+            )
+        assert r.status_code == 422, r.text
+    finally:
+        from backend.api.v1.workers_register_auth import (
+            resolve_workspace_for_bearer as real_resolver,
+        )
+
+        workers_mod.resolve_workspace_for_bearer = real_resolver  # type: ignore[assignment]
+
+
+async def test_register_legacy_install_token_still_works(admin_client) -> None:
+    """Backward-compat — the X-Install-Token path is preserved through Lift E5."""
+    install_token = (await admin_client.post("/api/v1/workers/install-token")).json()["token"]
+    r = await admin_client.post(
+        "/api/v1/workers/register",
+        headers={"X-Install-Token": install_token},
+        json={"name": "legacy", "labels": [], "capabilities": []},
+    )
+    assert r.status_code == 201, r.text
+    # The deprecated install_token register response carries the Deprecation
+    # signal so callers know to migrate.
+    assert r.headers.get("deprecation") == "true"
+
+
+async def test_register_response_carries_created_at_and_status(db, workspace_id) -> None:
+    """List response after a bearer-register includes the new timestamps."""
+    sub = "owner-sub"
+    await _seed_member(db, workspace_id, "owner", sub)
+
+    from backend.api.v1 import workers_register_auth
+
+    async def _ok_bearer(bearer, session):  # noqa: ARG001
+        return workers_register_auth.ResolvedRegisterPrincipal(
+            workspace_id=workspace_id, auth_kind="supabase_jwt"
+        )
+
+    app = create_app()
+    import backend.api.v1.workers as workers_mod
+
+    workers_mod.resolve_workspace_for_bearer = _ok_bearer  # type: ignore[assignment]
+
+    def _ws() -> uuid.UUID:
+        return workspace_id
+
+    app.dependency_overrides[get_current_user] = fake_current_user(sub)
+    app.dependency_overrides[get_workspace_id] = _ws
+    try:
+        async with _client(app, db) as c:
+            await c.post(
+                "/api/v1/workers/register",
+                headers={"Authorization": "Bearer fake"},
+                json={"name": "stamped", "labels": [], "capabilities": ["claude_code"]},
+            )
+            lr = await c.get("/api/v1/workers")
+        assert lr.status_code == 200, lr.text
+        rows = lr.json()
+        assert len(rows) == 1
+        assert rows[0]["name"] == "stamped"
+        assert rows[0]["created_at"]  # ISO 8601 string
+        # No heartbeat yet — explicitly null.
+        assert rows[0]["last_heartbeat"] is None
+    finally:
+        from backend.api.v1.workers_register_auth import (
+            resolve_workspace_for_bearer as real_resolver,
+        )
+
+        workers_mod.resolve_workspace_for_bearer = real_resolver  # type: ignore[assignment]
