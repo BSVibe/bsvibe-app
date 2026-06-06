@@ -4,7 +4,9 @@ import type { ConnectorCreate, ConnectorCreated, ConnectorName } from "@/lib/api
 import { KNOWN_CONNECTORS } from "@/lib/api/types";
 import { useTranslations } from "next-intl";
 import { useId, useMemo, useState } from "react";
+import { ConnectorOAuthButton } from "./ConnectorOAuthButton";
 import CopyField from "./CopyField";
+import { GithubAppSetup } from "./GithubAppSetup";
 import { type FieldDescriptor, descriptorFor } from "./connector-fields";
 
 type FormState = "idle" | "submitting" | "error";
@@ -287,7 +289,13 @@ function FieldRow({
   const placeholder = t(`fields.${field.i18nKey}.placeholder`);
   const inputId = useId();
   const control =
-    field.kind === "textarea" ? (
+    field.kind === "oauth" ? (
+      field.oauthProvider === "github" ? (
+        <GithubAppSetup />
+      ) : (
+        <ConnectorOAuthButton provider={field.oauthProvider ?? field.key} />
+      )
+    ) : field.kind === "textarea" ? (
       <textarea
         id={inputId}
         className="connector-form__input connector-form__input--mono"

@@ -323,3 +323,64 @@ async def test_import_now_requires_write_scope(db, workspace_id, user_id, regist
                 {"connector_id": str(uuid.uuid4())},
                 ctx,
             )
+
+
+# ── OAuth connect / GitHub-App setup tools (folded from feat/connector-oauth) ──
+
+import backend.connectors.auth.db  # noqa: E402, F401 — register oauth tables
+from backend.connectors.auth import providers as _providers_mod  # noqa: E402
+from backend.connectors.auth.github import GitHubAppProvider  # noqa: E402
+from backend.connectors.auth.providers import register_provider  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _isolate_providers():
+    snapshot = dict(_providers_mod._REGISTRY)
+    try:
+        yield
+    finally:
+        _providers_mod._REGISTRY.clear()
+        _providers_mod._REGISTRY.update(snapshot)
+
+
+async def test_oauth_start_unknown_provider_errors(db, workspace_id, user_id, registry) -> None:
+    async with db() as s:
+        ctx = ToolContext(
+            principal=_principal(workspace_id=workspace_id, user_id=user_id, scopes=("mcp:write",)),
+            session=s,
+        )
+        with pytest.raises(ToolError, match="not configured"):
+            await registry.call_tool("bsvibe_connectors_oauth_start", {"provider": "github"}, ctx)
+
+
+async def test_oauth_start_returns_authorize_url(db, workspace_id, user_id, registry) -> None:
+    register_provider(GitHubAppProvider(client_id="Iv1.x", client_secret="s"))  # noqa: S106
+    async with db() as s:
+        ctx = ToolContext(
+            principal=_principal(workspace_id=workspace_id, user_id=user_id, scopes=("mcp:write",)),
+            session=s,
+        )
+        out = await registry.call_tool("bsvibe_connectors_oauth_start", {"provider": "github"}, ctx)
+    assert out["authorize_url"].startswith("https://github.com/login/oauth/authorize")
+    assert "instructions" in out
+
+
+async def test_github_app_status_not_configured(db, workspace_id, user_id, registry) -> None:
+    async with db() as s:
+        ctx = ToolContext(
+            principal=_principal(workspace_id=workspace_id, user_id=user_id, scopes=("mcp:read",)),
+            session=s,
+        )
+        out = await registry.call_tool("bsvibe_connectors_github_app_status", {}, ctx)
+    assert out["configured"] is False
+
+
+async def test_github_app_setup_url_returns_manifest(db, workspace_id, user_id, registry) -> None:
+    async with db() as s:
+        ctx = ToolContext(
+            principal=_principal(workspace_id=workspace_id, user_id=user_id, scopes=("mcp:write",)),
+            session=s,
+        )
+        out = await registry.call_tool("bsvibe_connectors_github_app_setup_url", {}, ctx)
+    assert out["post_url"].startswith("https://github.com/settings/apps/new")
+    assert "redirect_url" in out["manifest"]

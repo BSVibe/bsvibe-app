@@ -56,6 +56,8 @@ from backend.api.deps import get_db_session, get_workspace_id
 # Reuse the ingress's cipher dependency so the create-side encrypt and the
 # webhook-side decrypt share one (test-overridable) cipher.
 from backend.api.webhooks import get_credential_cipher
+from backend.connectors.auth.db import ConnectorOAuthTokenRow
+from backend.connectors.auth.resolve import resolve_connector_credentials
 from backend.connectors.db import ConnectorAccountRow
 from backend.connectors.kinds import (
     ConnectorKind,
@@ -162,6 +164,11 @@ class ConnectorOut(BaseModel):
     kind: ConnectorKind | None
     last_import_at: datetime | None
     last_import_count: int | None
+    # Lift 1 — for oauth2 connectors (github, …): the connected account's
+    # ``@login`` / workspace name when an OAuth token is bound, else None.
+    # ``None`` means "not connected via OAuth" so the UI shows "Connect with X"
+    # instead of "Connected as …". Never the token itself.
+    oauth_account_label: str | None = None
 
 
 class ConnectorImportResult(BaseModel):
@@ -186,7 +193,9 @@ def _token_hint(webhook_token: str) -> str:
     return f"...{webhook_token[-4:]}"
 
 
-def _row_to_out(row: ConnectorAccountRow) -> ConnectorOut:
+def _row_to_out(
+    row: ConnectorAccountRow, *, oauth_account_label: str | None = None
+) -> ConnectorOut:
     return ConnectorOut(
         id=row.id,
         connector=row.connector,
@@ -198,6 +207,7 @@ def _row_to_out(row: ConnectorAccountRow) -> ConnectorOut:
         kind=connector_kind(row.connector),
         last_import_at=row.last_import_at,
         last_import_count=row.last_import_count,
+        oauth_account_label=oauth_account_label,
     )
 
 
@@ -217,7 +227,18 @@ async def list_connectors(
         .scalars()
         .all()
     )
-    return [_row_to_out(r) for r in rows]
+    # One query for every bound OAuth token's account label, keyed by binding —
+    # so the list can show "Connected as @login" without an N+1 fan-out.
+    label_rows = (
+        await session.execute(
+            select(
+                ConnectorOAuthTokenRow.connector_account_id,
+                ConnectorOAuthTokenRow.account_label,
+            ).where(ConnectorOAuthTokenRow.connector_account_id.in_([r.id for r in rows]))
+        )
+    ).all()
+    labels: dict[uuid.UUID, str | None] = {account_id: label for account_id, label in label_rows}
+    return [_row_to_out(r, oauth_account_label=labels.get(r.id)) for r in rows]
 
 
 @router.post("", status_code=status.HTTP_201_CREATED)
@@ -302,6 +323,7 @@ class ImportDispatcher:
         *,
         row: ConnectorAccountRow,
         workspace_id: uuid.UUID,
+        session: AsyncSession,
     ) -> dict[str, Any]:
         meta = self._plugins_by_name.get(row.connector)
         if meta is None:
@@ -311,12 +333,14 @@ class ImportDispatcher:
             # The kind gate should reject this earlier; defensive guard.
             raise PluginRunError(f"import: no bulk-import action for connector {row.connector!r}")
 
-        # Decrypted secret carried under the same ``token`` slot the
-        # connector-action bridge uses (Notion's import reads it as
-        # ``token`` from credentials; obsidian/claude/gpt ignore it).
-        credentials: dict[str, Any] = {
-            "token": self._cipher.decrypt(row.signing_secret_ciphertext),
-        }
+        # The API credential carried under the ``token`` slot the connector-
+        # action bridge uses (Notion's import reads it; obsidian/claude/gpt
+        # ignore it). Routed through the unified resolver: an OAuth token if
+        # one is bound, else the legacy signing secret (behavior-preserving
+        # for every connector that hasn't been moved to OAuth yet).
+        credentials: dict[str, Any] = await resolve_connector_credentials(
+            session, account=row, cipher=self._cipher
+        )
         knowledge = self._knowledge_factory(workspace_id)
         ctx = SkillContext(
             llm=_NoLlm(),
@@ -471,7 +495,7 @@ async def trigger_import(
         workspace_id=str(workspace_id),
     )
     try:
-        detail = await dispatcher.import_for(row=row, workspace_id=workspace_id)
+        detail = await dispatcher.import_for(row=row, workspace_id=workspace_id, session=session)
     except PluginRunError as exc:
         logger.warning(
             _AUDIT_IMPORT_FAILED,

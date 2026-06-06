@@ -633,6 +633,14 @@
           "notionDatabaseIds": {
             "label": "Database IDs (one per line, optional)",
             "placeholder": "abcd1234ef…"
+          },
+          "githubConnect": {
+            "label": "GitHub account",
+            "placeholder": "Connect your GitHub account to deliver pull requests"
+          },
+          "oauthConnect": {
+            "label": "Account",
+            "placeholder": "Connect your account to deliver to this service"
           }
         },
         "inbound": {

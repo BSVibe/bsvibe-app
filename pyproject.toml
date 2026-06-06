@@ -251,6 +251,11 @@ forbidden_modules = [
     "backend.api",
 ]
 ignore_imports = [
+    # Connector OAuth (this branch) — the folded "Connect with X" / GitHub-App
+    # setup tools live in connectors_tools and call the connector OAuth service
+    # layer; ignoring this one edge cuts the whole connectors.auth subtree (and
+    # its transitive router.accounts.crypto reach) from MCP's graph.
+    "backend.mcp.tools.connectors_tools -> backend.connectors.auth.service",
     # Lift D3a — UI-parity setup tools (model accounts / connectors /
     # notifications). Each new tool module calls the SAME service /
     # row / kind primitives the REST surface uses so the MCP and PWA

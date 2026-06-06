@@ -25,13 +25,19 @@ from backend.api.middleware import WorkspaceContextMiddleware
 from backend.api.oauth import metadata_router as oauth_metadata_router
 from backend.api.oauth import public_router as oauth_public_router
 from backend.api.v1 import router as v1_router
+from backend.api.v1.connector_oauth import public_router as connector_oauth_public_router
 from backend.api.v1.events import public_router as events_public_router
 from backend.api.v1.live_events import set_live_event_bus_redis
 from backend.api.v1.workers import public_router as workers_public_router
 from backend.api.webhooks import router as webhooks_router
 from backend.config import get_settings
+from backend.connectors.auth.bootstrap import (
+    load_app_credential_providers,
+    register_configured_providers,
+)
 from backend.extensions.plugin.bootstrap import discover_webhook_parsers
 from backend.mcp.lifespan import mcp_lifespan
+from backend.router.accounts.crypto import CredentialCipher, _key_from_settings
 from backend.shared.core.logging import configure_logging
 from plugin.audit import register_audit_subscriber
 
@@ -49,12 +55,29 @@ def create_app() -> FastAPI:
     # one missing module never blocks the API. Idempotent (every connector
     # the loader sees re-registers into the same singleton).
     discover_webhook_parsers()
+    # Lift 1 — register the credential-gated connector OAuth providers
+    # (GitHubAppProvider, …) so "Connect with X" works. No-op for providers
+    # whose App credentials are unset; those connectors keep the legacy
+    # signing-secret path.
+    register_configured_providers(settings)
 
     session_factory = _get_session_factory()
 
     @contextlib.asynccontextmanager
     async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
         async with mcp_lifespan(app, session_factory=session_factory):
+            # Lift 1.5 — load connector OAuth App credentials minted via the
+            # GitHub App Manifest flow from the DB; these override any env-set
+            # provider. Soft-fail so a DB that hasn't run the migration yet
+            # (or is unreachable) never blocks startup — the connector simply
+            # falls back to env / the legacy secret path.
+            try:
+                async with session_factory() as session:
+                    await load_app_credential_providers(
+                        session, CredentialCipher(_key_from_settings())
+                    )
+            except Exception:  # noqa: BLE001 — provider load must never break boot
+                logger.warning("connector_oauth_db_provider_load_failed", exc_info=True)
             yield
 
     app = FastAPI(
@@ -126,6 +149,10 @@ def create_app() -> FastAPI:
     # (eventsource-sse-auth-trap). Mounted OUTSIDE the auth-gated v1 router
     # for the same reason, like webhooks + worker register/heartbeat.
     app.include_router(events_public_router, prefix="/api/v1")
+    # Connector OAuth callback — public (the third party's browser redirect has
+    # no bsvibe session), mounted outside the auth-gated v1 router like the
+    # other public callbacks.
+    app.include_router(connector_oauth_public_router, prefix="/api/v1")
     app.include_router(v1_router, prefix="/api")
 
     # Embedded MCP server (Lift D2) — mounted at /mcp (NOT under /api — MCP

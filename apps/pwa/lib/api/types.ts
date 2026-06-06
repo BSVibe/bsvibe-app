@@ -931,6 +931,10 @@ export interface Connector {
   /** Count from the last successful import (notes / conversations /
    *  pages depending on connector). `null` until the first import. */
   last_import_count?: number | null;
+  /** Lift 1 — for oauth2 connectors (github, …): the connected account's
+   *  `@login` / workspace name once an OAuth token is bound, else `null`
+   *  (not connected → the card shows "Connect with X"). Never the token. */
+  oauth_account_label?: string | null;
 }
 
 /** `POST /api/v1/connectors/{id}/import` response (backend

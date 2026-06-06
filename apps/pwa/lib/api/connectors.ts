@@ -71,3 +71,47 @@ export function triggerImport(connectorId: string): Promise<ConnectorImportResul
     },
   );
 }
+
+/** Response of `POST /api/v1/connectors/oauth/{provider}/start`. */
+export interface ConnectorOAuthStart {
+  authorize_url: string;
+}
+
+/** Begin the OAuth connect dance for `provider` (github / slack / …). The
+ *  backend mints CSRF state + PKCE and returns the provider authorize URL the
+ *  browser must navigate to. */
+export function startConnectorOAuth(provider: string): Promise<ConnectorOAuthStart> {
+  return apiFetch<ConnectorOAuthStart>(
+    `/api/v1/connectors/oauth/${encodeURIComponent(provider)}/start`,
+    { method: "POST" },
+  );
+}
+
+/** Response of `GET /api/v1/connectors/oauth/github/app-status`. */
+export interface GithubAppStatus {
+  configured: boolean;
+  app_slug: string | null;
+  html_url: string | null;
+}
+
+/** Whether the bsvibe GitHub App is set up (so "Connect with GitHub" works) or
+ *  the founder still needs to create it via the manifest flow. */
+export function getGithubAppStatus(): Promise<GithubAppStatus> {
+  return apiFetch<GithubAppStatus>("/api/v1/connectors/oauth/github/app-status");
+}
+
+/** Response of `POST /api/v1/connectors/oauth/github/app-manifest/start`. The
+ *  PWA auto-submits `manifest` (JSON) as a form POST to `post_url`; GitHub
+ *  creates the App and redirects back to the manifest callback. */
+export interface GithubAppManifestStart {
+  post_url: string;
+  manifest: Record<string, unknown>;
+}
+
+/** Begin the GitHub App Manifest flow — returns the GitHub POST target + the
+ *  manifest body to submit. */
+export function startGithubAppManifest(): Promise<GithubAppManifestStart> {
+  return apiFetch<GithubAppManifestStart>("/api/v1/connectors/oauth/github/app-manifest/start", {
+    method: "POST",
+  });
+}

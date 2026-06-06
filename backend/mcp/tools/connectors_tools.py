@@ -32,6 +32,7 @@ from pydantic import BaseModel, ConfigDict, Field, RootModel
 from sqlalchemy import select
 
 from backend.api.v1.connectors import get_import_dispatcher
+from backend.connectors.auth import service as oauth_service
 from backend.connectors.db import ConnectorAccountRow
 from backend.connectors.kinds import (
     connector_kind,
@@ -289,6 +290,86 @@ async def _h_import_now(args: ConnectorsImportNowInput, ctx: ToolContext) -> Any
 # ---------------------------------------------------------------------------
 # Registration
 # ---------------------------------------------------------------------------
+# ── OAuth connect / GitHub-App setup (this branch) ──────────────────────
+# The "Connect with X" + GitHub App Manifest flows need ONE browser approval
+# (no tool can click Authorize on the provider), so these return a URL for the
+# human to open; everything else stays headless. They delegate to the connector
+# OAuth service layer shared with the REST routes.
+
+
+class OAuthStartInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    provider: str = Field(..., min_length=1, max_length=64)
+
+
+class OAuthStartOutput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    authorize_url: str
+    instructions: str
+
+
+async def _h_oauth_start(args: OAuthStartInput, ctx: ToolContext) -> OAuthStartOutput:
+    try:
+        url = await oauth_service.begin_oauth_connect(
+            ctx.session, provider=args.provider, workspace_id=ctx.principal.workspace_id
+        )
+    except oauth_service.UnknownProviderError as exc:
+        raise ToolError(
+            f"provider {args.provider!r} is not configured — set up its OAuth app first"
+        ) from exc
+    return OAuthStartOutput(
+        authorize_url=url,
+        instructions=(
+            f"Open this URL in a browser to authorize {args.provider}. After you "
+            "approve, the connection completes automatically — re-list connectors to confirm."
+        ),
+    )
+
+
+class GithubAppStatusInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+class GithubAppStatusOutput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    configured: bool
+    app_slug: str | None
+    html_url: str | None
+
+
+async def _h_github_app_status(_: GithubAppStatusInput, ctx: ToolContext) -> GithubAppStatusOutput:
+    data = await oauth_service.compute_github_app_status(
+        ctx.session, cipher=oauth_service.build_credential_cipher()
+    )
+    return GithubAppStatusOutput(**data)
+
+
+class GithubAppSetupInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+class GithubAppSetupOutput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    post_url: str
+    manifest: dict[str, Any]
+    instructions: str
+
+
+async def _h_github_app_setup(_: GithubAppSetupInput, ctx: ToolContext) -> GithubAppSetupOutput:
+    data = await oauth_service.begin_github_app_manifest(
+        ctx.session, workspace_id=ctx.principal.workspace_id
+    )
+    return GithubAppSetupOutput(
+        post_url=data["post_url"],
+        manifest=data["manifest"],
+        instructions=(
+            "POST the `manifest` (JSON) as a form field named 'manifest' to `post_url` "
+            "in a browser, then approve 'Create GitHub App'. GitHub stores the "
+            "credentials automatically; then use connectors_oauth_start provider='github'."
+        ),
+    )
+
+
 def register_connectors_tools(registry: ToolRegistry) -> None:
     registry.register(
         Tool(
@@ -355,6 +436,44 @@ def register_connectors_tools(registry: ToolRegistry) -> None:
             handler=_h_import_now,
             required_scopes=("mcp:write",),
             audit_event="bsvibe.mcp.connectors_import_now.invoked",
+        )
+    )
+    registry.register(
+        Tool(
+            name="bsvibe_connectors_oauth_start",
+            description=(
+                "Begin 'Connect with X' for an OAuth connector (github/slack/notion/"
+                "discord). Returns an authorize_url for the human to open in a browser."
+            ),
+            input_schema=OAuthStartInput,
+            output_schema=OAuthStartOutput,
+            handler=_h_oauth_start,
+            required_scopes=("mcp:write",),
+            audit_event="bsvibe.mcp.connectors_oauth_start.invoked",
+        )
+    )
+    registry.register(
+        Tool(
+            name="bsvibe_connectors_github_app_status",
+            description="Whether the GitHub App is set up (so 'Connect with GitHub' works).",
+            input_schema=GithubAppStatusInput,
+            output_schema=GithubAppStatusOutput,
+            handler=_h_github_app_status,
+            required_scopes=("mcp:read",),
+        )
+    )
+    registry.register(
+        Tool(
+            name="bsvibe_connectors_github_app_setup_url",
+            description=(
+                "Begin the GitHub App Manifest setup. Returns the GitHub POST target + "
+                "manifest for the human to approve once (no manual env editing)."
+            ),
+            input_schema=GithubAppSetupInput,
+            output_schema=GithubAppSetupOutput,
+            handler=_h_github_app_setup,
+            required_scopes=("mcp:write",),
+            audit_event="bsvibe.mcp.connectors_app_setup.invoked",
         )
     )
 
