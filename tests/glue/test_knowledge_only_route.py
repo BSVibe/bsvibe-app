@@ -317,9 +317,17 @@ async def test_factory_routes_executor_account_even_when_knowledge_only(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    """An executor account keeps routing to ExecutorOrchestrator regardless of
-    the path classification (knowledge-only is for the LLM Q&A path, not a
-    delegated CLI worker)."""
+    """Lift E3 — the factory no longer special-cases executor accounts; the
+    knowledge_only path applies uniformly.
+
+    The historical invariant ("executor → ExecutorOrchestrator regardless of
+    path_classification") was a side-effect of the bypass branch that Lift E3
+    deleted. Today an executor account behaves like any other account: the
+    knowledge_only classification routes to :class:`KnowledgeAnswerOrchestrator`,
+    and its underlying chat call lands on
+    :class:`backend.dispatch.adapter.ExecutorAdapter` because the resolver
+    handed back an executor adapter.
+    """
     workspace_id = uuid.uuid4()
     await _seed_active_account(
         sf, workspace_id=workspace_id, account_id=uuid.uuid4(), provider="executor"
@@ -344,9 +352,10 @@ async def test_factory_routes_executor_account_even_when_knowledge_only(
             settings=get_settings(), sandbox_manager=NoopSandboxManager()
         )
         orch = await deps.orchestrator_factory(session, run)
-        # Executor account → ExecutorOrchestrator, NOT the knowledge path.
-        assert isinstance(orch, ExecutorOrchestrator)
-        assert not isinstance(orch, KnowledgeAnswerOrchestrator)
+        # Lift E3 — knowledge_only short-circuits before any orchestrator
+        # specialization, so an executor account routes here too.
+        assert isinstance(orch, KnowledgeAnswerOrchestrator)
+        assert not isinstance(orch, ExecutorOrchestrator)
 
 
 async def test_knowledge_only_without_llm_falls_back_to_loop(

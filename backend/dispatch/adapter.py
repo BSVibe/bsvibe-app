@@ -6,15 +6,22 @@ and then calls one verb on the adapter the resolver hands back:
 
 * :meth:`ModelAccountAdapter.chat` — system + messages + tools → response.
 
-Two concrete adapters land in this module:
+Two concrete adapters live in this module:
 
 * :class:`LiteLLMAdapter` wraps :class:`~backend.router.llm_client.LlmClient`
   for any provider whose dispatch is a direct provider-API chat call
   (anthropic, openai, ollama_chat, …).
-* :class:`ExecutorAdapter` is the worker / CLI branch (``provider="executor"``).
-  Lift E3 swaps the body for a direct subprocess call against the worker's
-  ``execute`` stream-json shape; Lift E2 leaves it as a stub that raises
-  ``NotImplementedError`` so an executor account is loud, not silent.
+* :class:`ExecutorAdapter` is the worker / CLI branch (``provider="executor"``)
+  — Lift E3 wires it to the existing CLI subprocess executor by enqueueing
+  a single-shot chat task onto the worker's Redis stream and awaiting the
+  worker's POSTed result. The worker runs ``claude --print`` /
+  ``codex -p`` / ``opencode -p`` exactly as it does for the legacy
+  :class:`~backend.executors.coordinator.ExecutorOrchestrator` full-run
+  path — same ``execute(prompt, context)`` streamers (claude_code.py /
+  codex.py / opencode.py), same ``sanitized_subprocess_env``, same
+  per-line deadline + rate-limit retry semantics — but for a single chat
+  turn instead of a whole run. The CLI's response text becomes
+  :attr:`ChatResponse.content`.
 
 Both adapters expose the same ``chat`` surface.  ``supported_methods`` is
 checked at rule-creation time so an incompatible binding fails fast.
@@ -41,6 +48,7 @@ __all__ = [
     "ChatResponse",
     "ChatToolCall",
     "ExecutorAdapter",
+    "ExecutorAdapterUnavailable",
     "LiteLLMAdapter",
     "ModelAccountAdapter",
     "adapter_for",
@@ -121,6 +129,21 @@ class ModelAccountAdapter(Protocol):
         """
 
 
+class ExecutorAdapterUnavailable(RuntimeError):
+    """Raised by :meth:`ExecutorAdapter.chat` when the chat cannot dispatch.
+
+    Three distinct failure modes share one exception type because every
+    call site treats them the same way (surface to the user / write a
+    Decision, never a silent fallback):
+
+    * No Redis client wired into the resolver (the worker stream needs it).
+    * The executor account's ``extra_params`` is missing
+      ``executor_type``.
+    * No online worker carries the requested capability (Decision in the
+      legacy full-run path; here we raise so the chat call site sees it).
+    """
+
+
 # ---------------------------------------------------------------------------
 # LiteLLM-backed adapter (the canonical happy path).
 # ---------------------------------------------------------------------------
@@ -165,7 +188,8 @@ class LiteLLMAdapter:
 
 
 # ---------------------------------------------------------------------------
-# Executor adapter — E3 will wire it to the subprocess worker; E2 stub.
+# Executor adapter — thin wrapper around the existing subprocess dispatch
+# substrate (`backend.executors.dispatch`). Single-shot CLI chat call.
 # ---------------------------------------------------------------------------
 
 
@@ -173,18 +197,36 @@ class LiteLLMAdapter:
 class ExecutorAdapter:
     """Worker / CLI adapter for ``provider="executor"`` accounts.
 
-    Lift E2 ships the dataclass + ``supported_methods`` so rule creation
-    can validate against this shape, but the verb itself raises until
-    Lift E3 wires the subprocess executor (claude_code / codex /
-    opencode) directly. The OLD path (classifier + tier vocabulary) is
-    gone — there is no silent fallback through the legacy gateway, per
-    founder policy ``bsvibe-no-implicit-routing``.
+    Each :meth:`chat` invocation creates ONE ``executor_tasks`` row
+    (``run_id=None`` — chat is detached from any ExecutionRun, no artifact
+    capture), XADDs it onto the bound worker's stream, and awaits the
+    worker's POSTed result. The worker runs the appropriate CLI
+    (claude_code / codex / opencode) ``--print`` mode subprocess against
+    the rendered prompt, and the CLI's stdout text becomes
+    :attr:`ChatResponse.content`.
+
+    Why ``run_id=None``: a chat turn is not a code-running task — the
+    worker still creates and tears down its per-task local dir, but any
+    files the CLI happens to write are discarded. The BSVibe agent loop
+    owns the workflow + tools; the executor is just a transport for the
+    LLM call (founder's Pro subscription used through the host CLI cred).
+
+    Tool calling is NOT supported through this transport (the CLI's
+    ``--print`` mode does not surface OpenAI-style tool_calls in its
+    stream-json output). A non-empty ``tools`` argument raises
+    :class:`NotImplementedError` so the caller sees the mismatch instead
+    of silently dropping the tools. Every static caller in
+    :mod:`backend.dispatch.caller_registry` declares ``required_methods =
+    {"chat"}`` only, so this is invariant-aligned.
     """
 
     account: ModelAccount
     workspace_id: uuid.UUID
     account_id: uuid.UUID
     model_account_id: uuid.UUID
+    session: AsyncSession
+    settings: Settings
+    redis: Any = None
     supported_methods: frozenset[str] = field(default_factory=lambda: frozenset({"chat"}))
 
     async def chat(
@@ -194,12 +236,102 @@ class ExecutorAdapter:
         messages: list[ChatMessage],
         tools: list[dict[str, Any]] | None = None,
     ) -> ChatResponse:
-        del system, messages, tools
-        raise NotImplementedError(
-            "ExecutorAdapter.chat lands in Lift E3 — until then resolver hits on "
-            "an executor account must be handled by the ExecutorOrchestrator "
-            "branch upstream (see backend.workflow.application.runtime.agent_runtime)"
+        # Tool calling is intentionally unsupported on the CLI transport
+        # (see class docstring) — surface the mismatch loudly so the call
+        # site does not silently lose its tools.
+        if tools:
+            raise NotImplementedError(
+                "ExecutorAdapter does not support tool calls — the CLI "
+                "--print transport has no tool_use surface. Route a caller "
+                "that requires tools to a LiteLLM-backed account."
+            )
+
+        if self.redis is None:
+            raise ExecutorAdapterUnavailable(
+                "ExecutorAdapter requires a Redis client to dispatch onto the "
+                "worker stream — no redis was wired into the resolver"
+            )
+
+        extra = self.account.extra_params or {}
+        executor_type = str(extra.get("executor_type") or "")
+        if not executor_type:
+            raise ExecutorAdapterUnavailable(
+                f"ExecutorAdapter account {self.model_account_id} has no "
+                "executor_type in extra_params — the executor model row is malformed"
+            )
+        pinned_raw = extra.get("worker_id")
+        pinned_worker_id = _parse_uuid_or_none(pinned_raw)
+
+        prompt = _render_prompt(messages)
+
+        # Lazy imports — keeps the dispatch module import-cost low for
+        # the common LiteLLM path and avoids a hot cycle if executors
+        # ever folds dispatch back in.
+        from backend.executors import dispatch  # noqa: PLC0415
+
+        worker = await dispatch.find_available_worker(
+            self.session,
+            workspace_id=self.workspace_id,
+            executor_type=executor_type,
+            pinned_worker_id=pinned_worker_id,
         )
+        if worker is None:
+            raise ExecutorAdapterUnavailable(
+                f"no online worker with capability {executor_type!r} for "
+                f"workspace {self.workspace_id}"
+            )
+
+        # Create + dispatch the task. ``run_id=None`` because chat is
+        # detached from any ExecutionRun (see class docstring).
+        task = await dispatch.create_task(
+            self.session,
+            workspace_id=self.workspace_id,
+            executor_type=executor_type,
+            prompt=prompt,
+            system=system,
+            workspace_dir=".",
+            run_id=None,
+        )
+        await dispatch.dispatch_task(
+            self.redis, session=self.session, task=task, worker_id=worker.id
+        )
+        # Commit before awaiting — the worker reports its result on a
+        # SEPARATE session over HTTP (/api/v1/workers/result), whose
+        # ``record_result`` does ``session.get(ExecutorTaskRow)``. Under
+        # PG READ COMMITTED an uncommitted row is invisible to the
+        # worker's session, so the worker can never flip it terminal and
+        # we'd block the full timeout. Same invariant the
+        # :class:`ExecutorOrchestrator` carries.
+        await self.session.commit()
+
+        try:
+            completed = await dispatch.await_completion(
+                self.redis,
+                session=self.session,
+                task_id=task.id,
+                timeout_s=self.settings.executor_task_timeout_s,
+            )
+        except dispatch.TaskTimeout as exc:
+            raise ExecutorAdapterUnavailable(
+                f"executor chat task {task.id} timed out: {exc}"
+            ) from exc
+
+        if completed.status != "done":
+            raise ExecutorAdapterUnavailable(
+                f"executor chat task {task.id} failed: "
+                f"{completed.error_message or 'no error message'}"
+            )
+
+        logger.info(
+            "executor_adapter_chat_complete",
+            workspace_id=str(self.workspace_id),
+            account_id=str(self.model_account_id),
+            worker_id=str(worker.id),
+            task_id=str(task.id),
+            executor_type=executor_type,
+            output_chars=len(completed.output or ""),
+        )
+        return ChatResponse(content=completed.output or "")
 
 
 # ---------------------------------------------------------------------------
@@ -214,6 +346,7 @@ def adapter_for(
     settings: Settings,
     api_key: str,
     llm: LlmClient | None = None,
+    redis: Any = None,
 ) -> ModelAccountAdapter:
     """Pick the right :class:`ModelAccountAdapter` for an account.
 
@@ -225,16 +358,21 @@ def adapter_for(
     we never decrypt inside the adapter so credentials never leak
     through logs emitted from this module.
 
-    ``session`` + ``settings`` are unused today but kept on the call site
-    surface so a later lift can wire them without breaking callers.
+    ``redis`` is the Redis client used by the ExecutorAdapter to dispatch
+    onto the worker stream. May be ``None`` when no executor account is
+    expected (a workspace with only LiteLLM accounts); resolving an
+    executor account with no redis later raises
+    :class:`ExecutorAdapterUnavailable`.
     """
-    del session, settings  # reserved for future per-account budget hooks
     if is_executor_account(account):
         return ExecutorAdapter(
             account=account,
             workspace_id=account.workspace_id,
             account_id=account.account_id,
             model_account_id=account.id,
+            session=session,
+            settings=settings,
+            redis=redis,
         )
     return LiteLLMAdapter(
         account=account,
@@ -267,3 +405,55 @@ def _from_llm_response(response: LlmResponse) -> ChatResponse:
         usage_completion_tokens=response.usage_completion_tokens,
         raw=response.raw,
     )
+
+
+def _render_prompt(messages: list[ChatMessage]) -> str:
+    """Render an OpenAI-style ``messages`` list as a single CLI prompt.
+
+    The CLI subprocess takes ONE prompt over stdin (``claude --print``,
+    ``codex -p``, …). We render the conversation as a simple
+    role-tagged transcript so the CLI sees the same turn history a chat
+    completion endpoint would. The ``system`` slot is already shipped
+    separately as ``--append-system-prompt`` (the executor streamer's
+    ``context["system"]``) and is NOT re-rendered here.
+
+    Tool-call messages (``role == "tool"``) are rendered as
+    ``[tool:<name>] <content>`` for completeness, though :meth:`ExecutorAdapter.chat`
+    rejects ``tools=[...]`` upstream so this branch only fires for a
+    pre-existing tool-result message in the history.
+    """
+    parts: list[str] = []
+    for message in messages:
+        role = str(message.get("role") or "user")
+        content = message.get("content")
+        if isinstance(content, list):
+            # OpenAI's content-parts shape — concatenate the text parts.
+            text_parts = [
+                str(part.get("text") or "")
+                for part in content
+                if isinstance(part, dict) and part.get("type") == "text"
+            ]
+            content = "".join(text_parts)
+        if content is None:
+            content = ""
+        if role == "tool":
+            tool_name = str(message.get("name") or "tool")
+            parts.append(f"[tool:{tool_name}] {content}")
+        elif role == "system":
+            # Defensive: ResolverLoopLlm already strips the leading
+            # system message before calling the adapter, but a caller may
+            # forget. Don't render it here — the adapter ships
+            # ``system`` separately via ``--append-system-prompt``.
+            continue
+        else:
+            parts.append(f"{role}: {content}")
+    return "\n\n".join(parts).strip()
+
+
+def _parse_uuid_or_none(value: Any) -> uuid.UUID | None:
+    if value is None:
+        return None
+    try:
+        return uuid.UUID(str(value))
+    except (ValueError, AttributeError):
+        return None

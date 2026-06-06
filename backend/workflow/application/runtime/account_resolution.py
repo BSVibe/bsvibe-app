@@ -24,6 +24,7 @@ consumers.
 from __future__ import annotations
 
 import uuid
+from typing import Any
 
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -66,6 +67,7 @@ async def _resolve_via_caller(
     caller_id: str,
     workspace_id: uuid.UUID,
     settings: Settings,
+    redis: Any = None,
 ) -> ResolvedAccount | None:
     """Resolve ``(caller_id, workspace_id)`` via the resolver.
 
@@ -74,8 +76,12 @@ async def _resolve_via_caller(
     ``KeyError`` so call sites can soft-fall-back (a Decision row in the
     run worker; ``None`` short-circuit in the settle / bootstrap paths)
     instead of crashing.
+
+    ``redis`` is threaded into the resolver so an executor adapter has a
+    transport for the worker stream XADD (Lift E3). Optional — LiteLLM
+    accounts never touch it.
     """
-    resolver = ModelAccountResolver(session, settings=settings)
+    resolver = ModelAccountResolver(session, settings=settings, redis=redis)
     try:
         return await resolver.resolve_for(caller_id=caller_id, workspace_id=workspace_id)
     except NoMatchingRouteError:
@@ -168,7 +174,11 @@ def _single_native_account(accounts: list[ModelAccount]) -> ModelAccount | None:
 
 
 async def _resolve_judge_llm(
-    session: AsyncSession, run: ExecutionRun, settings: Settings
+    session: AsyncSession,
+    run: ExecutionRun,
+    settings: Settings,
+    *,
+    redis: Any = None,
 ) -> ResolverLoopLlm | None:
     """Resolve a judge LLM for the executor verification path.
 
@@ -182,6 +192,7 @@ async def _resolve_judge_llm(
         caller_id=CALLER_JUDGE,
         workspace_id=run.workspace_id,
         settings=settings,
+        redis=redis,
     )
     if resolved is None:
         logger.info(
