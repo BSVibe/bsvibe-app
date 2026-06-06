@@ -1,9 +1,10 @@
-"""register_configured_providers — settings → live provider registry (Lift 1).
+"""register_configured_providers — settings → live provider registry.
 
-The Lift 0 skeleton seeds only the StubProvider at import time. Real providers
-are credential-gated: GitHubAppProvider registers under ``github`` ONLY when
-its App credentials are configured, so a deployment without GitHub creds simply
-has no github provider (the connector falls back to the legacy secret path).
+Real providers are credential-gated. github is the exception: its App creds
+live in the DB (set up via the manifest flow), NOT env — so github is NEVER
+registered from env here; it is loaded by ``load_app_credential_providers`` at
+startup. slack / notion / discord stay env-registered (until their own DB
+setup lift).
 
 A snapshot/restore fixture keeps each test from leaking into the process-wide
 ``_REGISTRY``.
@@ -16,7 +17,6 @@ import pytest
 from backend.config import Settings
 from backend.connectors.auth import providers as providers_mod
 from backend.connectors.auth.bootstrap import register_configured_providers
-from backend.connectors.auth.github import GitHubAppProvider
 from backend.connectors.auth.providers import get_provider
 
 
@@ -30,36 +30,27 @@ def _isolate_registry() -> None:
         providers_mod._REGISTRY.update(snapshot)
 
 
-def test_full_app_creds_register_github_with_service_token() -> None:
-    settings = Settings(
-        github_app_client_id="Iv1.cid",
-        github_app_client_secret="csecret",
-        github_app_id="123456",
-        github_app_private_key_pem="-----BEGIN PRIVATE KEY-----\nx\n-----END PRIVATE KEY-----",
-    )
-    registered = register_configured_providers(settings)
-    assert "github" in registered
-    prov = get_provider("github")
-    assert isinstance(prov, GitHubAppProvider)
-    assert prov.supports_service_token is True
+def test_github_not_registered_from_env(monkeypatch) -> None:
+    # Even with the legacy BSVIBE_GITHUB_APP_* env vars set, github is NOT
+    # registered from env — its creds come from the DB (manifest flow) only.
+    monkeypatch.setenv("BSVIBE_GITHUB_APP_CLIENT_ID", "Iv1.cid")
+    monkeypatch.setenv("BSVIBE_GITHUB_APP_CLIENT_SECRET", "csecret")
+    registered = register_configured_providers(Settings())
+    assert "github" not in registered
+    assert get_provider("github") is None
 
 
-def test_client_only_creds_register_github_without_service_token() -> None:
-    settings = Settings(
-        github_app_client_id="Iv1.cid",
-        github_app_client_secret="csecret",
-    )
-    registered = register_configured_providers(settings)
-    assert registered == ["github"]
-    prov = get_provider("github")
-    assert isinstance(prov, GitHubAppProvider)
-    # No app_id / private key → installation token capability stays off.
-    assert prov.supports_service_token is False
-
-
-def test_no_creds_register_nothing() -> None:
-    settings = Settings(github_app_client_id="", github_app_client_secret="")
-    registered = register_configured_providers(settings)
+def test_no_creds_register_nothing(monkeypatch) -> None:
+    for var in (
+        "BSVIBE_SLACK_CLIENT_ID",
+        "BSVIBE_SLACK_CLIENT_SECRET",
+        "BSVIBE_NOTION_CLIENT_ID",
+        "BSVIBE_NOTION_CLIENT_SECRET",
+        "BSVIBE_DISCORD_CLIENT_ID",
+        "BSVIBE_DISCORD_CLIENT_SECRET",
+    ):
+        monkeypatch.delenv(var, raising=False)
+    registered = register_configured_providers(Settings())
     assert registered == []
     assert get_provider("github") is None
 

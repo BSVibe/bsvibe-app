@@ -80,21 +80,19 @@ class Settings(BaseSettings):
 
     # Connector OAuth — bsvibe acting as an OAuth *client* of third parties
     # (backend.connectors.auth). One App credential set per provider (standard
-    # SaaS pattern: per-workspace *tokens*, not per-workspace apps). GitHub App
-    # (design Lift 1): client_id/secret drive the user-to-server OAuth dance;
-    # app_id + the PEM private key additionally enable installation tokens
-    # (service_token). All empty → no github provider registered, and the
-    # connector falls back to the legacy signing-secret/PAT path unchanged.
-    # NEVER logged. Generate the App private key in the GitHub App settings,
-    # then paste the PEM (or base64 it) into BSVIBE_GITHUB_APP_PRIVATE_KEY_PEM.
-    github_app_client_id: str = ""
-    github_app_client_secret: str = ""
-    github_app_id: str = ""
-    github_app_private_key_pem: str = ""
+    # SaaS pattern: per-workspace *tokens*, not per-workspace apps).
+    #
+    # GitHub has NO env credentials: its App is created + stored entirely via
+    # the in-app manifest flow ("Set up GitHub App" → encrypted DB row in
+    # connector_oauth_app_credentials → loaded at startup). The DB is the single
+    # source of truth. To create the App manually instead, see the README /
+    # .env.example note — but there is no BSVIBE_GITHUB_APP_* runtime var.
+    #
     # Vanilla OAuth2 connectors (authorization_code) — one App per provider,
-    # registered from env when both id + secret are set (no manifest flow;
-    # GitHub-App-only). slack: bot OAuth v2; notion / discord: Basic-auth
-    # token exchange; sentry: install→grant integration.
+    # registered from env when both id + secret are set (no manifest flow).
+    # slack: bot OAuth v2; notion / discord: Basic-auth token exchange; sentry:
+    # install→grant integration. (These will move to in-app DB setup in a
+    # follow-up lift, matching github.)
     slack_client_id: str = ""
     slack_client_secret: str = ""
     notion_client_id: str = ""
