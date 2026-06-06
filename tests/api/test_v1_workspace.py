@@ -84,6 +84,9 @@ async def test_get_workspace_returns_id_and_name(client_with_ws) -> None:
         "id": str(workspace_id),
         "name": "Acme",
         "audit_retention_days": None,
+        # Lift E1 — workspace-default ModelAccount fallback surfaces here;
+        # ``None`` until the founder picks one via PATCH or MCP.
+        "default_account_id": None,
     }
 
 
@@ -95,6 +98,7 @@ async def test_patch_workspace_renames_and_persists(client_with_ws) -> None:
         "id": str(workspace_id),
         "name": "Acme Inc.",
         "audit_retention_days": None,
+        "default_account_id": None,
     }
 
     # The row in the database actually changed.
@@ -115,6 +119,7 @@ async def test_patch_workspace_sets_audit_retention_days(client_with_ws) -> None
         "id": str(workspace_id),
         "name": "Acme",  # unchanged
         "audit_retention_days": 30,
+        "default_account_id": None,
     }
     async with db() as s:
         row = (
