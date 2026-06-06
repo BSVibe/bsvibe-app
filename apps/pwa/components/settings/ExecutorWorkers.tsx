@@ -2,18 +2,18 @@
 
 import { backendBaseUrl } from "@/lib/api/client";
 import type { Worker } from "@/lib/api/types";
-import { listWorkers, mintInstallToken, revokeWorker } from "@/lib/api/workers";
+import { listWorkers, revokeWorker } from "@/lib/api/workers";
 import { useTranslations } from "next-intl";
 import { useEffect, useState } from "react";
 import CopyField from "./CopyField";
 
 /**
  * Settings → Models → "Executor workers" — GitHub-Actions-runner-style UX
- * (Lift E4).
+ * (Lift E4; Lift E5 removed the legacy install-token escape hatch).
  *
  * The founder registers a host that already has their coding-agent CLIs
- * (claude_code / codex / opencode) signed in. The new flow is a single
- * shell snippet they paste once on the host:
+ * (claude_code / codex / opencode) signed in. The flow is a single shell
+ * snippet they paste once on the host:
  *
  *   pip install bsvibe-app           # or any future packaging
  *   bsvibe login                     # PKCE loopback OAuth on the host
@@ -30,16 +30,12 @@ import CopyField from "./CopyField";
  *
  *   - List   ← GET    /api/v1/workers
  *   - Revoke → DELETE /api/v1/workers/{id}
- *   - (Deprecated) Mint legacy install token — `mintInstallToken()` is kept
- *     for hosts that haven't cut over yet; surfaced behind "Show legacy
- *     install token" until Lift E5 removes the endpoint entirely.
  */
 type ListState = { data: Worker[]; failed: boolean } | null;
 
 export default function ExecutorWorkers() {
   const [list, setList] = useState<ListState>(null);
   const [showInstall, setShowInstall] = useState(false);
-  const [showLegacy, setShowLegacy] = useState(false);
   const t = useTranslations("settings.models.workers");
 
   async function load() {
@@ -72,7 +68,7 @@ export default function ExecutorWorkers() {
       </header>
       <p className="workers__lede">{t("lede")}</p>
 
-      {/* PRIMARY — runner-style install command. No install-token paste. */}
+      {/* PRIMARY — runner-style install command. The only register path. */}
       {showInstall ? (
         <section className="worker-install" aria-label={t("installLabel")}>
           <p className="worker-install__title">{t("installTitle")}</p>
@@ -89,11 +85,6 @@ export default function ExecutorWorkers() {
           >
             {t("done")}
           </button>
-          <LegacyInstallTokenToggle
-            visible={showLegacy}
-            onToggle={() => setShowLegacy((v) => !v)}
-          />
-          {showLegacy ? <LegacyInstallTokenPanel /> : null}
         </section>
       ) : (
         <div className="workers__connect">
@@ -125,81 +116,6 @@ export default function ExecutorWorkers() {
         </ul>
       )}
     </section>
-  );
-}
-
-function LegacyInstallTokenToggle({
-  visible,
-  onToggle,
-}: {
-  visible: boolean;
-  onToggle: () => void;
-}) {
-  const t = useTranslations("settings.models.workers");
-  return (
-    <button
-      type="button"
-      className="worker-install__legacy-toggle"
-      onClick={onToggle}
-      aria-expanded={visible}
-    >
-      {visible ? t("legacyHide") : t("legacyShow")}
-    </button>
-  );
-}
-
-type LegacyMintState = "idle" | "minting" | "error";
-
-function LegacyInstallTokenPanel() {
-  const t = useTranslations("settings.models.workers");
-  const [state, setState] = useState<LegacyMintState>("idle");
-  const [token, setToken] = useState<string | null>(null);
-
-  async function mint() {
-    if (state === "minting") return;
-    setState("minting");
-    try {
-      const minted = await mintInstallToken();
-      setToken(minted.token);
-      setState("idle");
-    } catch {
-      setState("error");
-    }
-  }
-
-  if (token) {
-    return (
-      <section className="worker-token worker-token--legacy" aria-label={t("legacyTokenLabel")}>
-        <p className="worker-token__warn">{t("legacyWarn")}</p>
-        <CopyField label={t("tokenLabel")} value={token} secret />
-        <CopyField
-          label={t("legacyRunLabel")}
-          value={t("legacyRunCommand", { token, serverUrl: backendBaseUrl() })}
-          secret
-        />
-        <button type="button" className="worker-token__done" onClick={() => setToken(null)}>
-          {t("done")}
-        </button>
-      </section>
-    );
-  }
-  return (
-    <div className="worker-install__legacy">
-      <p className="worker-install__legacy-note">{t("legacyNote")}</p>
-      {state === "error" ? (
-        <span className="workers__error" aria-live="polite">
-          {t("mintError")}
-        </span>
-      ) : null}
-      <button
-        type="button"
-        className="worker-install__legacy-btn"
-        onClick={mint}
-        disabled={state === "minting"}
-      >
-        {state === "minting" ? t("minting") : t("legacyMint")}
-      </button>
-    </div>
   );
 }
 

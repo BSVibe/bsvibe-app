@@ -1,6 +1,7 @@
 /**
  * Executor workers surface — the Settings → Models "Executor workers" section
- * (Lift E4 — GitHub-Actions-runner UX).
+ * (Lift E4 — GitHub-Actions-runner UX; Lift E5 removed the legacy install-token
+ * escape hatch).
  *
  *  - Calm empty state when no worker is registered (no cards)
  *  - LIST renders a card per worker (name, capability chips, online/offline pill,
@@ -9,8 +10,8 @@
  *  - "Add a worker" reveals the runner-style install snippet (no install-token
  *    paste): `bsvibe login && bsvibe-worker register --name $(hostname) &&
  *    bsvibe-worker run`
- *  - The legacy install-token affordance is reachable (deprecated path, removed
- *    in Lift E5) and still mints + reveals a single-use token
+ *  - The legacy install-token affordance is GONE — no "show legacy" toggle,
+ *    no mint button, no UI access to a deprecated path
  *  - Revoke: confirm → DELETE fires → re-read fires
  *
  * Determinism: the worker list loads asynchronously on mount, so every
@@ -143,9 +144,6 @@ describe("Executor workers surface", () => {
 
     // The new flow is `bsvibe login && bsvibe-worker register …` — NO install
     // token to paste, NO `python -m backend.executors.worker INSTALL_TOKEN=…`.
-    // The full command string appears in a CopyField `<code>`. The phrase
-    // also appears in the install hint text, so disambiguate by the code
-    // element with the assembled command.
     const cmd = await screen.findByText(
       /bsvibe login && bsvibe-worker register --name \$\(hostname\) && bsvibe-worker run/,
     );
@@ -157,30 +155,16 @@ describe("Executor workers surface", () => {
     ).toBeInTheDocument();
   });
 
-  it("legacy install-token affordance is reachable behind a toggle, still mints", async () => {
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValueOnce(jsonResponse([]))
-      .mockResolvedValueOnce(jsonResponse({ token: "INSTALL-TOKEN-once-abcd" }));
-    global.fetch = fetchMock as unknown as typeof fetch;
-
+  it("has no legacy install-token affordance (Lift E5 removed it)", async () => {
+    global.fetch = vi.fn(async () => jsonResponse([])) as unknown as typeof fetch;
     render(<ExecutorWorkers />);
 
     await screen.findByText(/No worker connected yet/i);
     await userEvent.click(screen.getByRole("button", { name: /add a worker/i }));
-    await userEvent.click(
-      await screen.findByRole("button", { name: /show legacy install token/i }),
-    );
-    await userEvent.click(
-      await screen.findByRole("button", { name: /mint legacy install token/i }),
-    );
 
-    await waitFor(() => {
-      expect(screen.getByText("INSTALL-TOKEN-once-abcd")).toBeInTheDocument();
-    });
-    const mintCall = fetchMock.mock.calls[1] as unknown as [string, RequestInit];
-    expect(mintCall[0]).toBe("/api/v1/workers/install-token");
-    expect(mintCall[1].method).toBe("POST");
+    // After E5, NO toggle to reveal a legacy mint button, NO mint button at all.
+    expect(screen.queryByRole("button", { name: /legacy install token/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /mint/i })).not.toBeInTheDocument();
   });
 
   it("revokes a worker after confirm → DELETE → re-read", async () => {
@@ -206,27 +190,5 @@ describe("Executor workers surface", () => {
       expect(deleteCall[1].method).toBe("DELETE");
     });
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
-  });
-
-  it("shows a calm inline error when legacy mint fails and stays usable", async () => {
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValueOnce(jsonResponse([]))
-      .mockResolvedValueOnce(jsonResponse("forbidden", 403));
-    global.fetch = fetchMock as unknown as typeof fetch;
-
-    render(<ExecutorWorkers />);
-
-    await screen.findByText(/No worker connected yet/i);
-    await userEvent.click(screen.getByRole("button", { name: /add a worker/i }));
-    await userEvent.click(
-      await screen.findByRole("button", { name: /show legacy install token/i }),
-    );
-    await userEvent.click(
-      await screen.findByRole("button", { name: /mint legacy install token/i }),
-    );
-
-    expect(await screen.findByText(/Couldn.t mint an install token/i)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /mint legacy install token/i })).toBeEnabled();
   });
 });

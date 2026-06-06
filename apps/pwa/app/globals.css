@@ -5373,12 +5373,6 @@ main.login {
   gap: 8px;
 }
 
-.workers__error {
-  flex: 1 1 100%;
-  font-size: 0.78rem;
-  color: var(--amber-ink);
-}
-
 .workers__connect-btn {
   border: 1px solid var(--ink);
   border-radius: 999px;
@@ -5549,56 +5543,6 @@ main.login {
 .worker-card__danger:focus-visible {
   outline: 2px solid var(--amber-dot);
   outline-offset: 1px;
-}
-
-/* One-time install-token reveal panel (mirrors .connector-secret) */
-.worker-token {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  padding: 18px;
-  background: var(--green-pill-bg);
-  border: 1px solid var(--green-dot);
-  border-radius: var(--radius);
-}
-
-.worker-token__title {
-  margin: 0;
-  font-size: 0.95rem;
-  font-weight: 650;
-  color: var(--ink);
-}
-
-.worker-token__warn {
-  margin: 0;
-  font-size: 0.82rem;
-  color: var(--amber-ink);
-  font-weight: 550;
-}
-
-.worker-token__run-title {
-  margin: 4px 0 0;
-  font-size: 0.82rem;
-  font-weight: 600;
-  color: var(--ink-2);
-}
-
-.worker-token__hint {
-  margin: 0;
-  font-size: 0.78rem;
-  color: var(--ink-2);
-}
-
-.worker-token__done {
-  align-self: flex-start;
-  border: 1px solid var(--hair-strong);
-  border-radius: 999px;
-  padding: 6px 16px;
-  font-size: 0.82rem;
-  font-weight: 550;
-  background: var(--surface);
-  color: var(--ink-2);
-  cursor: pointer;
 }
 
 /* ── Sidebar PRODUCTS section + New project create flow ────────────────────

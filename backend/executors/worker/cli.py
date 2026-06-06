@@ -131,17 +131,15 @@ async def _register_once(args: argparse.Namespace) -> int:
         capabilities = detect_capabilities() or ["claude_code"]
     labels = [lab.strip() for lab in (args.labels or "").split(",") if lab.strip()]
 
-    bearer: str | None = None
-    if not args.install_token:
-        try:
-            creds = load_host_credentials()
-            bearer = creds.access_token
-        except CredentialsNotFound as exc:
-            print(
-                f"register failed: {exc}\nHint: run `bsvibe login` first.",
-                file=sys.stderr,
-            )
-            return 1
+    try:
+        creds = load_host_credentials()
+    except CredentialsNotFound as exc:
+        print(
+            f"register failed: {exc}\nHint: run `bsvibe login` first.",
+            file=sys.stderr,
+        )
+        return 1
+    bearer = creds.access_token
 
     async with httpx.AsyncClient(base_url=settings.server_url, timeout=30.0) as client:
         try:
@@ -151,7 +149,6 @@ async def _register_once(args: argparse.Namespace) -> int:
                 capabilities=capabilities,
                 labels=labels,
                 bearer_token=bearer,
-                install_token=args.install_token or "",
             )
         except httpx.HTTPStatusError as exc:
             print(
@@ -189,12 +186,6 @@ def build_bsvibe_worker_parser() -> argparse.ArgumentParser:
         help="Comma-separated capabilities (default: auto-detect).",
     )
     p_reg.add_argument("--labels", default="", help="Comma-separated labels (free-form tags).")
-    p_reg.add_argument(
-        "--install-token",
-        default="",
-        help="(Deprecated) Use the legacy X-Install-Token path instead of "
-        "the host OAuth credential. Lift E5 removes this flag.",
-    )
     p_reg.set_defaults(func=_cmd_register)
 
     p_run = sub.add_parser("run", help="Start the long-polling worker loop.")

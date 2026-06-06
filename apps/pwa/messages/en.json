@@ -460,16 +460,6 @@
         "installCommand": "BSVIBE_WORKER_SERVER_URL={serverUrl} bsvibe login && bsvibe-worker register --name $(hostname) && bsvibe-worker run",
         "installNotes": "After it finishes, the host shows up in the list below within a few seconds.",
         "done": "Done",
-        "legacyShow": "Show legacy install token (deprecated)",
-        "legacyHide": "Hide legacy install token",
-        "legacyNote": "Older worker hosts (pre-`bsvibe login`) can still register with an install token. This path is removed in the next lift.",
-        "legacyMint": "Mint legacy install token",
-        "legacyTokenLabel": "Legacy install token",
-        "legacyWarn": "Shown once. The install token is a secret — copy it before closing.",
-        "legacyRunLabel": "Run on the worker host (legacy)",
-        "legacyRunCommand": "BSVIBE_WORKER_SERVER_URL={serverUrl} BSVIBE_WORKER_INSTALL_TOKEN={token} python -m backend.executors.worker",
-        "minting": "Minting…",
-        "mintError": "Couldn't mint an install token right now. Try again in a moment.",
         "online": "Online",
         "offline": "Offline",
         "statusTitle": "Online means the worker sent a recent heartbeat",
@@ -480,8 +470,7 @@
         "confirmRevoke": "Confirm revoke",
         "cancel": "Cancel",
         "revoking": "Revoking…",
-        "revokeError": "Couldn't revoke that. Please try again.",
-        "tokenLabel": "Install token"
+        "revokeError": "Couldn't revoke that. Please try again."
       },
       "default": {
         "sectionLabel": "Default model for this workspace",

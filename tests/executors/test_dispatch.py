@@ -52,7 +52,7 @@ async def _seed_worker(
     status: str = "online",
     heartbeat_age_s: float | None = 0.0,
 ) -> WorkerRow:
-    """Insert a worker row directly (bypassing the install-token flow)."""
+    """Insert a worker row directly (bypassing the register flow)."""
     last_heartbeat = (
         None if heartbeat_age_s is None else datetime.now(UTC) - timedelta(seconds=heartbeat_age_s)
     )

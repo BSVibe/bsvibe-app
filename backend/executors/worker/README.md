@@ -40,28 +40,27 @@ The host must already have `claude` installed and logged in — the worker reuse
 the host's existing Claude login and harness (`CLAUDE.md`, `settings.json`,
 hooks). No API key is passed by the backend.
 
-1. An admin mints an **install token** for the workspace:
+The GitHub-Actions-runner UX:
 
-   ```
-   POST /api/v1/workers/install-token   (admin JWT)  ->  { "token": "..." }
-   ```
+```bash
+bsvibe login                          # PKCE loopback OAuth on this host
+bsvibe-worker register --name $(hostname)
+bsvibe-worker run
+```
 
-2. On the worker machine, set the environment (or a `.env` file in the working
-   directory) and run the module:
+`bsvibe login` writes the host OAuth credential to
+`~/.config/bsvibe/credentials.json`. `bsvibe-worker register` sends that
+credential as `Authorization: Bearer` to `POST /api/v1/workers/register`; the
+backend derives the workspace from the verified claims and returns a fresh
+per-worker token, which the CLI persists to `~/.bsvibe/worker.token` (and
+`.env` as `BSVIBE_WORKER_TOKEN`). Subsequent runs of `bsvibe-worker run`
+reuse that token.
 
-   ```bash
-   export BSVIBE_WORKER_SERVER_URL="https://api.bsvibe.dev"
-   export BSVIBE_WORKER_INSTALL_TOKEN="<the install token from step 1>"
-   # Optional — enable streaming chunks back to the backend:
-   # export BSVIBE_WORKER_REDIS_URL="redis://<backend-redis-host>:6379/0"
+Optional streaming back-channel:
 
-   python -m backend.executors.worker
-   ```
-
-   On the **first** run the worker registers itself with the install token and
-   persists the returned **worker token** to `.env` (as `BSVIBE_WORKER_TOKEN`),
-   along with its name + server URL. Subsequent runs reuse that token and never
-   need the install token again.
+```bash
+export BSVIBE_WORKER_REDIS_URL="redis://<backend-redis-host>:6379/0"
+```
 
 ## Environment variables
 
@@ -70,7 +69,7 @@ All vars use the `BSVIBE_WORKER_` prefix and may be set via env or a `.env` file
 | Variable | Default | Purpose |
 |----------|---------|---------|
 | `BSVIBE_WORKER_SERVER_URL` | `http://localhost:8400` | Backend API base URL. |
-| `BSVIBE_WORKER_INSTALL_TOKEN` | _(empty)_ | Required only on first run, to register. |
+| `BSVIBE_WORKER_ACCESS_TOKEN` | _(empty)_ | Optional explicit OAuth bearer; falls back to `~/.config/bsvibe/credentials.json` when empty. |
 | `BSVIBE_WORKER_TOKEN` | _(empty)_ | Per-worker token; written to `.env` after first registration. |
 | `BSVIBE_WORKER_NAME` | hostname | The worker's display name. |
 | `BSVIBE_WORKER_REDIS_URL` | _(empty)_ | Enables streaming output chunks; empty disables streaming. |

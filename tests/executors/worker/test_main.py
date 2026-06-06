@@ -113,7 +113,7 @@ def _settings(**overrides: Any) -> WorkerSettings:
     base: dict[str, Any] = {
         "server_url": "http://test",
         "token": "WORKER-TOKEN",
-        "install_token": "",
+        "access_token": "",
         "name": "test-worker",
         "redis_url": "",
         "poll_interval_seconds": 0,
@@ -144,41 +144,28 @@ def _task(**overrides: Any) -> dict[str, Any]:
 # ── Registration ─────────────────────────────────────────────────────────────
 
 
-async def test_register_returns_token_and_sends_install_header() -> None:
-    """Legacy install_token path — the worker still emits ``X-Install-Token``."""
-    state: dict[str, Any] = {}
-    async with _client(state) as client:
-        token = await worker_main.register(
-            client,
-            name="w1",
-            install_token="INSTALL-XYZ",
-            capabilities=["claude_code"],
-        )
-    assert token == "WORKER-TOKEN"
-    assert state["register_headers"]["x-install-token"] == "INSTALL-XYZ"
-
-
-async def test_register_uses_bearer_when_provided() -> None:
-    """Lift E4 — bearer_token wins over install_token; emits Authorization."""
+async def test_register_sends_authorization_bearer() -> None:
+    """Lift E4 — the worker emits ``Authorization: Bearer`` from the host cred."""
     state: dict[str, Any] = {}
     async with _client(state) as client:
         token = await worker_main.register(
             client,
             name="w1",
             bearer_token="ACCESS-TOKEN-XYZ",
-            install_token="UNUSED",
             capabilities=["claude_code"],
         )
     assert token == "WORKER-TOKEN"
     assert state["register_headers"]["authorization"] == "Bearer ACCESS-TOKEN-XYZ"
+    # Lift E5 — no install-token header is ever emitted.
     assert "x-install-token" not in state["register_headers"]
 
 
-async def test_register_requires_install_token() -> None:
+async def test_register_requires_bearer_token() -> None:
+    """Lift E5 — without a bearer there is no legacy fallback; raises ValueError."""
     state: dict[str, Any] = {}
     async with _client(state) as client:
         with pytest.raises(ValueError, match="bearer_token"):
-            await worker_main.register(client, name="w1", install_token="", capabilities=[])
+            await worker_main.register(client, name="w1", bearer_token="", capabilities=[])
 
 
 # ── Single task handling ─────────────────────────────────────────────────────
@@ -434,7 +421,8 @@ async def test_poll_and_execute_registers_when_no_token(monkeypatch: Any) -> Non
     state: dict[str, Any] = {"poll_queue": []}
     captured: dict[str, Any] = {}
 
-    settings = _settings(token="", install_token="INSTALL-1")
+    # Lift E5 — the host OAuth bearer is the only register credential.
+    settings = _settings(token="", access_token="HOST-BEARER")
     stop = asyncio.Event()
 
     # Run exactly one tick: capture the headers the loop built post-registration,
@@ -454,9 +442,36 @@ async def test_poll_and_execute_registers_when_no_token(monkeypatch: Any) -> Non
 
     # Registration happened (token minted) and the loop used it.
     assert ("POST", "/api/v1/workers/register") in state["calls"]
+    # The register call carried the host OAuth bearer (Lift E4) — never an
+    # X-Install-Token header (Lift E5 removed that path entirely).
+    assert state["register_headers"]["authorization"] == "Bearer HOST-BEARER"
+    assert "x-install-token" not in state["register_headers"]
     assert captured["headers"]["X-Worker-Token"] == "WORKER-TOKEN"
     # The minted token was persisted back onto the settings object.
     assert settings.token == "WORKER-TOKEN"
+
+
+async def test_poll_and_execute_raises_when_no_token_and_no_bearer(monkeypatch: Any) -> None:
+    """Lift E5 — without a worker token AND without a host bearer, register cannot run."""
+    import asyncio
+
+    monkeypatch.setattr(worker_main, "detect_capabilities", lambda: ["claude_code"])
+    monkeypatch.setattr(worker_main, "_persist_worker_token", lambda *a, **k: None)
+    # No CredentialsNotFound: simulate "no host credentials on disk".
+    from backend.executors.worker import credentials as worker_credentials
+
+    def _no_creds() -> Any:
+        raise worker_credentials.CredentialsNotFound("no host credentials")
+
+    monkeypatch.setattr(worker_main, "load_host_credentials", _no_creds)
+
+    settings = _settings(token="", access_token="")
+    state: dict[str, Any] = {"poll_queue": []}
+    async with _client(state) as client:
+        with pytest.raises(RuntimeError, match="bsvibe login"):
+            await worker_main.poll_and_execute(
+                settings=settings, client=client, redis=None, stop=asyncio.Event()
+            )
 
 
 # ── .env persistence ──────────────────────────────────────────────────────────

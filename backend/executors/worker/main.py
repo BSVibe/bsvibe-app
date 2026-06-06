@@ -1,8 +1,9 @@
 """BSVibe executor worker — poll loop, registration, task handling.
 
 Headless client process. On first run (no worker token) it registers with the
-backend using an install token, persisting the returned worker token to
-``.env``. Then it loops::
+backend using the host OAuth bearer (Lift E4 — ``bsvibe login`` writes
+``~/.config/bsvibe/credentials.json``), persisting the returned worker token
+to ``.env``. Then it loops::
 
     heartbeat -> poll(count=free slots) -> for each task:
         select executor by ``executor_type`` -> run it -> collect output
@@ -184,38 +185,26 @@ async def register(
     *,
     name: str,
     capabilities: list[str],
+    bearer_token: str,
     labels: list[str] | None = None,
-    bearer_token: str | None = None,
-    install_token: str = "",
 ) -> str:
     """Register this worker → return the worker token (Lift E4).
 
-    Auth precedence:
+    ``bearer_token`` is the host OAuth credential (Supabase session JWT or
+    MCP access token), sent as ``Authorization: Bearer <token>``. The
+    backend derives the workspace from the verified claims.
 
-    * ``bearer_token`` — the host OAuth credential (preferred). Sent as
-      ``Authorization: Bearer <token>``. The backend derives the workspace
-      from the verified claims.
-    * ``install_token`` — **deprecated** legacy ``X-Install-Token`` path,
-      preserved for hosts that haven't yet run ``bsvibe login``.
-
-    At least one must be provided. The returned worker token is what every
-    later request uses (heartbeat / poll / result).
+    The returned worker token is what every later request uses (heartbeat /
+    poll / result).
     """
-    if not bearer_token and not install_token:
-        raise ValueError(
-            "register() needs either bearer_token (run `bsvibe login` to "
-            "produce one) or install_token (deprecated)."
-        )
+    if not bearer_token:
+        raise ValueError("register() needs a bearer_token; run `bsvibe login` to produce one.")
     payload: dict[str, Any] = {
         "name": name,
         "capabilities": capabilities or ["claude_code"],
         "labels": labels or [],
     }
-    headers: dict[str, str] = {}
-    if bearer_token:
-        headers["Authorization"] = f"Bearer {bearer_token}"
-    elif install_token:
-        headers["X-Install-Token"] = install_token
+    headers = {"Authorization": f"Bearer {bearer_token}"}
     res = await client.post("/api/v1/workers/register", json=payload, headers=headers)
     res.raise_for_status()
     data = res.json()
@@ -408,11 +397,12 @@ async def poll_and_execute(
     if not token:
         logger.info("no_worker_token", hint="registering with backend")
         bearer = _resolve_host_bearer(settings)
+        if not bearer:
+            raise RuntimeError("no host OAuth credential; run `bsvibe login` on this host first.")
         token = await register(
             client,
             name=settings.name,
             bearer_token=bearer,
-            install_token=settings.install_token,
             capabilities=detect_capabilities(),
         )
         settings.token = token
@@ -480,12 +470,12 @@ async def _interruptible_sleep(seconds: float, stop: asyncio.Event) -> None:
 
 
 def _resolve_host_bearer(settings: WorkerSettings) -> str | None:
-    """Return the OAuth bearer for register, or ``None`` to fall back.
+    """Return the OAuth bearer for register, or ``None`` when absent.
 
-    Looks up the host credentials file (``~/.config/bsvibe/credentials.json``)
-    or the ``BSVIBE_ACCESS_TOKEN`` env. When neither yields a token the worker
-    falls back to the legacy install-token path (which itself 401s if
-    settings.install_token is also empty).
+    Looks up ``settings.access_token`` first (``BSVIBE_WORKER_ACCESS_TOKEN``)
+    then the host credentials file (``~/.config/bsvibe/credentials.json``)
+    that ``bsvibe login`` writes. ``None`` means the caller must run
+    ``bsvibe login`` first — there is no legacy fallback.
     """
     if settings.access_token:
         return settings.access_token

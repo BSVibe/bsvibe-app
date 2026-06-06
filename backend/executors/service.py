@@ -1,26 +1,26 @@
 """Service layer for the external executor-worker registration subsystem.
 
-Ported from BSGateway's ``executor/install_token.py`` + the inline logic in
-``api/routers/workers.py``, adapted to async SQLAlchemy and ``workspace_id``.
-
-Token model (matches BSGateway):
-  * **install token** — per-workspace, minted by an admin, used by worker
-    machines to register. One active token per workspace; re-minting replaces.
+Token model:
   * **worker token** — per-worker, minted at registration, used on every
-    subsequent worker request (heartbeat, and — in later lifts — poll/result).
+    subsequent worker request (heartbeat, poll, result).
 
 Only SHA-256 hashes are persisted; plaintext is returned once and never stored.
 The session is owned by the caller (router / test) — these functions ``add``/
 ``delete`` and ``flush`` but never ``commit``, so the caller controls the
 transaction boundary.
 
-Lift M2 (v8 §20.3 Pattern B audit, 2026-06-02) — **already module-level
-function decomposition (Pattern E), skipped.** No class bundles validator
-+ state-advance + persistence. Token-hashing primitives (``_hash_token``,
-``_generate_token``) are already module-level helpers. Validation
-(``InvalidInstallToken``) is its own exception. Executor-model-account
-persistence is delegated to ``ModelAccountRepository`` (Lift I-Repo
-seam). Each function has a single, narrow responsibility.
+Lift E5 (2026-06-06) — the legacy ``install_token`` system is gone. The CLI
+now registers with the host's OAuth bearer (Supabase session JWT or MCP
+access token, Lift E4); the workspace is derived from verified claims, not a
+DB-stored install token. ``mint_install_token`` /
+``resolve_install_token_workspace`` / ``InvalidInstallToken`` and the
+``register_worker(install_token=…)`` overload are all removed.
+
+Lift M2 (v8 §20.3 Pattern B audit, 2026-06-02) — module-level function
+decomposition (Pattern E). Token-hashing primitives (``_hash_token``,
+``_generate_token``) are module-level helpers; executor-model-account
+persistence is delegated to ``ModelAccountRepository`` (Lift I-Repo seam).
+Each function has a single, narrow responsibility.
 """
 
 from __future__ import annotations
@@ -31,10 +31,10 @@ import uuid
 from datetime import UTC, datetime
 
 import structlog
-from sqlalchemy import delete, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.executors.db import WorkerInstallTokenRow, WorkerRow
+from backend.executors.db import WorkerRow
 from backend.router.accounts.account_service import ensure_personal_account
 from backend.router.accounts.predicates import EXECUTOR_PROVIDER
 from backend.router.accounts.repository import ModelAccountRepository
@@ -42,60 +42,13 @@ from backend.router.accounts.repository import ModelAccountRepository
 logger = structlog.get_logger(__name__)
 
 
-class InvalidInstallToken(Exception):
-    """Raised when registration is attempted with a missing/unknown install token."""
-
-
 def _hash_token(token: str) -> str:
-    """SHA-256 hex digest — the single hashing primitive for both token kinds."""
+    """SHA-256 hex digest — the worker-token hashing primitive."""
     return hashlib.sha256(token.encode()).hexdigest()
 
 
 def _generate_token() -> str:
     return secrets.token_urlsafe(32)
-
-
-# ── Install token ───────────────────────────────────────────────────────────
-
-
-async def mint_install_token(session: AsyncSession, *, workspace_id: uuid.UUID) -> str:
-    """Mint a new install token for ``workspace_id``, returning the plaintext once.
-
-    Idempotent on the workspace: any prior install token is deleted first, so
-    a workspace has at most one active install token at a time (re-mint = rotate).
-    """
-    await session.execute(
-        delete(WorkerInstallTokenRow).where(WorkerInstallTokenRow.workspace_id == workspace_id)
-    )
-    token = _generate_token()
-    session.add(WorkerInstallTokenRow(workspace_id=workspace_id, token_hash=_hash_token(token)))
-    await session.flush()
-    logger.info("executor_install_token_minted", workspace_id=str(workspace_id))
-    return token
-
-
-async def get_install_token_hash(session: AsyncSession, workspace_id: uuid.UUID) -> str | None:
-    """Return the stored install-token hash for ``workspace_id``, or ``None``."""
-    row = (
-        await session.execute(
-            select(WorkerInstallTokenRow).where(WorkerInstallTokenRow.workspace_id == workspace_id)
-        )
-    ).scalar_one_or_none()
-    return row.token_hash if row is not None else None
-
-
-async def resolve_install_token_workspace(session: AsyncSession, token: str) -> uuid.UUID | None:
-    """Find the workspace that minted ``token``, or ``None`` if unknown."""
-    if not token:
-        return None
-    row = (
-        await session.execute(
-            select(WorkerInstallTokenRow).where(
-                WorkerInstallTokenRow.token_hash == _hash_token(token)
-            )
-        )
-    ).scalar_one_or_none()
-    return row.workspace_id if row is not None else None
 
 
 # ── Executor model accounts (Lift 5a) ─────────────────────────────────────────
@@ -176,10 +129,10 @@ async def register_worker_for_workspace(
 ) -> tuple[WorkerRow, str]:
     """Create a worker bound to ``workspace_id``, returning ``(row, plaintext)``.
 
-    The new Lift E4 path — workspace is derived upstream from the OAuth bearer
-    (Supabase session JWT or MCP access token) so no install_token round-trip
-    is required. The fresh per-worker token's plaintext is returned once; only
-    its hash is persisted.
+    The workspace is derived upstream from the OAuth bearer (Supabase session
+    JWT or MCP access token) so no install-token round-trip is required. The
+    fresh per-worker token's plaintext is returned once; only its hash is
+    persisted.
     """
     token = _generate_token()
     worker = WorkerRow(
@@ -214,37 +167,6 @@ async def register_worker_for_workspace(
         capabilities=list(capabilities),
     )
     return worker, token
-
-
-async def register_worker(
-    session: AsyncSession,
-    *,
-    install_token: str,
-    name: str,
-    labels: list[str],
-    capabilities: list[str],
-) -> tuple[WorkerRow, str]:
-    """Validate ``install_token`` and create a worker, returning ``(row, plaintext)``.
-
-    **Deprecated (Lift E4)** — the install-token path is kept for backward
-    compatibility while existing worker hosts cut over to the OAuth-bearer
-    flow. Lift E5 removes this entry point + the underlying
-    ``executor_install_tokens`` table. Prefer
-    :func:`register_worker_for_workspace` for new callers.
-
-    Raises :class:`InvalidInstallToken` when the install token is absent or
-    does not match any workspace.
-    """
-    workspace_id = await resolve_install_token_workspace(session, install_token)
-    if workspace_id is None:
-        raise InvalidInstallToken("invalid or missing install token")
-    return await register_worker_for_workspace(
-        session,
-        workspace_id=workspace_id,
-        name=name,
-        labels=labels,
-        capabilities=capabilities,
-    )
 
 
 async def authenticate_worker(session: AsyncSession, token: str) -> WorkerRow | None:
@@ -322,14 +244,9 @@ async def revoke_worker(
 
 
 __all__ = [
-    "InvalidInstallToken",
     "authenticate_worker",
-    "get_install_token_hash",
     "list_workers",
-    "mint_install_token",
     "record_heartbeat",
-    "register_worker",
     "register_worker_for_workspace",
-    "resolve_install_token_workspace",
     "revoke_worker",
 ]

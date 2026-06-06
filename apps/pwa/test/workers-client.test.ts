@@ -2,13 +2,16 @@
  * Workers client — wire contracts against a mocked fetch
  * (lib/api/workers.ts → backend /api/v1/workers).
  *
- *  - listWorkers:       GET  /api/v1/workers
- *  - mintInstallToken:  POST /api/v1/workers/install-token → { token } (once)
- *  - revokeWorker:      DELETE /api/v1/workers/{id} → 204 void
+ *  - listWorkers:   GET    /api/v1/workers
+ *  - revokeWorker:  DELETE /api/v1/workers/{id} → 204 void
+ *
+ * Lift E5 (2026-06-06) — the legacy `mintInstallToken` client is gone; the
+ * PWA never sees an install token because registration happens host-side via
+ * `bsvibe-worker register` with the host OAuth bearer.
  */
 
 import { ApiError } from "@/lib/api/client";
-import { listWorkers, mintInstallToken, revokeWorker } from "@/lib/api/workers";
+import { listWorkers, revokeWorker } from "@/lib/api/workers";
 import { type Session, clearSession, setSession } from "@/lib/auth/session";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -63,19 +66,6 @@ describe("workers client", () => {
     expect((init.method ?? "GET").toUpperCase()).toBe("GET");
   });
 
-  it("mintInstallToken POSTs /api/v1/workers/install-token and returns { token }", async () => {
-    const minted = { token: "INSTALL-TOKEN-once-abcd" };
-    const fetchMock = okFetch(minted, 200);
-    global.fetch = fetchMock as unknown as typeof fetch;
-
-    const res = await mintInstallToken();
-
-    expect(res).toEqual(minted);
-    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
-    expect(url).toBe("/api/v1/workers/install-token");
-    expect(init.method).toBe("POST");
-  });
-
   it("revokeWorker DELETEs /api/v1/workers/{id} and resolves void", async () => {
     const fetchMock = okFetch(null, 204);
     global.fetch = fetchMock as unknown as typeof fetch;
@@ -94,13 +84,5 @@ describe("workers client", () => {
     ) as unknown as typeof fetch;
 
     await expect(listWorkers()).rejects.toBeInstanceOf(ApiError);
-  });
-
-  it("surfaces an ApiError on a non-ok mint (e.g. 403 non-admin)", async () => {
-    global.fetch = vi.fn(
-      async () => new Response("forbidden", { status: 403 }),
-    ) as unknown as typeof fetch;
-
-    await expect(mintInstallToken()).rejects.toBeInstanceOf(ApiError);
   });
 });

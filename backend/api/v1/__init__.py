@@ -74,9 +74,9 @@ router.include_router(messages.router, prefix="/messages", tags=["messages"])
 router.include_router(safemode.router, prefix="/safemode", tags=["safemode"])
 router.include_router(inside.router, prefix="/inside", tags=["inside"])
 router.include_router(notifications.router, prefix="/notifications", tags=["notifications"])
-# Workers — only the JWT-gated routes (install-token mint, list, revoke) live
-# under the v1 aggregate. The install-token/worker-token authed routes
-# (register, heartbeat) are mounted by backend.api.main on ``workers.public_router``
+# Workers — only the JWT-gated routes (list, revoke) live under the v1
+# aggregate. The bearer/worker-token authed routes (register, heartbeat,
+# poll, result) are mounted by backend.api.main on ``workers.public_router``
 # at /api/v1/workers directly, bypassing the get_current_user gate.
 router.include_router(workers.router, prefix="/workers", tags=["workers"])
 

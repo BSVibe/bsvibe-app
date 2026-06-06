@@ -28,15 +28,14 @@ class WorkerSettings(BaseSettings):
     server_url: str = "http://localhost:8400"
 
     # Worker identity. ``token`` (env: ``BSVIBE_WORKER_TOKEN``) is minted at
-    # first-run registration and persisted back to ``.env``. Lift E4 added the
-    # bearer-token register path: ``access_token`` (env:
-    # ``BSVIBE_WORKER_ACCESS_TOKEN``) sources the host OAuth credential
-    # explicitly — when empty the worker falls back to the credentials file
-    # ``bsvibe login`` writes (``~/.config/bsvibe/credentials.json``) and
-    # finally to the deprecated ``install_token`` path (Lift E5 removes).
+    # first-run registration and persisted back to ``.env``. The bearer-token
+    # register path (Lift E4) sources the host OAuth credential — either from
+    # ``access_token`` (env: ``BSVIBE_WORKER_ACCESS_TOKEN``) when set
+    # explicitly, or from the credentials file ``bsvibe login`` writes
+    # (``~/.config/bsvibe/credentials.json``). Lift E5 (2026-06-06) removed
+    # the legacy ``install_token`` path.
     token: str = ""
     access_token: str = ""
-    install_token: str = ""
     name: str = socket.gethostname()
 
     # Polling cadence + batching.

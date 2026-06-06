@@ -77,7 +77,7 @@ def test_alembic_head_is_connector_last_import():
     # Lift A v2 bumped the head; keep the test name (function name was the
     # historical revision id, kept for git-blame stability) and assert the
     # new tip.
-    assert "run_routing_caller_id" in result.stdout
+    assert "drop_executor_install_tokens" in result.stdout
 
 
 def test_target_metadata_covers_all_bases():
@@ -167,7 +167,6 @@ def test_target_metadata_covers_all_bases():
         "notification_prefs",
         # External executor-worker registration subsystem (executor-pool Lift 1)
         "executor_workers",
-        "executor_install_tokens",
         # Executor dispatch substrate — pending→dispatched→done/failed (Lift 2)
         "executor_tasks",
     }
