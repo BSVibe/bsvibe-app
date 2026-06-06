@@ -1,36 +1,28 @@
-"""ModelAccountResolver — caller_id × workspace_id → account (Lift E1).
+"""ModelAccountResolver — caller_id × workspace_id → account.
 
 The resolver is mechanism-only: it does not decide policy. It looks for
 a match in this order:
 
-1. **Explicit rule** — an active :class:`RunRoutingRuleRow` whose
-   ``conditions`` carry a ``caller_id`` equality clause that matches.
-   When found, the rule's ``target`` (a ``litellm_model``) picks the
-   workspace's ACTIVE account that publishes that model.
-2. **Workspace default** — :attr:`WorkspaceRow.default_account_id`.
-   The founder sets this through Settings (PWA) or the MCP tool. The
+1. **Explicit rule** — an active
+   :class:`~backend.router.routing.run_routing.db.RunRoutingRuleRow`
+   whose ``conditions`` carry a ``caller_id`` equality clause that
+   matches. When found, the rule's ``target`` (a ``litellm_model``)
+   picks the workspace's ACTIVE account that publishes that model.
+2. **Workspace default** — :attr:`WorkspaceRow.default_account_id`. The
+   founder sets this through Settings (PWA) or the MCP tool. The
    resolver never auto-stamps it.
 3. **Hard fail** — :class:`NoMatchingRouteError`. The call site surfaces
    the error to the user / PWA Settings instead of silently picking a
    model.
 
-The resolver does NOT touch the classifier or the tier vocabulary
-(``simple`` / ``substantial`` / ``LOCAL_INFERENCE_PROVIDERS``). Those
-remain in :mod:`backend.router.classifier` /
-:mod:`backend.router.routing.run_routing.tier_default` and continue to
-power the legacy :class:`GatewayDispatcher` path until Lift E2 removes
-them.
-
-The matched account is wrapped in a :class:`ResolvedAccount` together
-with a constructed :class:`ModelAccountAdapter` so the call site has the
-single object it actually needs — ``account.adapter.chat(...)``.
+After Lift E2 there is no classifier path, no tier vocabulary, no
+provider allow-list. Dispatch flows through this resolver alone.
 """
 
 from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass
-from typing import Any
 
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -98,9 +90,9 @@ class ResolvedAccount:
 
 
 # Condition the resolver looks for inside a rule's JSON ``conditions``
-# array. Today only equality is honoured — anything fancier (regex,
-# in-list) is reserved for E2 hardening when rule validation moves
-# server-side. ``operator`` defaults to ``eq``.
+# array. The rule's row-level ``caller_id`` column is the primary
+# matcher; this clause stays for back-compat with rules whose caller_id
+# was authored as a condition before the column was added.
 _CALLER_FIELD = "caller_id"
 
 
@@ -118,25 +110,30 @@ class ModelAccountResolver:
     ) -> None:
         self._session = session
         self._settings = settings
-        self._cipher = cipher or CredentialCipher(_key_from_settings())
-        self._accounts = accounts or ModelAccountService(session, cipher=self._cipher)
+        # Lazy cipher / accounts service — only built when we actually
+        # need to decrypt an api key (i.e. when a route resolves). A
+        # workspace with no rules + no default never touches them, so
+        # tests/dev environments that lack ``BSVIBE_GATEWAY_KMS_KEY_B64``
+        # don't crash at resolver construction time.
+        self._cipher = cipher
+        self._accounts = accounts
         self._skill_names = skill_names or []
+
+    def _ensure_accounts(self) -> ModelAccountService:
+        if self._accounts is not None:
+            return self._accounts
+        if self._cipher is None:
+            self._cipher = CredentialCipher(_key_from_settings())
+        self._accounts = ModelAccountService(self._session, cipher=self._cipher)
+        return self._accounts
 
     async def resolve_for(
         self,
         *,
         caller_id: str,
         workspace_id: uuid.UUID,
-        legacy_features: Any = None,
-        legacy_projected_cost_cents: int = 1,
     ) -> ResolvedAccount:
         """Resolve the account for one ``(caller_id, workspace_id)`` pair.
-
-        ``legacy_features`` is the classifier features the call site used
-        to pass on the old code path; threaded through so the
-        E1-transitional adapter still routes through
-        :class:`GatewayDispatcher` (budget + classifier still alive).
-        Lift E2 deletes this parameter.
 
         Raises :class:`NoMatchingRouteError` when nothing matches.
         Raises :class:`KeyError` for an unknown ``caller_id``.
@@ -163,14 +160,23 @@ class ModelAccountResolver:
             )
             raise NoMatchingRouteError(caller_id=caller_id, workspace_id=workspace_id)
 
-        api_key = self._accounts.reveal_api_key(account)
+        # Executor accounts never carry an api key (CLI subprocess uses
+        # the host's own credential); skip the decryption entirely so a
+        # workspace that registered only an executor account doesn't
+        # require ``BSVIBE_GATEWAY_KMS_KEY_B64`` just to resolve.
+        from backend.router.accounts.predicates import (  # noqa: PLC0415
+            is_executor_account,
+        )
+
+        if is_executor_account(account):
+            api_key = ""
+        else:
+            api_key = self._ensure_accounts().reveal_api_key(account)
         adapter = adapter_for(
             account,
             session=self._session,
             settings=self._settings,
             api_key=api_key,
-            legacy_features=legacy_features,
-            legacy_projected_cost_cents=legacy_projected_cost_cents,
         )
 
         # Defensive validation — rule creation is supposed to catch this
@@ -192,16 +198,15 @@ class ModelAccountResolver:
     # ----- internals -----
 
     async def _match_rule(self, caller_id: str, workspace_id: uuid.UUID) -> ModelAccount | None:
-        """First-active-rule wins among rules whose conditions carry an
-        equality clause on the ``caller_id`` field.
+        """First-active-rule wins among rules whose ``caller_id`` matches.
 
-        Today the existing :class:`RunRoutingRuleRow` schema only carries
-        framed-signal conditions (``artifact_type_hint`` etc.). Until a
-        future lift extends ``ALLOWED_FIELDS`` to include ``caller_id``
-        we treat the column as if rules opt into the new field via the
-        same JSON shape — i.e. ``conditions = [{"field": "caller_id",
-        "operator": "eq", "value": "knowledge.ingest"}]``. Rules without
-        a ``caller_id`` clause never match.
+        Two write shapes are honoured:
+
+        * The :class:`RunRoutingRuleRow.caller_id` column (the canonical
+          shape after Lift E2 — rule creation requires it).
+        * A ``{"field": "caller_id", "operator": "eq", "value": "..."}``
+          entry inside ``conditions`` (the back-compat shape for rules
+          authored before the column existed).
         """
         from sqlalchemy import select  # noqa: PLC0415
 
@@ -219,12 +224,14 @@ class ModelAccountResolver:
             if rule.is_default:
                 continue
             if _rule_matches_caller(rule, caller_id):
-                return await self._account_for_target(workspace_id, rule.target)
+                account = await self._account_for_target(workspace_id, rule.target)
+                if account is not None:
+                    return account
         # No explicit match — try the default rule (still a rule, just a
         # catch-all). We honour it ONLY when the rule actually targets a
         # live model account.
         for rule in rules:
-            if rule.is_default and not rule.conditions:
+            if rule.is_default and not rule.conditions and not rule.caller_id:
                 account = await self._account_for_target(workspace_id, rule.target)
                 if account is not None:
                     return account
@@ -278,15 +285,23 @@ class ModelAccountResolver:
             raise NoAdapterMethodError(caller_id=spec.caller_id, missing=missing)
 
 
-def _rule_matches_caller(rule: RunRoutingRuleRow, caller_id: str) -> bool:
-    """True when ``rule`` carries an equality clause on ``caller_id`` that
-    matches ``caller_id``.
+def _matches_skill_short(value: str, caller_id: str) -> bool:
+    """A skill caller_id ``skill.<name>`` also matches the bare ``<name>``."""
+    return (
+        caller_id.startswith(SKILL_CALLER_PREFIX) and value == caller_id[len(SKILL_CALLER_PREFIX) :]
+    )
 
-    Skill caller_ids (``skill.<name>``) match a rule whose value is the
-    literal full ``skill.<name>`` OR a rule whose value is just
-    ``<name>`` AND the field is explicitly ``"caller_id"`` — the latter
-    is the convenience shape we expect operators will use for skills.
+
+def _rule_matches_caller(rule: RunRoutingRuleRow, caller_id: str) -> bool:
+    """True when ``rule`` matches ``caller_id``.
+
+    Match precedence: ``rule.caller_id`` column (canonical) → ``conditions``
+    back-compat clause. Skill caller_ids match either the full
+    ``skill.<name>`` or the bare ``<name>``.
     """
+    column = getattr(rule, "caller_id", None)
+    if isinstance(column, str) and column:
+        return column == caller_id or _matches_skill_short(column, caller_id)
     if not isinstance(rule.conditions, list):
         return False
     for clause in rule.conditions:
@@ -294,18 +309,11 @@ def _rule_matches_caller(rule: RunRoutingRuleRow, caller_id: str) -> bool:
             continue
         if clause.get("field") != _CALLER_FIELD:
             continue
-        operator = clause.get("operator", "eq")
-        if operator != "eq":
-            # Future operators land with E2 hardening; reject for now.
+        if clause.get("operator", "eq") != "eq":
             continue
         value = clause.get("value")
         if value == caller_id:
             return True
-        # Skill convenience: "skill.<name>" matches the bare "<name>".
-        if (
-            isinstance(value, str)
-            and caller_id.startswith(SKILL_CALLER_PREFIX)
-            and value == caller_id[len(SKILL_CALLER_PREFIX) :]
-        ):
+        if isinstance(value, str) and _matches_skill_short(value, caller_id):
             return True
     return False

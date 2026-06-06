@@ -145,6 +145,13 @@ async def _seed_executor_account(
     worker_id: uuid.UUID,
     executor_type: str,
 ) -> ModelAccount:
+    """Seed an executor ModelAccount and set it as the workspace default
+    so the Lift E2 resolver routes the agent loop's act turn to it without
+    an explicit rule."""
+    from sqlalchemy import select  # noqa: PLC0415
+
+    from backend.identity.workspaces_db import WorkspaceRow  # noqa: PLC0415
+
     account = ModelAccount(
         id=uuid.uuid4(),
         workspace_id=workspace_id,
@@ -159,6 +166,21 @@ async def _seed_executor_account(
         extra_params={"worker_id": str(worker_id), "executor_type": executor_type},
     )
     s.add(account)
+    await s.flush()
+    ws = (
+        await s.execute(select(WorkspaceRow).where(WorkspaceRow.id == workspace_id))
+    ).scalar_one_or_none()
+    if ws is None:
+        ws = WorkspaceRow(
+            id=workspace_id,
+            name="test-ws",
+            region="us-1",
+            safe_mode=True,
+            legal_basis="contract",
+        )
+        s.add(ws)
+        await s.flush()
+    ws.default_account_id = account.id
     await s.flush()
     return account
 
@@ -705,9 +727,9 @@ async def test_non_executor_account_builds_native_orchestrator(
     import base64
 
     from backend.config import get_settings as _get_settings
+    from backend.dispatch import adapter as runtime_dispatcher
     from backend.router.llm_client import LlmClient
     from backend.workflow.application.agent_loop import RunOrchestrator
-    from backend.workflow.application.runtime import dispatcher as runtime_dispatcher
     from backend.workflow.infrastructure.workers import (
         run as run_module,  # noqa: F401 — legacy alias
     )
@@ -724,8 +746,12 @@ async def test_non_executor_account_builds_native_orchestrator(
         runtime_dispatcher, "LlmClient", lambda: LlmClient(completion_fn=lambda **_: None)
     )
 
+    from backend.identity.workspaces_db import WorkspaceRow  # noqa: PLC0415
+    from backend.router.accounts.crypto import CredentialCipher  # noqa: PLC0415
+
     workspace_id = uuid.uuid4()
     async with sf() as s:
+        cipher = CredentialCipher(b"0" * 32)
         account = ModelAccount(
             id=uuid.uuid4(),
             workspace_id=workspace_id,
@@ -734,12 +760,25 @@ async def test_non_executor_account_builds_native_orchestrator(
             label="claude",
             litellm_model="claude-3-5-sonnet",
             api_base=None,
-            api_key_encrypted="ciphertext",
+            api_key_encrypted=cipher.encrypt("sk-test"),
             data_jurisdiction="us",
             is_active=True,
             extra_params={},
         )
         s.add(account)
+        await s.flush()
+        # Lift E2 — resolver needs the workspace default to route the
+        # native run without an explicit rule.
+        s.add(
+            WorkspaceRow(
+                id=workspace_id,
+                name="ws",
+                region="us-1",
+                safe_mode=True,
+                legal_basis="contract",
+                default_account_id=account.id,
+            )
+        )
         run_id = await _open_run(s, workspace_id=workspace_id, text="native run")
         await s.commit()
 
@@ -891,9 +930,9 @@ async def test_factory_wires_retriever_into_native_orchestrator(
     import base64
 
     from backend.config import get_settings as _get_settings
+    from backend.dispatch import adapter as runtime_dispatcher
     from backend.router.llm_client import LlmClient
     from backend.workflow.application.agent_loop import RunOrchestrator
-    from backend.workflow.application.runtime import dispatcher as runtime_dispatcher
     from backend.workflow.infrastructure.workers import (
         run as run_module,  # noqa: F401 — legacy alias
     )
@@ -905,6 +944,9 @@ async def test_factory_wires_retriever_into_native_orchestrator(
         runtime_dispatcher, "LlmClient", lambda: LlmClient(completion_fn=lambda **_: None)
     )
 
+    from backend.identity.workspaces_db import WorkspaceRow  # noqa: PLC0415
+    from backend.router.accounts.crypto import CredentialCipher  # noqa: PLC0415
+
     settings = _vault_root_settings(tmp_path)
     workspace_id = uuid.uuid4()
     await _seed_canon_concept(
@@ -915,6 +957,7 @@ async def test_factory_wires_retriever_into_native_orchestrator(
         display="Use structlog for structured logging",
     )
     async with sf() as s:
+        cipher = CredentialCipher(b"0" * 32)
         account = ModelAccount(
             id=uuid.uuid4(),
             workspace_id=workspace_id,
@@ -923,12 +966,23 @@ async def test_factory_wires_retriever_into_native_orchestrator(
             label="claude",
             litellm_model="claude-3-5-sonnet",
             api_base=None,
-            api_key_encrypted="ciphertext",
+            api_key_encrypted=cipher.encrypt("sk-test"),
             data_jurisdiction="us",
             is_active=True,
             extra_params={},
         )
         s.add(account)
+        await s.flush()
+        s.add(
+            WorkspaceRow(
+                id=workspace_id,
+                name="ws",
+                region="us-1",
+                safe_mode=True,
+                legal_basis="contract",
+                default_account_id=account.id,
+            )
+        )
         run_id = await _open_run(s, workspace_id=workspace_id, text="native run")
         await s.commit()
 

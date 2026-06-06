@@ -1,4 +1,4 @@
-"""LiteLLMAdapter + ExecutorAdapter — wire-shape + delegation tests."""
+"""LiteLLMAdapter + ExecutorAdapter — wire-shape + delegation tests (Lift E2)."""
 
 from __future__ import annotations
 
@@ -35,7 +35,7 @@ def _stub_account(provider: str = "ollama") -> ModelAccount:
 
 
 class TestLiteLLMAdapter:
-    async def test_direct_path_calls_llm_client(self) -> None:
+    async def test_chat_calls_llm_client(self) -> None:
         account = _stub_account()
         mock_completion = AsyncMock(
             return_value={
@@ -51,8 +51,6 @@ class TestLiteLLMAdapter:
             workspace_id=account.workspace_id,
             account_id=account.account_id,
             model_account_id=account.id,
-            dispatcher=None,  # direct path
-            legacy_features=None,
         )
         response = await adapter.chat(
             system="be terse",
@@ -60,59 +58,15 @@ class TestLiteLLMAdapter:
         )
         assert isinstance(response, ChatResponse)
         assert response.content == "hello"
+        assert response.tool_calls == ()
         assert response.usage_prompt_tokens == 4
-        mock_completion.assert_awaited_once()
-        # System prompt prepended.
-        kwargs = mock_completion.await_args.kwargs
+        assert response.usage_completion_tokens == 1
+        # System prompt prepended; user message preserved.
+        kwargs = mock_completion.call_args.kwargs
         assert kwargs["messages"][0] == {"role": "system", "content": "be terse"}
         assert kwargs["messages"][1] == {"role": "user", "content": "hi"}
 
-    async def test_dispatcher_path_routes_through_gateway(self) -> None:
-        account = _stub_account()
-        # Hand-mock the dispatcher so we don't touch the real classifier.
-        from backend.router.classifier.base import (
-            ClassificationFeatures,
-            ClassificationResult,
-        )
-        from backend.router.dispatch import DispatchResult
-
-        mock_dispatcher = AsyncMock()
-        mock_dispatcher.dispatch.return_value = DispatchResult(
-            classification=ClassificationResult(
-                tier="local", score=10, strategy="static", reason="t"
-            ),
-            response=LlmResponse(
-                content="from-gateway",
-                usage_prompt_tokens=2,
-                usage_completion_tokens=1,
-                tool_calls=(),
-            ),
-            actual_cost_cents=1,
-        )
-        adapter = LiteLLMAdapter(
-            account=account,
-            api_key="",
-            llm=LlmClient(completion_fn=AsyncMock()),  # untouched
-            workspace_id=account.workspace_id,
-            account_id=account.account_id,
-            model_account_id=account.id,
-            dispatcher=mock_dispatcher,
-            legacy_features=ClassificationFeatures(
-                token_count=10,
-                system_prompt_chars=0,
-                conversation_turns=1,
-                code_block_count=0,
-                tool_count=0,
-            ),
-        )
-        response = await adapter.chat(
-            system="s",
-            messages=[{"role": "user", "content": "u"}],
-        )
-        assert response.content == "from-gateway"
-        mock_dispatcher.dispatch.assert_awaited_once()
-
-    def test_supported_methods_includes_chat(self) -> None:
+    async def test_supported_methods_chat_only(self) -> None:
         adapter = LiteLLMAdapter(
             account=_stub_account(),
             api_key="",
@@ -121,9 +75,34 @@ class TestLiteLLMAdapter:
             account_id=uuid.uuid4(),
             model_account_id=uuid.uuid4(),
         )
-        assert "chat" in adapter.supported_methods
+        assert adapter.supported_methods == frozenset({"chat"})
 
-    def test_satisfies_protocol(self) -> None:
+
+class TestExecutorAdapter:
+    async def test_chat_raises_until_e3(self) -> None:
+        adapter = ExecutorAdapter(
+            account=_stub_account("executor"),
+            workspace_id=uuid.uuid4(),
+            account_id=uuid.uuid4(),
+            model_account_id=uuid.uuid4(),
+        )
+        with pytest.raises(NotImplementedError, match="ExecutorAdapter.chat"):
+            await adapter.chat(system="x", messages=[{"role": "user", "content": "y"}])
+
+    def test_supported_methods_chat_only(self) -> None:
+        adapter = ExecutorAdapter(
+            account=_stub_account("executor"),
+            workspace_id=uuid.uuid4(),
+            account_id=uuid.uuid4(),
+            model_account_id=uuid.uuid4(),
+        )
+        assert adapter.supported_methods == frozenset({"chat"})
+
+
+class TestProtocolConformance:
+    """Both adapters satisfy the ``ModelAccountAdapter`` Protocol."""
+
+    def test_litellm_adapter_is_model_account_adapter(self) -> None:
         adapter = LiteLLMAdapter(
             account=_stub_account(),
             api_key="",
@@ -134,88 +113,26 @@ class TestLiteLLMAdapter:
         )
         assert isinstance(adapter, ModelAccountAdapter)
 
-
-class TestExecutorAdapter:
-    async def test_chat_without_dispatcher_raises_not_implemented(self) -> None:
+    def test_executor_adapter_is_model_account_adapter(self) -> None:
         adapter = ExecutorAdapter(
-            account=_stub_account(provider="executor"),
-            workspace_id=uuid.uuid4(),
-            account_id=uuid.uuid4(),
-            model_account_id=uuid.uuid4(),
-            dispatcher=None,
-            legacy_features=None,
-        )
-        with pytest.raises(NotImplementedError):
-            await adapter.chat(
-                system="x",
-                messages=[{"role": "user", "content": "y"}],
-            )
-
-    async def test_chat_delegates_to_dispatcher_when_wired(self) -> None:
-        from backend.router.classifier.base import (
-            ClassificationFeatures,
-            ClassificationResult,
-        )
-        from backend.router.dispatch import DispatchResult
-
-        mock_dispatcher = AsyncMock()
-        mock_dispatcher.dispatch.return_value = DispatchResult(
-            classification=ClassificationResult(
-                tier="cloud", score=80, strategy="static", reason="t"
-            ),
-            response=LlmResponse(
-                content="exec-output",
-                usage_prompt_tokens=10,
-                usage_completion_tokens=5,
-                tool_calls=(),
-            ),
-            actual_cost_cents=1,
-        )
-        adapter = ExecutorAdapter(
-            account=_stub_account(provider="executor"),
-            workspace_id=uuid.uuid4(),
-            account_id=uuid.uuid4(),
-            model_account_id=uuid.uuid4(),
-            dispatcher=mock_dispatcher,
-            legacy_features=ClassificationFeatures(
-                token_count=10,
-                system_prompt_chars=0,
-                conversation_turns=1,
-                code_block_count=0,
-                tool_count=0,
-            ),
-        )
-        response = await adapter.chat(
-            system="s",
-            messages=[{"role": "user", "content": "u"}],
-        )
-        assert response.content == "exec-output"
-
-    def test_supported_methods_includes_chat(self) -> None:
-        adapter = ExecutorAdapter(
-            account=_stub_account(provider="executor"),
+            account=_stub_account("executor"),
             workspace_id=uuid.uuid4(),
             account_id=uuid.uuid4(),
             model_account_id=uuid.uuid4(),
         )
-        assert "chat" in adapter.supported_methods
+        assert isinstance(adapter, ModelAccountAdapter)
 
 
-class TestFromLlmResponse:
-    def test_normalizes_tool_calls(self) -> None:
-        raw = LlmResponse(
-            content="call X",
-            usage_prompt_tokens=1,
-            usage_completion_tokens=2,
-            tool_calls=(
-                {
-                    "id": "c1",
-                    "type": "function",
-                    "function": {"name": "do_x", "arguments": '{"a": 1}'},
-                },
-            ),
-        )
-        chat = _from_llm_response(raw)
-        assert chat.content == "call X"
-        assert chat.tool_calls[0].name == "do_x"
-        assert chat.tool_calls[0].arguments_json == '{"a": 1}'
+def test_from_llm_response_normalizes_tool_calls() -> None:
+    response = LlmResponse(
+        content="ok",
+        usage_prompt_tokens=2,
+        usage_completion_tokens=3,
+        tool_calls=({"id": "abc", "function": {"name": "write_file", "arguments": "{}"}},),
+    )
+    chat = _from_llm_response(response)
+    assert chat.content == "ok"
+    assert len(chat.tool_calls) == 1
+    assert chat.tool_calls[0].id == "abc"
+    assert chat.tool_calls[0].name == "write_file"
+    assert chat.tool_calls[0].arguments_json == "{}"

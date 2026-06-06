@@ -36,8 +36,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.executors.db import WorkerInstallTokenRow, WorkerRow
 from backend.router.accounts.account_service import ensure_personal_account
+from backend.router.accounts.predicates import EXECUTOR_PROVIDER
 from backend.router.accounts.repository import ModelAccountRepository
-from backend.router.dispatch.strategies import EXECUTOR_PROVIDER
 
 logger = structlog.get_logger(__name__)
 

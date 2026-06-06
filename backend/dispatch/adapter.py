@@ -1,25 +1,22 @@
-"""ModelAccountAdapter — uniform call-site interface (Lift E1).
+"""ModelAccountAdapter — uniform call-site interface.
 
-A call site that has been migrated to the new dispatch path no longer
-constructs a :class:`~backend.router.dispatch.GatewayDispatcher` directly;
-it asks :class:`~backend.dispatch.resolver.ModelAccountResolver` for an
-account and then calls one verb on the adapter the resolver hands back:
+A call site that needs an LLM asks
+:class:`~backend.dispatch.resolver.ModelAccountResolver` for an account
+and then calls one verb on the adapter the resolver hands back:
 
 * :meth:`ModelAccountAdapter.chat` — system + messages + tools → response.
 
-Two concrete adapters land in E1:
+Two concrete adapters land in this module:
 
 * :class:`LiteLLMAdapter` wraps :class:`~backend.router.llm_client.LlmClient`
   for any provider whose dispatch is a direct provider-API chat call
-  (anthropic, openai, ollama_chat, …). It is the canonical happy path.
-* :class:`ExecutorAdapter` is a **placeholder** that delegates back to the
-  existing classifier-based gateway dispatcher so the new code path can
-  ship even before E3 wires the subprocess executor (claude_code / codex
-  / opencode) directly. Once E3 lands, this class wraps
-  :class:`~backend.executors.worker.claude_code.ClaudeCodeExecutor` &
-  friends — keeping the call-site API stable.
+  (anthropic, openai, ollama_chat, …).
+* :class:`ExecutorAdapter` is the worker / CLI branch (``provider="executor"``).
+  Lift E3 swaps the body for a direct subprocess call against the worker's
+  ``execute`` stream-json shape; Lift E2 leaves it as a stub that raises
+  ``NotImplementedError`` so an executor account is loud, not silent.
 
-Both adapters expose the same ``chat`` shape. ``supported_methods`` is
+Both adapters expose the same ``chat`` surface.  ``supported_methods`` is
 checked at rule-creation time so an incompatible binding fails fast.
 """
 
@@ -34,10 +31,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.config import Settings
 from backend.router.accounts.models import ModelAccount
-from backend.router.dispatch import DispatchRequest, GatewayDispatcher
-from backend.router.dispatch.strategies import is_executor_account
+from backend.router.accounts.predicates import is_executor_account
 from backend.router.llm_client import LlmClient, LlmResponse
-from backend.workflow.application.runtime.dispatcher import build_gateway_dispatcher
 
 logger = structlog.get_logger(__name__)
 
@@ -57,10 +52,9 @@ __all__ = [
 # ---------------------------------------------------------------------------
 
 
-#: OpenAI-style message — ``{"role": "system"|"user"|"assistant"|"tool",
-#: "content": str, ...}``. We use a plain ``dict`` rather than a Pydantic
-#: model to keep the adapter forwarding zero-cost; the call sites already
-#: speak this shape.
+#: OpenAI-style message — ``{"role": ..., "content": ..., ...}``. Plain
+#: ``dict`` so the adapter forwarding is zero-cost (call sites already
+#: speak this shape).
 ChatMessage = dict[str, Any]
 
 
@@ -77,10 +71,9 @@ class ChatToolCall:
 class ChatResponse:
     """The minimum useful shape every call site needs from a chat turn.
 
-    ``raw`` is intentionally typed as ``Any`` — it carries the underlying
-    provider's response object so a power-user call site (the agent loop's
-    token-usage telemetry, say) can inspect it. Most call sites only touch
-    ``content`` + ``tool_calls``.
+    ``raw`` carries the underlying provider's response object so a power-
+    user call site (the agent loop's token-usage telemetry, say) can
+    inspect it. Most call sites only touch ``content`` + ``tool_calls``.
     """
 
     content: str
@@ -97,17 +90,14 @@ class ChatResponse:
 
 @runtime_checkable
 class ModelAccountAdapter(Protocol):
-    """The single verb dispatch hands to call sites in E1 — ``chat``.
+    """The single verb dispatch hands to call sites — ``chat``.
 
     A concrete implementation MUST advertise its supported methods on the
     ``supported_methods`` attribute so rule creation can validate that the
     caller's ``required_methods`` is a subset. Today every adapter
-    supports ``{"chat"}``; a future ``execute`` verb (for a different
-    integration shape — out of scope for E1) would be additive.
+    supports ``{"chat"}``.
     """
 
-    #: The set of adapter-method names this implementation honors. Today
-    #: ``frozenset({"chat"})`` — the only verb in E1.
     supported_methods: frozenset[str]
 
     async def chat(
@@ -140,17 +130,10 @@ class ModelAccountAdapter(Protocol):
 class LiteLLMAdapter:
     """Wraps :class:`~backend.router.llm_client.LlmClient` for one account.
 
-    Two paths exist in E1 while classifier / budget are still alive:
-
-    * If ``dispatcher`` is provided, ``chat`` routes through the existing
-      :class:`GatewayDispatcher` so budget / classifier still run. This
-      is the default in production — bigger E2 cuts the classifier.
-    * If ``dispatcher`` is ``None`` (set-up by ``adapter_for`` only when
-      the caller explicitly opts out, e.g. in tests), ``chat`` calls
-      :class:`LlmClient` directly with the account's decrypted
-      credentials — bypassing budget. The seam exists so the test layer
-      and (eventually) E2 can shed the classifier without rewriting every
-      adapter.
+    Calls :class:`LlmClient` directly with the account's decrypted
+    credentials. The credential never leaves this module — it is held on
+    the dataclass and threaded into the LLM call's ``api_key`` slot, not
+    logged anywhere.
     """
 
     account: ModelAccount
@@ -159,14 +142,6 @@ class LiteLLMAdapter:
     workspace_id: uuid.UUID
     account_id: uuid.UUID
     model_account_id: uuid.UUID
-    dispatcher: GatewayDispatcher | None = None
-    #: The :class:`ClassificationFeatures` to forward to the dispatcher.
-    #: Today this is a per-caller fingerprint; E2 deletes the field
-    #: entirely along with the classifier. Held as a plain ``Any`` here
-    #: so this module does NOT have to import the classifier package
-    #: while the seam is in transition.
-    legacy_features: Any = None
-    legacy_projected_cost_cents: int = 1
     supported_methods: frozenset[str] = field(default_factory=lambda: frozenset({"chat"}))
 
     async def chat(
@@ -178,24 +153,6 @@ class LiteLLMAdapter:
     ) -> ChatResponse:
         full_messages: list[ChatMessage] = [{"role": "system", "content": system}]
         full_messages.extend(dict(m) for m in messages)
-
-        if self.dispatcher is not None and self.legacy_features is not None:
-            # Production path while E2 is pending — keep budget + classifier alive.
-            request = DispatchRequest(
-                workspace_id=self.workspace_id,
-                account_id=self.account_id,
-                model_account_id=self.model_account_id,
-                messages=full_messages,
-                features=self.legacy_features,
-                projected_cost_cents=self.legacy_projected_cost_cents,
-                tools=tools,
-            )
-            result = await self.dispatcher.dispatch(request)
-            return _from_llm_response(result.response)
-
-        # Direct path — used by tests today; will become the production
-        # default once E2 lands. The provider key flows through the
-        # adapter, never logged.
         response = await self.llm.chat(
             model=self.account.litellm_model,
             messages=full_messages,
@@ -208,32 +165,26 @@ class LiteLLMAdapter:
 
 
 # ---------------------------------------------------------------------------
-# Executor placeholder adapter (E3 wraps subprocess executors here).
+# Executor adapter — E3 will wire it to the subprocess worker; E2 stub.
 # ---------------------------------------------------------------------------
 
 
 @dataclass(slots=True)
 class ExecutorAdapter:
-    """Placeholder for executor (``provider="executor"``) accounts.
+    """Worker / CLI adapter for ``provider="executor"`` accounts.
 
-    E1 does not migrate the subprocess executor path; E3 does. While the
-    classifier-based gateway is still wired, this adapter routes the
-    chat call through :class:`GatewayDispatcher` exactly as a native
-    account would — which today silently falls back to the classifier's
-    tier verdict for an executor account. The placeholder exists so call
-    sites can already be written against the new resolver/adapter API;
-    when E3 swaps the body for a direct subprocess call (NDJSON
-    stream-json from claude_code / codex / opencode) the call sites do
-    not change.
+    Lift E2 ships the dataclass + ``supported_methods`` so rule creation
+    can validate against this shape, but the verb itself raises until
+    Lift E3 wires the subprocess executor (claude_code / codex /
+    opencode) directly. The OLD path (classifier + tier vocabulary) is
+    gone — there is no silent fallback through the legacy gateway, per
+    founder policy ``bsvibe-no-implicit-routing``.
     """
 
     account: ModelAccount
     workspace_id: uuid.UUID
     account_id: uuid.UUID
     model_account_id: uuid.UUID
-    dispatcher: GatewayDispatcher | None = None
-    legacy_features: Any = None
-    legacy_projected_cost_cents: int = 1
     supported_methods: frozenset[str] = field(default_factory=lambda: frozenset({"chat"}))
 
     async def chat(
@@ -243,24 +194,12 @@ class ExecutorAdapter:
         messages: list[ChatMessage],
         tools: list[dict[str, Any]] | None = None,
     ) -> ChatResponse:
-        if self.dispatcher is None or self.legacy_features is None:
-            raise NotImplementedError(
-                "ExecutorAdapter direct path lands in Lift E3; today it requires "
-                "the legacy GatewayDispatcher seam to be passed in via adapter_for"
-            )
-        full_messages: list[ChatMessage] = [{"role": "system", "content": system}]
-        full_messages.extend(dict(m) for m in messages)
-        request = DispatchRequest(
-            workspace_id=self.workspace_id,
-            account_id=self.account_id,
-            model_account_id=self.model_account_id,
-            messages=full_messages,
-            features=self.legacy_features,
-            projected_cost_cents=self.legacy_projected_cost_cents,
-            tools=tools,
+        del system, messages, tools
+        raise NotImplementedError(
+            "ExecutorAdapter.chat lands in Lift E3 — until then resolver hits on "
+            "an executor account must be handled by the ExecutorOrchestrator "
+            "branch upstream (see backend.workflow.application.runtime.agent_runtime)"
         )
-        result = await self.dispatcher.dispatch(request)
-        return _from_llm_response(result.response)
 
 
 # ---------------------------------------------------------------------------
@@ -274,34 +213,28 @@ def adapter_for(
     session: AsyncSession,
     settings: Settings,
     api_key: str,
-    legacy_features: Any = None,
-    legacy_projected_cost_cents: int = 1,
     llm: LlmClient | None = None,
-    dispatcher: GatewayDispatcher | None = None,
 ) -> ModelAccountAdapter:
     """Pick the right :class:`ModelAccountAdapter` for an account.
 
-    Executor accounts (per :func:`is_executor_account`) → :class:`ExecutorAdapter`
-    placeholder. Anything else → :class:`LiteLLMAdapter`.
+    Executor accounts (per :func:`is_executor_account`) →
+    :class:`ExecutorAdapter`. Anything else → :class:`LiteLLMAdapter`.
 
     ``api_key`` is the already-decrypted key the caller pulled from
     :meth:`backend.router.accounts.service.ModelAccountService.reveal_api_key`;
-    we never decrypt inside the adapter so credentials never leak through
-    logs or error messages emitted from this module.
+    we never decrypt inside the adapter so credentials never leak
+    through logs emitted from this module.
 
-    ``legacy_features`` + ``dispatcher`` keep the path-through to the
-    classifier-based gateway alive for E1 — E2 strips them both.
+    ``session`` + ``settings`` are unused today but kept on the call site
+    surface so a later lift can wire them without breaking callers.
     """
-    actual_dispatcher = dispatcher or build_gateway_dispatcher(session, settings)
+    del session, settings  # reserved for future per-account budget hooks
     if is_executor_account(account):
         return ExecutorAdapter(
             account=account,
             workspace_id=account.workspace_id,
             account_id=account.account_id,
             model_account_id=account.id,
-            dispatcher=actual_dispatcher,
-            legacy_features=legacy_features,
-            legacy_projected_cost_cents=legacy_projected_cost_cents,
         )
     return LiteLLMAdapter(
         account=account,
@@ -310,9 +243,6 @@ def adapter_for(
         workspace_id=account.workspace_id,
         account_id=account.account_id,
         model_account_id=account.id,
-        dispatcher=actual_dispatcher,
-        legacy_features=legacy_features,
-        legacy_projected_cost_cents=legacy_projected_cost_cents,
     )
 
 

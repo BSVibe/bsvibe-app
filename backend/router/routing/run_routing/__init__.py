@@ -1,13 +1,11 @@
-"""Rule-based run routing (Phase 1).
+"""Rule-based run routing (Lift E2 — classifier-free).
 
-A per-workspace, priority-ordered rule engine that selects WHICH ModelAccount
-(native LLM or executor CLI) handles a run, based on the run's framed signals
-(artifact type, path classification, skill, intent, pipeline stage, product).
-Ported from BSGateway's rule engine and adapted to the BSVibe run domain.
-
-When a workspace has no routing rules, resolution falls back to the legacy
-"exactly one active account" policy — so existing single-account workspaces
-are unaffected.
+Per-workspace, priority-ordered rules that select WHICH ModelAccount
+handles a run, keyed on the dispatch caller_id + the run's framed
+signals. When no rule matches and the workspace has no
+``default_account_id``, dispatch fails with
+:class:`~backend.dispatch.resolver.NoMatchingRouteError` (never a silent
+pick).
 """
 
 from backend.router.routing.run_routing.db import RunRoutingRuleRow

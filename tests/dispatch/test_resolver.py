@@ -1,9 +1,8 @@
-"""ModelAccountResolver — rule + workspace-default + hard-fail."""
+"""ModelAccountResolver — rule + workspace-default + hard-fail (Lift E2)."""
 
 from __future__ import annotations
 
 from typing import Any
-from unittest.mock import patch
 
 import pytest
 import pytest_asyncio
@@ -28,10 +27,34 @@ async def rule_caller_frame(
     workspace: WorkspaceRow,
     cloud_account: ModelAccount,
 ) -> RunRoutingRuleRow:
-    """A rule that maps caller_id='workflow.frame' to the cloud account."""
+    """A rule that maps caller_id='workflow.frame' to the cloud account
+    via the canonical column shape."""
     rule = RunRoutingRuleRow(
         workspace_id=workspace.id,
         name="frame -> cloud",
+        caller_id=CALLER_FRAME,
+        priority=10,
+        is_default=False,
+        target=cloud_account.litellm_model,
+        conditions=[],
+        is_active=True,
+    )
+    session.add(rule)
+    await session.flush()
+    return rule
+
+
+@pytest_asyncio.fixture
+async def legacy_condition_rule(
+    session: AsyncSession,
+    workspace: WorkspaceRow,
+    cloud_account: ModelAccount,
+) -> RunRoutingRuleRow:
+    """A rule that carries the caller_id only in the back-compat condition shape."""
+    rule = RunRoutingRuleRow(
+        workspace_id=workspace.id,
+        name="frame -> cloud (legacy)",
+        caller_id=None,
         priority=10,
         is_default=False,
         target=cloud_account.litellm_model,
@@ -46,7 +69,7 @@ async def rule_caller_frame(
 class TestResolverRuleMatch:
     """Explicit rule beats workspace default."""
 
-    async def test_active_rule_picks_target_account(
+    async def test_canonical_column_rule_picks_target_account(
         self,
         session: AsyncSession,
         workspace: WorkspaceRow,
@@ -54,36 +77,48 @@ class TestResolverRuleMatch:
         cloud_account: ModelAccount,
         rule_caller_frame: RunRoutingRuleRow,
     ) -> None:
-        # Default points elsewhere — rule must still win.
         workspace.default_account_id = model_account.id
         await session.flush()
 
         resolver = ModelAccountResolver(session, settings=get_settings())
-        with patch("backend.dispatch.adapter.build_gateway_dispatcher") as mock_build:
-            mock_build.return_value = None  # adapter ignores it in tests
-            resolved = await resolver.resolve_for(
-                caller_id=CALLER_FRAME,
-                workspace_id=workspace.id,
-            )
+        resolved = await resolver.resolve_for(
+            caller_id=CALLER_FRAME,
+            workspace_id=workspace.id,
+        )
         assert resolved.account.id == cloud_account.id
         assert resolved.source == "explicit_rule"
         assert isinstance(resolved.adapter, ModelAccountAdapter)
 
-    async def test_rule_without_caller_id_does_not_match(
+    async def test_legacy_condition_clause_still_matches(
+        self,
+        session: AsyncSession,
+        workspace: WorkspaceRow,
+        model_account: ModelAccount,
+        cloud_account: ModelAccount,
+        legacy_condition_rule: RunRoutingRuleRow,
+    ) -> None:
+        workspace.default_account_id = model_account.id
+        await session.flush()
+        resolver = ModelAccountResolver(session, settings=get_settings())
+        resolved = await resolver.resolve_for(caller_id=CALLER_FRAME, workspace_id=workspace.id)
+        assert resolved.account.id == cloud_account.id
+        assert resolved.source == "explicit_rule"
+
+    async def test_rule_for_different_caller_does_not_match(
         self,
         session: AsyncSession,
         workspace: WorkspaceRow,
         model_account: ModelAccount,
         cloud_account: ModelAccount,
     ) -> None:
-        # Rule that targets a different field — should be skipped.
         rule = RunRoutingRuleRow(
             workspace_id=workspace.id,
             name="other",
+            caller_id="workflow.judge",
             priority=10,
             is_default=False,
             target=cloud_account.litellm_model,
-            conditions=[{"field": "stage", "operator": "eq", "value": "impl"}],
+            conditions=[],
             is_active=True,
         )
         session.add(rule)
@@ -91,8 +126,7 @@ class TestResolverRuleMatch:
         await session.flush()
 
         resolver = ModelAccountResolver(session, settings=get_settings())
-        with patch("backend.dispatch.adapter.build_gateway_dispatcher", return_value=None):
-            resolved = await resolver.resolve_for(caller_id=CALLER_FRAME, workspace_id=workspace.id)
+        resolved = await resolver.resolve_for(caller_id=CALLER_FRAME, workspace_id=workspace.id)
         # Falls back to workspace default.
         assert resolved.account.id == model_account.id
         assert resolved.source == "workspace_default"
@@ -107,18 +141,18 @@ class TestResolverRuleMatch:
         rule = RunRoutingRuleRow(
             workspace_id=workspace.id,
             name="frame -> cloud (off)",
+            caller_id=CALLER_FRAME,
             priority=10,
             is_default=False,
             target=cloud_account.litellm_model,
-            conditions=[{"field": "caller_id", "operator": "eq", "value": CALLER_FRAME}],
+            conditions=[],
             is_active=False,
         )
         session.add(rule)
         workspace.default_account_id = model_account.id
         await session.flush()
         resolver = ModelAccountResolver(session, settings=get_settings())
-        with patch("backend.dispatch.adapter.build_gateway_dispatcher", return_value=None):
-            resolved = await resolver.resolve_for(caller_id=CALLER_FRAME, workspace_id=workspace.id)
+        resolved = await resolver.resolve_for(caller_id=CALLER_FRAME, workspace_id=workspace.id)
         assert resolved.source == "workspace_default"
 
 
@@ -132,8 +166,7 @@ class TestResolverWorkspaceDefault:
         workspace.default_account_id = model_account.id
         await session.flush()
         resolver = ModelAccountResolver(session, settings=get_settings())
-        with patch("backend.dispatch.adapter.build_gateway_dispatcher", return_value=None):
-            resolved = await resolver.resolve_for(caller_id=CALLER_FRAME, workspace_id=workspace.id)
+        resolved = await resolver.resolve_for(caller_id=CALLER_FRAME, workspace_id=workspace.id)
         assert resolved.account.id == model_account.id
         assert resolved.source == "workspace_default"
 
@@ -143,7 +176,6 @@ class TestResolverWorkspaceDefault:
         workspace: WorkspaceRow,
         model_account: ModelAccount,
     ) -> None:
-        # Mark the account inactive — default should be treated as unset.
         model_account.is_active = False
         workspace.default_account_id = model_account.id
         await session.flush()
@@ -157,7 +189,7 @@ class TestResolverHardFail:
         self,
         session: AsyncSession,
         workspace: WorkspaceRow,
-        model_account: ModelAccount,  # noqa: ARG002 — seeded so the workspace has one but no default set
+        model_account: ModelAccount,  # noqa: ARG002 — seeded but no default set
     ) -> None:
         resolver = ModelAccountResolver(session, settings=get_settings())
         with pytest.raises(NoMatchingRouteError) as exc_info:
@@ -194,3 +226,31 @@ class TestResolverDefensiveValidation:
 
         with pytest.raises(NoAdapterMethodError):
             ModelAccountResolver._check_supported(spec, _OnlyChat())  # type: ignore[arg-type]
+
+
+class TestDefaultCatchAllRule:
+    async def test_default_rule_catches_unmatched_caller(
+        self,
+        session: AsyncSession,
+        workspace: WorkspaceRow,
+        model_account: ModelAccount,
+        cloud_account: ModelAccount,
+    ) -> None:
+        # Default rule with no caller_id + no conditions = catch-all.
+        rule = RunRoutingRuleRow(
+            workspace_id=workspace.id,
+            name="catch-all",
+            caller_id=None,
+            priority=100,
+            is_default=True,
+            target=cloud_account.litellm_model,
+            conditions=[],
+            is_active=True,
+        )
+        session.add(rule)
+        workspace.default_account_id = model_account.id
+        await session.flush()
+        resolver = ModelAccountResolver(session, settings=get_settings())
+        resolved = await resolver.resolve_for(caller_id=CALLER_FRAME, workspace_id=workspace.id)
+        assert resolved.account.id == cloud_account.id
+        assert resolved.source == "explicit_rule"

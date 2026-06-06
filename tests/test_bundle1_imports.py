@@ -25,11 +25,11 @@ def test_all_three_modules_import():
     assert sandbox_mod.get_sandbox_manager is not None
     assert sandbox_mod.NoopSandboxManager is not None
 
-    assert backend.router.GatewayDispatcher is not None
+    # Lift E2 — GatewayDispatcher / LocalVsCloudClassifier removed.
     assert backend.router.LlmClient is not None
+    assert backend.router.ModelAccountNotFound is not None
     assert backend.router.accounts.ModelAccountService is not None
     assert backend.router.budget.BudgetPolicyService is not None
-    assert backend.router.classifier.LocalVsCloudClassifier is not None
 
 
 def test_no_circular_imports_between_modules():

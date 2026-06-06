@@ -1,12 +1,6 @@
 """Back-compat shim — the production worker runtime moved to
 ``backend.workflow.application.runtime`` per v8 §17.2a.
 
-Every public symbol is re-exported here so existing callers + tests +
-``backend.workers.__main__`` keep importing from the legacy
-``backend.workflow.infrastructure.workers.run`` path without source
-edits during §17.2a. Follow-up §17.2b will migrate consumers to the
-runtime/ package + retire this shim.
-
 Behavior is byte-identical — this file is now a pure re-export.
 """
 
@@ -18,6 +12,7 @@ from backend.workflow.application.runtime.account_resolution import (
     DECISION_NO_MODEL_ACCOUNT,
     _list_active_workspace_accounts,
     _resolve_judge_llm,
+    _resolve_via_caller,
     _single_native_account,
     resolve_workspace_model_account,
 )
@@ -36,9 +31,8 @@ from backend.workflow.application.runtime.delivery_runtime import (
     load_connector_plugins,
 )
 from backend.workflow.application.runtime.dispatcher import (
-    _GatewayCompileLlm,
-    _GatewayFrameLlm,
-    build_gateway_dispatcher,
+    _ResolverCompileLlm,
+    _ResolverFrameLlm,
 )
 from backend.workflow.application.runtime.lifecycle import run_workers
 from backend.workflow.application.runtime.settle_runtime import (
@@ -66,22 +60,22 @@ __all__ = [
     "RealPluginDispatchAdapter",
     "StreamConsumerBinding",
     "WorkerRuntime",
-    "_GatewayCompileLlm",
-    "_key_from_settings",
-    "_GatewayFrameLlm",
     "_PLUGINS_IMPLEMENTATIONS_DIR",
+    "_ResolverCompileLlm",
+    "_ResolverFrameLlm",
     "_build_composite_workspace_provisioner",
     "_frame_skill_hint",
     "_is_knowledge_only",
+    "_key_from_settings",
     "_list_active_workspace_accounts",
     "_product_workspace_provisioner",
     "_relative_note_path",
     "_resolve_judge_llm",
+    "_resolve_via_caller",
     "_single_native_account",
     "_tick_handler",
     "build_agent_execution_deps",
     "build_delivery_adapter",
-    "build_gateway_dispatcher",
     "build_note_embed_hook",
     "build_settle_entity_extractor_factory",
     "build_stream_consumers",

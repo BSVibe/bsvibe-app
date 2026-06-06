@@ -77,7 +77,7 @@ def test_alembic_head_is_connector_last_import():
     # Lift A v2 bumped the head; keep the test name (function name was the
     # historical revision id, kept for git-blame stability) and assert the
     # new tip.
-    assert "workspace_default_account" in result.stdout
+    assert "run_routing_caller_id" in result.stdout
 
 
 def test_target_metadata_covers_all_bases():

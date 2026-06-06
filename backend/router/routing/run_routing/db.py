@@ -30,6 +30,12 @@ class RunRoutingRuleRow(Base):
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
     workspace_id: Mapped[uuid.UUID] = mapped_column(nullable=False, index=True)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
+    # Lift E2 — the canonical caller_id this rule routes. Required for
+    # any non-default (non catch-all) rule; the default rule (is_default
+    # AND empty conditions AND null caller_id) catches everything else.
+    # Validated at write time against ``backend.dispatch.caller_registry``
+    # so a typo never persists as a no-op rule.
+    caller_id: Mapped[str | None] = mapped_column(String(120), nullable=True)
     # Lower priority evaluated FIRST (BSGateway semantics — ascending sort).
     priority: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     # The fallback rule used when no non-default rule matches.

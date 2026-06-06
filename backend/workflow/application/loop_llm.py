@@ -1,88 +1,65 @@
-"""GatewayLoopLlm — the production :class:`LoopLlm` for the agent loop.
+"""ResolverLoopLlm — production :class:`LoopLlm` for the agent loop.
 
-Routes every plan/act/judge turn through the
-:class:`~backend.router.dispatch.GatewayDispatcher` (substantial tier;
-the gateway resolves the account + model + budget). The work loop in
-:mod:`backend.execution.orchestrator` depends only on the ``LoopLlm``
+Routes every plan/act/judge turn through a
+:class:`~backend.dispatch.adapter.ModelAccountAdapter` the agent
+runtime resolved up front from
+:class:`~backend.dispatch.resolver.ModelAccountResolver`. The work loop
+in :mod:`backend.execution.orchestrator` depends only on the ``LoopLlm``
 Protocol, so this adapter and a deterministic test stub are
 interchangeable.
 
-The account / model identity is resolved by the caller (the HTTP
-Direct-path wiring or the worker — the next chunk) and held for the
-run's lifetime; this adapter just maps ``(messages, tools)`` →
-``DispatchRequest`` → :class:`LoopTurn`.
+After Lift E2 the classifier-driven :class:`GatewayDispatcher` is gone —
+this adapter speaks directly to the resolver's adapter object.
 """
 
 from __future__ import annotations
 
 import json
-import uuid
 from typing import Any
 
-from backend.router.classifier.base import ClassificationFeatures
-from backend.router.dispatch import DispatchRequest, GatewayDispatcher
+from backend.dispatch.adapter import ChatToolCall, ModelAccountAdapter
 from backend.workflow.application.agent_loop import LoopToolCall, LoopTurn
 
-# Substantial-tier default features — high enough complexity that the
-# classifier routes plan/act to the heavy model.
-_SUBSTANTIAL_FEATURES = ClassificationFeatures(
-    token_count=4096,
-    system_prompt_chars=2048,
-    conversation_turns=4,
-    code_block_count=2,
-    tool_count=6,
-)
 
+class ResolverLoopLlm:
+    """Adapts a :class:`ModelAccountAdapter` to the ``LoopLlm`` Protocol."""
 
-class GatewayLoopLlm:
-    """Adapts :class:`GatewayDispatcher` to the ``LoopLlm`` Protocol."""
+    __slots__ = ("_adapter",)
 
-    def __init__(
-        self,
-        *,
-        dispatcher: GatewayDispatcher,
-        workspace_id: uuid.UUID,
-        account_id: uuid.UUID,
-        model_account_id: uuid.UUID,
-        features: ClassificationFeatures | None = None,
-        projected_cost_cents: int = 1,
-    ) -> None:
-        self._dispatcher = dispatcher
-        self._workspace_id = workspace_id
-        self._account_id = account_id
-        self._model_account_id = model_account_id
-        self._features = features or _SUBSTANTIAL_FEATURES
-        self._projected_cost_cents = projected_cost_cents
+    def __init__(self, *, adapter: ModelAccountAdapter) -> None:
+        self._adapter = adapter
 
     async def complete(
         self, *, messages: list[dict[str, Any]], tools: list[dict[str, Any]] | None
     ) -> LoopTurn:
-        request = DispatchRequest(
-            workspace_id=self._workspace_id,
-            account_id=self._account_id,
-            model_account_id=self._model_account_id,
-            messages=[dict(m) for m in messages],
-            features=self._features,
-            projected_cost_cents=self._projected_cost_cents,
+        # The loop's messages already include a system message; the
+        # adapter contract expects ``system`` separate and ``messages``
+        # without the leading system slot. Pull it off when present so
+        # the wire shape is correct, otherwise pass an empty system.
+        copied = [dict(m) for m in messages]
+        system = ""
+        if copied and copied[0].get("role") == "system":
+            system = str(copied[0].get("content") or "")
+            copied = copied[1:]
+        response = await self._adapter.chat(
+            system=system,
+            messages=copied,
             tools=[dict(t) for t in tools] if tools else None,
         )
-        result = await self._dispatcher.dispatch(request)
-        response = result.response
         return LoopTurn(
             content=response.content,
             tool_calls=_to_loop_tool_calls(response.tool_calls),
         )
 
 
-def _to_loop_tool_calls(raw: tuple[dict[str, Any], ...]) -> tuple[LoopToolCall, ...]:
+def _to_loop_tool_calls(raw: tuple[ChatToolCall, ...]) -> tuple[LoopToolCall, ...]:
     calls: list[LoopToolCall] = []
     for call in raw:
-        function = call.get("function") or {}
-        arguments = _decode_arguments(function.get("arguments"))
+        arguments = _decode_arguments(call.arguments_json)
         calls.append(
             LoopToolCall(
-                id=str(call.get("id") or ""),
-                name=str(function.get("name") or ""),
+                id=call.id,
+                name=call.name,
                 arguments=arguments,
             )
         )
@@ -101,4 +78,4 @@ def _decode_arguments(raw: Any) -> dict[str, Any]:
     return {}
 
 
-__all__ = ["GatewayLoopLlm"]
+__all__ = ["ResolverLoopLlm"]

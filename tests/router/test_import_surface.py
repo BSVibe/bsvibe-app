@@ -58,25 +58,34 @@ def test_router_accounts_subpackage_importable() -> None:
     assert not missing, f"backend.router.accounts missing: {missing}"
 
 
-def test_router_root_unifies_lift_a_and_old_gateway_exports() -> None:
+def test_router_root_unifies_lift_a_and_post_e2_exports() -> None:
     router = importlib.import_module("backend.router")
     # From Lift A (facade Protocol + dataclasses).
     lift_a = {"Router", "LlmRequest", "LlmResult", "LlmRoutingHints"}
-    # From the former backend.gateway public surface.
-    old_gateway = {
+    # Surviving the Lift E2 classifier removal.
+    post_e2 = {
         "DispatchError",
-        "DispatchRequest",
-        "DispatchResult",
-        "GatewayDispatcher",
         "LlmClient",
         "LlmResponse",
         "ModelAccountNotFound",
         "budget",
-        "classifier",
     }
     available = set(dir(router))
-    missing = (lift_a | old_gateway) - available
+    missing = (lift_a | post_e2) - available
     assert not missing, f"backend.router missing exports: {missing}"
+
+
+def test_router_classifier_subpackage_removed_by_lift_e2() -> None:
+    """Lift E2 deletes the classifier (Local/Static/LLM) module entirely."""
+    with pytest.raises(ModuleNotFoundError):
+        importlib.import_module("backend.router.classifier")
+
+
+def test_router_dispatch_strategies_removed_by_lift_e2() -> None:
+    """Lift E2 deletes the dispatch.strategies seam — the predicate now
+    lives at :mod:`backend.router.accounts.predicates`."""
+    with pytest.raises(ModuleNotFoundError):
+        importlib.import_module("backend.router.dispatch.strategies")
 
 
 def test_router_accounts_repository_importable() -> None:
@@ -86,7 +95,9 @@ def test_router_accounts_repository_importable() -> None:
 
 def test_router_dispatch_importable() -> None:
     mod = importlib.import_module("backend.router.dispatch")
-    assert hasattr(mod, "GatewayDispatcher")
+    # Lift E2 — GatewayDispatcher is gone; only the error surface remains.
+    assert hasattr(mod, "DispatchError")
+    assert hasattr(mod, "ModelAccountNotFound")
 
 
 def test_router_budget_models_importable() -> None:

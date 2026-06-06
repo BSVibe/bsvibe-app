@@ -1,21 +1,18 @@
-"""OpenAI-compatible chat completions endpoint.
+"""OpenAI-compatible chat completions endpoint (Lift E2 — no classifier).
 
-Wires :class:`backend.api.litellm_hook.chat_service.ChatService` against the
-existing :class:`backend.router.dispatch.GatewayDispatcher`. The dispatcher
-itself is constructed per-request from the request-scoped AsyncSession +
-the workspace's ModelAccountService + Classifier + BudgetPolicyService +
-LlmClient.
+Wires :class:`backend.api.litellm_hook.chat_service.ChatService` against
+the per-request session + workspace budget. The caller passes
+``model_account_id`` explicitly via ``metadata.bsvibe_model_account_id`` —
+routing is the caller's responsibility on this proxy surface (unlike
+the internal workflow paths, which route through
+:class:`backend.dispatch.resolver.ModelAccountResolver`).
 
-The endpoint surface:
+Endpoint:
 
     POST /api/v1/chat/completions
-    Body: OpenAI-shape + optional ``metadata.bsvibe_account_id`` +
-          ``metadata.bsvibe_model_account_id``
+    Body: OpenAI-shape + ``metadata.bsvibe_account_id``
+          + ``metadata.bsvibe_model_account_id``
     Returns: OpenAI-shape completion + ``bsvibe`` metadata
-
-Auth dependency (workspace_id) intentionally fails fast with 501 until
-Bundle G wires backend.shared.authz; that's how the route signals "real
-backend wired, but auth path not yet productionized."
 """
 
 from __future__ import annotations
@@ -39,13 +36,7 @@ from backend.router.budget.errors import BudgetExceeded
 from backend.router.budget.policy import BudgetPolicyService
 from backend.router.budget.repository import BudgetPolicyRepository
 from backend.router.budget.tracker import BudgetTracker, InMemoryBudgetStore
-from backend.router.classifier.local_vs_cloud import LocalVsCloudClassifier
-from backend.router.classifier.static import StaticClassifier
-from backend.router.dispatch import (
-    DispatchError,
-    GatewayDispatcher,
-    ModelAccountNotFound,
-)
+from backend.router.dispatch import DispatchError, ModelAccountNotFound
 from backend.router.llm_client import LlmClient
 from plugin.audit.events import AuditActor, AuditResource
 from plugin.audit.service import safe_emit
@@ -73,25 +64,19 @@ class ChatCompletionRequest(BaseModel):
     metadata: ChatCompletionMetadata | None = None
 
 
-def _build_dispatcher(session: AsyncSession) -> GatewayDispatcher:
+def _build_service(session: AsyncSession) -> ChatService:
     cipher = CredentialCipher(_key_from_settings())
     accounts = ModelAccountService(session, cipher=cipher)
     budget_repo = BudgetPolicyRepository(session)
     tracker = BudgetTracker(InMemoryBudgetStore())
     budget = BudgetPolicyService(repository=budget_repo, tracker=tracker)
-    from backend.config import get_settings  # noqa: PLC0415
-
-    settings = get_settings()
-    classifier = LocalVsCloudClassifier(
-        local_score_max=settings.gateway_local_score_max,
-        cloud_score_min=settings.gateway_cloud_score_min,
-        static=StaticClassifier(
-            local_score_max=settings.gateway_local_score_max,
-            cloud_score_min=settings.gateway_cloud_score_min,
-        ),
+    return ChatService(
+        session=session,
+        budget=budget,
+        accounts=accounts,
+        llm=LlmClient(),
+        cipher=cipher,
     )
-    llm = LlmClient()
-    return GatewayDispatcher(accounts=accounts, classifier=classifier, budget=budget, llm=llm)
 
 
 @router.post("/completions")
@@ -101,16 +86,16 @@ async def chat_completions(
     account_id: Annotated[uuid.UUID, Depends(require_account_id)],
     session: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> dict[str, Any]:
-    """OpenAI-shape chat completions — dispatches via backend.router."""
+    """OpenAI-shape chat completions — dispatches via the router service."""
     md = payload.metadata or ChatCompletionMetadata()
     model_account_id = md.bsvibe_model_account_id
     if model_account_id is None:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="metadata.bsvibe_model_account_id required (no provider auto-select in Phase 1)",
+            detail="metadata.bsvibe_model_account_id required (the proxy does not auto-route)",
         )
 
-    service = ChatService(dispatcher=_build_dispatcher(session))
+    service = _build_service(session)
     ctx = ChatCompletionContext(
         workspace_id=workspace_id,
         account_id=account_id,
@@ -173,7 +158,6 @@ async def chat_completions(
             data={
                 "model": completion.get("model"),
                 "actual_cost_cents": completion.get("bsvibe", {}).get("actual_cost_cents"),
-                "classification_tier": completion.get("bsvibe", {}).get("classification_tier"),
             },
         ),
         session=session,

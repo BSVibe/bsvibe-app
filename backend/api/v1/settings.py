@@ -37,10 +37,6 @@ class SettingsResponse(BaseModel):
     sandbox_idle_reap_seconds: int
     sandbox_max_concurrent: int
 
-    # Gateway 2-tier classifier thresholds
-    gateway_local_score_max: int
-    gateway_cloud_score_min: int
-
 
 @router.get("")
 async def get_settings_view() -> SettingsResponse:
@@ -56,6 +52,4 @@ async def get_settings_view() -> SettingsResponse:
         sandbox_image=s.sandbox_image,
         sandbox_idle_reap_seconds=s.sandbox_idle_reap_seconds,
         sandbox_max_concurrent=s.sandbox_max_concurrent,
-        gateway_local_score_max=s.gateway_local_score_max,
-        gateway_cloud_score_min=s.gateway_cloud_score_min,
     )

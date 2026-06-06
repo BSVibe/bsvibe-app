@@ -61,11 +61,14 @@ def test_new_run_routing_submodules_importable() -> None:
     assert hasattr(engine, "RoutingContext")
     assert hasattr(engine, "ALLOWED_FIELDS")
     assert hasattr(engine, "evaluate_rules")
-    multi = importlib.import_module("backend.router.routing.run_routing.multi_account")
-    assert hasattr(multi, "ROUTING_PRIORITY_KEY")
-    assert hasattr(multi, "select_within_class")
-    tier = importlib.import_module("backend.router.routing.run_routing.tier_default")
-    assert tier is not None
+
+
+def test_tier_default_and_multi_account_deleted_by_lift_e2() -> None:
+    """Lift E2 deletes the tier-default + multi-account fallback modules."""
+    with pytest.raises(ModuleNotFoundError):
+        importlib.import_module("backend.router.routing.run_routing.multi_account")
+    with pytest.raises(ModuleNotFoundError):
+        importlib.import_module("backend.router.routing.run_routing.tier_default")
 
 
 def test_llm_provider_routing_surface_preserved() -> None:

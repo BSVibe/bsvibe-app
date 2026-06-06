@@ -1,26 +1,19 @@
 """Workflow runtime layer — agent / worker / lifecycle construction.
 
 Decomposed out of the legacy
-``backend.workflow.infrastructure.workers.run`` god-file per v8 §17.2a:
+``backend.workflow.infrastructure.workers.run`` god-file:
 
-* :mod:`.dispatcher` — gateway dispatcher build + ``CompileLlm`` /
-  ``FrameLlm`` adapter seams.
-* :mod:`.account_resolution` — workspace ModelAccount resolution policy.
+* :mod:`.dispatcher` — resolver-backed ``CompileLlm`` / ``FrameLlm`` adapters.
+* :mod:`.account_resolution` — workspace ModelAccount resolution policy
+  via :class:`backend.dispatch.resolver.ModelAccountResolver`.
 * :mod:`.agent_runtime` — :func:`build_agent_execution_deps` factory.
-* :mod:`.settle_runtime` — settle entity extractor + note embed hook
-  factories.
-* :mod:`.delivery_runtime` — :class:`RealPluginDispatchAdapter`,
-  :func:`build_delivery_adapter`, :func:`load_connector_plugins`,
-  :class:`LoggingRelay`.
-* :mod:`.worker_runtime` — :class:`WorkerRuntime`,
-  :func:`build_worker_runtime`, Redis-Streams consumer wiring,
-  :func:`check_executor_dispatch_health`.
+* :mod:`.settle_runtime` — settle entity extractor + note embed hook factories.
+* :mod:`.delivery_runtime` — plugin dispatch + connector loaders.
+* :mod:`.worker_runtime` — :class:`WorkerRuntime`, Redis-Streams wiring.
 * :mod:`.lifecycle` — :func:`run_workers` process entrypoint.
 
 The legacy ``backend.workflow.infrastructure.workers.run`` path remains a
-thin re-export shim during §17.2a for back-compat — every caller +
-test + ``backend.workers.__main__`` keeps working without source
-edits. The per-context wiring/ slice split is deferred to §17.2b.
+thin re-export shim for back-compat.
 """
 
 from __future__ import annotations
@@ -37,7 +30,6 @@ from backend.workflow.application.runtime.delivery_runtime import (
     build_delivery_adapter,
     load_connector_plugins,
 )
-from backend.workflow.application.runtime.dispatcher import build_gateway_dispatcher
 from backend.workflow.application.runtime.lifecycle import run_workers
 from backend.workflow.application.runtime.settle_runtime import (
     build_note_embed_hook,
@@ -61,7 +53,6 @@ __all__ = [
     "WorkerRuntime",
     "build_agent_execution_deps",
     "build_delivery_adapter",
-    "build_gateway_dispatcher",
     "build_note_embed_hook",
     "build_settle_entity_extractor_factory",
     "build_stream_consumers",
