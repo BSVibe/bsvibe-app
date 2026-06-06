@@ -50,20 +50,16 @@ _ENV_PROVIDERS: tuple[tuple[str, Callable[..., OAuthProvider], str, str], ...] =
 
 
 def register_configured_providers(settings: Settings | None = None) -> list[str]:
-    """Register every provider whose ENV credentials are present; return names."""
+    """Register every provider whose ENV credentials are present; return names.
+
+    github is intentionally NOT here — its App credentials are the single
+    source of truth in the DB (``connector_oauth_app_credentials``, set up via
+    the manifest flow) and are loaded by :func:`load_app_credential_providers`
+    at startup. slack / notion / discord remain env-registered until their own
+    DB-credential setup lift.
+    """
     settings = settings or get_settings()
     registered: list[str] = []
-
-    if settings.github_app_client_id and settings.github_app_client_secret:
-        register_provider(
-            GitHubAppProvider(
-                client_id=settings.github_app_client_id,
-                client_secret=settings.github_app_client_secret,
-                app_id=settings.github_app_id,
-                private_key_pem=settings.github_app_private_key_pem,
-            )
-        )
-        registered.append("github")
 
     for name, build, id_attr, secret_attr in _ENV_PROVIDERS:
         client_id = getattr(settings, id_attr)
