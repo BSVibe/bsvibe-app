@@ -53,3 +53,4 @@ logs/
 # Never committed to the BSVibe repo itself.
 var/products/
 var/runs/
+apps/pwa/package-lock.json
