@@ -52,6 +52,11 @@ import httpx
 import structlog
 
 from backend.executors.worker.config import WorkerSettings, get_worker_settings
+from backend.executors.worker.credentials import (
+    CredentialsNotFound,
+    load_host_credentials,
+    save_worker_token,
+)
 from backend.executors.worker.executors import (
     ExecutorProtocol,
     detect_capabilities,
@@ -178,30 +183,40 @@ async def register(
     client: httpx.AsyncClient,
     *,
     name: str,
-    install_token: str,
     capabilities: list[str],
     labels: list[str] | None = None,
+    bearer_token: str | None = None,
+    install_token: str = "",
 ) -> str:
-    """Register this worker via ``X-Install-Token`` → return the worker token.
+    """Register this worker → return the worker token (Lift E4).
 
-    The install token is minted by an admin (``POST /api/v1/workers/install-token``)
-    and used once; the returned worker token is what every later request uses.
+    Auth precedence:
+
+    * ``bearer_token`` — the host OAuth credential (preferred). Sent as
+      ``Authorization: Bearer <token>``. The backend derives the workspace
+      from the verified claims.
+    * ``install_token`` — **deprecated** legacy ``X-Install-Token`` path,
+      preserved for hosts that haven't yet run ``bsvibe login``.
+
+    At least one must be provided. The returned worker token is what every
+    later request uses (heartbeat / poll / result).
     """
-    if not install_token:
+    if not bearer_token and not install_token:
         raise ValueError(
-            "install_token is required for first-time registration. Set "
-            "BSVIBE_WORKER_INSTALL_TOKEN to a token minted via the backend."
+            "register() needs either bearer_token (run `bsvibe login` to "
+            "produce one) or install_token (deprecated)."
         )
     payload: dict[str, Any] = {
         "name": name,
         "capabilities": capabilities or ["claude_code"],
         "labels": labels or [],
     }
-    res = await client.post(
-        "/api/v1/workers/register",
-        json=payload,
-        headers={"X-Install-Token": install_token},
-    )
+    headers: dict[str, str] = {}
+    if bearer_token:
+        headers["Authorization"] = f"Bearer {bearer_token}"
+    elif install_token:
+        headers["X-Install-Token"] = install_token
+    res = await client.post("/api/v1/workers/register", json=payload, headers=headers)
     res.raise_for_status()
     data = res.json()
     token: str = data["token"]
@@ -392,9 +407,11 @@ async def poll_and_execute(
     token = settings.token
     if not token:
         logger.info("no_worker_token", hint="registering with backend")
+        bearer = _resolve_host_bearer(settings)
         token = await register(
             client,
             name=settings.name,
+            bearer_token=bearer,
             install_token=settings.install_token,
             capabilities=detect_capabilities(),
         )
@@ -462,14 +479,42 @@ async def _interruptible_sleep(seconds: float, stop: asyncio.Event) -> None:
 # ── .env persistence ────────────────────────────────────────────────────────────
 
 
+def _resolve_host_bearer(settings: WorkerSettings) -> str | None:
+    """Return the OAuth bearer for register, or ``None`` to fall back.
+
+    Looks up the host credentials file (``~/.config/bsvibe/credentials.json``)
+    or the ``BSVIBE_ACCESS_TOKEN`` env. When neither yields a token the worker
+    falls back to the legacy install-token path (which itself 401s if
+    settings.install_token is also empty).
+    """
+    if settings.access_token:
+        return settings.access_token
+    try:
+        creds = load_host_credentials()
+    except CredentialsNotFound:
+        return None
+    return creds.access_token
+
+
 def _persist_worker_token(token: str, settings: WorkerSettings) -> None:
-    """Write the freshly minted worker token to ``.env`` for subsequent runs."""
+    """Write the freshly minted worker token to ``.env`` + the dedicated file.
+
+    Lift E4 — the GitHub-Actions-runner UX also persists the token at
+    ``~/.bsvibe/worker.token`` (mode 0600) so subsequent invocations of
+    ``bsvibe-worker run`` can pick it up without depending on a project
+    ``.env``. The ``.env`` write is kept for legacy hosts that wire the
+    config that way.
+    """
     updates = {
         "BSVIBE_WORKER_TOKEN": token,
         "BSVIBE_WORKER_NAME": settings.name,
         "BSVIBE_WORKER_SERVER_URL": settings.server_url,
     }
     _update_env_file(_ENV_PATH, updates)
+    try:
+        save_worker_token(token)
+    except OSError:  # pragma: no cover — file-system failure is non-fatal
+        logger.warning("worker_token_file_save_failed", exc_info=True)
 
 
 def _update_env_file(path: str, updates: dict[str, str]) -> None:

@@ -18,6 +18,7 @@ from backend.mcp.tools.notifications_tools import register_notifications_tools
 from backend.mcp.tools.routing_rules_tools import register_routing_rules_tools
 from backend.mcp.tools.safe_mode_tools import register_safe_mode_tools
 from backend.mcp.tools.skills_tools import register_skills_tools
+from backend.mcp.tools.workers_tools import register_workers_tools
 from backend.mcp.tools.workflow_tools import register_workflow_tools
 from backend.mcp.tools.workspace_tools import register_workspace_tools
 
@@ -48,6 +49,7 @@ def register_all_tools(registry: ToolRegistry) -> None:
     register_workspace_tools(registry)
     register_inside_trust_tools(registry)
     register_account_tools(registry)
+    register_workers_tools(registry)
 
 
 __all__ = [
@@ -65,6 +67,7 @@ __all__ = [
     "register_routing_rules_tools",
     "register_safe_mode_tools",
     "register_skills_tools",
+    "register_workers_tools",
     "register_workflow_tools",
     "register_workspace_tools",
 ]

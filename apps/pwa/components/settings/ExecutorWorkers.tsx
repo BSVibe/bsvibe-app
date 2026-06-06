@@ -8,40 +8,38 @@ import { useEffect, useState } from "react";
 import CopyField from "./CopyField";
 
 /**
- * Settings → Models → "Executor workers" (executor-pool design's "subscription
- * accounts"). The founder registers / views / revokes the machines that run the
- * BSVibe worker process, where their coding-agent CLIs (claude_code / codex /
- * opencode) are signed in. Registering one lets BSVibe route work to those CLIs
- * under the founder's own subscription, alongside the API model accounts above.
+ * Settings → Models → "Executor workers" — GitHub-Actions-runner-style UX
+ * (Lift E4).
+ *
+ * The founder registers a host that already has their coding-agent CLIs
+ * (claude_code / codex / opencode) signed in. The new flow is a single
+ * shell snippet they paste once on the host:
+ *
+ *   pip install bsvibe-app           # or any future packaging
+ *   bsvibe login                     # PKCE loopback OAuth on the host
+ *   bsvibe-worker register --name $(hostname)
+ *   bsvibe-worker run
+ *
+ * No install-token paste. The CLI uses the host's OAuth credentials
+ * (`~/.config/bsvibe/credentials.json`) to authenticate against
+ * `POST /api/v1/workers/register`, the backend derives the workspace from
+ * the verified bearer, and the per-worker token comes back in the response
+ * so the daemon can heartbeat / poll / report.
  *
  * Backed by the REAL /api/v1/workers endpoints (backend/api/v1/workers.py):
  *
- *  - List   ← GET    /api/v1/workers              (status + capabilities; the
- *                                                  response carries no exact
- *                                                  last-seen yet — show the
- *                                                  heartbeat-driven status pill)
- *  - Connect → POST  /api/v1/workers/install-token (mints a one-time install
- *                                                  token, revealed ONCE; the
- *                                                  founder runs the worker
- *                                                  process with it)
- *  - Revoke → DELETE /api/v1/workers/{id}          (confirm-gated; 204)
- *
- * The list loads on mount and re-reads after a successful revoke so the section
- * always reflects the server. A failed list read degrades to a calm inline note
- * rather than a blanked page. The connect flow's own write (mint) is independent
- * of the list's read.
- *
- * Deferred (later lifts): the tier→model ROUTING section, and an exact last-seen
- * timestamp (a later backend tweak — there is no `last_heartbeat` in the
- * response yet).
+ *   - List   ← GET    /api/v1/workers
+ *   - Revoke → DELETE /api/v1/workers/{id}
+ *   - (Deprecated) Mint legacy install token — `mintInstallToken()` is kept
+ *     for hosts that haven't cut over yet; surfaced behind "Show legacy
+ *     install token" until Lift E5 removes the endpoint entirely.
  */
 type ListState = { data: Worker[]; failed: boolean } | null;
-type MintState = "idle" | "minting" | "error";
 
 export default function ExecutorWorkers() {
   const [list, setList] = useState<ListState>(null);
-  const [mintState, setMintState] = useState<MintState>("idle");
-  const [token, setToken] = useState<string | null>(null);
+  const [showInstall, setShowInstall] = useState(false);
+  const [showLegacy, setShowLegacy] = useState(false);
   const t = useTranslations("settings.models.workers");
 
   async function load() {
@@ -62,18 +60,6 @@ export default function ExecutorWorkers() {
     };
   }, []);
 
-  async function connect() {
-    if (mintState === "minting") return;
-    setMintState("minting");
-    try {
-      const minted = await mintInstallToken();
-      setToken(minted.token);
-      setMintState("idle");
-    } catch {
-      setMintState("error");
-    }
-  }
-
   const workers = list && !list.failed ? list.data : [];
 
   return (
@@ -86,42 +72,37 @@ export default function ExecutorWorkers() {
       </header>
       <p className="workers__lede">{t("lede")}</p>
 
-      {/* CONNECT — mint + one-time install-token reveal. After a successful mint
-          we show ONLY the token panel until the founder dismisses it, so the
-          one-time capability is the focus. */}
-      {token ? (
-        <section className="worker-token" aria-label={t("credentialsLabel")}>
-          <p className="worker-token__title">{t("tokenTitle")}</p>
-          <p className="worker-token__warn">{t("tokenWarn")}</p>
-
-          <CopyField label={t("tokenLabel")} value={token} secret />
-
-          <p className="worker-token__run-title">{t("runTitle")}</p>
+      {/* PRIMARY — runner-style install command. No install-token paste. */}
+      {showInstall ? (
+        <section className="worker-install" aria-label={t("installLabel")}>
+          <p className="worker-install__title">{t("installTitle")}</p>
+          <p className="worker-install__hint">{t("installHint")}</p>
           <CopyField
-            label={t("runCommandLabel")}
-            value={t("runCommand", { token, serverUrl: backendBaseUrl() })}
-            secret
+            label={t("installCommandLabel")}
+            value={t("installCommand", { serverUrl: backendBaseUrl() })}
           />
-          <p className="worker-token__hint">{t("runHint")}</p>
-
-          <button type="button" className="worker-token__done" onClick={() => setToken(null)}>
+          <p className="worker-install__notes">{t("installNotes")}</p>
+          <button
+            type="button"
+            className="worker-install__done"
+            onClick={() => setShowInstall(false)}
+          >
             {t("done")}
           </button>
+          <LegacyInstallTokenToggle
+            visible={showLegacy}
+            onToggle={() => setShowLegacy((v) => !v)}
+          />
+          {showLegacy ? <LegacyInstallTokenPanel /> : null}
         </section>
       ) : (
         <div className="workers__connect">
-          {mintState === "error" ? (
-            <span className="workers__error" aria-live="polite">
-              {t("mintError")}
-            </span>
-          ) : null}
           <button
             type="button"
             className="workers__connect-btn"
-            onClick={connect}
-            disabled={mintState === "minting"}
+            onClick={() => setShowInstall(true)}
           >
-            {mintState === "minting" ? t("minting") : t("connect")}
+            {t("addWorker")}
           </button>
         </div>
       )}
@@ -147,15 +128,88 @@ export default function ExecutorWorkers() {
   );
 }
 
+function LegacyInstallTokenToggle({
+  visible,
+  onToggle,
+}: {
+  visible: boolean;
+  onToggle: () => void;
+}) {
+  const t = useTranslations("settings.models.workers");
+  return (
+    <button
+      type="button"
+      className="worker-install__legacy-toggle"
+      onClick={onToggle}
+      aria-expanded={visible}
+    >
+      {visible ? t("legacyHide") : t("legacyShow")}
+    </button>
+  );
+}
+
+type LegacyMintState = "idle" | "minting" | "error";
+
+function LegacyInstallTokenPanel() {
+  const t = useTranslations("settings.models.workers");
+  const [state, setState] = useState<LegacyMintState>("idle");
+  const [token, setToken] = useState<string | null>(null);
+
+  async function mint() {
+    if (state === "minting") return;
+    setState("minting");
+    try {
+      const minted = await mintInstallToken();
+      setToken(minted.token);
+      setState("idle");
+    } catch {
+      setState("error");
+    }
+  }
+
+  if (token) {
+    return (
+      <section className="worker-token worker-token--legacy" aria-label={t("legacyTokenLabel")}>
+        <p className="worker-token__warn">{t("legacyWarn")}</p>
+        <CopyField label={t("tokenLabel")} value={token} secret />
+        <CopyField
+          label={t("legacyRunLabel")}
+          value={t("legacyRunCommand", { token, serverUrl: backendBaseUrl() })}
+          secret
+        />
+        <button type="button" className="worker-token__done" onClick={() => setToken(null)}>
+          {t("done")}
+        </button>
+      </section>
+    );
+  }
+  return (
+    <div className="worker-install__legacy">
+      <p className="worker-install__legacy-note">{t("legacyNote")}</p>
+      {state === "error" ? (
+        <span className="workers__error" aria-live="polite">
+          {t("mintError")}
+        </span>
+      ) : null}
+      <button
+        type="button"
+        className="worker-install__legacy-btn"
+        onClick={mint}
+        disabled={state === "minting"}
+      >
+        {state === "minting" ? t("minting") : t("legacyMint")}
+      </button>
+    </div>
+  );
+}
+
 type RowState = "idle" | "confirming" | "revoking" | "error";
 
 /**
  * One registered worker, rendered as a card: name, the labels (if any), a
- * capability chip per CLI it can drive, and an online/offline status pill
- * (online = a recent heartbeat). Revoke is REAL and confirm-gated: the first
- * "Revoke" reveals a "Confirm revoke" (+ "Cancel") so a revoke is never a single
- * stray tap; Confirm fires the DELETE and `onRevoked` re-reads the list. A
- * failed revoke shows a calm inline note and keeps the card actionable.
+ * capability chip per CLI it can drive, an online/offline status pill (online =
+ * a recent heartbeat), and Lift E4's last-seen + added-on detail. Revoke is
+ * REAL and confirm-gated.
  */
 function WorkerRow({
   worker,
@@ -175,14 +229,14 @@ function WorkerRow({
     try {
       await revoke(worker.id);
       onRevoked();
-      // The container re-read replaces this card; leave it in revoking so the
-      // button can't be re-fired before then.
     } catch {
       setState("error");
     }
   }
 
   const online = worker.status === "online";
+  const lastSeen = worker.last_heartbeat ? formatRelative(worker.last_heartbeat) : null;
+  const createdOn = worker.created_at ? formatDate(worker.created_at) : null;
 
   return (
     <li className="worker-card">
@@ -206,6 +260,13 @@ function WorkerRow({
         {worker.labels.length > 0 ? (
           <p className="worker-card__labels">{worker.labels.join(" · ")}</p>
         ) : null}
+        {(lastSeen || createdOn) && (
+          <p className="worker-card__detail">
+            {lastSeen ? <>{t("lastSeen", { when: lastSeen })}</> : null}
+            {lastSeen && createdOn ? " · " : null}
+            {createdOn ? <>{t("addedOn", { when: createdOn })}</> : null}
+          </p>
+        )}
       </div>
 
       <div className="worker-card__actions">
@@ -246,4 +307,23 @@ function WorkerRow({
       </div>
     </li>
   );
+}
+
+function formatDate(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  return d.toLocaleDateString();
+}
+
+function formatRelative(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  const diffMs = Date.now() - d.getTime();
+  const min = Math.round(diffMs / 60_000);
+  if (min < 1) return "just now";
+  if (min < 60) return `${min}m ago`;
+  const hr = Math.round(min / 60);
+  if (hr < 24) return `${hr}h ago`;
+  const day = Math.round(hr / 24);
+  return `${day}d ago`;
 }

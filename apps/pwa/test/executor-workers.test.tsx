@@ -1,16 +1,19 @@
 /**
- * Executor workers surface — the Settings → Models "Executor workers" section.
- * Drives the real list/mint/revoke clients against a mocked fetch and asserts:
+ * Executor workers surface — the Settings → Models "Executor workers" section
+ * (Lift E4 — GitHub-Actions-runner UX).
  *
- *  - calm empty state when no worker is registered (no cards)
- *  - LIST renders a card per worker (name, capability chips, online/offline pill)
- *  - a failed list read degrades to a calm inline note (no crash)
- *  - Connect → mintInstallToken → the one-time token is revealed once with a
- *    "won't see this again" note AND the run command (env vars + the
- *    `python -m backend.executors.worker` invocation)
+ *  - Calm empty state when no worker is registered (no cards)
+ *  - LIST renders a card per worker (name, capability chips, online/offline pill,
+ *    last-seen + added-on detail)
+ *  - A failed list read degrades to a calm inline note (no crash)
+ *  - "Add a worker" reveals the runner-style install snippet (no install-token
+ *    paste): `bsvibe login && bsvibe-worker register --name $(hostname) &&
+ *    bsvibe-worker run`
+ *  - The legacy install-token affordance is reachable (deprecated path, removed
+ *    in Lift E5) and still mints + reveals a single-use token
  *  - Revoke: confirm → DELETE fires → re-read fires
  *
- * Determinism note: the worker list loads asynchronously on mount, so every
+ * Determinism: the worker list loads asynchronously on mount, so every
  * assertion that depends on it is gated behind `findBy*`/`waitFor`.
  */
 
@@ -43,6 +46,8 @@ const ONLINE_WORKER = {
   capabilities: ["claude_code", "codex"],
   status: "online",
   is_active: true,
+  last_heartbeat: "2026-06-06T12:00:00+00:00",
+  created_at: "2026-06-01T12:00:00+00:00",
 };
 
 const OFFLINE_WORKER = {
@@ -53,6 +58,8 @@ const OFFLINE_WORKER = {
   capabilities: ["opencode"],
   status: "offline",
   is_active: true,
+  last_heartbeat: null,
+  created_at: "2026-06-05T12:00:00+00:00",
 };
 
 describe("Executor workers surface", () => {
@@ -69,7 +76,6 @@ describe("Executor workers surface", () => {
     global.fetch = vi.fn(async () => jsonResponse([])) as unknown as typeof fetch;
     render(<ExecutorWorkers />);
     expect(screen.getByRole("heading", { name: /executor workers/i })).toBeInTheDocument();
-    // Settle the async load so the test doesn't leak an unawaited state update.
     await screen.findByText(/No worker connected yet/i);
   });
 
@@ -99,6 +105,25 @@ describe("Executor workers surface", () => {
     expect(within(offlineCard).getByText(/^Offline$/i)).toBeInTheDocument();
   });
 
+  it("surfaces last-seen + added-on detail on each card", async () => {
+    global.fetch = vi.fn(async () =>
+      jsonResponse([ONLINE_WORKER, OFFLINE_WORKER]),
+    ) as unknown as typeof fetch;
+
+    render(<ExecutorWorkers />);
+
+    const list = await screen.findByRole("list", { name: /workers/i });
+    const onlineCard = within(list).getByText("studio-mini").closest("li") as HTMLElement;
+    // ONLINE_WORKER has a last_heartbeat — surfaces "Last seen …".
+    expect(within(onlineCard).getByText(/Last seen/i)).toBeInTheDocument();
+    expect(within(onlineCard).getByText(/Added/i)).toBeInTheDocument();
+
+    const offlineCard = within(list).getByText("old-laptop").closest("li") as HTMLElement;
+    // OFFLINE_WORKER has no heartbeat — only "Added …" shows.
+    expect(within(offlineCard).queryByText(/Last seen/i)).not.toBeInTheDocument();
+    expect(within(offlineCard).getByText(/Added/i)).toBeInTheDocument();
+  });
+
   it("surfaces a calm note when the list read fails", async () => {
     global.fetch = vi.fn(
       async () => new Response("boom", { status: 500 }),
@@ -109,35 +134,50 @@ describe("Executor workers surface", () => {
     expect(await screen.findByText(/Couldn.t load your workers/i)).toBeInTheDocument();
   });
 
-  it("Connect → mints the install token, reveals it once with the run command", async () => {
+  it("Add a worker reveals the runner-style install snippet (no install token paste)", async () => {
+    global.fetch = vi.fn(async () => jsonResponse([])) as unknown as typeof fetch;
+    render(<ExecutorWorkers />);
+
+    await screen.findByText(/No worker connected yet/i);
+    await userEvent.click(screen.getByRole("button", { name: /add a worker/i }));
+
+    // The new flow is `bsvibe login && bsvibe-worker register …` — NO install
+    // token to paste, NO `python -m backend.executors.worker INSTALL_TOKEN=…`.
+    // The full command string appears in a CopyField `<code>`. The phrase
+    // also appears in the install hint text, so disambiguate by the code
+    // element with the assembled command.
+    const cmd = await screen.findByText(
+      /bsvibe login && bsvibe-worker register --name \$\(hostname\) && bsvibe-worker run/,
+    );
+    expect(cmd).toBeInTheDocument();
+    expect(screen.queryByText(/BSVIBE_WORKER_INSTALL_TOKEN=/i)).not.toBeInTheDocument();
+    // The snippet points at THIS deployment's backend.
+    expect(
+      screen.getByText(/BSVIBE_WORKER_SERVER_URL=https:\/\/api\.bsvibe\.dev/i),
+    ).toBeInTheDocument();
+  });
+
+  it("legacy install-token affordance is reachable behind a toggle, still mints", async () => {
     const fetchMock = vi
       .fn()
-      // initial list (empty)
       .mockResolvedValueOnce(jsonResponse([]))
-      // mint install token
       .mockResolvedValueOnce(jsonResponse({ token: "INSTALL-TOKEN-once-abcd" }));
     global.fetch = fetchMock as unknown as typeof fetch;
 
     render(<ExecutorWorkers />);
 
     await screen.findByText(/No worker connected yet/i);
-    await userEvent.click(screen.getByRole("button", { name: /connect a worker/i }));
+    await userEvent.click(screen.getByRole("button", { name: /add a worker/i }));
+    await userEvent.click(
+      await screen.findByRole("button", { name: /show legacy install token/i }),
+    );
+    await userEvent.click(
+      await screen.findByRole("button", { name: /mint legacy install token/i }),
+    );
 
-    // The one-time token is revealed with a "won't see again" note.
     await waitFor(() => {
       expect(screen.getByText("INSTALL-TOKEN-once-abcd")).toBeInTheDocument();
     });
-    expect(screen.getByText(/won.t see (this|it) again/i)).toBeInTheDocument();
-    // The run command (the worker-process invocation) is shown, copyable.
-    expect(screen.getByText(/python -m backend\.executors\.worker/i)).toBeInTheDocument();
-    // It points the worker at THIS deployment's backend so a copy-paste run
-    // actually reaches the server instead of the localhost default. (No
-    // NEXT_PUBLIC_BACKEND_URL in the test env → the prod default URL.)
-    expect(
-      screen.getByText(/BSVIBE_WORKER_SERVER_URL=https:\/\/api\.bsvibe\.dev/i),
-    ).toBeInTheDocument();
-
-    // The mint POST fired against the install-token endpoint.
     const mintCall = fetchMock.mock.calls[1] as unknown as [string, RequestInit];
     expect(mintCall[0]).toBe("/api/v1/workers/install-token");
     expect(mintCall[1].method).toBe("POST");
@@ -157,7 +197,6 @@ describe("Executor workers surface", () => {
     const card = within(list).getByText("studio-mini").closest("li") as HTMLElement;
     await userEvent.click(within(card).getByRole("button", { name: /^Revoke$/i }));
 
-    // Confirm affordance appears; clicking it fires the DELETE.
     const confirm = await within(card).findByRole("button", { name: /^Confirm revoke$/i });
     await userEvent.click(confirm);
 
@@ -166,11 +205,10 @@ describe("Executor workers surface", () => {
       expect(deleteCall[0]).toBe(`/api/v1/workers/${ONLINE_WORKER.id}`);
       expect(deleteCall[1].method).toBe("DELETE");
     });
-    // A re-read fired after the revoke.
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
   });
 
-  it("shows a calm inline error when mint fails and stays usable", async () => {
+  it("shows a calm inline error when legacy mint fails and stays usable", async () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(jsonResponse([]))
@@ -180,9 +218,15 @@ describe("Executor workers surface", () => {
     render(<ExecutorWorkers />);
 
     await screen.findByText(/No worker connected yet/i);
-    await userEvent.click(screen.getByRole("button", { name: /connect a worker/i }));
+    await userEvent.click(screen.getByRole("button", { name: /add a worker/i }));
+    await userEvent.click(
+      await screen.findByRole("button", { name: /show legacy install token/i }),
+    );
+    await userEvent.click(
+      await screen.findByRole("button", { name: /mint legacy install token/i }),
+    );
 
     expect(await screen.findByText(/Couldn.t mint an install token/i)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /connect a worker/i })).toBeEnabled();
+    expect(screen.getByRole("button", { name: /mint legacy install token/i })).toBeEnabled();
   });
 });

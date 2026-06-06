@@ -145,6 +145,7 @@ def _task(**overrides: Any) -> dict[str, Any]:
 
 
 async def test_register_returns_token_and_sends_install_header() -> None:
+    """Legacy install_token path — the worker still emits ``X-Install-Token``."""
     state: dict[str, Any] = {}
     async with _client(state) as client:
         token = await worker_main.register(
@@ -157,10 +158,26 @@ async def test_register_returns_token_and_sends_install_header() -> None:
     assert state["register_headers"]["x-install-token"] == "INSTALL-XYZ"
 
 
+async def test_register_uses_bearer_when_provided() -> None:
+    """Lift E4 — bearer_token wins over install_token; emits Authorization."""
+    state: dict[str, Any] = {}
+    async with _client(state) as client:
+        token = await worker_main.register(
+            client,
+            name="w1",
+            bearer_token="ACCESS-TOKEN-XYZ",
+            install_token="UNUSED",
+            capabilities=["claude_code"],
+        )
+    assert token == "WORKER-TOKEN"
+    assert state["register_headers"]["authorization"] == "Bearer ACCESS-TOKEN-XYZ"
+    assert "x-install-token" not in state["register_headers"]
+
+
 async def test_register_requires_install_token() -> None:
     state: dict[str, Any] = {}
     async with _client(state) as client:
-        with pytest.raises(ValueError, match="install_token"):
+        with pytest.raises(ValueError, match="bearer_token"):
             await worker_main.register(client, name="w1", install_token="", capabilities=[])
 
 

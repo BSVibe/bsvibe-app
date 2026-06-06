@@ -1278,6 +1278,11 @@ export interface Worker {
   capabilities: string[];
   status: string;
   is_active: boolean;
+  /** Lift E4 — ISO 8601 last-heartbeat timestamp, `null` until the worker
+   *  daemon has heartbeated at least once. Surfaces "Last seen" on the card. */
+  last_heartbeat: string | null;
+  /** Lift E4 — ISO 8601 row-creation timestamp ("Added on" detail). */
+  created_at: string | null;
 }
 
 /** `POST /api/v1/workers/install-token` → `{ token }` (backend response). The
