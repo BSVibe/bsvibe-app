@@ -247,17 +247,74 @@ forbidden_modules = [
     "backend.schedule",
     "backend.executors",
     "backend.extensions",
+    "backend.connectors",
     "backend.api",
 ]
-# ``backend.connectors`` is now an MCP-orchestrated context: the MCP-UI parity
-# rule requires every PWA Settings → Connectors action to be an MCP tool too
-# (``backend.mcp.tools.connector_tools``), so MCP legitimately depends on the
-# connector OAuth service. The connector layer pervasively uses the shared
-# credential cipher, which physically lives under ``backend.router.accounts.crypto``
-# (a credential-encryption utility, NOT model routing) — so MCP transitively
-# reaches that one module through connectors. That single utility edge is
-# whitelisted; ``backend.router`` stays otherwise forbidden.
 ignore_imports = [
-    "backend.connectors.auth.* -> backend.router.accounts.crypto",
+    # Connector OAuth (this branch) — the folded "Connect with X" / GitHub-App
+    # setup tools live in connectors_tools and call the connector OAuth service
+    # layer; ignoring this one edge cuts the whole connectors.auth subtree (and
+    # its transitive router.accounts.crypto reach) from MCP's graph.
+    "backend.mcp.tools.connectors_tools -> backend.connectors.auth.service",
+    # Lift D3a — UI-parity setup tools (model accounts / connectors /
+    # notifications). Each new tool module calls the SAME service /
+    # row / kind primitives the REST surface uses so the MCP and PWA
+    # paths stay one canonical mutation chain (no second copy of the
+    # encryption logic, the webhook-token mint, the kind validator, the
+    # inbound-import dispatcher, etc.). The exceptions are narrowly
+    # scoped to the three new tool modules; the rest of backend.mcp is
+    # still bound by the contract above.
+    "backend.mcp.tools.model_accounts_tools -> backend.router.accounts.account_service",
+    "backend.mcp.tools.model_accounts_tools -> backend.router.accounts.crypto",
+    "backend.mcp.tools.model_accounts_tools -> backend.router.accounts.schemas",
+    "backend.mcp.tools.model_accounts_tools -> backend.router.accounts.service",
+    "backend.mcp.tools.connectors_tools -> backend.api.v1.connectors",
+    "backend.mcp.tools.connectors_tools -> backend.connectors.db",
+    "backend.mcp.tools.connectors_tools -> backend.connectors.kinds",
+    "backend.mcp.tools.connectors_tools -> backend.extensions.plugin.base",
+    "backend.mcp.tools.connectors_tools -> backend.extensions.plugin.webhook_registry",
+    "backend.mcp.tools.connectors_tools -> backend.router.accounts.crypto",
+    # Transitive chain head — connector_dispatch pulls in router.accounts /
+    # connectors.db / extensions.plugin internally. The single MCP touch-point
+    # is the OUTBOUND_EVENT_BUILDERS map (the same registerable-connector gate
+    # the REST surface uses); the contract still bounds every other backend.mcp
+    # module from those subtrees.
+    "backend.mcp.tools.connectors_tools -> backend.workflow.application.delivery.connector_dispatch",
+    # Lift D3b — UI-parity workflow tools (bindings / decisions / routing
+    # rules). Same pattern as D3a: each new tool module calls the SAME repo /
+    # service primitives the REST surface uses so MCP and PWA paths stay one
+    # canonical mutation chain.
+    "backend.mcp.tools.bindings_tools -> backend.connectors.db",
+    "backend.mcp.tools.routing_rules_tools -> backend.router.accounts.account_service",
+    "backend.mcp.tools.routing_rules_tools -> backend.router.rules.conditions",
+    "backend.mcp.tools.routing_rules_tools -> backend.router.rules.db",
+    "backend.mcp.tools.routing_rules_tools -> backend.router.rules.repository",
+    # Lift D3c — UI-parity Knowledge retract/correct + Skills + Workspace.
+    # Same pattern as D3a/b: each new tool module calls the SAME service /
+    # loader the REST surface uses so MCP and PWA paths stay one canonical
+    # chain (no second copy of the skill loader, no second slug rule, no
+    # second markdown renderer).
+    "backend.mcp.tools.skills_tools -> backend.extensions.skill",
+    # Transitive chain through plugin.audit — RetractionService emits via
+    # plugin.audit.service, which pulls in plugin.audit.subscriber (which
+    # imports backend.api.v1.live_events for SSE relay) + backend.extensions.eventbus
+    # internally. The MCP touch-point is the application service the REST
+    # surface uses; the audit pipeline is a leaf concern not under MCP's control.
+    "backend.mcp.tools.knowledge_retraction_tools -> backend.knowledge.application.retraction_service",
+    # Lift D3d — UI-parity Inside Trust + Account read-only tools. The
+    # account-get tool calls the SAME ``ensure_personal_account`` service the
+    # REST /api/v1/account discovery endpoint calls — one canonical
+    # create-on-read chain across MCP + PWA. Inside trust uses
+    # backend.workflow.application.metrics.trust_surface directly (already in
+    # the allowlist — workflow.application is permitted).
+    "backend.mcp.tools.account_tools -> backend.router.accounts.account_service",
+    # Hotfix — UI-parity for ``products_create``. The MCP path now
+    # schedules the same post-commit bootstrap the REST path schedules
+    # (Lift A v2). The scheduler module pulls in
+    # ``account_resolution`` (workflow.application.runtime) which itself
+    # depends on ``router.dispatch.strategies`` for the LLM gateway.
+    # The MCP touch-point is the same scheduler entry the REST handler
+    # uses — no second copy of the orchestration.
+    "backend.mcp.tools.workflow_tools -> backend.workflow.application.runtime.product_bootstrap_runtime",
 ]
 

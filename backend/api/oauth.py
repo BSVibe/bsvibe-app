@@ -35,7 +35,7 @@ from __future__ import annotations
 import re
 import time
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 from threading import Lock
 from typing import Annotated, Any
 from urllib.parse import urlencode, urlsplit
@@ -44,6 +44,7 @@ import structlog
 from fastapi import APIRouter, Depends, Form, HTTPException, Request, status
 from fastapi.responses import JSONResponse, RedirectResponse
 from pydantic import BaseModel, ConfigDict, Field
+from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.api.deps import (
@@ -501,6 +502,26 @@ async def authorize_post(  # noqa: PLR0911 — OAuth state machine
         client.workspace_id = workspace_id
         if client.created_by_user_id is None:
             client.created_by_user_id = user_row.id
+
+    # Supersede earlier same-name clients in the same workspace. Native
+    # MCP clients (Claude Code, MCP Inspector) re-register on every
+    # ``mcp authenticate`` run because each session picks a fresh
+    # loopback port for the redirect URI (RFC 8252 §7.3). The previous
+    # rows are dead — the founder will never use that exact port again.
+    # Soft-revoke them so the Settings UI shows one live row per client
+    # name and old rows fall under the "revoked" filter. Same-name +
+    # same-workspace + still-active + not this row.
+    now = datetime.now(UTC)
+    await session.execute(
+        update(OAuthClientRow)
+        .where(
+            OAuthClientRow.workspace_id == workspace_id,
+            OAuthClientRow.client_name == client.client_name,
+            OAuthClientRow.client_id != client.client_id,
+            OAuthClientRow.revoked_at.is_(None),
+        )
+        .values(revoked_at=now)
+    )
 
     # Approve — mint code. The OAuth subject is the consenting session user.
     code = await issue_authorization_code(

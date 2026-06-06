@@ -3,31 +3,68 @@
 from __future__ import annotations
 
 from backend.mcp.api import ToolRegistry
-from backend.mcp.tools.connector_tools import register_connector_tools
+from backend.mcp.tools.account_tools import register_account_tools
+from backend.mcp.tools.bindings_tools import register_bindings_tools
+from backend.mcp.tools.connectors_tools import register_connectors_tools
+from backend.mcp.tools.decisions_tools import register_decisions_tools
 from backend.mcp.tools.direct_tools import register_direct_tools
+from backend.mcp.tools.inside_trust_tools import register_inside_trust_tools
+from backend.mcp.tools.knowledge_retraction_tools import (
+    register_knowledge_retraction_tools,
+)
 from backend.mcp.tools.knowledge_tools import register_knowledge_tools
+from backend.mcp.tools.model_accounts_tools import register_model_accounts_tools
+from backend.mcp.tools.notifications_tools import register_notifications_tools
+from backend.mcp.tools.routing_rules_tools import register_routing_rules_tools
 from backend.mcp.tools.safe_mode_tools import register_safe_mode_tools
+from backend.mcp.tools.skills_tools import register_skills_tools
 from backend.mcp.tools.workflow_tools import register_workflow_tools
+from backend.mcp.tools.workspace_tools import register_workspace_tools
 
 
 def register_all_tools(registry: ToolRegistry) -> None:
-    """Register every D2 MCP tool onto ``registry``.
+    """Register every MCP tool onto ``registry``.
 
-    Surfaces: knowledge (5), workflow (6), safe-mode (3), direct (1),
-    connector (6 — PWA Settings → Connectors parity).
+    Surfaces (D2 + D3a + D3b + D3c + D3d):
+    knowledge (5), workflow (7), safe-mode (3), direct (1),
+    model-accounts (4 — D3a), connectors (5 — D3a),
+    notifications (2 — D3a),
+    bindings (4 — D3b), decisions (4 — D3b), routing-rules (3 — D3b),
+    knowledge-retraction (3 — D3c), skills (4 — D3c), workspace (2 — D3c),
+    inside-trust (2 — D3d), account (2 — D3d).
     """
     register_knowledge_tools(registry)
     register_workflow_tools(registry)
     register_safe_mode_tools(registry)
     register_direct_tools(registry)
-    register_connector_tools(registry)
+    register_model_accounts_tools(registry)
+    register_connectors_tools(registry)
+    register_notifications_tools(registry)
+    register_bindings_tools(registry)
+    register_decisions_tools(registry)
+    register_routing_rules_tools(registry)
+    register_knowledge_retraction_tools(registry)
+    register_skills_tools(registry)
+    register_workspace_tools(registry)
+    register_inside_trust_tools(registry)
+    register_account_tools(registry)
 
 
 __all__ = [
+    "register_account_tools",
     "register_all_tools",
-    "register_connector_tools",
+    "register_bindings_tools",
+    "register_connectors_tools",
+    "register_decisions_tools",
     "register_direct_tools",
+    "register_inside_trust_tools",
+    "register_knowledge_retraction_tools",
     "register_knowledge_tools",
+    "register_model_accounts_tools",
+    "register_notifications_tools",
+    "register_routing_rules_tools",
     "register_safe_mode_tools",
+    "register_skills_tools",
     "register_workflow_tools",
+    "register_workspace_tools",
 ]

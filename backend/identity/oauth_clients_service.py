@@ -89,10 +89,20 @@ async def lookup_client_by_client_id(
 async def list_clients_for_workspace(
     session: AsyncSession, workspace_id: uuid.UUID
 ) -> list[OAuthClientRow]:
-    """Founder-facing listing — current workspace only."""
+    """Founder-facing listing — current workspace, active rows only.
+
+    Revoked rows are kept in the table for audit (and so we don't break
+    the FK from oauth_codes / oauth_access_tokens already issued under
+    them), but the Settings UI doesn't show them — the supersede-on-
+    consent path produces one revoked row per ``claude mcp authenticate``
+    retry, which is noise the founder doesn't want to see.
+    """
     stmt = (
         select(OAuthClientRow)
-        .where(OAuthClientRow.workspace_id == workspace_id)
+        .where(
+            OAuthClientRow.workspace_id == workspace_id,
+            OAuthClientRow.revoked_at.is_(None),
+        )
         .order_by(OAuthClientRow.created_at.desc())
     )
     return list((await session.execute(stmt)).scalars().all())

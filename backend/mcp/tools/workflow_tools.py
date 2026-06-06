@@ -12,6 +12,7 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
+import structlog
 from pydantic import BaseModel, ConfigDict, Field, RootModel, field_validator
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -22,6 +23,8 @@ from backend.workflow.infrastructure.repositories import (
     SqlAlchemyDeliverableRepository,
     SqlAlchemyRunRepository,
 )
+
+logger = structlog.get_logger(__name__)
 
 
 class _Envelope(RootModel[Any]):
@@ -178,11 +181,47 @@ async def _h_products_create(args: ProductsCreateInput, ctx: ToolContext) -> Any
     except IntegrityError as exc:
         await ctx.session.rollback()
         raise ToolError(f"slug {args.slug!r} already exists in this workspace") from exc
-    # NOTE: MCP create does NOT schedule the bootstrap background task — the
-    # founder UI's create path owns that orchestration today (the scheduler
-    # depends on the FastAPI app's session-factory DI). MCP create produces
-    # the product row; the founder can trigger bootstrap via the PWA, or a
-    # follow-up lift can add a dedicated `bsvibe_products_bootstrap` tool.
+
+    # UI parity: mirror the REST create handler's post-commit work so
+    # `claude mcp` and PWA Brief → New Product land the same artifact.
+    # 1. Init the per-product git workspace (W1). Soft-fail — same as
+    #    REST: a transient FS error doesn't undo the row.
+    # 2. When repo_url is set, hand off the clone + LLM ingest to the
+    #    background scheduler (Lift A v2) — exactly what the REST path
+    #    does at this seam.
+    from backend.storage.product_workspace import (  # noqa: PLC0415
+        ProductWorkspaceError,
+        init_product_workspace,
+    )
+
+    try:
+        await init_product_workspace(row.id)
+    except ProductWorkspaceError:
+        logger.warning(
+            "product_workspace_init_failed_at_mcp_create",
+            product_id=str(row.id),
+            exc_info=True,
+        )
+
+    if args.repo_url and ctx.session_factory is not None:
+        from backend.workflow.application.runtime.product_bootstrap_runtime import (  # noqa: PLC0415
+            schedule_product_bootstrap,
+        )
+
+        try:
+            schedule_product_bootstrap(
+                product_id=row.id,
+                workspace_id=ctx.principal.workspace_id,
+                repo_url=args.repo_url,
+                session_factory=ctx.session_factory,
+            )
+        except Exception:  # noqa: BLE001 — soft-fail; row already committed
+            logger.warning(
+                "product_bootstrap_schedule_failed_at_mcp_create",
+                product_id=str(row.id),
+                exc_info=True,
+            )
+
     return _Envelope(_product_to_dict(row))
 
 
