@@ -1,23 +1,21 @@
 """/api/v1/workers — external executor-worker registration.
 
-Four auth axes live behind one URL prefix:
+Three auth axes live behind one URL prefix:
 
-* JWT + ``require_role("admin")`` — minting an install token, listing, revoking.
-  These hang off ``router`` (mounted under the JWT-gated v1 aggregate in
+* JWT — listing, revoking. Workspace-scoped via the v1 aggregate's
+  ``get_current_user`` + per-route ``get_workspace_id``. These hang off
+  ``router`` (mounted under the JWT-gated v1 aggregate in
   :mod:`backend.api.v1`).
 * OAuth bearer (``Authorization: Bearer <token>``) — worker registration
   (Lift E4). The bearer is either a Supabase session JWT (the same one the
-  PWA uses) or an MCP ES256 access token (Lift D1). Workspace is derived
-  from the verified claims — the body never carries a workspace id.
-* Install-token (``X-Install-Token`` header) — worker registration **legacy
-  path**, deprecated in Lift E4 and removed in Lift E5. The endpoint still
-  accepts it for backward compatibility with existing worker hosts that
-  haven't cut over to ``bsvibe login`` yet; the ``Deprecation`` header
-  signals callers to migrate.
+  PWA uses) or an ES256 MCP access token (Lift D1). Workspace is derived
+  from the verified claims — the body never carries a workspace id. This is
+  the only register path; the legacy ``X-Install-Token`` header was removed
+  in Lift E5.
 * Worker-token (``X-Worker-Token`` header) — heartbeat / poll / result.
 
-The bearer / install-token / worker-token paths are NOT JWT-authed (a headless
-worker machine has no Supabase session by default), so they hang off
+The bearer / worker-token paths are NOT JWT-authed (a headless worker
+machine has no Supabase session by default), so they hang off
 ``public_router`` which :mod:`backend.api.main` mounts at ``/api/v1/workers``
 directly — bypassing the v1 router's ``get_current_user`` gate, exactly like
 the connector ``webhooks`` ingress.
@@ -31,11 +29,11 @@ from __future__ import annotations
 import uuid
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Response, status
+from fastapi import APIRouter, Depends, Header, HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.api.deps import get_artifact_store, get_db_session, get_workspace_id, require_role
+from backend.api.deps import get_artifact_store, get_db_session, get_workspace_id
 from backend.api.v1.workers_register_auth import (
     BearerAuthError,
     extract_bearer,
@@ -53,12 +51,6 @@ public_router = APIRouter(prefix="/workers", tags=["workers"])
 
 
 # ── Schemas ───────────────────────────────────────────────────────────────────
-
-
-class InstallTokenResponse(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    token: str
 
 
 class WorkerRegisterBody(BaseModel):
@@ -173,37 +165,7 @@ async def get_poll_redis() -> Any:
     return redis_aio.from_url(get_settings().redis_url, decode_responses=True)
 
 
-# ── JWT-gated (admin / workspace-scoped) ──────────────────────────────────────
-
-
-@router.post(
-    "/install-token",
-    response_model=InstallTokenResponse,
-    dependencies=[Depends(require_role("admin"))],
-)
-async def mint_install_token(
-    response: Response,
-    workspace_id: Annotated[uuid.UUID, Depends(get_workspace_id)],
-    session: Annotated[AsyncSession, Depends(get_db_session)],
-) -> InstallTokenResponse:
-    """Mint a new install token for the caller's workspace (replaces any prior).
-
-    **Deprecated (Lift E4)** — the install-token paste step is being removed
-    in favour of the GitHub-Actions-runner UX (``bsvibe login`` + one-line
-    ``bsvibe-worker register``). The Lift E5 removal will delete this route
-    + the ``executor_install_tokens`` table; new worker hosts should call
-    ``POST /api/v1/workers/register`` with an ``Authorization: Bearer``
-    instead. The ``Deprecation`` response header signals automated callers.
-
-    Returns the plaintext exactly once — it is never retrievable again.
-    """
-    token = await service.mint_install_token(session, workspace_id=workspace_id)
-    await session.commit()
-    # RFC 9745 deprecation signalling. ``Sunset`` would carry a date once we
-    # lock E5 onto a calendar; for now just flag the route as deprecated.
-    response.headers["Deprecation"] = "true"
-    response.headers["Link"] = '</api/v1/workers/register>; rel="successor-version"'
-    return InstallTokenResponse(token=token)
+# ── JWT-gated (workspace-scoped) ──────────────────────────────────────────────
 
 
 @router.get("")
@@ -241,69 +203,44 @@ async def revoke_worker(
 )
 async def register_worker(
     body: WorkerRegisterBody,
-    response: Response,
     session: Annotated[AsyncSession, Depends(get_db_session)],
     authorization: Annotated[str | None, Header()] = None,
-    x_install_token: Annotated[str | None, Header()] = None,
 ) -> WorkerRegisterResponse:
-    """Register a worker with an OAuth bearer (Lift E4) or install-token.
+    """Register a worker with an OAuth bearer (Lift E4).
 
-    Auth precedence:
-
-    1. ``Authorization: Bearer <token>`` — the bearer is either a Supabase
-       session JWT (the same one the PWA uses) or an ES256 MCP access token
-       (Lift D1). Workspace is derived from the verified claims; the body's
-       ``name`` / ``labels`` / ``capabilities`` are accepted verbatim.
-    2. ``X-Install-Token`` — **deprecated** legacy path retained for
-       backward compatibility through Lift E4. The ``Deprecation`` response
-       header signals callers to migrate. Lift E5 removes it.
+    The bearer is either a Supabase session JWT (the same one the PWA uses)
+    or an ES256 MCP access token (Lift D1). Workspace is derived from the
+    verified claims; the body's ``name`` / ``labels`` / ``capabilities`` are
+    accepted verbatim.
 
     Returns the worker id + a fresh per-worker token (used for heartbeat /
     poll / result). The worker-token plaintext is returned ONCE; only its
     hash is persisted.
+
+    Lift E5 (2026-06-06) — the legacy ``X-Install-Token`` header path is
+    gone. Missing ``Authorization: Bearer`` → 401.
     """
     bearer = extract_bearer(authorization)
-
-    # 1. New path — OAuth bearer (Lift E4).
-    if bearer is not None:
-        try:
-            principal = await resolve_workspace_for_bearer(bearer, session)
-        except BearerAuthError as exc:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="invalid bearer token",
-            ) from exc
-        worker, token = await service.register_worker_for_workspace(
-            session,
-            workspace_id=principal.workspace_id,
-            name=body.name,
-            labels=body.labels,
-            capabilities=body.capabilities,
-        )
-        await session.commit()
-        return WorkerRegisterResponse(id=worker.id, token=token)
-
-    # 2. Legacy path — install token (deprecated; Lift E5 removes).
-    if not x_install_token:
+    if bearer is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="missing Authorization bearer or X-Install-Token",
+            detail="missing Authorization bearer",
         )
     try:
-        worker, token = await service.register_worker(
-            session,
-            install_token=x_install_token,
-            name=body.name,
-            labels=body.labels,
-            capabilities=body.capabilities,
-        )
-    except service.InvalidInstallToken as exc:
+        principal = await resolve_workspace_for_bearer(bearer, session)
+    except BearerAuthError as exc:
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid install token"
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="invalid bearer token",
         ) from exc
+    worker, token = await service.register_worker_for_workspace(
+        session,
+        workspace_id=principal.workspace_id,
+        name=body.name,
+        labels=body.labels,
+        capabilities=body.capabilities,
+    )
     await session.commit()
-    response.headers["Deprecation"] = "true"
-    response.headers["Link"] = '</api/v1/workers/register>; rel="successor-version"'
     return WorkerRegisterResponse(id=worker.id, token=token)
 
 

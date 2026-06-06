@@ -17,10 +17,8 @@ The endpoint derives ``workspace_id`` from the verified bearer — the body
 never carries a ``workspace_id`` (so a client cannot mint a worker in someone
 else's workspace by guessing IDs).
 
-For backward compatibility the legacy ``X-Install-Token`` path is preserved
-through Lift E5; it lives in the route handler itself rather than this
-resolver because its workspace derivation is structurally different
-(token → DB lookup, not bearer → JWT claims).
+Lift E5 (2026-06-06) — this is now the ONLY register auth path. The legacy
+``X-Install-Token`` header and its DB-backed install-token system are gone.
 """
 
 from __future__ import annotations
@@ -59,9 +57,9 @@ def extract_bearer(authorization: str | None) -> str | None:
     """Return the raw bearer token from an ``Authorization`` header, or ``None``.
 
     Unlike :func:`backend.shared.authz.deps._extract_bearer` this never
-    raises — the register endpoint must distinguish "no bearer at all" (try
-    the legacy install-token path) from "bearer present but invalid"
-    (401). Caller decides.
+    raises — the register endpoint must distinguish "no bearer at all"
+    (401 "missing Authorization bearer") from "bearer present but invalid"
+    (401 "invalid bearer token"). Caller decides.
     """
     if not authorization:
         return None

@@ -1,22 +1,25 @@
 """SQLAlchemy schema for the external executor-worker registration subsystem.
 
 Lift 1 of the executor-pool epic — the registration model ported from
-BSGateway (``bsgateway/api/routers/workers.py`` + ``executor/install_token``)
-and adapted to monorepo conventions (SQLAlchemy + alembic, ``workspace_id`` as
-the tenancy axis, JSON columns portable to the SQLite test tier).
+BSGateway and adapted to monorepo conventions (SQLAlchemy + alembic,
+``workspace_id`` as the tenancy axis, JSON columns portable to the SQLite test
+tier).
 
 An *external* worker is a remote machine that runs CLI executors
 (``claude_code`` / ``codex`` / ``opencode``). It authenticates to the backend
-with an opaque per-worker token (only the SHA-256 hash is stored). A worker is
-bootstrapped using a per-workspace **install token** — admins mint one, share
-it with worker machines, and the machine registers with it.
+with an opaque per-worker token (only the SHA-256 hash is stored). A worker
+is bootstrapped using the host's OAuth credential (Lift E4 — the CLI sends
+``Authorization: Bearer <token>`` to ``POST /api/v1/workers/register``).
 
 Distinct from :mod:`backend.workers.db` (the Bundle G internal-daemon liveness
 model, table ``workers``). That subsystem tracks the orchestrator's own
 consumer-group daemons; this one tracks externally-installed executor hosts.
-The names ``workers`` / ``worker_install_tokens`` are already taken there, so
-this subsystem owns its own tables: ``executor_workers`` /
-``executor_install_tokens``.
+The name ``workers`` is already taken there, so this subsystem owns its own
+table: ``executor_workers``.
+
+Lift E5 (2026-06-06) — the legacy ``executor_install_tokens`` table and its
+``WorkerInstallTokenRow`` ORM are gone. The host now registers with its
+OAuth bearer; there is no install-token paste step.
 """
 
 from __future__ import annotations
@@ -24,7 +27,7 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import JSON, Boolean, DateTime, String, Text, UniqueConstraint
+from sqlalchemy import JSON, Boolean, DateTime, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from backend.data import Base
@@ -57,28 +60,6 @@ class WorkerRow(Base):
     )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=_utcnow, onupdate=_utcnow
-    )
-
-
-class WorkerInstallTokenRow(Base):
-    """The single active install token per workspace.
-
-    Re-minting replaces the prior row (``workspace_id`` is unique), so a
-    workspace has at most one usable install token at a time. Only the
-    SHA-256 hash is persisted — the plaintext is returned once at mint time
-    and never stored.
-    """
-
-    __tablename__ = "executor_install_tokens"
-    __table_args__ = (
-        UniqueConstraint("workspace_id", name="uq_executor_install_tokens_workspace"),
-    )
-
-    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
-    workspace_id: Mapped[uuid.UUID] = mapped_column(nullable=False, index=True)
-    token_hash: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, default=_utcnow
     )
 
 
@@ -134,6 +115,5 @@ class ExecutorTaskRow(Base):
 __all__ = [
     "ExecutorTaskRow",
     "ExecutorsBase",
-    "WorkerInstallTokenRow",
     "WorkerRow",
 ]

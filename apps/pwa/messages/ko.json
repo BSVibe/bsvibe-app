@@ -460,16 +460,6 @@
         "installCommand": "BSVIBE_WORKER_SERVER_URL={serverUrl} bsvibe login && bsvibe-worker register --name $(hostname) && bsvibe-worker run",
         "installNotes": "완료되면 아래 목록에 몇 초 안에 호스트가 나타나요.",
         "done": "완료",
-        "legacyShow": "예전 방식 설치 토큰 보기 (사용 중단 예정)",
-        "legacyHide": "예전 방식 설치 토큰 숨기기",
-        "legacyNote": "예전 워커 호스트(`bsvibe login` 미사용)는 설치 토큰으로 등록할 수 있어요. 다음 lift에서 이 경로는 제거돼요.",
-        "legacyMint": "예전 설치 토큰 발급",
-        "legacyTokenLabel": "예전 설치 토큰",
-        "legacyWarn": "한 번만 표시돼요. 설치 토큰은 비밀 값이니 닫기 전에 복사하세요.",
-        "legacyRunLabel": "워커 호스트에서 실행 (예전 방식)",
-        "legacyRunCommand": "BSVIBE_WORKER_SERVER_URL={serverUrl} BSVIBE_WORKER_INSTALL_TOKEN={token} python -m backend.executors.worker",
-        "minting": "발급 중…",
-        "mintError": "지금은 설치 토큰을 발급할 수 없어요. 잠시 후 다시 시도해 주세요.",
         "online": "온라인",
         "offline": "오프라인",
         "statusTitle": "온라인은 워커가 최근 하트비트를 보냈다는 의미예요",
@@ -480,8 +470,7 @@
         "confirmRevoke": "해지 확인",
         "cancel": "취소",
         "revoking": "해지 중…",
-        "revokeError": "해지하지 못했어요. 다시 시도해 주세요.",
-        "tokenLabel": "설치 토큰"
+        "revokeError": "해지하지 못했어요. 다시 시도해 주세요."
       },
       "default": {
         "sectionLabel": "이 워크스페이스의 기본 모델",

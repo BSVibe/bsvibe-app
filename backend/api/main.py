@@ -125,8 +125,9 @@ def create_app() -> FastAPI:
     # Connector webhook ingress is PUBLIC (external callback) — mounted under
     # /api directly, NOT under the auth-gated v1 router (Workflow §11.2).
     app.include_router(webhooks_router, prefix="/api")
-    # Executor-worker register/heartbeat are install-token / worker-token authed
-    # (a headless worker has no Supabase session JWT) — mounted under /api/v1
+    # Executor-worker register/heartbeat are bearer / worker-token authed
+    # (a headless worker registers with the host OAuth credential; subsequent
+    # heartbeat/poll/result use the per-worker token) — mounted under /api/v1
     # directly, NOT under the auth-gated v1 router, like the webhooks ingress.
     app.include_router(workers_public_router, prefix="/api/v1")
     # Embedded OAuth 2.0 authorization server (Lift D1).

@@ -1284,10 +1284,3 @@ export interface Worker {
   /** Lift E4 — ISO 8601 row-creation timestamp ("Added on" detail). */
   created_at: string | null;
 }
-
-/** `POST /api/v1/workers/install-token` → `{ token }` (backend response). The
- *  ONLY place the plaintext install token is ever returned — like an API key,
- *  shown once. The founder feeds it to the worker process on its host. */
-export interface WorkerInstallToken {
-  token: string;
-}
