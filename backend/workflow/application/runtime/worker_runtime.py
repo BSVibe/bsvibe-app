@@ -37,7 +37,7 @@ from backend.knowledge.infrastructure.workers.settle_worker import (
     build_garden_promoter_factory,
 )
 from backend.router.accounts.models import ModelAccount
-from backend.router.dispatch.strategies import EXECUTOR_PROVIDER
+from backend.router.accounts.predicates import EXECUTOR_PROVIDER
 from backend.schedule.infrastructure.db_poll_runner import build_db_poll_schedule_runner
 from backend.schedule.infrastructure.workers.schedule_worker import (
     ScheduleWorker,

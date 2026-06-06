@@ -110,28 +110,17 @@ async def test_hook_budget_pass_does_not_raise() -> None:
 
 
 @pytest.mark.asyncio
-async def test_chat_service_complete_requires_dispatcher() -> None:
-    svc = ChatService()
-    cctx = ChatCompletionContext(
-        workspace_id=uuid.uuid4(),
-        account_id=uuid.uuid4(),
-        trace_id="t",
-        stream=False,
-        model_account_id=uuid.uuid4(),
-    )
-    with pytest.raises(RuntimeError, match="requires a GatewayDispatcher"):
-        await svc.complete(context=cctx, payload={"messages": []})
-
-
-@pytest.mark.asyncio
 async def test_chat_service_complete_rejects_missing_account() -> None:
     """Without account_id, complete() refuses — every dispatch needs scoping."""
+    from unittest.mock import AsyncMock, MagicMock
 
-    class _NeverDispatcher:
-        async def dispatch(self, _req):  # pragma: no cover — should never be called
-            raise AssertionError("dispatcher should not run")
-
-    svc = ChatService(dispatcher=_NeverDispatcher())  # type: ignore[arg-type]
+    svc = ChatService(
+        session=MagicMock(),
+        budget=MagicMock(),
+        accounts=MagicMock(),
+        llm=MagicMock(chat=AsyncMock()),
+        cipher=MagicMock(),
+    )
     cctx = ChatCompletionContext(
         workspace_id=uuid.uuid4(),
         account_id=None,

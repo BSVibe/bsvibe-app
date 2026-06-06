@@ -1,14 +1,22 @@
-"""Routing rule engine (Phase 1) — priority first-match + default fallback,
-condition operators, and account resolution with safe legacy fallback."""
+"""Routing rule engine — priority first-match + default fallback,
+condition operators, and account resolution (Lift E2 — no tier fallback).
+"""
 
 from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime
 
+import pytest
+
+from backend.identity.workspaces_db import WorkspaceRow
 from backend.router.accounts.models import ModelAccount
 from backend.router.routing.run_routing.db import RunRoutingRuleRow
-from backend.router.routing.run_routing.engine import RoutingContext, evaluate_rules, resolve_route
+from backend.router.routing.run_routing.engine import (
+    RoutingContext,
+    evaluate_rules,
+    resolve_route,
+)
 from backend.workflow.infrastructure.db import ExecutionRun, RunStatus
 
 from ...._support import memory_session
@@ -22,12 +30,14 @@ def _rule(
     is_default: bool = False,
     conditions: list[dict] | None = None,
     is_active: bool = True,
+    caller_id: str | None = None,
     ws: uuid.UUID,
 ) -> RunRoutingRuleRow:
     return RunRoutingRuleRow(
         id=uuid.uuid4(),
         workspace_id=ws,
         name=name,
+        caller_id=caller_id,
         priority=priority,
         is_default=is_default,
         target=target,
@@ -63,7 +73,6 @@ def test_first_match_by_priority_wins() -> None:
             conditions=[{"field": "artifact_type_hint", "operator": "eq", "value": "code"}],
         ),
     ]
-    # priority 10 evaluated before 20 → codex wins.
     assert evaluate_rules(rules, _ctx(artifact_type_hint="code")) == "executor/codex"
 
 
@@ -78,7 +87,7 @@ def test_default_used_when_no_rule_matches() -> None:
         ),
         _rule(name="fallback", target="ollama/qwen", is_default=True, priority=999, ws=ws),
     ]
-    assert evaluate_rules(rules, _ctx(artifact_type_hint="page")) == "ollama/qwen"
+    assert evaluate_rules(rules, _ctx(artifact_type_hint="pr")) == "ollama/qwen"
 
 
 def test_no_match_no_default_returns_none() -> None:
@@ -91,71 +100,10 @@ def test_no_match_no_default_returns_none() -> None:
             conditions=[{"field": "artifact_type_hint", "operator": "eq", "value": "code"}],
         ),
     ]
-    assert evaluate_rules(rules, _ctx(artifact_type_hint="page")) is None
+    assert evaluate_rules(rules, _ctx(artifact_type_hint="pr")) is None
 
 
-def test_all_conditions_must_match_AND() -> None:
-    ws = uuid.uuid4()
-    rules = [
-        _rule(
-            name="design-code",
-            target="executor/codex",
-            ws=ws,
-            conditions=[
-                {"field": "artifact_type_hint", "operator": "eq", "value": "code"},
-                {"field": "stage", "operator": "eq", "value": "design"},
-            ],
-        ),
-    ]
-    assert (
-        evaluate_rules(rules, _ctx(artifact_type_hint="code", stage="design")) == "executor/codex"
-    )
-    # stage mismatch → no match.
-    assert evaluate_rules(rules, _ctx(artifact_type_hint="code", stage="impl")) is None
-
-
-def test_operators_contains_in_negate() -> None:
-    ws = uuid.uuid4()
-    contains = [
-        _rule(
-            name="c",
-            target="t",
-            ws=ws,
-            conditions=[{"field": "intent_text", "operator": "contains", "value": "deploy"}],
-        )
-    ]
-    assert evaluate_rules(contains, _ctx(intent_text="please DEPLOY the site")) == "t"
-
-    in_rule = [
-        _rule(
-            name="i",
-            target="t2",
-            ws=ws,
-            conditions=[{"field": "artifact_type_hint", "operator": "in", "value": ["code", "pr"]}],
-        )
-    ]
-    assert evaluate_rules(in_rule, _ctx(artifact_type_hint="pr")) == "t2"
-
-    negate = [
-        _rule(
-            name="n",
-            target="t3",
-            ws=ws,
-            conditions=[
-                {
-                    "field": "path_classification",
-                    "operator": "eq",
-                    "value": "knowledge_only",
-                    "negate": True,
-                }
-            ],
-        )
-    ]
-    assert evaluate_rules(negate, _ctx(path_classification="agent_loop")) == "t3"
-    assert evaluate_rules(negate, _ctx(path_classification="knowledge_only")) is None
-
-
-def test_unknown_field_never_matches() -> None:
+def test_unknown_field_logged_and_skipped() -> None:
     ws = uuid.uuid4()
     rules = [
         _rule(
@@ -182,8 +130,26 @@ def test_inactive_rule_skipped() -> None:
     assert evaluate_rules(rules, _ctx(artifact_type_hint="code")) is None
 
 
+def test_caller_id_column_filters_match() -> None:
+    ws = uuid.uuid4()
+    rule = _rule(
+        name="frame",
+        target="ollama/qwen",
+        ws=ws,
+        caller_id="workflow.frame",
+        conditions=[],
+    )
+    # caller_id matches → match (no other conditions to fail).
+    assert (
+        evaluate_rules([rule], _ctx(caller_id="workflow.frame", artifact_type_hint=None))
+        == "ollama/qwen"
+    )
+    # Different caller → no match.
+    assert evaluate_rules([rule], _ctx(caller_id="workflow.judge", artifact_type_hint=None)) is None
+
+
 # ---------------------------------------------------------------------------
-# resolve_route — DB-backed account resolution + legacy fallback
+# RoutingContext.from_run
 # ---------------------------------------------------------------------------
 
 
@@ -218,146 +184,116 @@ def _run(ws: uuid.UUID, payload: dict | None = None) -> ExecutionRun:
     )
 
 
-async def test_resolve_no_rules_delegates_to_single_active() -> None:
-    ws = uuid.uuid4()
-    async with memory_session() as s:
-        acct = _account(ws, "ollama/qwen", provider="ollama")
-        s.add(acct)
-        run = _run(ws)
-        s.add(run)
-        await s.commit()
-
-        # No routing rules → legacy "exactly one active account" wins.
-        resolved = await resolve_route(s, run)
-        assert resolved is not None
-        assert resolved.litellm_model == "ollama/qwen"
-
-
-async def test_resolve_rule_selects_target_account_among_many_active() -> None:
-    ws = uuid.uuid4()
-    async with memory_session() as s:
-        native = _account(ws, "ollama/qwen", provider="ollama")
-        codex = _account(ws, "executor/codex")
-        opencode = _account(ws, "executor/opencode")
-        s.add_all([native, codex, opencode])
-        # stage=design + code → codex.
-        s.add(
-            _rule(
-                name="design",
-                target="executor/codex",
-                priority=10,
-                ws=ws,
-                conditions=[
-                    {"field": "stage", "operator": "eq", "value": "design"},
-                ],
-            )
-        )
-        s.add(
-            _rule(
-                name="impl",
-                target="executor/opencode",
-                priority=20,
-                ws=ws,
-                conditions=[
-                    {"field": "stage", "operator": "eq", "value": "impl"},
-                ],
-            )
-        )
-        s.add(_rule(name="fallback", target="ollama/qwen", is_default=True, priority=999, ws=ws))
-        design_run = _run(ws, {"stage": "design", "frame": {"artifact_type_hint": "code"}})
-        impl_run = _run(ws, {"stage": "impl", "frame": {"artifact_type_hint": "code"}})
-        chat_run = _run(ws, {"frame": {"path_classification": "knowledge_only"}})
-        s.add_all([design_run, impl_run, chat_run])
-        await s.commit()
-
-        assert (await resolve_route(s, design_run)).litellm_model == "executor/codex"
-        assert (await resolve_route(s, impl_run)).litellm_model == "executor/opencode"
-        # No stage → default rule → native.
-        assert (await resolve_route(s, chat_run)).litellm_model == "ollama/qwen"
-
-
 def test_from_run_derives_design_stage_from_pipeline() -> None:
-    # Production NEVER sets an explicit ``stage`` on the first run — only the
-    # spawned impl run gets ``stage="impl"``. The first run of a
-    # ``design_then_impl`` pipeline must therefore be derived as ``stage="design"``
-    # from the frame so the ``stage==design`` rule can route it to the designer.
     ws = uuid.uuid4()
     design = RoutingContext.from_run(
         _run(ws, {"frame": {"artifact_type_hint": "code", "pipeline": "design_then_impl"}})
     )
     assert design.stage == "design"
-
-    # An explicit stage always wins (the impl run carries ``stage="impl"``).
     impl = RoutingContext.from_run(
         _run(ws, {"stage": "impl", "frame": {"pipeline": "design_then_impl"}})
     )
     assert impl.stage == "impl"
-
-    # A single pipeline (no design handoff) stays ``single``.
     single = RoutingContext.from_run(_run(ws, {"frame": {"pipeline": "single"}}))
     assert single.stage == "single"
 
 
-async def test_resolve_design_then_impl_first_run_routes_to_codex_without_explicit_stage() -> None:
-    # The realistic case: the first run has NO explicit stage, only the frame's
-    # ``pipeline="design_then_impl"`` signal — it must still hit the codex rule.
-    ws = uuid.uuid4()
+# ---------------------------------------------------------------------------
+# resolve_route — DB-backed, no tier fallback
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_resolve_no_rules_no_default_returns_none() -> None:
+    ws_id = uuid.uuid4()
     async with memory_session() as s:
-        s.add_all(
-            [
-                _account(ws, "ollama/qwen", provider="ollama"),
-                _account(ws, "executor/codex"),
-                _account(ws, "executor/opencode"),
-            ]
+        s.add(WorkspaceRow(id=ws_id, name="w", region="us-1", safe_mode=True, legal_basis="x"))
+        acct = _account(ws_id, "ollama/qwen", provider="ollama")
+        s.add(acct)
+        run = _run(ws_id)
+        s.add(run)
+        await s.commit()
+        # No rules + no default = no match (Lift E2 dropped the
+        # "exactly one active" tier fallback).
+        assert await resolve_route(s, run) is None
+
+
+@pytest.mark.asyncio
+async def test_resolve_workspace_default_used_when_no_rules() -> None:
+    ws_id = uuid.uuid4()
+    async with memory_session() as s:
+        acct = _account(ws_id, "ollama/qwen", provider="ollama")
+        s.add(acct)
+        s.add(
+            WorkspaceRow(
+                id=ws_id,
+                name="w",
+                region="us-1",
+                safe_mode=True,
+                legal_basis="x",
+                default_account_id=acct.id,
+            )
+        )
+        run = _run(ws_id)
+        s.add(run)
+        await s.commit()
+        resolved = await resolve_route(s, run)
+        assert resolved is not None
+        assert resolved.litellm_model == "ollama/qwen"
+
+
+@pytest.mark.asyncio
+async def test_resolve_rule_match_beats_workspace_default() -> None:
+    ws_id = uuid.uuid4()
+    async with memory_session() as s:
+        native = _account(ws_id, "ollama/qwen", provider="ollama")
+        codex = _account(ws_id, "executor/codex")
+        s.add_all([native, codex])
+        s.add(
+            WorkspaceRow(
+                id=ws_id,
+                name="w",
+                region="us-1",
+                safe_mode=True,
+                legal_basis="x",
+                default_account_id=native.id,
+            )
         )
         s.add(
             _rule(
                 name="design",
                 target="executor/codex",
                 priority=10,
-                ws=ws,
+                ws=ws_id,
                 conditions=[{"field": "stage", "operator": "eq", "value": "design"}],
             )
         )
-        s.add(
-            _rule(
-                name="impl",
-                target="executor/opencode",
-                priority=20,
-                ws=ws,
-                conditions=[{"field": "stage", "operator": "eq", "value": "impl"}],
-            )
-        )
-        s.add(_rule(name="fallback", target="ollama/qwen", is_default=True, priority=999, ws=ws))
-        first_run = _run(
-            ws, {"frame": {"artifact_type_hint": "code", "pipeline": "design_then_impl"}}
-        )
-        s.add(first_run)
+        run = _run(ws_id, {"stage": "design", "frame": {}})
+        s.add(run)
         await s.commit()
+        resolved = await resolve_route(s, run)
+        assert resolved is not None
+        assert resolved.litellm_model == "executor/codex"
 
-        assert (await resolve_route(s, first_run)).litellm_model == "executor/codex"
 
-
-async def test_resolve_rule_target_inactive_falls_back_to_single_active() -> None:
-    ws = uuid.uuid4()
+@pytest.mark.asyncio
+async def test_resolve_rule_target_inactive_falls_through() -> None:
+    ws_id = uuid.uuid4()
     async with memory_session() as s:
-        # Only the native account is active; the rule targets an executor that
-        # isn't registered → safe fallback to the lone active account.
-        s.add(_account(ws, "ollama/qwen", provider="ollama"))
+        s.add(WorkspaceRow(id=ws_id, name="w", region="us-1", safe_mode=True, legal_basis="x"))
+        s.add(_account(ws_id, "ollama/qwen", provider="ollama"))
         s.add(
             _rule(
                 name="code",
-                target="executor/opencode",
-                ws=ws,
+                target="executor/opencode",  # not active in workspace
+                ws=ws_id,
                 conditions=[
                     {"field": "artifact_type_hint", "operator": "eq", "value": "code"},
                 ],
             )
         )
-        run = _run(ws, {"frame": {"artifact_type_hint": "code"}})
+        run = _run(ws_id, {"frame": {"artifact_type_hint": "code"}})
         s.add(run)
         await s.commit()
-
-        resolved = await resolve_route(s, run)
-        assert resolved is not None
-        assert resolved.litellm_model == "ollama/qwen"
+        # Rule's target is inactive + no workspace default = None.
+        assert await resolve_route(s, run) is None

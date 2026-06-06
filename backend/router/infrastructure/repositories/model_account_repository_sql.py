@@ -18,7 +18,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.router.accounts.models import ModelAccount
-from backend.router.dispatch.strategies import EXECUTOR_PROVIDER
+from backend.router.accounts.predicates import EXECUTOR_PROVIDER
 
 
 class SqlAlchemyModelAccountRepository:

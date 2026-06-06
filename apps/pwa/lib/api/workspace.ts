@@ -4,15 +4,26 @@
  *  fallback-only behavior (the email-as-workspace-name placeholder that the
  *  /impeccable audit's Lift 13 flagged as confusing for new users).
  *
+ *  Lift E2 — `default_account_id` is the workspace-wide fallback the dispatch
+ *  resolver routes to when no RunRoutingRule matches a caller. Settings →
+ *  Models renders the picker for it; clearing the value (null) means "no
+ *  fallback — surface NoMatchingRouteError to the founder". BSVibe NEVER
+ *  auto-stamps it (founder policy `bsvibe-no-implicit-routing`).
+ *
  *  Distinct from `lib/api/workspaces.ts` (plural — membership lookup across
  *  workspaces) and `lib/api/account.ts` (the billing-account axis). */
 
 import { apiFetch } from "./client";
 
-/** The active workspace's basic facts. */
+/** The active workspace's basic facts + dispatch-resolver fallback pointer. */
 export interface WorkspaceInfo {
   id: string;
   name: string;
+  audit_retention_days?: number | null;
+  /** Lift E2 — workspace-default ModelAccount.id for the dispatch resolver
+   *  fallback. `null` = the founder has not picked one yet (resolver
+   *  hard-fails on unmatched rules). */
+  default_account_id?: string | null;
 }
 
 /** GET — load the active workspace. */
@@ -25,5 +36,17 @@ export function renameWorkspace(name: string): Promise<WorkspaceInfo> {
   return apiFetch<WorkspaceInfo>("/api/v1/workspace", {
     method: "PATCH",
     body: JSON.stringify({ name }),
+  });
+}
+
+/** PATCH — set (or clear with `null`) the workspace-default ModelAccount the
+ *  dispatch resolver falls back to. The backend validates the target is an
+ *  active account in this workspace; clearing returns the workspace to "no
+ *  fallback" so unrouted callers surface a NoMatchingRouteError instead of
+ *  silently picking a model. */
+export function setWorkspaceDefaultAccount(accountId: string | null): Promise<WorkspaceInfo> {
+  return apiFetch<WorkspaceInfo>("/api/v1/workspace", {
+    method: "PATCH",
+    body: JSON.stringify({ default_account_id: accountId }),
   });
 }

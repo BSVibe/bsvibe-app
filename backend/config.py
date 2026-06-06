@@ -113,21 +113,6 @@ class Settings(BaseSettings):
     # 32-byte AES-256-GCM key, base64-url-encoded. Generate with:
     # `python -c "import os,base64; print(base64.urlsafe_b64encode(os.urandom(32)).decode())"`.
     gateway_kms_key_b64: str = ""
-    # Default 2-tier classifier thresholds (used by LocalVsCloudClassifier
-    # when no override is supplied).
-    gateway_local_score_max: int = 40
-    gateway_cloud_score_min: int = 60
-    # Lift E1 — gate for the new
-    # :class:`backend.dispatch.resolver.ModelAccountResolver` path. When
-    # ``True``, callers that have been migrated (today: the frame stage
-    # in :mod:`backend.workflow.application.runtime.agent_runtime`) try
-    # the new caller_id × workspace_id → adapter chain FIRST and only
-    # fall back to the legacy classifier-based dispatcher on
-    # :class:`~backend.dispatch.resolver.NoMatchingRouteError`. ``False``
-    # (the default during E1) keeps every call site on the legacy path
-    # so the new code can ship behind a flag. Lift E2 deletes both the
-    # flag and the legacy path.
-    dispatch_use_new_resolver: bool = False
 
     # Knowledge settings (backend.knowledge) — vault FS root + region.
     # Per-workspace vault lives at ``<knowledge_vault_root>/<region>/<workspace_id>/``.

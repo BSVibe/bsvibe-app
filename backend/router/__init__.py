@@ -1,47 +1,28 @@
-"""Router context — unified module (Lift A facade + Lift B gateway/accounts merge).
+"""Router context — unified module.
 
-Contract (Lift N-Coverage pattern #8):
-
-* **Owns** model accounts, budget policy, request classification, and the
-  LLM dispatch path — i.e. every decision that turns a ``LlmRequest`` into
-  a routed ``LlmResult``.
-* **Facade**: ``backend.router.facade.Router`` Protocol with a single
-  ``invoke(request: LlmRequest) -> LlmResult`` method (v8 §5.1).
-* **Not exposed**: dispatch internals, classifier scoring tables, budget
-  ledger rows, and per-provider LLM wire formats are private — callers
-  depend on the ``Router`` facade only.
-
-Lift A introduced the public facade Protocol (``Router``) plus the
-``LlmRequest`` / ``LlmResult`` / ``LlmRoutingHints`` dataclasses — the surface
-callers will depend on once the dispatch path is rewired.
-
-Lift B renamed the existing ``backend.gateway`` package to ``backend.router``
-and folded the previously-hoisted ``backend.accounts`` back in as
-``backend.router.accounts``. The pre-existing public API of those packages
-is preserved verbatim — no caller behavior changes in this lift; subsequent
-lifts (E…N) switch call sites to the Router Protocol.
+Owns model accounts, budget policy, the LiteLLM wrapper, and the LLM
+dispatch error surface. After Lift E2 the classifier / tier vocabulary
+is gone — routing flows through :mod:`backend.dispatch` (resolver +
+adapter) per founder policy ``bsvibe-no-implicit-routing``.
 
 Public surface (union):
 
-- :mod:`backend.router.facade` — Router Protocol + LLM I/O dataclasses (Lift A).
-- :mod:`backend.router.accounts` — ``ModelAccount`` entity + CRUD (lifted from
-  the former top-level ``backend.accounts``).
-- :mod:`backend.router.budget`     — ``BudgetPolicyService`` + tracker.
-- :mod:`backend.router.classifier` — static + 2-tier (local vs cloud).
-- :mod:`backend.router.dispatch`   — ``GatewayDispatcher`` + request/result types.
+- :mod:`backend.router.facade` — Router Protocol + LLM I/O dataclasses.
+- :mod:`backend.router.accounts` — ``ModelAccount`` entity + CRUD.
+- :mod:`backend.router.budget` — ``BudgetPolicyService`` + tracker.
+- :mod:`backend.router.dispatch` — dispatch error types.
 - :mod:`backend.router.llm_client` — folded ``bsvibe-llm`` wrapper.
+
+The infrastructure / domain repositories and the routing run-routing
+internals (engine + DB rows) are **private** — callers depend on the
+Protocol surface re-exported here and never reach into the SQL adapter
+or the rule-evaluation table directly.
 """
 
 from __future__ import annotations
 
-from backend.router import budget, classifier
-from backend.router.dispatch import (
-    DispatchError,
-    DispatchRequest,
-    DispatchResult,
-    GatewayDispatcher,
-    ModelAccountNotFound,
-)
+from backend.router import budget
+from backend.router.dispatch import DispatchError, ModelAccountNotFound
 from backend.router.facade import (
     LlmRequest,
     LlmResult,
@@ -52,9 +33,6 @@ from backend.router.llm_client import LlmClient, LlmResponse
 
 __all__ = [
     "DispatchError",
-    "DispatchRequest",
-    "DispatchResult",
-    "GatewayDispatcher",
     "LlmClient",
     "LlmRequest",
     "LlmResponse",
@@ -63,5 +41,4 @@ __all__ = [
     "ModelAccountNotFound",
     "Router",
     "budget",
-    "classifier",
 ]

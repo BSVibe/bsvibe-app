@@ -36,6 +36,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from backend.config import Settings, get_settings
+from backend.dispatch.caller_registry import CALLER_KNOWLEDGE_INGEST
 from backend.identity.workspaces_db import ProductRow, WorkspaceRow
 from backend.knowledge.facade import (
     CanonRetrievalResult,
@@ -54,14 +55,8 @@ from backend.storage.product_workspace import (
     ProductWorkspaceError,
     product_workspace_path,
 )
-from backend.workflow.application.runtime.account_resolution import (
-    _list_active_workspace_accounts,
-    _single_native_account,
-)
-from backend.workflow.application.runtime.dispatcher import (
-    _GatewayCompileLlm,
-    build_gateway_dispatcher,
-)
+from backend.workflow.application.runtime.account_resolution import _resolve_via_caller
+from backend.workflow.application.runtime.dispatcher import _ResolverCompileLlm
 from backend.workflow.infrastructure.delivery.git_ops import GitError, GitOps
 
 logger = structlog.get_logger(__name__)
@@ -175,16 +170,16 @@ def build_bootstrap_knowledge(
 ) -> Knowledge | None:
     """Build the workspace's :class:`Knowledge` facade for the bootstrap path.
 
-    Same single-active-account resolution policy as the settle path
-    (``_single_native_account`` → use it; zero / ambiguous → ``None`` so the
-    bootstrap pipeline soft-fails with ``failed:ingest`` rather than
-    guessing a model). Returns ``None`` when no LLM is wireable — the
-    runner translates that into a status row.
+    Routes through the resolver for caller_id ``knowledge.ingest``
+    (same path the settle extractor takes). Returns ``None`` (soft-fail)
+    when the resolver finds no match — the bootstrap pipeline marks the
+    run ``failed:ingest`` rather than guessing a model.
 
     The returned facade hangs an ``ingest_callable`` over
     :class:`IngestCompiler.compile_batch` with a per-session
-    :class:`_GatewayCompileLlm` (the same plumbing the settle extractor
-    factory uses, so a workspace's LLM swap propagates here automatically).
+    :class:`_ResolverCompileLlm` over the resolver (the same plumbing the
+    settle extractor factory uses, so a workspace's LLM swap propagates
+    here automatically).
     The settle / retrieve callables are stubs (the bootstrap doesn't drive
     them) — the facade is intentionally narrow for this caller.
     """
@@ -251,22 +246,20 @@ def _build_bootstrap_knowledge_inner(
         region: str,
         artifacts: list[dict[str, object]],
     ) -> tuple[int, int]:
-        accounts = await _list_active_workspace_accounts(session, workspace_id)
-        account = _single_native_account(accounts)
-        if account is None:
+        resolved = await _resolve_via_caller(
+            session,
+            caller_id=CALLER_KNOWLEDGE_INGEST,
+            workspace_id=workspace_id,
+            settings=settings,
+        )
+        if resolved is None:
             logger.info(
                 "bootstrap_ingest_account_unresolved",
                 workspace_id=str(workspace_id),
-                active_count=len(accounts),
+                caller_id=CALLER_KNOWLEDGE_INGEST,
             )
             return (0, 0)
-        dispatcher = build_gateway_dispatcher(session, settings)
-        llm = _GatewayCompileLlm(
-            dispatcher=dispatcher,
-            workspace_id=workspace_id,
-            account_id=account.account_id,
-            model_account_id=account.id,
-        )
+        llm = _ResolverCompileLlm(adapter=resolved.adapter)
         factory = KnowledgeFactory(
             region=region,
             workspace_id=str(workspace_id),

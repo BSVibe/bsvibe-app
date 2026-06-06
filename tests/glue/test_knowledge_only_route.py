@@ -107,7 +107,7 @@ def _patch_scripted_llm(monkeypatch: pytest.MonkeyPatch, script: _ScriptedComple
     # Lift §17.2a: build_gateway_dispatcher moved to
     # backend.workflow.application.runtime.dispatcher; patch the binding at
     # its new home where the lookup happens.
-    from backend.workflow.application.runtime import dispatcher as runtime_dispatcher
+    from backend.dispatch import adapter as runtime_dispatcher
 
     monkeypatch.setattr(runtime_dispatcher, "LlmClient", lambda: scripted_client)
 
@@ -120,9 +120,15 @@ async def _seed_active_account(
     provider: str = "ollama",
     label: str = "default",
 ) -> None:
+    """Seed an active ModelAccount and set it as the workspace default so
+    the Lift E2 resolver routes to it without an explicit rule."""
+    from sqlalchemy import select  # noqa: PLC0415
+
+    from backend.identity.workspaces_db import WorkspaceRow  # noqa: PLC0415
+
     async with sf() as s:
         svc = ModelAccountService(s, cipher=runtime.CredentialCipher(runtime._key_from_settings()))
-        await svc.create(
+        out = await svc.create(
             workspace_id=workspace_id,
             account_id=account_id,
             payload=ModelAccountCreate(
@@ -134,6 +140,20 @@ async def _seed_active_account(
                 extra_params=({"executor_type": "claude_code"} if provider == "executor" else {}),
             ),
         )
+        ws = (
+            await s.execute(select(WorkspaceRow).where(WorkspaceRow.id == workspace_id))
+        ).scalar_one_or_none()
+        if ws is None:
+            ws = WorkspaceRow(
+                id=workspace_id,
+                name="test-ws",
+                region="us-1",
+                safe_mode=True,
+                legal_basis="contract",
+            )
+            s.add(ws)
+            await s.flush()
+        ws.default_account_id = out.id
         await s.commit()
 
 

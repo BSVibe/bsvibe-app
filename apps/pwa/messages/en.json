@@ -474,6 +474,16 @@
         "done": "Done. I’ve copied it",
         "credentialsLabel": "New worker install token"
       },
+      "default": {
+        "sectionLabel": "Default model for this workspace",
+        "sectionHeading": "Default model for this workspace",
+        "lede": "When no routing rule matches a caller, the dispatch resolver routes here. Leave it as “None” to surface a missing-route error to me instead of silently picking a model.",
+        "pickerLabel": "Default model",
+        "none": "None — surface missing-route error",
+        "loading": "Loading your default model…",
+        "loadError": "Couldn’t load your default model right now. Try again in a moment.",
+        "noActiveAccounts": "No active model accounts yet. Add one above first."
+      },
       "routing": {
         "sectionLabel": "Routing",
         "sectionHeading": "Routing",

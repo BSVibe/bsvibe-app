@@ -45,7 +45,7 @@ import pytest
         ("backend.workflow.application.runtime", "build_agent_execution_deps"),
         ("backend.workflow.application.runtime", "build_worker_runtime"),
         ("backend.workflow.application.runtime", "run_workers"),
-        ("backend.workflow.application.runtime.dispatcher", "build_gateway_dispatcher"),
+        ("backend.workflow.application.runtime.dispatcher", "_ResolverCompileLlm"),
         (
             "backend.workflow.application.runtime.account_resolution",
             "resolve_workspace_model_account",
@@ -93,7 +93,6 @@ def test_runtime_module_exposes_symbol(module_name: str, symbol: str) -> None:
         "build_agent_execution_deps",
         "build_worker_runtime",
         "run_workers",
-        "build_gateway_dispatcher",
         "build_settle_entity_extractor_factory",
         "build_note_embed_hook",
         "build_delivery_adapter",

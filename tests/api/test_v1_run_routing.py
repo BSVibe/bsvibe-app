@@ -51,9 +51,11 @@ async def test_create_list_delete_run_rule(client) -> None:
     assert r.status_code == 200
     assert r.json() == []
 
-    # Create a stage→executor rule.
+    # Create a caller_id-keyed rule (Lift E2 — caller_id required for
+    # non-default rules).
     body = {
         "name": "impl-stage",
+        "caller_id": "workflow.agent_loop.act",
         "priority": 10,
         "target": "executor/opencode",
         "conditions": [{"field": "stage", "operator": "eq", "value": "impl"}],
@@ -62,6 +64,7 @@ async def test_create_list_delete_run_rule(client) -> None:
     assert r.status_code == 201, r.text
     created = r.json()
     assert created["name"] == "impl-stage"
+    assert created["caller_id"] == "workflow.agent_loop.act"
     assert created["target"] == "executor/opencode"
     assert created["conditions"] == [
         {"field": "stage", "operator": "eq", "value": "impl", "negate": False}
@@ -89,6 +92,7 @@ async def test_duplicate_name_conflicts(client) -> None:
 async def test_rejects_unknown_condition_field(client) -> None:
     body = {
         "name": "bad-field",
+        "caller_id": "workflow.frame",
         "priority": 0,
         "target": "t",
         "conditions": [{"field": "nonexistent", "operator": "eq", "value": "x"}],
@@ -100,12 +104,51 @@ async def test_rejects_unknown_condition_field(client) -> None:
 async def test_rejects_unknown_operator(client) -> None:
     body = {
         "name": "bad-op",
+        "caller_id": "workflow.frame",
         "priority": 0,
         "target": "t",
         "conditions": [{"field": "stage", "operator": "matches", "value": "x"}],
     }
     r = await client.post("/api/v1/run-routing", json=body)
     assert r.status_code == 422
+
+
+async def test_rejects_non_default_rule_without_caller_id(client) -> None:
+    """Lift E2 — non-default rules MUST declare a caller_id."""
+    body = {
+        "name": "no-caller",
+        "priority": 0,
+        "target": "t",
+        "conditions": [{"field": "stage", "operator": "eq", "value": "impl"}],
+    }
+    r = await client.post("/api/v1/run-routing", json=body)
+    assert r.status_code == 422
+
+
+async def test_rejects_unknown_caller_id(client) -> None:
+    """Lift E2 — caller_id must match the registry or skill.<name>."""
+    body = {
+        "name": "bad-caller",
+        "caller_id": "not.a.real.caller",
+        "priority": 0,
+        "target": "t",
+        "conditions": [],
+    }
+    r = await client.post("/api/v1/run-routing", json=body)
+    assert r.status_code == 422
+
+
+async def test_accepts_skill_caller_id(client) -> None:
+    """Lift E2 — skill.<name> caller_ids are permissively accepted at write time."""
+    body = {
+        "name": "skill-rule",
+        "caller_id": "skill.my-custom-skill",
+        "priority": 0,
+        "target": "ollama/qwen",
+        "conditions": [],
+    }
+    r = await client.post("/api/v1/run-routing", json=body)
+    assert r.status_code == 201, r.text
 
 
 async def test_delete_unknown_rule_404(client) -> None:

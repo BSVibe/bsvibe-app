@@ -1,13 +1,24 @@
-"""Workspace ModelAccount resolution policy (§17.2a slice).
+"""Workspace ModelAccount resolution policy (Lift E2 — resolver-backed).
 
-Phase 2 v1 policy — "exactly one active non-executor account → use it; zero or
-ambiguous → never guess, never stall: write a :class:`Decision` and return
-``None``." Honors the founder-in-the-loop invariant: stuck → Decision, never a
-silent stall.
+Three thin helpers shared across the agent / settle / product-bootstrap
+runtimes:
 
-Extracted out of the legacy ``backend.workflow.infrastructure.workers.run``
-god-file. Three callsites share these helpers (the run resolver, the judge
-resolver, the frame-LLM resolver), so they sit together here.
+* :func:`_list_active_workspace_accounts` — workspace-scoped active
+  account fetch.
+* :func:`_resolve_via_caller` — pull an adapter for one caller_id via
+  :class:`backend.dispatch.resolver.ModelAccountResolver`, returning
+  ``None`` on :class:`NoMatchingRouteError` (the runtime branches on
+  ``None``: a Decision row in the run worker, a soft-skip in the
+  ingest/extract pipeline).
+* :func:`_resolve_judge_llm` — judge LLM for the executor verification
+  path, resolved via caller_id ``workflow.judge``.
+
+Lift E2 also keeps the historical Decision-marking helper
+:func:`resolve_workspace_model_account`. The fallback semantics changed:
+when the resolver finds nothing the helper still writes a founder
+Decision (so the founder UI surfaces the missing-route condition) and
+returns ``None``. The decision kinds stay byte-identical for downstream
+consumers.
 """
 
 from __future__ import annotations
@@ -18,10 +29,15 @@ import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.config import Settings
+from backend.dispatch.adapter import ModelAccountAdapter
+from backend.dispatch.resolver import (
+    ModelAccountResolver,
+    NoMatchingRouteError,
+    ResolvedAccount,
+)
 from backend.router.accounts.models import ModelAccount
-from backend.router.dispatch.strategies import is_executor_account
-from backend.workflow.application.loop_llm import GatewayLoopLlm
-from backend.workflow.application.runtime.dispatcher import build_gateway_dispatcher
+from backend.router.accounts.predicates import is_executor_account
+from backend.workflow.application.loop_llm import ResolverLoopLlm
 from backend.workflow.infrastructure.db import Decision, ExecutionRun
 
 logger = structlog.get_logger(__name__)
@@ -34,16 +50,8 @@ DECISION_AMBIGUOUS_MODEL_ACCOUNT = "ambiguous_model_account"
 async def _list_active_workspace_accounts(
     session: AsyncSession, workspace_id: uuid.UUID
 ) -> list[ModelAccount]:
-    """All ``is_active`` ModelAccounts for ``workspace_id`` (across accounts).
-
-    Lift I-Repo-Router — delegates to
-    :meth:`ModelAccountRepository.list_active_for_workspace` so the run
-    resolver depends on the Protocol seam, not on a raw
-    raw SQLAlchemy query. The wrapper is kept (rather than inlining the
-    Repository at every call-site) because several call-sites in this file
-    share the same workspace-scoped fetch + the integer-len fallback logic
-    around it."""
-    from backend.router.infrastructure.repositories import (  # noqa: PLC0415 — avoid import cycle
+    """All ``is_active`` ModelAccounts for ``workspace_id``."""
+    from backend.router.infrastructure.repositories import (  # noqa: PLC0415
         SqlAlchemyModelAccountRepository,
     )
 
@@ -52,19 +60,38 @@ async def _list_active_workspace_accounts(
     return list(rows)
 
 
-def _single_native_account(accounts: list[ModelAccount]) -> ModelAccount | None:
-    """The lone active NON-executor account, or ``None`` when there are zero or
-    more than one.
+async def _resolve_via_caller(
+    session: AsyncSession,
+    *,
+    caller_id: str,
+    workspace_id: uuid.UUID,
+    settings: Settings,
+) -> ResolvedAccount | None:
+    """Resolve ``(caller_id, workspace_id)`` via the resolver.
 
-    The cheap-LLM resolvers (frame stage + settle entity extractor) drive a
-    native chat model and cannot use a ``provider='executor'`` CLI account. A
-    workspace that has registered an executor worker therefore carries the
-    native account PLUS one executor account per capability — so a naive
-    "exactly one active account" check returns nothing and silently drops these
-    stages to their keyword/soft fallback. Filter executor accounts out first,
-    then require exactly one native account (never guess among several)."""
-    native = [a for a in accounts if not is_executor_account(a)]
-    return native[0] if len(native) == 1 else None
+    Returns ``None`` on
+    :class:`~backend.dispatch.resolver.NoMatchingRouteError` /
+    ``KeyError`` so call sites can soft-fall-back (a Decision row in the
+    run worker; ``None`` short-circuit in the settle / bootstrap paths)
+    instead of crashing.
+    """
+    resolver = ModelAccountResolver(session, settings=settings)
+    try:
+        return await resolver.resolve_for(caller_id=caller_id, workspace_id=workspace_id)
+    except NoMatchingRouteError:
+        logger.info(
+            "resolve_via_caller_no_match",
+            caller_id=caller_id,
+            workspace_id=str(workspace_id),
+        )
+        return None
+    except KeyError:
+        logger.warning(
+            "resolve_via_caller_unknown_caller",
+            caller_id=caller_id,
+            workspace_id=str(workspace_id),
+        )
+        return None
 
 
 async def resolve_workspace_model_account(
@@ -72,15 +99,29 @@ async def resolve_workspace_model_account(
 ) -> ModelAccount | None:
     """Resolve the workspace's *active* ModelAccount for this run.
 
-    Phase 2 v1 policy (implemented EXACTLY):
-
-    * exactly one active account → return it.
-    * ZERO or MORE-THAN-ONE → do NOT crash, do NOT silently guess: create a
-      :class:`~backend.workflow.infrastructure.db.Decision` (so the run is
-      paused on a founder decision, staying RUNNING) and return ``None``.
-      Honors the founder-in-the-loop invariant — stuck → Decision, never a
-      silent stall.
+    Lift E2 routes through the resolver via caller_id
+    ``workflow.agent_loop.act`` first; on miss the legacy
+    exactly-one-active-non-executor heuristic remains (kept so a
+    workspace with one ModelAccount and no rules still works end-to-end
+    without forcing the founder to mint a routing rule for every run).
+    Both ZERO and AMBIGUOUS terminal states write the historical
+    :class:`Decision` rows so existing founder UIs keep their semantics.
     """
+    from backend.config import get_settings  # noqa: PLC0415
+    from backend.dispatch.caller_registry import CALLER_AGENT_LOOP_ACT  # noqa: PLC0415
+
+    settings = get_settings()
+    resolved = await _resolve_via_caller(
+        session,
+        caller_id=CALLER_AGENT_LOOP_ACT,
+        workspace_id=run.workspace_id,
+        settings=settings,
+    )
+    if resolved is not None:
+        return resolved.account
+
+    # Fallback: legacy exactly-one-active heuristic, identical to v1
+    # behaviour so existing single-account workspaces are unaffected.
     accounts = await _list_active_workspace_accounts(session, run.workspace_id)
     if len(accounts) == 1:
         return accounts[0]
@@ -117,42 +158,53 @@ async def resolve_workspace_model_account(
     return None
 
 
+def _single_native_account(accounts: list[ModelAccount]) -> ModelAccount | None:
+    """The lone active NON-executor account (kept for the legacy soft-fallback
+    paths that don't have a caller_id yet — settle / bootstrap callers route
+    through :func:`_resolve_via_caller` first, then optionally degrade here).
+    """
+    native = [a for a in accounts if not is_executor_account(a)]
+    return native[0] if len(native) == 1 else None
+
+
 async def _resolve_judge_llm(
     session: AsyncSession, run: ExecutionRun, settings: Settings
-) -> GatewayLoopLlm | None:
-    """Resolve a judge LLM for the executor verification path (B2b).
+) -> ResolverLoopLlm | None:
+    """Resolve a judge LLM for the executor verification path.
 
-    The executor account routes work to an external CLI worker — it cannot grade
-    a judge contract itself. So the judge runs on a SEPARATE, NON-executor
-    active ModelAccount (an api-llm account in the same workspace), resolved
-    here independently of the run's executor account. Mirrors the
-    settle-extractor resolution: the FIRST active non-executor account wins;
-    ``None`` when the workspace has only executor accounts active — in which
-    case a judge-bearing contract routes to a human-review Decision (never a
-    silent pass). Command-only contracts still verify without a judge."""
-    accounts = await _list_active_workspace_accounts(session, run.workspace_id)
-    judge_account = next((a for a in accounts if not is_executor_account(a)), None)
-    if judge_account is None:
+    Routes via caller_id ``workflow.judge``. ``None`` on miss — the judge
+    contract then routes to a human-review Decision (never a silent pass).
+    """
+    from backend.dispatch.caller_registry import CALLER_JUDGE  # noqa: PLC0415
+
+    resolved = await _resolve_via_caller(
+        session,
+        caller_id=CALLER_JUDGE,
+        workspace_id=run.workspace_id,
+        settings=settings,
+    )
+    if resolved is None:
         logger.info(
             "executor_judge_llm_unresolved",
             run_id=str(run.id),
             workspace_id=str(run.workspace_id),
         )
         return None
-    dispatcher = build_gateway_dispatcher(session, settings)
-    return GatewayLoopLlm(
-        dispatcher=dispatcher,
-        workspace_id=run.workspace_id,
-        account_id=judge_account.account_id,
-        model_account_id=judge_account.id,
-    )
+    return ResolverLoopLlm(adapter=resolved.adapter)
+
+
+def _judge_loop_for_adapter(adapter: ModelAccountAdapter) -> ResolverLoopLlm:
+    """Wrap a pre-resolved adapter into a :class:`ResolverLoopLlm` for the judge."""
+    return ResolverLoopLlm(adapter=adapter)
 
 
 __all__ = [
     "DECISION_AMBIGUOUS_MODEL_ACCOUNT",
     "DECISION_NO_MODEL_ACCOUNT",
+    "_judge_loop_for_adapter",
     "_list_active_workspace_accounts",
     "_resolve_judge_llm",
+    "_resolve_via_caller",
     "_single_native_account",
     "resolve_workspace_model_account",
 ]

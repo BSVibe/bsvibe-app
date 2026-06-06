@@ -27,11 +27,10 @@ DEFAULT_ACCOUNT_LABEL = "default"
 # Providers whose models run on the operator's host — they don't authenticate
 # with a real key, so a NULL ``api_key_encrypted`` is allowed and resolves to
 # the empty string (litellm forwards it harmlessly). Every other provider
-# requires a populated key; NULL there is a bug, not a no-op.
-LOCAL_INFERENCE_PROVIDERS = frozenset({"ollama", "lmstudio", "llama_cpp", "vllm"})
-# Back-compat private alias (the public name is the source of truth; the run
-# routing tier default imports it to identify the "local" account class).
-_LOCAL_INFERENCE_PROVIDERS = LOCAL_INFERENCE_PROVIDERS
+# requires a populated key; NULL there is a bug, not a no-op. This is a
+# pure NULL-key tolerance list — NOT a tier verdict (Lift E2 removed the
+# tier vocabulary; the provider field is only a label).
+_NULL_KEY_TOLERANT_PROVIDERS = frozenset({"ollama", "lmstudio", "llama_cpp", "vllm"})
 
 
 class ModelAccountService:
@@ -125,16 +124,13 @@ class ModelAccountService:
     def reveal_api_key(self, row: ModelAccount) -> str:
         """Decrypt — only the dispatch path should call this.
 
-        Executor accounts (Lift 5a) carry no api key (the column is NULL); the
-        gateway never resolves to an executor account so reaching here for one
-        is a bug. Local-inference providers (Ollama / LM Studio / llama.cpp /
-        vLLM) are reached as regular ``provider`` rows BUT their api_key is
-        meaningless (the LLM runs on the operator's host) — accept NULL there
-        and return an empty credential string. Everything else: NULL is a bug,
-        raise rather than silently dispatch with an empty key.
+        Host-local providers (Ollama / LM Studio / llama.cpp / vLLM) carry
+        no api key (the LLM runs on the operator's host); accept NULL and
+        return an empty credential string. Every other provider: NULL is
+        a bug, raise rather than silently dispatch with an empty key.
         """
         if row.api_key_encrypted is None:
-            if row.provider in _LOCAL_INFERENCE_PROVIDERS:
+            if row.provider in _NULL_KEY_TOLERANT_PROVIDERS:
                 return ""
             raise ValueError(
                 f"ModelAccount {row.id} has no api key to reveal (provider={row.provider!r})"

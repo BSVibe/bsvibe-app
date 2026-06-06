@@ -18,7 +18,7 @@ deliverable emit in :mod:`backend.workflow.domain.emit_deliverable`.
 
 The loop depends on ONE LLM seam — the :class:`LoopLlm` Protocol — so
 the caller can inject the production gateway adapter
-(:class:`~backend.workflow.application.loop_llm.GatewayLoopLlm`) or a deterministic
+(:class:`~backend.workflow.application.loop_llm.ResolverLoopLlm`) or a deterministic
 test stub. (Per the ``bsvibe-llm-wrapper-not-raw-litellm`` rule: one
 Protocol, never a Union of concretes.)
 """

@@ -207,15 +207,14 @@ def _verified_script() -> _ScriptedCompletion:
 
 
 def _patch_scripted_llm(monkeypatch: pytest.MonkeyPatch, script: _ScriptedCompletion) -> None:
-    """Make ``build_gateway_dispatcher``'s ``LlmClient()`` use the scripted
-    completion, leaving the rest of the real deps graph untouched."""
+    """Make the resolver's :class:`LiteLLMAdapter` use the scripted
+    completion. After Lift E2 the adapter is constructed inside
+    :func:`backend.dispatch.adapter.adapter_for`; the ``LlmClient()``
+    default kwarg there is what we patch."""
     scripted_client = LlmClient(completion_fn=script)
-    # Lift §17.2a: build_gateway_dispatcher moved to
-    # backend.workflow.application.runtime.dispatcher; patch the binding at
-    # its new home where the lookup happens.
-    from backend.workflow.application.runtime import dispatcher as runtime_dispatcher
+    from backend.dispatch import adapter as dispatch_adapter
 
-    monkeypatch.setattr(runtime_dispatcher, "LlmClient", lambda: scripted_client)
+    monkeypatch.setattr(dispatch_adapter, "LlmClient", lambda: scripted_client)
 
 
 @pytest_asyncio.fixture
@@ -252,7 +251,15 @@ async def _seed_active_account(
     workspace_id: uuid.UUID,
     account_id: uuid.UUID,
     label: str = "default",
+    set_as_default: bool = True,
 ) -> uuid.UUID:
+    """Seed an active ModelAccount + (by default) set it as the workspace
+    fallback so the Lift E2 resolver routes to it without an explicit rule.
+    """
+    from sqlalchemy import select  # noqa: PLC0415
+
+    from backend.identity.workspaces_db import WorkspaceRow  # noqa: PLC0415
+
     async with sf() as s:
         svc = ModelAccountService(s, cipher=runtime.CredentialCipher(runtime._key_from_settings()))
         out = await svc.create(
@@ -266,6 +273,21 @@ async def _seed_active_account(
                 data_jurisdiction="us",
             ),
         )
+        if set_as_default:
+            ws = (
+                await s.execute(select(WorkspaceRow).where(WorkspaceRow.id == workspace_id))
+            ).scalar_one_or_none()
+            if ws is None:
+                ws = WorkspaceRow(
+                    id=workspace_id,
+                    name="test-ws",
+                    region="us-1",
+                    safe_mode=True,
+                    legal_basis="contract",
+                )
+                s.add(ws)
+                await s.flush()
+            ws.default_account_id = out.id
         await s.commit()
         return out.id
 
@@ -379,7 +401,7 @@ async def test_zero_active_accounts_creates_decision_and_run_stays_running(
         assert (await s.execute(select(DeliveryEventRow))).first() is None
 
 
-async def test_two_active_same_class_accounts_resolve_via_d4_no_decision(
+async def test_two_active_accounts_workspace_default_picks_winner(
     client: httpx.AsyncClient,
     sf: async_sessionmaker[AsyncSession],
     workspace_id: uuid.UUID,
@@ -388,26 +410,26 @@ async def test_two_active_same_class_accounts_resolve_via_d4_no_decision(
     kms_key: None,
     tmp_path: Path,
 ) -> None:
-    """D4 delta — TWO active same-class accounts no longer STALL.
-
-    Pre-D4 this raised an ``ambiguous_model_account`` :class:`Decision` (a stall
-    on 2+). D4 makes :func:`resolve_route` pick deterministically within the
-    class (highest ``routing_priority``, tiebroken by ``created_at`` then ``id``)
-    — a SPECIFIC account, never an ambiguous Decision."""
+    """Lift E2 — two active accounts resolve via the workspace default
+    (the founder-set fallback). The classifier-driven tier_default +
+    multi_account "exactly one of class" auto-pick is gone; routing is
+    100% explicit.
+    """
+    from backend.identity.workspaces_db import WorkspaceRow  # noqa: PLC0415
     from backend.router.routing.run_routing.engine import resolve_route  # noqa: PLC0415
-    from backend.router.routing.run_routing.multi_account import (
-        ROUTING_PRIORITY_KEY,  # noqa: PLC0415
-    )
 
-    # Two active local (ollama) accounts; "b" carries the higher priority.
-    await _seed_active_account(sf, workspace_id=workspace_id, account_id=account_id, label="a")
-    await _seed_active_account(sf, workspace_id=workspace_id, account_id=uuid.uuid4(), label="b")
+    # Seed account "a" first (without making it default), then "b" — the
+    # _seed_active_account helper stamps the latest as the workspace default.
+    a_id = await _seed_active_account(
+        sf, workspace_id=workspace_id, account_id=account_id, label="a", set_as_default=False
+    )
+    b_id = await _seed_active_account(
+        sf, workspace_id=workspace_id, account_id=uuid.uuid4(), label="b"
+    )
     resp = await client.post("/api/v1/messages", json={"text": "two accounts run"})
     assert resp.status_code == 202
     assert await IntakeWorker(session_factory=sf).drain_once() == 1
 
-    # Claim the Request into an ExecutionRun (the resolution input) without
-    # driving the loop — D4's contract is at resolution, not execution.
     deps = runtime.build_agent_execution_deps(
         settings=get_settings(), sandbox_manager=NoopSandboxManager()
     )
@@ -416,20 +438,18 @@ async def test_two_active_same_class_accounts_resolve_via_d4_no_decision(
     assert await agent.claim_once() == 1
 
     async with sf() as s:
-        # Give "b" an explicit higher routing priority so the winner is pinned.
-        accounts = list((await s.execute(select(ModelAccount))).scalars().all())
-        for acct in accounts:
-            if acct.label == "b":
-                acct.extra_params = {ROUTING_PRIORITY_KEY: 5}
-        await s.commit()
-
+        # Default is "b" (last seed stamped it).
+        ws = (
+            await s.execute(select(WorkspaceRow).where(WorkspaceRow.id == workspace_id))
+        ).scalar_one()
+        assert ws.default_account_id == b_id
         run = (await s.execute(select(ExecutionRun))).scalar_one()
         resolved = await resolve_route(s, run)
         await s.commit()
 
-        # A specific account resolved — no stall, no ambiguous Decision.
         assert resolved is not None
         assert resolved.label == "b"
+        assert resolved.id != a_id
         assert (await s.execute(select(Decision))).first() is None
 
 
@@ -618,7 +638,6 @@ async def test_settle_entity_extractor_factory_extracts_entities(
 
 
 def _bare_account(provider: str) -> Any:
-    from backend.router.accounts.models import ModelAccount
 
     return ModelAccount(
         id=uuid.uuid4(),
@@ -666,14 +685,20 @@ async def test_settle_entity_extractor_factory_none_when_no_account(
     assert await factory(region="us-1", workspace_id=workspace_id) is None
 
 
-async def test_settle_entity_extractor_factory_none_when_ambiguous(
+async def test_settle_entity_extractor_factory_none_when_no_default_or_rule(
     sf: async_sessionmaker[AsyncSession],
     workspace_id: uuid.UUID,
     kms_key: None,
 ) -> None:
-    """More than one active account → None (no silent guess for derived knowledge)."""
-    await _seed_active_account(sf, workspace_id=workspace_id, account_id=uuid.uuid4(), label="a")
-    await _seed_active_account(sf, workspace_id=workspace_id, account_id=uuid.uuid4(), label="b")
+    """Lift E2 — accounts exist but no workspace default + no caller rule
+    → ``None`` (the resolver raises NoMatchingRouteError and the factory
+    surfaces it as a soft-skip; never silently guesses)."""
+    await _seed_active_account(
+        sf, workspace_id=workspace_id, account_id=uuid.uuid4(), label="a", set_as_default=False
+    )
+    await _seed_active_account(
+        sf, workspace_id=workspace_id, account_id=uuid.uuid4(), label="b", set_as_default=False
+    )
     factory = runtime.build_settle_entity_extractor_factory(
         session_factory=sf, settings=get_settings()
     )
