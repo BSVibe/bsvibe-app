@@ -65,6 +65,13 @@ class CompileResult:
     # cost of the whole batch compile. Populated by ``compile_batch``.
     seed_count: int = 0
     elapsed_ms: int = 0
+    # Lift E8 Bug 2 — count of chunks that raised inside ``compile_batch``'s
+    # per-chunk try/except. Surfaces the silent-fail signal callers (today the
+    # product-bootstrap runtime) need to decide ``failed`` vs ``complete``
+    # when ``notes_created + notes_updated == 0``: a real no-op repo has
+    # ``chunk_failures == 0`` while an executor-without-redis bootstrap shows
+    # ``chunk_failures == chunk_count``.
+    chunk_failures: int = 0
 
 
 @dataclass(frozen=True)

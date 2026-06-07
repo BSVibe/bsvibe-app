@@ -49,11 +49,23 @@ class BootstrapOutcome:
 
     ``artifacts_count`` is the count handed to ``Knowledge.ingest`` (NOT
     the count IngestCompiler then chunked). ``ingest_result`` carries the
-    Knowledge-facade-returned proposals/notes counts for the audit log.
+    Knowledge-facade-returned proposals/notes counts for the audit log,
+    plus (Lift E8 Bug 2) the compile-time failure signal the runtime uses
+    to decide ``failed:ingest`` vs ``complete``.
     """
 
     artifacts_count: int
     ingest_result: IngestResult
+
+    @property
+    def notes_written(self) -> int:
+        """How many notes were created OR updated by the ingest. Bug 2 signal."""
+        return self.ingest_result.notes_created + self.ingest_result.notes_updated
+
+    @property
+    def chunk_failures(self) -> int:
+        """How many compile chunks raised. Bug 2 signal."""
+        return self.ingest_result.chunk_failures
 
 
 async def run_repo_bootstrap(

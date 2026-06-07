@@ -28,6 +28,7 @@ from __future__ import annotations
 import asyncio
 import uuid
 from contextlib import suppress
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -161,12 +162,30 @@ class SqlAlchemyBootstrapRepository:
             )
 
 
+@dataclass(frozen=True, slots=True)
+class _IngestCallResult:
+    """Internal tuple returned by ``_ingest_callable`` — Lift E8 Bug 2.
+
+    Adds the compile-time failure signal alongside the created/updated
+    counts so the bootstrap runtime can mark ``failed:ingest`` when
+    EVERY chunk dropped (notes_created + notes_updated == 0 AND
+    chunk_failures > 0). Without this, a workspace whose executor adapter
+    couldn't reach Redis silently flipped to ``complete`` with zero notes
+    written.
+    """
+
+    notes_created: int
+    notes_updated: int
+    chunk_failures: int
+
+
 def build_bootstrap_knowledge(
     *,
     session: AsyncSession,
     workspace_id: uuid.UUID,
     region: str,
     settings: Settings | None = None,
+    redis_client: Any = None,
 ) -> Knowledge | None:
     """Build the workspace's :class:`Knowledge` facade for the bootstrap path.
 
@@ -182,6 +201,14 @@ def build_bootstrap_knowledge(
     here automatically).
     The settle / retrieve callables are stubs (the bootstrap doesn't drive
     them) — the facade is intentionally narrow for this caller.
+
+    ``redis_client`` (Lift E8 Bug 1) is threaded into the resolver so an
+    executor adapter has a transport for the worker stream XADD. Without
+    it, an executor account returned by the resolver raises
+    :class:`~backend.dispatch.adapter.ExecutorAdapterUnavailable` on its
+    first chat call, the IngestCompiler chunk loop catches and counts the
+    failure, and every chunk drops silently — exactly the qazasa123
+    dogfood symptom that surfaced this lift.
     """
     settings = settings or get_settings()
     return _build_bootstrap_knowledge_inner(
@@ -189,6 +216,7 @@ def build_bootstrap_knowledge(
         workspace_id=workspace_id,
         region=region,
         settings=settings,
+        redis_client=redis_client,
     )
 
 
@@ -198,6 +226,7 @@ def _build_bootstrap_knowledge_inner(
     workspace_id: uuid.UUID,
     region: str,
     settings: Settings,
+    redis_client: Any = None,
 ) -> Knowledge | None:
     # Lazy imports keep the runtime layer's top-level cheap and avoid the
     # heavy Knowledge subsystem at module load.
@@ -245,12 +274,18 @@ def _build_bootstrap_knowledge_inner(
         workspace_id: uuid.UUID,
         region: str,
         artifacts: list[dict[str, object]],
-    ) -> tuple[int, int]:
+    ) -> _IngestCallResult:
+        # Lift E8 Bug 1 — thread ``redis_client`` so an executor adapter
+        # the resolver returns has a transport for the worker stream XADD.
+        # Without it, ExecutorAdapter.chat raises ExecutorAdapterUnavailable
+        # on the first chunk and the IngestCompiler silently drops every
+        # chunk into the chunk_failures counter.
         resolved = await _resolve_via_caller(
             session,
             caller_id=CALLER_KNOWLEDGE_INGEST,
             workspace_id=workspace_id,
             settings=settings,
+            redis=redis_client,
         )
         if resolved is None:
             logger.info(
@@ -258,7 +293,7 @@ def _build_bootstrap_knowledge_inner(
                 workspace_id=str(workspace_id),
                 caller_id=CALLER_KNOWLEDGE_INGEST,
             )
-            return (0, 0)
+            return _IngestCallResult(notes_created=0, notes_updated=0, chunk_failures=0)
         llm = _ResolverCompileLlm(adapter=resolved.adapter)
         factory = KnowledgeFactory(
             region=region,
@@ -276,7 +311,16 @@ def _build_bootstrap_knowledge_inner(
             for a in artifacts
         ]
         result = await compiler.compile_batch(items, seed_source="product-bootstrap")
-        return (result.notes_created, result.notes_updated)
+        return _IngestCallResult(
+            notes_created=result.notes_created,
+            notes_updated=result.notes_updated,
+            # ``CompileResult`` carries ``chunk_failures`` through the per-batch
+            # analytics record (:class:`IngestBatchRecord`). The current
+            # ``CompileResult`` dataclass does not expose it as a field, so we
+            # mirror what the compiler logged via ``getattr`` with a 0 default
+            # for forward compatibility — the field is being added in this lift.
+            chunk_failures=int(getattr(result, "chunk_failures", 0) or 0),
+        )
 
     async def _settle_stub() -> int:
         return 0
@@ -289,15 +333,20 @@ def _build_bootstrap_knowledge_inner(
     # CanonRetriever construction wiring the bootstrap doesn't need).
     class _BootstrapKnowledge:
         async def ingest(self, request: IngestRequest) -> IngestResult:
-            created, updated = await _ingest_callable(
+            call_result = await _ingest_callable(
                 workspace_id=request.workspace_id,
                 region=request.region,
                 artifacts=list(request.artifacts),
             )
             return IngestResult(
                 proposals_count=0,
-                notes_count=created + updated,
+                notes_count=call_result.notes_created + call_result.notes_updated,
                 run_id=uuid.uuid5(uuid.NAMESPACE_URL, f"bootstrap:{request.workspace_id}"),
+                # Lift E8 Bug 2 — surface the failure signal so the runtime
+                # layer can mark ``failed:ingest`` when every chunk dropped.
+                notes_created=call_result.notes_created,
+                notes_updated=call_result.notes_updated,
+                chunk_failures=call_result.chunk_failures,
             )
 
         async def retrieve_canon(self, query: Any) -> CanonRetrievalResult:
@@ -320,6 +369,7 @@ async def run_product_bootstrap_job(
     settings: Settings | None = None,
     repo: BootstrapRepository | None = None,
     git_ops: GitOps | None = None,
+    redis_client: Any = None,
 ) -> None:
     """End-to-end: clone → walk → ingest → mark status.
 
@@ -399,6 +449,7 @@ async def run_product_bootstrap_job(
             workspace_id=workspace_id,
             region=region,
             settings=settings,
+            redis_client=redis_client,
         )
         if knowledge is None:
             await repo.mark_status(
@@ -469,6 +520,39 @@ async def run_product_bootstrap_job(
             )
             return
 
+    # Lift E8 Bug 2 — decide ``failed:ingest`` vs ``complete`` based on
+    # whether ingest actually produced ANY notes. Before this lift the
+    # runtime cheerfully marked ``complete`` whenever the orchestrator
+    # returned an outcome — even when EVERY chunk had dropped to a
+    # transport error (the qazasa123 dogfood showed artifacts_count=1377
+    # / notes_count=0 / status=complete, leaving the founder UI saying
+    # "all good" with an empty knowledge graph).
+    notes_written = outcome.notes_written
+    chunk_failures = outcome.chunk_failures
+    if notes_written == 0 and chunk_failures > 0:
+        # Every chunk dropped — the ingest never succeeded for ANY artifact.
+        chunk_total = chunk_failures  # all chunks that ran failed
+        error_msg = (
+            f"ingest failed: {chunk_failures}/{chunk_total} chunks raised — "
+            f"0 notes written from {outcome.artifacts_count} artifacts"
+        )
+        await repo.mark_status(
+            product_id,
+            status=STATUS_FAILED_INGEST,
+            run_id=run_id,
+            error=error_msg,
+        )
+        logger.warning(
+            _AUDIT_FAILED,
+            product_id=str(product_id),
+            workspace_id=str(workspace_id),
+            run_id=str(run_id),
+            reason="ingest_zero_notes",
+            artifacts_count=outcome.artifacts_count,
+            chunk_failures=chunk_failures,
+        )
+        return
+
     await repo.mark_status(
         product_id,
         status=STATUS_COMPLETE,
@@ -482,6 +566,8 @@ async def run_product_bootstrap_job(
         run_id=str(run_id),
         artifacts_count=outcome.artifacts_count,
         notes_count=outcome.ingest_result.notes_count,
+        notes_written=notes_written,
+        chunk_failures=chunk_failures,
     )
 
 
@@ -492,6 +578,7 @@ def schedule_product_bootstrap(
     repo_url: str,
     session_factory: async_sessionmaker[AsyncSession],
     settings: Settings | None = None,
+    redis_client: Any = None,
 ) -> asyncio.Task[None]:
     """Fire-and-forget the bootstrap job; return the task for tests.
 
@@ -499,19 +586,56 @@ def schedule_product_bootstrap(
     event loop's weak-ref scheduler can't drop it. Errors inside the job
     are caught by :func:`run_product_bootstrap_job` itself — the task's
     own ``done`` callback only logs unhandled crashes for visibility.
+
+    ``redis_client`` (Lift E8 Bug 1) is threaded into the job so executor
+    accounts the resolver returns have a transport for the worker stream
+    XADD. When the caller does not supply one, the function lazily builds
+    a Redis client from ``settings.redis_url`` (mirrors the pattern in
+    :func:`backend.workflow.application.runtime.lifecycle.run_workers`) —
+    so the production bootstrap path picks up Redis automatically.
+    Failure to construct the client is non-fatal: the bootstrap still
+    runs, and a LiteLLM-backed account works without Redis.
     """
+    resolved_settings = settings or get_settings()
+    if redis_client is None:
+        redis_client = _build_redis_client(resolved_settings)
     task = asyncio.create_task(
         run_product_bootstrap_job(
             product_id=product_id,
             workspace_id=workspace_id,
             repo_url=repo_url,
             session_factory=session_factory,
-            settings=settings,
+            settings=resolved_settings,
+            redis_client=redis_client,
         )
     )
     _running.add(task)
     task.add_done_callback(_on_task_done)
     return task
+
+
+def _build_redis_client(settings: Settings) -> Any:
+    """Build a ``redis.asyncio`` client from ``settings.redis_url``.
+
+    Returns ``None`` when no URL is configured OR construction fails — both
+    are non-fatal: the bootstrap still proceeds, and a LiteLLM-backed
+    account never touches Redis. An executor-backed account will surface
+    its own ``ExecutorAdapterUnavailable`` later, which the runtime now
+    propagates to ``failed:ingest`` via Bug 2's chunk-failure gate.
+    """
+    if not settings.redis_url:
+        return None
+    try:
+        import redis.asyncio as redis_aio  # noqa: PLC0415 — only on bootstrap path
+
+        return redis_aio.from_url(settings.redis_url, decode_responses=True)
+    except Exception:  # noqa: BLE001 — Redis is optional for the LiteLLM path
+        logger.warning(
+            "bootstrap_redis_connect_failed",
+            redis_url=settings.redis_url,
+            exc_info=True,
+        )
+        return None
 
 
 def _on_task_done(task: asyncio.Task[None]) -> None:

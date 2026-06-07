@@ -464,6 +464,10 @@ async def test_poll_and_execute_raises_when_no_token_and_no_bearer(monkeypatch: 
         raise worker_credentials.CredentialsNotFound("no host credentials")
 
     monkeypatch.setattr(worker_main, "load_host_credentials", _no_creds)
+    # Also block the saved-token-file fallback path so the test exercises the
+    # "truly no credentials anywhere" branch — the autouse conftest fixture
+    # already redirects BSVIBE_HOME, but be explicit here.
+    monkeypatch.setattr(worker_main, "load_worker_token", lambda: None, raising=False)
 
     settings = _settings(token="", access_token="")
     state: dict[str, Any] = {"poll_queue": []}
@@ -472,6 +476,60 @@ async def test_poll_and_execute_raises_when_no_token_and_no_bearer(monkeypatch: 
             await worker_main.poll_and_execute(
                 settings=settings, client=client, redis=None, stop=asyncio.Event()
             )
+
+
+async def test_poll_and_execute_loads_saved_worker_token_when_settings_token_empty(
+    monkeypatch: Any,
+) -> None:
+    """Lift E8 Bug 4: when ``settings.token`` is empty BUT a previous
+    ``bsvibe-worker register`` saved a token to ``~/.bsvibe/worker.token``,
+    ``poll_and_execute`` MUST pick the saved token up and skip auto-registration.
+
+    Pre-fix behaviour: the worker re-registered on every ``bsvibe-worker run``
+    because ``settings.token`` only sources ``BSVIBE_WORKER_TOKEN`` (env), never
+    the file ``register`` writes. That created duplicate workers + ModelAccount
+    rows in the founder's workspace on each run.
+    """
+    import asyncio
+
+    from backend.executors.worker import credentials as worker_credentials
+
+    # Pre-seed the saved-token file at the autouse-redirected default path so
+    # ``load_worker_token()`` (no path=) returns it.
+    worker_credentials.save_worker_token("SAVED-WORKER-TOKEN")
+
+    state: dict[str, Any] = {"poll_queue": []}
+    captured: dict[str, Any] = {}
+    stop = asyncio.Event()
+
+    async def _one_tick(**kwargs: Any) -> set[Any]:
+        captured["headers"] = kwargs["headers"]
+        stop.set()
+        return set()
+
+    monkeypatch.setattr(worker_main, "run_once", _one_tick)
+    monkeypatch.setattr(worker_main, "detect_capabilities", lambda: ["claude_code"])
+
+    # If the worker INCORRECTLY re-registers we want a loud failure, not a
+    # silent register-then-overwrite — make register() blow up.
+    async def _explode(*_a: Any, **_kw: Any) -> str:
+        raise AssertionError(
+            "register() was called — Bug 4 regressed: the saved worker token "
+            "was not picked up before the auto-register branch."
+        )
+
+    monkeypatch.setattr(worker_main, "register", _explode)
+
+    settings = _settings(token="", access_token="")
+    async with _client(state) as client:
+        await worker_main.poll_and_execute(settings=settings, client=client, redis=None, stop=stop)
+
+    # The saved token flowed into the request headers WITHOUT a register call.
+    assert captured["headers"]["X-Worker-Token"] == "SAVED-WORKER-TOKEN"
+    assert ("POST", "/api/v1/workers/register") not in state.get("calls", [])
+    # And the settings object now carries the loaded token (so a subsequent
+    # tick inside the same process sees it directly without another file read).
+    assert settings.token == "SAVED-WORKER-TOKEN"
 
 
 # ── .env persistence ──────────────────────────────────────────────────────────
@@ -516,6 +574,55 @@ def test_persist_writes_key_that_settings_reads(tmp_path: Any, monkeypatch: Any)
     reloaded = WorkerSettings(_env_file=str(env))
 
     assert reloaded.token == "MINTED-TOKEN"
+
+
+def test_persist_worker_token_does_not_touch_real_home_path(
+    tmp_path: Any, monkeypatch: Any
+) -> None:
+    """Lift E8 Bug 3 regression: ``_persist_worker_token`` MUST write the worker
+    token file only under the test-isolated HOME (driven by the autouse fixture
+    in ``tests/executors/worker/conftest.py``), never to the real
+    ``~/.bsvibe/worker.token``.
+
+    Before E8 this test would obliterate the founder's actual worker token on
+    every CI run — the autouse conftest fixture sets ``BSVIBE_HOME`` to a tmp
+    dir so ``default_worker_token_path()`` resolves under tmp instead of HOME.
+    """
+    from pathlib import Path
+
+    from backend.executors.worker.credentials import default_worker_token_path
+
+    # Sanity check the autouse fixture is in effect — default path must resolve
+    # under tmp (because BSVIBE_HOME was set by the conftest fixture).
+    default_path = default_worker_token_path()
+    real_home_path = Path.home() / ".bsvibe" / "worker.token"
+    assert default_path != real_home_path, (
+        f"BSVIBE_HOME redirect failed — default token path still resolves to "
+        f"the real home ({real_home_path}); the conftest autouse fixture is "
+        f"not active or BSVIBE_HOME is being shadowed."
+    )
+
+    env = tmp_path / ".env"
+    monkeypatch.setattr(worker_main, "_ENV_PATH", str(env))
+
+    # Capture the mtime of the real home-dir token file (if any) so we can
+    # detect the moment it gets written by the call under test.
+    real_existed_before = real_home_path.exists()
+    real_mtime_before = real_home_path.stat().st_mtime_ns if real_existed_before else None
+
+    settings = _settings(token="", name="hot-worker", server_url="http://hot")
+    worker_main._persist_worker_token("HOTFIX-TOKEN", settings)
+
+    # The redirected default path got the token.
+    assert default_path.exists()
+    assert default_path.read_text(encoding="utf-8").strip() == "HOTFIX-TOKEN"
+
+    # The real ~/.bsvibe/worker.token was NOT touched.
+    if real_existed_before:
+        assert real_home_path.stat().st_mtime_ns == real_mtime_before
+        assert real_home_path.read_text(encoding="utf-8").strip() != "HOTFIX-TOKEN"
+    else:
+        assert not real_home_path.exists()
 
 
 # ── Full loop: error resilience + graceful stop ───────────────────────────────

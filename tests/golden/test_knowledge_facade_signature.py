@@ -119,14 +119,23 @@ def test_ingest_request_field_shape_is_pinned() -> None:
 
 def test_ingest_result_field_shape_is_pinned() -> None:
     hints = get_type_hints(IngestResult)
+    # Lift E8 Bug 2 — three new optional-default fields surface the
+    # compile-time failure signal so the product-bootstrap runtime can
+    # distinguish "every chunk dropped" from "no work to do".
     assert set(hints.keys()) == {
         "proposals_count",
         "notes_count",
         "run_id",
+        "notes_created",
+        "notes_updated",
+        "chunk_failures",
     }, f"IngestResult field set drift: {sorted(hints.keys())}"
     assert hints["proposals_count"] is int
     assert hints["notes_count"] is int
     assert hints["run_id"] is uuid.UUID
+    assert hints["notes_created"] is int
+    assert hints["notes_updated"] is int
+    assert hints["chunk_failures"] is int
 
 
 def test_canon_retrieval_query_field_shape_is_pinned() -> None:

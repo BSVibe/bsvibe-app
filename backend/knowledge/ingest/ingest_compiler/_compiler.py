@@ -245,6 +245,7 @@ class IngestCompiler:
             llm_calls=llm_calls,
             seed_count=len(items),
             elapsed_ms=elapsed_ms,
+            chunk_failures=chunk_failures,
         )
 
     async def extract_entity_names(self, text: str, *, label: str = "seed") -> list[str]:
