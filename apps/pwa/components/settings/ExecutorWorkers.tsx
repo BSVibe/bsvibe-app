@@ -171,13 +171,9 @@ function WorkerRow({
             {online ? t("online") : t("offline")}
           </span>
           {stale ? (
-            <span
-              className="worker-card__stale-marker"
-              role="status"
-              title={t("staleTitle")}
-            >
+            <output className="worker-card__stale-marker" title={t("staleTitle")}>
               {t("stale")}
-            </span>
+            </output>
           ) : null}
         </div>
         <div className="worker-card__caps" aria-label={t("capabilitiesLabel")}>
