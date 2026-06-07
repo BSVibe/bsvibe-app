@@ -72,7 +72,17 @@ class ListRecentInput(BaseModel):
     subdir: str = Field(
         "garden",
         max_length=128,
-        description="Vault subdirectory to scan (e.g. 'garden', 'seeds').",
+        description=(
+            "Vault subdirectory to scan (e.g. 'garden', 'concepts/active'). "
+            "Pass an empty string to walk the entire workspace vault."
+        ),
+    )
+    recursive: bool = Field(
+        True,
+        description=(
+            "Walk the entire subtree under `subdir` (default — the "
+            "founder-friendly behavior). Pass False for a single-level view."
+        ),
     )
 
 
@@ -90,8 +100,17 @@ class ListRecentOutput(_PermissiveModel):
 
 async def _h_list_recent(args: ListRecentInput, ctx: ToolContext) -> Any:
     vault = await _vault_for_call(ctx)
-    files = await vault.read_notes(args.subdir)
-    files = files[-args.limit :] if len(files) > args.limit else files
+    files = await vault.read_notes(args.subdir, recursive=args.recursive)
+
+    # Founder UX = "show me what just happened" — sort by mtime descending,
+    # then apply limit so the freshest notes survive the cap.
+    def _mtime(p: Path) -> float:
+        try:
+            return p.stat().st_mtime
+        except OSError:
+            return 0.0
+
+    files = sorted(files, key=_mtime, reverse=True)[: args.limit]
     notes: list[NoteSummary] = []
     for f in files:
         try:
@@ -145,6 +164,13 @@ class SearchKnowledgeInput(BaseModel):
     query: str = Field(..., min_length=1, max_length=200)
     subdir: str = Field("garden", max_length=128)
     limit: int = Field(10, ge=1, le=50)
+    recursive: bool = Field(
+        True,
+        description=(
+            "Walk the entire subtree under `subdir` (default). Pass False to "
+            "restrict the substring scan to direct children only."
+        ),
+    )
 
 
 class SearchHit(_PermissiveModel):
@@ -161,7 +187,7 @@ class SearchKnowledgeOutput(_PermissiveModel):
 
 async def _h_search_knowledge(args: SearchKnowledgeInput, ctx: ToolContext) -> Any:
     vault = await _vault_for_call(ctx)
-    files = await vault.read_notes(args.subdir)
+    files = await vault.read_notes(args.subdir, recursive=args.recursive)
     needle = args.query.lower()
     hits: list[SearchHit] = []
     for f in files:
@@ -189,6 +215,13 @@ async def _h_search_knowledge(args: SearchKnowledgeInput, ctx: ToolContext) -> A
 class ListTagsInput(BaseModel):
     subdir: str = Field("garden", max_length=128)
     limit: int = Field(50, ge=1, le=500)
+    recursive: bool = Field(
+        True,
+        description=(
+            "Walk the entire subtree under `subdir` (default). Pass False to "
+            "restrict the aggregation to direct children only."
+        ),
+    )
 
 
 class TagCount(BaseModel):
@@ -204,7 +237,7 @@ class ListTagsOutput(_PermissiveModel):
 
 async def _h_list_tags(args: ListTagsInput, ctx: ToolContext) -> Any:
     vault = await _vault_for_call(ctx)
-    files = await vault.read_notes(args.subdir)
+    files = await vault.read_notes(args.subdir, recursive=args.recursive)
     counts: dict[str, int] = {}
     for f in files:
         try:
