@@ -20,6 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.connectors.auth.db import ConnectorOAuthTokenRow
 from backend.connectors.auth.providers import get_provider
+from backend.connectors.auth.sentry import SentryProvider
 from backend.connectors.auth.store import upsert_token
 from backend.connectors.db import ConnectorAccountRow
 from backend.router.accounts.crypto import CredentialCipher
@@ -59,16 +60,25 @@ async def resolve_connector_credentials(
         if _expiring_soon(token_row) and token_row.refresh_token_ciphertext:
             provider = get_provider(token_row.provider)
             if provider is not None and provider.refreshable:
-                refreshed = await provider.refresh(
-                    refresh_token=cipher.decrypt(token_row.refresh_token_ciphertext)
-                )
-                token_row = await upsert_token(
-                    session,
-                    connector_account_id=account.id,
-                    provider=token_row.provider,
-                    token=refreshed,
-                    cipher=cipher,
-                )
+                refresh_token = cipher.decrypt(token_row.refresh_token_ciphertext)
+                refreshed = None
+                if isinstance(provider, SentryProvider):
+                    # Sentry refresh is installation-scoped; the installationId
+                    # lives on the binding's external_ref (set at claim time).
+                    if account.external_ref:
+                        refreshed = await provider.refresh_installation(
+                            installation_id=account.external_ref, refresh_token=refresh_token
+                        )
+                else:
+                    refreshed = await provider.refresh(refresh_token=refresh_token)
+                if refreshed is not None:
+                    token_row = await upsert_token(
+                        session,
+                        connector_account_id=account.id,
+                        provider=token_row.provider,
+                        token=refreshed,
+                        cipher=cipher,
+                    )
         return {"token": cipher.decrypt(token_row.access_token_ciphertext)}
 
     # Legacy path — no OAuth token bound yet.
