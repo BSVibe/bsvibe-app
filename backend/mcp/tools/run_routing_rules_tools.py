@@ -1,0 +1,248 @@
+"""Run-routing rule tools — UI-parity workflow surface (Lift E7).
+
+Mirrors the REST surface at ``/api/v1/run-routing`` (see
+:mod:`backend.api.v1.run_routing`). These rules pick WHICH ModelAccount
+handles a run, keyed on the dispatch ``caller_id`` + the run's framed
+signals — distinct from the legacy model-routing rules
+(``bsvibe_routing_rules_*``) which pick the LLM model within a run via
+the litellm hook.
+
+The lift exists because the dogfood (qazasa123) surfaced that the new
+run-routing system lived behind REST only, while the legacy
+``bsvibe_routing_rules_*`` tools route through a different engine + a
+different (heuristic) ALLOWED_FIELDS whitelist that rejects
+``caller_id``. This violates [[bsvibe-mcp-ui-parity]]. We expose the
+NEW surface as a SEPARATE tool family so the legacy tools stay valid
+for the legacy model-routing rules.
+
+Handlers delegate to the same
+:class:`SqlAlchemyRunRoutingRuleRepository` the REST surface uses, and
+the input schema reuses
+:func:`backend.api.v1.run_routing._validate_caller_id` so the MCP and
+PWA paths land on one validation contract.
+
+Scopes follow the existing convention: ``mcp:read`` for list,
+``mcp:write`` for create / delete.
+"""
+
+from __future__ import annotations
+
+import uuid
+from datetime import datetime
+from typing import Any
+
+from pydantic import BaseModel, ConfigDict, Field, RootModel, field_validator, model_validator
+from sqlalchemy.exc import IntegrityError
+
+from backend.api.v1.run_routing import _validate_caller_id
+from backend.mcp.api import Tool, ToolContext, ToolError, ToolRegistry
+from backend.router.infrastructure.repositories import SqlAlchemyRunRoutingRuleRepository
+from backend.router.routing.run_routing.db import RunRoutingRuleRow
+from backend.router.routing.run_routing.engine import ALLOWED_FIELDS, VALID_OPERATORS
+
+
+class _Envelope(RootModel[Any]):
+    """Permissive output envelope — preserves the natural JSON shape."""
+
+
+def _row_to_dict(row: RunRoutingRuleRow) -> dict[str, Any]:
+    return {
+        "id": str(row.id),
+        "name": row.name,
+        "caller_id": row.caller_id,
+        "priority": row.priority,
+        "is_default": row.is_default,
+        "target": row.target,
+        "conditions": row.conditions if isinstance(row.conditions, list) else [],
+        "is_active": row.is_active,
+        "created_at": row.created_at.isoformat() if isinstance(row.created_at, datetime) else None,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Schemas (mirror /api/v1/run-routing — RunRuleCreate)
+# ---------------------------------------------------------------------------
+class ConditionPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    field: str = Field(min_length=1)
+    operator: str = "eq"
+    value: Any = None
+    negate: bool = False
+
+    @field_validator("field")
+    @classmethod
+    def _field_allowed(cls, v: str) -> str:
+        if v not in ALLOWED_FIELDS:
+            allowed = ", ".join(sorted(ALLOWED_FIELDS))
+            raise ValueError(f"unknown condition field {v!r}; allowed: {allowed}")
+        return v
+
+    @field_validator("operator")
+    @classmethod
+    def _operator_valid(cls, v: str) -> str:
+        if v not in VALID_OPERATORS:
+            raise ValueError(
+                f"unknown operator {v!r}; allowed: {', '.join(sorted(VALID_OPERATORS))}"
+            )
+        return v
+
+
+# ---------------------------------------------------------------------------
+# bsvibe_run_routing_rules_list
+# ---------------------------------------------------------------------------
+class RunRoutingRulesListInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+async def _h_list(_args: RunRoutingRulesListInput, ctx: ToolContext) -> Any:
+    repo = SqlAlchemyRunRoutingRuleRepository(ctx.session)
+    rows = await repo.list_by_workspace(workspace_id=ctx.principal.workspace_id)
+    return _Envelope([_row_to_dict(r) for r in rows])
+
+
+# ---------------------------------------------------------------------------
+# bsvibe_run_routing_rules_create
+# ---------------------------------------------------------------------------
+class RunRoutingRulesCreateInput(BaseModel):
+    """Mirror of :class:`backend.api.v1.run_routing.RunRuleCreate`."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1, max_length=255)
+    caller_id: str | None = Field(default=None, max_length=120)
+    priority: int = Field(default=0, ge=0)
+    is_default: bool = False
+    target: str = Field(min_length=1, max_length=255)
+    conditions: list[ConditionPayload] = Field(default_factory=list)
+    is_active: bool = True
+
+    @field_validator("caller_id")
+    @classmethod
+    def _caller_known(cls, v: str | None) -> str | None:
+        if v is None:
+            return v
+        return _validate_caller_id(v)
+
+    @model_validator(mode="after")
+    def _non_default_requires_caller(self) -> RunRoutingRulesCreateInput:
+        # Non-default rules must declare a caller_id (top-level column or
+        # a back-compat ``{field:'caller_id', operator:'eq'}`` condition).
+        if self.is_default:
+            return self
+        if self.caller_id:
+            return self
+        condition_callers = [
+            c
+            for c in self.conditions
+            if c.field == "caller_id" and c.operator == "eq" and isinstance(c.value, str)
+        ]
+        if not condition_callers:
+            raise ValueError(
+                "non-default run-routing rules must declare a caller_id "
+                "(either the top-level field or a {field:'caller_id', operator:'eq'} condition)"
+            )
+        return self
+
+
+async def _h_create(args: RunRoutingRulesCreateInput, ctx: ToolContext) -> Any:
+    repo = SqlAlchemyRunRoutingRuleRepository(ctx.session)
+    row = RunRoutingRuleRow(
+        id=uuid.uuid4(),
+        workspace_id=ctx.principal.workspace_id,
+        name=args.name,
+        caller_id=args.caller_id,
+        priority=args.priority,
+        is_default=args.is_default,
+        target=args.target,
+        conditions=[c.model_dump() for c in args.conditions],
+        is_active=args.is_active,
+    )
+    try:
+        await repo.add(row)
+    except IntegrityError as exc:
+        await ctx.session.rollback()
+        raise ToolError(f"a run-routing rule named {args.name!r} already exists") from exc
+    await ctx.session.commit()
+    return _Envelope(_row_to_dict(row))
+
+
+# ---------------------------------------------------------------------------
+# bsvibe_run_routing_rules_delete
+# ---------------------------------------------------------------------------
+class RunRoutingRulesDeleteInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    rule_id: uuid.UUID
+
+
+class RunRoutingRulesDeleteOutput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    deleted: bool
+    rule_id: str
+
+
+async def _h_delete(args: RunRoutingRulesDeleteInput, ctx: ToolContext) -> Any:
+    repo = SqlAlchemyRunRoutingRuleRepository(ctx.session)
+    row = await repo.get(workspace_id=ctx.principal.workspace_id, rule_id=args.rule_id)
+    if row is None:
+        raise ToolError(f"run-routing rule not found: {args.rule_id}")
+    await repo.delete(row)
+    await ctx.session.commit()
+    return RunRoutingRulesDeleteOutput(deleted=True, rule_id=str(args.rule_id))
+
+
+# ---------------------------------------------------------------------------
+# Registration
+# ---------------------------------------------------------------------------
+def register_run_routing_rules_tools(registry: ToolRegistry) -> None:
+    registry.register(
+        Tool(
+            name="bsvibe_run_routing_rules_list",
+            description=(
+                "List run-routing rules for the active workspace, priority "
+                "ascending. These rules pick which ModelAccount handles a "
+                "run (e.g. design → executor/codex, impl → executor/opencode). "
+                "Distinct from bsvibe_routing_rules_* (those are model-routing "
+                "rules for the litellm hook, a different layer)."
+            ),
+            input_schema=RunRoutingRulesListInput,
+            output_schema=_Envelope,
+            handler=_h_list,
+            required_scopes=("mcp:read",),
+        )
+    )
+    registry.register(
+        Tool(
+            name="bsvibe_run_routing_rules_create",
+            description=(
+                "Create a run-routing rule. Mirrors POST /api/v1/run-routing: "
+                "name + caller_id + priority + target ModelAccount selector + "
+                "optional conditions + optional is_default flag. Non-default "
+                "rules must declare a caller_id (validated against the caller "
+                "registry — static known callers + skill.<name> namespace). "
+                "Conditions are validated against the new engine's "
+                "ALLOWED_FIELDS (caller_id / artifact_type_hint / "
+                "path_classification / skill_match / intent_text / stage / "
+                "pipeline / product_id)."
+            ),
+            input_schema=RunRoutingRulesCreateInput,
+            output_schema=_Envelope,
+            handler=_h_create,
+            required_scopes=("mcp:write",),
+            audit_event="bsvibe.mcp.run_routing_rules_create.invoked",
+        )
+    )
+    registry.register(
+        Tool(
+            name="bsvibe_run_routing_rules_delete",
+            description="Delete a run-routing rule by id.",
+            input_schema=RunRoutingRulesDeleteInput,
+            output_schema=RunRoutingRulesDeleteOutput,
+            handler=_h_delete,
+            required_scopes=("mcp:write",),
+            audit_event="bsvibe.mcp.run_routing_rules_delete.invoked",
+        )
+    )
+
+
+__all__ = ["register_run_routing_rules_tools"]

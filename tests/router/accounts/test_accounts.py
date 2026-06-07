@@ -228,9 +228,12 @@ class TestListGetUpdateDelete:
         )
 
 
-class TestExecutorRowsHiddenFromList:
-    """Lift 5a: provider=executor rows are routable accounts but must NOT
-    appear in the api-llm Models list (the PWA shows workers separately)."""
+class TestExecutorRowsVisibleInList:
+    """Lift E7: provider=executor rows are first-class ModelAccounts after
+    E1-E5 — callers route to them like any other account, and the founder
+    needs them in the PWA's Settings → Models list to set
+    ``workspace.default_account_id``. The pre-E7 hide-from-list behaviour
+    was dropped (the design doc covers the rationale in detail)."""
 
     async def _seed_executor(self, service, workspace_id, account_id, *, label):
         # Executor rows are inserted via the low-level repo (no api_key to
@@ -247,28 +250,27 @@ class TestExecutorRowsHiddenFromList:
             extra_params={"worker_id": str(uuid.uuid4()), "executor_type": "claude_code"},
         )
 
-    async def test_list_excludes_executor_rows(self, service, workspace_id, account_id):
+    async def test_list_includes_executor_rows(self, service, workspace_id, account_id):
         await service.create(
             workspace_id=workspace_id, account_id=account_id, payload=_make_create()
         )
         await self._seed_executor(service, workspace_id, account_id, label="laptop-1")
         rows = await service.list_(workspace_id=workspace_id, account_id=account_id)
-        # Only the real LLM account is returned; the executor row is hidden.
-        assert len(rows) == 1
-        assert rows[0].provider == "openai"
+        providers = {r.provider for r in rows}
+        assert providers == {"openai", "executor"}
 
-    async def test_list_only_active_also_excludes_executor_rows(
+    async def test_list_only_active_also_includes_executor_rows(
         self, service, workspace_id, account_id
     ):
         await self._seed_executor(service, workspace_id, account_id, label="laptop-1")
         rows = await service.list_(
             workspace_id=workspace_id, account_id=account_id, only_active=True
         )
-        assert rows == []
+        assert len(rows) == 1
+        assert rows[0].provider == "executor"
 
     async def test_get_executor_row_still_resolves(self, service, workspace_id, account_id):
-        # Lift 5b resolution fetches an executor account by id directly — get
-        # must keep working even though it's hidden from the list.
+        # Lift 5b resolution fetches an executor account by id directly.
         row = await self._seed_executor(service, workspace_id, account_id, label="laptop-1")
         fetched = await service.get(
             workspace_id=workspace_id,
