@@ -18,8 +18,8 @@ from typing import Any
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.config import get_settings
-from backend.connectors.auth import store
-from backend.connectors.auth.app_credentials import get_app_credentials
+from backend.connectors.auth import bootstrap, store
+from backend.connectors.auth.app_credentials import get_app_credentials, upsert_app_credentials
 from backend.connectors.auth.github_manifest import build_manifest, manifest_post_url
 from backend.connectors.auth.providers import get_provider
 from backend.router.accounts.crypto import CredentialCipher, _key_from_settings
@@ -40,6 +40,45 @@ _VERIFIER_BYTES = 48
 
 class UnknownProviderError(Exception):
     """Raised when an OAuth connect is requested for an unregistered provider."""
+
+
+async def set_app_credentials(
+    session: AsyncSession,
+    *,
+    provider: str,
+    client_id: str,
+    client_secret: str,
+    cipher: CredentialCipher,
+) -> None:
+    """Operator: store a vanilla provider's OAuth App creds + register it.
+
+    For slack / notion / discord — the operator creates the OAuth app in that
+    provider's console (no programmatic creation API) and pastes the client_id
+    / client_secret here. Stored instance-global + encrypted in
+    ``connector_oauth_app_credentials`` (app_id / private-key are github-only,
+    left empty), then the provider is registered so workspaces can connect.
+    github uses the manifest flow, not this.
+    """
+    if provider not in bootstrap.VANILLA_DB_PROVIDERS:
+        if provider == "github":
+            raise ValueError("github uses the App Manifest flow, not paste-creds")
+        raise ValueError(f"provider does not support paste-creds setup: {provider}")
+    await upsert_app_credentials(
+        session,
+        provider=provider,
+        app_id="",
+        app_slug=None,
+        client_id=client_id,
+        client_secret=client_secret,
+        private_key_pem="",
+        webhook_secret=None,
+        html_url=None,
+        cipher=cipher,
+    )
+    await session.commit()
+    creds = await get_app_credentials(session, provider=provider, cipher=cipher)
+    if creds is not None:
+        bootstrap.register_provider_from_credentials(provider, creds)
 
 
 def _issuer() -> str:
@@ -135,4 +174,5 @@ __all__ = [
     "callback_redirect_uri",
     "compute_github_app_status",
     "manifest_redirect_uri",
+    "set_app_credentials",
 ]

@@ -13,7 +13,8 @@ import { useTranslations } from "next-intl";
 import { useEffect, useRef, useState } from "react";
 import AddConnector from "./AddConnector";
 import ConnectorRow from "./ConnectorRow";
-import { isOAuthConnector } from "./connector-fields";
+import { ProviderAppConfig } from "./ProviderAppConfig";
+import { isOAuthConnector, isPasteCredsConnector } from "./connector-fields";
 
 /**
  * Settings → Connectors, framed as a CATALOG (design: stitch/
@@ -58,6 +59,9 @@ export default function Connectors() {
   // Connector whose OAuth start failed (app not configured by the operator yet)
   // → a calm "not available" note instead of a broken redirect.
   const [oauthUnavailable, setOauthUnavailable] = useState<ConnectorName | null>(null);
+  // Provider whose operator paste-creds form is open (slack/notion/discord not
+  // configured yet) → renders ProviderAppConfig inline on its card.
+  const [configuring, setConfiguring] = useState<ConnectorName | null>(null);
   const dialogRef = useRef<HTMLDialogElement>(null);
 
   // "Connect" on a card. OAuth connectors (github/slack/notion/discord) need no
@@ -74,9 +78,21 @@ export default function Connectors() {
       const { authorize_url } = await startConnectorOAuth(name);
       window.location.assign(authorize_url);
     } catch {
-      // Provider not configured (no App creds) → calm note, no crash.
-      setOauthUnavailable(name);
+      // Provider not configured. Paste-creds providers (slack/notion/discord)
+      // → open the operator config form; github → calm note (manifest flow).
+      if (isPasteCredsConnector(name)) {
+        setConfiguring(name);
+      } else {
+        setOauthUnavailable(name);
+      }
     }
+  }
+
+  // After the operator saves a provider's App creds, proceed to the connect.
+  async function connectAfterConfig(name: ConnectorName) {
+    setConfiguring(null);
+    const { authorize_url } = await startConnectorOAuth(name);
+    window.location.assign(authorize_url);
   }
 
   // Drive the native <dialog> from the `connecting` state: showModal() gives us
@@ -173,20 +189,28 @@ export default function Connectors() {
                 <span className="connector-card__name">{t(`labels.${name}`)}</span>
                 <p className="connector-card__detail">{t(`blurbs.${name}`)}</p>
               </div>
-              <div className="connector-card__actions">
-                {oauthUnavailable === name ? (
-                  <span className="connector-card__note" aria-live="polite">
-                    {t("oauthUnavailable")}
-                  </span>
-                ) : null}
-                <button
-                  type="button"
-                  className="connector-card__connect"
-                  onClick={() => handleConnect(name)}
-                >
-                  {t("connect")}
-                </button>
-              </div>
+              {configuring === name ? (
+                <ProviderAppConfig
+                  provider={name}
+                  onSaved={() => connectAfterConfig(name)}
+                  onCancel={() => setConfiguring(null)}
+                />
+              ) : (
+                <div className="connector-card__actions">
+                  {oauthUnavailable === name ? (
+                    <span className="connector-card__note" aria-live="polite">
+                      {t("oauthUnavailable")}
+                    </span>
+                  ) : null}
+                  <button
+                    type="button"
+                    className="connector-card__connect"
+                    onClick={() => handleConnect(name)}
+                  >
+                    {t("connect")}
+                  </button>
+                </div>
+              )}
             </li>
           ))}
           {ASPIRATIONAL_KEYS.map((key) => (

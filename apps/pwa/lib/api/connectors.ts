@@ -87,6 +87,21 @@ export function startConnectorOAuth(provider: string): Promise<ConnectorOAuthSta
   );
 }
 
+/** Operator: configure a vanilla OAuth provider's App credentials (slack/notion/
+ *  discord) by pasting the client_id/secret created in that provider's console.
+ *  Stored encrypted server-side; the provider registers so workspaces can then
+ *  1-click connect. github uses the manifest flow, not this. */
+export function setProviderAppCredentials(
+  provider: string,
+  clientId: string,
+  clientSecret: string,
+): Promise<{ provider: string; configured: boolean }> {
+  return apiFetch(`/api/v1/connectors/oauth/${encodeURIComponent(provider)}/app-credentials`, {
+    method: "POST",
+    body: JSON.stringify({ client_id: clientId, client_secret: clientSecret }),
+  });
+}
+
 /** Response of `GET /api/v1/connectors/oauth/github/app-status`. */
 export interface GithubAppStatus {
   configured: boolean;

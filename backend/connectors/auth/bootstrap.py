@@ -34,9 +34,18 @@ from backend.connectors.auth.providers import OAuthProvider, register_provider
 from backend.connectors.auth.slack import build_slack_provider
 from backend.router.accounts.crypto import CredentialCipher
 
-# Providers loadable from the DB app-credentials table (manifest flow). github
-# only for now; the others are env-only (no GitHub-App-style manifest).
-_DB_PROVIDERS = ("github",)
+# Vanilla OAuth2 providers configurable via DB app-credentials (operator pastes
+# client_id/secret — they have no GitHub-App-style manifest). Builders take
+# client_id/client_secret only (app_id/private-key are github-specific).
+VANILLA_DB_PROVIDERS: dict[str, Callable[..., OAuthProvider]] = {
+    "slack": build_slack_provider,
+    "notion": build_notion_provider,
+    "discord": build_discord_provider,
+}
+
+# Providers loadable from the DB app-credentials table at startup: github (via
+# the manifest flow) + the vanilla providers (via operator-set creds).
+_DB_PROVIDERS = ("github", *VANILLA_DB_PROVIDERS)
 
 # Vanilla OAuth2 connectors registered from env: (name, builder, id_attr,
 # secret_attr). Each builder takes client_id/client_secret and returns a
@@ -71,15 +80,27 @@ def register_configured_providers(settings: Settings | None = None) -> list[str]
     return registered
 
 
-def _register_github_from_credentials(creds: AppCredentials) -> None:
-    register_provider(
-        GitHubAppProvider(
-            client_id=creds.client_id,
-            client_secret=creds.client_secret,
-            app_id=creds.app_id,
-            private_key_pem=creds.private_key_pem,
+def register_provider_from_credentials(provider: str, creds: AppCredentials) -> None:
+    """Build + register the provider for ``provider`` from its DB credentials.
+
+    github → GitHubAppProvider (app_id + private key); slack / notion / discord
+    → their vanilla builder (client_id/secret only).
+    """
+    if provider == "github":
+        register_provider(
+            GitHubAppProvider(
+                client_id=creds.client_id,
+                client_secret=creds.client_secret,
+                app_id=creds.app_id,
+                private_key_pem=creds.private_key_pem,
+            )
         )
-    )
+    elif provider in VANILLA_DB_PROVIDERS:
+        register_provider(
+            VANILLA_DB_PROVIDERS[provider](
+                client_id=creds.client_id, client_secret=creds.client_secret
+            )
+        )
 
 
 async def load_app_credential_providers(
@@ -88,17 +109,21 @@ async def load_app_credential_providers(
     """Register providers from the DB app-credentials table; return their names.
 
     Overrides any env-registered provider of the same name (DB = the App the
-    founder set up via the manifest flow).
+    operator set up via the manifest flow / paste-creds form).
     """
     registered: list[str] = []
     for provider in _DB_PROVIDERS:
         creds = await get_app_credentials(session, provider=provider, cipher=cipher)
         if creds is None:
             continue
-        if provider == "github":
-            _register_github_from_credentials(creds)
+        register_provider_from_credentials(provider, creds)
         registered.append(provider)
     return registered
 
 
-__all__ = ["load_app_credential_providers", "register_configured_providers"]
+__all__ = [
+    "VANILLA_DB_PROVIDERS",
+    "load_app_credential_providers",
+    "register_configured_providers",
+    "register_provider_from_credentials",
+]

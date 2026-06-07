@@ -670,7 +670,16 @@
           }
         }
       },
-      "oauthUnavailable": "Not available yet — ask your admin to set up this connection."
+      "oauthUnavailable": "Not available yet — ask your admin to set up this connection.",
+      "providerConfig": {
+        "hint": "Paste the OAuth app credentials you created in {provider}'s developer console.",
+        "clientId": "Client ID",
+        "clientSecret": "Client secret",
+        "save": "Save & Connect",
+        "saving": "Saving…",
+        "cancel": "Cancel",
+        "error": "Couldn't save — check the credentials."
+      }
     },
     "notifications": {
       "lede": "Notifications: when and where BSVibe pings you.",

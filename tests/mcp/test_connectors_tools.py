@@ -384,3 +384,52 @@ async def test_github_app_setup_url_returns_manifest(db, workspace_id, user_id, 
         out = await registry.call_tool("bsvibe_connectors_github_app_setup_url", {}, ctx)
     assert out["post_url"].startswith("https://github.com/settings/apps/new")
     assert "redirect_url" in out["manifest"]
+
+
+# ── set_oauth_app (operator paste-creds for vanilla providers) ──────────
+
+
+async def test_set_oauth_app_registers_vanilla_provider(
+    db, workspace_id, user_id, registry
+) -> None:
+    async with db() as s:
+        ctx = ToolContext(
+            principal=_principal(workspace_id=workspace_id, user_id=user_id, scopes=("mcp:write",)),
+            session=s,
+        )
+        out = await registry.call_tool(
+            "bsvibe_connectors_set_oauth_app",
+            {"provider": "slack", "client_id": "Iv1.cid", "client_secret": "sec"},
+            ctx,
+        )
+    assert out["provider"] == "slack"
+    assert out["configured"] is True
+    assert _providers_mod.get_provider("slack") is not None
+
+
+async def test_set_oauth_app_rejects_github(db, workspace_id, user_id, registry) -> None:
+    async with db() as s:
+        ctx = ToolContext(
+            principal=_principal(workspace_id=workspace_id, user_id=user_id, scopes=("mcp:write",)),
+            session=s,
+        )
+        with pytest.raises(ToolError, match="github"):
+            await registry.call_tool(
+                "bsvibe_connectors_set_oauth_app",
+                {"provider": "github", "client_id": "x", "client_secret": "y"},
+                ctx,
+            )
+
+
+async def test_set_oauth_app_denied_for_read_only(db, workspace_id, user_id, registry) -> None:
+    async with db() as s:
+        ctx = ToolContext(
+            principal=_principal(workspace_id=workspace_id, user_id=user_id, scopes=("mcp:read",)),
+            session=s,
+        )
+        with pytest.raises(ToolError):
+            await registry.call_tool(
+                "bsvibe_connectors_set_oauth_app",
+                {"provider": "slack", "client_id": "x", "client_secret": "y"},
+                ctx,
+            )
