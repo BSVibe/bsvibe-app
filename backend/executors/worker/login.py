@@ -99,6 +99,7 @@ def _register_dcr_client(*, issuer: str, redirect_uri: str, client: httpx.Client
         "grant_types": ["authorization_code", "refresh_token"],
         "response_types": ["code"],
         "token_endpoint_auth_method": "none",
+        "scope": _DCR_SCOPES,
     }
     res = client.post(f"{issuer}/api/oauth/register", json=body, timeout=30.0)
     if res.status_code >= 400:

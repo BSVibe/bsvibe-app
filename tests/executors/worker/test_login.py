@@ -29,6 +29,9 @@ def _fake_httpx_client(*, dcr_status: int = 201, token_status: int = 200) -> htt
             (request.method, request.url.path)
         )
         if request.url.path == "/api/oauth/register":
+            import json as _json
+
+            captured["dcr_body"] = _json.loads(request.content.decode("utf-8") or "{}")
             if dcr_status >= 400:
                 return httpx.Response(dcr_status, text="DCR rejected")
             return httpx.Response(
@@ -182,5 +185,40 @@ def test_perform_login_fails_when_token_exchange_rejects() -> None:
                 wait_for_callback=_wait_for_callback,
                 timeout_s=1.0,
             )
+    finally:
+        client.close()
+
+
+def test_perform_login_dcr_body_requests_full_mcp_scope_set() -> None:
+    """Regression — DCR body must include scope=mcp:read mcp:write mcp:admin.
+
+    Without it the anonymous client is registered with only DEFAULT_SCOPE
+    (``mcp:read``), and the subsequent /authorize ask for write/admin fails
+    with ``invalid_scope`` (see hotfix Lift E6).
+    """
+    captured: dict[str, str] = {}
+
+    def _wait_for_callback(port: int, timeout: float) -> dict[str, str]:  # noqa: ARG001
+        return {"code": "CODE", "state": captured["state"]}
+
+    def _open(url: str) -> bool:
+        from urllib.parse import parse_qs, urlparse
+
+        captured["state"] = parse_qs(urlparse(url).query)["state"][0]
+        return True
+
+    client = _fake_httpx_client()
+    try:
+        perform_login(
+            issuer="https://auth.test",
+            open_browser=_open,
+            httpx_client=client,
+            pick_port=lambda: 41234,
+            wait_for_callback=_wait_for_callback,
+            timeout_s=1.0,
+        )
+        body = client._captured["dcr_body"]  # type: ignore[attr-defined]
+        assert "scope" in body, "DCR body must carry the requested scope set"
+        assert body["scope"] == "mcp:read mcp:write mcp:admin"
     finally:
         client.close()
