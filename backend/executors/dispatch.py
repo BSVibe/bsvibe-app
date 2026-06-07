@@ -49,6 +49,23 @@ logger = structlog.get_logger(__name__)
 # BSGateway's ``find_available_worker`` ``INTERVAL '120 seconds'``).
 HEARTBEAT_FRESHNESS_S = 120
 
+
+def is_heartbeat_fresh(last_heartbeat: datetime | None) -> bool:
+    """Lift E13 — the same predicate :func:`find_available_worker` uses.
+
+    Exposed so the REST + MCP worker-list surfaces can surface a
+    ``heartbeat_fresh`` field without duplicating the cutoff calc. A
+    ``status="online"`` worker whose heartbeat is older than the cutoff
+    is a real diagnosis — the daemon died before clearing the column.
+    """
+    if last_heartbeat is None:
+        return False
+    # Tolerate naive timestamps (legacy SQLite rows) by stamping UTC.
+    if last_heartbeat.tzinfo is None:
+        last_heartbeat = last_heartbeat.replace(tzinfo=UTC)
+    return (datetime.now(UTC) - last_heartbeat).total_seconds() <= HEARTBEAT_FRESHNESS_S
+
+
 WORKER_STREAM_PREFIX = "tasks:worker:"
 
 _TERMINAL_STATUSES = ("done", "failed")
@@ -482,6 +499,7 @@ __all__ = [
     "dispatch_task",
     "done_channel",
     "find_available_worker",
+    "is_heartbeat_fresh",
     "mark_pending",
     "record_result",
     "stream_channel",

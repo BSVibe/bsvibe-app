@@ -25,6 +25,7 @@ from pydantic import BaseModel, ConfigDict, RootModel
 
 from backend.executors import service
 from backend.executors.db import WorkerRow
+from backend.executors.dispatch import is_heartbeat_fresh
 from backend.mcp.api import Tool, ToolContext, ToolError, ToolRegistry
 
 
@@ -42,6 +43,11 @@ def _row_to_dict(row: WorkerRow) -> dict[str, Any]:
         "status": row.status,
         "is_active": row.is_active,
         "last_heartbeat": row.last_heartbeat.isoformat() if row.last_heartbeat else None,
+        # Lift E13 — fleet-detail field: ``status="online"`` can lie when
+        # the worker process died without flipping the column. The
+        # ``find_available_worker`` heartbeat-cutoff predicate is the
+        # source of truth for "can this worker actually take work".
+        "heartbeat_fresh": is_heartbeat_fresh(row.last_heartbeat),
         "created_at": row.created_at.isoformat() if row.created_at else None,
     }
 

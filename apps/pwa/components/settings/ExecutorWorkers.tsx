@@ -151,20 +151,34 @@ function WorkerRow({
   }
 
   const online = worker.status === "online";
+  // Lift E13 — `status` can lie when the worker process died before
+  // clearing the column. Backend now ships `heartbeat_fresh` (mirrors
+  // `find_available_worker`'s cutoff). A row with `status="online"` but
+  // `heartbeat_fresh=false` is the stale-online diagnosis — flag it.
+  const stale = online && worker.heartbeat_fresh === false;
   const lastSeen = worker.last_heartbeat ? formatRelative(worker.last_heartbeat) : null;
   const createdOn = worker.created_at ? formatDate(worker.created_at) : null;
 
   return (
-    <li className="worker-card">
+    <li className="worker-card" data-stale={stale ? "true" : undefined}>
       <div className="worker-card__body">
         <div className="worker-card__head">
           <span className="worker-card__name">{worker.name}</span>
           <span
-            className={`worker-card__pill${online ? " worker-card__pill--online" : ""}`}
+            className={`worker-card__pill${online ? " worker-card__pill--online" : ""}${stale ? " worker-card__pill--stale" : ""}`}
             title={t("statusTitle")}
           >
             {online ? t("online") : t("offline")}
           </span>
+          {stale ? (
+            <span
+              className="worker-card__stale-marker"
+              role="status"
+              title={t("staleTitle")}
+            >
+              {t("stale")}
+            </span>
+          ) : null}
         </div>
         <div className="worker-card__caps" aria-label={t("capabilitiesLabel")}>
           {worker.capabilities.map((cap) => (

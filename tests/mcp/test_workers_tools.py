@@ -163,6 +163,96 @@ async def test_workers_revoke_denied_without_write_scope(
             )
 
 
+async def test_workers_list_exposes_e13_fields(db, workspace_id, user_id, registry, seeded) -> None:
+    """Lift E13 — list output carries capabilities, labels, last_heartbeat,
+    heartbeat_fresh, status, is_active, created_at — the fleet-detail shape
+    the founder UI + ``find_available_worker`` debugging needs.
+    """
+    from datetime import UTC, datetime, timedelta
+
+    from backend.executors.db import WorkerRow
+    from backend.executors.dispatch import HEARTBEAT_FRESHNESS_S
+
+    fresh_id = uuid.uuid4()
+    stale_id = uuid.uuid4()
+    silent_id = uuid.uuid4()
+    now = datetime.now(UTC)
+
+    async with db() as s:
+        # Fresh online — under the freshness cutoff.
+        s.add(
+            WorkerRow(
+                id=fresh_id,
+                workspace_id=workspace_id,
+                name="fresh",
+                labels=["mac"],
+                capabilities=["codex", "opencode"],
+                status="online",
+                is_active=True,
+                last_heartbeat=now - timedelta(seconds=5),
+                token_hash="h1",
+            )
+        )
+        # Stale online — claims online but heartbeat well past the cutoff.
+        s.add(
+            WorkerRow(
+                id=stale_id,
+                workspace_id=workspace_id,
+                name="stale",
+                labels=[],
+                capabilities=["claude_code"],
+                status="online",
+                is_active=True,
+                last_heartbeat=now - timedelta(seconds=HEARTBEAT_FRESHNESS_S + 60),
+                token_hash="h2",
+            )
+        )
+        # Never heartbeated.
+        s.add(
+            WorkerRow(
+                id=silent_id,
+                workspace_id=workspace_id,
+                name="silent",
+                labels=["new"],
+                capabilities=[],
+                status="offline",
+                is_active=True,
+                last_heartbeat=None,
+                token_hash="h3",
+            )
+        )
+        await s.commit()
+
+    async with db() as s:
+        ctx = ToolContext(
+            principal=_principal(workspace_id=workspace_id, user_id=user_id, scopes=("mcp:read",)),
+            session=s,
+        )
+        out = await registry.call_tool("bsvibe_workers_list", {}, ctx)
+
+    by_name = {w["name"]: w for w in out}
+    assert set(by_name) == {"fresh", "stale", "silent"}
+
+    fresh = by_name["fresh"]
+    assert fresh["capabilities"] == ["codex", "opencode"]
+    assert fresh["labels"] == ["mac"]
+    assert fresh["status"] == "online"
+    assert fresh["is_active"] is True
+    assert fresh["last_heartbeat"] is not None
+    assert fresh["heartbeat_fresh"] is True
+    assert fresh["created_at"]
+
+    stale = by_name["stale"]
+    # status row says online but heartbeat is stale — surfaces as False.
+    assert stale["status"] == "online"
+    assert stale["heartbeat_fresh"] is False
+    assert stale["last_heartbeat"] is not None
+
+    silent = by_name["silent"]
+    assert silent["last_heartbeat"] is None
+    assert silent["heartbeat_fresh"] is False
+
+
 async def test_workers_list_isolates_workspaces(db, registry, seeded) -> None:
     other_workspace = uuid.uuid4()
     async with db() as s:

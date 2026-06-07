@@ -61,6 +61,12 @@ EXPECTED_ROUTES: dict[str, set[tuple[str, str]]] = {
         ("DELETE", "/{product_id}"),
         # Lift A v2 — repo-bootstrap progress endpoint.
         ("GET", "/{product_id}/bootstrap"),
+        # Lift E13 — cancel + retry surface for a wedged bootstrap. Uses
+        # slug-or-id (matches the MCP tool input contract); the path is
+        # distinct from the ``{product_id}/bootstrap`` GET above so no
+        # routing collision.
+        ("POST", "/{slug_or_id}/bootstrap/cancel"),
+        ("POST", "/{slug_or_id}/bootstrap/retry"),
         ("GET", "/{product_id}/resources"),
         ("POST", "/{product_id}/resources"),
         ("DELETE", "/{product_id}/resources/{resource_id}"),
@@ -167,6 +173,9 @@ EXPECTED_SUBMODULES: dict[str, list[str]] = {
     ],
     "backend.api.v1.products": [
         "backend.api.v1.products.products_crud",
+        # Lift E13 — cancel + retry endpoints live in their own thin sub-file
+        # so products_crud stays under the D35 LOC ceiling.
+        "backend.api.v1.products.bootstrap_actions",
         "backend.api.v1.products.resources",
         "backend.api.v1.products.bindings",
         "backend.api.v1.products.files",

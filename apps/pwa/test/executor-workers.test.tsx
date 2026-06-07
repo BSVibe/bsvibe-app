@@ -47,7 +47,8 @@ const ONLINE_WORKER = {
   capabilities: ["claude_code", "codex"],
   status: "online",
   is_active: true,
-  last_heartbeat: "2026-06-06T12:00:00+00:00",
+  last_heartbeat: new Date(Date.now() - 5_000).toISOString(),
+  heartbeat_fresh: true,
   created_at: "2026-06-01T12:00:00+00:00",
 };
 
@@ -60,7 +61,23 @@ const OFFLINE_WORKER = {
   status: "offline",
   is_active: true,
   last_heartbeat: null,
+  heartbeat_fresh: false,
   created_at: "2026-06-05T12:00:00+00:00",
+};
+
+const STALE_ONLINE_WORKER = {
+  id: "33333333-3333-3333-3333-333333333333",
+  workspace_id: "ws-1",
+  name: "ghost-rig",
+  labels: ["linux"],
+  capabilities: ["claude_code"],
+  // Status row says online but heartbeat is stale — daemon died before
+  // clearing the column. The card must surface this as a stale warning.
+  status: "online",
+  is_active: true,
+  last_heartbeat: "2025-01-01T00:00:00+00:00",
+  heartbeat_fresh: false,
+  created_at: "2026-06-04T12:00:00+00:00",
 };
 
 describe("Executor workers surface", () => {
@@ -165,6 +182,33 @@ describe("Executor workers surface", () => {
     // After E5, NO toggle to reveal a legacy mint button, NO mint button at all.
     expect(screen.queryByRole("button", { name: /legacy install token/i })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /mint/i })).not.toBeInTheDocument();
+  });
+
+  it("renders capability chips per CLI a worker can drive (Lift E13)", async () => {
+    global.fetch = vi.fn(async () => jsonResponse([ONLINE_WORKER])) as unknown as typeof fetch;
+
+    render(<ExecutorWorkers />);
+
+    const list = await screen.findByRole("list", { name: /workers/i });
+    const card = within(list).getByText("studio-mini").closest("li") as HTMLElement;
+    // Capabilities surface as small chips with the canonical CLI names.
+    const chips = within(card).getAllByText(/^(claude_code|codex|opencode)$/);
+    expect(chips.length).toBe(2);
+  });
+
+  it("flags a stale-online worker with a warning marker (Lift E13)", async () => {
+    global.fetch = vi.fn(async () =>
+      jsonResponse([STALE_ONLINE_WORKER]),
+    ) as unknown as typeof fetch;
+
+    render(<ExecutorWorkers />);
+
+    const list = await screen.findByRole("list", { name: /workers/i });
+    const card = within(list).getByText("ghost-rig").closest("li") as HTMLElement;
+    // Stale-online row carries the data-stale attribute + a visible
+    // marker so the founder can spot the diagnosis at a glance.
+    expect(card.dataset.stale).toBe("true");
+    expect(within(card).getByText(/stale/i)).toBeInTheDocument();
   });
 
   it("revokes a worker after confirm → DELETE → re-read", async () => {

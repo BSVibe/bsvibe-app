@@ -465,6 +465,8 @@
         "done": "Done",
         "online": "Online",
         "offline": "Offline",
+        "stale": "Stale",
+        "staleTitle": "The worker says online, but its last heartbeat is older than the 120s freshness cutoff — the daemon may have died without clearing the status.",
         "statusTitle": "Online means the worker sent a recent heartbeat",
         "capabilitiesLabel": "Can run",
         "lastSeen": "Last seen {when}",

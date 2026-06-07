@@ -109,6 +109,11 @@ class WorkerResponse(BaseModel):
     # Lift E4 — expose heartbeat + creation timestamps so the PWA Workers tab
     # can render the GitHub-Actions-runner-style detail (last seen / added on).
     last_heartbeat: str | None = None
+    # Lift E13 — fleet-detail field. ``status="online"`` can lie when the
+    # worker process died before clearing the column; ``heartbeat_fresh``
+    # mirrors the predicate ``find_available_worker`` uses, so the founder
+    # can spot a stale-online row at a glance.
+    heartbeat_fresh: bool = False
     created_at: str | None = None
 
     @classmethod
@@ -122,6 +127,7 @@ class WorkerResponse(BaseModel):
             status=row.status,
             is_active=row.is_active,
             last_heartbeat=row.last_heartbeat.isoformat() if row.last_heartbeat else None,
+            heartbeat_fresh=dispatch.is_heartbeat_fresh(row.last_heartbeat),
             created_at=row.created_at.isoformat() if row.created_at else None,
         )
 
