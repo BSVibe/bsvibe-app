@@ -23,6 +23,7 @@ vi.mock("@/lib/api/connectors", () => ({
   startConnectorOAuth: vi.fn(async () => ({
     authorize_url: "https://github.com/login/oauth/authorize?client_id=x",
   })),
+  setProviderAppCredentials: vi.fn(async () => ({ provider: "slack", configured: true })),
 }));
 
 import { startConnectorOAuth } from "@/lib/api/connectors";
@@ -87,11 +88,14 @@ describe("OAuth 1-click connect", () => {
     expect(mockedStart).not.toHaveBeenCalled();
   });
 
-  it("unconfigured OAuth provider → calm note, no redirect, no crash", async () => {
+  it("unconfigured github (manifest provider) → calm note, no redirect, no crash", async () => {
+    // github is operator-set via the manifest flow (not paste-creds), so an
+    // unconfigured github degrades to the calm note (slack/notion/discord open
+    // the paste-creds form instead — see connectors-operator-wiring).
     mockedStart.mockRejectedValueOnce(new Error("provider not configured"));
     render(<Connectors />);
 
-    const card = await availableCard("Slack");
+    const card = await availableCard("GitHub");
     await userEvent.click(within(card).getByRole("button", { name: /^Connect$/i }));
 
     expect(await screen.findByText(/not available/i)).toBeInTheDocument();

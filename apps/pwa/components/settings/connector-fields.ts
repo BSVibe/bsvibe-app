@@ -171,6 +171,17 @@ export function isOAuthConnector(connector: ConnectorName): boolean {
   return OAUTH_CONNECTORS.has(connector);
 }
 
+/** OAuth providers the operator configures by PASTING client_id/secret (they
+ *  have no GitHub-App-style manifest auto-create). github is excluded — it uses
+ *  the manifest flow. Mirrors backend ``bootstrap.VANILLA_DB_PROVIDERS``. */
+const PASTE_CREDS_CONNECTORS = new Set<ConnectorName>(["slack", "discord", "notion"]);
+
+/** True when the operator sets this provider's App up by pasting client_id/
+ *  secret (vs github's manifest). */
+export function isPasteCredsConnector(connector: ConnectorName): boolean {
+  return PASTE_CREDS_CONNECTORS.has(connector);
+}
+
 /** github (Lift 1): "Connect with GitHub" replaces the old PAT/signing-secret
  *  field; the OAuth token is the outbound API credential (stored separately in
  *  connector_oauth_tokens). The delivery_config JSON stays for PR routing
