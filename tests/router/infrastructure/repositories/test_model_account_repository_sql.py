@@ -58,7 +58,13 @@ async def test_get_returns_none_when_cross_workspace() -> None:
 
 
 @pytest.mark.asyncio
-async def test_list_for_account_excludes_executor_provider() -> None:
+async def test_list_for_account_includes_executor_provider() -> None:
+    """Lift E7: executor accounts are first-class ModelAccounts now.
+
+    Pre-E7 ``list_for_account`` filtered them out to hide them from the
+    PWA's Settings → Models page. After E1-E5 executor accounts are
+    normal model accounts that callers route to (and the founder needs
+    to see them to set ``workspace.default_account_id``)."""
     async with memory_session() as session:
         repo = SqlAlchemyModelAccountRepository(session)
         ws = uuid.uuid4()
@@ -75,7 +81,7 @@ async def test_list_for_account_excludes_executor_provider() -> None:
             data_jurisdiction="local",
             extra_params={},
         )
-        # executor-pool account (excluded by list_for_account)
+        # executor-pool account — now included
         await repo.create(
             workspace_id=ws,
             account_id=acc,
@@ -89,8 +95,9 @@ async def test_list_for_account_excludes_executor_provider() -> None:
         )
 
         rows = await repo.list_for_account(workspace_id=ws, account_id=acc)
-        assert len(rows) == 1
-        assert rows[0].provider == "ollama"
+        assert len(rows) == 2
+        providers = {r.provider for r in rows}
+        assert providers == {"ollama", "executor"}
 
 
 @pytest.mark.asyncio

@@ -76,10 +76,17 @@ class SqlAlchemyModelAccountRepository:
         account_id: uuid.UUID,
         only_active: bool = False,
     ) -> Sequence[ModelAccount]:
+        # Lift E7: executor accounts are first-class ModelAccounts now.
+        # Pre-E7 this method filtered them out via a
+        # ``provider != EXECUTOR_PROVIDER`` clause to hide them from the
+        # PWA's Settings → Models page. After E1-E5 executor accounts
+        # are just normal model accounts that callers route to (and the
+        # founder needs to see them to set
+        # ``workspace.default_account_id``). The explicit executor
+        # lookup still lives on ``list_executor_accounts_for_worker``.
         stmt = select(ModelAccount).where(
             ModelAccount.workspace_id == workspace_id,
             ModelAccount.account_id == account_id,
-            ModelAccount.provider != EXECUTOR_PROVIDER,
         )
         if only_active:
             stmt = stmt.where(ModelAccount.is_active.is_(True))

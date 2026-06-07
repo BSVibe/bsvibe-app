@@ -173,9 +173,10 @@ async def test_get_account_persists_single_row(client, db) -> None:
         assert len(rows) == 1
 
 
-async def test_model_accounts_list_excludes_executor_rows(client, db) -> None:
-    """Lift 5a: a provider=executor row is a routable account but must NOT
-    surface in the api-llm Models list (workers are shown separately)."""
+async def test_model_accounts_list_includes_executor_rows(client, db) -> None:
+    """Lift E7: provider=executor rows are first-class ModelAccounts now —
+    they must surface in the Models list so the founder can set
+    ``workspace.default_account_id`` and verify worker registration."""
     from backend.router.accounts.models import ModelAccount
 
     # Create a real LLM account through the API so the personal account exists.
@@ -209,5 +210,5 @@ async def test_model_accounts_list_excludes_executor_rows(client, db) -> None:
 
     listed = await client.get("/api/v1/accounts")
     assert listed.status_code == 200, listed.text
-    providers = [row["provider"] for row in listed.json()]
-    assert providers == ["openai"]
+    providers = {row["provider"] for row in listed.json()}
+    assert providers == {"openai", "executor"}

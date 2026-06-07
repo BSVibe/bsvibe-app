@@ -338,5 +338,17 @@ ignore_imports = [
     # one-step cascade lives in the service layer.
     "backend.mcp.tools.workers_tools -> backend.executors.service",
     "backend.mcp.tools.workers_tools -> backend.executors.db",
+    # Lift E7 — UI-parity for the NEW run-routing rules surface
+    # (/api/v1/run-routing). Same one-canonical-mutation-chain pattern
+    # as D3b's routing_rules_tools: the MCP module calls the same repo
+    # + engine + caller_registry the REST handler uses so MCP and PWA
+    # paths land on one validation contract (no second copy of the
+    # caller_id whitelist, the ALLOWED_FIELDS set, or the
+    # non-default-requires-caller invariant). Reusing the REST handler's
+    # ``_validate_caller_id`` keeps the helper a single source of truth.
+    "backend.mcp.tools.run_routing_rules_tools -> backend.api.v1.run_routing",
+    "backend.mcp.tools.run_routing_rules_tools -> backend.router.infrastructure.repositories",
+    "backend.mcp.tools.run_routing_rules_tools -> backend.router.routing.run_routing.db",
+    "backend.mcp.tools.run_routing_rules_tools -> backend.router.routing.run_routing.engine",
 ]
 
