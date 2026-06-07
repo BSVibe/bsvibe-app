@@ -4,6 +4,7 @@ import {
   createConnector,
   listConnectors,
   revokeConnector,
+  startConnectorOAuth,
   triggerImport,
 } from "@/lib/api/connectors";
 import type { Connector, ConnectorName } from "@/lib/api/types";
@@ -12,6 +13,7 @@ import { useTranslations } from "next-intl";
 import { useEffect, useRef, useState } from "react";
 import AddConnector from "./AddConnector";
 import ConnectorRow from "./ConnectorRow";
+import { isOAuthConnector } from "./connector-fields";
 
 /**
  * Settings → Connectors, framed as a CATALOG (design: stitch/
@@ -53,7 +55,29 @@ export default function Connectors() {
   // The connector the founder is mid-creating, if any → renders the create panel
   // pre-selected. `null` = no panel open.
   const [connecting, setConnecting] = useState<ConnectorName | null>(null);
+  // Connector whose OAuth start failed (app not configured by the operator yet)
+  // → a calm "not available" note instead of a broken redirect.
+  const [oauthUnavailable, setOauthUnavailable] = useState<ConnectorName | null>(null);
   const dialogRef = useRef<HTMLDialogElement>(null);
+
+  // "Connect" on a card. OAuth connectors (github/slack/notion/discord) need no
+  // form — the App is operator-configured once (SaaS single-app), so go STRAIGHT
+  // to the provider authorize URL, no modal. Everything else opens the create
+  // panel for its binding fields.
+  async function handleConnect(name: ConnectorName) {
+    if (!isOAuthConnector(name)) {
+      setConnecting(name);
+      return;
+    }
+    setOauthUnavailable(null);
+    try {
+      const { authorize_url } = await startConnectorOAuth(name);
+      window.location.assign(authorize_url);
+    } catch {
+      // Provider not configured (no App creds) → calm note, no crash.
+      setOauthUnavailable(name);
+    }
+  }
 
   // Drive the native <dialog> from the `connecting` state: showModal() gives us
   // the backdrop, focus trap, and Escape-to-close for free. close() fires on
@@ -150,10 +174,15 @@ export default function Connectors() {
                 <p className="connector-card__detail">{t(`blurbs.${name}`)}</p>
               </div>
               <div className="connector-card__actions">
+                {oauthUnavailable === name ? (
+                  <span className="connector-card__note" aria-live="polite">
+                    {t("oauthUnavailable")}
+                  </span>
+                ) : null}
                 <button
                   type="button"
                   className="connector-card__connect"
-                  onClick={() => setConnecting(name)}
+                  onClick={() => handleConnect(name)}
                 >
                   {t("connect")}
                 </button>
