@@ -65,11 +65,21 @@ class CallerSpec:
 
     ``description`` is for operator-facing surfaces — settings UIs that
     list callers, audit logs that name them, MCP tool descriptions.
+
+    ``default_timeout_s`` (Lift E9) is the per-caller chat timeout
+    override (seconds). ``None`` means "use ``settings.executor_task_timeout_s``"
+    — keeps long-running coding-agent callers (``workflow.agent_loop.act``,
+    5-15 minutes per turn) on the default while letting chat-shaped callers
+    (knowledge ingest, frame, judge — 10-60 s when the worker is healthy)
+    fail fast when the worker dies mid-task. Without this, one global
+    1800 s default hammered every caller and stalled bsvibe-app's ~50-chunk
+    bootstrap for a wall-clock day on a single hung chunk.
     """
 
     caller_id: str
     required_methods: frozenset[str] = field(default_factory=lambda: frozenset({"chat"}))
     description: str = ""
+    default_timeout_s: float | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -106,6 +116,10 @@ KNOWN_CALLERS: dict[str, CallerSpec] = {
             "Knowledge ingest compile pass — one structured-output chat call per "
             "chunk that produces the JSON garden-action plan."
         ),
+        # 3 min — a chunk's structured-output call is normally 10-60 s. A
+        # bsvibe-app bootstrap is ~50 chunks; one stuck chunk at the legacy
+        # 30 min default could waste a wall-clock day.
+        default_timeout_s=180.0,
     ),
     CALLER_KNOWLEDGE_QUERY: CallerSpec(
         caller_id=CALLER_KNOWLEDGE_QUERY,
@@ -114,6 +128,8 @@ KNOWN_CALLERS: dict[str, CallerSpec] = {
             "Knowledge query answerer — single chat call over the workspace "
             "ontology when the frame classified the ask as knowledge_only."
         ),
+        # 1 min — interactive query, founder is waiting for the answer.
+        default_timeout_s=60.0,
     ),
     CALLER_KNOWLEDGE_CANONICALIZATION: CallerSpec(
         caller_id=CALLER_KNOWLEDGE_CANONICALIZATION,
@@ -122,6 +138,7 @@ KNOWN_CALLERS: dict[str, CallerSpec] = {
             "BSage canonicalization mutation extractor — proposes cannot-link / "
             "must-link decisions over the canonical graph."
         ),
+        default_timeout_s=180.0,
     ),
     CALLER_FRAME: CallerSpec(
         caller_id=CALLER_FRAME,
@@ -129,6 +146,7 @@ KNOWN_CALLERS: dict[str, CallerSpec] = {
         description=(
             "Frame stage — cheap classify+skill-match completion before the agent loop dispatches."
         ),
+        default_timeout_s=180.0,
     ),
     CALLER_AGENT_LOOP_PLAN: CallerSpec(
         caller_id=CALLER_AGENT_LOOP_PLAN,
@@ -137,6 +155,9 @@ KNOWN_CALLERS: dict[str, CallerSpec] = {
             "Agent loop plan turn — heavy reasoning step that decides the next "
             "action without emitting tool calls."
         ),
+        # 5 min — plan turn is heavier than a chat-shaped call but doesn't
+        # run the full `claude --print` subprocess.
+        default_timeout_s=300.0,
     ),
     CALLER_AGENT_LOOP_ACT: CallerSpec(
         caller_id=CALLER_AGENT_LOOP_ACT,
@@ -145,6 +166,10 @@ KNOWN_CALLERS: dict[str, CallerSpec] = {
             "Agent loop act turn — the tool-emitting turn whose response can "
             "include tool_calls the workflow then dispatches."
         ),
+        # Genuinely long — a tool-emitting turn runs `claude --print` /
+        # `codex -p` / `opencode -p` on a real coding task. Leave at None
+        # so it picks up the settings default of 1800 s.
+        default_timeout_s=None,
     ),
     CALLER_JUDGE: CallerSpec(
         caller_id=CALLER_JUDGE,
@@ -153,6 +178,7 @@ KNOWN_CALLERS: dict[str, CallerSpec] = {
             "Judge / verifier — grades a candidate deliverable against the run's "
             "verification contract."
         ),
+        default_timeout_s=180.0,
     ),
     CALLER_SETTLE_EXTRACT: CallerSpec(
         caller_id=CALLER_SETTLE_EXTRACT,
@@ -161,6 +187,7 @@ KNOWN_CALLERS: dict[str, CallerSpec] = {
             "Settle worker's entity extractor — single chat call over the "
             "verified deliverable's transcript to populate the ontology."
         ),
+        default_timeout_s=180.0,
     ),
 }
 

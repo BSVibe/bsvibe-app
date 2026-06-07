@@ -150,7 +150,9 @@
       "failedClone": "Couldn’t clone that repository.",
       "failedTooLarge": "That repository is too large to analyze.",
       "failedIngest": "Couldn’t analyze that repository.",
-      "errorPrefix": "Details: "
+      "errorPrefix": "Details: ",
+      "chunkProgress": "Ingesting {done} / {total} chunks",
+      "chunkProgressWithFailures": "Ingesting {done} / {total} chunks ({failed} failed)"
     },
     "resources": {
       "heading": "Resources",

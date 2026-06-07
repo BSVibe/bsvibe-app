@@ -36,6 +36,7 @@ const BLOG: Product = {
   bootstrap_status: null,
   bootstrap_artifacts_count: null,
   bootstrap_error: null,
+  bootstrap_progress: null,
   created_at: NOW,
   updated_at: NOW,
 };

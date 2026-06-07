@@ -60,6 +60,17 @@ export default function BootstrapStatusPanel({
   const isFailed = progress.status.startsWith("failed:");
   const message = messageFor(progress.status, t);
 
+  // Lift E9 — incremental per-chunk progress line. Rendered only when
+  // the bootstrap is mid-ingest AND the runtime has written at least one
+  // chunk's update; `null` (the legacy / pre-first-chunk state) falls
+  // back to the status line alone so an old row stays unchanged.
+  const chunkProgress = progress.progress;
+  const showChunkLine =
+    !isFailed &&
+    chunkProgress !== null &&
+    chunkProgress !== undefined &&
+    chunkProgress.chunks_total > 0;
+
   return (
     <section
       className={
@@ -71,6 +82,22 @@ export default function BootstrapStatusPanel({
       aria-label="bootstrap progress"
     >
       <p className="bootstrap-status__line">{message}</p>
+      {showChunkLine && chunkProgress ? (
+        <p className="bootstrap-status__detail">
+          <span className="bootstrap-status__detail-text">
+            {chunkProgress.chunks_failed > 0
+              ? t("chunkProgressWithFailures", {
+                  done: chunkProgress.chunks_done,
+                  total: chunkProgress.chunks_total,
+                  failed: chunkProgress.chunks_failed,
+                })
+              : t("chunkProgress", {
+                  done: chunkProgress.chunks_done,
+                  total: chunkProgress.chunks_total,
+                })}
+          </span>
+        </p>
+      ) : null}
       {isFailed && progress.error ? (
         <p className="bootstrap-status__detail">
           <span className="bootstrap-status__detail-label">{t("errorPrefix")}</span>

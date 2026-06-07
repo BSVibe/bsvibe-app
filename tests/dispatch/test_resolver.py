@@ -228,6 +228,42 @@ class TestResolverDefensiveValidation:
             ModelAccountResolver._check_supported(spec, _OnlyChat())  # type: ignore[arg-type]
 
 
+class TestPerCallerTimeoutFlow:
+    """Lift E9 — resolver surfaces the per-caller timeout on ResolvedAccount."""
+
+    async def test_resolved_account_carries_caller_default_timeout(
+        self,
+        session: AsyncSession,
+        workspace: WorkspaceRow,
+        model_account: ModelAccount,
+    ) -> None:
+        """``CALLER_FRAME`` has 180 s default — ResolvedAccount surfaces it
+        so observability + future routing-rule overrides can read it without
+        re-walking the registry."""
+        workspace.default_account_id = model_account.id
+        await session.flush()
+        resolver = ModelAccountResolver(session, settings=get_settings())
+        resolved = await resolver.resolve_for(caller_id=CALLER_FRAME, workspace_id=workspace.id)
+        assert resolved.timeout_s == 180.0
+
+    async def test_adapter_closes_over_timeout_at_construction(
+        self,
+        session: AsyncSession,
+        workspace: WorkspaceRow,
+        model_account: ModelAccount,
+    ) -> None:
+        """The adapter the resolver returns has ``timeout_s`` set so
+        :meth:`chat` doesn't have to re-walk the caller registry per call."""
+        from backend.dispatch.adapter import LiteLLMAdapter
+
+        workspace.default_account_id = model_account.id
+        await session.flush()
+        resolver = ModelAccountResolver(session, settings=get_settings())
+        resolved = await resolver.resolve_for(caller_id=CALLER_FRAME, workspace_id=workspace.id)
+        assert isinstance(resolved.adapter, LiteLLMAdapter)
+        assert resolved.adapter.timeout_s == 180.0
+
+
 class TestDefaultCatchAllRule:
     async def test_default_rule_catches_unmatched_caller(
         self,

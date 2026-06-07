@@ -22,6 +22,7 @@ function snapshot(overrides: Partial<ProductBootstrap> = {}): ProductBootstrap {
     run_id: null,
     started_at: "2026-06-03T00:00:00Z",
     completed_at: null,
+    progress: null,
     ...overrides,
   };
 }
@@ -74,5 +75,53 @@ describe("BootstrapStatusPanel", () => {
       .mockResolvedValue(snapshot({ status: "failed:too_large", error: "files=10001" }));
     render(<BootstrapStatusPanel productId="p1" getBootstrap={getBootstrap} />);
     expect(await screen.findByText(/too large to analyze/i)).toBeInTheDocument();
+  });
+
+  it("renders the chunk progress line when ingesting with progress data", async () => {
+    const getBootstrap = vi.fn().mockResolvedValue(
+      snapshot({
+        status: "ingesting",
+        progress: {
+          chunks_done: 12,
+          chunks_total: 47,
+          chunks_failed: 0,
+          notes_created: 30,
+          notes_updated: 5,
+          phase: "ingesting",
+        },
+      }),
+    );
+    render(<BootstrapStatusPanel productId="p1" getBootstrap={getBootstrap} />);
+    expect(await screen.findByText(/Ingesting 12 \/ 47 chunks/i)).toBeInTheDocument();
+  });
+
+  it("renders the chunk progress with failures count when chunks_failed > 0", async () => {
+    const getBootstrap = vi.fn().mockResolvedValue(
+      snapshot({
+        status: "ingesting",
+        progress: {
+          chunks_done: 20,
+          chunks_total: 47,
+          chunks_failed: 3,
+          notes_created: 50,
+          notes_updated: 8,
+          phase: "ingesting",
+        },
+      }),
+    );
+    render(<BootstrapStatusPanel productId="p1" getBootstrap={getBootstrap} />);
+    expect(
+      await screen.findByText(/Ingesting 20 \/ 47 chunks \(3 failed\)/i),
+    ).toBeInTheDocument();
+  });
+
+  it("does not render the chunk progress line when progress is null", async () => {
+    const getBootstrap = vi
+      .fn()
+      .mockResolvedValue(snapshot({ status: "ingesting", progress: null }));
+    render(<BootstrapStatusPanel productId="p1" getBootstrap={getBootstrap} />);
+    // The status line still renders, but no progress detail.
+    expect(await screen.findByText(/Indexing the repository/i)).toBeInTheDocument();
+    expect(screen.queryByText(/chunks/i)).toBeNull();
   });
 });

@@ -51,8 +51,30 @@ export interface Product {
   bootstrap_status: string | null;
   bootstrap_artifacts_count: number | null;
   bootstrap_error: string | null;
+  /** Lift E9 — per-chunk progress snapshot during ingest.
+   *
+   *  `null` outside the ingest window or on legacy rows. Shape:
+   *  `{ chunks_done, chunks_total, chunks_failed, notes_created,
+   *  notes_updated, phase }`. The Brief / BootstrapStatusPanel render
+   *  `chunks_done / chunks_total (N failed)` as a small line next to the
+   *  status pill — gives forward-motion visibility on a ~50-chunk bootstrap
+   *  that previously showed the same opaque "ingesting" for an hour. */
+  bootstrap_progress: BootstrapProgress | null;
   created_at: string;
   updated_at: string;
+}
+
+/** Per-chunk progress snapshot for a Product whose bootstrap is mid-ingest.
+ *  Mirrors the backend's `bootstrap_progress` JSON column written by the
+ *  bootstrap runtime's event subscriber. Every counter is monotonic across
+ *  the compile_batch run. */
+export interface BootstrapProgress {
+  chunks_done: number;
+  chunks_total: number;
+  chunks_failed: number;
+  notes_created: number;
+  notes_updated: number;
+  phase: string;
 }
 
 /** `GET /api/v1/products/{id}/bootstrap` body — progress snapshot. */
@@ -64,6 +86,13 @@ export interface ProductBootstrap {
   run_id: string | null;
   started_at: string | null;
   completed_at: string | null;
+  /** Lift E9 — per-chunk progress snapshot while ingest is running.
+   *
+   *  `null` outside the ingest window or before any chunk has finished.
+   *  Surfaced by the BootstrapStatusPanel as a small "Ingesting N / M chunks
+   *  (K failed)" line beside the status pill so a long bootstrap shows
+   *  forward motion. */
+  progress: BootstrapProgress | null;
 }
 
 /** `POST /api/v1/products` body (backend ProductCreate, extra=forbid). The slug
