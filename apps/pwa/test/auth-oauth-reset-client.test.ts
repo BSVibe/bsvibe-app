@@ -71,12 +71,59 @@ describe("social sign-in (PKCE) + password reset", () => {
     const authorizeCall = calls.find((c) => c.url.includes("/authorize"));
     expect(authorizeCall).toBeTruthy();
     const body = authorizeCall?.body as { code_challenge: string; redirect_to: string };
+    // No `?return_to=` query, no `#return_to=` fragment — Lift E11 dropped
+    // both because Supabase's redirect URL allow-list is exact-match on
+    // path+query AND Supabase strips/overwrites the fragment in practice.
+    // The return_to lives in sessionStorage now.
     expect(body.redirect_to).toBe("http://localhost:3700/auth/callback");
     expect(body.code_challenge).toBeTruthy();
     // The challenge is the SHA-256 hash of the verifier, NOT the verifier itself.
     expect(body.code_challenge).not.toBe(verifier);
 
     expect(assign).toHaveBeenCalledWith(OAUTH_AUTHORIZE_RESPONSE.authorize_url);
+    // No return_to was passed in — sessionStorage stays clean.
+    expect(sessionStorage.getItem("bsvibe.return_to")).toBeNull();
+  });
+
+  it("startOAuth stashes return_to in sessionStorage before redirecting", async () => {
+    // Lift E11 — the consent-flow round-trip. `startOAuth` is the LAST line
+    // of JavaScript that runs before the browser navigates to Supabase, so
+    // it MUST be the one that atomically commits the return_to value. The
+    // upstream `useEffect` write in /login/page.tsx is too early — by the
+    // time the user clicks, a stale React render could overwrite or clear it.
+    const assign = stubLocationOrigin("http://localhost:3700");
+    global.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/api/auth/oauth/google/authorize")) {
+        return jsonResponse(OAUTH_AUTHORIZE_RESPONSE);
+      }
+      return jsonResponse({}, 404);
+    }) as unknown as typeof fetch;
+
+    const consentReturnTo =
+      "/oauth/consent?response_type=code&client_id=dcr-abc" +
+      "&redirect_uri=http%3A%2F%2F127.0.0.1%3A53113%2F&state=ABC" +
+      "&code_challenge=cc&code_challenge_method=S256";
+
+    await startOAuth("google", consentReturnTo);
+
+    // Stashed verbatim — no encoding gymnastics required because
+    // sessionStorage is opaque to the URL parser.
+    expect(sessionStorage.getItem("bsvibe.return_to")).toBe(consentReturnTo);
+    expect(assign).toHaveBeenCalledWith(OAUTH_AUTHORIZE_RESPONSE.authorize_url);
+  });
+
+  it("startOAuth rejects unsafe return_to values rather than stashing them", async () => {
+    // Defense in depth — the /login page guards before calling startOAuth,
+    // but the underlying API must refuse open-redirect attempts too. We
+    // never want a crafted return_to to leak through a future caller.
+    stubLocationOrigin("http://localhost:3700");
+    global.fetch = vi.fn(async () =>
+      jsonResponse(OAUTH_AUTHORIZE_RESPONSE),
+    ) as unknown as typeof fetch;
+
+    await expect(startOAuth("google", "https://evil.com/steal")).rejects.toThrow();
+    expect(sessionStorage.getItem("bsvibe.return_to")).toBeNull();
   });
 
   it("completeOAuth exchanges the code with the stashed verifier and persists the session", async () => {

@@ -427,6 +427,60 @@ async def test_authorize_get_redirects_to_pwa_consent(client: httpx.AsyncClient)
     assert f"code_challenge={CHALLENGE}" in location
 
 
+async def test_authorize_get_preserves_loopback_redirect_uri(
+    client: httpx.AsyncClient,
+) -> None:
+    """GET /authorize preserves ``redirect_uri`` into the PWA consent URL.
+
+    Lift E11 regression guard. The CLI loopback flow opens this endpoint with
+    ``redirect_uri=http://127.0.0.1:<port>/`` — that exact value must round-
+    trip through the consent screen so when the founder clicks "Allow", the
+    backend's POST /authorize returns ``redirect_to`` pointing at the right
+    loopback port. A drop here means the browser navigates to /brief and the
+    CLI's `_wait_for_callback` server times out at 300s.
+    """
+    reg = await _register(client)
+    # Path MUST match the registered ``/callback`` (RFC 8252 §7.3 lets the
+    # port vary on loopback, but path is still strict-match). The real CLI
+    # uses ``http://127.0.0.1:<port>/`` because it registers a fresh DCR
+    # client whose redirect_uris list ALSO ends in ``/`` — the registered
+    # path always matches the requested one. Tests can't repeat the DCR
+    # round-trip cheaply, so we mirror the path the fixture client carries.
+    loopback = "http://127.0.0.1:53113/callback"
+    r = await client.get(
+        "/api/oauth/authorize",
+        params={
+            "response_type": "code",
+            "client_id": reg["client_id"],
+            "redirect_uri": loopback,
+            "scope": "mcp:read mcp:write",
+            "state": "round-trip-state",
+            "code_challenge": CHALLENGE,
+            "code_challenge_method": "S256",
+        },
+        follow_redirects=False,
+    )
+    assert r.status_code == 302
+    location = r.headers["location"]
+    # Parse the consent URL and verify every required OAuth param is present
+    # and the redirect_uri matches the loopback URI exactly. urllib parsing
+    # decodes the percent-encoding so we compare the canonical value.
+    from urllib.parse import parse_qs, urlsplit
+
+    parts = urlsplit(location)
+    assert parts.path == "/oauth/consent"
+    qs = parse_qs(parts.query)
+    assert qs.get("redirect_uri") == [loopback], (
+        f"missing redirect_uri in {qs=} location={location}"
+    )
+    assert qs["client_id"] == [reg["client_id"]]
+    assert qs["response_type"] == ["code"]
+    assert qs["scope"] == ["mcp:read mcp:write"]
+    assert qs["state"] == ["round-trip-state"]
+    assert qs["code_challenge"] == [CHALLENGE]
+    assert qs["code_challenge_method"] == ["S256"]
+
+
 async def test_authorize_unknown_client_redirects_to_consent_with_error(
     client: httpx.AsyncClient,
 ) -> None:

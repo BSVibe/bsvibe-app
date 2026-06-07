@@ -15,6 +15,13 @@ const PKCE_VERIFIER_KEY = "bsvibe.pkce_verifier";
 /** sessionStorage key remembering which provider the redirect was for, so the
  *  `/auth/callback` page can finish the exchange against the right path. */
 const PKCE_PROVIDER_KEY = "bsvibe.pkce_provider";
+/** sessionStorage key carrying the post-sign-in destination across the
+ *  Supabase IdP round-trip. Set atomically by `startOAuth` immediately before
+ *  the IdP hand-off; read + cleared by `/auth/callback`. Lift E11 dropped the
+ *  hash-fragment encoding because Supabase strips/overwrites fragments in
+ *  practice — sessionStorage survives same-tab cross-origin navigation, which
+ *  is the only mode an OAuth round-trip uses. */
+export const RETURN_TO_KEY = "bsvibe.return_to";
 
 /** Persist a backend session, then best-effort attach the personal account id
  *  (`/api/v1/account`) so subsequent calls carry `X-BSVibe-Account-Id`. The
@@ -71,38 +78,74 @@ async function challengeFor(verifier: string): Promise<string> {
   return base64UrlEncode(new Uint8Array(digest));
 }
 
+/** Same-origin path guard, shared between /login's URL-param accept gate and
+ *  `startOAuth`'s defense-in-depth check on the caller-supplied return_to.
+ *  Rejects anything that isn't a relative path beginning with a single `/`
+ *  — `//evil.com/x` is protocol-relative and resolves cross-origin.
+ *
+ *  Exported so the consent client, /login, and /auth/callback all derive
+ *  their "is this safe" answer from one source of truth (Lift E11). */
+export function isSameOriginPath(raw: string | null | undefined): raw is string {
+  if (!raw) return false;
+  if (!raw.startsWith("/")) return false;
+  if (raw.startsWith("//")) return false;
+  return true;
+}
+
 /** Start social sign-in: derive a PKCE verifier (stashed for the return trip),
  *  ask the backend for the GoTrue authorize URL with the matching challenge,
  *  then hand the browser off to it. The provider sends the user back to
- *  `/auth/callback?code=…`, where `completeOAuth` finishes the exchange. */
+ *  `/auth/callback?code=…`, where `completeOAuth` finishes the exchange.
+ *
+ *  Lift E11 — `returnTo` is stashed in **sessionStorage**, never on the URL.
+ *  Earlier shapes (hash fragment, query param) all failed in practice:
+ *
+ *   * **Hash fragment** — Supabase's GoTrue rebuilds the redirect URL via
+ *     `url.Parse` + `query.Encode()` + `.String()`. The fragment SOMETIMES
+ *     survives, but in dogfood (2026-06-06, qazasa123 Google sign-in) it
+ *     was provably dropped between the IdP 302 and `/auth/callback`. The
+ *     mechanism is too fragile to depend on.
+ *   * **Query param** — Supabase's redirect URL allow-list is exact-match
+ *     on path+query. A callback URL with `?return_to=…` fails the match
+ *     and Supabase falls back to the Site URL (`/brief`), losing context.
+ *
+ *  sessionStorage survives same-tab cross-origin navigation by spec; the
+ *  full OAuth round-trip never opens a new tab. We commit the value
+ *  ATOMICALLY here — the line after `setItem` is `window.location.assign`,
+ *  so no React re-render or subsequent setState can clear it between
+ *  intent and hand-off. */
 export async function startOAuth(provider: OAuthProvider, returnTo?: string): Promise<void> {
+  // Defense in depth: refuse to stash an unsafe target even if a caller
+  // forgot to guard. `/login`'s `safeReturnTo` is the primary gate, but a
+  // crafted future entry point shouldn't be able to bypass us.
+  if (returnTo !== undefined && !isSameOriginPath(returnTo)) {
+    throw new Error("unsafe return_to rejected");
+  }
   const verifier = randomVerifier();
   sessionStorage.setItem(PKCE_VERIFIER_KEY, verifier);
   sessionStorage.setItem(PKCE_PROVIDER_KEY, provider);
   const codeChallenge = await challengeFor(verifier);
-  // Encode return_to into a HASH FRAGMENT (not a query param). Supabase's
-  // redirect URL allow-list is exact-match on path + query; a callback URL
-  // with a `?return_to=…` query param doesn't match the configured
-  // `https://app.bsvibe.dev/auth/callback` and Supabase falls back to the
-  // Site URL — the founder lands on /brief instead of the consent page.
-  // Hash fragments are NEVER sent to the server, so the allow-list match
-  // passes; the browser preserves the fragment through the 302 chain and
-  // /auth/callback reads it via window.location.hash. sessionStorage is
-  // also unreliable across the IdP round-trip.
-  const callbackUrl = new URL(`${window.location.origin}/auth/callback`);
-  if (returnTo) {
-    callbackUrl.hash = `return_to=${encodeURIComponent(returnTo)}`;
-  }
+  const callbackUrl = `${window.location.origin}/auth/callback`;
   const { authorize_url } = await apiFetch<{ authorize_url: string }>(
     `/api/auth/oauth/${provider}/authorize`,
     {
       method: "POST",
       body: JSON.stringify({
         code_challenge: codeChallenge,
-        redirect_to: callbackUrl.toString(),
+        redirect_to: callbackUrl,
       }),
     },
   );
+  // Atomic with the assign — write, then leave. Any further work (a stray
+  // setState, an unmount cleanup) cannot run between these two lines
+  // because `window.location.assign` synchronously commits to a navigation.
+  if (returnTo) {
+    sessionStorage.setItem(RETURN_TO_KEY, returnTo);
+  } else {
+    // Vanilla sign-in (no consent flow). Make sure a stale value from an
+    // earlier aborted run can't leak into this one.
+    sessionStorage.removeItem(RETURN_TO_KEY);
+  }
   window.location.assign(authorize_url);
 }
 

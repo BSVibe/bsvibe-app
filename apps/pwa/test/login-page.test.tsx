@@ -25,16 +25,21 @@ const startOAuth = vi.fn();
 vi.mock("@/lib/api/auth", () => ({
   login: (...args: unknown[]) => login(...args),
   startOAuth: (...args: unknown[]) => startOAuth(...args),
+  RETURN_TO_KEY: "bsvibe.return_to",
+  isSameOriginPath: (raw: string | null | undefined): boolean =>
+    !!raw && raw.startsWith("/") && !raw.startsWith("//"),
 }));
 
 describe("LoginPage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     searchParams = new URLSearchParams();
+    sessionStorage.clear();
   });
 
   afterEach(() => {
     vi.restoreAllMocks();
+    sessionStorage.clear();
   });
 
   it("renders the brand, social buttons, and email form", () => {
