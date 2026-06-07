@@ -37,6 +37,7 @@ function product(slug: string, name: string): Product {
     bootstrap_status: null,
     bootstrap_artifacts_count: null,
     bootstrap_error: null,
+    bootstrap_progress: null,
     created_at: "2026-05-23T00:00:00Z",
     updated_at: "2026-05-23T00:00:00Z",
   };

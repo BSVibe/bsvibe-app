@@ -197,6 +197,9 @@ async def get_product_bootstrap(
         # future lift if the founder ever asks.
         started_at=row.created_at if row.bootstrap_status else None,
         completed_at=(row.updated_at if row.bootstrap_status == "complete" else None),
+        # Lift E9 — incremental per-chunk progress (None outside the
+        # ingest window so the UI falls back to the status pill).
+        progress=row.bootstrap_progress,
     )
 
 

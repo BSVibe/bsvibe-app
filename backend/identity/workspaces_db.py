@@ -144,6 +144,16 @@ class ProductRow(WorkspacesBase):
     bootstrap_run_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(), nullable=True)
     bootstrap_artifacts_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
     bootstrap_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Lift E9 — incremental per-chunk progress while ``bootstrap_status``
+    # is ``ingesting``. ``None`` outside the ingest window or before any
+    # chunk has run. Shape: ``{"chunks_done": int, "chunks_total": int,
+    # "chunks_failed": int, "notes_created": int, "notes_updated": int,
+    # "phase": "cloning" | "walking" | "ingesting"}``. Mutated by a
+    # subscriber on the ingest event bus via short-lived UPDATE writes —
+    # never held across the whole compile_batch (multi-tenant write
+    # contention). Founder UI treats ``None`` as "fall back to status
+    # pill", so legacy rows render exactly as before.
+    bootstrap_progress: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=lambda: datetime.now()
     )

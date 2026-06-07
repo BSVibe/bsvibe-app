@@ -150,7 +150,9 @@
       "failedClone": "그 저장소를 가져오지 못했어요.",
       "failedTooLarge": "그 저장소는 너무 커서 분석할 수 없어요.",
       "failedIngest": "그 저장소를 분석하지 못했어요.",
-      "errorPrefix": "자세히: "
+      "errorPrefix": "자세히: ",
+      "chunkProgress": "{done} / {total} 청크 색인 중",
+      "chunkProgressWithFailures": "{done} / {total} 청크 색인 중 ({failed}개 실패)"
     },
     "resources": {
       "heading": "리소스",

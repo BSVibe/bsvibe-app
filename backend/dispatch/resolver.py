@@ -83,11 +83,21 @@ class NoAdapterMethodError(Exception):
 
 @dataclass(frozen=True, slots=True)
 class ResolvedAccount:
-    """The bundle a call site receives — account + adapter + provenance."""
+    """The bundle a call site receives — account + adapter + provenance.
+
+    ``timeout_s`` (Lift E9) is the per-caller chat-timeout override taken
+    from :attr:`CallerSpec.default_timeout_s`. ``None`` means the call
+    site should fall back to ``settings.executor_task_timeout_s`` (the
+    legacy single global). Callers that pre-cache the adapter (most do)
+    rely on the adapter itself already having the timeout closed over —
+    this field exists so observability + future routing-rule overrides
+    can read the resolved value without re-walking the registry.
+    """
 
     account: ModelAccount
     adapter: ModelAccountAdapter
     source: str  # "explicit_rule" | "workspace_default"
+    timeout_s: float | None = None
 
 
 # Condition the resolver looks for inside a rule's JSON ``conditions``
@@ -186,6 +196,9 @@ class ModelAccountResolver:
             settings=self._settings,
             api_key=api_key,
             redis=self._redis,
+            # Lift E9 — close the per-caller timeout into the adapter so
+            # ``chat`` doesn't re-walk the registry per call.
+            timeout_s=spec.default_timeout_s,
         )
 
         # Defensive validation — rule creation is supposed to catch this
@@ -201,8 +214,14 @@ class ModelAccountResolver:
             account_id=str(account.id),
             provider=account.provider,
             litellm_model=account.litellm_model,
+            timeout_s=spec.default_timeout_s,
         )
-        return ResolvedAccount(account=account, adapter=adapter, source=source)
+        return ResolvedAccount(
+            account=account,
+            adapter=adapter,
+            source=source,
+            timeout_s=spec.default_timeout_s,
+        )
 
     # ----- internals -----
 

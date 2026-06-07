@@ -44,6 +44,11 @@ def _product_to_dict(row: ProductRow) -> dict[str, Any]:
         "bootstrap_status": row.bootstrap_status,
         "bootstrap_artifacts_count": row.bootstrap_artifacts_count,
         "bootstrap_error": row.bootstrap_error,
+        # Lift E9 — per-chunk progress snapshot while ingest is running.
+        # ``None`` outside the ingest window or before any chunk has
+        # finished; founder UI / MCP caller treats ``None`` as "no
+        # incremental signal, fall back to bootstrap_status".
+        "bootstrap_progress": row.bootstrap_progress,
         "created_at": row.created_at.isoformat() if row.created_at else None,
         "updated_at": row.updated_at.isoformat() if row.updated_at else None,
     }

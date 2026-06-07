@@ -157,6 +157,14 @@ class LiteLLMAdapter:
     credentials. The credential never leaves this module — it is held on
     the dataclass and threaded into the LLM call's ``api_key`` slot, not
     logged anywhere.
+
+    ``timeout_s`` (Lift E9) — per-caller request timeout in seconds.
+    Threaded into the LiteLLM ``timeout`` kwarg (litellm accepts a
+    per-request ``timeout`` knob and honours it across every provider).
+    ``None`` leaves the kwarg out so litellm uses its own default;
+    explicit values let chat-shaped callers (frame / judge / knowledge
+    ingest, ~60-180 s) fail fast instead of waiting on the legacy
+    1800 s ExecutorAdapter default.
     """
 
     account: ModelAccount
@@ -165,6 +173,7 @@ class LiteLLMAdapter:
     workspace_id: uuid.UUID
     account_id: uuid.UUID
     model_account_id: uuid.UUID
+    timeout_s: float | None = None
     supported_methods: frozenset[str] = field(default_factory=lambda: frozenset({"chat"}))
 
     async def chat(
@@ -176,12 +185,21 @@ class LiteLLMAdapter:
     ) -> ChatResponse:
         full_messages: list[ChatMessage] = [{"role": "system", "content": system}]
         full_messages.extend(dict(m) for m in messages)
+        # Fold the per-caller timeout into ``extra_params`` so it lands in
+        # ``litellm.acompletion``'s ``timeout`` kwarg (LiteLLM honours
+        # request-level ``timeout`` across every provider). The account's
+        # own ``extra_params`` takes precedence — operators can override
+        # the per-caller default by setting ``extra_params.timeout`` on
+        # the model account row itself.
+        extra_params = dict(self.account.extra_params)
+        if self.timeout_s is not None and "timeout" not in extra_params:
+            extra_params["timeout"] = self.timeout_s
         response = await self.llm.chat(
             model=self.account.litellm_model,
             messages=full_messages,
             api_base=self.account.api_base,
             api_key=self.api_key,
-            extra_params=dict(self.account.extra_params),
+            extra_params=extra_params,
             tools=tools,
         )
         return _from_llm_response(response)
@@ -227,6 +245,12 @@ class ExecutorAdapter:
     session: AsyncSession
     settings: Settings
     redis: Any = None
+    # Lift E9 — per-caller chat timeout. ``None`` falls back to
+    # ``settings.executor_task_timeout_s`` (the legacy 1800 s default,
+    # right for ``workflow.agent_loop.act`` but wrong for chat-shaped
+    # callers like ``knowledge.ingest`` that finish in 10-60 s when
+    # the worker is healthy).
+    timeout_s: float | None = None
     supported_methods: frozenset[str] = field(default_factory=lambda: frozenset({"chat"}))
 
     async def chat(
@@ -304,12 +328,20 @@ class ExecutorAdapter:
         # :class:`ExecutorOrchestrator` carries.
         await self.session.commit()
 
+        # Lift E9 — per-caller chat timeout. ``self.timeout_s`` is set
+        # from :attr:`CallerSpec.default_timeout_s` at construction time
+        # (see :func:`adapter_for`); ``None`` keeps the legacy global
+        # ``settings.executor_task_timeout_s`` for long-running coding-
+        # agent callers (``workflow.agent_loop.act``, ~5-15 min).
+        effective_timeout_s = (
+            self.timeout_s if self.timeout_s is not None else self.settings.executor_task_timeout_s
+        )
         try:
             completed = await dispatch.await_completion(
                 self.redis,
                 session=self.session,
                 task_id=task.id,
-                timeout_s=self.settings.executor_task_timeout_s,
+                timeout_s=effective_timeout_s,
             )
         except dispatch.TaskTimeout as exc:
             raise ExecutorAdapterUnavailable(
@@ -347,6 +379,7 @@ def adapter_for(
     api_key: str,
     llm: LlmClient | None = None,
     redis: Any = None,
+    timeout_s: float | None = None,
 ) -> ModelAccountAdapter:
     """Pick the right :class:`ModelAccountAdapter` for an account.
 
@@ -363,6 +396,13 @@ def adapter_for(
     expected (a workspace with only LiteLLM accounts); resolving an
     executor account with no redis later raises
     :class:`ExecutorAdapterUnavailable`.
+
+    ``timeout_s`` (Lift E9) — per-caller chat timeout in seconds, taken
+    from :attr:`CallerSpec.default_timeout_s` by the resolver. ``None``
+    falls back to ``settings.executor_task_timeout_s`` on the executor
+    path and to LiteLLM's own default on the LiteLLM path. The adapter
+    closes over the value at construction so :meth:`chat` does not
+    re-walk the caller registry per call.
     """
     if is_executor_account(account):
         return ExecutorAdapter(
@@ -373,6 +413,7 @@ def adapter_for(
             session=session,
             settings=settings,
             redis=redis,
+            timeout_s=timeout_s,
         )
     return LiteLLMAdapter(
         account=account,
@@ -381,6 +422,7 @@ def adapter_for(
         workspace_id=account.workspace_id,
         account_id=account.account_id,
         model_account_id=account.id,
+        timeout_s=timeout_s,
     )
 
 

@@ -102,6 +102,78 @@ class TestLiteLLMAdapter:
         )
         assert adapter.supported_methods == frozenset({"chat"})
 
+    async def test_chat_propagates_per_caller_timeout(self) -> None:
+        """Lift E9 — when constructed with ``timeout_s`` the adapter folds
+        it into LiteLLM's ``timeout`` kwarg so a chat-shaped caller's 3 min
+        cap actually reaches the provider call."""
+        account = _stub_account()
+        mock_completion = AsyncMock(
+            return_value={
+                "choices": [{"message": {"content": "ok", "tool_calls": []}}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1},
+            }
+        )
+        llm = LlmClient(completion_fn=mock_completion)
+        adapter = LiteLLMAdapter(
+            account=account,
+            api_key="",
+            llm=llm,
+            workspace_id=account.workspace_id,
+            account_id=account.account_id,
+            model_account_id=account.id,
+            timeout_s=180.0,
+        )
+        await adapter.chat(system="x", messages=[{"role": "user", "content": "y"}])
+        kwargs = mock_completion.call_args.kwargs
+        assert kwargs["timeout"] == 180.0
+
+    async def test_chat_without_timeout_omits_kwarg(self) -> None:
+        """``timeout_s=None`` lets LiteLLM use its own default."""
+        account = _stub_account()
+        mock_completion = AsyncMock(
+            return_value={
+                "choices": [{"message": {"content": "ok", "tool_calls": []}}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1},
+            }
+        )
+        llm = LlmClient(completion_fn=mock_completion)
+        adapter = LiteLLMAdapter(
+            account=account,
+            api_key="",
+            llm=llm,
+            workspace_id=account.workspace_id,
+            account_id=account.account_id,
+            model_account_id=account.id,
+        )
+        await adapter.chat(system="x", messages=[{"role": "user", "content": "y"}])
+        kwargs = mock_completion.call_args.kwargs
+        assert "timeout" not in kwargs
+
+    async def test_account_extra_params_timeout_wins_over_caller_default(self) -> None:
+        """Operator-set ``extra_params.timeout`` on the model account row
+        overrides the per-caller default — lets a deployment tune per
+        provider when a global per-caller cap is too aggressive."""
+        account = _stub_account(extra_params={"timeout": 600.0})
+        mock_completion = AsyncMock(
+            return_value={
+                "choices": [{"message": {"content": "ok", "tool_calls": []}}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1},
+            }
+        )
+        llm = LlmClient(completion_fn=mock_completion)
+        adapter = LiteLLMAdapter(
+            account=account,
+            api_key="",
+            llm=llm,
+            workspace_id=account.workspace_id,
+            account_id=account.account_id,
+            model_account_id=account.id,
+            timeout_s=180.0,
+        )
+        await adapter.chat(system="x", messages=[{"role": "user", "content": "y"}])
+        kwargs = mock_completion.call_args.kwargs
+        assert kwargs["timeout"] == 600.0
+
 
 # --------------------------------------------------------------------------
 # ExecutorAdapter — Lift E3 wires the subprocess dispatch path.
@@ -294,6 +366,163 @@ class TestExecutorAdapterChat:
 
                 assert response.content == "42"
                 assert response.tool_calls == ()
+
+    async def test_chat_uses_per_caller_timeout_over_settings_default(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Lift E9 — when constructed with ``timeout_s`` the executor adapter
+        passes that value to ``dispatch.await_completion`` instead of the
+        settings default. Spies on the captured timeout_s kwarg."""
+        import asyncio
+
+        redis = await _make_redis()
+        workspace_id = uuid.uuid4()
+        # Settings default 1800; the per-caller override is 180.
+        settings = get_settings().model_copy(update={"executor_task_timeout_s": 1800.0})
+
+        captured: dict[str, float] = {}
+        real_await = dispatch.await_completion
+
+        async def _spy_await(*args: Any, **kwargs: Any) -> Any:
+            captured["timeout_s"] = kwargs["timeout_s"]
+            return await real_await(*args, **kwargs)
+
+        monkeypatch.setattr(dispatch, "await_completion", _spy_await)
+
+        async with shared_file_sessionmaker() as sf:
+            async with sf() as setup:
+                worker = await _seed_worker(
+                    setup, workspace_id=workspace_id, capabilities=["claude_code"]
+                )
+                account = _executor_account(workspace_id, worker.id)
+                setup.add(account)
+                await setup.commit()
+
+            async with sf() as adapter_session:
+                adapter = ExecutorAdapter(
+                    account=account,
+                    workspace_id=workspace_id,
+                    account_id=account.account_id,
+                    model_account_id=account.id,
+                    session=adapter_session,
+                    settings=settings,
+                    redis=redis,
+                    timeout_s=180.0,
+                )
+
+                async def _simulate_worker() -> None:
+                    stream = dispatch.worker_stream(worker.id)
+                    last_id = "0"
+                    for _ in range(500):
+                        entries = await redis.xread({stream: last_id}, count=1, block=20)
+                        if not entries:
+                            continue
+                        _name, messages = entries[0]
+                        for msg_id, fields in messages:
+                            last_id = msg_id
+                            task_id = uuid.UUID(fields["task_id"])
+                            async with sf() as ws_session:
+                                await dispatch.record_result(
+                                    ws_session,
+                                    redis,
+                                    task_id=task_id,
+                                    success=True,
+                                    output="ok",
+                                    error_message=None,
+                                )
+                                await ws_session.commit()
+                            return
+                    raise AssertionError("worker stream never saw the XADD")
+
+                worker_task = asyncio.create_task(_simulate_worker())
+                try:
+                    await adapter.chat(
+                        system="x",
+                        messages=[{"role": "user", "content": "y"}],
+                    )
+                finally:
+                    await worker_task
+
+                assert captured["timeout_s"] == 180.0, (
+                    "ExecutorAdapter.chat ignored the per-caller timeout — "
+                    "still passing the 1800 s settings default."
+                )
+
+    async def test_chat_falls_back_to_settings_when_timeout_none(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``timeout_s=None`` uses ``settings.executor_task_timeout_s`` —
+        ``workflow.agent_loop.act`` keeps the legacy 1800 s default."""
+        import asyncio
+
+        redis = await _make_redis()
+        workspace_id = uuid.uuid4()
+        settings = get_settings().model_copy(update={"executor_task_timeout_s": 1800.0})
+
+        captured: dict[str, float] = {}
+        real_await = dispatch.await_completion
+
+        async def _spy_await(*args: Any, **kwargs: Any) -> Any:
+            captured["timeout_s"] = kwargs["timeout_s"]
+            return await real_await(*args, **kwargs)
+
+        monkeypatch.setattr(dispatch, "await_completion", _spy_await)
+
+        async with shared_file_sessionmaker() as sf:
+            async with sf() as setup:
+                worker = await _seed_worker(
+                    setup, workspace_id=workspace_id, capabilities=["claude_code"]
+                )
+                account = _executor_account(workspace_id, worker.id)
+                setup.add(account)
+                await setup.commit()
+
+            async with sf() as adapter_session:
+                adapter = ExecutorAdapter(
+                    account=account,
+                    workspace_id=workspace_id,
+                    account_id=account.account_id,
+                    model_account_id=account.id,
+                    session=adapter_session,
+                    settings=settings,
+                    redis=redis,
+                    # No timeout_s — falls back to settings.
+                )
+
+                async def _simulate_worker() -> None:
+                    stream = dispatch.worker_stream(worker.id)
+                    last_id = "0"
+                    for _ in range(500):
+                        entries = await redis.xread({stream: last_id}, count=1, block=20)
+                        if not entries:
+                            continue
+                        _name, messages = entries[0]
+                        for msg_id, fields in messages:
+                            last_id = msg_id
+                            task_id = uuid.UUID(fields["task_id"])
+                            async with sf() as ws_session:
+                                await dispatch.record_result(
+                                    ws_session,
+                                    redis,
+                                    task_id=task_id,
+                                    success=True,
+                                    output="ok",
+                                    error_message=None,
+                                )
+                                await ws_session.commit()
+                            return
+                    raise AssertionError("worker stream never saw the XADD")
+
+                worker_task = asyncio.create_task(_simulate_worker())
+                try:
+                    await adapter.chat(
+                        system="x",
+                        messages=[{"role": "user", "content": "y"}],
+                    )
+                finally:
+                    await worker_task
+
+                assert captured["timeout_s"] == 1800.0
 
     async def test_chat_worker_failure_raises(self) -> None:
         """Worker reports ``success=False`` → adapter raises with the error."""

@@ -77,7 +77,7 @@ def test_alembic_head_is_connector_last_import():
     # Lift A v2 bumped the head; keep the test name (function name was the
     # historical revision id, kept for git-blame stability) and assert the
     # new tip.
-    assert "drop_executor_install_tokens" in result.stdout
+    assert "product_bootstrap_progress" in result.stdout
 
 
 def test_target_metadata_covers_all_bases():

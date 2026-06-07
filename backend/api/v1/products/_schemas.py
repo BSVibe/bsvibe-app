@@ -62,6 +62,12 @@ class ProductResponse(BaseModel):
     bootstrap_status: str | None = None
     bootstrap_artifacts_count: int | None = None
     bootstrap_error: str | None = None
+    # Lift E9 — per-chunk progress snapshot while ingest is running:
+    # ``{"chunks_done", "chunks_total", "chunks_failed", "notes_created",
+    # "notes_updated", "phase"}``. ``None`` outside the ingest window
+    # or on every legacy row — founder UI treats ``None`` as "fall back
+    # to status pill".
+    bootstrap_progress: dict[str, Any] | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -84,6 +90,9 @@ class ProductBootstrapResponse(BaseModel):
     run_id: uuid.UUID | None
     started_at: datetime | None
     completed_at: datetime | None
+    # Lift E9 — per-chunk progress snapshot during ingest. ``None``
+    # outside the ingest window or before any chunk has finished.
+    progress: dict[str, Any] | None = None
 
 
 # --- Product resources --------------------------------------------------------

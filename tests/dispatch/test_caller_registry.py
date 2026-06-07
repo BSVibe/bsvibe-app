@@ -5,9 +5,14 @@ from __future__ import annotations
 import pytest
 
 from backend.dispatch.caller_registry import (
+    CALLER_AGENT_LOOP_ACT,
     CALLER_AGENT_LOOP_PLAN,
     CALLER_FRAME,
+    CALLER_JUDGE,
+    CALLER_KNOWLEDGE_CANONICALIZATION,
     CALLER_KNOWLEDGE_INGEST,
+    CALLER_KNOWLEDGE_QUERY,
+    CALLER_SETTLE_EXTRACT,
     KNOWN_CALLERS,
     SKILL_CALLER_PREFIX,
     CallerSpec,
@@ -62,6 +67,47 @@ class TestSkillNamespace:
                 f"{SKILL_CALLER_PREFIX}widget-builder",
                 skill_names=["other-skill"],
             )
+
+
+class TestPerCallerTimeout:
+    """Lift E9 — per-caller chat timeout knob on :class:`CallerSpec`."""
+
+    def test_callerspec_defaults_to_none(self) -> None:
+        """A spec authored without an explicit timeout uses settings default."""
+        spec = CallerSpec(caller_id="custom")
+        assert spec.default_timeout_s is None
+
+    def test_chat_shaped_callers_set_short_timeout(self) -> None:
+        """Chat-shaped callers (ingest, frame, judge, canon, settle) override
+        the global 1800 s default with a 3 min ceiling so one stuck chunk
+        in a 50-chunk bootstrap doesn't waste 30 min."""
+        for caller_id in (
+            CALLER_KNOWLEDGE_INGEST,
+            CALLER_KNOWLEDGE_CANONICALIZATION,
+            CALLER_FRAME,
+            CALLER_JUDGE,
+            CALLER_SETTLE_EXTRACT,
+        ):
+            spec = KNOWN_CALLERS[caller_id]
+            assert spec.default_timeout_s == 180.0, (
+                f"{caller_id} should have 180 s timeout (chat-shaped), got {spec.default_timeout_s}"
+            )
+
+    def test_knowledge_query_one_minute(self) -> None:
+        """Interactive query — founder is waiting; fail fast."""
+        spec = KNOWN_CALLERS[CALLER_KNOWLEDGE_QUERY]
+        assert spec.default_timeout_s == 60.0
+
+    def test_agent_loop_plan_five_minutes(self) -> None:
+        """Plan turn is heavier than chat but lighter than tool-emitting act."""
+        spec = KNOWN_CALLERS[CALLER_AGENT_LOOP_PLAN]
+        assert spec.default_timeout_s == 300.0
+
+    def test_agent_loop_act_uses_settings_default(self) -> None:
+        """Tool-emitting agent turn genuinely runs `claude --print` —
+        keeps the 1800 s legacy default by leaving the override None."""
+        spec = KNOWN_CALLERS[CALLER_AGENT_LOOP_ACT]
+        assert spec.default_timeout_s is None
 
 
 class TestListAllCallers:

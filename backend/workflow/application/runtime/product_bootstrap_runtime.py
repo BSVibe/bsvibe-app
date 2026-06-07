@@ -162,6 +162,111 @@ class SqlAlchemyBootstrapRepository:
             )
 
 
+class _BootstrapProgressSubscriber:
+    """Lift E9 — turn ``INGEST_COMPILE_BATCH_*`` events into ``bootstrap_progress`` writes.
+
+    The bootstrap pipeline emits per-chunk events via the
+    :class:`~backend.knowledge._internal.events.EventBus` wired into the
+    :class:`IngestCompiler`. This subscriber listens for the four chunk
+    lifecycle events and writes the rolling totals onto the product row's
+    new ``bootstrap_progress`` JSON column.
+
+    Each event triggers a SHORT-LIVED session (open → ``UPDATE products
+    SET bootstrap_progress=… WHERE id=…`` → commit → close). NEVER holds
+    the row across a chunk — multi-tenant write contention would stall
+    every other product in the workspace while one slow bootstrap runs.
+
+    Writes are best-effort: a transient DB error logs a warning and the
+    compile keeps going. ``chunks_done`` is monotonic so last-writer-wins
+    semantics are safe — a lost event just stalls the visible counter
+    for one tick; the next chunk's event catches up.
+    """
+
+    __slots__ = ("_session_factory", "_product_id", "_state")
+
+    def __init__(
+        self,
+        *,
+        session_factory: async_sessionmaker[AsyncSession],
+        product_id: uuid.UUID,
+    ) -> None:
+        self._session_factory = session_factory
+        self._product_id = product_id
+        self._state: dict[str, Any] = {
+            "chunks_done": 0,
+            "chunks_total": 0,
+            "chunks_failed": 0,
+            "notes_created": 0,
+            "notes_updated": 0,
+            "phase": "ingesting",
+        }
+
+    async def on_event(self, event: Any) -> None:  # EventSubscriber Protocol
+        """Receive one :class:`~backend.knowledge._internal.events.Event`.
+
+        Filters to the ``INGEST_COMPILE_BATCH_*`` event family and folds
+        the payload into the rolling state, then writes the snapshot.
+        """
+        # Lazy import — keep the runtime module's top-level cheap.
+        from backend.knowledge._internal.events import EventType  # noqa: PLC0415
+
+        event_type = getattr(event, "event_type", None)
+        payload = getattr(event, "payload", {}) or {}
+
+        if event_type is EventType.INGEST_COMPILE_BATCH_START:
+            # Carry the chunk_count immediately so the founder UI can
+            # render the denominator while chunk 0 is still warming up.
+            self._state["chunks_total"] = int(payload.get("chunk_count") or 0)
+        elif event_type is EventType.INGEST_COMPILE_BATCH_CHUNK_START:
+            # Idempotent: if START never fired (subscribers can join
+            # mid-compile) honour the chunk_count carried on the chunk
+            # event so the founder UI never shows ``chunks_total=0``
+            # alongside a non-zero ``chunks_done``.
+            total = int(payload.get("chunk_count") or 0)
+            self._state["chunks_total"] = max(self._state["chunks_total"], total)
+        elif event_type is EventType.INGEST_COMPILE_BATCH_CHUNK_DONE:
+            self._state["chunks_done"] += 1
+            self._state["notes_created"] += int(payload.get("notes_created") or 0)
+            self._state["notes_updated"] += int(payload.get("notes_updated") or 0)
+            total = int(payload.get("chunk_count") or 0)
+            self._state["chunks_total"] = max(self._state["chunks_total"], total)
+        elif event_type is EventType.INGEST_COMPILE_BATCH_CHUNK_FAILED:
+            self._state["chunks_done"] += 1
+            self._state["chunks_failed"] += 1
+            total = int(payload.get("chunk_count") or 0)
+            self._state["chunks_total"] = max(self._state["chunks_total"], total)
+        else:
+            # Other event types pass through silently — the subscriber
+            # only owns the ``INGEST_COMPILE_BATCH_*`` family.
+            return
+
+        await self._write_snapshot()
+
+    async def _write_snapshot(self) -> None:
+        """Persist the current rolling state. Short-lived session.
+
+        Failure here is logged but never raised — a transient DB hiccup
+        must not sink a successful ingest's chunk_done event.
+        """
+        try:
+            async with self._session_factory() as session:
+                row = await session.get(ProductRow, self._product_id)
+                if row is None:
+                    return
+                # Fresh dict copy so SQLAlchemy sees a mutation on JSON
+                # column (a mutate-in-place dict on a JSON-typed mapped
+                # attr can be missed by the dirty tracker on some
+                # dialects — copy is cheap and unambiguous).
+                row.bootstrap_progress = dict(self._state)
+                await session.commit()
+        except Exception:  # noqa: BLE001 — best-effort visibility, never block ingest
+            logger.warning(
+                "bootstrap_progress_write_failed",
+                product_id=str(self._product_id),
+                exc_info=True,
+            )
+
+
 @dataclass(frozen=True, slots=True)
 class _IngestCallResult:
     """Internal tuple returned by ``_ingest_callable`` — Lift E8 Bug 2.
@@ -186,6 +291,7 @@ def build_bootstrap_knowledge(
     region: str,
     settings: Settings | None = None,
     redis_client: Any = None,
+    progress_subscriber: Any = None,
 ) -> Knowledge | None:
     """Build the workspace's :class:`Knowledge` facade for the bootstrap path.
 
@@ -209,6 +315,14 @@ def build_bootstrap_knowledge(
     first chat call, the IngestCompiler chunk loop catches and counts the
     failure, and every chunk drops silently — exactly the qazasa123
     dogfood symptom that surfaced this lift.
+
+    ``progress_subscriber`` (Lift E9) is an
+    :class:`~backend.knowledge._internal.events.EventSubscriber` (typically
+    :class:`_BootstrapProgressSubscriber`) that listens for the
+    ``INGEST_COMPILE_BATCH_*`` event family and surfaces per-chunk
+    progress onto the product row. ``None`` is non-fatal — the bootstrap
+    still runs end-to-end, the founder UI just falls back to the
+    status pill.
     """
     settings = settings or get_settings()
     return _build_bootstrap_knowledge_inner(
@@ -217,6 +331,7 @@ def build_bootstrap_knowledge(
         region=region,
         settings=settings,
         redis_client=redis_client,
+        progress_subscriber=progress_subscriber,
     )
 
 
@@ -227,9 +342,11 @@ def _build_bootstrap_knowledge_inner(
     region: str,
     settings: Settings,
     redis_client: Any = None,
+    progress_subscriber: Any = None,
 ) -> Knowledge | None:
     # Lazy imports keep the runtime layer's top-level cheap and avoid the
     # heavy Knowledge subsystem at module load.
+    from backend.knowledge._internal.events import EventBus  # noqa: PLC0415
     from backend.knowledge.canonicalization.index import (  # noqa: PLC0415
         InMemoryCanonicalizationIndex,
     )
@@ -301,10 +418,19 @@ def _build_bootstrap_knowledge_inner(
             vault_root=Path(settings.knowledge_vault_root),
         )
         canon_service = await _build_canonicalization_service(workspace_id, region)
+        # Lift E9 — wire the progress subscriber onto a fresh EventBus so
+        # the compiler emits ``INGEST_COMPILE_BATCH_*`` events into our
+        # surface. ``None`` subscriber → still build the bus (zero-cost
+        # no-op without subscribers) so the compiler doesn't branch on
+        # whether the runtime opted into progress.
+        bus = EventBus()
+        if progress_subscriber is not None:
+            bus.subscribe(progress_subscriber)
         compiler = IngestCompiler(
             garden_writer=factory.writer(),
             llm_client=llm,
             canonicalization_service=canon_service,
+            event_bus=bus,
         )
         items = [
             BatchItem(label=str(a.get("label", "")), content=str(a.get("content", "")))
@@ -443,6 +569,15 @@ async def run_product_bootstrap_job(
 
     await repo.mark_status(product_id, status=STATUS_ANALYZING)
 
+    # Lift E9 — wire a per-job progress subscriber so the compile_batch
+    # event stream lands on the product row. The subscriber holds the
+    # session FACTORY (not a session) so each write opens a fresh
+    # short-lived session and never blocks other workspaces' writes.
+    progress_subscriber = _BootstrapProgressSubscriber(
+        session_factory=session_factory,
+        product_id=product_id,
+    )
+
     async with session_factory() as session:
         knowledge = build_bootstrap_knowledge(
             session=session,
@@ -450,6 +585,7 @@ async def run_product_bootstrap_job(
             region=region,
             settings=settings,
             redis_client=redis_client,
+            progress_subscriber=progress_subscriber,
         )
         if knowledge is None:
             await repo.mark_status(
@@ -732,6 +868,7 @@ __all__ = [
     "STATUS_INGESTING",
     "STATUS_PENDING",
     "SqlAlchemyBootstrapRepository",
+    "_BootstrapProgressSubscriber",
     "build_bootstrap_knowledge",
     "run_product_bootstrap_job",
     "schedule_product_bootstrap",
