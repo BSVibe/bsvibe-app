@@ -110,9 +110,7 @@ describe("BootstrapStatusPanel", () => {
       }),
     );
     render(<BootstrapStatusPanel productId="p1" getBootstrap={getBootstrap} />);
-    expect(
-      await screen.findByText(/Ingesting 20 \/ 47 chunks \(3 failed\)/i),
-    ).toBeInTheDocument();
+    expect(await screen.findByText(/Ingesting 20 \/ 47 chunks \(3 failed\)/i)).toBeInTheDocument();
   });
 
   it("does not render the chunk progress line when progress is null", async () => {
