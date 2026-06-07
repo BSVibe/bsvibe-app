@@ -31,7 +31,8 @@
     "resetSentBody": "If an account exists for that email, a reset link is on its way.",
     "backToSignIn": "Back to sign in",
     "completingSignIn": "Completing sign-in…",
-    "oauthCallbackError": "Sign-in couldn’t be completed. Please try again."
+    "oauthCallbackError": "Sign-in couldn’t be completed. Please try again.",
+    "oauthLostContext": "OAuth flow lost context — please run `bsvibe login` again."
   },
   "oauthConsent": {
     "title": "Allow {clientName} to access BSVibe?",

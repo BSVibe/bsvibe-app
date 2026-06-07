@@ -1,6 +1,7 @@
 "use client";
 
 import { AuthBrand } from "@/components/auth/AuthBrand";
+import { RETURN_TO_KEY } from "@/lib/api/auth";
 import { ApiError } from "@/lib/api/client";
 import {
   type AuthorizeParams,
@@ -42,9 +43,17 @@ export function ConsentClient() {
   // brings the user back to THIS consent URL (preserving every param).
   // Living outside the `(app)` segment means we don't inherit the
   // app-shell RequireAuth — the redirect is owned here.
+  //
+  // Lift E11 — `return_to` is stashed in sessionStorage (under
+  // `RETURN_TO_KEY`) BEFORE the redirect. The query-param shape is kept
+  // as the secondary write path so /login renders an "I know where you
+  // came from" state on direct loads, but the load-bearing carrier is
+  // sessionStorage. The login page + startOAuth both re-write the same
+  // key so a wedge between effect timings can't drop it.
   useEffect(() => {
     if (!hydrated || session) return;
     const returnTo = `${window.location.pathname}${window.location.search}`;
+    sessionStorage.setItem(RETURN_TO_KEY, returnTo);
     router.replace(`/login?return_to=${encodeURIComponent(returnTo)}`);
   }, [hydrated, session, router]);
 

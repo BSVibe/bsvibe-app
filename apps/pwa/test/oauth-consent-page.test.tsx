@@ -151,6 +151,7 @@ describe("oauth consent page", () => {
 
   it("redirects unauthenticated users to /login with return_to", async () => {
     clearSession();
+    sessionStorage.clear();
     render(<ConsentClient />);
 
     await waitFor(() => expect(replace).toHaveBeenCalledTimes(1));
@@ -160,6 +161,15 @@ describe("oauth consent page", () => {
     expect(decodeURIComponent(arg)).toContain("/oauth/consent");
     expect(decodeURIComponent(arg)).toContain("client_id=dcr-abc123");
     expect(getOAuthClientByClientId).not.toHaveBeenCalled();
+
+    // Lift E11 — the load-bearing carrier is sessionStorage. The query
+    // is just for the rendering pass on /login; the value the callback
+    // page reads after the IdP round-trip lives here.
+    const stashed = sessionStorage.getItem("bsvibe.return_to");
+    expect(stashed).toContain("/oauth/consent");
+    expect(stashed).toContain("client_id=dcr-abc123");
+    expect(stashed).toContain("redirect_uri=http%3A%2F%2F127.0.0.1%3A49921%2Fcallback");
+    sessionStorage.clear();
   });
 
   it("shows the unknown-client error card when the lookup 404s", async () => {

@@ -1,7 +1,13 @@
 "use client";
 
 import { AuthBrand } from "@/components/auth/AuthBrand";
-import { type OAuthProvider, login, startOAuth } from "@/lib/api/auth";
+import {
+  type OAuthProvider,
+  RETURN_TO_KEY,
+  isSameOriginPath,
+  login,
+  startOAuth,
+} from "@/lib/api/auth";
 import { useTranslations } from "next-intl";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
@@ -31,8 +37,17 @@ export default function LoginPage() {
 
   // Resolve the post-sign-in destination. We accept ONLY same-origin paths
   // (starting with `/`) so a crafted `?return_to=https://evil.com` can't
-  // turn /login into an open redirector.
-  const returnTo = safeReturnTo(params.get("return_to")) ?? "/brief";
+  // turn /login into an open redirector. Two input sources:
+  //
+  //   1. `?return_to=…` query — direct navigations (magic-link, deep link).
+  //   2. `sessionStorage[RETURN_TO_KEY]` — set by `ConsentClient` before
+  //      bouncing here, so the value survives even when the founder lands
+  //      on /login via a router.replace that drops the query.
+  //
+  // The query wins when both are present (caller-explicit overrides the
+  // stash). Anything that fails the guard is dropped — never silently
+  // turned into an open redirect.
+  const returnTo = pickReturnTo(params.get("return_to")) ?? "/brief";
 
   // Warm the destination route (its chunk + RSC payload) while the founder
   // is still typing credentials, so the post-sign-in router.replace paints
@@ -42,15 +57,17 @@ export default function LoginPage() {
     router.prefetch(returnTo);
   }, [router, returnTo]);
 
-  // Persist `return_to` across the social-provider round trip. `startOAuth`
-  // hands the browser off to the IdP, which sends the user back to
-  // `/auth/callback` — that page reads this key + redirects there.
+  // Persist `return_to` across the social-provider round trip so a refresh
+  // of /login (which drops the query) re-renders against the same intent.
+  // The atomic write right before `window.location.assign` lives in
+  // `startOAuth` — this effect just mirrors the resolved value for the
+  // email/password sign-in path (which router.replaces after the POST).
   useEffect(() => {
     if (typeof window === "undefined") return;
     if (returnTo === "/brief") {
-      sessionStorage.removeItem("bsvibe.return_to");
+      sessionStorage.removeItem(RETURN_TO_KEY);
     } else {
-      sessionStorage.setItem("bsvibe.return_to", returnTo);
+      sessionStorage.setItem(RETURN_TO_KEY, returnTo);
     }
   }, [returnTo]);
 
@@ -177,15 +194,18 @@ export default function LoginPage() {
   );
 }
 
-/** Reject anything other than a same-origin path. A `?return_to=…` value
- *  that's not a relative path beginning with `/` (and not `//…` — the
- *  protocol-relative shape that would land cross-origin) is dropped so
- *  /login can't be turned into an open redirector. */
-function safeReturnTo(raw: string | null): string | null {
-  if (!raw) return null;
-  if (!raw.startsWith("/")) return null;
-  if (raw.startsWith("//")) return null;
-  return raw;
+/** Pick the post-sign-in destination, preferring the explicit query param
+ *  over the sessionStorage stash that ConsentClient laid down. Returns
+ *  `null` when neither source produced a same-origin path, in which case
+ *  the caller falls back to `/brief`. Reuses the shared
+ *  `isSameOriginPath` so /login, /auth/callback, and `startOAuth` all
+ *  agree on what "safe" means. */
+function pickReturnTo(fromQuery: string | null): string | null {
+  if (isSameOriginPath(fromQuery)) return fromQuery;
+  if (typeof window === "undefined") return null;
+  const stashed = window.sessionStorage.getItem(RETURN_TO_KEY);
+  if (isSameOriginPath(stashed)) return stashed;
+  return null;
 }
 
 function GoogleIcon() {
