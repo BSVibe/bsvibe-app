@@ -88,3 +88,47 @@ async def test_load_registers_vanilla_providers_from_db() -> None:
     assert "discord" in registered
     assert get_provider("notion") is not None
     assert get_provider("discord") is not None
+
+
+# ── sentry (install→grant; needs integration slug) ──────────────────────
+
+from backend.connectors.auth.sentry import SentryProvider  # noqa: E402
+
+
+async def test_set_sentry_creds_with_slug_registers_sentry_provider() -> None:
+    cipher = _cipher()
+    async with memory_session() as s:
+        await set_app_credentials(
+            s,
+            provider="sentry",
+            client_id="cid",
+            client_secret="sec",
+            app_slug="bsvibe-int",
+            cipher=cipher,
+        )
+        creds = await get_app_credentials(s, provider="sentry", cipher=cipher)
+    assert creds is not None
+    assert creds.app_slug == "bsvibe-int"  # external-install URL slug
+    prov = get_provider("sentry")
+    assert isinstance(prov, SentryProvider)
+
+
+async def test_set_sentry_creds_requires_slug() -> None:
+    cipher = _cipher()
+    async with memory_session() as s:
+        with pytest.raises(ValueError, match="slug"):
+            await set_app_credentials(
+                s, provider="sentry", client_id="c", client_secret="s", cipher=cipher
+            )
+
+
+async def test_load_registers_sentry_from_db() -> None:
+    cipher = _cipher()
+    async with memory_session() as s:
+        await set_app_credentials(
+            s, provider="sentry", client_id="c", client_secret="s", app_slug="x", cipher=cipher
+        )
+        providers_mod._REGISTRY.clear()
+        registered = await load_app_credential_providers(s, cipher)
+    assert "sentry" in registered
+    assert isinstance(get_provider("sentry"), SentryProvider)

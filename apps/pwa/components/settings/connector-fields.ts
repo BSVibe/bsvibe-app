@@ -182,6 +182,18 @@ export function isPasteCredsConnector(connector: ConnectorName): boolean {
   return PASTE_CREDS_CONNECTORS.has(connector);
 }
 
+/** Providers connected via an install→grant flow with no per-connect state, so
+ *  the binding is deferred (claim-later): the founder opens the install URL, the
+ *  callback parks an unclaimed install, then they claim it to a workspace.
+ *  Sentry is the first (design §11); operator setup needs an integration slug. */
+const INSTALL_CONNECTORS = new Set<ConnectorName>(["sentry"]);
+
+/** True when ``connector`` uses the install→grant claim-later flow (sentry),
+ *  not the standard OAuth start/callback. */
+export function isInstallConnector(connector: ConnectorName): boolean {
+  return INSTALL_CONNECTORS.has(connector);
+}
+
 /** github (Lift 1): "Connect with GitHub" replaces the old PAT/signing-secret
  *  field; the OAuth token is the outbound API credential (stored separately in
  *  connector_oauth_tokens). The delivery_config JSON stays for PR routing

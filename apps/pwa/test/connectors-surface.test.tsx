@@ -160,6 +160,8 @@ describe("Connectors catalog surface", () => {
       .fn()
       // initial list (empty)
       .mockResolvedValueOnce(jsonResponse([]))
+      // pending-installs fetch on mount (Sentry claim-later)
+      .mockResolvedValueOnce(jsonResponse({ unclaimed: [] }))
       // create
       .mockResolvedValueOnce(jsonResponse(created, 201))
       // re-read list after create
@@ -193,8 +195,9 @@ describe("Connectors catalog surface", () => {
     expect(screen.getByText("ONE-TIME-TOKEN-abcd")).toBeInTheDocument();
     expect(screen.getByText(/won.t see (this|it) again/i)).toBeInTheDocument();
 
-    // Assert the create POST carried the form body.
-    const createCall = fetchMock.mock.calls[1] as unknown as [string, RequestInit];
+    // Assert the create POST carried the form body. (calls: [0] list, [1]
+    // pending-installs, [2] create POST, [3] re-read.)
+    const createCall = fetchMock.mock.calls[2] as unknown as [string, RequestInit];
     expect(createCall[0]).toBe("/api/v1/connectors");
     expect(createCall[1].method).toBe("POST");
     expect(JSON.parse(createCall[1].body as string)).toEqual({
@@ -204,12 +207,15 @@ describe("Connectors catalog surface", () => {
       delivery_config: { chat_id: "123" },
     });
 
-    // A re-read fired (3rd call is the list GET).
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
+    // A re-read fired (list, pending-installs, create, re-read).
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(4));
   });
 
   it("rejects an invalid delivery_config JSON before firing the request", async () => {
-    const fetchMock = vi.fn().mockResolvedValueOnce(jsonResponse([]));
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse([]))
+      .mockResolvedValueOnce(jsonResponse({ unclaimed: [] }));
     global.fetch = fetchMock as unknown as typeof fetch;
 
     render(<Connectors />);
@@ -225,14 +231,15 @@ describe("Connectors catalog surface", () => {
     await userEvent.click(screen.getByRole("button", { name: /^Add connector$/i }));
 
     expect(await screen.findByText(/not valid JSON/i)).toBeInTheDocument();
-    // No POST fired — only the initial list GET.
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    // No POST fired — only the initial list GET + pending-installs fetch on mount.
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
   it("shows a calm inline error when create fails and keeps the form usable", async () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(jsonResponse([]))
+      .mockResolvedValueOnce(jsonResponse({ unclaimed: [] }))
       .mockResolvedValueOnce(jsonResponse("bad", 422));
     global.fetch = fetchMock as unknown as typeof fetch;
 
@@ -253,6 +260,7 @@ describe("Connectors catalog surface", () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(jsonResponse([GITHUB_ROW]))
+      .mockResolvedValueOnce(jsonResponse({ unclaimed: [] }))
       .mockResolvedValueOnce(jsonResponse(null, 204))
       .mockResolvedValueOnce(jsonResponse([{ ...GITHUB_ROW, is_active: false }]));
     global.fetch = fetchMock as unknown as typeof fetch;
@@ -267,19 +275,21 @@ describe("Connectors catalog surface", () => {
     const confirm = await within(card).findByRole("button", { name: /^Confirm revoke$/i });
     await userEvent.click(confirm);
 
+    // calls: [0] list, [1] pending-installs, [2] DELETE, [3] re-read.
     await waitFor(() => {
-      const deleteCall = fetchMock.mock.calls[1] as unknown as [string, RequestInit];
+      const deleteCall = fetchMock.mock.calls[2] as unknown as [string, RequestInit];
       expect(deleteCall[0]).toBe(`/api/v1/connectors/${GITHUB_ROW.id}`);
       expect(deleteCall[1].method).toBe("DELETE");
     });
     // A re-read fired after the revoke.
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(4));
   });
 
   it("shows a calm inline error when revoke fails — card stays actionable", async () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(jsonResponse([GITHUB_ROW]))
+      .mockResolvedValueOnce(jsonResponse({ unclaimed: [] }))
       .mockResolvedValueOnce(jsonResponse("boom", 500));
     global.fetch = fetchMock as unknown as typeof fetch;
 

@@ -23,7 +23,11 @@ import uuid
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.connectors.auth.db import ConnectorOAuthPendingRow, ConnectorOAuthTokenRow
+from backend.connectors.auth.db import (
+    ConnectorOAuthPendingRow,
+    ConnectorOAuthTokenRow,
+    ConnectorOAuthUnclaimedRow,
+)
 from backend.connectors.auth.tokenset import TokenSet
 from backend.connectors.db import ConnectorAccountRow
 from backend.router.accounts.crypto import CredentialCipher
@@ -158,9 +162,70 @@ async def upsert_token(
     return row
 
 
+async def create_unclaimed(
+    session: AsyncSession,
+    *,
+    provider: str,
+    installation_ref: str,
+    account_label: str | None,
+    token: TokenSet,
+    cipher: CredentialCipher,
+) -> ConnectorOAuthUnclaimedRow:
+    """Park an exchanged token awaiting a workspace claim (encrypt-on-write)."""
+    row = ConnectorOAuthUnclaimedRow(
+        provider=provider,
+        installation_ref=installation_ref,
+        account_label=account_label,
+        access_token_ciphertext=cipher.encrypt(token.access_token),
+        refresh_token_ciphertext=(
+            cipher.encrypt(token.refresh_token) if token.refresh_token else None
+        ),
+        expires_at=token.expires_at,
+    )
+    session.add(row)
+    await session.flush()
+    return row
+
+
+async def list_unclaimed(
+    session: AsyncSession, *, provider: str | None = None
+) -> list[ConnectorOAuthUnclaimedRow]:
+    """Unclaimed installs (optionally filtered by provider), newest first."""
+    stmt = select(ConnectorOAuthUnclaimedRow).order_by(ConnectorOAuthUnclaimedRow.created_at.desc())
+    if provider is not None:
+        stmt = stmt.where(ConnectorOAuthUnclaimedRow.provider == provider)
+    return list((await session.execute(stmt)).scalars().all())
+
+
+async def claim_unclaimed(
+    session: AsyncSession, *, unclaimed_id: uuid.UUID, cipher: CredentialCipher
+) -> tuple[str, str, TokenSet] | None:
+    """Fetch + delete an unclaimed row (single-use). Returns
+    ``(provider, installation_ref, decrypted TokenSet)`` or ``None`` if absent.
+    """
+    row = await session.get(ConnectorOAuthUnclaimedRow, unclaimed_id)
+    if row is None:
+        return None
+    token = TokenSet(
+        access_token=cipher.decrypt(row.access_token_ciphertext),
+        refresh_token=(
+            cipher.decrypt(row.refresh_token_ciphertext) if row.refresh_token_ciphertext else None
+        ),
+        expires_at=row.expires_at,
+        account_label=row.account_label,
+    )
+    provider, installation_ref = row.provider, row.installation_ref
+    await session.delete(row)
+    await session.flush()
+    return provider, installation_ref, token
+
+
 __all__ = [
     "claim_pending",
+    "claim_unclaimed",
     "create_pending",
+    "create_unclaimed",
     "get_or_create_account",
+    "list_unclaimed",
     "upsert_token",
 ]

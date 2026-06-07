@@ -24,7 +24,7 @@ import uuid
 from typing import Annotated
 
 import structlog
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -171,11 +171,16 @@ async def start_github_app_manifest(
 
 
 class AppCredentialsIn(BaseModel):
-    """Operator-pasted OAuth App credentials for a vanilla provider."""
+    """Operator-pasted OAuth App credentials for a vanilla provider.
+
+    ``app_slug`` is required only for sentry (its integration slug, used to build
+    the external-install URL); slack/notion/discord ignore it.
+    """
 
     model_config = ConfigDict(extra="forbid")
     client_id: str = Field(..., min_length=1, max_length=255)
     client_secret: str = Field(..., min_length=1, max_length=1024)
+    app_slug: str | None = Field(default=None, max_length=255)
 
 
 @router.post("/{provider}/app-credentials")
@@ -198,6 +203,7 @@ async def set_provider_app_credentials(
             provider=provider,
             client_id=payload.client_id,
             client_secret=payload.client_secret,
+            app_slug=payload.app_slug,
             cipher=cipher,
         )
     except ValueError as exc:
@@ -245,6 +251,79 @@ async def github_app_manifest_callback(
     )
     return RedirectResponse(
         _pwa_manifest_return_url(ok=True),
+        status_code=status.HTTP_302_FOUND,
+    )
+
+
+# ── Unclaimed installs (claim-later) ────────────────────────────────────
+
+
+@router.get("/unclaimed")
+async def list_unclaimed_installs(
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+) -> dict[str, object]:
+    """Installs awaiting a workspace claim (e.g. Sentry). No secrets returned."""
+    return {"unclaimed": await service.list_unclaimed_installs(session)}
+
+
+@router.post("/unclaimed/{unclaimed_id}/claim")
+async def claim_unclaimed_install(
+    unclaimed_id: uuid.UUID,
+    workspace_id: Annotated[uuid.UUID, Depends(get_workspace_id)],
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    cipher: Annotated[CredentialCipher, Depends(get_credential_cipher)],
+) -> dict[str, object]:
+    """Bind an unclaimed install to the active workspace."""
+    try:
+        connector = await service.claim_install(
+            session, unclaimed_id=unclaimed_id, workspace_id=workspace_id, cipher=cipher
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    return {"connector": connector, "claimed": True}
+
+
+# ── Sentry install→grant flow (claim-later, design §11) ─────────────────
+
+
+@router.get("/sentry/install-url")
+async def sentry_install_url(
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    cipher: Annotated[CredentialCipher, Depends(get_credential_cipher)],
+) -> dict[str, object]:
+    """The Sentry external-install URL (founder opens it to install + connect).
+
+    ``configured`` false when the operator hasn't set the Sentry integration's
+    creds + slug yet.
+    """
+    url = await service.sentry_install_url(session, cipher=cipher)
+    return {"configured": url is not None, "install_url": url}
+
+
+@public_router.get("/connectors/oauth/sentry/install/callback")
+async def sentry_install_callback(
+    code: str,
+    installation_id: Annotated[str, Query(alias="installationId")],
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    cipher: Annotated[CredentialCipher, Depends(get_credential_cipher)],
+) -> RedirectResponse:
+    """Sentry redirects here post-install with ``code`` + ``installationId``.
+
+    No workspace binding (Sentry passes no state) — exchange the grant + park
+    the token as an unclaimed install; the founder claims it afterwards.
+    """
+    try:
+        await service.complete_sentry_install(
+            session, code=code, installation_id=installation_id, cipher=cipher
+        )
+    except service.UnknownProviderError:
+        return RedirectResponse(
+            _pwa_return_url("sentry", ok=False), status_code=status.HTTP_302_FOUND
+        )
+    logger.info("sentry_install_unclaimed", installation_id=installation_id)
+    base = get_settings().pwa_url.rstrip("/")
+    return RedirectResponse(
+        f"{base}/settings/connectors?sentry_install=pending",
         status_code=status.HTTP_302_FOUND,
     )
 
