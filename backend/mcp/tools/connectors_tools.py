@@ -370,6 +370,36 @@ async def _h_github_app_setup(_: GithubAppSetupInput, ctx: ToolContext) -> Githu
     )
 
 
+# ── set_oauth_app (operator paste-creds for slack / notion / discord) ────
+
+
+class SetOAuthAppInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    provider: str = Field(..., min_length=1, max_length=64)
+    client_id: str = Field(..., min_length=1, max_length=255)
+    client_secret: str = Field(..., min_length=1, max_length=1024)
+
+
+class SetOAuthAppOutput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    provider: str
+    configured: bool
+
+
+async def _h_set_oauth_app(args: SetOAuthAppInput, ctx: ToolContext) -> SetOAuthAppOutput:
+    try:
+        await oauth_service.set_app_credentials(
+            ctx.session,
+            provider=args.provider,
+            client_id=args.client_id,
+            client_secret=args.client_secret,
+            cipher=oauth_service.build_credential_cipher(),
+        )
+    except ValueError as exc:
+        raise ToolError(str(exc)) from exc
+    return SetOAuthAppOutput(provider=args.provider, configured=True)
+
+
 def register_connectors_tools(registry: ToolRegistry) -> None:
     registry.register(
         Tool(
@@ -474,6 +504,23 @@ def register_connectors_tools(registry: ToolRegistry) -> None:
             handler=_h_github_app_setup,
             required_scopes=("mcp:write",),
             audit_event="bsvibe.mcp.connectors_app_setup.invoked",
+        )
+    )
+    registry.register(
+        Tool(
+            name="bsvibe_connectors_set_oauth_app",
+            description=(
+                "Operator: configure a vanilla OAuth connector's App credentials "
+                "(slack/notion/discord) by pasting the client_id + client_secret you "
+                "created in that provider's developer console. Stored encrypted; the "
+                "provider registers so workspaces can then 1-click connect. (github "
+                "uses connectors_github_app_setup_url instead.)"
+            ),
+            input_schema=SetOAuthAppInput,
+            output_schema=SetOAuthAppOutput,
+            handler=_h_set_oauth_app,
+            required_scopes=("mcp:write",),
+            audit_event="bsvibe.mcp.connectors_set_oauth_app.invoked",
         )
     )
 
