@@ -24,6 +24,9 @@ vi.mock("@/lib/api/connectors", () => ({
     authorize_url: "https://github.com/login/oauth/authorize?client_id=x",
   })),
   setProviderAppCredentials: vi.fn(async () => ({ provider: "slack", configured: true })),
+  getSentryInstallUrl: vi.fn(async () => ({ configured: false, install_url: null })),
+  listUnclaimedInstalls: vi.fn(async () => ({ unclaimed: [] })),
+  claimInstall: vi.fn(async () => ({ connector: "sentry", claimed: true })),
 }));
 
 import { startConnectorOAuth } from "@/lib/api/connectors";

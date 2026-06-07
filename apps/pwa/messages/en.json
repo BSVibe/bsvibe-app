@@ -680,10 +680,19 @@
         "hint": "Paste the OAuth app credentials you created in {provider}'s developer console.",
         "clientId": "Client ID",
         "clientSecret": "Client secret",
+        "appSlug": "Integration slug",
+        "appSlugHint": "Your Sentry integration's slug (from its settings URL).",
         "save": "Save & Connect",
         "saving": "Saving…",
         "cancel": "Cancel",
         "error": "Couldn't save — check the credentials."
+      },
+      "unclaimed": {
+        "heading": "Pending installs",
+        "lede": "These were installed but aren't bound to a workspace yet. Connect one to this workspace.",
+        "claim": "Connect to this workspace",
+        "claiming": "Connecting…",
+        "claimError": "Couldn't connect — try again."
       }
     },
     "notifications": {

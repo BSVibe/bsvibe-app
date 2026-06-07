@@ -20,6 +20,9 @@ vi.mock("@/lib/api/connectors", () => ({
     throw new Error("provider not configured");
   }),
   setProviderAppCredentials: vi.fn(async () => ({ provider: "slack", configured: true })),
+  getSentryInstallUrl: vi.fn(async () => ({ configured: false, install_url: null })),
+  listUnclaimedInstalls: vi.fn(async () => ({ unclaimed: [] })),
+  claimInstall: vi.fn(async () => ({ connector: "sentry", claimed: true })),
 }));
 
 const SESSION: Session = {

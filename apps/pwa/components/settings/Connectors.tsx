@@ -1,8 +1,12 @@
 "use client";
 
 import {
+  type UnclaimedInstall,
+  claimInstall,
   createConnector,
+  getSentryInstallUrl,
   listConnectors,
+  listUnclaimedInstalls,
   revokeConnector,
   startConnectorOAuth,
   triggerImport,
@@ -14,7 +18,7 @@ import { useEffect, useRef, useState } from "react";
 import AddConnector from "./AddConnector";
 import ConnectorRow from "./ConnectorRow";
 import { ProviderAppConfig } from "./ProviderAppConfig";
-import { isOAuthConnector, isPasteCredsConnector } from "./connector-fields";
+import { isInstallConnector, isOAuthConnector, isPasteCredsConnector } from "./connector-fields";
 
 /**
  * Settings → Connectors, framed as a CATALOG (design: stitch/
@@ -59,9 +63,13 @@ export default function Connectors() {
   // Connector whose OAuth start failed (app not configured by the operator yet)
   // → a calm "not available" note instead of a broken redirect.
   const [oauthUnavailable, setOauthUnavailable] = useState<ConnectorName | null>(null);
-  // Provider whose operator paste-creds form is open (slack/notion/discord not
-  // configured yet) → renders ProviderAppConfig inline on its card.
+  // Provider whose operator paste-creds form is open (slack/notion/discord/
+  // sentry not configured yet) → renders ProviderAppConfig inline on its card.
   const [configuring, setConfiguring] = useState<ConnectorName | null>(null);
+  // Installs exchanged but not yet bound to a workspace (Sentry claim-later).
+  const [unclaimed, setUnclaimed] = useState<UnclaimedInstall[]>([]);
+  // Unclaimed id currently being claimed (button busy state).
+  const [claiming, setClaiming] = useState<string | null>(null);
   const dialogRef = useRef<HTMLDialogElement>(null);
 
   // "Connect" on a card. OAuth connectors (github/slack/notion/discord) need no
@@ -69,6 +77,22 @@ export default function Connectors() {
   // to the provider authorize URL, no modal. Everything else opens the create
   // panel for its binding fields.
   async function handleConnect(name: ConnectorName) {
+    // Sentry's install→grant flow (claim-later): no /start dance — fetch the
+    // external-install URL and navigate there. Unconfigured → operator form.
+    if (isInstallConnector(name)) {
+      setOauthUnavailable(null);
+      try {
+        const { configured, install_url } = await getSentryInstallUrl();
+        if (configured && install_url) {
+          window.location.assign(install_url);
+          return;
+        }
+        setConfiguring(name);
+      } catch {
+        setConfiguring(name);
+      }
+      return;
+    }
     if (!isOAuthConnector(name)) {
       setConnecting(name);
       return;
@@ -91,8 +115,26 @@ export default function Connectors() {
   // After the operator saves a provider's App creds, proceed to the connect.
   async function connectAfterConfig(name: ConnectorName) {
     setConfiguring(null);
+    if (isInstallConnector(name)) {
+      const { configured, install_url } = await getSentryInstallUrl();
+      if (configured && install_url) window.location.assign(install_url);
+      return;
+    }
     const { authorize_url } = await startConnectorOAuth(name);
     window.location.assign(authorize_url);
+  }
+
+  // Claim an unclaimed install to the active workspace, then refresh both lists.
+  async function handleClaim(id: string) {
+    setClaiming(id);
+    try {
+      await claimInstall(id);
+      await Promise.all([load(), loadUnclaimed()]);
+    } catch {
+      // leave the row in place; the founder can retry.
+    } finally {
+      setClaiming(null);
+    }
   }
 
   // Drive the native <dialog> from the `connecting` state: showModal() gives us
@@ -125,11 +167,34 @@ export default function Connectors() {
     }
   }
 
+  async function loadUnclaimed() {
+    try {
+      const res = await listUnclaimedInstalls();
+      setUnclaimed(res?.unclaimed ?? []);
+    } catch {
+      // Best-effort — a failed read just hides the pending-installs section.
+      setUnclaimed([]);
+    }
+  }
+
   useEffect(() => {
     let active = true;
-    listConnectors()
-      .then((data) => active && setList({ data, failed: false }))
-      .catch(() => active && setList({ data: [], failed: true }));
+    // Load sequentially (list, then pending installs) so the request order is
+    // deterministic and the pending-installs section settles after the catalog.
+    (async () => {
+      try {
+        const data = await listConnectors();
+        if (active) setList({ data, failed: false });
+      } catch {
+        if (active) setList({ data: [], failed: true });
+      }
+      try {
+        const res = await listUnclaimedInstalls();
+        if (active) setUnclaimed(res?.unclaimed ?? []);
+      } catch {
+        // best-effort
+      }
+    })();
     return () => {
       active = false;
     };
@@ -179,6 +244,36 @@ export default function Connectors() {
         )}
       </div>
 
+      {/* PENDING INSTALLS (claim-later) ───────────────────────────────────── */}
+      {unclaimed.length > 0 ? (
+        <div className="connectors__section">
+          <h3 className="connectors__section-label">{t("unclaimed.heading")}</h3>
+          <p className="connectors__lede">{t("unclaimed.lede")}</p>
+          <ul className="connectors__grid" aria-label={t("unclaimed.heading")}>
+            {unclaimed.map((u) => (
+              <li key={u.id} className="connector-card connector-card--available">
+                <div className="connector-card__body">
+                  <span className="connector-card__name">
+                    {t(`labels.${u.provider as ConnectorName}`)}
+                  </span>
+                  <p className="connector-card__detail">{u.account_label ?? u.installation_ref}</p>
+                </div>
+                <div className="connector-card__actions">
+                  <button
+                    type="button"
+                    className="connector-card__connect"
+                    disabled={claiming === u.id}
+                    onClick={() => handleClaim(u.id)}
+                  >
+                    {claiming === u.id ? t("unclaimed.claiming") : t("unclaimed.claim")}
+                  </button>
+                </div>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+
       {/* AVAILABLE ────────────────────────────────────────────────────────── */}
       <div className="connectors__section">
         <h3 className="connectors__section-label">{t("available")}</h3>
@@ -192,6 +287,7 @@ export default function Connectors() {
               {configuring === name ? (
                 <ProviderAppConfig
                   provider={name}
+                  requireSlug={isInstallConnector(name)}
                   onSaved={() => connectAfterConfig(name)}
                   onCancel={() => setConfiguring(null)}
                 />

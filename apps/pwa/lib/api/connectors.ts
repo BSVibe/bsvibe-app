@@ -95,10 +95,50 @@ export function setProviderAppCredentials(
   provider: string,
   clientId: string,
   clientSecret: string,
+  appSlug?: string,
 ): Promise<{ provider: string; configured: boolean }> {
+  const body: Record<string, string> = { client_id: clientId, client_secret: clientSecret };
+  // sentry requires its integration slug (for the external-install URL); other
+  // providers ignore it, so only send it when present.
+  if (appSlug?.trim()) body.app_slug = appSlug.trim();
   return apiFetch(`/api/v1/connectors/oauth/${encodeURIComponent(provider)}/app-credentials`, {
     method: "POST",
-    body: JSON.stringify({ client_id: clientId, client_secret: clientSecret }),
+    body: JSON.stringify(body),
+  });
+}
+
+/** Response of `GET /api/v1/connectors/oauth/sentry/install-url`. */
+export interface SentryInstallUrl {
+  configured: boolean;
+  install_url: string | null;
+}
+
+/** The Sentry external-install URL the founder opens to install + authorize.
+ *  `configured` is false until the operator has set Sentry's creds + slug. */
+export function getSentryInstallUrl(): Promise<SentryInstallUrl> {
+  return apiFetch<SentryInstallUrl>("/api/v1/connectors/oauth/sentry/install-url");
+}
+
+/** An install awaiting a workspace claim (Sentry claim-later). No secrets. */
+export interface UnclaimedInstall {
+  id: string;
+  provider: string;
+  installation_ref: string;
+  account_label: string | null;
+  created_at: string;
+}
+
+/** Installs exchanged but not yet bound to a workspace (claim-later). */
+export function listUnclaimedInstalls(): Promise<{ unclaimed: UnclaimedInstall[] }> {
+  return apiFetch<{ unclaimed: UnclaimedInstall[] }>("/api/v1/connectors/oauth/unclaimed");
+}
+
+/** Bind an unclaimed install to the active workspace. */
+export function claimInstall(
+  unclaimedId: string,
+): Promise<{ connector: string; claimed: boolean }> {
+  return apiFetch(`/api/v1/connectors/oauth/unclaimed/${encodeURIComponent(unclaimedId)}/claim`, {
+    method: "POST",
   });
 }
 

@@ -23,29 +23,48 @@ export function ProviderAppConfig({
   provider,
   onSaved,
   onCancel,
+  requireSlug = false,
   save = setProviderAppCredentials,
 }: {
   provider: string;
   onSaved: () => void | Promise<void>;
   onCancel: () => void;
-  save?: (provider: string, clientId: string, clientSecret: string) => Promise<unknown>;
+  /** Sentry needs an integration slug (for the external-install URL) alongside
+   *  the client_id/secret — flips this field on and passes it as the 4th save
+   *  arg. Vanilla providers (slack/notion/discord) leave it off. */
+  requireSlug?: boolean;
+  save?: (
+    provider: string,
+    clientId: string,
+    clientSecret: string,
+    appSlug?: string,
+  ) => Promise<unknown>;
 }) {
   const t = useTranslations("settings.connectors.providerConfig");
   const [clientId, setClientId] = useState("");
   const [clientSecret, setClientSecret] = useState("");
+  const [appSlug, setAppSlug] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(false);
   const idField = useId();
   const secretField = useId();
+  const slugField = useId();
 
-  const ready = clientId.trim().length > 0 && clientSecret.trim().length > 0;
+  const ready =
+    clientId.trim().length > 0 &&
+    clientSecret.trim().length > 0 &&
+    (!requireSlug || appSlug.trim().length > 0);
 
   async function submit() {
     if (!ready || busy) return;
     setBusy(true);
     setError(false);
     try {
-      await save(provider, clientId.trim(), clientSecret.trim());
+      if (requireSlug) {
+        await save(provider, clientId.trim(), clientSecret.trim(), appSlug.trim());
+      } else {
+        await save(provider, clientId.trim(), clientSecret.trim());
+      }
       await onSaved();
     } catch {
       setError(true);
@@ -86,6 +105,21 @@ export function ProviderAppConfig({
           onChange={(e) => setClientSecret(e.target.value)}
         />
       </label>
+      {requireSlug ? (
+        <label className="connector-form__field" htmlFor={slugField}>
+          <span className="connector-form__label">{t("appSlug")}</span>
+          <input
+            id={slugField}
+            className="connector-form__input"
+            type="text"
+            autoComplete="off"
+            value={appSlug}
+            disabled={busy}
+            placeholder={t("appSlugHint")}
+            onChange={(e) => setAppSlug(e.target.value)}
+          />
+        </label>
+      ) : null}
       {error ? (
         <span className="connector-form__error" aria-live="polite">
           {t("error")}
