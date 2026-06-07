@@ -31,6 +31,7 @@ from backend.connectors.auth.discord import build_discord_provider
 from backend.connectors.auth.github import GitHubAppProvider
 from backend.connectors.auth.notion import build_notion_provider
 from backend.connectors.auth.providers import OAuthProvider, register_provider
+from backend.connectors.auth.sentry import SentryProvider
 from backend.connectors.auth.slack import build_slack_provider
 from backend.router.accounts.crypto import CredentialCipher
 
@@ -44,8 +45,9 @@ VANILLA_DB_PROVIDERS: dict[str, Callable[..., OAuthProvider]] = {
 }
 
 # Providers loadable from the DB app-credentials table at startup: github (via
-# the manifest flow) + the vanilla providers (via operator-set creds).
-_DB_PROVIDERS = ("github", *VANILLA_DB_PROVIDERS)
+# the manifest flow), the vanilla providers (paste-creds), and sentry
+# (install→grant; paste-creds + integration slug).
+_DB_PROVIDERS = ("github", *VANILLA_DB_PROVIDERS, "sentry")
 
 # Vanilla OAuth2 connectors registered from env: (name, builder, id_attr,
 # secret_attr). Each builder takes client_id/client_secret and returns a
@@ -100,6 +102,10 @@ def register_provider_from_credentials(provider: str, creds: AppCredentials) -> 
             VANILLA_DB_PROVIDERS[provider](
                 client_id=creds.client_id, client_secret=creds.client_secret
             )
+        )
+    elif provider == "sentry":
+        register_provider(
+            SentryProvider(client_id=creds.client_id, client_secret=creds.client_secret)
         )
 
 

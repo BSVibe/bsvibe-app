@@ -27,6 +27,7 @@ from typing import Any
 
 import httpx
 
+from backend.connectors.auth.providers import TokenExchangeAuth
 from backend.connectors.auth.tokenset import TokenSet
 
 _API_BASE = "https://sentry.io/api/0"
@@ -37,7 +38,7 @@ class SentryProvider:
     """Mint + rotate a Sentry integration installation token."""
 
     name = "sentry"
-    token_exchange_auth = "body"  # noqa: S105 — auth-style label, not a secret
+    token_exchange_auth: TokenExchangeAuth = "body"  # noqa: S105 — auth-style label
     refreshable = True
     supports_service_token = True
 
