@@ -1310,6 +1310,12 @@ export interface Worker {
   /** Lift E4 — ISO 8601 last-heartbeat timestamp, `null` until the worker
    *  daemon has heartbeated at least once. Surfaces "Last seen" on the card. */
   last_heartbeat: string | null;
+  /** Lift E13 — mirrors the predicate `find_available_worker` uses (last
+   *  heartbeat within 120s). `status="online"` can lie when the worker
+   *  process died before clearing the column; this flag is the source of
+   *  truth for "can this worker actually take work right now". A row with
+   *  `status="online", heartbeat_fresh=false` is the stale-online diagnosis. */
+  heartbeat_fresh: boolean;
   /** Lift E4 — ISO 8601 row-creation timestamp ("Added on" detail). */
   created_at: string | null;
 }

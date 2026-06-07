@@ -353,6 +353,79 @@ async def test_install_token_endpoint_gone(admin_client) -> None:
     assert r.status_code in (404, 405), r.text
 
 
+# ── Lift E13 — fleet detail (capabilities/labels/heartbeat_fresh) ────────────
+
+
+async def test_list_response_carries_e13_fleet_detail(db, workspace_id) -> None:
+    """``GET /api/v1/workers`` carries the E13 fleet-detail fields per row:
+    capabilities, labels, status, is_active, last_heartbeat, heartbeat_fresh,
+    created_at.
+    """
+    from datetime import UTC, datetime, timedelta
+
+    import backend.executors.db as executors_db  # noqa: PLC0415
+
+    sub = "fleet-sub"
+    await _seed_member(db, workspace_id, "owner", sub)
+
+    app = create_app()
+
+    def _ws() -> uuid.UUID:
+        return workspace_id
+
+    app.dependency_overrides[get_current_user] = fake_current_user(sub)
+    app.dependency_overrides[get_workspace_id] = _ws
+
+    from backend.executors.dispatch import HEARTBEAT_FRESHNESS_S  # noqa: PLC0415
+
+    now = datetime.now(UTC)
+    async with db() as s:
+        s.add(
+            executors_db.WorkerRow(
+                id=uuid.uuid4(),
+                workspace_id=workspace_id,
+                name="fresh",
+                labels=["mac"],
+                capabilities=["codex", "opencode"],
+                status="online",
+                is_active=True,
+                last_heartbeat=now - timedelta(seconds=5),
+                token_hash="h1",
+            )
+        )
+        s.add(
+            executors_db.WorkerRow(
+                id=uuid.uuid4(),
+                workspace_id=workspace_id,
+                name="stale",
+                labels=[],
+                capabilities=["claude_code"],
+                status="online",
+                is_active=True,
+                last_heartbeat=now - timedelta(seconds=HEARTBEAT_FRESHNESS_S + 60),
+                token_hash="h2",
+            )
+        )
+        await s.commit()
+
+    async with _client(app, db) as c:
+        r = await c.get("/api/v1/workers")
+    assert r.status_code == 200, r.text
+    rows = {row["name"]: row for row in r.json()}
+    fresh = rows["fresh"]
+    assert fresh["capabilities"] == ["codex", "opencode"]
+    assert fresh["labels"] == ["mac"]
+    assert fresh["status"] == "online"
+    assert fresh["is_active"] is True
+    assert fresh["last_heartbeat"]
+    assert fresh["heartbeat_fresh"] is True
+    assert fresh["created_at"]
+
+    stale = rows["stale"]
+    assert stale["status"] == "online"
+    assert stale["heartbeat_fresh"] is False
+
+
 async def test_register_with_only_x_install_token_is_401(db) -> None:
     """Lift E5 — the X-Install-Token header is no longer honoured."""
     app = create_app()

@@ -338,6 +338,11 @@ ignore_imports = [
     # one-step cascade lives in the service layer.
     "backend.mcp.tools.workers_tools -> backend.executors.service",
     "backend.mcp.tools.workers_tools -> backend.executors.db",
+    # Lift E13 — surfacing ``heartbeat_fresh`` on the workers-list shape
+    # reuses the canonical predicate from ``executors.dispatch`` (the same
+    # one ``find_available_worker`` uses) instead of duplicating the cutoff
+    # calc. One source of truth for "can this worker actually take work".
+    "backend.mcp.tools.workers_tools -> backend.executors.dispatch",
     # Lift E7 — UI-parity for the NEW run-routing rules surface
     # (/api/v1/run-routing). Same one-canonical-mutation-chain pattern
     # as D3b's routing_rules_tools: the MCP module calls the same repo

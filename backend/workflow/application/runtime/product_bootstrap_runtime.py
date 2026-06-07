@@ -91,6 +91,40 @@ STATUS_FAILED_INGEST = "failed:ingest"
 # on completion) is the canonical fire-and-forget pattern.
 _running: set[asyncio.Task[None]] = set()
 
+# Lift E13 — per-product index of the running task, so an operator can
+# cancel a wedged bootstrap mid-flight (the qazasa123 dogfood symptom:
+# bootstrap stuck "ingesting" for 6+ hours, no way to abort without
+# slug-churning a fresh product). Maintained as a ``product_id → Task``
+# map alongside :data:`_running`; the ``done`` callback unregisters by
+# task identity so re-running the same product_id later doesn't leak.
+_running_by_product: dict[uuid.UUID, asyncio.Task[None]] = {}
+
+
+def register_running_task(product_id: uuid.UUID, task: asyncio.Task[None]) -> None:
+    """Register ``task`` as the current bootstrap for ``product_id``.
+
+    Public so test scaffolding (and any future external scheduler) can
+    surface its task to the cancel surface without going through
+    :func:`schedule_product_bootstrap`. Replaces any prior entry for the
+    same product_id — the schedule_retry path always supersedes a
+    previously-failed bootstrap's stale entry.
+    """
+    _running_by_product[product_id] = task
+
+
+def unregister_running_task(product_id: uuid.UUID) -> None:
+    """Drop the registered task for ``product_id`` if any.
+
+    Public so test scaffolding can clean up between cases. The done
+    callback already calls this via :func:`_on_task_done` in production.
+    """
+    _running_by_product.pop(product_id, None)
+
+
+def get_running_task(product_id: uuid.UUID) -> asyncio.Task[None] | None:
+    """Return the registered in-flight bootstrap task for ``product_id``."""
+    return _running_by_product.get(product_id)
+
 
 class SqlAlchemyBootstrapRepository:
     """Concrete :class:`BootstrapRepository` against ``products.bootstrap_*``.
@@ -746,6 +780,9 @@ def schedule_product_bootstrap(
         )
     )
     _running.add(task)
+    # Lift E13 — index by product_id so the cancel tool can find the
+    # task and ``task.cancel()`` it without having to scan ``_running``.
+    _running_by_product[product_id] = task
     task.add_done_callback(_on_task_done)
     return task
 
@@ -776,6 +813,14 @@ def _build_redis_client(settings: Settings) -> Any:
 
 def _on_task_done(task: asyncio.Task[None]) -> None:
     _running.discard(task)
+    # Lift E13 — drop the by-product index entry only if it still points
+    # at this task. (A retry that scheduled a NEW task for the same
+    # product_id will have already replaced the entry; we must not yank
+    # the new task out from under itself.)
+    for pid, t in list(_running_by_product.items()):
+        if t is task:
+            _running_by_product.pop(pid, None)
+            break
     if task.cancelled():
         return
     exc = task.exception()
@@ -870,6 +915,9 @@ __all__ = [
     "SqlAlchemyBootstrapRepository",
     "_BootstrapProgressSubscriber",
     "build_bootstrap_knowledge",
+    "get_running_task",
+    "register_running_task",
     "run_product_bootstrap_job",
     "schedule_product_bootstrap",
+    "unregister_running_task",
 ]

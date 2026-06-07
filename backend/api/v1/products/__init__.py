@@ -4,6 +4,8 @@ Decomposes the 562-LOC ``products.py`` god-file into thin endpoint-grouping
 sub-modules per v8 §20 + D35:
 
 * :mod:`.products_crud` — list / create / get / patch / delete the Product itself.
+* :mod:`.bootstrap_actions` — Lift E13 cancel/retry surface for the
+  per-product bootstrap (POST ``/{slug_or_id}/bootstrap/{cancel,retry}``).
 * :mod:`.resources` — named pointers a product works with (repo / doc /
   deploy / note): list / add / delete.
 * :mod:`.bindings` — per-Product × ConnectorAccount 3-knob binding
@@ -26,12 +28,18 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
-from . import bindings, files, products_crud, resources
+from . import bindings, bootstrap_actions, files, products_crud, resources
 
 # Single aggregator router — see deliverables/__init__.py for the
 # ``routes.extend(...)`` rationale.
 router = APIRouter()
-for _sub in (products_crud.router, resources.router, bindings.router, files.router):
+for _sub in (
+    products_crud.router,
+    bootstrap_actions.router,
+    resources.router,
+    bindings.router,
+    files.router,
+):
     router.routes.extend(_sub.routes)
 
 __all__ = ["router"]

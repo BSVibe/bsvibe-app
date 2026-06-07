@@ -231,6 +231,113 @@ async def _h_products_create(args: ProductsCreateInput, ctx: ToolContext) -> Any
 
 
 # ---------------------------------------------------------------------------
+# bsvibe_products_bootstrap_cancel / bsvibe_products_bootstrap_retry — Lift E13
+#
+# Recoverability for a wedged bootstrap. The qazasa123 dogfood found a
+# product whose ingest had been stuck "ingesting" for 6+ hours (a pre-E8
+# container's compile_batch iterating 1377 artifacts at 1800s per stuck
+# chunk) — and the founder had no MCP / REST surface to abandon it, only
+# slug-churn workarounds (``bsvibe-app-r2``, ``r3``…). These two tools
+# close that gap:
+#
+#   * ``cancel``  — flip an in-flight bootstrap to ``failed`` with a
+#                   precise reason; opportunistically ``task.cancel()``
+#                   the in-process task if the runtime is hosting one.
+#   * ``retry``   — reset the row + re-schedule the same ``repo_url``
+#                   under the same product_id (no slug churn).
+#
+# Both reject the wrong status with a clear ``ToolError`` rather than
+# silently no-op'ing (cancel on a terminal status; retry on an in-flight
+# status). Both require ``mcp:write`` — the founder is mutating prod
+# state, even when the mutation looks innocuous.
+# ---------------------------------------------------------------------------
+_IN_FLIGHT_STATUSES = frozenset({"pending", "cloning", "analyzing", "ingesting"})
+_TERMINAL_STATUSES = frozenset(
+    {"complete", "failed", "failed:clone", "failed:ingest", "failed:too_large"}
+)
+
+
+class ProductsBootstrapCancelInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    slug_or_id: str = Field(..., min_length=1, max_length=64)
+
+
+async def _h_products_bootstrap_cancel(args: ProductsBootstrapCancelInput, ctx: ToolContext) -> Any:
+    row = await _resolve_product(ctx, args.slug_or_id)
+    status = row.bootstrap_status
+    if status not in _IN_FLIGHT_STATUSES:
+        raise ToolError(f"no-op — bootstrap is terminal (status={status!r})")
+
+    # Lift E13 — opportunistically cancel the in-process task if the
+    # runtime is hosting one. The DB flip is the source of truth (the
+    # runtime's silent-fail guard from E8 catches the CancelledError-shaped
+    # error and surfaces it cleanly), but a live ``task.cancel()`` stops
+    # the wasted compute promptly instead of letting the chunk loop run
+    # its current 1800s chunk to completion.
+    from backend.workflow.application.runtime.product_bootstrap_runtime import (  # noqa: PLC0415
+        get_running_task,
+    )
+
+    task = get_running_task(row.id)
+    if task is not None and not task.done():
+        task.cancel()
+
+    row.bootstrap_status = "failed"
+    row.bootstrap_error = "cancelled by founder"
+    await ctx.session.commit()
+    await ctx.session.refresh(row)
+    return _Envelope(_product_to_dict(row))
+
+
+class ProductsBootstrapRetryInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    slug_or_id: str = Field(..., min_length=1, max_length=64)
+
+
+async def _h_products_bootstrap_retry(args: ProductsBootstrapRetryInput, ctx: ToolContext) -> Any:
+    row = await _resolve_product(ctx, args.slug_or_id)
+    if not row.repo_url:
+        raise ToolError("product has no repo_url to bootstrap from")
+    status = row.bootstrap_status
+    # Allow retry only when the prior bootstrap is terminal — refuse to
+    # double-schedule on top of an active in-flight ingest. The cancel
+    # tool is the founder's escape hatch for that case.
+    if status is not None and status not in _TERMINAL_STATUSES:
+        raise ToolError("bootstrap already in flight — call bootstrap_cancel first")
+
+    # Reset the lifecycle fields atomically so the founder UI's next poll
+    # sees a clean ``pending`` row rather than a half-stamped one.
+    row.bootstrap_status = "pending"
+    row.bootstrap_artifacts_count = None
+    row.bootstrap_error = None
+    row.bootstrap_progress = None
+    await ctx.session.commit()
+    await ctx.session.refresh(row)
+
+    # Schedule the bootstrap under the same product_id — no slug churn.
+    if ctx.session_factory is not None:
+        from backend.workflow.application.runtime import (  # noqa: PLC0415
+            product_bootstrap_runtime,
+        )
+
+        try:
+            product_bootstrap_runtime.schedule_product_bootstrap(
+                product_id=row.id,
+                workspace_id=ctx.principal.workspace_id,
+                repo_url=row.repo_url,
+                session_factory=ctx.session_factory,
+            )
+        except Exception:  # noqa: BLE001 — soft-fail; row already reset
+            logger.warning(
+                "product_bootstrap_retry_schedule_failed",
+                product_id=str(row.id),
+                exc_info=True,
+            )
+
+    return _Envelope(_product_to_dict(row))
+
+
+# ---------------------------------------------------------------------------
 # bsvibe_runs_list
 # ---------------------------------------------------------------------------
 class RunsListInput(BaseModel):
@@ -336,6 +443,41 @@ def register_workflow_tools(registry: ToolRegistry) -> None:
             handler=_h_products_create,
             required_scopes=("mcp:write",),
             audit_event="bsvibe.mcp.products_create.invoked",
+        )
+    )
+    registry.register(
+        Tool(
+            name="bsvibe_products_bootstrap_cancel",
+            description=(
+                "Abort an in-flight bootstrap for a product (pending / cloning / "
+                "analyzing / ingesting). Flips the row to `failed` with "
+                "`bootstrap_error='cancelled by founder'` and opportunistically "
+                "cancels the running asyncio task. Use this to recover a wedged "
+                "bootstrap without slug-churning a fresh product. No-op on a "
+                "terminal status (complete / failed*) — surfaces a ToolError."
+            ),
+            input_schema=ProductsBootstrapCancelInput,
+            output_schema=_Envelope,
+            handler=_h_products_bootstrap_cancel,
+            required_scopes=("mcp:write",),
+            audit_event="bsvibe.mcp.products_bootstrap_cancel.invoked",
+        )
+    )
+    registry.register(
+        Tool(
+            name="bsvibe_products_bootstrap_retry",
+            description=(
+                "Re-trigger bootstrap on an existing product (no slug churn). "
+                "Resets bootstrap_status/artifacts_count/error/progress and "
+                "schedules the same `repo_url` again. Refuses to retry an "
+                "in-flight bootstrap — call bootstrap_cancel first. Requires "
+                "the product to carry a repo_url."
+            ),
+            input_schema=ProductsBootstrapRetryInput,
+            output_schema=_Envelope,
+            handler=_h_products_bootstrap_retry,
+            required_scopes=("mcp:write",),
+            audit_event="bsvibe.mcp.products_bootstrap_retry.invoked",
         )
     )
     registry.register(
