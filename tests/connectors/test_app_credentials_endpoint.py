@@ -105,3 +105,26 @@ async def test_never_returns_the_secret(client: httpx.AsyncClient) -> None:
     )
     assert r.status_code == 200
     assert "supersecret" not in r.text
+
+
+async def test_set_sentry_app_credentials_with_slug(
+    client: httpx.AsyncClient, sf: async_sessionmaker[AsyncSession], cipher: CredentialCipher
+) -> None:
+    r = await client.post(
+        "/api/v1/connectors/oauth/sentry/app-credentials",
+        json={"client_id": "cid", "client_secret": "sec", "app_slug": "bsvibe-int"},
+    )
+    assert r.status_code == 200, r.text
+    async with sf() as s:
+        creds = await get_app_credentials(s, provider="sentry", cipher=cipher)
+    assert creds is not None and creds.app_slug == "bsvibe-int"
+    assert get_provider("sentry") is not None
+
+
+async def test_set_sentry_without_slug_400(client: httpx.AsyncClient) -> None:
+    r = await client.post(
+        "/api/v1/connectors/oauth/sentry/app-credentials",
+        json={"client_id": "cid", "client_secret": "sec"},
+    )
+    assert r.status_code == 400
+    assert "slug" in r.text.lower()

@@ -378,6 +378,8 @@ class SetOAuthAppInput(BaseModel):
     provider: str = Field(..., min_length=1, max_length=64)
     client_id: str = Field(..., min_length=1, max_length=255)
     client_secret: str = Field(..., min_length=1, max_length=1024)
+    # Required only for sentry (its integration slug for the external-install URL).
+    app_slug: str | None = Field(default=None, max_length=255)
 
 
 class SetOAuthAppOutput(BaseModel):
@@ -393,6 +395,7 @@ async def _h_set_oauth_app(args: SetOAuthAppInput, ctx: ToolContext) -> SetOAuth
             provider=args.provider,
             client_id=args.client_id,
             client_secret=args.client_secret,
+            app_slug=args.app_slug,
             cipher=oauth_service.build_credential_cipher(),
         )
     except ValueError as exc:

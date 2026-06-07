@@ -171,11 +171,16 @@ async def start_github_app_manifest(
 
 
 class AppCredentialsIn(BaseModel):
-    """Operator-pasted OAuth App credentials for a vanilla provider."""
+    """Operator-pasted OAuth App credentials for a vanilla provider.
+
+    ``app_slug`` is required only for sentry (its integration slug, used to build
+    the external-install URL); slack/notion/discord ignore it.
+    """
 
     model_config = ConfigDict(extra="forbid")
     client_id: str = Field(..., min_length=1, max_length=255)
     client_secret: str = Field(..., min_length=1, max_length=1024)
+    app_slug: str | None = Field(default=None, max_length=255)
 
 
 @router.post("/{provider}/app-credentials")
@@ -198,6 +203,7 @@ async def set_provider_app_credentials(
             provider=provider,
             client_id=payload.client_id,
             client_secret=payload.client_secret,
+            app_slug=payload.app_slug,
             cipher=cipher,
         )
     except ValueError as exc:
