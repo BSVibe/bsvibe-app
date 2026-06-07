@@ -532,92 +532,48 @@ async def test_poll_and_execute_loads_saved_worker_token_when_settings_token_emp
     assert settings.token == "SAVED-WORKER-TOKEN"
 
 
-# ── .env persistence ──────────────────────────────────────────────────────────
+# ── Token persistence (Lift E12 — CWD .env writeback removed) ─────────────────
 
 
-def test_update_env_file_upserts(tmp_path: Any) -> None:
-    env = tmp_path / ".env"
-    env.write_text("BSVIBE_WORKER_NAME=old\nUNRELATED=keep\n", encoding="utf-8")
-
-    worker_main._update_env_file(
-        str(env),
-        {"BSVIBE_WORKER_TOKEN": "T", "BSVIBE_WORKER_NAME": "new"},
-    )
-
-    text = env.read_text(encoding="utf-8")
-    assert "BSVIBE_WORKER_TOKEN=T" in text
-    assert "BSVIBE_WORKER_NAME=new" in text
-    assert "BSVIBE_WORKER_NAME=old" not in text
-    assert "UNRELATED=keep" in text
-
-
-def test_update_env_file_creates_when_absent(tmp_path: Any) -> None:
-    env = tmp_path / ".env"
-    worker_main._update_env_file(str(env), {"BSVIBE_WORKER_TOKEN": "X"})
-    assert env.read_text(encoding="utf-8") == "BSVIBE_WORKER_TOKEN=X\n"
-
-
-def test_persist_writes_key_that_settings_reads(tmp_path: Any, monkeypatch: Any) -> None:
-    # Bug 2 regression: ``_persist_worker_token`` must write the SAME env key
-    # that the settings field reads. A round-trip (persist -> reload from .env)
-    # must populate ``settings.token`` so the worker does NOT re-register.
-    env = tmp_path / ".env"
-    monkeypatch.setattr(worker_main, "_ENV_PATH", str(env))
-
-    settings = _settings(token="", name="rt-worker", server_url="http://rt")
-    worker_main._persist_worker_token("MINTED-TOKEN", settings)
-
-    # Reload a fresh WorkerSettings purely from the persisted .env (no overrides,
-    # no leaking process env that could mask the bug).
-    for key in ("BSVIBE_WORKER_TOKEN", "BSVIBE_WORKER_WORKER_TOKEN"):
-        monkeypatch.delenv(key, raising=False)
-    reloaded = WorkerSettings(_env_file=str(env))
-
-    assert reloaded.token == "MINTED-TOKEN"
-
-
-def test_persist_worker_token_does_not_touch_real_home_path(
+def test_persist_worker_token_writes_only_to_home_token_file(
     tmp_path: Any, monkeypatch: Any
 ) -> None:
-    """Lift E8 Bug 3 regression: ``_persist_worker_token`` MUST write the worker
-    token file only under the test-isolated HOME (driven by the autouse fixture
-    in ``tests/executors/worker/conftest.py``), never to the real
-    ``~/.bsvibe/worker.token``.
+    """Lift E12 — ``_persist_worker_token`` writes the token under
+    ``~/.bsvibe/`` only. The legacy CWD ``.env`` upsert (E4/E8) has been
+    removed: the founder's qazasa123 dogfood proved that splitting state
+    between ``~/.bsvibe/worker.token`` and a CWD-relative ``.env`` silently
+    loses the register-time config when ``run`` is invoked from a different
+    CWD.
 
-    Before E8 this test would obliterate the founder's actual worker token on
-    every CI run — the autouse conftest fixture sets ``BSVIBE_HOME`` to a tmp
-    dir so ``default_worker_token_path()`` resolves under tmp instead of HOME.
+    This test asserts (1) the home-dir token file IS written and (2) NO
+    ``.env`` file appears in the CWD as a side effect.
     """
     from pathlib import Path
 
     from backend.executors.worker.credentials import default_worker_token_path
 
-    # Sanity check the autouse fixture is in effect — default path must resolve
-    # under tmp (because BSVIBE_HOME was set by the conftest fixture).
+    monkeypatch.chdir(tmp_path)
+
     default_path = default_worker_token_path()
     real_home_path = Path.home() / ".bsvibe" / "worker.token"
     assert default_path != real_home_path, (
-        f"BSVIBE_HOME redirect failed — default token path still resolves to "
-        f"the real home ({real_home_path}); the conftest autouse fixture is "
-        f"not active or BSVIBE_HOME is being shadowed."
+        "BSVIBE_HOME redirect failed — default token path still resolves to "
+        "the real home; the conftest autouse fixture is not active."
     )
 
-    env = tmp_path / ".env"
-    monkeypatch.setattr(worker_main, "_ENV_PATH", str(env))
-
-    # Capture the mtime of the real home-dir token file (if any) so we can
-    # detect the moment it gets written by the call under test.
     real_existed_before = real_home_path.exists()
     real_mtime_before = real_home_path.stat().st_mtime_ns if real_existed_before else None
 
     settings = _settings(token="", name="hot-worker", server_url="http://hot")
     worker_main._persist_worker_token("HOTFIX-TOKEN", settings)
 
-    # The redirected default path got the token.
     assert default_path.exists()
     assert default_path.read_text(encoding="utf-8").strip() == "HOTFIX-TOKEN"
 
-    # The real ~/.bsvibe/worker.token was NOT touched.
+    # No ``.env`` left in the CWD — the legacy writeback is gone.
+    assert not (tmp_path / ".env").exists()
+
+    # The real ``~/.bsvibe/worker.token`` was NOT touched.
     if real_existed_before:
         assert real_home_path.stat().st_mtime_ns == real_mtime_before
         assert real_home_path.read_text(encoding="utf-8").strip() != "HOTFIX-TOKEN"

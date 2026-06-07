@@ -26,7 +26,9 @@ from __future__ import annotations
 import argparse
 import asyncio
 import sys
+import time
 from collections.abc import Sequence
+from datetime import UTC, datetime
 
 import httpx
 import structlog
@@ -34,11 +36,17 @@ import structlog
 from backend.executors.worker.config import get_worker_settings
 from backend.executors.worker.credentials import (
     CredentialsNotFound,
+    WorkerConfig,
     clear_host_credentials,
+    clear_worker_config,
     clear_worker_token,
     default_credentials_path,
+    default_worker_config_path,
     default_worker_token_path,
     load_host_credentials,
+    load_worker_config,
+    load_worker_token,
+    save_worker_config,
     save_worker_token,
 )
 from backend.executors.worker.executors import detect_capabilities
@@ -72,13 +80,16 @@ def _cmd_login(args: argparse.Namespace) -> int:
 def _cmd_logout(args: argparse.Namespace) -> int:  # noqa: ARG001
     removed_host = clear_host_credentials()
     removed_worker = clear_worker_token()
-    if not removed_host and not removed_worker:
+    removed_config = clear_worker_config()
+    if not removed_host and not removed_worker and not removed_config:
         print("Nothing to clear.", file=sys.stderr)
         return 0
     if removed_host:
         print(f"Removed {default_credentials_path()}", file=sys.stderr)
     if removed_worker:
         print(f"Removed {default_worker_token_path()}", file=sys.stderr)
+    if removed_config:
+        print(f"Removed {default_worker_config_path()}", file=sys.stderr)
     return 0
 
 
@@ -158,7 +169,22 @@ async def _register_once(args: argparse.Namespace) -> int:
             return 1
 
     saved = save_worker_token(token)
-    print(f"Registered worker {args.name!r}. Token saved at {saved}", file=sys.stderr)
+    # Lift E12 — persist register-time config to ``~/.bsvibe/config.json`` so
+    # subsequent ``bsvibe-worker run`` from any CWD recovers name +
+    # capabilities + labels + server_url without re-detecting from hostname /
+    # PATH / a CWD-relative ``.env``.
+    config = WorkerConfig(
+        name=args.name,
+        capabilities=capabilities,
+        labels=labels,
+        server_url=settings.server_url,
+        saved_at=int(time.time()),
+    )
+    config_path = save_worker_config(config)
+    print(
+        f"Registered worker {args.name!r}. Token saved at {saved}; config saved at {config_path}",
+        file=sys.stderr,
+    )
     return 0
 
 
@@ -168,6 +194,51 @@ def _cmd_register(args: argparse.Namespace) -> int:
 
 def _cmd_run(args: argparse.Namespace) -> int:  # noqa: ARG001
     asyncio.run(_amain())
+    return 0
+
+
+def _cmd_worker_status(args: argparse.Namespace) -> int:  # noqa: ARG001
+    """Print the persisted worker config + token presence — Lift E12.
+
+    The diagnostic founders want every time something looks off. No JSON
+    output mode, no flags — dirt simple by design.
+    """
+    config_path = default_worker_config_path()
+    token_path = default_worker_token_path()
+    config = load_worker_config(path=config_path)
+    token = load_worker_token(path=token_path)
+
+    if config is None and token is None:
+        print(
+            "No worker config or token found. "
+            "Run `bsvibe-worker register --name <name> --capabilities <cap1,cap2>` first.",
+            file=sys.stderr,
+        )
+        return 1
+
+    if config is not None:
+        when = datetime.fromtimestamp(config.saved_at, tz=UTC).isoformat()
+        caps = ", ".join(config.capabilities) if config.capabilities else "(none)"
+        labels = ", ".join(config.labels) if config.labels else "(none)"
+        print(f"Worker config: {config_path}", file=sys.stderr)
+        print(f"  name: {config.name}", file=sys.stderr)
+        print(f"  capabilities: {caps}", file=sys.stderr)
+        print(f"  labels: {labels}", file=sys.stderr)
+        print(f"  server: {config.server_url}", file=sys.stderr)
+        print(f"  registered at: {when}", file=sys.stderr)
+    else:
+        print(
+            f"No worker config at {config_path}. Run `bsvibe-worker register` to create one.",
+            file=sys.stderr,
+        )
+
+    if token is not None:
+        print(f"Token: {token_path} (mode 0600, len={len(token)})", file=sys.stderr)
+    else:
+        print(
+            f"No worker token at {token_path}. Run `bsvibe-worker register` to create one.",
+            file=sys.stderr,
+        )
     return 0
 
 
@@ -190,6 +261,9 @@ def build_bsvibe_worker_parser() -> argparse.ArgumentParser:
 
     p_run = sub.add_parser("run", help="Start the long-polling worker loop.")
     p_run.set_defaults(func=_cmd_run)
+
+    p_status = sub.add_parser("status", help="Show persisted worker config + token.")
+    p_status.set_defaults(func=_cmd_worker_status)
 
     p_logout = sub.add_parser("logout", help="Clear the local worker token.")
     p_logout.set_defaults(func=_cmd_logout)

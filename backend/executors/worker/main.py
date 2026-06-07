@@ -3,7 +3,8 @@
 Headless client process. On first run (no worker token) it registers with the
 backend using the host OAuth bearer (Lift E4 — ``bsvibe login`` writes
 ``~/.config/bsvibe/credentials.json``), persisting the returned worker token
-to ``.env``. Then it loops::
+to ``~/.bsvibe/worker.token`` (Lift E12 retired the CWD ``.env`` writeback).
+Then it loops::
 
     heartbeat -> poll(count=free slots) -> for each task:
         select executor by ``executor_type`` -> run it -> collect output
@@ -27,7 +28,7 @@ selection + capability detection are extracted to
 ``backend.executors.worker.executors``. What remains here is the
 process entry point: registration, the single-task body
 (:func:`handle_task`), the one-tick body (:func:`run_once`), the main
-loop (:func:`poll_and_execute`), tiny ``.env`` upsert helpers, and the
+loop (:func:`poll_and_execute`), the worker-token persistence helper, and the
 signal-wired :func:`main` entry point. These are bundled because this
 file *is* the headless worker process — splitting registration /
 artifact-capture / loop / wiring into 4 modules creates 4 modules with
@@ -56,6 +57,7 @@ from backend.executors.worker.config import WorkerSettings, get_worker_settings
 from backend.executors.worker.credentials import (
     CredentialsNotFound,
     load_host_credentials,
+    load_worker_config,
     load_worker_token,
     save_worker_token,
 )
@@ -67,7 +69,6 @@ from backend.executors.worker.executors import (
 
 logger = structlog.get_logger(__name__)
 
-_ENV_PATH = ".env"
 _HTTP_TIMEOUT_S = 30.0
 
 # Artifact-capture caps (executor-pool B1). The per-task work dir starts EMPTY
@@ -437,13 +438,25 @@ async def poll_and_execute(
     """
     token = await _acquire_worker_token(client, settings)
 
+    # Lift E12 — when ``~/.bsvibe/config.json`` declares an explicit
+    # capabilities list, honour it. The founder ran
+    # ``bsvibe-worker register --capabilities codex,opencode`` to limit the
+    # worker to those executors; without this filter the loop re-detects
+    # PATH-available CLIs (including the unwanted ``claude_code``) and
+    # silently broadens the worker's surface beyond the founder's choice.
+    persisted = load_worker_config()
+    if persisted is not None and persisted.capabilities:
+        capabilities = list(persisted.capabilities)
+    else:
+        capabilities = detect_capabilities()
+
     executors: dict[str, ExecutorProtocol] = {}
-    for cap in detect_capabilities():
+    for cap in capabilities:
         try:
             executors[cap] = select_executor(cap)
         except ValueError:
-            # Detected but no executor in this lift (codex / opencode) — skip.
-            logger.info("capability_detected_no_executor", capability=cap)
+            # Declared but no executor wired in this lift — skip.
+            logger.info("capability_declared_no_executor", capability=cap)
 
     headers = {"X-Worker-Token": token}
     in_flight: set[asyncio.Task[None]] = set()
@@ -516,46 +529,19 @@ def _resolve_host_bearer(settings: WorkerSettings) -> str | None:
 
 
 def _persist_worker_token(token: str, settings: WorkerSettings) -> None:
-    """Write the freshly minted worker token to ``.env`` + the dedicated file.
+    """Persist the freshly minted worker token to ``~/.bsvibe/worker.token``.
 
-    Lift E4 — the GitHub-Actions-runner UX also persists the token at
-    ``~/.bsvibe/worker.token`` (mode 0600) so subsequent invocations of
-    ``bsvibe-worker run`` can pick it up without depending on a project
-    ``.env``. The ``.env`` write is kept for legacy hosts that wire the
-    config that way.
+    Lift E12 — the legacy CWD ``.env`` writeback is gone (it caused the
+    qazasa123 cross-CWD bug where ``register`` wrote ``~/.env`` and ``run``
+    from a different CWD never saw it). The canonical store is the
+    XDG-style ``~/.bsvibe/`` directory; ``register`` writes the matching
+    ``config.json`` directly via :func:`save_worker_config` in the CLI.
     """
-    updates = {
-        "BSVIBE_WORKER_TOKEN": token,
-        "BSVIBE_WORKER_NAME": settings.name,
-        "BSVIBE_WORKER_SERVER_URL": settings.server_url,
-    }
-    _update_env_file(_ENV_PATH, updates)
+    del settings  # token is the only thing persisted here now
     try:
         save_worker_token(token)
     except OSError:  # pragma: no cover — file-system failure is non-fatal
         logger.warning("worker_token_file_save_failed", exc_info=True)
-
-
-def _update_env_file(path: str, updates: dict[str, str]) -> None:
-    """Idempotently upsert key=value lines into a ``.env`` file."""
-    env_path = Path(path)
-    lines: list[str] = []
-    if env_path.exists():
-        lines = env_path.read_text(encoding="utf-8").splitlines(keepends=True)
-
-    seen: set[str] = set()
-    out: list[str] = []
-    for line in lines:
-        key = line.split("=", 1)[0].strip()
-        if key in updates:
-            out.append(f"{key}={updates[key]}\n")
-            seen.add(key)
-        else:
-            out.append(line)
-    for key, value in updates.items():
-        if key not in seen:
-            out.append(f"{key}={value}\n")
-    env_path.write_text("".join(out), encoding="utf-8")
 
 
 # ── Real-world wiring (entry point) ──────────────────────────────────────────────
@@ -576,8 +562,52 @@ def _connect_redis(settings: WorkerSettings) -> _RedisPublisher | None:
         return None
 
 
+_HOSTNAME_DEFAULT = WorkerSettings.model_fields["name"].default
+
+
+def _apply_persisted_config(settings: WorkerSettings) -> WorkerSettings:
+    """Layer ``~/.bsvibe/config.json`` UNDER any explicit env override — Lift E12.
+
+    Source priority for each field — first non-empty wins:
+
+    1. ``BSVIBE_WORKER_*`` env var (already loaded into ``settings``).
+    2. ``~/.bsvibe/config.json`` (the canonical persisted source from
+       ``bsvibe-worker register``).
+    3. Hard-coded defaults (``socket.gethostname()`` for ``name``,
+       :func:`detect_capabilities` for capabilities, ``http://localhost:8400``
+       for ``server_url``).
+
+    Logs a structured ``worker_config_loaded`` line with the resolved source
+    for each field so future debugging is cheap.
+    """
+    persisted = load_worker_config()
+    sources = {
+        "name": "env" if settings.name != _HOSTNAME_DEFAULT else "default",
+        "server_url": (
+            "env"
+            if settings.server_url != WorkerSettings.model_fields["server_url"].default
+            else "default"
+        ),
+        "capabilities": "default",
+        "labels": "default",
+    }
+    if persisted is not None:
+        if sources["name"] == "default" and persisted.name:
+            settings.name = persisted.name
+            sources["name"] = "file"
+        if sources["server_url"] == "default" and persisted.server_url:
+            settings.server_url = persisted.server_url
+            sources["server_url"] = "file"
+        if persisted.capabilities:
+            sources["capabilities"] = "file"
+        if persisted.labels:
+            sources["labels"] = "file"
+    logger.info("worker_config_loaded", sources=sources)
+    return settings
+
+
 async def _amain() -> None:
-    settings = get_worker_settings()
+    settings = _apply_persisted_config(get_worker_settings())
     stop = asyncio.Event()
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGINT, signal.SIGTERM):
