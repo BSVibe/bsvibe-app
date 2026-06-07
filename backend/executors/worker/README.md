@@ -52,9 +52,25 @@ bsvibe-worker run
 `~/.config/bsvibe/credentials.json`. `bsvibe-worker register` sends that
 credential as `Authorization: Bearer` to `POST /api/v1/workers/register`; the
 backend derives the workspace from the verified claims and returns a fresh
-per-worker token, which the CLI persists to `~/.bsvibe/worker.token` (and
-`.env` as `BSVIBE_WORKER_TOKEN`). Subsequent runs of `bsvibe-worker run`
-reuse that token.
+per-worker token, which the CLI persists to `~/.bsvibe/worker.token`. Lift
+E12 (2026-06-07) also persists the register-time choices to
+`~/.bsvibe/config.json`:
+
+```json
+{
+  "name": "founder-mac",
+  "capabilities": ["codex", "opencode"],
+  "labels": [],
+  "server_url": "https://api.bsvibe.dev",
+  "saved_at": 1717900000
+}
+```
+
+so subsequent `bsvibe-worker run` invocations recover the founder's
+`--name` / `--capabilities` / `--labels` / `server_url` no matter which CWD
+the daemon is launched from — without re-detecting from hostname / PATH /
+a CWD-relative `.env`. Source priority is env > `config.json` > defaults.
+Run `bsvibe-worker status` to inspect the persisted config + token.
 
 Optional streaming back-channel:
 
@@ -70,7 +86,7 @@ All vars use the `BSVIBE_WORKER_` prefix and may be set via env or a `.env` file
 |----------|---------|---------|
 | `BSVIBE_WORKER_SERVER_URL` | `http://localhost:8400` | Backend API base URL. |
 | `BSVIBE_WORKER_ACCESS_TOKEN` | _(empty)_ | Optional explicit OAuth bearer; falls back to `~/.config/bsvibe/credentials.json` when empty. |
-| `BSVIBE_WORKER_TOKEN` | _(empty)_ | Per-worker token; written to `.env` after first registration. |
+| `BSVIBE_WORKER_TOKEN` | _(empty)_ | Per-worker token; persisted to `~/.bsvibe/worker.token` after first registration (Lift E12 — the legacy CWD `.env` writeback is gone). |
 | `BSVIBE_WORKER_NAME` | hostname | The worker's display name. |
 | `BSVIBE_WORKER_REDIS_URL` | _(empty)_ | Enables streaming output chunks; empty disables streaming. |
 | `BSVIBE_WORKER_POLL_INTERVAL_SECONDS` | `5` | Idle poll cadence. |
