@@ -470,7 +470,9 @@ async def test_authorize_get_preserves_loopback_redirect_uri(
     parts = urlsplit(location)
     assert parts.path == "/oauth/consent"
     qs = parse_qs(parts.query)
-    assert qs.get("redirect_uri") == [loopback], f"missing redirect_uri in {qs=} location={location}"
+    assert qs.get("redirect_uri") == [loopback], (
+        f"missing redirect_uri in {qs=} location={location}"
+    )
     assert qs["client_id"] == [reg["client_id"]]
     assert qs["response_type"] == ["code"]
     assert qs["scope"] == ["mcp:read mcp:write"]
