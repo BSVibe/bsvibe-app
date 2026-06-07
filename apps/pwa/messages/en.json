@@ -669,7 +669,8 @@
             "hint": "Add an integration token to also import pages from Notion. Leave both blank to use Notion only for outbound delivery."
           }
         }
-      }
+      },
+      "oauthUnavailable": "Not available yet — ask your admin to set up this connection."
     },
     "notifications": {
       "lede": "Notifications: when and where BSVibe pings you.",
