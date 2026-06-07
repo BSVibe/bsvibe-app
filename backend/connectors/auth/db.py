@@ -116,8 +116,33 @@ class ConnectorOAuthPendingRow(Base):
     )
 
 
+class ConnectorOAuthUnclaimedRow(Base):
+    """An exchanged OAuth token awaiting a workspace claim (claim-later).
+
+    Sentry's install→grant redirect carries no ``state``, so the callback can't
+    bind the token to a workspace. It exchanges the grant code (the code is
+    short-lived) and parks the resulting token here, unbound; the founder then
+    claims it for a workspace via an authenticated call. ``installation_ref`` is
+    the Sentry ``installationId`` (needed for later refresh). Encrypted at rest.
+    """
+
+    __tablename__ = "connector_oauth_unclaimed"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    provider: Mapped[str] = mapped_column(String(64), nullable=False)
+    installation_ref: Mapped[str] = mapped_column(String(255), nullable=False)
+    account_label: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    access_token_ciphertext: Mapped[str] = mapped_column(String(2048), nullable=False)
+    refresh_token_ciphertext: Mapped[str | None] = mapped_column(String(2048), nullable=True)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_utcnow
+    )
+
+
 __all__ = [
     "ConnectorOAuthAppCredentialRow",
     "ConnectorOAuthPendingRow",
     "ConnectorOAuthTokenRow",
+    "ConnectorOAuthUnclaimedRow",
 ]
