@@ -29,6 +29,15 @@ class IngestResult:
     proposals_count: int
     notes_count: int
     run_id: uuid.UUID
+    # Lift E8 Bug 2 — surface compile-time failure signal so the caller
+    # (today the product-bootstrap runtime) can decide ``failed`` vs
+    # ``complete`` based on whether ANY chunk actually produced notes.
+    # An ingest that lost every chunk to a transport error currently looks
+    # identical to a no-op (proposals_count=0, notes_count=0) — but only
+    # the failure case has chunk_failures > 0.
+    notes_created: int = 0
+    notes_updated: int = 0
+    chunk_failures: int = 0
 
 
 @dataclass(frozen=True)

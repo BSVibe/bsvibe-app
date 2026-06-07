@@ -64,7 +64,19 @@ def test_ingest_result_is_frozen_dataclass() -> None:
     assert dataclasses.is_dataclass(IngestResult)
     assert IngestResult.__dataclass_params__.frozen is True  # type: ignore[attr-defined]
     field_names = {f.name for f in dataclasses.fields(IngestResult)}
-    assert field_names == {"proposals_count", "notes_count", "run_id"}
+    # Lift E8 Bug 2 — IngestResult now also carries ``notes_created``,
+    # ``notes_updated``, and ``chunk_failures`` so the product-bootstrap
+    # runtime can decide ``failed`` vs ``complete`` from the produce-side
+    # signal (a chunk that raised has chunk_failures > 0; a real no-op
+    # repo has chunk_failures == 0).
+    assert field_names == {
+        "proposals_count",
+        "notes_count",
+        "run_id",
+        "notes_created",
+        "notes_updated",
+        "chunk_failures",
+    }
 
 
 def test_ingest_result_field_types() -> None:
@@ -72,6 +84,9 @@ def test_ingest_result_field_types() -> None:
     assert hints_types["proposals_count"] is int
     assert hints_types["notes_count"] is int
     assert hints_types["run_id"] is uuid.UUID
+    assert hints_types["notes_created"] is int
+    assert hints_types["notes_updated"] is int
+    assert hints_types["chunk_failures"] is int
 
 
 def test_canon_retrieval_query_is_frozen_dataclass() -> None:

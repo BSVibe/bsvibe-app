@@ -56,6 +56,7 @@ from backend.executors.worker.config import WorkerSettings, get_worker_settings
 from backend.executors.worker.credentials import (
     CredentialsNotFound,
     load_host_credentials,
+    load_worker_token,
     save_worker_token,
 )
 from backend.executors.worker.executors import (
@@ -380,6 +381,47 @@ async def run_once(
 # ── Main loop ─────────────────────────────────────────────────────────────────
 
 
+async def _acquire_worker_token(client: httpx.AsyncClient, settings: WorkerSettings) -> str:
+    """Resolve the worker token in priority order — Lift E8 Bug 4.
+
+    Source order:
+
+    1. ``settings.token`` (``BSVIBE_WORKER_TOKEN`` env) — wins if set.
+    2. :func:`load_worker_token` — the file ``bsvibe-worker register`` writes
+       to ``~/.bsvibe/worker.token`` (or ``$BSVIBE_HOME/worker.token``).
+       Without this fallback, ``bsvibe-worker run`` after a successful
+       ``register`` step always auto-re-registers a new worker (duplicate
+       worker rows + ModelAccount rows in the workspace on every run).
+    3. Auto-register only when both above are empty (requires a host OAuth
+       bearer — Lift E5 removed the legacy install-token fallback).
+    """
+    token = settings.token
+    if token:
+        logger.info("worker_token_loaded", source="env")  # noqa: S106 — log label, not a secret
+        return token
+
+    saved = load_worker_token()
+    if saved:
+        settings.token = saved
+        logger.info("worker_token_loaded", source="file")  # noqa: S106 — log label, not a secret
+        return saved
+
+    logger.info("no_worker_token", hint="registering with backend")
+    bearer = _resolve_host_bearer(settings)
+    if not bearer:
+        raise RuntimeError("no host OAuth credential; run `bsvibe login` on this host first.")
+    minted = await register(
+        client,
+        name=settings.name,
+        bearer_token=bearer,
+        capabilities=detect_capabilities(),
+    )
+    settings.token = minted
+    _persist_worker_token(minted, settings)
+    logger.info("worker_token_loaded", source="registered")  # noqa: S106 — log label, not a secret
+    return minted
+
+
 async def poll_and_execute(
     *,
     settings: WorkerSettings,
@@ -393,20 +435,7 @@ async def poll_and_execute(
     A ``stop`` event lets a signal handler (or a test) end the loop gracefully;
     in-flight tasks are awaited before returning.
     """
-    token = settings.token
-    if not token:
-        logger.info("no_worker_token", hint="registering with backend")
-        bearer = _resolve_host_bearer(settings)
-        if not bearer:
-            raise RuntimeError("no host OAuth credential; run `bsvibe login` on this host first.")
-        token = await register(
-            client,
-            name=settings.name,
-            bearer_token=bearer,
-            capabilities=detect_capabilities(),
-        )
-        settings.token = token
-        _persist_worker_token(token, settings)
+    token = await _acquire_worker_token(client, settings)
 
     executors: dict[str, ExecutorProtocol] = {}
     for cap in detect_capabilities():
