@@ -26,6 +26,7 @@ from typing import Annotated
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import RedirectResponse
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.api.deps import get_db_session, get_workspace_id
@@ -167,6 +168,41 @@ async def start_github_app_manifest(
     ``redirect_url`` with a ``code`` (and the echoed ``state``).
     """
     return await service.begin_github_app_manifest(session, workspace_id=workspace_id)
+
+
+class AppCredentialsIn(BaseModel):
+    """Operator-pasted OAuth App credentials for a vanilla provider."""
+
+    model_config = ConfigDict(extra="forbid")
+    client_id: str = Field(..., min_length=1, max_length=255)
+    client_secret: str = Field(..., min_length=1, max_length=1024)
+
+
+@router.post("/{provider}/app-credentials")
+async def set_provider_app_credentials(
+    provider: str,
+    payload: AppCredentialsIn,
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    cipher: Annotated[CredentialCipher, Depends(get_credential_cipher)],
+) -> dict[str, object]:
+    """Operator: store a vanilla provider's (slack/notion/discord) App creds.
+
+    The operator creates the OAuth app in the provider's console (no manifest
+    API there) and pastes client_id/secret here — stored encrypted + the
+    provider registers so workspaces can 1-click connect. github uses the
+    manifest flow, not this (→ 400).
+    """
+    try:
+        await service.set_app_credentials(
+            session,
+            provider=provider,
+            client_id=payload.client_id,
+            client_secret=payload.client_secret,
+            cipher=cipher,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    return {"provider": provider, "configured": True}
 
 
 @public_router.get("/connectors/oauth/github/app-manifest/callback")
