@@ -433,3 +433,45 @@ async def test_set_oauth_app_denied_for_read_only(db, workspace_id, user_id, reg
                 {"provider": "slack", "client_id": "x", "client_secret": "y"},
                 ctx,
             )
+
+
+# ── unclaimed installs (Sentry claim-later) ─────────────────────────────
+
+from backend.connectors.auth import store as _store  # noqa: E402
+from backend.connectors.auth.tokenset import TokenSet as _TokenSet  # noqa: E402
+from backend.router.accounts.crypto import CredentialCipher as _Cipher  # noqa: E402
+from backend.router.accounts.crypto import _key_from_settings as _key  # noqa: E402
+
+
+async def test_list_and_claim_unclaimed(db, workspace_id, user_id, registry) -> None:
+    cipher = _Cipher(_key())
+    async with db() as s:
+        await _store.create_unclaimed(
+            s,
+            provider="sentry",
+            installation_ref="inst-1",
+            account_label="Acme",
+            token=_TokenSet(access_token="tok", refresh_token="ref", expires_at=None),
+            cipher=cipher,
+        )
+        await s.commit()
+
+    async with db() as s:
+        ctx = ToolContext(
+            principal=_principal(workspace_id=workspace_id, user_id=user_id, scopes=("mcp:read",)),
+            session=s,
+        )
+        listed = await registry.call_tool("bsvibe_connectors_list_unclaimed", {}, ctx)
+    uid = listed["unclaimed"][0]["id"]
+    assert listed["unclaimed"][0]["installation_ref"] == "inst-1"
+
+    async with db() as s:
+        ctx = ToolContext(
+            principal=_principal(workspace_id=workspace_id, user_id=user_id, scopes=("mcp:write",)),
+            session=s,
+        )
+        out = await registry.call_tool(
+            "bsvibe_connectors_claim_install", {"unclaimed_id": uid}, ctx
+        )
+    assert out["connector"] == "sentry"
+    assert out["claimed"] is True

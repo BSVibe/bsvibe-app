@@ -187,6 +187,53 @@ async def sentry_install_url(session: AsyncSession, *, cipher: CredentialCipher)
     return f"https://sentry.io/sentry-apps/{creds.app_slug}/external-install/"
 
 
+async def list_unclaimed_installs(session: AsyncSession) -> list[dict[str, Any]]:
+    """Unclaimed installs awaiting a workspace claim (no secrets returned)."""
+    rows = await store.list_unclaimed(session)
+    return [
+        {
+            "id": str(r.id),
+            "provider": r.provider,
+            "installation_ref": r.installation_ref,
+            "account_label": r.account_label,
+            "created_at": r.created_at.isoformat(),
+        }
+        for r in rows
+    ]
+
+
+async def claim_install(
+    session: AsyncSession,
+    *,
+    unclaimed_id: uuid.UUID,
+    workspace_id: uuid.UUID,
+    cipher: CredentialCipher,
+) -> str:
+    """Bind an unclaimed install to ``workspace_id``; return the connector name.
+
+    Mints (or reuses) the workspace's connector_account, stores the token, and
+    records the installation ref on the account (``external_ref``) so the
+    provider's refresh can find it later. Raises :class:`ValueError` if absent.
+    """
+    claimed = await store.claim_unclaimed(session, unclaimed_id=unclaimed_id, cipher=cipher)
+    if claimed is None:
+        raise ValueError("unclaimed install not found")
+    provider, installation_ref, token = claimed
+    account = await store.get_or_create_account(
+        session, workspace_id=workspace_id, connector=provider, cipher=cipher
+    )
+    account.external_ref = installation_ref
+    await store.upsert_token(
+        session,
+        connector_account_id=account.id,
+        provider=provider,
+        token=token,
+        cipher=cipher,
+    )
+    await session.commit()
+    return provider
+
+
 async def complete_sentry_install(
     session: AsyncSession, *, code: str, installation_id: str, cipher: CredentialCipher
 ) -> None:
@@ -218,8 +265,10 @@ __all__ = [
     "begin_oauth_connect",
     "build_credential_cipher",
     "callback_redirect_uri",
+    "claim_install",
     "complete_sentry_install",
     "compute_github_app_status",
+    "list_unclaimed_installs",
     "manifest_redirect_uri",
     "sentry_install_url",
     "set_app_credentials",

@@ -400,6 +400,60 @@ async def _h_set_oauth_app(args: SetOAuthAppInput, ctx: ToolContext) -> SetOAuth
     return SetOAuthAppOutput(provider=args.provider, configured=True)
 
 
+# ── unclaimed installs (Sentry claim-later) ─────────────────────────────
+
+
+class ListUnclaimedInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+class UnclaimedItem(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    id: str
+    provider: str
+    installation_ref: str
+    account_label: str | None
+    created_at: str
+
+
+class ListUnclaimedOutput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    unclaimed: list[UnclaimedItem]
+
+
+async def _h_list_unclaimed(_: ListUnclaimedInput, ctx: ToolContext) -> ListUnclaimedOutput:
+    rows = await oauth_service.list_unclaimed_installs(ctx.session)
+    return ListUnclaimedOutput(unclaimed=[UnclaimedItem(**r) for r in rows])
+
+
+class ClaimInstallInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    unclaimed_id: str = Field(..., max_length=64)
+
+
+class ClaimInstallOutput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    connector: str
+    claimed: bool
+
+
+async def _h_claim_install(args: ClaimInstallInput, ctx: ToolContext) -> ClaimInstallOutput:
+    try:
+        uid = uuid.UUID(args.unclaimed_id)
+    except ValueError as exc:
+        raise ToolError(f"invalid unclaimed_id: {args.unclaimed_id}") from exc
+    try:
+        connector = await oauth_service.claim_install(
+            ctx.session,
+            unclaimed_id=uid,
+            workspace_id=ctx.principal.workspace_id,
+            cipher=oauth_service.build_credential_cipher(),
+        )
+    except ValueError as exc:
+        raise ToolError(str(exc)) from exc
+    return ClaimInstallOutput(connector=connector, claimed=True)
+
+
 def register_connectors_tools(registry: ToolRegistry) -> None:
     registry.register(
         Tool(
@@ -521,6 +575,33 @@ def register_connectors_tools(registry: ToolRegistry) -> None:
             handler=_h_set_oauth_app,
             required_scopes=("mcp:write",),
             audit_event="bsvibe.mcp.connectors_set_oauth_app.invoked",
+        )
+    )
+    registry.register(
+        Tool(
+            name="bsvibe_connectors_list_unclaimed",
+            description=(
+                "List OAuth installs awaiting a workspace claim (e.g. Sentry, whose "
+                "install→grant carries no workspace binding). No secrets returned."
+            ),
+            input_schema=ListUnclaimedInput,
+            output_schema=ListUnclaimedOutput,
+            handler=_h_list_unclaimed,
+            required_scopes=("mcp:read",),
+        )
+    )
+    registry.register(
+        Tool(
+            name="bsvibe_connectors_claim_install",
+            description=(
+                "Bind an unclaimed install (from list_unclaimed) to the active "
+                "workspace — completes the Sentry connect after the operator installed it."
+            ),
+            input_schema=ClaimInstallInput,
+            output_schema=ClaimInstallOutput,
+            handler=_h_claim_install,
+            required_scopes=("mcp:write",),
+            audit_event="bsvibe.mcp.connectors_claim_install.invoked",
         )
     )
 

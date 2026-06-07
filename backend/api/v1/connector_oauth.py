@@ -249,6 +249,34 @@ async def github_app_manifest_callback(
     )
 
 
+# ── Unclaimed installs (claim-later) ────────────────────────────────────
+
+
+@router.get("/unclaimed")
+async def list_unclaimed_installs(
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+) -> dict[str, object]:
+    """Installs awaiting a workspace claim (e.g. Sentry). No secrets returned."""
+    return {"unclaimed": await service.list_unclaimed_installs(session)}
+
+
+@router.post("/unclaimed/{unclaimed_id}/claim")
+async def claim_unclaimed_install(
+    unclaimed_id: uuid.UUID,
+    workspace_id: Annotated[uuid.UUID, Depends(get_workspace_id)],
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    cipher: Annotated[CredentialCipher, Depends(get_credential_cipher)],
+) -> dict[str, object]:
+    """Bind an unclaimed install to the active workspace."""
+    try:
+        connector = await service.claim_install(
+            session, unclaimed_id=unclaimed_id, workspace_id=workspace_id, cipher=cipher
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    return {"connector": connector, "claimed": True}
+
+
 # ── Sentry install→grant flow (claim-later, design §11) ─────────────────
 
 

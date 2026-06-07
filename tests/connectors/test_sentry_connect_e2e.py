@@ -144,3 +144,39 @@ async def test_callback_when_not_configured_redirects_error(client: httpx.AsyncC
     )
     assert cb.status_code in (302, 307)
     assert "connect_error=sentry" in cb.headers["location"]
+
+
+@respx.mock(assert_all_mocked=False)
+async def test_unclaimed_list_and_claim_via_rest(
+    respx_mock: respx.MockRouter,
+    client: httpx.AsyncClient,
+    sf: async_sessionmaker[AsyncSession],
+    cipher: CredentialCipher,
+) -> None:
+    await _configure_sentry(sf, cipher)
+    respx_mock.post(_AUTHZ).mock(
+        return_value=httpx.Response(201, json={"token": "t", "refreshToken": "r"})
+    )
+    await client.get(
+        "/api/v1/connectors/oauth/sentry/install/callback",
+        params={"code": "g", "installationId": "inst-1"},
+    )
+    listed = await client.get("/api/v1/connectors/oauth/unclaimed")
+    assert listed.status_code == 200
+    items = listed.json()["unclaimed"]
+    assert len(items) == 1 and items[0]["installation_ref"] == "inst-1"
+
+    claim = await client.post(f"/api/v1/connectors/oauth/unclaimed/{items[0]['id']}/claim")
+    assert claim.status_code == 200, claim.text
+    assert claim.json() == {"connector": "sentry", "claimed": True}
+
+    # claimed → unclaimed list now empty
+    again = await client.get("/api/v1/connectors/oauth/unclaimed")
+    assert again.json()["unclaimed"] == []
+
+
+async def test_claim_missing_404(client: httpx.AsyncClient) -> None:
+    import uuid as _uuid
+
+    r = await client.post(f"/api/v1/connectors/oauth/unclaimed/{_uuid.uuid4()}/claim")
+    assert r.status_code == 404
