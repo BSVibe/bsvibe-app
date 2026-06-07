@@ -22,6 +22,7 @@ from backend.connectors.auth import bootstrap, store
 from backend.connectors.auth.app_credentials import get_app_credentials, upsert_app_credentials
 from backend.connectors.auth.github_manifest import build_manifest, manifest_post_url
 from backend.connectors.auth.providers import get_provider
+from backend.connectors.auth.sentry import SentryProvider
 from backend.router.accounts.crypto import CredentialCipher, _key_from_settings
 
 
@@ -173,6 +174,43 @@ async def compute_github_app_status(
     }
 
 
+async def sentry_install_url(session: AsyncSession, *, cipher: CredentialCipher) -> str | None:
+    """The Sentry external-install URL for the configured integration, or None.
+
+    Sentry connect is NOT an authorize redirect — the user installs the public
+    integration at this fixed URL; Sentry then redirects to our install callback
+    with ``code`` + ``installationId`` (design §11).
+    """
+    creds = await get_app_credentials(session, provider="sentry", cipher=cipher)
+    if creds is None or not creds.app_slug:
+        return None
+    return f"https://sentry.io/sentry-apps/{creds.app_slug}/external-install/"
+
+
+async def complete_sentry_install(
+    session: AsyncSession, *, code: str, installation_id: str, cipher: CredentialCipher
+) -> None:
+    """Exchange a Sentry install grant → park the token as an unclaimed install.
+
+    No workspace binding here (Sentry passes no state); the founder claims it
+    afterwards. Raises :class:`UnknownProviderError` if sentry isn't configured.
+    """
+    creds = await get_app_credentials(session, provider="sentry", cipher=cipher)
+    if creds is None:
+        raise UnknownProviderError("sentry")
+    provider = SentryProvider(client_id=creds.client_id, client_secret=creds.client_secret)
+    token = await provider.exchange_installation(installation_id=installation_id, code=code)
+    await store.create_unclaimed(
+        session,
+        provider="sentry",
+        installation_ref=installation_id,
+        account_label=token.account_label,
+        token=token,
+        cipher=cipher,
+    )
+    await session.commit()
+
+
 __all__ = [
     "MANIFEST_PENDING_PROVIDER",
     "UnknownProviderError",
@@ -180,7 +218,9 @@ __all__ = [
     "begin_oauth_connect",
     "build_credential_cipher",
     "callback_redirect_uri",
+    "complete_sentry_install",
     "compute_github_app_status",
     "manifest_redirect_uri",
+    "sentry_install_url",
     "set_app_credentials",
 ]

@@ -24,7 +24,7 @@ import uuid
 from typing import Annotated
 
 import structlog
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -245,6 +245,51 @@ async def github_app_manifest_callback(
     )
     return RedirectResponse(
         _pwa_manifest_return_url(ok=True),
+        status_code=status.HTTP_302_FOUND,
+    )
+
+
+# ── Sentry install→grant flow (claim-later, design §11) ─────────────────
+
+
+@router.get("/sentry/install-url")
+async def sentry_install_url(
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    cipher: Annotated[CredentialCipher, Depends(get_credential_cipher)],
+) -> dict[str, object]:
+    """The Sentry external-install URL (founder opens it to install + connect).
+
+    ``configured`` false when the operator hasn't set the Sentry integration's
+    creds + slug yet.
+    """
+    url = await service.sentry_install_url(session, cipher=cipher)
+    return {"configured": url is not None, "install_url": url}
+
+
+@public_router.get("/connectors/oauth/sentry/install/callback")
+async def sentry_install_callback(
+    code: str,
+    installation_id: Annotated[str, Query(alias="installationId")],
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    cipher: Annotated[CredentialCipher, Depends(get_credential_cipher)],
+) -> RedirectResponse:
+    """Sentry redirects here post-install with ``code`` + ``installationId``.
+
+    No workspace binding (Sentry passes no state) — exchange the grant + park
+    the token as an unclaimed install; the founder claims it afterwards.
+    """
+    try:
+        await service.complete_sentry_install(
+            session, code=code, installation_id=installation_id, cipher=cipher
+        )
+    except service.UnknownProviderError:
+        return RedirectResponse(
+            _pwa_return_url("sentry", ok=False), status_code=status.HTTP_302_FOUND
+        )
+    logger.info("sentry_install_unclaimed", installation_id=installation_id)
+    base = get_settings().pwa_url.rstrip("/")
+    return RedirectResponse(
+        f"{base}/settings/connectors?sentry_install=pending",
         status_code=status.HTTP_302_FOUND,
     )
 
