@@ -51,6 +51,7 @@ async def _seed_worker(
     capabilities: list[str],
     status: str = "online",
     heartbeat_age_s: float | None = 0.0,
+    last_in_flight: int | None = 0,
 ) -> WorkerRow:
     """Insert a worker row directly (bypassing the register flow)."""
     last_heartbeat = (
@@ -63,6 +64,7 @@ async def _seed_worker(
         capabilities=list(capabilities),
         status=status,
         last_heartbeat=last_heartbeat,
+        last_in_flight=last_in_flight,
         token_hash=service._hash_token(uuid.uuid4().hex),
         is_active=True,
     )
@@ -274,6 +276,186 @@ async def test_find_available_worker_pinned_missing_capability_falls_through() -
         )
         assert found is not None
         assert found.id == fresh.id
+
+
+# ── Lift E16 — capacity-aware dispatch ───────────────────────────────────────
+
+
+async def test_find_available_worker_excludes_saturated() -> None:
+    """Lift E16 — a worker at ``last_in_flight >= cap`` is NOT selected.
+
+    The worker's poll loop skips polling while at-cap, so a task XADDed
+    onto its stream sits unread until a slot frees up. Pre-E16 the backend
+    happily dispatched there and started a timer that expired before the
+    worker even read the task. Now ``find_available_worker`` must exclude
+    a saturated row entirely.
+    """
+    workspace_id = uuid.uuid4()
+    async with memory_session() as s:
+        await _seed_worker(
+            s,
+            workspace_id=workspace_id,
+            capabilities=["opencode"],
+            heartbeat_age_s=5,
+            last_in_flight=3,
+        )
+        await s.commit()
+        found = await dispatch.find_available_worker(
+            s,
+            workspace_id=workspace_id,
+            executor_type="opencode",
+            max_parallel_per_worker=3,
+        )
+        assert found is None
+
+
+async def test_find_available_worker_picks_least_loaded() -> None:
+    """Lift E16 — among free workers the lower-load one wins (round-robin via heartbeat).
+
+    Two workers, both online + fresh + capability-matching, both below cap:
+    the one with the older heartbeat (i.e. the one selection has not picked
+    recently) wins. This is the same ``ORDER BY last_heartbeat ASC``
+    semantics ``find_available_worker`` has always carried; the new
+    capacity gate just composes with it instead of replacing it.
+    """
+    workspace_id = uuid.uuid4()
+    async with memory_session() as s:
+        older = await _seed_worker(
+            s,
+            workspace_id=workspace_id,
+            capabilities=["opencode"],
+            heartbeat_age_s=60,
+            last_in_flight=2,
+        )
+        await _seed_worker(
+            s,
+            workspace_id=workspace_id,
+            capabilities=["opencode"],
+            heartbeat_age_s=5,
+            last_in_flight=1,
+        )
+        await s.commit()
+        found = await dispatch.find_available_worker(
+            s,
+            workspace_id=workspace_id,
+            executor_type="opencode",
+            max_parallel_per_worker=3,
+        )
+        assert found is not None
+        assert found.id == older.id
+
+
+async def test_find_available_worker_returns_none_when_all_saturated() -> None:
+    """Lift E16 — every worker at-cap returns None (the chat call must wait)."""
+    workspace_id = uuid.uuid4()
+    async with memory_session() as s:
+        await _seed_worker(
+            s,
+            workspace_id=workspace_id,
+            capabilities=["opencode"],
+            heartbeat_age_s=5,
+            last_in_flight=3,
+        )
+        await _seed_worker(
+            s,
+            workspace_id=workspace_id,
+            capabilities=["opencode"],
+            heartbeat_age_s=5,
+            last_in_flight=3,
+        )
+        await s.commit()
+        found = await dispatch.find_available_worker(
+            s,
+            workspace_id=workspace_id,
+            executor_type="opencode",
+            max_parallel_per_worker=3,
+        )
+        assert found is None
+
+
+async def test_find_available_worker_pre_e16_null_count_is_permitted() -> None:
+    """Lift E16 — a NULL ``last_in_flight`` (pre-E16 worker shape) is allowed.
+
+    Back-compat: rolling out E16 to the backend BEFORE upgrading workers
+    must not capacity-exclude every legacy worker that never reports a
+    count. NULL is treated as "no signal — let it through" so the
+    workspace remains functional during the rollout.
+    """
+    workspace_id = uuid.uuid4()
+    async with memory_session() as s:
+        worker = await _seed_worker(
+            s,
+            workspace_id=workspace_id,
+            capabilities=["opencode"],
+            heartbeat_age_s=5,
+            last_in_flight=None,
+        )
+        await s.commit()
+        found = await dispatch.find_available_worker(
+            s,
+            workspace_id=workspace_id,
+            executor_type="opencode",
+            max_parallel_per_worker=3,
+        )
+        assert found is not None
+        assert found.id == worker.id
+
+
+async def test_find_available_worker_pinned_respected_even_when_saturated() -> None:
+    """Lift E16 — a pinned worker_id is honoured even at-cap.
+
+    The founder pinned a specific worker for a reason — usually a single
+    dedicated machine. Capacity-excluding it would silently fall through
+    to a different worker and break the pin invariant. The waiting
+    behaviour belongs in :class:`ExecutorAdapter.chat`, not here.
+    """
+    workspace_id = uuid.uuid4()
+    async with memory_session() as s:
+        worker = await _seed_worker(
+            s,
+            workspace_id=workspace_id,
+            capabilities=["opencode"],
+            heartbeat_age_s=5,
+            last_in_flight=3,
+        )
+        await s.commit()
+        found = await dispatch.find_available_worker(
+            s,
+            workspace_id=workspace_id,
+            executor_type="opencode",
+            pinned_worker_id=worker.id,
+            max_parallel_per_worker=3,
+        )
+        assert found is not None
+        assert found.id == worker.id
+
+
+async def test_find_available_worker_stale_heartbeat_excluded_with_busy_count() -> None:
+    """Lift E16 / Part D — stale heartbeat trumps capacity reading.
+
+    If a worker died mid-task without sending the final result, its
+    ``last_in_flight`` would stay positive forever. The existing freshness
+    check excludes the row entirely (it is not "available" anyway), so
+    capacity-mode never sees it. Pins the interaction after the column
+    addition — the count must not "leak" past the freshness gate.
+    """
+    workspace_id = uuid.uuid4()
+    async with memory_session() as s:
+        await _seed_worker(
+            s,
+            workspace_id=workspace_id,
+            capabilities=["opencode"],
+            heartbeat_age_s=300,  # stale (>HEARTBEAT_FRESHNESS_S=120)
+            last_in_flight=3,
+        )
+        await s.commit()
+        found = await dispatch.find_available_worker(
+            s,
+            workspace_id=workspace_id,
+            executor_type="opencode",
+            max_parallel_per_worker=3,
+        )
+        assert found is None
 
 
 async def test_mark_pending_resets_task() -> None:

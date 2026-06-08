@@ -123,6 +123,7 @@ async def find_available_worker(
     workspace_id: uuid.UUID,
     executor_type: str,
     pinned_worker_id: uuid.UUID | None = None,
+    max_parallel_per_worker: int | None = None,
 ) -> WorkerRow | None:
     """Return an online, capability-matching worker for ``workspace_id``, or ``None``.
 
@@ -134,7 +135,25 @@ async def find_available_worker(
     ``pinned_worker_id`` (optional) is accepted even with a stale heartbeat —
     the caller explicitly bound this worker — as long as it is active + in the
     workspace + carries the capability. A pinned id that doesn't qualify falls
-    through to the normal availability scan.
+    through to the normal availability scan. **Pinned workers are ALSO accepted
+    when saturated** (``last_in_flight >= max_parallel_per_worker``): the
+    founder pinned a specific machine for a reason and the waiting belongs in
+    :class:`~backend.dispatch.adapter.ExecutorAdapter.chat`, not here.
+
+    ``max_parallel_per_worker`` (Lift E16, optional) — when set, eligible
+    rows whose last-reported ``last_in_flight`` reached this cap are
+    EXCLUDED. The backend used to dispatch onto a saturated worker's
+    stream and start its 600 s ``await_completion`` timer; the worker's
+    poll loop skips polling at-cap, so the timer expired while the task
+    was never read — chunks were marked ``failed`` before they ran. The
+    capacity-exclusion stops that. ``None`` keeps the pre-E16 behaviour
+    (no capacity gate at all). A ``last_in_flight`` of ``NULL`` is treated
+    as "no signal — let it through" for back-compat with pre-E16 workers
+    that don't report a count.
+
+    On capacity exhaustion logs ``find_available_worker_all_saturated``
+    with a count of capability-matching workers and saturated workers —
+    future capacity diagnostics need a signal that this code path fired.
     """
     if pinned_worker_id is not None:
         pinned = (
@@ -166,6 +185,8 @@ async def find_available_worker(
         .scalars()
         .all()
     )
+    total_eligible = 0
+    saturated = 0
     for row in rows:
         if row.last_heartbeat is None:
             continue
@@ -177,8 +198,33 @@ async def find_available_worker(
         # SQLite returns naive datetimes; treat them as UTC for the comparison.
         if last.tzinfo is None:
             last = last.replace(tzinfo=UTC)
-        if last.timestamp() >= cutoff:
-            return row
+        if last.timestamp() < cutoff:
+            continue
+        total_eligible += 1
+        # Lift E16 capacity gate. A NULL count is "no signal — let it
+        # through" (pre-E16 worker that never reported); a positive count
+        # at-or-over the cap excludes the row.
+        if (
+            max_parallel_per_worker is not None
+            and row.last_in_flight is not None
+            and row.last_in_flight >= max_parallel_per_worker
+        ):
+            saturated += 1
+            continue
+        return row
+    # Lift E16 — explicit log when capacity exclusion is the reason we
+    # return None. Distinguishes "all-saturated" from "no worker at all"
+    # so a future founder dogfood debug session sees the signal in logs
+    # without needing a redis introspection.
+    if max_parallel_per_worker is not None and total_eligible > 0 and saturated == total_eligible:
+        logger.info(
+            "find_available_worker_all_saturated",
+            workspace_id=str(workspace_id),
+            executor_type=executor_type,
+            total_eligible=total_eligible,
+            saturated=saturated,
+            max_parallel_per_worker=max_parallel_per_worker,
+        )
     return None
 
 

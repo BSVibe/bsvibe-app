@@ -29,6 +29,7 @@ checked at rule-creation time so an incompatible binding fails fast.
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from dataclasses import dataclass, field
 from typing import Any, Protocol, runtime_checkable
@@ -293,17 +294,14 @@ class ExecutorAdapter:
         # ever folds dispatch back in.
         from backend.executors import dispatch  # noqa: PLC0415
 
-        worker = await dispatch.find_available_worker(
-            self.session,
+        worker = await _await_worker_with_capacity(
+            session=self.session,
             workspace_id=self.workspace_id,
             executor_type=executor_type,
             pinned_worker_id=pinned_worker_id,
+            settings=self.settings,
+            account_id=self.model_account_id,
         )
-        if worker is None:
-            raise ExecutorAdapterUnavailable(
-                f"no online worker with capability {executor_type!r} for "
-                f"workspace {self.workspace_id}"
-            )
 
         # Create + dispatch the task. ``run_id=None`` because chat is
         # detached from any ExecutionRun (see class docstring).
@@ -446,6 +444,75 @@ def adapter_for(
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+async def _await_worker_with_capacity(
+    *,
+    session: AsyncSession,
+    workspace_id: uuid.UUID,
+    executor_type: str,
+    pinned_worker_id: uuid.UUID | None,
+    settings: Settings,
+    account_id: uuid.UUID,
+) -> Any:
+    """Lift E16 — block until a worker with free capacity is available.
+
+    Loops :func:`backend.executors.dispatch.find_available_worker` with the
+    workspace's per-worker parallel cap; sleeps
+    ``settings.executor_capacity_wait_poll_s`` between checks; gives up
+    after ``settings.executor_capacity_wait_max_s`` with a distinct
+    :class:`ExecutorAdapterUnavailable` so the caller can tell saturation
+    apart from misconfig.
+
+    Why a separate helper: the retry math + bounded-wait log boundaries
+    don't belong inline in :meth:`ExecutorAdapter.chat` (already a
+    multi-step orchestration). The helper closes over the dispatch
+    invariants (pin honoured even when saturated lives in
+    :func:`find_available_worker`; we just propagate the result).
+    """
+    from backend.executors import dispatch  # noqa: PLC0415
+
+    deadline = asyncio.get_event_loop().time() + settings.executor_capacity_wait_max_s
+    poll_interval = max(settings.executor_capacity_wait_poll_s, 0.0)
+    attempt = 0
+    while True:
+        attempt += 1
+        worker = await dispatch.find_available_worker(
+            session,
+            workspace_id=workspace_id,
+            executor_type=executor_type,
+            pinned_worker_id=pinned_worker_id,
+            max_parallel_per_worker=settings.max_parallel_tasks_per_worker,
+        )
+        if worker is not None:
+            return worker
+        now = asyncio.get_event_loop().time()
+        elapsed = settings.executor_capacity_wait_max_s - (deadline - now)
+        if now >= deadline:
+            logger.info(
+                "executor_adapter_capacity_wait_exhausted",
+                workspace_id=str(workspace_id),
+                account_id=str(account_id),
+                executor_type=executor_type,
+                attempts=attempt,
+                elapsed_s=round(elapsed, 3),
+                max_wait_s=settings.executor_capacity_wait_max_s,
+            )
+            raise ExecutorAdapterUnavailable(
+                f"no worker capacity within {settings.executor_capacity_wait_max_s}s "
+                f"for executor {executor_type!r} in workspace {workspace_id} "
+                f"— workspace appears stuck or under-provisioned"
+            )
+        logger.info(
+            "executor_adapter_awaiting_capacity",
+            workspace_id=str(workspace_id),
+            account_id=str(account_id),
+            executor_type=executor_type,
+            attempt=attempt,
+            elapsed_s=round(elapsed, 3),
+        )
+        # Cap sleep at the remaining budget so we don't overshoot the deadline.
+        await asyncio.sleep(min(poll_interval, deadline - now))
 
 
 def _from_llm_response(response: LlmResponse) -> ChatResponse:

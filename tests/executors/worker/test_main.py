@@ -89,6 +89,11 @@ def _mock_transport(state: dict[str, Any]) -> httpx.MockTransport:
             state["register_headers"] = dict(request.headers)
             return httpx.Response(201, json={"id": str(uuid.uuid4()), "token": "WORKER-TOKEN"})
         if path == "/api/v1/workers/heartbeat":
+            try:
+                body = json.loads(request.content) if request.content else None
+            except json.JSONDecodeError:
+                body = None
+            state.setdefault("heartbeats", []).append(body)
             return httpx.Response(200, json={"status": "ok"})
         if path == "/api/v1/workers/poll":
             tasks = state.get("poll_queue", [])
@@ -410,6 +415,54 @@ async def test_run_once_respects_capacity() -> None:
     methods = [p for _, p in state["calls"]]
     assert "/api/v1/workers/poll" not in methods
     assert result == in_flight  # unchanged
+
+
+# ── Lift E16 — heartbeat carries in_flight count ─────────────────────────────
+
+
+async def test_run_once_heartbeat_reports_in_flight_zero_when_idle(monkeypatch: Any) -> None:
+    """Lift E16 — an idle worker heartbeats ``in_flight=0`` (after reaping done tasks)."""
+    state: dict[str, Any] = {"poll_queue": []}
+    monkeypatch.setattr(worker_main, "select_executor", lambda _t: _StubExecutor())
+    async with _client(state) as client:
+        await worker_main.run_once(
+            client=client,
+            settings=_settings(),
+            executors={},
+            headers={"X-Worker-Token": "WORKER-TOKEN"},
+            redis=None,
+            in_flight=set(),
+        )
+    assert state["heartbeats"] == [{"in_flight": 0}]
+
+
+async def test_run_once_heartbeat_reports_in_flight_at_cap_when_saturated() -> None:
+    """Lift E16 — a saturated worker reports its in-flight count so the backend can exclude it.
+
+    The poll loop still SKIPS polling at-cap (the worker has no slot), but
+    it MUST heartbeat with the real count so the backend's
+    :func:`find_available_worker` sees the saturation signal and stops
+    dispatching onto this stream. Without this, the worker silently
+    swallows tasks the backend keeps XADDing — backend timer expires
+    before the worker reads them.
+    """
+    state: dict[str, Any] = {"poll_queue": [_task()]}
+
+    class _NeverDone:
+        def done(self) -> bool:
+            return False
+
+    in_flight = {_NeverDone(), _NeverDone(), _NeverDone()}
+    async with _client(state) as client:
+        await worker_main.run_once(
+            client=client,
+            settings=_settings(max_parallel_tasks=3),
+            executors={"claude_code": _StubExecutor()},
+            headers={"X-Worker-Token": "WORKER-TOKEN"},
+            redis=None,
+            in_flight=in_flight,  # type: ignore[arg-type]
+        )
+    assert state["heartbeats"] == [{"in_flight": 3}]
 
 
 # ── poll_and_execute bootstrap (registers when no token) ─────────────────────

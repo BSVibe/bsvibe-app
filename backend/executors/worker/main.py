@@ -433,7 +433,19 @@ async def run_once(
     """
     in_flight = {t for t in in_flight if not t.done()}
 
-    await client.post("/api/v1/workers/heartbeat", headers=headers)
+    # Lift E16 — heartbeat carries the worker's current in-flight count
+    # so the backend's :func:`find_available_worker` can capacity-exclude
+    # saturated workers. Pre-E16 the heartbeat had no body and the backend
+    # had no visibility into worker load — it kept dispatching onto a
+    # stream the worker's poll loop had paused (the poll-skip-at-cap path
+    # below), and the per-task timer expired before the worker ever read
+    # the task. Reporting the count here is the producer side of the
+    # capacity gate.
+    await client.post(
+        "/api/v1/workers/heartbeat",
+        headers=headers,
+        json={"in_flight": len(in_flight)},
+    )
 
     max_parallel = settings.max_parallel_tasks
     if len(in_flight) >= max_parallel:

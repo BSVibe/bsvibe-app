@@ -184,10 +184,24 @@ async def authenticate_worker(session: AsyncSession, token: str) -> WorkerRow | 
     return row
 
 
-async def record_heartbeat(session: AsyncSession, worker: WorkerRow) -> WorkerRow:
-    """Mark ``worker`` online and stamp ``last_heartbeat`` to now."""
+async def record_heartbeat(
+    session: AsyncSession,
+    worker: WorkerRow,
+    *,
+    in_flight: int = 0,
+) -> WorkerRow:
+    """Mark ``worker`` online and stamp ``last_heartbeat`` to now.
+
+    Lift E16 — also stamps ``last_in_flight`` to the worker-reported
+    in-flight task count. The backend's :func:`find_available_worker`
+    excludes rows whose ``last_in_flight`` reached the per-worker cap so
+    the dispatch path never XADDs onto a stream the worker has paused
+    polling. Default 0 keeps the call-site invariant for callers that
+    don't have a count (older worker shape over the wire).
+    """
     worker.status = "online"
     worker.last_heartbeat = datetime.now(UTC)
+    worker.last_in_flight = in_flight
     await session.flush()
     return worker
 

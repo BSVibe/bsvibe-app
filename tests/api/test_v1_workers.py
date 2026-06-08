@@ -237,6 +237,85 @@ async def test_heartbeat_with_worker_token_ok(db, workspace_id) -> None:
     assert r.json()["status"] == "ok"
 
 
+async def test_heartbeat_persists_in_flight_count(db, workspace_id) -> None:
+    """Lift E16 — the heartbeat body's ``in_flight`` round-trips to ``last_in_flight``.
+
+    The worker stamps its current ``len(in_flight)`` on every heartbeat;
+    the backend persists it onto the row so ``find_available_worker`` can
+    exclude saturated workers from selection. Without round-trip the
+    capacity-aware dispatch can't fire and we silently fall back to the
+    pre-E16 "always dispatch" behaviour.
+    """
+    from backend.executors.db import WorkerRow
+
+    await _seed_member(db, workspace_id, "owner", "hb-if-sub")
+    app = create_app()
+    _override_bearer(app, workspace_id)
+    try:
+        async with _client(app, db) as c:
+            reg = await c.post(
+                "/api/v1/workers/register",
+                headers={"Authorization": "Bearer fake"},
+                json={"name": "hb-if", "labels": [], "capabilities": []},
+            )
+            worker_token = reg.json()["token"]
+            worker_id = uuid.UUID(reg.json()["id"])
+    finally:
+        _restore_bearer()
+
+    app = create_app()
+    async with _client(app, db) as c:
+        r = await c.post(
+            "/api/v1/workers/heartbeat",
+            headers={"X-Worker-Token": worker_token},
+            json={"in_flight": 2},
+        )
+    assert r.status_code == 200, r.text
+    async with db() as s:
+        row = await s.get(WorkerRow, worker_id)
+        assert row is not None
+        assert row.last_in_flight == 2
+
+
+async def test_heartbeat_without_body_defaults_in_flight_zero(db, workspace_id) -> None:
+    """Lift E16 — a heartbeat with no body still works (defaults to 0).
+
+    The endpoint pre-E16 took no body at all. After E16 the body shape is
+    optional + defaults to ``in_flight=0`` so an older worker that still
+    posts an empty body remains functional. This guards the back-compat
+    rollout invariant.
+    """
+    from backend.executors.db import WorkerRow
+
+    await _seed_member(db, workspace_id, "owner", "hb-nobody-sub")
+    app = create_app()
+    _override_bearer(app, workspace_id)
+    try:
+        async with _client(app, db) as c:
+            reg = await c.post(
+                "/api/v1/workers/register",
+                headers={"Authorization": "Bearer fake"},
+                json={"name": "hb-nobody", "labels": [], "capabilities": []},
+            )
+            worker_token = reg.json()["token"]
+            worker_id = uuid.UUID(reg.json()["id"])
+    finally:
+        _restore_bearer()
+
+    app = create_app()
+    async with _client(app, db) as c:
+        # No JSON body at all — must still succeed (older worker shape).
+        r = await c.post(
+            "/api/v1/workers/heartbeat",
+            headers={"X-Worker-Token": worker_token},
+        )
+    assert r.status_code == 200, r.text
+    async with db() as s:
+        row = await s.get(WorkerRow, worker_id)
+        assert row is not None
+        assert row.last_in_flight == 0
+
+
 async def test_heartbeat_with_bad_worker_token_is_401(db) -> None:
     app = create_app()
     async with _client(app, db) as c:
