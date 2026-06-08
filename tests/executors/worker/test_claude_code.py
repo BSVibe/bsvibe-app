@@ -313,3 +313,89 @@ async def test_subprocess_env_strips_session_markers_keeps_normal(
     assert env["PATH"] == "/usr/bin:/bin"
     assert env["HOME"] == "/home/worker"
     assert env["ANTHROPIC_API_KEY"] == "sk-keep"
+
+
+# ── Lift E15 — cancel propagation actually terminates the subprocess ────────
+
+
+class _HangingProcess:
+    """Fake subprocess that survives ``wait()`` until ``kill()`` is invoked."""
+
+    def __init__(self) -> None:
+        self.stdin = _FakeStreamWriter()
+        self.stdout = _FakeStreamReader([], hang=True)
+        self.stderr = _FakeStreamReader([])
+        self.returncode: int | None = None
+        self.killed_at: float | None = None
+        self.pid: int = 12345
+        self._kill_event = asyncio.Event()
+
+    async def wait(self) -> int:
+        await self._kill_event.wait()
+        if self.returncode is None:
+            self.returncode = -9
+        return self.returncode
+
+    def kill(self) -> None:
+        self.killed_at = asyncio.get_event_loop().time()
+        self.returncode = -9
+        self._kill_event.set()
+
+
+async def test_cancel_kills_subprocess_promptly_no_wait_block(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Lift E15 — claude_code parity of the opencode cancel test.
+
+    When the wrapper Task is cancelled mid-stream the ``claude`` subprocess
+    MUST be terminated quickly, NOT after the inner ``finally`` blocks on
+    ``process.wait()`` for the full per-task deadline.
+    """
+    proc = _HangingProcess()
+    # _HangingProcess satisfies the fake-process interface structurally.
+    _patch_subprocess(monkeypatch, proc)  # type: ignore[arg-type]
+
+    from backend.executors.worker import claude_code as claude_mod
+
+    def _fake_group_kill(p: Any) -> None:
+        p.kill()
+
+    monkeypatch.setattr(claude_mod, "_kill_process_group", _fake_group_kill)
+
+    executor = ClaudeCodeExecutor(timeout_seconds=3600, total_timeout_seconds=7200)
+    stream = executor.execute("long task", {"workspace_dir": "."})
+    task = asyncio.create_task(_drain(stream))
+
+    for _ in range(50):
+        if task.done():
+            break
+        await asyncio.sleep(0.01)
+
+    cancel_at = asyncio.get_event_loop().time()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(task, timeout=2.0)
+
+    assert proc.killed_at is not None, "subprocess.kill() must fire on cancel"
+    elapsed = proc.killed_at - cancel_at
+    assert elapsed < 0.5, f"kill must fire within 0.5s of cancel; got {elapsed:.3f}s"
+
+
+async def test_subprocess_started_in_new_session_for_pgrp_signal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Lift E15 — claude_code executor MUST spawn with ``start_new_session=True``."""
+    proc = _FakeProcess(stdout_lines=[_assistant_line("x")])
+    spawn_kwargs: list[dict[str, Any]] = []
+
+    async def _capture_exec(*args: Any, **kwargs: Any) -> _FakeProcess:
+        spawn_kwargs.append(dict(kwargs))
+        return proc
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", _capture_exec)
+    await _drain(ClaudeCodeExecutor().execute("p", {"workspace_dir": "."}))
+
+    assert spawn_kwargs, "create_subprocess_exec was never called"
+    assert spawn_kwargs[0].get("start_new_session") is True, (
+        "claude_code executor must pass start_new_session=True"
+    )

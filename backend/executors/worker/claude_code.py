@@ -30,7 +30,11 @@ from typing import Any
 
 import structlog
 
-from backend.executors.worker.executors import ExecutionChunk, sanitized_subprocess_env
+from backend.executors.worker.executors import (
+    ExecutionChunk,
+    _kill_process_group,
+    sanitized_subprocess_env,
+)
 
 logger = structlog.get_logger(__name__)
 
@@ -142,6 +146,8 @@ class ClaudeCodeExecutor:
         cmd_args = self._build_cmd(system, model)
         process: asyncio.subprocess.Process | None = None
         try:
+            # Lift E15 — ``start_new_session=True`` so we can group-kill on
+            # cancel (see opencode.py for the dogfood story).
             process = await asyncio.create_subprocess_exec(
                 *cmd_args,
                 cwd=workspace,
@@ -149,6 +155,7 @@ class ClaudeCodeExecutor:
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 env=sanitized_subprocess_env(),
+                start_new_session=True,
             )
             assert process.stdin is not None
             assert process.stdout is not None
@@ -167,6 +174,18 @@ class ClaudeCodeExecutor:
                     delta = _claude_extract_delta(parsed)
                     if delta:
                         yield ExecutionChunk(delta=delta, raw=parsed)
+            except asyncio.CancelledError:
+                # Lift E15 — kill the process GROUP before the inner
+                # ``finally``'s ``process.wait()`` blocks for the full
+                # per-task deadline. See opencode._run for the diagnosis.
+                logger.info(
+                    "worker_subprocess_terminate_sent",
+                    pid=process.pid,
+                    executor="claude_code",
+                    reason="cancelled",
+                )
+                _kill_process_group(process)
+                raise
             finally:
                 rc = await asyncio.wait_for(
                     process.wait(),
@@ -188,8 +207,9 @@ class ClaudeCodeExecutor:
         finally:
             if process is not None and process.returncode is None:
                 try:
-                    process.kill()
+                    _kill_process_group(process)
                     await process.wait()
+                    logger.info("worker_subprocess_killed", pid=process.pid, executor="claude_code")
                 except ProcessLookupError:  # pragma: no cover — race on shutdown
                     pass
 

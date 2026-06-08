@@ -282,6 +282,16 @@ async def cancel_task(
     own caller) so an unsuccessful cancel costs only the worker's
     compute, not data integrity.
     """
+    # Lift E15 — explicit pre-XADD log so the cancel chain is diagnosable
+    # from logs alone (E14 dogfood: zero log evidence of cancel propagation
+    # made diagnosis painful). Logged BEFORE the redis call so a redis
+    # failure still produces a "we tried" record.
+    logger.info(
+        "dispatch_cancel_task_called",
+        task_id=str(task_id),
+        worker_id=str(worker_id),
+        stream=worker_stream(worker_id),
+    )
     payload: dict[str, Any] = {
         "task_id": str(task_id),
         "action": "cancel",
@@ -298,9 +308,10 @@ async def cancel_task(
         )
         return
     logger.info(
-        "executor_task_cancel_dispatched",
+        "dispatch_cancel_xadd_succeeded",
         task_id=str(task_id),
         worker_id=str(worker_id),
+        stream=worker_stream(worker_id),
     )
 
 

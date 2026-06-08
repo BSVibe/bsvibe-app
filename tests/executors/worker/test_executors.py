@@ -157,3 +157,107 @@ def test_sanitized_env_accepts_explicit_base() -> None:
     assert env["OPENCODE_CONFIG_CONTENT"] == "{}"
     assert "CLAUDE_CODE_SESSION_ID" not in env
     assert "CLAUDECODE" not in env
+
+
+# ── Lift E15 — _kill_process_group helper ───────────────────────────────────
+
+
+class _StubProcess:
+    """Stand-in for ``asyncio.subprocess.Process`` exposing only what the
+    helper needs (``pid`` + a fallback ``kill``)."""
+
+    def __init__(self, pid: int = 99999) -> None:
+        self.pid = pid
+        self.killed = False
+
+    def kill(self) -> None:
+        self.killed = True
+
+
+def test_kill_process_group_signals_pgrp_on_posix(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Lift E15 — on POSIX, the helper signals the whole process group
+    via ``os.killpg(os.getpgid(pid), SIGKILL)`` so the CLI shim's
+    descendants die alongside the direct child.
+    """
+    import os
+    import signal
+    import sys
+
+    if sys.platform == "win32":
+        pytest.skip("POSIX-only path")
+
+    proc = _StubProcess(pid=12345)
+    calls: list[tuple[int, int]] = []
+
+    def _fake_getpgid(pid: int) -> int:
+        return pid  # pgrp leader == pid since we used start_new_session
+
+    def _fake_killpg(pgid: int, sig: int) -> None:
+        calls.append((pgid, sig))
+
+    monkeypatch.setattr(os, "getpgid", _fake_getpgid)
+    monkeypatch.setattr(os, "killpg", _fake_killpg)
+
+    exmod._kill_process_group(proc)  # type: ignore[arg-type]
+
+    assert calls == [(12345, signal.SIGKILL)]
+    # Should NOT have fallen back to the direct kill (group kill succeeded).
+    assert proc.killed is False
+
+
+def test_kill_process_group_swallows_process_lookup_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Lift E15 — a ``ProcessLookupError`` (group already exited between
+    ``getpgid`` and ``killpg``) is swallowed silently. The helper is
+    best-effort: an absent group is not an error.
+    """
+    import os
+    import sys
+
+    if sys.platform == "win32":
+        pytest.skip("POSIX-only path")
+
+    proc = _StubProcess(pid=12345)
+
+    def _fake_getpgid(pid: int) -> int:
+        return pid
+
+    def _fake_killpg(pgid: int, sig: int) -> None:
+        raise ProcessLookupError("no such pgrp")
+
+    monkeypatch.setattr(os, "getpgid", _fake_getpgid)
+    monkeypatch.setattr(os, "killpg", _fake_killpg)
+
+    # Must not raise.
+    exmod._kill_process_group(proc)  # type: ignore[arg-type]
+
+
+def test_kill_process_group_falls_back_to_process_kill_on_oserror(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Lift E15 — on a generic ``OSError`` (signal-delivery race /
+    permission), the helper falls back to ``process.kill()`` so the
+    leader is still terminated.
+    """
+    import os
+    import sys
+
+    if sys.platform == "win32":
+        pytest.skip("POSIX-only path")
+
+    proc = _StubProcess(pid=12345)
+
+    def _fake_getpgid(pid: int) -> int:
+        return pid
+
+    def _fake_killpg(pgid: int, sig: int) -> None:
+        raise OSError("nope")
+
+    monkeypatch.setattr(os, "getpgid", _fake_getpgid)
+    monkeypatch.setattr(os, "killpg", _fake_killpg)
+
+    exmod._kill_process_group(proc)  # type: ignore[arg-type]
+
+    # Fallback fired.
+    assert proc.killed is True

@@ -13,16 +13,23 @@ native CLI; :func:`detect_capabilities` PATH-probes all three and
 
 from __future__ import annotations
 
+import asyncio
 import os
 import shutil
+import signal
+import sys
 from collections.abc import AsyncIterator, Mapping
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal, Protocol, runtime_checkable
+
+import structlog
 
 if TYPE_CHECKING:
     from backend.executors.worker.claude_code import ClaudeCodeExecutor
     from backend.executors.worker.codex import CodexExecutor
     from backend.executors.worker.opencode import OpenCodeExecutor
+
+_logger = structlog.get_logger(__name__)
 
 
 @dataclass
@@ -190,10 +197,58 @@ def select_executor(executor_type: str) -> ExecutorProtocol:
     raise ValueError(f"Unsupported executor type: {executor_type!r}")
 
 
+# ── Subprocess group-kill (Lift E15) ────────────────────────────────────────
+
+
+def _kill_process_group(process: asyncio.subprocess.Process) -> None:
+    """Best-effort SIGKILL the WHOLE process group of ``process``.
+
+    Every subprocess executor (claude_code / codex / opencode) spawns its
+    CLI with ``start_new_session=True``, making the child the leader of a
+    fresh process group. This helper signals that whole group so the CLI
+    shim's descendants (Bun/Node agent-loop workers, language-server child
+    processes, …) die atomically alongside the direct child.
+
+    The dogfood symptom (Lift E15): cancel was issued, ``process.kill()``
+    fired on the direct child — but the opencode shim's Bun workers kept
+    running for 20+ minutes, holding GPU + network. The fix is killing
+    the group, not the leader.
+
+    POSIX-only — :func:`os.killpg` does not exist on Windows. The worker
+    runs only on Mac/Linux per the worker design, so the Windows branch
+    falls back to :meth:`asyncio.subprocess.Process.kill` to avoid an
+    AttributeError in unit tests that might run on Windows CI.
+
+    Best-effort: a ``ProcessLookupError`` (the group already exited) or
+    a generic ``OSError`` (signal delivery race) is swallowed + logged.
+    """
+    pid = process.pid
+    if sys.platform == "win32":  # pragma: no cover — worker runs only POSIX
+        try:
+            process.kill()
+        except ProcessLookupError:
+            pass
+        return
+    try:
+        os.killpg(os.getpgid(pid), signal.SIGKILL)
+    except ProcessLookupError:
+        # The group already exited between getpgid and killpg.
+        return
+    except OSError:
+        # Couldn't signal the group (permission, race). Fall back to a
+        # direct kill so we at least try to terminate the leader.
+        _logger.warning("worker_subprocess_group_kill_failed", pid=pid, exc_info=True)
+        try:
+            process.kill()
+        except ProcessLookupError:
+            pass
+
+
 __all__ = [
     "ExecutionChunk",
     "ExecutionResult",
     "ExecutorProtocol",
+    "_kill_process_group",
     "collect",
     "detect_capabilities",
     "sanitized_subprocess_env",

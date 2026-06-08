@@ -270,3 +270,142 @@ async def test_subprocess_env_strips_session_markers_keeps_normal(
 
 async def test_supported_task_types() -> None:
     assert OpenCodeExecutor().supported_task_types() == ["opencode"]
+
+
+# ── Lift E15 — cancel propagation actually terminates the subprocess ────────
+
+
+class _HangingProcess:
+    """Fake subprocess that survives ``wait()`` until ``kill()`` is invoked.
+
+    Models the dogfood symptom: an ``opencode run`` shim that is happily
+    running its multi-turn agent loop and will NEVER exit on its own. Only
+    ``kill()`` terminates it. ``wait()`` blocks forever otherwise.
+
+    Exposes a ``pid`` so :func:`backend.executors.worker.executors._kill_process_group`
+    can call ``os.killpg(os.getpgid(pid), SIGKILL)`` against it (we
+    monkeypatch ``_kill_process_group`` so the OS call never actually
+    fires — the test only asserts that ``kill()`` was invoked).
+    """
+
+    def __init__(self) -> None:
+        self.stdin = _FakeStreamWriter()
+        self.stdout = _FakeStreamReader([], hang=True)
+        self.stderr = _FakeStreamReader([])
+        self.returncode: int | None = None
+        self.killed_at: float | None = None
+        self.pid: int = 12345
+        self._kill_event = asyncio.Event()
+
+    async def wait(self) -> int:
+        # Block until ``kill`` flips the event — exactly like a real Popen
+        # whose child won't exit unless we signal it.
+        await self._kill_event.wait()
+        if self.returncode is None:
+            self.returncode = -9
+        return self.returncode
+
+    def kill(self) -> None:
+        self.killed_at = asyncio.get_event_loop().time()
+        self.returncode = -9
+        self._kill_event.set()
+
+
+async def test_cancel_kills_subprocess_promptly_no_wait_block(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Lift E15 — when the wrapper Task running an ``opencode`` stream is
+    cancelled mid-flight, the subprocess MUST be terminated promptly
+    (kill called within a small bound). The dogfood failure was the
+    inner ``finally`` block waiting up to the per-task deadline
+    (``timeout_seconds`` default 3600s) for ``process.wait()`` to return
+    naturally — because ``opencode run`` is happily running its multi-turn
+    LLM loop and will never exit on its own. Cancel propagation was
+    silently swallowed for 20+ minutes per task.
+
+    The fix: catch ``CancelledError`` inside the chunk loop and kill the
+    process BEFORE awaiting ``process.wait()``. After this fix, a cancel
+    fires ``process.kill()`` within ~100ms in the test environment, not
+    after the (default 3600s) per-task deadline.
+    """
+    proc = _HangingProcess()
+    # _HangingProcess satisfies the fake-process interface structurally.
+    _patch_subprocess(monkeypatch, proc)  # type: ignore[arg-type]
+    # Stub the OS-level group kill so the test never actually signals a
+    # real pgrp; the executor's group kill just invokes ``process.kill()``
+    # on the fake, flipping its ``killed_at`` + ending its ``wait()``.
+    from backend.executors.worker import opencode as opencode_mod
+
+    def _fake_group_kill(p: Any) -> None:
+        p.kill()
+
+    monkeypatch.setattr(opencode_mod, "_kill_process_group", _fake_group_kill)
+
+    # ``timeout_seconds=3600`` is the production default for opencode; the
+    # bug only surfaces with a long deadline (a short deadline lets the
+    # inner ``wait_for`` time out quickly and mask the issue).
+    executor = OpenCodeExecutor(timeout_seconds=3600)
+    stream = executor.execute("long task", {"workspace_dir": "."})
+
+    # Drive the generator forward until it's awaiting on stdout.
+    task = asyncio.create_task(_drain(stream))
+
+    # Let the executor enter the chunk loop (await readline → blocks).
+    # The fake stdout's ``hang=True`` makes ``readline`` await forever.
+    for _ in range(50):
+        if proc.stdout._hang:  # pragma: no cover — invariant of _HangingProcess
+            await asyncio.sleep(0.01)
+        if not task.done():
+            await asyncio.sleep(0.01)
+        else:
+            break
+
+    cancel_at = asyncio.get_event_loop().time()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(task, timeout=2.0)
+
+    assert proc.killed_at is not None, (
+        "subprocess.kill() must be invoked when the wrapper Task is "
+        "cancelled — the dogfood bug was the cancel sitting on "
+        "process.wait() forever"
+    )
+    elapsed = proc.killed_at - cancel_at
+    assert elapsed < 0.5, (
+        f"subprocess.kill() must fire within 0.5s of cancel; got "
+        f"{elapsed:.3f}s — the inner finally is blocking on process.wait()"
+    )
+
+
+async def test_subprocess_started_in_new_session_for_pgrp_signal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Lift E15 — the executor MUST spawn the subprocess with
+    ``start_new_session=True`` so the child process becomes its own
+    process-group leader. Without it, ``opencode``'s child processes
+    (the Bun/Node agent loop spawned by the CLI shim) survive a
+    ``process.kill()`` on the direct child — orphaned, burning CPU,
+    holding network/file handles. The dogfood ``ps aux`` showed exactly
+    this: opencode subprocesses alive 20+ minutes after their parent
+    worker daemon should have terminated them.
+
+    With ``start_new_session=True`` we can later signal the WHOLE group
+    via ``os.killpg`` so SIGTERM/SIGKILL nukes every descendant atomically.
+    """
+    proc = _FakeProcess(stdout_lines=[_text_line("x")])
+    spawn_kwargs: list[dict[str, Any]] = []
+
+    async def _capture_exec(*args: Any, **kwargs: Any) -> _FakeProcess:
+        spawn_kwargs.append(dict(kwargs))
+        return proc
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", _capture_exec)
+
+    await _drain(OpenCodeExecutor().execute("p", {"workspace_dir": "."}))
+
+    assert spawn_kwargs, "create_subprocess_exec was never called"
+    assert spawn_kwargs[0].get("start_new_session") is True, (
+        "executor must pass start_new_session=True so the subprocess is "
+        "its own pgrp leader — without it, killing the direct child leaves "
+        "grandchild processes (the agent-loop workers) as orphans"
+    )
