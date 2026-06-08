@@ -37,7 +37,11 @@ from typing import Any
 
 import structlog
 
-from backend.executors.worker.executors import ExecutionChunk, sanitized_subprocess_env
+from backend.executors.worker.executors import (
+    ExecutionChunk,
+    _kill_process_group,
+    sanitized_subprocess_env,
+)
 
 logger = structlog.get_logger(__name__)
 
@@ -94,6 +98,13 @@ class OpenCodeExecutor:
         process: asyncio.subprocess.Process | None = None
         stderr_buf: list[str] = []
         try:
+            # Lift E15 — ``start_new_session=True`` makes the child the
+            # leader of its own process group so we can later signal the
+            # whole group via ``os.killpg``. Without this, killing the
+            # opencode shim leaves its child processes (the Bun/Node
+            # agent-loop workers) orphaned. The dogfood ``ps aux`` showed
+            # exactly this — opencode subprocesses alive 20+ minutes past
+            # their parent's cancellation.
             process = await asyncio.create_subprocess_exec(
                 *cmd_args,
                 cwd=workspace,
@@ -101,6 +112,7 @@ class OpenCodeExecutor:
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 env=env,
+                start_new_session=True,
             )
             assert process.stdout is not None
             assert process.stderr is not None
@@ -114,6 +126,26 @@ class OpenCodeExecutor:
                     delta = _opencode_extract_delta(parsed)
                     if delta:
                         yield ExecutionChunk(delta=delta, raw=parsed)
+            except asyncio.CancelledError:
+                # Lift E15 — the wrapper Task was cancelled (backend timed
+                # out → ``ExecutorAdapter`` XADDed an ``action=cancel`` →
+                # poll loop ``.cancel()``-ed us). Kill the subprocess
+                # GROUP immediately, BEFORE awaiting ``process.wait()`` in
+                # the inner ``finally`` — otherwise wait_for(process.wait,
+                # timeout=deadline-now) blocks for the FULL remaining
+                # per-task budget (up to 3600s for opencode) while the
+                # CLI happily keeps running its agentic loop. This is the
+                # dogfood symptom: cancel was issued, subprocess kept
+                # running, worker logged ``task_completed`` only after
+                # external ``kill -9``.
+                logger.info(
+                    "worker_subprocess_terminate_sent",
+                    pid=process.pid,
+                    executor="opencode",
+                    reason="cancelled",
+                )
+                _kill_process_group(process)
+                raise
             finally:
                 rc = await asyncio.wait_for(
                     process.wait(),
@@ -134,9 +166,18 @@ class OpenCodeExecutor:
             yield ExecutionChunk(done=True, error=str(exc))
         finally:
             if process is not None and process.returncode is None:
+                # Lift E15 — group-kill so the CLI shim's children die too.
+                # ``_kill_process_group`` is best-effort: a dead direct child
+                # / a process that escaped its group raises ProcessLookupError,
+                # swallowed below.
                 try:
-                    process.kill()
+                    _kill_process_group(process)
                     await process.wait()
+                    logger.info(
+                        "worker_subprocess_killed",
+                        pid=process.pid,
+                        executor="opencode",
+                    )
                 except ProcessLookupError:  # pragma: no cover — race on shutdown
                     pass
 

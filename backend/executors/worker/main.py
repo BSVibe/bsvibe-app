@@ -485,6 +485,11 @@ async def run_once(
             if not target_task_id:
                 logger.warning("cancel_message_missing_task_id")
                 continue
+            # Lift E15 — explicit per-boundary log so the cancel chain is
+            # diagnosable from logs alone (the E14 dogfood failed silently
+            # because no log line confirmed the worker had seen the
+            # message — diagnosis required ``ps aux`` + speculation).
+            logger.info("worker_poll_received_cancel", task_id=target_task_id)
             running = _RUNNING_TASKS.get(target_task_id)
             if running is None:
                 logger.info(
@@ -492,8 +497,12 @@ async def run_once(
                     task_id=target_task_id,
                 )
                 continue
-            logger.info("task_cancel_requested", task_id=target_task_id)
-            running.cancel()
+            cancelled = running.cancel()
+            logger.info(
+                "worker_task_cancel_started",
+                task_id=target_task_id,
+                asyncio_cancel_returned=cancelled,
+            )
             continue
         in_flight.add(asyncio.create_task(_run(task)))
     return in_flight
