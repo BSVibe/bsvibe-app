@@ -121,9 +121,7 @@ def test_fresh_pg_upgrade_round_trip():
     # Phase 1 — fresh upgrade.
     _alembic(["upgrade", "head"], env_extra=env_extra)
     stamped = asyncio.run(_stamped_head(url))
-    assert stamped == "connector_oauth_unclaimed", (
-        f"expected head connector_oauth_unclaimed, got {stamped}"
-    )
+    assert stamped == "worker_last_in_flight", f"expected head worker_last_in_flight, got {stamped}"
 
     # Phase 2 — full downgrade. Verifies every revision's downgrade path.
     _alembic(["downgrade", "base"], env_extra=env_extra)
@@ -131,7 +129,7 @@ def test_fresh_pg_upgrade_round_trip():
     # Phase 3 — re-upgrade. Verifies the chain is idempotent.
     _alembic(["upgrade", "head"], env_extra=env_extra)
     stamped = asyncio.run(_stamped_head(url))
-    assert stamped == "connector_oauth_unclaimed"
+    assert stamped == "worker_last_in_flight"
 
 
 def test_model_account_api_key_encrypted_is_nullable_after_upgrade():
@@ -182,6 +180,53 @@ def test_model_account_api_key_encrypted_is_nullable_after_upgrade():
 
     assert asyncio.run(_insert_null_key()), (
         "could not insert a NULL api_key_encrypted — column is still NOT NULL"
+    )
+
+
+def test_worker_last_in_flight_column_round_trips():
+    """Lift E16 — the ``executor_workers.last_in_flight`` column adds + drops cleanly.
+
+    Up migration adds an ``INTEGER`` column ``NULL`` allowed with ``DEFAULT 0``;
+    down migration removes it. Both must run without error against a fresh PG
+    so the operational rollback path is safe.
+    """
+    url = _skip_if_no_pg()
+    env_extra = {"BSVIBE_DATABASE_URL": url}
+
+    asyncio.run(_drop_everything(url))
+    _alembic(["upgrade", "head"], env_extra=env_extra)
+
+    async def _column_exists() -> bool:
+        engine = create_async_engine(url, future=True)
+        try:
+            async with engine.connect() as conn:
+                row = (
+                    await conn.execute(
+                        text(
+                            "SELECT 1 FROM information_schema.columns "
+                            "WHERE table_name='executor_workers' "
+                            "AND column_name='last_in_flight'"
+                        )
+                    )
+                ).first()
+                return row is not None
+        finally:
+            await engine.dispose()
+
+    assert asyncio.run(_column_exists()), (
+        "executor_workers.last_in_flight column missing after upgrade"
+    )
+
+    # Downgrade just this revision; column must be gone.
+    _alembic(["downgrade", "-1"], env_extra=env_extra)
+    assert not asyncio.run(_column_exists()), (
+        "executor_workers.last_in_flight column survived downgrade"
+    )
+
+    # Re-upgrade restores it.
+    _alembic(["upgrade", "head"], env_extra=env_extra)
+    assert asyncio.run(_column_exists()), (
+        "executor_workers.last_in_flight column missing after re-upgrade"
     )
 
 

@@ -177,6 +177,34 @@ class Settings(BaseSettings):
     # long-lived. Operator-tunable per deployment.
     executor_task_timeout_s: float = 1800.0
 
+    # Capacity-aware dispatch (Lift E16). Backend must NOT dispatch onto a
+    # worker stream when the worker is already at its in-flight cap — the
+    # worker's poll loop skips polling while ``len(in_flight) >=
+    # max_parallel_tasks``, leaving newly-XADDed tasks unread until a slot
+    # frees up. Pre-E16 the backend's ``await_completion`` timer started at
+    # dispatch time, so it could expire before the worker ever read the
+    # task, leading to false ``failed`` results on chunks the worker hadn't
+    # touched (dogfood: bsvibe-app big-repo bootstrap). The default mirrors
+    # the worker's ``WorkerSettings.max_parallel_tasks`` default so a stock
+    # founder deployment is internally consistent; operators may override
+    # both sides in lockstep.
+    max_parallel_tasks_per_worker: int = 3
+
+    # Lift E16 — bounded total wait when every worker in the workspace is
+    # at capacity. ``ExecutorAdapter.chat`` loops with bounded retry waiting
+    # for a free worker slot before dispatching; this caps the wait so a
+    # genuinely under-provisioned / wedged workspace surfaces a meaningful
+    # error instead of looping forever. Default 30 min matches the legacy
+    # per-task timeout — beyond that the caller should see "no capacity"
+    # as a hard signal, not a soft hang.
+    executor_capacity_wait_max_s: float = 1800.0
+
+    # Lift E16 — sleep between capacity-availability re-checks while the
+    # adapter is awaiting a free worker slot. Short enough that a freshly
+    # vacated slot is picked up promptly without flooding the DB with
+    # ``find_available_worker`` calls.
+    executor_capacity_wait_poll_s: float = 2.0
+
     # PWA origin — the browser app at https://app.bsvibe.dev. The OAuth
     # ``GET /api/oauth/authorize`` endpoint redirects the user agent to
     # ``<pwa_url>/oauth/consent`` so the consent screen renders inside the

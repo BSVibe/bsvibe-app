@@ -27,7 +27,7 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import JSON, Boolean, DateTime, String, Text
+from sqlalchemy import JSON, Boolean, DateTime, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from backend.data import Base
@@ -53,6 +53,15 @@ class WorkerRow(Base):
     capabilities: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="offline")
     last_heartbeat: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Lift E16 — capacity-aware dispatch. The worker stamps its
+    # ``len(in_flight)`` here on every heartbeat. ``find_available_worker``
+    # excludes rows where ``last_in_flight >= max_parallel_tasks_per_worker``
+    # so the backend stops dispatching onto a worker stream a worker has
+    # paused polling (its poll loop skips polling when at-cap). Nullable +
+    # default 0 for back-compat with pre-E16 worker shapes: a NULL value is
+    # treated as "no signal — let it through" so a stale-shape worker is
+    # never capacity-excluded just because it never reported.
+    last_in_flight: Mapped[int | None] = mapped_column(Integer, nullable=True, default=0)
     token_hash: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     created_at: Mapped[datetime] = mapped_column(

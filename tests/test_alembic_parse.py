@@ -75,10 +75,10 @@ def test_alembic_head_is_connector_last_import():
         text=True,
     )
     assert result.returncode == 0
-    # Lift A v2 bumped the head; keep the test name (function name was the
+    # Lift E16 bumped the head; keep the test name (function name was the
     # historical revision id, kept for git-blame stability) and assert the
     # new tip.
-    assert "connector_oauth_unclaimed" in result.stdout
+    assert "worker_last_in_flight" in result.stdout
 
 
 def test_target_metadata_covers_all_bases():

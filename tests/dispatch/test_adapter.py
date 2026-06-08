@@ -281,9 +281,27 @@ class TestExecutorAdapterChat:
             with pytest.raises(ExecutorAdapterUnavailable, match="executor_type"):
                 await adapter.chat(system="x", messages=[{"role": "user", "content": "y"}])
 
-    async def test_chat_no_worker_raises(self) -> None:
+    async def test_chat_no_worker_waits_then_raises_capacity_timeout(self) -> None:
+        """Lift E16 — no available worker means *wait*, not immediate raise.
+
+        Pre-E16 the adapter raised ``no online worker`` instantly when
+        :func:`find_available_worker` returned None — that made sense
+        because pre-E16 "no worker" only meant "no row at all". Post-E16
+        the same return value can also mean "every worker temporarily at
+        capacity" (the worker's poll loop skips polling at-cap), so the
+        adapter waits with bounded retry. After the bounded wait it
+        raises a distinct "no worker capacity within" message so the
+        caller sees the difference between misconfig and saturation.
+        """
         redis = await _make_redis()
         workspace_id = uuid.uuid4()
+        # Tiny wait budget so the test is fast — the real default is 30 min.
+        settings = get_settings().model_copy(
+            update={
+                "executor_capacity_wait_max_s": 0.1,
+                "executor_capacity_wait_poll_s": 0.02,
+            }
+        )
         async with memory_session() as s:
             adapter = ExecutorAdapter(
                 account=_stub_account(
@@ -294,11 +312,106 @@ class TestExecutorAdapterChat:
                 account_id=uuid.uuid4(),
                 model_account_id=uuid.uuid4(),
                 session=s,
-                settings=get_settings(),
+                settings=settings,
                 redis=redis,
             )
-            with pytest.raises(ExecutorAdapterUnavailable, match="no online worker"):
+            with pytest.raises(ExecutorAdapterUnavailable, match="no worker capacity"):
                 await adapter.chat(system="x", messages=[{"role": "user", "content": "y"}])
+
+    async def test_chat_waits_for_capacity_then_dispatches(self) -> None:
+        """Lift E16 — adapter retries until capacity frees up, then dispatches.
+
+        Mock :func:`find_available_worker` to return None twice, then a
+        real worker. The adapter must NOT raise — it must keep
+        re-checking on the configured poll interval until the worker
+        becomes available, then dispatch + await as usual.
+        """
+        import asyncio
+
+        redis = await _make_redis()
+        workspace_id = uuid.uuid4()
+        settings = get_settings().model_copy(
+            update={
+                "executor_task_timeout_s": 30.0,
+                "executor_capacity_wait_max_s": 5.0,
+                "executor_capacity_wait_poll_s": 0.02,
+            }
+        )
+
+        async with shared_file_sessionmaker() as sf:
+            async with sf() as setup:
+                worker = await _seed_worker(
+                    setup, workspace_id=workspace_id, capabilities=["claude_code"]
+                )
+                account = _executor_account(workspace_id, worker.id)
+                setup.add(account)
+                await setup.commit()
+
+            # Monkey-patch the dispatch module's find_available_worker so
+            # the first two calls return None (simulating "every worker at
+            # capacity"), then the real worker is returned on the third.
+            from backend.executors import dispatch as dispatch_mod
+
+            real_find = dispatch_mod.find_available_worker
+            call_count = {"n": 0}
+
+            async def _flaky_find(*args: Any, **kwargs: Any) -> WorkerRow | None:
+                call_count["n"] += 1
+                if call_count["n"] <= 2:
+                    return None
+                return await real_find(*args, **kwargs)
+
+            dispatch_mod.find_available_worker = _flaky_find  # type: ignore[assignment]
+            try:
+                async with sf() as adapter_session:
+                    adapter = ExecutorAdapter(
+                        account=account,
+                        workspace_id=workspace_id,
+                        account_id=account.account_id,
+                        model_account_id=account.id,
+                        session=adapter_session,
+                        settings=settings,
+                        redis=redis,
+                    )
+
+                    async def _simulate_worker() -> None:
+                        stream = dispatch.worker_stream(worker.id)
+                        last_id = "0"
+                        for _ in range(500):
+                            entries = await redis.xread({stream: last_id}, count=1, block=20)
+                            if not entries:
+                                continue
+                            _name, messages = entries[0]
+                            for msg_id, fields in messages:
+                                last_id = msg_id
+                                task_id = uuid.UUID(fields["task_id"])
+                                async with sf() as ws_session:
+                                    await dispatch.record_result(
+                                        ws_session,
+                                        redis,
+                                        task_id=task_id,
+                                        success=True,
+                                        output="42",
+                                        error_message=None,
+                                    )
+                                    await ws_session.commit()
+                                return
+                        raise AssertionError("worker stream never saw the XADD")
+
+                    worker_task = asyncio.create_task(_simulate_worker())
+                    try:
+                        response = await adapter.chat(
+                            system="be terse",
+                            messages=[{"role": "user", "content": "what is 6 * 7?"}],
+                        )
+                    finally:
+                        await worker_task
+
+                    assert response.content == "42"
+                    # Twice None + once real = at least 3 calls.
+                    assert call_count["n"] >= 3
+            finally:
+                dispatch_mod.find_available_worker = real_find  # type: ignore[assignment]
 
     async def test_chat_happy_path_dispatches_and_returns_output(self) -> None:
         """Adapter dispatches a chat task and surfaces the worker's output."""

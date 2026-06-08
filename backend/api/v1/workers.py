@@ -29,7 +29,7 @@ from __future__ import annotations
 import uuid
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, Header, HTTPException, status
+from fastapi import APIRouter, Body, Depends, Header, HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -66,6 +66,27 @@ class WorkerRegisterResponse(BaseModel):
 
     id: uuid.UUID
     token: str
+
+
+class HeartbeatBody(BaseModel):
+    """Lift E16 — capacity-aware dispatch heartbeat payload.
+
+    ``in_flight`` is the worker's ``len(in_flight)`` at the moment of the
+    heartbeat. The backend stamps it onto :attr:`WorkerRow.last_in_flight`
+    so :func:`find_available_worker` can exclude saturated workers from
+    selection — otherwise the backend dispatches onto a stream the
+    worker's poll loop has paused (at-cap), the 600 s
+    ``await_completion`` timer expires before the worker reads the
+    task, and chunks are marked ``failed`` before they ever run.
+
+    The body itself is optional (an older worker shape POSTs no body at
+    all) — when omitted, the field defaults to ``0`` so the back-compat
+    rollout path remains functional.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    in_flight: int = Field(default=0, ge=0)
 
 
 class HeartbeatResponse(BaseModel):
@@ -254,9 +275,18 @@ async def register_worker(
 async def heartbeat(
     worker: Annotated[WorkerRow, Depends(get_current_worker)],
     session: Annotated[AsyncSession, Depends(get_db_session)],
+    body: Annotated[HeartbeatBody | None, Body()] = None,
 ) -> HeartbeatResponse:
-    """Record a worker heartbeat — sets status online + stamps last_heartbeat."""
-    await service.record_heartbeat(session, worker)
+    """Record a worker heartbeat — sets status online + stamps last_heartbeat.
+
+    Lift E16 — the optional ``HeartbeatBody`` carries the worker's
+    current ``in_flight`` task count which the backend persists onto
+    :attr:`WorkerRow.last_in_flight` for capacity-aware dispatch. An
+    empty body (older worker shape) defaults to ``in_flight=0`` so the
+    back-compat path remains functional.
+    """
+    body = body or HeartbeatBody()
+    await service.record_heartbeat(session, worker, in_flight=body.in_flight)
     await session.commit()
     return HeartbeatResponse(status="ok")
 
