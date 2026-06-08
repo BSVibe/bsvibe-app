@@ -922,6 +922,75 @@ class TestDeriveBatchCharBudget:
         assert budget == ingest_compiler._OLLAMA_BUDGET_CAP
 
 
+class TestChunkBatchBudgetE14:
+    """Lift E14 — the post-dogfood char-budget constants.
+
+    Dogfood ran a bsvibe-app big-repo bootstrap (1134 chunks for 1377 file
+    artifacts) and found 3.6% of chunks failed because the backend's
+    per-caller timeout expired before ``opencode run`` on a single big
+    file finished. Part B of the fix HALVES the budget constants so a big
+    seed gets distributed across more, smaller chunks — each one bounded
+    by the new 600 s caller timeout, with finer-grained progress.
+
+    These tests pin the new constants AND assert behaviour: three seeds
+    of varying size partition into more chunks than they did before, but
+    not into so many that we lose batching entirely.
+    """
+
+    def test_default_budget_halved_to_2500(self) -> None:
+        from backend.knowledge.ingest.ingest_compiler import _DEFAULT_BATCH_CHAR_BUDGET
+
+        # 5_000 → 2_500 (Lift E14 halving).
+        assert _DEFAULT_BATCH_CHAR_BUDGET == 2_500
+
+    def test_ollama_cap_halved_to_4000(self) -> None:
+        from backend.knowledge.ingest import ingest_compiler
+
+        # 8_000 → 4_000 (Lift E14 halving).
+        assert ingest_compiler._OLLAMA_BUDGET_CAP == 4_000
+
+    def test_three_seeds_split_across_more_chunks_at_4000_budget(self) -> None:
+        """Three small-to-medium seeds (1.5 KB / 3 KB / 5 KB) — small
+        enough that NONE individually exceeds the legacy 8_000 cap, so
+        the old budget would have packed them more aggressively. Halving
+        to 4_000 forces strictly more chunks because the medium + large
+        ones now exceed the budget per-chunk.
+
+        Asserts relative behaviour (new > old) — the test stays
+        meaningful if the constants are tuned further.
+        """
+        from backend.knowledge.ingest.ingest_compiler import BatchItem, _chunk_batch
+
+        items = [
+            BatchItem(label="small.py", content="A" * 1_500),
+            BatchItem(label="medium.py", content="B" * 3_000),
+            BatchItem(label="large.py", content="C" * 5_000),
+        ]
+
+        new_budget_chunks = _chunk_batch(items, 4_000)
+        old_budget_chunks = _chunk_batch(items, 8_000)
+
+        # Smaller budget => more chunks (more progress granularity).
+        assert len(new_budget_chunks) > len(old_budget_chunks), (
+            "halving the budget should produce strictly more chunks; "
+            f"new={len(new_budget_chunks)} old={len(old_budget_chunks)}"
+        )
+        # Smoke that we're in the expected ballpark — 2 to 3 chunks at
+        # 4_000-char budget given 1.5+3+5 KB seeds.
+        assert 2 <= len(new_budget_chunks) <= 3
+
+    def test_one_seed_per_chunk_when_each_exceeds_budget(self) -> None:
+        """When every seed is bigger than the budget, the loop puts one
+        truncated seed per chunk — no two items can share a chunk."""
+        from backend.knowledge.ingest.ingest_compiler import BatchItem, _chunk_batch
+
+        items = [BatchItem(label=f"f{i}.py", content="x" * 5_000) for i in range(3)]
+        chunks = _chunk_batch(items, 2_500)
+        assert len(chunks) == 3
+        for chunk in chunks:
+            assert len(chunk) == 1
+
+
 class _ScriptedCompileLlm:
     """Deterministic CompileLlm seam — returns one canned plan string per call."""
 

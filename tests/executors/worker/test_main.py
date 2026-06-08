@@ -679,6 +679,303 @@ def test_connect_redis_none_when_no_url() -> None:
     assert worker_main._connect_redis(_settings(redis_url="")) is None
 
 
+# ── Lift E14 — cancel signal handling + subprocess lifecycle ────────────────
+
+
+class _BlockingExecutor:
+    """Streams forever (until ``aclose``) so the test can cancel mid-stream."""
+
+    def __init__(self) -> None:
+        self.entered = False
+        self.cancelled = False
+        self.closed = False
+
+    def supported_task_types(self) -> list[str]:
+        return ["claude_code"]
+
+    async def execute(self, prompt: str, context: dict[str, Any]) -> AsyncIterator[ExecutionChunk]:
+        import asyncio
+
+        self.entered = True
+        try:
+            yield ExecutionChunk(delta="starting")
+            while True:
+                await asyncio.sleep(60)  # blocks forever
+                yield ExecutionChunk(delta="tick")
+        except (GeneratorExit, BaseException):
+            # ``GeneratorExit`` from ``aclose``; ``CancelledError`` from task.cancel().
+            self.cancelled = True
+            raise
+        finally:
+            self.closed = True
+
+
+async def test_handle_task_cancellation_skips_result_post(tmp_path: Any) -> None:
+    """Lift E14 — when the backend cancels an in-flight task (the asyncio
+    Task running :func:`handle_task` is .cancel()-ed), the worker MUST:
+
+    1. Let CancelledError propagate through the streaming executor so its
+       subprocess cleanup runs (kills the child process).
+    2. NOT POST a result to ``/api/v1/workers/result`` — the backend has
+       already moved on; a late ``failed`` result POST would clobber the
+       row the backend may have already terminal-flipped.
+    3. Log ``task_cancelled_by_backend`` so the cancel path is visible
+       in production logs.
+    """
+    import asyncio
+
+    state: dict[str, Any] = {}
+    executor = _BlockingExecutor()
+
+    async def _run() -> None:
+        async with _client(state) as client:
+            await worker_main.handle_task(
+                _task(executor_type="claude_code"),
+                executors={"claude_code": executor},
+                client=client,
+                headers={"X-Worker-Token": "WORKER-TOKEN"},
+                redis=None,
+                workspace_root=str(tmp_path),
+            )
+
+    task = asyncio.create_task(_run())
+    # Let the executor enter its loop before we cancel.
+    for _ in range(50):
+        if executor.entered:
+            break
+        await asyncio.sleep(0.01)
+    assert executor.entered, "executor never entered its loop — test setup bug"
+
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    # Subprocess-equivalent cleanup ran (executor's finally fired).
+    assert executor.closed is True
+    # Result was NOT posted to the backend — the cancel path bypasses it.
+    assert state.get("results") is None or state.get("results") == []
+
+
+async def test_handle_task_registers_in_flight_for_cancel_lookup(tmp_path: Any) -> None:
+    """Lift E14 — :func:`handle_task` registers its asyncio.Task in
+    :data:`backend.executors.worker.main._RUNNING_TASKS` under the
+    task_id so the poll-loop cancel-action handler can look it up and
+    cancel it. The dict entry is removed on exit (success / failure /
+    cancellation) so it does not leak.
+    """
+    import asyncio
+
+    state: dict[str, Any] = {}
+    task_payload = _task(prompt="hi")
+    task_id = task_payload["task_id"]
+    executor = _StubExecutor()
+    async with _client(state) as client:
+        # Wrap in a task so handle_task's own asyncio.current_task() is the wrapper.
+        coro_task = asyncio.create_task(
+            worker_main.handle_task(
+                task_payload,
+                executors={"claude_code": executor},
+                client=client,
+                headers={"X-Worker-Token": "WORKER-TOKEN"},
+                redis=None,
+                workspace_root=str(tmp_path),
+            )
+        )
+        await coro_task
+    # After completion the registry must NOT still hold the task.
+    assert task_id not in worker_main._RUNNING_TASKS
+
+
+async def test_run_once_cancel_action_cancels_in_flight_task(
+    monkeypatch: Any, tmp_path: Any
+) -> None:
+    """Lift E14 — when a poll returns a ``{action: cancel, task_id: X}``
+    message, the loop looks X up in the in-flight registry and calls
+    .cancel() on the running asyncio.Task instead of spawning a new
+    handler.
+    """
+    import asyncio
+
+    # Step 1: spawn a long-running task and wait until it's in-flight.
+    state: dict[str, Any] = {"poll_queue": [_task(prompt="long")]}
+    executor = _BlockingExecutor()
+    monkeypatch.setattr(worker_main, "select_executor", lambda _t: executor)
+
+    async with _client(state) as client:
+        in_flight = await worker_main.run_once(
+            client=client,
+            settings=_settings(),
+            executors={"claude_code": executor},
+            headers={"X-Worker-Token": "WORKER-TOKEN"},
+            redis=None,
+            in_flight=set(),
+        )
+        assert len(in_flight) == 1
+
+        for _ in range(50):
+            if executor.entered:
+                break
+            await asyncio.sleep(0.01)
+        assert executor.entered, "first poll didn't actually start the task"
+
+        # Step 2: a second poll returns a cancel for the same task_id.
+        # Reconstruct the task_id from in_flight registry — the only place we have it.
+        in_flight_task_ids = list(worker_main._RUNNING_TASKS.keys())
+        assert len(in_flight_task_ids) == 1
+        target_task_id = in_flight_task_ids[0]
+
+        state["poll_queue"] = [
+            {
+                "task_id": target_task_id,
+                "action": "cancel",
+                "dispatched_at": "2026-05-24T00:00:00+00:00",
+            }
+        ]
+        await worker_main.run_once(
+            client=client,
+            settings=_settings(),
+            executors={"claude_code": executor},
+            headers={"X-Worker-Token": "WORKER-TOKEN"},
+            redis=None,
+            in_flight=in_flight,
+        )
+
+        # Drain the original task — must finish (cancelled).
+        for t in in_flight:
+            with pytest.raises(asyncio.CancelledError):
+                await t
+
+    # Executor's finally fired → subprocess equivalent cleanup ran.
+    assert executor.closed is True
+    # Registry cleared.
+    assert target_task_id not in worker_main._RUNNING_TASKS
+    # Worker did NOT POST a late ``failed`` result for the cancelled task.
+    assert state.get("results") is None or state["results"] == []
+
+
+# ── Lift E14 — shutdown propagates to running subprocesses ──────────────────
+
+
+async def test_poll_and_execute_cancels_in_flight_on_stop(monkeypatch: Any, tmp_path: Any) -> None:
+    """Lift E14 — when the stop event is set (signal / shutdown), any
+    asyncio.Tasks still in flight get .cancel()-ed so their streaming
+    executors run their subprocess-cleanup finally blocks. Without this,
+    an SIGTERM would orphan the spawned ``claude --print`` / ``opencode``
+    subprocesses (the dogfood found 7 of these alive 22 h after their
+    parent worker daemon died)."""
+    import asyncio
+
+    state: dict[str, Any] = {"poll_queue": []}
+    executor = _BlockingExecutor()
+    monkeypatch.setattr(worker_main, "select_executor", lambda _t: executor)
+    monkeypatch.setattr(worker_main, "detect_capabilities", lambda: ["claude_code"])
+    monkeypatch.setattr(worker_main, "_persist_worker_token", lambda *a, **k: None)
+
+    stop = asyncio.Event()
+
+    # Replace run_once with one that spawns a single long-running task on
+    # the first tick, then sets stop on the second tick.
+    real_run_once = worker_main.run_once
+    ticks = {"n": 0}
+
+    async def _run_once(**kwargs: Any) -> Any:
+        ticks["n"] += 1
+        if ticks["n"] == 1:
+            state["poll_queue"] = [_task(executor_type="claude_code", prompt="forever")]
+        else:
+            state["poll_queue"] = []
+            stop.set()
+        result = await real_run_once(**kwargs)
+        if ticks["n"] == 1:
+            for _ in range(50):
+                if executor.entered:
+                    break
+                await asyncio.sleep(0.01)
+        return result
+
+    monkeypatch.setattr(worker_main, "run_once", _run_once)
+
+    settings = _settings(poll_interval_seconds=0)
+    async with _client(state) as client:
+        await worker_main.poll_and_execute(settings=settings, client=client, redis=None, stop=stop)
+
+    # The blocking executor's finally MUST have run — subprocess cleanup
+    # is what frees the orphaned ``claude --print`` / ``opencode``
+    # processes the dogfood found alive 22h after worker death.
+    assert executor.closed is True
+
+
+def test_ensure_process_group_skipped_on_windows(monkeypatch: Any) -> None:
+    """Lift E14 — ``_ensure_process_group`` is a no-op on Windows."""
+    import sys
+
+    called = {"n": 0}
+
+    def _spy() -> None:
+        called["n"] += 1
+
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr("os.setpgrp", _spy, raising=False)
+    worker_main._ensure_process_group()
+    assert called["n"] == 0
+
+
+def test_ensure_process_group_calls_setpgrp_on_posix(monkeypatch: Any) -> None:
+    """Lift E14 — on POSIX, ``_ensure_process_group`` calls ``os.setpgrp()``
+    so the worker daemon becomes a process group leader. This lets a
+    future OS-level supervisor (systemd KillMode=control-group, launchd)
+    terminate the whole group atomically, preventing the orphaned
+    ``opencode run`` subprocesses the dogfood found alive 22 h after
+    their parent worker daemon died.
+    """
+    import os
+    import sys
+
+    monkeypatch.setattr(sys, "platform", "darwin")
+    called = {"n": 0}
+
+    def _spy() -> None:
+        called["n"] += 1
+
+    monkeypatch.setattr(os, "setpgrp", _spy, raising=False)
+    worker_main._ensure_process_group()
+    assert called["n"] == 1
+
+
+async def test_cancel_all_running_tasks_cancels_pending_handlers(tmp_path: Any) -> None:
+    """Lift E14 — signal handler helper iterates :data:`_RUNNING_TASKS` and
+    calls ``.cancel()`` on each non-done entry. Done tasks are left alone.
+    """
+    import asyncio
+
+    state: dict[str, Any] = {}
+    executor = _BlockingExecutor()
+    async with _client(state) as client:
+        running_task = asyncio.create_task(
+            worker_main.handle_task(
+                _task(),
+                executors={"claude_code": executor},
+                client=client,
+                headers={"X-Worker-Token": "WORKER-TOKEN"},
+                redis=None,
+                workspace_root=str(tmp_path),
+            )
+        )
+        for _ in range(50):
+            if executor.entered:
+                break
+            await asyncio.sleep(0.01)
+        assert executor.entered
+
+        # Helper fires .cancel() on the in-flight task.
+        worker_main._cancel_all_running_tasks()
+
+        with pytest.raises(asyncio.CancelledError):
+            await running_task
+
+    assert executor.closed is True
+
+
 def _patched(obj: Any, name: str, value: Any) -> Any:
     """Tiny context manager to swap an attribute (avoids monkeypatch in helpers)."""
     import contextlib

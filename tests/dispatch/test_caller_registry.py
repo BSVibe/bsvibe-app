@@ -70,38 +70,55 @@ class TestSkillNamespace:
 
 
 class TestPerCallerTimeout:
-    """Lift E9 — per-caller chat timeout knob on :class:`CallerSpec`."""
+    """Lift E9 — per-caller chat timeout knob on :class:`CallerSpec`.
+
+    Lift E14 dogfood (bsvibe-app big-repo bootstrap, 1134 chunks) found the
+    original 180 s ceilings were too aggressive for a single large-file
+    chunk (an ``opencode run`` subprocess on a 10–20 KB file takes
+    5–16 min wall-clock). Bumped to per-caller targets that match
+    observed worker latency on realistic seed sizes.
+    """
 
     def test_callerspec_defaults_to_none(self) -> None:
         """A spec authored without an explicit timeout uses settings default."""
         spec = CallerSpec(caller_id="custom")
         assert spec.default_timeout_s is None
 
-    def test_chat_shaped_callers_set_short_timeout(self) -> None:
-        """Chat-shaped callers (ingest, frame, judge, canon, settle) override
-        the global 1800 s default with a 3 min ceiling so one stuck chunk
-        in a 50-chunk bootstrap doesn't waste 30 min."""
-        for caller_id in (
-            CALLER_KNOWLEDGE_INGEST,
-            CALLER_KNOWLEDGE_CANONICALIZATION,
-            CALLER_FRAME,
-            CALLER_JUDGE,
-            CALLER_SETTLE_EXTRACT,
-        ):
-            spec = KNOWN_CALLERS[caller_id]
-            assert spec.default_timeout_s == 180.0, (
-                f"{caller_id} should have 180 s timeout (chat-shaped), got {spec.default_timeout_s}"
-            )
+    def test_knowledge_ingest_ten_minutes(self) -> None:
+        """Big-file chunks (single 10–20 KB seed) routinely take 5–16 min
+        via the executor adapter; 600 s is the post-E14 ceiling."""
+        spec = KNOWN_CALLERS[CALLER_KNOWLEDGE_INGEST]
+        assert spec.default_timeout_s == 600.0
 
-    def test_knowledge_query_one_minute(self) -> None:
-        """Interactive query — founder is waiting; fail fast."""
-        spec = KNOWN_CALLERS[CALLER_KNOWLEDGE_QUERY]
-        assert spec.default_timeout_s == 60.0
+    def test_knowledge_canonicalization_ten_minutes(self) -> None:
+        """Canonicalization passes fan out over the workspace ontology and
+        run as long as a heavy ingest chunk."""
+        spec = KNOWN_CALLERS[CALLER_KNOWLEDGE_CANONICALIZATION]
+        assert spec.default_timeout_s == 600.0
 
-    def test_agent_loop_plan_five_minutes(self) -> None:
-        """Plan turn is heavier than chat but lighter than tool-emitting act."""
-        spec = KNOWN_CALLERS[CALLER_AGENT_LOOP_PLAN]
+    def test_frame_five_minutes(self) -> None:
+        """Frame is bounded reasoning; 5 min is plenty."""
+        spec = KNOWN_CALLERS[CALLER_FRAME]
         assert spec.default_timeout_s == 300.0
+
+    def test_judge_five_minutes(self) -> None:
+        spec = KNOWN_CALLERS[CALLER_JUDGE]
+        assert spec.default_timeout_s == 300.0
+
+    def test_settle_extract_five_minutes(self) -> None:
+        spec = KNOWN_CALLERS[CALLER_SETTLE_EXTRACT]
+        assert spec.default_timeout_s == 300.0
+
+    def test_knowledge_query_ninety_seconds(self) -> None:
+        """Interactive query — founder is waiting; fail fast but small bump
+        from 60 s so a slow first-token doesn't cancel a healthy query."""
+        spec = KNOWN_CALLERS[CALLER_KNOWLEDGE_QUERY]
+        assert spec.default_timeout_s == 90.0
+
+    def test_agent_loop_plan_ten_minutes(self) -> None:
+        """Plan turn over a big repo can pull lots of context."""
+        spec = KNOWN_CALLERS[CALLER_AGENT_LOOP_PLAN]
+        assert spec.default_timeout_s == 600.0
 
     def test_agent_loop_act_uses_settings_default(self) -> None:
         """Tool-emitting agent turn genuinely runs `claude --print` —

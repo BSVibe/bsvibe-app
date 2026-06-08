@@ -259,6 +259,51 @@ async def dispatch_task(
     return str(msg_id)
 
 
+async def cancel_task(
+    redis: _RedisDispatch,
+    *,
+    worker_id: uuid.UUID,
+    task_id: uuid.UUID,
+) -> None:
+    """XADD a cancel marker onto ``worker_id``'s stream — Lift E14.
+
+    When :class:`~backend.dispatch.adapter.ExecutorAdapter.chat` times out
+    waiting on a worker, the worker is still happily running the
+    ``opencode run`` / ``claude --print`` / ``codex -p`` subprocess for
+    many more minutes — wasting compute + holding a parallel-task slot —
+    because the result POST path is the only way the worker learns the
+    backend gave up. This function notifies the worker by reusing the
+    same dispatch stream the original task came in on: the worker's poll
+    loop pulls the cancel marker, looks the task_id up in its in-flight
+    subprocess registry, and terminates it.
+
+    Best-effort: a redis hiccup is logged + swallowed. The backend has
+    already moved on from the task (raised :class:`TaskTimeout` to its
+    own caller) so an unsuccessful cancel costs only the worker's
+    compute, not data integrity.
+    """
+    payload: dict[str, Any] = {
+        "task_id": str(task_id),
+        "action": "cancel",
+        "dispatched_at": datetime.now(UTC).isoformat(),
+    }
+    try:
+        await redis.xadd(worker_stream(worker_id), payload)
+    except Exception:  # noqa: BLE001 — cancel is best-effort, not a control-flow gate
+        logger.warning(
+            "executor_cancel_publish_failed",
+            task_id=str(task_id),
+            worker_id=str(worker_id),
+            exc_info=True,
+        )
+        return
+    logger.info(
+        "executor_task_cancel_dispatched",
+        task_id=str(task_id),
+        worker_id=str(worker_id),
+    )
+
+
 def _persist_task_files(
     *,
     run_id: uuid.UUID,
@@ -495,6 +540,7 @@ __all__ = [
     "HEARTBEAT_FRESHNESS_S",
     "TaskTimeout",
     "await_completion",
+    "cancel_task",
     "create_task",
     "dispatch_task",
     "done_channel",

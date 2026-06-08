@@ -44,9 +44,12 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import os
 import shutil
 import signal
+import sys
 import tempfile
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol, cast
 
@@ -83,6 +86,26 @@ _MAX_FILE_BYTES = 256 * 1024
 #: Directory names + suffixes that are build/cache junk, never real artifacts.
 _JUNK_DIRS = frozenset({"__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache", ".git"})
 _JUNK_SUFFIXES = (".pyc", ".pyo")
+
+
+#: Lift E14 — in-flight task registry keyed by ``task_id`` string.
+#:
+#: When the backend's :class:`~backend.dispatch.adapter.ExecutorAdapter`
+#: times out waiting on a worker, it XADDs an ``action=cancel`` message
+#: onto the worker's stream. The worker's next poll surfaces that
+#: message, looks the ``task_id`` up in this dict, and calls
+#: ``.cancel()`` on the wrapper :class:`asyncio.Task`. The wrapper's
+#: cleanup runs the streaming executor's ``finally`` (which kills the
+#: CLI subprocess). This decouples the cancel transport (a stream
+#: message) from the cleanup mechanism (asyncio cancellation +
+#: per-executor subprocess teardown) — no per-executor cancel hook is
+#: needed.
+#:
+#: Module-level so a signal handler in :func:`_amain` can iterate it
+#: at shutdown and cancel every still-running task before the process
+#: exits. The dict is single-event-loop-scoped (one asyncio loop per
+#: worker process) so plain Python dict access is safe.
+_RUNNING_TASKS: dict[str, asyncio.Task[None]] = {}
 
 
 def _is_build_junk(rel: Path) -> bool:
@@ -267,6 +290,90 @@ async def handle_task(
         "model": task.get("model") or None,
     }
 
+    # Lift E14 — register the asyncio Task this handler runs in so the
+    # poll-loop cancel-action handler can look us up by ``task_id`` and
+    # ``.cancel()`` us. Inside the wrapper :func:`_run` in
+    # :func:`run_once` the current task IS the wrapper; outside of that
+    # (e.g. tests that call ``handle_task`` directly without wrapping)
+    # ``current_task()`` is still some Task and the registration is
+    # harmless. Skip when we somehow are not inside a Task at all.
+    current = asyncio.current_task()
+    if current is not None:
+        _RUNNING_TASKS[task_id] = current
+    try:
+        outcome = await _stream_and_collect(
+            executor=executor,
+            prompt=prompt,
+            context=context,
+            stream_chan=stream_chan,
+            redis=redis,
+            task_id=task_id,
+            local_workspace=local_workspace,
+        )
+        await client.post(
+            "/api/v1/workers/result",
+            headers=headers,
+            json={
+                "task_id": task_id,
+                "success": outcome.success,
+                "output": "".join(outcome.parts),
+                "error_message": outcome.error,
+                "files": outcome.files,
+            },
+        )
+        if redis is not None:
+            await _publish(
+                redis,
+                done_chan,
+                {"task_id": task_id, "success": outcome.success, "error_message": outcome.error},
+            )
+        logger.info("task_completed", task_id=task_id, success=outcome.success)
+    except asyncio.CancelledError:
+        # Lift E14 — the poll-loop saw an ``action=cancel`` for this
+        # task_id (backend timed out / shutdown signal fired) and
+        # ``.cancel()``-ed our wrapper task. The executor's ``finally``
+        # in :func:`_stream_and_collect` has already killed the CLI
+        # subprocess + removed the work dir. Skip the result POST — the
+        # backend has already moved on, a late ``failed`` POST would
+        # clobber a row it may have already terminal-flipped.
+        logger.info("task_cancelled_by_backend", task_id=task_id, executor=executor_type)
+        raise
+    finally:
+        _RUNNING_TASKS.pop(task_id, None)
+
+
+@dataclass
+class _StreamOutcome:
+    """Aggregated result of one streaming-executor drain (Lift E14)."""
+
+    success: bool
+    parts: list[str]
+    error: str | None
+    files: list[dict[str, Any]]
+
+
+async def _stream_and_collect(
+    *,
+    executor: ExecutorProtocol,
+    prompt: str,
+    context: dict[str, Any],
+    stream_chan: str,
+    redis: _RedisPublisher | None,
+    task_id: str,
+    local_workspace: str,
+) -> _StreamOutcome:
+    """Drain the executor's chunk stream, then finalize + capture files.
+
+    Split out of :func:`handle_task` for branch-count hygiene (PLR0912):
+    the chunk loop, its cancel/error handling, and the post-loop
+    stream-close + workspace-capture step all live here so the caller is
+    a flat happy-path + result POST.
+
+    Re-raises :class:`asyncio.CancelledError` so the caller can
+    short-circuit the result POST + emit a ``task_cancelled_by_backend``
+    log entry. The ``finally`` runs even on cancellation, so the CLI
+    subprocess + work dir cleanup always fires.
+    """
     parts: list[str] = []
     error: str | None = None
     success = True
@@ -287,34 +394,16 @@ async def handle_task(
                 )
             if chunk.done:
                 break
+    except asyncio.CancelledError:
+        raise
     except Exception as exc:  # noqa: BLE001 — defensive; report rather than crash the loop
         error = str(exc)
         success = False
         if redis is not None:
             await _publish(redis, stream_chan, {"delta": "", "done": True, "error": error})
     finally:
-        # Close the stream, CAPTURE produced files (B1), then remove the work
-        # dir — order matters: capture must precede the rmtree.
         files = await _finalize_task(stream, local_workspace, task_id=task_id)
-
-    await client.post(
-        "/api/v1/workers/result",
-        headers=headers,
-        json={
-            "task_id": task_id,
-            "success": success,
-            "output": "".join(parts),
-            "error_message": error,
-            "files": files,
-        },
-    )
-    if redis is not None:
-        await _publish(
-            redis,
-            done_chan,
-            {"task_id": task_id, "success": success, "error_message": error},
-        )
-    logger.info("task_completed", task_id=task_id, success=success)
+    return _StreamOutcome(success=success, parts=parts, error=error, files=files)
 
 
 async def _publish(redis: _RedisPublisher, channel: str, payload: dict[str, Any]) -> None:
@@ -371,10 +460,41 @@ async def run_once(
                 redis=redis,
                 workspace_root=settings.workspace_root or None,
             )
+        except asyncio.CancelledError:
+            # Lift E14 — cancel propagated from the poll-loop cancel-action
+            # handler (or shutdown). The handler has already cleaned up
+            # the subprocess + logged ``task_cancelled_by_backend``. Let
+            # the cancellation finish so the wrapper Task transitions to
+            # ``cancelled`` cleanly (its ``done()`` becomes True, the
+            # ``in_flight.discard`` on the next tick removes it).
+            raise
         except Exception:  # noqa: BLE001 — one task's failure must not kill the loop
             logger.exception("task_execution_error", task_id=task.get("task_id"))
 
     for task in tasks:
+        # Lift E14 — backend-initiated cancels arrive on the SAME poll
+        # stream as new executes (the ExecutorAdapter XADDs the cancel
+        # marker onto ``tasks:worker:{id}``). When the action is
+        # ``cancel``, look the in-flight Task up by task_id and call
+        # ``.cancel()`` instead of spawning a new handler. An unknown
+        # task_id (cancel raced ahead of execute, or the execute already
+        # finished) is a quiet no-op — the worker has nothing to abort.
+        action = task.get("action") or "execute"
+        if action == "cancel":
+            target_task_id = task.get("task_id")
+            if not target_task_id:
+                logger.warning("cancel_message_missing_task_id")
+                continue
+            running = _RUNNING_TASKS.get(target_task_id)
+            if running is None:
+                logger.info(
+                    "cancel_message_no_in_flight_match",
+                    task_id=target_task_id,
+                )
+                continue
+            logger.info("task_cancel_requested", task_id=target_task_id)
+            running.cancel()
+            continue
         in_flight.add(asyncio.create_task(_run(task)))
     return in_flight
 
@@ -606,13 +726,61 @@ def _apply_persisted_config(settings: WorkerSettings) -> WorkerSettings:
     return settings
 
 
+def _ensure_process_group() -> None:
+    """Lift E14 — make the worker daemon its own process group leader.
+
+    When the worker spawns ``claude --print`` / ``codex -p`` / ``opencode run``
+    subprocesses, they inherit the daemon's process group. If the daemon
+    dies abruptly (SIGKILL, segfault, uncaught exception before our
+    asyncio cancel paths fire) the CLI subprocesses survive as orphans —
+    the dogfood found 7 of these alive 22 h after their parent worker
+    daemon's death.
+
+    Making the daemon a process group leader lets a future "nuke
+    everything" path (or an OS-level supervisor like systemd or
+    ``launchd`` with ``KillMode=control-group``) terminate the whole
+    group atomically. Guarded by ``sys.platform`` — POSIX-only; the
+    worker runs only on Mac/Linux per the design.
+    """
+    if sys.platform == "win32":  # pragma: no cover — workers don't run on Windows
+        return
+    try:
+        os.setpgrp()
+    except OSError:  # pragma: no cover — only fails if we're already a session leader
+        logger.debug("setpgrp_skipped", reason="already_pg_leader_or_unsupported")
+
+
+def _cancel_all_running_tasks() -> None:
+    """Lift E14 — cancel every task in :data:`_RUNNING_TASKS`.
+
+    Called from the SIGINT/SIGTERM signal handler so a shutdown
+    propagates IMMEDIATELY into the in-flight task cancellation —
+    without this, the poll loop's own ``stop.set()`` only takes effect
+    on the NEXT iteration of ``_interruptible_sleep``, leaving a slow
+    handler running for up to ``poll_interval_seconds``. Cancelling the
+    tasks here ensures each running streaming executor's ``finally``
+    block fires (killing the CLI subprocess) within the same event-loop
+    tick the signal arrives on.
+    """
+    for task_id, running in list(_RUNNING_TASKS.items()):
+        if not running.done():
+            logger.info("worker_shutdown_cancel_in_flight", task_id=task_id)
+            running.cancel()
+
+
 async def _amain() -> None:
+    _ensure_process_group()
     settings = _apply_persisted_config(get_worker_settings())
     stop = asyncio.Event()
     loop = asyncio.get_running_loop()
+
+    def _shutdown_handler() -> None:
+        stop.set()
+        _cancel_all_running_tasks()
+
     for sig in (signal.SIGINT, signal.SIGTERM):
         try:
-            loop.add_signal_handler(sig, stop.set)
+            loop.add_signal_handler(sig, _shutdown_handler)
         except (NotImplementedError, ValueError):  # pragma: no cover — non-main thread / Windows
             pass
 

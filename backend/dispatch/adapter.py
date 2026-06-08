@@ -344,6 +344,23 @@ class ExecutorAdapter:
                 timeout_s=effective_timeout_s,
             )
         except dispatch.TaskTimeout as exc:
+            # Lift E14 — signal the worker so it stops running the
+            # now-abandoned subprocess. The dogfood symptom (bsvibe-app
+            # big-repo bootstrap) was the backend marking 25 chunks as
+            # ``failed`` while the worker's ``opencode run`` for each one
+            # kept burning CPU + memory for many more minutes. The cancel
+            # is best-effort — :func:`dispatch.cancel_task` swallows
+            # redis hiccups since the backend has already raised on its
+            # own caller. We log + raise unconditionally.
+            logger.info(
+                "executor_adapter_chat_timeout",
+                workspace_id=str(self.workspace_id),
+                account_id=str(self.model_account_id),
+                worker_id=str(worker.id),
+                task_id=str(task.id),
+                timeout_s=effective_timeout_s,
+            )
+            await dispatch.cancel_task(self.redis, worker_id=worker.id, task_id=task.id)
             raise ExecutorAdapterUnavailable(
                 f"executor chat task {task.id} timed out: {exc}"
             ) from exc

@@ -347,6 +347,51 @@ async def test_dispatch_task_xadds_and_marks_dispatched() -> None:
     await redis.aclose()
 
 
+# ── cancel_task (Lift E14) ───────────────────────────────────────────────────
+
+
+async def test_cancel_task_xadds_cancel_action_onto_worker_stream() -> None:
+    """Lift E14 — backend cancels a task by XADDing an ``action=cancel`` message
+    onto the worker's dedicated stream. The worker's next poll picks it up and
+    terminates the running subprocess."""
+    workspace_id = uuid.uuid4()
+    redis = await _make_redis()
+    async with memory_session() as s:
+        worker = await _seed_worker(
+            s, workspace_id=workspace_id, capabilities=["claude_code"], heartbeat_age_s=5
+        )
+        task_id = uuid.uuid4()
+
+        await dispatch.cancel_task(redis, worker_id=worker.id, task_id=task_id)
+
+        entries = await redis.xrange(dispatch.worker_stream(worker.id))
+        assert len(entries) == 1
+        _entry_id, fields = entries[0]
+        assert fields["action"] == "cancel"
+        assert fields["task_id"] == str(task_id)
+        # Every stream field must be a flat string (Redis Streams constraint).
+        assert all(isinstance(v, str) for v in fields.values())
+    await redis.aclose()
+
+
+async def test_cancel_task_swallows_redis_errors() -> None:
+    """A cancel signal is best-effort — a redis hiccup must not cascade into
+    the timeout-handling code path (which has already given up on the task)."""
+
+    class _BoomRedis:
+        async def xadd(self, *_a: Any, **_kw: Any) -> Any:
+            raise RuntimeError("redis down")
+
+        async def publish(self, *_a: Any, **_kw: Any) -> Any:  # pragma: no cover — Protocol stub
+            return None
+
+        def pubsub(self) -> Any:  # pragma: no cover — Protocol stub
+            raise NotImplementedError
+
+    # Does not raise; logs warning + returns.
+    await dispatch.cancel_task(_BoomRedis(), worker_id=uuid.uuid4(), task_id=uuid.uuid4())
+
+
 # ── record_result ────────────────────────────────────────────────────────────
 
 

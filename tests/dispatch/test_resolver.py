@@ -237,14 +237,15 @@ class TestPerCallerTimeoutFlow:
         workspace: WorkspaceRow,
         model_account: ModelAccount,
     ) -> None:
-        """``CALLER_FRAME`` has 180 s default — ResolvedAccount surfaces it
-        so observability + future routing-rule overrides can read it without
-        re-walking the registry."""
+        """``CALLER_FRAME`` has 300 s default (Lift E14 — bumped from 180 s
+        after dogfood found one stuck big-file chunk wasted hours). The
+        ResolvedAccount surfaces it so observability + future routing-rule
+        overrides can read it without re-walking the registry."""
         workspace.default_account_id = model_account.id
         await session.flush()
         resolver = ModelAccountResolver(session, settings=get_settings())
         resolved = await resolver.resolve_for(caller_id=CALLER_FRAME, workspace_id=workspace.id)
-        assert resolved.timeout_s == 180.0
+        assert resolved.timeout_s == 300.0
 
     async def test_adapter_closes_over_timeout_at_construction(
         self,
@@ -261,7 +262,7 @@ class TestPerCallerTimeoutFlow:
         resolver = ModelAccountResolver(session, settings=get_settings())
         resolved = await resolver.resolve_for(caller_id=CALLER_FRAME, workspace_id=workspace.id)
         assert isinstance(resolved.adapter, LiteLLMAdapter)
-        assert resolved.adapter.timeout_s == 180.0
+        assert resolved.adapter.timeout_s == 300.0
 
 
 class TestDefaultCatchAllRule:
