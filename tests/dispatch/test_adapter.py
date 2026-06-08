@@ -524,6 +524,64 @@ class TestExecutorAdapterChat:
 
                 assert captured["timeout_s"] == 1800.0
 
+    async def test_chat_cancels_worker_task_on_timeout(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Lift E14 — when ``await_completion`` raises :class:`TaskTimeout`,
+        the adapter MUST signal the worker so it stops running the now-
+        abandoned subprocess. Verifies the cancel XADD is issued and the
+        exception still propagates as :class:`ExecutorAdapterUnavailable`."""
+        redis = await _make_redis()
+        workspace_id = uuid.uuid4()
+        settings = get_settings().model_copy(update={"executor_task_timeout_s": 0.1})
+
+        async def _timeout(*_a: Any, **_kw: Any) -> Any:
+            raise dispatch.TaskTimeout("test forced timeout")
+
+        monkeypatch.setattr(dispatch, "await_completion", _timeout)
+
+        cancel_calls: list[dict[str, Any]] = []
+        real_cancel = dispatch.cancel_task
+
+        async def _spy_cancel(*args: Any, **kwargs: Any) -> Any:
+            cancel_calls.append(dict(kwargs))
+            return await real_cancel(*args, **kwargs)
+
+        monkeypatch.setattr(dispatch, "cancel_task", _spy_cancel)
+
+        async with shared_file_sessionmaker() as sf:
+            async with sf() as setup:
+                worker = await _seed_worker(
+                    setup, workspace_id=workspace_id, capabilities=["claude_code"]
+                )
+                account = _executor_account(workspace_id, worker.id)
+                setup.add(account)
+                await setup.commit()
+
+            async with sf() as adapter_session:
+                adapter = ExecutorAdapter(
+                    account=account,
+                    workspace_id=workspace_id,
+                    account_id=account.account_id,
+                    model_account_id=account.id,
+                    session=adapter_session,
+                    settings=settings,
+                    redis=redis,
+                    timeout_s=0.1,
+                )
+                with pytest.raises(ExecutorAdapterUnavailable, match="timed out"):
+                    await adapter.chat(
+                        system="x",
+                        messages=[{"role": "user", "content": "y"}],
+                    )
+
+        assert len(cancel_calls) == 1, (
+            "ExecutorAdapter must call cancel_task() exactly once on TaskTimeout — "
+            "otherwise the worker keeps running its abandoned subprocess."
+        )
+        assert cancel_calls[0]["worker_id"] == worker.id
+        assert "task_id" in cancel_calls[0]
+
     async def test_chat_worker_failure_raises(self) -> None:
         """Worker reports ``success=False`` → adapter raises with the error."""
         import asyncio

@@ -116,10 +116,15 @@ KNOWN_CALLERS: dict[str, CallerSpec] = {
             "Knowledge ingest compile pass — one structured-output chat call per "
             "chunk that produces the JSON garden-action plan."
         ),
-        # 3 min — a chunk's structured-output call is normally 10-60 s. A
-        # bsvibe-app bootstrap is ~50 chunks; one stuck chunk at the legacy
-        # 30 min default could waste a wall-clock day.
-        default_timeout_s=180.0,
+        # 10 min (Lift E14) — the 3 min cap (E9) was sized for small chunks
+        # but big-repo bootstraps (bsvibe-app: 1134 chunks of 1377 file
+        # artifacts) routinely send a 10-20 KB seed through the executor
+        # adapter, and a single ``opencode run`` over that text takes
+        # 5-16 min wall-clock. The dogfood symptom was a 3.6%
+        # accelerating chunk-failure rate as the bootstrap hit those
+        # big-file chunks; 10 min covers them while still failing fast on
+        # a genuinely stuck chunk.
+        default_timeout_s=600.0,
     ),
     CALLER_KNOWLEDGE_QUERY: CallerSpec(
         caller_id=CALLER_KNOWLEDGE_QUERY,
@@ -128,8 +133,10 @@ KNOWN_CALLERS: dict[str, CallerSpec] = {
             "Knowledge query answerer — single chat call over the workspace "
             "ontology when the frame classified the ask as knowledge_only."
         ),
-        # 1 min — interactive query, founder is waiting for the answer.
-        default_timeout_s=60.0,
+        # 90 s — interactive query, founder is waiting for the answer.
+        # Small bump from the original 60 s so a slow first-token doesn't
+        # cancel a healthy query when the worker is under load.
+        default_timeout_s=90.0,
     ),
     CALLER_KNOWLEDGE_CANONICALIZATION: CallerSpec(
         caller_id=CALLER_KNOWLEDGE_CANONICALIZATION,
@@ -138,7 +145,9 @@ KNOWN_CALLERS: dict[str, CallerSpec] = {
             "BSage canonicalization mutation extractor — proposes cannot-link / "
             "must-link decisions over the canonical graph."
         ),
-        default_timeout_s=180.0,
+        # 10 min (Lift E14) — canonicalization passes fan out over the
+        # workspace ontology and can run as long as a heavy ingest chunk.
+        default_timeout_s=600.0,
     ),
     CALLER_FRAME: CallerSpec(
         caller_id=CALLER_FRAME,
@@ -146,7 +155,10 @@ KNOWN_CALLERS: dict[str, CallerSpec] = {
         description=(
             "Frame stage — cheap classify+skill-match completion before the agent loop dispatches."
         ),
-        default_timeout_s=180.0,
+        # 5 min — frame is bounded reasoning, but the worker / executor
+        # path is the same one knowledge.ingest uses, so give it the same
+        # safety margin against worker queue contention.
+        default_timeout_s=300.0,
     ),
     CALLER_AGENT_LOOP_PLAN: CallerSpec(
         caller_id=CALLER_AGENT_LOOP_PLAN,
@@ -155,9 +167,9 @@ KNOWN_CALLERS: dict[str, CallerSpec] = {
             "Agent loop plan turn — heavy reasoning step that decides the next "
             "action without emitting tool calls."
         ),
-        # 5 min — plan turn is heavier than a chat-shaped call but doesn't
-        # run the full `claude --print` subprocess.
-        default_timeout_s=300.0,
+        # 10 min (Lift E14) — planning over a big repo pulls lots of
+        # context. The 5 min ceiling (E9) was tight for non-trivial repos.
+        default_timeout_s=600.0,
     ),
     CALLER_AGENT_LOOP_ACT: CallerSpec(
         caller_id=CALLER_AGENT_LOOP_ACT,
@@ -178,7 +190,7 @@ KNOWN_CALLERS: dict[str, CallerSpec] = {
             "Judge / verifier — grades a candidate deliverable against the run's "
             "verification contract."
         ),
-        default_timeout_s=180.0,
+        default_timeout_s=300.0,
     ),
     CALLER_SETTLE_EXTRACT: CallerSpec(
         caller_id=CALLER_SETTLE_EXTRACT,
@@ -187,7 +199,7 @@ KNOWN_CALLERS: dict[str, CallerSpec] = {
             "Settle worker's entity extractor — single chat call over the "
             "verified deliverable's transcript to populate the ontology."
         ),
-        default_timeout_s=180.0,
+        default_timeout_s=300.0,
     ),
 }
 

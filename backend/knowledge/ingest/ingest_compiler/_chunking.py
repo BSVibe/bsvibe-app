@@ -26,7 +26,15 @@ logger = structlog.get_logger(__name__)
 # models will set their own budget via :func:`derive_batch_char_budget`
 # at AppState construction time. Single items larger than the budget
 # are truncated rather than allowed to balloon the prompt.
-_DEFAULT_BATCH_CHAR_BUDGET = 5_000
+#
+# Lift E14 — halved from 5_000 to 2_500. The legacy bundled-import use
+# case (a ZIP of 30 small markdown notes) packed many seeds per chunk;
+# bsvibe-app's product-bootstrap workload is one large source file per
+# seed, where a single 20 KB seed = one whole chunk by itself. Halving
+# the budget pushes those big seeds across MORE, SMALLER chunks so
+# (a) any one chunk's executor-adapter call fits inside the 600 s
+# Lift E14 timeout ceiling, and (b) a failure burns less work.
+_DEFAULT_BATCH_CHAR_BUDGET = 2_500
 
 
 # Reserve this fraction of the model's input window for the system
@@ -44,7 +52,12 @@ _CHARS_PER_TOKEN = 3.5
 # 16k input; 5-8k is the practical sweet spot. Cap their derived
 # budget here — doesn't apply to hosted models (anthropic/openai/etc.)
 # which handle long prompts efficiently.
-_OLLAMA_BUDGET_CAP = 8_000
+#
+# Lift E14 — halved from 8_000 to 4_000 for the same product-bootstrap
+# reason as :data:`_DEFAULT_BATCH_CHAR_BUDGET` above. With one source
+# file per seed, a 4 KB cap puts each big file in its own bounded chunk
+# whose ``opencode run`` finishes inside the new 600 s caller timeout.
+_OLLAMA_BUDGET_CAP = 4_000
 
 
 @dataclass
