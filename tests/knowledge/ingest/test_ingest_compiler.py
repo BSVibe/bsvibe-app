@@ -654,6 +654,355 @@ class TestIngestCompilerCompileBatch:
         assert result.llm_calls == 1
 
 
+class TestIngestCompilerParallelism:
+    """Lift E18 — ``compile_batch`` fans chunks out concurrently.
+
+    Pre-E18 the chunk loop awaited ``_plan_batch_updates`` sequentially: one
+    LLM call in flight at a time per bootstrap, even when the worker fleet had
+    multiple free slots. E18 bounds concurrency with an ``asyncio.Semaphore``
+    so up to ``parallelism`` chunks process at once.
+    """
+
+    @pytest.fixture()
+    def vault_and_writer(self, tmp_path: Path) -> tuple[Vault, GardenWriter]:
+        vault = Vault(tmp_path)
+        vault.ensure_dirs()
+        return vault, GardenWriter(vault)
+
+    @pytest.fixture()
+    def mock_llm(self) -> AsyncMock:
+        llm = AsyncMock()
+        llm.chat = AsyncMock(return_value="[]")
+        return llm
+
+    @pytest.mark.asyncio
+    async def test_parallelism_default_is_three(
+        self,
+        vault_and_writer: tuple[Vault, GardenWriter],
+        mock_llm: AsyncMock,
+    ) -> None:
+        from backend.knowledge.ingest.ingest_compiler import IngestCompiler
+
+        _, writer = vault_and_writer
+        compiler = IngestCompiler(garden_writer=writer, llm_client=mock_llm)
+        # Default knob matches the worker's default ``max_parallel_tasks=3``.
+        assert compiler._parallelism == 3
+
+    @pytest.mark.asyncio
+    async def test_concurrent_dispatch_completes_faster_than_sequential(
+        self,
+        vault_and_writer: tuple[Vault, GardenWriter],
+    ) -> None:
+        """With ``parallelism=3`` and 6 slow chunks at 0.1 s each, the batch
+        finishes in ~0.2 s (two waves of three) instead of 0.6 s sequential.
+        Use a generous bound to keep the test stable on busy CI."""
+        import asyncio
+        import time
+
+        from backend.knowledge.ingest.ingest_compiler import BatchItem, IngestCompiler
+
+        _, writer = vault_and_writer
+
+        class _SlowLlm:
+            def __init__(self) -> None:
+                self.in_flight = 0
+                self.max_in_flight = 0
+                self.calls = 0
+
+            async def chat(
+                self,
+                *,
+                system: str,
+                messages: list[dict[str, Any]],
+                suppress_reasoning: bool = False,
+                timeout_s: float | None = None,
+            ) -> str:
+                self.in_flight += 1
+                self.calls += 1
+                self.max_in_flight = max(self.max_in_flight, self.in_flight)
+                try:
+                    await asyncio.sleep(0.1)
+                finally:
+                    self.in_flight -= 1
+                return "[]"
+
+        slow_llm = _SlowLlm()
+        compiler = IngestCompiler(
+            garden_writer=writer,
+            llm_client=slow_llm,
+            parallelism=3,
+            batch_char_budget=4_000,
+        )
+
+        # 6 oversized seeds → 6 chunks (each item exceeds the budget halved).
+        big = "z" * 3_000
+        items = [BatchItem(label=f"f{i}.md", content=big) for i in range(6)]
+
+        start = time.perf_counter()
+        result = await compiler.compile_batch(items=items, seed_source="parallel-test")
+        elapsed = time.perf_counter() - start
+
+        # Sequential lower bound would be 6 × 0.1 = 0.6 s.
+        # Two-wave parallel upper bound is 2 × 0.1 = 0.2 s + scheduler slack.
+        assert slow_llm.calls == 6
+        assert slow_llm.max_in_flight == 3, (
+            f"expected three chunks in flight at once, saw {slow_llm.max_in_flight}"
+        )
+        assert elapsed < 0.5, f"parallel dispatch too slow: {elapsed:.2f}s"
+        assert result.llm_calls == 6
+
+    @pytest.mark.asyncio
+    async def test_parallelism_one_serializes_chunks(
+        self,
+        vault_and_writer: tuple[Vault, GardenWriter],
+    ) -> None:
+        """Smoke: parallelism=1 keeps at most one chunk in flight at a time."""
+        import asyncio
+
+        from backend.knowledge.ingest.ingest_compiler import BatchItem, IngestCompiler
+
+        _, writer = vault_and_writer
+
+        class _ProbeLlm:
+            def __init__(self) -> None:
+                self.in_flight = 0
+                self.max_in_flight = 0
+
+            async def chat(
+                self,
+                *,
+                system: str,
+                messages: list[dict[str, Any]],
+                suppress_reasoning: bool = False,
+                timeout_s: float | None = None,
+            ) -> str:
+                self.in_flight += 1
+                self.max_in_flight = max(self.max_in_flight, self.in_flight)
+                try:
+                    await asyncio.sleep(0.02)
+                finally:
+                    self.in_flight -= 1
+                return "[]"
+
+        probe = _ProbeLlm()
+        compiler = IngestCompiler(
+            garden_writer=writer,
+            llm_client=probe,
+            parallelism=1,
+            batch_char_budget=4_000,
+        )
+        big = "z" * 3_000
+        items = [BatchItem(label=f"f{i}.md", content=big) for i in range(4)]
+        await compiler.compile_batch(items=items, seed_source="serial-test")
+        assert probe.max_in_flight == 1
+
+    @pytest.mark.asyncio
+    async def test_one_chunk_failure_does_not_abort_others(
+        self,
+        vault_and_writer: tuple[Vault, GardenWriter],
+    ) -> None:
+        """One chunk raises mid-flight, the other 5 still complete.
+        ``chunk_failures=1`` and ``notes_created`` reflects the successes."""
+        import asyncio
+
+        from backend.knowledge.ingest.ingest_compiler import BatchItem, IngestCompiler
+
+        _, writer = vault_and_writer
+        good_plan = json.dumps(
+            [
+                {
+                    "action": "create",
+                    "target_path": None,
+                    "title": "T",
+                    "content": "body",
+                    "tags": [],
+                    "entities": [],
+                    "reason": "test",
+                    "source_seeds": [1],
+                    "related": [],
+                }
+            ]
+        )
+
+        class _FlakyLlm:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            async def chat(
+                self,
+                *,
+                system: str,
+                messages: list[dict[str, Any]],
+                suppress_reasoning: bool = False,
+                timeout_s: float | None = None,
+            ) -> str:
+                self.calls += 1
+                # Sleep so calls interleave under gather; raise on the 3rd
+                # call after partial work elsewhere is already done.
+                await asyncio.sleep(0.01)
+                if "raise-me" in messages[0]["content"]:
+                    raise RuntimeError("boom")
+                return good_plan
+
+        flaky = _FlakyLlm()
+        compiler = IngestCompiler(
+            garden_writer=writer,
+            llm_client=flaky,
+            parallelism=3,
+            batch_char_budget=4_000,
+        )
+        big_ok = "z" * 3_000
+        big_bad = "raise-me " + "z" * 3_000
+        items = [
+            BatchItem(label="a.md", content=big_ok),
+            BatchItem(label="b.md", content=big_ok),
+            BatchItem(label="c.md", content=big_bad),  # fails
+            BatchItem(label="d.md", content=big_ok),
+            BatchItem(label="e.md", content=big_ok),
+            BatchItem(label="f.md", content=big_ok),
+        ]
+        result = await compiler.compile_batch(items=items, seed_source="failure-isolation")
+
+        assert result.chunk_failures == 1
+        # Five successful chunks each created one note → 5 notes.
+        assert result.notes_created == 5
+        assert result.llm_calls == 5
+
+    @pytest.mark.asyncio
+    async def test_progress_chunks_done_matches_successful_chunks(
+        self,
+        vault_and_writer: tuple[Vault, GardenWriter],
+    ) -> None:
+        """Spy on the event bus: when N of M chunks succeed under
+        ``parallelism>1``, the post-batch DONE event count equals N
+        and FAILED count equals M-N (counts are stable even though the
+        per-chunk ordering across chunks is unbounded)."""
+        import asyncio
+
+        from backend.knowledge._internal.events import EventBus
+        from backend.knowledge.ingest.ingest_compiler import BatchItem, IngestCompiler
+
+        _, writer = vault_and_writer
+
+        class _Recorder:
+            def __init__(self) -> None:
+                self.starts = 0
+                self.dones = 0
+                self.fails = 0
+
+            async def on_event(self, event: Any) -> None:
+                from backend.knowledge._internal.events import EventType
+
+                if event.event_type is EventType.INGEST_COMPILE_BATCH_CHUNK_START:
+                    self.starts += 1
+                elif event.event_type is EventType.INGEST_COMPILE_BATCH_CHUNK_DONE:
+                    self.dones += 1
+                elif event.event_type is EventType.INGEST_COMPILE_BATCH_CHUNK_FAILED:
+                    self.fails += 1
+
+        recorder = _Recorder()
+        bus = EventBus()
+        bus.subscribe(recorder)
+
+        class _FlakyLlm:
+            async def chat(
+                self,
+                *,
+                system: str,
+                messages: list[dict[str, Any]],
+                suppress_reasoning: bool = False,
+                timeout_s: float | None = None,
+            ) -> str:
+                await asyncio.sleep(0.005)
+                if "raise-me" in messages[0]["content"]:
+                    raise RuntimeError("boom")
+                return "[]"
+
+        compiler = IngestCompiler(
+            garden_writer=writer,
+            llm_client=_FlakyLlm(),
+            event_bus=bus,
+            parallelism=4,
+            batch_char_budget=4_000,
+        )
+        big_ok = "z" * 3_000
+        big_bad = "raise-me " + "z" * 3_000
+        items = [
+            BatchItem(label="a.md", content=big_ok),
+            BatchItem(label="b.md", content=big_bad),  # fail
+            BatchItem(label="c.md", content=big_ok),
+            BatchItem(label="d.md", content=big_bad),  # fail
+            BatchItem(label="e.md", content=big_ok),
+            BatchItem(label="f.md", content=big_ok),
+            BatchItem(label="g.md", content=big_ok),
+            BatchItem(label="h.md", content=big_ok),
+        ]
+        await compiler.compile_batch(items=items, seed_source="monotonic-progress")
+
+        # 8 chunks total, 2 failed, 6 succeeded.
+        assert recorder.starts == 8
+        assert recorder.dones == 6
+        assert recorder.fails == 2
+        # Total "completion" events (done + fail) sums to chunk count exactly.
+        assert recorder.dones + recorder.fails == 8
+
+    @pytest.mark.asyncio
+    async def test_same_retriever_instance_reused_for_every_chunk(
+        self,
+        vault_and_writer: tuple[Vault, GardenWriter],
+    ) -> None:
+        """Snapshot invariant: the related-context retriever is constructed
+        once (by the runtime/factory, before ``compile_batch`` starts) and
+        every chunk hits the SAME instance. ``compile_batch`` must NOT
+        instantiate a new retriever per chunk — that would re-scan the vault
+        each call and add latency for no benefit."""
+        from backend.knowledge.ingest.ingest_compiler import BatchItem, IngestCompiler
+
+        _, writer = vault_and_writer
+
+        class _IdRetriever:
+            instances_seen: list[int] = []
+
+            def __init__(self) -> None:
+                self.search = AsyncMock(return_value="No notes.")
+
+            async def __call__(self, *_: Any, **__: Any) -> str:
+                result: str = await self.search()
+                return result
+
+        retriever = _IdRetriever()
+        mock_llm = AsyncMock()
+        mock_llm.chat = AsyncMock(return_value="[]")
+
+        compiler = IngestCompiler(
+            garden_writer=writer,
+            llm_client=mock_llm,
+            retriever=retriever,  # type: ignore[arg-type]
+            parallelism=3,
+            batch_char_budget=4_000,
+        )
+
+        # Capture the retriever id every time _find_related is invoked.
+        seen_ids: list[int] = []
+        original = compiler._find_related
+
+        async def _spy(seed_content: str) -> str:
+            seen_ids.append(id(compiler._retriever))
+            return await original(seed_content)
+
+        compiler._find_related = _spy  # type: ignore[method-assign]
+
+        big = "z" * 3_000
+        items = [BatchItem(label=f"f{i}.md", content=big) for i in range(4)]
+        await compiler.compile_batch(items=items, seed_source="snapshot-test")
+
+        # Each chunk queried the retriever once (per-chunk invariant).
+        assert retriever.search.await_count == 4
+        # Every call resolved the SAME retriever instance — no per-chunk reconstruction.
+        assert len(seen_ids) == 4
+        assert len(set(seen_ids)) == 1
+
+
 class TestDynamicOntologyContract:
     """Step B1 — compile_batch produces tag- and entity-rich plans, not a
     note_type pick. The LLM-output cleaners enforce the ``tags``/``entities``
@@ -922,70 +1271,69 @@ class TestDeriveBatchCharBudget:
         assert budget == ingest_compiler._OLLAMA_BUDGET_CAP
 
 
-class TestChunkBatchBudgetE14:
-    """Lift E14 — the post-dogfood char-budget constants.
+class TestChunkBatchBudgetE18:
+    """Lift E18 — char-budget constants raised after Lift E17 cut per-call overhead.
 
-    Dogfood ran a bsvibe-app big-repo bootstrap (1134 chunks for 1377 file
-    artifacts) and found 3.6% of chunks failed because the backend's
-    per-caller timeout expired before ``opencode run`` on a single big
-    file finished. Part B of the fix HALVES the budget constants so a big
-    seed gets distributed across more, smaller chunks — each one bounded
-    by the new 600 s caller timeout, with finer-grained progress.
+    E14 halved the budget (5_000 → 2_500, 8_000 → 4_000) under a 180 s + heavy
+    subprocess-spawn-per-call regime. Lift E17 swapped the executor adapter to
+    ``opencode serve`` + HTTP — per-call overhead dropped from minutes to ~1 s
+    and the per-caller timeout was raised to 600 s. Big chunks now pay off:
+    fewer LLM calls per bootstrap, same wall-clock per call.
 
-    These tests pin the new constants AND assert behaviour: three seeds
-    of varying size partition into more chunks than they did before, but
-    not into so many that we lose batching entirely.
+    These tests pin the new constants AND assert behaviour: same three seeds
+    as before now stay batched (two chunks instead of three) and a single 16 KB
+    seed fits comfortably in one chunk.
     """
 
-    def test_default_budget_halved_to_2500(self) -> None:
+    def test_default_budget_raised_to_16000(self) -> None:
         from backend.knowledge.ingest.ingest_compiler import _DEFAULT_BATCH_CHAR_BUDGET
 
-        # 5_000 → 2_500 (Lift E14 halving).
-        assert _DEFAULT_BATCH_CHAR_BUDGET == 2_500
+        # E14 2_500 → E18 16_000.
+        assert _DEFAULT_BATCH_CHAR_BUDGET == 16_000
 
-    def test_ollama_cap_halved_to_4000(self) -> None:
+    def test_ollama_cap_raised_to_24000(self) -> None:
         from backend.knowledge.ingest import ingest_compiler
 
-        # 8_000 → 4_000 (Lift E14 halving).
-        assert ingest_compiler._OLLAMA_BUDGET_CAP == 4_000
+        # E14 4_000 → E18 24_000.
+        assert ingest_compiler._OLLAMA_BUDGET_CAP == 24_000
 
-    def test_three_seeds_split_across_more_chunks_at_4000_budget(self) -> None:
-        """Three small-to-medium seeds (1.5 KB / 3 KB / 5 KB) — small
-        enough that NONE individually exceeds the legacy 8_000 cap, so
-        the old budget would have packed them more aggressively. Halving
-        to 4_000 forces strictly more chunks because the medium + large
-        ones now exceed the budget per-chunk.
-
-        Asserts relative behaviour (new > old) — the test stays
-        meaningful if the constants are tuned further.
+    def test_three_seeds_fit_in_fewer_chunks_at_16000_budget(self) -> None:
+        """Three small-to-medium seeds (1.5 KB / 3 KB / 5 KB) total ~9.5 KB —
+        comfortably under the new 16 KB default budget. They should all fit
+        in a single chunk (was 3 chunks under the E14 4_000 budget). And
+        three 10 KB seeds at 16 KB budget split into 3 chunks (10+10>16 —
+        each new addition exceeds the running chunk's room).
         """
         from backend.knowledge.ingest.ingest_compiler import BatchItem, _chunk_batch
 
-        items = [
+        small_items = [
             BatchItem(label="small.py", content="A" * 1_500),
             BatchItem(label="medium.py", content="B" * 3_000),
             BatchItem(label="large.py", content="C" * 5_000),
         ]
 
-        new_budget_chunks = _chunk_batch(items, 4_000)
-        old_budget_chunks = _chunk_batch(items, 8_000)
+        new_budget_chunks = _chunk_batch(small_items, 16_000)
+        old_budget_chunks = _chunk_batch(small_items, 4_000)
 
-        # Smaller budget => more chunks (more progress granularity).
-        assert len(new_budget_chunks) > len(old_budget_chunks), (
-            "halving the budget should produce strictly more chunks; "
+        # Bigger budget => fewer chunks (fewer LLM calls per bootstrap).
+        assert len(new_budget_chunks) < len(old_budget_chunks), (
+            "raising the budget should produce strictly fewer chunks; "
             f"new={len(new_budget_chunks)} old={len(old_budget_chunks)}"
         )
-        # Smoke that we're in the expected ballpark — 2 to 3 chunks at
-        # 4_000-char budget given 1.5+3+5 KB seeds.
-        assert 2 <= len(new_budget_chunks) <= 3
+        # All three small seeds (1.5+3+5 = 9.5 KB) fit in one 16 KB budget.
+        assert len(new_budget_chunks) == 1
+
+        # Three 10 KB seeds — 10+10>16 splits each into its own chunk.
+        big_items = [BatchItem(label=f"f{i}.py", content="x" * 10_000) for i in range(3)]
+        assert len(_chunk_batch(big_items, 16_000)) == 3
 
     def test_one_seed_per_chunk_when_each_exceeds_budget(self) -> None:
         """When every seed is bigger than the budget, the loop puts one
         truncated seed per chunk — no two items can share a chunk."""
         from backend.knowledge.ingest.ingest_compiler import BatchItem, _chunk_batch
 
-        items = [BatchItem(label=f"f{i}.py", content="x" * 5_000) for i in range(3)]
-        chunks = _chunk_batch(items, 2_500)
+        items = [BatchItem(label=f"f{i}.py", content="x" * 20_000) for i in range(3)]
+        chunks = _chunk_batch(items, 16_000)
         assert len(chunks) == 3
         for chunk in chunks:
             assert len(chunk) == 1

@@ -132,6 +132,14 @@ class Settings(BaseSettings):
     knowledge_embedding_api_base: str | None = None
     knowledge_embedding_timeout_s: float = 30.0
 
+    # Lift E18 — how many ingest-compile chunks ``IngestCompiler.compile_batch``
+    # processes in parallel per call. Each in-flight chunk consumes one slot
+    # of the worker fleet's capacity-aware dispatch (E16). Tune to ``<= total
+    # free worker slots`` (worker count × ``max_parallel_tasks_per_worker``)
+    # so the worker fleet is the constraint, not us. Default matches the
+    # worker's default ``max_parallel_tasks=3`` for a single-worker fleet.
+    ingest_compile_parallelism: int = 3
+
     # Skills settings (backend.extensions.skill) — per-workspace skill directory.
     # Layout: ``<skills_root>/<workspace_id>/*.md`` per Workflow §6 #5.
     skills_root: str = "var/skills"

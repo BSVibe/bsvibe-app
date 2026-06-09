@@ -465,6 +465,7 @@ def _build_bootstrap_knowledge_inner(
             llm_client=llm,
             canonicalization_service=canon_service,
             event_bus=bus,
+            parallelism=settings.ingest_compile_parallelism,
         )
         items = [
             BatchItem(label=str(a.get("label", "")), content=str(a.get("content", "")))

@@ -27,14 +27,18 @@ logger = structlog.get_logger(__name__)
 # at AppState construction time. Single items larger than the budget
 # are truncated rather than allowed to balloon the prompt.
 #
-# Lift E14 — halved from 5_000 to 2_500. The legacy bundled-import use
-# case (a ZIP of 30 small markdown notes) packed many seeds per chunk;
-# bsvibe-app's product-bootstrap workload is one large source file per
-# seed, where a single 20 KB seed = one whole chunk by itself. Halving
-# the budget pushes those big seeds across MORE, SMALLER chunks so
-# (a) any one chunk's executor-adapter call fits inside the 600 s
-# Lift E14 timeout ceiling, and (b) a failure burns less work.
-_DEFAULT_BATCH_CHAR_BUDGET = 2_500
+# Lift E14 halved this from 5_000 to 2_500 because executor-adapter
+# calls were subprocess-spawn-per-call (~minutes of overhead) and the
+# per-caller timeout was 180 s — bigger chunks risked timing out before
+# the LLM finished a single big file.
+#
+# Lift E18 raises it to 16_000 because the executor adapter is now
+# ``opencode serve`` + HTTP (Lift E17): per-call overhead dropped from
+# minutes to ~1 s, the caller timeout is 600 s, and ``opencode-go``
+# subscription has effectively unlimited token budget. Big chunks pay
+# off — fewer LLM calls per bootstrap, same wall-clock per call, more
+# context for the LLM to deduplicate/cross-reference across seeds.
+_DEFAULT_BATCH_CHAR_BUDGET = 16_000
 
 
 # Reserve this fraction of the model's input window for the system
@@ -47,17 +51,17 @@ _BUDGET_SAFETY_FRACTION = 0.4
 _CHARS_PER_TOKEN = 3.5
 
 # Local ollama models often DECLARE huge context windows (200k+) but
-# actually generate slowly past a few thousand chars of input.
-# Empirically, glm-4.7-flash on consumer GPU times out (>300s) at
-# 16k input; 5-8k is the practical sweet spot. Cap their derived
-# budget here — doesn't apply to hosted models (anthropic/openai/etc.)
-# which handle long prompts efficiently.
+# actually generate slowly past a few thousand chars of input. The cap
+# bounds what we hand a small local model — hosted models
+# (anthropic/openai/etc.) are unaffected and pick up the full derived
+# budget.
 #
-# Lift E14 — halved from 8_000 to 4_000 for the same product-bootstrap
-# reason as :data:`_DEFAULT_BATCH_CHAR_BUDGET` above. With one source
-# file per seed, a 4 KB cap puts each big file in its own bounded chunk
-# whose ``opencode run`` finishes inside the new 600 s caller timeout.
-_OLLAMA_BUDGET_CAP = 4_000
+# Lift E14 → E18 path: was 8_000, then halved to 4_000 under the slow
+# subprocess-spawn executor (Lift E14), now raised to 24_000 because
+# Lift E17 swapped to ``opencode serve`` + HTTP (per-call overhead ~1 s,
+# 600 s caller timeout). Bigger chunks mean fewer LLM calls per bootstrap
+# — the dogfood win is 5-6× fewer chunks on bsvibe-app (1309 → 200-300).
+_OLLAMA_BUDGET_CAP = 24_000
 
 
 @dataclass
