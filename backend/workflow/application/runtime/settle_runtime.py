@@ -76,7 +76,11 @@ def build_settle_entity_extractor_factory(
                 workspace_id=str(workspace_id),
                 vault_root=vault_root,
             )
-            return IngestCompiler(garden_writer=knowledge.writer(), llm_client=llm)
+            return IngestCompiler(
+                garden_writer=knowledge.writer(),
+                llm_client=llm,
+                parallelism=settings.ingest_compile_parallelism,
+            )
 
     return _factory
 

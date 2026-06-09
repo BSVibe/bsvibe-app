@@ -16,10 +16,21 @@ The chunk loop in :meth:`IngestCompiler.compile_batch` calls
 query. Do not hoist the call above the loop, do not cache the result
 across chunks. The ``rag-batch-stale-related-context`` skill exists
 because this exact bug shipped once already.
+
+Lift E18 — chunks now fan out CONCURRENTLY (bounded by ``parallelism``)
+so the backend uses the worker fleet's free capacity. The per-chunk
+related-context lookup invariant is preserved: each parallel task still
+calls ``_find_related`` with ITS chunk's seed query. The retriever
+instance is shared across all chunks (single instance held on
+``self._retriever``), so the underlying index is loaded once and reused
+— a per-chunk SEARCH, not a per-chunk index rebuild. Event emissions
+are serialized through an ``asyncio.Lock`` so the progress subscriber's
+``chunks_done`` counter never races between concurrent chunks.
 """
 
 from __future__ import annotations
 
+import asyncio
 import time
 from typing import TYPE_CHECKING, Any
 
@@ -76,6 +87,7 @@ class IngestCompiler:
         chunk_timeout_s: float | None = 300.0,
         canonicalization_service: CanonicalizationService | None = None,
         batch_recorder: IngestBatchRecorder | None = None,
+        parallelism: int = 3,
     ) -> None:
         self._writer = garden_writer
         self._llm = llm_client
@@ -98,6 +110,13 @@ class IngestCompiler:
         # raw tag is run through the resolver before landing in the garden
         # note. Unresolved/ambiguous/blocked tags are dropped per spec.
         self._canon_service = canonicalization_service
+        # Lift E18 — bound the number of in-flight chunks per ``compile_batch``.
+        # Default matches the worker fleet's ``max_parallel_tasks=3``; operators
+        # should size this ``<=`` total free worker slots so the backend's
+        # capacity-aware dispatch (E16) is the constraint, not us. Must be >= 1.
+        if parallelism < 1:
+            raise ValueError(f"parallelism must be >= 1, got {parallelism}")
+        self._parallelism = parallelism
 
     async def compile_batch(
         self,
@@ -124,79 +143,91 @@ class IngestCompiler:
             {"source": seed_source, "item_count": len(items), "chunk_count": len(chunks)},
         )
 
+        # Lift E18 — fan chunks out concurrently bounded by ``parallelism``.
+        # The aggregation lock serializes shared-state mutation + event
+        # emission so the progress subscriber's per-chunk counters stay
+        # monotonic and per-chunk START→DONE/FAILED ordering is preserved.
+        sem = asyncio.Semaphore(self._parallelism)
         actions_taken: list[UpdateAction] = []
-        notes_created = 0
-        notes_updated = 0
-        llm_calls = 0
-        chunk_failures = 0
+        counters: dict[str, int] = {
+            "notes_created": 0,
+            "notes_updated": 0,
+            "llm_calls": 0,
+            "chunk_failures": 0,
+        }
+        agg_lock = asyncio.Lock()
 
-        for chunk_index, chunk in enumerate(chunks):
-            # Per-chunk progress event so a long bulk import can stream
-            # progress to a UI loading bar — see plugin runner / SSE
-            # bridges. Plain payload (no exception details) so the event
-            # bus stays free of large blobs.
-            await emit_event(
-                self._event_bus,
-                "INGEST_COMPILE_BATCH_CHUNK_START",
-                {
-                    "source": seed_source,
-                    "chunk_index": chunk_index,
-                    "chunk_count": len(chunks),
-                    "chunk_size": len(chunk),
-                },
-            )
+        async def _process_chunk(chunk_index: int, chunk: list[BatchItem]) -> None:
+            async with sem:
+                async with agg_lock:
+                    await emit_event(
+                        self._event_bus,
+                        "INGEST_COMPILE_BATCH_CHUNK_START",
+                        {
+                            "source": seed_source,
+                            "chunk_index": chunk_index,
+                            "chunk_count": len(chunks),
+                            "chunk_size": len(chunk),
+                        },
+                    )
 
-            # ⚠️  PER-CHUNK related lookup — each chunk gets vault context
-            # relevant to ITS own seeds, not items 1-3 of the whole
-            # batch. See ``rag-batch-stale-related-context`` skill: a
-            # prior bug hoisted this OUT of the loop and silently broke
-            # the update path for every chunk after the first. DO NOT
-            # cache or hoist this call.
-            chunk_query = "\n\n".join(item.content[:500] for item in chunk)
-            chunk_result: CompileResult | None = None
-            try:
-                related_context = await self._find_related(chunk_query)
+                # ⚠️  PER-CHUNK related lookup (rag-batch-stale-related-context):
+                # query the SHARED retriever instance with THIS chunk's seeds —
+                # never hoist this call or cache its result across chunks.
+                chunk_query = "\n\n".join(item.content[:500] for item in chunk)
+                chunk_result: CompileResult | None = None
+                try:
+                    related_context = await self._find_related(chunk_query)
+                    plan = await self._plan_batch_updates(chunk, seed_source, related_context)
+                    chunk_result = await self._execute_plan(plan)
+                except Exception:
+                    # Per-chunk failure must NOT discard earlier chunks' work
+                    # — log + emit FAILED and keep the gather going.
+                    logger.warning(
+                        "ingest_compile_chunk_failed",
+                        source=seed_source,
+                        chunk_index=chunk_index,
+                        chunk_size=len(chunk),
+                        exc_info=True,
+                    )
+                    async with agg_lock:
+                        counters["chunk_failures"] += 1
+                        await emit_event(
+                            self._event_bus,
+                            "INGEST_COMPILE_BATCH_CHUNK_FAILED",
+                            {
+                                "source": seed_source,
+                                "chunk_index": chunk_index,
+                                "chunk_count": len(chunks),
+                            },
+                        )
+                    return
 
-                plan = await self._plan_batch_updates(chunk, seed_source, related_context)
-                llm_calls += 1
-                chunk_result = await self._execute_plan(plan)
-            except Exception:
-                # Per-chunk failure must NOT discard work that earlier
-                # chunks already wrote to disk. Log and keep going so
-                # bulk imports stay best-effort: a single malformed
-                # batch shouldn't sink the whole compile.
-                chunk_failures += 1
-                logger.warning(
-                    "ingest_compile_chunk_failed",
-                    source=seed_source,
-                    chunk_index=chunk_index,
-                    chunk_size=len(chunk),
-                    exc_info=True,
-                )
-                await emit_event(
-                    self._event_bus,
-                    "INGEST_COMPILE_BATCH_CHUNK_FAILED",
-                    {
-                        "source": seed_source,
-                        "chunk_index": chunk_index,
-                        "chunk_count": len(chunks),
-                    },
-                )
-                continue
-            actions_taken.extend(chunk_result.actions_taken)
-            notes_created += chunk_result.notes_created
-            notes_updated += chunk_result.notes_updated
-            await emit_event(
-                self._event_bus,
-                "INGEST_COMPILE_BATCH_CHUNK_DONE",
-                {
-                    "source": seed_source,
-                    "chunk_index": chunk_index,
-                    "chunk_count": len(chunks),
-                    "notes_created": chunk_result.notes_created,
-                    "notes_updated": chunk_result.notes_updated,
-                },
-            )
+                async with agg_lock:
+                    counters["llm_calls"] += 1
+                    counters["notes_created"] += chunk_result.notes_created
+                    counters["notes_updated"] += chunk_result.notes_updated
+                    actions_taken.extend(chunk_result.actions_taken)
+                    await emit_event(
+                        self._event_bus,
+                        "INGEST_COMPILE_BATCH_CHUNK_DONE",
+                        {
+                            "source": seed_source,
+                            "chunk_index": chunk_index,
+                            "chunk_count": len(chunks),
+                            "notes_created": chunk_result.notes_created,
+                            "notes_updated": chunk_result.notes_updated,
+                        },
+                    )
+
+        # Per-chunk exceptions are caught inside ``_process_chunk``; any
+        # exception escaping here is structural (e.g. emit_event itself
+        # failing) and SHOULD propagate — no silent swallow.
+        await asyncio.gather(*(_process_chunk(i, c) for i, c in enumerate(chunks)))
+        notes_created = counters["notes_created"]
+        notes_updated = counters["notes_updated"]
+        llm_calls = counters["llm_calls"]
+        chunk_failures = counters["chunk_failures"]
 
         await emit_event(
             self._event_bus,
