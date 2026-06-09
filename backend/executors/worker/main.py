@@ -56,6 +56,7 @@ from typing import Any, Protocol, cast
 import httpx
 import structlog
 
+from backend.executors.worker import opencode_server
 from backend.executors.worker.config import WorkerSettings, get_worker_settings
 from backend.executors.worker.credentials import (
     CredentialsNotFound,
@@ -564,6 +565,61 @@ async def _acquire_worker_token(client: httpx.AsyncClient, settings: WorkerSetti
     return minted
 
 
+def _wire_executors() -> dict[str, ExecutorProtocol]:
+    """Resolve capabilities → executor instances.
+
+    Lift E12 — when ``~/.bsvibe/config.json`` declares an explicit
+    capabilities list, honour it. The founder ran
+    ``bsvibe-worker register --capabilities codex,opencode`` to limit the
+    worker to those executors; without this filter the loop re-detects
+    PATH-available CLIs (including the unwanted ``claude_code``) and
+    silently broadens the worker's surface beyond the founder's choice.
+    """
+    persisted = load_worker_config()
+    if persisted is not None and persisted.capabilities:
+        capabilities = list(persisted.capabilities)
+    else:
+        capabilities = detect_capabilities()
+    executors: dict[str, ExecutorProtocol] = {}
+    for cap in capabilities:
+        try:
+            executors[cap] = select_executor(cap)
+        except ValueError:
+            # Declared but no executor wired in this lift — skip.
+            logger.info("capability_declared_no_executor", capability=cap)
+    return executors
+
+
+async def _maybe_start_opencode_serve(
+    settings: WorkerSettings,
+    executors: dict[str, ExecutorProtocol],
+) -> opencode_server.OpenCodeServerProcess | None:
+    """Lift E17 — long-running ``opencode serve`` daemon.
+
+    The ``opencode`` executor talks HTTP to this daemon instead of spawning
+    per-task subprocesses; dogfood after E16 found per-call startup tax made
+    the subprocess path 8 h wall-clock on a trivial prompt vs 2.7 s for the
+    daemon path. We start serve before the poll loop begins so the first
+    polled opencode task hits a ready URL, and the caller stops it in its
+    ``finally`` so daemon lifetime is bounded by the worker process's.
+
+    Returns ``None`` when opencode is not a wired capability OR when the
+    daemon failed to start (logged + degraded — non-opencode tasks still run).
+    """
+    if "opencode" not in executors:
+        return None
+    try:
+        daemon = await opencode_server.start_opencode_serve(settings)
+    except opencode_server.OpenCodeServeStartupError:
+        logger.error(
+            "opencode_serve_disabled",
+            hint="opencode tasks will fail until the daemon starts cleanly",
+        )
+        return None
+    opencode_server.set_serve_url(daemon.url)
+    return daemon
+
+
 async def poll_and_execute(
     *,
     settings: WorkerSettings,
@@ -578,27 +634,7 @@ async def poll_and_execute(
     in-flight tasks are awaited before returning.
     """
     token = await _acquire_worker_token(client, settings)
-
-    # Lift E12 — when ``~/.bsvibe/config.json`` declares an explicit
-    # capabilities list, honour it. The founder ran
-    # ``bsvibe-worker register --capabilities codex,opencode`` to limit the
-    # worker to those executors; without this filter the loop re-detects
-    # PATH-available CLIs (including the unwanted ``claude_code``) and
-    # silently broadens the worker's surface beyond the founder's choice.
-    persisted = load_worker_config()
-    if persisted is not None and persisted.capabilities:
-        capabilities = list(persisted.capabilities)
-    else:
-        capabilities = detect_capabilities()
-
-    executors: dict[str, ExecutorProtocol] = {}
-    for cap in capabilities:
-        try:
-            executors[cap] = select_executor(cap)
-        except ValueError:
-            # Declared but no executor wired in this lift — skip.
-            logger.info("capability_declared_no_executor", capability=cap)
-
+    executors = _wire_executors()
     headers = {"X-Worker-Token": token}
     in_flight: set[asyncio.Task[None]] = set()
     stop = stop or asyncio.Event()
@@ -610,6 +646,8 @@ async def poll_and_execute(
         executors=list(executors.keys()),
         streaming=redis is not None,
     )
+
+    opencode_daemon = await _maybe_start_opencode_serve(settings, executors)
 
     try:
         while not stop.is_set():
@@ -637,6 +675,11 @@ async def poll_and_execute(
             task.cancel()
         if in_flight:
             await asyncio.gather(*in_flight, return_exceptions=True)
+        # Lift E17 — group-kill the ``opencode serve`` daemon so its child
+        # processes (Bun runtime, helper workers) die alongside the worker.
+        if opencode_daemon is not None:
+            await opencode_server.stop_opencode_serve(opencode_daemon)
+            opencode_server.clear_serve_url()
 
 
 async def _interruptible_sleep(seconds: float, stop: asyncio.Event) -> None:

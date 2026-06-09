@@ -61,6 +61,24 @@ class WorkerSettings(BaseSettings):
     # DB-row terminal state without incremental chunks.
     redis_url: str = ""
 
+    # ── Lift E17 — long-running ``opencode serve`` daemon ────────────────────
+    #
+    # The pre-E17 ``opencode run`` per-task subprocess paid heavy startup tax
+    # (workspace scan, plugin load, tool registry init, agent runtime spin-up)
+    # on every call. Dogfood measured 8 hours wall-clock on a trivial 1-line
+    # prompt; the same prompt against a long-running ``opencode serve`` +
+    # ``POST /session/{id}/message`` finished in 2.7 seconds. E17 keeps the
+    # runtime up across tasks and hits its HTTP surface.
+    #
+    # The worker spawns serve once at startup (bound to localhost, auto-port
+    # by default) and keeps it alive until shutdown. ``OpenCodeExecutor.execute``
+    # POSTs against the captured URL instead of launching a subprocess.
+    opencode_serve_agent: str = "plan"
+    opencode_serve_host: str = "127.0.0.1"
+    opencode_serve_port: int = 0
+    opencode_serve_startup_timeout_s: float = 30.0
+    opencode_request_timeout_s: float = 600.0
+
 
 @lru_cache(maxsize=1)
 def get_worker_settings() -> WorkerSettings:
