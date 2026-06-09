@@ -1043,3 +1043,128 @@ def _patched(obj: Any, name: str, value: Any) -> Any:
             setattr(obj, name, original)
 
     return _ctx()
+
+
+# ── Lift E17 — opencode serve daemon lifecycle integration ──────────────────
+
+
+async def test_poll_and_execute_starts_and_stops_opencode_serve(
+    monkeypatch: Any,
+) -> None:
+    """When ``opencode`` is a wired capability, the worker MUST start the
+    ``opencode serve`` daemon before the poll loop begins and stop it on
+    shutdown. Lift E17 — without this the HTTP executor has no URL to call.
+    """
+    import asyncio
+
+    from backend.executors.worker import opencode_server
+
+    settings = _settings(token="WORKER-TOKEN")
+    stop = asyncio.Event()
+    started: list[str] = []
+    stopped: list[str] = []
+
+    class _FakeDaemon:
+        url = "http://127.0.0.1:54321"
+        process = None  # not used in this test
+
+    async def _fake_start(*args: Any, **kwargs: Any) -> _FakeDaemon:
+        started.append("yes")
+        return _FakeDaemon()
+
+    async def _fake_stop(daemon: Any) -> None:
+        stopped.append("yes")
+
+    monkeypatch.setattr(opencode_server, "start_opencode_serve", _fake_start)
+    monkeypatch.setattr(opencode_server, "stop_opencode_serve", _fake_stop)
+    monkeypatch.setattr(worker_main, "detect_capabilities", lambda: ["opencode"])
+
+    async def _one_tick(**kwargs: Any) -> set[Any]:
+        # Verify the URL singleton is populated by the time the loop runs.
+        assert opencode_server.get_serve_url() == "http://127.0.0.1:54321"
+        stop.set()
+        return set()
+
+    monkeypatch.setattr(worker_main, "run_once", _one_tick)
+
+    state: dict[str, Any] = {"poll_queue": []}
+    async with _client(state) as client:
+        await worker_main.poll_and_execute(settings=settings, client=client, redis=None, stop=stop)
+
+    assert started == ["yes"], "opencode serve must be started before the poll loop"
+    assert stopped == ["yes"], "opencode serve must be stopped on shutdown"
+    # Singleton cleared on shutdown so test pollution is impossible.
+    assert opencode_server.get_serve_url() is None
+
+
+async def test_poll_and_execute_skips_opencode_serve_when_capability_absent(
+    monkeypatch: Any,
+) -> None:
+    """If the worker has no opencode capability, do NOT start the daemon —
+    a worker pinned to ``claude_code,codex`` does not need (and may not even
+    have) the opencode CLI on PATH.
+    """
+    import asyncio
+
+    from backend.executors.worker import opencode_server
+
+    settings = _settings(token="WORKER-TOKEN")
+    stop = asyncio.Event()
+    started: list[str] = []
+
+    async def _fake_start(*args: Any, **kwargs: Any) -> Any:
+        started.append("yes")
+        return None  # pragma: no cover — should never run
+
+    monkeypatch.setattr(opencode_server, "start_opencode_serve", _fake_start)
+    monkeypatch.setattr(worker_main, "detect_capabilities", lambda: ["claude_code"])
+
+    async def _one_tick(**kwargs: Any) -> set[Any]:
+        stop.set()
+        return set()
+
+    monkeypatch.setattr(worker_main, "run_once", _one_tick)
+
+    state: dict[str, Any] = {"poll_queue": []}
+    async with _client(state) as client:
+        await worker_main.poll_and_execute(settings=settings, client=client, redis=None, stop=stop)
+
+    assert started == [], "serve must NOT start when opencode is not a wired capability"
+
+
+async def test_poll_and_execute_continues_when_opencode_serve_startup_fails(
+    monkeypatch: Any,
+) -> None:
+    """A serve startup failure must NOT prevent the worker from running —
+    the worker still picks up non-opencode tasks (claude_code, codex). Only
+    opencode tasks will surface a clear error chunk when they hit the
+    missing-URL singleton check.
+    """
+    import asyncio
+
+    from backend.executors.worker import opencode_server
+
+    settings = _settings(token="WORKER-TOKEN")
+    stop = asyncio.Event()
+
+    async def _fake_start(*args: Any, **kwargs: Any) -> Any:
+        raise opencode_server.OpenCodeServeStartupError("serve failed")
+
+    monkeypatch.setattr(opencode_server, "start_opencode_serve", _fake_start)
+    monkeypatch.setattr(worker_main, "detect_capabilities", lambda: ["opencode"])
+
+    tick_ran = []
+
+    async def _one_tick(**kwargs: Any) -> set[Any]:
+        tick_ran.append(True)
+        stop.set()
+        return set()
+
+    monkeypatch.setattr(worker_main, "run_once", _one_tick)
+
+    state: dict[str, Any] = {"poll_queue": []}
+    async with _client(state) as client:
+        # Must NOT raise — startup failure is logged + degraded.
+        await worker_main.poll_and_execute(settings=settings, client=client, redis=None, stop=stop)
+
+    assert tick_ran == [True]

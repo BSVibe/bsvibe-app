@@ -1,255 +1,269 @@
-"""The ``opencode`` executor — streams from the opencode CLI.
+"""The ``opencode`` executor — HTTP against a long-running ``opencode serve`` (Lift E17).
 
-Runs ``opencode run --format json <prompt>`` as an async subprocess and parses
-its flat JSONL event stream into :class:`ExecutionChunk`s (assistant text, then
-a terminal ``done`` / ``error``). Adapted from BSGateway's proven
-``worker/executors.py`` streamer, mirroring the worker's ``claude_code``
-executor.
+Pre-E17 this executor spawned ``opencode run --format json`` per task. The
+dogfood after E16 found this fundamentally too slow for chat-shaped ingest
+calls: a trivial 1-line prompt wall-clocked at 8 hours, and even small ingest
+chunks (1–3 seeds, ~2.5 KB) wall-clocked at 20+ minutes. The cost was startup
+tax (workspace scan, plugin load, tool registry init, agent runtime spin-up)
+paid every single call. The runtime is meant to be a long-lived TUI/server,
+not a per-call subprocess.
+
+E17 keeps a single ``opencode serve`` daemon up per worker (managed by
+:mod:`backend.executors.worker.opencode_server`) and hits its HTTP surface
+once per task:
+
+1. ``POST /session`` → returns the new session id.
+2. ``POST /session/{id}/message`` with body
+   ``{"system": <str>, "parts": [{"type":"text","text": <prompt>}],
+   "agent": "plan", "model": <optional>}``.
+
+The dogfood-verified wire shape is critical: ``system`` is a TOP-LEVEL key
+alongside ``parts``, NOT a system-role message inside ``parts``. The
+response's text part carries the LLM output.
 
 Robustness:
 
-* per-line read deadline (``timeout_seconds``) → a terminal timeout error chunk,
-  never a hung loop;
-* non-zero exit / OS errors → a terminal error chunk (no crash);
-* ``TimeoutError`` is caught BEFORE the ``OSError`` branch (``TimeoutError``
-  subclasses ``OSError`` in 3.11) so the explicit timeout message is surfaced
-  rather than an empty ``str(OSError())``.
+* ``opencode_request_timeout_s`` caps each call wall-clock (default 600 s).
+* On non-2xx → terminal error chunk (no crash).
+* On :class:`httpx.ConnectError` (daemon died mid-run) → ask the server
+  module to re-spawn once, then retry once. A second failure surfaces as
+  a terminal error chunk.
+* :class:`asyncio.CancelledError` propagation: the executor aborts the
+  open session via ``POST /session/{id}/abort`` so the serve daemon stops
+  the LLM call server-side, then re-raises CancelledError so the worker
+  loop's cancel chain (E14/E15) stays correct.
 
-Each task is its own ``opencode run`` process, so per-task workspace (``--dir``),
-model (``-m``), and system prompt are naturally isolated. ``opencode run
---format json`` emits a JSONL event stream on stdout: ``step_start`` →
-``text`` → ``step_finish``; the assistant's answer is the ``part.text`` of each
-``text`` event. The prompt is the trailing positional argument; ``system`` is
-injected via the ``OPENCODE_CONFIG_CONTENT`` env var (an inline JSON config
-opencode merges with its global config), referencing a temp file removed when
-the subprocess exits.
+NO subprocess path remains; reintroducing it would re-open the dogfood bug
+this lift exists to close. :func:`test_no_subprocess_exec_used` enforces that.
 """
 
 from __future__ import annotations
 
 import asyncio
-import json
-import os
-import shutil
-import tempfile
 from collections.abc import AsyncIterator
 from typing import Any
 
+import httpx
 import structlog
 
-from backend.executors.worker.executors import (
-    ExecutionChunk,
-    _kill_process_group,
-    sanitized_subprocess_env,
-)
+from backend.executors.worker import opencode_server
+from backend.executors.worker.config import get_worker_settings
+from backend.executors.worker.executors import ExecutionChunk
 
 logger = structlog.get_logger(__name__)
 
 
 class OpenCodeExecutor:
-    """Stream from ``opencode run --format json``."""
+    """Stream from ``opencode serve``'s HTTP message surface."""
 
-    def __init__(self, timeout_seconds: int = 3600) -> None:
-        self._cmd = shutil.which("opencode") or "opencode"
-        self._timeout = timeout_seconds
+    def __init__(
+        self,
+        *,
+        http_transport: httpx.AsyncBaseTransport | None = None,
+    ) -> None:
+        # ``http_transport`` is the test seam — production passes ``None`` and
+        # the real network is used. The transport is stashed (not the client)
+        # because each ``execute`` opens + closes its own client; sharing a
+        # client would couple lifetimes across cancel boundaries.
+        self._transport = http_transport
+        self._settings = get_worker_settings()
 
     def supported_task_types(self) -> list[str]:
         return ["opencode"]
 
     async def execute(self, prompt: str, context: dict[str, Any]) -> AsyncIterator[ExecutionChunk]:
-        workspace = context.get("workspace_dir") or "."
         system = context.get("system") or ""
         model = context.get("model") or None
-        deadline = asyncio.get_event_loop().time() + self._timeout
+        timeout_s = self._settings.opencode_request_timeout_s
 
-        # Build the per-task inline config (system instructions). opencode
-        # merges OPENCODE_CONFIG_CONTENT over its global config, so each
-        # subprocess is isolated without touching disk config or the workspace.
-        sys_path: str | None = None
-        config: dict[str, Any] = {}
-        if system:
-            sys_path = _write_system_file(system)
-            config["instructions"] = [sys_path]
-
-        # Start from a sanitized env (no parent Claude-Code session leakage),
-        # then layer opencode's per-task inline config on top.
-        env = sanitized_subprocess_env()
-        if config:
-            env["OPENCODE_CONFIG_CONTENT"] = json.dumps(config)
-
-        cmd_args = self._build_cmd(workspace, model, prompt)
-        try:
-            async for chunk in self._run(cmd_args, workspace, env, deadline):
-                yield chunk
-        finally:
-            if sys_path:
-                try:
-                    os.unlink(sys_path)
-                except OSError:  # pragma: no cover — best-effort cleanup
-                    pass
-
-    async def _run(
-        self,
-        cmd_args: list[str],
-        workspace: str,
-        env: dict[str, str],
-        deadline: float,
-    ) -> AsyncIterator[ExecutionChunk]:
-        process: asyncio.subprocess.Process | None = None
-        stderr_buf: list[str] = []
-        try:
-            # Lift E15 — ``start_new_session=True`` makes the child the
-            # leader of its own process group so we can later signal the
-            # whole group via ``os.killpg``. Without this, killing the
-            # opencode shim leaves its child processes (the Bun/Node
-            # agent-loop workers) orphaned. The dogfood ``ps aux`` showed
-            # exactly this — opencode subprocesses alive 20+ minutes past
-            # their parent's cancellation.
-            process = await asyncio.create_subprocess_exec(
-                *cmd_args,
-                cwd=workspace,
-                stdin=asyncio.subprocess.DEVNULL,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                env=env,
-                start_new_session=True,
+        url = opencode_server.get_serve_url()
+        if not url:
+            # The worker daemon never started the serve subprocess. Surface
+            # a clear error rather than silently failing — the dispatch
+            # layer needs a terminal error to record on the task row.
+            yield ExecutionChunk(
+                done=True,
+                error=(
+                    "opencode serve URL singleton is unset — the worker "
+                    "daemon did not start the serve subprocess at boot"
+                ),
             )
-            assert process.stdout is not None
-            assert process.stderr is not None
+            return
 
-            stderr_task = asyncio.create_task(_drain(process.stderr, stderr_buf))
-            try:
-                async for line in _aiter_lines(process.stdout, deadline):
-                    parsed = _safe_json(line)
-                    if parsed is None:
-                        continue
-                    delta = _opencode_extract_delta(parsed)
-                    if delta:
-                        yield ExecutionChunk(delta=delta, raw=parsed)
-            except asyncio.CancelledError:
-                # Lift E15 — the wrapper Task was cancelled (backend timed
-                # out → ``ExecutorAdapter`` XADDed an ``action=cancel`` →
-                # poll loop ``.cancel()``-ed us). Kill the subprocess
-                # GROUP immediately, BEFORE awaiting ``process.wait()`` in
-                # the inner ``finally`` — otherwise wait_for(process.wait,
-                # timeout=deadline-now) blocks for the FULL remaining
-                # per-task budget (up to 3600s for opencode) while the
-                # CLI happily keeps running its agentic loop. This is the
-                # dogfood symptom: cancel was issued, subprocess kept
-                # running, worker logged ``task_completed`` only after
-                # external ``kill -9``.
-                logger.info(
-                    "worker_subprocess_terminate_sent",
-                    pid=process.pid,
-                    executor="opencode",
-                    reason="cancelled",
-                )
-                _kill_process_group(process)
-                raise
-            finally:
-                rc = await asyncio.wait_for(
-                    process.wait(),
-                    timeout=max(0.1, deadline - asyncio.get_event_loop().time()),
-                )
-                await stderr_task
-            err_text = "".join(stderr_buf)
-            if rc != 0:
-                yield ExecutionChunk(done=True, error=err_text or f"exit {rc}")
-            else:
-                yield ExecutionChunk(done=True)
-        except TimeoutError:
-            # ``TimeoutError`` is a subclass of ``OSError`` (3.11) — handle it
-            # BEFORE the ``OSError`` branch so the explicit timeout message is
-            # surfaced rather than the empty ``str(OSError())`` below.
-            yield ExecutionChunk(done=True, error=f"Execution timed out after {self._timeout}s")
-        except (FileNotFoundError, PermissionError, OSError) as exc:
-            yield ExecutionChunk(done=True, error=str(exc))
-        finally:
-            if process is not None and process.returncode is None:
-                # Lift E15 — group-kill so the CLI shim's children die too.
-                # ``_kill_process_group`` is best-effort: a dead direct child
-                # / a process that escaped its group raises ProcessLookupError,
-                # swallowed below.
-                try:
-                    _kill_process_group(process)
-                    await process.wait()
-                    logger.info(
-                        "worker_subprocess_killed",
-                        pid=process.pid,
-                        executor="opencode",
-                    )
-                except ProcessLookupError:  # pragma: no cover — race on shutdown
-                    pass
-
-    def _build_cmd(self, workspace: str, model: str | None, prompt: str) -> list[str]:
-        cmd_args = [
-            self._cmd,
-            "run",
-            "--format",
-            "json",
-            "--dangerously-skip-permissions",
-            "--dir",
-            workspace,
-        ]
+        body: dict[str, Any] = {
+            "parts": [{"type": "text", "text": prompt}],
+            "agent": self._settings.opencode_serve_agent,
+        }
+        if system:
+            body["system"] = system
         if model:
-            cmd_args += ["-m", model]
-        cmd_args.append(prompt)
-        return cmd_args
+            body["model"] = model
+
+        # Mutable holder so the inner helper can publish the session_id back
+        # to the cancel handler the moment it is created — without this, a
+        # cancellation that fires during the message POST would lose the
+        # session_id needed to abort it server-side.
+        session_holder: dict[str, str] = {}
+        client = self._client(url, timeout_s)
+        abort_task: asyncio.Task[None] | None = None
+        try:
+            try:
+                resp = await self._call_with_respawn(client, body, session_holder)
+            except asyncio.CancelledError:
+                sid = session_holder.get("id")
+                if sid:
+                    # Lift E17 — fire the abort POST so the serve daemon
+                    # stops the LLM call server-side. We schedule it on the
+                    # loop here and ``shield`` it in the ``finally`` block;
+                    # the shielded task is allowed to complete even though
+                    # our outer task is being cancelled.
+                    abort_task = asyncio.create_task(self._do_abort(url, sid, timeout_s))
+                raise
+            except httpx.HTTPError as exc:
+                yield ExecutionChunk(done=True, error=str(exc))
+                return
+            except OpenCodeHttpError as exc:
+                yield ExecutionChunk(done=True, error=str(exc))
+                return
+        finally:
+            if abort_task is not None:
+                try:
+                    await asyncio.shield(abort_task)
+                except asyncio.CancelledError:
+                    # Our outer task is being cancelled — the shielded
+                    # abort task continues running on the loop until it
+                    # lands (or its 5 s internal timeout fires).
+                    pass
+                except Exception:  # noqa: BLE001 — cleanup best-effort
+                    logger.warning(
+                        "opencode_session_abort_failed",
+                        session_id=session_holder.get("id"),
+                        exc_info=True,
+                    )
+            await client.aclose()
+
+        text = _extract_text(resp)
+        if text:
+            yield ExecutionChunk(delta=text, raw=resp)
+        yield ExecutionChunk(
+            done=True,
+            raw={"info": resp.get("info")},
+        )
+
+    # ── Internals ───────────────────────────────────────────────────────────
+
+    def _client(self, base_url: str, timeout_s: float) -> httpx.AsyncClient:
+        return httpx.AsyncClient(
+            base_url=base_url,
+            transport=self._transport,
+            timeout=timeout_s,
+        )
+
+    async def _create_session(self, client: httpx.AsyncClient) -> str:
+        res = await client.post("/session", json={})
+        if res.status_code >= 300:
+            raise OpenCodeHttpError(
+                f"POST /session returned {res.status_code}: {_truncate(res.text)}"
+            )
+        data = res.json()
+        sid = data.get("id")
+        if not isinstance(sid, str) or not sid:
+            raise OpenCodeHttpError(
+                f"POST /session response missing 'id' field: {_truncate(res.text)}"
+            )
+        return sid
+
+    async def _call_with_respawn(
+        self,
+        client: httpx.AsyncClient,
+        body: dict[str, Any],
+        session_holder: dict[str, str],
+    ) -> dict[str, Any]:
+        """Create a session + post the message. On ConnectError → re-spawn once + retry.
+
+        Returns the response JSON. The created session id is published into
+        ``session_holder["id"]`` the moment ``POST /session`` returns, so a
+        cancellation that fires during the message POST can still find the
+        sid to abort server-side.
+        """
+        try:
+            sid = await self._create_session(client)
+            session_holder["id"] = sid
+            return await self._post_message(client, sid, body)
+        except httpx.ConnectError as exc:
+            logger.warning("opencode_serve_dead_retrying", error=str(exc))
+            await opencode_server.ensure_serve_running(self._settings)
+            sid = await self._create_session(client)
+            session_holder["id"] = sid
+            return await self._post_message(client, sid, body)
+
+    async def _post_message(
+        self, client: httpx.AsyncClient, session_id: str, body: dict[str, Any]
+    ) -> dict[str, Any]:
+        res = await client.post(f"/session/{session_id}/message", json=body)
+        if res.status_code >= 300:
+            raise OpenCodeHttpError(
+                f"POST /session/{session_id}/message returned "
+                f"{res.status_code}: {_truncate(res.text)}"
+            )
+        data: dict[str, Any] = res.json()
+        return data
+
+    async def _do_abort(self, base_url: str, session_id: str, timeout_s: float) -> None:
+        """POST ``/session/{id}/abort`` on a fresh client.
+
+        Uses its own ``httpx.AsyncClient`` (not the cancelled task's client)
+        so the abort POST is not racing the outer ``client.aclose()`` in
+        :meth:`execute`'s ``finally``. Caller schedules this as a separate
+        task and ``shield``s it from the outer cancellation.
+        """
+        del timeout_s  # the abort POST gets its own short timeout
+        try:
+            async with httpx.AsyncClient(
+                base_url=base_url, transport=self._transport, timeout=5.0
+            ) as abort_client:
+                await abort_client.post(f"/session/{session_id}/abort")
+            logger.info("opencode_session_aborted", session_id=session_id)
+        except Exception:  # noqa: BLE001 — best-effort cleanup
+            logger.warning("opencode_session_abort_failed", session_id=session_id, exc_info=True)
 
 
-# ── Stream parsing helpers ────────────────────────────────────────────────────
+# ── Helpers ─────────────────────────────────────────────────────────────────
 
 
-def _opencode_extract_delta(event: dict[str, Any]) -> str:
-    """Pull assistant text from an ``opencode run --format json`` event.
+class OpenCodeHttpError(RuntimeError):
+    """Non-2xx HTTP from the serve daemon, or a malformed response body."""
 
-    ``opencode run`` emits a flat JSONL stream of ``{"type": ..., "part": {...}}``
-    records: ``step_start`` → ``text`` → ``step_finish``. The assistant's answer
-    is the ``part.text`` of each ``text`` event; tool / step events carry no
-    user-facing text.
+
+def _extract_text(resp: dict[str, Any]) -> str:
+    """Pick the first text part out of a serve message response.
+
+    Server response shape::
+
+        {"parts": [{"type": "text", "text": "<llm output>"}, ...], "info": {...}}
+
+    Concatenates every text part in order. Non-text parts (tool calls etc.) are
+    skipped — the chat-shaped caller wants the assistant's natural-language reply.
     """
-    if event.get("type") == "text":
-        part = event.get("part") or {}
-        if isinstance(part, dict):
-            text = part.get("text") or ""
-            return text if isinstance(text, str) else ""
-    return ""
+    parts = resp.get("parts") or []
+    if not isinstance(parts, list):
+        return ""
+    chunks: list[str] = []
+    for part in parts:
+        if not isinstance(part, dict):
+            continue
+        if part.get("type") != "text":
+            continue
+        text = part.get("text")
+        if isinstance(text, str):
+            chunks.append(text)
+    return "".join(chunks)
 
 
-def _write_system_file(system: str) -> str:
-    tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".md", delete=False, encoding="utf-8")
-    try:
-        tmp.write(system)
-    finally:
-        tmp.close()
-    return tmp.name
+def _truncate(text: str, max_len: int = 500) -> str:
+    if len(text) <= max_len:
+        return text
+    return text[:max_len] + "…"
 
 
-async def _aiter_lines(stream: asyncio.StreamReader, deadline: float) -> AsyncIterator[str]:
-    while True:
-        remaining = deadline - asyncio.get_event_loop().time()
-        if remaining <= 0:
-            raise TimeoutError
-        line = await asyncio.wait_for(stream.readline(), timeout=remaining)
-        if not line:
-            return
-        yield line.decode("utf-8", errors="replace").rstrip("\n")
-
-
-async def _drain(stream: asyncio.StreamReader, buf: list[str]) -> None:
-    while True:
-        chunk = await stream.read(4096)
-        if not chunk:
-            return
-        buf.append(chunk.decode("utf-8", errors="replace"))
-
-
-def _safe_json(line: str) -> dict[str, Any] | None:
-    try:
-        obj = json.loads(line)
-    except (json.JSONDecodeError, ValueError):
-        return None
-    return obj if isinstance(obj, dict) else None
-
-
-__all__ = ["OpenCodeExecutor"]
+__all__ = ["OpenCodeExecutor", "OpenCodeHttpError"]
