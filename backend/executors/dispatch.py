@@ -240,12 +240,17 @@ async def create_task(
     system: str = "",
     workspace_dir: str = ".",
     run_id: uuid.UUID | None = None,
+    model: str | None = None,
 ) -> ExecutorTaskRow:
     """Create a ``pending`` :class:`ExecutorTaskRow` and flush it (no commit).
 
     ``run_id`` (optional) binds the task to its :class:`ExecutionRun` so the
     result path can resolve the run workspace to persist captured files into
     (executor-pool B1). It is nullable: substrate-only callers omit it.
+
+    ``model`` (optional, Lift E21) is the underlying LLM model id the worker
+    forwards to the executor (e.g. ``opencode-go/qwen3.6-plus``). NULL means
+    "use the CLI's default model" — the back-compat shape pre-E21.
     """
     task = ExecutorTaskRow(
         workspace_id=workspace_id,
@@ -254,6 +259,7 @@ async def create_task(
         prompt=prompt,
         system=system,
         workspace_dir=workspace_dir,
+        model=model,
         status="pending",
     )
     session.add(task)
@@ -291,6 +297,12 @@ async def dispatch_task(
         "action": "execute",
         "dispatched_at": datetime.now(UTC).isoformat(),
     }
+    # Lift E21 — forward the underlying model id only when set. Redis Streams
+    # reject ``None``; omit the key entirely so the worker's
+    # ``task.get("model") or None`` keeps the back-compat "use CLI default"
+    # path for legacy callers that have not started passing the model.
+    if task.model:
+        payload["model"] = task.model
     msg_id = await redis.xadd(worker_stream(worker_id), payload)
 
     task.worker_id = worker_id

@@ -413,6 +413,105 @@ class TestExecutorAdapterChat:
             finally:
                 dispatch_mod.find_available_worker = real_find  # type: ignore[assignment]
 
+    async def test_chat_passes_account_litellm_model_into_dispatch(self) -> None:
+        """E21 — the adapter pulls ``account.litellm_model`` and forwards it as
+        the dispatch ``model`` so it lands on the task row + the worker's
+        stream entry. The legacy ``executor/<type>`` placeholder still maps
+        to ``None`` for back-compat with pre-E21 accounts."""
+        redis = await _make_redis()
+        workspace_id = uuid.uuid4()
+
+        async with shared_file_sessionmaker() as sf:
+            async with sf() as setup:
+                worker = await _seed_worker(
+                    setup, workspace_id=workspace_id, capabilities=["opencode"]
+                )
+                account = ModelAccount(
+                    id=uuid.uuid4(),
+                    workspace_id=workspace_id,
+                    account_id=uuid.uuid4(),
+                    provider="executor",
+                    label="mac-mini-qwen",
+                    litellm_model="opencode-go/qwen3.6-plus",
+                    api_base=None,
+                    api_key_encrypted=None,
+                    data_jurisdiction="unknown",
+                    is_active=True,
+                    extra_params={
+                        "worker_id": str(worker.id),
+                        "executor_type": "opencode",
+                    },
+                )
+                setup.add(account)
+                await setup.commit()
+
+            async with sf() as adapter_session:
+                adapter = ExecutorAdapter(
+                    account=account,
+                    workspace_id=workspace_id,
+                    account_id=account.account_id,
+                    model_account_id=account.id,
+                    session=adapter_session,
+                    settings=get_settings().model_copy(update={"executor_task_timeout_s": 5.0}),
+                    redis=redis,
+                )
+
+                # Don't wait for a worker — short-circuit by timing out the
+                # await_completion. The XADD we want to inspect happens
+                # BEFORE await_completion blocks.
+                with pytest.raises(ExecutorAdapterUnavailable):
+                    await adapter.chat(
+                        system="",
+                        messages=[{"role": "user", "content": "hi"}],
+                    )
+
+                entries = await redis.xrange(dispatch.worker_stream(worker.id))
+                # 2 entries — execute + cancel (post-timeout). Pick the first.
+                execute_entry = next(
+                    fields for _id, fields in entries if fields.get("action") == "execute"
+                )
+                assert execute_entry["model"] == "opencode-go/qwen3.6-plus"
+
+    async def test_chat_legacy_executor_placeholder_omits_model(self) -> None:
+        """E21 back-compat — accounts whose ``litellm_model`` is the legacy
+        ``executor/<type>`` placeholder MUST NOT propagate that string as the
+        underlying model; absence means "use CLI default"."""
+        redis = await _make_redis()
+        workspace_id = uuid.uuid4()
+
+        async with shared_file_sessionmaker() as sf:
+            async with sf() as setup:
+                worker = await _seed_worker(
+                    setup, workspace_id=workspace_id, capabilities=["claude_code"]
+                )
+                account = _executor_account(workspace_id, worker.id)
+                setup.add(account)
+                await setup.commit()
+
+            async with sf() as adapter_session:
+                adapter = ExecutorAdapter(
+                    account=account,
+                    workspace_id=workspace_id,
+                    account_id=account.account_id,
+                    model_account_id=account.id,
+                    session=adapter_session,
+                    settings=get_settings().model_copy(update={"executor_task_timeout_s": 5.0}),
+                    redis=redis,
+                )
+
+                with pytest.raises(ExecutorAdapterUnavailable):
+                    await adapter.chat(
+                        system="",
+                        messages=[{"role": "user", "content": "hi"}],
+                    )
+
+                entries = await redis.xrange(dispatch.worker_stream(worker.id))
+                execute_entry = next(
+                    fields for _id, fields in entries if fields.get("action") == "execute"
+                )
+                # Either absent or empty — never the placeholder string.
+                assert execute_entry.get("model", "") == ""
+
     async def test_chat_happy_path_dispatches_and_returns_output(self) -> None:
         """Adapter dispatches a chat task and surfaces the worker's output."""
         import asyncio

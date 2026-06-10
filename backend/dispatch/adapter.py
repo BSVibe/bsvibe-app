@@ -377,6 +377,13 @@ class ExecutorAdapter:
             account_id=self.model_account_id,
         )
 
+        # Lift E21 — forward the underlying LLM model id from the
+        # account so the worker can pass it to the executor's HTTP body.
+        # Empty string and the legacy ``executor/<executor_type>`` placeholder
+        # both mean "no override — use the CLI default" (pre-E21 shape).
+        raw_model = (self.account.litellm_model or "").strip()
+        model = None if not raw_model or raw_model.startswith("executor/") else raw_model
+
         # Create + dispatch the task. ``run_id=None`` because chat is
         # detached from any ExecutionRun (see class docstring).
         task = await dispatch.create_task(
@@ -387,6 +394,7 @@ class ExecutorAdapter:
             system=system,
             workspace_dir=".",
             run_id=None,
+            model=model,
         )
         await dispatch.dispatch_task(self.redis, session=session, task=task, worker_id=worker.id)
         # Commit before awaiting — the worker reports its result on a
