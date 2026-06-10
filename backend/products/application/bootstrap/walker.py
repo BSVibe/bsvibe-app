@@ -25,6 +25,10 @@ from __future__ import annotations
 from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from backend.products.application.bootstrap.bootstrap_filter import BootstrapFileFilter
 
 #: Per-file size cap. Files larger than this are silently skipped —
 #: indexing 5MB minified bundles or fixture blobs has no useful signal
@@ -156,6 +160,7 @@ def walk_repo(
     max_total_bytes: int = DEFAULT_MAX_TOTAL_BYTES,
     max_file_count: int = DEFAULT_MAX_FILE_COUNT,
     skip_dirs: frozenset[str] = DEFAULT_SKIP_DIRS,
+    file_filter: BootstrapFileFilter | None = None,
 ) -> Iterator[WalkedFile]:
     """Walk ``repo_root`` lazily, yielding :class:`WalkedFile` records.
 
@@ -192,6 +197,7 @@ def walk_repo(
                 max_total_bytes=max_total_bytes,
                 max_file_count=max_file_count,
                 counters=counters,
+                file_filter=file_filter,
             )
 
 
@@ -213,6 +219,7 @@ def _handle_entry(  # noqa: PLR0911 — per-entry early-returns each guard one f
     max_total_bytes: int,
     max_file_count: int,
     counters: _WalkCounters,
+    file_filter: BootstrapFileFilter | None = None,
 ) -> Iterator[WalkedFile]:
     """Handle one ``entry`` from the walker's per-dir loop.
 
@@ -237,6 +244,17 @@ def _handle_entry(  # noqa: PLR0911 — per-entry early-returns each guard one f
         return
     if _looks_binary(entry):
         return
+    # Lift E20 Phase A — when a packer filter is supplied, run it BEFORE
+    # the whole-repo counters tick so lockfiles / vendor dirs / binaries
+    # don't count toward the file-count cap. The filter needs the
+    # repo-relative POSIX path, so compute it once here and reuse below.
+    try:
+        rel = entry.relative_to(root)
+    except ValueError:
+        return
+    rel_posix = rel.as_posix()
+    if file_filter is not None and file_filter.decide(rel_posix, size=size) is not None:
+        return
     counters.total_bytes += size
     counters.total_files += 1
     if counters.total_files > max_file_count:
@@ -247,13 +265,9 @@ def _handle_entry(  # noqa: PLR0911 — per-entry early-returns each guard one f
         raise BootstrapTooLargeError(
             metric="bytes", value=counters.total_bytes, limit=max_total_bytes
         )
-    try:
-        rel = entry.relative_to(root)
-    except ValueError:
-        return
     yield WalkedFile(
         abs_path=entry,
-        rel_path=rel.as_posix(),
+        rel_path=rel_posix,
         size=size,
     )
 

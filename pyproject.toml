@@ -25,6 +25,19 @@ dependencies = [
     "mcp>=1",
     "aiosqlite>=0.20",
     "litellm>=1.50",
+    # Lift E20 — Graphify-inspired code-graph ingest. ``pathspec`` powers
+    # the ``.gitignore`` filter in BootstrapFileFilter; ``tree-sitter`` +
+    # ``tree-sitter-language-pack`` extract deterministic AST nodes/edges
+    # from Python/TypeScript/JavaScript/Markdown without an LLM call per
+    # file; ``python-igraph`` runs Leiden community detection on the
+    # NetworkX graph before LLM synthesis fans out per community.
+    "pathspec>=0.12",
+    "tree-sitter>=0.23",
+    "tree-sitter-language-pack>=0.4",
+    "python-igraph>=0.11",
+    # NetworkX's pagerank uses scipy's sparse linear algebra; we need
+    # it to rank nodes inside each community before LLM synthesis.
+    "scipy>=1.13",
     # Lift S — plugin SDK at repo root, consumed via uv workspace.
     "bsvibe-sdk",
 ]

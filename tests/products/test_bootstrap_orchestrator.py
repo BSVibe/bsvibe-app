@@ -75,12 +75,23 @@ async def test_orchestrator_assembles_and_ingests(tmp_path):
     assert req.region == "us-1"
 
     arts: list[dict[str, Any]] = req.artifacts
-    # 1 file-tree + 1 manifest + 1 doc + 2 source = 5
-    assert outcome.artifacts_count == 5
-    assert len(arts) == 5
+    # Lift E20 — the new pipeline emits structural seeds (file-tree +
+    # manifest) PLUS one ``markdown-doc`` artifact per markdown file
+    # PLUS one ``code-graph-community`` artifact per detected community
+    # (Leiden on the AST graph). The exact community count is graph-
+    # density-dependent so we assert the SHAPE rather than the count.
     kinds = [a["kind"] for a in arts]
-    # Order is deterministic: file-tree, manifests, docs, sources.
-    assert kinds == ["file-tree", "manifest", "doc", "source", "source"]
+    assert kinds[0] == "file-tree"
+    assert "manifest" in kinds
+    assert "markdown-doc" in kinds
+    assert "code-graph-community" in kinds
+    # Lockfile-free, vendor-free: filter dropped the noise BEFORE we
+    # got here, so no source artifact comes from ``node_modules/`` or
+    # the PNG.
+    labels = " ".join(a["label"] for a in arts)
+    assert "node_modules" not in labels
+    assert "logo.png" not in labels
+    assert outcome.artifacts_count == len(arts)
 
 
 @pytest.mark.asyncio
@@ -98,33 +109,37 @@ async def test_orchestrator_handles_empty_repo(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_orchestrator_propagates_too_large(tmp_path):
-    # The orchestrator uses the walker's defaults; assert the walker raises
-    # for the same fixture (the orchestrator catches no error here — it
-    # propagates), then prove the orchestrator passes it through when the
-    # walker hits the cap. We achieve the latter by monkey-patching the
-    # imported walker symbol on the orchestrator module to a capped fn.
-    from backend.products.application.bootstrap import orchestrator as orch_mod
-    from backend.products.application.bootstrap.walker import walk_repo
+async def test_orchestrator_propagates_too_large(tmp_path, monkeypatch):
+    # The Lift E20 orchestrator calls walk_repo twice — once inside
+    # ``build_code_graph_artifacts`` (lazy-imported there to break the
+    # bootstrap → code_graph circular import) and once for the
+    # structural-seeds pass. We patch the canonical export in
+    # ``backend.products.application.bootstrap.walker``; both call
+    # sites resolve to that module so one substitution covers both.
+    from backend.products.application.bootstrap import walker as walker_mod
 
     _make(tmp_path, "f1.py", b"x\n")
     _make(tmp_path, "f2.py", b"x\n")
 
+    original = walker_mod.walk_repo
+
     def _capped(repo_root, **_):
-        yield from walk_repo(repo_root, max_file_count=1)
+        yield from original(repo_root, max_file_count=1)
+
+    monkeypatch.setattr(walker_mod, "walk_repo", _capped)
+    # The orchestrator module imports walk_repo by name at import time;
+    # patch that binding too so the structural pass sees the capped fn.
+    from backend.products.application.bootstrap import orchestrator as orch_mod
+
+    monkeypatch.setattr(orch_mod, "walk_repo", _capped)
 
     workspace = uuid.uuid4()
     knowledge = _FakeKnowledge()
-    original = orch_mod.walk_repo
-    orch_mod.walk_repo = _capped  # type: ignore[assignment]
-    try:
-        with pytest.raises(BootstrapTooLargeError):
-            await run_repo_bootstrap(
-                repo_root=tmp_path,
-                workspace_id=workspace,
-                region="us-1",
-                knowledge=knowledge,
-            )
-    finally:
-        orch_mod.walk_repo = original  # type: ignore[assignment]
+    with pytest.raises(BootstrapTooLargeError):
+        await run_repo_bootstrap(
+            repo_root=tmp_path,
+            workspace_id=workspace,
+            region="us-1",
+            knowledge=knowledge,
+        )
     assert knowledge.received == []

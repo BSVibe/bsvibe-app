@@ -8,6 +8,7 @@ from backend.mcp.tools.bindings_tools import register_bindings_tools
 from backend.mcp.tools.connectors_tools import register_connectors_tools
 from backend.mcp.tools.decisions_tools import register_decisions_tools
 from backend.mcp.tools.direct_tools import register_direct_tools
+from backend.mcp.tools.graph_tools import register_graph_tools
 from backend.mcp.tools.inside_trust_tools import register_inside_trust_tools
 from backend.mcp.tools.knowledge_retraction_tools import (
     register_knowledge_retraction_tools,
@@ -53,6 +54,8 @@ def register_all_tools(registry: ToolRegistry) -> None:
     register_inside_trust_tools(registry)
     register_account_tools(registry)
     register_workers_tools(registry)
+    # Lift E20 — code-graph query surface (5 tools).
+    register_graph_tools(registry)
 
 
 __all__ = [
@@ -62,6 +65,7 @@ __all__ = [
     "register_connectors_tools",
     "register_decisions_tools",
     "register_direct_tools",
+    "register_graph_tools",
     "register_inside_trust_tools",
     "register_knowledge_retraction_tools",
     "register_knowledge_tools",

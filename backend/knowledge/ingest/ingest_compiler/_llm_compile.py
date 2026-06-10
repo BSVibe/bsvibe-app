@@ -64,84 +64,58 @@ LLMClient = CompileLlm
 
 
 COMPILE_BATCH_SYSTEM_PROMPT = """\
-You are an ingest compiler for a personal knowledge garden (Obsidian vault).
+You are a knowledge garden curator. You receive code/docs from a project, and you must extract ONLY reusable engineering knowledge worth preserving across projects.
 
-You receive:
-1. A BATCH of NEW seeds (numbered) — recently captured raw notes.
-2. EXISTING notes from the vault — context for deduplication.
+⚠️ THIS IS NOT A FILE CATALOG. Do NOT create notes that describe files, classes, functions, or codebase structure. The source code itself is the source of truth for what code DOES. Notes are for what humans LEARN that they couldn't re-derive by re-reading the code.
 
-Your job: produce a SINGLE consolidated plan as a JSON array of actions.
+For each chunk, produce 0-3 notes. Each note has a type:
 
-## Mental model
+1. **Pattern** — a recurring design or implementation pattern (e.g. "AsyncSession.flush() is not safe for concurrent use — race fires as 'Session is already flushing'; fix: per-call session via session_factory")
+2. **Principle** — a non-obvious invariant or decision (e.g. "Workspace_id contextvar must be set before any session query for RLS to engage")
+3. **TechInsight** — concrete library/protocol behavior (e.g. "opencode CLI's `run` subprocess pays ~8h startup tax per call; `serve` daemon + HTTP API is 3000x faster")
+4. **DomainModel** — a system abstraction and its relations (e.g. "RunRoutingRule is matched by caller_id, then conditions evaluated against the run's framed signals")
 
-This is a digital garden, not a filing cabinet. Notes are connected by
-[[wikilinks]] — every entity, concept, person, tool, or project mentioned
-should be wikilinked. The graph emerges from connections, not from
-categorization.
+If a chunk is just code that implements obvious things (CRUD endpoint, Pydantic model, simple FastAPI route, boilerplate `__init__.py`), produce **0 notes**. Most code is uninteresting — that's the expected outcome.
 
-Do NOT classify notes into types. Do NOT invent a "type" tag like "idea",
-"fact", "insight", "project". Tags describe what the content IS ABOUT
-(domain, topic), not what KIND of note it is.
+## Output schema (JSON array)
 
-Identity in this graph comes from what a note connects to, not from what
-folder or category we put it in.
+Each note object:
+- "action": "create" | "update" (use update if vault context contains a meaningfully overlapping note)
+- "type": "Pattern" | "Principle" | "TechInsight" | "DomainModel" (REQUIRED — these four only)
+- "target_path": vault-relative path. Required for update. null for create.
+- "title": short descriptive title (5-80 chars)
+- "content": 2-6 sentences of insight. Plain markdown. Wikilinks ONLY for entities worth their own future note (major technologies, products, named concepts) — NEVER for function names, file paths, variable names, codebase-internal identifiers.
+- "wikilinks": list of `[[X]]` strings — MUST be a strict subset of "content"
+- "tags": 2-4 lowercase hyphen-separated content tags ("async-cancellation", "rate-limiting"). Avoid kind tags ("idea", "concept").
+- "source_chunk_index": integer (0-based)
+- "reason": one sentence why this is worth preserving across projects.
 
-## Output schema
+Return ONLY the JSON array. No code fences. No commentary.
 
-Return a JSON array. Each action object has:
+## Examples
 
-- "action": "create" | "update" | "append"
-- "target_path": vault-relative path. Required for update/append. null for create.
-- "title": short descriptive title (5-80 chars). No quotes around it.
-- "content": markdown body. USE [[wikilinks]] liberally for any concept,
-  person, tool, project, organization mentioned — even if the target note
-  doesn't exist yet (the system auto-creates stubs).
-- "tags": 2-5 free-form lowercase content tags (e.g. "authentication",
-  "reverse-proxy", "cost-optimization"). Hyphen-separated. Avoid generic
-  tags ("idea", "note", "thought") and kind tags ("fact", "insight").
-- "entities": list of [[Name]] strings extracted from "content".
-  Every item MUST appear as a [[wikilink]] in "content".
-  Include people, products, concepts, tools, organizations, projects.
-- "reason": one sentence stating why, citing seed numbers
-  (e.g. "consolidates seeds #1, #4, #7").
-- "source_seeds": list of integer seed numbers this action draws from.
-- "related": list of EXISTING note titles (from the vault context) for
-  cross-linking. Empty list if none apply.
+Good note (from a real BSVibe dogfood finding):
+{
+  "action": "create",
+  "type": "Pattern",
+  "title": "Per-call AsyncSession to escape concurrent flush race",
+  "content": "[[SQLAlchemy]] AsyncSession is NOT safe for concurrent use — two parallel asyncio tasks calling `session.flush()` on the same session race and one raises `InvalidRequestError: Session is already flushing`. Fix: wire an `async_sessionmaker[AsyncSession]` factory through the call chain; each parallel branch opens its own session for its writes. Lock-based serialization defeats the parallelism — factory is the right answer.",
+  "wikilinks": ["[[SQLAlchemy]]"],
+  "tags": ["async-concurrency", "database-session", "race-condition"],
+  "source_chunk_index": 12,
+  "reason": "Future projects using SQLAlchemy AsyncSession with asyncio.gather will hit the same race; this principle is repo-independent."
+}
 
-## Rules
+Bad note (DO NOT produce):
+{
+  "action": "create",
+  "title": "backend/__init__.py uses __all__ markers",
+  "content": "The BSVibe backend root package is namespace-only. Public surface lives under six bounded contexts: router, knowledge, workflow, identity, schedule, extensions. Lift N (v8 §22) adds __all__ markers across every backend sub-package.",
+  ...
+}
+This is a codebase description. Not reusable. Return [] for this chunk.
 
-- Treat the entire batch as one body of incoming material — deduplicate
-  across seeds, MERGE related items into one note when reasonable.
-- Prefer UPDATE over CREATE when content meaningfully overlaps an
-  existing note in the vault context.
-- Every name in "entities" MUST appear as [[Name]] in "content". If you
-  can't naturally fit it as a wikilink, drop it from entities.
-- If a seed is too brief or has no extractable substance, omit it. Do
-  not pad with filler content.
-- Return [] if the entire batch warrants no action.
-- Return ONLY the JSON array. No markdown code fences. No commentary
-  before or after.
-
-## Example
-
-INPUT seeds:
-SEED #1: "Tested Vaultwarden behind Caddy reverse proxy. The X-Forwarded-Proto header was the issue — without it, OAuth callbacks broke."
-SEED #2: "Bitwarden client compatibility check for Vaultwarden — most clients work, except mobile push notifications need extra setup."
-
-OUTPUT:
-[
-  {
-    "action": "create",
-    "target_path": null,
-    "title": "Vaultwarden behind Caddy reverse proxy",
-    "content": "Got [[Vaultwarden]] running behind [[Caddy]]. The trick was getting [[X-Forwarded-Proto]] right — without it, Vaultwarden assumed http and OAuth callbacks broke.\\n\\nClient compatibility: most [[Bitwarden]] clients work, except mobile push notifications which need additional setup.",
-    "tags": ["self-hosting", "reverse-proxy", "bitwarden-compatibility"],
-    "entities": ["[[Vaultwarden]]", "[[Caddy]]", "[[X-Forwarded-Proto]]", "[[Bitwarden]]"],
-    "reason": "consolidates seeds #1 and #2, both about Vaultwarden self-hosting setup",
-    "source_seeds": [1, 2],
-    "related": []
-  }
-]
+Return [] when the chunk has no insight worth extracting. THIS IS THE COMMON CASE.
 """  # noqa: E501  -- prompt body has long natural-language lines on purpose
 
 
@@ -206,6 +180,12 @@ def parse_plan(raw: str) -> list[dict[str, Any]]:
     - reasoning-model preamble that survives suppression (e.g.
       stray ``<think>...`` even with ``thinking={"type": "disabled"}``)
     - trailing commentary after the array
+
+    Lift E20 — an EMPTY array (``[]``) is the prompt's documented "no
+    insight in this chunk" signal. Logged at ``info`` as
+    ``ingest_chunk_no_insight`` (not a warning); the chunk loop just
+    returns 0 actions and moves on. Real parse failures still log
+    ``ingest_compile_parse_*`` at warning level.
     """
     text = raw.strip()
     # Pull out the first ``[`` through the matching last ``]`` —
@@ -223,6 +203,8 @@ def parse_plan(raw: str) -> list[dict[str, Any]]:
         return []
     if not isinstance(parsed, list):
         return []
+    if not parsed:
+        logger.info("ingest_chunk_no_insight")
     return parsed
 
 
