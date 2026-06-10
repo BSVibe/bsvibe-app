@@ -36,9 +36,40 @@ logger = structlog.get_logger(__name__)
 _REQUIRED_ACTION_FIELDS = {"action", "title", "content", "reason"}
 
 
+# Lift E20 — the new prompt classifies every emitted note into one of
+# four reusable-knowledge kinds. Notes that don't fit (codebase
+# descriptions, file catalogs, boilerplate) are returned as an empty
+# array. The constants are exposed so the prompt body + validator
+# share one source of truth.
+NOTE_KIND_PATTERN: str = "Pattern"
+NOTE_KIND_PRINCIPLE: str = "Principle"
+NOTE_KIND_TECH_INSIGHT: str = "TechInsight"
+NOTE_KIND_DOMAIN_MODEL: str = "DomainModel"
+
+VALID_NOTE_KINDS: frozenset[str] = frozenset(
+    {
+        NOTE_KIND_PATTERN,
+        NOTE_KIND_PRINCIPLE,
+        NOTE_KIND_TECH_INSIGHT,
+        NOTE_KIND_DOMAIN_MODEL,
+    }
+)
+
+
 @dataclass
 class UpdateAction:
-    """A single update/create/append action planned by the LLM."""
+    """A single update/create/append action planned by the LLM.
+
+    Lift E20 added the optional ``note_kind`` field — when the new
+    Graphify-inspired prompt set the action's ``type`` to one of the
+    four reusable-knowledge kinds (Pattern / Principle / TechInsight /
+    DomainModel), the validator landed it here and the executor passes
+    it through to ``GardenNote.note_type`` so the kind shows up in the
+    note's YAML frontmatter as ``type: Pattern``.
+
+    ``None`` means "the LLM didn't classify" — the legacy settle prompt
+    still works without the ``type`` field.
+    """
 
     action: Literal["update", "append", "create"]
     target_path: str | None
@@ -48,6 +79,7 @@ class UpdateAction:
     tags: list[str] = field(default_factory=list)
     entities: list[str] = field(default_factory=list)
     related: list[str] = field(default_factory=list)
+    note_kind: str | None = None
 
 
 @dataclass
@@ -114,7 +146,14 @@ def empty_compile_result() -> CompileResult:
 
 
 def validate_action(raw: dict[str, Any]) -> bool:
-    """Check that raw action dict has all required fields."""
+    """Check that raw action dict has all required fields.
+
+    Lift E20 added an OPTIONAL ``type`` field. When present, it MUST be
+    one of :data:`VALID_NOTE_KINDS`; an invalid value drops the action
+    (the LLM invented a kind the schema doesn't recognize, and we won't
+    let it poison the vault). When absent, the action is accepted as
+    legacy-schema — the settle pipeline still uses that.
+    """
     if not isinstance(raw, dict):
         return False
     missing = _REQUIRED_ACTION_FIELDS - raw.keys()
@@ -123,7 +162,16 @@ def validate_action(raw: dict[str, Any]) -> bool:
         return False
     if raw["action"] not in ("create", "update", "append"):
         return False
-    return not (raw["action"] in ("update", "append") and not raw.get("target_path"))
+    if raw["action"] in ("update", "append") and not raw.get("target_path"):
+        return False
+    # Lift E20 — ``type`` is optional. When present, must be one of the
+    # four reusable-knowledge kinds.
+    if "type" in raw and raw["type"] is not None:
+        type_value = raw["type"]
+        if not isinstance(type_value, str) or type_value not in VALID_NOTE_KINDS:
+            logger.debug("ingest_compile_action_bad_type", type=type_value)
+            return False
+    return True
 
 
 async def canonicalize_tags(
@@ -204,7 +252,16 @@ async def execute_plan(
 
         tags = clean_tags(raw_action.get("tags") or [])
         tags = await canonicalize_tags(canon_service, tags, raw_source="ingest-compiler")
-        entities = clean_entities(raw_action.get("entities") or [], raw_action["content"])
+        # Lift E20 — the new prompt names the field ``wikilinks`` (strict
+        # subset of content); the legacy prompt called it ``entities``.
+        # Accept either; clean_entities enforces the in-content invariant.
+        raw_links = raw_action.get("wikilinks") or raw_action.get("entities") or []
+        entities = clean_entities(raw_links, raw_action["content"])
+        # Lift E20 — accept the optional ``type`` field; validate_action
+        # has already filtered out any invalid value, so just pass it
+        # through. ``None`` keeps legacy behavior (no kind on the note).
+        raw_type = raw_action.get("type")
+        note_kind = raw_type if isinstance(raw_type, str) and raw_type in VALID_NOTE_KINDS else None
 
         action = UpdateAction(
             action=raw_action["action"],
@@ -215,6 +272,7 @@ async def execute_plan(
             tags=tags,
             entities=entities,
             related=raw_action.get("related", []),
+            note_kind=note_kind,
         )
 
         try:
@@ -227,6 +285,10 @@ async def execute_plan(
                         tags=action.tags,
                         entities=action.entities,
                         related=action.related,
+                        # Lift E20 — when the new prompt classified, the
+                        # kind lands in frontmatter as ``type: <Kind>``.
+                        # ``None`` keeps the legacy "no type" behavior.
+                        note_type=action.note_kind,
                     )
                 )
                 notes_created += 1

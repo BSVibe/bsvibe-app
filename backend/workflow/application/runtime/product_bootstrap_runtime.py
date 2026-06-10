@@ -667,6 +667,10 @@ async def run_product_bootstrap_job(
                 workspace_id=workspace_id,
                 region=region,
                 knowledge=knowledge,
+                # Lift E20 — the orchestrator persists the code graph
+                # to ``<vault_root>/code_graph/graph.json`` so the MCP
+                # graph query surface can serve it later.
+                vault_root=Path(settings.knowledge_vault_root) / region / str(workspace_id),
             )
             # Lift A-fix — promote LLM-classified seedling tags into
             # ``concepts/active/<id>.md`` canonical anchors so the PWA

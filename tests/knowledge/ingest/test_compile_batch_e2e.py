@@ -198,7 +198,10 @@ async def test_compile_batch_writes_graph_and_is_retrievable(tmp_path: Path) -> 
     # The seam contract: structured-output suppression is forwarded and the
     # compile system prompt reaches the model.
     assert llm.calls[0]["suppress_reasoning"] is True
-    assert "ingest compiler" in llm.calls[0]["system"].lower()
+    # Lift E20 rewrote the prompt; the legacy "ingest compiler" header was
+    # replaced by "knowledge garden curator". Either substring proves the
+    # compile-batch prompt — not a tool-call / verifier prompt — was sent.
+    assert "knowledge garden curator" in llm.calls[0]["system"].lower()
 
     # 2. Notes + entity stubs were written under the workspace-scoped vault.
     ws_root = factory.vault_path

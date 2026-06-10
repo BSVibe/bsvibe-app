@@ -257,6 +257,57 @@ _TERMINAL_STATUSES = frozenset(
 )
 
 
+# Lift E20 — subdirectories the optional pre-retry wipe targets. Keeps
+# the per-workspace vault structure intact otherwise.
+_RESETTABLE_VAULT_SUBDIRS: tuple[str, ...] = (
+    "garden",
+    "concepts",
+    "actions",
+    "proposals",
+    "code_graph",
+)
+
+
+async def _wipe_workspace_vault_subtrees(ctx: ToolContext) -> None:
+    """Best-effort delete the resettable subtrees for ``ctx.principal.workspace_id``.
+
+    The vault root is resolved via the helper that already powers the
+    knowledge tools, so any layout change there flows through. Failures
+    on a single subdir are logged but never propagated — the retry
+    proceeds; the new bootstrap will simply re-create whatever was
+    expected to be present.
+    """
+    import asyncio  # noqa: PLC0415 — only on the wipe path
+    import shutil  # noqa: PLC0415 — only on the wipe path
+
+    from backend.mcp.tools._helpers import (  # noqa: PLC0415
+        vault_root_for,
+        workspace_region,
+    )
+
+    from pathlib import Path  # noqa: PLC0415 — only on the wipe path
+
+    region = await workspace_region(ctx.session, ctx.principal.workspace_id)
+    vault_root = vault_root_for(region=region, workspace_id=ctx.principal.workspace_id)
+    for subdir in _RESETTABLE_VAULT_SUBDIRS:
+        target = vault_root / subdir
+        if not target.exists():
+            continue
+
+        def _do_remove(path: Path = target) -> None:
+            shutil.rmtree(path, ignore_errors=True)
+
+        try:
+            await asyncio.to_thread(_do_remove)
+        except Exception:  # noqa: BLE001 — soft-fail per docstring
+            logger.warning(
+                "products_bootstrap_retry_vault_wipe_failed",
+                workspace_id=str(ctx.principal.workspace_id),
+                subdir=subdir,
+                exc_info=True,
+            )
+
+
 class ProductsBootstrapCancelInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
     slug_or_id: str = Field(..., min_length=1, max_length=64)
@@ -292,6 +343,28 @@ async def _h_products_bootstrap_cancel(args: ProductsBootstrapCancelInput, ctx: 
 class ProductsBootstrapRetryInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
     slug_or_id: str = Field(..., min_length=1, max_length=64)
+    # Lift E20 — when the bootstrap pipeline changed (file-dump → code
+    # graph) the founder needs a way to start fresh on a previously
+    # bootstrapped product without slug-churning. ``vault_reset_on_retry``
+    # wipes ``garden/`` / ``concepts/`` / ``actions/`` / ``proposals/`` /
+    # ``code_graph/`` for the workspace before re-running. Defense
+    # against accidents: the founder must ALSO pass ``confirm_reset=True``
+    # in the same call. Default ``False`` keeps current behavior.
+    vault_reset_on_retry: bool = Field(
+        default=False,
+        description=(
+            "Wipe the workspace's garden/concepts/actions/proposals/code_graph "
+            "before re-running the bootstrap. Destructive — requires "
+            "confirm_reset=True in the SAME call."
+        ),
+    )
+    confirm_reset: bool = Field(
+        default=False,
+        description=(
+            "Explicit confirmation flag that MUST also be true when "
+            "vault_reset_on_retry=True. Two-key guard against accidental wipes."
+        ),
+    )
 
 
 async def _h_products_bootstrap_retry(args: ProductsBootstrapRetryInput, ctx: ToolContext) -> Any:
@@ -304,6 +377,12 @@ async def _h_products_bootstrap_retry(args: ProductsBootstrapRetryInput, ctx: To
     # tool is the founder's escape hatch for that case.
     if status is not None and status not in _TERMINAL_STATUSES:
         raise ToolError("bootstrap already in flight — call bootstrap_cancel first")
+
+    # Lift E20 — optional pre-retry vault wipe, two-key guarded.
+    if args.vault_reset_on_retry:
+        if not args.confirm_reset:
+            raise ToolError("vault_reset_on_retry requires confirm_reset=True in the same call")
+        await _wipe_workspace_vault_subtrees(ctx)
 
     # Reset the lifecycle fields atomically so the founder UI's next poll
     # sees a clean ``pending`` row rather than a half-stamped one.
@@ -471,7 +550,11 @@ def register_workflow_tools(registry: ToolRegistry) -> None:
                 "Resets bootstrap_status/artifacts_count/error/progress and "
                 "schedules the same `repo_url` again. Refuses to retry an "
                 "in-flight bootstrap — call bootstrap_cancel first. Requires "
-                "the product to carry a repo_url."
+                "the product to carry a repo_url. "
+                "⚠️ Optional `vault_reset_on_retry=true` + `confirm_reset=true` "
+                "wipes the workspace's garden/concepts/actions/proposals/"
+                "code_graph subtrees BEFORE re-running — useful after E20 "
+                "to start fresh with the new code-graph ingest pipeline."
             ),
             input_schema=ProductsBootstrapRetryInput,
             output_schema=_Envelope,

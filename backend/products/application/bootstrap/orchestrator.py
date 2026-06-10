@@ -24,16 +24,19 @@ propagates so the runtime layer's outer try/except writes a generic
 from __future__ import annotations
 
 import uuid
-from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import structlog
 
+from backend.knowledge.code_graph.pipeline import (
+    build_code_graph_artifacts,
+    code_graph_vault_path,
+    persist_graph,
+)
 from backend.knowledge.facade import IngestRequest, IngestResult, Knowledge
-from backend.products.application.bootstrap.extractors import docs, file_tree, manifests
-from backend.products.application.bootstrap.source_collector import collect_source_artifacts
+from backend.products.application.bootstrap.extractors import file_tree, manifests
 from backend.products.application.bootstrap.walker import (
     BootstrapTooLargeError,
     WalkedFile,
@@ -74,8 +77,25 @@ async def run_repo_bootstrap(
     workspace_id: uuid.UUID,
     region: str,
     knowledge: Knowledge,
+    vault_root: Path | None = None,
 ) -> BootstrapOutcome:
     """Run the full bootstrap pipeline against an already-cloned repo.
+
+    Lift E20 — the pipeline is now Graphify-inspired:
+
+    1. The code-graph pipeline (:mod:`backend.knowledge.code_graph.pipeline`)
+       walks + filters + parses + builds the directed graph + runs
+       Leiden community detection. Each community becomes ONE LLM
+       artifact (top-K nodes' signatures + docstrings) instead of one
+       artifact per source file.
+    2. Markdown files (READMEs, ``.bsvibe/*.md``) still get a per-file
+       artifact — they're insight-dense and worth a dedicated prompt.
+    3. The file-tree + manifest extractors still run on the raw walked
+       set so the LLM sees the deterministic "what's this project's
+       shape" structural seeds first.
+    4. When ``vault_root`` is supplied, the graph is persisted to
+       ``<vault_root>/code_graph/graph.json`` so the MCP graph query
+       tools (Phase D) can serve it back later.
 
     Caller responsibilities (the runtime layer):
 
@@ -88,26 +108,70 @@ async def run_repo_bootstrap(
     :class:`BootstrapTooLargeError` when whole-repo caps are exceeded
     (caller writes ``failed:too_large``). Other errors propagate.
     """
-    walked: list[WalkedFile] = []
+    # Lift E20 — run the code-graph pipeline (filter + parse + graph +
+    # communities) once. It also drives the per-doc markdown artifact
+    # rendering, so the orchestrator's own ``walked`` list now only
+    # supplies the file-tree / manifests structural seeds.
     try:
-        for w in walk_repo(repo_root):
-            walked.append(w)
+        code_graph_result = build_code_graph_artifacts(repo_root)
     except BootstrapTooLargeError:
         logger.warning(
             "product_bootstrap_too_large",
             workspace_id=str(workspace_id),
             region=region,
-            walked_so_far=len(walked),
         )
         raise
 
-    artifacts: list[dict[str, Any]] = _build_artifacts(walked)
+    # Persist the graph so the MCP query surface can serve it back.
+    if vault_root is not None:
+        try:
+            persist_graph(
+                code_graph_result.graph,
+                code_graph_vault_path(vault_root=vault_root),
+            )
+        except OSError:
+            logger.warning(
+                "product_bootstrap_graph_persist_failed",
+                workspace_id=str(workspace_id),
+                region=region,
+                exc_info=True,
+            )
+
+    # Re-walk the repo with the same filter so we can build the
+    # file-tree + manifests structural seeds. (The code-graph pipeline
+    # already filters; we re-walk lightly here to feed the structural
+    # extractors that consume :class:`WalkedFile`.)
+    structural_walked: list[WalkedFile] = []
+    try:
+        from backend.products.application.bootstrap.bootstrap_filter import (  # noqa: PLC0415
+            BootstrapFileFilter,
+        )
+
+        for w in walk_repo(repo_root, file_filter=BootstrapFileFilter(repo_root=repo_root)):
+            structural_walked.append(w)
+    except BootstrapTooLargeError:
+        logger.warning(
+            "product_bootstrap_too_large_structural",
+            workspace_id=str(workspace_id),
+            region=region,
+            walked_so_far=len(structural_walked),
+        )
+        raise
+
+    artifacts: list[dict[str, Any]] = []
+    artifacts.append(file_tree(structural_walked))
+    artifacts.extend(manifests(structural_walked))
+    artifacts.extend(code_graph_result.artifacts)
+
     logger.info(
         "product_bootstrap_artifacts_built",
         workspace_id=str(workspace_id),
         region=region,
-        walked=len(walked),
+        walked=code_graph_result.walked_count,
+        parsed=code_graph_result.parsed_count,
+        communities=code_graph_result.community_count,
         artifacts=len(artifacts),
+        filter_summary=code_graph_result.filter_summary,
     )
 
     if not artifacts:
@@ -139,22 +203,6 @@ async def run_repo_bootstrap(
         )
     )
     return BootstrapOutcome(artifacts_count=len(artifacts), ingest_result=result)
-
-
-def _build_artifacts(walked: Sequence[WalkedFile]) -> list[dict[str, Any]]:
-    """Compose the four buckets into one ordered artifact list.
-
-    Order is fixed for stability across runs: ``[file-tree, manifests,
-    docs, sources]`` — the IngestCompiler's batch chunker preserves
-    input order within each chunk so the LLM sees high-signal seeds
-    first.
-    """
-    artifacts: list[dict[str, Any]] = []
-    artifacts.append(file_tree(walked))
-    artifacts.extend(manifests(walked))
-    artifacts.extend(docs(walked))
-    artifacts.extend(collect_source_artifacts(walked))
-    return artifacts
 
 
 __all__ = [

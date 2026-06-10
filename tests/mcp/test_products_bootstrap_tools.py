@@ -489,3 +489,96 @@ async def test_bootstrap_retry_requires_write_scope(
                 {"slug_or_id": "p"},
                 ctx,
             )
+
+
+# ---------------------------------------------------------------------------
+# Lift E20 — vault_reset_on_retry + confirm_reset two-key wipe
+# ---------------------------------------------------------------------------
+async def test_bootstrap_retry_vault_reset_requires_confirm(
+    db, workspace_id, user_id, registry, seeded
+) -> None:
+    """Refusing without confirm_reset is the documented two-key guard."""
+    pid = uuid.uuid4()
+    async with db() as s:
+        s.add(
+            ProductRow(
+                id=pid,
+                workspace_id=workspace_id,
+                name="P",
+                slug="p",
+                repo_url="https://github.com/org/repo",
+                bootstrap_status="failed",
+            )
+        )
+        await s.commit()
+
+    async with db() as s:
+        ctx = ToolContext(
+            principal=_principal(workspace_id=workspace_id, user_id=user_id, scopes=("mcp:write",)),
+            session=s,
+            session_factory=db,
+        )
+        with pytest.raises(ToolError, match="confirm_reset"):
+            await registry.call_tool(
+                "bsvibe_products_bootstrap_retry",
+                {"slug_or_id": "p", "vault_reset_on_retry": True},
+                ctx,
+            )
+
+
+async def test_bootstrap_retry_vault_reset_wipes_subtrees(
+    db, workspace_id, user_id, registry, seeded, tmp_path, monkeypatch
+) -> None:
+    """With both flags set, the resettable subtrees are removed before retry."""
+    pid = uuid.uuid4()
+    async with db() as s:
+        s.add(
+            ProductRow(
+                id=pid,
+                workspace_id=workspace_id,
+                name="P",
+                slug="p",
+                repo_url="https://github.com/org/repo",
+                bootstrap_status="failed",
+            )
+        )
+        await s.commit()
+
+    # Plant content under each resettable subtree.
+    monkeypatch.setenv("BSVIBE_KNOWLEDGE_VAULT_ROOT", str(tmp_path / "vault"))
+    get_settings.cache_clear()
+    settings = get_settings()
+    vault = __import__("pathlib").Path(settings.knowledge_vault_root) / "us-1" / str(workspace_id)
+    for sub in ("garden", "concepts", "actions", "proposals", "code_graph"):
+        d = vault / sub
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "marker.md").write_text("x")
+
+    def _noop_scheduler(**_kwargs):
+        return None
+
+    monkeypatch.setattr(
+        "backend.workflow.application.runtime.product_bootstrap_runtime.schedule_product_bootstrap",
+        _noop_scheduler,
+    )
+
+    async with db() as s:
+        ctx = ToolContext(
+            principal=_principal(workspace_id=workspace_id, user_id=user_id, scopes=("mcp:write",)),
+            session=s,
+            session_factory=db,
+        )
+        await registry.call_tool(
+            "bsvibe_products_bootstrap_retry",
+            {
+                "slug_or_id": "p",
+                "vault_reset_on_retry": True,
+                "confirm_reset": True,
+            },
+            ctx,
+        )
+
+    # All five resettable subtrees should be gone.
+    for sub in ("garden", "concepts", "actions", "proposals", "code_graph"):
+        assert not (vault / sub).exists(), f"{sub} survived the wipe"
+    get_settings.cache_clear()
