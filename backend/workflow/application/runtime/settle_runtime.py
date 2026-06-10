@@ -62,6 +62,11 @@ def build_settle_entity_extractor_factory(
                 caller_id=CALLER_SETTLE_EXTRACT,
                 workspace_id=workspace_id,
                 settings=settings,
+                # Lift E19 — same E18 race the bootstrap runtime hit. The
+                # settle path also passes its IngestCompiler through
+                # parallel chunks; each must own its own session for the
+                # ExecutorAdapter dispatch lifecycle.
+                session_factory=session_factory,
             )
             if resolved is None:
                 logger.info(

@@ -26,7 +26,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import structlog
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from backend.config import Settings
 from backend.dispatch.adapter import ModelAccountAdapter, adapter_for
@@ -119,6 +119,7 @@ class ModelAccountResolver:
         cipher: CredentialCipher | None = None,
         skill_names: list[str] | None = None,
         redis: Any = None,
+        session_factory: async_sessionmaker[AsyncSession] | None = None,
     ) -> None:
         self._session = session
         self._settings = settings
@@ -136,6 +137,14 @@ class ModelAccountResolver:
         # :class:`~backend.dispatch.adapter.ExecutorAdapterUnavailable`
         # at chat() time.
         self._redis = redis
+        # Lift E19 — optional ``async_sessionmaker`` plumbed into the
+        # ExecutorAdapter so each ``chat`` call opens its OWN
+        # ``AsyncSession`` for the dispatch lifecycle. Without this, the
+        # bootstrap / settle path passes one session down to every
+        # parallel chunk of ``IngestCompiler.compile_batch``, and two
+        # concurrent chunks hit the "Session is already flushing" guard.
+        # ``None`` falls back to the bound ``session`` (legacy).
+        self._session_factory = session_factory
 
     def _ensure_accounts(self) -> ModelAccountService:
         if self._accounts is not None:
@@ -199,6 +208,10 @@ class ModelAccountResolver:
             # Lift E9 — close the per-caller timeout into the adapter so
             # ``chat`` doesn't re-walk the registry per call.
             timeout_s=spec.default_timeout_s,
+            # Lift E19 — when the runtime wired a sessionmaker, the
+            # ExecutorAdapter uses it to open a fresh session per chat
+            # call so parallel chunks don't race on flush().
+            session_factory=self._session_factory,
         )
 
         # Defensive validation — rule creation is supposed to catch this
