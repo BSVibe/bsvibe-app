@@ -41,7 +41,6 @@ from enum import StrEnum
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-
 #: Default per-file byte cap. Tighter than the walker's 500KB ceiling so
 #: a 100KB minified-but-not-binary blob still drops before it hits the
 #: graph builder. Graphify's packer baseline runs ~50KB; we mirror it.

@@ -279,13 +279,12 @@ async def _wipe_workspace_vault_subtrees(ctx: ToolContext) -> None:
     """
     import asyncio  # noqa: PLC0415 — only on the wipe path
     import shutil  # noqa: PLC0415 — only on the wipe path
+    from pathlib import Path  # noqa: PLC0415 — only on the wipe path
 
     from backend.mcp.tools._helpers import (  # noqa: PLC0415
         vault_root_for,
         workspace_region,
     )
-
-    from pathlib import Path  # noqa: PLC0415 — only on the wipe path
 
     region = await workspace_region(ctx.session, ctx.principal.workspace_id)
     vault_root = vault_root_for(region=region, workspace_id=ctx.principal.workspace_id)
