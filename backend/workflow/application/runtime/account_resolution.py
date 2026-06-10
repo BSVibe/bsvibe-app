@@ -27,7 +27,7 @@ import uuid
 from typing import Any
 
 import structlog
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from backend.config import Settings
 from backend.dispatch.adapter import ModelAccountAdapter
@@ -68,6 +68,7 @@ async def _resolve_via_caller(
     workspace_id: uuid.UUID,
     settings: Settings,
     redis: Any = None,
+    session_factory: async_sessionmaker[AsyncSession] | None = None,
 ) -> ResolvedAccount | None:
     """Resolve ``(caller_id, workspace_id)`` via the resolver.
 
@@ -80,8 +81,17 @@ async def _resolve_via_caller(
     ``redis`` is threaded into the resolver so an executor adapter has a
     transport for the worker stream XADD (Lift E3). Optional — LiteLLM
     accounts never touch it.
+
+    ``session_factory`` (Lift E19) is threaded into the resolver so the
+    ExecutorAdapter can open a fresh ``AsyncSession`` per ``chat`` call.
+    Required for any call path that fans out across asyncio tasks (the
+    :meth:`IngestCompiler.compile_batch` chunk loop); optional for
+    single-flight callers. Without it, parallel chunks race on
+    ``session.flush()`` ("Session is already flushing") — the E18 bug.
     """
-    resolver = ModelAccountResolver(session, settings=settings, redis=redis)
+    resolver = ModelAccountResolver(
+        session, settings=settings, redis=redis, session_factory=session_factory
+    )
     try:
         return await resolver.resolve_for(caller_id=caller_id, workspace_id=workspace_id)
     except NoMatchingRouteError:

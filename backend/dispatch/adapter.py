@@ -35,7 +35,7 @@ from dataclasses import dataclass, field
 from typing import Any, Protocol, runtime_checkable
 
 import structlog
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from backend.config import Settings
 from backend.router.accounts.models import ModelAccount
@@ -252,6 +252,22 @@ class ExecutorAdapter:
     # callers like ``knowledge.ingest`` that finish in 10-60 s when
     # the worker is healthy).
     timeout_s: float | None = None
+    # Lift E19 — optional ``session_factory`` so each ``chat`` call can
+    # open its OWN ``AsyncSession`` for the dispatch lifecycle
+    # (create_task → dispatch_task → commit → await_completion). When
+    # set, the bound ``self.session`` is NOT used by the chat path; it
+    # stays on the dataclass only as the legacy-caller fallback below.
+    #
+    # Why this exists: Lift E18 parallelised :meth:`IngestCompiler.compile_batch`
+    # via ``asyncio.gather`` (parallelism=3 default). When several parallel
+    # chunks all called this adapter with the SAME ``self.session`` (the one
+    # the bootstrap / settle runtime opened up-stream), two concurrent
+    # ``session.flush()`` calls hit SQLAlchemy's "Session is already flushing"
+    # guard (``InvalidRequestError``). Live dogfood @ 01:40:37 saw chunks
+    # 0/2/3 of 591 raise the guard at the same microsecond. Per-call
+    # ``session_factory`` removes the shared-state hazard at its root: every
+    # parallel branch owns its own write transaction.
+    session_factory: async_sessionmaker[AsyncSession] | None = None
     supported_methods: frozenset[str] = field(default_factory=lambda: frozenset({"chat"}))
 
     async def chat(
@@ -289,13 +305,71 @@ class ExecutorAdapter:
 
         prompt = _render_prompt(messages)
 
-        # Lazy imports — keeps the dispatch module import-cost low for
-        # the common LiteLLM path and avoids a hot cycle if executors
-        # ever folds dispatch back in.
+        # Lift E19 — when wired with a ``session_factory`` the entire
+        # dispatch lifecycle (create_task → dispatch_task → commit →
+        # await_completion) runs on a FRESH ``AsyncSession``. Parallel
+        # chat calls on the same adapter no longer race on a shared
+        # session's flush state. The legacy ``self.session`` is the
+        # fallback path so the optional plumbing is fully additive.
+        if self.session_factory is not None:
+            # Lift E19 telemetry — visible signal that the per-call
+            # session path is active. Helps verify wiring in prod.
+            logger.debug(
+                "executor_adapter_chat_per_call_session",
+                workspace_id=str(self.workspace_id),
+                account_id=str(self.model_account_id),
+            )
+            async with self.session_factory() as call_session:
+                return await self._chat_with_session(
+                    session=call_session,
+                    executor_type=executor_type,
+                    pinned_worker_id=pinned_worker_id,
+                    system=system,
+                    prompt=prompt,
+                )
+
+        # Legacy path — caller hasn't migrated; use the bound session.
+        # ⚠️ Concurrent ``chat`` calls on the same adapter through this
+        # path race on ``session.flush()`` (the E18 hazard). Callers that
+        # fan out (``IngestCompiler.compile_batch``) MUST wire
+        # ``session_factory`` instead.
+        logger.warning(
+            "executor_adapter_chat_bound_session",
+            workspace_id=str(self.workspace_id),
+            account_id=str(self.model_account_id),
+            note=(
+                "no session_factory wired — using bound session. "
+                "Concurrent chat calls will race on session.flush() (E18). "
+                "Lift E19: thread async_sessionmaker through the resolver."
+            ),
+        )
+        return await self._chat_with_session(
+            session=self.session,
+            executor_type=executor_type,
+            pinned_worker_id=pinned_worker_id,
+            system=system,
+            prompt=prompt,
+        )
+
+    async def _chat_with_session(
+        self,
+        *,
+        session: AsyncSession,
+        executor_type: str,
+        pinned_worker_id: uuid.UUID | None,
+        system: str,
+        prompt: str,
+    ) -> ChatResponse:
+        """Run one chat-task dispatch lifecycle against a single session.
+
+        Lift E19 — extracted so the same dispatch-side logic runs whether
+        the caller wired a ``session_factory`` (each chat = fresh session)
+        or the legacy bound ``self.session``. Pre-E19 this was inline.
+        """
         from backend.executors import dispatch  # noqa: PLC0415
 
         worker = await _await_worker_with_capacity(
-            session=self.session,
+            session=session,
             workspace_id=self.workspace_id,
             executor_type=executor_type,
             pinned_worker_id=pinned_worker_id,
@@ -306,7 +380,7 @@ class ExecutorAdapter:
         # Create + dispatch the task. ``run_id=None`` because chat is
         # detached from any ExecutionRun (see class docstring).
         task = await dispatch.create_task(
-            self.session,
+            session,
             workspace_id=self.workspace_id,
             executor_type=executor_type,
             prompt=prompt,
@@ -314,9 +388,7 @@ class ExecutorAdapter:
             workspace_dir=".",
             run_id=None,
         )
-        await dispatch.dispatch_task(
-            self.redis, session=self.session, task=task, worker_id=worker.id
-        )
+        await dispatch.dispatch_task(self.redis, session=session, task=task, worker_id=worker.id)
         # Commit before awaiting — the worker reports its result on a
         # SEPARATE session over HTTP (/api/v1/workers/result), whose
         # ``record_result`` does ``session.get(ExecutorTaskRow)``. Under
@@ -324,7 +396,7 @@ class ExecutorAdapter:
         # worker's session, so the worker can never flip it terminal and
         # we'd block the full timeout. Same invariant the
         # :class:`ExecutorOrchestrator` carries.
-        await self.session.commit()
+        await session.commit()
 
         # Lift E9 — per-caller chat timeout. ``self.timeout_s`` is set
         # from :attr:`CallerSpec.default_timeout_s` at construction time
@@ -337,7 +409,7 @@ class ExecutorAdapter:
         try:
             completed = await dispatch.await_completion(
                 self.redis,
-                session=self.session,
+                session=session,
                 task_id=task.id,
                 timeout_s=effective_timeout_s,
             )
@@ -395,6 +467,7 @@ def adapter_for(
     llm: LlmClient | None = None,
     redis: Any = None,
     timeout_s: float | None = None,
+    session_factory: async_sessionmaker[AsyncSession] | None = None,
 ) -> ModelAccountAdapter:
     """Pick the right :class:`ModelAccountAdapter` for an account.
 
@@ -418,6 +491,13 @@ def adapter_for(
     path and to LiteLLM's own default on the LiteLLM path. The adapter
     closes over the value at construction so :meth:`chat` does not
     re-walk the caller registry per call.
+
+    ``session_factory`` (Lift E19) — optional ``async_sessionmaker`` the
+    :class:`ExecutorAdapter` uses to open a fresh ``AsyncSession`` per
+    ``chat`` call. When set, parallel chat calls (the
+    :meth:`IngestCompiler.compile_batch` ``asyncio.gather`` fan-out) no
+    longer share + race on the bound session's flush state. ``None``
+    keeps the legacy path; the LiteLLM adapter never needs it.
     """
     if is_executor_account(account):
         return ExecutorAdapter(
@@ -429,6 +509,11 @@ def adapter_for(
             settings=settings,
             redis=redis,
             timeout_s=timeout_s,
+            # Lift E19 — when the resolver was wired with an
+            # ``async_sessionmaker`` the adapter opens a fresh session
+            # per ``chat`` call so parallel chunks don't race on
+            # ``session.flush()``. ``None`` keeps the legacy path.
+            session_factory=session_factory,
         )
     return LiteLLMAdapter(
         account=account,

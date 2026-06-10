@@ -326,6 +326,7 @@ def build_bootstrap_knowledge(
     settings: Settings | None = None,
     redis_client: Any = None,
     progress_subscriber: Any = None,
+    session_factory: async_sessionmaker[AsyncSession] | None = None,
 ) -> Knowledge | None:
     """Build the workspace's :class:`Knowledge` facade for the bootstrap path.
 
@@ -357,6 +358,15 @@ def build_bootstrap_knowledge(
     progress onto the product row. ``None`` is non-fatal — the bootstrap
     still runs end-to-end, the founder UI just falls back to the
     status pill.
+
+    ``session_factory`` (Lift E19) is threaded into the resolver so the
+    :class:`~backend.dispatch.adapter.ExecutorAdapter` opens a fresh
+    ``AsyncSession`` per ``chat`` call. Without it, parallel chunks of
+    :meth:`IngestCompiler.compile_batch` (Lift E18 fan-out) share the
+    same session and hit ``Session is already flushing`` on
+    ``dispatch.create_task`` / ``dispatch.dispatch_task``. The
+    bootstrap orchestrator already holds the sessionmaker — pass it
+    through.
     """
     settings = settings or get_settings()
     return _build_bootstrap_knowledge_inner(
@@ -366,6 +376,7 @@ def build_bootstrap_knowledge(
         settings=settings,
         redis_client=redis_client,
         progress_subscriber=progress_subscriber,
+        session_factory=session_factory,
     )
 
 
@@ -377,6 +388,7 @@ def _build_bootstrap_knowledge_inner(
     settings: Settings,
     redis_client: Any = None,
     progress_subscriber: Any = None,
+    session_factory: async_sessionmaker[AsyncSession] | None = None,
 ) -> Knowledge | None:
     # Lazy imports keep the runtime layer's top-level cheap and avoid the
     # heavy Knowledge subsystem at module load.
@@ -437,6 +449,13 @@ def _build_bootstrap_knowledge_inner(
             workspace_id=workspace_id,
             settings=settings,
             redis=redis_client,
+            # Lift E19 — each parallel chunk of IngestCompiler.compile_batch
+            # (Lift E18 asyncio.gather fan-out) needs its OWN AsyncSession
+            # for the dispatch lifecycle, or two concurrent
+            # ``dispatch.create_task`` / ``dispatch.dispatch_task`` calls
+            # race on ``session.flush()`` and raise
+            # ``InvalidRequestError: Session is already flushing``.
+            session_factory=session_factory,
         )
         if resolved is None:
             logger.info(
@@ -621,6 +640,10 @@ async def run_product_bootstrap_job(
             settings=settings,
             redis_client=redis_client,
             progress_subscriber=progress_subscriber,
+            # Lift E19 — thread the bootstrap orchestrator's sessionmaker
+            # all the way down to the ExecutorAdapter so each parallel
+            # chunk of compile_batch (E18 fan-out) gets its own session.
+            session_factory=session_factory,
         )
         if knowledge is None:
             await repo.mark_status(
