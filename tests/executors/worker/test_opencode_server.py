@@ -201,7 +201,16 @@ async def test_singleton_round_trip_set_and_get() -> None:
 # ── argv shape ──────────────────────────────────────────────────────────────
 
 
-async def test_serve_argv_uses_pure_and_host_and_port(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_serve_argv_loads_plugins_and_sets_host_and_port(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Lift E22 — opencode serve MUST NOT be spawned with ``--pure``. The flag
+    skips loading external plugins, including the ``opencode-go`` provider plugin
+    that registers the founder's subscribed models (qwen3.6-plus, kimi-k2.6, etc.).
+    Without those models registered, every chat request returns UnknownError.
+    Pure-mode also bypasses the providers that ship as plugins (zen / opencode /
+    opencode-go), so any model resolution falls through to nothing.
+    """
     proc = _FakeProcess(stdout_lines=[b"opencode server listening on http://127.0.0.1:60000\n"])
     spawns = _patch_subprocess(monkeypatch, proc)
 
@@ -213,7 +222,9 @@ async def test_serve_argv_uses_pure_and_host_and_port(monkeypatch: pytest.Monkey
     await opencode_server.start_opencode_serve(settings, http_transport=_ok_health_transport())
 
     argv = spawns[0]["args"]
-    assert "--pure" in argv
+    assert "--pure" not in argv, (
+        "opencode serve must run WITH plugins so opencode-go provider is loaded"
+    )
     assert "--port" in argv
     assert "0" in argv
     assert "--hostname" in argv
