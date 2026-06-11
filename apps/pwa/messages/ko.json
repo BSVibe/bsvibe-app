@@ -435,7 +435,7 @@
       "provider": "제공자",
       "providerPlaceholder": "예: openai, anthropic, ollama",
       "modelIdentifier": "모델 식별자",
-      "modelPlaceholder": "예: gpt-5, claude-sonnet-4, ollama/qwen3",
+      "modelPlaceholder": "예: opencode-go/qwen3.6-plus, opencode-go/kimi-k2.6, ollama/qwen3",
       "label": "레이블",
       "labelPlaceholder": "알아보기 쉬운 이름, 예: 기본",
       "apiBase": "API 베이스 (선택)",

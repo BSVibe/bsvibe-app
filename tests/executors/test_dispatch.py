@@ -149,6 +149,103 @@ async def test_create_task_carries_run_id() -> None:
         assert task.run_id == run_id
 
 
+# ── Lift E21 — model routing ─────────────────────────────────────────────────
+
+
+async def test_create_task_carries_model() -> None:
+    """E21 — ``create_task`` threads ``model`` onto the task row so the worker
+    can select an underlying LLM model (e.g. ``opencode-go/qwen3.6-plus``)
+    instead of the executor CLI's plan-agent default."""
+    workspace_id = uuid.uuid4()
+    async with memory_session() as s:
+        task = await dispatch.create_task(
+            s,
+            workspace_id=workspace_id,
+            executor_type="opencode",
+            prompt="p",
+            model="opencode-go/qwen3.6-plus",
+        )
+        await s.commit()
+        assert task.model == "opencode-go/qwen3.6-plus"
+
+
+async def test_create_task_model_defaults_to_none() -> None:
+    """E21 — when no ``model`` is passed, the task row's ``model`` is NULL.
+    Worker code interprets a missing/empty model as "use CLI default"."""
+    workspace_id = uuid.uuid4()
+    async with memory_session() as s:
+        task = await dispatch.create_task(
+            s,
+            workspace_id=workspace_id,
+            executor_type="opencode",
+            prompt="p",
+        )
+        await s.commit()
+        assert task.model is None
+
+
+async def test_dispatch_task_xadds_model_when_set() -> None:
+    """E21 — when the task has a ``model`` set, ``dispatch_task`` includes it
+    in the XADD payload so the worker can forward it to the executor."""
+    workspace_id = uuid.uuid4()
+    redis = await _make_redis()
+    async with memory_session() as s:
+        worker = await _seed_worker(
+            s, workspace_id=workspace_id, capabilities=["opencode"], heartbeat_age_s=5
+        )
+        task = await dispatch.create_task(
+            s,
+            workspace_id=workspace_id,
+            executor_type="opencode",
+            prompt="hello",
+            model="opencode-go/kimi-k2.6",
+        )
+        await s.commit()
+
+        await dispatch.dispatch_task(redis, session=s, task=task, worker_id=worker.id)
+        await s.commit()
+
+        entries = await redis.xrange(dispatch.worker_stream(worker.id))
+        assert len(entries) == 1
+        _entry_id, fields = entries[0]
+        assert fields["model"] == "opencode-go/kimi-k2.6"
+        # Every stream field must remain a flat string.
+        assert all(isinstance(v, str) for v in fields.values())
+    await redis.aclose()
+
+
+async def test_dispatch_task_omits_model_when_none() -> None:
+    """E21 — when the task has no ``model`` set, ``dispatch_task`` MUST NOT
+    include a ``model`` key in the XADD payload (or include it as the empty
+    string). Redis Streams reject None — and the worker treats absence as
+    "use CLI default" via ``task.get("model")``."""
+    workspace_id = uuid.uuid4()
+    redis = await _make_redis()
+    async with memory_session() as s:
+        worker = await _seed_worker(
+            s, workspace_id=workspace_id, capabilities=["opencode"], heartbeat_age_s=5
+        )
+        task = await dispatch.create_task(
+            s,
+            workspace_id=workspace_id,
+            executor_type="opencode",
+            prompt="hello",
+        )
+        await s.commit()
+
+        await dispatch.dispatch_task(redis, session=s, task=task, worker_id=worker.id)
+        await s.commit()
+
+        entries = await redis.xrange(dispatch.worker_stream(worker.id))
+        assert len(entries) == 1
+        _entry_id, fields = entries[0]
+        # Either absent or empty string — never a Python ``None`` rendered as
+        # the string "None", which would mis-route the worker.
+        assert fields.get("model", "") == ""
+        assert all(isinstance(v, str) for v in fields.values())
+    await redis.aclose()
+
+
 # ── find_available_worker ──────────────────────────────────────────────────────
 
 

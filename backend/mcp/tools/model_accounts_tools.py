@@ -121,7 +121,21 @@ class ModelAccountsCreateInput(BaseModel):
 
     provider: str = Field(..., min_length=1, max_length=64)
     label: str = Field(..., min_length=1, max_length=128)
-    litellm_model: str = Field(..., min_length=1, max_length=255)
+    # Lift E21 — ``litellm_model`` is also the underlying model id forwarded
+    # to executor workers. Use vendor-prefixed ids like
+    # ``opencode-go/qwen3.6-plus`` or ``opencode-go/kimi-k2.6`` to route
+    # callers through specific models. Pre-E21 placeholder ``executor/<type>``
+    # is still accepted but the worker will fall back to the CLI default.
+    litellm_model: str = Field(
+        ...,
+        min_length=1,
+        max_length=255,
+        description=(
+            "Underlying model id. For executor provider: vendor-prefixed "
+            "(e.g. 'opencode-go/qwen3.6-plus', 'opencode-go/kimi-k2.6'). "
+            "For litellm provider: standard litellm id (e.g. 'ollama/qwen3')."
+        ),
+    )
     api_key: str = Field(..., min_length=1)
     api_base: str | None = None
     data_jurisdiction: str = "unknown"

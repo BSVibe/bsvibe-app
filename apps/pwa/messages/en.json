@@ -435,7 +435,7 @@
       "provider": "Provider",
       "providerPlaceholder": "e.g. openai, anthropic, ollama",
       "modelIdentifier": "Model identifier",
-      "modelPlaceholder": "e.g. gpt-5, claude-sonnet-4, ollama/qwen3",
+      "modelPlaceholder": "e.g. opencode-go/qwen3.6-plus, opencode-go/kimi-k2.6, ollama/qwen3",
       "label": "Label",
       "labelPlaceholder": "A name you'll recognise, e.g. Primary",
       "apiBase": "API base (optional)",

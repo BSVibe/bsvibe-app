@@ -104,6 +104,12 @@ class ExecutorTaskRow(Base):
     prompt: Mapped[str] = mapped_column(Text, nullable=False)
     system: Mapped[str] = mapped_column(Text, nullable=False, default="")
     workspace_dir: Mapped[str] = mapped_column(String(1024), nullable=False, default=".")
+    # Lift E21 — the underlying LLM model id forwarded to the worker's
+    # executor (e.g. ``opencode-go/qwen3.6-plus``). NULL means "use the
+    # executor CLI's default model". Lets the founder route ``ingest``
+    # callers to a cheaper/faster model and ``codegen`` callers to a
+    # capable one via RunRoutingRule → ModelAccount.litellm_model.
+    model: Mapped[str | None] = mapped_column(String(255), nullable=True)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending", index=True)
     output: Mapped[str] = mapped_column(Text, nullable=False, default="")
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
