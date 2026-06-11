@@ -121,7 +121,7 @@ def test_fresh_pg_upgrade_round_trip():
     # Phase 1 — fresh upgrade.
     _alembic(["upgrade", "head"], env_extra=env_extra)
     stamped = asyncio.run(_stamped_head(url))
-    assert stamped == "worker_last_in_flight", f"expected head worker_last_in_flight, got {stamped}"
+    assert stamped == "executor_task_model", f"expected head executor_task_model, got {stamped}"
 
     # Phase 2 — full downgrade. Verifies every revision's downgrade path.
     _alembic(["downgrade", "base"], env_extra=env_extra)
@@ -129,7 +129,7 @@ def test_fresh_pg_upgrade_round_trip():
     # Phase 3 — re-upgrade. Verifies the chain is idempotent.
     _alembic(["upgrade", "head"], env_extra=env_extra)
     stamped = asyncio.run(_stamped_head(url))
-    assert stamped == "worker_last_in_flight"
+    assert stamped == "executor_task_model"
 
 
 def test_model_account_api_key_encrypted_is_nullable_after_upgrade():
@@ -217,8 +217,10 @@ def test_worker_last_in_flight_column_round_trips():
         "executor_workers.last_in_flight column missing after upgrade"
     )
 
-    # Downgrade just this revision; column must be gone.
-    _alembic(["downgrade", "-1"], env_extra=env_extra)
+    # Downgrade to before this revision; column must be gone. Cannot use
+    # ``-1`` because newer revisions (E21+) sit above it now — target the
+    # parent revision by name.
+    _alembic(["downgrade", "connector_oauth_unclaimed"], env_extra=env_extra)
     assert not asyncio.run(_column_exists()), (
         "executor_workers.last_in_flight column survived downgrade"
     )
