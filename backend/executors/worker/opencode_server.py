@@ -10,7 +10,7 @@ in 115 seconds with zero errors.
 
 This module owns the daemon lifecycle:
 
-* :func:`start_opencode_serve` — spawns ``opencode serve --pure --port <p>
+* :func:`start_opencode_serve` — spawns ``opencode serve --port <p>
   --hostname <h>`` with ``start_new_session=True``, scrapes the listen URL
   from stdout, GET /openapi.json health-checks it, and returns a
   :class:`OpenCodeServerProcess` handle.
@@ -117,10 +117,17 @@ async def start_opencode_serve(
     :class:`httpx.MockTransport`. Production passes ``None`` (real network).
     """
     cmd = shutil.which("opencode") or "opencode"
+    # Lift E22 — do NOT pass ``--pure``. That flag skips loading external
+    # plugins, which includes the ``opencode-go`` provider plugin that
+    # registers the founder's subscribed models (qwen3.6-plus, kimi-k2.6,
+    # …). Without it, every chat request to those models returns opencode's
+    # ``UnknownError`` and the worker drops the task as exit 1 — discovered
+    # in the E21 prod dogfood (2026-06-11). Standalone ``opencode serve``
+    # (no ``--pure``) returns valid LLM responses for the same model id,
+    # confirming the plugin path is the difference.
     argv = [
         cmd,
         "serve",
-        "--pure",
         "--hostname",
         settings.opencode_serve_host,
         "--port",
