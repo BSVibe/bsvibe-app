@@ -134,6 +134,10 @@ async def test_message_body_uses_system_alongside_parts_not_inside() -> None:
     ``parts``, NOT a system-role message inside ``parts``. Tests assert the
     body matches the verified-working shape exactly so any future regression
     that moves ``system`` into ``parts`` fails loud.
+
+    Lift E24 — ``model`` is encoded as the opencode object shape
+    ``{"providerID": ..., "modelID": ...}`` because opencode's HTTP API
+    rejects plain strings with ``BadRequest: Expected object | null``.
     """
     serve = _FakeServe(text="ok")
     executor = _executor_with(serve)
@@ -149,7 +153,36 @@ async def test_message_body_uses_system_alongside_parts_not_inside() -> None:
     assert body["system"] == "BE BRIEF"
     assert body["parts"] == [{"type": "text", "text": "the user prompt"}]
     assert body["agent"] == "plan"
-    assert body["model"] == "anthropic/claude"
+    assert body["model"] == {"providerID": "anthropic", "modelID": "claude"}
+
+
+async def test_message_body_model_splits_opencode_go_vendor_prefix() -> None:
+    """E24 — vendor ids like ``opencode-go/qwen3.6-plus`` split at the FIRST
+    slash so ``providerID='opencode-go'`` and ``modelID='qwen3.6-plus'``.
+    The opencode-go provider registers models under those exact ids; getting
+    the split wrong returns 400 BadRequest from opencode.
+    """
+    serve = _FakeServe(text="ok")
+    executor = _executor_with(serve)
+
+    await _drain(executor.execute("p", {"model": "opencode-go/qwen3.6-plus"}))
+
+    assert serve.message_requests[0]["model"] == {
+        "providerID": "opencode-go",
+        "modelID": "qwen3.6-plus",
+    }
+
+
+async def test_message_body_omits_model_when_no_slash_separator() -> None:
+    """E24 — a model id without ``/`` cannot be split into provider+model.
+    Rather than guess (and send a body opencode rejects with 400) we omit
+    ``model`` entirely so the daemon falls back to its default."""
+    serve = _FakeServe(text="ok")
+    executor = _executor_with(serve)
+
+    await _drain(executor.execute("p", {"model": "qwen3.6-plus"}))
+
+    assert "model" not in serve.message_requests[0]
 
 
 async def test_message_body_omits_model_when_not_provided() -> None:

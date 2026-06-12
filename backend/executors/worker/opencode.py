@@ -96,8 +96,16 @@ class OpenCodeExecutor:
         }
         if system:
             body["system"] = system
-        if model:
-            body["model"] = model
+        # Lift E24 — opencode's HTTP API expects ``model`` as an object
+        # ``{"providerID": ..., "modelID": ...}``, not a plain string. The
+        # founder's RunRoutingRule / ModelAccount.litellm_model carries the
+        # vendor-prefixed id ``opencode-go/qwen3.6-plus``; split at the FIRST
+        # ``/`` to derive provider + model. An id without a ``/`` cannot be
+        # split (we'd guess wrong and opencode would 400) — omit ``model``
+        # entirely and let the daemon's default fire.
+        if model and "/" in model:
+            provider_id, _, model_id = model.partition("/")
+            body["model"] = {"providerID": provider_id, "modelID": model_id}
 
         # Mutable holder so the inner helper can publish the session_id back
         # to the cancel handler the moment it is created — without this, a
