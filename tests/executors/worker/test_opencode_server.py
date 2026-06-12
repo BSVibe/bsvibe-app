@@ -31,10 +31,17 @@ class _FakeStreamReader:
     def __init__(self, lines: Sequence[bytes], *, hang_after: bool = False) -> None:
         self._lines = list(lines)
         self._hang_after = hang_after
+        # E23 — track bytes consumed by drain tasks so tests can assert
+        # the daemon's stdout/stderr is actively read, not left to fill the
+        # OS pipe buffer (16 KiB on macOS → asyncio event-loop wedge once
+        # opencode's plugin logging crosses that threshold).
+        self.consumed_bytes = 0
 
     async def readline(self) -> bytes:
         if self._lines:
-            return self._lines.pop(0)
+            line = self._lines.pop(0)
+            self.consumed_bytes += len(line)
+            return line
         if self._hang_after:
             await asyncio.sleep(3600)
         return b""
@@ -199,6 +206,91 @@ async def test_singleton_round_trip_set_and_get() -> None:
 
 
 # ── argv shape ──────────────────────────────────────────────────────────────
+
+
+async def test_start_drains_stdout_and_stderr_after_url_detected(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Lift E23 — once the listening URL is captured, the daemon's stdout AND
+    stderr MUST be drained in the background. Otherwise opencode's plugin
+    chatter (now louder post-E22 with plugins enabled) fills the OS pipe
+    buffer (16 KiB on macOS), back-pressuring the asyncio event loop into a
+    silent wedge — no heartbeats, no polls, no further log lines.
+
+    The fix: ``start_opencode_serve`` returns a daemon whose stdout/stderr
+    each have a background reader task consuming them so the buffer never
+    saturates. Discovered via the E22 prod dogfood (2026-06-12).
+    """
+    extra_chatter = [
+        b"timestamp=... level=INFO message=stream providerID=opencode-go\n",
+        b"timestamp=... level=INFO message=llm runtime selected\n",
+        b"timestamp=... level=DEBUG message=tool registered name=read\n",
+    ]
+    proc = _FakeProcess(
+        stdout_lines=[
+            b"opencode server listening on http://127.0.0.1:54400\n",
+            *extra_chatter,
+        ],
+        stderr_lines=list(extra_chatter),
+    )
+    _patch_subprocess(monkeypatch, proc)
+
+    settings = WorkerSettings(opencode_serve_startup_timeout_s=5.0)
+    daemon = await opencode_server.start_opencode_serve(
+        settings, http_transport=_ok_health_transport()
+    )
+
+    # Give the drain tasks a slice to consume queued lines.
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+
+    assert proc.stdout.consumed_bytes > 0, (
+        "post-URL stdout chatter must be drained in the background — otherwise "
+        "the pipe buffer fills and the asyncio loop wedges"
+    )
+    assert proc.stderr.consumed_bytes > 0, (
+        "stderr must also be drained — opencode's plugin logs write to stderr "
+        "more than stdout once --pure is dropped (E22)"
+    )
+
+    # Drain tasks are owned by the daemon handle so shutdown can cancel them.
+    drain_tasks = getattr(daemon, "drain_tasks", None)
+    assert drain_tasks, "daemon handle must expose its drain tasks for shutdown"
+    assert all(isinstance(t, asyncio.Task) for t in drain_tasks)
+
+    # Cancel + wait so the test doesn't leak a forever-sleeping task.
+    for t in drain_tasks:
+        t.cancel()
+    for t in drain_tasks:
+        try:
+            await t
+        except (asyncio.CancelledError, BaseException):  # noqa: BLE001
+            pass
+
+
+async def test_stop_cancels_drain_tasks_before_killing_process(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Lift E23 — ``stop_opencode_serve`` cancels the background drain tasks so
+    they don't leak past the daemon's life. They MUST be cancelled (or already
+    done) before the process is group-killed."""
+    proc = _FakeProcess(
+        stdout_lines=[b"opencode server listening on http://127.0.0.1:54500\n"],
+    )
+    _patch_subprocess(monkeypatch, proc)
+    monkeypatch.setattr(opencode_server, "_kill_process_group", lambda p: p.kill())
+
+    settings = WorkerSettings(opencode_serve_startup_timeout_s=5.0)
+    daemon = await opencode_server.start_opencode_serve(
+        settings, http_transport=_ok_health_transport()
+    )
+    drain_tasks = list(daemon.drain_tasks)  # type: ignore[attr-defined]
+    assert drain_tasks, "daemon must own drain tasks"
+
+    await opencode_server.stop_opencode_serve(daemon)
+
+    for t in drain_tasks:
+        assert t.done(), "drain tasks must be cancelled/done after stop"
 
 
 async def test_serve_argv_loads_plugins_and_sets_host_and_port(

@@ -51,10 +51,19 @@ class OpenCodeServeStartupError(RuntimeError):
 
 @dataclass
 class OpenCodeServerProcess:
-    """A live ``opencode serve`` child process + its captured listen URL."""
+    """A live ``opencode serve`` child process + its captured listen URL.
+
+    Lift E23 — ``drain_tasks`` holds the background coroutines reading the
+    daemon's stdout and stderr to /dev/null after the listening URL is
+    captured. Without them, opencode's plugin chatter fills the 16 KiB OS
+    pipe buffer (macOS), back-pressuring the asyncio event loop into a
+    silent wedge — no heartbeats, no polls. ``stop_opencode_serve`` cancels
+    them on shutdown.
+    """
 
     process: asyncio.subprocess.Process
     url: str
+    drain_tasks: tuple[asyncio.Task[None], ...] = ()
 
 
 # ── Singleton: worker startup writes, executor reads ────────────────────────
@@ -165,8 +174,21 @@ async def start_opencode_serve(
         _kill_process_group(process)
         raise OpenCodeServeStartupError(f"opencode serve at {url} failed health check")
 
+    # Lift E23 — drain the daemon's stdout + stderr in the background so the
+    # OS pipe buffer (16 KiB on macOS) never saturates. Pre-E23 the worker
+    # left both pipes unread after the listening line; once opencode's
+    # plugin logging (which expanded after E22 dropped ``--pure``) crossed
+    # the buffer threshold the asyncio event loop silently wedged — no
+    # heartbeats, no polls, no further log lines, but the TCP connection
+    # to the backend stayed ``ESTABLISHED`` so the failure was invisible
+    # without a process sample.
+    drain_tasks: tuple[asyncio.Task[None], ...] = (
+        asyncio.create_task(_drain_stream(process.stdout), name="opencode-serve-stdout-drain"),
+        asyncio.create_task(_drain_stream(process.stderr), name="opencode-serve-stderr-drain"),
+    )
+
     logger.info("opencode_serve_ready", url=url, pid=process.pid)
-    return OpenCodeServerProcess(process=process, url=url)
+    return OpenCodeServerProcess(process=process, url=url, drain_tasks=drain_tasks)
 
 
 async def stop_opencode_serve(daemon: OpenCodeServerProcess) -> None:
@@ -175,7 +197,19 @@ async def stop_opencode_serve(daemon: OpenCodeServerProcess) -> None:
     Best-effort — a daemon that already exited (``returncode`` set) is a no-op.
     Always swallows :class:`ProcessLookupError` (race between the group
     enumeration and the signal).
+
+    Lift E23 — cancel the background drain tasks BEFORE the process is
+    killed so they don't leak past the daemon's life. Cancellation is
+    cooperative — each drain task suppresses ``asyncio.CancelledError`` so
+    awaiting it after cancel returns cleanly.
     """
+    # Cancel drain tasks unconditionally — even on a daemon that already
+    # exited, the tasks may be parked on the EOF read.
+    for task in daemon.drain_tasks:
+        task.cancel()
+    if daemon.drain_tasks:
+        await asyncio.gather(*daemon.drain_tasks, return_exceptions=True)
+
     if daemon.process.returncode is not None:
         return
     try:
@@ -229,6 +263,29 @@ async def _await_listening_url(process: asyncio.subprocess.Process, timeout_s: f
         match = _LISTENING_RE.search(line)
         if match:
             return match.group(1).decode("utf-8", errors="replace").rstrip("/")
+
+
+async def _drain_stream(stream: asyncio.StreamReader | None) -> None:
+    """Read + discard ``stream`` until EOF (Lift E23 pipe-drainer).
+
+    Runs in a background task for the daemon's lifetime. Reads line by line
+    — a chunked read would still drain the buffer, but ``readline`` matches
+    the daemon's own output cadence (one structured log line per write) and
+    keeps each await brief so cancellation is responsive. EOF (b\"\") ends
+    the loop naturally; ``CancelledError`` from ``stop_opencode_serve`` is
+    let to propagate so the awaiting caller can join the task.
+    """
+    if stream is None:  # pragma: no cover — only when subprocess started without PIPE
+        return
+    try:
+        while True:
+            line = await stream.readline()
+            if not line:
+                return
+    except asyncio.CancelledError:
+        raise
+    except Exception:  # noqa: BLE001 — drain must not crash the worker
+        logger.debug("opencode_serve_drain_error", exc_info=True)
 
 
 async def _health_check(url: str, *, http_transport: httpx.AsyncBaseTransport | None) -> bool:
