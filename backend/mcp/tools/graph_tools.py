@@ -36,11 +36,36 @@ import structlog
 from pydantic import BaseModel, ConfigDict, Field
 
 from backend.knowledge.code_graph.graph import load_graph
-from backend.knowledge.code_graph.pipeline import code_graph_vault_path
+from backend.knowledge.code_graph.pipeline import (
+    code_graph_vault_path,
+    community_labels_vault_path,
+)
 from backend.mcp.api import Tool, ToolContext, ToolError, ToolRegistry
 from backend.mcp.tools._helpers import vault_root_for, workspace_region
 
 logger = structlog.get_logger(__name__)
+
+
+async def _community_labels_for_call(ctx: ToolContext) -> dict[int, dict[str, Any]]:
+    """Async sibling of :func:`_graph_for_call` for the labels sidecar."""
+    import json as _json  # noqa: PLC0415
+
+    region = await workspace_region(ctx.session, ctx.principal.workspace_id)
+    vault_root = vault_root_for(region=region, workspace_id=ctx.principal.workspace_id)
+    path = community_labels_vault_path(vault_root=vault_root)
+    if not path.is_file():
+        return {}
+    try:
+        raw = _json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, KeyError) as exc:
+        logger.warning("mcp_community_labels_load_failed", path=str(path), error=str(exc))
+        return {}
+    out: dict[int, dict[str, Any]] = {}
+    for entry in raw.get("communities") or []:
+        cid = entry.get("community_id")
+        if isinstance(cid, int):
+            out[cid] = entry
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -253,8 +278,17 @@ class CommunityInput(BaseModel):
 
 
 class _CommunitySummary(BaseModel):
+    """Lift E25 — overview-row shape now carries the founder-facing label,
+    description, and centrality signals so the MCP response answers "why
+    are these grouped" without a follow-up call."""
+
+    model_config = ConfigDict(extra="allow")
     community_id: int
     size: int
+    label: str | None = None
+    description: str | None = None
+    top_symbols: list[str] = Field(default_factory=list)
+    top_paths: list[str] = Field(default_factory=list)
 
 
 class CommunityOutput(BaseModel):
@@ -262,10 +296,15 @@ class CommunityOutput(BaseModel):
     total: int
     communities: list[_CommunitySummary] = Field(default_factory=list)
     members: list[dict[str, Any]] = Field(default_factory=list)
+    # Lift E25 — when ``community_id`` is set, surface the requested
+    # community's label alongside its members so a single call returns
+    # both the rendering header and the rows.
+    community: _CommunitySummary | None = None
 
 
 async def _h_community(args: CommunityInput, ctx: ToolContext) -> Any:
     graph = _require_graph(await _graph_for_call(ctx))
+    labels = await _community_labels_for_call(ctx)
     if args.community_id is None:
         sizes: dict[int, int] = {}
         for nid in graph.nodes:
@@ -275,21 +314,39 @@ async def _h_community(args: CommunityInput, ctx: ToolContext) -> Any:
             cid = int(cid_raw)
             sizes[cid] = sizes.get(cid, 0) + 1
         summaries = [
-            _CommunitySummary(community_id=cid, size=n) for cid, n in sorted(sizes.items())
+            _CommunitySummary(
+                community_id=cid,
+                size=n,
+                label=labels.get(cid, {}).get("label"),
+                description=labels.get(cid, {}).get("description"),
+                top_symbols=list(labels.get(cid, {}).get("top_symbols") or []),
+                top_paths=list(labels.get(cid, {}).get("top_paths") or []),
+            )
+            for cid, n in sorted(sizes.items())
         ]
         return CommunityOutput(total=len(summaries), communities=summaries)
     target = args.community_id
     members: list[dict[str, Any]] = []
+    size = 0
     for nid in graph.nodes:
         cid_raw = graph.nodes[nid].get("community_id")
         if cid_raw is None:
             continue
         if int(cid_raw) != target:
             continue
-        members.append(_node_to_dict(graph, nid))
-        if len(members) >= args.limit:
-            break
-    return CommunityOutput(total=len(members), members=members)
+        size += 1
+        if len(members) < args.limit:
+            members.append(_node_to_dict(graph, nid))
+    label_entry = labels.get(target, {})
+    summary = _CommunitySummary(
+        community_id=target,
+        size=size,
+        label=label_entry.get("label"),
+        description=label_entry.get("description"),
+        top_symbols=list(label_entry.get("top_symbols") or []),
+        top_paths=list(label_entry.get("top_paths") or []),
+    )
+    return CommunityOutput(total=len(members), members=members, community=summary)
 
 
 # ---------------------------------------------------------------------------

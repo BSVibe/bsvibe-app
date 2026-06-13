@@ -136,6 +136,34 @@ async def run_repo_bootstrap(
                 region=region,
                 exc_info=True,
             )
+        # Lift E25 — derive + persist community labels so the MCP
+        # ``bsvibe_graph_community`` tool can answer "why are these grouped"
+        # with a deterministic label (common path prefix), top symbols, and
+        # file count. Soft-fails: the graph itself is still queryable even
+        # if the label sidecar can't be written.
+        try:
+            from backend.knowledge.code_graph.pipeline import (  # noqa: PLC0415
+                community_labels_vault_path,
+                persist_community_labels,
+            )
+
+            labeled = persist_community_labels(
+                code_graph_result.graph,
+                community_labels_vault_path(vault_root=vault_root),
+            )
+            logger.info(
+                "product_bootstrap_community_labels_persisted",
+                workspace_id=str(workspace_id),
+                region=region,
+                labeled=labeled,
+            )
+        except OSError:
+            logger.warning(
+                "product_bootstrap_community_labels_persist_failed",
+                workspace_id=str(workspace_id),
+                region=region,
+                exc_info=True,
+            )
 
     # Re-walk the repo with the same filter so we can build the
     # file-tree + manifests structural seeds. (The code-graph pipeline

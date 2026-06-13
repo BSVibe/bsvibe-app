@@ -29,7 +29,10 @@ The artifact dicts are the standard
 
 from __future__ import annotations
 
+import json
+import os
 import re
+import tempfile
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -308,6 +311,32 @@ def persist_graph(graph: nx.DiGraph, path: Path) -> None:
     save_graph(graph, path)
 
 
+def persist_community_labels(graph: nx.DiGraph, path: Path) -> int:
+    """Lift E25 — derive + atomically persist community labels.
+
+    Returns the number of communities that received a label so the
+    orchestrator can audit-log the count. Soft-fails on OS errors via the
+    caller's existing try/except — same pattern as ``persist_graph``.
+    """
+    from backend.knowledge.code_graph.community import (  # noqa: PLC0415
+        derive_community_labels,
+    )
+
+    labels = derive_community_labels(graph)
+    payload = {
+        "version": 1,
+        "communities": [labels[cid] for cid in sorted(labels)],
+    }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(
+        "w", encoding="utf-8", dir=str(path.parent), delete=False
+    ) as tmp:
+        json.dump(payload, tmp, ensure_ascii=False)
+        tmp_path = tmp.name
+    os.replace(tmp_path, path)
+    return len(labels)
+
+
 def code_graph_vault_path(*, vault_root: Path) -> Path:
     """Return the per-workspace ``code_graph/graph.json`` path.
 
@@ -317,10 +346,17 @@ def code_graph_vault_path(*, vault_root: Path) -> Path:
     return vault_root / "code_graph" / "graph.json"
 
 
+def community_labels_vault_path(*, vault_root: Path) -> Path:
+    """Lift E25 — companion path for ``code_graph/communities.json``."""
+    return vault_root / "code_graph" / "communities.json"
+
+
 __all__ = [
     "CodeGraphResult",
     "build_code_graph_artifacts",
     "code_graph_vault_path",
+    "community_labels_vault_path",
     "is_test_path",
+    "persist_community_labels",
     "persist_graph",
 ]
