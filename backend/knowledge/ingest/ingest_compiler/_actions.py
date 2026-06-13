@@ -179,6 +179,7 @@ async def canonicalize_tags(
     tags: list[str],
     *,
     raw_source: str,
+    note_type: str | None = None,
 ) -> list[str]:
     """Resolve cleaned tags to canonical concept ids (Handoff §11).
 
@@ -186,6 +187,13 @@ async def canonicalize_tags(
     land in the garden note. Tags returning None
     (ambiguous/blocked/pending_candidate/auto-apply-failed) are dropped
     per spec — their evidence lives on the action/proposal record.
+
+    Lift E27 — when the caller knows the note's E20 ``type`` field (the
+    ingest plan has it in ``raw_action['type']``), thread it onto the
+    auto-create-concept path so the concept inherits the kind in its
+    frontmatter (E26 wire). Pre-E27 this path always omitted the type
+    so every ingest-auto-created concept was untyped even when the
+    seedling note that triggered it had one.
     """
     if canon_service is None or not tags:
         return tags
@@ -193,7 +201,11 @@ async def canonicalize_tags(
     seen: set[str] = set()
     for raw_tag in tags:
         try:
-            resolved = await canon_service.resolve_and_canonicalize(raw_tag, raw_source=raw_source)
+            resolved = await canon_service.resolve_and_canonicalize(
+                raw_tag,
+                raw_source=raw_source,
+                note_type=note_type,
+            )
         except Exception as exc:  # noqa: BLE001 — never abort ingest on resolve error
             logger.warning(
                 "ingest_compile_canonicalize_failed",
@@ -251,17 +263,24 @@ async def execute_plan(
             continue
 
         tags = clean_tags(raw_action.get("tags") or [])
-        tags = await canonicalize_tags(canon_service, tags, raw_source="ingest-compiler")
-        # Lift E20 — the new prompt names the field ``wikilinks`` (strict
-        # subset of content); the legacy prompt called it ``entities``.
-        # Accept either; clean_entities enforces the in-content invariant.
-        raw_links = raw_action.get("wikilinks") or raw_action.get("entities") or []
-        entities = clean_entities(raw_links, raw_action["content"])
         # Lift E20 — accept the optional ``type`` field; validate_action
         # has already filtered out any invalid value, so just pass it
         # through. ``None`` keeps legacy behavior (no kind on the note).
         raw_type = raw_action.get("type")
         note_kind = raw_type if isinstance(raw_type, str) and raw_type in VALID_NOTE_KINDS else None
+        # Lift E27 — thread the note's type into canonicalize_tags so the
+        # auto-created concept inherits the same kind (E26 wire).
+        tags = await canonicalize_tags(
+            canon_service,
+            tags,
+            raw_source="ingest-compiler",
+            note_type=note_kind,
+        )
+        # Lift E20 — the new prompt names the field ``wikilinks`` (strict
+        # subset of content); the legacy prompt called it ``entities``.
+        # Accept either; clean_entities enforces the in-content invariant.
+        raw_links = raw_action.get("wikilinks") or raw_action.get("entities") or []
+        entities = clean_entities(raw_links, raw_action["content"])
 
         action = UpdateAction(
             action=raw_action["action"],
