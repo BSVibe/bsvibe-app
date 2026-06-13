@@ -206,6 +206,70 @@ class TestTypeFieldPersistedAsFrontmatter:
         assert "[[SQLAlchemy]]" in body
 
 
+class TestE27TypeThreadedToCanonicalize:
+    """Lift E27 — when the ingest plan stamps ``type: Pattern`` on the
+    note, that kind MUST be threaded into ``canonicalize_tags`` (and on
+    through ``resolve_and_canonicalize`` → E26 wire) so the auto-created
+    concept inherits the kind in its frontmatter.
+
+    Pre-E27 the ingest path called ``canonicalize_tags(...)`` without
+    ``note_type``, so every ingest-auto-created concept landed untyped
+    even when the seedling note that triggered it had a kind.
+
+    Tests target ``canonicalize_tags`` directly with a recording stub —
+    the wire is the surface that needs locking, not the full ingest
+    pipeline (which already has integration coverage elsewhere).
+    """
+
+    @pytest.mark.asyncio
+    async def test_canonicalize_tags_forwards_note_type(self) -> None:
+        from backend.knowledge.ingest.ingest_compiler._actions import (
+            canonicalize_tags,
+        )
+
+        captured: list[dict[str, Any]] = []
+
+        class _RecordingCanon:
+            async def resolve_and_canonicalize(self, raw_tag: str, **kwargs: Any) -> str | None:
+                captured.append({"raw_tag": raw_tag, **kwargs})
+                return raw_tag  # echo back so it makes it into the returned list
+
+        out = await canonicalize_tags(
+            _RecordingCanon(),  # type: ignore[arg-type]
+            ["pipe-drain"],
+            raw_source="ingest-compiler",
+            note_type="Pattern",
+        )
+        assert out == ["pipe-drain"]
+        assert len(captured) == 1
+        assert captured[0]["note_type"] == "Pattern", (
+            "E27 — canonicalize_tags must forward note_type so the "
+            "create-concept action carries it into E26's write path"
+        )
+
+    @pytest.mark.asyncio
+    async def test_canonicalize_tags_back_compat_omits_note_type(self) -> None:
+        from backend.knowledge.ingest.ingest_compiler._actions import (
+            canonicalize_tags,
+        )
+
+        captured: list[dict[str, Any]] = []
+
+        class _RecordingCanon:
+            async def resolve_and_canonicalize(self, raw_tag: str, **kwargs: Any) -> str | None:
+                captured.append({"raw_tag": raw_tag, **kwargs})
+                return raw_tag
+
+        await canonicalize_tags(
+            _RecordingCanon(),  # type: ignore[arg-type]
+            ["tag"],
+            raw_source="ingest-compiler",
+        )
+        # Pre-E27 callers (and untyped notes) pass note_type=None — the
+        # downstream service ignores it.
+        assert captured[0].get("note_type") is None
+
+
 class TestWikilinksAreStrictSubset:
     """The ``wikilinks`` field accepts ONLY targets that appear in content."""
 
