@@ -251,6 +251,7 @@ class CanonicalizationService(
         *,
         raw_source: str | None = None,
         auto_apply: bool = True,
+        note_type: str | None = None,
     ) -> str | None:
         """Tag → canonical concept id (Handoff §11 ingest write policy).
 
@@ -281,9 +282,17 @@ class CanonicalizationService(
             return None
 
         if result.status == "new_candidate" and normalized is not None:
+            # Lift E26 — record the dominant seedling type in the action so
+            # ``_effect_create_concept`` can stamp it onto the concept.
+            params: dict[str, Any] = {
+                "concept": normalized,
+                "title": _title_from_raw(raw_tag),
+            }
+            if note_type:
+                params["type"] = note_type
             draft = await self.create_action_draft(
                 kind="create-concept",
-                params={"concept": normalized, "title": _title_from_raw(raw_tag)},
+                params=params,
             )
             if not auto_apply:
                 return None

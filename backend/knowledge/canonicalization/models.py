@@ -53,6 +53,11 @@ class ConceptEntry:
     created_at: datetime
     updated_at: datetime
     source_action: str | None = None
+    # Lift E26 — the seedling note kind that promoted into this concept,
+    # one of ``Pattern`` / ``Principle`` / ``TechInsight`` / ``DomainModel``
+    # (E20 whitelist). NULL on pre-E26 concepts and on concepts created from
+    # a tag with no typed seedling backing — the read path is permissive.
+    note_type: str | None = None
 
 
 @dataclass

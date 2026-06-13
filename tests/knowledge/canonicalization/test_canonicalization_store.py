@@ -72,6 +72,60 @@ class TestReadWriteConcept:
         assert extract_title(raw) == "Machine Learning"
 
     @pytest.mark.asyncio
+    async def test_write_concept_carries_note_type_in_frontmatter(
+        self, store: NoteStore, storage: FileSystemStorage
+    ) -> None:
+        """Lift E26 — a concept's ``note_type`` (Pattern / Principle /
+        TechInsight / DomainModel) MUST round-trip through the frontmatter.
+
+        Pre-E26 the seedling's E20 ``type:`` field was dropped during
+        promotion: ``concepts/active/<slug>.md`` only carried
+        ``aliases / created_at / updated_at / source_action``. The founder
+        sees a 400+ concept pool that all reads as "one type" with no way
+        to distinguish patterns from domain models from infra principles.
+        """
+        entry = models.ConceptEntry(
+            concept_id="oauth-loopback-pkce",
+            path="concepts/active/oauth-loopback-pkce.md",
+            display="OAuth loopback PKCE",
+            aliases=[],
+            created_at=datetime(2026, 6, 14),
+            updated_at=datetime(2026, 6, 14),
+            note_type="Pattern",
+        )
+        await store.write_concept(entry)
+
+        raw = await storage.read("concepts/active/oauth-loopback-pkce.md")
+        fm = extract_frontmatter(raw)
+        assert fm.get("type") == "Pattern"
+
+        # Round-trip — read_concept returns the typed entry.
+        got = await store.read_concept("oauth-loopback-pkce")
+        assert got is not None
+        assert got.note_type == "Pattern"
+
+    @pytest.mark.asyncio
+    async def test_write_concept_without_type_omits_field(
+        self, store: NoteStore, storage: FileSystemStorage
+    ) -> None:
+        """E26 back-compat — a concept written without a ``note_type``
+        keeps the pre-E26 frontmatter shape (no ``type`` key)."""
+        entry = models.ConceptEntry(
+            concept_id="untyped",
+            path="concepts/active/untyped.md",
+            display="Untyped",
+            aliases=[],
+            created_at=datetime(2026, 6, 14),
+            updated_at=datetime(2026, 6, 14),
+        )
+        await store.write_concept(entry)
+        fm = extract_frontmatter(await storage.read("concepts/active/untyped.md"))
+        assert "type" not in fm
+        got = await store.read_concept("untyped")
+        assert got is not None
+        assert got.note_type is None
+
+    @pytest.mark.asyncio
     async def test_read_missing_returns_none(self, store: NoteStore) -> None:
         assert await store.read_concept("does-not-exist") is None
 

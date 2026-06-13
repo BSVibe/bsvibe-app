@@ -96,6 +96,8 @@ class NoteStore:
             created_at=_parse_iso(fm.get("created_at")) or datetime.min,
             updated_at=_parse_iso(fm.get("updated_at")) or datetime.min,
             source_action=fm.get("source_action"),
+            # Lift E26 — read the seedling note kind back if present.
+            note_type=fm.get("type"),
         )
 
     async def write_concept(
@@ -113,6 +115,11 @@ class NoteStore:
             fm["aliases"] = list(entry.aliases)
         if entry.source_action is not None:
             fm["source_action"] = entry.source_action
+        # Lift E26 — carry the seedling note kind through to the concept
+        # so the founder can tell a Pattern from a Principle/DomainModel/
+        # TechInsight at a glance. Pre-E26 promotion dropped this.
+        if entry.note_type is not None:
+            fm["type"] = entry.note_type
 
         body_lines = [f"# {entry.display}", ""]
         if initial_body:
@@ -409,6 +416,25 @@ class NoteStore:
         text = await self._storage.read(garden_path)
         fm = extract_frontmatter(text)
         return list(fm.get("tags") or [])
+
+    async def read_garden_note_type(self, garden_path: str) -> str | None:
+        """Lift E26 — return the seedling's ``type:`` frontmatter field.
+
+        E20 stamps one of ``Pattern`` / ``Principle`` / ``TechInsight`` /
+        ``DomainModel`` on every seedling. The promoter uses this to
+        determine the dominant kind across the seedlings that contributed
+        to a candidate tag, then carries it through to the concept the
+        promotion creates. Returns ``None`` for legacy / pre-E20 notes
+        and on a missing file (treated like an absent type rather than
+        raising, since the promoter walks many notes best-effort).
+        """
+        try:
+            text = await self._storage.read(garden_path)
+        except FileNotFoundError:
+            return None
+        fm = extract_frontmatter(text)
+        value = fm.get("type")
+        return value if isinstance(value, str) and value else None
 
     async def set_garden_tags(self, garden_path: str, tags: list[str]) -> None:
         """Replace ``tags`` frontmatter on a garden note (Handoff §7.6)."""
