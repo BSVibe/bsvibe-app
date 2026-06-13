@@ -19,6 +19,8 @@ across runs.
 
 from __future__ import annotations
 
+import os.path
+from collections import Counter
 from typing import Any
 
 import networkx as nx
@@ -93,4 +95,128 @@ def annotate_communities(graph: nx.DiGraph) -> None:
         graph.nodes[nid]["community_id"] = cid
 
 
-__all__ = ["annotate_communities", "detect_communities"]
+def derive_community_labels(
+    graph: nx.DiGraph,
+    *,
+    min_size: int = 3,
+    top_symbols_k: int = 5,
+) -> dict[int, dict[str, Any]]:
+    """Lift E25 — produce a structured label for every non-trivial community.
+
+    Without any LLM call: the path prefix of the community's files, the top
+    symbols (by PageRank if annotated, else by node order), language tally,
+    and a 1-line human-readable description. This answers the founder's
+    question "why are these nodes grouped?" with concrete signals every
+    time, even on a degraded LLM path.
+
+    Communities below ``min_size`` are dropped — Leiden produces a long
+    tail of singletons + 2-node fragments that would just add noise.
+
+    Returns ``{community_id: {label, description, size, file_count,
+    languages, top_symbols, top_paths}}``.
+    """
+    if graph.number_of_nodes() == 0:
+        return {}
+
+    grouped: dict[int, list[str]] = {}
+    for nid in graph.nodes:
+        cid_raw = graph.nodes[nid].get("community_id")
+        if cid_raw is None:
+            continue
+        grouped.setdefault(int(cid_raw), []).append(nid)
+
+    out: dict[int, dict[str, Any]] = {}
+    for cid, members in grouped.items():
+        if len(members) < min_size:
+            continue
+        out[cid] = _label_for_community(graph, cid, members, top_symbols_k=top_symbols_k)
+    return out
+
+
+def _label_for_community(
+    graph: nx.DiGraph,
+    cid: int,
+    members: list[str],
+    *,
+    top_symbols_k: int,
+) -> dict[str, Any]:
+    """Build one community's label dict from member node attrs."""
+    paths: list[str] = []
+    names_by_rank: list[tuple[str, float]] = []
+    lang_counter: Counter[str] = Counter()
+    for nid in members:
+        attrs = graph.nodes[nid]
+        path = attrs.get("path") or ""
+        if path and attrs.get("kind") != "external":
+            paths.append(path)
+        name = attrs.get("name") or ""
+        if name:
+            # Higher PageRank = more central = preferred label symbol. Fall
+            # back to a tiny positive constant when PR is missing so the
+            # node still participates in the symbol shortlist.
+            pr = float(attrs.get("pagerank") or 0.0001)
+            names_by_rank.append((name, pr))
+        lang = attrs.get("language") or ""
+        if lang:
+            lang_counter[lang] += 1
+
+    label = _common_path_label(paths)
+    top_symbols = [n for n, _ in sorted(names_by_rank, key=lambda kv: -kv[1])[:top_symbols_k]]
+    file_count = len({p for p in paths})
+
+    desc_parts: list[str] = []
+    if file_count:
+        plural = "files" if file_count != 1 else "file"
+        prefix = label or "various paths"
+        desc_parts.append(f"{file_count} {plural} in {prefix}")
+    if top_symbols:
+        desc_parts.append(f"top symbols: {', '.join(top_symbols[:3])}")
+    desc_parts.append(f"{len(members)} nodes")
+    description = " · ".join(desc_parts)
+
+    return {
+        "community_id": cid,
+        "label": label or "misc",
+        "description": description,
+        "size": len(members),
+        "file_count": file_count,
+        "languages": dict(lang_counter),
+        "top_symbols": top_symbols,
+        "top_paths": sorted({p for p in paths})[:5],
+    }
+
+
+def _common_path_label(paths: list[str]) -> str:
+    """Pick the deepest shared directory prefix across ``paths``.
+
+    Uses POSIX-style separators so worktrees on macOS + Linux + CI agree.
+    No shared prefix beyond the root → empty string (the caller renders
+    this as ``misc`` to keep the surface clean).
+    """
+    cleaned = [p.replace("\\", "/").strip("/") for p in paths if p]
+    if not cleaned:
+        return ""
+    if len(cleaned) == 1:
+        # A single-path community labels by its parent directory.
+        parent = os.path.dirname(cleaned[0])
+        return parent or cleaned[0]
+    split = [p.split("/") for p in cleaned]
+    shared: list[str] = []
+    for parts in zip(*split, strict=False):
+        first = parts[0]
+        if any(p != first for p in parts):
+            break
+        shared.append(first)
+    # If the shared prefix already exhausts the shortest path, drop the file
+    # component so we land on a directory.
+    label = "/".join(shared)
+    if any(label == p for p in cleaned):
+        label = os.path.dirname(label)
+    return label
+
+
+__all__ = [
+    "annotate_communities",
+    "derive_community_labels",
+    "detect_communities",
+]
