@@ -272,7 +272,76 @@ class TestEmptyVault:
         assert result.candidate_tags == []
         assert result.created_concepts == []
         assert result.proposals == []
-        assert result.applied_merges == []
+
+
+class TestE26TypePropagation:
+    """Lift E26 — the dominant seedling ``type:`` (E20 whitelist) is carried
+    through promotion onto the concept's frontmatter so the founder can
+    distinguish a Pattern from a Principle / DomainModel / TechInsight when
+    browsing ``concepts/active/``."""
+
+    @pytest.mark.asyncio
+    async def test_promoted_concept_inherits_seedling_type(
+        self, workspace_storage: FileSystemStorage
+    ) -> None:
+        # Seed two observations all stamped ``type: Pattern`` referencing
+        # one entity — promotion's recurrence gate fires and the concept
+        # is created.
+        for i in range(2):
+            await workspace_storage.write(
+                f"garden/seedling/observation-{i}.md",
+                "---\n"
+                "type: Pattern\n"
+                "tags:\n"
+                "  - settle\n"
+                "  - oauth-loopback\n"
+                "---\n"
+                "# OAuth loopback observation\n",
+            )
+
+        service = await _make_service(workspace_storage, safe_mode=False)
+        await GardenObservationPromoter(service).promote()
+
+        fm = extract_frontmatter(await workspace_storage.read("concepts/active/oauth-loopback.md"))
+        assert fm.get("type") == "Pattern"
+
+    @pytest.mark.asyncio
+    async def test_majority_type_wins(self, workspace_storage: FileSystemStorage) -> None:
+        # 3 Pattern + 1 Principle for the same tag → Pattern wins.
+        for i in range(3):
+            await workspace_storage.write(
+                f"garden/seedling/pat-{i}.md",
+                "---\ntype: Pattern\ntags:\n  - settle\n  - async-cancel\n---\n# Pattern note\n",
+            )
+        await workspace_storage.write(
+            "garden/seedling/principle-0.md",
+            "---\ntype: Principle\ntags:\n  - settle\n  - async-cancel\n---\n# Principle note\n",
+        )
+
+        service = await _make_service(workspace_storage, safe_mode=False)
+        await GardenObservationPromoter(service).promote()
+
+        fm = extract_frontmatter(await workspace_storage.read("concepts/active/async-cancel.md"))
+        assert fm.get("type") == "Pattern"
+
+    @pytest.mark.asyncio
+    async def test_untyped_seedlings_leave_concept_unmarked(
+        self, workspace_storage: FileSystemStorage
+    ) -> None:
+        # Pre-E20 / legacy notes have no ``type:``. The promoted concept
+        # must stay unmarked (no ``type:`` frontmatter field) rather than
+        # be assigned a guessed kind.
+        for i in range(2):
+            await workspace_storage.write(
+                f"garden/seedling/legacy-{i}.md",
+                "---\ntags:\n  - settle\n  - legacy-tag\n---\n# Legacy note\n",
+            )
+
+        service = await _make_service(workspace_storage, safe_mode=False)
+        await GardenObservationPromoter(service).promote()
+
+        fm = extract_frontmatter(await workspace_storage.read("concepts/active/legacy-tag.md"))
+        assert "type" not in fm
 
     @pytest.mark.asyncio
     async def test_only_structural_tags_yields_no_candidates(

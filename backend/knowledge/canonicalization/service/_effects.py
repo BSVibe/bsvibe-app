@@ -54,6 +54,10 @@ class _EffectsMixin(_ServiceBase):
         title = entry.params["title"]
         aliases = list(entry.params.get("aliases") or [])
         initial_body = entry.params.get("initial_body")
+        # Lift E26 — promotion stamps the dominant seedling type onto the
+        # action's params so the concept inherits the same E20 ``type:``
+        # field. Empty / unset = legacy concept, no type written.
+        note_type = entry.params.get("type") or None
 
         now = self._clock()
         path = paths.active_concept_path(concept)
@@ -66,6 +70,7 @@ class _EffectsMixin(_ServiceBase):
                 created_at=now,
                 updated_at=now,
                 source_action=entry.path,
+                note_type=note_type,
             ),
             initial_body=initial_body,
         )

@@ -207,11 +207,19 @@ class GardenObservationPromoter:
         """
         observation_counts: dict[str, int] = {}
         representative: dict[str, str] = {}
+        # Lift E26 — track the seedling note kind (E20 type field) per
+        # normalized tag so the promoter can stamp a dominant ``type:`` onto
+        # the concept it creates. ``type_counts[normalized][type]`` =
+        # observations. The promoter reads this via :attr:`_type_votes`.
+        self._type_votes = {}  # type: dict[str, dict[str, int]]
         for path in await self._store.list_garden_paths():
             try:
                 tags = await self._store.read_garden_tags(path)
             except FileNotFoundError:  # pragma: no cover — listing/read race
                 continue
+            # E26 — alongside the tags, read the seedling's ``type:``. Missing
+            # type is treated as "no vote" (pre-E20 notes, retags, …).
+            note_type = await self._store.read_garden_note_type(path)
             # Count each normalized tag at most ONCE per observation — recurrence
             # is across notes, not repeated tags within one note.
             in_this_note: set[str] = set()
@@ -225,6 +233,9 @@ class GardenObservationPromoter:
                 representative.setdefault(normalized, raw)
             for normalized in in_this_note:
                 observation_counts[normalized] = observation_counts.get(normalized, 0) + 1
+                if note_type:
+                    bucket = self._type_votes.setdefault(normalized, {})
+                    bucket[note_type] = bucket.get(note_type, 0) + 1
 
         survivors = {
             representative[normalized]
@@ -232,6 +243,28 @@ class GardenObservationPromoter:
             if count >= _MIN_OBSERVATIONS_FOR_PROMOTION
         }
         return sorted(survivors)
+
+    def _dominant_type_for(self, raw_tag: str) -> str | None:
+        """Lift E26 — pick the seedling type that voted most for this tag.
+
+        Tie-break is the E20 declaration order so the picks are stable across
+        runs (deterministic seed → deterministic concept type). Returns
+        ``None`` when no typed seedling contributed (pre-E20 vault, retag-only
+        tags, …) so the concept stays unmarked rather than being mistyped.
+        """
+        if not getattr(self, "_type_votes", None):
+            return None
+        normalized = self._resolver.normalize(raw_tag)
+        if not normalized:
+            return None
+        votes = self._type_votes.get(normalized)
+        if not votes:
+            return None
+        priority = {"Pattern": 0, "Principle": 1, "TechInsight": 2, "DomainModel": 3}
+        return max(
+            votes.items(),
+            key=lambda kv: (kv[1], -priority.get(kv[0], 99)),
+        )[0]
 
     async def _seed_concept(self, raw_tag: str, result: PromotionResult) -> None:
         """Ensure a candidate concept exists for ``raw_tag``.
@@ -258,8 +291,15 @@ class GardenObservationPromoter:
         # the service). resolve_and_canonicalize returns the draft path via the
         # pending/new candidate flow; we then drive apply through the service so
         # Safe Mode gating is honoured.
+        # Lift E26 — pass the dominant seedling type so the create-concept
+        # action carries it through to ``ConceptEntry.note_type`` and the
+        # concept's frontmatter ``type:`` field.
+        note_type = self._dominant_type_for(raw_tag)
         await self._service.resolve_and_canonicalize(
-            raw_tag, raw_source="garden-observation", auto_apply=False
+            raw_tag,
+            raw_source="garden-observation",
+            auto_apply=False,
+            note_type=note_type,
         )
 
         draft = await self._index.find_pending_concept_draft(normalized)
