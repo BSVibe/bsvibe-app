@@ -351,10 +351,11 @@ describe("Knowledge surface (BSage graph)", () => {
     });
     // The community legend entry shows the member count (auth community has 2).
     expect(screen.getByTestId("legend-community-auth")).toHaveTextContent("2");
-    // Communities get SHORT human labels ("Cluster N"), not the raw long
-    // community id (which is a concept-id string and overflows the legend).
-    expect(screen.getByTestId("legend-community-auth")).toHaveTextContent(/Cluster \d/);
-    expect(screen.getByTestId("legend-community-auth")).not.toHaveTextContent("auth");
+    // Lift E29 — communities show the humanized form of the backend's
+    // semantic community id (the smallest member concept_id) so the founder
+    // can answer "why are these grouped?" at a glance. Pre-E29 this collapsed
+    // every community to "Cluster N" which threw away the signal.
+    expect(screen.getByTestId("legend-community-auth")).toHaveTextContent("Auth");
   });
 
   it("filters by a COMMUNITY legend entry", async () => {
@@ -386,10 +387,11 @@ describe("Knowledge surface (BSage graph)", () => {
     // metadatum. The fixture node's kind is "concept" → humanized "Concept".
     expect(within(panel).getByText("Type")).toBeInTheDocument();
     expect(within(panel).getByText("Concept")).toBeInTheDocument();
-    // Community is labelled with the same "Cluster N" scheme as the legend (not
-    // the raw community id), so the two surfaces agree.
+    // Lift E29 — community is labelled with the humanized form of the
+    // backend's semantic community id (the same map the legend uses) so the
+    // two surfaces agree. The fixture's "auth" community renders as "Auth".
     expect(within(panel).getByText("Community")).toBeInTheDocument();
-    expect(within(panel).getByText(/Cluster \d/)).toBeInTheDocument();
+    expect(within(panel).getByText("Auth")).toBeInTheDocument();
   });
 
   it("no longer renders the 'Recently observed' section (directive #2)", async () => {
