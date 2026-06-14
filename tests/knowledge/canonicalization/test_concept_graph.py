@@ -99,8 +99,52 @@ async def test_active_concepts_become_nodes_with_attrs(
     assert set(graph.nodes()) == {"python", "calculator"}
     for node_id, attrs in graph.nodes(data=True):
         # get_graph reads `name` (display) and `entity_type`.
+        # E28 back-compat — concepts seeded without ``note_type`` fall
+        # back to the generic ``concept`` label so the legend stays sane.
         assert attrs["entity_type"] == "concept"
         assert attrs["name"] == node_id
+
+
+async def test_concept_graph_node_entity_type_carries_note_type(
+    workspace_storage: FileSystemStorage,
+) -> None:
+    """Lift E28 — a concept promoted with ``note_type='Pattern'`` lands on
+    the concept graph as a node whose ``entity_type`` is ``Pattern`` (not
+    the generic ``concept``). The PWA Knowledge view's TYPE legend reads
+    this directly so the founder buckets by Pattern / Principle /
+    TechInsight / DomainModel rather than seeing one undifferentiated
+    pool."""
+    service = await _make_permissive_service(workspace_storage)
+    # Seed two concepts with different note kinds.
+    draft = await service.create_action_draft(
+        kind="create-concept",
+        params={"concept": "pipe-drain", "title": "Pipe drain", "type": "Pattern"},
+    )
+    await service.apply_action(draft, actor="test")
+    draft = await service.create_action_draft(
+        kind="create-concept",
+        params={
+            "concept": "no-implicit-routing",
+            "title": "No implicit routing",
+            "type": "Principle",
+        },
+    )
+    await service.apply_action(draft, actor="test")
+
+    graph = await build_concept_graph(workspace_storage)
+
+    assert graph.nodes["pipe-drain"]["entity_type"] == "Pattern"
+    assert graph.nodes["no-implicit-routing"]["entity_type"] == "Principle"
+
+
+async def test_concept_graph_untyped_concept_falls_back_to_generic_kind(
+    workspace_storage: FileSystemStorage,
+) -> None:
+    """E28 back-compat — concepts without ``note_type`` (pre-E26 vaults,
+    retag-only tags) land on the graph with the legacy ``concept`` kind."""
+    await _seed_concepts(workspace_storage, ["legacy"])
+    graph = await build_concept_graph(workspace_storage)
+    assert graph.nodes["legacy"]["entity_type"] == "concept"
 
 
 async def test_empty_workspace_yields_empty_graph(

@@ -73,6 +73,10 @@ async def list_concepts(
                 alias_count=len(concept.aliases),
                 created_at=concept.created_at,
                 updated_at=concept.updated_at,
+                # Lift E28 — surface the E20/E26/E27 seedling note kind so
+                # the founder can skim by Pattern/Principle/TechInsight/
+                # DomainModel instead of one undifferentiated "concept" pool.
+                type=concept.note_type,
             )
         )
     return out
@@ -172,6 +176,8 @@ async def get_concept_detail(
         aliases=list(concept.aliases),
         related=related,
         observations=[resp for _captured, _path, resp in observations],
+        # Lift E28 — same E26/E27 propagation as the list endpoint.
+        type=concept.note_type,
     )
 
 
