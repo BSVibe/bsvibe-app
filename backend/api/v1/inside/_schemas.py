@@ -31,6 +31,12 @@ class ConceptResponse(BaseModel):
     alias_count: int
     created_at: datetime
     updated_at: datetime
+    # Lift E28 — the seedling note kind that promoted into this concept
+    # (E20 whitelist: Pattern / Principle / TechInsight / DomainModel),
+    # threaded through E26 + E27. Optional — pre-E26 concepts and the
+    # untyped retag/merge path leave it ``None`` and the UI shows the
+    # generic "concept" label.
+    type: str | None = None
 
 
 class GraphNode(BaseModel):
@@ -160,6 +166,10 @@ class ConceptDetailResponse(BaseModel):
     aliases: list[str]
     related: list[RelatedConcept]
     observations: list[SourceObservation]
+    # Lift E28 — surface the concept's note kind (same field as
+    # :class:`ConceptResponse.type`) so the detail inspector can show it
+    # next to the aliases + observations.
+    type: str | None = None
 
 
 __all__ = [

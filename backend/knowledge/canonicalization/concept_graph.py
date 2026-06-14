@@ -75,10 +75,17 @@ async def build_concept_graph(storage: StorageBackend) -> nx.MultiDiGraph:
     concept_ids: set[str] = set()
     for concept in concepts:
         concept_ids.add(concept.concept_id)
+        # Lift E28 — let the seedling note kind drive the graph node's
+        # ``entity_type`` so the PWA Knowledge view's TYPE legend buckets
+        # concepts by Pattern / Principle / TechInsight / DomainModel
+        # rather than collapsing every concept under one ``concept`` label.
+        # Pre-E26 / untyped concepts fall back to the generic ``concept``
+        # so the legend never breaks on a NULL.
+        entity_type = concept.note_type or "concept"
         graph.add_node(
             concept.concept_id,
             name=concept.display or concept.concept_id,
-            entity_type="concept",
+            entity_type=entity_type,
         )
 
     if not concept_ids:

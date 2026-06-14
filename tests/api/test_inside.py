@@ -24,6 +24,7 @@ is never enumerated. An empty workspace yields empty lists, never an error.
 from __future__ import annotations
 
 import uuid
+from datetime import UTC, datetime
 from pathlib import Path
 
 import httpx
@@ -194,6 +195,36 @@ async def test_concepts_lists_canonical_anchors(client, workspace_storage) -> No
     assert row["alias_count"] == len(row["aliases"])
     assert row["created_at"]
     assert row["updated_at"]
+
+
+async def test_concepts_response_surfaces_note_type(client, workspace_storage) -> None:
+    """Lift E28 — ``GET /inside/concepts`` returns each concept's ``type``
+    field (E26/E27 propagated) so the founder can skim by Pattern /
+    Principle / TechInsight / DomainModel instead of the all-``concept``
+    pre-E28 collapse."""
+    from backend.knowledge.canonicalization import models as _models
+    from backend.knowledge.canonicalization.store import NoteStore as _NoteStore
+
+    # Bypass the promotion path and write a typed concept directly so the
+    # test stays focused on the API surface, not the promotion plumbing.
+    store = _NoteStore(workspace_storage)
+    await store.write_concept(
+        _models.ConceptEntry(
+            concept_id="pipe-drain",
+            path="concepts/active/pipe-drain.md",
+            display="Pipe drain",
+            aliases=[],
+            created_at=datetime(2026, 6, 14, tzinfo=UTC),
+            updated_at=datetime(2026, 6, 14, tzinfo=UTC),
+            note_type="Pattern",
+        )
+    )
+
+    r = await client.get("/api/v1/inside/concepts")
+    assert r.status_code == 200, r.text
+    rows = r.json()
+    row = next(row for row in rows if row["id"] == "pipe-drain")
+    assert row["type"] == "Pattern", "E28 — concept list response must surface the note kind"
 
 
 async def test_concepts_empty_workspace(client) -> None:
