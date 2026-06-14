@@ -279,7 +279,6 @@
     "graphColorType": "유형",
     "graphColorCommunity": "커뮤니티",
     "graphLegendCommunityLabel": "커뮤니티로 필터",
-    "graphCommunityLabel": "클러스터 {id}",
     "inspectorType": "유형",
     "inspectorCommunity": "커뮤니티",
     "inspectorActionRetract": "철회",
