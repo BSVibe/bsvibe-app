@@ -107,8 +107,8 @@ const SESSION: Session = {
 
 const GRAPH: KnowledgeGraph = {
   nodes: [
-    { id: "auth", label: "Auth", kind: "concept", community: "auth", weight: 2 },
-    { id: "jwks", label: "JWKS", kind: "concept", community: "auth", weight: 1 },
+    { id: "auth", label: "Auth", kind: "concept", community: "auth-domain", weight: 2 },
+    { id: "jwks", label: "JWKS", kind: "concept", community: "auth-domain", weight: 1 },
     { id: "deploy", label: "Deploy", kind: "topic", community: "deploy", weight: 1 },
   ],
   edges: [
@@ -349,13 +349,13 @@ describe("Knowledge surface (BSage graph)", () => {
       // Two communities in the fixture: "auth" (auth+jwks) and "deploy".
       expect(screen.getAllByTestId(/legend-community-/).length).toBe(2);
     });
-    // The community legend entry shows the member count (auth community has 2).
-    expect(screen.getByTestId("legend-community-auth")).toHaveTextContent("2");
+    // The community legend entry shows the member count (auth-domain has 2).
+    expect(screen.getByTestId("legend-community-auth-domain")).toHaveTextContent("2");
     // Lift E29 — communities show the humanized form of the backend's
     // semantic community id (the smallest member concept_id) so the founder
     // can answer "why are these grouped?" at a glance. Pre-E29 this collapsed
     // every community to "Cluster N" which threw away the signal.
-    expect(screen.getByTestId("legend-community-auth")).toHaveTextContent("Auth");
+    expect(screen.getByTestId("legend-community-auth-domain")).toHaveTextContent("Auth domain");
   });
 
   it("filters by a COMMUNITY legend entry", async () => {
@@ -389,9 +389,11 @@ describe("Knowledge surface (BSage graph)", () => {
     expect(within(panel).getByText("Concept")).toBeInTheDocument();
     // Lift E29 — community is labelled with the humanized form of the
     // backend's semantic community id (the same map the legend uses) so the
-    // two surfaces agree. The fixture's "auth" community renders as "Auth".
+    // two surfaces agree. The fixture's "auth-domain" community renders as
+    // "Auth domain" (distinct from the node's "Auth" label so the assertion
+    // can scope to the metadatum row).
     expect(within(panel).getByText("Community")).toBeInTheDocument();
-    expect(within(panel).getByText("Auth")).toBeInTheDocument();
+    expect(within(panel).getByText("Auth domain")).toBeInTheDocument();
   });
 
   it("no longer renders the 'Recently observed' section (directive #2)", async () => {
