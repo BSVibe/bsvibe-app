@@ -211,24 +211,22 @@ export default function KnowledgeGraphView({ graph }: { graph: KnowledgeGraph })
     [colorMode],
   );
 
-  // Deterministic community id → "Cluster N" map, the SINGLE source of truth for
-  // community labels (used by both the legend and the inspector so they never
-  // disagree). Numbered by the same freq-desc / id-asc order the legend uses;
-  // computed independent of colorMode so the inspector can label a node's
-  // community even while the canvas is coloured by TYPE.
+  // Lift E29 — community labels are the humanized form of the backend's
+  // semantic community id (e.g. "anti-hallucination" → "Anti hallucination").
+  // Pre-E29 this collapsed every community to a sequential "Cluster N" tag,
+  // which masked the very signal the user needed: "WHY are these grouped?"
+  // The backend (concept_graph._assign_communities) picks the
+  // lexicographically smallest member concept_id as the community id, so the
+  // label is grounded in real vault data — never a synthetic counter.
   const communityLabels = useMemo(() => {
-    const counts: Record<string, number> = {};
-    for (const n of baseNodes) {
-      if (n.community) counts[n.community] = (counts[n.community] ?? 0) + 1;
-    }
     const map: Record<string, string> = {};
-    Object.entries(counts)
-      .sort(([ga, a], [gb, b]) => b - a || ga.localeCompare(gb))
-      .forEach(([community], idx) => {
-        map[community] = t("graphCommunityLabel", { id: idx + 1 });
-      });
+    for (const n of baseNodes) {
+      if (n.community && !(n.community in map)) {
+        map[n.community] = humanizeGroup(n.community) ?? n.community;
+      }
+    }
     return map;
-  }, [baseNodes, t]);
+  }, [baseNodes]);
 
   // Legend entries derived from actual data for the ACTIVE color mode: each
   // unique group gets a color (palette cycles by frequency rank) and a count.
