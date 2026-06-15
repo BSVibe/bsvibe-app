@@ -238,6 +238,10 @@ def build_agent_execution_deps(
             workspace_id=run.workspace_id,
             settings=settings,
             redis=redis_client,
+            # Lift E31 — thread the run id so the ExecutorAdapter binds
+            # its dispatched task to the run for artifact persistence
+            # (files captured by the worker → run's ``artifact_refs``).
+            run_id=run.id,
         )
         if resolved is None:
             # Fallthrough writes a Decision when there's truly no LLM

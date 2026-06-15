@@ -270,6 +270,15 @@ class ExecutorAdapter:
     # ``session_factory`` removes the shared-state hazard at its root: every
     # parallel branch owns its own write transaction.
     session_factory: async_sessionmaker[AsyncSession] | None = None
+    # Lift E31 — when the caller is an ``agent_loop.act`` invocation the
+    # executor task IS part of an ExecutionRun. Threading the run id onto
+    # ``dispatch.create_task`` is what flips ``record_result``'s file-
+    # persist guard (``files and task.run_id is not None``) so the files
+    # the coding agent wrote inside its sandbox land under the run's
+    # vault path as real ``artifact_refs``. Chat-shaped callers (frame /
+    # judge / knowledge.ingest) leave this ``None`` — their tasks are
+    # detached from any run and capturing files would be noise.
+    run_id: uuid.UUID | None = None
     supported_methods: frozenset[str] = field(default_factory=lambda: frozenset({"chat"}))
 
     async def chat(
@@ -399,8 +408,11 @@ class ExecutorAdapter:
         raw_model = (self.account.litellm_model or "").strip()
         model = None if not raw_model or raw_model.startswith("executor/") else raw_model
 
-        # Create + dispatch the task. ``run_id=None`` because chat is
-        # detached from any ExecutionRun (see class docstring).
+        # Create + dispatch the task. Lift E31 — when the resolver wired
+        # ``self.run_id`` (agent_loop callers), thread it onto the task row
+        # so the worker's captured files (B1) get persisted as the run's
+        # ``artifact_refs`` via ``record_result``. Pre-E31 / chat-shaped
+        # callers leave ``run_id=None`` and capture is silently skipped.
         task = await dispatch.create_task(
             session,
             workspace_id=self.workspace_id,
@@ -408,7 +420,7 @@ class ExecutorAdapter:
             prompt=prompt,
             system=system,
             workspace_dir=".",
-            run_id=None,
+            run_id=self.run_id,
             model=model,
         )
         await dispatch.dispatch_task(self.redis, session=session, task=task, worker_id=worker.id)
@@ -594,6 +606,7 @@ def adapter_for(
     redis: Any = None,
     timeout_s: float | None = None,
     session_factory: async_sessionmaker[AsyncSession] | None = None,
+    run_id: uuid.UUID | None = None,
 ) -> ModelAccountAdapter:
     """Pick the right :class:`ModelAccountAdapter` for an account.
 
@@ -640,6 +653,9 @@ def adapter_for(
             # per ``chat`` call so parallel chunks don't race on
             # ``session.flush()``. ``None`` keeps the legacy path.
             session_factory=session_factory,
+            # Lift E31 — agent_loop callers thread the ExecutionRun's id
+            # so files captured by the worker land under the run.
+            run_id=run_id,
         )
     return LiteLLMAdapter(
         account=account,

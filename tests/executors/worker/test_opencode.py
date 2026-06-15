@@ -152,7 +152,10 @@ async def test_message_body_uses_system_alongside_parts_not_inside() -> None:
     body = serve.message_requests[0]
     assert body["system"] == "BE BRIEF"
     assert body["parts"] == [{"type": "text", "text": "the user prompt"}]
-    assert body["agent"] == "plan"
+    # Lift E31 — default agent is now ``build`` so the coding agent acts
+    # in its sandbox (edits files, runs bash, runs tests). Pre-E31 the
+    # default was ``plan`` which only produced descriptions.
+    assert body["agent"] == "build"
     assert body["model"] == {"providerID": "anthropic", "modelID": "claude"}
 
 
