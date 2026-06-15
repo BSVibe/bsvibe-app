@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -232,7 +233,16 @@ class TestExecutorAdapterChat:
             )
             assert adapter.supported_methods == frozenset({"chat"})
 
-    async def test_chat_rejects_tools(self) -> None:
+    async def test_chat_with_tools_no_longer_rejects(self) -> None:
+        """Lift E30 — passing tools to ExecutorAdapter MUST NOT raise.
+
+        Pre-E30 the adapter rejected any chat with ``tools`` so the agent
+        loop forced LiteLLM-backed accounts only. That violated the
+        ``no-implicit-routing`` principle (BSVibe must work with a coding
+        agent attached). Post-E30 the tool list is formatted into the
+        system prompt as a verification-contract guide; the dispatch still
+        needs Redis to actually fire, which the next assertion checks.
+        """
         async with memory_session() as s:
             adapter = ExecutorAdapter(
                 account=_stub_account("executor"),
@@ -242,7 +252,9 @@ class TestExecutorAdapterChat:
                 session=s,
                 settings=get_settings(),
             )
-            with pytest.raises(NotImplementedError, match="does not support tool calls"):
+            # No redis → no NotImplementedError; only the redis-missing
+            # error path fires, exactly like a tools-less call would.
+            with pytest.raises(ExecutorAdapterUnavailable, match="requires a Redis client"):
                 await adapter.chat(
                     system="x",
                     messages=[{"role": "user", "content": "y"}],
@@ -855,6 +867,178 @@ class TestExecutorAdapterChat:
                         )
                 finally:
                     await worker_task
+
+
+class TestExecutorAdapterE30ToolsAndContract:
+    """Lift E30 — when ``tools`` are passed the adapter formats them into
+    a verification-contract guide in the system prompt instead of raising;
+    when the agent's output contains a ``<verification-contract>{…}</…>``
+    block, the adapter synthesizes a ``declare_verification`` tool call so
+    the downstream loop registers the contract through the existing path.
+    """
+
+    def test_augment_system_appends_contract_guide_when_tools_set(self) -> None:
+        from backend.dispatch.adapter import _augment_system_for_executor_tools
+
+        out = _augment_system_for_executor_tools(
+            "You are a worker.",
+            [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "declare_verification",
+                        "description": "Declare how BSVibe verifies your work.",
+                    },
+                },
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "write_file",
+                        "description": "Write a file under the run workspace.",
+                    },
+                },
+            ],
+        )
+        # Original system prompt survives untouched at the head.
+        assert out.startswith("You are a worker.")
+        # The E30 guide is appended, including the contract template AND
+        # the named tools the loop registered.
+        assert "BSVibe verification contract (Lift E30)" in out
+        assert "<verification-contract>" in out
+        assert "declare_verification" in out
+        assert "write_file" in out
+
+    def test_augment_system_no_tools_returns_original(self) -> None:
+        from backend.dispatch.adapter import _augment_system_for_executor_tools
+
+        assert _augment_system_for_executor_tools("be terse", None) == "be terse"
+        assert _augment_system_for_executor_tools("be terse", []) == "be terse"
+
+    def test_synthesize_tool_call_from_contract_block(self) -> None:
+        from backend.dispatch.adapter import _synthesize_executor_tool_calls
+
+        output = (
+            "I edited tests/api/test_inside_trust.py to inject a fixture clock.\n"
+            "\n"
+            "<verification-contract>\n"
+            '{"checks": [{"kind": "shell", "cmd": "pytest tests/api/test_inside_trust.py::test_product_trust_detail_shape -q"}]}\n'
+            "</verification-contract>\n"
+        )
+        calls = _synthesize_executor_tool_calls(output)
+        assert len(calls) == 1
+        call = calls[0]
+        assert call.name == "declare_verification"
+        payload = json.loads(call.arguments_json)
+        assert payload["checks"][0]["kind"] == "shell"
+        assert "pytest" in payload["checks"][0]["cmd"]
+
+    def test_synthesize_returns_empty_when_no_block(self) -> None:
+        from backend.dispatch.adapter import _synthesize_executor_tool_calls
+
+        assert _synthesize_executor_tool_calls("just text, no contract") == ()
+        assert _synthesize_executor_tool_calls("") == ()
+
+    def test_synthesize_returns_empty_on_malformed_json(self) -> None:
+        from backend.dispatch.adapter import _synthesize_executor_tool_calls
+
+        bad = "<verification-contract>{not valid json}</verification-contract>"
+        assert _synthesize_executor_tool_calls(bad) == ()
+
+    @pytest.mark.asyncio
+    async def test_chat_with_tools_dispatches_with_augmented_system(
+        self,
+    ) -> None:
+        """End-to-end — passing ``tools`` augments the system prompt that
+        lands on the worker's stream entry, and a contract block in the
+        worker's reply synthesizes the ``declare_verification`` tool call."""
+        redis = await _make_redis()
+        workspace_id = uuid.uuid4()
+
+        async with shared_file_sessionmaker() as sf:
+            async with sf() as setup:
+                worker = await _seed_worker(
+                    setup, workspace_id=workspace_id, capabilities=["claude_code"]
+                )
+                account = _executor_account(workspace_id, worker.id)
+                setup.add(account)
+                await setup.commit()
+
+            async with sf() as adapter_session:
+                adapter = ExecutorAdapter(
+                    account=account,
+                    workspace_id=workspace_id,
+                    account_id=account.account_id,
+                    model_account_id=account.id,
+                    session=adapter_session,
+                    settings=get_settings().model_copy(update={"executor_task_timeout_s": 30.0}),
+                    redis=redis,
+                )
+
+                async def _simulate_worker() -> None:
+                    stream = dispatch.worker_stream(worker.id)
+                    last_id = "0"
+                    captured_system: list[str] = []
+                    for _ in range(500):
+                        entries = await redis.xread({stream: last_id}, count=1, block=20)
+                        if not entries:
+                            continue
+                        _name, messages = entries[0]
+                        for msg_id, fields in messages:
+                            last_id = msg_id
+                            if fields.get("action") != "execute":
+                                continue
+                            captured_system.append(fields.get("system", ""))
+                            task_id = uuid.UUID(fields["task_id"])
+                            async with sf() as ws_session:
+                                await dispatch.record_result(
+                                    ws_session,
+                                    redis,
+                                    task_id=task_id,
+                                    success=True,
+                                    output=(
+                                        "Edited the file. Verification follows.\n"
+                                        "<verification-contract>\n"
+                                        '{"checks": [{"kind": "shell", "cmd": "pytest -q tests/foo.py"}]}\n'
+                                        "</verification-contract>\n"
+                                    ),
+                                    error_message=None,
+                                )
+                                await ws_session.commit()
+                            # Stash for the outer assertion.
+                            self._captured_system = captured_system[0]  # type: ignore[attr-defined]
+                            return
+                    raise AssertionError("worker stream never saw the XADD")
+
+                import asyncio as _asyncio
+
+                worker_task = _asyncio.create_task(_simulate_worker())
+                try:
+                    response = await adapter.chat(
+                        system="ORIGINAL SYSTEM",
+                        messages=[{"role": "user", "content": "fix the flake"}],
+                        tools=[
+                            {
+                                "type": "function",
+                                "function": {
+                                    "name": "declare_verification",
+                                    "description": "Declare contract.",
+                                },
+                            }
+                        ],
+                    )
+                finally:
+                    await worker_task
+
+                # The system prompt the worker received was the augmented one.
+                augmented = getattr(self, "_captured_system", "")
+                assert augmented.startswith("ORIGINAL SYSTEM")
+                assert "verification-contract" in augmented
+
+                # The contract block in the worker's reply became a synthesized
+                # ``declare_verification`` tool call the downstream loop will
+                # register through its existing path.
+                assert len(response.tool_calls) == 1
+                assert response.tool_calls[0].name == "declare_verification"
 
 
 class TestProtocolConformance:
