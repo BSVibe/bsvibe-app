@@ -30,6 +30,8 @@ checked at rule-creation time so an incompatible binding fails fast.
 from __future__ import annotations
 
 import asyncio
+import json
+import re
 import uuid
 from dataclasses import dataclass, field
 from typing import Any, Protocol, runtime_checkable
@@ -277,15 +279,21 @@ class ExecutorAdapter:
         messages: list[ChatMessage],
         tools: list[dict[str, Any]] | None = None,
     ) -> ChatResponse:
-        # Tool calling is intentionally unsupported on the CLI transport
-        # (see class docstring) — surface the mismatch loudly so the call
-        # site does not silently lose its tools.
-        if tools:
-            raise NotImplementedError(
-                "ExecutorAdapter does not support tool calls — the CLI "
-                "--print transport has no tool_use surface. Route a caller "
-                "that requires tools to a LiteLLM-backed account."
-            )
+        # Lift E30 — when the caller passes tools the loop expects to drive a
+        # tool-use cycle (BSVibe = orchestrator, LLM = planner emitting
+        # structured tool_calls). Coding agents (opencode / codex /
+        # claude_code) work the OTHER way around: the agent acts
+        # autonomously inside its sandbox with its OWN tools (bash, git, gh,
+        # file edit, pytest, …). The single piece BSVibe genuinely needs
+        # from them is the verification contract that gates ``verified``.
+        #
+        # Impedance-match the two patterns: format the BSVibe tools as a
+        # short natural-language reference block in ``system`` so the agent
+        # knows the contract surface, single-shot the chat call, then parse
+        # the agent's final text for a ``<verification-contract>{...}</…>``
+        # block and synthesize a virtual ``declare_verification`` tool call.
+        # ``_drive_loop`` then registers the contract and runs verification
+        # exactly as it does for LiteLLM-backed accounts.
 
         if self.redis is None:
             raise ExecutorAdapterUnavailable(
@@ -304,6 +312,13 @@ class ExecutorAdapter:
         pinned_worker_id = _parse_uuid_or_none(pinned_raw)
 
         prompt = _render_prompt(messages)
+
+        # Lift E30 — when ``tools`` is set, give the agent a short reference
+        # of BSVibe's expected verification contract so it can declare one
+        # in its final text. The agent does its actual work using its own
+        # native tools (bash, git, gh, file edit, pytest); BSVibe's tool
+        # registry is here only as a verification-contract template.
+        effective_system = _augment_system_for_executor_tools(system, tools) if tools else system
 
         # Lift E19 — when wired with a ``session_factory`` the entire
         # dispatch lifecycle (create_task → dispatch_task → commit →
@@ -324,7 +339,7 @@ class ExecutorAdapter:
                     session=call_session,
                     executor_type=executor_type,
                     pinned_worker_id=pinned_worker_id,
-                    system=system,
+                    system=effective_system,
                     prompt=prompt,
                 )
 
@@ -347,7 +362,7 @@ class ExecutorAdapter:
             session=self.session,
             executor_type=executor_type,
             pinned_worker_id=pinned_worker_id,
-            system=system,
+            system=effective_system,
             prompt=prompt,
         )
 
@@ -458,7 +473,110 @@ class ExecutorAdapter:
             executor_type=executor_type,
             output_chars=len(completed.output or ""),
         )
-        return ChatResponse(content=completed.output or "")
+        # Lift E30 — when the agent emitted a verification contract block,
+        # synthesize a virtual ``declare_verification`` tool call so the
+        # downstream loop registers the contract and runs verification
+        # exactly as it does for LiteLLM-backed accounts. Absent a contract
+        # block the return shape is the legacy one (``tool_calls=()``) and
+        # the loop nudges the agent on the next cycle.
+        synthesized = _synthesize_executor_tool_calls(completed.output or "")
+        return ChatResponse(content=completed.output or "", tool_calls=synthesized)
+
+
+# ---------------------------------------------------------------------------
+# Lift E30 — executor-side helpers
+# ---------------------------------------------------------------------------
+
+_E30_TOOL_GUIDE_HEADER = (
+    "## BSVibe verification contract (Lift E30)\n"
+    "\n"
+    "You are a coding agent running inside a sandbox. Do the work end-to-end "
+    "with your own tools (read/edit files, run bash, run tests, open PRs, "
+    "etc.). Your work is delegated; BSVibe will not call tools on your "
+    "behalf. The single piece BSVibe NEEDS from you is the verification "
+    "contract: how should BSVibe verify your work after you finish?\n"
+    "\n"
+    "When you are finished, emit ONE block on its own lines:\n"
+    "\n"
+    "<verification-contract>\n"
+    '{"checks": [{"kind": "shell", "cmd": "<the command BSVibe should run to verify>"}]}\n'
+    "</verification-contract>\n"
+    "\n"
+    "Each check is a shell command whose exit-code-0 means verified. Common "
+    'patterns: ``{"kind": "shell", "cmd": "pytest tests/<path>::<node>"}`` or '
+    '``{"kind": "shell", "cmd": "ruff check <path>"}``. List as many as you '
+    "need; ALL must pass for the run to be ``verified``.\n"
+    "\n"
+    "BSVibe's tool registry (FOR REFERENCE — you do NOT call these; you "
+    "declare the contract instead):\n"
+)
+
+_E30_CONTRACT_RE = re.compile(
+    r"<verification-contract>\s*(?P<json>\{.*?\})\s*</verification-contract>",
+    re.DOTALL,
+)
+
+
+def _augment_system_for_executor_tools(system: str, tools: list[dict[str, Any]] | None) -> str:
+    """Lift E30 — append a verification-contract guide + tool reference to
+    the caller's system prompt so a coding-agent executor knows what BSVibe
+    needs from it.
+
+    The agent doesn't call BSVibe tools (its OWN sandbox tools — bash, git,
+    gh, file edit — do the work). The tools list is included only so the
+    agent can phrase its verification contract in the same vocabulary the
+    rest of the system uses.
+    """
+    if not tools:
+        return system
+    lines: list[str] = [system.rstrip() if system else "", "", _E30_TOOL_GUIDE_HEADER]
+    for tool in tools:
+        # OpenAI / Anthropic tool shapes share ``{"type": "function",
+        # "function": {"name": ..., "description": ...}}``. Tolerate both.
+        fn = tool.get("function") if isinstance(tool, dict) else None
+        name = (fn or tool).get("name") if isinstance(fn or tool, dict) else None
+        desc = (fn or tool).get("description") if isinstance(fn or tool, dict) else None
+        if not name:
+            continue
+        first = (desc or "").splitlines()[0][:200] if desc else ""
+        lines.append(f"- ``{name}`` — {first}" if first else f"- ``{name}``")
+    return "\n".join(lines)
+
+
+def _synthesize_executor_tool_calls(output: str) -> tuple[ChatToolCall, ...]:
+    """Lift E30 — extract the agent's ``<verification-contract>{…}</…>``
+    block and turn it into a synthetic ``declare_verification`` tool call so
+    the downstream loop registers the contract through the existing path.
+
+    On a missing or malformed block we return ``()`` so the loop's
+    no-tool-calls branch fires (it will nudge the agent on the next cycle).
+    Best-effort by design — the agent's text is the source of truth, this
+    layer only forwards what was declared.
+    """
+    if not output:
+        return ()
+    match = _E30_CONTRACT_RE.search(output)
+    if match is None:
+        return ()
+    raw_json = match.group("json").strip()
+    try:
+        parsed = json.loads(raw_json)
+    except (TypeError, ValueError):
+        logger.warning("executor_adapter_contract_parse_failed", raw=raw_json[:200])
+        return ()
+    if not isinstance(parsed, dict):
+        return ()
+    # The synthesized call goes through the same ``ToolRegistry`` invoker
+    # as a LiteLLM-emitted ``declare_verification`` call, so the arguments
+    # must be the same JSON the registry's handler accepts. The handler is
+    # tolerant of unknown keys; we forward whatever the agent declared.
+    return (
+        ChatToolCall(
+            id="e30-declare-verification",
+            name="declare_verification",
+            arguments_json=json.dumps(parsed),
+        ),
+    )
 
 
 # ---------------------------------------------------------------------------
