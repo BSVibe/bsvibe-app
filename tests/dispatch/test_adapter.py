@@ -1040,6 +1040,92 @@ class TestExecutorAdapterE30ToolsAndContract:
                 assert len(response.tool_calls) == 1
                 assert response.tool_calls[0].name == "declare_verification"
 
+    @pytest.mark.asyncio
+    async def test_chat_with_run_id_persists_files_under_run(self) -> None:
+        """Lift E31 — when the resolver wired ``run_id`` (agent_loop callers)
+        the dispatched task carries it through to ``ExecutorTaskRow.run_id``
+        so files captured by the worker (B1) get persisted as the run's
+        ``artifact_refs`` via ``record_result``.
+
+        Pre-E31 the chat path hard-coded ``run_id=None`` so the worker's
+        file capture was silently dropped — chat tasks were detached from
+        any run. With E31 the agent_loop's ``act`` caller threads its run
+        id end-to-end so the coding agent's edits land in the vault.
+        """
+        redis = await _make_redis()
+        workspace_id = uuid.uuid4()
+        run_id = uuid.uuid4()
+
+        async with shared_file_sessionmaker() as sf:
+            async with sf() as setup:
+                worker = await _seed_worker(
+                    setup, workspace_id=workspace_id, capabilities=["claude_code"]
+                )
+                account = _executor_account(workspace_id, worker.id)
+                setup.add(account)
+                await setup.commit()
+
+            async with sf() as adapter_session:
+                adapter = ExecutorAdapter(
+                    account=account,
+                    workspace_id=workspace_id,
+                    account_id=account.account_id,
+                    model_account_id=account.id,
+                    session=adapter_session,
+                    settings=get_settings().model_copy(update={"executor_task_timeout_s": 30.0}),
+                    redis=redis,
+                    run_id=run_id,
+                )
+
+                from backend.executors.db import ExecutorTaskRow
+
+                captured_run_ids: list[uuid.UUID | None] = []
+
+                async def _simulate_worker() -> None:
+                    stream = dispatch.worker_stream(worker.id)
+                    last_id = "0"
+                    for _ in range(500):
+                        entries = await redis.xread({stream: last_id}, count=1, block=20)
+                        if not entries:
+                            continue
+                        _name, messages = entries[0]
+                        for msg_id, fields in messages:
+                            last_id = msg_id
+                            if fields.get("action") != "execute":
+                                continue
+                            task_id = uuid.UUID(fields["task_id"])
+                            # Read the task row to confirm the run_id was
+                            # threaded through ``dispatch.create_task``.
+                            async with sf() as ws_session:
+                                row = await ws_session.get(ExecutorTaskRow, task_id)
+                                captured_run_ids.append(row.run_id if row else None)
+                                await dispatch.record_result(
+                                    ws_session,
+                                    redis,
+                                    task_id=task_id,
+                                    success=True,
+                                    output="ok",
+                                    error_message=None,
+                                )
+                                await ws_session.commit()
+                            return
+                    raise AssertionError("worker stream never saw the XADD")
+
+                import asyncio as _asyncio
+
+                worker_task = _asyncio.create_task(_simulate_worker())
+                try:
+                    await adapter.chat(
+                        system="x",
+                        messages=[{"role": "user", "content": "fix"}],
+                    )
+                finally:
+                    await worker_task
+
+                assert captured_run_ids == [run_id], (
+                    "E31 — ExecutorAdapter.run_id MUST land on ExecutorTaskRow.run_id"
+                )
+
 
 class TestProtocolConformance:
     """Both adapters satisfy the ``ModelAccountAdapter`` Protocol."""

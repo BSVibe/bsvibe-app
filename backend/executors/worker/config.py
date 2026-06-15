@@ -73,7 +73,15 @@ class WorkerSettings(BaseSettings):
     # The worker spawns serve once at startup (bound to localhost, auto-port
     # by default) and keeps it alive until shutdown. ``OpenCodeExecutor.execute``
     # POSTs against the captured URL instead of launching a subprocess.
-    opencode_serve_agent: str = "plan"
+    # Lift E31 — default to opencode's ``build`` agent so the executor
+    # actually edits files in its sandbox instead of stopping at a
+    # description. ``plan`` (the pre-E31 default) made the agent return a
+    # fix proposal but never produced code; ``build`` reads + edits + runs
+    # bash + tests inside the worker's per-task tempdir. The captured
+    # files flow into ``record_result`` (B1) → vault artifact_refs when the
+    # adapter is given a ``run_id``. Operators who genuinely want planning
+    # only can override via env ``BSVIBE_WORKER_OPENCODE_SERVE_AGENT=plan``.
+    opencode_serve_agent: str = "build"
     opencode_serve_host: str = "127.0.0.1"
     opencode_serve_port: int = 0
     opencode_serve_startup_timeout_s: float = 30.0

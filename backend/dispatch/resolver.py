@@ -120,6 +120,7 @@ class ModelAccountResolver:
         skill_names: list[str] | None = None,
         redis: Any = None,
         session_factory: async_sessionmaker[AsyncSession] | None = None,
+        run_id: uuid.UUID | None = None,
     ) -> None:
         self._session = session
         self._settings = settings
@@ -145,6 +146,12 @@ class ModelAccountResolver:
         # concurrent chunks hit the "Session is already flushing" guard.
         # ``None`` falls back to the bound ``session`` (legacy).
         self._session_factory = session_factory
+        # Lift E31 — when the agent_loop builds a resolver for one run, it
+        # passes the run id so the ExecutorAdapter the resolver hands back
+        # records its dispatched task under that run. Files captured by the
+        # worker then land as the run's ``artifact_refs`` instead of being
+        # silently dropped (the chat-shaped tasks' pre-E31 behaviour).
+        self._run_id = run_id
 
     def _ensure_accounts(self) -> ModelAccountService:
         if self._accounts is not None:
@@ -212,6 +219,10 @@ class ModelAccountResolver:
             # ExecutorAdapter uses it to open a fresh session per chat
             # call so parallel chunks don't race on flush().
             session_factory=self._session_factory,
+            # Lift E31 — when the resolver was wired with the run id,
+            # the ExecutorAdapter binds its dispatched task to that run
+            # so worker-captured files land as the run's artifact_refs.
+            run_id=self._run_id,
         )
 
         # Defensive validation — rule creation is supposed to catch this
