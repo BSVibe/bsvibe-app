@@ -246,6 +246,98 @@ async def test_dispatch_task_omits_model_when_none() -> None:
     await redis.aclose()
 
 
+# ── Lift E32 — repo_url ──────────────────────────────────────────────────────
+
+
+async def test_create_task_carries_repo_url() -> None:
+    """E32 — ``create_task`` threads ``repo_url`` onto the task row so the
+    worker can shallow-clone the repo into the per-task workspace before
+    invoking the executor (coding-agent path)."""
+    workspace_id = uuid.uuid4()
+    async with memory_session() as s:
+        task = await dispatch.create_task(
+            s,
+            workspace_id=workspace_id,
+            executor_type="opencode",
+            prompt="p",
+            repo_url="https://github.com/BSVibe/bsvibe-app",
+        )
+        await s.commit()
+        assert task.repo_url == "https://github.com/BSVibe/bsvibe-app"
+
+
+async def test_create_task_repo_url_defaults_to_none() -> None:
+    """E32 — chat-shaped callers (frame / judge / knowledge.ingest) omit
+    ``repo_url`` and the task row stays NULL. Worker treats absence as
+    "stick with the empty tempfile.mkdtemp() workspace"."""
+    workspace_id = uuid.uuid4()
+    async with memory_session() as s:
+        task = await dispatch.create_task(
+            s,
+            workspace_id=workspace_id,
+            executor_type="opencode",
+            prompt="p",
+        )
+        await s.commit()
+        assert task.repo_url is None
+
+
+async def test_dispatch_task_xadds_repo_url_when_set() -> None:
+    """E32 — when ``repo_url`` is set on the task, the XADD payload carries
+    it so the worker can clone before invoking the executor."""
+    workspace_id = uuid.uuid4()
+    redis = await _make_redis()
+    async with memory_session() as s:
+        worker = await _seed_worker(
+            s, workspace_id=workspace_id, capabilities=["opencode"], heartbeat_age_s=5
+        )
+        task = await dispatch.create_task(
+            s,
+            workspace_id=workspace_id,
+            executor_type="opencode",
+            prompt="hello",
+            repo_url="https://github.com/BSVibe/bsvibe-app",
+        )
+        await s.commit()
+        await dispatch.dispatch_task(redis, session=s, task=task, worker_id=worker.id)
+        await s.commit()
+
+        entries = await redis.xrange(dispatch.worker_stream(worker.id))
+        assert len(entries) == 1
+        _entry_id, fields = entries[0]
+        assert fields["repo_url"] == "https://github.com/BSVibe/bsvibe-app"
+        assert all(isinstance(v, str) for v in fields.values())
+    await redis.aclose()
+
+
+async def test_dispatch_task_omits_repo_url_when_none() -> None:
+    """E32 — chat-shaped callers' XADD payload MUST NOT include
+    ``repo_url``. The worker's ``task.get("repo_url") or None`` keeps the
+    back-compat empty-tempdir path for those callers."""
+    workspace_id = uuid.uuid4()
+    redis = await _make_redis()
+    async with memory_session() as s:
+        worker = await _seed_worker(
+            s, workspace_id=workspace_id, capabilities=["opencode"], heartbeat_age_s=5
+        )
+        task = await dispatch.create_task(
+            s,
+            workspace_id=workspace_id,
+            executor_type="opencode",
+            prompt="hello",
+        )
+        await s.commit()
+        await dispatch.dispatch_task(redis, session=s, task=task, worker_id=worker.id)
+        await s.commit()
+
+        entries = await redis.xrange(dispatch.worker_stream(worker.id))
+        assert len(entries) == 1
+        _entry_id, fields = entries[0]
+        assert fields.get("repo_url", "") == ""
+        assert all(isinstance(v, str) for v in fields.values())
+    await redis.aclose()
+
+
 # ── find_available_worker ──────────────────────────────────────────────────────
 
 

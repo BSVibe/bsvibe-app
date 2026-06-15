@@ -64,6 +64,25 @@ from backend.workflow.infrastructure.workers.agent_worker import AgentExecutionD
 logger = structlog.get_logger(__name__)
 
 
+async def _product_repo_url(session: AsyncSession, product_id: uuid.UUID) -> str | None:
+    """Lift E32 — return the product's git URL for worker-side cloning.
+
+    The agent_loop passes this through ``_resolve_via_caller`` so the
+    ExecutorAdapter the resolver hands back tells the worker to clone
+    the repo into the per-task workspace. Soft-fails (returns ``None``)
+    on a missing product or an empty ``repo_url`` so a substrate-only
+    run still resolves an adapter for its non-code chat callers.
+    """
+    from sqlalchemy import select  # noqa: PLC0415 — keep imports terse at module load
+
+    from backend.identity.workspaces_db import ProductRow  # noqa: PLC0415
+
+    repo_url = (
+        await session.execute(select(ProductRow.repo_url).where(ProductRow.id == product_id))
+    ).scalar_one_or_none()
+    return repo_url or None
+
+
 async def _product_workspace_provisioner(
     session: AsyncSession,
     run: ExecutionRun,
@@ -232,6 +251,13 @@ def build_agent_execution_deps(
             resolve_workspace_model_account,
         )
 
+        # Lift E32 — look up the product's repo URL so the worker can
+        # clone it into the per-task workspace before invoking the
+        # executor. Without it the coding agent gets an empty tempdir
+        # and the E31 dogfood symptom returns: 0 file edits, NULL
+        # artifact_refs. ``None`` keeps the pre-E32 empty-tempdir path
+        # for runs without a product (substrate-only tasks).
+        repo_url = await _product_repo_url(session, run.product_id) if run.product_id else None
         resolved = await _resolve_via_caller(
             session,
             caller_id=CALLER_AGENT_LOOP_ACT,
@@ -242,6 +268,9 @@ def build_agent_execution_deps(
             # its dispatched task to the run for artifact persistence
             # (files captured by the worker → run's ``artifact_refs``).
             run_id=run.id,
+            # Lift E32 — thread the product's repo URL so the worker
+            # clones it into the per-task workspace.
+            repo_url=repo_url,
         )
         if resolved is None:
             # Fallthrough writes a Decision when there's truly no LLM
