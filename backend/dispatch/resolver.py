@@ -121,6 +121,7 @@ class ModelAccountResolver:
         redis: Any = None,
         session_factory: async_sessionmaker[AsyncSession] | None = None,
         run_id: uuid.UUID | None = None,
+        repo_url: str | None = None,
     ) -> None:
         self._session = session
         self._settings = settings
@@ -152,6 +153,11 @@ class ModelAccountResolver:
         # worker then land as the run's ``artifact_refs`` instead of being
         # silently dropped (the chat-shaped tasks' pre-E31 behaviour).
         self._run_id = run_id
+        # Lift E32 — when the agent_loop knows the run's product, it passes
+        # the product's repo URL so the ExecutorAdapter the resolver hands
+        # back tells the worker to clone the repo into the per-task
+        # workspace before invoking the executor.
+        self._repo_url = repo_url
 
     def _ensure_accounts(self) -> ModelAccountService:
         if self._accounts is not None:
@@ -223,6 +229,10 @@ class ModelAccountResolver:
             # the ExecutorAdapter binds its dispatched task to that run
             # so worker-captured files land as the run's artifact_refs.
             run_id=self._run_id,
+            # Lift E32 — when the resolver was wired with a repo URL,
+            # the ExecutorAdapter dispatches it so the worker clones the
+            # repo into the per-task workspace before calling the executor.
+            repo_url=self._repo_url,
         )
 
         # Defensive validation — rule creation is supposed to catch this

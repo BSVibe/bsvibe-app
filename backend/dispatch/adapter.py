@@ -279,6 +279,12 @@ class ExecutorAdapter:
     # judge / knowledge.ingest) leave this ``None`` — their tasks are
     # detached from any run and capturing files would be noise.
     run_id: uuid.UUID | None = None
+    # Lift E32 — when set, the dispatched task tells the worker to
+    # shallow-clone this git URL into the per-task workspace before
+    # invoking the executor. Without it the worker hands the coding agent
+    # an empty ``tempfile.mkdtemp()`` and the agent has nothing to read or
+    # edit (the E31 dogfood symptom). Chat-shaped callers leave NULL.
+    repo_url: str | None = None
     supported_methods: frozenset[str] = field(default_factory=lambda: frozenset({"chat"}))
 
     async def chat(
@@ -422,6 +428,7 @@ class ExecutorAdapter:
             workspace_dir=".",
             run_id=self.run_id,
             model=model,
+            repo_url=self.repo_url,
         )
         await dispatch.dispatch_task(self.redis, session=session, task=task, worker_id=worker.id)
         # Commit before awaiting — the worker reports its result on a
@@ -607,6 +614,7 @@ def adapter_for(
     timeout_s: float | None = None,
     session_factory: async_sessionmaker[AsyncSession] | None = None,
     run_id: uuid.UUID | None = None,
+    repo_url: str | None = None,
 ) -> ModelAccountAdapter:
     """Pick the right :class:`ModelAccountAdapter` for an account.
 
@@ -656,6 +664,9 @@ def adapter_for(
             # Lift E31 — agent_loop callers thread the ExecutionRun's id
             # so files captured by the worker land under the run.
             run_id=run_id,
+            # Lift E32 — agent_loop callers thread the product's repo URL
+            # so the worker clones it into the per-task workspace.
+            repo_url=repo_url,
         )
     return LiteLLMAdapter(
         account=account,

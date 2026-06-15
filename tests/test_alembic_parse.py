@@ -75,11 +75,11 @@ def test_alembic_head_is_connector_last_import():
         text=True,
     )
     assert result.returncode == 0
-    # Lift E16 bumped the head to worker_last_in_flight; Lift E21 bumped it
-    # again to executor_task_model. Keep the test name (function name is the
-    # historical revision id, kept for git-blame stability) and assert the
-    # current tip.
-    assert "executor_task_model" in result.stdout
+    # Lift E16 → worker_last_in_flight; E21 → executor_task_model; E32 →
+    # executor_task_repo_url. Keep the test name (function name is the
+    # historical revision id, kept for git-blame stability) and assert
+    # the current tip.
+    assert "executor_task_repo_url" in result.stdout
 
 
 def test_target_metadata_covers_all_bases():

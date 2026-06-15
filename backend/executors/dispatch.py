@@ -241,6 +241,7 @@ async def create_task(
     workspace_dir: str = ".",
     run_id: uuid.UUID | None = None,
     model: str | None = None,
+    repo_url: str | None = None,
 ) -> ExecutorTaskRow:
     """Create a ``pending`` :class:`ExecutorTaskRow` and flush it (no commit).
 
@@ -251,6 +252,11 @@ async def create_task(
     ``model`` (optional, Lift E21) is the underlying LLM model id the worker
     forwards to the executor (e.g. ``opencode-go/qwen3.6-plus``). NULL means
     "use the CLI's default model" — the back-compat shape pre-E21.
+
+    ``repo_url`` (optional, Lift E32) — when set, the worker shallow-clones
+    this git URL into the per-task workspace BEFORE invoking the executor so
+    the coding agent has real files to read + edit. NULL keeps the pre-E32
+    empty-tempdir behaviour for chat-shaped callers.
     """
     task = ExecutorTaskRow(
         workspace_id=workspace_id,
@@ -260,6 +266,7 @@ async def create_task(
         system=system,
         workspace_dir=workspace_dir,
         model=model,
+        repo_url=repo_url,
         status="pending",
     )
     session.add(task)
@@ -303,6 +310,11 @@ async def dispatch_task(
     # path for legacy callers that have not started passing the model.
     if task.model:
         payload["model"] = task.model
+    # Lift E32 — when the dispatch is for a coding-agent run, ship the
+    # repo URL so the worker shallow-clones it into the per-task workspace
+    # before calling the executor. Same omit-when-empty rule as ``model``.
+    if task.repo_url:
+        payload["repo_url"] = task.repo_url
     msg_id = await redis.xadd(worker_stream(worker_id), payload)
 
     task.worker_id = worker_id

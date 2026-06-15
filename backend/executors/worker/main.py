@@ -242,6 +242,51 @@ async def register(
 # ── Single-task handling ───────────────────────────────────────────────────────
 
 
+async def _clone_repo_into_workspace(repo_url: str, workspace_dir: str) -> None:
+    """Lift E32 — shallow-clone ``repo_url`` into the per-task workspace.
+
+    ``git clone --depth 1 <repo_url> <workspace_dir>`` would fail because
+    ``workspace_dir`` already exists (``tempfile.mkdtemp`` created it).
+    ``git init`` + ``git fetch`` + ``git checkout FETCH_HEAD`` is the
+    idiomatic recovery: it clones into an existing-but-empty dir without
+    the ``destination path already exists`` error and stays shallow.
+
+    Soft-fail: any subprocess error degrades to the empty-tempdir
+    behaviour so a transient network/git issue doesn't take down the
+    whole task. The agent will see no files and likely write nothing,
+    but the run still terminates rather than hanging.
+    """
+    cmds = [
+        ["git", "init", "-q"],
+        ["git", "fetch", "--depth=1", "--quiet", repo_url, "HEAD"],
+        ["git", "checkout", "--quiet", "FETCH_HEAD"],
+    ]
+    for cmd in cmds:
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                cwd=workspace_dir,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            _stdout, stderr = await proc.communicate()
+        except Exception:  # noqa: BLE001 — best-effort clone
+            logger.warning(
+                "repo_clone_subprocess_failed", repo_url=repo_url, cmd=cmd[0], exc_info=True
+            )
+            return
+        if proc.returncode != 0:
+            logger.warning(
+                "repo_clone_step_failed",
+                repo_url=repo_url,
+                cmd=cmd[0],
+                returncode=proc.returncode,
+                stderr=stderr.decode("utf-8", errors="replace")[:500],
+            )
+            return
+    logger.info("repo_cloned", repo_url=repo_url, workspace_dir=workspace_dir)
+
+
 async def handle_task(
     task: dict[str, Any],
     *,
@@ -281,6 +326,18 @@ async def handle_task(
         executors[executor_type] = executor
 
     local_workspace = tempfile.mkdtemp(prefix="bsvibe-task-", dir=workspace_root or None)
+    # Lift E32 — when the dispatcher told the worker about a repo URL,
+    # shallow-clone it into ``local_workspace`` BEFORE handing the
+    # workspace to the executor. Without this the coding agent
+    # (opencode / codex / claude_code) gets an empty tempdir and the
+    # E31 dogfood symptom returns: success=True per call but ``git
+    # status --short`` empty, ``artifact_refs`` NULL — the agent had
+    # nothing to read or edit. Soft-fails: a clone error degrades to
+    # the empty-tempdir behaviour rather than killing the task, so a
+    # transient network blip doesn't take down the whole agent_loop.
+    repo_url = task.get("repo_url") or None
+    if repo_url:
+        await _clone_repo_into_workspace(repo_url, local_workspace)
     context: dict[str, Any] = {
         "task_id": task_id,
         # ALWAYS the worker-local dir — never the backend's foreign run path.

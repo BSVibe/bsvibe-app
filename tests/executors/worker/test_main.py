@@ -315,6 +315,63 @@ async def test_handle_task_skips_oversized_file_with_truncation_marker(tmp_path:
     assert files["small.txt"]["truncated"] is False
 
 
+async def test_handle_task_clones_repo_when_repo_url_set(monkeypatch: Any) -> None:
+    """Lift E32 — when the dispatched task carries ``repo_url``, the worker
+    invokes ``_clone_repo_into_workspace`` BEFORE running the executor so
+    the coding agent has real files to read + edit.
+
+    Pre-E32 the worker handed the executor an empty ``tempfile.mkdtemp()``
+    and the agent could only describe what it would do (the E31 dogfood
+    symptom: success=True per call, git status empty, artifact_refs NULL)."""
+    clone_calls: list[tuple[str, str]] = []
+
+    async def _fake_clone(repo_url: str, workspace_dir: str) -> None:
+        clone_calls.append((repo_url, workspace_dir))
+
+    monkeypatch.setattr(worker_main, "_clone_repo_into_workspace", _fake_clone)
+
+    executor = _WorkspaceCapturingExecutor()
+    state: dict[str, Any] = {}
+    async with _client(state) as client:
+        await worker_main.handle_task(
+            _task(repo_url="https://github.com/BSVibe/bsvibe-app"),
+            executors={"claude_code": executor},
+            client=client,
+            headers={"X-Worker-Token": "WORKER-TOKEN"},
+            redis=None,
+        )
+    # Clone fired once with the dispatched URL, targeting the SAME local
+    # workspace the executor then ran inside (so the agent sees the files).
+    assert len(clone_calls) == 1
+    assert clone_calls[0][0] == "https://github.com/BSVibe/bsvibe-app"
+    assert clone_calls[0][1] == executor.seen_workspace
+
+
+async def test_handle_task_skips_clone_when_repo_url_unset(monkeypatch: Any) -> None:
+    """E32 back-compat — chat-shaped callers (frame / judge / ingest) omit
+    ``repo_url`` and the worker MUST NOT clone anything, keeping the
+    pre-E32 empty-tempdir behaviour."""
+    clone_called = False
+
+    async def _fake_clone(repo_url: str, workspace_dir: str) -> None:
+        nonlocal clone_called
+        clone_called = True
+
+    monkeypatch.setattr(worker_main, "_clone_repo_into_workspace", _fake_clone)
+
+    executor = _WorkspaceCapturingExecutor()
+    state: dict[str, Any] = {}
+    async with _client(state) as client:
+        await worker_main.handle_task(
+            _task(),  # no repo_url
+            executors={"claude_code": executor},
+            client=client,
+            headers={"X-Worker-Token": "WORKER-TOKEN"},
+            redis=None,
+        )
+    assert clone_called is False
+
+
 async def test_handle_task_reports_failure_on_error_chunk() -> None:
     state: dict[str, Any] = {}
     async with _client(state) as client:

@@ -70,6 +70,7 @@ async def _resolve_via_caller(
     redis: Any = None,
     session_factory: async_sessionmaker[AsyncSession] | None = None,
     run_id: uuid.UUID | None = None,
+    repo_url: str | None = None,
 ) -> ResolvedAccount | None:
     """Resolve ``(caller_id, workspace_id)`` via the resolver.
 
@@ -96,6 +97,7 @@ async def _resolve_via_caller(
         redis=redis,
         session_factory=session_factory,
         run_id=run_id,
+        repo_url=repo_url,
     )
     try:
         return await resolver.resolve_for(caller_id=caller_id, workspace_id=workspace_id)

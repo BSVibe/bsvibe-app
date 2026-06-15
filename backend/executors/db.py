@@ -110,6 +110,13 @@ class ExecutorTaskRow(Base):
     # callers to a cheaper/faster model and ``codegen`` callers to a
     # capable one via RunRoutingRule → ModelAccount.litellm_model.
     model: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # Lift E32 — when set, the worker treats the dispatched task as a
+    # repo-shaped agent invocation: clone ``repo_url`` (shallow main) into
+    # the per-task workspace before handing the prompt to the executor so
+    # the coding agent (opencode/codex/claude_code) can read + edit real
+    # files instead of an empty ``tempfile.mkdtemp()``. NULL keeps the
+    # pre-E32 chat-shaped semantics (frame / judge / knowledge.ingest).
+    repo_url: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending", index=True)
     output: Mapped[str] = mapped_column(Text, nullable=False, default="")
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
