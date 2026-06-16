@@ -901,9 +901,10 @@ class TestExecutorAdapterE30ToolsAndContract:
         )
         # Original system prompt survives untouched at the head.
         assert out.startswith("You are a worker.")
-        # The E30 guide is appended, including the contract template AND
-        # the named tools the loop registered.
-        assert "BSVibe verification contract (Lift E30)" in out
+        # The E30 guide is appended (now E34 strengthens its DO-IT framing),
+        # including the contract template AND the named tools the loop
+        # registered.
+        assert "BSVibe coding-agent contract (Lift E30 / E34)" in out
         assert "<verification-contract>" in out
         assert "declare_verification" in out
         assert "write_file" in out

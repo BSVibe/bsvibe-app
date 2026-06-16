@@ -507,27 +507,38 @@ class ExecutorAdapter:
 # ---------------------------------------------------------------------------
 
 _E30_TOOL_GUIDE_HEADER = (
-    "## BSVibe verification contract (Lift E30)\n"
+    "## BSVibe coding-agent contract (Lift E30 / E34)\n"
     "\n"
-    "You are a coding agent running inside a sandbox. Do the work end-to-end "
-    "with your own tools (read/edit files, run bash, run tests, open PRs, "
-    "etc.). Your work is delegated; BSVibe will not call tools on your "
-    "behalf. The single piece BSVibe NEEDS from you is the verification "
-    "contract: how should BSVibe verify your work after you finish?\n"
+    "You are a coding agent running inside a sandbox that ALREADY has the "
+    "product repo checked out at your current working directory (Lift E32). "
+    "Use your OWN tools — Read / Edit / Write / Bash — to read the files, "
+    "make the actual edits, and run tests. BSVibe does NOT call tools on "
+    "your behalf; the agent_loop will not give you another turn unless you "
+    "explicitly fail to declare the verification contract.\n"
     "\n"
-    "When you are finished, emit ONE block on its own lines:\n"
+    "**Do all the work in this single response.** Concretely:\n"
+    "1. Read the files referenced in the user prompt.\n"
+    "2. Make the edits using your Edit / Write tools.\n"
+    "3. Run the verification commands yourself (Bash tool, e.g. ``pytest`` / "
+    "``ruff check``) to confirm they pass BEFORE declaring the contract.\n"
+    "4. End your final message with ONE contract block:\n"
     "\n"
     "<verification-contract>\n"
-    '{"checks": [{"kind": "shell", "cmd": "<the command BSVibe should run to verify>"}]}\n'
+    '{"checks": [{"kind": "shell", "cmd": "<command BSVibe should re-run to verify>"}]}\n'
     "</verification-contract>\n"
     "\n"
-    "Each check is a shell command whose exit-code-0 means verified. Common "
-    'patterns: ``{"kind": "shell", "cmd": "pytest tests/<path>::<node>"}`` or '
-    '``{"kind": "shell", "cmd": "ruff check <path>"}``. List as many as you '
-    "need; ALL must pass for the run to be ``verified``.\n"
+    "Each check is a shell command whose exit-code-0 means verified. After "
+    "you emit the contract BSVibe re-runs every check in its own sandbox "
+    "and the run lands ``verified`` if all pass — DO NOT just describe what "
+    "to do, DO IT. Planning without editing is the failure mode the loop "
+    "punishes by re-prompting you until contract is declared.\n"
     "\n"
-    "BSVibe's tool registry (FOR REFERENCE — you do NOT call these; you "
-    "declare the contract instead):\n"
+    "Capture (Lift E33): BSVibe records the files git status reports as "
+    "changed against your post-clone baseline. Untouched files don't count "
+    "as deliverables; the diff is the deliverable.\n"
+    "\n"
+    "BSVibe's tool registry (FOR REFERENCE — you do NOT call these; emit "
+    "the contract instead):\n"
 )
 
 _E30_CONTRACT_RE = re.compile(
