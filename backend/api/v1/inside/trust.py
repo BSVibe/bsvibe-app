@@ -18,6 +18,7 @@ audit_outbox + settle_drains + execution_runs rows (design §6).
 from __future__ import annotations
 
 import uuid
+from datetime import datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Depends
@@ -152,6 +153,15 @@ async def build_trust_service(
     return TrustSurfaceService(session=session)
 
 
+async def get_now() -> datetime | None:
+    """Injectable clock — returns ``None`` (real wall-clock) by default.
+
+    Tests override this to inject a fixed ``datetime`` so time-window
+    queries are deterministic regardless of when CI runs.
+    """
+    return None
+
+
 # --- Endpoints ------------------------------------------------------------
 
 
@@ -159,6 +169,7 @@ async def build_trust_service(
 async def fleet_trust(
     workspace_id: Annotated[uuid.UUID, Depends(get_workspace_id)],
     service: Annotated[TrustSurfaceService, Depends(build_trust_service)],
+    now: Annotated[datetime | None, Depends(get_now)] = None,
 ) -> FleetTrustResponse:
     """Trust glyphs for every product in the workspace.
 
@@ -169,7 +180,7 @@ async def fleet_trust(
     product_ids = await service.list_product_ids(workspace_id)
     entries: list[FleetTrustEntry] = []
     for pid in product_ids:
-        arrow = await service.compute_trend_arrow(workspace_id, pid)
+        arrow = await service.compute_trend_arrow(workspace_id, pid, now=now)
         entries.append(FleetTrustEntry(product_id=pid, trend_arrow=_arrow_to_resp(arrow)))
     return FleetTrustResponse(products=entries)
 
@@ -179,6 +190,7 @@ async def product_trust(
     product_id: uuid.UUID,
     workspace_id: Annotated[uuid.UUID, Depends(get_workspace_id)],
     service: Annotated[TrustSurfaceService, Depends(build_trust_service)],
+    now: Annotated[datetime | None, Depends(get_now)] = None,
 ) -> ProductTrustResponse:
     """Per-product trust detail for the L3 Inside trust strip.
 
@@ -186,7 +198,7 @@ async def product_trust(
     with no events returns the dormant glyph (``·``) + zero counts —
     same shape, never a 404.
     """
-    pt = await service.compute_product_trust(workspace_id, product_id)
+    pt = await service.compute_product_trust(workspace_id, product_id, now=now)
     return _product_to_resp(pt)
 
 

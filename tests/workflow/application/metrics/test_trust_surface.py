@@ -46,7 +46,10 @@ from tests._support import db_engine
 pytestmark = pytest.mark.asyncio
 
 
-_NOW = datetime(2026, 6, 1, 12, 0, 0, tzinfo=UTC)
+# Fixed clock far enough in the future that CI runs won't outpace the
+# 14-day window for years.  All fixtures are anchored relative to _NOW;
+# every test explicitly passes now=_NOW to the service methods.
+_NOW = datetime(2029, 6, 1, 12, 0, 0, tzinfo=UTC)
 
 
 @pytest_asyncio.fixture

@@ -184,6 +184,7 @@ def test_no_remaining_backend_orchestrator_imports_in_source() -> None:
             "node_modules",
             ".git",
             "var",
+            "wt",
         }:
             continue
         # Allow this test file (it documents the removed surface).
