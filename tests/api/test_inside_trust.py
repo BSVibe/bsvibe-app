@@ -44,7 +44,54 @@ from .._support import db_engine, fake_current_user
 
 pytestmark = pytest.mark.asyncio
 
-_NOW = datetime(2026, 6, 1, 12, 0, 0, tzinfo=UTC)
+# Fixed clock far enough in the future that CI runs won't outpace the
+# 14-day window for years.  Drain rows sit at _NOW - 5 days; the window
+# anchored at _NOW covers [_NOW-14d, _NOW].  Even if the real wall-clock
+# leaks through (now=None → _utcnow), the drain stays inside the window
+# until mid-2028.
+_NOW = datetime(2029, 6, 1, 12, 0, 0, tzinfo=UTC)
+
+
+class _FixedClockService:
+    """Wrapper that forces ``now=_NOW`` on every TrustSurfaceService call.
+
+    Uses ``__getattr__`` to dynamically intercept ALL method calls —
+    including future methods added to TrustSurfaceService — so no code
+    path can accidentally fall back to the real wall-clock via
+    ``now=None → _utcnow()``.  Only injects ``now`` for methods that
+    actually accept it (checked via inspect).
+    """
+
+    def __init__(self, inner):
+        self._inner = inner
+        import inspect
+
+        self._takes_now: set[str] = set()
+        for name in dir(inner):
+            if name.startswith("_"):
+                continue
+            attr = getattr(inner, name)
+            if callable(attr):
+                sig = inspect.signature(attr)
+                if "now" in sig.parameters:
+                    self._takes_now.add(name)
+
+    def __getattr__(self, name):
+        inner_attr = getattr(self._inner, name)
+        if not callable(inner_attr):
+            return inner_attr
+
+        if name in self._takes_now:
+
+            async def wrapper(*a, **kw):
+                kw["now"] = _NOW
+                return await inner_attr(*a, **kw)
+        else:
+
+            async def wrapper(*a, **kw):
+                return await inner_attr(*a, **kw)
+
+        return wrapper
 
 
 @pytest_asyncio.fixture
@@ -63,6 +110,9 @@ async def client(
     sf: async_sessionmaker[AsyncSession],
     workspace_id: uuid.UUID,
 ):
+    from backend.api.v1.inside.trust import build_trust_service, get_now
+    from backend.workflow.application.metrics.trust_surface import TrustSurfaceService
+
     app = create_app()
 
     def _ws() -> uuid.UUID:
@@ -72,9 +122,19 @@ async def client(
         async with sf() as s:
             yield s
 
+    async def _trust_service():
+        async for session in _session():
+            inner = TrustSurfaceService(session=session)
+            yield _FixedClockService(inner)
+
+    def _now() -> datetime:
+        return _NOW
+
     app.dependency_overrides[get_current_user] = fake_current_user()
     app.dependency_overrides[get_workspace_id] = _ws
     app.dependency_overrides[get_db_session] = _session
+    app.dependency_overrides[build_trust_service] = _trust_service
+    app.dependency_overrides[get_now] = _now
 
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
@@ -144,7 +204,7 @@ async def test_product_trust_detail_shape(
     """``GET /trust/{product_id}`` returns all four sub-metrics."""
     product_id = uuid.uuid4()
     actor = uuid.uuid4()
-    run = _make_run(workspace_id, product_id, created_at=_NOW - timedelta(days=20))
+    run = _make_run(workspace_id, product_id, created_at=_NOW - timedelta(days=30))
     decision = Decision(
         id=uuid.uuid4(),
         run_id=run.id,
@@ -161,7 +221,7 @@ async def test_product_trust_detail_shape(
         workspace_id=workspace_id,
         run_id=run.id,
         node_ref="garden/seedling/x.md",
-        drained_at=_NOW - timedelta(days=2),
+        drained_at=_NOW - timedelta(days=5),
     )
     async with sf() as s:
         s.add(run)

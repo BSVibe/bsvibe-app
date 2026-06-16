@@ -42,6 +42,10 @@ class _FakeServe:
         self.text = text
         self.status = status
         self.session_requests: list[bytes] = []
+        # Lift E35 — also capture the raw URL of each ``POST /session`` so tests
+        # can assert the ``?directory=`` query param (the fix for opencode binding
+        # the session to the worker's launchd cwd = host source repo).
+        self.session_request_urls: list[str] = []
         self.message_requests: list[dict[str, Any]] = []
         self.aborted_sessions: list[str] = []
         self.next_sid: str = "sid-1"
@@ -53,6 +57,7 @@ class _FakeServe:
             path = request.url.path
             if request.method == "POST" and path == "/session":
                 self.session_requests.append(request.content)
+                self.session_request_urls.append(str(request.url))
                 return httpx.Response(200, json={"id": self.next_sid})
             if (
                 request.method == "POST"
@@ -203,6 +208,59 @@ async def test_message_body_omits_system_when_empty() -> None:
     body = serve.message_requests[0]
     # An empty system field is omitted rather than sent as "".
     assert body.get("system", "") == ""  # accept "" or absent
+
+
+# ── Lift E35 — session directory must point at the worker's per-task clone ──
+
+
+async def test_session_create_passes_workspace_dir_as_directory_query() -> None:
+    """Lift E35 — ``POST /session`` MUST carry the worker's per-task
+    workspace as ``?directory=<workspace_dir>``. Without it opencode binds the
+    session to its OWN cwd (the worker's launchd ``WorkingDirectory`` = host
+    source repo), so every Edit/Write tool call lands in the founder's
+    working tree instead of the freshly-cloned per-task workspace. Symptom:
+    ``git status`` in the per-task dir shows nothing (captured=0), yet the
+    host repo silently accumulates agent edits across runs.
+
+    Live API probe against opencode 1.15.12 confirmed
+    ``POST /session?directory=/tmp`` → response ``directory=/private/tmp``
+    (the query param IS honoured; the body field is not).
+    """
+    serve = _FakeServe(text="ok")
+    executor = _executor_with(serve)
+
+    ws = "/var/folders/xx/bsvibe-task-deadbeef"
+    await _drain(executor.execute("p", {"workspace_dir": ws}))
+
+    assert serve.session_request_urls, "executor must have called POST /session"
+    url = serve.session_request_urls[0]
+    # ``httpx`` percent-encodes the slashes in the value; assert on the
+    # decoded ``directory=`` substring rather than the raw bytes.
+    from urllib.parse import parse_qs, urlparse
+
+    qs = parse_qs(urlparse(url).query)
+    assert qs.get("directory") == [ws], (
+        f"expected ?directory={ws!r} in session URL, got query={qs!r}"
+    )
+
+
+async def test_session_create_omits_directory_when_workspace_dir_missing() -> None:
+    """Lift E35 — chat-shaped callers (frame, judge, settle) don't have a
+    workspace at all. They pass ``context`` without ``workspace_dir``; the
+    executor must NOT send an empty ``?directory=`` (opencode would resolve
+    that to the process cwd anyway, but an empty value is meaningless and
+    adds noise to the log). Absent ``workspace_dir`` → no query at all.
+    """
+    serve = _FakeServe(text="ok")
+    executor = _executor_with(serve)
+
+    await _drain(executor.execute("p", {}))
+
+    assert serve.session_request_urls, "executor must have called POST /session"
+    from urllib.parse import parse_qs, urlparse
+
+    qs = parse_qs(urlparse(serve.session_request_urls[0]).query)
+    assert "directory" not in qs, f"empty workspace_dir should omit ?directory=, got query={qs!r}"
 
 
 # ── Error paths ─────────────────────────────────────────────────────────────

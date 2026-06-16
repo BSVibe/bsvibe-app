@@ -105,7 +105,7 @@ def test_no_legacy_orchestrator_submodule_imports_remain() -> None:
     for path in repo_root.rglob("*.py"):
         # Skip the test file itself + venv dirs.
         rel = path.relative_to(repo_root)
-        if rel.parts and rel.parts[0] in {".venv", "venv", "node_modules", ".git"}:
+        if rel.parts and rel.parts[0] in {".venv", "venv", "node_modules", ".git", "wt"}:
             continue
         if rel == Path("tests/workflow/test_h2b_orchestrator_absorption.py"):
             continue

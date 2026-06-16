@@ -14,6 +14,7 @@ executor dispatch. These tests pin the minimum executor event set:
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -23,17 +24,33 @@ from sqlalchemy import select
 import backend.executors.db  # noqa: F401
 from backend.config import Settings
 from backend.executors.orchestrator import ExecutorOrchestrator
+from backend.extensions.eventbus import reset_event_bus_for_testing
 from backend.workflow.application.audit_events import (
     DecisionPending,
     LoopTerminal,
     RunStarted,
 )
+from plugin.audit import register_audit_subscriber
 from plugin.audit.models import AuditOutboxRecord
 
 from .._support import memory_session
 from .test_orchestrator import FakeBox, FakeSandboxManager, _make_redis, _seed
 
 pytestmark = pytest.mark.asyncio
+
+
+@pytest.fixture(autouse=True)
+def _audit_subscriber_registered() -> Iterator[None]:
+    """Mirror the prod wiring (`backend.api.main` / `runtime.lifecycle`) — without
+    this, `safe_emit` publishes into a subscriber-less EventBus and every
+    audit_outbox assertion fails with `[]`. The fix matches the pattern already
+    used in `plugin/audit/tests/conftest.py`; isolated here so it doesn't bleed
+    into the sibling orchestrator tests that don't touch the outbox.
+    """
+    reset_event_bus_for_testing()
+    register_audit_subscriber()
+    yield
+    reset_event_bus_for_testing()
 
 
 async def _outbox_types(session):

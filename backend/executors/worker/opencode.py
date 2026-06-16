@@ -74,6 +74,17 @@ class OpenCodeExecutor:
     async def execute(self, prompt: str, context: dict[str, Any]) -> AsyncIterator[ExecutionChunk]:
         system = context.get("system") or ""
         model = context.get("model") or None
+        # Lift E35 — pin every opencode session to the worker's per-task clone
+        # (set by ``handle_task`` to ``local_workspace``). Without this opencode
+        # binds the session to its OWN cwd, which is inherited from the worker
+        # process (= the launchd ``WorkingDirectory``, normally the host source
+        # repo). Every Edit/Write tool call then lands in the founder's working
+        # tree instead of the per-task workspace, so E33's ``git status`` in the
+        # per-task dir reports ``captured=0`` while the host repo silently
+        # accumulates agent edits. Live API probe against opencode 1.15.12:
+        # ``POST /session?directory=/tmp`` returns ``directory=/private/tmp``;
+        # the body field is ignored, only the query param is honoured.
+        workspace_dir = context.get("workspace_dir") or ""
         timeout_s = self._settings.opencode_request_timeout_s
 
         url = opencode_server.get_serve_url()
@@ -116,7 +127,9 @@ class OpenCodeExecutor:
         abort_task: asyncio.Task[None] | None = None
         try:
             try:
-                resp = await self._call_with_respawn(client, body, session_holder)
+                resp = await self._call_with_respawn(
+                    client, body, session_holder, workspace_dir=workspace_dir
+                )
             except asyncio.CancelledError:
                 sid = session_holder.get("id")
                 if sid:
@@ -167,8 +180,12 @@ class OpenCodeExecutor:
             timeout=timeout_s,
         )
 
-    async def _create_session(self, client: httpx.AsyncClient) -> str:
-        res = await client.post("/session", json={})
+    async def _create_session(self, client: httpx.AsyncClient, *, workspace_dir: str = "") -> str:
+        # Lift E35 — ``directory`` is a QUERY param (the body field is ignored).
+        # ``params`` is omitted when empty so chat-shaped callers (frame, judge,
+        # settle) without a workspace fall back to opencode's default.
+        params = {"directory": workspace_dir} if workspace_dir else None
+        res = await client.post("/session", json={}, params=params)
         if res.status_code >= 300:
             raise OpenCodeHttpError(
                 f"POST /session returned {res.status_code}: {_truncate(res.text)}"
@@ -186,6 +203,8 @@ class OpenCodeExecutor:
         client: httpx.AsyncClient,
         body: dict[str, Any],
         session_holder: dict[str, str],
+        *,
+        workspace_dir: str = "",
     ) -> dict[str, Any]:
         """Create a session + post the message. On ConnectError → re-spawn once + retry.
 
@@ -195,13 +214,13 @@ class OpenCodeExecutor:
         sid to abort server-side.
         """
         try:
-            sid = await self._create_session(client)
+            sid = await self._create_session(client, workspace_dir=workspace_dir)
             session_holder["id"] = sid
             return await self._post_message(client, sid, body)
         except httpx.ConnectError as exc:
             logger.warning("opencode_serve_dead_retrying", error=str(exc))
             await opencode_server.ensure_serve_running(self._settings)
-            sid = await self._create_session(client)
+            sid = await self._create_session(client, workspace_dir=workspace_dir)
             session_holder["id"] = sid
             return await self._post_message(client, sid, body)
 
