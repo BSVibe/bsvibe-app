@@ -372,6 +372,80 @@ async def test_handle_task_skips_clone_when_repo_url_unset(monkeypatch: Any) -> 
     assert clone_called is False
 
 
+async def test_collect_changed_files_returns_only_git_modified_paths(tmp_path: Any) -> None:
+    """Lift E33 — when the work dir is a git repo, capture ONLY the files
+    that git status reports as changed against the post-clone baseline.
+
+    Pre-E33 the worker walked the WHOLE work dir and hit a 100-file cap
+    sorted alphabetically — the E32 dogfood (run a180f51e) proved this
+    captures the same first 100 files of the repo across every cycle and
+    misses the agent's actual edits whenever they sort lexically later
+    than the cap. The new helper enumerates ``git status --porcelain``
+    and reads only those paths, so the diff IS the deliverable.
+    """
+    import asyncio
+    import base64
+    import subprocess
+
+    work_dir = str(tmp_path)
+
+    def _seed_baseline() -> None:
+        subprocess.check_call(["git", "init", "-q"], cwd=work_dir)
+        subprocess.check_call(["git", "config", "user.email", "t@t"], cwd=work_dir)
+        subprocess.check_call(["git", "config", "user.name", "t"], cwd=work_dir)
+        (tmp_path / "alpha.py").write_text("# baseline\n")
+        (tmp_path / "deep" / "module.py").parent.mkdir()
+        (tmp_path / "deep" / "module.py").write_text("# baseline\n")
+        subprocess.check_call(["git", "add", "-A"], cwd=work_dir)
+        subprocess.check_call(["git", "commit", "-q", "-m", "baseline"], cwd=work_dir)
+
+    await asyncio.to_thread(_seed_baseline)
+
+    # Agent edits: one modified, one new, one deleted.
+    (tmp_path / "alpha.py").write_text("# modified by agent\n")
+    (tmp_path / "tests" / "new_test.py").parent.mkdir()
+    (tmp_path / "tests" / "new_test.py").write_text("assert True\n")
+    (tmp_path / "deep" / "module.py").unlink()
+
+    files = await worker_main._collect_changed_files(work_dir)
+
+    by_path = {f["path"]: f for f in files}
+    assert set(by_path) == {"alpha.py", "tests/new_test.py", "deep/module.py"}
+    assert base64.b64decode(by_path["alpha.py"]["content_b64"]) == b"# modified by agent\n"
+    assert base64.b64decode(by_path["tests/new_test.py"]["content_b64"]) == b"assert True\n"
+    # Deleted entry surfaces with the deletion marker; content stays empty.
+    assert by_path["deep/module.py"]["content_b64"] == ""
+    assert by_path["deep/module.py"].get("deleted") is True
+
+
+async def test_collect_changed_files_empty_when_no_changes(tmp_path: Any) -> None:
+    """E33 — a quiescent post-clone repo (agent did nothing) returns ``[]``.
+    Pre-E33 the walker would have shipped 100 untouched-clone files and
+    the loop would have surfaced them as the agent's deliverable."""
+    import asyncio
+    import subprocess
+
+    def _seed_baseline() -> None:
+        subprocess.check_call(["git", "init", "-q"], cwd=str(tmp_path))
+        subprocess.check_call(["git", "config", "user.email", "t@t"], cwd=str(tmp_path))
+        subprocess.check_call(["git", "config", "user.name", "t"], cwd=str(tmp_path))
+        (tmp_path / "alpha.py").write_text("x = 1\n")
+        subprocess.check_call(["git", "add", "-A"], cwd=str(tmp_path))
+        subprocess.check_call(["git", "commit", "-q", "-m", "baseline"], cwd=str(tmp_path))
+
+    await asyncio.to_thread(_seed_baseline)
+
+    assert await worker_main._collect_changed_files(str(tmp_path)) == []
+
+
+async def test_collect_changed_files_returns_empty_when_not_a_git_repo(tmp_path: Any) -> None:
+    """E33 — chat-shaped callers (no E32 clone) leave the work dir without
+    a ``.git`` directory; the new collector returns ``[]`` and the
+    handler falls back to the legacy walker."""
+    (tmp_path / "out.txt").write_text("hello")
+    assert await worker_main._collect_changed_files(str(tmp_path)) == []
+
+
 async def test_handle_task_reports_failure_on_error_chunk() -> None:
     state: dict[str, Any] = {}
     async with _client(state) as client:

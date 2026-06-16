@@ -117,19 +117,24 @@ def _is_build_junk(rel: Path) -> bool:
 
 
 def _collect_workspace_files(work_dir: str) -> list[dict[str, Any]]:
-    """Walk ``work_dir`` and return the files the CLI produced (B1).
+    """Walk ``work_dir`` and return the files the CLI produced (B1, legacy).
 
-    The dir starts empty for executor tasks, so every regular file is treated as
-    output. Each entry is ``{path, content_b64, truncated}`` where ``path`` is
-    relative to ``work_dir`` (POSIX-style). Symlinks are skipped (never follow
-    out of the work dir); files over :data:`_MAX_FILE_BYTES` are reported as a
-    truncation marker with empty content. At most :data:`_MAX_CAPTURED_FILES`
-    files are returned (deterministic sort so the cap is stable).
+    Used by chat-shaped callers (no ``repo_url`` → no git checkout) where
+    the work dir starts EMPTY and every regular file IS the CLI's output.
+    Sorted with a hard ``_MAX_CAPTURED_FILES`` cap so the result POST stays
+    bounded.
 
-    Build/cache junk is skipped (``__pycache__`` / ``.pytest_cache`` dirs, ``.pyc``
-    files): an agent that RUNS its tests leaves these behind, they aren't real
-    deliverables, and being binary they would poison a downstream text consumer
-    (the design→impl handoff prompt → a Postgres text column).
+    Lift E33 — when the dispatcher cloned a repo into the work dir
+    (1500+ files for bsvibe-app), this walker hits its cap on file 100
+    sorted alphabetically and CANNOT tell apart "files the agent edited"
+    from "files that were in the original checkout". The E32 dogfood (run
+    a180f51e) proved it: all six executor tasks captured the same first
+    100 files (``.devcontainer/Dockerfile`` …), zero agent edits visible.
+    For the repo-cloned path use :func:`_collect_changed_files` instead.
+
+    Build/cache junk is skipped (``__pycache__`` / ``.pytest_cache`` dirs,
+    ``.pyc`` files): an agent that RUNS its tests leaves these behind,
+    they aren't real deliverables.
     """
     root = Path(work_dir)
     if not root.is_dir():
@@ -173,6 +178,108 @@ def _collect_workspace_files(work_dir: str) -> list[dict[str, Any]]:
     return collected
 
 
+async def _collect_changed_files(work_dir: str) -> list[dict[str, Any]]:
+    """Lift E33 — capture ONLY the files the agent changed (git diff against
+    the post-clone baseline) instead of walking the whole work dir.
+
+    Coding agents (opencode / codex / claude_code) work the way a human
+    developer does: read files on demand with their own Read tool, edit
+    with their own Edit tool, run bash. They DON'T spit "everything in
+    workspace" as the deliverable; the deliverable is the diff. Walking
+    the whole work_dir and capping at 100 files captures whichever files
+    sort first alphabetically (``.devcontainer/Dockerfile`` …) — the
+    actual edits land off-screen.
+
+    Approach: ``git status --porcelain`` against the freshly-cloned repo
+    enumerates only modified/added/deleted/renamed paths. Read each, ship
+    the same ``{path, content_b64, truncated}`` shape as B1 so the
+    record_result + artifact_store path stays unchanged. Deleted files
+    are reported with empty content + ``deleted: True`` so the backend
+    can record the removal explicitly.
+
+    Returns ``[]`` when:
+    - the work dir isn't a git repo (chat-shaped fallback should have
+      gone through :func:`_collect_workspace_files` instead),
+    - ``git status`` fails for any reason (degrades gracefully — soft-
+      fail rather than killing the task).
+    """
+    root = Path(work_dir)
+    if not (root / ".git").exists():
+        return []
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "git",
+            "status",
+            "--porcelain",
+            # ``-u``/``--untracked-files=all`` expands untracked DIRECTORIES
+            # to each contained file. Without this, an agent that creates
+            # a new subdir would yield one porcelain line ending in ``/``
+            # (the directory marker) — we'd treat it as a file path,
+            # stat() the dir, and ship nothing.
+            "--untracked-files=all",
+            cwd=work_dir,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, _stderr = await proc.communicate()
+    except Exception:  # noqa: BLE001 — soft-fail keeps the run path alive
+        logger.warning("artifact_git_status_failed", work_dir=work_dir, exc_info=True)
+        return []
+    if proc.returncode != 0:
+        logger.warning(
+            "artifact_git_status_nonzero",
+            work_dir=work_dir,
+            returncode=proc.returncode,
+        )
+        return []
+
+    collected: list[dict[str, Any]] = []
+    for line in stdout.decode("utf-8", errors="replace").splitlines():
+        # Porcelain shape: ``XY <path>`` where ``XY`` is the two-char
+        # index/worktree status. Take the rightmost path so ``R old -> new``
+        # captures the new name. We don't need to distinguish staged vs
+        # unstaged since a fresh clone has none staged.
+        if len(line) < 4:
+            continue
+        status_code = line[:2]
+        path_segment = line[3:].strip()
+        rel = path_segment.rsplit(" -> ", 1)[-1]
+        if not rel or _is_build_junk(Path(rel)):
+            continue
+        abs_path = root / rel
+        deleted = status_code[0] == "D" or status_code[1] == "D"
+        if deleted:
+            collected.append({"path": rel, "content_b64": "", "truncated": False, "deleted": True})
+            continue
+        try:
+            size = abs_path.stat().st_size
+        except OSError:
+            logger.warning("artifact_stat_failed", path=rel)
+            continue
+        if size > _MAX_FILE_BYTES:
+            logger.info("artifact_skipped_oversized", path=rel, size=size)
+            collected.append({"path": rel, "content_b64": "", "truncated": True})
+            continue
+        try:
+            content = abs_path.read_bytes()
+        except OSError:
+            logger.warning("artifact_read_failed", path=rel)
+            continue
+        collected.append(
+            {
+                "path": rel,
+                "content_b64": base64.b64encode(content).decode("ascii"),
+                "truncated": False,
+            }
+        )
+    logger.info(
+        "artifact_changed_files_captured",
+        work_dir=work_dir,
+        captured=len(collected),
+    )
+    return collected
+
+
 async def _finalize_task(
     stream: Any, local_workspace: str, *, task_id: Any
 ) -> list[dict[str, Any]]:
@@ -181,6 +288,10 @@ async def _finalize_task(
     Returns the captured ``files`` (B1) — collected BEFORE the rmtree, else the
     CLI's output is lost. Both close and capture are best-effort: a failure here
     must never crash the loop or drop the result POST.
+
+    Lift E33 — when the work dir has a ``.git`` (the E32 clone path), capture
+    only the files git knows changed since the clone. The plain walker keeps
+    serving chat-shaped callers whose work dir is the legacy empty tempdir.
     """
     aclose = getattr(stream, "aclose", None)
     if aclose is not None:
@@ -190,7 +301,10 @@ async def _finalize_task(
             pass
     files: list[dict[str, Any]] = []
     try:
-        files = await asyncio.to_thread(_collect_workspace_files, local_workspace)
+        if (Path(local_workspace) / ".git").exists():
+            files = await _collect_changed_files(local_workspace)
+        else:
+            files = await asyncio.to_thread(_collect_workspace_files, local_workspace)
     except Exception:  # noqa: BLE001 — capture is best-effort, never fails a task
         logger.warning("artifact_capture_failed", task_id=task_id, exc_info=True)
     shutil.rmtree(local_workspace, ignore_errors=True)
