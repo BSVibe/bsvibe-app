@@ -178,67 +178,49 @@ def _collect_workspace_files(work_dir: str) -> list[dict[str, Any]]:
     return collected
 
 
-async def _collect_changed_files(work_dir: str) -> list[dict[str, Any]]:
-    """Lift E33 — capture ONLY the files the agent changed (git diff against
-    the post-clone baseline) instead of walking the whole work dir.
-
-    Coding agents (opencode / codex / claude_code) work the way a human
-    developer does: read files on demand with their own Read tool, edit
-    with their own Edit tool, run bash. They DON'T spit "everything in
-    workspace" as the deliverable; the deliverable is the diff. Walking
-    the whole work_dir and capping at 100 files captures whichever files
-    sort first alphabetically (``.devcontainer/Dockerfile`` …) — the
-    actual edits land off-screen.
-
-    Approach: ``git status --porcelain`` against the freshly-cloned repo
-    enumerates only modified/added/deleted/renamed paths. Read each, ship
-    the same ``{path, content_b64, truncated}`` shape as B1 so the
-    record_result + artifact_store path stays unchanged. Deleted files
-    are reported with empty content + ``deleted: True`` so the backend
-    can record the removal explicitly.
-
-    Returns ``[]`` when:
-    - the work dir isn't a git repo (chat-shaped fallback should have
-      gone through :func:`_collect_workspace_files` instead),
-    - ``git status`` fails for any reason (degrades gracefully — soft-
-      fail rather than killing the task).
+async def _git_lines(work_dir: str, *args: str) -> list[str]:
+    """Run a git subcommand and return its stdout split into non-empty lines.
+    Empty list on any non-zero exit or subprocess failure — soft-fail.
     """
-    root = Path(work_dir)
-    if not (root / ".git").exists():
-        return []
     try:
         proc = await asyncio.create_subprocess_exec(
             "git",
-            "status",
-            "--porcelain",
-            # ``-u``/``--untracked-files=all`` expands untracked DIRECTORIES
-            # to each contained file. Without this, an agent that creates
-            # a new subdir would yield one porcelain line ending in ``/``
-            # (the directory marker) — we'd treat it as a file path,
-            # stat() the dir, and ship nothing.
-            "--untracked-files=all",
+            *args,
             cwd=work_dir,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
         stdout, _stderr = await proc.communicate()
     except Exception:  # noqa: BLE001 — soft-fail keeps the run path alive
-        logger.warning("artifact_git_status_failed", work_dir=work_dir, exc_info=True)
         return []
     if proc.returncode != 0:
-        logger.warning(
-            "artifact_git_status_nonzero",
-            work_dir=work_dir,
-            returncode=proc.returncode,
-        )
         return []
+    return [ln for ln in stdout.decode("utf-8", errors="replace").splitlines() if ln]
 
-    collected: list[dict[str, Any]] = []
-    for line in stdout.decode("utf-8", errors="replace").splitlines():
-        # Porcelain shape: ``XY <path>`` where ``XY`` is the two-char
-        # index/worktree status. Take the rightmost path so ``R old -> new``
-        # captures the new name. We don't need to distinguish staged vs
-        # unstaged since a fresh clone has none staged.
+
+async def _changes_from_fetch_head(work_dir: str) -> dict[str, str]:
+    """E36 — diff vs the cloned baseline ref + untracked files. Returns
+    ``path → status_letter (M/A/D)``, first writer wins on collisions
+    (a path committed *and* with working-tree mods surfaces once)."""
+    changes: dict[str, str] = {}
+    for line in await _git_lines(work_dir, "diff", "--name-status", "FETCH_HEAD"):
+        parts = line.split("\t")
+        if not parts:
+            continue
+        status = parts[0][:1] if parts[0] else "M"
+        rel = parts[-1]
+        if rel and not _is_build_junk(Path(rel)):
+            changes.setdefault(rel, status)
+    for rel in await _git_lines(work_dir, "ls-files", "--others", "--exclude-standard"):
+        if rel and not _is_build_junk(Path(rel)):
+            changes.setdefault(rel, "A")
+    return changes
+
+
+async def _changes_from_porcelain(work_dir: str) -> dict[str, str]:
+    """E33 legacy fallback for chat-shaped tasks that bypass E32 clone."""
+    changes: dict[str, str] = {}
+    for line in await _git_lines(work_dir, "status", "--porcelain", "--untracked-files=all"):
         if len(line) < 4:
             continue
         status_code = line[:2]
@@ -246,32 +228,98 @@ async def _collect_changed_files(work_dir: str) -> list[dict[str, Any]]:
         rel = path_segment.rsplit(" -> ", 1)[-1]
         if not rel or _is_build_junk(Path(rel)):
             continue
-        abs_path = root / rel
-        deleted = status_code[0] == "D" or status_code[1] == "D"
-        if deleted:
-            collected.append({"path": rel, "content_b64": "", "truncated": False, "deleted": True})
-            continue
-        try:
-            size = abs_path.stat().st_size
-        except OSError:
-            logger.warning("artifact_stat_failed", path=rel)
-            continue
-        if size > _MAX_FILE_BYTES:
-            logger.info("artifact_skipped_oversized", path=rel, size=size)
-            collected.append({"path": rel, "content_b64": "", "truncated": True})
-            continue
-        try:
-            content = abs_path.read_bytes()
-        except OSError:
-            logger.warning("artifact_read_failed", path=rel)
-            continue
-        collected.append(
-            {
-                "path": rel,
-                "content_b64": base64.b64encode(content).decode("ascii"),
-                "truncated": False,
-            }
-        )
+        if status_code[0] == "D" or status_code[1] == "D":
+            changes.setdefault(rel, "D")
+        else:
+            changes.setdefault(rel, status_code[0] if status_code[0] != " " else status_code[1])
+    return changes
+
+
+def _read_change_entry(root: Path, rel: str, status: str) -> dict[str, Any] | None:
+    """Read one changed file into the B1 ``{path, content_b64, truncated}``
+    payload shape. Deletions surface as empty content + ``deleted=True``;
+    oversized files surface as a truncation marker; OS errors soft-fail
+    (logged, dropped from the result)."""
+    if status == "D":
+        return {"path": rel, "content_b64": "", "truncated": False, "deleted": True}
+    abs_path = root / rel
+    try:
+        size = abs_path.stat().st_size
+    except OSError:
+        logger.warning("artifact_stat_failed", path=rel)
+        return None
+    if size > _MAX_FILE_BYTES:
+        logger.info("artifact_skipped_oversized", path=rel, size=size)
+        return {"path": rel, "content_b64": "", "truncated": True}
+    try:
+        content = abs_path.read_bytes()
+    except OSError:
+        logger.warning("artifact_read_failed", path=rel)
+        return None
+    return {
+        "path": rel,
+        "content_b64": base64.b64encode(content).decode("ascii"),
+        "truncated": False,
+    }
+
+
+async def _collect_changed_files(work_dir: str) -> list[dict[str, Any]]:
+    """Lift E33 + E36 — capture ONLY the files the agent changed (anything
+    that differs from the post-clone baseline) instead of walking the whole
+    work dir.
+
+    Coding agents (opencode / codex / claude_code) work the way a human
+    developer does: read files on demand, edit, run bash — and *sometimes
+    commit*. The E35 dogfood (session ses_12f86f499, 2026-06-16) caught
+    qwen3.6-plus doing exactly that:
+
+        edit alpha.py
+        git checkout -b lift-e35-truncate-docstring
+        git add alpha.py
+        git commit -m "..."
+        git push    # fails silently — no auth
+        gh repo create ...  # also fails
+
+    `git status --porcelain` AFTER the commit sees zero working-tree
+    changes — the edit lives in the new branch, not in the index. E33
+    alone surfaced empty. E36 unions three sources so every variant
+    (committed / modified / untracked) lands:
+
+    * ``git diff --name-status FETCH_HEAD`` — every tracked file whose
+      content differs from the cloned baseline. FETCH_HEAD is the ref
+      ``_clone_repo_into_workspace`` wrote (E32); if the agent rebased it
+      away, this list is empty and we still fall back through.
+    * ``git ls-files --others --exclude-standard`` — net-new untracked
+      files the agent created but hasn't ``git add``'d.
+    * ``git status --porcelain --untracked-files=all`` — legacy fallback
+      for chat-shaped E32-bypass cases (no FETCH_HEAD ref present).
+
+    Each path is read once and shipped in the same
+    ``{path, content_b64, truncated}`` shape as B1 so the record_result
+    + artifact_store path stays unchanged. Deleted files surface with
+    empty content + ``deleted: True``.
+
+    Returns ``[]`` when the work dir isn't a git repo or every git call
+    soft-failed.
+    """
+    root = Path(work_dir)
+    if not (root / ".git").exists():
+        return []
+
+    # E36 — pull from three sources and union by path. ``has_fetch_head``
+    # decides whether we trust the commit-aware path (diff vs FETCH_HEAD +
+    # ls-files) or fall back to legacy porcelain.
+    has_fetch_head = (root / ".git" / "FETCH_HEAD").exists()
+    if has_fetch_head:
+        changes = await _changes_from_fetch_head(work_dir)
+    else:
+        changes = await _changes_from_porcelain(work_dir)
+
+    collected: list[dict[str, Any]] = []
+    for rel, status in changes.items():
+        entry = _read_change_entry(root, rel, status)
+        if entry is not None:
+            collected.append(entry)
     logger.info(
         "artifact_changed_files_captured",
         work_dir=work_dir,

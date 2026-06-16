@@ -446,6 +446,134 @@ async def test_collect_changed_files_returns_empty_when_not_a_git_repo(tmp_path:
     assert await worker_main._collect_changed_files(str(tmp_path)) == []
 
 
+# ── Lift E36 — commits made by the agent must also surface ──────────────────
+
+
+async def test_collect_changed_files_surfaces_agent_commits_to_new_branch(
+    tmp_path: Any,
+) -> None:
+    """Lift E36 — the E35 dogfood (session ses_12f86f499) proved the agent
+    edits the right file in the right per-task workspace, but the agent
+    then ran ``git checkout -b lift-e35-truncate-docstring && git add ... &&
+    git commit`` — the human-developer reflex. The commit moved the change
+    OUT of the porcelain working-tree view, so the E33 capture saw zero
+    changes and the run shipped an empty deliverable.
+
+    Fix: also diff against the ``FETCH_HEAD`` ref the E32 clone wrote, so
+    any commit the agent made on top of the cloned baseline surfaces too.
+    """
+    import asyncio
+    import base64
+    import subprocess
+
+    # Put upstream + work outside each other so the clone init doesn't
+    # see upstream/ as an untracked subdir.
+    work_path = tmp_path / "work"
+    work_path.mkdir()
+    work_dir = str(work_path)
+    upstream = tmp_path / "upstream"
+
+    def _seed_baseline_and_agent_commit() -> None:
+        upstream.mkdir()
+        subprocess.check_call(["git", "init", "-q", "-b", "main"], cwd=upstream)
+        subprocess.check_call(["git", "config", "user.email", "u@u"], cwd=upstream)
+        subprocess.check_call(["git", "config", "user.name", "u"], cwd=upstream)
+        (upstream / "alpha.py").write_text("# baseline\n")
+        subprocess.check_call(["git", "add", "-A"], cwd=upstream)
+        subprocess.check_call(["git", "commit", "-q", "-m", "baseline"], cwd=upstream)
+
+        # Mirror the E32 clone sequence into the per-task workspace.
+        subprocess.check_call(["git", "init", "-q"], cwd=work_dir)
+        subprocess.check_call(["git", "config", "user.email", "a@a"], cwd=work_dir)
+        subprocess.check_call(["git", "config", "user.name", "a"], cwd=work_dir)
+        subprocess.check_call(
+            ["git", "fetch", "--depth=1", "--quiet", str(upstream), "HEAD"],
+            cwd=work_dir,
+        )
+        subprocess.check_call(["git", "checkout", "--quiet", "FETCH_HEAD"], cwd=work_dir)
+
+        # Agent edits a file then commits it to a new branch (no working-tree leftover).
+        (work_path / "alpha.py").write_text("# edited by agent\n")
+        subprocess.check_call(
+            ["git", "checkout", "-q", "-b", "lift-e36-agent-branch"],
+            cwd=work_dir,
+        )
+        subprocess.check_call(["git", "add", "-A"], cwd=work_dir)
+        subprocess.check_call(["git", "commit", "-q", "-m", "agent edit"], cwd=work_dir)
+
+    await asyncio.to_thread(_seed_baseline_and_agent_commit)
+
+    # Sanity: porcelain alone would miss it (this is exactly why E33 failed).
+    porcelain = await asyncio.to_thread(
+        subprocess.check_output,
+        ["git", "status", "--porcelain", "--untracked-files=all"],
+        cwd=work_dir,
+    )
+    assert porcelain == b"", "test setup must reproduce the E35 dogfood symptom"
+
+    files = await worker_main._collect_changed_files(work_dir)
+    by_path = {f["path"]: f for f in files}
+    assert set(by_path) == {"alpha.py"}, f"expected committed edit to surface, got {set(by_path)!r}"
+    assert base64.b64decode(by_path["alpha.py"]["content_b64"]) == b"# edited by agent\n"
+
+
+async def test_collect_changed_files_unions_commits_and_working_tree(
+    tmp_path: Any,
+) -> None:
+    """Lift E36 — when the agent both commits some files and leaves others
+    in the working tree (committed: ``alpha.py``; untracked: ``new.py``;
+    modified-uncommitted: ``beta.py``), every category must surface. This
+    is the realistic shape of a mid-iteration agent state where it commits
+    the main change but hasn't yet `git add`'d a follow-up tweak.
+    """
+    import asyncio
+    import base64
+    import subprocess
+
+    work_path = tmp_path / "work"
+    work_path.mkdir()
+    work_dir = str(work_path)
+    upstream = tmp_path / "upstream"
+
+    def _seed() -> None:
+        upstream.mkdir()
+        subprocess.check_call(["git", "init", "-q", "-b", "main"], cwd=upstream)
+        subprocess.check_call(["git", "config", "user.email", "u@u"], cwd=upstream)
+        subprocess.check_call(["git", "config", "user.name", "u"], cwd=upstream)
+        (upstream / "alpha.py").write_text("# baseline alpha\n")
+        (upstream / "beta.py").write_text("# baseline beta\n")
+        subprocess.check_call(["git", "add", "-A"], cwd=upstream)
+        subprocess.check_call(["git", "commit", "-q", "-m", "baseline"], cwd=upstream)
+
+        subprocess.check_call(["git", "init", "-q"], cwd=work_dir)
+        subprocess.check_call(["git", "config", "user.email", "a@a"], cwd=work_dir)
+        subprocess.check_call(["git", "config", "user.name", "a"], cwd=work_dir)
+        subprocess.check_call(
+            ["git", "fetch", "--depth=1", "--quiet", str(upstream), "HEAD"],
+            cwd=work_dir,
+        )
+        subprocess.check_call(["git", "checkout", "--quiet", "FETCH_HEAD"], cwd=work_dir)
+
+        # Agent: commit alpha; modify beta but don't commit; create untracked new.py.
+        (work_path / "alpha.py").write_text("# committed alpha\n")
+        subprocess.check_call(["git", "checkout", "-q", "-b", "agent-branch"], cwd=work_dir)
+        subprocess.check_call(["git", "add", "alpha.py"], cwd=work_dir)
+        subprocess.check_call(["git", "commit", "-q", "-m", "alpha"], cwd=work_dir)
+        (work_path / "beta.py").write_text("# modified beta\n")
+        (work_path / "new.py").write_text("# new untracked\n")
+
+    await asyncio.to_thread(_seed)
+
+    files = await worker_main._collect_changed_files(work_dir)
+    by_path = {f["path"]: f for f in files}
+    assert set(by_path) == {"alpha.py", "beta.py", "new.py"}, (
+        f"expected union of commits + working-tree + untracked, got {set(by_path)!r}"
+    )
+    assert base64.b64decode(by_path["alpha.py"]["content_b64"]) == b"# committed alpha\n"
+    assert base64.b64decode(by_path["beta.py"]["content_b64"]) == b"# modified beta\n"
+    assert base64.b64decode(by_path["new.py"]["content_b64"]) == b"# new untracked\n"
+
+
 async def test_handle_task_reports_failure_on_error_chunk() -> None:
     state: dict[str, Any] = {}
     async with _client(state) as client:
