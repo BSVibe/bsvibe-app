@@ -231,9 +231,7 @@ async def _changes_from_porcelain(work_dir: str) -> dict[str, str]:
         if status_code[0] == "D" or status_code[1] == "D":
             changes.setdefault(rel, "D")
         else:
-            changes.setdefault(
-                rel, status_code[0] if status_code[0] != " " else status_code[1]
-            )
+            changes.setdefault(rel, status_code[0] if status_code[0] != " " else status_code[1])
     return changes
 
 
