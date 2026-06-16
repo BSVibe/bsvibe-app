@@ -288,6 +288,10 @@ def _extract_text(resp: dict[str, Any]) -> str:
 
 
 def _truncate(text: str, max_len: int = 500) -> str:
+    """Truncate *text* to *max_len* characters for logging/error messages.
+
+    Prevents oversized response bodies from blowing up log lines or error strings.
+    """
     if len(text) <= max_len:
         return text
     return text[:max_len] + "…"
