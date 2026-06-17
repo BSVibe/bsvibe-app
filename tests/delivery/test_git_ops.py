@@ -80,6 +80,41 @@ async def test_commit_all_no_changes_returns_false(tmp_path: Path) -> None:
     assert committed is False
 
 
+async def test_is_ahead_of_base_true_when_branch_has_extra_commit(tmp_path: Path) -> None:
+    """Lift E41 — when the verifier's W2 step already committed the agent's
+    edits before delivery runs, ``commit_all`` returns ``False`` (working tree
+    clean) BUT the branch still has commits ahead of ``base_branch`` that
+    must be pushed + PR'd. The dogfood (run 5a695eb8, 2026-06-17) caught
+    this: ``github_delivery_no_changes_noop`` fired even though the agent's
+    commit was sitting on HEAD ready to ship.
+    """
+    bare = await _make_bare_remote(tmp_path)
+    ops = GitOps()
+    dest = tmp_path / "checkout"
+    await ops.clone(bare.as_uri(), dest, token=None, depth=1)
+    await ops.checkout_new_branch(dest, "bsvibe/run-ahead")
+    # Simulate the verifier's W2 commit_worktree: file added + committed.
+    (dest / "feature.txt").write_text("the feature\n")
+    await ops.commit_all(dest, "feat: add feature")
+
+    assert await ops.is_ahead_of_base(dest, "main") is True
+
+
+async def test_is_ahead_of_base_false_when_branch_matches_base(tmp_path: Path) -> None:
+    """Lift E41 — a freshly-checked-out branch with no commits beyond
+    ``base_branch`` reports ``False``. This is the legitimate no-op
+    scenario the existing ``test_github_no_file_changes_no_push_no_pr_clean_success``
+    guards: nothing to PR.
+    """
+    bare = await _make_bare_remote(tmp_path)
+    ops = GitOps()
+    dest = tmp_path / "checkout"
+    await ops.clone(bare.as_uri(), dest, token=None, depth=1)
+    await ops.checkout_new_branch(dest, "bsvibe/run-clean")
+
+    assert await ops.is_ahead_of_base(dest, "main") is False
+
+
 def test_scrub_token_redacts_token_in_url() -> None:
     token = "ghp_supersecrettoken"
     url = f"https://x-access-token:{token}@github.com/owner/repo.git"
