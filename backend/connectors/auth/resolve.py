@@ -13,6 +13,7 @@ directly by the webhook resolver.
 
 from __future__ import annotations
 
+import uuid
 from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import select
@@ -39,6 +40,23 @@ def _expiring_soon(token_row: ConnectorOAuthTokenRow) -> bool:
     if exp.tzinfo is None:
         exp = exp.replace(tzinfo=UTC)
     return exp <= datetime.now(tz=UTC) + _REFRESH_SKEW
+
+
+class ConnectorReauthRequired(Exception):
+    """Lift E45 — the bound OAuth refresh token can no longer be exchanged
+    for a new access token (provider returned ``bad_refresh_token`` / 401 /
+    similar). The founder must run the OAuth flow again for this account.
+    The exception carries the ``account_id`` + ``provider`` so the caller
+    can surface a precise "reconnect <provider>" signal instead of the
+    raw provider error string (which travels through the dispatch + push
+    paths as an opaque ``Authentication failed`` stack).
+    """
+
+    def __init__(self, *, account_id: uuid.UUID, provider: str, cause: str) -> None:
+        super().__init__(f"connector {provider} (account={account_id}) needs re-OAuth: {cause}")
+        self.account_id = account_id
+        self.provider = provider
+        self.cause = cause
 
 
 async def resolve_connector_credentials(
@@ -70,7 +88,14 @@ async def resolve_connector_credentials(
                             installation_id=account.external_ref, refresh_token=refresh_token
                         )
                 else:
-                    refreshed = await provider.refresh(refresh_token=refresh_token)
+                    try:
+                        refreshed = await provider.refresh(refresh_token=refresh_token)
+                    except Exception as exc:  # noqa: BLE001 — provider-specific; classify as reauth-needed
+                        raise ConnectorReauthRequired(
+                            account_id=account.id,
+                            provider=token_row.provider,
+                            cause=str(exc),
+                        ) from exc
                 if refreshed is not None:
                     token_row = await upsert_token(
                         session,
@@ -85,4 +110,4 @@ async def resolve_connector_credentials(
     return {"token": cipher.decrypt(account.signing_secret_ciphertext)}
 
 
-__all__ = ["resolve_connector_credentials"]
+__all__ = ["ConnectorReauthRequired", "resolve_connector_credentials"]
