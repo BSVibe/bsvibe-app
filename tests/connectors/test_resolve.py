@@ -108,6 +108,51 @@ async def test_refreshes_when_expiring_and_refreshable(sf, cipher) -> None:
     assert creds["token"] == "stub-access-refreshed"
 
 
+async def test_refresh_failure_raises_connector_reauth_required(sf, cipher) -> None:
+    """Lift E45 — when the provider's ``refresh`` raises (the GitHub OAuth
+    refresh-token endpoint returns ``bad_refresh_token`` when the refresh
+    token has been consumed or expired), ``resolve_connector_credentials``
+    surfaces a typed :class:`ConnectorReauthRequired` instead of leaking the
+    raw provider exception. This lets the caller (``deliver_github`` /
+    safe_mode_approve / etc.) format a clear "founder must re-OAuth" signal
+    instead of "Authentication failed" + a stack trace.
+    """
+    from backend.connectors.auth.resolve import ConnectorReauthRequired
+
+    class _BadRefreshStub(StubProvider):
+        async def refresh(self, *, refresh_token: str):  # noqa: ARG002
+            raise ValueError(
+                "github token exchange failed: bad_refresh_token "
+                "(The refresh token passed is incorrect or expired.)"
+            )
+
+    register_provider(_BadRefreshStub(name="badrefresh-stub", refreshable=True))
+    acct = await _account(sf, cipher, "badrefresh-stub")
+    expired = datetime.now(tz=UTC) - timedelta(minutes=1)
+    async with sf() as s:
+        await upsert_token(
+            s,
+            connector_account_id=acct.id,
+            provider="badrefresh-stub",
+            token=TokenSet(
+                access_token="stale-access",
+                refresh_token="dead-refresh",
+                expires_at=expired,
+            ),
+            cipher=cipher,
+        )
+        await s.commit()
+    async with sf() as s:
+        acct = await s.get(ConnectorAccountRow, acct.id)
+        with pytest.raises(ConnectorReauthRequired) as exc_info:
+            await resolve_connector_credentials(s, account=acct, cipher=cipher)
+    assert "bad_refresh_token" in str(exc_info.value)
+    # The exception carries the account + provider so the caller can surface
+    # them to the founder ("reconnect github").
+    assert exc_info.value.account_id == acct.id
+    assert exc_info.value.provider == "badrefresh-stub"
+
+
 async def test_no_refresh_without_refresh_material(sf, cipher) -> None:
     register_provider(StubProvider(name="norefresh-stub"))
     acct = await _account(sf, cipher, "norefresh-stub")
