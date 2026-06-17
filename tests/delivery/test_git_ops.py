@@ -138,6 +138,29 @@ def test_authed_url_embeds_token() -> None:
     assert ops.authed_url("file:///tmp/remote.git", token=None) == "file:///tmp/remote.git"
 
 
+def test_authed_url_idempotent_on_already_authed_url() -> None:
+    """Lift E43 — ``GitOps.push`` reads ``origin`` (which may already
+    carry the clone-time ``x-access-token:<token>@`` userinfo) and
+    re-runs ``authed_url`` on it before pushing. The dogfood retrace
+    (run 5a695eb8, 2026-06-17) caught the double-embed:
+    ``https://x-access-token:***@x-access-token:***@github.com/…``
+    → ``URL rejected: Port number was not a decimal number …``.
+    ``authed_url`` must strip any existing userinfo segment before
+    embedding the current token so a re-auth produces a SINGLE
+    userinfo segment regardless of how many times it is applied.
+    """
+    ops = GitOps()
+    once = ops.authed_url("https://github.com/owner/repo.git", token="ghp_one")
+    twice = ops.authed_url(once, token="ghp_two")
+    # Exactly ONE userinfo segment in the final URL.
+    assert twice.count("x-access-token:") == 1
+    # The newest token wins.
+    assert "ghp_two" in twice
+    assert "ghp_one" not in twice
+    # Standard shape: https://x-access-token:<token>@github.com/owner/repo.git
+    assert twice == "https://x-access-token:ghp_two@github.com/owner/repo.git"
+
+
 def test_authed_url_percent_encodes_token_special_chars() -> None:
     """Lift E42 — OAuth-issued tokens (Connect with GitHub via the OAuth
     App flow) can carry URL-reserved characters like ``:`` / ``/`` / ``@``
