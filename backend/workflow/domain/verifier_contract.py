@@ -59,16 +59,33 @@ class VerificationContract:
         return tuple(c for c in self.checks if c.kind == "judge")
 
 
+#: Lift E38 — natural-English aliases LLMs reach for when the prompt
+#: template is paraphrased. ``shell`` reads as the prose ("shell command")
+#: the E37 dogfood (session ``ses_12c8f0be2``, 2026-06-17) proved
+#: qwen3.6-plus emits even when the template prescribes ``command``. The
+#: parser normalizes both onto the canonical ``command`` kind.
+_KIND_ALIASES: dict[str, str] = {"shell": "command", "command": "command", "judge": "judge"}
+
+
 def _parse_check(raw: Any) -> VerificationCheck | None:
-    """Normalize one raw check dict. Returns None when unusable."""
+    """Normalize one raw check dict. Returns None when unusable.
+
+    Lift E38 — tolerant of ``kind: "shell"`` (mapped to ``command``) and
+    ``cmd`` (mapped to ``command``) so the agent's first emit shape lands
+    instead of triggering a re-prompt loop. The canonical
+    ``{"kind": "command", "command": "…"}`` continues to parse unchanged.
+    """
     if not isinstance(raw, dict):
         return None
-    kind = str(raw.get("kind") or "").strip().lower()
-    if kind not in _VALID_KINDS:
+    raw_kind = str(raw.get("kind") or "").strip().lower()
+    kind = _KIND_ALIASES.get(raw_kind)
+    if kind is None:
         return None
     rationale = str(raw.get("rationale") or "").strip()
     if kind == "command":
-        command = str(raw.get("command") or "").strip()
+        # E38 — accept ``command`` (canonical) OR ``cmd`` (alias the E37
+        # prompt template used before E38 aligned it).
+        command = str(raw.get("command") or raw.get("cmd") or "").strip()
         if not command:
             return None
         return VerificationCheck(kind="command", command=command, rationale=rationale)

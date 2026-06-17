@@ -955,6 +955,41 @@ class TestExecutorAdapterE30ToolsAndContract:
         # restructuring is in play.
         assert "Lift E30 / E34 / E37" in guide
 
+    def test_e38_contract_template_uses_canonical_kind_and_command_fields(self) -> None:
+        """Lift E38 — the E37 dogfood proved the agent OBEYS the prompt
+        template verbatim; the template's `kind: "shell"` + `cmd:` choice
+        produced contracts the parser rejected (it accepts `kind: "command"`
+        + `command:`). Align the template with the parser's canonical
+        shape so the wire is end-to-end consistent on the first try.
+        """
+        from backend.dispatch.adapter import _augment_system_for_executor_tools
+
+        out = _augment_system_for_executor_tools(
+            "You are a worker.",
+            [{"type": "function", "function": {"name": "declare_verification"}}],
+        )
+        guide_start = out.index("BSVibe coding-agent contract")
+        guide = out[guide_start:]
+        # The first contract template the agent reads must use
+        # ``kind: "command"`` + ``command:`` so the parser accepts the
+        # naïve copy-paste shape.
+        first_template_idx = guide.index("<verification-contract>")
+        # Look at the FIRST contract template only — later examples may
+        # mention alternative aliases for tolerance, but the primary
+        # example must be the canonical shape.
+        first_template = guide[first_template_idx : first_template_idx + 400]
+        assert '"kind": "command"' in first_template, (
+            f"first template must show canonical kind=command, got: {first_template!r}"
+        )
+        assert '"command":' in first_template, (
+            f"first template must show canonical command field, got: {first_template!r}"
+        )
+        # The wrong-shape pair the E37 dogfood reproduced must NOT appear
+        # in the first template — it's the source of the rejection loop.
+        assert '"cmd"' not in first_template, (
+            "first template must not use the cmd alias which the parser originally rejected"
+        )
+
     def test_synthesize_tool_call_from_contract_block(self) -> None:
         from backend.dispatch.adapter import _synthesize_executor_tool_calls
 
