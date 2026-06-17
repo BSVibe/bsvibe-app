@@ -77,15 +77,18 @@ class GitOps:
         if not token or not repo_url.startswith("https://"):
             return repo_url
         rest = repo_url[len("https://") :]
-        # Lift E43 — strip any existing ``<userinfo>@`` segment so a
-        # re-auth (e.g. ``push`` reads the origin URL that was already
+        # Lift E43 + E44 — strip ALL existing ``<userinfo>@`` segments so
+        # a re-auth (e.g. ``push`` reads the origin URL that was already
         # token-embedded at clone time) produces a SINGLE userinfo
-        # segment instead of stacking ``user:pass@user:pass@host``.
-        # The split is on the FIRST ``@`` before the host; that's the
-        # only ``@`` that could occur in a well-formed origin URL
-        # because we percent-encoded the token's reserved chars.
+        # segment. ``rsplit("@", 1)`` keeps the last ``@`` as the
+        # userinfo/host boundary and discards everything before — so
+        # both a clean ``user:pass@host`` AND a stacked
+        # ``user:pass@user:pass@host`` (from a pre-E42 clone that
+        # later got re-auth'd) both collapse to the host alone.
+        # E42 percent-encoded tokens cannot contain raw ``@``, so the
+        # last ``@`` is unambiguously the userinfo terminator.
         if "@" in rest:
-            rest = rest.split("@", 1)[1]
+            rest = rest.rsplit("@", 1)[1]
         return f"https://x-access-token:{quote(token, safe='')}@{rest}"
 
     async def _run(
