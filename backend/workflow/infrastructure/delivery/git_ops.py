@@ -63,11 +63,21 @@ class GitOps:
         github accepts ``https://x-access-token:<token>@github.com/...`` for a
         PAT / OAuth access token. A falsy token (or a non-https remote, e.g. a
         local ``file://`` bare repo used in tests) is returned unchanged.
+
+        Lift E42 — the token is percent-encoded with ``safe=''`` so URL-
+        reserved characters (``:`` / ``/`` / ``@`` / ``?`` / ``#`` / ``%``)
+        in OAuth-issued tokens don't confuse the URL parser. The E41 dogfood
+        caught this: an OAuth token containing ``:`` was read as a
+        ``host:port`` split and curl rejected with "Port number was not a
+        decimal number between 0 and 65535". PATs (``ghp_…``) only use
+        ``[A-Za-z0-9_]`` so they round-tripped unchanged before this fix.
         """
+        from urllib.parse import quote  # noqa: PLC0415
+
         if not token or not repo_url.startswith("https://"):
             return repo_url
         rest = repo_url[len("https://") :]
-        return f"https://x-access-token:{token}@{rest}"
+        return f"https://x-access-token:{quote(token, safe='')}@{rest}"
 
     async def _run(
         self, *args: str, cwd: Path | None = None, token: str | None = None
