@@ -65,7 +65,24 @@ def create_app() -> FastAPI:
 
     @contextlib.asynccontextmanager
     async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
-        async with mcp_lifespan(app, session_factory=session_factory):
+        # Lift E40 — build the outbound delivery dispatcher ONCE at app
+        # boot and inject it into the MCP ToolContext so the
+        # `bsvibe_safe_mode_approve` tool dispatches through the same
+        # code path as `POST /api/v1/safemode/{id}/approve`
+        # ([[bsvibe-mcp-ui-parity]]). Built here (not inside the MCP
+        # context) because :func:`build_delivery_adapter` transitively
+        # imports `backend.extensions` / `backend.router` — forbidden
+        # in the MCP import-contract.
+        from backend.workflow.infrastructure.workers.run import (  # noqa: PLC0415
+            build_delivery_adapter,
+        )
+
+        delivery_dispatcher = await build_delivery_adapter(session_factory=session_factory)
+        async with mcp_lifespan(
+            app,
+            session_factory=session_factory,
+            delivery_dispatcher=delivery_dispatcher,
+        ):
             # Lift 1.5 — load connector OAuth App credentials minted via the
             # GitHub App Manifest flow from the DB; these override any env-set
             # provider. Soft-fail so a DB that hasn't run the migration yet

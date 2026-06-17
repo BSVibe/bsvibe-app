@@ -38,6 +38,7 @@ def build_server(
     *,
     session_factory: async_sessionmaker[Any],
     registry: ToolRegistry | None = None,
+    delivery_dispatcher: Any | None = None,
 ) -> Server:
     """Construct an MCP :class:`Server` wired to ``session_factory``.
 
@@ -45,6 +46,14 @@ def build_server(
     REST handlers — every tool call opens one session, scopes it to
     the principal's workspace via :class:`ToolContext`, and tears it
     down at the end of the call.
+
+    ``delivery_dispatcher`` (Lift E40) — when provided, every
+    :class:`ToolContext` exposes it under
+    ``extras["delivery_dispatcher"]`` so the safe-mode-approve handler
+    can dispatch the outbound delivery through the same code path the
+    REST route uses. Built by the FastAPI app (which has the wider
+    import surface) and passed in to keep the MCP context's
+    import-contract intact ([[bsvibe-mcp-ui-parity]]).
     """
     server: Server = Server(SERVER_NAME)
     reg = registry or build_registry()
@@ -61,10 +70,14 @@ def build_server(
             # before the dispatcher ever runs. Belt-and-braces guard.
             raise ToolError("unauthenticated")
         async with session_factory() as session:
+            extras: dict[str, Any] = {}
+            if delivery_dispatcher is not None:
+                extras["delivery_dispatcher"] = delivery_dispatcher
             ctx = ToolContext(
                 principal=principal,
                 session=session,
                 session_factory=session_factory,
+                extras=extras,
             )
             try:
                 result = await reg.call_tool(name, arguments or {}, ctx)

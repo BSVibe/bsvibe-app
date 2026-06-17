@@ -6,6 +6,7 @@ import base64
 import uuid
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
+from typing import Any
 
 import pytest
 import pytest_asyncio
@@ -137,10 +138,118 @@ async def test_safe_mode_approve_flips_state(db, workspace_id, user_id, registry
                 scopes=("mcp:read", "mcp:write"),
             ),
             session=s,
+            extras={"delivery_dispatcher": _StubDeliveryDispatcher()},
         )
         out = await registry.call_tool("bsvibe_safe_mode_approve", {"item_id": str(seeded)}, ctx)
     assert out["status"] == "approved"
     # Verify pending list is now empty.
+    async with db() as s:
+        ctx = ToolContext(
+            principal=_principal(workspace_id=workspace_id, user_id=user_id, scopes=("mcp:read",)),
+            session=s,
+        )
+        listed = await registry.call_tool("bsvibe_safe_mode_list_pending", {}, ctx)
+    assert listed["total"] == 0
+
+
+class _StubDeliveryDispatcher:
+    """Test seam — records every dispatch call so tests can assert the MCP
+    approve path actually ran the outbound dispatch (E40 parity fix). The
+    duck-typed contract matches
+    :class:`~backend.workflow.infrastructure.workers.delivery_worker.PluginDispatchAdapter`.
+    """
+
+    def __init__(self) -> None:
+        self.calls: list[dict[str, Any]] = []
+        self.result_actions: int = 1
+
+    async def dispatch(self, *, workspace_id, deliverable_id, artifact_type):
+        from backend.workflow.domain.delivery import ActionResult, DeliveryResult
+
+        self.calls.append(
+            {
+                "workspace_id": workspace_id,
+                "deliverable_id": deliverable_id,
+                "artifact_type": artifact_type,
+            }
+        )
+        return DeliveryResult(
+            workspace_id=workspace_id,
+            deliverable_id=deliverable_id,
+            artifact_type=artifact_type,
+            actions=[
+                ActionResult(action=f"stub:outbound:{artifact_type}", succeeded=True, output={})
+                for _ in range(self.result_actions)
+            ],
+        )
+
+
+async def test_safe_mode_approve_dispatches_via_injected_dispatcher(
+    db, workspace_id, user_id, registry, seeded
+) -> None:
+    """Lift E40 — MCP `bsvibe_safe_mode_approve` MUST mirror the REST
+    `POST /api/v1/safemode/{id}/approve` parity ([[bsvibe-mcp-ui-parity]]):
+    approve flips the queue row AND runs the outbound dispatch through the
+    SAME `dispatch_delivery` helper the REST route uses. Pre-E40 the MCP
+    handler only flipped the queue row and returned `dispatched=False`,
+    relying on "the worker's next tick re-drains" — but the worker drains
+    `delivery_events`, not the safe_mode queue, so the approved item never
+    dispatched and the deliverable's `diff_url` stayed NULL forever.
+
+    The dogfood retrace (run 1079bff5, 2026-06-17) caught this: the run
+    reached `review_ready`, the MCP tool flipped the queue row, but the
+    PR never opened.
+    """
+    dispatcher = _StubDeliveryDispatcher()
+    async with db() as s:
+        ctx = ToolContext(
+            principal=_principal(
+                workspace_id=workspace_id,
+                user_id=user_id,
+                scopes=("mcp:read", "mcp:write"),
+            ),
+            session=s,
+            extras={"delivery_dispatcher": dispatcher},
+        )
+        out = await registry.call_tool("bsvibe_safe_mode_approve", {"item_id": str(seeded)}, ctx)
+
+    assert out["status"] == "approved"
+    # E40 — the output now reflects the actual dispatch.
+    assert out["dispatched"] is True
+    # Dispatcher was hit exactly once for the approved item's deliverable.
+    assert len(dispatcher.calls) == 1
+    assert dispatcher.calls[0]["workspace_id"] == workspace_id
+    assert dispatcher.calls[0]["artifact_type"] == "direct_output"
+
+
+async def test_safe_mode_approve_dispatch_failure_does_not_revert_approval(
+    db, workspace_id, user_id, registry, seeded
+) -> None:
+    """Lift E40 — approval is irreversible (mirrors PWA + REST behaviour).
+    A transient dispatch failure must still leave the queue item in
+    ``approved`` state — the founder can retry the outbound side later.
+    """
+
+    class _FailingDispatcher:
+        async def dispatch(self, *, workspace_id, deliverable_id, artifact_type):
+            raise RuntimeError("connector unavailable")
+
+    async with db() as s:
+        ctx = ToolContext(
+            principal=_principal(
+                workspace_id=workspace_id,
+                user_id=user_id,
+                scopes=("mcp:read", "mcp:write"),
+            ),
+            session=s,
+            extras={"delivery_dispatcher": _FailingDispatcher()},
+        )
+        out = await registry.call_tool("bsvibe_safe_mode_approve", {"item_id": str(seeded)}, ctx)
+
+    # Approval succeeded; dispatched flag reflects the failure.
+    assert out["status"] == "approved"
+    assert out["dispatched"] is False
+    # The queue is empty — the item has flipped past pending regardless.
     async with db() as s:
         ctx = ToolContext(
             principal=_principal(workspace_id=workspace_id, user_id=user_id, scopes=("mcp:read",)),
