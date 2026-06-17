@@ -136,3 +136,32 @@ def test_authed_url_embeds_token() -> None:
     assert authed == "https://x-access-token:abc123@github.com/owner/repo.git"
     # No token → unchanged (file:// / local-remote path).
     assert ops.authed_url("file:///tmp/remote.git", token=None) == "file:///tmp/remote.git"
+
+
+def test_authed_url_percent_encodes_token_special_chars() -> None:
+    """Lift E42 — OAuth-issued tokens (Connect with GitHub via the OAuth
+    App flow) can carry URL-reserved characters like ``:`` / ``/`` / ``@``
+    / ``?`` / ``#`` / ``%``. The pre-E42 code embedded the token raw, so a
+    ``:`` in the token confused git's URL parser into reading it as a
+    ``host:port`` split → ``URL rejected: Port number was not a decimal
+    number between 0 and 65535``. The E41 dogfood retrace caught this:
+    the push fired with the W2 branch ahead of base, but the URL parser
+    rejected the embedded token. Fix percent-encodes every reserved char
+    so any opaque token shape survives the round-trip.
+    """
+    ops = GitOps()
+    # Token mixes ``:`` (the parser-confusing char) + ``/`` + ``%``.
+    raw = "gho_a:b/c%d"
+    authed = ops.authed_url("https://github.com/owner/repo.git", token=raw)
+    # The raw character sequence MUST NOT appear in the userinfo segment —
+    # it should be percent-encoded.
+    assert raw not in authed
+    # The encoded form must produce a valid userinfo segment that the git
+    # client / curl will accept (single ``:`` between user and pass, then
+    # ``@`` before the host).
+    assert authed.startswith("https://x-access-token:")
+    assert "@github.com/owner/repo.git" in authed
+    # The encoded representation contains the expected percent-escapes.
+    assert "%3A" in authed  # ':'
+    assert "%2F" in authed  # '/'
+    assert "%25" in authed  # '%'
