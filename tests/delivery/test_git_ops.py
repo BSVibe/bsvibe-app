@@ -161,6 +161,24 @@ def test_authed_url_idempotent_on_already_authed_url() -> None:
     assert twice == "https://x-access-token:ghp_two@github.com/owner/repo.git"
 
 
+def test_authed_url_strips_doubled_userinfo() -> None:
+    """Lift E44 — `GitOps.push` re-runs `authed_url` on the current
+    origin URL, which on a workspace that pre-dates E42 may carry a
+    pre-encoded token AND was already token-set at clone time so the
+    URL has stacked userinfo (`x-access-token:T@x-access-token:T@host`).
+    E43 only stripped the FIRST `@` so the second pass left
+    `x-access-token:NEW@x-access-token:T@host` — still doubled. E44
+    rsplits on the LAST `@` so any number of stacked userinfo segments
+    collapse to a single one in front of the host.
+    """
+    ops = GitOps()
+    doubled = "https://x-access-token:OLD@x-access-token:OLD@github.com/owner/repo.git"
+    fixed = ops.authed_url(doubled, token="NEW")
+    assert fixed == "https://x-access-token:NEW@github.com/owner/repo.git"
+    assert fixed.count("x-access-token:") == 1
+    assert "OLD" not in fixed
+
+
 def test_authed_url_percent_encodes_token_special_chars() -> None:
     """Lift E42 — OAuth-issued tokens (Connect with GitHub via the OAuth
     App flow) can carry URL-reserved characters like ``:`` / ``/`` / ``@``
