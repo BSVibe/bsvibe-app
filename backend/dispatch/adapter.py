@@ -512,14 +512,14 @@ _E30_TOOL_GUIDE_HEADER = (
     "⚠ REQUIRED — your final message MUST end with this exact block:\n"
     "\n"
     "<verification-contract>\n"
-    '{"checks": [{"kind": "shell", "cmd": "<command BSVibe should re-run to verify>"}]}\n'
+    '{"checks": [{"kind": "command", "command": "<shell command BSVibe should re-run to verify>"}]}\n'
     "</verification-contract>\n"
     "\n"
     "Without this block BSVibe ROUTES THE RUN TO HUMAN REVIEW and your "
     "edits WILL NOT SHIP as a PR. This is the gate to ``verified`` — no "
     "block, no ship. A trivial pass-through is acceptable when no real "
     "command makes sense, e.g. "
-    '``{"checks": [{"kind": "shell", "cmd": "test -f <one-of-the-files-you-changed>"}]}``\n'
+    '``{"checks": [{"kind": "command", "command": "test -f <one-of-the-files-you-changed>"}]}``\n'
     "— but the block ITSELF is non-negotiable.\n"
     "\n"
     "---\n"
