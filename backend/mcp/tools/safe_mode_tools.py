@@ -15,10 +15,14 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
+import structlog
 from pydantic import BaseModel, ConfigDict, Field
 
 from backend.mcp.api import Tool, ToolContext, ToolError, ToolRegistry
 from backend.workflow.application.safe_mode_queue import SafeModeQueue
+from backend.workflow.infrastructure.workers.delivery_worker import dispatch_delivery
+
+logger = structlog.get_logger(__name__)
 
 
 class _Output(BaseModel):
@@ -96,6 +100,7 @@ async def _h_approve(args: SafeModeApproveInput, ctx: ToolContext) -> Any:
     item = pending.get(args.item_id)
     if item is None:
         raise ToolError(f"no pending Safe Mode item {args.item_id}")
+    deliverable_id = item.deliverable_id
 
     ok = await queue.approve(
         workspace_id=ctx.principal.workspace_id,
@@ -106,17 +111,82 @@ async def _h_approve(args: SafeModeApproveInput, ctx: ToolContext) -> Any:
         raise ToolError(f"Safe Mode item {args.item_id} is no longer pending")
     await ctx.session.commit()
 
-    # Approval is irreversible by design. MCP's approve flips the queue row
-    # only — the worker's next tick re-drains the shipped event and dispatches
-    # through the SAME ``ConnectorDeliveryAdapter`` the REST path constructs
-    # (Workflow §10.5 / §1.2 — one outbound code path). Inlining the dispatcher
-    # build here would pull every plugin module into the request scope on the
-    # very first call; deferring to the worker keeps MCP transactions short.
+    # Lift E40 — mirror the REST `POST /api/v1/safemode/{id}/approve` parity
+    # ([[bsvibe-mcp-ui-parity]]): the MCP path MUST run the outbound dispatch
+    # through the same ``dispatch_delivery`` helper the REST route uses so
+    # an approved item lands as a real PR / page / channel post instead of
+    # rotting in the approved state. Pre-E40 the handler only flipped the
+    # queue row and returned ``dispatched=False``, relying on "the worker's
+    # next tick" — but the worker drains ``delivery_events``, not the
+    # safe_mode queue. The dogfood retrace (run 1079bff5, 2026-06-17)
+    # caught this: the run reached ``review_ready``, the MCP tool flipped
+    # the queue row, but the PR never opened. Approval stays irreversible:
+    # a transient dispatch failure does NOT revert the approve.
+    dispatcher = await _resolve_delivery_dispatcher(ctx)
+    dispatched = False
+    if dispatcher is not None:
+        artifact_type = await _artifact_type_for_deliverable(ctx.session, deliverable_id)
+        try:
+            await dispatch_delivery(
+                dispatcher,
+                workspace_id=ctx.principal.workspace_id,
+                deliverable_id=deliverable_id,
+                artifact_type=artifact_type,
+            )
+            dispatched = True
+        except Exception:  # noqa: BLE001 — approval already committed; dispatch is best-effort
+            logger.warning(
+                "mcp_safe_mode_approve_dispatch_failed",
+                item_id=str(args.item_id),
+                deliverable_id=str(deliverable_id),
+                exc_info=True,
+            )
+    else:
+        logger.warning(
+            "mcp_safe_mode_approve_no_dispatcher_configured",
+            item_id=str(args.item_id),
+            deliverable_id=str(deliverable_id),
+            hint=(
+                "wire a delivery_dispatcher into ToolContext.extras at MCP "
+                "server boot to enable end-to-end approve+dispatch parity"
+            ),
+        )
+
     return SafeModeActionOutput(
         item_id=str(args.item_id),
         status="approved",
-        dispatched=False,
+        dispatched=dispatched,
     )
+
+
+async def _resolve_delivery_dispatcher(ctx: ToolContext) -> Any:
+    """Return the outbound :class:`PluginDispatchAdapter` for this call.
+
+    The MCP context's static-import surface is intentionally narrow
+    (import-contract `MCP context depends only on Identity + Workflow +
+    Knowledge + common`), so the dispatcher factory — which transitively
+    pulls connector plugins via ``backend.extensions`` — cannot be
+    imported HERE at module level. Instead the MCP server boot
+    (:mod:`backend.mcp.streamable_http`) builds the dispatcher once and
+    installs it into every :class:`ToolContext` via
+    ``ctx.extras["delivery_dispatcher"]``. Tests inject the same key with
+    a stub.
+
+    Returns ``None`` when no dispatcher is wired so the caller can fall
+    back to ``dispatched=False`` instead of crashing the approve.
+    """
+    return ctx.extras.get("delivery_dispatcher") if ctx.extras else None
+
+
+async def _artifact_type_for_deliverable(session: Any, deliverable_id: uuid.UUID) -> str:
+    """Resolve the deliverable's artifact_type for ``dispatch_delivery``.
+    Mirrors :func:`backend.api.v1.safemode._helpers._artifact_type_for`."""
+    from backend.workflow.infrastructure.db import Deliverable  # noqa: PLC0415
+
+    deliverable = await session.get(Deliverable, deliverable_id)
+    if deliverable is None:
+        return "direct_output"
+    return str(deliverable.deliverable_type.value)
 
 
 # ---------------------------------------------------------------------------

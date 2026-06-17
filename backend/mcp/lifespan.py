@@ -34,12 +34,24 @@ async def mcp_lifespan(
     app: FastAPI,
     *,
     session_factory: async_sessionmaker[Any],
+    delivery_dispatcher: Any | None = None,
 ) -> AsyncIterator[None]:
-    """Bring up the MCP transport for the duration of the FastAPI app."""
+    """Bring up the MCP transport for the duration of the FastAPI app.
+
+    Lift E40 — ``delivery_dispatcher`` (optional): the outbound
+    :class:`PluginDispatchAdapter` injected from the FastAPI app so the
+    MCP ``bsvibe_safe_mode_approve`` handler dispatches through the
+    same code path as the REST route. Passed through to
+    :func:`build_server` and installed into every :class:`ToolContext`.
+    """
     settings = get_settings()
     issuer = settings.oauth_issuer
     registry = build_registry()
-    server = build_server(session_factory=session_factory, registry=registry)
+    server = build_server(
+        session_factory=session_factory,
+        registry=registry,
+        delivery_dispatcher=delivery_dispatcher,
+    )
     manager = StreamableHTTPSessionManager(
         app=server,
         stateless=True,
