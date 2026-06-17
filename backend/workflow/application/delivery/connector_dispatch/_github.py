@@ -187,22 +187,35 @@ async def deliver_github(
     summary = str(content.get("summary") or "")
     title, body = _split_summary(summary)
 
-    # 1. Commit the agent's file edits. No changes → no PR (clean no-op).
+    # 1. Commit the agent's file edits. No new working-tree changes is OK —
+    # the verifier's W2 ``commit_worktree`` step (run.product_id != None +
+    # real worktree) may have already committed every agent edit on top of
+    # the base branch. Lift E41 — only treat the run as a clean no-op when
+    # ``commit_all`` made no new commit AND the branch is NOT ahead of base.
+    # Otherwise still push + open the PR (the W2 commit IS the deliverable).
     committed = await deps.git_ops.commit_all(checkout, title)
     if not committed:
+        ahead = await deps.git_ops.is_ahead_of_base(checkout, binding.base_branch)
+        if not ahead:
+            logger.info(
+                "github_delivery_no_changes_noop",
+                workspace_id=str(workspace_id),
+                deliverable_id=str(deliverable_id),
+                run_id=str(run_id),
+            )
+            return [
+                ActionResult(
+                    action=action_prefix,
+                    succeeded=True,
+                    output={"skipped": True, "reason": "no_changes"},
+                )
+            ]
         logger.info(
-            "github_delivery_no_changes_noop",
+            "github_delivery_using_w2_commit",
             workspace_id=str(workspace_id),
             deliverable_id=str(deliverable_id),
             run_id=str(run_id),
         )
-        return [
-            ActionResult(
-                action=action_prefix,
-                succeeded=True,
-                output={"skipped": True, "reason": "no_changes"},
-            )
-        ]
 
     # 2. Resolve the github API credential — OAuth token (Connect with GitHub)
     #    takes precedence over the legacy signing secret. Resolved AFTER the

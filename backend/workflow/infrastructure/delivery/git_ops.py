@@ -134,6 +134,29 @@ class GitOps:
         await self._run_checked("commit", "-m", message, cwd=dest)
         return True
 
+    async def is_ahead_of_base(self, dest: Path, base_branch: str) -> bool:
+        """Lift E41 — True iff HEAD has commits NOT in ``origin/<base_branch>``.
+
+        Used by :func:`deliver_github` to decide "should we still push +
+        open the PR even though ``commit_all`` made no new commit?". The
+        verifier's W2 ``commit_worktree`` step may have already committed
+        the agent's edits before delivery runs; without this check the
+        deliver path treats a clean working tree as nothing-to-ship and
+        the run rots in ``review_ready``.
+        """
+        code, out, _err = await self._run(
+            "rev-list",
+            "--count",
+            f"origin/{base_branch}..HEAD",
+            cwd=dest,
+        )
+        if code != 0:
+            return False
+        try:
+            return int(out.strip() or "0") > 0
+        except ValueError:
+            return False
+
     async def push(self, dest: Path, branch: str, *, token: str | None) -> None:
         """Push ``branch`` to ``origin``.
 
