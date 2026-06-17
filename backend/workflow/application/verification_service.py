@@ -225,9 +225,27 @@ class VerificationService:
         judge_blob: dict[str, Any] | None = None
         judge_pass = True
         criteria = [c for chk in contract.judge_checks for c in chk.criteria]
+        # Lift E39 — when the ONLY judge check is the one
+        # ``assemble_contract`` adds from BSage retrieval (rationale ==
+        # RETRIEVED_KNOWLEDGE_RATIONALE), and the agent's command_check
+        # attestation already passed, treat the judge as ADVISORY: still
+        # run it + record the verdict on the result, but don't let it
+        # flip a clean command-passed run to FAILED. The agent's command
+        # is the primary attestation; the retriever-added judge is a
+        # secondary "do BSage patterns also look satisfied" signal which
+        # can hallucinate with weak criteria (E38 dogfood run df66a253).
+        judge_advisory = (
+            bool(command_results)
+            and all_cmd_pass
+            and bool(contract.judge_checks)
+            and all(chk.rationale == RETRIEVED_KNOWLEDGE_RATIONALE for chk in contract.judge_checks)
+        )
         if criteria:
             judge_blob = await self._run_judge(criteria, written_paths, final_text, box)
-            judge_pass = bool(judge_blob.get("passed"))
+            if judge_advisory:
+                judge_blob = {**judge_blob, "advisory": True}
+            else:
+                judge_pass = bool(judge_blob.get("passed"))
 
         passed = all_cmd_pass and judge_pass
         outcome = VerificationOutcome.PASSED if passed else VerificationOutcome.FAILED

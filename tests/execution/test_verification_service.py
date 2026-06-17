@@ -437,6 +437,104 @@ async def test_verify_command_pass_but_judge_fail_is_failed() -> None:
         assert vr.outcome is VerificationOutcome.FAILED
 
 
+async def test_verify_retriever_added_judge_is_advisory_when_command_passes() -> None:
+    """Lift E39 — when the agent's own command_check PASSES and the only
+    judge check is the one ``assemble_contract`` adds from BSage retrieval
+    (rationale=RETRIEVED_KNOWLEDGE_RATIONALE — the agent did not declare
+    it), a hallucinating judge verdict must NOT flip the outcome to FAILED.
+
+    The E38 dogfood (run df66a253, 2026-06-17) caught the failure mode:
+    the agent's command_check ``git show HEAD:… | grep -q '…docstring text'``
+    passed exit-0 (proving the change landed), but the retriever-added
+    judge — which got criteria like "Verification" / "Git" / "Related
+    note — …plan-mode…" and only the first 8 KB of a 13 KB file — said
+    "no docstring at all" and the run fell into a verification_failed
+    spin until the round budget ran out.
+
+    The agent's command_check IS the agent's primary attestation. The
+    retriever's judge is a secondary "do these BSage patterns also seem
+    satisfied" advisory. When the primary passes, the secondary becomes
+    informational (still recorded on the result) but not gating.
+    """
+    from backend.workflow.application.verification_service import (
+        RETRIEVED_KNOWLEDGE_RATIONALE,
+    )
+
+    async with memory_session() as session:
+        run = await _make_run(session)
+        work_step, attempt = await _make_step_and_attempt(session, run)
+        contract = VerificationContract(
+            checks=(
+                VerificationCheck(kind="command", command="true"),
+                VerificationCheck(
+                    kind="judge",
+                    criteria=("Verification", "Git"),
+                    rationale=RETRIEVED_KNOWLEDGE_RATIONALE,
+                ),
+            )
+        )
+        llm = StubLlm(
+            [
+                LoopTurn(
+                    content='{"passed": false, "reasoning": "judge hallucinated"}',
+                )
+            ]
+        )
+        svc = VerificationService(session=session, llm=llm)
+        vr = await svc.verify(
+            run=run,
+            work_step=work_step,
+            attempt=attempt,
+            contract=contract,
+            box=FakeBox(),
+            written_paths=[],
+            final_text="",
+        )
+        # Outcome PASSES because the agent's command attestation passed.
+        assert vr.outcome is VerificationOutcome.PASSED
+        # The judge result is still recorded on the verification_result so
+        # the founder can read the hallucination in the audit trail.
+        judge_blob = vr.result["judge"]
+        assert judge_blob is not None
+        assert judge_blob["passed"] is False
+        assert judge_blob.get("advisory") is True
+
+
+async def test_verify_agent_declared_judge_still_gates_outcome() -> None:
+    """Lift E39 — guardrail: only the *retriever-added* judge becomes
+    advisory. If the AGENT explicitly declared a judge check (empty
+    rationale — see ``parse_verification_contract``), it still gates
+    the outcome the same way as before. Agent attestation respects
+    what the agent chose to stake the verification on.
+    """
+    async with memory_session() as session:
+        run = await _make_run(session)
+        work_step, attempt = await _make_step_and_attempt(session, run)
+        contract = VerificationContract(
+            checks=(
+                VerificationCheck(kind="command", command="true"),
+                # Empty rationale = agent declared this judge, NOT the retriever.
+                VerificationCheck(
+                    kind="judge",
+                    criteria=("must contain doctring",),
+                    rationale="",
+                ),
+            )
+        )
+        llm = StubLlm([LoopTurn(content='{"passed": false}')])
+        svc = VerificationService(session=session, llm=llm)
+        vr = await svc.verify(
+            run=run,
+            work_step=work_step,
+            attempt=attempt,
+            contract=contract,
+            box=FakeBox(),
+            written_paths=[],
+            final_text="",
+        )
+        assert vr.outcome is VerificationOutcome.FAILED
+
+
 async def test_verify_parses_declared_then_verifies_round_trip() -> None:
     """End-to-end through the service surface: parse → assemble → verify."""
     async with memory_session() as session:
