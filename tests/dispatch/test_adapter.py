@@ -904,7 +904,7 @@ class TestExecutorAdapterE30ToolsAndContract:
         # The E30 guide is appended (now E34 strengthens its DO-IT framing),
         # including the contract template AND the named tools the loop
         # registered.
-        assert "BSVibe coding-agent contract (Lift E30 / E34)" in out
+        assert "BSVibe coding-agent contract — MANDATORY (Lift E30 / E34 / E37)" in out
         assert "<verification-contract>" in out
         assert "declare_verification" in out
         assert "write_file" in out
@@ -914,6 +914,46 @@ class TestExecutorAdapterE30ToolsAndContract:
 
         assert _augment_system_for_executor_tools("be terse", None) == "be terse"
         assert _augment_system_for_executor_tools("be terse", []) == "be terse"
+
+    def test_e37_contract_requirement_is_loud_and_first_in_guide(self) -> None:
+        """Lift E37 — qwen3.6-plus dogfood (session ses_12f1a577d, 2026-06-16)
+        proved the contract requirement buried at step 4 of the guide gets
+        IGNORED by the agent: it edits, commits, ends with a summary text,
+        and emits NO ``<verification-contract>`` block. The fix is structural,
+        not a louder nudge — the requirement must be the FIRST thing the
+        agent sees in the guide section, with explicit failure semantics
+        ("MANDATORY", "no block → human review → no PR") so a model that
+        skims the prompt cannot miss it.
+        """
+        from backend.dispatch.adapter import _augment_system_for_executor_tools
+
+        out = _augment_system_for_executor_tools(
+            "You are a worker.",
+            [{"type": "function", "function": {"name": "declare_verification"}}],
+        )
+        # The original system prompt still survives at the head so chat-shape
+        # preservation isn't disturbed.
+        assert out.startswith("You are a worker.")
+        # The guide block now leads with a MANDATORY / REQUIRED marker on
+        # the contract — well BEFORE any reference to tool flow / "Concretely:".
+        guide_start = out.index("BSVibe coding-agent contract")
+        guide = out[guide_start:]
+        loud_idx = next(
+            (guide.find(marker) for marker in ("MANDATORY", "REQUIRED") if marker in guide),
+            -1,
+        )
+        assert loud_idx >= 0, "guide must contain MANDATORY/REQUIRED marker"
+        # The <verification-contract> template appears before the work flow
+        # description so the agent reads the gate first.
+        contract_template_idx = guide.find("<verification-contract>")
+        concretely_idx = guide.find("Concretely:")
+        assert contract_template_idx >= 0
+        assert contract_template_idx < concretely_idx or concretely_idx < 0, (
+            "contract template must appear before the work-flow steps"
+        )
+        # E37 must also lift the lift-tag so future audits know which
+        # restructuring is in play.
+        assert "Lift E30 / E34 / E37" in guide
 
     def test_synthesize_tool_call_from_contract_block(self) -> None:
         from backend.dispatch.adapter import _synthesize_executor_tool_calls
