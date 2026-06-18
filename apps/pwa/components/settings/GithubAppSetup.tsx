@@ -45,6 +45,7 @@ function submitManifestFormToGithub(postUrl: string, manifest: Record<string, un
 export function GithubAppSetup({
   configured,
   connectedLabel,
+  needsReauth,
   getStatus = getGithubAppStatus,
   startManifest = startGithubAppManifest,
   submitManifestForm = submitManifestFormToGithub,
@@ -53,6 +54,10 @@ export function GithubAppSetup({
   /** Explicit override; when omitted the component probes app-status itself. */
   configured?: boolean;
   connectedLabel?: string | null;
+  /** Lift E46 — pass-through to :class:`ConnectorOAuthButton` so the
+   *  inner button surfaces "Reconnect with GitHub" when the bound
+   *  token row was flipped to `needs_reauth`. */
+  needsReauth?: boolean;
   getStatus?: () => Promise<GithubAppStatus>;
   startManifest?: () => Promise<GithubAppManifestStart>;
   submitManifestForm?: (postUrl: string, manifest: Record<string, unknown>) => void;
@@ -84,6 +89,7 @@ export function GithubAppSetup({
       <ConnectorOAuthButton
         provider="github"
         connectedLabel={connectedLabel}
+        needsReauth={needsReauth}
         onRedirect={onRedirect}
       />
     );

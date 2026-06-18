@@ -18,6 +18,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 import pytest_asyncio
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from backend.connectors.auth.db import ConnectorOAuthTokenRow  # noqa: F401 — register
@@ -151,6 +152,70 @@ async def test_refresh_failure_raises_connector_reauth_required(sf, cipher) -> N
     # them to the founder ("reconnect github").
     assert exc_info.value.account_id == acct.id
     assert exc_info.value.provider == "badrefresh-stub"
+
+    # Lift E46 — the token row's ``status`` is persisted to
+    # ``needs_reauth`` so the connectors API + PWA card can render a
+    # Reconnect CTA on the next read.
+    async with sf() as s:
+        row = (
+            await s.execute(
+                select(ConnectorOAuthTokenRow).where(
+                    ConnectorOAuthTokenRow.connector_account_id == acct.id
+                )
+            )
+        ).scalar_one()
+        assert row.status == "needs_reauth"
+
+
+async def test_successful_refresh_resets_status_to_active(sf, cipher) -> None:
+    """Lift E46 — after a previous refresh failure persisted
+    ``status='needs_reauth'``, a fresh OAuth flow (re-OAuth → upsert_token)
+    and the FIRST successful refresh that follows return the row to
+    ``status='active'`` so the PWA card flips back to "connected".
+    """
+    register_provider(StubProvider(name="resetstatus-stub", refreshable=True))
+    acct = await _account(sf, cipher, "resetstatus-stub")
+    expired = datetime.now(tz=UTC) - timedelta(minutes=1)
+    async with sf() as s:
+        await upsert_token(
+            s,
+            connector_account_id=acct.id,
+            provider="resetstatus-stub",
+            token=TokenSet(
+                access_token="stale-access",
+                refresh_token="r-1",
+                expires_at=expired,
+            ),
+            cipher=cipher,
+        )
+        # Manually flip to needs_reauth simulating a prior failure.
+        from backend.connectors.auth.db import ConnectorOAuthTokenRow
+
+        row = (
+            await s.execute(
+                select(ConnectorOAuthTokenRow).where(
+                    ConnectorOAuthTokenRow.connector_account_id == acct.id
+                )
+            )
+        ).scalar_one()
+        row.status = "needs_reauth"
+        await s.commit()
+    async with sf() as s:
+        acct = await s.get(ConnectorAccountRow, acct.id)
+        creds = await resolve_connector_credentials(s, account=acct, cipher=cipher)
+        await s.commit()
+    assert creds["token"] == "stub-access-refreshed"
+    async with sf() as s:
+        from backend.connectors.auth.db import ConnectorOAuthTokenRow
+
+        row = (
+            await s.execute(
+                select(ConnectorOAuthTokenRow).where(
+                    ConnectorOAuthTokenRow.connector_account_id == acct.id
+                )
+            )
+        ).scalar_one()
+        assert row.status == "active"
 
 
 async def test_no_refresh_without_refresh_material(sf, cipher) -> None:

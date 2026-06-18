@@ -964,6 +964,13 @@ export interface Connector {
    *  `@login` / workspace name once an OAuth token is bound, else `null`
    *  (not connected → the card shows "Connect with X"). Never the token. */
   oauth_account_label?: string | null;
+  /** Lift E46 — `true` when the bound OAuth token row was flipped to
+   *  `needs_reauth` by the backend (the refresh-token endpoint
+   *  rejected the latest refresh attempt). The card surfaces a
+   *  "Reconnect" CTA in this state instead of the steady "Connected"
+   *  badge so the founder sees a dead credential immediately rather
+   *  than waiting for the next dispatch to fail silently. */
+  needs_reauth?: boolean;
 }
 
 /** `POST /api/v1/connectors/{id}/import` response (backend
