@@ -145,6 +145,15 @@ async def upsert_token(
         existing.expires_at = token.expires_at
         existing.scopes = scopes
         existing.account_label = token.account_label
+        # Lift E48 — every path that calls upsert_token has just received a
+        # fresh token from the provider (initial connect, refresh-on-resolve,
+        # or a founder-triggered re-OAuth after needs_reauth). A row that
+        # carries fresh credentials by definition no longer needs re-auth,
+        # so always reset the status. Without this the PWA card stayed in
+        # the "Reconnect" pill state even after a successful re-OAuth —
+        # the founder kept clicking with no visible result until the next
+        # dispatch ran resolve's refresh-success path.
+        existing.status = "active"
         await session.flush()
         return existing
 
