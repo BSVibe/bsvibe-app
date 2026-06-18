@@ -66,6 +66,18 @@ class ConnectorOAuthTokenRow(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=_utcnow, onupdate=_utcnow
     )
+    # Lift E46 — health state. ``active`` for a working OAuth-bound row;
+    # ``needs_reauth`` when ``resolve_connector_credentials`` caught the
+    # refresh failure and persisted the signal. The PWA reads this through
+    # the connectors API to render a "Reconnect" CTA instead of a stale
+    # "connected" badge.
+    status: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="active", server_default="active"
+    )
+
+
+#: Lift E46 — full enum of values the ``status`` column can carry.
+TOKEN_STATUS_VALUES = ("active", "needs_reauth")
 
 
 class ConnectorOAuthAppCredentialRow(Base):

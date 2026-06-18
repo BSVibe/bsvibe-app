@@ -582,6 +582,7 @@
       },
       "row": {
         "revoked": "Revoked",
+        "needs_reauth": "Reconnect needed",
         "deliversOut": "delivers out · {keys}",
         "tokenHintTitle": "Webhook token (masked)",
         "revokeError": "Couldn’t revoke that. Please try again.",

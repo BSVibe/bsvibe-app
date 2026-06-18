@@ -169,6 +169,14 @@ class ConnectorOut(BaseModel):
     # ``None`` means "not connected via OAuth" so the UI shows "Connect with X"
     # instead of "Connected as …". Never the token itself.
     oauth_account_label: str | None = None
+    # Lift E46 — True when the bound OAuth token row is in the
+    # ``needs_reauth`` state (the refresh-token endpoint rejected the
+    # last refresh attempt, ``resolve_connector_credentials`` raised
+    # :class:`ConnectorReauthRequired`, the row was flipped). The PWA
+    # renders a "Reconnect" CTA instead of the steady-state "Connected"
+    # badge so the founder sees the credential is dead instead of
+    # waiting for the next dispatch to fail silently.
+    needs_reauth: bool = False
 
 
 class ConnectorImportResult(BaseModel):
@@ -194,7 +202,10 @@ def _token_hint(webhook_token: str) -> str:
 
 
 def _row_to_out(
-    row: ConnectorAccountRow, *, oauth_account_label: str | None = None
+    row: ConnectorAccountRow,
+    *,
+    oauth_account_label: str | None = None,
+    needs_reauth: bool = False,
 ) -> ConnectorOut:
     return ConnectorOut(
         id=row.id,
@@ -208,6 +219,7 @@ def _row_to_out(
         last_import_at=row.last_import_at,
         last_import_count=row.last_import_count,
         oauth_account_label=oauth_account_label,
+        needs_reauth=needs_reauth,
     )
 
 
@@ -227,18 +239,32 @@ async def list_connectors(
         .scalars()
         .all()
     )
-    # One query for every bound OAuth token's account label, keyed by binding —
-    # so the list can show "Connected as @login" without an N+1 fan-out.
-    label_rows = (
+    # One query for every bound OAuth token's account label + status
+    # (Lift E46), keyed by binding — so the list can show "Connected as
+    # @login" / "Reconnect" without an N+1 fan-out.
+    token_rows = (
         await session.execute(
             select(
                 ConnectorOAuthTokenRow.connector_account_id,
                 ConnectorOAuthTokenRow.account_label,
+                ConnectorOAuthTokenRow.status,
             ).where(ConnectorOAuthTokenRow.connector_account_id.in_([r.id for r in rows]))
         )
     ).all()
-    labels: dict[uuid.UUID, str | None] = {account_id: label for account_id, label in label_rows}
-    return [_row_to_out(r, oauth_account_label=labels.get(r.id)) for r in rows]
+    labels: dict[uuid.UUID, str | None] = {
+        account_id: label for account_id, label, _status in token_rows
+    }
+    needs_reauth_by_id: dict[uuid.UUID, bool] = {
+        account_id: status == "needs_reauth" for account_id, _label, status in token_rows
+    }
+    return [
+        _row_to_out(
+            r,
+            oauth_account_label=labels.get(r.id),
+            needs_reauth=needs_reauth_by_id.get(r.id, False),
+        )
+        for r in rows
+    ]
 
 
 @router.post("", status_code=status.HTTP_201_CREATED)

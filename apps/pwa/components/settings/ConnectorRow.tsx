@@ -95,13 +95,23 @@ export default function ConnectorRow({
       <div className="connector-card__body">
         <div className="connector-card__head">
           <span className="connector-card__name">{connector.connector}</span>
-          {connector.is_active ? (
-            <span className="connector-card__pill connector-card__pill--connected">
-              {tConnectors("connected")}
-            </span>
-          ) : (
+          {/* Lift E46 — needs_reauth flips the pill to a calm warning so the
+              founder can tell a working binding apart from a binding whose
+              OAuth token is silently dead. */}
+          {!connector.is_active ? (
             <span className="connector-card__pill connector-card__pill--revoked">
               {t("revoked")}
+            </span>
+          ) : connector.needs_reauth ? (
+            <span
+              className="connector-card__pill connector-card__pill--needs-reauth"
+              data-testid="connector-pill-needs-reauth"
+            >
+              {t("needs_reauth")}
+            </span>
+          ) : (
+            <span className="connector-card__pill connector-card__pill--connected">
+              {tConnectors("connected")}
             </span>
           )}
         </div>
@@ -109,13 +119,21 @@ export default function ConnectorRow({
           <div className="connector-card__oauth">
             {/* A binding already exists → show Connect / Connected. github uses
                 the App-aware control (configured, no probe — a binding implies
-                the App exists); other OAuth connectors use the plain button. */}
+                the App exists); other OAuth connectors use the plain button.
+                Lift E46 — when the bound token needs re-auth, the inner
+                control hides the steady "Connected as" chip and surfaces a
+                "Reconnect with X" CTA instead. */}
             {connector.connector === "github" ? (
-              <GithubAppSetup configured connectedLabel={connector.oauth_account_label} />
+              <GithubAppSetup
+                configured
+                connectedLabel={connector.oauth_account_label}
+                needsReauth={connector.needs_reauth}
+              />
             ) : (
               <ConnectorOAuthButton
                 provider={connector.connector}
                 connectedLabel={connector.oauth_account_label}
+                needsReauth={connector.needs_reauth}
               />
             )}
           </div>

@@ -76,10 +76,10 @@ def test_alembic_head_is_connector_last_import():
     )
     assert result.returncode == 0
     # Lift E16 → worker_last_in_flight; E21 → executor_task_model; E32 →
-    # executor_task_repo_url. Keep the test name (function name is the
+    # connector_oauth_tokens_status. Keep the test name (function name is the
     # historical revision id, kept for git-blame stability) and assert
     # the current tip.
-    assert "executor_task_repo_url" in result.stdout
+    assert "connector_oauth_tokens_status" in result.stdout
 
 
 def test_target_metadata_covers_all_bases():

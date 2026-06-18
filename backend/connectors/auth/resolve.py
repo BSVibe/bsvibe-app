@@ -91,6 +91,16 @@ async def resolve_connector_credentials(
                     try:
                         refreshed = await provider.refresh(refresh_token=refresh_token)
                     except Exception as exc:  # noqa: BLE001 — provider-specific; classify as reauth-needed
+                        # Lift E46 — persist the needs_reauth state so the
+                        # connectors API + PWA card can surface a Reconnect
+                        # CTA. The flush + commit are the caller's
+                        # responsibility (mirrors the successful-refresh
+                        # ``upsert_token`` path); raising aborts the
+                        # transaction only when the caller has not yet
+                        # committed.
+                        token_row.status = "needs_reauth"
+                        await session.flush()
+                        await session.commit()
                         raise ConnectorReauthRequired(
                             account_id=account.id,
                             provider=token_row.provider,
@@ -104,6 +114,12 @@ async def resolve_connector_credentials(
                         token=refreshed,
                         cipher=cipher,
                     )
+                    # Lift E46 — a successful refresh clears any prior
+                    # needs_reauth flag so a re-OAuth → first dispatch
+                    # returns the card to the active state in the PWA.
+                    if token_row.status != "active":
+                        token_row.status = "active"
+                        await session.flush()
         return {"token": cipher.decrypt(token_row.access_token_ciphertext)}
 
     # Legacy path — no OAuth token bound yet.

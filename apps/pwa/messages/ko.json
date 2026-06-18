@@ -582,6 +582,7 @@
       },
       "row": {
         "revoked": "해지됨",
+        "needs_reauth": "재연결 필요",
         "deliversOut": "내보내기 · {keys}",
         "tokenHintTitle": "웹훅 토큰 (마스킹됨)",
         "revokeError": "해지하지 못했어요. 다시 시도해 주세요.",
