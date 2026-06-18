@@ -288,7 +288,7 @@ def _extract_text(resp: dict[str, Any]) -> str:
 
 
 def _truncate(text: str, max_len: int = 500) -> str:
-    """Truncate *text* to *max_len* characters for safe inclusion in log lines.
+    """Truncate *text* to *max_len* characters for safe inclusion in logs.
 
     Prevents long HTTP response bodies from blowing up log output.
     """
