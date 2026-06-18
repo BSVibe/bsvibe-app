@@ -72,7 +72,9 @@ export function ConnectorOAuthButton({
       disabled={busy}
       onClick={handleClick}
     >
-      {needsReauth ? `Reconnect with ${titleCase(provider)}` : `Connect with ${titleCase(provider)}`}
+      {needsReauth
+        ? `Reconnect with ${titleCase(provider)}`
+        : `Connect with ${titleCase(provider)}`}
     </button>
   );
 }
