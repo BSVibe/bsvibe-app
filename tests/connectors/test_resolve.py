@@ -167,6 +167,81 @@ async def test_refresh_failure_raises_connector_reauth_required(sf, cipher) -> N
         assert row.status == "needs_reauth"
 
 
+async def test_upsert_token_resets_needs_reauth_status_to_active(sf, cipher) -> None:
+    """Lift E48 — re-OAuth from the founder's PWA Reconnect click runs the
+    callback path through :func:`upsert_token` on the existing row, writing
+    a fresh access + refresh token. Pre-E48 the status column was left
+    untouched, so a row previously flipped to ``needs_reauth`` would re-
+    render the same "Reconnect" pill + button forever even though the
+    new tokens were valid. The PWA only flipped back to "Connected" if
+    the founder then triggered a dispatch that ran the resolve-success
+    refresh path; until then they kept clicking Reconnect with no
+    visible result.
+
+    The fix: ``upsert_token`` resets ``status = "active"`` on every write,
+    because the only path that calls it is "we just got a fresh token"
+    (initial connect OR refresh-on-resolve OR reconnect). A row receiving
+    fresh credentials by definition no longer needs re-auth.
+    """
+    from backend.connectors.auth.db import ConnectorOAuthTokenRow
+
+    acct = await _account(sf, cipher, "github-stub-e48")
+    expired = datetime.now(tz=UTC) - timedelta(minutes=1)
+    async with sf() as s:
+        await upsert_token(
+            s,
+            connector_account_id=acct.id,
+            provider="github",
+            token=TokenSet(
+                access_token="dead",
+                refresh_token="dead-refresh",
+                expires_at=expired,
+            ),
+            cipher=cipher,
+        )
+        row = (
+            await s.execute(
+                select(ConnectorOAuthTokenRow).where(
+                    ConnectorOAuthTokenRow.connector_account_id == acct.id
+                )
+            )
+        ).scalar_one()
+        row.status = "needs_reauth"
+        await s.commit()
+
+    # Re-OAuth — the callback path calls upsert_token with fresh tokens.
+    fresh_expiry = datetime.now(tz=UTC) + timedelta(hours=8)
+    async with sf() as s:
+        await upsert_token(
+            s,
+            connector_account_id=acct.id,
+            provider="github",
+            token=TokenSet(
+                access_token="fresh",
+                refresh_token="fresh-refresh",
+                expires_at=fresh_expiry,
+                account_label="@founder",
+            ),
+            cipher=cipher,
+        )
+        await s.commit()
+
+    async with sf() as s:
+        row = (
+            await s.execute(
+                select(ConnectorOAuthTokenRow).where(
+                    ConnectorOAuthTokenRow.connector_account_id == acct.id
+                )
+            )
+        ).scalar_one()
+        assert row.status == "active", (
+            f"upsert_token must reset needs_reauth → active on re-OAuth, got {row.status!r}"
+        )
+        # And the tokens were actually refreshed.
+        assert cipher.decrypt(row.access_token_ciphertext) == "fresh"
+        assert row.account_label == "@founder"
+
+
 async def test_successful_refresh_resets_status_to_active(sf, cipher) -> None:
     """Lift E46 — after a previous refresh failure persisted
     ``status='needs_reauth'``, a fresh OAuth flow (re-OAuth → upsert_token)
