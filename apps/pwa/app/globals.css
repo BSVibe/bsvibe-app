@@ -4812,6 +4812,74 @@ main.login {
   color: var(--ink-3);
 }
 
+/* Lift E47 — needs_reauth pill: the bound OAuth credential is dead and
+   the founder must reconnect. Calm amber register (matches the in-app
+   "attention needed" tone, not red-error) with a dot to mirror the
+   --connected pill shape so the card's visual rhythm survives the
+   status transition. */
+.connector-card__pill--needs-reauth {
+  background: var(--accent-bg);
+  color: var(--amber-ink);
+}
+
+.connector-card__pill--needs-reauth::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--amber-dot);
+}
+
+/* Lift E47 — the OAuth section nestled inside the connected card.
+   Pre-E46 this surface only rendered for unconnected providers (the
+   founder-facing "Connect with X" empty state), so the buttons never
+   needed the connected-card styling. E46 surfaces the same button as
+   a "Reconnect with X" CTA INSIDE the connected card when the bound
+   token row carries needs_reauth, so the connector__oauth wrapper now
+   gives the button a calm primary affordance + breathing room. */
+.connector-card__oauth {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.connector-form__oauth-connected {
+  font-size: 0.82rem;
+  color: var(--ink-2);
+  font-weight: 500;
+}
+
+.connector-form__oauth-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 12px;
+  border: 1px solid var(--ink-3);
+  border-radius: 7px;
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+  font-size: 0.82rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 120ms ease, border-color 120ms ease;
+}
+
+.connector-form__oauth-btn:hover:not(:disabled) {
+  background: var(--accent-bg);
+  border-color: var(--ink-2);
+}
+
+.connector-form__oauth-btn:focus-visible {
+  outline: 2px solid var(--amber-dot);
+  outline-offset: 1px;
+}
+
+.connector-form__oauth-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
 .connector-card__actions {
   display: flex;
   align-items: center;
