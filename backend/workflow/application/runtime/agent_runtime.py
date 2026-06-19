@@ -146,6 +146,32 @@ def _frame_skill_hint(
     return skill_match, description
 
 
+def _resolve_sandbox_manager(
+    sandbox_manager: SandboxManager | None, settings: Settings
+) -> SandboxManager:
+    """Pick the sandbox backend EXPLICITLY — never a silent host fallback.
+
+    [[bsvibe-no-implicit-routing]]: an injected manager (tests) wins; otherwise
+    when ``sandbox_enabled`` the Docker (DinD) manager MUST build — an
+    enabled-but-unbuildable sandbox raises rather than degrading to host
+    execution (the old ``… or NoopSandboxManager()`` tail silently ran the
+    verifier's ``command`` checks as worker-container subprocesses, where the
+    project toolchain is absent). Only when the sandbox is *explicitly* disabled
+    do we use the host :class:`NoopSandboxManager`.
+    """
+    if sandbox_manager is not None:
+        return sandbox_manager
+    if settings.sandbox_enabled:
+        built = build_sandbox_manager()
+        if built is None:
+            raise RuntimeError(
+                "sandbox_enabled is true but no sandbox manager could be built — "
+                "refusing to silently fall back to host execution"
+            )
+        return built
+    return NoopSandboxManager()
+
+
 def build_agent_execution_deps(
     *,
     settings: Settings | None = None,
@@ -163,7 +189,7 @@ def build_agent_execution_deps(
     * sandbox / skill_loader / provisioner / redis wiring unchanged.
     """
     settings = settings or get_settings()
-    box: SandboxManager = sandbox_manager or build_sandbox_manager() or NoopSandboxManager()
+    box: SandboxManager = _resolve_sandbox_manager(sandbox_manager, settings)
     skills_root = Path(settings.skills_root)
     knowledge_vault_root = Path(settings.knowledge_vault_root)
 
