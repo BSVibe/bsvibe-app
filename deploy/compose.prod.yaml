@@ -67,10 +67,15 @@ services:
       BSVIBE_AUDIT_RELAY_URL: ${BSVIBE_AUDIT_RELAY_URL:-}
       BSVIBE_OAUTH_ISSUER: ${BSVIBE_OAUTH_ISSUER:-https://api.bsvibe.dev}
       BSVIBE_PWA_URL: ${BSVIBE_PWA_URL:-https://app.bsvibe.dev}
-      # Sandbox stays off until the LLM phase (see runbook staged rollout).
+      # Sandbox: verification/work command checks run in a per-project DinD
+      # container (toolchain: pytest/ruff/uv). Enable with the `sandbox`
+      # compose profile + BSVIBE_SANDBOX_ENABLED=true (see README §5 Stage B).
+      # SANDBOX_USER=0:0 matches the worker's root-owned run worktrees so the
+      # sandbox can write /work.
       BSVIBE_SANDBOX_ENABLED: ${BSVIBE_SANDBOX_ENABLED:-false}
       BSVIBE_SANDBOX_IMAGE: ${BSVIBE_SANDBOX_IMAGE:-bsvibe-sandbox:latest}
       BSVIBE_DOCKER_HOST: ${BSVIBE_DOCKER_HOST:-}
+      BSVIBE_SANDBOX_USER: ${BSVIBE_SANDBOX_USER:-}
     volumes:
       - appdata:/app/var
 
@@ -103,6 +108,7 @@ services:
       BSVIBE_SANDBOX_ENABLED: ${BSVIBE_SANDBOX_ENABLED:-false}
       BSVIBE_SANDBOX_IMAGE: ${BSVIBE_SANDBOX_IMAGE:-bsvibe-sandbox:latest}
       BSVIBE_DOCKER_HOST: ${BSVIBE_DOCKER_HOST:-}
+      BSVIBE_SANDBOX_USER: ${BSVIBE_SANDBOX_USER:-}
     volumes:
       - appdata:/app/var
 

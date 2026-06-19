@@ -6,8 +6,24 @@ COPY --from=ghcr.io/astral-sh/uv:0.5.4 /uv /uvx /usr/local/bin/
 # W1/W2 — git is required for the product workspace + per-run worktree
 # lifecycle (backend.storage.product_workspace shells out to git via
 # subprocess). The slim base doesn't ship it.
+#
+# docker-cli — the verification/work sandbox manager
+# (backend.workflow.infrastructure.sandbox.docker_manager) shells out to the
+# `docker` CLI against the DinD sidecar (DOCKER_HOST=tcp://...). Only the
+# client is needed (no daemon); the daemon runs in the privileged dind
+# sidecar. Without this binary `acquire()` fails with FileNotFoundError and
+# every sandboxed verification → system_error.
 RUN apt-get update \
-    && apt-get install --no-install-recommends -y git \
+    && apt-get install --no-install-recommends -y git ca-certificates curl gnupg \
+    && install -m 0755 -d /etc/apt/keyrings \
+    && curl -fsSL https://download.docker.com/linux/debian/gpg \
+        -o /etc/apt/keyrings/docker.asc \
+    && chmod a+r /etc/apt/keyrings/docker.asc \
+    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] \
+https://download.docker.com/linux/debian $(. /etc/os-release && echo "$VERSION_CODENAME") stable" \
+        > /etc/apt/sources.list.d/docker.list \
+    && apt-get update \
+    && apt-get install --no-install-recommends -y docker-ce-cli \
     && rm -rf /var/lib/apt/lists/*
 
 ENV UV_LINK_MODE=copy \
