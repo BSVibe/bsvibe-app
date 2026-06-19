@@ -51,12 +51,13 @@ class FakeDocker:
         return (0, b"", b"")
 
 
-def _mgr_with_fake(**kwargs) -> tuple[DockerSandboxManager, FakeDocker]:
+def _mgr_with_fake(*, sandbox_user: str = "", **kwargs) -> tuple[DockerSandboxManager, FakeDocker]:
     mgr = DockerSandboxManager(
         docker_host="tcp://dind:2375",
         sandbox_image="bsvibe-sandbox:test",
         idle_reap_seconds=10,
         max_concurrent=2,
+        sandbox_user=sandbox_user,
     )
     fake = FakeDocker(**kwargs)
     mgr._docker = fake  # type: ignore[method-assign]
@@ -117,6 +118,27 @@ class TestAcquireCreate:
             await mgr.acquire(uuid.uuid4(), str(tmp_path))
         # Permit should be released even though create failed.
         assert mgr._semaphore._value == 2  # noqa: SLF001
+
+
+class TestSandboxUser:
+    """``sandbox_user`` adds an EXPLICIT ``--user`` run flag so the per-project
+    sandbox runs as a uid that can write the root-owned run workspace mounted at
+    ``/work`` (the worker writes the worktree as root; the image default user is
+    uid 1000 → unwritable). Empty setting = image default, no ``--user`` (no
+    silent uid coercion — explicit config only)."""
+
+    async def test_user_set_adds_user_flag(self, tmp_path):
+        mgr, fake = _mgr_with_fake(sandbox_user="0:0")
+        await mgr.acquire(uuid.uuid4(), str(tmp_path))
+        run_argv = next(argv for argv, _ in fake.calls if argv[0] == "run")
+        assert "--user" in run_argv
+        assert run_argv[run_argv.index("--user") + 1] == "0:0"
+
+    async def test_user_empty_omits_user_flag(self, tmp_path):
+        mgr, fake = _mgr_with_fake(sandbox_user="")
+        await mgr.acquire(uuid.uuid4(), str(tmp_path))
+        run_argv = next(argv for argv, _ in fake.calls if argv[0] == "run")
+        assert "--user" not in run_argv
 
 
 class TestExecPath:

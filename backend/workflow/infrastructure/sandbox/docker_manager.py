@@ -134,9 +134,16 @@ class DockerSandboxManager:
         sandbox_image: str,
         idle_reap_seconds: int,
         max_concurrent: int,
+        sandbox_user: str = "",
     ) -> None:
         self._docker_host = docker_host
         self._image = sandbox_image
+        # Explicit ``--user`` for the sandbox container. The worker writes the
+        # run worktree as root, so the image's default uid-1000 ``sandbox`` user
+        # cannot write ``/work``. Setting this to e.g. ``"0:0"`` matches the
+        # worker's uid; empty leaves the image default (no ``--user``) — never a
+        # silent uid coercion.
+        self._user = sandbox_user
         self._idle_reap_seconds = idle_reap_seconds
         self._semaphore = asyncio.Semaphore(max_concurrent)
         self._locks: dict[uuid.UUID, asyncio.Lock] = {}
@@ -212,6 +219,7 @@ class DockerSandboxManager:
         name = _container_name(project_id)
         await self._docker(["rm", "-f", name], timeout_s=_DOCKER_OP_TIMEOUT_S)
         await self._semaphore.acquire()
+        user_flag = ["--user", self._user] if self._user else []
         try:
             code, _out, err = await self._docker(
                 [
@@ -223,6 +231,7 @@ class DockerSandboxManager:
                     _SANDBOX_MEMORY,
                     "--memory-swap",
                     _SANDBOX_MEMORY,
+                    *user_flag,
                     "-v",
                     f"{workspace_path}:{_WORK_MOUNT}",
                     "-w",
