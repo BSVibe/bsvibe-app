@@ -50,6 +50,13 @@ from backend.executors.worker.executors import (
 
 logger = structlog.get_logger(__name__)
 
+# ``codex exec --json`` emits one JSON event per line, and a single line can
+# carry full file contents / diffs / reasoning — easily past asyncio's default
+# 64 KiB StreamReader limit. Without a raised limit ``readline()`` raises
+# ``LimitOverrunError`` ("Separator is found, but chunk is longer than limit")
+# mid-run and the task dies. 16 MiB comfortably covers a large multi-file turn.
+_STREAM_LIMIT = 16 * 1024 * 1024
+
 
 class CodexExecutor:
     """Stream from ``codex exec --json``."""
@@ -99,6 +106,7 @@ class CodexExecutor:
                 stderr=asyncio.subprocess.PIPE,
                 env=sanitized_subprocess_env(),
                 start_new_session=True,
+                limit=_STREAM_LIMIT,
             )
             assert process.stdin is not None
             assert process.stdout is not None
