@@ -272,6 +272,10 @@ async def deliver_github(
         return [ActionResult(action=action_prefix, succeeded=False, error=str(exc))]
 
     output = dict(result) if isinstance(result, dict) else {"result": result}
+    # #362 — persist the PR URL onto the Deliverable so the PWA / Brief can
+    # surface the PR link (open_pr returns ``url`` = the PR html_url). Soft:
+    # a write hiccup never fails an already-opened PR.
+    await _persist_pr_url(deps.session_factory, deliverable_id, output.get("url"))
     logger.info(
         "github_delivery_pr_opened",
         workspace_id=str(workspace_id),
@@ -282,6 +286,34 @@ async def deliver_github(
         remote=remote_url,
     )
     return [ActionResult(action=action_prefix, succeeded=True, output=output)]
+
+
+async def _persist_pr_url(
+    session_factory: async_sessionmaker[AsyncSession],
+    deliverable_id: uuid.UUID,
+    pr_url: object,
+) -> None:
+    """Write the opened PR's URL onto ``Deliverable.diff_url`` (#362).
+
+    No-op when ``pr_url`` is falsy / not a string, or when the deliverable is
+    gone. Soft — never raises into the delivery path (the PR is already open;
+    a missed diff_url is cosmetic)."""
+    if not isinstance(pr_url, str) or not pr_url:
+        return
+    from backend.workflow.infrastructure.db import Deliverable  # noqa: PLC0415 — lazy
+
+    try:
+        async with session_factory() as session:
+            deliverable = await session.get(Deliverable, deliverable_id)
+            if deliverable is not None:
+                deliverable.diff_url = pr_url
+                await session.commit()
+    except Exception:  # noqa: BLE001 — diff_url write must never fail a delivered PR
+        logger.warning(
+            "github_delivery_diff_url_write_failed",
+            deliverable_id=str(deliverable_id),
+            exc_info=True,
+        )
 
 
 __all__ = [
