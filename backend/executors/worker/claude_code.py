@@ -38,6 +38,11 @@ from backend.executors.worker.executors import (
 
 logger = structlog.get_logger(__name__)
 
+# claude_code's JSONL stream can carry a single line past asyncio's default
+# 64 KiB StreamReader limit (full file contents / diffs) — same trap as codex.
+# Without a raised limit ``readline()`` raises ``LimitOverrunError`` mid-run.
+_STREAM_LIMIT = 16 * 1024 * 1024
+
 
 class ClaudeCodeExecutor:
     """Stream from ``claude --print --output-format stream-json``."""
@@ -156,6 +161,7 @@ class ClaudeCodeExecutor:
                 stderr=asyncio.subprocess.PIPE,
                 env=sanitized_subprocess_env(),
                 start_new_session=True,
+                limit=_STREAM_LIMIT,
             )
             assert process.stdin is not None
             assert process.stdout is not None

@@ -352,3 +352,21 @@ async def test_subprocess_started_in_new_session_for_pgrp_signal(
     assert spawn_kwargs[0].get("start_new_session") is True, (
         "codex executor must pass start_new_session=True"
     )
+
+
+async def test_subprocess_uses_large_stream_limit(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``codex exec --json`` emits JSON lines that can exceed asyncio's default
+    64 KiB StreamReader limit (full file contents / diffs / reasoning). Without
+    a raised ``limit=``, ``readline()`` raises ``LimitOverrunError`` mid-run
+    ("Separator is found, but chunk is longer than limit") and the task fails.
+    The subprocess must be created with a large stream limit."""
+    proc = _FakeProcess(stdout_lines=[_agent_message_line("x")])
+    captured: dict[str, Any] = {}
+
+    async def _fake_exec(*args: Any, **kwargs: Any) -> _FakeProcess:
+        captured.update(kwargs)
+        return proc
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", _fake_exec)
+    await _drain(CodexExecutor().execute("p", {"system": "s", "model": "gpt-5"}))
+    assert captured.get("limit", 0) >= 1024 * 1024, "stream limit must be >= 1 MiB for large JSON lines"
