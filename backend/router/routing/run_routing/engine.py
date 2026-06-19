@@ -183,12 +183,28 @@ def _evaluate_condition(condition: dict[str, Any], ctx: RoutingContext) -> bool:
     return (not result) if condition.get("negate") else result
 
 
+_SKILL_CALLER_PREFIX = "skill."
+
+
+def _caller_matches(column_caller: str, caller_id: str) -> bool:
+    """The rule's ``caller_id`` column matches the dispatch caller. A skill
+    caller (``skill.<name>``) also matches a rule authored with the bare
+    ``<name>`` (back-compat tolerance, carried from the resolver's old
+    matcher so #368's engine-delegation doesn't drop it)."""
+    if column_caller == caller_id:
+        return True
+    return (
+        caller_id.startswith(_SKILL_CALLER_PREFIX)
+        and column_caller == caller_id[len(_SKILL_CALLER_PREFIX) :]
+    )
+
+
 def _rule_matches(rule: RunRoutingRuleRow, ctx: RoutingContext) -> bool:
     """A rule matches when its ``caller_id`` (when set) matches AND all
     conditions match. A rule with no caller_id and no conditions matches
     everything (catch-all default)."""
     column_caller = getattr(rule, "caller_id", None)
-    if column_caller and ctx.caller_id and column_caller != ctx.caller_id:
+    if column_caller and ctx.caller_id and not _caller_matches(column_caller, ctx.caller_id):
         return False
     conditions = rule.conditions if isinstance(rule.conditions, list) else []
     return all(_evaluate_condition(c, ctx) for c in conditions if isinstance(c, dict))

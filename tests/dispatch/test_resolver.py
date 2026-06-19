@@ -291,3 +291,90 @@ class TestDefaultCatchAllRule:
         resolved = await resolver.resolve_for(caller_id=CALLER_FRAME, workspace_id=workspace.id)
         assert resolved.account.id == cloud_account.id
         assert resolved.source == "explicit_rule"
+
+
+class TestResolverConditionEvaluation:
+    """#368 — the resolver MUST evaluate run-routing rule conditions
+    (stage/pipeline/…) against the run, not just match caller_id. A rule
+    whose condition doesn't match the run's context must be skipped."""
+
+    async def test_condition_mismatch_skips_rule_falls_to_default(
+        self,
+        session: AsyncSession,
+        workspace: WorkspaceRow,
+        model_account: ModelAccount,
+        cloud_account: ModelAccount,
+    ) -> None:
+        from backend.dispatch.caller_registry import CALLER_AGENT_LOOP_ACT
+        from backend.workflow.infrastructure.db import ExecutionRun, RunStatus
+
+        # Default = model_account; an act-caller rule targets cloud_account
+        # ONLY when pipeline == design_then_impl.
+        workspace.default_account_id = model_account.id
+        session.add(
+            RunRoutingRuleRow(
+                workspace_id=workspace.id,
+                name="design -> cloud",
+                caller_id=CALLER_AGENT_LOOP_ACT,
+                priority=0,
+                is_default=False,
+                target=cloud_account.litellm_model,
+                conditions=[{"field": "pipeline", "operator": "eq", "value": "design_then_impl"}],
+                is_active=True,
+            )
+        )
+        # The run is a SINGLE-pipeline run → the rule's condition must NOT match.
+        run = ExecutionRun(
+            workspace_id=workspace.id,
+            status=RunStatus.RUNNING,
+            payload={"frame": {"pipeline": "single"}},
+        )
+        session.add(run)
+        await session.flush()
+
+        resolver = ModelAccountResolver(session, settings=get_settings(), run_id=run.id)
+        resolved = await resolver.resolve_for(
+            caller_id=CALLER_AGENT_LOOP_ACT, workspace_id=workspace.id
+        )
+        # Condition didn't match → rule skipped → workspace default.
+        assert resolved.account.id == model_account.id
+        assert resolved.source == "workspace_default"
+
+    async def test_condition_match_selects_rule_target(
+        self,
+        session: AsyncSession,
+        workspace: WorkspaceRow,
+        model_account: ModelAccount,
+        cloud_account: ModelAccount,
+    ) -> None:
+        from backend.dispatch.caller_registry import CALLER_AGENT_LOOP_ACT
+        from backend.workflow.infrastructure.db import ExecutionRun, RunStatus
+
+        workspace.default_account_id = model_account.id
+        session.add(
+            RunRoutingRuleRow(
+                workspace_id=workspace.id,
+                name="design -> cloud",
+                caller_id=CALLER_AGENT_LOOP_ACT,
+                priority=0,
+                is_default=False,
+                target=cloud_account.litellm_model,
+                conditions=[{"field": "pipeline", "operator": "eq", "value": "design_then_impl"}],
+                is_active=True,
+            )
+        )
+        run = ExecutionRun(
+            workspace_id=workspace.id,
+            status=RunStatus.RUNNING,
+            payload={"frame": {"pipeline": "design_then_impl"}},
+        )
+        session.add(run)
+        await session.flush()
+
+        resolver = ModelAccountResolver(session, settings=get_settings(), run_id=run.id)
+        resolved = await resolver.resolve_for(
+            caller_id=CALLER_AGENT_LOOP_ACT, workspace_id=workspace.id
+        )
+        # Condition matched → rule's target wins over the default.
+        assert resolved.account.id == cloud_account.id
+        assert resolved.source == "explicit_rule"
