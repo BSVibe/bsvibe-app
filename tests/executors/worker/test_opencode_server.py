@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Sequence
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -202,6 +203,144 @@ async def test_singleton_round_trip_set_and_get() -> None:
     try:
         assert opencode_server.get_serve_url() == "http://127.0.0.1:8888"
     finally:
+        opencode_server.clear_serve_url()
+
+
+# ── SQLite-corruption auto-recovery (this lift) ─────────────────────────────
+#
+# opencode persists session state in a SQLite store. When the binary on the
+# host is OLDER than whatever opencode last migrated that store with, the
+# schema carries columns the running binary doesn't expect (observed live:
+# ``NOT NULL constraint failed: session_message.seq`` on opencode 1.15.12 vs a
+# newer-migrated db). Every new session's first message insert then 500s and
+# the worker can never make progress until a human resets the db. The recovery
+# primitive here lets the worker self-heal: stop the daemon (releasing its
+# lock on the db), move the corrupt db aside, start a fresh daemon (which
+# recreates the store at the binary's own schema).
+
+
+@pytest.mark.asyncio(loop_scope="function")
+async def test_daemon_handle_singleton_round_trip() -> None:
+    """The recovery path needs the live daemon handle (to stop it), so the
+    worker startup must publish it into a module singleton alongside the URL."""
+    opencode_server.set_serve_daemon(None)
+    assert opencode_server.get_serve_daemon() is None
+    sentinel = object()
+    opencode_server.set_serve_daemon(sentinel)  # type: ignore[arg-type]
+    try:
+        assert opencode_server.get_serve_daemon() is sentinel
+    finally:
+        opencode_server.set_serve_daemon(None)
+        assert opencode_server.get_serve_daemon() is None
+
+
+async def test_opencode_data_dir_honours_xdg_data_home(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("XDG_DATA_HOME", "/custom/xdg")
+    assert opencode_server.opencode_data_dir() == Path("/custom/xdg/opencode")
+
+
+async def test_opencode_data_dir_defaults_to_local_share(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("XDG_DATA_HOME", raising=False)
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: Path("/home/worker")))
+    assert opencode_server.opencode_data_dir() == Path("/home/worker/.local/share/opencode")
+
+
+async def test_opencode_data_dir_setting_overrides(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An explicit ``opencode_data_dir`` setting wins over XDG/HOME derivation."""
+    monkeypatch.setenv("XDG_DATA_HOME", "/custom/xdg")
+    settings = WorkerSettings(opencode_data_dir="/explicit/dir")
+    assert opencode_server.opencode_data_dir(settings) == Path("/explicit/dir")
+
+
+async def test_quarantine_moves_db_and_sidecars(tmp_path: Path) -> None:
+    """The db plus its WAL/SHM sidecars are all moved aside so the fresh daemon
+    starts from a clean store. The originals must be gone; the quarantined
+    copies must retain the bytes."""
+    data_dir = tmp_path / "opencode"
+    data_dir.mkdir()
+    (data_dir / "opencode.db").write_bytes(b"corrupt-db")
+    (data_dir / "opencode.db-wal").write_bytes(b"wal")
+    (data_dir / "opencode.db-shm").write_bytes(b"shm")
+
+    moved = opencode_server.quarantine_opencode_db(data_dir, suffix="20260620-000000")
+
+    assert not (data_dir / "opencode.db").exists()
+    assert not (data_dir / "opencode.db-wal").exists()
+    assert not (data_dir / "opencode.db-shm").exists()
+    # The moved-aside db retains the original bytes.
+    bak = data_dir / "opencode.db.bak-20260620-000000"
+    assert bak.read_bytes() == b"corrupt-db"
+    assert bak in moved
+
+
+async def test_quarantine_tolerates_missing_sidecars(tmp_path: Path) -> None:
+    """A db with no WAL/SHM (or even no db at all) must not raise — recovery is
+    best-effort and never blocks the restart."""
+    data_dir = tmp_path / "opencode"
+    data_dir.mkdir()
+    (data_dir / "opencode.db").write_bytes(b"db-only")
+
+    moved = opencode_server.quarantine_opencode_db(data_dir, suffix="s")
+
+    assert not (data_dir / "opencode.db").exists()
+    assert (data_dir / "opencode.db.bak-s").read_bytes() == b"db-only"
+    assert all(p.exists() for p in moved)
+
+    # No db present at all → no-op, no raise.
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    assert opencode_server.quarantine_opencode_db(empty, suffix="s2") == []
+
+
+async def test_restart_after_corruption_stops_quarantines_then_starts_fresh(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """``restart_serve_after_corruption`` must, in order: stop the existing
+    daemon (so its lock on the db is released), quarantine the db, start a
+    fresh daemon, and republish both the URL and daemon singletons."""
+    order: list[str] = []
+
+    old_proc = _FakeProcess(stdout_lines=[b"opencode server listening on http://127.0.0.1:1111\n"])
+    old_daemon = opencode_server.OpenCodeServerProcess(
+        process=old_proc, url="http://127.0.0.1:1111"
+    )
+    opencode_server.set_serve_daemon(old_daemon)
+    opencode_server.set_serve_url("http://127.0.0.1:1111")
+
+    new_proc = _FakeProcess(stdout_lines=[b"opencode server listening on http://127.0.0.1:2222\n"])
+    new_daemon = opencode_server.OpenCodeServerProcess(
+        process=new_proc, url="http://127.0.0.1:2222"
+    )
+
+    async def _fake_stop(daemon: Any) -> None:
+        assert daemon is old_daemon
+        order.append("stop")
+
+    def _fake_quarantine(data_dir: Path, *, suffix: str) -> list[Path]:
+        order.append("quarantine")
+        return [data_dir / "opencode.db.bak"]
+
+    async def _fake_start(settings: Any, **kwargs: Any) -> Any:
+        order.append("start")
+        return new_daemon
+
+    monkeypatch.setattr(opencode_server, "stop_opencode_serve", _fake_stop)
+    monkeypatch.setattr(opencode_server, "quarantine_opencode_db", _fake_quarantine)
+    monkeypatch.setattr(opencode_server, "start_opencode_serve", _fake_start)
+    monkeypatch.setattr(opencode_server, "opencode_data_dir", lambda settings=None: tmp_path)
+
+    settings = WorkerSettings(opencode_serve_startup_timeout_s=5.0)
+    try:
+        url = await opencode_server.restart_serve_after_corruption(settings)
+
+        assert url == "http://127.0.0.1:2222"
+        # Stop BEFORE quarantine (db lock must be released first), quarantine
+        # BEFORE start (fresh store), start last.
+        assert order == ["stop", "quarantine", "start"]
+        assert opencode_server.get_serve_url() == "http://127.0.0.1:2222"
+        assert opencode_server.get_serve_daemon() is new_daemon
+    finally:
+        opencode_server.set_serve_daemon(None)
         opencode_server.clear_serve_url()
 
 
