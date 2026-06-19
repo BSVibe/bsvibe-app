@@ -87,6 +87,17 @@ class WorkerSettings(BaseSettings):
     opencode_serve_startup_timeout_s: float = 30.0
     opencode_request_timeout_s: float = 600.0
 
+    # opencode keeps its session state in a SQLite store under its XDG data
+    # dir (``$XDG_DATA_HOME/opencode`` or ``~/.local/share/opencode``). When
+    # the running binary is older than whatever opencode last migrated that
+    # store with, the schema carries columns the binary doesn't expect
+    # (observed live: ``NOT NULL constraint failed: session_message.seq`` on
+    # opencode 1.15.12) and every new session's first message insert 500s.
+    # The auto-recovery path quarantines that store + restarts serve. Leave
+    # this blank to derive the path from XDG/HOME; set it only when opencode's
+    # data dir is relocated (``BSVIBE_WORKER_OPENCODE_DATA_DIR``).
+    opencode_data_dir: str = ""
+
 
 @lru_cache(maxsize=1)
 def get_worker_settings() -> WorkerSettings:

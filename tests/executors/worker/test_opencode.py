@@ -393,6 +393,140 @@ async def test_persistent_connection_refused_surfaces_terminal_error(
     assert "connection" in chunks[-1].error.lower() or "refused" in chunks[-1].error.lower()
 
 
+# ── SQLite-corruption auto-recovery ─────────────────────────────────────────
+#
+# opencode persists session state in SQLite. A host binary older than whatever
+# opencode last migrated that store with hits an unexpected schema; the live
+# signature is a 500 carrying ``NOT NULL constraint failed: session_message.seq``
+# on every new session's first message insert. The executor must detect that
+# signature, ask the server module to quarantine the db + restart serve, then
+# retry the message ONCE against the fresh daemon.
+
+
+async def test_is_sqlite_corruption_matches_seq_signature() -> None:
+    from backend.executors.worker.opencode import _is_sqlite_corruption
+
+    assert _is_sqlite_corruption(
+        "POST /session/abc/message returned 500: "
+        '{"data":{"message":"NOT NULL constraint failed: session_message.seq"}}'
+    )
+    # Broader SQLite store-corruption markers also qualify.
+    assert _is_sqlite_corruption("SqliteError: database disk image is malformed")
+    assert _is_sqlite_corruption("SQLITE_CORRUPT: file is not a database")
+
+
+async def test_is_sqlite_corruption_ignores_ordinary_errors() -> None:
+    from backend.executors.worker.opencode import _is_sqlite_corruption
+
+    assert not _is_sqlite_corruption("POST /session returned 400: BadRequest")
+    assert not _is_sqlite_corruption("connection refused")
+    assert not _is_sqlite_corruption("")
+
+
+async def test_execute_recovers_from_sqlite_corruption_then_retries(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """First message POST 500s with the SQLite-seq signature. The executor must
+    call the server module's recovery (quarantine db + restart serve) ONCE and
+    retry, after which the task completes normally."""
+    calls = {"message": 0}
+
+    async def _handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if request.method == "POST" and path == "/session":
+            return httpx.Response(200, json={"id": "sid-x"})
+        if request.method == "POST" and path.endswith("/message"):
+            calls["message"] += 1
+            if calls["message"] == 1:
+                return httpx.Response(
+                    500,
+                    json={"data": {"message": "NOT NULL constraint failed: session_message.seq"}},
+                )
+            return httpx.Response(
+                200,
+                json={"parts": [{"type": "text", "text": "healed"}], "info": {}},
+            )
+        return httpx.Response(404)
+
+    opencode_server.set_serve_url("http://127.0.0.1:4096")
+    executor = OpenCodeExecutor(http_transport=httpx.MockTransport(_handler))
+
+    recovered: list[int] = []
+
+    async def _fake_restart(settings: Any) -> str:
+        recovered.append(1)
+        return "http://127.0.0.1:5000"
+
+    monkeypatch.setattr(opencode_server, "restart_serve_after_corruption", _fake_restart)
+
+    chunks = await _drain(executor.execute("p", {"workspace_dir": "."}))
+
+    deltas = [c.delta for c in chunks if c.delta]
+    assert deltas == ["healed"]
+    assert chunks[-1].done is True
+    assert chunks[-1].error is None
+    assert recovered == [1], "recovery must fire exactly once"
+    assert calls["message"] == 2, "message POST must be retried once after recovery"
+
+
+async def test_execute_surfaces_error_when_recovery_retry_still_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """If the post-recovery retry ALSO hits the corruption signature, the
+    executor stops (no infinite loop) and yields a terminal error."""
+
+    async def _handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if request.method == "POST" and path == "/session":
+            return httpx.Response(200, json={"id": "sid-x"})
+        if request.method == "POST" and path.endswith("/message"):
+            return httpx.Response(
+                500,
+                json={"data": {"message": "NOT NULL constraint failed: session_message.seq"}},
+            )
+        return httpx.Response(404)
+
+    opencode_server.set_serve_url("http://127.0.0.1:4096")
+    executor = OpenCodeExecutor(http_transport=httpx.MockTransport(_handler))
+
+    recovered: list[int] = []
+
+    async def _fake_restart(settings: Any) -> str:
+        recovered.append(1)
+        return "http://127.0.0.1:5000"
+
+    monkeypatch.setattr(opencode_server, "restart_serve_after_corruption", _fake_restart)
+
+    chunks = await _drain(executor.execute("p", {}))
+
+    assert chunks[-1].done is True
+    assert chunks[-1].error is not None
+    assert recovered == [1], "recovery is attempted once, not in a loop"
+
+
+async def test_execute_does_not_recover_on_ordinary_http_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A plain non-corruption 500 must NOT trigger db quarantine — only the
+    SQLite-corruption signature does. Ordinary errors surface as before."""
+    serve = _FakeServe(status=500)
+    executor = _executor_with(serve)
+
+    recovered: list[int] = []
+
+    async def _fake_restart(settings: Any) -> str:
+        recovered.append(1)
+        return "http://127.0.0.1:5000"
+
+    monkeypatch.setattr(opencode_server, "restart_serve_after_corruption", _fake_restart)
+
+    chunks = await _drain(executor.execute("p", {}))
+
+    assert chunks[-1].done is True
+    assert chunks[-1].error is not None
+    assert recovered == [], "ordinary errors must not quarantine the db"
+
+
 # ── No subprocess code path remains ─────────────────────────────────────────
 
 

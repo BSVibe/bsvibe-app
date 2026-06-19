@@ -29,9 +29,11 @@ This module owns the daemon lifecycle:
 from __future__ import annotations
 
 import asyncio
+import os
 import re
 import shutil
 from dataclasses import dataclass
+from pathlib import Path
 
 import httpx
 import structlog
@@ -88,6 +90,32 @@ def get_serve_url() -> str | None:
 def clear_serve_url() -> None:
     """Drop the singleton (test isolation + worker shutdown)."""
     _SINGLETON.pop("url", None)
+
+
+# ── Singleton: the live daemon handle (for SQLite-corruption recovery) ───────
+#
+# The URL singleton above is all the executor needs for the happy path. The
+# corruption-recovery path additionally needs to STOP the running daemon (to
+# release its lock on opencode.db before the db is moved aside), which requires
+# the daemon handle — not just its URL. The worker startup publishes the handle
+# here right after ``start_opencode_serve`` so the executor's recovery call can
+# find it. Stored single-slot, mirroring the URL singleton, to dodge the
+# ``global`` keyword (ruff PLW0603).
+
+_DAEMON_SLOT: dict[str, OpenCodeServerProcess] = {}
+
+
+def set_serve_daemon(daemon: OpenCodeServerProcess | None) -> None:
+    """Publish (or clear, with ``None``) the live daemon handle."""
+    if daemon is None:
+        _DAEMON_SLOT.pop("daemon", None)
+    else:
+        _DAEMON_SLOT["daemon"] = daemon
+
+
+def get_serve_daemon() -> OpenCodeServerProcess | None:
+    """Return the live daemon handle, or ``None`` if startup never set it."""
+    return _DAEMON_SLOT.get("daemon")
 
 
 # ── Stdout-listening-line regex ─────────────────────────────────────────────
@@ -242,6 +270,93 @@ async def ensure_serve_running(settings: WorkerSettings) -> str:
     return daemon.url
 
 
+# ── SQLite-corruption recovery ──────────────────────────────────────────────
+#
+# opencode persists session state in a SQLite store. When the host's opencode
+# binary is OLDER than whatever opencode last migrated that store with, the
+# schema carries columns the binary doesn't expect (observed live on opencode
+# 1.15.12: ``NOT NULL constraint failed: session_message.seq``). Every new
+# session's first message insert then 500s, and the worker can never make
+# progress until the db is reset by hand. ``restart_serve_after_corruption``
+# automates the manual reset: stop the daemon (release its lock), move the
+# store aside, start a fresh daemon (which recreates the store at the binary's
+# own schema).
+
+# The store + its SQLite WAL/SHM sidecars. All three move together so the fresh
+# daemon never picks up a half-quarantined store.
+_DB_FILES = ("opencode.db", "opencode.db-wal", "opencode.db-shm")
+
+
+def opencode_data_dir(settings: WorkerSettings | None = None) -> Path:
+    """Resolve opencode's data dir (where ``opencode.db`` lives).
+
+    An explicit ``settings.opencode_data_dir`` wins; otherwise derive it the
+    same way opencode itself does — ``$XDG_DATA_HOME/opencode`` when set, else
+    ``~/.local/share/opencode``. Resolution mirrors the env the daemon was
+    spawned with (``sanitized_subprocess_env`` preserves HOME + XDG).
+    """
+    if settings is not None and settings.opencode_data_dir:
+        return Path(settings.opencode_data_dir)
+    xdg = os.environ.get("XDG_DATA_HOME")
+    base = Path(xdg) if xdg else Path.home() / ".local" / "share"
+    return base / "opencode"
+
+
+def quarantine_opencode_db(data_dir: Path, *, suffix: str) -> list[Path]:
+    """Move ``opencode.db`` (+ its WAL/SHM sidecars) aside, return the new paths.
+
+    Best-effort: a sidecar that doesn't exist is skipped, and an entirely
+    absent db is a no-op (returns ``[]``). Never raises on a missing file —
+    recovery must not be blocked by the exact set of sidecars present.
+    """
+    moved: list[Path] = []
+    for name in _DB_FILES:
+        src = data_dir / name
+        if not src.exists():
+            continue
+        dst = data_dir / f"{name}.bak-{suffix}"
+        src.rename(dst)
+        moved.append(dst)
+    if moved:
+        logger.warning(
+            "opencode_db_quarantined",
+            data_dir=str(data_dir),
+            moved=[p.name for p in moved],
+        )
+    return moved
+
+
+def _corruption_suffix() -> str:
+    """A unique-enough quarantine suffix (wall-clock; recovery is rare)."""
+    import time  # noqa: PLC0415 — local to keep the hot import surface small
+
+    return time.strftime("%Y%m%d-%H%M%S")
+
+
+async def restart_serve_after_corruption(settings: WorkerSettings) -> str:
+    """Stop the daemon, quarantine the SQLite store, start a fresh daemon.
+
+    Order is load-bearing: STOP first so the daemon releases its lock on
+    ``opencode.db``, THEN quarantine the store (on macOS moving a still-open
+    file leaves the daemon on the now-unlinked inode — the corrupt schema
+    survives), THEN start a fresh daemon which recreates the store at the
+    binary's own schema. Re-publishes both singletons and returns the new URL.
+    """
+    old = get_serve_daemon()
+    if old is not None:
+        await stop_opencode_serve(old)
+    set_serve_daemon(None)
+    clear_serve_url()
+
+    quarantine_opencode_db(opencode_data_dir(settings), suffix=_corruption_suffix())
+
+    daemon = await start_opencode_serve(settings)
+    set_serve_url(daemon.url)
+    set_serve_daemon(daemon)
+    logger.info("opencode_serve_restarted_after_corruption", url=daemon.url)
+    return daemon.url
+
+
 # ── Internals ───────────────────────────────────────────────────────────────
 
 
@@ -303,7 +418,12 @@ __all__ = [
     "OpenCodeServeStartupError",
     "clear_serve_url",
     "ensure_serve_running",
+    "get_serve_daemon",
     "get_serve_url",
+    "opencode_data_dir",
+    "quarantine_opencode_db",
+    "restart_serve_after_corruption",
+    "set_serve_daemon",
     "set_serve_url",
     "start_opencode_serve",
     "stop_opencode_serve",

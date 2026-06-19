@@ -836,6 +836,9 @@ async def _maybe_start_opencode_serve(
         )
         return None
     opencode_server.set_serve_url(daemon.url)
+    # Publish the handle too so the executor's SQLite-corruption recovery can
+    # stop this daemon (release its db lock) before quarantining the store.
+    opencode_server.set_serve_daemon(daemon)
     return daemon
 
 
@@ -896,8 +899,14 @@ async def poll_and_execute(
             await asyncio.gather(*in_flight, return_exceptions=True)
         # Lift E17 — group-kill the ``opencode serve`` daemon so its child
         # processes (Bun runtime, helper workers) die alongside the worker.
-        if opencode_daemon is not None:
-            await opencode_server.stop_opencode_serve(opencode_daemon)
+        # Prefer the singleton's CURRENT handle: SQLite-corruption recovery may
+        # have replaced the boot daemon with a fresh one, leaving the local
+        # ``opencode_daemon`` pointing at the already-stopped original. Stopping
+        # the stale handle would leak the live daemon's process group.
+        live_daemon = opencode_server.get_serve_daemon() or opencode_daemon
+        if live_daemon is not None:
+            await opencode_server.stop_opencode_serve(live_daemon)
+            opencode_server.set_serve_daemon(None)
             opencode_server.clear_serve_url()
 
 
