@@ -369,4 +369,6 @@ async def test_subprocess_uses_large_stream_limit(monkeypatch: pytest.MonkeyPatc
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", _fake_exec)
     await _drain(CodexExecutor().execute("p", {"system": "s", "model": "gpt-5"}))
-    assert captured.get("limit", 0) >= 1024 * 1024, "stream limit must be >= 1 MiB for large JSON lines"
+    assert captured.get("limit", 0) >= 1024 * 1024, (
+        "stream limit must be >= 1 MiB for large JSON lines"
+    )
