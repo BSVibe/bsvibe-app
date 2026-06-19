@@ -101,22 +101,7 @@ class OpenCodeExecutor:
             )
             return
 
-        body: dict[str, Any] = {
-            "parts": [{"type": "text", "text": prompt}],
-            "agent": self._settings.opencode_serve_agent,
-        }
-        if system:
-            body["system"] = system
-        # Lift E24 — opencode's HTTP API expects ``model`` as an object
-        # ``{"providerID": ..., "modelID": ...}``, not a plain string. The
-        # founder's RunRoutingRule / ModelAccount.litellm_model carries the
-        # vendor-prefixed id ``opencode-go/qwen3.6-plus``; split at the FIRST
-        # ``/`` to derive provider + model. An id without a ``/`` cannot be
-        # split (we'd guess wrong and opencode would 400) — omit ``model``
-        # entirely and let the daemon's default fire.
-        if model and "/" in model:
-            provider_id, _, model_id = model.partition("/")
-            body["model"] = {"providerID": provider_id, "modelID": model_id}
+        body = self._build_message_body(prompt, system, model)
 
         # Mutable holder so the inner helper can publish the session_id back
         # to the cancel handler the moment it is created — without this, a
@@ -144,8 +129,27 @@ class OpenCodeExecutor:
                 yield ExecutionChunk(done=True, error=str(exc))
                 return
             except OpenCodeHttpError as exc:
-                yield ExecutionChunk(done=True, error=str(exc))
-                return
+                if not _is_sqlite_corruption(str(exc)):
+                    yield ExecutionChunk(done=True, error=str(exc))
+                    return
+                # opencode's SQLite store is wedged (host binary older than the
+                # schema it was last migrated with). Quarantine the db + restart
+                # serve, then retry the message ONCE against the fresh daemon.
+                logger.warning("opencode_sqlite_corruption_recovering", error=str(exc))
+                try:
+                    resp = await self._recover_and_retry(
+                        body, session_holder, timeout_s, workspace_dir=workspace_dir
+                    )
+                except (
+                    httpx.HTTPError,
+                    OpenCodeHttpError,
+                    opencode_server.OpenCodeServeStartupError,
+                ) as retry_exc:
+                    yield ExecutionChunk(
+                        done=True,
+                        error=f"opencode SQLite recovery retry failed: {retry_exc}",
+                    )
+                    return
         finally:
             if abort_task is not None:
                 try:
@@ -172,6 +176,29 @@ class OpenCodeExecutor:
         )
 
     # ── Internals ───────────────────────────────────────────────────────────
+
+    def _build_message_body(self, prompt: str, system: str, model: str | None) -> dict[str, Any]:
+        """Assemble the ``POST /session/{id}/message`` body.
+
+        ``system`` is a TOP-LEVEL key alongside ``parts`` (dogfood-verified
+        shape — NOT a system-role message inside ``parts``). Lift E24 — opencode
+        expects ``model`` as an object ``{"providerID": ..., "modelID": ...}``,
+        not a plain string. The founder's ``ModelAccount.litellm_model`` carries
+        the vendor-prefixed id ``opencode-go/qwen3.6-plus``; split at the FIRST
+        ``/`` to derive provider + model. An id without a ``/`` can't be split
+        (we'd guess wrong and opencode would 400) — omit ``model`` entirely and
+        let the daemon's default fire.
+        """
+        body: dict[str, Any] = {
+            "parts": [{"type": "text", "text": prompt}],
+            "agent": self._settings.opencode_serve_agent,
+        }
+        if system:
+            body["system"] = system
+        if model and "/" in model:
+            provider_id, _, model_id = model.partition("/")
+            body["model"] = {"providerID": provider_id, "modelID": model_id}
+        return body
 
     def _client(self, base_url: str, timeout_s: float) -> httpx.AsyncClient:
         return httpx.AsyncClient(
@@ -224,6 +251,33 @@ class OpenCodeExecutor:
             session_holder["id"] = sid
             return await self._post_message(client, sid, body)
 
+    async def _recover_and_retry(
+        self,
+        body: dict[str, Any],
+        session_holder: dict[str, str],
+        timeout_s: float,
+        *,
+        workspace_dir: str = "",
+    ) -> dict[str, Any]:
+        """Quarantine the corrupt SQLite store + restart serve, then retry once.
+
+        The fresh daemon binds a NEW ephemeral port, so the retry runs on its
+        own client pointed at the restart's returned URL — the caller's client
+        (built on the dead URL) is left for the ``finally`` to close. A
+        re-raised error here is caught by ``execute`` and surfaced terminally;
+        recovery is attempted exactly once (no loop) so a persistently broken
+        store fails honestly instead of spinning.
+        """
+        new_url = await opencode_server.restart_serve_after_corruption(self._settings)
+        # The previous session lived in the now-quarantined db — drop its id so
+        # a later cancel doesn't try to abort a session the fresh daemon never
+        # heard of.
+        session_holder.clear()
+        async with self._client(new_url, timeout_s) as client:
+            return await self._call_with_respawn(
+                client, body, session_holder, workspace_dir=workspace_dir
+            )
+
     async def _post_message(
         self, client: httpx.AsyncClient, session_id: str, body: dict[str, Any]
     ) -> dict[str, Any]:
@@ -260,6 +314,30 @@ class OpenCodeExecutor:
 
 class OpenCodeHttpError(RuntimeError):
     """Non-2xx HTTP from the serve daemon, or a malformed response body."""
+
+
+# Markers that identify opencode's SQLite store being wedged rather than an
+# ordinary request error. The live signature (opencode 1.15.12 against a
+# newer-migrated db) is the seq-column NOT-NULL violation; the broader SQLite
+# corruption phrases are included so other store breakages self-heal too.
+_SQLITE_CORRUPTION_MARKERS: tuple[str, ...] = (
+    "session_message.seq",
+    "constraint failed: session_message",
+    "database disk image is malformed",
+    "sqlite_corrupt",
+    "file is not a database",
+)
+
+
+def _is_sqlite_corruption(error_text: str) -> bool:
+    """True when *error_text* names an opencode SQLite-store corruption.
+
+    Matches case-insensitively against known markers. Ordinary errors
+    (400/404, connection refused, timeouts) must NOT match — only a wedged
+    store is worth quarantining the db + restarting serve for.
+    """
+    low = error_text.lower()
+    return any(marker in low for marker in _SQLITE_CORRUPTION_MARKERS)
 
 
 def _extract_text(resp: dict[str, Any]) -> str:
