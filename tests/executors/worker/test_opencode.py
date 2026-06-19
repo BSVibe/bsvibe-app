@@ -423,6 +423,122 @@ async def test_is_sqlite_corruption_ignores_ordinary_errors() -> None:
     assert not _is_sqlite_corruption("")
 
 
+async def test_extract_error_ref_pulls_opencode_ref_token() -> None:
+    """opencode hides the real error behind a generic 500 body that carries a
+    ``ref`` token (``err_69ca699e``). The executor extracts that ref to
+    correlate against opencode's own server log."""
+    from backend.executors.worker.opencode import _extract_error_ref
+
+    text = (
+        "POST /session/abc/message returned 500: "
+        '{"data":{"message":"Unexpected server error. Check server logs for '
+        'details.","ref":"err_13a393a7"}}'
+    )
+    assert _extract_error_ref(text) == "err_13a393a7"
+    assert _extract_error_ref("no ref here") is None
+
+
+async def test_execute_recovers_when_corruption_only_in_server_log(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The LIVE shape: opencode's 500 body is generic + carries a ``ref``; the
+    real SQLite-seq error is ONLY in opencode's server log. The executor must
+    resolve the ref via ``lookup_server_error``, recognise the corruption,
+    recover + retry. (Dogfood found body-only detection silently missed this.)
+    """
+    calls = {"message": 0}
+
+    async def _handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if request.method == "POST" and path == "/session":
+            return httpx.Response(200, json={"id": "sid-x"})
+        if request.method == "POST" and path.endswith("/message"):
+            calls["message"] += 1
+            if calls["message"] == 1:
+                # Generic body — NO seq signature inline, only a ref.
+                return httpx.Response(
+                    500,
+                    json={
+                        "data": {
+                            "message": "Unexpected server error. Check server logs for details.",
+                            "ref": "err_13a393a7",
+                        }
+                    },
+                )
+            return httpx.Response(
+                200, json={"parts": [{"type": "text", "text": "healed"}], "info": {}}
+            )
+        return httpx.Response(404)
+
+    opencode_server.set_serve_url("http://127.0.0.1:4096")
+    executor = OpenCodeExecutor(http_transport=httpx.MockTransport(_handler))
+
+    looked_up: list[str] = []
+
+    def _fake_lookup(ref: str, settings: Any = None) -> str:
+        looked_up.append(ref)
+        return (
+            f"ERROR service=server ref={ref} error=NOT NULL constraint failed: session_message.seq"
+        )
+
+    recovered: list[int] = []
+
+    async def _fake_restart(settings: Any) -> str:
+        recovered.append(1)
+        return "http://127.0.0.1:5000"
+
+    monkeypatch.setattr(opencode_server, "lookup_server_error", _fake_lookup)
+    monkeypatch.setattr(opencode_server, "restart_serve_after_corruption", _fake_restart)
+
+    chunks = await _drain(executor.execute("p", {"workspace_dir": "."}))
+
+    deltas = [c.delta for c in chunks if c.delta]
+    assert deltas == ["healed"]
+    assert chunks[-1].error is None
+    assert looked_up == ["err_13a393a7"], "ref must be resolved against the server log"
+    assert recovered == [1]
+
+
+async def test_execute_does_not_recover_when_ref_log_is_not_corruption(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A generic 500 whose ref resolves to a NON-corruption log line (e.g. a
+    provider error) must NOT quarantine the db — only a confirmed store
+    corruption is worth restarting serve for."""
+
+    async def _handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if request.method == "POST" and path == "/session":
+            return httpx.Response(200, json={"id": "sid-x"})
+        if request.method == "POST" and path.endswith("/message"):
+            return httpx.Response(
+                500,
+                json={"data": {"message": "Unexpected server error.", "ref": "err_provider"}},
+            )
+        return httpx.Response(404)
+
+    opencode_server.set_serve_url("http://127.0.0.1:4096")
+    executor = OpenCodeExecutor(http_transport=httpx.MockTransport(_handler))
+
+    def _fake_lookup(ref: str, settings: Any = None) -> str:
+        return f"ERROR service=server ref={ref} error=ProviderError: upstream 503"
+
+    recovered: list[int] = []
+
+    async def _fake_restart(settings: Any) -> str:
+        recovered.append(1)
+        return "http://127.0.0.1:5000"
+
+    monkeypatch.setattr(opencode_server, "lookup_server_error", _fake_lookup)
+    monkeypatch.setattr(opencode_server, "restart_serve_after_corruption", _fake_restart)
+
+    chunks = await _drain(executor.execute("p", {}))
+
+    assert chunks[-1].done is True
+    assert chunks[-1].error is not None
+    assert recovered == [], "a non-corruption ref must not trigger db quarantine"
+
+
 async def test_execute_recovers_from_sqlite_corruption_then_retries(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -40,6 +40,7 @@ this lift exists to close. :func:`test_no_subprocess_exec_used` enforces that.
 from __future__ import annotations
 
 import asyncio
+import re
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -129,7 +130,7 @@ class OpenCodeExecutor:
                 yield ExecutionChunk(done=True, error=str(exc))
                 return
             except OpenCodeHttpError as exc:
-                if not _is_sqlite_corruption(str(exc)):
+                if not self._diagnose_sqlite_corruption(str(exc)):
                     yield ExecutionChunk(done=True, error=str(exc))
                     return
                 # opencode's SQLite store is wedged (host binary older than the
@@ -251,6 +252,27 @@ class OpenCodeExecutor:
             session_holder["id"] = sid
             return await self._post_message(client, sid, body)
 
+    def _diagnose_sqlite_corruption(self, error_text: str) -> bool:
+        """Decide whether an ``OpenCodeHttpError`` is an opencode SQLite wedge.
+
+        Two paths, because opencode reports the failure two ways:
+
+        1. The error text itself names the corruption (some versions inline it,
+           and the unit doubles do) → match directly.
+        2. The LIVE shape: the 500 body is generic (``Unexpected server error.
+           Check server logs for details.``) and carries only a ``ref`` token;
+           the real SQLite error is in opencode's server log. Resolve the ref
+           against the log and match on THAT. A ref that resolves to a
+           non-corruption line (e.g. a provider error) is NOT a wedge.
+        """
+        if _is_sqlite_corruption(error_text):
+            return True
+        ref = _extract_error_ref(error_text)
+        if not ref:
+            return False
+        logged = opencode_server.lookup_server_error(ref, self._settings)
+        return _is_sqlite_corruption(logged)
+
     async def _recover_and_retry(
         self,
         body: dict[str, Any],
@@ -338,6 +360,18 @@ def _is_sqlite_corruption(error_text: str) -> bool:
     """
     low = error_text.lower()
     return any(marker in low for marker in _SQLITE_CORRUPTION_MARKERS)
+
+
+# opencode's generic 500 body carries a ``ref`` token (e.g. ``err_69ca699e``)
+# that keys the real error in opencode's server log. Tokens are ``err_`` +
+# lowercase hex/alnum.
+_ERROR_REF_RE = re.compile(r"err_[0-9a-z]+")
+
+
+def _extract_error_ref(error_text: str) -> str | None:
+    """Pull opencode's ``err_…`` ref token out of a 500 body, or ``None``."""
+    match = _ERROR_REF_RE.search(error_text)
+    return match.group(0) if match else None
 
 
 def _extract_text(resp: dict[str, Any]) -> str:

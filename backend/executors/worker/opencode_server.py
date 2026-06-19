@@ -326,6 +326,48 @@ def quarantine_opencode_db(data_dir: Path, *, suffix: str) -> list[Path]:
     return moved
 
 
+# How many of the most-recent log files to scan when resolving a ref. opencode
+# rolls logs per serve boot; the ref we're chasing was logged by the daemon
+# that just 500'd, so it's in one of the newest files.
+_LOG_SCAN_LIMIT = 5
+
+
+def lookup_server_error(ref: str, settings: WorkerSettings | None = None) -> str:
+    """Resolve an opencode error ``ref`` to the line it logged, or ``""``.
+
+    opencode's HTTP 500 body is generic (``Unexpected server error. Check
+    server logs for details.``) and carries only a ``ref`` token; the REAL
+    error (e.g. the SQLite seq violation) lives in opencode's own log under
+    ``<data_dir>/log``. Scans the newest few log files for a line containing
+    ``ref=<ref>`` and returns it. Best-effort — a missing/unreadable log dir
+    yields ``""`` (the caller then can't confirm corruption and surfaces the
+    error honestly instead of needlessly restarting serve). Never raises.
+    """
+    if not ref:
+        return ""
+    log_dir = opencode_data_dir(settings) / "log"
+    try:
+        logs = sorted(
+            log_dir.glob("*.log"),
+            key=lambda p: p.stat().st_mtime,
+            reverse=True,
+        )
+    except OSError:
+        return ""
+    needle = f"ref={ref}"
+    for log in logs[:_LOG_SCAN_LIMIT]:
+        try:
+            content = log.read_text(errors="replace")
+        except OSError:  # pragma: no cover — racing rotation
+            continue
+        # Scan newest-line-first: a ref can recur across retries; the latest
+        # occurrence is the one that matches the 500 we're diagnosing.
+        for line in reversed(content.splitlines()):
+            if needle in line:
+                return line
+    return ""
+
+
 def _corruption_suffix() -> str:
     """A unique-enough quarantine suffix (wall-clock; recovery is rare)."""
     import time  # noqa: PLC0415 — local to keep the hot import surface small
@@ -420,6 +462,7 @@ __all__ = [
     "ensure_serve_running",
     "get_serve_daemon",
     "get_serve_url",
+    "lookup_server_error",
     "opencode_data_dir",
     "quarantine_opencode_db",
     "restart_serve_after_corruption",
