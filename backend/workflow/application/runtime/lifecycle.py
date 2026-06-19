@@ -36,6 +36,33 @@ from plugin.audit import register_audit_subscriber
 logger = structlog.get_logger(__name__)
 
 
+async def _bootstrap_db_oauth_providers(session_factory: Any) -> None:
+    """Register connector OAuth providers from DB-stored App credentials (the
+    GitHub App Manifest flow) in the WORKER process — issue #362.
+
+    Delivery + connector token refresh run in the worker, but
+    ``load_app_credential_providers`` was only called in the API lifespan. So
+    ``get_provider("github")`` was ``None`` here and
+    ``resolve_connector_credentials`` silently skipped refresh — an expired
+    github push token then failed the ``deliver_github`` push and no PR opened.
+    Mirrors ``backend/api/main.py``; soft-fail so a DB hiccup / pre-migration DB
+    never blocks worker boot (the connector just falls back to env / legacy).
+    """
+    from backend.connectors.auth.bootstrap import (  # noqa: PLC0415 — lazy
+        load_app_credential_providers,
+    )
+    from backend.router.accounts.crypto import (  # noqa: PLC0415 — lazy
+        CredentialCipher,
+        _key_from_settings,
+    )
+
+    try:
+        async with session_factory() as session:
+            await load_app_credential_providers(session, CredentialCipher(_key_from_settings()))
+    except Exception:  # noqa: BLE001 — provider load must never break worker boot
+        logger.warning("connector_oauth_db_provider_load_failed", exc_info=True)
+
+
 async def run_workers() -> None:
     """Process entrypoint — construct + run every worker until SIGINT/SIGTERM.
 
@@ -47,6 +74,10 @@ async def run_workers() -> None:
     register_audit_subscriber()
     engine = create_async_engine(settings.database_url, future=True)
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    # #362 — register DB-stored connector OAuth providers so the worker can
+    # REFRESH expiring connector tokens during delivery (github push, etc.).
+    await _bootstrap_db_oauth_providers(session_factory)
 
     # The Redis client is needed by (a) redis_streams mode's producer-side
     # wake-up emission and (b) executor-pool dispatch (Lift 5b) — the
