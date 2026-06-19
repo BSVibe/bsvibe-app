@@ -31,7 +31,6 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from backend.config import Settings
 from backend.dispatch.adapter import ModelAccountAdapter, adapter_for
 from backend.dispatch.caller_registry import (
-    SKILL_CALLER_PREFIX,
     CallerSpec,
     get_caller_spec,
 )
@@ -98,13 +97,6 @@ class ResolvedAccount:
     adapter: ModelAccountAdapter
     source: str  # "explicit_rule" | "workspace_default"
     timeout_s: float | None = None
-
-
-# Condition the resolver looks for inside a rule's JSON ``conditions``
-# array. The rule's row-level ``caller_id`` column is the primary
-# matcher; this clause stays for back-compat with rules whose caller_id
-# was authored as a condition before the column was added.
-_CALLER_FIELD = "caller_id"
 
 
 class ModelAccountResolver:
@@ -260,17 +252,24 @@ class ModelAccountResolver:
     # ----- internals -----
 
     async def _match_rule(self, caller_id: str, workspace_id: uuid.UUID) -> ModelAccount | None:
-        """First-active-rule wins among rules whose ``caller_id`` matches.
+        """Resolve the rule-selected account via the run-routing ENGINE.
 
-        Two write shapes are honoured:
-
-        * The :class:`RunRoutingRuleRow.caller_id` column (the canonical
-          shape after Lift E2 — rule creation requires it).
-        * A ``{"field": "caller_id", "operator": "eq", "value": "..."}``
-          entry inside ``conditions`` (the back-compat shape for rules
-          authored before the column existed).
+        Issue #368 — this used to match ``caller_id`` ONLY and ignore each
+        rule's ``conditions`` (stage / pipeline / path_classification / …),
+        so condition-based routing (the design→codex / impl→opencode
+        stage split) silently did nothing. We now delegate to
+        :func:`evaluate_rules`, which matches caller_id AND evaluates the
+        conditions against the run's :class:`RoutingContext` (built from
+        ``self._run_id``). Both write shapes — the canonical ``caller_id``
+        column and the back-compat caller_id condition clause — are honoured
+        by the engine. ``evaluate_rules`` also returns the active default
+        rule's target when no explicit rule matches.
         """
         from sqlalchemy import select  # noqa: PLC0415
+
+        from backend.router.routing.run_routing.engine import (  # noqa: PLC0415
+            evaluate_rules,
+        )
 
         stmt = (
             select(RunRoutingRuleRow)
@@ -282,22 +281,34 @@ class ModelAccountResolver:
         if not rules:
             return None
 
-        for rule in rules:
-            if rule.is_default:
-                continue
-            if _rule_matches_caller(rule, caller_id):
-                account = await self._account_for_target(workspace_id, rule.target)
-                if account is not None:
-                    return account
-        # No explicit match — try the default rule (still a rule, just a
-        # catch-all). We honour it ONLY when the rule actually targets a
-        # live model account.
-        for rule in rules:
-            if rule.is_default and not rule.conditions and not rule.caller_id:
-                account = await self._account_for_target(workspace_id, rule.target)
-                if account is not None:
-                    return account
-        return None
+        ctx = await self._build_routing_context(caller_id)
+        target = evaluate_rules(rules, ctx)
+        if target is None:
+            return None
+        return await self._account_for_target(workspace_id, target)
+
+    async def _build_routing_context(self, caller_id: str) -> Any:
+        """Build the :class:`RoutingContext` the engine evaluates conditions
+        against — from the run (``self._run_id``) + the dispatch ``caller_id``.
+
+        No run bound (settle / bootstrap callers) → a minimal context carrying
+        just the caller_id (stage/pipeline default to ``"single"``), so
+        caller-only rules still match and stage/pipeline conditions simply
+        don't."""
+        from dataclasses import replace  # noqa: PLC0415
+
+        from backend.router.routing.run_routing.engine import (  # noqa: PLC0415
+            RoutingContext,
+        )
+
+        if self._run_id is None:
+            return RoutingContext(caller_id=caller_id)
+        from backend.workflow.infrastructure.db import ExecutionRun  # noqa: PLC0415
+
+        run = await self._session.get(ExecutionRun, self._run_id)
+        if run is None:
+            return RoutingContext(caller_id=caller_id)
+        return replace(RoutingContext.from_run(run), caller_id=caller_id)
 
     async def _account_for_target(
         self, workspace_id: uuid.UUID, target: str
@@ -311,6 +322,20 @@ class ModelAccountResolver:
         for account in accounts:
             if account.litellm_model == target:
                 return account
+        # #368 — accept the natural ``executor/<executor_type>`` selector
+        # (what the PWA/MCP rule forms suggest) in addition to a bare
+        # ``litellm_model`` match. An executor account's litellm_model is the
+        # vendor-prefixed model (e.g. ``opencode-go/qwen3.6-plus``), NOT
+        # ``executor/opencode`` — so a target of ``executor/opencode`` would
+        # otherwise resolve to no account and silently fall through.
+        if target.startswith("executor/"):
+            want_type = target.split("/", 1)[1]
+            for account in accounts:
+                if getattr(account, "provider", None) != "executor":
+                    continue
+                extra = account.extra_params if isinstance(account.extra_params, dict) else {}
+                if extra.get("executor_type") == want_type:
+                    return account
         return None
 
     async def _workspace_default(self, workspace_id: uuid.UUID) -> ModelAccount | None:
@@ -345,37 +370,3 @@ class ModelAccountResolver:
         missing = spec.required_methods - adapter.supported_methods
         if missing:
             raise NoAdapterMethodError(caller_id=spec.caller_id, missing=missing)
-
-
-def _matches_skill_short(value: str, caller_id: str) -> bool:
-    """A skill caller_id ``skill.<name>`` also matches the bare ``<name>``."""
-    return (
-        caller_id.startswith(SKILL_CALLER_PREFIX) and value == caller_id[len(SKILL_CALLER_PREFIX) :]
-    )
-
-
-def _rule_matches_caller(rule: RunRoutingRuleRow, caller_id: str) -> bool:
-    """True when ``rule`` matches ``caller_id``.
-
-    Match precedence: ``rule.caller_id`` column (canonical) → ``conditions``
-    back-compat clause. Skill caller_ids match either the full
-    ``skill.<name>`` or the bare ``<name>``.
-    """
-    column = getattr(rule, "caller_id", None)
-    if isinstance(column, str) and column:
-        return column == caller_id or _matches_skill_short(column, caller_id)
-    if not isinstance(rule.conditions, list):
-        return False
-    for clause in rule.conditions:
-        if not isinstance(clause, dict):
-            continue
-        if clause.get("field") != _CALLER_FIELD:
-            continue
-        if clause.get("operator", "eq") != "eq":
-            continue
-        value = clause.get("value")
-        if value == caller_id:
-            return True
-        if isinstance(value, str) and _matches_skill_short(value, caller_id):
-            return True
-    return False
