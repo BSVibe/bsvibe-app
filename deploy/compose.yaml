@@ -96,6 +96,39 @@ services:
     ports:
       - "3700:3700"
 
+  # Per-project work/verification sandbox daemon (Docker-in-Docker).
+  #
+  # The worker shells out `docker -H tcp://sandbox-dind:2375 run …` to spawn a
+  # bsvibe-sandbox container per project; the verifier's declared `command`
+  # checks (pytest/ruff/uv) run INSIDE that container — which carries the
+  # toolchain the worker image deliberately lacks.
+  #
+  # `appdata` is mounted at the SAME path (/app/var) as the worker so a
+  # bind-mount of the run worktree (`-v /app/var/runs/<id>:/work`) resolves
+  # against the dind daemon's filesystem to the same files the worker wrote
+  # (the named-volume + bind-mount trap — see the dind-sandbox skill). The
+  # nested daemon's own image/volume store lives on `dind-storage`.
+  #
+  # Behind the `sandbox` profile: only started with `--profile sandbox`, so a
+  # plain local `up` does not run a privileged daemon. Enable it in prod
+  # alongside BSVIBE_SANDBOX_ENABLED=true (see deploy/README.md §5 Stage B).
+  sandbox-dind:
+    image: docker:28-dind
+    profiles: ["sandbox"]
+    container_name: bsvibe-sandbox-dind
+    privileged: true
+    restart: unless-stopped
+    environment:
+      # Listen on plaintext tcp/2375 (no TLS) — reachable ONLY on the internal
+      # compose network, never published to the host.
+      DOCKER_TLS_CERTDIR: ""
+    command:
+      ["dockerd", "--host=tcp://0.0.0.0:2375", "--host=unix:///var/run/docker.sock"]
+    volumes:
+      - appdata:/app/var
+      - dind-storage:/var/lib/docker
+
 volumes:
   pgdata:
   redisdata:
+  dind-storage:

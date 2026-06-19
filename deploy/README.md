@@ -118,17 +118,43 @@ curl -s http://localhost:8700/api/health
 The health route is `GET /api/health` (mounted in `backend/api/main.py` →
 `backend/api/health.py`); it returns `{status, version, git_sha}`.
 
-**Stage B — enable the worker + sandbox (LLM phase).** Once a `ModelAccount`
-is configured and you've built the sandbox image, scale the worker up:
+**Stage B — enable the worker + sandbox (LLM phase).** The work/verification
+sandbox runs as a per-project container spawned **inside a Docker-in-Docker
+sidecar** (`sandbox-dind`, behind the `sandbox` compose profile). The verifier's
+declared `command` checks (pytest/ruff/uv) run inside that container — which
+carries the toolchain the worker image deliberately lacks.
+
+Set in `.env.prod` (already the default in `.env.prod.example`):
 
 ```sh
-# Build the sandbox image the worker spawns for LLM execution:
-docker build -f deploy/Dockerfile.sandbox -t bsvibe-sandbox:latest .
-
-# In .env.prod: BSVIBE_SANDBOX_ENABLED=true (+ BSVIBE_DOCKER_HOST if remote).
-docker compose -f deploy/compose.yaml -f deploy/compose.prod.yaml \
-  --env-file deploy/.env.prod up -d --scale worker=1
+BSVIBE_SANDBOX_ENABLED=true
+BSVIBE_DOCKER_HOST=tcp://sandbox-dind:2375   # the dind sidecar, internal network only
+BSVIBE_SANDBOX_USER=0:0                       # match the worker's root-owned worktrees
 ```
+
+Bring up the stack WITH the `sandbox` profile (starts the dind sidecar), then
+build + **load the sandbox image into the dind daemon** — a plain host
+`docker build` is invisible to the nested daemon, so it must be transferred:
+
+```sh
+# 1. Bring the stack up including the dind sidecar.
+docker compose -p bsvibe-prod --profile sandbox \
+  -f deploy/compose.yaml -f deploy/compose.prod.yaml \
+  --env-file deploy/.env.prod up -d --scale worker=1
+
+# 2. Build the toolchain image on the host AND load it into the dind daemon.
+#    (build-sandbox-image.sh does `docker save | docker exec -i <dind> docker load`)
+DIND_CONTAINER=bsvibe-sandbox-dind ./tools/build-sandbox-image.sh
+
+# 3. Smoke-check the toolchain is reachable inside a spawned sandbox:
+docker exec bsvibe-sandbox-dind \
+  docker run --rm bsvibe-sandbox:latest python -m pytest --version
+# -> pytest 8.x.x
+```
+
+Without the `--profile sandbox` flag the dind sidecar does **not** start and the
+worker's `acquire()` fails fast (sandbox unavailable → run `system_error`),
+never a silent host fallback.
 
 The worker drains intake → agent → delivery → settle → relay. It connects to
 the same DB; it does **not** run migrations (entrypoint overridden).
