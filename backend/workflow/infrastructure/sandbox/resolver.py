@@ -23,6 +23,7 @@ def build_sandbox_manager() -> SandboxManager | None:
             sandbox_image=settings.sandbox_image,
             idle_reap_seconds=settings.sandbox_idle_reap_seconds,
             max_concurrent=settings.sandbox_max_concurrent,
+            sandbox_user=settings.sandbox_user,
         )
     return None
 

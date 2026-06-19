@@ -108,6 +108,11 @@ class Settings(BaseSettings):
     sandbox_image: str = "bsvibe-sandbox:latest"
     sandbox_idle_reap_seconds: int = 1800
     sandbox_max_concurrent: int = 2
+    # Explicit ``--user`` for the per-project sandbox container. The worker
+    # writes the run worktree as root (uid 0), so the sandbox image's default
+    # uid-1000 user cannot write ``/work`` — set this to ``"0:0"`` to match.
+    # Empty leaves the image default (no ``--user``); never a silent coercion.
+    sandbox_user: str = ""
 
     # Gateway settings (backend.router)
     # 32-byte AES-256-GCM key, base64-url-encoded. Generate with:
