@@ -54,6 +54,17 @@ logger = structlog.get_logger(__name__)
 VERIFY_TIMEOUT_S = 60.0
 _JUDGE_FILE_CONTEXT_BYTES = 8 * 1024
 
+# Issue #361 — the sandbox image carries the toolchain (pytest/ruff/uv) but
+# NOT the project's dependency tree, so a plain ``python -m pytest`` cannot
+# import ``<project>.*`` (its conftest pulls the deps). For a uv-managed
+# worktree we materialize the project venv (incl. extras, where pytest lives)
+# once, then run each command check with that venv on PATH — so the natural
+# command the agent declares resolves the full deps regardless of phrasing.
+_UV_SYNC = "uv sync --frozen --all-extras"
+# The cold sync downloads the dep tree (can be minutes) — its own generous
+# budget, NOT the per-command VERIFY_TIMEOUT_S.
+VENV_SYNC_TIMEOUT_S = 600.0
+
 #: Rationale stamped on the judge check that folds retrieved BSage knowledge
 #: (canon patterns / prior decisions / prior rejections) into the verify
 #: contract. It is the stable marker the Delivery Report keys off to surface
@@ -307,12 +318,23 @@ class VerificationService:
         self, contract: VerificationContract, box: SandboxSession
     ) -> list[dict[str, Any]]:
         results: list[dict[str, Any]] = []
+        if not contract.command_checks:
+            return results
+        # Issue #361 — ensure the project venv for a uv worktree, then run each
+        # command inside it. ``venv_ready`` False (non-uv project, or a sync
+        # failure) → commands run bare (honest fail, never a silent pass).
+        venv_ready = await self._ensure_project_venv(box)
+        venv_bin = f"{box.workspace_mount}/.venv/bin"
         for check in contract.command_checks:
             command = check.command or ""
-            res = await box.exec(command, timeout_s=VERIFY_TIMEOUT_S, shell=True)
+            run_command = f'export PATH="{venv_bin}:$PATH"; {command}' if venv_ready else command
+            res = await box.exec(run_command, timeout_s=VERIFY_TIMEOUT_S, shell=True)
             output = "\n".join(c for c in (res.stdout, res.stderr) if c)[-2000:]
             results.append(
                 {
+                    # The recorded command stays the agent's CLEAN declaration —
+                    # the PATH prefix is an execution detail, not part of the
+                    # contract surfaced in the Delivery Report.
                     "command": command,
                     "exit_code": res.exit_code,
                     "timed_out": res.timed_out,
@@ -321,6 +343,27 @@ class VerificationService:
                 }
             )
         return results
+
+    async def _ensure_project_venv(self, box: SandboxSession) -> bool:
+        """For a uv-managed worktree, materialize ``.venv`` (incl. extras —
+        pytest/ruff live there) so command checks resolve the project's full
+        dependency tree regardless of how the agent phrased them (issue #361).
+
+        Detection is by ``uv.lock`` presence (read, not exec — a missing lock
+        raises :class:`SandboxError` on a real sandbox and returns empty on the
+        host double, so a non-uv worktree never triggers a sync). Not a uv
+        project → ``False`` so non-uv command checks (``npm test``, ``go
+        test``, …) run unchanged. Best-effort: a sync failure also returns
+        ``False`` — the command then runs bare and fails honestly rather than
+        passing against a half-built environment."""
+        try:
+            lock = await box.read_file("uv.lock", 64)
+        except SandboxError:
+            return False
+        if not lock:
+            return False
+        sync = await box.exec(_UV_SYNC, timeout_s=VENV_SYNC_TIMEOUT_S, shell=True)
+        return sync.exit_code == 0 and not sync.timed_out
 
     async def _run_judge(
         self,

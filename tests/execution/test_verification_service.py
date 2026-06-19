@@ -20,7 +20,10 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.workflow.application.agent_loop import LoopTurn
-from backend.workflow.application.verification_service import VerificationService
+from backend.workflow.application.verification_service import (
+    _UV_SYNC,
+    VerificationService,
+)
 from backend.workflow.domain.verifier_contract import (
     VerificationCheck,
     VerificationContract,
@@ -294,6 +297,7 @@ async def test_verify_command_pass_writes_passed_result() -> None:
         run = await _make_run(session)
         work_step, attempt = await _make_step_and_attempt(session, run)
         contract = VerificationContract(checks=(VerificationCheck(kind="command", command="true"),))
+        # No uv.lock in `files` → not a uv worktree → command runs bare.
         box = FakeBox(
             exec_map={"true": SandboxResult(exit_code=0, stdout="", stderr="", timed_out=False)}
         )
@@ -325,7 +329,7 @@ async def test_verify_command_fail_writes_failed_result() -> None:
         )
         box = FakeBox(
             exec_map={
-                "false": SandboxResult(exit_code=1, stdout="", stderr="boom", timed_out=False)
+                "false": SandboxResult(exit_code=1, stdout="", stderr="boom", timed_out=False),
             }
         )
         svc = VerificationService(session=session, llm=StubLlm([]))
@@ -561,3 +565,60 @@ async def test_verify_parses_declared_then_verifies_round_trip() -> None:
             final_text="done",
         )
         assert vr.outcome is VerificationOutcome.PASSED
+
+
+# --------------------------------------------------------------------------
+# _run_command_checks — project venv for uv worktrees (issue #361)
+# --------------------------------------------------------------------------
+
+
+def _cmd_contract(command: str) -> VerificationContract:
+    return VerificationContract(checks=(VerificationCheck(kind="command", command=command),))
+
+
+async def test_command_checks_sync_and_prefix_venv_for_uv_project() -> None:
+    """uv worktree (uv.lock present) → `uv sync` once, then each command runs
+    with the project venv prepended to PATH so a plain `python -m pytest`
+    resolves project deps."""
+    box = FakeBox(
+        files={"uv.lock": b"# lockfile"},
+        exec_map={_UV_SYNC: SandboxResult(exit_code=0, stdout="", stderr="", timed_out=False)},
+    )
+    async with memory_session() as session:
+        svc = VerificationService(session=session, llm=StubLlm([]))
+        results = await svc._run_command_checks(  # noqa: SLF001
+            _cmd_contract("python -m pytest tests/x.py -v"), box
+        )
+    assert _UV_SYNC in box.exec_calls  # synced once
+    assert "uv.lock" in box.read_calls  # detected via the lockfile read
+    prefixed = 'export PATH="/workspace/.venv/bin:$PATH"; python -m pytest tests/x.py -v'
+    assert prefixed in box.exec_calls  # command ran inside the venv
+    assert results[0]["command"] == "python -m pytest tests/x.py -v"  # recorded command is clean
+    assert results[0]["passed"] is True
+
+
+async def test_command_checks_no_sync_or_prefix_when_not_uv_project() -> None:
+    """No uv.lock → not a uv project → no sync, command runs bare."""
+    box = FakeBox()  # no files → read_file("uv.lock") returns b""
+    async with memory_session() as session:
+        svc = VerificationService(session=session, llm=StubLlm([]))
+        await svc._run_command_checks(_cmd_contract("npm test"), box)  # noqa: SLF001
+    assert _UV_SYNC not in box.exec_calls
+    assert box.exec_calls == ["npm test"]  # bare, no PATH prefix
+
+
+async def test_command_checks_no_prefix_when_uv_sync_fails() -> None:
+    """uv.lock present but `uv sync` failed → run command bare (honest fail,
+    never a silent pass via a half-built venv)."""
+    box = FakeBox(
+        files={"uv.lock": b"# lockfile"},
+        exec_map={_UV_SYNC: SandboxResult(exit_code=1, stdout="", stderr="boom", timed_out=False)},
+    )
+    async with memory_session() as session:
+        svc = VerificationService(session=session, llm=StubLlm([]))
+        await svc._run_command_checks(  # noqa: SLF001
+            _cmd_contract("python -m pytest tests/x.py"), box
+        )
+    assert _UV_SYNC in box.exec_calls  # attempted
+    assert "python -m pytest tests/x.py" in box.exec_calls  # ran bare
+    assert not any(c.startswith("export PATH=") for c in box.exec_calls)
