@@ -344,6 +344,84 @@ async def test_restart_after_corruption_stops_quarantines_then_starts_fresh(
         opencode_server.clear_serve_url()
 
 
+# ── ref → server-log correlation (corruption is hidden behind a generic 500) ─
+#
+# opencode's HTTP 500 body is generic — ``{"data":{"message":"Unexpected
+# server error. Check server logs for details.","ref":"err_69ca699e"}}``. The
+# REAL error (e.g. the SQLite seq violation) is only in opencode's own log,
+# keyed by that ``ref``. ``lookup_server_error`` resolves a ref to its logged
+# line so the executor can tell a store-corruption 500 apart from any other.
+
+_LOG_LINE = (
+    "ERROR 2026-06-19T16:04:51 +73ms service=server ref={ref} "
+    "error=NOT NULL constraint failed: session_message.seq "
+    "cause=SQLiteError: NOT NULL constraint failed: session_message.seq"
+)
+
+
+async def test_lookup_server_error_finds_ref_line(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    data_dir = tmp_path / "opencode"
+    log_dir = data_dir / "log"
+    log_dir.mkdir(parents=True)
+    (log_dir / "2026-06-19T160338.log").write_text(
+        "INFO  service=server msg=boot\n" + _LOG_LINE.format(ref="err_69ca699e") + "\n"
+    )
+    monkeypatch.setattr(opencode_server, "opencode_data_dir", lambda settings=None: data_dir)
+
+    line = opencode_server.lookup_server_error("err_69ca699e")
+    assert "session_message.seq" in line
+    assert "ref=err_69ca699e" in line
+
+
+async def test_lookup_server_error_missing_ref_returns_empty(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    data_dir = tmp_path / "opencode"
+    log_dir = data_dir / "log"
+    log_dir.mkdir(parents=True)
+    (log_dir / "a.log").write_text(_LOG_LINE.format(ref="err_aaaa") + "\n")
+    monkeypatch.setattr(opencode_server, "opencode_data_dir", lambda settings=None: data_dir)
+
+    assert opencode_server.lookup_server_error("err_does_not_exist") == ""
+
+
+async def test_lookup_server_error_scans_latest_log_first(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The ref lives in the NEWEST log; older logs may reuse opencode's rolling
+    filenames. Resolution must find it regardless of how many logs exist."""
+    data_dir = tmp_path / "opencode"
+    log_dir = data_dir / "log"
+    log_dir.mkdir(parents=True)
+    old = log_dir / "2026-06-19T150000.log"
+    new = log_dir / "2026-06-19T160338.log"
+    old.write_text("INFO old log, no refs here\n")
+    new.write_text(_LOG_LINE.format(ref="err_13a393a7") + "\n")
+    # Make the mtimes unambiguous (new is newer).
+    import os as _os
+
+    _os.utime(old, (1_000_000, 1_000_000))
+    _os.utime(new, (2_000_000, 2_000_000))
+    monkeypatch.setattr(opencode_server, "opencode_data_dir", lambda settings=None: data_dir)
+
+    line = opencode_server.lookup_server_error("err_13a393a7")
+    assert "session_message.seq" in line
+
+
+async def test_lookup_server_error_no_log_dir_is_best_effort_empty(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """No log dir (or unreadable) → empty string, never raises. The executor
+    then can't confirm corruption and surfaces the error honestly rather than
+    needlessly restarting serve."""
+    monkeypatch.setattr(
+        opencode_server, "opencode_data_dir", lambda settings=None: tmp_path / "nonexistent"
+    )
+    assert opencode_server.lookup_server_error("err_whatever") == ""
+
+
 # ── argv shape ──────────────────────────────────────────────────────────────
 
 
