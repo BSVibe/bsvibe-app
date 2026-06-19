@@ -58,6 +58,21 @@ from backend.workflow.infrastructure.repositories import (
 logger = structlog.get_logger(__name__)
 
 
+def _is_linked_worktree(worktree: Path) -> bool:
+    """True iff ``worktree`` is a LINKED git worktree — i.e. ``.git`` is the
+    gitdir-pointer FILE that shares the product repo's ref store.
+
+    Only a linked worktree's run branch is visible to the product repo, so only
+    it can be auto-shipped via the local ``merge_to_main`` fast-forward. A
+    github-binding-provisioned run is a STANDALONE CLONE (``.git`` is a
+    DIRECTORY with its own ref store + ``origin`` remote); its branch is
+    invisible to the product repo and ``merge_to_main`` can only fail there —
+    those runs deliver via the push+PR path instead (issue #362). A run with no
+    ``.git`` at all (glue tests bypassing the provisioner) is also not linked.
+    """
+    return (worktree / ".git").is_file()
+
+
 class AgentRunner:
     """Spawn + supervise one ExecutionRun for a Request."""
 
@@ -243,7 +258,7 @@ class AgentRunner:
                 run_worktree_path,
             )
 
-            if (run_worktree_path(run.id) / ".git").exists():
+            if _is_linked_worktree(run_worktree_path(run.id)):
                 await self._auto_ship_product_run(run)
 
         # P1-L2 — design→impl handoff. When a DESIGN-stage run in a
