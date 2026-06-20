@@ -408,10 +408,18 @@ class KnowledgeSettleSink:
         PRIMARY: run the workspace's :class:`EntityExtractor` over the verified
         work's summary + intent and use the LLM-committed entity names
         (normalized) as candidate concepts — BSage's mechanism, where generic
-        nouns are excluded structurally. SOFT-FALLBACK (no factory, no extractor,
-        empty result, or any error): the deterministic :func:`derive_content_tags`
-        heuristic. The settlement is the source of truth; a derivation failure is
-        logged + degraded, never raised, so it can't break the settle write.
+        nouns are excluded structurally. When the extractor RUNS successfully its
+        result is AUTHORITATIVE — including an empty list, which the compile
+        prompt documents as the COMMON case ("no reusable knowledge worth a
+        concept"). We must NOT degrade an empty-but-successful extraction to the
+        deterministic tokenizer: that injects generic intent/summary words
+        (small, utility, create, common, …) as content tags which the promoter
+        then auto-promotes to noise concepts (the 'utility'/'small' garden
+        clutter). SOFT-FALLBACK to the deterministic :func:`derive_content_tags`
+        heuristic fires ONLY when there is no LLM signal at all — no factory, no
+        extractor, or an extraction error. The settlement is the source of truth;
+        a derivation failure is logged + degraded, never raised, so it can't
+        break the settle write.
         """
         if self._extractor_factory is None:
             return derive_content_tags(settlement)
@@ -430,12 +438,10 @@ class KnowledgeSettleSink:
                 exc_info=True,
             )
             return derive_content_tags(settlement)
-        entity_tags = _entity_names_to_tags(names)
-        if not entity_tags:
-            # The LLM committed no entities (thin summary / connector-inbound run)
-            # — degrade to the deterministic signal rather than emit nothing.
-            return derive_content_tags(settlement)
-        return entity_tags
+        # The extractor ran — trust its verdict, empty included. No deterministic
+        # fallback here (that's the noise-concept source); structural tags alone
+        # are correct for a run with no reusable knowledge.
+        return _entity_names_to_tags(names)
 
 
 def _extraction_seed_text(settlement: Settlement) -> str:

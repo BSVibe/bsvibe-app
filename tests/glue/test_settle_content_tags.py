@@ -440,9 +440,12 @@ async def test_sink_soft_fallback_when_extractor_raises(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_sink_soft_fallback_when_no_entities_extracted(tmp_path) -> None:
-    """A thin summary yielding zero entities → fallback (never an empty tag set
-    when deterministic signal exists)."""
+async def test_sink_respects_successful_empty_extraction(tmp_path) -> None:
+    """When the extractor RUNS and returns zero entities, its verdict is
+    AUTHORITATIVE — no content tags. We do NOT degrade to the deterministic
+    tokenizer here (that injects generic intent/summary words the promoter
+    auto-promotes to noise concepts). The deterministic fallback is for the
+    no-LLM-signal paths only (no factory / extractor None / error)."""
     from backend.knowledge.infrastructure.workers.settle_worker import KnowledgeSettleSink
 
     async def _factory(*, region: str, workspace_id):  # noqa: ANN001, ARG001
@@ -450,7 +453,9 @@ async def test_sink_soft_fallback_when_no_entities_extracted(tmp_path) -> None:
 
     sink = KnowledgeSettleSink(vault_root=tmp_path, extractor_factory=_factory)
     tags = await _sink_tags(sink, _settlement(summary="configured the reverse proxy"))
-    assert {"configured", "reverse", "proxy"} <= set(tags)
+    # The successful-empty extraction is honoured: no deterministic noise tags.
+    assert tags == []
+    assert not ({"configured", "reverse", "proxy"} & set(tags))
 
 
 @pytest.mark.asyncio
