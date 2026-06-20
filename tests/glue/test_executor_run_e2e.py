@@ -467,7 +467,11 @@ async def test_executor_run_contract_pass_verifies_and_review_ready(
 
         deliverable = (await s.execute(select(Deliverable))).scalar_one()
         assert deliverable.deliverable_type is DeliverableType.CODE
-        assert deliverable.payload.get("summary") == "implemented + green"
+        # Summary is titled by the founder intent (first line → PR/settle title),
+        # with the executor's output kept as body detail.
+        summary = deliverable.payload.get("summary") or ""
+        assert summary.splitlines()[0].strip() == "ship the feature"
+        assert "implemented + green" in summary
 
         deliver_event = (await s.execute(select(DeliveryEventRow))).scalar_one()
         assert deliver_event.deliverable_id == deliverable.id

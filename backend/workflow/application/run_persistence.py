@@ -15,6 +15,7 @@ distributed across the new files.
 
 from __future__ import annotations
 
+import re
 import uuid
 from typing import TYPE_CHECKING, Any
 
@@ -42,6 +43,37 @@ from plugin.audit.events import AuditActor, AuditEventBase, AuditResource
 from plugin.audit.service import safe_emit
 
 logger = structlog.get_logger(__name__)
+
+# A coding-agent executor's ``--print`` output ends with a machine-readable
+# ``<verification-contract>{…}</…>`` block (Lift E30). It's noise in a
+# human-facing deliverable summary / PR body, so strip it.
+_CONTRACT_BLOCK_RE = re.compile(
+    r"<verification-contract>.*?</verification-contract>",
+    re.DOTALL | re.IGNORECASE,
+)
+#: Cap the title line (first line of the summary → PR title / settle note
+#: title) so a single-line intent doesn't produce a 512-char title.
+_MAX_SUMMARY_TITLE = 120
+
+
+def _compose_verified_summary(run: ExecutionRun, final_text: str) -> str:
+    """Build the verified deliverable's summary — titled by the founder INTENT.
+
+    The summary's first line becomes the PR title (via ``_split_summary``) and
+    the settle note's title. The work LLM's ``final_text`` is raw streaming
+    narration ("Let me check the existing backend structure first…") plus the
+    E30 contract block — using it verbatim produced garbage PR titles and noise
+    settle notes (live dogfood, PR #374). Instead lead with the founder intent
+    (a clean, deterministic description of what was asked == what shipped for a
+    verified run), keep the agent's prose as body detail, and strip the
+    contract block. Falls back to a stable title when the run carries no intent.
+    """
+    payload = run.payload or {}
+    intent = str(payload.get("intent_text") or payload.get("text") or "").strip()
+    first_line = next((ln.strip() for ln in intent.splitlines() if ln.strip()), "")
+    title = first_line[:_MAX_SUMMARY_TITLE].rstrip() or "Delivered change"
+    body = _CONTRACT_BLOCK_RE.sub("", final_text or "").strip()
+    return f"{title}\n\n{body}" if body else title
 
 
 def utcnow() -> Any:
@@ -162,7 +194,9 @@ async def finish_verified(
         run,
         attempt_id=attempt.id,
         artifact_refs=written_paths,
-        summary=final_text,
+        # Title the summary by the founder intent, not the work LLM's raw
+        # narration — the first line becomes the PR title + settle note title.
+        summary=_compose_verified_summary(run, final_text),
     )
 
     # Wake the delivery + settle consumers (worker_mode="redis_streams"
