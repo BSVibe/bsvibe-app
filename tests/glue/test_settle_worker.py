@@ -205,6 +205,57 @@ async def test_settle_worker_note_carries_content_tags_not_just_structural(sf, t
     assert "the" not in tags
 
 
+class _EmptyExtractor:
+    """An entity extractor that RAN but found no entities — the compile
+    prompt's documented COMMON case ('no reusable knowledge worth a concept')."""
+
+    async def extract_entity_names(self, text: str, *, label: str = "seed") -> list[str]:
+        return []
+
+
+async def test_settle_worker_respects_llm_empty_extraction_no_noise_tags(sf, tmp_path) -> None:
+    """When the entity extractor RUNS successfully and returns NO entities, the
+    note must carry only structural tags — the LLM's 'nothing worth a concept'
+    is authoritative. Previously the worker degraded to the deterministic
+    intent/summary tokenizer even on a successful-empty extraction, injecting
+    generic words (small, utility, list, create, …) as content tags that the
+    promoter then auto-promoted to noise concepts (live dogfood: trivial util
+    tasks spawned 'utility'/'small' concepts).
+    """
+    from backend.knowledge.canonicalization.store import NoteStore  # noqa: PLC0415
+    from backend.knowledge.graph.storage import FileSystemStorage  # noqa: PLC0415
+
+    ws = uuid.uuid4()
+    await _seed_settle_activity(
+        sf,
+        workspace_id=ws,
+        summary="Add a small list-chunking utility to the backend",
+        artifact_refs=["backend/common/chunked.py"],
+    )
+
+    async def _factory(*, region: str, workspace_id: uuid.UUID) -> _EmptyExtractor:
+        return _EmptyExtractor()
+
+    worker = SettleWorker(
+        session_factory=sf,
+        sink=KnowledgeSettleSink(vault_root=tmp_path, extractor_factory=_factory),
+        config=SettleWorkerConfig(default_region="us-1"),
+    )
+    assert await worker.drain_once() == 1
+
+    store = NoteStore(FileSystemStorage(_ws_dir(tmp_path, "us-1", ws)))
+    garden_paths = await store.list_garden_paths()
+    assert len(garden_paths) == 1
+    tags = set(await store.read_garden_tags(garden_paths[0]))
+
+    # Structural tags preserved …
+    assert {"settle", "verified-run"} <= tags
+    # … but the deterministic intent/summary noise words must NOT leak in as
+    # content tags (the LLM's empty result is authoritative).
+    noise = {"small", "utility", "list", "chunking", "create", "common", "backend", "add"}
+    assert not (noise & tags), f"noise content tags leaked despite empty extraction: {noise & tags}"
+
+
 async def test_settle_worker_idempotent_redrain(sf, tmp_path) -> None:
     ws = uuid.uuid4()
     await _seed_settle_activity(sf, workspace_id=ws)
