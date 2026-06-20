@@ -1,8 +1,5 @@
-"""BSVibe backend common utilities.
-
-Shared, pure-stdlib helpers with no bounded-context dependencies.
-"""
+"""Cross-cutting pure helpers shared across all backend bounded contexts."""
 
 from __future__ import annotations
 
-__all__: list[str] = ["bytesize"]
+__all__ = ["bytesize"]
