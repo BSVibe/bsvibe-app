@@ -124,6 +124,13 @@ async def drive_loop(  # noqa: PLR0912, PLR0915 — preserved cycle body, H2a is
     for _cycle in range(orch._max_cycles):
         turn = await orch._llm.complete(messages=messages, tools=tools_schema)
         final_text = turn.content or final_text
+        # Merge files the compute backend captured outside the loop's tools
+        # (a coding-agent executor's edits in the worker clone) so the verified
+        # deliverable's artifact_refs record what actually changed. Empty for
+        # the LiteLLM path, which writes through the loop's file_write tools.
+        for captured_path in turn.artifact_refs:
+            if captured_path not in written_paths:
+                written_paths.append(captured_path)
         await orch._record(
             run,
             attempt,

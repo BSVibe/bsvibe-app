@@ -590,6 +590,87 @@ class TestExecutorAdapterChat:
 
                 assert response.content == "42"
                 assert response.tool_calls == ()
+                # No files shipped → no captured artifact_refs.
+                assert response.artifact_refs == ()
+
+    async def test_chat_surfaces_worker_captured_artifact_refs(self, tmp_path: Any) -> None:
+        """A run-bound executor chat surfaces the files the worker captured
+        (persisted on the task row as artifact_refs) on the ChatResponse, so the
+        agent loop can record them as the verified deliverable's artifact_refs.
+        Without this the deliverable came out with empty artifact_refs for every
+        executor run even though the agent changed files in its clone.
+        """
+        import asyncio
+        import base64
+
+        redis = await _make_redis()
+        workspace_id = uuid.uuid4()
+        run_id = uuid.uuid4()
+        settings = get_settings().model_copy(update={"executor_task_timeout_s": 30.0})
+
+        async with shared_file_sessionmaker() as sf:
+            async with sf() as setup:
+                worker = await _seed_worker(
+                    setup, workspace_id=workspace_id, capabilities=["claude_code"]
+                )
+                account = _executor_account(workspace_id, worker.id)
+                setup.add(account)
+                await setup.commit()
+
+            async with sf() as adapter_session:
+                adapter = ExecutorAdapter(
+                    account=account,
+                    workspace_id=workspace_id,
+                    account_id=account.account_id,
+                    model_account_id=account.id,
+                    session=adapter_session,
+                    settings=settings,
+                    redis=redis,
+                    run_id=run_id,
+                )
+
+                async def _simulate_worker() -> None:
+                    stream = dispatch.worker_stream(worker.id)
+                    last_id = "0"
+                    for _ in range(500):
+                        entries = await redis.xread({stream: last_id}, count=1, block=20)
+                        if not entries:
+                            continue
+                        _name, messages = entries[0]
+                        for msg_id, fields in messages:
+                            last_id = msg_id
+                            task_id = uuid.UUID(fields["task_id"])
+                            async with sf() as ws_session:
+                                await dispatch.record_result(
+                                    ws_session,
+                                    redis,
+                                    task_id=task_id,
+                                    success=True,
+                                    output="done",
+                                    error_message=None,
+                                    files=[
+                                        {
+                                            "path": "backend/common/bytesize.py",
+                                            "content_b64": base64.b64encode(b"x = 1\n").decode(),
+                                            "truncated": False,
+                                        }
+                                    ],
+                                    run_workspace_root=str(tmp_path),
+                                )
+                                await ws_session.commit()
+                            return
+                    raise AssertionError("worker stream never saw the XADD")
+
+                worker_task = asyncio.create_task(_simulate_worker())
+                try:
+                    response = await adapter.chat(
+                        system="be terse",
+                        messages=[{"role": "user", "content": "add bytesize util"}],
+                    )
+                finally:
+                    await worker_task
+
+                assert response.artifact_refs == ("backend/common/bytesize.py",)
 
     async def test_chat_uses_per_caller_timeout_over_settings_default(
         self, monkeypatch: pytest.MonkeyPatch
