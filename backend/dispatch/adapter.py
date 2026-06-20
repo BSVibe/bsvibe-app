@@ -93,6 +93,12 @@ class ChatResponse:
     usage_prompt_tokens: int = 0
     usage_completion_tokens: int = 0
     raw: Any = None
+    # Relative paths the worker captured for an executor chat that was bound to
+    # a run (the coding agent's edits in its per-task clone). Empty for the
+    # LiteLLM path and for run-less chat-shaped executor calls. The agent loop
+    # merges these into its ``written_paths`` so the verified Deliverable's
+    # ``artifact_refs`` reflect what the agent actually changed.
+    artifact_refs: tuple[str, ...] = ()
 
 
 # ---------------------------------------------------------------------------
@@ -500,7 +506,17 @@ class ExecutorAdapter:
         # block the return shape is the legacy one (``tool_calls=()``) and
         # the loop nudges the agent on the next cycle.
         synthesized = _synthesize_executor_tool_calls(completed.output or "")
-        return ChatResponse(content=completed.output or "", tool_calls=synthesized)
+        # Surface the worker-captured files (B1 — persisted on the task row when
+        # the chat was bound to a run) so the loop can record them as the
+        # verified Deliverable's artifact_refs. The agent edits files with its
+        # OWN sandbox tools, never the loop's file_write, so without this the
+        # deliverable's artifact_refs comes out empty for every executor run.
+        captured = tuple(completed.artifact_refs or ())
+        return ChatResponse(
+            content=completed.output or "",
+            tool_calls=synthesized,
+            artifact_refs=captured,
+        )
 
 
 # ---------------------------------------------------------------------------

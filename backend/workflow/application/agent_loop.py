@@ -106,6 +106,13 @@ class LoopTurn:
 
     content: str
     tool_calls: tuple[LoopToolCall, ...] = ()
+    # Files the compute backend captured for this turn OUTSIDE the loop's
+    # file_write/file_edit tools. Coding-agent executors edit files in the
+    # worker's per-task clone (captured worker-side as the task's
+    # artifact_refs); those never flow through the loop's tool writes, so the
+    # loop merges these into ``written_paths`` to record what actually changed.
+    # Empty for the LiteLLM path (it writes via the loop's tools).
+    artifact_refs: tuple[str, ...] = ()
 
 
 @runtime_checkable

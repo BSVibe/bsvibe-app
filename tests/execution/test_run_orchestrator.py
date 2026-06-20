@@ -256,6 +256,48 @@ async def test_compose_verified_summary_falls_back_when_no_intent() -> None:
     assert "did the thing" in summary
 
 
+async def test_executor_artifact_refs_flow_into_deliverable(tmp_path: Path) -> None:
+    """Coding-agent executors write files in the worker's clone — captured
+    worker-side as the executor task's ``artifact_refs``, NOT via the loop's
+    ``file_write`` tools. So the loop's ``written_paths`` stayed empty and the
+    verified ``Deliverable.artifact_refs`` came out ``[]`` (live: PR/settle
+    showed no changed-file list even though files shipped in the git branch).
+
+    The ExecutorAdapter now surfaces the captured paths on the turn
+    (``LoopTurn.artifact_refs``); the loop merges them into ``written_paths`` so
+    the deliverable records what actually changed.
+    """
+    declare = LoopToolCall(
+        id="e30-declare-verification",
+        name="declare_verification",
+        arguments={"checks": [{"kind": "command", "command": "true"}]},
+    )
+    llm = ScriptedLlm(
+        [
+            LoopTurn(
+                content="did it in one shot",
+                tool_calls=(declare,),
+                artifact_refs=("backend/common/bytesize.py", "tests/common/test_bytesize.py"),
+            ),
+        ]
+    )
+    async with memory_session() as session:
+        run = await _make_run(session)
+        orch = RunOrchestrator(session=session, llm=llm, sandbox_manager=NoopSandboxManager())
+        result = await orch.run(run=run, workspace_dir=tmp_path)
+
+        assert result.outcome == "verified"
+        assert result.written_paths == [
+            "backend/common/bytesize.py",
+            "tests/common/test_bytesize.py",
+        ]
+        deliverable = (await session.execute(select(Deliverable))).scalar_one()
+        assert deliverable.payload.get("artifact_refs") == [
+            "backend/common/bytesize.py",
+            "tests/common/test_bytesize.py",
+        ]
+
+
 # --------------------------------------------------------------------------
 # Executor path — the synthesized declare_verification is TERMINAL.
 # --------------------------------------------------------------------------
