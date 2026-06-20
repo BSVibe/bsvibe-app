@@ -204,6 +204,47 @@ async def test_verified_run_does_file_work_and_passes_command_check(tmp_path: Pa
 
 
 # --------------------------------------------------------------------------
+# Executor path — the synthesized declare_verification is TERMINAL.
+# --------------------------------------------------------------------------
+
+
+async def test_executor_synthesized_declare_is_terminal_and_verifies(tmp_path: Path) -> None:
+    """A coding-agent executor (claude_code / codex / opencode) is single-shot:
+    it does ALL its work in one turn and ends with a ``<verification-contract>``
+    block, which the ExecutorAdapter turns into a synthesized
+    ``declare_verification`` tool call (id ``e30-declare-verification``) on
+    EVERY turn. The loop only reaches verification when ``tool_calls`` is empty
+    — which the executor never returns — so without treating the synthesized
+    declare as terminal the loop spins to its round cap and never verifies
+    (live dogfood: claude/sonnet emitted the contract reliably every turn → the
+    run round-capped instead of producing a deliverable).
+
+    The fix: once the executor's synthesized declare has registered a contract,
+    THAT turn is terminal → proceed straight to verification. This test scripts
+    a SINGLE such turn with NO trailing empty-tool_calls turn; if the loop still
+    demands one, ScriptedLlm is asked for a second turn and raises.
+    """
+    declare = LoopToolCall(
+        id="e30-declare-verification",
+        name="declare_verification",
+        arguments={"checks": [{"kind": "command", "command": "true"}]},
+    )
+    llm = ScriptedLlm([LoopTurn(content="did the work in one shot", tool_calls=(declare,))])
+    async with memory_session() as session:
+        run = await _make_run(session)
+        orch = RunOrchestrator(session=session, llm=llm, sandbox_manager=NoopSandboxManager())
+        result = await orch.run(run=run, workspace_dir=tmp_path)
+
+        assert result.outcome == "verified"
+        # Exactly ONE work turn — the synthesized declare was terminal, no
+        # wasteful re-prompt of the single-shot executor.
+        assert len(llm.calls) == 1
+
+        vr = (await session.execute(select(VerificationResult))).scalar_one()
+        assert vr.outcome is VerificationOutcome.PASSED
+
+
+# --------------------------------------------------------------------------
 # B7 — verify-first gate: a write BEFORE declare_verification is refused;
 # the model must declare first, then writes work (the new discipline).
 # --------------------------------------------------------------------------

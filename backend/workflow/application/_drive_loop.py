@@ -16,6 +16,7 @@ import json
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from backend.dispatch.adapter import EXECUTOR_DECLARE_VERIFICATION_ID
 from backend.workflow.application._loop_context import (
     _SYSTEM_PROMPT,
     _intent_title,
@@ -214,9 +215,25 @@ async def drive_loop(  # noqa: PLR0912, PLR0915 — preserved cycle body, H2a is
                     {"tool": call.name, "ok": ok, "writes_count": len(writes)},
                 )
                 messages.append({"role": "tool", "tool_call_id": call.id, "content": output})
-            continue
 
-        # No tool calls: the model believes the step is done.
+            # Single-shot executor (claude_code / codex / opencode): the agent
+            # does ALL its work in one turn and the ExecutorAdapter synthesizes
+            # a ``declare_verification`` (id ``e30-declare-verification``) from
+            # its ``<verification-contract>`` block on EVERY turn — so
+            # ``tool_calls`` is never empty and the "model returned no tool
+            # calls = done" branch below never fires. Once that synthesized
+            # declare has registered a contract, THIS turn is terminal: fall
+            # through to verification instead of re-prompting the agent (which
+            # would just redo the work every cycle until the round cap — the
+            # live dogfood failure with claude/sonnet, which declares reliably).
+            executor_declared_terminal = registry.declared_contract is not None and any(
+                c.id == EXECUTOR_DECLARE_VERIFICATION_ID for c in turn.tool_calls
+            )
+            if not executor_declared_terminal:
+                continue
+
+        # No tool calls (or the single-shot executor just declared): the model
+        # believes the step is done.
         if (
             not written_paths
             and registry.declared_contract is None

@@ -47,6 +47,7 @@ from backend.router.llm_client import LlmClient, LlmResponse
 logger = structlog.get_logger(__name__)
 
 __all__ = [
+    "EXECUTOR_DECLARE_VERIFICATION_ID",
     "ChatMessage",
     "ChatResponse",
     "ChatToolCall",
@@ -560,6 +561,17 @@ _E30_CONTRACT_RE = re.compile(
     re.DOTALL,
 )
 
+#: Stable id stamped on the synthesized ``declare_verification`` tool call so
+#: the agent loop can recognize it as the SINGLE-SHOT executor's terminal
+#: declaration. Coding-agent executors (claude_code / codex / opencode) do all
+#: their work in one ``--print`` turn and re-emit the ``<verification-contract>``
+#: block EVERY turn, so this synthesized call appears on every turn and
+#: ``tool_calls`` is never empty. The loop reaches verification only on an
+#: empty-tool_calls turn (a LiteLLM model signalling "done"), which the
+#: executor never returns — so the loop treats this id as terminal and verifies
+#: straight away (see ``backend.workflow.application._drive_loop``).
+EXECUTOR_DECLARE_VERIFICATION_ID = "e30-declare-verification"
+
 
 def _augment_system_for_executor_tools(system: str, tools: list[dict[str, Any]] | None) -> str:
     """Lift E30 — append a verification-contract guide + tool reference to
@@ -616,7 +628,7 @@ def _synthesize_executor_tool_calls(output: str) -> tuple[ChatToolCall, ...]:
     # tolerant of unknown keys; we forward whatever the agent declared.
     return (
         ChatToolCall(
-            id="e30-declare-verification",
+            id=EXECUTOR_DECLARE_VERIFICATION_ID,
             name="declare_verification",
             arguments_json=json.dumps(parsed),
         ),
