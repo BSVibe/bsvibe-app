@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import uuid
 from pathlib import Path
+from typing import Any
 
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -38,6 +39,7 @@ def build_settle_entity_extractor_factory(
     *,
     session_factory: async_sessionmaker[AsyncSession],
     settings: Settings | None = None,
+    redis: Any = None,
 ) -> ExtractorFactory:
     """Production :class:`ExtractorFactory` for the settle sink.
 
@@ -48,6 +50,15 @@ def build_settle_entity_extractor_factory(
     the sink writes to. Returns ``None`` on
     :class:`~backend.dispatch.resolver.NoMatchingRouteError` so derived
     knowledge never silently routes to an unintended model.
+
+    ``redis`` is threaded into the resolver so a settle that resolves to an
+    EXECUTOR account (e.g. the workspace default is a claude_code/codex/opencode
+    worker) can dispatch the entity-extraction chat onto the worker stream.
+    Without it ``ExecutorAdapter.chat`` raises ``ExecutorAdapterUnavailable`` on
+    every settle, the sink degrades to the deterministic tokenizer, and the
+    promoter auto-promotes the resulting intent/summary words into noise
+    concepts. ``None`` is fine for workspaces whose settle route is a LiteLLM
+    account (they never touch the worker stream).
     """
     settings = settings or get_settings()
     vault_root = Path(settings.knowledge_vault_root)
@@ -62,6 +73,10 @@ def build_settle_entity_extractor_factory(
                 caller_id=CALLER_SETTLE_EXTRACT,
                 workspace_id=workspace_id,
                 settings=settings,
+                # An executor-account settle route needs a Redis client to
+                # dispatch the extraction chat onto the worker stream; without
+                # it the ExecutorAdapter raises and the sink degrades to noise.
+                redis=redis,
                 # Lift E19 — same E18 race the bootstrap runtime hit. The
                 # settle path also passes its IngestCompiler through
                 # parallel chunks; each must own its own session for the

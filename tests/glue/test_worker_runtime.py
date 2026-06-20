@@ -637,6 +637,42 @@ async def test_settle_entity_extractor_factory_extracts_entities(
     get_settings.cache_clear()
 
 
+async def test_settle_extractor_factory_threads_redis_for_executor_dispatch(
+    sf: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """The settle extractor factory must thread the worker's redis client into
+    its per-settlement resolver so an EXECUTOR-account extraction can dispatch
+    onto the worker stream. Without it ``ExecutorAdapter.chat`` raises
+    ``ExecutorAdapterUnavailable`` ('no redis was wired into the resolver') on
+    EVERY settle, the sink soft-falls back to the deterministic tokenizer, and
+    the promoter auto-promotes the resulting intent/summary words into noise
+    concepts (live dogfood with the claude_code workspace default)."""
+    from backend.workflow.application.runtime import settle_runtime
+
+    monkeypatch.setenv("BSVIBE_KNOWLEDGE_VAULT_ROOT", str(tmp_path / "vault"))
+    get_settings.cache_clear()
+
+    captured: dict[str, Any] = {}
+
+    async def _fake_resolve(session: Any, *, redis: Any = None, **kwargs: Any) -> None:
+        captured["redis"] = redis
+        return None  # short-circuit — the factory returns None (no extractor)
+
+    monkeypatch.setattr(settle_runtime, "_resolve_via_caller", _fake_resolve)
+
+    sentinel = object()
+    factory = runtime.build_settle_entity_extractor_factory(
+        session_factory=sf, settings=get_settings(), redis=sentinel
+    )
+    extractor = await factory(region="us-1", workspace_id=uuid.uuid4())
+
+    assert extractor is None  # short-circuited
+    assert captured["redis"] is sentinel, "redis must be threaded into the resolver"
+    get_settings.cache_clear()
+
+
 def _bare_account(provider: str) -> Any:
 
     return ModelAccount(

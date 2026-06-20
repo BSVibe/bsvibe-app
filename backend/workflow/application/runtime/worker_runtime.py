@@ -183,7 +183,12 @@ def build_worker_runtime(
                 # mechanism) — soft-falls back to the deterministic heuristic
                 # when the workspace has no single active model account.
                 extractor_factory=build_settle_entity_extractor_factory(
-                    session_factory=session_factory, settings=settings
+                    session_factory=session_factory,
+                    settings=settings,
+                    # Thread redis so an executor-account settle route can
+                    # dispatch the extraction chat onto the worker stream
+                    # (else every settle degrades to deterministic noise tags).
+                    redis=redis_client,
                 ),
             ),
             config=SettleWorkerConfig(default_region=settings.knowledge_default_region),
