@@ -243,6 +243,7 @@ async def test_adapter_session_factory_opens_fresh_session_per_chat() -> None:
             class _Completed:
                 status = "done"
                 output = "ok"
+                artifact_refs = None
                 error_message = None
 
             async def _fake_await_completion(
@@ -357,6 +358,7 @@ async def test_adapter_without_session_factory_falls_back_to_bound_session() -> 
             class _Completed:
                 status = "done"
                 output = "ok"
+                artifact_refs = None
                 error_message = None
 
             async def _fake_await_completion(
