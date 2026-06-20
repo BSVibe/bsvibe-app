@@ -297,7 +297,9 @@ async def test_verified_run_delivers_as_github_pr(
     files = await _git("ls-tree", "--name-only", branch, cwd=bare)
     assert "feature.txt" in files
     log = await _git("log", branch, "--oneline", cwd=bare)
-    assert "Add the feature" in log  # commit message = first line of summary
+    # Commit message = first line of summary = the founder intent (the summary is
+    # now titled by intent_text, not the work LLM's free output).
+    assert "add the feature" in log.lower()
 
     # open_pr was requested with head=run branch, base=main, title/body from
     # the deliverable summary.

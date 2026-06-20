@@ -204,6 +204,59 @@ async def test_verified_run_does_file_work_and_passes_command_check(tmp_path: Pa
 
 
 # --------------------------------------------------------------------------
+# Verified-deliverable summary — titled by the founder intent, NOT the
+# agent's raw streaming narration.
+# --------------------------------------------------------------------------
+
+
+async def test_verified_summary_titled_by_intent_not_agent_narration() -> None:
+    """The deliverable summary's FIRST line becomes the PR title (via
+    ``_split_summary``) and the settle note's title. A coding-agent executor's
+    ``--print`` output is raw narration ("Let me check the existing backend
+    structure first…") + a ``<verification-contract>`` block — using it
+    verbatim produced garbage PR titles and noise settle notes (live dogfood,
+    PR #374). The fix: title the summary from the founder intent, keep the
+    agent's prose as body detail, and strip the contract block.
+    """
+    from types import SimpleNamespace
+
+    from backend.workflow.application.run_persistence import _compose_verified_summary
+
+    run = SimpleNamespace(
+        payload={"intent_text": "Add a TTL cache utility to the backend.\n\nDetails: monotonic."}
+    )
+    agent_output = (
+        "Let me check the existing backend structure first.\n"
+        "Now I have enough context. 3 files created and all tests pass.\n"
+        "<verification-contract>\n"
+        '{"checks": [{"kind": "command", "command": "uv run pytest -q"}]}\n'
+        "</verification-contract>"
+    )
+    summary = _compose_verified_summary(run, agent_output)  # type: ignore[arg-type]
+
+    title = summary.splitlines()[0].strip()
+    assert title == "Add a TTL cache utility to the backend."
+    assert "Let me check the existing backend structure" not in title
+    # The agent's substantive prose is kept as body detail …
+    assert "3 files created and all tests pass" in summary
+    # … but the verification-contract block is stripped (it's machine noise).
+    assert "<verification-contract>" not in summary
+    assert "uv run pytest" not in summary
+
+
+async def test_compose_verified_summary_falls_back_when_no_intent() -> None:
+    from types import SimpleNamespace
+
+    from backend.workflow.application.run_persistence import _compose_verified_summary
+
+    run = SimpleNamespace(payload={})
+    summary = _compose_verified_summary(run, "did the thing")  # type: ignore[arg-type]
+    # No intent → still a non-empty, clean title + the agent body.
+    assert summary.splitlines()[0].strip()
+    assert "did the thing" in summary
+
+
+# --------------------------------------------------------------------------
 # Executor path — the synthesized declare_verification is TERMINAL.
 # --------------------------------------------------------------------------
 

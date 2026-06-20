@@ -35,6 +35,7 @@ from backend.executors.terminal import (
 )
 from backend.workflow.application.agent_loop import LoopResult
 from backend.workflow.application.audit_events import LoopTerminal, VerifyRun
+from backend.workflow.application.run_persistence import _compose_verified_summary
 from backend.workflow.application.verification_service import (
     CanonRetriever,
     JudgeLlm,
@@ -214,7 +215,9 @@ async def verify_and_finish(
         run,
         attempt_id=attempt.id,
         artifact_refs=artifact_refs,
-        summary=output,
+        # Title by the founder intent, not the executor's raw narration — the
+        # summary's first line becomes the PR title + settle note title.
+        summary=_compose_verified_summary(run, output),
     )
     logger.info(
         "executor_orchestrator_verified",

@@ -524,7 +524,11 @@ async def test_contract_pass_sets_proved_and_writes_deliverable(tmp_path: Path) 
             assert vr.outcome is VerificationOutcome.PASSED
             deliverable = (await s.execute(select(Deliverable))).scalar_one()
             assert deliverable.payload.get("artifact_refs") == ["result.py"]
-            assert deliverable.payload.get("summary") == "implemented + tests green"
+            # Summary titled by the founder intent ("do work"), executor output
+            # kept as body detail.
+            summary = deliverable.payload.get("summary") or ""
+            assert summary.splitlines()[0].strip() == "do work"
+            assert "implemented + tests green" in summary
             step = (await s.execute(select(WorkStep))).scalar_one()
             assert step.proof_state is ProofState.PROVED
             assert step.status is WorkStepStatus.VERIFIED
