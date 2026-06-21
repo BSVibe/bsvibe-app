@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+import time
 import uuid
+from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from unittest.mock import AsyncMock
@@ -59,6 +61,23 @@ async def _make_redis() -> Any:
     client = fakeredis_aio.FakeRedis(server=fakeredis.FakeServer(), decode_responses=True)
     await client.flushdb()
     return client
+
+
+def _poll_deadline(seconds: float = 30.0) -> Iterator[bool]:
+    """Time-bounded replacement for ``range(N)`` in the worker-stream polls.
+
+    The worker-simulation loops below poll a fakeredis stream for the
+    ExecutorAdapter's XADD. A fixed iteration count gave up after a fixed
+    *number* of polls, which a contended CI event loop (a shared-SQLite
+    lock resolving, xdist CPU pressure delaying the chat coroutine's XADD)
+    could exhaust before the entry landed — the intermittent "worker
+    stream never saw the XADD" flake. A wall-clock deadline waits long
+    enough regardless of how many polls fit in the window, and still
+    returns immediately on the happy path.
+    """
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        yield True
 
 
 class TestLiteLLMAdapter:
@@ -389,7 +408,7 @@ class TestExecutorAdapterChat:
                     async def _simulate_worker() -> None:
                         stream = dispatch.worker_stream(worker.id)
                         last_id = "0"
-                        for _ in range(500):
+                        for _ in _poll_deadline():
                             entries = await redis.xread({stream: last_id}, count=1, block=20)
                             if not entries:
                                 continue
@@ -558,7 +577,7 @@ class TestExecutorAdapterChat:
                 async def _simulate_worker() -> None:
                     stream = dispatch.worker_stream(worker.id)
                     last_id = "0"
-                    for _ in range(500):
+                    for _ in _poll_deadline():
                         entries = await redis.xread({stream: last_id}, count=1, block=20)
                         if not entries:
                             continue
@@ -632,7 +651,7 @@ class TestExecutorAdapterChat:
                 async def _simulate_worker() -> None:
                     stream = dispatch.worker_stream(worker.id)
                     last_id = "0"
-                    for _ in range(500):
+                    for _ in _poll_deadline():
                         entries = await redis.xread({stream: last_id}, count=1, block=20)
                         if not entries:
                             continue
@@ -718,7 +737,7 @@ class TestExecutorAdapterChat:
                 async def _simulate_worker() -> None:
                     stream = dispatch.worker_stream(worker.id)
                     last_id = "0"
-                    for _ in range(500):
+                    for _ in _poll_deadline():
                         entries = await redis.xread({stream: last_id}, count=1, block=20)
                         if not entries:
                             continue
@@ -797,7 +816,7 @@ class TestExecutorAdapterChat:
                 async def _simulate_worker() -> None:
                     stream = dispatch.worker_stream(worker.id)
                     last_id = "0"
-                    for _ in range(500):
+                    for _ in _poll_deadline():
                         entries = await redis.xread({stream: last_id}, count=1, block=20)
                         if not entries:
                             continue
@@ -918,7 +937,7 @@ class TestExecutorAdapterChat:
                 async def _simulate_worker_failure() -> None:
                     stream = dispatch.worker_stream(worker.id)
                     last_id = "0"
-                    for _ in range(500):
+                    for _ in _poll_deadline():
                         entries = await redis.xread({stream: last_id}, count=1, block=20)
                         if not entries:
                             continue
@@ -1135,7 +1154,7 @@ class TestExecutorAdapterE30ToolsAndContract:
                     stream = dispatch.worker_stream(worker.id)
                     last_id = "0"
                     captured_system: list[str] = []
-                    for _ in range(500):
+                    for _ in _poll_deadline():
                         entries = await redis.xread({stream: last_id}, count=1, block=20)
                         if not entries:
                             continue
@@ -1241,7 +1260,7 @@ class TestExecutorAdapterE30ToolsAndContract:
                 async def _simulate_worker() -> None:
                     stream = dispatch.worker_stream(worker.id)
                     last_id = "0"
-                    for _ in range(500):
+                    for _ in _poll_deadline():
                         entries = await redis.xread({stream: last_id}, count=1, block=20)
                         if not entries:
                             continue
