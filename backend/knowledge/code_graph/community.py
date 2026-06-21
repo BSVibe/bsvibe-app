@@ -44,6 +44,15 @@ _LEIDEN_SEED = 42
 #: scattered community.
 _DOMINANT_FRACTION = 0.6
 
+#: A sub-area (one directory level deeper than the label) is worth naming
+#: in the description only if it covers at least this fraction of the
+#: community's files. Below it the area is noise; above it the founder
+#: wants to know "backend — but which parts?".
+_SUBAREA_FRACTION = 0.2
+
+#: How many sub-areas to surface, at most.
+_SUBAREA_TOP_N = 3
+
 
 def detect_communities(graph: nx.DiGraph) -> dict[str, int]:
     """Run Leiden on the undirected projection of ``graph``.
@@ -178,12 +187,17 @@ def _label_for_community(
     label = _common_path_label(paths)
     top_symbols = [n for n, _ in sorted(names_by_rank, key=lambda kv: -kv[1])[:top_symbols_k]]
     file_count = len({p for p in paths})
+    subareas = _subareas_for(paths, label)
 
     desc_parts: list[str] = []
     if file_count:
         plural = "files" if file_count != 1 else "file"
         prefix = label or "various paths"
         desc_parts.append(f"{file_count} {plural} in {prefix}")
+    if subareas:
+        # The community spans several sub-areas under a shallow label —
+        # name them so "backend" becomes "backend, spanning api + mcp".
+        desc_parts.append(f"spanning {', '.join(subareas)}")
     if top_symbols:
         desc_parts.append(f"top symbols: {', '.join(top_symbols[:3])}")
     desc_parts.append(f"{len(members)} nodes")
@@ -197,6 +211,7 @@ def _label_for_community(
         "file_count": file_count,
         "languages": dict(lang_counter),
         "top_symbols": top_symbols,
+        "subareas": subareas,
         "top_paths": sorted({p for p in paths})[:5],
     }
 
@@ -236,6 +251,46 @@ def _common_path_label(paths: list[str]) -> str:
         else:
             break
     return best
+
+
+def _subareas_for(paths: list[str], label: str) -> list[str]:
+    """Name the directory areas a community spans one level below ``label``.
+
+    The majority label is honest but can be shallow: a 374-node community
+    split ~50/50 between ``backend/api`` and ``backend/mcp`` only labels
+    ``backend``. This surfaces those sub-areas so the founder sees the
+    spread without the label lying about a single owner. Returns at most
+    :data:`_SUBAREA_TOP_N` prefixes that each cover ≥
+    :data:`_SUBAREA_FRACTION` of the files, and only when **more than one**
+    qualifies — a single dominant sub-area would already have deepened the
+    label, so echoing it adds nothing.
+    """
+    cleaned = [p.replace("\\", "/").strip("/") for p in paths if p]
+    if not cleaned:
+        return []
+    label_depth = len(label.split("/")) if label else 0
+    sub_depth = label_depth + 1
+
+    dir_parts: list[list[str]] = []
+    for p in cleaned:
+        parent = os.path.dirname(p)
+        dir_parts.append(parent.split("/") if parent else [])
+
+    total = len(dir_parts)
+    # Only consider files that reach the sub-area depth and, when a label
+    # exists, actually sit under it.
+    prefixes = [
+        "/".join(parts[:sub_depth])
+        for parts in dir_parts
+        if len(parts) >= sub_depth and (not label or "/".join(parts[:label_depth]) == label)
+    ]
+    counts = Counter(prefixes)
+    qualifying = [
+        area
+        for area, n in counts.most_common(_SUBAREA_TOP_N)
+        if area != label and n / total >= _SUBAREA_FRACTION
+    ]
+    return qualifying if len(qualifying) > 1 else []
 
 
 __all__ = [

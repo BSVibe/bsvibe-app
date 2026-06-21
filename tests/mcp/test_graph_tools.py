@@ -222,6 +222,48 @@ async def test_community_overview_and_members(
     assert all(m["community_id"] == 0 for m in members["members"])
 
 
+async def test_community_overview_surfaces_subareas(
+    db, workspace_id, user_id, registry, seeded_graph
+) -> None:
+    """The community summary must carry the structured ``subareas`` field
+    from the labels sidecar, not only embed it in the prose description —
+    MCP-UI parity for the "backend spanning api + mcp" signal."""
+    import json as _json
+
+    from backend.knowledge.code_graph.pipeline import community_labels_vault_path
+
+    lpath = community_labels_vault_path(vault_root=seeded_graph)
+    lpath.parent.mkdir(parents=True, exist_ok=True)
+    lpath.write_text(
+        _json.dumps(
+            {
+                "version": 1,
+                "communities": [
+                    {
+                        "community_id": 0,
+                        "label": "backend",
+                        "description": "… · spanning backend/api, backend/mcp",
+                        "size": 3,
+                        "top_symbols": [],
+                        "subareas": ["backend/api", "backend/mcp"],
+                        "top_paths": [],
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    async with db() as s:
+        ctx = ToolContext(
+            principal=_principal(workspace_id=workspace_id, user_id=user_id, scopes=("mcp:read",)),
+            session=s,
+        )
+        overview = await registry.call_tool("bsvibe_graph_community", {}, ctx)
+
+    c0 = next(c for c in overview["communities"] if c["community_id"] == 0)
+    assert c0["subareas"] == ["backend/api", "backend/mcp"]
+
+
 async def test_search_finds_node_by_name(db, workspace_id, user_id, registry, seeded_graph) -> None:
     async with db() as s:
         ctx = ToolContext(

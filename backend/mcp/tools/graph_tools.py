@@ -288,6 +288,9 @@ class _CommunitySummary(BaseModel):
     label: str | None = None
     description: str | None = None
     top_symbols: list[str] = Field(default_factory=list)
+    # Sub-areas a community spans below a shallow label (e.g. "backend"
+    # spanning backend/api + backend/mcp). Empty for uniform communities.
+    subareas: list[str] = Field(default_factory=list)
     top_paths: list[str] = Field(default_factory=list)
 
 
@@ -320,6 +323,7 @@ async def _h_community(args: CommunityInput, ctx: ToolContext) -> Any:
                 label=labels.get(cid, {}).get("label"),
                 description=labels.get(cid, {}).get("description"),
                 top_symbols=list(labels.get(cid, {}).get("top_symbols") or []),
+                subareas=list(labels.get(cid, {}).get("subareas") or []),
                 top_paths=list(labels.get(cid, {}).get("top_paths") or []),
             )
             for cid, n in sorted(sizes.items())
@@ -344,6 +348,7 @@ async def _h_community(args: CommunityInput, ctx: ToolContext) -> Any:
         label=label_entry.get("label"),
         description=label_entry.get("description"),
         top_symbols=list(label_entry.get("top_symbols") or []),
+        subareas=list(label_entry.get("subareas") or []),
         top_paths=list(label_entry.get("top_paths") or []),
     )
     return CommunityOutput(total=len(members), members=members, community=summary)
