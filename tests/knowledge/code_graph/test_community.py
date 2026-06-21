@@ -130,6 +130,48 @@ class TestDeriveCommunityLabels:
         assert "backend/dispatch" in desc
         assert "3 files" in desc
 
+    def test_cross_cutting_community_surfaces_subareas(self) -> None:
+        """A large community whose majority label is shallow (e.g. just
+        'backend') but which actually spans two co-dominant sub-areas must
+        surface those sub-areas — in a ``subareas`` field and in the
+        description — instead of leaving the founder with a bare 'backend'.
+        The label itself stays honest (not falsely narrowed)."""
+        g = nx.DiGraph()
+        # 5 files under backend/api + 4 under backend/mcp → label "backend",
+        # but the community clearly spans api + mcp.
+        paths = [f"backend/api/a{i}.py" for i in range(5)] + [
+            f"backend/mcp/m{i}.py" for i in range(4)
+        ]
+        for idx, p in enumerate(paths):
+            g.add_node(
+                f"n{idx}",
+                id=f"n{idx}",
+                kind="module",
+                path=p,
+                name=f"sym{idx}",
+                language="python",
+                community_id=8,
+                pagerank=0.1,
+            )
+        labels = derive_community_labels(g, min_size=3)
+
+        assert 8 in labels
+        lab = labels[8]
+        # Label stays the honest majority prefix.
+        assert lab["label"] == "backend"
+        # Sub-areas surface both co-dominant areas.
+        assert set(lab["subareas"]) == {"backend/api", "backend/mcp"}
+        assert "backend/api" in lab["description"]
+        assert "backend/mcp" in lab["description"]
+
+    def test_uniform_deep_community_has_no_subareas(self) -> None:
+        """A community that lives entirely under one deep directory has no
+        meaningful sub-areas — the ``subareas`` field stays empty rather
+        than echoing the label."""
+        g = _seed_community_graph()  # community 0 all under backend/api/v1/oauth
+        labels = derive_community_labels(g, min_size=3)
+        assert labels[0]["subareas"] == []
+
     def test_small_communities_below_min_size_are_dropped(self) -> None:
         g = _seed_community_graph()
         # Drop one node from community 0 so it has only 2 nodes.
