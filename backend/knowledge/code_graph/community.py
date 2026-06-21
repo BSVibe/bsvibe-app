@@ -156,11 +156,16 @@ def _label_for_community(
     lang_counter: Counter[str] = Counter()
     for nid in members:
         attrs = graph.nodes[nid]
+        is_external = attrs.get("kind") == "external"
         path = attrs.get("path") or ""
-        if path and attrs.get("kind") != "external":
+        if path and not is_external:
             paths.append(path)
         name = attrs.get("name") or ""
-        if name:
+        # Skip external import stubs: they carry the highest PageRank
+        # (everything imports BaseModel / typing / …) and would otherwise
+        # dominate every label's symbols, telling the founder nothing about
+        # the community's own code. Same filter the path label already uses.
+        if name and not is_external:
             # Higher PageRank = more central = preferred label symbol. Fall
             # back to a tiny positive constant when PR is missing so the
             # node still participates in the symbol shortlist.

@@ -158,6 +158,42 @@ class TestDeriveCommunityLabels:
         # No common prefix => empty string fallback (handled as "misc")
         assert labels[2]["label"] in {"misc", ""}
 
+    def test_top_symbols_exclude_external_stubs(self) -> None:
+        """External import stubs (BaseModel, typing, …) are the most-central
+        nodes by PageRank because everything imports them. They must NOT
+        dominate a community's ``top_symbols`` — the label should surface the
+        community's own local symbols, mirroring the path filter that already
+        skips ``kind == 'external'``."""
+        g = nx.DiGraph()
+        # A high-PageRank external stub that is a member of the community.
+        g.add_node(
+            "external:BaseModel",
+            id="external:BaseModel",
+            kind="external",
+            name="symbol/BaseModel",
+            path="",
+            community_id=3,
+            pagerank=0.05,  # far higher than the local nodes
+        )
+        for idx, (name, pr) in enumerate([("ConnectorResolver", 0.002), ("dispatch", 0.001)]):
+            g.add_node(
+                f"local{idx}",
+                id=f"local{idx}",
+                kind="class" if idx == 0 else "module",
+                name=name,
+                path=f"backend/dispatch/m{idx}.py",
+                language="python",
+                community_id=3,
+                pagerank=pr,
+            )
+        labels = derive_community_labels(g, min_size=3)
+
+        assert 3 in labels
+        top = labels[3]["top_symbols"]
+        assert "symbol/BaseModel" not in top
+        # The local symbols survive, ranked by their own centrality.
+        assert top[0] == "ConnectorResolver"
+
     def test_dominant_prefix_survives_a_few_outliers(self) -> None:
         """A community where the vast majority of files share a top-level
         directory must label by that dominant prefix — NOT collapse to

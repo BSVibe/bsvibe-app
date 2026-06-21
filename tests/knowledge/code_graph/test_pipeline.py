@@ -126,6 +126,33 @@ class TestPersistGraph:
         assert body["nodes"]
         assert isinstance(body["edges"], list)
 
+    def test_pipeline_annotates_pagerank_that_survives_persistence(self, tmp_path: Path) -> None:
+        """The graph the pipeline returns (and persists) must carry a
+        ``pagerank`` on every node, so the MCP graph_search ranking and
+        the E25 community top_symbols are grounded in real centrality
+        instead of collapsing to 0.0 / node order (the live-graph bug)."""
+        from backend.knowledge.code_graph.graph import load_graph
+
+        repo = _seed_repo(tmp_path)
+        result = build_code_graph_artifacts(repo)
+
+        # Every node carries a positive pagerank straight out of the pipeline.
+        assert result.graph.number_of_nodes() > 0
+        for nid in result.graph.nodes:
+            assert result.graph.nodes[nid].get("pagerank", 0.0) > 0.0
+
+        # And it round-trips through persistence into graph.json.
+        out = tmp_path / "vault" / "code_graph" / "graph.json"
+        persist_graph(result.graph, out)
+        reloaded = load_graph(out)
+        assert all(reloaded.nodes[n].get("pagerank", 0.0) > 0.0 for n in reloaded.nodes)
+        # Centrality is not uniform: util() is called from two sites, so it
+        # outranks a leaf like caller().
+        util = "python:src/foo.py::util"
+        caller = "python:src/foo.py::caller"
+        if util in reloaded.nodes and caller in reloaded.nodes:
+            assert reloaded.nodes[util]["pagerank"] > reloaded.nodes[caller]["pagerank"]
+
 
 if __name__ == "__main__":  # pragma: no cover
     pytest.main([__file__, "-v"])
