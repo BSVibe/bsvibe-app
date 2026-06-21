@@ -13,6 +13,7 @@ from pathlib import Path
 import pytest
 
 from backend.knowledge.code_graph.graph import (
+    annotate_pagerank,
     build_graph,
     load_graph,
     save_graph,
@@ -68,6 +69,34 @@ class TestPageRank:
         helper_idx = ids.index("python:a.py::helper")
         caller_idx = ids.index("python:a.py::caller")
         assert helper_idx < caller_idx
+
+
+class TestAnnotatePageRank:
+    """The MCP graph_search ranking and the E25 community top_symbols both
+    read ``node["pagerank"]``. If the pipeline never annotates it, every
+    node scores 0.0 and ranking degrades to node-iteration order — which
+    is exactly what surfaced on the live graph (all pr=0.0)."""
+
+    def test_every_node_gets_a_pagerank_attr(self) -> None:
+        nodes, edges = _py(
+            "a.py",
+            b"def helper():\n    pass\n\ndef caller():\n    helper()\n",
+        )
+        g = build_graph(nodes, edges)
+        # Pre-condition: build_graph alone does NOT annotate pagerank.
+        assert all("pagerank" not in g.nodes[n] for n in g.nodes)
+
+        scores = annotate_pagerank(g)
+
+        for nid in g.nodes:
+            assert "pagerank" in g.nodes[nid]
+            assert g.nodes[nid]["pagerank"] > 0.0
+        # Returned dict mirrors the annotation.
+        assert scores["python:a.py::helper"] == g.nodes["python:a.py::helper"]["pagerank"]
+
+    def test_empty_graph_is_a_noop(self) -> None:
+        g = build_graph([], [])
+        assert annotate_pagerank(g) == {}
 
 
 class TestSaveLoadGraph:

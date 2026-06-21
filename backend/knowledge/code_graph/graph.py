@@ -75,28 +75,44 @@ def build_graph(nodes: Iterable[CodeNode], edges: Iterable[CodeEdge]) -> nx.DiGr
     return g
 
 
-def top_nodes_by_pagerank(graph: nx.DiGraph, *, limit: int) -> list[tuple[str, float]]:
-    """Return the top-``limit`` (node_id, pagerank) tuples, highest first.
+def annotate_pagerank(graph: nx.DiGraph) -> dict[str, float]:
+    """Compute PageRank centrality and write it onto every node in place.
 
     Edge direction matters — calls / inherits flow toward the
     "more-referenced" definition, so PageRank on the directed graph is
-    the right Aider-style centrality. We also annotate the graph in
-    place so callers that want every node's score can read it from
-    ``graph.nodes[id]["pagerank"]``.
+    the right Aider-style centrality. After this call every node carries
+    ``graph.nodes[id]["pagerank"]``, which the MCP ``graph_search``
+    ranking and the E25 community ``top_symbols`` both read. Skipping it
+    leaves every node at 0.0 and collapses ranking to node-iteration
+    order.
 
-    An empty graph returns ``[]``; a graph with no edges falls back to
+    An empty graph returns ``{}``; a graph with no edges falls back to
     the uniform PageRank (everyone is the same score).
     """
     if graph.number_of_nodes() == 0:
-        return []
+        return {}
     try:
-        scores = nx.pagerank(graph)
+        # networkx is untyped, so pin the result to our contract explicitly.
+        scores: dict[str, float] = {
+            str(nid): float(score) for nid, score in nx.pagerank(graph).items()
+        }
     except nx.NetworkXError:
         # Defensive — undirected NetworkX edge cases. Fall back to
-        # uniform centrality so the loop still produces a sane order.
-        scores = {n: 1.0 / graph.number_of_nodes() for n in graph.nodes}
+        # uniform centrality so callers still get a sane order.
+        scores = {str(n): 1.0 / graph.number_of_nodes() for n in graph.nodes}
     for nid, score in scores.items():
         graph.nodes[nid]["pagerank"] = score
+    return scores
+
+
+def top_nodes_by_pagerank(graph: nx.DiGraph, *, limit: int) -> list[tuple[str, float]]:
+    """Return the top-``limit`` (node_id, pagerank) tuples, highest first.
+
+    Annotates the graph in place (see :func:`annotate_pagerank`) so
+    callers that want every node's score can read it from
+    ``graph.nodes[id]["pagerank"]``.
+    """
+    scores = annotate_pagerank(graph)
     ranked = sorted(scores.items(), key=lambda kv: -kv[1])
     return ranked[:limit]
 
@@ -146,6 +162,7 @@ def load_graph(path: Path) -> nx.DiGraph:
 
 
 __all__ = [
+    "annotate_pagerank",
     "build_graph",
     "load_graph",
     "save_graph",

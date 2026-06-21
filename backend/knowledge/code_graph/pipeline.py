@@ -42,7 +42,7 @@ import networkx as nx
 import structlog
 
 from backend.knowledge.code_graph.community import annotate_communities
-from backend.knowledge.code_graph.graph import build_graph, save_graph
+from backend.knowledge.code_graph.graph import annotate_pagerank, build_graph, save_graph
 from backend.knowledge.code_graph.parser import detect_language, parse_source
 from backend.knowledge.code_graph.types import NodeKind
 
@@ -157,6 +157,10 @@ def build_code_graph_artifacts(repo_root: Path) -> CodeGraphResult:
 
     graph = build_graph(all_nodes, all_edges)
     annotate_communities(graph)
+    # Persist centrality onto every node so the saved graph.json powers
+    # MCP graph_search ranking + E25 community top_symbols. Without this
+    # every node lands at pagerank 0.0 and ranking degrades to node order.
+    annotate_pagerank(graph)
 
     community_chunks = _render_community_chunks(graph)
     doc_artifacts = _render_doc_artifacts(markdown_files)
@@ -198,11 +202,10 @@ def _render_community_chunks(graph: nx.DiGraph) -> list[dict[str, Any]]:
     if graph.number_of_nodes() == 0:
         return []
 
-    # Compute PageRank once; cache on nodes.
-    try:
-        scores = nx.pagerank(graph)
-    except nx.NetworkXError:
-        scores = {n: 1.0 / graph.number_of_nodes() for n in graph.nodes}
+    # PageRank is already annotated onto every node by the pipeline
+    # (annotate_pagerank). Read the cached scores here so chunk ordering
+    # matches what graph_search and the labels will surface.
+    scores = {n: float(graph.nodes[n].get("pagerank", 0.0)) for n in graph.nodes}
 
     # Group node ids by community.
     communities: dict[int, list[str]] = {}
