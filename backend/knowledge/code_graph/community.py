@@ -34,6 +34,16 @@ logger = structlog.get_logger(__name__)
 #: community ids, which is fine on a fresh bootstrap.
 _LEIDEN_SEED = 42
 
+#: Minimum fraction of a community's files that must share a directory
+#: prefix for it to be used as the label. Strict full consensus (every
+#: file shares the prefix) collapsed real communities to "misc" the
+#: moment a single outlier file appeared — e.g. a 223-file community
+#: that was 91% ``backend/`` got labelled "misc" because of two
+#: ``plugin/``/``bsvibe_sdk/`` strays. A 60% majority keeps the label
+#: honest ("backend") without letting a thin plurality mislabel a truly
+#: scattered community.
+_DOMINANT_FRACTION = 0.6
+
 
 def detect_communities(graph: nx.DiGraph) -> dict[str, int]:
     """Run Leiden on the undirected projection of ``graph``.
@@ -187,32 +197,40 @@ def _label_for_community(
 
 
 def _common_path_label(paths: list[str]) -> str:
-    """Pick the deepest shared directory prefix across ``paths``.
+    """Pick the deepest directory prefix shared by a *majority* of ``paths``.
 
     Uses POSIX-style separators so worktrees on macOS + Linux + CI agree.
-    No shared prefix beyond the root → empty string (the caller renders
-    this as ``misc`` to keep the surface clean).
+    We label by directory components only — never a filename — and walk
+    one level deeper as long as a single prefix still covers at least
+    :data:`_DOMINANT_FRACTION` of the files. The previous strict
+    full-consensus rule collapsed to an empty label (rendered "misc") the
+    moment one outlier file diverged; a majority prefix keeps the label
+    grounded ("backend") while still returning "" for a genuinely
+    scattered community where no prefix reaches the threshold.
     """
     cleaned = [p.replace("\\", "/").strip("/") for p in paths if p]
     if not cleaned:
         return ""
-    if len(cleaned) == 1:
-        # A single-path community labels by its parent directory.
-        parent = os.path.dirname(cleaned[0])
-        return parent or cleaned[0]
-    split = [p.split("/") for p in cleaned]
-    shared: list[str] = []
-    for parts in zip(*split, strict=False):
-        first = parts[0]
-        if any(p != first for p in parts):
+    # Directory components only; a file with no parent contributes none.
+    dir_parts: list[list[str]] = []
+    for p in cleaned:
+        parent = os.path.dirname(p)
+        dir_parts.append(parent.split("/") if parent else [])
+
+    total = len(dir_parts)
+    best = ""
+    depth = 1
+    while True:
+        prefixes = ["/".join(parts[:depth]) for parts in dir_parts if len(parts) >= depth]
+        if not prefixes:
             break
-        shared.append(first)
-    # If the shared prefix already exhausts the shortest path, drop the file
-    # component so we land on a directory.
-    label = "/".join(shared)
-    if any(label == p for p in cleaned):
-        label = os.path.dirname(label)
-    return label
+        top, count = Counter(prefixes).most_common(1)[0]
+        if count / total >= _DOMINANT_FRACTION:
+            best = top
+            depth += 1
+        else:
+            break
+    return best
 
 
 __all__ = [

@@ -158,6 +158,43 @@ class TestDeriveCommunityLabels:
         # No common prefix => empty string fallback (handled as "misc")
         assert labels[2]["label"] in {"misc", ""}
 
+    def test_dominant_prefix_survives_a_few_outliers(self) -> None:
+        """A community where the vast majority of files share a top-level
+        directory must label by that dominant prefix — NOT collapse to
+        'misc' just because a couple of outlier files break a strict
+        full-consensus prefix. Mirrors the real prod community-9 shape
+        (91% backend, a few plugin/sdk outliers) that surfaced as 'misc'."""
+        g = nx.DiGraph()
+        # 8 files under backend/** (no single shared subdir) ...
+        backend_paths = [
+            "backend/data/migrations/m1.py",
+            "backend/data/migrations/m2.py",
+            "backend/knowledge/graph/store.py",
+            "backend/knowledge/retrieval/r.py",
+            "backend/workflow/application/run.py",
+            "backend/router/dispatch.py",
+            "backend/connectors/auth/oauth.py",
+            "backend/executors/worker/loop.py",
+        ]
+        # ... plus 2 outliers under entirely different top dirs.
+        outlier_paths = ["plugin/obsidian/sync.py", "bsvibe_sdk/client.py"]
+        for idx, p in enumerate(backend_paths + outlier_paths):
+            g.add_node(
+                f"n{idx}",
+                id=f"n{idx}",
+                kind="module",
+                path=p,
+                name=f"sym{idx}",
+                language="python",
+                community_id=7,
+                pagerank=0.1,
+            )
+        labels = derive_community_labels(g, min_size=3)
+
+        assert 7 in labels
+        # 8/10 = 80% share 'backend' => dominant prefix label, not 'misc'.
+        assert labels[7]["label"] == "backend"
+
 
 if __name__ == "__main__":  # pragma: no cover
     pytest.main([__file__, "-v"])
