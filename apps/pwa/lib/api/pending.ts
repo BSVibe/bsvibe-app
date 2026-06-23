@@ -24,8 +24,22 @@
 import { listCheckpoints } from "./checkpoints";
 import { ApiError } from "./client";
 import { listPendingProposals } from "./decisions";
+import { listDeliverables } from "./deliverables";
+import { listProducts } from "./products";
+import { type ReviewLookup, buildReviewLookup } from "./review-context";
+import { listRuns } from "./runs";
 import { listSafeModeQueue } from "./safemode";
-import type { Checkpoint, PendingDecision, Proposal, SafeModeItem } from "./types";
+import type {
+  Checkpoint,
+  Deliverable,
+  PendingDecision,
+  Product,
+  Proposal,
+  Run,
+  SafeModeItem,
+} from "./types";
+
+const _RUN_WINDOW = 50;
 
 /** Swallow a per-surface ApiError / network blip into an empty list so one
  *  failing queue does not blank the whole Decisions surface. */
@@ -40,9 +54,13 @@ export function toPendingDecisions(
   deliveries: SafeModeItem[],
   checkpoints: Checkpoint[],
   proposals: Proposal[],
+  lookup?: ReviewLookup,
 ): PendingDecision[] {
   const items: PendingDecision[] = [];
   for (const d of deliveries) {
+    // Join the run/deliverable so the row says WHAT is being shipped and links
+    // to its proof, instead of a blind generic "a delivery is held".
+    const ctx = lookup?.forDelivery(d.deliverable_id, d.run_id ?? null);
     items.push({
       kind: "delivery",
       id: `delivery-${d.id}`,
@@ -50,15 +68,24 @@ export function toPendingDecisions(
       // B12a — thread the run_id so the Decisions surface can group
       // delivery rows by run and offer a per-run "Approve all" shortcut.
       runId: d.run_id ?? null,
+      deliverableId: d.deliverable_id,
+      title: ctx?.title ?? null,
+      productSlug: ctx?.productSlug,
+      detailHref: ctx?.detailHref ?? null,
       createdAt: d.created_at,
     });
   }
   for (const c of checkpoints) {
+    const ctx = lookup?.forRun(c.run_id);
     items.push({
       kind: "decision",
       id: `checkpoint-${c.id}`,
       checkpointId: c.id,
       question: c.question,
+      runId: c.run_id,
+      title: ctx?.title ?? null,
+      productSlug: ctx?.productSlug,
+      detailHref: ctx?.detailHref ?? null,
       // L-D1 — LLM-suggested options. Null/empty falls back to free-text;
       // CheckpointRow always renders an "Other" radio so the founder isn't
       // locked into the suggested set.
@@ -89,10 +116,16 @@ export function toPendingDecisions(
  *  single optional queue failing degrades to empty rather than blanking the
  *  surface. */
 export async function listPendingDecisions(): Promise<PendingDecision[]> {
-  const [deliveries, checkpoints, proposals] = await Promise.all([
+  const [deliveries, checkpoints, proposals, runs, deliverables, products] = await Promise.all([
     listSafeModeQueue().catch(emptyOnApiError<SafeModeItem>),
     listCheckpoints().catch(emptyOnApiError<Checkpoint>),
     listPendingProposals().catch(emptyOnApiError<Proposal>),
+    // The review-context join — same three reads the Brief already does. Each
+    // degrades to empty so a blip just falls back to the bare question.
+    listRuns(_RUN_WINDOW).catch(emptyOnApiError<Run>),
+    listDeliverables(_RUN_WINDOW).catch(emptyOnApiError<Deliverable>),
+    listProducts().catch(emptyOnApiError<Product>),
   ]);
-  return toPendingDecisions(deliveries, checkpoints, proposals);
+  const lookup = buildReviewLookup(runs, deliverables, products);
+  return toPendingDecisions(deliveries, checkpoints, proposals, lookup);
 }

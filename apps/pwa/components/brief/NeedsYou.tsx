@@ -3,6 +3,7 @@
 import { approveSafeModeItem, denySafeModeItem } from "@/lib/api/safemode";
 import type { NeedsYouItem } from "@/lib/api/types";
 import { useTranslations } from "next-intl";
+import Link from "next/link";
 import { useState } from "react";
 
 /**
@@ -87,7 +88,15 @@ function NeedsYouRow({ item, onResolved }: { item: NeedsYouItem; onResolved?: ()
       <span className="needs-you__sep" aria-hidden="true">
         ·
       </span>
-      <span className="needs-you__q">{item.question}</span>
+      {/* Lead with the task title so the approve decision is informed; the
+          generic "a delivery is held" question is the fallback. */}
+      {item.detailHref ? (
+        <Link className="needs-you__q needs-you__q--link" href={item.detailHref}>
+          {item.title || item.question}
+        </Link>
+      ) : (
+        <span className="needs-you__q">{item.title || item.question}</span>
+      )}
 
       {item.resolve && !resolved ? (
         <span className="needs-you__actions">
