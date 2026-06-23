@@ -35,6 +35,7 @@ from backend.workflow.application.audit_events import (
     VerifyRun,
 )
 from backend.workflow.infrastructure.sandbox import NoopSandboxManager
+from plugin.audit import register_audit_subscriber
 from plugin.audit.models import AuditOutboxRecord
 
 from .._support import memory_session
@@ -46,6 +47,19 @@ from .test_run_orchestrator import (
 )
 
 pytestmark = pytest.mark.asyncio
+
+
+@pytest.fixture(autouse=True)
+def _wire_audit_subscriber() -> None:
+    """These tests assert audit events land in the ``audit_outbox``. That write
+    is done by the ``AuditEventSubscriber``, which production wires onto the
+    in-process EventBus ONCE per process at app/worker startup
+    (``register_audit_subscriber``) — NOT on import. Run in isolation, no
+    earlier test has wired it, so the emits fan out to a bus with no audit
+    subscriber and nothing persists (green only when some other suite happened
+    to start the runtime first). Wire it here so the assertion holds regardless
+    of test order. Idempotent — a second call is a no-op."""
+    register_audit_subscriber()
 
 
 def _event_types(rows: list[AuditOutboxRecord]) -> list[str]:
