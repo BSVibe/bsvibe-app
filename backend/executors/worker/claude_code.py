@@ -43,6 +43,12 @@ logger = structlog.get_logger(__name__)
 # Without a raised limit ``readline()`` raises ``LimitOverrunError`` mid-run.
 _STREAM_LIMIT = 16 * 1024 * 1024
 
+#: Headless permission settings for the confined run (see ``_build_cmd``). Auto-
+#: allow Bash so the verify step (uv/pytest) runs without prompts; file edits are
+#: handled by ``--permission-mode acceptEdits`` and stay confined to the cwd
+#: (the per-task workspace) because the blanket bypass is no longer set.
+_CONFINED_SETTINGS = json.dumps({"permissions": {"allow": ["Bash"]}})
+
 
 class ClaudeCodeExecutor:
     """Stream from ``claude --print --output-format stream-json``."""
@@ -125,10 +131,22 @@ class ClaudeCodeExecutor:
             return
 
     def _build_cmd(self, system: str, model: str | None) -> list[str]:
+        # The executor inherits the host operator's harness (CLAUDE.md / skills /
+        # memory) by design — but the agent's native file writes must stay inside
+        # the per-task workspace. ``--dangerously-skip-permissions`` disabled ALL
+        # guards including the working-directory confinement, so an agent that
+        # learned the host source-repo path from the inherited memory wrote into
+        # that repo (dogfood leak). Instead: ``--permission-mode acceptEdits``
+        # auto-applies edits headlessly but ONLY inside an allowed dir (the cwd =
+        # the per-task clone), and the settings allow Bash so the verify step
+        # (uv/pytest) still runs without re-opening writes outside the workspace.
         cmd_args = [
             self._cmd,
             "--print",
-            "--dangerously-skip-permissions",
+            "--permission-mode",
+            "acceptEdits",
+            "--settings",
+            _CONFINED_SETTINGS,
             "--output-format",
             "stream-json",
             "--verbose",

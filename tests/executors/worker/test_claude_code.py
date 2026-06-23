@@ -153,6 +153,34 @@ async def test_command_includes_print_and_stream_json(monkeypatch: pytest.Monkey
     assert "sonnet" in argv
 
 
+async def test_writes_are_confined_to_the_workspace(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The executor inherits the host operator's harness (CLAUDE.md / skills /
+    memory) BY DESIGN, but the agent's native file writes must NOT escape the
+    per-task workspace. ``--dangerously-skip-permissions`` disabled ALL guards
+    including the working-directory confinement, so the agent — which learns the
+    host source-repo path from the inherited memory — wrote into the host repo
+    (dogfood leak). The fix: drop the bypass and confine writes to the cwd via
+    ``--permission-mode acceptEdits`` (edits auto-apply, but only inside an
+    allowed dir = the cwd) while still auto-allowing Bash for the verify step.
+    """
+    proc = _FakeProcess(stdout_lines=[_assistant_line("x")])
+    calls = _patch_subprocess(monkeypatch, proc)
+
+    await _drain(ClaudeCodeExecutor().execute("p", {}))
+
+    argv = calls[0]
+    # The blanket bypass is gone — it was what let writes escape the workspace.
+    assert "--dangerously-skip-permissions" not in argv
+    # Edits auto-apply headlessly but stay confined to the working directory.
+    assert "--permission-mode" in argv
+    assert "acceptEdits" in argv
+    # Bash is auto-allowed (the verify step runs uv/pytest) without re-opening
+    # file writes outside the workspace.
+    settings_idx = argv.index("--settings")
+    settings_blob = argv[settings_idx + 1]
+    assert "Bash" in settings_blob
+
+
 # ── Failure paths ────────────────────────────────────────────────────────────
 
 
