@@ -215,9 +215,10 @@ async def verify_and_finish(
         run,
         attempt_id=attempt.id,
         artifact_refs=artifact_refs,
-        # Title by the founder intent, not the executor's raw narration — the
-        # summary's first line becomes the PR title + settle note title.
-        summary=_compose_verified_summary(run, output),
+        # Title by the founder intent + body by the changed files, not the
+        # executor's raw narration — the summary's first line becomes the PR
+        # title + settle note title.
+        summary=_compose_verified_summary(run, output, artifact_refs),
     )
     logger.info(
         "executor_orchestrator_verified",

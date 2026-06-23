@@ -209,14 +209,15 @@ async def test_verified_run_does_file_work_and_passes_command_check(tmp_path: Pa
 # --------------------------------------------------------------------------
 
 
-async def test_verified_summary_titled_by_intent_not_agent_narration() -> None:
+async def test_verified_summary_titled_by_intent_bodied_by_changed_files() -> None:
     """The deliverable summary's FIRST line becomes the PR title (via
     ``_split_summary``) and the settle note's title. A coding-agent executor's
-    ``--print`` output is raw narration ("Let me check the existing backend
-    structure first…") + a ``<verification-contract>`` block — using it
-    verbatim produced garbage PR titles and noise settle notes (live dogfood,
-    PR #374). The fix: title the summary from the founder intent, keep the
-    agent's prose as body detail, and strip the contract block.
+    ``--print`` output is raw first-person streaming narration ("Let me check…
+    Now I'll… Phase 1 (RED)…") with chunk-join whitespace artifacts — slop in a
+    user-facing deliverable summary / PR body (live dogfood F4). The fix: title
+    from the founder intent, body from the DETERMINISTIC list of changed files,
+    and never dump the agent's raw prose into the summary (it stays in the
+    ``llm_turn`` activity for debugging).
     """
     from types import SimpleNamespace
 
@@ -227,21 +228,42 @@ async def test_verified_summary_titled_by_intent_not_agent_narration() -> None:
     )
     agent_output = (
         "Let me check the existing backend structure first.\n"
-        "Now I have enough context. 3 files created and all tests pass.\n"
+        "Now I'll follow TDD.Phase 1 (RED).All 3 tests pass.\n"
         "<verification-contract>\n"
         '{"checks": [{"kind": "command", "command": "uv run pytest -q"}]}\n'
         "</verification-contract>"
     )
-    summary = _compose_verified_summary(run, agent_output)  # type: ignore[arg-type]
+    written_paths = ["backend/cache.py", "tests/test_cache.py"]
+    summary = _compose_verified_summary(run, agent_output, written_paths)  # type: ignore[arg-type]
 
     title = summary.splitlines()[0].strip()
     assert title == "Add a TTL cache utility to the backend."
-    assert "Let me check the existing backend structure" not in title
-    # The agent's substantive prose is kept as body detail …
-    assert "3 files created and all tests pass" in summary
-    # … but the verification-contract block is stripped (it's machine noise).
+    # Body lists what actually changed — deterministic, no slop.
+    assert "backend/cache.py" in summary
+    assert "tests/test_cache.py" in summary
+    # The agent's first-person narration is NOT dumped into the summary.
+    assert "Let me check the existing backend structure" not in summary
+    assert "Now I'll follow TDD" not in summary
+    assert "Phase 1 (RED)" not in summary
+    # The verification-contract block never leaks either.
     assert "<verification-contract>" not in summary
     assert "uv run pytest" not in summary
+
+
+async def test_compose_verified_summary_falls_back_to_cleaned_prose_without_paths() -> None:
+    """When no changed-file list is available (rare — a non-file deliverable),
+    fall back to the agent prose, but strip the contract block and repair the
+    streaming chunk-join whitespace artifacts ("done.Next" → "done. Next")."""
+    from types import SimpleNamespace
+
+    from backend.workflow.application.run_persistence import _compose_verified_summary
+
+    run = SimpleNamespace(payload={"intent_text": "Investigate the flake."})
+    summary = _compose_verified_summary(run, "Found the cause.Fixed the race.", None)  # type: ignore[arg-type]
+    assert summary.splitlines()[0].strip() == "Investigate the flake."
+    # whitespace-join artifact repaired:
+    assert "Found the cause. Fixed the race." in summary
+    assert "cause.Fixed" not in summary
 
 
 async def test_compose_verified_summary_falls_back_when_no_intent() -> None:
@@ -250,10 +272,10 @@ async def test_compose_verified_summary_falls_back_when_no_intent() -> None:
     from backend.workflow.application.run_persistence import _compose_verified_summary
 
     run = SimpleNamespace(payload={})
-    summary = _compose_verified_summary(run, "did the thing")  # type: ignore[arg-type]
-    # No intent → still a non-empty, clean title + the agent body.
-    assert summary.splitlines()[0].strip()
-    assert "did the thing" in summary
+    summary = _compose_verified_summary(run, "did the thing", ["a.py"])  # type: ignore[arg-type]
+    # No intent → still a non-empty, clean fallback title + the changed file.
+    assert summary.splitlines()[0].strip() == "Delivered change"
+    assert "a.py" in summary
 
 
 async def test_executor_artifact_refs_flow_into_deliverable(tmp_path: Path) -> None:

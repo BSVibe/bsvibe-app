@@ -307,8 +307,10 @@ async def test_verified_run_delivers_as_github_pr(
     body = pr_route.calls.last.request.content.decode()
     assert f'"head": "{branch}"' in body or f'"head":"{branch}"' in body
     assert '"base": "main"' in body or '"base":"main"' in body
-    assert "Add the feature" in body
-    assert "Implements the requested feature" in body
+    # PR title/body = intent title + the deterministic changed-file list (F4),
+    # NOT the work LLM's raw narration.
+    assert "add the feature" in body.lower()
+    assert "feature.txt" in body
     # Token came from the decrypted connector secret.
     assert pr_route.calls.last.request.headers["authorization"] == "Bearer ghp_test_token"
 

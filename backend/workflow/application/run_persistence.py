@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import re
 import uuid
+from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any
 
 import structlog
@@ -54,25 +55,41 @@ _CONTRACT_BLOCK_RE = re.compile(
 #: Cap the title line (first line of the summary → PR title / settle note
 #: title) so a single-line intent doesn't produce a 512-char title.
 _MAX_SUMMARY_TITLE = 120
+#: Repairs streaming chunk-join whitespace artifacts ("done.Next" → "done. Next")
+#: in the fallback prose — the coding-agent ``--print`` output concatenates
+#: streamed chunks without the inter-sentence space.
+_CHUNK_JOIN_RE = re.compile(r"([.!?:])([A-Z])")
 
 
-def _compose_verified_summary(run: ExecutionRun, final_text: str) -> str:
-    """Build the verified deliverable's summary — titled by the founder INTENT.
+def _compose_verified_summary(
+    run: ExecutionRun, final_text: str, written_paths: Sequence[str] | None = None
+) -> str:
+    """Build the verified deliverable's summary — titled by the founder INTENT,
+    bodied by the DETERMINISTIC list of changed files.
 
     The summary's first line becomes the PR title (via ``_split_summary``) and
-    the settle note's title. The work LLM's ``final_text`` is raw streaming
-    narration ("Let me check the existing backend structure first…") plus the
-    E30 contract block — using it verbatim produced garbage PR titles and noise
-    settle notes (live dogfood, PR #374). Instead lead with the founder intent
-    (a clean, deterministic description of what was asked == what shipped for a
-    verified run), keep the agent's prose as body detail, and strip the
-    contract block. Falls back to a stable title when the run carries no intent.
+    the settle note's title. The work LLM's ``final_text`` is raw first-person
+    streaming narration ("I'll invoke /feature-workflow… Now the
+    implementation… Phase 1 (RED)…") with chunk-join whitespace artifacts plus
+    the E30 contract block — slop in a user-facing deliverable summary / PR body
+    (live dogfood F4; earlier garbage PR titles, PR #374). So lead with the
+    founder intent (what was asked == what shipped for a verified run) and list
+    what actually changed; the agent's prose stays in the ``llm_turn`` activity
+    for debugging. ``final_text`` is only a FALLBACK body (contract-stripped,
+    whitespace-repaired) when no changed-file list is available — e.g. a
+    non-file deliverable. Falls back to a stable title when there is no intent.
     """
     payload = run.payload or {}
     intent = str(payload.get("intent_text") or payload.get("text") or "").strip()
     first_line = next((ln.strip() for ln in intent.splitlines() if ln.strip()), "")
     title = first_line[:_MAX_SUMMARY_TITLE].rstrip() or "Delivered change"
-    body = _CONTRACT_BLOCK_RE.sub("", final_text or "").strip()
+
+    files = [p.strip() for p in (written_paths or []) if p and p.strip()]
+    if files:
+        body = "Changed files:\n" + "\n".join(f"- {p}" for p in files)
+    else:
+        stripped = _CONTRACT_BLOCK_RE.sub("", final_text or "").strip()
+        body = _CHUNK_JOIN_RE.sub(r"\1 \2", stripped)
     return f"{title}\n\n{body}" if body else title
 
 
@@ -194,9 +211,10 @@ async def finish_verified(
         run,
         attempt_id=attempt.id,
         artifact_refs=written_paths,
-        # Title the summary by the founder intent, not the work LLM's raw
-        # narration — the first line becomes the PR title + settle note title.
-        summary=_compose_verified_summary(run, final_text),
+        # Title the summary by the founder intent + body by the changed files,
+        # not the work LLM's raw narration — the first line becomes the PR
+        # title + settle note title.
+        summary=_compose_verified_summary(run, final_text, written_paths),
     )
 
     # Wake the delivery + settle consumers (worker_mode="redis_streams"
