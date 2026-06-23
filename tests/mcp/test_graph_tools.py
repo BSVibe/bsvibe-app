@@ -294,6 +294,76 @@ async def test_search_filters_by_kind(db, workspace_id, user_id, registry, seede
     assert all(r["kind"] == "function" for r in out["results"])
 
 
+@pytest_asyncio.fixture
+async def graph_with_external(db, workspace_id) -> AsyncIterator[Path]:
+    """A graph where an external import stub (BaseModel) shares the query
+    substring with an internal node — for the F8 external-exclusion check."""
+    async with db() as s:
+        ws = WorkspaceRow(id=workspace_id, name="ws", region="us-1")
+        s.add(ws)
+        await s.commit()
+    settings = get_settings()
+    vault = Path(settings.knowledge_vault_root) / "us-1" / str(workspace_id)
+    vault.mkdir(parents=True, exist_ok=True)
+    graph: nx.DiGraph = nx.DiGraph()
+    graph.add_node(
+        "py:m.py::data_model",
+        id="py:m.py::data_model",
+        kind="function",
+        name="data_model",
+        path="m.py",
+        start_line=1,
+        end_line=5,
+        language="python",
+        community_id=0,
+    )
+    graph.add_node(
+        "external:pydantic.BaseModel",
+        id="external:pydantic.BaseModel",
+        kind="external",
+        name="BaseModel",
+        path="",
+        language="python",
+    )
+    graph.add_edge("py:m.py::data_model", "external:pydantic.BaseModel", kind="imports")
+    save_graph(graph, vault / "code_graph" / "graph.json")
+    yield vault
+
+
+async def test_search_excludes_external_import_stubs(
+    db, workspace_id, user_id, registry, graph_with_external
+) -> None:
+    """F8 — graph_search ranks by PageRank and external stubs sink the most
+    rank; a plain search must return the codebase's own nodes, not framework
+    import stubs that merely match the substring."""
+    async with db() as s:
+        ctx = ToolContext(
+            principal=_principal(workspace_id=workspace_id, user_id=user_id, scopes=("mcp:read",)),
+            session=s,
+        )
+        out = await registry.call_tool("bsvibe_graph_search", {"query": "model"}, ctx)
+    ids = {r["id"] for r in out["results"]}
+    assert "py:m.py::data_model" in ids
+    assert "external:pydantic.BaseModel" not in ids
+
+
+async def test_search_includes_external_when_kind_requested(
+    db, workspace_id, user_id, registry, graph_with_external
+) -> None:
+    """The exclusion is a sensible default, not a hard block: an explicit
+    ``kind='external'`` query still surfaces the import stubs."""
+    async with db() as s:
+        ctx = ToolContext(
+            principal=_principal(workspace_id=workspace_id, user_id=user_id, scopes=("mcp:read",)),
+            session=s,
+        )
+        out = await registry.call_tool(
+            "bsvibe_graph_search", {"query": "model", "kind": "external"}, ctx
+        )
+    ids = {r["id"] for r in out["results"]}
+    assert "external:pydantic.BaseModel" in ids
+
+
 async def test_no_graph_yet_returns_clean_error(db, workspace_id, user_id, registry) -> None:
     async with db() as s:
         ws = WorkspaceRow(id=workspace_id, name="ws", region="us-1")
