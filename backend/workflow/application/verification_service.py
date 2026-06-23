@@ -251,12 +251,19 @@ class VerificationService:
             and bool(contract.judge_checks)
             and all(chk.rationale == RETRIEVED_KNOWLEDGE_RATIONALE for chk in contract.judge_checks)
         )
-        if criteria:
+        if criteria and judge_advisory:
+            # F6 — the ONLY judge checks are the BSage-retrieved ones and the
+            # agent's command attestation already passed, so the judge cannot
+            # gate (advisory). Running the cheap LLM-judge here adds no signal
+            # and reliably HALLUCINATES against weak single-word criteria
+            # ("Verification"/"Git") + a truncated file view — dogfood F6 saw it
+            # assert "files don't exist" while pytest passed exit-0. Skip the
+            # call; record honestly that it was skipped. The criteria still
+            # surface as Delivery-Report references via the contract.
+            judge_blob = {"advisory": True, "skipped": "advisory_retrieval_only"}
+        elif criteria:
             judge_blob = await self._run_judge(criteria, written_paths, final_text, box)
-            if judge_advisory:
-                judge_blob = {**judge_blob, "advisory": True}
-            else:
-                judge_pass = bool(judge_blob.get("passed"))
+            judge_pass = bool(judge_blob.get("passed"))
 
         passed = all_cmd_pass and judge_pass
         outcome = VerificationOutcome.PASSED if passed else VerificationOutcome.FAILED

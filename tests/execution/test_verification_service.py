@@ -477,13 +477,9 @@ async def test_verify_retriever_added_judge_is_advisory_when_command_passes() ->
                 ),
             )
         )
-        llm = StubLlm(
-            [
-                LoopTurn(
-                    content='{"passed": false, "reasoning": "judge hallucinated"}',
-                )
-            ]
-        )
+        # Empty script: StubLlm raises if a judge call is made — proving the
+        # advisory judge is SKIPPED entirely (F6), not merely demoted.
+        llm = StubLlm([])
         svc = VerificationService(session=session, llm=llm)
         vr = await svc.verify(
             run=run,
@@ -496,12 +492,16 @@ async def test_verify_retriever_added_judge_is_advisory_when_command_passes() ->
         )
         # Outcome PASSES because the agent's command attestation passed.
         assert vr.outcome is VerificationOutcome.PASSED
-        # The judge result is still recorded on the verification_result so
-        # the founder can read the hallucination in the audit trail.
+        # F6 — the cheap LLM-judge is NOT run for an advisory retriever-only
+        # check (it reliably hallucinated "files don't exist" while the command
+        # passed — dogfood). Instead the result honestly records that it was
+        # skipped as advisory; the criteria still surface as Delivery-Report
+        # references via the contract.
         judge_blob = vr.result["judge"]
         assert judge_blob is not None
-        assert judge_blob["passed"] is False
         assert judge_blob.get("advisory") is True
+        assert judge_blob.get("skipped") == "advisory_retrieval_only"
+        assert "passed" not in judge_blob
 
 
 async def test_verify_agent_declared_judge_still_gates_outcome() -> None:
