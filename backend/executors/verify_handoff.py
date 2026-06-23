@@ -121,14 +121,7 @@ async def verify_and_finish(
         # below before ``verify`` runs, and command-only contracts make no
         # judge call (asserted by the VerificationService unit tests).
         judge: JudgeLlm = verify_llm or _UnavailableJudge()
-        from backend.config import get_settings  # noqa: PLC0415 — avoid import cycle
-
-        svc = VerificationService(
-            session=session,
-            llm=judge,
-            retriever=retriever,
-            independent_acceptance=get_settings().independent_acceptance_enabled,
-        )
+        svc = VerificationService(session=session, llm=judge, retriever=retriever)
         contract = await svc.assemble_contract(
             declared_contract=None,
             written_paths=artifact_refs,

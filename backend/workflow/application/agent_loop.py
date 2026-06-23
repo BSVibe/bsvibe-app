@@ -386,14 +386,7 @@ class RunOrchestrator:
         """Build the shared verifier with this run's deps. The native loop and
         the executor orchestrator both go through this SAME service so they
         verify identically (Lift B2a)."""
-        from backend.config import get_settings  # noqa: PLC0415 — avoid import cycle
-
-        return VerificationService(
-            session=self._session,
-            llm=self._llm,
-            retriever=self._retriever,
-            independent_acceptance=get_settings().independent_acceptance_enabled,
-        )
+        return VerificationService(session=self._session, llm=self._llm, retriever=self._retriever)
 
     async def _verify(
         self,

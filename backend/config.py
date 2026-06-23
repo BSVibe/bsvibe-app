@@ -102,18 +102,6 @@ class Settings(BaseSettings):
     sentry_client_id: str = ""
     sentry_client_secret: str = ""
 
-    # L2 verify — a SEPARATE verifier authors an acceptance test from the run's
-    # intent (not the worker's own tests) and runs it in the sandbox, breaking
-    # the self-grading circularity. ON by default: it is a SAFETY NET, so it
-    # protects every run, not only when someone remembers to toggle it. Safe to
-    # leave on because a broken/unusable authored test is discarded (never a
-    # false-fail — see VerificationService) regardless of how weak the verify
-    # model is; only a VALID independent test that genuinely disagrees escalates
-    # to human review. It costs an LLM call + a pytest run per verify. The flag
-    # remains a kill-switch — set BSVIBE_INDEPENDENT_ACCEPTANCE_ENABLED=false to
-    # disable in an emergency without a redeploy.
-    independent_acceptance_enabled: bool = True
-
     # Sandbox settings (backend.workflow.infrastructure.sandbox)
     sandbox_enabled: bool = False
     docker_host: str = ""
