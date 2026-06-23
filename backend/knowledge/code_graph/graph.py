@@ -113,7 +113,18 @@ def top_nodes_by_pagerank(graph: nx.DiGraph, *, limit: int) -> list[tuple[str, f
     ``graph.nodes[id]["pagerank"]``.
     """
     scores = annotate_pagerank(graph)
-    ranked = sorted(scores.items(), key=lambda kv: -kv[1])
+    # F8 — external import stubs (BaseModel, Protocol, …) are referenced by
+    # nearly every module and so carry the HIGHEST raw PageRank, but they are
+    # framework imports, not the codebase's own central code. Exclude them from
+    # the "top central nodes" surface (mirrors the community-label skip).
+    ranked = sorted(
+        (
+            (nid, score)
+            for nid, score in scores.items()
+            if graph.nodes[nid].get("kind") != "external"
+        ),
+        key=lambda kv: -kv[1],
+    )
     return ranked[:limit]
 
 
