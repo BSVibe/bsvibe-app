@@ -5,6 +5,7 @@
  */
 
 import { ConnectorOAuthButton } from "@/components/settings/ConnectorOAuthButton";
+import { ApiError } from "@/lib/api/client";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -45,5 +46,32 @@ describe("ConnectorOAuthButton", () => {
     render(<ConnectorOAuthButton provider="github" connectedLabel="@octocat" />);
     expect(screen.queryByRole("button")).toBeNull();
     expect(screen.getByText(/@octocat/)).toBeTruthy();
+  });
+
+  it("surfaces a clear error when the provider is not configured (404), no redirect", async () => {
+    // F10 — clicking Connect on a connector whose OAuth app is not configured
+    // in prod 404s; the failure must be visible, not a silent no-op.
+    mockedStart.mockRejectedValue(new ApiError(404, "unknown or unregistered provider: slack"));
+    const onRedirect = vi.fn();
+    render(<ConnectorOAuthButton provider="slack" onRedirect={onRedirect} />);
+
+    fireEvent.click(screen.getByRole("button"));
+
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toMatch(/slack/i);
+    expect(alert.textContent).toMatch(/not available|isn.t available|not configured/i);
+    expect(onRedirect).not.toHaveBeenCalled();
+  });
+
+  it("surfaces a generic retry error on a non-404 failure, no redirect", async () => {
+    mockedStart.mockRejectedValue(new ApiError(500, "boom"));
+    const onRedirect = vi.fn();
+    render(<ConnectorOAuthButton provider="slack" onRedirect={onRedirect} />);
+
+    fireEvent.click(screen.getByRole("button"));
+
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toMatch(/couldn.t|try again|failed/i);
+    expect(onRedirect).not.toHaveBeenCalled();
   });
 });

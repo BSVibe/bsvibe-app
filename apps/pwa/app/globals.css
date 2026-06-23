@@ -4843,6 +4843,19 @@ main.login {
   gap: 8px;
 }
 
+.connector-form__oauth {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 5px;
+}
+
+.connector-form__oauth-error {
+  margin: 0;
+  font-size: 0.78rem;
+  color: var(--danger, #b42318);
+}
+
 .connector-form__oauth-connected {
   font-size: 0.82rem;
   color: var(--ink-2);
