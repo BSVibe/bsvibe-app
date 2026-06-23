@@ -70,6 +70,28 @@ class TestPageRank:
         caller_idx = ids.index("python:a.py::caller")
         assert helper_idx < caller_idx
 
+    def test_top_nodes_excludes_external_import_stubs(self) -> None:
+        """F8 — every module imports framework symbols (BaseModel, Protocol),
+        so external import stubs carry the HIGHEST raw PageRank. They are not
+        the codebase's own central code, so the 'top central nodes' surface
+        must exclude them (mirrors the community-label skip)."""
+        import networkx as nx
+
+        g: nx.DiGraph = nx.DiGraph()
+        g.add_node("python:a.py::helper", kind="function", name="helper")
+        g.add_node("python:a.py::caller", kind="function", name="caller")
+        g.add_node("external:pydantic.BaseModel", kind="external", name="BaseModel")
+        # Both internal nodes reference the external → it sinks the most rank.
+        g.add_edge("python:a.py::caller", "python:a.py::helper")
+        g.add_edge("python:a.py::caller", "external:pydantic.BaseModel")
+        g.add_edge("python:a.py::helper", "external:pydantic.BaseModel")
+
+        ranked = top_nodes_by_pagerank(g, limit=10)
+        ids = [r[0] for r in ranked]
+        assert "external:pydantic.BaseModel" not in ids
+        assert "python:a.py::helper" in ids
+        assert "python:a.py::caller" in ids
+
 
 class TestAnnotatePageRank:
     """The MCP graph_search ranking and the E25 community top_symbols both

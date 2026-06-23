@@ -8,7 +8,8 @@
  * session store.
  */
 
-import { clearSession, getSession } from "@/lib/auth/session";
+import { clearSession, getSession, setSession } from "@/lib/auth/session";
+import type { SupabaseSession } from "./types";
 
 /**
  * Backend base URL. Prod build: `https://api.bsvibe.dev`. Unset → "" so the
@@ -59,7 +60,53 @@ function handleUnauthorized(path: string): void {
   window.location.assign("/login");
 }
 
-export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise<T> {
+/** Refresh the access token once it is within this window of expiring. */
+const EXPIRY_SKEW_MS = 60_000;
+
+/**
+ * One shared in-flight refresh. Supabase refresh tokens are SINGLE-USE /
+ * rotating — two concurrent refreshes would burn the token and 401 every
+ * subsequent call — so concurrent callers await the SAME promise. Resolves
+ * `true` once a rotated session is persisted, `false` when there is nothing to
+ * refresh or the backend rejected the refresh token.
+ */
+let refreshInFlight: Promise<boolean> | null = null;
+
+function refreshSession(): Promise<boolean> {
+  if (refreshInFlight) return refreshInFlight;
+  const session = getSession();
+  if (!session?.refreshToken) return Promise.resolve(false);
+
+  refreshInFlight = (async () => {
+    try {
+      const res = await fetch(`${base}/api/auth/refresh`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ refresh_token: session.refreshToken }),
+      });
+      if (!res.ok) return false;
+      const next = (await res.json()) as SupabaseSession;
+      const current = getSession();
+      setSession({
+        accessToken: next.access_token,
+        refreshToken: next.refresh_token,
+        email: next.email,
+        userId: next.supabase_user_id,
+        expiresAt: Date.now() + next.expires_in * 1000,
+        personalAccountId: current?.personalAccountId,
+      });
+      return true;
+    } catch {
+      return false;
+    } finally {
+      refreshInFlight = null;
+    }
+  })();
+  return refreshInFlight;
+}
+
+/** Build request headers from the CURRENT session (re-read after any refresh). */
+function authHeaders(init: RequestInit): Headers {
   const session = getSession();
   const headers = new Headers(init.headers);
   if (!headers.has("Content-Type")) {
@@ -74,14 +121,36 @@ export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise
       headers.set("X-BSVibe-Account-Id", session.personalAccountId);
     }
   }
+  return headers;
+}
 
-  const response = await fetch(`${base}${path}`, { ...init, headers });
+export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise<T> {
+  const isAuthPath = path.startsWith("/api/auth/");
+
+  // Proactive — refresh a near-expired token before spending a request on a
+  // guaranteed 401. Never for /api/auth/* (those mint/refresh the session).
+  if (!isAuthPath) {
+    const session = getSession();
+    if (session?.refreshToken && session.expiresAt - Date.now() < EXPIRY_SKEW_MS) {
+      await refreshSession();
+    }
+  }
+
+  let response = await fetch(`${base}${path}`, { ...init, headers: authHeaders(init) });
+
+  // Reactive — a 401 on a non-auth path with a session means the token expired
+  // or was rotated out from under us. Refresh once and retry before logging out.
+  if (response.status === 401 && !isAuthPath && getSession()) {
+    if (await refreshSession()) {
+      response = await fetch(`${base}${path}`, { ...init, headers: authHeaders(init) });
+    }
+  }
 
   if (!response.ok) {
-    // A 401 means the session is expired/invalid: clear it and redirect to
-    // /login once (loop-guarded in handleUnauthorized). Non-401 failures still
-    // just surface their status so callers (e.g. the Brief's calm placeholder
-    // fallback) can decide — we don't logout-cascade on transient blips.
+    // A still-401 means the session is expired/invalid AND a refresh could not
+    // save it: clear and redirect once (loop-guarded in handleUnauthorized).
+    // Non-401 failures just surface their status so callers (e.g. the Brief's
+    // calm placeholder fallback) can decide — no logout-cascade on blips.
     if (response.status === 401) {
       handleUnauthorized(path);
     }

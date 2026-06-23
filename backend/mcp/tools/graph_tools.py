@@ -382,6 +382,11 @@ async def _h_graph_search(args: GraphSearchInput, ctx: ToolContext) -> Any:
         attrs = graph.nodes[nid]
         if args.kind is not None and str(attrs.get("kind", "")) != args.kind:
             continue
+        # F8 — external import stubs sink the most PageRank but are framework
+        # imports, not the codebase's own code. Skip them on an unfiltered
+        # search; an explicit kind="external" still surfaces them above.
+        if args.kind is None and str(attrs.get("kind", "")) == "external":
+            continue
         # Search across name + signature + docstring + path.
         haystack_parts = [
             str(attrs.get("name", "")),
