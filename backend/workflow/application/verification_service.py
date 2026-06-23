@@ -207,17 +207,10 @@ class VerificationService:
         session: AsyncSession,
         llm: JudgeLlm,
         retriever: CanonRetriever | None = None,
-        independent_acceptance: bool = False,
     ) -> None:
         self._session = session
         self._llm = llm
         self._retriever = retriever
-        # L2 — when enabled, a SEPARATE verifier authors an acceptance test from
-        # the INTENT (not the worker's own tests) and runs it in the sandbox,
-        # breaking the self-grading circularity. Off by default: it costs an LLM
-        # call + a pytest run and needs a CAPABLE verify model (a weak model
-        # writes flaky tests → false-fails). Callers flip it on per workspace.
-        self._independent_acceptance = independent_acceptance
 
     async def assemble_contract(
         self,
@@ -348,15 +341,17 @@ class VerificationService:
 
         command_results = await self._run_command_checks(contract, box)
 
-        # L2 — independent acceptance check. A SEPARATE verifier authors a test
-        # from the INTENT (not the worker's tests) and runs it. Its result joins
-        # the command results, so a failure fails verification → the orchestrator
-        # routes to human review, which is exactly when review is worth it (the
-        # independent check disagreed with the worker). Off unless enabled.
-        if self._independent_acceptance:
-            independent = await self._run_independent_acceptance_check(run, written_paths, box)
-            if independent is not None:
-                command_results.append(independent)
+        # L2 — independent acceptance check, ALWAYS run (a safety net is not
+        # optional). A SEPARATE verifier authors a test from the INTENT (not the
+        # worker's tests) and runs it; its result joins the command results, so a
+        # genuine failure fails verification → the orchestrator routes to human
+        # review — exactly when review is worth it (the independent check
+        # disagreed with the worker). A broken/unusable authored test is
+        # discarded inside the check (never a false-fail), so this is safe to run
+        # unconditionally regardless of how weak the verify model is.
+        independent = await self._run_independent_acceptance_check(run, written_paths, box)
+        if independent is not None:
+            command_results.append(independent)
 
         all_cmd_pass = all(r["passed"] for r in command_results)
 
