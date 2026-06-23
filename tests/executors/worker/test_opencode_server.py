@@ -134,6 +134,28 @@ async def test_start_returns_url_after_stdout_line_and_health_ok(
     assert "serve" in argv
 
 
+async def test_daemon_spawns_in_a_neutral_cwd_not_the_host_checkout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Defense-in-depth (executor write isolation). With no explicit ``cwd`` the
+    long-running daemon inherits the worker's launchd WorkingDirectory — the
+    host's OWN source checkout — so an opencode session created WITHOUT an
+    explicit ``directory`` would treat the host repo as its project root and
+    could write into it. Pin the daemon to a neutral temp cwd; per-task code
+    sessions still scope to their workspace via the ``directory`` param."""
+    import tempfile
+
+    proc = _FakeProcess(
+        stdout_lines=[b"opencode server listening on http://127.0.0.1:54321\n"],
+    )
+    spawns = _patch_subprocess(monkeypatch, proc)
+
+    settings = WorkerSettings(opencode_serve_startup_timeout_s=5.0)
+    await opencode_server.start_opencode_serve(settings, http_transport=_ok_health_transport())
+
+    assert spawns[0]["kwargs"].get("cwd") == tempfile.gettempdir()
+
+
 async def test_start_times_out_when_listening_line_never_arrives(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

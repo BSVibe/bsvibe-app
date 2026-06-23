@@ -32,6 +32,7 @@ import asyncio
 import os
 import re
 import shutil
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -179,6 +180,13 @@ async def start_opencode_serve(
 
     process = await asyncio.create_subprocess_exec(
         *argv,
+        # Defense-in-depth (executor write isolation): pin the daemon to a
+        # neutral temp cwd. Without this it inherits the worker's launchd
+        # WorkingDirectory — the host's OWN source checkout — so a session
+        # created without an explicit ``directory`` would treat the host repo as
+        # its project root. Per-task code sessions still scope to their
+        # workspace via the ``directory`` param on ``POST /session``.
+        cwd=tempfile.gettempdir(),
         stdin=asyncio.subprocess.DEVNULL,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
