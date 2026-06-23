@@ -257,6 +257,58 @@ class TestDeriveCommunityLabels:
         assert "backend/api" in lab["description"]
         assert "backend/mcp" in lab["description"]
 
+    def test_shallow_label_with_fragmented_children_still_gets_subareas(self) -> None:
+        """F3 Lift 2 — a community whose majority label is shallow ('backend')
+        but which spreads across MANY child dirs (each below the strict 20%
+        bar) must still name its top child areas. Before, the strict gate left
+        these the worst offenders — a bare 'backend' with empty subareas — even
+        though they are exactly the cross-cutting blobs the founder can't
+        navigate."""
+        g = nx.DiGraph()
+        # 6 child areas under backend/, 3 nodes each (each 16.7% < 20%).
+        children = ["api", "mcp", "executors", "knowledge", "connectors", "identity"]
+        idx = 0
+        for child in children:
+            for f in range(3):
+                g.add_node(
+                    f"n{idx}",
+                    id=f"n{idx}",
+                    kind="module",
+                    path=f"backend/{child}/m{f}.py",
+                    name=f"sym{idx}",
+                    language="python",
+                    community_id=7,
+                    pagerank=0.1,
+                )
+                idx += 1
+        labels = derive_community_labels(g, min_size=3)
+        lab = labels[7]
+        assert lab["label"] == "backend"  # label stays the honest prefix
+        assert len(lab["subareas"]) >= 2  # but the spread is named
+        assert all(s.startswith("backend/") for s in lab["subareas"])
+
+    def test_no_shallow_label_is_left_without_subareas_invariant(self) -> None:
+        """Invariant: a single-token (shallow) label that spans >=2 child dirs
+        never ships with empty subareas — that combination is the un-navigable
+        'bare backend' the redesign targets."""
+        g = nx.DiGraph()
+        for idx, child in enumerate(["api", "dispatch", "embedding", "extensions", "router"]):
+            g.add_node(
+                f"n{idx}",
+                id=f"n{idx}",
+                kind="module",
+                path=f"backend/{child}/x.py",
+                name=f"s{idx}",
+                language="python",
+                community_id=4,
+                pagerank=0.1,
+            )
+        labels = derive_community_labels(g, min_size=3)
+        for lab in labels.values():
+            shallow = lab["label"] and "/" not in lab["label"] and lab["label"] != "misc"
+            if shallow:
+                assert lab["subareas"], f"shallow label {lab['label']!r} left without subareas"
+
     def test_uniform_deep_community_has_no_subareas(self) -> None:
         """A community that lives entirely under one deep directory has no
         meaningful sub-areas — the ``subareas`` field stays empty rather
