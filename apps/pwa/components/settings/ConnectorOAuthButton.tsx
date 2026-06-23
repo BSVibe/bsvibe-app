@@ -10,6 +10,7 @@
  * `window.location`; it defaults to a real navigation in the browser.
  */
 
+import { ApiError } from "@/lib/api/client";
 import { startConnectorOAuth } from "@/lib/api/connectors";
 import { useState } from "react";
 
@@ -37,6 +38,7 @@ export function ConnectorOAuthButton({
   onRedirect?: (url: string) => void;
 }) {
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   // E46 — when the binding needs re-auth, hide the steady-state chip and
   // fall through to the button branch so the user has a one-click recovery.
@@ -50,6 +52,7 @@ export function ConnectorOAuthButton({
 
   const handleClick = async () => {
     setBusy(true);
+    setError(null);
     try {
       const { authorize_url } = await startConnectorOAuth(provider);
       const go =
@@ -58,23 +61,41 @@ export function ConnectorOAuthButton({
           window.location.href = url;
         });
       go(authorize_url);
+    } catch (e) {
+      // F10 — a connector whose OAuth app isn't configured in prod 404s on the
+      // start route; surface it instead of failing silently (the click looked
+      // like a no-op). A 404 means "not wired up yet" — distinct from a
+      // transient failure the user can retry.
+      const status = e instanceof ApiError ? e.status : 0;
+      setError(
+        status === 404
+          ? `${titleCase(provider)} isn't available yet — its connection hasn't been set up.`
+          : `Couldn't start the ${titleCase(provider)} connection. Please try again.`,
+      );
     } finally {
       setBusy(false);
     }
   };
 
   return (
-    <button
-      type="button"
-      className="connector-form__oauth-btn"
-      data-provider={provider}
-      data-testid={needsReauth ? "connector-oauth-reconnect" : "connector-oauth-connect"}
-      disabled={busy}
-      onClick={handleClick}
-    >
-      {needsReauth
-        ? `Reconnect with ${titleCase(provider)}`
-        : `Connect with ${titleCase(provider)}`}
-    </button>
+    <div className="connector-form__oauth">
+      <button
+        type="button"
+        className="connector-form__oauth-btn"
+        data-provider={provider}
+        data-testid={needsReauth ? "connector-oauth-reconnect" : "connector-oauth-connect"}
+        disabled={busy}
+        onClick={handleClick}
+      >
+        {needsReauth
+          ? `Reconnect with ${titleCase(provider)}`
+          : `Connect with ${titleCase(provider)}`}
+      </button>
+      {error && (
+        <p className="connector-form__oauth-error" role="alert" data-provider={provider}>
+          {error}
+        </p>
+      )}
+    </div>
   );
 }
