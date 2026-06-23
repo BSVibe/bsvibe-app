@@ -259,9 +259,7 @@ async def test_compose_verified_summary_falls_back_to_cleaned_prose_without_path
     from backend.workflow.application.run_persistence import _compose_verified_summary
 
     run = SimpleNamespace(payload={"intent_text": "Investigate the flake."})
-    summary = _compose_verified_summary(
-        run, "Found the cause.Fixed the race.", None
-    )  # type: ignore[arg-type]
+    summary = _compose_verified_summary(run, "Found the cause.Fixed the race.", None)  # type: ignore[arg-type]
     assert summary.splitlines()[0].strip() == "Investigate the flake."
     # whitespace-join artifact repaired:
     assert "Found the cause. Fixed the race." in summary
