@@ -170,8 +170,63 @@ async def test_assemble_contract_keeps_declared_checks() -> None:
             declared_contract=declared, written_paths=["a.py"], final_text="ran tests"
         )
         assert contract is not None
-        assert len(contract.command_checks) == 1
-        assert contract.command_checks[0].command == "pytest -q"
+        cmds = [c.command for c in contract.command_checks]
+        # The agent's declared check is preserved …
+        assert "pytest -q" in cmds
+
+
+async def test_assemble_contract_appends_mandatory_quality_gates() -> None:
+    """L1 — ``verified`` must mean the project's deterministic quality bar
+    (lint/format/type) held on the changed files, not just the one command the
+    agent chose to declare. So assemble_contract appends mandatory ruff / ruff
+    format / mypy command checks on the changed ``.py`` files, regardless of the
+    declared contract — closing the self-attestation gap (an agent that only ran
+    a narrow pytest can't pass with unformatted / lint-broken / mistyped code).
+    """
+    async with memory_session() as session:
+        svc = VerificationService(session=session, llm=StubLlm([]))
+        declared = {
+            "checks": [{"kind": "command", "command": "uv run pytest tests/common/test_x.py"}]
+        }
+        contract = await svc.assemble_contract(
+            declared_contract=declared,
+            written_paths=["backend/common/x.py", "tests/common/test_x.py"],
+            final_text="",
+        )
+        assert contract is not None
+        cmds = [c.command or "" for c in contract.command_checks]
+        # agent's own behavioral check kept
+        assert any("pytest tests/common/test_x.py" in c for c in cmds)
+        # mandatory deterministic gates appended on the changed .py files
+        assert any(c.startswith("uv run ruff check") and "backend/common/x.py" in c for c in cmds)
+        assert any("ruff format --check" in c and "tests/common/test_x.py" in c for c in cmds)
+        assert any(c.startswith("uv run mypy") and "backend/common/x.py" in c for c in cmds)
+
+
+async def test_mandatory_gates_only_augment_a_real_attestation() -> None:
+    """Mandatory gates AUGMENT a behavioral attestation; they never manufacture
+    one. No declared command check → still routes to human review (None), so a
+    lint-clean but untested change is not silently called verified."""
+    async with memory_session() as session:
+        svc = VerificationService(session=session, llm=StubLlm([]))
+        contract = await svc.assemble_contract(
+            declared_contract=None, written_paths=["backend/common/x.py"], final_text=""
+        )
+        assert contract is None
+
+
+async def test_mandatory_gates_skipped_when_no_python_changed() -> None:
+    """A non-Python change (docs, config) gets no ruff/mypy gate — they'd be
+    no-ops or errors. Only the agent's declared check applies."""
+    async with memory_session() as session:
+        svc = VerificationService(session=session, llm=StubLlm([]))
+        declared = {"checks": [{"kind": "command", "command": "test -f README.md"}]}
+        contract = await svc.assemble_contract(
+            declared_contract=declared, written_paths=["README.md", "docs/x.md"], final_text=""
+        )
+        assert contract is not None
+        cmds = [c.command or "" for c in contract.command_checks]
+        assert cmds == ["test -f README.md"]
 
 
 async def test_assemble_contract_merges_declared_and_canon() -> None:
@@ -278,7 +333,9 @@ async def test_real_factory_retriever_empty_workspace_leaves_contract_unchanged(
         declared = {"checks": [{"kind": "command", "command": "pytest -q"}]}
         contract = await svc.assemble_contract(
             declared_contract=declared,
-            written_paths=["a.py"],
+            # non-.py change → no mandatory lint/type gates, keeping this test
+            # focused on the retriever folding nothing.
+            written_paths=["notes.txt"],
             final_text="did a thing",
         )
         assert contract is not None

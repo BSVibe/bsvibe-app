@@ -46,6 +46,7 @@ from backend.workflow.infrastructure.db import (
 )
 from backend.workflow.infrastructure.delivery.db import DeliveryEventRow
 from backend.workflow.infrastructure.sandbox import NoopSandboxManager, SandboxUnavailable
+from backend.workflow.infrastructure.sandbox.protocol import SandboxResult
 from tests._support import memory_session
 
 # --------------------------------------------------------------------------
@@ -77,6 +78,40 @@ class FailingSandboxManager:
 
     async def acquire(self, project_id: uuid.UUID, workspace_path: str) -> Any:
         raise SandboxUnavailable("docker daemon unreachable")
+
+    async def release(self, project_id: uuid.UUID) -> None:
+        return None
+
+
+class _PassingBox:
+    """A sandbox session whose every command exits 0 — for tests that exercise
+    the loop / artifact-capture flow (with SIMULATED file paths) rather than the
+    real ruff/mypy/pytest execution a true sandbox would run."""
+
+    @property
+    def workspace_mount(self) -> str:
+        return "/workspace"
+
+    async def exec(self, command: str, *, timeout_s: float, shell: bool = False) -> SandboxResult:
+        return SandboxResult(exit_code=0, stdout="", stderr="", timed_out=False)
+
+    async def read_file(self, rel_path: str, max_bytes: int) -> bytes:
+        return b""
+
+    async def write_file(self, rel_path: str, content: bytes) -> None:
+        return None
+
+    async def list_dir(self, rel_path: str) -> list[str]:
+        return []
+
+
+class PassingSandboxManager:
+    """Acquire returns a box whose commands all pass — keeps loop/artifact tests
+    focused on their subject (not on running real lint/tests against the
+    simulated, non-existent file paths the test scripts)."""
+
+    async def acquire(self, project_id: uuid.UUID, workspace_path: str) -> Any:
+        return _PassingBox()
 
     async def release(self, project_id: uuid.UUID) -> None:
         return None
@@ -305,7 +340,12 @@ async def test_executor_artifact_refs_flow_into_deliverable(tmp_path: Path) -> N
     )
     async with memory_session() as session:
         run = await _make_run(session)
-        orch = RunOrchestrator(session=session, llm=llm, sandbox_manager=NoopSandboxManager())
+        # PassingSandboxManager (not Noop): the artifact_refs here are SIMULATED
+        # paths that don't exist on disk, so the L1 mandatory ruff/mypy gates
+        # (added in assemble_contract) would fail running against them on a real
+        # host-exec box. This test is about artifact flow, not lint — so use a
+        # box whose commands pass.
+        orch = RunOrchestrator(session=session, llm=llm, sandbox_manager=PassingSandboxManager())
         result = await orch.run(run=run, workspace_dir=tmp_path)
 
         assert result.outcome == "verified"

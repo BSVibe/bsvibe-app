@@ -25,6 +25,7 @@ structurally.
 from __future__ import annotations
 
 import json
+import shlex
 import uuid
 from typing import Any, Protocol, runtime_checkable
 
@@ -72,6 +73,48 @@ VENV_SYNC_TIMEOUT_S = 600.0
 #: which past docs/decisions the agent referenced), distinct from the
 #: verification checklist. Changing this string is a wire-contract change.
 RETRIEVED_KNOWLEDGE_RATIONALE = "BSage canonical patterns retrieved for this change"
+
+#: Stamped on the L1 mandatory quality-gate checks (lint/format/type) that the
+#: verifier appends regardless of the agent's declared contract.
+MANDATORY_GATE_RATIONALE = "Mandatory project quality gate — enforced on the changed files"
+
+#: Path prefixes mypy --strict covers in this repo (mirrors CI's ``mypy backend/``
+#: + the sdk run). Changed files outside these get lint/format only.
+_MYPY_PREFIXES = ("backend/", "plugin/", "bsvibe_sdk/")
+
+
+def _mandatory_quality_checks(written_paths: list[str]) -> list[VerificationCheck]:
+    """The deterministic quality bar the project enforces in CI (ruff check,
+    ruff format --check, mypy --strict), scoped to the changed Python files.
+
+    These run REGARDLESS of what the agent declared, so ``verified`` cannot mean
+    "the one narrow command I chose passed" while the code is unformatted,
+    lint-broken, or mistyped. Non-Python changes get nothing here (the gates
+    would no-op / error). Returns ``[]`` when no ``.py`` file changed."""
+    py = sorted({p for p in written_paths if p.endswith(".py")})
+    if not py:
+        return []
+    files = " ".join(shlex.quote(p) for p in py)
+    checks = [
+        VerificationCheck(
+            kind="command", command=f"uv run ruff check {files}", rationale=MANDATORY_GATE_RATIONALE
+        ),
+        VerificationCheck(
+            kind="command",
+            command=f"uv run ruff format --check {files}",
+            rationale=MANDATORY_GATE_RATIONALE,
+        ),
+    ]
+    typed = [p for p in py if p.startswith(_MYPY_PREFIXES)]
+    if typed:
+        checks.append(
+            VerificationCheck(
+                kind="command",
+                command=f"uv run mypy {' '.join(shlex.quote(p) for p in typed)}",
+                rationale=MANDATORY_GATE_RATIONALE,
+            )
+        )
+    return checks
 
 
 @runtime_checkable
@@ -129,6 +172,15 @@ class VerificationService:
             else None
         )
         checks: list[VerificationCheck] = list(declared.checks) if declared is not None else []
+
+        # L1 — when the agent has staked a behavioral check (a declared
+        # command), ALSO enforce the project's deterministic quality bar
+        # (lint/format/type) on the changed files. This augments a real
+        # attestation; it never manufactures one (no command → still None →
+        # human review below), so a lint-clean but untested change isn't
+        # silently called verified.
+        if any(c.kind == "command" for c in checks):
+            checks.extend(_mandatory_quality_checks(written_paths))
 
         if self._retriever is not None:
             signals = (final_text + "\n" + "\n".join(written_paths)).strip()
