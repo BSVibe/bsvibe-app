@@ -102,6 +102,13 @@ class Settings(BaseSettings):
     sentry_client_id: str = ""
     sentry_client_secret: str = ""
 
+    # L2 verify — when true, a SEPARATE verifier authors an acceptance test from
+    # the run's intent (not the worker's own tests) and runs it in the sandbox,
+    # breaking the self-grading circularity. Off by default: needs a CAPABLE
+    # verify model (a weak one writes flaky tests → false-fails) + costs an LLM
+    # call + a pytest run per verify. Env: BSVIBE_INDEPENDENT_ACCEPTANCE_ENABLED.
+    independent_acceptance_enabled: bool = False
+
     # Sandbox settings (backend.workflow.infrastructure.sandbox)
     sandbox_enabled: bool = False
     docker_host: str = ""

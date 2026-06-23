@@ -82,6 +82,54 @@ MANDATORY_GATE_RATIONALE = "Mandatory project quality gate — enforced on the c
 #: + the sdk run). Changed files outside these get lint/format only.
 _MYPY_PREFIXES = ("backend/", "plugin/", "bsvibe_sdk/")
 
+#: Where the L2 independent acceptance test is written inside the sandbox.
+_INDEPENDENT_TEST_REL = "tests/_bsvibe_independent_acceptance.py"
+#: Bytes of each changed source file fed to the verifier-author (enough for a
+#: utility/module; the author needs the API, not the whole repo).
+_SOURCE_CTX_BYTES = 8 * 1024
+
+
+def _is_test_path(path: str) -> bool:
+    base = path.rsplit("/", 1)[-1]
+    return "/tests/" in f"/{path}" or base.startswith("test_") or base.endswith("_test.py")
+
+
+def _extract_python_code(text: str) -> str:
+    """Pull the test source out of an LLM reply. Prefers a ```python fenced
+    block; falls back to a bare ``` block; else the whole stripped reply."""
+    for fence in ("```python", "```py", "```"):
+        start = text.find(fence)
+        if start == -1:
+            continue
+        body = text[start + len(fence) :]
+        end = body.find("```")
+        return (body[:end] if end != -1 else body).strip()
+    return text.strip()
+
+
+def _acceptance_author_messages(
+    intent: str, sources: list[tuple[str, str]]
+) -> list[dict[str, str]]:
+    blob = "\n\n".join(f"# {p}\n{src}" for p, src in sources)[:12000]
+    return [
+        {
+            "role": "system",
+            "content": (
+                "You are an INDEPENDENT acceptance-test author. Given a task and the "
+                "implementation it produced, write a fresh pytest test that verifies the "
+                "TASK's stated requirements against the implementation's public API. Derive "
+                "your assertions from the REQUIREMENTS, not from any existing test. Cover the "
+                "happy path, boundaries, and the error/edge cases the task names. Import the "
+                "real modules by their paths. Output ONLY the test file as a single ```python "
+                "code block — no prose."
+            ),
+        },
+        {
+            "role": "user",
+            "content": f"TASK (the requirements):\n{intent}\n\nIMPLEMENTATION under test:\n{blob}",
+        },
+    ]
+
 
 def _mandatory_quality_checks(written_paths: list[str]) -> list[VerificationCheck]:
     """The deterministic quality bar the project enforces in CI (ruff check,
@@ -150,10 +198,17 @@ class VerificationService:
         session: AsyncSession,
         llm: JudgeLlm,
         retriever: CanonRetriever | None = None,
+        independent_acceptance: bool = False,
     ) -> None:
         self._session = session
         self._llm = llm
         self._retriever = retriever
+        # L2 — when enabled, a SEPARATE verifier authors an acceptance test from
+        # the INTENT (not the worker's own tests) and runs it in the sandbox,
+        # breaking the self-grading circularity. Off by default: it costs an LLM
+        # call + a pytest run and needs a CAPABLE verify model (a weak model
+        # writes flaky tests → false-fails). Callers flip it on per workspace.
+        self._independent_acceptance = independent_acceptance
 
     async def assemble_contract(
         self,
@@ -283,6 +338,17 @@ class VerificationService:
             return vr
 
         command_results = await self._run_command_checks(contract, box)
+
+        # L2 — independent acceptance check. A SEPARATE verifier authors a test
+        # from the INTENT (not the worker's tests) and runs it. Its result joins
+        # the command results, so a failure fails verification → the orchestrator
+        # routes to human review, which is exactly when review is worth it (the
+        # independent check disagreed with the worker). Off unless enabled.
+        if self._independent_acceptance:
+            independent = await self._run_independent_acceptance_check(run, written_paths, box)
+            if independent is not None:
+                command_results.append(independent)
+
         all_cmd_pass = all(r["passed"] for r in command_results)
 
         judge_blob: dict[str, Any] | None = None
@@ -423,6 +489,66 @@ class VerificationService:
             return False
         sync = await box.exec(_UV_SYNC, timeout_s=VENV_SYNC_TIMEOUT_S, shell=True)
         return sync.exit_code == 0 and not sync.timed_out
+
+    async def _run_independent_acceptance_check(
+        self,
+        run: ExecutionRun,
+        written_paths: list[str],
+        box: SandboxSession,
+    ) -> dict[str, Any] | None:
+        """L2 — author a fresh acceptance test from the INTENT (via a separate
+        LLM that does NOT see the worker's tests) and run it in the sandbox.
+
+        Returns a command-result dict (folds into the PASS gate) or ``None`` when
+        there's nothing to do — no intent, no changed source files, or the author
+        produced no test. A best-effort failure (sandbox/LLM hiccup) returns
+        ``None`` rather than failing the run: the worker's own contract + the L1
+        gates still gate it; the independent check only ADDS confidence."""
+        payload = run.payload or {}
+        intent = str(payload.get("intent_text") or payload.get("text") or "").strip()
+        if not intent:
+            return None
+        sources: list[tuple[str, str]] = []
+        for path in written_paths:
+            if not path.endswith(".py") or _is_test_path(path):
+                continue
+            try:
+                data = await box.read_file(path, _SOURCE_CTX_BYTES)
+            except SandboxError:
+                continue
+            sources.append((path, data.decode("utf-8", errors="replace")))
+        if not sources:
+            return None
+        try:
+            turn = await self._llm.complete(
+                messages=_acceptance_author_messages(intent, sources), tools=None
+            )
+        except Exception:  # noqa: BLE001 — author hiccup must never break the run
+            return None
+        code = _extract_python_code(str(getattr(turn, "content", "") or ""))
+        if not code.strip():
+            return None
+        try:
+            await box.write_file(_INDEPENDENT_TEST_REL, code.encode("utf-8"))
+        except SandboxError:
+            return None
+        # Re-validate the venv (a no-op-fast second `uv sync --frozen` if the
+        # command checks already materialized it) so the authored test resolves
+        # the project deps just like the agent's own tests.
+        venv_ready = await self._ensure_project_venv(box)
+        command = f"uv run pytest {_INDEPENDENT_TEST_REL} -q"
+        venv_bin = f"{box.workspace_mount}/.venv/bin"
+        run_command = f'export PATH="{venv_bin}:$PATH"; {command}' if venv_ready else command
+        res = await box.exec(run_command, timeout_s=VERIFY_TIMEOUT_S, shell=True)
+        output = "\n".join(c for c in (res.stdout, res.stderr) if c)[-2000:]
+        return {
+            "command": "independent acceptance test (L2)",
+            "exit_code": res.exit_code,
+            "timed_out": res.timed_out,
+            "passed": res.exit_code == 0 and not res.timed_out,
+            "output": output,
+            "independent": True,
+        }
 
     async def _run_judge(
         self,

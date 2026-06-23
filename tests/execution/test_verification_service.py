@@ -679,3 +679,93 @@ async def test_command_checks_no_prefix_when_uv_sync_fails() -> None:
     assert _UV_SYNC in box.exec_calls  # attempted
     assert "python -m pytest tests/x.py" in box.exec_calls  # ran bare
     assert not any(c.startswith("export PATH=") for c in box.exec_calls)
+
+
+# --------------------------------------------------------------------------
+# L2 — independent acceptance check (separate verifier authors + runs a test)
+# --------------------------------------------------------------------------
+
+
+async def test_independent_acceptance_failure_fails_verification() -> None:
+    """A SEPARATE verifier authors a test from the INTENT and runs it. A failing
+    independent test fails verification (→ human review) even though the worker's
+    own command passed — breaking the self-grading circularity."""
+    async with memory_session() as session:
+        run = await _make_run(session)
+        work_step, attempt = await _make_step_and_attempt(session, run)
+        llm = StubLlm([LoopTurn(content="```python\ndef test_spec():\n    assert False\n```")])
+        svc = VerificationService(session=session, llm=llm, independent_acceptance=True)
+        box = FakeBox(
+            files={"backend/common/x.py": b"def x() -> int:\n    return 1\n"},
+            exec_map={
+                "true": SandboxResult(exit_code=0, stdout="", stderr="", timed_out=False),
+                "uv run pytest tests/_bsvibe_independent_acceptance.py -q": SandboxResult(
+                    exit_code=1, stdout="1 failed", stderr="", timed_out=False
+                ),
+            },
+        )
+        contract = VerificationContract(checks=(VerificationCheck(kind="command", command="true"),))
+        vr = await svc.verify(
+            run=run,
+            work_step=work_step,
+            attempt=attempt,
+            contract=contract,
+            box=box,
+            written_paths=["backend/common/x.py"],
+            final_text="",
+        )
+        assert vr.outcome is VerificationOutcome.FAILED
+        assert llm.calls, "the independent author LLM must be called"
+        assert any(r.get("independent") for r in vr.result["command_results"])
+
+
+async def test_independent_acceptance_pass_keeps_verified() -> None:
+    async with memory_session() as session:
+        run = await _make_run(session)
+        work_step, attempt = await _make_step_and_attempt(session, run)
+        llm = StubLlm([LoopTurn(content="```python\ndef test_spec():\n    assert True\n```")])
+        svc = VerificationService(session=session, llm=llm, independent_acceptance=True)
+        # The independent pytest command is absent from exec_map → FakeBox
+        # default exit 0 → the authored test passes.
+        box = FakeBox(
+            files={"backend/common/x.py": b"def x() -> int:\n    return 1\n"},
+            exec_map={"true": SandboxResult(exit_code=0, stdout="", stderr="", timed_out=False)},
+        )
+        contract = VerificationContract(checks=(VerificationCheck(kind="command", command="true"),))
+        vr = await svc.verify(
+            run=run,
+            work_step=work_step,
+            attempt=attempt,
+            contract=contract,
+            box=box,
+            written_paths=["backend/common/x.py"],
+            final_text="",
+        )
+        assert vr.outcome is VerificationOutcome.PASSED
+        assert any(r.get("independent") for r in vr.result["command_results"])
+
+
+async def test_independent_acceptance_off_by_default() -> None:
+    """Default OFF — no extra LLM call, no independent result. Opt-in only."""
+    async with memory_session() as session:
+        run = await _make_run(session)
+        work_step, attempt = await _make_step_and_attempt(session, run)
+        llm = StubLlm([])  # would raise if the author were invoked
+        svc = VerificationService(session=session, llm=llm)
+        box = FakeBox(
+            files={"backend/common/x.py": b"def x() -> int:\n    return 1\n"},
+            exec_map={"true": SandboxResult(exit_code=0, stdout="", stderr="", timed_out=False)},
+        )
+        contract = VerificationContract(checks=(VerificationCheck(kind="command", command="true"),))
+        vr = await svc.verify(
+            run=run,
+            work_step=work_step,
+            attempt=attempt,
+            contract=contract,
+            box=box,
+            written_paths=["backend/common/x.py"],
+            final_text="",
+        )
+        assert vr.outcome is VerificationOutcome.PASSED
+        assert not any(r.get("independent") for r in vr.result["command_results"])
+        assert llm.calls == []
