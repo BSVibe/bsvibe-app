@@ -745,13 +745,15 @@ async def test_independent_acceptance_pass_keeps_verified() -> None:
         assert any(r.get("independent") for r in vr.result["command_results"])
 
 
-async def test_independent_acceptance_off_by_default() -> None:
-    """Default OFF — no extra LLM call, no independent result. Opt-in only."""
+async def test_independent_acceptance_kill_switch_disables_it() -> None:
+    """The kill-switch (``independent_acceptance=False``) runs nothing extra — no
+    LLM call, no independent result. It's the emergency off; the PRODUCT default
+    is ON (see ``test_independent_acceptance_on_by_default_setting``)."""
     async with memory_session() as session:
         run = await _make_run(session)
         work_step, attempt = await _make_step_and_attempt(session, run)
         llm = StubLlm([])  # would raise if the author were invoked
-        svc = VerificationService(session=session, llm=llm)
+        svc = VerificationService(session=session, llm=llm, independent_acceptance=False)
         box = FakeBox(
             files={"backend/common/x.py": b"def x() -> int:\n    return 1\n"},
             exec_map={"true": SandboxResult(exit_code=0, stdout="", stderr="", timed_out=False)},
@@ -769,6 +771,14 @@ async def test_independent_acceptance_off_by_default() -> None:
         assert vr.outcome is VerificationOutcome.PASSED
         assert not any(r.get("independent") for r in vr.result["command_results"])
         assert llm.calls == []
+
+
+def test_independent_acceptance_on_by_default_setting() -> None:
+    """The safety net protects every run by default — the product setting is ON
+    (only an explicit BSVIBE_INDEPENDENT_ACCEPTANCE_ENABLED=false disables it)."""
+    from backend.config import Settings
+
+    assert Settings().independent_acceptance_enabled is True
 
 
 async def test_independent_acceptance_broken_test_is_discarded() -> None:
