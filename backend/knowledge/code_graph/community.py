@@ -20,6 +20,7 @@ across runs.
 from __future__ import annotations
 
 import os.path
+import random
 from collections import Counter
 from typing import Any
 
@@ -33,6 +34,23 @@ logger = structlog.get_logger(__name__)
 #: same community ids. Bumping this re-shuffles every workspace's
 #: community ids, which is fine on a fresh bootstrap.
 _LEIDEN_SEED = 42
+
+#: F3 — max nodes in a community before we recursively subdivide it. Leiden's
+#: modularity objective has a resolution limit (Traag 2011): on a LARGE graph
+#: it cannot resolve communities below ~sqrt(2·|E|) and merges distinct areas
+#: into one oversized blob that can only be labelled with a shallow prefix
+#: ("backend"). We re-run Leiden on each oversized community's induced subgraph
+#: — where the limit is far lower — to split it. The cap is a human-navigation
+#: bound (a community you'd drill into should be scannable), NOT reverse-derived
+#: from one repo's numbers; 50/60/80 give near-identical results across repos.
+#: Subdivision is SPLIT-ONLY (it re-runs detection on a subset), so it can never
+#: increase a community's size and is a no-op on small repos that have no blob.
+_MAX_COMMUNITY = 60
+
+#: A subdivision is accepted only if it yields at least two parts each this
+#: large — otherwise the oversized community is genuinely cohesive (a clique)
+#: and we keep it whole rather than shattering it into singleton noise.
+_SUBDIVIDE_MIN_PART = 5
 
 #: Minimum fraction of a community's files that must share a directory
 #: prefix for it to be used as the label. Strict full consensus (every
@@ -54,8 +72,45 @@ _SUBAREA_FRACTION = 0.2
 _SUBAREA_TOP_N = 3
 
 
-def detect_communities(graph: nx.DiGraph) -> dict[str, int]:
-    """Run Leiden on the undirected projection of ``graph``.
+def _leiden_membership(graph: nx.DiGraph) -> dict[str, int] | None:
+    """One Leiden pass on the undirected projection of ``graph``.
+
+    Returns ``{node_id: community_id}`` or ``None`` if igraph is missing or
+    Leiden's C bindings throw (the caller decides how to degrade).
+    """
+    undirected = graph.to_undirected(as_view=False)
+    try:
+        import igraph  # noqa: PLC0415 — heavy import, deferred to call site
+    except ImportError:  # pragma: no cover — dep declared in pyproject.toml
+        logger.warning("leiden_igraph_missing — every node lands in its own community")
+        return None
+
+    # Determinism: Leiden's refinement uses a random node order. Seed igraph's
+    # RNG before every call (top-level AND each subgraph) so the same graph +
+    # node order yields the same membership across runs — a re-bootstrap of the
+    # same repo must give stable community ids, and the split-only invariant
+    # below is only meaningful against a deterministic base. (The docstring long
+    # claimed this; the seed was never actually wired until F3.)
+    igraph.set_random_number_generator(random.Random(_LEIDEN_SEED))  # noqa: S311 — reproducibility seed, not crypto
+
+    # python-igraph's from_networkx walks node order so we read the
+    # membership back in the same order.
+    ig_graph: Any = igraph.Graph.from_networkx(undirected)
+    try:
+        result = ig_graph.community_leiden(objective_function="modularity", n_iterations=10)
+    except Exception:  # noqa: BLE001 — Leiden's C bindings throw on edge cases
+        logger.warning("leiden_detection_failed — falling back to weakly connected components")
+        return None
+
+    ordered_ids = [v["_nx_name"] for v in ig_graph.vs]
+    return {nid: int(cid) for nid, cid in zip(ordered_ids, result.membership, strict=True)}
+
+
+def detect_communities(
+    graph: nx.DiGraph, *, max_community_size: int = _MAX_COMMUNITY
+) -> dict[str, int]:
+    """Run Leiden on the undirected projection of ``graph``, then recursively
+    subdivide any oversized community (F3).
 
     Returns ``{node_id: community_id}`` for every node. Empty graph →
     empty map; a singleton node → ``{node_id: 0}`` without running
@@ -68,29 +123,77 @@ def detect_communities(graph: nx.DiGraph) -> dict[str, int]:
         only_node = next(iter(graph.nodes))
         return {only_node: 0}
 
-    # Undirected projection. We preserve node identity so the
-    # membership keys come back as the original ids.
-    undirected = graph.to_undirected(as_view=False)
-    try:
-        import igraph  # noqa: PLC0415 — heavy import, deferred to call site
-    except ImportError:  # pragma: no cover — dep declared in pyproject.toml
-        logger.warning("leiden_igraph_missing — every node lands in its own community")
-        return {nid: idx for idx, nid in enumerate(graph.nodes)}
-
-    # python-igraph's from_networkx walks node order so we read the
-    # membership back in the same order.
-    ig_graph: Any = igraph.Graph.from_networkx(undirected)
-    try:
-        result = ig_graph.community_leiden(objective_function="modularity", n_iterations=10)
-    except Exception:  # noqa: BLE001 — Leiden's C bindings throw on edge cases
-        logger.warning("leiden_detection_failed — falling back to weakly connected components")
+    membership = _leiden_membership(graph)
+    if membership is None:
         return _fallback_components(graph)
+    return _subdivide_oversized(
+        graph, membership, max_size=max_community_size, min_part=_SUBDIVIDE_MIN_PART
+    )
 
-    membership = result.membership
-    # python-igraph annotates nodes with ``_nx_name`` carrying the
-    # original NetworkX node id.
-    ordered_ids = [v["_nx_name"] for v in ig_graph.vs]
-    return {nid: int(cid) for nid, cid in zip(ordered_ids, membership, strict=True)}
+
+def _subdivide_oversized(
+    graph: nx.DiGraph,
+    membership: dict[str, int],
+    *,
+    max_size: int,
+    min_part: int,
+) -> dict[str, int]:
+    """Recursively split communities larger than ``max_size`` (F3).
+
+    For each community over the cap we re-run Leiden on its induced subgraph —
+    where the resolution limit is far lower — and accept the split only when it
+    yields ≥2 parts each ≥ ``min_part`` (otherwise the community is genuinely
+    cohesive and we keep it whole). SPLIT-ONLY: a community's nodes are only ever
+    partitioned, never merged, so the maximum community size can never increase
+    and small graphs with no oversized community pass through unchanged.
+
+    Re-numbers every community with a fresh contiguous id so split parts get
+    distinct ids; the actual integer values are opaque.
+    """
+    groups: dict[int, list[str]] = {}
+    for nid, cid in membership.items():
+        groups.setdefault(cid, []).append(nid)
+
+    out: dict[str, int] = {}
+    next_id = 0
+    # Sort by id for deterministic id assignment across runs.
+    for _cid, members in sorted(groups.items()):
+        if len(members) <= max_size:
+            for nid in members:
+                out[nid] = next_id
+            next_id += 1
+            continue
+
+        sub_membership = _leiden_membership(graph.subgraph(members))
+        parts: dict[int, list[str]] = {}
+        if sub_membership is not None:
+            for nid, sub_cid in sub_membership.items():
+                parts.setdefault(sub_cid, []).append(nid)
+
+        substantial = [p for p in parts.values() if len(p) >= min_part]
+        if len(substantial) < 2:
+            # Unsplittable (cohesive clique-like) — keep the community whole.
+            for nid in members:
+                out[nid] = next_id
+            next_id += 1
+            continue
+
+        # Accept the split; recurse so a part still over the cap splits again.
+        refined = _subdivide_oversized(
+            graph.subgraph(members),
+            {nid: sub_cid for nid, sub_cid in sub_membership.items()},  # type: ignore[union-attr]
+            max_size=max_size,
+            min_part=min_part,
+        )
+        local_to_global: dict[int, int] = {}
+        for nid in members:
+            local = refined[nid]
+            if local not in local_to_global:
+                local_to_global[local] = next_id
+                next_id += 1
+            out[nid] = local_to_global[local]
+
+    return out
 
 
 def _fallback_components(graph: nx.DiGraph) -> dict[str, int]:
