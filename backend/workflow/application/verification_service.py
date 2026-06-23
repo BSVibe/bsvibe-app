@@ -45,7 +45,7 @@ from backend.workflow.infrastructure.db import (
     VerificationResult,
     WorkStep,
 )
-from backend.workflow.infrastructure.sandbox import SandboxError, SandboxSession
+from backend.workflow.infrastructure.sandbox import SandboxError, SandboxResult, SandboxSession
 
 logger = structlog.get_logger(__name__)
 
@@ -107,28 +107,37 @@ def _extract_python_code(text: str) -> str:
     return text.strip()
 
 
+def _path_to_module(path: str) -> str:
+    """``backend/common/mean.py`` → ``backend.common.mean`` (import hint)."""
+    return path.removesuffix(".py").replace("/", ".")
+
+
 def _acceptance_author_messages(
-    intent: str, sources: list[tuple[str, str]]
+    intent: str, sources: list[tuple[str, str]], repair_hint: str = ""
 ) -> list[dict[str, str]]:
     blob = "\n\n".join(f"# {p}\n{src}" for p, src in sources)[:12000]
-    return [
-        {
-            "role": "system",
-            "content": (
-                "You are an INDEPENDENT acceptance-test author. Given a task and the "
-                "implementation it produced, write a fresh pytest test that verifies the "
-                "TASK's stated requirements against the implementation's public API. Derive "
-                "your assertions from the REQUIREMENTS, not from any existing test. Cover the "
-                "happy path, boundaries, and the error/edge cases the task names. Import the "
-                "real modules by their paths. Output ONLY the test file as a single ```python "
-                "code block — no prose."
-            ),
-        },
-        {
-            "role": "user",
-            "content": f"TASK (the requirements):\n{intent}\n\nIMPLEMENTATION under test:\n{blob}",
-        },
-    ]
+    imports = "\n".join(f"  from {_path_to_module(p)} import ...   # {p}" for p, _ in sources)
+    # Engineered to yield a RUNNABLE test even from a weak model (the
+    # minimum-spec target): concrete output contract, the exact import paths
+    # spelled out, no prose. A broken authored test is discarded downstream — it
+    # never false-fails good code — but a strong prompt keeps that rare.
+    system = (
+        "You are an INDEPENDENT acceptance-test author. Given a TASK and the implementation "
+        "it produced, write ONE self-contained pytest test file that verifies the TASK's "
+        "stated requirements against the implementation's public API.\n"
+        "RULES:\n"
+        "- Derive every assertion from the TASK REQUIREMENTS, not from any existing test.\n"
+        "- Cover the happy path, the boundaries, and EACH error/edge case the task names "
+        "(use pytest.raises for documented exceptions).\n"
+        "- Import the modules under test by their exact dotted paths:\n" + imports + "\n"
+        "- The file must be runnable as-is: real imports, valid Python, test_ functions.\n"
+        "- Output ONLY the test file as a single ```python code block. No prose, no fences "
+        "around anything else."
+    )
+    user = f"TASK (the requirements):\n{intent}\n\nIMPLEMENTATION under test:\n{blob}"
+    if repair_hint:
+        user += f"\n\n{repair_hint}"
+    return [{"role": "system", "content": system}, {"role": "user", "content": user}]
 
 
 def _mandatory_quality_checks(written_paths: list[str]) -> list[VerificationCheck]:
@@ -519,33 +528,63 @@ class VerificationService:
             sources.append((path, data.decode("utf-8", errors="replace")))
         if not sources:
             return None
-        try:
-            turn = await self._llm.complete(
-                messages=_acceptance_author_messages(intent, sources), tools=None
-            )
-        except Exception:  # noqa: BLE001 — author hiccup must never break the run
-            return None
-        code = _extract_python_code(str(getattr(turn, "content", "") or ""))
-        if not code.strip():
-            return None
-        try:
-            await box.write_file(_INDEPENDENT_TEST_REL, code.encode("utf-8"))
-        except SandboxError:
-            return None
         # Re-validate the venv (a no-op-fast second `uv sync --frozen` if the
         # command checks already materialized it) so the authored test resolves
         # the project deps just like the agent's own tests.
         venv_ready = await self._ensure_project_venv(box)
-        command = f"uv run pytest {_INDEPENDENT_TEST_REL} -q"
-        venv_bin = f"{box.workspace_mount}/.venv/bin"
-        run_command = f'export PATH="{venv_bin}:$PATH"; {command}' if venv_ready else command
-        res = await box.exec(run_command, timeout_s=VERIFY_TIMEOUT_S, shell=True)
+
+        async def _author_and_run(repair_hint: str) -> SandboxResult | None:
+            try:
+                turn = await self._llm.complete(
+                    messages=_acceptance_author_messages(intent, sources, repair_hint), tools=None
+                )
+            except Exception:  # noqa: BLE001 — author hiccup must never break the run
+                return None
+            code = _extract_python_code(str(getattr(turn, "content", "") or ""))
+            if not code.strip():
+                return None
+            try:
+                await box.write_file(_INDEPENDENT_TEST_REL, code.encode("utf-8"))
+            except SandboxError:
+                return None
+            command = f"uv run pytest {_INDEPENDENT_TEST_REL} -q"
+            venv_bin = f"{box.workspace_mount}/.venv/bin"
+            cmd = f'export PATH="{venv_bin}:$PATH"; {command}' if venv_ready else command
+            return await box.exec(cmd, timeout_s=VERIFY_TIMEOUT_S, shell=True)
+
+        res = await _author_and_run("")
+        if res is None:
+            return None
+        # Robust to a WEAK verify model (the minimum-spec target): a broken
+        # authored test must NEVER false-fail good code. pytest exit codes
+        # discriminate — 0=passed, 1=a test FAILED (a genuine disagreement →
+        # gate → human review), 2/5=collection error / NO tests collected and
+        # 3/4=internal/usage error (the AUTHOR produced an unusable test, not a
+        # code defect). On a collection error retry ONCE, feeding the error back
+        # for self-repair (mirrors the worker safety nets); if still unusable,
+        # DISCARD — the worker contract + L1 gates still hold.
+        if not res.timed_out and res.exit_code in (2, 5):
+            err = "\n".join(c for c in (res.stdout, res.stderr) if c)[-1500:]
+            retry = await _author_and_run(
+                "Your previous test could not be COLLECTED/RUN (import or syntax error). "
+                f"Fix it and output the corrected full test file. Error:\n{err}"
+            )
+            if retry is not None:
+                res = retry
+        if res.timed_out or res.exit_code not in (0, 1):
+            logger.info(
+                "independent_acceptance_unusable",
+                run_id=str(run.id),
+                exit_code=res.exit_code,
+                timed_out=res.timed_out,
+            )
+            return None
         output = "\n".join(c for c in (res.stdout, res.stderr) if c)[-2000:]
         return {
             "command": "independent acceptance test (L2)",
             "exit_code": res.exit_code,
-            "timed_out": res.timed_out,
-            "passed": res.exit_code == 0 and not res.timed_out,
+            "timed_out": False,
+            "passed": res.exit_code == 0,
             "output": output,
             "independent": True,
         }

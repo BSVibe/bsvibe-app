@@ -769,3 +769,43 @@ async def test_independent_acceptance_off_by_default() -> None:
         assert vr.outcome is VerificationOutcome.PASSED
         assert not any(r.get("independent") for r in vr.result["command_results"])
         assert llm.calls == []
+
+
+async def test_independent_acceptance_broken_test_is_discarded() -> None:
+    """Robust to a weak verify model: an UNUSABLE authored test (collection
+    error, pytest exit 2) must NOT false-fail good code. It is retried once for
+    self-repair and, if still unusable, DISCARDED — never a gate."""
+    async with memory_session() as session:
+        run = await _make_run(session)
+        work_step, attempt = await _make_step_and_attempt(session, run)
+        llm = StubLlm(
+            [
+                LoopTurn(content="```python\nimport nope\n```"),  # initial author
+                LoopTurn(content="```python\nimport still_nope\n```"),  # self-repair retry
+            ]
+        )
+        svc = VerificationService(session=session, llm=llm, independent_acceptance=True)
+        box = FakeBox(
+            files={"backend/common/x.py": b"def x() -> int:\n    return 1\n"},
+            exec_map={
+                "true": SandboxResult(exit_code=0, stdout="", stderr="", timed_out=False),
+                "uv run pytest tests/_bsvibe_independent_acceptance.py -q": SandboxResult(
+                    exit_code=2, stdout="", stderr="ModuleNotFoundError: nope", timed_out=False
+                ),
+            },
+        )
+        contract = VerificationContract(checks=(VerificationCheck(kind="command", command="true"),))
+        vr = await svc.verify(
+            run=run,
+            work_step=work_step,
+            attempt=attempt,
+            contract=contract,
+            box=box,
+            written_paths=["backend/common/x.py"],
+            final_text="",
+        )
+        # broken test discarded → the worker's own command alone gates → PASSED
+        assert vr.outcome is VerificationOutcome.PASSED
+        assert not any(r.get("independent") for r in vr.result["command_results"])
+        # the self-repair retry fired (two author calls)
+        assert len(llm.calls) == 2
