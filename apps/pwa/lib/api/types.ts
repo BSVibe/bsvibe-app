@@ -514,6 +514,13 @@ export interface PendingDelivery {
    *  shortcut that hits POST /api/v1/safemode/runs/{runId}/approve. ``null``
    *  for legacy items emitted before the run_id column existed. */
   runId: string | null;
+  /** Review context (joined from runs/deliverables/products by the aggregator)
+   *  so the founder sees WHAT is being shipped, concisely, and can open the
+   *  proof — instead of approving a generic "a delivery is held" blind. */
+  deliverableId?: string | null;
+  title?: string | null;
+  productSlug?: string;
+  detailHref?: string | null;
   createdAt: string;
 }
 
@@ -542,6 +549,12 @@ export interface PendingCheckpoint {
   /** G4 (proposal §5.5): the founder's relevant already-resolved decisions, so
    *  a recurring choice is answered consistently. Empty when none overlap. */
   priorDecisions: string[];
+  /** Review context joined from the run/deliverable so the checkpoint reads as
+   *  "<task title> · <product>" with a link to the proof, not a bare question. */
+  runId?: string | null;
+  title?: string | null;
+  productSlug?: string;
+  detailHref?: string | null;
   createdAt: string;
 }
 
@@ -1114,6 +1127,11 @@ export interface NeedsYouItem {
   productSlug: string;
   question: string;
   resolve?: SafeModeResolve;
+  /** Concise task title + link to the proof, joined from the run/deliverable so
+   *  the Brief "Needs you" strip says WHAT needs approval, not just "a delivery
+   *  is held". Optional: a proposal with no linked run keeps the bare question. */
+  title?: string | null;
+  detailHref?: string | null;
 }
 
 export type ArtifactType = "pr" | "doc" | "image" | "slides" | "file" | "email";
@@ -1157,6 +1175,12 @@ export interface ProductDetailRun {
   updatedAt: string;
   /** True iff the run shipped — its deliverables are surfaced under "Shipped". */
   shipped: boolean;
+  /** The run's Direction (or its deliverable's concise summary) so a run row
+   *  says WHAT it was, not just a status. Null when the run carries no intent. */
+  title: string | null;
+  /** Where the row links — the deliverable proof when one exists, else the run.
+   *  Makes "Needs your review" rows openable instead of a dead status line. */
+  detailHref: string | null;
 }
 
 /** The focused per-product view-model (the `/products/[slug]` surface). Composed

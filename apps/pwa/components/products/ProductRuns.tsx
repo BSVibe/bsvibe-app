@@ -1,5 +1,6 @@
 import type { ProductDetailRun } from "@/lib/api/types";
 import { useTranslations } from "next-intl";
+import Link from "next/link";
 
 /** Calm absolute date ("May 23 · 2:14 PM"); falls back to the raw string when
  *  unparseable. No date library — keeps the bundle quiet (matches RunRow). */
@@ -26,14 +27,29 @@ export default function ProductRuns({ runs }: { runs: ProductDetailRun[] }) {
         <p className="product-runs__empty">{t("noRuns")}</p>
       ) : (
         <ul className="product-runs__list">
-          {runs.map((run) => (
-            <li key={run.runId} className="product-run">
-              <span className={`product-run__status product-run__status--${run.tone}`}>
-                {run.statusLabel}
-              </span>
-              <span className="product-run__when">{formatWhen(run.updatedAt)}</span>
-            </li>
-          ))}
+          {runs.map((run) => {
+            const body = (
+              <>
+                <span className={`product-run__status product-run__status--${run.tone}`}>
+                  {run.statusLabel}
+                </span>
+                {/* WHAT the run was, so the row is more than a status + time. */}
+                {run.title && <span className="product-run__title">{run.title}</span>}
+                <span className="product-run__when">{formatWhen(run.updatedAt)}</span>
+              </>
+            );
+            return (
+              <li key={run.runId} className="product-run">
+                {run.detailHref ? (
+                  <Link className="product-run__link" href={run.detailHref}>
+                    {body}
+                  </Link>
+                ) : (
+                  body
+                )}
+              </li>
+            );
+          })}
         </ul>
       )}
     </section>

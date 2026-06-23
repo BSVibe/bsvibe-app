@@ -344,6 +344,7 @@
     "kindDecision": "Decision",
     "priorDecisions": "You decided similar before",
     "deliveryQuestion": "A delivery is held in Safe Mode. Send it out?",
+    "viewProof": "View proof",
     "deliveryGroupQuestion": "{count} deliveries from one run are held in Safe Mode. Send them all out?",
     "approveAll": "Approve all ({count})",
     "approve": "Approve",

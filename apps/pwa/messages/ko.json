@@ -344,6 +344,7 @@
     "kindDecision": "결정",
     "priorDecisions": "이전에 비슷한 결정을 했어요",
     "deliveryQuestion": "전달물이 안전 모드에 보류되어 있어요. 내보낼까요?",
+    "viewProof": "근거 보기",
     "deliveryGroupQuestion": "한 실행에서 {count}개의 전달물이 안전 모드에 보류되어 있어요. 모두 내보낼까요?",
     "approveAll": "모두 승인 ({count})",
     "approve": "승인",
