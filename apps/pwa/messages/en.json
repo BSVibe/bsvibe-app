@@ -104,6 +104,8 @@
   "direct": {
     "label": "Direct",
     "hint": "Tell BSVibe what to do. Ask a question or start work.",
+    "targetLabel": "For",
+    "targetAuto": "Auto (let BSVibe route it)",
     "placeholder": "e.g. “draft the launch post for bsvibe-site”",
     "sending": "Sending…",
     "sent": "Sent. Working on it.",

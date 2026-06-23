@@ -70,10 +70,14 @@ describe("Direct compose", () => {
       expect(screen.getByText("Sent. Working on it.")).toBeInTheDocument();
     });
 
-    // Hit the real endpoint with a JSON body carrying the typed text.
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
-    expect(url).toBe("/api/v1/messages");
+    // Hit the real endpoint with a JSON body carrying the typed text. (The
+    // overlay also reads /api/v1/products on open to populate the target
+    // selector, so we locate the /messages POST rather than asserting a count.)
+    const messagesCall = (fetchMock.mock.calls as unknown as Array<[string, RequestInit]>).find(
+      ([url]) => String(url).endsWith("/api/v1/messages"),
+    );
+    if (!messagesCall) throw new Error("expected a /messages POST");
+    const [, init] = messagesCall;
     expect(init.method).toBe("POST");
     expect(JSON.parse(init.body as string)).toEqual({ text: "draft the launch post" });
 
@@ -144,6 +148,52 @@ describe("Direct compose", () => {
     });
 
     // Reset for the next case.
+    _currentPathname = "/brief";
+  });
+
+  it("offers a target selector and submits the chosen product_id", async () => {
+    _currentPathname = "/brief"; // not on a product page → defaults to Auto
+    const PRODUCTS = [
+      { id: "p-aaaa", workspace_id: "ws-1", name: "Alpha", slug: "alpha" },
+      { id: "p-bbbb", workspace_id: "ws-1", name: "Beta", slug: "beta" },
+    ];
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/v1/products")) {
+        return new Response(JSON.stringify(PRODUCTS), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      return new Response(JSON.stringify(ACCEPTED), {
+        status: 202,
+        headers: { "Content-Type": "application/json" },
+      });
+    });
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    render(<DirectOverlay open onClose={() => {}} />);
+    // The selector appears once products load, with an Auto default.
+    const select = (await screen.findByRole("combobox")) as HTMLSelectElement;
+    expect(screen.getByRole("option", { name: "Alpha" })).toBeInTheDocument();
+
+    // Pick Beta explicitly, then submit.
+    await userEvent.selectOptions(select, "p-bbbb");
+    await userEvent.type(screen.getByRole("textbox"), "ship it");
+    fireEvent.click(screen.getByRole("button", { name: "Direct" }));
+
+    await waitFor(() => {
+      expect(screen.getByText("Sent. Working on it.")).toBeInTheDocument();
+    });
+
+    const messagesCall = (fetchMock.mock.calls as unknown as Array<[string, RequestInit]>).find(
+      ([url]) => String(url).endsWith("/api/v1/messages"),
+    );
+    if (!messagesCall) throw new Error("expected a /messages POST");
+    expect(JSON.parse(messagesCall[1].body as string)).toEqual({
+      text: "ship it",
+      product_id: "p-bbbb",
+    });
     _currentPathname = "/brief";
   });
 
