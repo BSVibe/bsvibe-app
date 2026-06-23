@@ -3,10 +3,15 @@
 import { ApiError } from "@/lib/api/client";
 import { submitMessage } from "@/lib/api/messages";
 import { listProducts } from "@/lib/api/products";
+import type { Product } from "@/lib/api/types";
 import { useTranslations } from "next-intl";
 import { usePathname } from "next/navigation";
 import { type FormEvent, useEffect, useState } from "react";
 import { PlusIcon } from "./icons";
+
+/** Sentinel <option> value for "let BSVibe route it" (no explicit product_id —
+ *  the backend binds to the workspace default). */
+const AUTO_TARGET = "";
 
 /** Fired on a successful Direct submission so the Brief can optimistically
  *  reflect that a new run is in flight (re-fetch its lanes). */
@@ -52,29 +57,31 @@ export function DirectOverlay({ open, onClose }: { open: boolean; onClose: () =>
   const [state, setState] = useState<SubmitState>("idle");
   const [error, setError] = useState<string | null>(null);
   const [productId, setProductId] = useState<string | null>(null);
+  const [products, setProducts] = useState<Product[]>([]);
   const t = useTranslations("direct");
   const pathname = usePathname();
   const currentSlug = _currentProductSlug(pathname);
 
-  // Resolve the current product slug → product_id when the overlay opens
-  // on a product page. Best-effort: a failed list call falls back to
-  // submitting without product_id (the backend's workspace-default
-  // fallback still produces a valid run, just bound to the default
-  // product). Cached implicitly by the browser per request lifecycle.
+  // Load the products on open so the founder can explicitly TARGET one (an
+  // optional selector), and default the target to the product they're on. The
+  // selector replaces the old prose-only routing where a global Direct message
+  // silently fell to the workspace default. Best-effort: a failed list keeps an
+  // empty selector and submits without product_id (backend workspace default).
   useEffect(() => {
-    if (!open || !currentSlug) {
-      setProductId(null);
-      return;
-    }
+    if (!open) return;
     let cancelled = false;
     listProducts()
-      .then((products) => {
+      .then((list) => {
         if (cancelled) return;
-        const match = products.find((p) => p.slug === currentSlug);
-        setProductId(match?.id ?? null);
+        setProducts(list);
+        const onPage = currentSlug ? list.find((p) => p.slug === currentSlug) : undefined;
+        setProductId(onPage?.id ?? null);
       })
       .catch(() => {
-        if (!cancelled) setProductId(null);
+        if (!cancelled) {
+          setProducts([]);
+          setProductId(null);
+        }
       });
     return () => {
       cancelled = true;
@@ -137,6 +144,26 @@ export function DirectOverlay({ open, onClose }: { open: boolean; onClose: () =>
       <dialog className="direct-overlay__panel" aria-label={t("label")} open>
         <form onSubmit={onSubmit}>
           <p className="direct-overlay__hint">{t("hint")}</p>
+          {products.length > 0 && (
+            <label className="direct-overlay__target">
+              <span className="direct-overlay__target-label">{t("targetLabel")}</span>
+              <select
+                className="direct-overlay__target-select"
+                value={productId ?? AUTO_TARGET}
+                onChange={(e) =>
+                  setProductId(e.target.value === AUTO_TARGET ? null : e.target.value)
+                }
+                disabled={state === "submitting" || state === "success"}
+              >
+                <option value={AUTO_TARGET}>{t("targetAuto")}</option>
+                {products.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
           <textarea
             className="direct-overlay__input"
             placeholder={t("placeholder")}
