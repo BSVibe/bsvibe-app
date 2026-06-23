@@ -362,11 +362,18 @@ def _subareas_for(paths: list[str], label: str) -> list[str]:
     The majority label is honest but can be shallow: a 374-node community
     split ~50/50 between ``backend/api`` and ``backend/mcp`` only labels
     ``backend``. This surfaces those sub-areas so the founder sees the
-    spread without the label lying about a single owner. Returns at most
-    :data:`_SUBAREA_TOP_N` prefixes that each cover ≥
-    :data:`_SUBAREA_FRACTION` of the files, and only when **more than one**
-    qualifies — a single dominant sub-area would already have deepened the
-    label, so echoing it adds nothing.
+    spread without the label lying about a single owner.
+
+    F3 Lift 2 — a SHALLOW label (one path component, e.g. ``backend``, or the
+    scattered ``misc``/empty case) that spreads thinly across MANY child dirs
+    used to fall below the strict 20% bar and ship with EMPTY subareas — the
+    exact un-navigable "bare backend" the redesign targets. For shallow labels
+    we relax the bar and name the top child dirs regardless, so such a
+    community always tells the founder *which parts* of backend it spans. DEEP
+    labels keep the conservative 20%/>1 gate so an already-specific community
+    isn't cluttered with noise. Returns at most :data:`_SUBAREA_TOP_N` prefixes,
+    and only when **more than one** child area exists (a single dominant
+    sub-area would have deepened the label, so echoing it adds nothing).
     """
     cleaned = [p.replace("\\", "/").strip("/") for p in paths if p]
     if not cleaned:
@@ -388,10 +395,14 @@ def _subareas_for(paths: list[str], label: str) -> list[str]:
         if len(parts) >= sub_depth and (not label or "/".join(parts[:label_depth]) == label)
     ]
     counts = Counter(prefixes)
+    # Shallow labels (``backend``, ``misc``, …) are the navigability problem —
+    # relax the fraction bar so a thinly-spread blob still names its areas.
+    shallow = label_depth <= 1
+    floor = 0.0 if shallow else _SUBAREA_FRACTION
     qualifying = [
         area
         for area, n in counts.most_common(_SUBAREA_TOP_N)
-        if area != label and n / total >= _SUBAREA_FRACTION
+        if area != label and n / total >= floor
     ]
     return qualifying if len(qualifying) > 1 else []
 
