@@ -17,6 +17,12 @@ import { type Session, clearSession, setSession } from "@/lib/auth/session";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+// ProductDetail mounts ProductDanger, which uses next/navigation's useRouter —
+// stub it so the surface renders under jsdom (no Next app-router context).
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ push: vi.fn(), refresh: vi.fn() }),
+}));
+
 const SESSION: Session = {
   accessToken: "tok",
   refreshToken: "ref",

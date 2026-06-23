@@ -137,6 +137,15 @@
     "noShipped": "Nothing shipped for this product yet.",
     "openArtifact": "Open artifact",
     "viewReport": "View report",
+    "danger": {
+      "heading": "Danger zone",
+      "delete": "Delete product",
+      "confirmLine": "Delete “{name}” and all its history? This can’t be undone.",
+      "cancel": "Cancel",
+      "confirmDelete": "Delete permanently",
+      "deleting": "Deleting…",
+      "error": "Couldn’t delete that product. Please try again."
+    },
     "files": "Files",
     "filesEmpty": "No files produced for this product yet.",
     "filesSelectHint": "Select a file to view it.",

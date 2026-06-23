@@ -137,6 +137,15 @@
     "noShipped": "이 제품은 아직 완료한 것이 없어요.",
     "openArtifact": "산출물 열기",
     "viewReport": "리포트 보기",
+    "danger": {
+      "heading": "위험 구역",
+      "delete": "제품 삭제",
+      "confirmLine": "“{name}” 제품과 모든 기록을 삭제할까요? 되돌릴 수 없어요.",
+      "cancel": "취소",
+      "confirmDelete": "영구 삭제",
+      "deleting": "삭제 중…",
+      "error": "제품을 삭제하지 못했어요. 다시 시도해 주세요."
+    },
     "files": "파일",
     "filesEmpty": "이 제품이 아직 만든 파일이 없어요.",
     "filesSelectHint": "볼 파일을 선택하세요.",

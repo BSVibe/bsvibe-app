@@ -35,6 +35,13 @@ export function createProduct(input: ProductCreate): Promise<Product> {
   });
 }
 
+/** Delete a product (hard delete; backend DELETE /api/v1/products/{id} → 204).
+ *  Lets the founder clear out finished / abandoned / test products so the list
+ *  stays the real ones. Admin-scoped server-side; the founder is admin. */
+export function deleteProduct(productId: string): Promise<void> {
+  return apiFetch<void>(`/api/v1/products/${productId}`, { method: "DELETE" });
+}
+
 /** List one directory level of a product's repo `main` tree (lazy — call again
  *  with a subdir `path` to expand a folder). Root when `path` is omitted. */
 export function listProductFiles(productId: string, path = ""): Promise<FileTreeEntry[]> {

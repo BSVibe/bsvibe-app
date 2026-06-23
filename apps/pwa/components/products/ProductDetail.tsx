@@ -7,6 +7,7 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import BootstrapStatusPanel from "./BootstrapStatusPanel";
 import ProductBindings from "./ProductBindings";
+import ProductDanger from "./ProductDanger";
 import ProductFiles from "./ProductFiles";
 import ProductHeader from "./ProductHeader";
 import ProductResources from "./ProductResources";
@@ -107,6 +108,7 @@ export default function ProductDetail({ slug }: { slug: string }) {
           <ProductFiles productId={loaded.view.id} />
           <ProductResources productId={loaded.view.id} />
           <ProductBindings productId={loaded.view.id} />
+          <ProductDanger productId={loaded.view.id} productName={loaded.view.name} />
         </>
       )}
     </div>
