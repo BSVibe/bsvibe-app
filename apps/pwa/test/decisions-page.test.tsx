@@ -33,8 +33,11 @@ import Decisions from "@/components/decisions/Decisions";
 import type {
   Checkpoint,
   DecisionLogEntry,
+  Deliverable,
+  Product,
   Proposal,
   ResolvedCheckpointItem,
+  Run,
   SafeModeItem,
   SafeModeResolvedItem,
 } from "@/lib/api/types";
@@ -144,6 +147,9 @@ function installFetch(opts: {
   decisions?: () => DecisionLogEntry[];
   resolvedSafemode?: () => SafeModeResolvedItem[];
   resolvedCheckpoints?: () => ResolvedCheckpointItem[];
+  runs?: () => Run[];
+  deliverables?: () => Deliverable[];
+  products?: () => Product[];
   onPost?: (url: string, init: RequestInit) => Response;
 }) {
   const proposals = opts.proposals ?? (() => []);
@@ -168,6 +174,17 @@ function installFetch(opts: {
       return json(resolvedCheckpoints());
     }
     if (method === "GET" && url.startsWith("/api/v1/checkpoints")) return json(checkpoints());
+    // Review-context join (lib/api/review-context) — the Decisions aggregator
+    // now fetches these to title each row + link its proof. Default to empty so
+    // rows fall back to their generic question (the join is best-effort).
+    if (method === "GET" && url.startsWith("/api/v1/runs"))
+      return json((opts.runs ?? (() => []))());
+    if (method === "GET" && url.startsWith("/api/v1/deliverables")) {
+      return json((opts.deliverables ?? (() => []))());
+    }
+    if (method === "GET" && url.startsWith("/api/v1/products")) {
+      return json((opts.products ?? (() => []))());
+    }
     if (method === "POST" && opts.onPost) return opts.onPost(url, init);
     throw new Error(`unexpected fetch ${method} ${url}`);
   });
@@ -232,6 +249,65 @@ describe("Decisions surface", () => {
     // knowledge (canon proposal) — verb + the Knowledge kind chip is the
     // proposal's existing proposal_kind chip ("merge")
     expect(screen.getByText(/merge concepts/)).toBeInTheDocument();
+  });
+
+  it("titles a held delivery with its task + links to the proof (no blind approval)", async () => {
+    // The review-context join: the delivery's deliverable → run → product, so
+    // the founder sees WHAT is shipping and can open the proof before approving.
+    installFetch({
+      safemode: () => [SAFEMODE],
+      deliverables: () =>
+        [
+          {
+            id: "del-1",
+            run_id: "run-9",
+            workspace_id: "ws-1",
+            deliverable_type: "pr",
+            summary: "Add factorial(n) utility with ValueError on negatives.",
+            artifact_refs: [],
+            artifact_uri: null,
+            verified: true,
+            created_at: "2026-05-23T12:00:00Z",
+          },
+        ] as Deliverable[],
+      runs: () =>
+        [
+          {
+            id: "run-9",
+            workspace_id: "ws-1",
+            product_id: "prod-1",
+            request_id: null,
+            status: "review_ready",
+            intent: "Add a factorial utility",
+            created_at: "2026-05-23T12:00:00Z",
+            updated_at: "2026-05-23T12:00:00Z",
+          },
+        ] as Run[],
+      products: () =>
+        [
+          {
+            id: "prod-1",
+            workspace_id: "ws-1",
+            name: "bsvibe-app",
+            slug: "bsvibe-app",
+            repo_url: null,
+            created_at: "2026-05-23T12:00:00Z",
+            updated_at: "2026-05-23T12:00:00Z",
+          },
+        ] as Product[],
+    });
+
+    render(<Decisions />);
+
+    // Concise title (the deliverable's summary), not just the generic question.
+    expect(
+      await screen.findByText("Add factorial(n) utility with ValueError on negatives."),
+    ).toBeInTheDocument();
+    // A "view proof" link pointing at the deliverable detail.
+    const proof = screen.getByRole("link", { name: /View proof/ });
+    expect(proof).toHaveAttribute("href", "/deliverables/del-1");
+    // The product chip.
+    expect(screen.getByText("bsvibe-app")).toBeInTheDocument();
   });
 
   it("approves a held delivery against the safemode endpoint", async () => {

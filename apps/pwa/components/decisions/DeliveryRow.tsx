@@ -3,6 +3,7 @@
 import { approveSafeModeItem, denySafeModeItem } from "@/lib/api/safemode";
 import type { PendingDelivery } from "@/lib/api/types";
 import { useTranslations } from "next-intl";
+import Link from "next/link";
 import { useState } from "react";
 import { relativeTime } from "./relative-time";
 
@@ -46,9 +47,20 @@ export default function DeliveryRow({
   return (
     <li className="decisions-row decisions-row--delivery">
       <span className="decisions-row__main">
-        <span className="decisions-row__q">{t("deliveryQuestion")}</span>
+        {/* Lead with WHAT is shipping (concise title) so the approve decision
+            is informed, not blind; the generic question becomes the subtitle. */}
+        <span className="decisions-row__q">{item.title || t("deliveryQuestion")}</span>
+        {item.title && <span className="decisions-row__sub">{t("deliveryQuestion")}</span>}
         <span className="decisions-row__meta">
           <span className="decisions-chip decisions-chip--delivery">{t("kindDelivery")}</span>
+          {item.productSlug && item.productSlug !== "workspace" && (
+            <span className="decisions-row__product">{item.productSlug}</span>
+          )}
+          {item.detailHref && (
+            <Link className="decisions-row__view" href={item.detailHref}>
+              {t("viewProof")}
+            </Link>
+          )}
           <span className="decisions-row__time">{relativeTime(item.createdAt, t)}</span>
         </span>
       </span>

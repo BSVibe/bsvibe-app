@@ -3,6 +3,7 @@
 import { resolveCheckpoint, resolveCheckpointAction } from "@/lib/api/checkpoints";
 import type { CheckpointAction, PendingCheckpoint } from "@/lib/api/types";
 import { useLocale, useTranslations } from "next-intl";
+import Link from "next/link";
 import { useId, useState } from "react";
 import { relativeTime } from "./relative-time";
 
@@ -104,8 +105,19 @@ export default function CheckpointRow({
     <li className="decisions-row decisions-row--decision">
       <span className="decisions-row__main">
         <span className="decisions-row__q">{item.question}</span>
+        {/* The task this checkpoint belongs to, so the founder knows which work
+            they're judging instead of answering a bare question. */}
+        {item.title && <span className="decisions-row__sub">{item.title}</span>}
         <span className="decisions-row__meta">
           <span className="decisions-chip decisions-chip--decision">{t("kindDecision")}</span>
+          {item.productSlug && item.productSlug !== "workspace" && (
+            <span className="decisions-row__product">{item.productSlug}</span>
+          )}
+          {item.detailHref && (
+            <Link className="decisions-row__view" href={item.detailHref}>
+              {t("viewProof")}
+            </Link>
+          )}
           <span className="decisions-row__time">{relativeTime(item.createdAt, t)}</span>
         </span>
       </span>

@@ -28,6 +28,7 @@
 import { conciseSummary } from "../text/summary";
 import { listDeliverables } from "./deliverables";
 import { listProducts } from "./products";
+import { type ReviewLookup, buildReviewLookup } from "./review-context";
 import { listRuns } from "./runs";
 import type {
   ActivityTone,
@@ -142,8 +143,9 @@ function toShippedItem(d: Deliverable, productSlug: string): ShippedItem {
   return item;
 }
 
-function toDetailRun(run: Run): ProductDetailRun {
+function toDetailRun(run: Run, lookup: ReviewLookup): ProductDetailRun {
   const { label, tone } = describeStatus(run.status);
+  const ctx = lookup.forRun(run.id);
   return {
     runId: run.id,
     status: run.status,
@@ -151,6 +153,8 @@ function toDetailRun(run: Run): ProductDetailRun {
     tone,
     updatedAt: run.updated_at,
     shipped: run.status === "shipped",
+    title: ctx.title,
+    detailHref: ctx.detailHref,
   };
 }
 
@@ -178,7 +182,6 @@ export async function getProductDetail(
 
   // Runs for THIS product, preserving the newest-first order of the list.
   const productRuns = runs.filter((r) => r.product_id === product.id);
-  const detailRuns = productRuns.map(toDetailRun);
   const latest = productRuns[0];
   const { status: currentStatus, tone: currentTone } = headlineFor(latest);
 
@@ -193,6 +196,12 @@ export async function getProductDetail(
   );
   const deliverables = perRun.flat();
   const shipped = deliverables.map((d) => toShippedItem(d, product.slug));
+
+  // Title + proof link per run: shipped runs link to their deliverable proof,
+  // the rest to the run — so a "Needs your review" row is openable, not a dead
+  // status line.
+  const lookup = buildReviewLookup(productRuns, deliverables, products);
+  const detailRuns = productRuns.map((r) => toDetailRun(r, lookup));
 
   return {
     id: product.id,

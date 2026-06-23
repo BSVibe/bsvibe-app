@@ -24,6 +24,7 @@ import { ApiError } from "./client";
 import { listPendingProposals } from "./decisions";
 import { listDeliverables } from "./deliverables";
 import { listProducts } from "./products";
+import { type ReviewLookup, buildReviewLookup } from "./review-context";
 import { listRuns } from "./runs";
 import { listSafeModeQueue } from "./safemode";
 import type {
@@ -48,7 +49,11 @@ function productSlug(products: Product[], productId: string | null): string {
   return products.find((p) => p.id === productId)?.slug ?? "workspace";
 }
 
-function needsYouFrom(proposals: Proposal[], queue: SafeModeItem[]): NeedsYouItem[] {
+function needsYouFrom(
+  proposals: Proposal[],
+  queue: SafeModeItem[],
+  lookup: ReviewLookup,
+): NeedsYouItem[] {
   const items: NeedsYouItem[] = [];
   for (const p of proposals) {
     items.push({
@@ -58,10 +63,15 @@ function needsYouFrom(proposals: Proposal[], queue: SafeModeItem[]): NeedsYouIte
     });
   }
   for (const item of queue) {
+    // Join the run/deliverable so "Needs you" names WHAT is held + links to the
+    // proof, instead of a bare "a delivery is held in Safe Mode".
+    const ctx = lookup.forDelivery(item.deliverable_id, item.run_id ?? null);
     items.push({
       id: `safemode-${item.id}`,
-      productSlug: "delivery",
+      productSlug: ctx.productSlug !== "workspace" ? ctx.productSlug : "delivery",
       question: "A delivery is held in Safe Mode. Approve to send it out?",
+      title: ctx.title,
+      detailHref: ctx.detailHref,
       // Resolvable in-place: approve dispatches it out, deny dismisses it.
       resolve: { kind: "safemode", itemId: item.id },
     });
@@ -143,9 +153,10 @@ export async function getBrief(): Promise<BriefView> {
       listDeliverables(_RUN_WINDOW).catch(emptyOnApiError<Deliverable>),
     ]);
 
+    const lookup = buildReviewLookup(runs, deliverables, products);
     return {
       working: activeWorkFrom(runs, products),
-      needsYou: needsYouFrom(proposals, queue),
+      needsYou: needsYouFrom(proposals, queue, lookup),
       stream: workStreamFrom(runs, deliverables, products),
       placeholder: false,
     };
