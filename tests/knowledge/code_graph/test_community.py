@@ -9,6 +9,8 @@ import networkx as nx
 import pytest
 
 from backend.knowledge.code_graph.community import (
+    _MAX_COMMUNITY,
+    _subdivide_oversized,
     annotate_communities,
     derive_community_labels,
     detect_communities,
@@ -59,6 +61,97 @@ class TestAnnotateCommunities:
         annotate_communities(g)
         for node in g.nodes:
             assert "community_id" in g.nodes[node]
+
+
+def _bridged_two_cluster_graph(per_cluster: int = 8) -> nx.DiGraph:
+    """Two sparse star-clusters joined by ONE bridge edge.
+
+    Modeled on the real failure: Leiden's modularity resolution limit merges
+    weakly-linked areas into one oversized community on a LARGE graph. We
+    reproduce that *deterministically* by handing the subdivider a base
+    membership that lumps both clusters into one community, then assert it
+    re-separates them.
+    """
+    g = nx.DiGraph()
+    a_hub, b_hub = "a0", "b0"
+    for i in range(1, per_cluster):
+        g.add_edge(a_hub, f"a{i}")
+    for i in range(1, per_cluster):
+        g.add_edge(b_hub, f"b{i}")
+    g.add_edge(a_hub, b_hub)  # the single weak bridge
+    return g
+
+
+def _sizes(membership: dict[str, int]) -> list[int]:
+    counts: dict[int, int] = {}
+    for cid in membership.values():
+        counts[cid] = counts.get(cid, 0) + 1
+    return sorted(counts.values(), reverse=True)
+
+
+class TestRecursiveSubdivision:
+    """F3 Lift 1 — split oversized communities (Leiden modularity's resolution
+    limit lumps distinct areas into one ``backend`` blob on big graphs).
+    Split-only: subdivision must NEVER increase a community's size."""
+
+    def test_oversized_splittable_community_is_subdivided(self) -> None:
+        g = _bridged_two_cluster_graph(per_cluster=8)  # 16 nodes
+        base = {n: 0 for n in g.nodes}  # resolution-limit merge: all in one
+        refined = _subdivide_oversized(g, base, max_size=10, min_part=3)
+        # The two clusters separate; no community keeps all 16.
+        assert len(set(refined.values())) >= 2
+        assert max(_sizes(refined)) < 16
+        assert refined["a1"] == refined["a0"]  # cluster A stays together
+        assert refined["b1"] == refined["b0"]  # cluster B stays together
+        assert refined["a0"] != refined["b0"]  # but A and B are split apart
+
+    def test_noop_when_all_communities_under_cap(self) -> None:
+        g = _bridged_two_cluster_graph(per_cluster=8)
+        base = {n: (0 if n.startswith("a") else 1) for n in g.nodes}  # already fine
+        refined = _subdivide_oversized(g, base, max_size=10, min_part=3)
+        assert _sizes(refined) == _sizes(base)  # unchanged partition shape
+
+    def test_split_only_never_increases_max_size(self) -> None:
+        g = _bridged_two_cluster_graph(per_cluster=8)
+        base = {n: 0 for n in g.nodes}
+        refined = _subdivide_oversized(g, base, max_size=10, min_part=3)
+        assert max(_sizes(refined)) <= max(_sizes(base))
+
+    def test_unsplittable_clique_stays_whole(self) -> None:
+        # A 12-node clique cannot be split into >=2 cohesive parts — keep it
+        # whole rather than shattering it into noise/singletons.
+        g = nx.DiGraph()
+        nodes = [f"k{i}" for i in range(12)]
+        for i in range(len(nodes)):
+            for j in range(i + 1, len(nodes)):
+                g.add_edge(nodes[i], nodes[j])
+        base = {n: 0 for n in g.nodes}
+        refined = _subdivide_oversized(g, base, max_size=8, min_part=3)
+        assert _sizes(refined) == [12]  # one community, not shattered
+
+    def test_detect_communities_is_deterministic(self) -> None:
+        # A larger graph (10 clusters chained) actually exercises Leiden's
+        # random node order — before the seed was wired this flaked run-to-run.
+        g = nx.DiGraph()
+        for c in range(10):
+            hub = f"c{c}_0"
+            for i in range(1, 7):
+                g.add_edge(hub, f"c{c}_{i}")
+            if c:  # chain clusters with a weak bridge
+                g.add_edge(f"c{c - 1}_0", hub)
+        runs = [detect_communities(g) for _ in range(3)]
+        assert runs[0] == runs[1] == runs[2]
+
+    def test_detect_communities_subdivision_is_split_only(self) -> None:
+        # End-to-end: enabling subdivision (small cap) never makes the largest
+        # community bigger than the single-pass result.
+        g = _bridged_two_cluster_graph(per_cluster=8)
+        single_pass = detect_communities(g, max_community_size=10_000)
+        subdivided = detect_communities(g, max_community_size=4)
+        assert max(_sizes(subdivided)) <= max(_sizes(single_pass))
+
+    def test_default_cap_constant_is_human_navigable(self) -> None:
+        assert 40 <= _MAX_COMMUNITY <= 100
 
 
 # ── Lift E25 — community labels ──────────────────────────────────────────────
