@@ -4092,6 +4092,57 @@ main.login {
   place-items: center;
 }
 
+/* F-M5 — Models tab: progressive disclosure (collapsed add forms) + two
+   conceptual groups (Compute / Routing) so the page reads as inventory +
+   policy, not a wall of always-open inputs. */
+.models-group {
+  margin-top: 28px;
+}
+.models-group__label {
+  margin: 0 0 10px;
+  font-size: 0.72rem;
+  font-weight: 650;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+.settings-add-toggle {
+  margin-left: auto;
+  border: 1px solid var(--hair-strong);
+  border-radius: 999px;
+  padding: 4px 12px;
+  font: inherit;
+  font-size: 0.78rem;
+  font-weight: 550;
+  background: transparent;
+  color: var(--ink);
+  cursor: pointer;
+}
+.settings-add-toggle:hover {
+  background: var(--accent-bg);
+}
+.settings-add-toggle:focus-visible {
+  outline: 2px solid var(--amber-dot);
+  outline-offset: 1px;
+}
+.settings-add-panel {
+  margin: 10px 0 4px;
+  padding: 14px;
+  border: 1px solid var(--hair-strong);
+  border-radius: 12px;
+  background: var(--surface);
+}
+.settings-add-cancel {
+  margin-top: 8px;
+  border: none;
+  background: none;
+  font: inherit;
+  font-size: 0.8rem;
+  color: var(--ink-3);
+  cursor: pointer;
+  text-decoration: underline;
+}
+
 .accounts__lede {
   margin: -8px 0 0;
   font-size: 0.86rem;

@@ -100,17 +100,24 @@ describe("Model accounts surface", () => {
     // The founder-facing jurisdiction picker is gone — invisible infra.
     expect(screen.queryByLabelText(/Data jurisdiction/i)).not.toBeInTheDocument();
 
+    // The add form is collapsed by default — open it before filling it in.
+    expect(screen.queryByLabelText(/^Provider$/i)).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "+ Add account" }));
+
     await userEvent.type(screen.getByLabelText(/^Provider$/i), "openai");
     await userEvent.type(screen.getByLabelText(/Model identifier/i), "gpt-5");
     await userEvent.type(screen.getByLabelText(/^Label$/i), "Primary");
     await userEvent.type(screen.getByLabelText(/^API key/i), "sk-super-secret");
     await userEvent.click(screen.getByRole("button", { name: /^Add model account$/i }));
 
-    // A success confirmation appears — naming the account, never the key.
+    // On success the form collapses and the list re-reads — the new account
+    // row (label, no key) is the confirmation; the secret is never echoed.
     await waitFor(() => {
-      expect(screen.getByText(/Added .Primary./)).toBeInTheDocument();
+      expect(screen.getByText("Primary")).toBeInTheDocument();
     });
     expect(screen.queryByText("sk-super-secret")).not.toBeInTheDocument();
+    // The add form collapsed back (its inputs are gone again).
+    expect(screen.queryByLabelText(/^Provider$/i)).not.toBeInTheDocument();
 
     // The create POST carried the form body, including the plaintext key once.
     const createCall = fetchMock.mock.calls[1] as unknown as [string, RequestInit];
@@ -228,6 +235,7 @@ describe("Model accounts surface", () => {
       expect(screen.getByText(/without it I can.t run work/i)).toBeInTheDocument(),
     );
 
+    await userEvent.click(screen.getByRole("button", { name: "+ Add account" }));
     await userEvent.type(screen.getByLabelText(/^Provider$/i), "openai");
     await userEvent.type(screen.getByLabelText(/Model identifier/i), "gpt-5");
     await userEvent.type(screen.getByLabelText(/^Label$/i), "Primary");

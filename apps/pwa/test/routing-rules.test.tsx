@@ -86,6 +86,8 @@ describe("Routing rules surface", () => {
       expect(screen.getByText(/All work goes to the active model account/i)).toBeInTheDocument(),
     );
 
+    // The add form is collapsed by default — open it before filling it in.
+    await userEvent.click(screen.getByRole("button", { name: "+ Add rule" }));
     await userEvent.type(screen.getByLabelText(/Rule name/i), "Substantial work");
     await userEvent.type(screen.getByLabelText(/Route to/i), "opencode/plan-builder");
     await userEvent.click(screen.getByRole("button", { name: /^Add rule$/i }));
