@@ -1019,6 +1019,35 @@ main.login {
   color: var(--ink-3);
 }
 
+/* The row title is now the link (consistent with Decisions / Needs-you). Keep
+   it inheriting the ink colour + ellipsis; underline only on hover. */
+.stream__title--link {
+  display: block;
+  color: var(--ink);
+  text-decoration: none;
+}
+.stream__title--link:hover {
+  text-decoration: underline;
+}
+
+/* Status as text (the coloured dot is reinforcement, not the only signal). */
+.stream__status {
+  font-weight: 600;
+}
+.stream__status--shipped {
+  color: var(--green-ink);
+}
+.stream__status--review,
+.stream__status--working {
+  color: var(--amber-ink);
+}
+.stream__status--failed {
+  color: var(--rose-500, #cf5b5b);
+}
+.stream__status--neutral {
+  color: var(--ink-3);
+}
+
 .stream__meta {
   display: flex;
   align-items: baseline;

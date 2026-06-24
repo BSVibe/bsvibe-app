@@ -1,21 +1,11 @@
 "use client";
 
 import { relativeTime } from "@/components/decisions/relative-time";
-import type { ArtifactType, RunStatus, WorkStreamItem } from "@/lib/api/types";
+import type { RunStatus, WorkStreamItem } from "@/lib/api/types";
 import { STATUS_LABEL_KEY, STATUS_TONE } from "@/lib/runs/status";
 import { useTranslations } from "next-intl";
 import Link from "next/link";
 import { useMemo, useState } from "react";
-
-/** Per-artifact-type marker (matches the rest of the app's glyph vocabulary). */
-const ARTIFACT: Record<ArtifactType, string> = {
-  pr: "◆",
-  doc: "▤",
-  image: "▦",
-  slides: "▥",
-  file: "▢",
-  email: "✉",
-};
 
 type Filter = "all" | "shipped" | "needs-you" | "failed";
 
@@ -65,39 +55,28 @@ export default function WorkStream({ items }: { items: WorkStreamItem[] }) {
         <ul className="stream__list">
           {visible.map((item) => {
             const tone = STATUS_TONE[item.status];
+            const statusLabel = t(STATUS_LABEL_KEY[item.status]);
+            // The whole row title is the link (consistent with the Decisions /
+            // Needs-you rows, which also link the title) — a deliverable opens
+            // its report, otherwise the run.
+            const href = item.deliverableId
+              ? `/deliverables/${item.deliverableId}`
+              : `/runs/${item.runId}`;
             return (
               <li key={item.runId} className="stream__row">
-                <span
-                  className={`stream__marker stream__marker--${tone}`}
-                  aria-label={t(STATUS_LABEL_KEY[item.status])}
-                  title={t(STATUS_LABEL_KEY[item.status])}
-                />
+                <span className={`stream__marker stream__marker--${tone}`} aria-hidden="true" />
                 <div className="stream__body">
-                  <span className="stream__title">
-                    {item.artifactType && (
-                      <span className="stream__icon" aria-hidden="true">
-                        {ARTIFACT[item.artifactType]}{" "}
-                      </span>
-                    )}
-                    {item.title ?? t(STATUS_LABEL_KEY[item.status])}
-                  </span>
+                  <Link className="stream__title stream__title--link" href={href}>
+                    {item.title ?? statusLabel}
+                  </Link>
                   <span className="stream__meta">
+                    {/* Status as text, not colour alone — the marker is just
+                        reinforcement. */}
+                    <span className={`stream__status stream__status--${tone}`}>{statusLabel}</span>
                     <span className="stream__product">{item.productSlug}</span>
                     <span className="stream__time">{relativeTime(item.updatedAt, t)}</span>
                   </span>
                 </div>
-                {item.deliverableId ? (
-                  <Link
-                    className="stream__report-link"
-                    href={`/deliverables/${item.deliverableId}`}
-                  >
-                    {t("viewReport")}
-                  </Link>
-                ) : (
-                  <Link className="stream__report-link" href={`/runs/${item.runId}`}>
-                    {t("openRun")}
-                  </Link>
-                )}
               </li>
             );
           })}
