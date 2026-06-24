@@ -881,6 +881,8 @@
     "noVerification": "No verification recorded for this deliverable yet.",
     "noChecksDeclared": "No checks were declared for this verification.",
     "artifacts": "Artifacts",
+    "files": "Files",
+    "linesAdded": "{count} lines added",
     "noArtifacts": "Nothing was produced for this deliverable.",
     "openArtifact": "Open artifact",
     "artifactLoading": "Opening this file…",
