@@ -87,6 +87,14 @@ class WorkspaceRow(WorkspacesBase):
     # an open INTEGER so a future settings-row migration doesn't need a
     # schema change.
     audit_retention_days: Mapped[int | None] = mapped_column(Integer, nullable=True, default=None)
+    # The language LLM-generated user-facing content is written in (knowledge
+    # notes, the agent's decision questions, framing). A short locale tag
+    # ("en" / "ko"); the founder sets it via Settings → Language. Default "en".
+    # NOT the FS region (that is ``region``) and NOT a routing knob — purely the
+    # OUTPUT language threaded into generation prompts.
+    language: Mapped[str] = mapped_column(
+        String(8), nullable=False, default="en", server_default="en"
+    )
     # Lift E1 — workspace-default ModelAccount fallback for the new
     # :class:`backend.dispatch.resolver.ModelAccountResolver`. The founder
     # picks this through Settings → Models or the MCP tool

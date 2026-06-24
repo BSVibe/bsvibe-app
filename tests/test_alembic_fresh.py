@@ -121,9 +121,7 @@ def test_fresh_pg_upgrade_round_trip():
     # Phase 1 — fresh upgrade.
     _alembic(["upgrade", "head"], env_extra=env_extra)
     stamped = asyncio.run(_stamped_head(url))
-    assert stamped == "connector_oauth_tokens_status", (
-        f"expected head connector_oauth_tokens_status, got {stamped}"
-    )
+    assert stamped == "workspace_language", f"expected head workspace_language, got {stamped}"
 
     # Phase 2 — full downgrade. Verifies every revision's downgrade path.
     _alembic(["downgrade", "base"], env_extra=env_extra)
@@ -131,7 +129,7 @@ def test_fresh_pg_upgrade_round_trip():
     # Phase 3 — re-upgrade. Verifies the chain is idempotent.
     _alembic(["upgrade", "head"], env_extra=env_extra)
     stamped = asyncio.run(_stamped_head(url))
-    assert stamped == "connector_oauth_tokens_status"
+    assert stamped == "workspace_language"
 
 
 def test_model_account_api_key_encrypted_is_nullable_after_upgrade():

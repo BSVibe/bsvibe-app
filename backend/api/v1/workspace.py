@@ -22,7 +22,7 @@ engage them.
 from __future__ import annotations
 
 import uuid
-from typing import Annotated
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field
@@ -52,6 +52,9 @@ class WorkspaceOut(BaseModel):
     # ``NoMatchingRouteError`` when no rule matches and this is unset
     # (BSVibe NEVER auto-stamps it per ``bsvibe-no-implicit-routing``).
     default_account_id: uuid.UUID | None = None
+    # The language LLM-generated user-facing prose is written in (knowledge
+    # notes, decision questions, framing). A short locale tag; "en" default.
+    language: str = "en"
 
 
 class WorkspaceUpdate(BaseModel):
@@ -84,6 +87,10 @@ class WorkspaceUpdate(BaseModel):
     # the target account exists in this workspace + is active — a
     # cross-workspace pointer is a 422.
     default_account_id: uuid.UUID | None = Field(default=None)
+    # The LLM output language. Omit to leave unchanged; a supported tag
+    # ("en" / "ko") to set. The PWA Language control sends this alongside the
+    # client locale so the UI and the generated prose share one language.
+    language: Literal["en", "ko"] | None = Field(default=None)
 
 
 @router.get("", response_model=WorkspaceOut)
@@ -100,6 +107,7 @@ async def get_workspace(
         name=workspace.name,
         audit_retention_days=workspace.audit_retention_days,
         default_account_id=workspace.default_account_id,
+        language=workspace.language,
     )
 
 
@@ -140,12 +148,15 @@ async def update_workspace(
         if payload.default_account_id is not None:
             await _ensure_account_in_workspace(session, workspace_id, payload.default_account_id)
         workspace.default_account_id = payload.default_account_id
+    if "language" in sent and payload.language is not None:
+        workspace.language = payload.language
     await session.commit()
     return WorkspaceOut(
         id=workspace.id,
         name=workspace.name,
         audit_retention_days=workspace.audit_retention_days,
         default_account_id=workspace.default_account_id,
+        language=workspace.language,
     )
 
 
