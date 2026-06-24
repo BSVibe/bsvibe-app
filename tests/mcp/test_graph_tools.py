@@ -116,6 +116,12 @@ async def seeded_graph(db, workspace_id) -> AsyncIterator[Path]:
 
     out = vault / "code_graph" / "graph.json"
     save_graph(graph, out)
+    # Mirror prod: the labels sidecar is written alongside the graph. The
+    # community overview surfaces only LABELED communities, so the fixture must
+    # persist labels for its two (≥min_size) communities.
+    from backend.knowledge.code_graph.pipeline import persist_community_labels
+
+    persist_community_labels(graph, vault / "code_graph" / "communities.json")
     yield vault
 
 
@@ -220,6 +226,47 @@ async def test_community_overview_and_members(
     assert cids == {0, 1}
     # Members of community 0 all have community_id=0 in raw data.
     assert all(m["community_id"] == 0 for m in members["members"])
+
+
+async def test_community_overview_excludes_unlabeled_singletons(
+    db, workspace_id, user_id, registry, seeded_graph
+) -> None:
+    """The overview must surface only the NAVIGABLE (labeled) communities.
+    Leiden + subdivision leave a long tail of singleton fragments with no label;
+    listing all ~2500 raw ids buried the meaningful ones. Add an unlabeled
+    singleton (community 99) to the graph and assert it is NOT in the overview,
+    and that the labeled communities come back biggest-first."""
+
+    from backend.knowledge.code_graph.graph import load_graph, save_graph
+
+    gpath = seeded_graph / "code_graph" / "graph.json"
+    graph: nx.DiGraph = load_graph(gpath)
+    graph.add_node(
+        "py:z.py::stray",
+        id="py:z.py::stray",
+        kind="function",
+        name="stray",
+        path="z.py",
+        start_line=1,
+        end_line=2,
+        language="python",
+        community_id=99,  # a singleton — below min_size, so no label entry
+    )
+    save_graph(graph, gpath)
+
+    async with db() as s:
+        ctx = ToolContext(
+            principal=_principal(workspace_id=workspace_id, user_id=user_id, scopes=("mcp:read",)),
+            session=s,
+        )
+        overview = await registry.call_tool("bsvibe_graph_community", {}, ctx)
+
+    cids = [c["community_id"] for c in overview["communities"]]
+    assert 99 not in cids, "unlabeled singleton must not appear in the overview"
+    assert set(cids) == {0, 1}
+    # Biggest-first ordering (both size 3 here → tie broken by id, still sorted).
+    sizes = [c["size"] for c in overview["communities"]]
+    assert sizes == sorted(sizes, reverse=True)
 
 
 async def test_community_overview_surfaces_subareas(
