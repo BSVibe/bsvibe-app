@@ -61,18 +61,17 @@ describe("Brief (Work Home) surface", () => {
     expect(screen.getByText("1")).toBeInTheDocument();
   });
 
-  it("lists done work in the stream, with a View report link when it shipped", () => {
+  it("links each stream row's title to its report (deliverable) or run", () => {
     render(<BriefContent view={VIEW} />);
     const stream = screen.getByRole("region", { name: "Work stream" });
-    expect(within(stream).getByText("getRelatedPosts function")).toBeInTheDocument();
-    expect(within(stream).getByText("Broken link fix")).toBeInTheDocument();
-    // The shipped row links to its Delivery Report; the failed row (no
+    // The row TITLE is the link (consistent with the Decisions / Needs-you
+    // rows) — a shipped row opens its Delivery Report, the failed row (no
     // deliverable) falls back to opening the run.
-    expect(within(stream).getByRole("link", { name: /View report/ })).toHaveAttribute(
+    expect(within(stream).getByRole("link", { name: /getRelatedPosts function/ })).toHaveAttribute(
       "href",
       "/deliverables/d1",
     );
-    expect(within(stream).getByRole("link", { name: /Open run/ })).toHaveAttribute(
+    expect(within(stream).getByRole("link", { name: /Broken link fix/ })).toHaveAttribute(
       "href",
       "/runs/r-fail",
     );
