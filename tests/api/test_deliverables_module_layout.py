@@ -39,7 +39,7 @@ def test_router_and_retract_handler_reexported() -> None:
 
 
 def test_all_endpoint_urls_still_routable() -> None:
-    """The 5 deliverables endpoints remain reachable via the aggregator router."""
+    """The 6 deliverables endpoints remain reachable via the aggregator router."""
     from backend.api.v1.deliverables import router
 
     methods_and_paths: set[tuple[str, str]] = set()
@@ -53,6 +53,7 @@ def test_all_endpoint_urls_still_routable() -> None:
         ("GET", ""),
         ("GET", "/{deliverable_id}"),
         ("GET", "/{deliverable_id}/report"),
+        ("GET", "/{deliverable_id}/diff"),
         ("GET", "/{deliverable_id}/artifacts/{ref:path}"),
         ("POST", "/{deliverable_id}/retract"),
     }
@@ -66,6 +67,7 @@ def test_all_endpoint_urls_still_routable() -> None:
     [
         "backend.api.v1.deliverables.list_get",
         "backend.api.v1.deliverables.proof",
+        "backend.api.v1.deliverables.diff",
         "backend.api.v1.deliverables.retract",
         "backend.api.v1.deliverables._schemas",
     ],

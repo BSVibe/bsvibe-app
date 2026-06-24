@@ -27,6 +27,7 @@ from backend.storage.product_workspace import (
     ProductWorkspaceBusy,
     abort_merge,
     add_run_worktree,
+    capture_run_diff,
     commit_worktree,
     force_merge_theirs,
     init_product_workspace,
@@ -310,3 +311,69 @@ async def test_product_workspace_lock_releases_on_exit() -> None:
             pass
 
     await engine.dispose()
+
+
+# ---------------------------------------------------------------------------
+# capture_run_diff — Lift 2a: the run's own changes as a unified diff
+# ---------------------------------------------------------------------------
+
+
+async def test_capture_run_diff_returns_additions_for_new_file() -> None:
+    """A freshly produced file appears as a unified diff of additions
+    (``git diff main...HEAD`` — the run's own changes vs the merge base)."""
+    product_id = uuid.uuid4()
+    run_id = uuid.uuid4()
+    await init_product_workspace(product_id)
+    worktree = await add_run_worktree(product_id, run_id)
+    (worktree / "hello.py").write_text("def add(a, b):\n    return a + b\n")
+    await commit_worktree(product_id, run_id, message="agent: add()")
+    await merge_main_into_worktree(product_id, run_id)
+
+    diff = await capture_run_diff(product_id, run_id)
+    assert diff is not None
+    # Standard unified-diff markers for a new file.
+    assert "diff --git a/hello.py b/hello.py" in diff
+    assert "new file" in diff
+    assert "+def add(a, b):" in diff
+
+
+async def test_capture_run_diff_shows_modification_as_red_green() -> None:
+    """Editing a file that already exists on main shows BOTH the removed
+    (red) and added (green) lines — true old↔new, not all-additions."""
+    product_id = uuid.uuid4()
+    run_id = uuid.uuid4()
+    await init_product_workspace(product_id)
+    product = product_workspace_path(product_id)
+
+    # A base file lands on main BEFORE the run branches.
+    (product / "calc.py").write_text("def add(a, b):\n    return a + b\n")
+    await _git("add", "-A", cwd=product)
+    await _git("commit", "-m", "main: seed calc.py", cwd=product)
+
+    worktree = await add_run_worktree(product_id, run_id)
+    # The run rewrites the body of the existing function.
+    (worktree / "calc.py").write_text("def add(a, b):\n    return a + b + 0\n")
+    await commit_worktree(product_id, run_id, message="agent: tweak add()")
+    await merge_main_into_worktree(product_id, run_id)
+
+    diff = await capture_run_diff(product_id, run_id)
+    assert diff is not None
+    assert "-    return a + b" in diff
+    assert "+    return a + b + 0" in diff
+
+
+async def test_capture_run_diff_none_when_nothing_changed() -> None:
+    """A run that wrote nothing has no diff to capture → ``None``."""
+    product_id = uuid.uuid4()
+    run_id = uuid.uuid4()
+    await init_product_workspace(product_id)
+    await add_run_worktree(product_id, run_id)
+
+    diff = await capture_run_diff(product_id, run_id)
+    assert diff is None
+
+
+async def test_capture_run_diff_none_when_worktree_absent() -> None:
+    """No worktree on disk (cleaned / non-product run) → ``None``, never raises."""
+    diff = await capture_run_diff(uuid.uuid4(), uuid.uuid4())
+    assert diff is None

@@ -402,6 +402,35 @@ async def commit_worktree(
     return head.stdout.strip()
 
 
+async def capture_run_diff(product_id: uuid.UUID, run_id: uuid.UUID) -> str | None:
+    """The run's OWN changes as a unified diff (``git diff main...HEAD``), or ``None``.
+
+    Three-dot ``main...HEAD`` diffs against the merge-base of main and the run
+    branch, so it captures exactly what THIS run produced — new files as
+    additions, edited files as red/green — and excludes anything that arrived by
+    merging main in (the verify-time :func:`merge_main_into_worktree`).
+
+    MUST be called while the run worktree is still alive (verify-time, before
+    auto-ship's :func:`merge_to_main` fast-forwards main onto HEAD) — once main
+    equals HEAD the three-dot diff is empty.
+
+    Best-effort: returns ``None`` (never raises) when the worktree is gone (a
+    cleaned / non-product run), isn't a real git worktree, git errors, or there
+    are no changes — diff capture must never break the verified terminal.
+    """
+    worktree = run_worktree_path(run_id)
+    if not (worktree / ".git").exists():
+        return None
+    try:
+        result = await _git("diff", "--no-color", "main...HEAD", cwd=worktree, check=False)
+    except (ProductWorkspaceError, OSError):
+        return None
+    if result.returncode != 0:
+        return None
+    diff = result.stdout
+    return diff if diff.strip() else None
+
+
 async def merge_main_into_worktree(product_id: uuid.UUID, run_id: uuid.UUID) -> MergeOutcome:
     """Pull ``main`` into the run worktree.
 

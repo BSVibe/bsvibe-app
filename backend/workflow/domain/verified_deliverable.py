@@ -40,6 +40,32 @@ logger = structlog.get_logger(__name__)
 
 _SETTLE_SUMMARY_CAP = 500
 
+# Cap for the captured unified diff stored on the deliverable payload. A typical
+# deliverable diff is a few KB; this guards a runaway diff (a large generated/
+# vendored file) from bloating the row. Past it, the leading bytes are kept and
+# ``diff_truncated`` is flagged so the viewer shows a calm "showing the first
+# part" note rather than persisting an unbounded blob.
+_MAX_DIFF_CHARS = 256 * 1024
+
+
+async def _capture_product_run_diff(run: ExecutionRun) -> tuple[str | None, bool]:
+    """The run's own changes as a (possibly truncated) unified diff, or ``(None,
+    False)``. Product runs only — a non-product (Direct) run has no worktree and
+    no 'before' state, so there is nothing to diff. Best-effort: any failure
+    degrades to no diff, never breaks the verified terminal."""
+    if run.product_id is None:
+        return None, False
+    from backend.storage.product_workspace import (
+        capture_run_diff,  # noqa: PLC0415 — lazy, cross-layer
+    )
+
+    diff = await capture_run_diff(run.product_id, run.id)
+    if diff is None:
+        return None, False
+    if len(diff) > _MAX_DIFF_CHARS:
+        return diff[:_MAX_DIFF_CHARS], True
+    return diff, False
+
 
 async def settle_run_context(session: AsyncSession, run: ExecutionRun) -> dict[str, Any]:
     """Resolve the run's stable settle-clustering context.
@@ -87,6 +113,17 @@ async def write_verified_deliverable(
     event + settle payloads (matching the native path); the Deliverable itself
     keeps the full summary.
     """
+    # Lift 2a: capture the run's real old↔new diff while the worktree is still
+    # alive (verify-time, before auto-ship cleanup) so the report can render
+    # GitHub-style red/green. Best-effort + product-run only; a missing diff
+    # leaves the payload as before and the viewer falls back to additions.
+    payload: dict[str, Any] = {"artifact_refs": artifact_refs, "summary": summary}
+    diff, diff_truncated = await _capture_product_run_diff(run)
+    if diff is not None:
+        payload["diff"] = diff
+        if diff_truncated:
+            payload["diff_truncated"] = True
+
     deliverable = Deliverable(
         id=uuid.uuid4(),
         run_id=run.id,
@@ -94,7 +131,7 @@ async def write_verified_deliverable(
         deliverable_type=DeliverableType.CODE,
         artifact_uri=None,
         diff_url=None,
-        payload={"artifact_refs": artifact_refs, "summary": summary},
+        payload=payload,
     )
     session.add(deliverable)
     await session.flush()

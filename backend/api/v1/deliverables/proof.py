@@ -10,6 +10,9 @@ Two endpoints — both glass-box proof reads, both thin adapters (D35):
   workspace via the per-run :class:`ArtifactStore`. Falls back to the
   product main checkout for product-bound runs whose worktree was removed
   after W2 auto-ship.
+
+The captured-diff read (``GET /{id}/diff``) lives in the sibling
+:mod:`.diff` sub-file (kept separate to hold each adapter under the D35 ceiling).
 """
 
 from __future__ import annotations
