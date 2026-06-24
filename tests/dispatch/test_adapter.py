@@ -111,6 +111,41 @@ class TestLiteLLMAdapter:
         assert kwargs["messages"][0] == {"role": "system", "content": "be terse"}
         assert kwargs["messages"][1] == {"role": "user", "content": "hi"}
 
+    async def test_chat_appends_output_language_directive(self) -> None:
+        """#6 — when the workspace output language is set (via the contextvar the
+        resolver stamps), chat() appends a 'write prose in <lang>' directive to
+        the system prompt so generated prose follows the workspace language.
+        English (the default) appends nothing."""
+        from backend.identity.output_language import set_output_language
+
+        account = _stub_account()
+        mock_completion = AsyncMock(
+            return_value={
+                "choices": [{"message": {"content": "x", "tool_calls": []}}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1},
+            }
+        )
+        adapter = LiteLLMAdapter(
+            account=account,
+            api_key="",
+            llm=LlmClient(completion_fn=mock_completion),
+            workspace_id=account.workspace_id,
+            account_id=account.account_id,
+            model_account_id=account.id,
+        )
+        try:
+            set_output_language("ko")
+            await adapter.chat(system="be terse", messages=[{"role": "user", "content": "hi"}])
+            sys_msg = mock_completion.call_args.kwargs["messages"][0]["content"]
+            assert sys_msg.startswith("be terse")
+            assert "Korean" in sys_msg
+
+            set_output_language("en")
+            await adapter.chat(system="be terse", messages=[{"role": "user", "content": "hi"}])
+            assert mock_completion.call_args.kwargs["messages"][0]["content"] == "be terse"
+        finally:
+            set_output_language("en")
+
     async def test_supported_methods_chat_only(self) -> None:
         adapter = LiteLLMAdapter(
             account=_stub_account(),

@@ -87,6 +87,7 @@ async def test_get_workspace_returns_id_and_name(client_with_ws) -> None:
         # Lift E1 — workspace-default ModelAccount fallback surfaces here;
         # ``None`` until the founder picks one via PATCH or MCP.
         "default_account_id": None,
+        "language": "en",
     }
 
 
@@ -99,6 +100,7 @@ async def test_patch_workspace_renames_and_persists(client_with_ws) -> None:
         "name": "Acme Inc.",
         "audit_retention_days": None,
         "default_account_id": None,
+        "language": "en",
     }
 
     # The row in the database actually changed.
@@ -120,6 +122,7 @@ async def test_patch_workspace_sets_audit_retention_days(client_with_ws) -> None
         "name": "Acme",  # unchanged
         "audit_retention_days": 30,
         "default_account_id": None,
+        "language": "en",
     }
     async with db() as s:
         row = (
@@ -127,6 +130,23 @@ async def test_patch_workspace_sets_audit_retention_days(client_with_ws) -> None
         ).scalar_one()
         assert row.audit_retention_days == 30
         assert row.name == "Acme"  # untouched by retention-only PATCH
+
+
+async def test_patch_workspace_sets_language(client_with_ws) -> None:
+    """#6 — the founder sets the workspace's LLM output language; it persists and
+    is threaded into generation prompts. Default is 'en'."""
+    c, workspace_id, db = client_with_ws
+    r = await c.patch("/api/v1/workspace", json={"language": "ko"})
+    assert r.status_code == 200, r.text
+    assert r.json()["language"] == "ko"
+    async with db() as s:
+        row = (
+            await s.execute(select(WorkspaceRow).where(WorkspaceRow.id == workspace_id))
+        ).scalar_one()
+        assert row.language == "ko"
+    # An unsupported tag is rejected (422), never silently stored.
+    bad = await c.patch("/api/v1/workspace", json={"language": "fr"})
+    assert bad.status_code == 422
 
 
 async def test_patch_workspace_unsets_audit_retention_days_to_forever(client_with_ws) -> None:

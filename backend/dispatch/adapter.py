@@ -193,7 +193,15 @@ class LiteLLMAdapter:
         messages: list[ChatMessage],
         tools: list[dict[str, Any]] | None = None,
     ) -> ChatResponse:
-        full_messages: list[ChatMessage] = [{"role": "system", "content": system}]
+        # Thread the workspace OUTPUT language into the prose-generating chat
+        # path (frame / ingest / judge / agent-loop questions all resolve a
+        # LiteLLM adapter): empty for English, else a "write prose in <lang>"
+        # suffix. Set on the contextvar by the resolver from workspaces.language.
+        from backend.identity.output_language import language_directive  # noqa: PLC0415
+
+        full_messages: list[ChatMessage] = [
+            {"role": "system", "content": system + language_directive()}
+        ]
         full_messages.extend(dict(m) for m in messages)
         # Fold the per-caller timeout into ``extra_params`` so it lands in
         # ``litellm.acompletion``'s ``timeout`` kwarg (LiteLLM honours

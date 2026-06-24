@@ -174,6 +174,23 @@ class ModelAccountResolver:
         # the rule matcher.
         spec = get_caller_spec(caller_id, skill_names=self._skill_names)
 
+        # Thread the workspace OUTPUT language onto the contextvar so the
+        # adapter's ``chat`` can append a "write prose in <lang>" directive to
+        # every chat-shaped generation (frame / ingest / judge / agent-loop
+        # questions). resolve_for runs in the same task as the chat call. NULL /
+        # missing → "en" (the default), which adds nothing to the prompt.
+        from sqlalchemy import select  # noqa: PLC0415
+
+        from backend.identity.output_language import set_output_language  # noqa: PLC0415
+        from backend.identity.workspaces_db import WorkspaceRow  # noqa: PLC0415
+
+        language = (
+            await self._session.execute(
+                select(WorkspaceRow.language).where(WorkspaceRow.id == workspace_id)
+            )
+        ).scalar_one_or_none()
+        set_output_language(language)
+
         # 1. Explicit rule — first match by priority.
         account = await self._match_rule(caller_id, workspace_id)
         source = "explicit_rule"

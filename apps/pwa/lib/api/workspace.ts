@@ -24,6 +24,10 @@ export interface WorkspaceInfo {
    *  fallback. `null` = the founder has not picked one yet (resolver
    *  hard-fails on unmatched rules). */
   default_account_id?: string | null;
+  /** #6 — the language LLM-generated user-facing prose is written in
+   *  (knowledge notes, decision questions, framing). The Settings Language
+   *  control sets this alongside the client locale. Defaults "en". */
+  language?: string;
 }
 
 /** GET — load the active workspace. */
@@ -48,5 +52,15 @@ export function setWorkspaceDefaultAccount(accountId: string | null): Promise<Wo
   return apiFetch<WorkspaceInfo>("/api/v1/workspace", {
     method: "PATCH",
     body: JSON.stringify({ default_account_id: accountId }),
+  });
+}
+
+/** #6 — PATCH the workspace's LLM output language ("en" / "ko"), so generated
+ *  prose (knowledge notes, decision questions, framing) follows the founder's
+ *  language. Set by the Settings → Language control alongside the client locale. */
+export function setWorkspaceLanguage(language: string): Promise<WorkspaceInfo> {
+  return apiFetch<WorkspaceInfo>("/api/v1/workspace", {
+    method: "PATCH",
+    body: JSON.stringify({ language }),
   });
 }

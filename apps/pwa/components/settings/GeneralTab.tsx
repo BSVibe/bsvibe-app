@@ -1,7 +1,7 @@
 "use client";
 
 import { ApiError } from "@/lib/api/client";
-import { getWorkspace, renameWorkspace } from "@/lib/api/workspace";
+import { getWorkspace, renameWorkspace, setWorkspaceLanguage } from "@/lib/api/workspace";
 import { useSession } from "@/lib/auth/session";
 import { type Locale, resolveLocale } from "@/lib/i18n/config";
 import { setLocaleCookie } from "@/lib/i18n/locale";
@@ -120,6 +120,10 @@ export default function GeneralTab() {
     updatePref("language", value);
     const locale: Locale = resolveLocale(value);
     setLocaleCookie(locale);
+    // #6 — also persist the workspace's LLM OUTPUT language so generated prose
+    // (knowledge notes, decision questions, framing) follows the same language.
+    // Best-effort: a failed PATCH must never block the live UI locale switch.
+    void setWorkspaceLanguage(locale).catch(() => {});
     router.refresh();
   }
 
