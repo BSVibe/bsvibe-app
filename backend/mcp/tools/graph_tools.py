@@ -316,18 +316,24 @@ async def _h_community(args: CommunityInput, ctx: ToolContext) -> Any:
                 continue
             cid = int(cid_raw)
             sizes[cid] = sizes.get(cid, 0) + 1
+        # Only the LABELED communities are navigable. Leiden + recursive
+        # subdivision leave a long tail of singleton / 2-node fragments that
+        # derive_community_labels drops (min_size); listing all ~2500 raw ids
+        # (most with label=None) buried the ~370 meaningful ones. Surface the
+        # labeled communities, biggest first.
         summaries = [
             _CommunitySummary(
                 community_id=cid,
-                size=n,
-                label=labels.get(cid, {}).get("label"),
-                description=labels.get(cid, {}).get("description"),
-                top_symbols=list(labels.get(cid, {}).get("top_symbols") or []),
-                subareas=list(labels.get(cid, {}).get("subareas") or []),
-                top_paths=list(labels.get(cid, {}).get("top_paths") or []),
+                size=sizes.get(cid, int(entry.get("size") or 0)),
+                label=entry.get("label"),
+                description=entry.get("description"),
+                top_symbols=list(entry.get("top_symbols") or []),
+                subareas=list(entry.get("subareas") or []),
+                top_paths=list(entry.get("top_paths") or []),
             )
-            for cid, n in sorted(sizes.items())
+            for cid, entry in labels.items()
         ]
+        summaries.sort(key=lambda s: (-s.size, s.community_id))
         return CommunityOutput(total=len(summaries), communities=summaries)
     target = args.community_id
     members: list[dict[str, Any]] = []
