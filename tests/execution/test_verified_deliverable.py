@@ -14,6 +14,13 @@ import uuid
 import pytest
 from sqlalchemy import select
 
+from backend.config import get_settings
+from backend.storage.product_workspace import (
+    add_run_worktree,
+    commit_worktree,
+    init_product_workspace,
+    merge_main_into_worktree,
+)
 from backend.workflow.domain.verified_deliverable import write_verified_deliverable
 from backend.workflow.infrastructure.db import (
     DeliverableType,
@@ -28,11 +35,11 @@ from .._support import memory_session
 pytestmark = pytest.mark.asyncio
 
 
-async def _seed_run(s, *, intent: str) -> ExecutionRun:
+async def _seed_run(s, *, intent: str, product_id: uuid.UUID | None = None) -> ExecutionRun:
     run = ExecutionRun(
         id=uuid.uuid4(),
         workspace_id=uuid.uuid4(),
-        product_id=None,
+        product_id=product_id,
         request_id=uuid.uuid4(),
         status=RunStatus.RUNNING,
         payload={"intent_text": intent},
@@ -107,3 +114,70 @@ async def test_write_verified_deliverable_truncates_summary_in_event() -> None:
             .one()
         )
         assert len(settle.payload["summary"]) == 500
+
+
+@pytest.fixture
+def _isolate_workspace_roots(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        get_settings(), "product_workspace_root", str(tmp_path / "products"), raising=False
+    )
+    monkeypatch.setattr(get_settings(), "run_workspace_root", str(tmp_path / "runs"), raising=False)
+
+
+async def test_write_verified_deliverable_captures_run_diff_for_product_run(
+    _isolate_workspace_roots,
+) -> None:
+    """Lift 2a: a product run's verified deliverable carries the real
+    ``git diff main...HEAD`` in its payload, captured while the run worktree is
+    still alive (verify-time, before auto-ship cleanup)."""
+    product_id = uuid.uuid4()
+    run_id = uuid.uuid4()
+    await init_product_workspace(product_id)
+    worktree = await add_run_worktree(product_id, run_id)
+    (worktree / "src" / "foo.py").parent.mkdir(parents=True, exist_ok=True)
+    (worktree / "src" / "foo.py").write_text("def foo():\n    return 1\n")
+    await commit_worktree(product_id, run_id, message="agent: foo()")
+    await merge_main_into_worktree(product_id, run_id)
+
+    async with memory_session() as s:
+        run = ExecutionRun(
+            id=run_id,
+            workspace_id=uuid.uuid4(),
+            product_id=product_id,
+            request_id=uuid.uuid4(),
+            status=RunStatus.RUNNING,
+            payload={"intent_text": "build foo"},
+        )
+        s.add(run)
+        await s.flush()
+
+        deliverable = await write_verified_deliverable(
+            s,
+            run,
+            attempt_id=uuid.uuid4(),
+            artifact_refs=["src/foo.py"],
+            summary="added foo",
+        )
+
+        assert "diff" in deliverable.payload
+        assert "+def foo():" in deliverable.payload["diff"]
+        assert deliverable.payload.get("diff_truncated") is not True
+        # The existing keys are untouched.
+        assert deliverable.payload["artifact_refs"] == ["src/foo.py"]
+        assert deliverable.payload["summary"] == "added foo"
+
+
+async def test_write_verified_deliverable_omits_diff_for_non_product_run() -> None:
+    """A non-product (Direct) run has no worktree / no 'before' state, so the
+    payload carries NO diff key — the front end falls back to additions."""
+    async with memory_session() as s:
+        run = await _seed_run(s, intent="answer it", product_id=None)
+        deliverable = await write_verified_deliverable(
+            s,
+            run,
+            attempt_id=uuid.uuid4(),
+            artifact_refs=["note.md"],
+            summary="done",
+        )
+        assert "diff" not in deliverable.payload
+        assert deliverable.payload == {"artifact_refs": ["note.md"], "summary": "done"}

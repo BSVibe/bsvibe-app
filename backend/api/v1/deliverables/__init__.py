@@ -7,6 +7,7 @@ adapters: parse → app service → serialize):
 * :mod:`.list_get` — read-only browse (``GET ""`` + ``GET /{id}``).
 * :mod:`.proof` — verified-proof surface (``GET /{id}/report``,
   ``GET /{id}/artifacts/{ref}``).
+* :mod:`.diff` — the run's captured old↔new ``git diff`` (``GET /{id}/diff``).
 * :mod:`.retract` — the single mutating endpoint (``POST /{id}/retract``)
   + the :class:`RetractHandler` protocol it dispatches through.
 
@@ -28,7 +29,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
-from . import list_get, proof, retract
+from . import diff, list_get, proof, retract
 from ._retract_handler import PluginRetractHandler, RetractHandler, get_retract_handler
 from .retract import RetractedCompensationEntry, RetractResponse
 
@@ -43,7 +44,7 @@ from .retract import RetractedCompensationEntry, RetractResponse
 # THIS router under ``/deliverables``, so each sub-router's paths land at
 # the same final URLs as the legacy module.
 router = APIRouter()
-for _sub in (list_get.router, proof.router, retract.router):
+for _sub in (list_get.router, proof.router, diff.router, retract.router):
     router.routes.extend(_sub.routes)
 
 __all__ = [

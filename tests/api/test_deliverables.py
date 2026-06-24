@@ -1149,3 +1149,100 @@ async def test_artifact_unknown_deliverable_404(configured_client, run_workspace
     """An unknown deliverable id is 404, not a 500."""
     r = await configured_client.get(f"/api/v1/deliverables/{uuid.uuid4()}/artifacts/hello.py")
     assert r.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# Captured diff — GET /{id}/diff (Lift 2a)
+# ---------------------------------------------------------------------------
+
+
+async def _seed_deliverable_with_payload(
+    s, *, deliverable_id: uuid.UUID, run_id: uuid.UUID, ws: uuid.UUID, payload: dict
+) -> None:
+    await _seed_run(s, run_id=run_id, ws=ws)
+    s.add(
+        Deliverable(
+            id=deliverable_id,
+            run_id=run_id,
+            workspace_id=ws,
+            deliverable_type=DeliverableType.CODE,
+            payload=payload,
+            created_at=datetime.now(tz=UTC),
+        )
+    )
+    await s.commit()
+
+
+async def test_diff_returns_stored_unified_diff(configured_client, db, workspace_id) -> None:
+    run_id = uuid.uuid4()
+    deliverable_id = uuid.uuid4()
+    unified = "diff --git a/foo.py b/foo.py\n--- a/foo.py\n+++ b/foo.py\n@@ -1 +1 @@\n-old\n+new\n"
+    async with db() as s:
+        await _seed_deliverable_with_payload(
+            s,
+            deliverable_id=deliverable_id,
+            run_id=run_id,
+            ws=workspace_id,
+            payload={"artifact_refs": ["foo.py"], "summary": "x", "diff": unified},
+        )
+
+    r = await configured_client.get(f"/api/v1/deliverables/{deliverable_id}/diff")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["diff"] == unified
+    assert body["truncated"] is False
+
+
+async def test_diff_truncated_flag_surfaced(configured_client, db, workspace_id) -> None:
+    run_id = uuid.uuid4()
+    deliverable_id = uuid.uuid4()
+    async with db() as s:
+        await _seed_deliverable_with_payload(
+            s,
+            deliverable_id=deliverable_id,
+            run_id=run_id,
+            ws=workspace_id,
+            payload={"diff": "partial…", "diff_truncated": True},
+        )
+
+    r = await configured_client.get(f"/api/v1/deliverables/{deliverable_id}/diff")
+    assert r.status_code == 200, r.text
+    assert r.json()["truncated"] is True
+
+
+async def test_diff_null_when_no_captured_diff(configured_client, db, workspace_id) -> None:
+    """A deliverable with no captured diff (Direct run / old row) returns a calm
+    null diff rather than 404 — the front end falls back to additions."""
+    run_id = uuid.uuid4()
+    deliverable_id = uuid.uuid4()
+    async with db() as s:
+        await _seed_deliverable_with_payload(
+            s,
+            deliverable_id=deliverable_id,
+            run_id=run_id,
+            ws=workspace_id,
+            payload={"artifact_refs": ["note.md"], "summary": "x"},
+        )
+
+    r = await configured_client.get(f"/api/v1/deliverables/{deliverable_id}/diff")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["diff"] is None
+    assert body["truncated"] is False
+
+
+async def test_diff_cross_workspace_404(configured_client, db, workspace_id) -> None:
+    other_ws = uuid.uuid4()
+    other_run = uuid.uuid4()
+    theirs = uuid.uuid4()
+    async with db() as s:
+        await _seed_deliverable_with_payload(
+            s,
+            deliverable_id=theirs,
+            run_id=other_run,
+            ws=other_ws,
+            payload={"diff": "secret diff"},
+        )
+
+    r = await configured_client.get(f"/api/v1/deliverables/{theirs}/diff")
+    assert r.status_code == 404

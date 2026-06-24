@@ -106,6 +106,22 @@ class DeliverableReportResponse(BaseModel):
     references: list[str] = []
 
 
+class DeliverableDiffResponse(BaseModel):
+    """The run's captured old↔new changes as a unified (``git diff``) patch.
+
+    Captured at verify-time for product runs (while the run worktree is alive)
+    and stored on ``Deliverable.payload``. ``diff`` is ``None`` for deliverables
+    with no captured diff — a non-product (Direct) run, or a row produced before
+    this feature — in which case the viewer falls back to rendering the produced
+    file content as additions. ``truncated`` flags that the diff was larger than
+    the stored cap (only the leading part is returned)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    diff: str | None = None
+    truncated: bool = False
+
+
 class ArtifactContentResponse(BaseModel):
     """The produced CONTENT of one artifact file, read-only.
 
@@ -145,6 +161,17 @@ def artifact_refs_of(payload: dict[str, Any]) -> list[str]:
     if isinstance(value, list):
         return [str(item) for item in value]
     return []
+
+
+def diff_of(payload: dict[str, Any]) -> tuple[str | None, bool]:
+    """Pull the captured unified diff + truncation flag out of the payload.
+
+    Returns ``(diff, truncated)`` — ``(None, False)`` when no diff was captured
+    (a non-product run / a pre-feature row), defensively coercing odd shapes."""
+    diff = payload.get("diff")
+    if not isinstance(diff, str):
+        return None, False
+    return diff, payload.get("diff_truncated") is True
 
 
 def request_text_of(payload: dict[str, Any]) -> str | None:
