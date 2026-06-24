@@ -4,7 +4,7 @@
  *  shipped" reads this to surface real artifact detail. */
 
 import { apiFetch } from "./client";
-import type { ArtifactContent, Deliverable, DeliverableReport } from "./types";
+import type { ArtifactContent, Deliverable, DeliverableDiff, DeliverableReport } from "./types";
 
 /** Recent Deliverable rows for the active workspace (newest first).
  *  `runId` narrows to one run's deliverables; the backend clamps `limit` to
@@ -22,6 +22,17 @@ export function listDeliverables(limit = 50, runId?: string): Promise<Deliverabl
 export function getDeliverableReport(deliverableId: string): Promise<DeliverableReport> {
   return apiFetch<DeliverableReport>(
     `/api/v1/deliverables/${encodeURIComponent(deliverableId)}/report`,
+  );
+}
+
+/** The run's captured old↔new changes as a unified `git diff` patch. REAL
+ *  backend `GET /api/v1/deliverables/{id}/diff`. `diff` is `null` when nothing
+ *  was captured (a non-product/Direct run, or a pre-feature row) — the viewer
+ *  falls back to content-as-additions. A 404 (deliverable not in the caller's
+ *  workspace) surfaces as an `ApiError`. */
+export function getDeliverableDiff(deliverableId: string): Promise<DeliverableDiff> {
+  return apiFetch<DeliverableDiff>(
+    `/api/v1/deliverables/${encodeURIComponent(deliverableId)}/diff`,
   );
 }
 
