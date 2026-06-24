@@ -21,6 +21,10 @@
   --green-ink: #4f8a5b;
   --green-dot: #5ba877;
   --green-pill-bg: #eef4ee;
+  /* Diff "removed" red — paired with --green-* for the delivery-report diff
+     viewer (light). */
+  --red-ink: #b23b3b;
+  --red-pill-bg: #fbecec;
 
   --rail-w: 248px;
   --col-w: 760px;
@@ -59,6 +63,10 @@
   --green-ink: #7cc08c;
   --green-dot: #5ba877;
   --green-pill-bg: #243027;
+  /* Diff "removed" red — paired with --green-* for the delivery-report diff
+     viewer (dark). */
+  --red-ink: #d98a8a;
+  --red-pill-bg: #34211f;
 
   color-scheme: dark;
 }
@@ -6247,13 +6255,27 @@ main.login {
   color: var(--ink-3);
 }
 
-/* The GitHub-style additions count chip in the panel head (+N). */
-.report-diff__added {
+/* The GitHub-style change-count chips in the panel head (+N / −N). */
+.report-diff__counts {
+  flex: none;
+  display: inline-flex;
+  gap: 8px;
+}
+
+.report-diff__added,
+.report-diff__removed {
   flex: none;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 0.76rem;
   font-weight: 600;
+}
+
+.report-diff__added {
   color: var(--green-ink);
+}
+
+.report-diff__removed {
+  color: var(--red-ink);
 }
 
 /* The diff body: a scrollable monospace block of line rows. Each row is a
@@ -6281,6 +6303,10 @@ main.login {
   background: var(--green-pill-bg);
 }
 
+.report-diff__line--del {
+  background: var(--red-pill-bg);
+}
+
 .report-diff__num {
   padding: 0 10px;
   text-align: right;
@@ -6290,8 +6316,16 @@ main.login {
 
 .report-diff__marker {
   padding-right: 8px;
-  color: var(--green-ink);
+  color: var(--ink-3);
   user-select: none;
+}
+
+.report-diff__line--add .report-diff__marker {
+  color: var(--green-ink);
+}
+
+.report-diff__line--del .report-diff__marker {
+  color: var(--red-ink);
 }
 
 .report-diff__code {

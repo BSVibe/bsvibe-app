@@ -1,13 +1,18 @@
 "use client";
 
 import { ApiError } from "@/lib/api/client";
-import { getDeliverableArtifact, getDeliverableReport } from "@/lib/api/deliverables";
+import {
+  getDeliverableArtifact,
+  getDeliverableDiff,
+  getDeliverableReport,
+} from "@/lib/api/deliverables";
 import type {
   ArtifactContent,
   DeliverableReport,
   VerificationOutcome,
   VerificationReportItem,
 } from "@/lib/api/types";
+import { type FileDiff, parseUnifiedDiff } from "@/lib/diff/parseUnifiedDiff";
 import { conciseSummary } from "@/lib/text/summary";
 import { useTranslations } from "next-intl";
 import Link from "next/link";
@@ -310,12 +315,34 @@ function WhatWasBuilt({
   const t = useTranslations("report");
   const { id, artifact_refs, artifact_uri } = deliverable;
   const [selected, setSelected] = useState<string | null>(artifact_refs[0] ?? null);
+  // The run's captured old↔new diff (product runs), parsed into a path→FileDiff
+  // map. `null` while loading; an empty map = nothing captured (Direct run / a
+  // pre-feature row) → every file falls back to the additions render. Best-effort:
+  // a 404 / read failure degrades to the empty map, never an error wall.
+  const [diffMap, setDiffMap] = useState<Map<string, FileDiff> | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    setDiffMap(null);
+    getDeliverableDiff(id)
+      .then((res) => {
+        if (active)
+          setDiffMap(typeof res.diff === "string" ? parseUnifiedDiff(res.diff) : new Map());
+      })
+      .catch(() => {
+        if (active) setDiffMap(new Map());
+      });
+    return () => {
+      active = false;
+    };
+  }, [id]);
 
   if (artifact_refs.length === 0 && !artifact_uri) {
     return <p className="report-doc__muted">{t("noArtifacts")}</p>;
   }
 
   const showFiles = artifact_refs.length > 1;
+  const selectedDiff = selected !== null ? (diffMap?.get(selected) ?? null) : null;
   return (
     <div className={`report-doc__built${showFiles ? " report-built--split" : ""}`}>
       {showFiles && (
@@ -341,7 +368,16 @@ function WhatWasBuilt({
         </nav>
       )}
       <div className="report-built__panel">
-        {selected && <ArtifactViewer deliverableId={id} refName={selected} hasDiff={hasDiff} />}
+        {selected &&
+          (diffMap === null ? (
+            <p className="report-artifact-view__loading" aria-busy="true">
+              {t("artifactLoading")}
+            </p>
+          ) : selectedDiff ? (
+            <DiffView fileDiff={selectedDiff} />
+          ) : (
+            <ArtifactViewer deliverableId={id} refName={selected} hasDiff={hasDiff} />
+          ))}
         {artifact_uri && (
           <a
             className="report-doc__open"
@@ -365,6 +401,63 @@ function toAdditionLines(content: string): string[] {
   const lines = content.split("\n");
   if (lines.length > 1 && lines[lines.length - 1] === "") lines.pop();
   return lines;
+}
+
+/** The change marker shown in each diff row's gutter. */
+const _DIFF_MARKER: Record<FileDiff["lines"][number]["kind"], string> = {
+  add: "+",
+  del: "-",
+  context: " ",
+};
+
+/** The right DIFF PANEL for a file that has a captured ``git diff`` — true
+ *  old↔new: removed lines red, added lines green, context plain, each with a
+ *  line-number gutter (the new-file number, or the old-file number for a removed
+ *  line). The +N / −N change counts head the panel. */
+function DiffView({ fileDiff }: { fileDiff: FileDiff }) {
+  const t = useTranslations("report");
+  return (
+    <div className="report-artifact-view">
+      <div className="report-artifact-view__head">
+        <span className="report-artifact-view__path">{fileDiff.path}</span>
+        <span className="report-diff__counts">
+          {fileDiff.additions > 0 && (
+            <span
+              className="report-diff__added"
+              aria-label={t("linesAdded", { count: fileDiff.additions })}
+            >
+              +{fileDiff.additions}
+            </span>
+          )}
+          {fileDiff.deletions > 0 && (
+            <span
+              className="report-diff__removed"
+              aria-label={t("linesRemoved", { count: fileDiff.deletions })}
+            >
+              -{fileDiff.deletions}
+            </span>
+          )}
+        </span>
+      </div>
+      <div className="report-diff">
+        {fileDiff.lines.map((line, i) => (
+          <div
+            // Diff lines are positional and may repeat — the index keys the row.
+            key={`${i}-${line.text}`}
+            className={`report-diff__line report-diff__line--${line.kind}`}
+          >
+            <span className="report-diff__num" aria-hidden="true">
+              {line.kind === "del" ? line.oldNumber : line.newNumber}
+            </span>
+            <span className="report-diff__marker" aria-hidden="true">
+              {_DIFF_MARKER[line.kind]}
+            </span>
+            <code className="report-diff__code">{line.text || " "}</code>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
 }
 
 type ArtifactLoaded =

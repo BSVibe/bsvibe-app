@@ -368,6 +368,17 @@ export interface ArtifactContent {
   binary: boolean;
 }
 
+/** `GET /api/v1/deliverables/{id}/diff` body (backend DeliverableDiffResponse) —
+ *  the run's captured old↔new changes as a unified `git diff` patch (captured at
+ *  verify-time for product runs). `diff` is `null` for a deliverable with no
+ *  captured diff (a non-product/Direct run, or a row produced before the feature)
+ *  — the viewer falls back to rendering content as additions. `truncated` flags
+ *  the diff exceeded the stored cap (only the leading part is returned). */
+export interface DeliverableDiff {
+  diff: string | null;
+  truncated: boolean;
+}
+
 /** One node in a product repo's `main` tree (backend FileTreeEntryResponse).
  *  `path` is the full repo-relative path; `name` is the leaf; `kind` is the
  *  git object kind mapped to file/dir. */

@@ -883,6 +883,7 @@
     "artifacts": "산출물",
     "files": "파일",
     "linesAdded": "{count}줄 추가",
+    "linesRemoved": "{count}줄 삭제",
     "noArtifacts": "이 산출물에서 만들어진 것이 없어요.",
     "openArtifact": "산출물 열기",
     "artifactLoading": "이 파일을 여는 중…",
