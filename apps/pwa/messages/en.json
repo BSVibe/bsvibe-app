@@ -873,6 +873,8 @@
     },
     "yourRequest": "Your request",
     "whatWasBuilt": "What was built",
+    "mandatoryGateRationale": "Mandatory project quality gate — enforced on the changed files",
+    "retrievedKnowledgeRationale": "Canonical patterns retrieved for this change",
     "referenced": "What BSVibe referenced",
     "referencedHint": "Past decisions, preferences, and rejections that informed this work.",
     "howChecked": "How BSVibe checked this",
