@@ -31,6 +31,7 @@ type ListState = { data: ModelAccount[]; failed: boolean } | null;
 
 export default function ModelAccounts() {
   const [list, setList] = useState<ListState>(null);
+  const [showAdd, setShowAdd] = useState(false);
   const t = useTranslations("settings.models");
 
   async function load() {
@@ -60,6 +61,11 @@ export default function ModelAccounts() {
         {list && !list.failed && list.data.length > 0 ? (
           <span className="accounts__count">{list.data.length}</span>
         ) : null}
+        {!showAdd && (
+          <button type="button" className="settings-add-toggle" onClick={() => setShowAdd(true)}>
+            {t("addToggle")}
+          </button>
+        )}
       </header>
       <p className="accounts__lede">{t("accountsLede")}</p>
 
@@ -69,7 +75,24 @@ export default function ModelAccounts() {
         </p>
       ) : null}
 
-      <AddModelAccount onCreated={load} createAccount={createAccount} />
+      {/* The add form is collapsed by default (progressive disclosure) so the
+          section reads as the founder's accounts, not a wall of empty inputs.
+          Opens on "+ Add account"; a successful create collapses it (the new
+          row in the list is the confirmation). */}
+      {showAdd && (
+        <div className="settings-add-panel">
+          <AddModelAccount
+            onCreated={() => {
+              load();
+              setShowAdd(false);
+            }}
+            createAccount={createAccount}
+          />
+          <button type="button" className="settings-add-cancel" onClick={() => setShowAdd(false)}>
+            {t("cancel")}
+          </button>
+        </div>
+      )}
 
       {list === null ? (
         <p className="accounts__loading" aria-busy="true">

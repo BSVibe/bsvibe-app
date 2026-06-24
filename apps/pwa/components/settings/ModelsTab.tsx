@@ -16,12 +16,24 @@ import RoutingRules from "./RoutingRules";
 export default function ModelsTab() {
   const t = useTranslations("settings.models");
   return (
-    <div className="general-tab">
+    <div className="general-tab models-tab">
       <p className="general-tab__lede">{t("lede")}</p>
-      <ModelAccounts />
-      <ExecutorWorkers />
-      <DefaultAccountPicker />
-      <RoutingRules />
+
+      {/* COMPUTE — the sources the agent loop can run on (LLM accounts + the
+          founder's own coding-agent CLIs). */}
+      <div className="models-group">
+        <p className="models-group__label">{t("groupCompute")}</p>
+        <ModelAccounts />
+        <ExecutorWorkers />
+      </div>
+
+      {/* ROUTING — how a run picks among that compute (the default + any rules).
+          Grouped apart so policy reads separately from inventory. */}
+      <div className="models-group">
+        <p className="models-group__label">{t("groupRouting")}</p>
+        <DefaultAccountPicker />
+        <RoutingRules />
+      </div>
     </div>
   );
 }

@@ -421,6 +421,10 @@
     },
     "models": {
       "lede": "Models: how BSVibe gets its thinking done.",
+      "groupCompute": "Compute",
+      "groupRouting": "Routing",
+      "addToggle": "+ Add account",
+      "cancel": "Cancel",
       "sectionLabel": "Model accounts",
       "sectionHeading": "Model accounts",
       "accountsLede": "The LLM account I run on. I use the active one to do work. Register it here once and it stays encrypted.",
@@ -501,6 +505,8 @@
       "routing": {
         "sectionLabel": "Routing",
         "sectionHeading": "Routing",
+        "addToggle": "+ Add rule",
+        "cancel": "Cancel",
         "lede": "How I pick a model for each unit of work. Rules run by priority (lowest first); the first match wins. The default catches everything else.",
         "loading": "Loading your routing rules…",
         "loadError": "Couldn’t load your routing rules right now. Try again in a moment.",

@@ -40,6 +40,7 @@ function matchSummary(rule: RoutingRule, anyLabel: string): string {
 
 export default function RoutingRules() {
   const [list, setList] = useState<ListState>(null);
+  const [showAdd, setShowAdd] = useState(false);
   const t = useTranslations("settings.models.routing");
 
   async function load() {
@@ -67,10 +68,30 @@ export default function RoutingRules() {
         {list && !list.failed && list.data.length > 0 ? (
           <span className="routing__count">{list.data.length}</span>
         ) : null}
+        {!showAdd && (
+          <button type="button" className="settings-add-toggle" onClick={() => setShowAdd(true)}>
+            {t("addToggle")}
+          </button>
+        )}
       </header>
       <p className="routing__lede">{t("lede")}</p>
 
-      <AddRoutingRule onCreated={load} createRule={createRule} />
+      {/* Collapsed by default — rules are optional (the default model handles
+          everything else), so the section shouldn't open as a big empty form. */}
+      {showAdd && (
+        <div className="settings-add-panel">
+          <AddRoutingRule
+            onCreated={() => {
+              load();
+              setShowAdd(false);
+            }}
+            createRule={createRule}
+          />
+          <button type="button" className="settings-add-cancel" onClick={() => setShowAdd(false)}>
+            {t("cancel")}
+          </button>
+        </div>
+      )}
 
       {list === null ? (
         <p className="routing__loading" aria-busy="true">
