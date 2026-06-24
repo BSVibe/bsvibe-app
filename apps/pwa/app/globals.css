@@ -6075,36 +6075,66 @@ main.login {
   gap: 10px;
 }
 
-.report-doc__tabs {
+/* GitHub PR-review split: a left file rail + a right diff panel. Collapses to a
+ * stacked single column on narrow viewports. */
+.report-built--split {
+  display: grid;
+  grid-template-columns: minmax(140px, 220px) 1fr;
+  gap: 14px;
+  align-items: start;
+}
+
+@media (max-width: 640px) {
+  .report-built--split {
+    grid-template-columns: 1fr;
+  }
+}
+
+.report-built__files {
+  min-width: 0;
+}
+
+.report-built__file-list {
   list-style: none;
   margin: 0;
   padding: 0;
   display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
+  flex-direction: column;
+  gap: 2px;
 }
 
-.report-doc__tab {
+.report-built__file {
   appearance: none;
+  display: block;
+  width: 100%;
+  text-align: left;
   font: inherit;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 0.78rem;
   color: var(--ink-2);
-  background: var(--accent-bg);
+  background: transparent;
   border: 1px solid transparent;
   border-radius: var(--radius-sm);
-  padding: 4px 9px;
-  max-width: 100%;
+  padding: 5px 9px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   cursor: pointer;
 }
 
-.report-doc__tab--active {
+.report-built__file--active {
   color: var(--ink);
   background: var(--surface);
   border-color: var(--hair-strong);
+}
+
+/* The right diff panel must be allowed to shrink so its content scrolls rather
+ * than blowing out the grid track. */
+.report-built__panel {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
 }
 
 .report-doc__verdict {
@@ -6196,6 +6226,10 @@ main.login {
 }
 
 .report-artifact-view__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
   font-size: 0.78rem;
 }
 
@@ -6213,19 +6247,58 @@ main.login {
   color: var(--ink-3);
 }
 
-.report-artifact-view__content {
+/* The GitHub-style additions count chip in the panel head (+N). */
+.report-diff__added {
+  flex: none;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.76rem;
+  font-weight: 600;
+  color: var(--green-ink);
+}
+
+/* The diff body: a scrollable monospace block of line rows. Each row is a
+ * three-track grid — line number, change marker, code — so the gutters stay
+ * aligned while the code column scrolls. */
+.report-diff {
   margin: 0;
   max-height: 420px;
   overflow: auto;
-  padding: 12px 14px;
   border: 1px solid var(--hair);
   border-radius: var(--radius-sm);
   background: var(--surface);
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 0.82rem;
   line-height: 1.5;
+}
+
+.report-diff__line {
+  display: grid;
+  grid-template-columns: auto auto 1fr;
+  align-items: baseline;
+}
+
+.report-diff__line--add {
+  background: var(--green-pill-bg);
+}
+
+.report-diff__num {
+  padding: 0 10px;
+  text-align: right;
+  color: var(--ink-3);
+  user-select: none;
+}
+
+.report-diff__marker {
+  padding-right: 8px;
+  color: var(--green-ink);
+  user-select: none;
+}
+
+.report-diff__code {
+  padding-right: 12px;
   color: var(--ink);
   white-space: pre;
+  overflow-wrap: normal;
 }
 
 .product-shipped__report-link {

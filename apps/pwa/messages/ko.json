@@ -881,6 +881,8 @@
     "noVerification": "아직 이 산출물에 대한 검증 기록이 없어요.",
     "noChecksDeclared": "이 검증에 선언된 확인 항목이 없어요.",
     "artifacts": "산출물",
+    "files": "파일",
+    "linesAdded": "{count}줄 추가",
     "noArtifacts": "이 산출물에서 만들어진 것이 없어요.",
     "openArtifact": "산출물 열기",
     "artifactLoading": "이 파일을 여는 중…",

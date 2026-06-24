@@ -293,9 +293,12 @@ function summarizeResult(result: Record<string, unknown>): string | null {
   return null;
 }
 
-/** "What was built" — the document centerpiece. Shows the produced file CONTENT
- *  inline by default (the first artifact), switchable across the deliverable's
- *  refs; the external landing link when one exists. A deliverable with neither
+/** "What was built" — the document centerpiece, a GitHub PR-review split: a left
+ *  FILE LIST + a right DIFF PANEL. The first artifact opens by default; selecting
+ *  another file refetches ONLY the right panel (the file list persists, the
+ *  current marker moves) so a many-file deliverable stays scannable without
+ *  re-rendering the whole document. The rail appears only when there's more than
+ *  one file — a lone file stays a calm single panel. A deliverable with neither
  *  refs nor a uri shows a calm "nothing produced" note. */
 function WhatWasBuilt({
   deliverable,
@@ -312,38 +315,56 @@ function WhatWasBuilt({
     return <p className="report-doc__muted">{t("noArtifacts")}</p>;
   }
 
+  const showFiles = artifact_refs.length > 1;
   return (
-    <div className="report-doc__built">
-      {artifact_refs.length > 1 && (
-        <ul className="report-doc__tabs" aria-label={t("artifacts")}>
-          {artifact_refs.map((ref) => (
-            <li key={ref}>
-              <button
-                type="button"
-                className={`report-doc__tab${selected === ref ? " report-doc__tab--active" : ""}`}
-                aria-pressed={selected === ref}
-                onClick={() => setSelected(ref)}
-                title={ref}
-              >
-                {ref}
-              </button>
-            </li>
-          ))}
-        </ul>
+    <div className={`report-doc__built${showFiles ? " report-built--split" : ""}`}>
+      {showFiles && (
+        <nav className="report-built__files" aria-label={t("files")}>
+          <ul className="report-built__file-list">
+            {artifact_refs.map((ref) => {
+              const active = selected === ref;
+              return (
+                <li key={ref}>
+                  <button
+                    type="button"
+                    className={`report-built__file${active ? " report-built__file--active" : ""}`}
+                    aria-current={active ? "true" : undefined}
+                    onClick={() => setSelected(ref)}
+                    title={ref}
+                  >
+                    {ref}
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        </nav>
       )}
-      {selected && <ArtifactViewer deliverableId={id} refName={selected} hasDiff={hasDiff} />}
-      {artifact_uri && (
-        <a
-          className="report-doc__open"
-          href={artifact_uri}
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          {t("openArtifact")}
-        </a>
-      )}
+      <div className="report-built__panel">
+        {selected && <ArtifactViewer deliverableId={id} refName={selected} hasDiff={hasDiff} />}
+        {artifact_uri && (
+          <a
+            className="report-doc__open"
+            href={artifact_uri}
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            {t("openArtifact")}
+          </a>
+        )}
+      </div>
     </div>
   );
+}
+
+/** Split the produced file CONTENT into the lines shown as additions. A single
+ *  trailing newline (almost every text file ends with one) would otherwise
+ *  render a phantom blank addition row, so it's dropped — but genuine interior
+ *  blank lines are kept. */
+function toAdditionLines(content: string): string[] {
+  const lines = content.split("\n");
+  if (lines.length > 1 && lines[lines.length - 1] === "") lines.pop();
+  return lines;
 }
 
 type ArtifactLoaded =
@@ -351,11 +372,14 @@ type ArtifactLoaded =
   | { state: "unavailable" }
   | { state: "ready"; artifact: ArtifactContent };
 
-/** Inline content viewer for one artifact ref. Fetches the produced file
- *  CONTENT and shows it in a calm scrollable monospace block. A 404 (cleaned
- *  run dir / unavailable) degrades to a "couldn't show this file" note that
- *  points back at the git diff; any other failure shows the same calm note. A
- *  binary file shows its metadata note; a truncated file shows a note. */
+/** Inline content viewer for one artifact ref — the right DIFF PANEL. Fetches the
+ *  produced file CONTENT and renders it GitHub-style: every line an "addition"
+ *  (green "+" row with a line-number gutter), since a freshly produced file is
+ *  all-new — each line reads honestly as added (true red/green for modified files
+ *  is a follow-up lift). A 404 (cleaned run dir / unavailable) degrades to a
+ *  "couldn't show this file" note that points back at the git diff; any other
+ *  failure shows the same calm note. A binary file shows its metadata note; a
+ *  truncated file shows a note. */
 function ArtifactViewer({
   deliverableId,
   refName,
@@ -402,10 +426,19 @@ function ArtifactViewer({
   }
 
   const { artifact } = loaded;
+  const lines = artifact.binary ? [] : toAdditionLines(artifact.content);
   return (
     <div className="report-artifact-view">
       <div className="report-artifact-view__head">
         <span className="report-artifact-view__path">{artifact.ref}</span>
+        {!artifact.binary && (
+          <span
+            className="report-diff__added"
+            aria-label={t("linesAdded", { count: lines.length })}
+          >
+            +{lines.length}
+          </span>
+        )}
       </div>
       {artifact.binary ? (
         <p className="report-artifact-view__binary">{artifact.content}</p>
@@ -414,9 +447,23 @@ function ArtifactViewer({
           {artifact.truncated && (
             <p className="report-artifact-view__truncated">{t("artifactTruncated")}</p>
           )}
-          <pre className="report-artifact-view__content">
-            <code>{artifact.content}</code>
-          </pre>
+          <div className="report-diff">
+            {lines.map((line, i) => (
+              <div
+                // Lines are positional and may repeat — the index keys the row.
+                key={`${i}-${line}`}
+                className="report-diff__line report-diff__line--add"
+              >
+                <span className="report-diff__num" aria-hidden="true">
+                  {i + 1}
+                </span>
+                <span className="report-diff__marker" aria-hidden="true">
+                  +
+                </span>
+                <code className="report-diff__code">{line || " "}</code>
+              </div>
+            ))}
+          </div>
         </>
       )}
     </div>
