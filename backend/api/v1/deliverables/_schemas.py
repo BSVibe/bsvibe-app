@@ -22,7 +22,10 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict
 
-from backend.workflow.application.verification_service import RETRIEVED_KNOWLEDGE_RATIONALE
+from backend.workflow.application.verification_service import (
+    LEGACY_RETRIEVED_KNOWLEDGE_RATIONALE,
+    RETRIEVED_KNOWLEDGE_RATIONALE,
+)
 from backend.workflow.infrastructure.db import (
     Deliverable,
     DeliverableType,
@@ -201,7 +204,11 @@ def references_of(verifications: list[VerificationReport]) -> list[str]:
         for check in checks:
             if not isinstance(check, dict):
                 continue
-            if check.get("rationale") != RETRIEVED_KNOWLEDGE_RATIONALE:
+            # Current marker OR the legacy ("BSage") one on historical rows.
+            if check.get("rationale") not in (
+                RETRIEVED_KNOWLEDGE_RATIONALE,
+                LEGACY_RETRIEVED_KNOWLEDGE_RATIONALE,
+            ):
                 continue
             criteria = check.get("criteria")
             if not isinstance(criteria, list):

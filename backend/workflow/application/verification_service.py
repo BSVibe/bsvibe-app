@@ -72,7 +72,12 @@ VENV_SYNC_TIMEOUT_S = 600.0
 #: those statements as a first-class ``references`` section ("근거 포함 답변" —
 #: which past docs/decisions the agent referenced), distinct from the
 #: verification checklist. Changing this string is a wire-contract change.
-RETRIEVED_KNOWLEDGE_RATIONALE = "BSage canonical patterns retrieved for this change"
+RETRIEVED_KNOWLEDGE_RATIONALE = "Canonical patterns retrieved for this change"
+
+#: Pre-2026-06 deliverables stamped the retrieved-knowledge checks with the old
+#: "BSage" (decommissioned product) wording. Kept ONLY so ``references_of`` still
+#: extracts the references section from historical verifications; never emitted.
+LEGACY_RETRIEVED_KNOWLEDGE_RATIONALE = "BSage canonical patterns retrieved for this change"
 
 #: Stamped on the L1 mandatory quality-gate checks (lint/format/type) that the
 #: verifier appends regardless of the agent's declared contract.

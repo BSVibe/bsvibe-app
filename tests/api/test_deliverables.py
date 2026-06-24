@@ -436,6 +436,59 @@ async def test_report_surfaces_referenced_knowledge(configured_client, db, works
     assert "reads cleanly" not in references
 
 
+async def test_report_references_extracts_legacy_bsage_marker(
+    configured_client, db, workspace_id
+) -> None:
+    """Back-compat: pre-2026-06 deliverables stamped the retrieved-knowledge
+    checks with the old "BSage canonical patterns…" wording. After the rename
+    (BSage removed from the user-facing string) the references section must STILL
+    extract from those historical rows via the legacy marker."""
+    from backend.workflow.application.verification_service import (
+        LEGACY_RETRIEVED_KNOWLEDGE_RATIONALE,
+    )
+
+    run_id = uuid.uuid4()
+    deliverable_id = uuid.uuid4()
+    contract = {
+        "checks": [
+            {
+                "kind": "judge",
+                "criteria": ["Prior decision — Q: Which database? A: Use Postgres"],
+                "rationale": LEGACY_RETRIEVED_KNOWLEDGE_RATIONALE,
+            },
+        ]
+    }
+    async with db() as s:
+        await _seed_run(s, run_id=run_id, ws=workspace_id, payload={"intent_text": "x"})
+        s.add(
+            Deliverable(
+                id=deliverable_id,
+                run_id=run_id,
+                workspace_id=workspace_id,
+                deliverable_type=DeliverableType.PR,
+                payload={"summary": "x"},
+                created_at=datetime.now(tz=UTC),
+            )
+        )
+        s.add(
+            VerificationResult(
+                id=uuid.uuid4(),
+                run_id=run_id,
+                work_step_id=None,
+                workspace_id=workspace_id,
+                outcome=VerificationOutcome.PASSED,
+                contract=contract,
+                result={},
+                created_at=datetime.now(tz=UTC),
+            )
+        )
+        await s.commit()
+
+    r = await configured_client.get(f"/api/v1/deliverables/{deliverable_id}/report")
+    assert r.status_code == 200, r.text
+    assert r.json()["references"] == ["Prior decision — Q: Which database? A: Use Postgres"]
+
+
 async def test_report_references_deduped_across_verifications(
     configured_client, db, workspace_id
 ) -> None:

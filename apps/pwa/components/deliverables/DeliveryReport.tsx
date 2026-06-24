@@ -240,8 +240,22 @@ function verdictTone(
   return strongest;
 }
 
+// The backend stamps verification checks with a few FIXED English rationale
+// strings (the L1 quality gate, the retrieved-knowledge marker incl. its legacy
+// "BSage" wording). They reached the Korean UI untranslated — map the known ones
+// to i18n; a free-form (agent-authored) rationale falls back to its raw text.
+const _RATIONALE_KEY: Record<string, string> = {
+  "Mandatory project quality gate — enforced on the changed files": "mandatoryGateRationale",
+  "Canonical patterns retrieved for this change": "retrievedKnowledgeRationale",
+  "BSage canonical patterns retrieved for this change": "retrievedKnowledgeRationale",
+};
+
 function VerificationBlock({ verification }: { verification: VerificationReportItem }) {
   const t = useTranslations("report");
+  const rationaleLabel = (raw: string): string => {
+    const key = _RATIONALE_KEY[raw];
+    return key ? t(key) : raw;
+  };
   const checks = checksFromContract(verification.contract);
   const resultSummary = summarizeResult(verification.result);
   return (
@@ -258,7 +272,7 @@ function VerificationBlock({ verification }: { verification: VerificationReportI
             >
               <span className="report-checks__cmd">{check.label}</span>
               {check.rationale && (
-                <span className="report-checks__rationale">{check.rationale}</span>
+                <span className="report-checks__rationale">{rationaleLabel(check.rationale)}</span>
               )}
             </li>
           ))}
