@@ -10,11 +10,10 @@
  *   - "decision"  ← GET /api/v1/checkpoints       (paused-run questions)
  *   - "knowledge" ← GET /api/v1/decisions?status_filter=pending  (canon proposals)
  *
- * Deliveries + proposals are the SAME set the Brief "Needs you" strip surfaces
- * (lib/api/brief.ts `needsYouFrom`), so the Pending count matches the Brief
- * count for that overlap. Paused-run checkpoints are folded in here too — the
- * Brief does not yet show them, so the Decisions Pending count is a superset by
- * exactly the pending-checkpoint count (that is the only kind the Brief omits).
+ * The Decisions surface is the SINGLE place these three queues are shown — the
+ * Brief no longer duplicates the Safe-Mode "Needs you" strip; its work-stream
+ * review_ready rows deep-link here instead. All three pending kinds (deliveries
+ * + checkpoints + proposals) live in this one list.
  *
  * Each list degrades to empty on its own per-surface 4xx / network blip so one
  * failing queue never blanks the whole surface (same calm-fallback rule the
