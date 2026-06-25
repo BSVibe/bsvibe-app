@@ -13,6 +13,7 @@ import type {
 } from "@/lib/api/types";
 import { useSession } from "@/lib/auth/session";
 import { useEventStream } from "@/lib/live-events/use-event-stream";
+import { humanizeFailureReason, stripIds } from "@/lib/text/failure-reason";
 import { useTranslations } from "next-intl";
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
@@ -308,8 +309,16 @@ function NextStep({
         {failureReason && (
           <p className="run-next__reason">
             <span className="run-next__reason-label">{t("failureReasonLabel")}</span>{" "}
-            {failureReason}
+            {humanizeFailureReason(failureReason, t)}
           </p>
+        )}
+        {/* L11 — the raw, engineer-facing reason (UUIDs stripped) stays
+            available behind a collapsed disclosure, never as the primary text. */}
+        {failureReason && (
+          <details className="run-next__reason-details">
+            <summary className="run-next__reason-details-summary">{t("failureDetails")}</summary>
+            <p className="run-next__reason-raw">{stripIds(failureReason)}</p>
+          </details>
         )}
         <button type="button" className="run-next__retry" onClick={onRetry} disabled={retrying}>
           {retrying ? t("retrying") : t("retry")}
