@@ -845,6 +845,7 @@
     "howChecked": "How BSVibe checked this",
     "noVerification": "No verification recorded for this deliverable yet.",
     "noChecksDeclared": "No checks were declared for this verification.",
+    "noChecksAfterKnowledge": "No additional checks beyond the referenced knowledge above.",
     "artifacts": "Artifacts",
     "files": "Files",
     "noArtifacts": "Nothing was produced for this deliverable.",
@@ -853,7 +854,19 @@
     "artifactTruncated": "Showing the first part of this file. It was larger than we display inline.",
     "artifactUnavailable": "Couldn’t show this file right now.",
     "artifactUnavailableWithDiff": "Couldn’t show this file. See the diff for the full change.",
-    "viewDiff": "View the diff"
+    "viewDiff": "View the diff",
+    "rollback": "Roll back",
+    "rollbackHint": "Reverse what was delivered — close the PR, delete the message, archive the page.",
+    "rollbackConfirm": "Roll this back?",
+    "rollbackConfirmLede": "This reverses the external action this deliverable produced. It can’t be undone.",
+    "rollbackConfirmButton": "Roll back",
+    "rollbackCancel": "Keep it",
+    "rollbackPending": "Rolling back…",
+    "rollbackDone": "Rolled back.",
+    "rollbackDoneWith": "Rolled back — {what}.",
+    "rollbackAlready": "Already rolled back.",
+    "rollbackNothing": "Nothing to roll back — this produced no external artifact.",
+    "rollbackFailed": "Couldn’t roll back just now. Try again in a moment."
   },
   "run": {
     "back": "‹ Brief",
