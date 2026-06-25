@@ -2,6 +2,7 @@
 
 import type { ResolvedDecision } from "@/lib/api/types";
 import { useTranslations } from "next-intl";
+import Link from "next/link";
 import { relativeTime } from "./relative-time";
 
 /**
@@ -24,9 +25,25 @@ export default function ResolvedRow({ item }: { item: ResolvedDecision }) {
   if (item.kind === "delivery") {
     return (
       <li className="decisions-row decisions-row--resolved">
-        <span className="decisions-row__q">{deliveryStatusLabel(item.status, t)}</span>
+        {/* Lead with WHAT was decided (the joined task title) so the history is
+            legible, not a blind "delivery approved"; the outcome is the
+            subtitle. Mirrors the PENDING DeliveryRow's title + product + proof. */}
+        <span className="decisions-row__q">
+          {item.title || deliveryStatusLabel(item.status, t)}
+        </span>
+        {item.title && (
+          <span className="decisions-row__sub">{deliveryStatusLabel(item.status, t)}</span>
+        )}
         <span className="decisions-row__meta">
           <span className="decisions-chip">{t("kindDelivery")}</span>
+          {item.productSlug && item.productSlug !== "workspace" && (
+            <span className="decisions-row__product">{item.productSlug}</span>
+          )}
+          {item.detailHref && (
+            <Link className="decisions-row__view" href={item.detailHref}>
+              {t("viewProof")}
+            </Link>
+          )}
           <span className="decisions-row__time">{relativeTime(item.resolvedAt, t)}</span>
         </span>
       </li>

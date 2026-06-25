@@ -1061,6 +1061,23 @@ main.login {
   color: var(--ink-2);
 }
 
+/* #10 — the deep-link from a review_ready work-stream row to its Decision. An
+   action-toned link (not the neutral report link) so "needs review" reads as
+   something to act on, routed to the single Decisions surface. The tap target
+   matches the report link (inline-flex + min-height). */
+.stream__review {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  min-height: 30px;
+  padding: 4px 0;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--link, var(--ink-2));
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
 .stream__report-link {
   flex: none;
   display: inline-flex;

@@ -618,6 +618,12 @@ export interface ResolvedDelivery {
   itemId: string;
   /** Terminal outcome: `approved` | `denied` | `expired`. */
   status: string;
+  /** Review context (joined from runs/deliverables/products by the aggregator)
+   *  so the resolved row says WHAT was decided + links to the proof — mirroring
+   *  the PENDING delivery row, instead of a blind generic "delivery approved". */
+  title?: string | null;
+  productSlug?: string;
+  detailHref?: string | null;
   resolvedAt: string;
 }
 
@@ -1131,30 +1137,11 @@ export interface RoutingRuleCreate {
 }
 
 // ── Brief / Work-Home view-model ──────────────────────────────────────────
-
-/** How a "Needs you" item can be resolved in-place. Only Safe-Mode held
- *  deliveries are resolvable from the PWA today (approve / deny endpoints exist,
- *  PR #17). Canonicalization proposals have no PWA resolve endpoint yet, so they
- *  carry no `resolve` and stay read-only. */
-export interface SafeModeResolve {
-  kind: "safemode";
-  /** The raw Safe-Mode item id for /api/v1/safemode/{itemId}/{approve,deny}. */
-  itemId: string;
-}
-
-/** A genuine fork that needs the founder (top "Needs you" strip + amber lane).
- *  `resolve` is present iff the item is actionable in-place; absent → read-only. */
-export interface NeedsYouItem {
-  id: string;
-  productSlug: string;
-  question: string;
-  resolve?: SafeModeResolve;
-  /** Concise task title + link to the proof, joined from the run/deliverable so
-   *  the Brief "Needs you" strip says WHAT needs approval, not just "a delivery
-   *  is held". Optional: a proposal with no linked run keeps the bare question. */
-  title?: string | null;
-  detailHref?: string | null;
-}
+//
+// Decisions are NOT modelled here — they live in the dedicated Decisions tab
+// (Safe-Mode held deliveries + paused-run checkpoints + canon proposals). The
+// Brief used to duplicate the Safe-Mode "Needs you" strip; that duplication was
+// removed, so the old NeedsYouItem / SafeModeResolve view-models are gone.
 
 export type ArtifactType = "pr" | "doc" | "image" | "slides" | "file" | "email";
 
@@ -1269,12 +1256,16 @@ export interface WorkStreamItem {
   artifactType: ArtifactType | null;
 }
 
-/** The merged Brief / Work-Home view-model: what BSVibe is doing now, what needs
- *  the founder, and the full chronological work stream (this replaces the old
- *  product lanes + recently-shipped + the separate Activity surface). */
+/** The merged Brief / Work-Home view-model: what BSVibe is doing now and the
+ *  full chronological work stream (this replaces the old product lanes +
+ *  recently-shipped + the separate Activity surface).
+ *
+ *  Decisions are intentionally NOT part of this view — they live in the
+ *  dedicated Decisions tab (the Brief used to duplicate the Safe-Mode "Needs
+ *  you" strip; that duplication was removed). Work-stream rows that need review
+ *  deep-link to their Decision instead. */
 export interface BriefView {
   working: ActiveWork[];
-  needsYou: NeedsYouItem[];
   stream: WorkStreamItem[];
   placeholder: boolean;
 }
