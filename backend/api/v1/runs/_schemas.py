@@ -157,6 +157,22 @@ class RunDetailResponse(BaseModel):
     partial_deliverables: list[RunPartialDeliverable] = []
     activities: list[RunActivity] = []
     timeline_source: str = "derived"
+    # L2 (#9): WHY a terminal-failed run failed — the latest
+    # ExecutionRunHistory ``reason`` for a FAILED / CANCELLED transition. The
+    # founder sees the cause (and a Retry affordance) instead of a blank
+    # "nothing to do" dead-end. ``None`` for non-failed runs.
+    failure_reason: str | None = None
+
+
+class RunRetryResponse(BaseModel):
+    """The result of re-opening a terminal-failed run (L2 #9): the run is back
+    to ``OPEN`` so ``AgentWorker.drive_once`` re-picks it for another attempt."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: uuid.UUID
+    status: RunStatus
+    retry_count: int
 
 
 __all__ = [
@@ -165,6 +181,7 @@ __all__ = [
     "RunDetailResponse",
     "RunPartialDeliverable",
     "RunResponse",
+    "RunRetryResponse",
     "RunTriggerContext",
     "RunVerification",
 ]

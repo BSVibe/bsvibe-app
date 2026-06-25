@@ -289,6 +289,17 @@ export interface RunDetail {
   partial_deliverables: RunPartialDeliverable[];
   activities: RunActivity[];
   timeline_source: "activities" | "derived";
+  /** L2 (#9) — WHY a terminal-failed run failed (the latest FAILED / CANCELLED
+   *  transition reason). `null` for non-failed runs. */
+  failure_reason: string | null;
+}
+
+/** `POST /api/v1/runs/{id}/retry` body (backend RunRetryResponse) — the run is
+ *  back to `open` for another attempt (L2 #9). */
+export interface RunRetry {
+  id: string;
+  status: RunStatus;
+  retry_count: number;
 }
 
 /** `DeliverableType` (backend/execution/db.py) — the artifact kind a verified

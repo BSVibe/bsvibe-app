@@ -2,7 +2,7 @@
 
 import { resolveCheckpoint } from "@/lib/api/checkpoints";
 import { ApiError } from "@/lib/api/client";
-import { getRunDetail } from "@/lib/api/runs";
+import { getRunDetail, retryRun } from "@/lib/api/runs";
 import type {
   RunActivity,
   RunDecision,
@@ -182,6 +182,9 @@ function DetailBody({
         status={detail.status}
         hasPendingDecision={pending.length > 0}
         deliverableId={deliverable_id}
+        runId={detail.id}
+        failureReason={detail.failure_reason}
+        onRetried={onResolved}
       />
 
       <TriggerBlock trigger={trigger} />
@@ -256,12 +259,20 @@ function NextStep({
   status,
   hasPendingDecision,
   deliverableId,
+  runId,
+  failureReason,
+  onRetried,
 }: {
   status: RunStatus;
   hasPendingDecision: boolean;
   deliverableId: string | null;
+  runId: string;
+  failureReason: string | null;
+  onRetried: () => void;
 }) {
   const t = useTranslations("run");
+  const [retrying, setRetrying] = useState(false);
+  const [retryError, setRetryError] = useState(false);
 
   // The genuine blocker wins, regardless of the run's status word.
   if (hasPendingDecision) {
@@ -273,11 +284,43 @@ function NextStep({
     );
   }
 
+  // L2 (#9) — a terminal-failed run is recoverable, not a dead-end: show WHY it
+  // failed (when the backend recorded a reason) + a Retry affordance that
+  // re-opens it for another attempt, instead of "nothing to do".
+  const isFailed = status === "failed" || status === "cancelled";
+  if (isFailed) {
+    const onRetry = () => {
+      setRetrying(true);
+      setRetryError(false);
+      retryRun(runId)
+        .then(() => onRetried())
+        .catch(() => {
+          setRetrying(false);
+          setRetryError(true);
+        });
+    };
+    return (
+      <section className={`run-next run-next--${status}`} aria-label={t("nextStep")}>
+        <h2 className="section-label">{t("nextStep")}</h2>
+        <p className="run-next__line">{t("nextFailed")}</p>
+        {failureReason && (
+          <p className="run-next__reason">
+            <span className="run-next__reason-label">{t("failureReasonLabel")}</span>{" "}
+            {failureReason}
+          </p>
+        )}
+        <button type="button" className="run-next__retry" onClick={onRetry} disabled={retrying}>
+          {retrying ? t("retrying") : t("retry")}
+        </button>
+        {retryError && <p className="run-next__retry-error">{t("retryError")}</p>}
+      </section>
+    );
+  }
+
   let line: string;
   if (status === "review_ready") line = t("nextReview");
   else if (status === "running" || status === "open") line = t("nextWorking");
   else if (status === "shipped") line = t("nextShipped");
-  else if (status === "failed" || status === "cancelled") line = t("nextFailed");
   else line = t("nextWorking");
 
   // review_ready points one tap from the proof when a deliverable exists.

@@ -105,7 +105,7 @@
     "label": "다이렉트",
     "hint": "BSVibe에게 무엇을 할지 알려주세요. 질문하거나 작업을 시작하세요.",
     "targetLabel": "대상",
-    "targetAuto": "자동 (BSVibe가 라우팅)",
+    "targetAuto": "자동 (자동 라우팅)",
     "placeholder": "예: “bsvibe-site 출시 글 초안 작성”",
     "sending": "보내는 중…",
     "sent": "전송됨. 작업하고 있어요.",
@@ -119,7 +119,7 @@
     "listLabel": "제품",
     "loading": "제품을 불러오는 중…",
     "loadError": "제품을 불러오지 못했어요. 잠시 후 다시 시도해 주세요.",
-    "empty": "아직 제품이 없어요. 하나를 만들면 BSVibe가 작업할 대상이 생겨요."
+    "empty": "아직 제품이 없어요. 하나를 만들면 작업할 대상이 생겨요."
   },
   "products": {
     "back": "‹ 요약",
@@ -327,7 +327,7 @@
   },
   "decisions": {
     "heading": "결정",
-    "lede": "BSVibe가 판단을 구하는 질문들이에요. 답하면 선례가 되어 같은 질문을 다시 묻지 않아요.",
+    "lede": "판단을 구하는 질문들이에요. 답하면 선례가 되어 같은 질문을 다시 묻지 않아요.",
     "loadingNote": "확인할 항목을 불러오는 중…",
     "searchLabel": "결정 검색",
     "searchPlaceholder": "결정 검색…",
@@ -420,7 +420,7 @@
       "developer": "개발자"
     },
     "models": {
-      "lede": "모델: BSVibe가 어떻게 사고하는지.",
+      "lede": "모델: 어떻게 사고하는지.",
       "groupCompute": "컴퓨트",
       "groupRouting": "라우팅",
       "addToggle": "+ 계정 추가",
@@ -494,7 +494,7 @@
       "default": {
         "sectionLabel": "이 워크스페이스의 기본 모델",
         "sectionHeading": "이 워크스페이스의 기본 모델",
-        "lede": "어떤 라우팅 규칙도 caller에 맞지 않을 때 디스패치 리졸버가 여기로 라우팅해요. \"없음\"으로 두면 BSVibe가 임의로 모델을 고르는 대신 라우팅 누락 에러를 보여줘요.",
+        "lede": "어떤 라우팅 규칙도 caller에 맞지 않을 때 디스패치 리졸버가 여기로 라우팅해요. \"없음\"으로 두면 임의로 모델을 고르지 않고 라우팅 누락 에러를 보여줘요.",
         "pickerLabel": "기본 모델",
         "none": "없음 — 라우팅 누락 에러 표시",
         "loading": "기본 모델을 불러오는 중…",
@@ -546,7 +546,7 @@
       "connect": "연결",
       "comingSoon": "준비 중. 아직 백엔드가 없어요.",
       "customTitle": "커스텀 커넥터 추가",
-      "customDetail": "직접 운영하는 MCP 서버 엔드포인트나 플러그인 SDK로 만든 BSage 플러그인을 연결하세요.",
+      "customDetail": "직접 운영하는 MCP 서버 엔드포인트나 플러그인 SDK로 만든 플러그인을 연결하세요.",
       "addCustom": "커스텀 추가",
       "connectDialogLabel": "서비스 연결",
       "connectTitle": "{service} 연결",
@@ -564,9 +564,9 @@
       },
       "blurbs": {
         "github": "이슈, PR, 푸시",
-        "slack": "메시지와 채널",
-        "telegram": "메시지와 채널",
-        "discord": "메시지와 채널",
+        "slack": "채널 메시지를 주고받아요",
+        "telegram": "메시지를 주고받아요",
+        "discord": "채널 메시지를 주고받아요",
         "sentry": "오류와 이슈",
         "notion": "페이지와 데이터베이스",
         "email-sender": "아웃바운드 전송",
@@ -712,7 +712,7 @@
       }
     },
     "notifications": {
-      "lede": "알림: BSVibe가 언제 어디로 알릴지.",
+      "lede": "알림: 언제 어디로 알릴지.",
       "loading": "알림 설정을 불러오는 중…",
       "loadError": "지금은 알림 설정을 불러오지 못했어요. 잠시 후 다시 시도해 주세요.",
       "saveError": "변경 사항을 저장하지 못했어요. 되돌렸어요. 잠시 후 다시 시도해 주세요.",
@@ -736,7 +736,7 @@
         },
         "failed": {
           "short": "실패",
-          "label": "실패: 검증에 실패해서 BSVibe가 중단했어요"
+          "label": "실패: 검증에 실패해서 중단했어요"
         },
         "daily_brief": {
           "short": "데일리 요약",
@@ -917,7 +917,7 @@
       "cancelled": "중단됨"
     },
     "decision": "확인이 필요해요",
-    "decisionRationale": "외부에서 들어온 작업이라 BSVibe는 안전 모드예요.",
+    "decisionRationale": "외부에서 들어온 작업이라 안전 모드예요.",
     "letContinue": "계속 진행",
     "hold": "보류",
     "resolving": "처리 중…",
@@ -940,7 +940,11 @@
     "nextReviewLink": "전달 리포트 보기",
     "nextWorking": "작업하고 있어요…",
     "nextShipped": "완료됐어요. 따로 하실 일은 없어요.",
-    "nextFailed": "완료하지 못했어요. 지금 하실 일은 없어요."
+    "nextFailed": "완료하지 못했어요. 다시 시도할 수 있어요.",
+    "failureReasonLabel": "멈춘 이유:",
+    "retry": "다시 시도",
+    "retrying": "다시 시도하는 중…",
+    "retryError": "다시 시도하지 못했어요 — 잠시 후 다시 해보세요."
   },
   "trust": {
     "glyphLabel": {

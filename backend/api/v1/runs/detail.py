@@ -30,6 +30,8 @@ from backend.workflow.domain.verified_deliverable import PARTIAL_DELIVERABLE_KIN
 from backend.workflow.infrastructure.db import (
     Deliverable,
     ExecutionRunActivity,
+    ExecutionRunHistory,
+    RunStatus,
     VerificationResult,
 )
 
@@ -122,6 +124,25 @@ async def get_run_detail(
         activity_rows, verification_row, deliverable_id, deliverable_created_at
     )
 
+    # L2 (#9): for a terminal-failed run, surface WHY — the latest history
+    # ``reason`` for the FAILED / CANCELLED transition (the loop's failure
+    # summary / the discard context). The founder sees the cause + a Retry
+    # affordance instead of a blank "nothing to do". None for non-failed runs.
+    failure_reason: str | None = None
+    if run.status in (RunStatus.FAILED, RunStatus.CANCELLED):
+        history_stmt = (
+            select(ExecutionRunHistory)
+            .where(
+                ExecutionRunHistory.run_id == run_id,
+                ExecutionRunHistory.workspace_id == workspace_id,
+                ExecutionRunHistory.to_status.in_((RunStatus.FAILED, RunStatus.CANCELLED)),
+            )
+            .order_by(ExecutionRunHistory.created_at.desc())
+            .limit(1)
+        )
+        history_row = (await session.execute(history_stmt)).scalars().first()
+        failure_reason = history_row.reason if history_row is not None else None
+
     return RunDetailResponse(
         id=run.id,
         workspace_id=run.workspace_id,
@@ -155,6 +176,7 @@ async def get_run_detail(
         partial_deliverables=partial_deliverables,
         activities=activities,
         timeline_source=timeline_source,
+        failure_reason=failure_reason,
     )
 
 

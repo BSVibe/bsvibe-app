@@ -145,8 +145,9 @@ async def _seed_executor_decision(
 async def test_executor_decision_lists_with_ship_and_discard_actions(
     client, db, workspace_id
 ) -> None:
-    """Both executor B2b Decision kinds carry the ship + discard actions on
-    the list response so the PWA renders one-click buttons."""
+    """Both executor B2b Decision kinds carry the ship + retry + discard actions
+    on the list response so the PWA renders one-click buttons. L2 (#9) added the
+    ``retry`` action so a failed run is recoverable, not a dead-end."""
     run, _ = await _seed_run_with_step(db, ws=workspace_id)
     for kind in ("verification_failed", "human_review_required"):
         await _seed_executor_decision(
@@ -157,9 +158,9 @@ async def test_executor_decision_lists_with_ship_and_discard_actions(
     assert r.status_code == 200, r.text
     for row in r.json():
         actions = row.get("actions")
-        assert isinstance(actions, list) and len(actions) == 2
+        assert isinstance(actions, list) and len(actions) == 3
         keys = {a["key"] for a in actions}
-        assert keys == {"ship", "discard"}
+        assert keys == {"ship", "retry", "discard"}
         # Both supported locales ship for client-side rendering.
         for a in actions:
             assert isinstance(a["label_en"], str) and a["label_en"]
