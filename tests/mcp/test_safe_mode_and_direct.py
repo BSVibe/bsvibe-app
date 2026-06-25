@@ -378,3 +378,51 @@ async def test_direct_requires_write_scope(db, workspace_id, user_id, registry) 
         )
         with pytest.raises(Exception, match="requires scope"):
             await registry.call_tool("bsvibe_direct", {"text": "x"}, ctx)
+
+
+# ---------------------------------------------------------------------------
+# L3 (#5) — Safe / Auto mode toggle over MCP (parity with Settings → General).
+# ---------------------------------------------------------------------------
+async def test_safe_mode_get_returns_workspace_flag(db, workspace_id, user_id, registry) -> None:
+    async with db() as s:
+        s.add(WorkspaceRow(id=workspace_id, name="ws", region="us-1", safe_mode=True))
+        await s.commit()
+    async with db() as s:
+        ctx = ToolContext(
+            principal=_principal(workspace_id=workspace_id, user_id=user_id, scopes=("mcp:read",)),
+            session=s,
+        )
+        out = await registry.call_tool("bsvibe_safe_mode_get", {}, ctx)
+    assert out["safe_mode"] is True
+
+
+async def test_safe_mode_set_switches_to_auto(db, workspace_id, user_id, registry) -> None:
+    async with db() as s:
+        s.add(WorkspaceRow(id=workspace_id, name="ws", region="us-1", safe_mode=True))
+        await s.commit()
+    async with db() as s:
+        ctx = ToolContext(
+            principal=_principal(
+                workspace_id=workspace_id, user_id=user_id, scopes=("mcp:read", "mcp:write")
+            ),
+            session=s,
+        )
+        out = await registry.call_tool("bsvibe_safe_mode_set", {"safe_mode": False}, ctx)
+    assert out["safe_mode"] is False
+    # The flag persists on the workspace row.
+    async with db() as s:
+        row = await s.get(WorkspaceRow, workspace_id)
+        assert row is not None and row.safe_mode is False
+
+
+async def test_safe_mode_set_requires_write_scope(db, workspace_id, user_id, registry) -> None:
+    async with db() as s:
+        s.add(WorkspaceRow(id=workspace_id, name="ws", region="us-1", safe_mode=True))
+        await s.commit()
+    async with db() as s:
+        ctx = ToolContext(
+            principal=_principal(workspace_id=workspace_id, user_id=user_id, scopes=("mcp:read",)),
+            session=s,
+        )
+        with pytest.raises(Exception, match="requires scope"):
+            await registry.call_tool("bsvibe_safe_mode_set", {"safe_mode": False}, ctx)

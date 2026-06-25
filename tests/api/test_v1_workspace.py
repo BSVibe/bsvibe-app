@@ -88,6 +88,8 @@ async def test_get_workspace_returns_id_and_name(client_with_ws) -> None:
         # ``None`` until the founder picks one via PATCH or MCP.
         "default_account_id": None,
         "language": "en",
+        # L3 (#5) — Safe Mode surfaces here; seeded ``True`` (the default).
+        "safe_mode": True,
     }
 
 
@@ -101,6 +103,7 @@ async def test_patch_workspace_renames_and_persists(client_with_ws) -> None:
         "audit_retention_days": None,
         "default_account_id": None,
         "language": "en",
+        "safe_mode": True,
     }
 
     # The row in the database actually changed.
@@ -123,6 +126,7 @@ async def test_patch_workspace_sets_audit_retention_days(client_with_ws) -> None
         "audit_retention_days": 30,
         "default_account_id": None,
         "language": "en",
+        "safe_mode": True,
     }
     async with db() as s:
         row = (
@@ -147,6 +151,26 @@ async def test_patch_workspace_sets_language(client_with_ws) -> None:
     # An unsupported tag is rejected (422), never silently stored.
     bad = await c.patch("/api/v1/workspace", json={"language": "fr"})
     assert bad.status_code == 422
+
+
+async def test_patch_workspace_sets_safe_mode(client_with_ws) -> None:
+    """L3 (#5) — the founder switches to Auto mode by PATCHing safe_mode=false;
+    it persists and surfaces on the response. A name-only PATCH leaves it alone."""
+    c, _workspace_id, db = client_with_ws
+    # Switch to Auto (deliverables auto-dispatch instead of queueing).
+    r = await c.patch("/api/v1/workspace", json={"safe_mode": False})
+    assert r.status_code == 200, r.text
+    assert r.json()["safe_mode"] is False
+    async with db() as s:
+        row = (await s.execute(select(WorkspaceRow))).scalar_one()
+        assert row.safe_mode is False
+    # A name-only PATCH must not flip the mode back.
+    r = await c.patch("/api/v1/workspace", json={"name": "Renamed"})
+    assert r.status_code == 200, r.text
+    assert r.json()["safe_mode"] is False
+    # Switch back to Safe.
+    r = await c.patch("/api/v1/workspace", json={"safe_mode": True})
+    assert r.json()["safe_mode"] is True
 
 
 async def test_patch_workspace_unsets_audit_retention_days_to_forever(client_with_ws) -> None:

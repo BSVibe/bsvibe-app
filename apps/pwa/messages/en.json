@@ -795,6 +795,11 @@
       "workspaceNameSaving": "Saving…",
       "workspaceNameCancel": "Cancel",
       "workspaceNameSaveError": "Couldn’t save that change. Try again in a moment.",
+      "safeMode": "Approvals",
+      "safeModeSafe": "Safe",
+      "safeModeAuto": "Auto",
+      "safeModeSafeCaption": "Safe: every delivery waits for your approval before it ships.",
+      "safeModeAutoCaption": "Auto: deliveries ship without asking. Real blockers still come to you.",
       "theme": "Theme",
       "themeChoice": {
         "light": "Light",
