@@ -902,6 +902,16 @@
     "nextShipped": "Shipped. Nothing needed from you.",
     "nextFailed": "This didn't finish. You can try again.",
     "failureReasonLabel": "Why it stopped:",
+    "failureHuman": {
+      "executorCrash": "The coding agent stopped unexpectedly while working on this.",
+      "loopCrashed": "Something went wrong while running this.",
+      "systemError": "An internal error interrupted this run.",
+      "timeout": "It took too long and timed out.",
+      "sandbox": "The work sandbox couldn't start.",
+      "cancelled": "You stopped this.",
+      "generic": "This didn't finish as expected."
+    },
+    "failureDetails": "Technical details",
     "retry": "Retry",
     "retrying": "Retrying…",
     "retryError": "Couldn't retry — please try again.",

@@ -342,19 +342,44 @@ describe("Run-detail surface (Triggered)", () => {
     expect(within(nextStep).getByRole("button", { name: /retry/i })).toBeInTheDocument();
   });
 
-  it("next step: a failed run surfaces WHY it failed when a reason is recorded", async () => {
+  it("next step: a failed run surfaces a HUMANIZED reason (sandbox), not the raw text", async () => {
     const failed: RunDetailModel = {
       ...REVIEW_READY,
       status: "failed",
       deliverable_id: null,
-      failure_reason: "the sandbox could not start",
+      failure_reason: "the work sandbox could not start",
     };
     global.fetch = vi.fn(async () => json(failed)) as unknown as typeof fetch;
 
     render(<RunDetail runId="rr" />);
 
     const nextStep = await screen.findByRole("region", { name: /next step|what.s next/i });
-    expect(within(nextStep).getByText(/the sandbox could not start/i)).toBeInTheDocument();
+    // The humanized sandbox line is the primary text the founder reads.
+    expect(within(nextStep).getByText(/work sandbox couldn.t start/i)).toBeInTheDocument();
+  });
+
+  it("next step: a UUID-laden executor-crash reason is humanized; the raw UUID is NOT shown as primary text", async () => {
+    const failed: RunDetailModel = {
+      ...REVIEW_READY,
+      status: "failed",
+      deliverable_id: null,
+      failure_reason:
+        "loop crashed: executor chat task 61483a05-1b2c-4d5e-8f90-abcdef123456 failed: exit 1",
+    };
+    global.fetch = vi.fn(async () => json(failed)) as unknown as typeof fetch;
+
+    render(<RunDetail runId="rr" />);
+
+    const nextStep = await screen.findByRole("region", { name: /next step|what.s next/i });
+    // The calm humanized line is the primary text.
+    const reason = within(nextStep).getByText(/coding agent stopped unexpectedly/i);
+    expect(reason).toBeInTheDocument();
+    // The raw UUID is NOT shown as the primary reason text.
+    expect(reason.textContent ?? "").not.toMatch(/61483a05-1b2c/);
+    // The raw reason is available behind a collapsed "Technical details"
+    // disclosure — and even there the UUID is stripped.
+    const details = within(nextStep).getByText(/technical details/i);
+    expect(details).toBeInTheDocument();
   });
 
   it("clicking Retry POSTs /api/v1/runs/{id}/retry and reloads", async () => {
