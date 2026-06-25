@@ -762,6 +762,11 @@
       "workspaceNameSaving": "Saving…",
       "workspaceNameCancel": "Cancel",
       "workspaceNameSaveError": "Couldn’t save that change. Try again in a moment.",
+      "safeMode": "Approvals",
+      "safeModeSafe": "Safe",
+      "safeModeAuto": "Auto",
+      "safeModeSafeCaption": "Safe: every delivery waits for your approval before it ships.",
+      "safeModeAutoCaption": "Auto: deliveries ship without asking. Real blockers still come to you.",
       "theme": "Theme",
       "themeChoice": {
         "light": "Light",
@@ -902,7 +907,11 @@
     "nextReviewLink": "See the delivery report",
     "nextWorking": "Working on it…",
     "nextShipped": "Shipped. Nothing needed from you.",
-    "nextFailed": "This didn't finish. Nothing for you to do right now."
+    "nextFailed": "This didn't finish. You can try again.",
+    "failureReasonLabel": "Why it stopped:",
+    "retry": "Retry",
+    "retrying": "Retrying…",
+    "retryError": "Couldn't retry — please try again."
   },
   "trust": {
     "glyphLabel": {
