@@ -28,6 +28,10 @@ export interface WorkspaceInfo {
    *  (knowledge notes, decision questions, framing). The Settings Language
    *  control sets this alongside the client locale. Defaults "en". */
   language?: string;
+  /** L3 (#5) — Safe Mode. `true` (Safe): every deliverable is held for
+   *  founder approval. `false` (Auto): deliverables auto-dispatch. The
+   *  Settings → General Safe / Auto control sets this. Defaults `true`. */
+  safe_mode?: boolean;
 }
 
 /** GET — load the active workspace. */
@@ -62,5 +66,16 @@ export function setWorkspaceLanguage(language: string): Promise<WorkspaceInfo> {
   return apiFetch<WorkspaceInfo>("/api/v1/workspace", {
     method: "PATCH",
     body: JSON.stringify({ language }),
+  });
+}
+
+/** L3 (#5) — PATCH the workspace's Safe Mode. `true` (Safe) holds every
+ *  deliverable for founder approval; `false` (Auto) auto-dispatches them (the
+ *  delivery gate is bypassed — real blocks like ask_user_question / verification
+ *  failures still surface as Decisions). Set by the Settings → General toggle. */
+export function setWorkspaceSafeMode(safeMode: boolean): Promise<WorkspaceInfo> {
+  return apiFetch<WorkspaceInfo>("/api/v1/workspace", {
+    method: "PATCH",
+    body: JSON.stringify({ safe_mode: safeMode }),
   });
 }

@@ -1,7 +1,12 @@
 "use client";
 
 import { ApiError } from "@/lib/api/client";
-import { getWorkspace, renameWorkspace, setWorkspaceLanguage } from "@/lib/api/workspace";
+import {
+  getWorkspace,
+  renameWorkspace,
+  setWorkspaceLanguage,
+  setWorkspaceSafeMode,
+} from "@/lib/api/workspace";
 import { useSession } from "@/lib/auth/session";
 import { type Locale, resolveLocale } from "@/lib/i18n/config";
 import { setLocaleCookie } from "@/lib/i18n/locale";
@@ -65,11 +70,18 @@ export default function GeneralTab() {
   const [saveState, setSaveState] = useState<SaveState>("idle");
   const [saveError, setSaveError] = useState<string | null>(null);
 
+  // L3 (#5) — Safe Mode. `null` while loading; the toggle is disabled until the
+  // real value arrives so we never optimistically show the wrong mode.
+  const [safeMode, setSafeMode] = useState<boolean | null>(null);
+  const [safeModeSaving, setSafeModeSaving] = useState(false);
+
   useEffect(() => {
     let active = true;
     getWorkspace()
       .then((w) => {
-        if (active) setWs({ kind: "loaded", name: w.name });
+        if (!active) return;
+        setWs({ kind: "loaded", name: w.name });
+        setSafeMode(w.safe_mode ?? true);
       })
       .catch(() => {
         if (active) setWs({ kind: "failed" });
@@ -78,6 +90,17 @@ export default function GeneralTab() {
       active = false;
     };
   }, []);
+
+  function chooseSafeMode(next: boolean) {
+    if (safeMode === next || safeModeSaving) return;
+    const previous = safeMode;
+    setSafeMode(next); // optimistic — the control reflects the choice immediately
+    setSafeModeSaving(true);
+    setWorkspaceSafeMode(next)
+      .then((w) => setSafeMode(w.safe_mode ?? next))
+      .catch(() => setSafeMode(previous)) // revert on failure
+      .finally(() => setSafeModeSaving(false));
+  }
 
   function beginEdit() {
     const current = ws.kind === "loaded" ? ws.name : "";
@@ -180,6 +203,39 @@ export default function GeneralTab() {
             </button>
           </span>
         )}
+      </section>
+
+      <section className="settings-field" aria-label={t("safeMode")}>
+        <span className="settings-field__label">{t("safeMode")}</span>
+        <fieldset className="theme-segmented" disabled={safeMode === null || safeModeSaving}>
+          <legend className="theme-segmented__legend">{t("safeMode")}</legend>
+          {[
+            { value: true, labelKey: "safeModeSafe" as const },
+            { value: false, labelKey: "safeModeAuto" as const },
+          ].map((choice) => {
+            const selected = safeMode === choice.value;
+            return (
+              <label
+                key={String(choice.value)}
+                className={`theme-segmented__option${
+                  selected ? " theme-segmented__option--on" : ""
+                }`}
+              >
+                <input
+                  type="radio"
+                  name="safe-mode"
+                  className="theme-segmented__input"
+                  checked={selected}
+                  onChange={() => chooseSafeMode(choice.value)}
+                />
+                {t(choice.labelKey)}
+              </label>
+            );
+          })}
+        </fieldset>
+        <span className="settings-field__caption">
+          {safeMode === false ? t("safeModeAutoCaption") : t("safeModeSafeCaption")}
+        </span>
       </section>
 
       <section className="settings-field">
