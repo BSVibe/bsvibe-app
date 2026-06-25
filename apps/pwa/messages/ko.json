@@ -788,6 +788,11 @@
       "workspaceNameSaving": "저장 중…",
       "workspaceNameCancel": "취소",
       "workspaceNameSaveError": "변경 사항을 저장하지 못했어요. 잠시 후 다시 시도해 주세요.",
+      "safeMode": "승인",
+      "safeModeSafe": "안전",
+      "safeModeAuto": "자동",
+      "safeModeSafeCaption": "안전: 모든 산출물이 출시 전에 승인을 기다려요.",
+      "safeModeAutoCaption": "자동: 산출물이 묻지 않고 바로 나가요. 진짜 막힘은 여전히 알려드려요.",
       "theme": "테마",
       "themeChoice": {
         "light": "라이트",
@@ -928,7 +933,11 @@
     "nextReviewLink": "전달 리포트 보기",
     "nextWorking": "작업하고 있어요…",
     "nextShipped": "완료됐어요. 따로 하실 일은 없어요.",
-    "nextFailed": "완료하지 못했어요. 지금 하실 일은 없어요."
+    "nextFailed": "완료하지 못했어요. 다시 시도할 수 있어요.",
+    "failureReasonLabel": "멈춘 이유:",
+    "retry": "다시 시도",
+    "retrying": "다시 시도하는 중…",
+    "retryError": "다시 시도하지 못했어요 — 잠시 후 다시 해보세요."
   },
   "trust": {
     "glyphLabel": {

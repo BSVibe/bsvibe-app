@@ -55,6 +55,12 @@ class WorkspaceOut(BaseModel):
     # The language LLM-generated user-facing prose is written in (knowledge
     # notes, decision questions, framing). A short locale tag; "en" default.
     language: str = "en"
+    # L3 (#5) — Safe Mode. ``True`` (Safe): every shipped deliverable is held
+    # in the Safe Mode queue for founder approval. ``False`` (Auto): deliverables
+    # auto-dispatch — the delivery gate is bypassed (the Claude-Code
+    # "bypass permissions" UX). Real blocks (ask_user_question / verification
+    # failures) still surface as Decisions regardless of this flag.
+    safe_mode: bool = True
 
 
 class WorkspaceUpdate(BaseModel):
@@ -91,6 +97,10 @@ class WorkspaceUpdate(BaseModel):
     # ("en" / "ko") to set. The PWA Language control sends this alongside the
     # client locale so the UI and the generated prose share one language.
     language: Literal["en", "ko"] | None = Field(default=None)
+    # L3 (#5) — Safe Mode toggle. Omit to leave unchanged; ``True`` (Safe) holds
+    # deliverables for approval, ``False`` (Auto) auto-dispatches. The founder
+    # flips it from Settings → General (or the MCP set-safe-mode tool).
+    safe_mode: bool | None = Field(default=None)
 
 
 @router.get("", response_model=WorkspaceOut)
@@ -108,6 +118,7 @@ async def get_workspace(
         audit_retention_days=workspace.audit_retention_days,
         default_account_id=workspace.default_account_id,
         language=workspace.language,
+        safe_mode=workspace.safe_mode,
     )
 
 
@@ -150,6 +161,8 @@ async def update_workspace(
         workspace.default_account_id = payload.default_account_id
     if "language" in sent and payload.language is not None:
         workspace.language = payload.language
+    if "safe_mode" in sent and payload.safe_mode is not None:
+        workspace.safe_mode = payload.safe_mode
     await session.commit()
     return WorkspaceOut(
         id=workspace.id,
@@ -157,6 +170,7 @@ async def update_workspace(
         audit_retention_days=workspace.audit_retention_days,
         default_account_id=workspace.default_account_id,
         language=workspace.language,
+        safe_mode=workspace.safe_mode,
     )
 
 

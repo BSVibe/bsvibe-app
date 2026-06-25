@@ -15,7 +15,7 @@ import { type Session, clearSession, setSession } from "@/lib/auth/session";
 import { LOCALE_COOKIE } from "@/lib/i18n/config";
 import { PREF_STORAGE_KEY } from "@/lib/preferences/preferences";
 import { THEME_STORAGE_KEY } from "@/lib/theme/theme";
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -146,5 +146,48 @@ describe("General tab — workspace identity", () => {
     // The default basis for a workspace is 'contract' — the badge surfaces
     // that as a read-only marker until the founder-editable UI ships.
     expect(screen.getByText(/legal basis/i)).toBeInTheDocument();
+  });
+});
+
+// L3 (#5) — Safe / Auto mode toggle, wired to PATCH /api/v1/workspace.
+describe("General tab — Safe Mode (#5)", () => {
+  function mockWorkspace(safeMode: boolean) {
+    return vi.fn(async (url: string, init?: RequestInit) => {
+      const method = init?.method ?? "GET";
+      if (typeof url === "string" && url.includes("/api/v1/workspace")) {
+        const body =
+          method === "PATCH" ? (JSON.parse(init?.body as string) as { safe_mode?: boolean }) : {};
+        const value = body.safe_mode ?? safeMode;
+        return new Response(
+          JSON.stringify({ id: "ws-1", name: "Acme", language: "en", safe_mode: value }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+      return new Response("{}", { status: 200, headers: { "Content-Type": "application/json" } });
+    });
+  }
+
+  it("reflects the loaded mode (Safe selected) and switching to Auto PATCHes safe_mode=false", async () => {
+    const fetchMock = mockWorkspace(true);
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<GeneralTab />);
+
+    // Auto becomes selectable once the workspace loads.
+    const auto = await screen.findByRole("radio", { name: /auto/i });
+    await waitFor(() => expect(auto).not.toBeDisabled());
+    await userEvent.click(auto);
+
+    await waitFor(() => {
+      const patch = fetchMock.mock.calls.find(
+        (c) =>
+          typeof c[0] === "string" &&
+          (c[0] as string).includes("/api/v1/workspace") &&
+          (c[1] as RequestInit)?.method === "PATCH",
+      );
+      expect(patch).toBeTruthy();
+      const [, init] = patch as unknown as [string, RequestInit];
+      expect(JSON.parse(init.body as string)).toEqual({ safe_mode: false });
+    });
   });
 });

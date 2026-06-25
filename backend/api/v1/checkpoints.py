@@ -198,14 +198,22 @@ _EXECUTOR_DECISION_QUESTIONS: dict[str, str] = {
 # handler. New Decision kinds may opt in by adding themselves to this map.
 ACTION_SHIP = "ship"
 ACTION_DISCARD = "discard"
+# L2 (#9): re-open the paused run for another attempt instead of shipping a
+# possibly-broken result or abandoning it. ``retry`` carries NO dedicated
+# handler — it falls through to the resume branch in :func:`resolve_checkpoint`
+# (RUNNING → OPEN), so ``AgentWorker.drive_once`` re-picks the run and drives a
+# fresh attempt. A failed run is recoverable, not a dead-end.
+ACTION_RETRY = "retry"
 
 _EXECUTOR_DECISION_ACTIONS: dict[str, list[DecisionAction]] = {
     "verification_failed": [
         DecisionAction(key=ACTION_SHIP, label_en="Approve & ship", label_ko="승인하고 출시"),
+        DecisionAction(key=ACTION_RETRY, label_en="Retry", label_ko="다시 시도"),
         DecisionAction(key=ACTION_DISCARD, label_en="Discard", label_ko="폐기"),
     ],
     "human_review_required": [
         DecisionAction(key=ACTION_SHIP, label_en="Approve & ship", label_ko="승인하고 출시"),
+        DecisionAction(key=ACTION_RETRY, label_en="Retry", label_ko="다시 시도"),
         DecisionAction(key=ACTION_DISCARD, label_en="Discard", label_ko="폐기"),
     ],
     # W1: the ship_or_discard kind from L-P2 is retired. Verified runs no

@@ -18,6 +18,7 @@ from typing import Any
 import structlog
 from pydantic import BaseModel, ConfigDict, Field
 
+from backend.identity.workspaces_db import WorkspaceRow
 from backend.mcp.api import Tool, ToolContext, ToolError, ToolRegistry
 from backend.workflow.application.safe_mode_queue import SafeModeQueue
 from backend.workflow.infrastructure.workers.delivery_worker import dispatch_delivery
@@ -217,6 +218,42 @@ async def _h_deny(args: SafeModeDenyInput, ctx: ToolContext) -> Any:
 
 
 # ---------------------------------------------------------------------------
+# bsvibe_safe_mode_get / bsvibe_safe_mode_set — the workspace mode toggle.
+# L3 (#5) — MCP parity for the Settings → General Safe / Auto control. Safe
+# (True) holds every deliverable for approval; Auto (False) auto-dispatches
+# (the delivery gate is bypassed — real blocks like ask_user_question /
+# verification failures still surface as Decisions regardless).
+# ---------------------------------------------------------------------------
+class SafeModeGetInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+class SafeModeModeOutput(_Output):
+    safe_mode: bool
+
+
+async def _h_get_mode(args: SafeModeGetInput, ctx: ToolContext) -> Any:
+    workspace = await ctx.session.get(WorkspaceRow, ctx.principal.workspace_id)
+    if workspace is None:
+        raise ToolError("workspace not found")
+    return SafeModeModeOutput(safe_mode=bool(workspace.safe_mode))
+
+
+class SafeModeSetInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    safe_mode: bool
+
+
+async def _h_set_mode(args: SafeModeSetInput, ctx: ToolContext) -> Any:
+    workspace = await ctx.session.get(WorkspaceRow, ctx.principal.workspace_id)
+    if workspace is None:
+        raise ToolError("workspace not found")
+    workspace.safe_mode = args.safe_mode
+    await ctx.session.commit()
+    return SafeModeModeOutput(safe_mode=bool(workspace.safe_mode))
+
+
+# ---------------------------------------------------------------------------
 # Registration
 # ---------------------------------------------------------------------------
 def register_safe_mode_tools(registry: ToolRegistry) -> None:
@@ -260,6 +297,35 @@ def register_safe_mode_tools(registry: ToolRegistry) -> None:
             handler=_h_deny,
             required_scopes=("mcp:write",),
             audit_event="bsvibe.mcp.safe_mode_deny.invoked",
+        )
+    )
+    registry.register(
+        Tool(
+            name="bsvibe_safe_mode_get",
+            description=(
+                "Get the active workspace's Safe Mode setting. `true` (Safe) holds "
+                "every deliverable for approval; `false` (Auto) auto-dispatches."
+            ),
+            input_schema=SafeModeGetInput,
+            output_schema=SafeModeModeOutput,
+            handler=_h_get_mode,
+            required_scopes=("mcp:read",),
+        )
+    )
+    registry.register(
+        Tool(
+            name="bsvibe_safe_mode_set",
+            description=(
+                "Switch the active workspace between Safe Mode (`safe_mode=true`, "
+                "every deliverable is held for approval) and Auto (`safe_mode=false`, "
+                "deliverables auto-dispatch). Real blocks (ask_user_question / "
+                "verification failures) still surface as Decisions either way."
+            ),
+            input_schema=SafeModeSetInput,
+            output_schema=SafeModeModeOutput,
+            handler=_h_set_mode,
+            required_scopes=("mcp:write",),
+            audit_event="bsvibe.mcp.safe_mode_set.invoked",
         )
     )
 
