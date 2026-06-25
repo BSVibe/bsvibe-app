@@ -6137,6 +6137,23 @@ main.login {
   gap: 10px;
 }
 
+/* In the multi-file split the panel RESERVES a fixed-height box so switching a
+ * file never collapses it (the content fetch's loading note would otherwise
+ * shrink the panel and reflow the rest of the document). The inner viewer fills
+ * the box and scrolls within it; the loading / unavailable note sits centered
+ * in the reserved space instead of resizing it. */
+.report-built--split .report-built__panel {
+  height: 68vh;
+  min-height: 320px;
+  max-height: 760px;
+}
+
+.report-built--split .report-built__panel > .report-artifact-view__loading,
+.report-built--split .report-built__panel > .report-artifact-view__unavailable,
+.report-built--split .report-built__panel > .report-artifact-view__binary {
+  margin: auto;
+}
+
 .report-doc__verdict {
   font-size: 0.92rem;
   font-weight: 600;
@@ -6240,9 +6257,8 @@ main.login {
 }
 
 .report-built--split .report-diffview {
-  height: 68vh;
-  min-height: 320px;
-  max-height: 760px;
+  flex: 1;
+  min-height: 0;
 }
 
 /* Rendered-Markdown reading view for a no-before doc deliverable — prose, not a
@@ -6260,9 +6276,8 @@ main.login {
 }
 
 .report-built--split .report-markdown {
-  height: 68vh;
-  min-height: 320px;
-  max-height: 760px;
+  flex: 1;
+  min-height: 0;
 }
 
 .report-markdown > :first-child {
