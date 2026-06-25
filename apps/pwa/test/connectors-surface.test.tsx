@@ -7,8 +7,9 @@
  *  - CONNECTED renders a card per active connector (name, ref, masked hint,
  *    "Connected" pill) with a real Revoke and a disabled (coming-soon) Configure
  *  - AVAILABLE renders the not-yet-connected supported connectors as ENABLED
- *    "Connect" cards, and the aspirational services (Figma/Linear/…) + the
- *    custom-MCP card as DISABLED "coming soon" controls
+ *    "Connect" cards, and the custom-MCP card as a DISABLED "coming soon"
+ *    control. The catalog shows ONLY real connectors — no aspirational
+ *    (Figma/Linear/…) coming-soon cards (L6 3c).
  *  - Connect → opens the create panel pre-selected → POST fires with the form
  *    body → the one-time webhook_url + token are shown with a "won't see again"
  *    note → a re-read fires
@@ -92,6 +93,17 @@ describe("Connectors catalog surface", () => {
     expect(within(connected).getByRole("button", { name: /^Revoke$/i })).toBeInTheDocument();
   });
 
+  it("does NOT render a 'delivers out' label even when delivery_config has keys (L6 3a)", async () => {
+    const rowWithDelivery = { ...GITHUB_ROW, delivery_config: { repo: "acme/widgets" } };
+    global.fetch = vi.fn(async () => jsonResponse([rowWithDelivery])) as unknown as typeof fetch;
+
+    render(<Connectors />);
+
+    const connected = await screen.findByRole("list", { name: /connected/i });
+    // The non-functional outbound label (no UI acts on it) is removed.
+    expect(within(connected).queryByText(/delivers out/i)).not.toBeInTheDocument();
+  });
+
   it("disables Configure on a connected card (no update API yet)", async () => {
     global.fetch = vi.fn(async () => jsonResponse([GITHUB_ROW])) as unknown as typeof fetch;
 
@@ -117,17 +129,14 @@ describe("Connectors catalog surface", () => {
     expect(within(available).queryByText("github")).not.toBeInTheDocument();
   });
 
-  it("renders aspirational services as disabled coming-soon cards", async () => {
+  it("does NOT render aspirational coming-soon cards (L6 3c — catalog shows only real connectors)", async () => {
     global.fetch = vi.fn(async () => jsonResponse([])) as unknown as typeof fetch;
 
     render(<Connectors />);
 
     const available = await screen.findByRole("list", { name: /available/i });
     for (const name of ["Figma", "Linear", "Google Drive", "PowerPoint", "Postgres"]) {
-      const card = within(available).getByText(name).closest("li") as HTMLElement;
-      const btn = within(card).getByRole("button", { name: /^Connect$/i });
-      expect(btn).toBeDisabled();
-      expect(btn).toHaveAttribute("title");
+      expect(within(available).queryByText(name)).not.toBeInTheDocument();
     }
   });
 

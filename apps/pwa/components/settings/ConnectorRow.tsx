@@ -13,8 +13,7 @@ type RowState = "idle" | "confirming" | "revoking" | "importing" | "import-error
 /**
  * One connected connector, rendered as a CONNECTED catalog card. Shows the
  * connector name, its reference label (if any), the masked token hint (last 4 —
- * never the full capability), a "Connected" status pill, and any delivery_config
- * keys (the outbound routing the founder set).
+ * never the full capability), and a "Connected" status pill.
  *
  * Three actions:
  *  - Import now (Lift B) — REAL, but ONLY when the connector is inbound or
@@ -83,7 +82,6 @@ export default function ConnectorRow({
     }
   }
 
-  const configKeys = Object.keys(connector.delivery_config ?? {});
   // "Last imported" — prefer the just-completed import (fresh in memory)
   // over the row's stored value, so the success state is reflected
   // immediately without waiting for the list refetch to land.
@@ -115,25 +113,20 @@ export default function ConnectorRow({
             </span>
           )}
         </div>
-        {isOAuthConnector(connector.connector as ConnectorName) ? (
+        {/* L6 3b — a connected, healthy OAuth binding already shows the green
+            "연결됨" pill above; a duplicate "Connected as @login" chip here was
+            redundant, so it's dropped. The OAuth control only renders when the
+            bound token needs re-auth, surfacing a single "Reconnect with X" CTA
+            (the green pill flips to a needs-reauth warning in that same state). */}
+        {isOAuthConnector(connector.connector as ConnectorName) && connector.needs_reauth ? (
           <div className="connector-card__oauth">
-            {/* A binding already exists → show Connect / Connected. github uses
-                the App-aware control (configured, no probe — a binding implies
-                the App exists); other OAuth connectors use the plain button.
-                Lift E46 — when the bound token needs re-auth, the inner
-                control hides the steady "Connected as" chip and surfaces a
-                "Reconnect with X" CTA instead. */}
             {connector.connector === "github" ? (
-              <GithubAppSetup
-                configured
-                connectedLabel={connector.oauth_account_label}
-                needsReauth={connector.needs_reauth}
-              />
+              <GithubAppSetup configured connectedLabel={null} needsReauth />
             ) : (
               <ConnectorOAuthButton
                 provider={connector.connector}
-                connectedLabel={connector.oauth_account_label}
-                needsReauth={connector.needs_reauth}
+                connectedLabel={null}
+                needsReauth
               />
             )}
           </div>
@@ -141,11 +134,6 @@ export default function ConnectorRow({
         <p className="connector-card__detail">
           {connector.external_ref ? (
             <span className="connector-card__ref">{connector.external_ref}</span>
-          ) : null}
-          {configKeys.length > 0 ? (
-            <span className="connector-card__config">
-              {t("deliversOut", { keys: configKeys.join(", ") })}
-            </span>
           ) : null}
           <span className="connector-card__hint" title={t("tokenHintTitle")}>
             {connector.token_hint}

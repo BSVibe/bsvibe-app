@@ -574,32 +574,9 @@
         "claude": "Claude 대화 내역 가져오기",
         "gpt": "ChatGPT 대화 내역 가져오기"
       },
-      "aspirational": {
-        "figma": {
-          "name": "Figma",
-          "blurb": "디자인 파일, 읽기와 댓글"
-        },
-        "linear": {
-          "name": "Linear",
-          "blurb": "이슈와 프로젝트"
-        },
-        "googleDrive": {
-          "name": "Google Drive",
-          "blurb": "문서, 시트, 슬라이드"
-        },
-        "powerpoint": {
-          "name": "PowerPoint",
-          "blurb": "Graph로 .pptx 생성"
-        },
-        "postgres": {
-          "name": "Postgres",
-          "blurb": "SQL 데이터 소스"
-        }
-      },
       "row": {
         "revoked": "해지됨",
         "needs_reauth": "재연결 필요",
-        "deliversOut": "내보내기 · {keys}",
         "tokenHintTitle": "웹훅 토큰 (마스킹됨)",
         "revokeError": "해지하지 못했어요. 다시 시도해 주세요.",
         "revoking": "해지 중…",
@@ -754,7 +731,7 @@
       "quietHoursCaption": "방해 금지 시간에는 “확인이 필요해요”만 인앱으로 전달돼요. 나머지는 아침까지 기다려요."
     },
     "account": {
-      "lede": "계정: 프로필과 플랜.",
+      "lede": "계정: 프로필과 로그인.",
       "comingSoon": "준비 중",
       "profile": "프로필",
       "changePhoto": "사진 변경",
@@ -762,24 +739,14 @@
       "nameHint": "이름 편집은 곧 제공돼요.",
       "email": "이메일",
       "notSignedIn": "로그인되지 않음",
-      "plan": "플랜",
-      "planTier": "무료",
-      "planPrice": "$0/월",
-      "planStatus": "활성",
-      "manageBilling": "결제 관리",
-      "planQuota": "결제가 도입되면 사용량과 할당량이 여기에 표시돼요.",
-      "viewInvoices": "인보이스 보기",
       "signInIdentities": "로그인 수단",
       "connected": "연결됨",
-      "disconnect": "연결 해제",
-      "connect": "연결",
-      "identitiesNote": "로그인 수단 연결 및 해제는 곧 제공돼요.",
+      "signedInWith": "{provider}로 로그인됨",
       "activeSessions": "활성 세션",
       "thisDevice": "이 기기",
       "activeNow": "{email} · 지금 활성",
       "signingOut": "로그아웃 중…",
       "signOut": "로그아웃",
-      "sessionsNote": "다른 기기 확인 및 로그아웃은 곧 제공돼요.",
       "providers": {
         "google": "Google",
         "github": "GitHub",

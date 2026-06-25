@@ -47,7 +47,7 @@ describe("Lift 2-4 — vanilla OAuth cascade", () => {
     }
   });
 
-  it("ConnectorRow renders 'Connect with Slack' for a slack binding", () => {
+  it("ConnectorRow shows a single Connected pill for a connected slack binding (L6 3b — no duplicate OAuth line)", () => {
     render(
       <ConnectorRow
         connector={makeConnector({ connector: "slack", oauth_account_label: null })}
@@ -55,10 +55,12 @@ describe("Lift 2-4 — vanilla OAuth cascade", () => {
         revoke={vi.fn()}
       />,
     );
-    expect(screen.getByRole("button", { name: /connect with slack/i })).toBeInTheDocument();
+    expect(screen.getByText(/^Connected$/i)).toBeInTheDocument();
+    // A healthy connected binding no longer renders an OAuth Connect/identity line.
+    expect(screen.queryByRole("button", { name: /connect with slack/i })).toBeNull();
   });
 
-  it("ConnectorRow shows 'Connected as @workspace' for a connected notion binding", () => {
+  it("ConnectorRow drops the redundant 'Connected as @workspace' line for a connected notion binding (L6 3b)", () => {
     render(
       <ConnectorRow
         connector={makeConnector({ connector: "notion", oauth_account_label: "Docs HQ" })}
@@ -66,6 +68,22 @@ describe("Lift 2-4 — vanilla OAuth cascade", () => {
         revoke={vi.fn()}
       />,
     );
-    expect(screen.getByText(/Docs HQ/)).toBeInTheDocument();
+    expect(screen.getByText(/^Connected$/i)).toBeInTheDocument();
+    expect(screen.queryByText(/Docs HQ/)).toBeNull();
+  });
+
+  it("ConnectorRow surfaces a single Reconnect CTA when a slack binding needs re-auth (L6 3b)", () => {
+    render(
+      <ConnectorRow
+        connector={makeConnector({
+          connector: "slack",
+          oauth_account_label: null,
+          needs_reauth: true,
+        })}
+        onRevoked={() => {}}
+        revoke={vi.fn()}
+      />,
+    );
+    expect(screen.getByRole("button", { name: /reconnect with slack/i })).toBeInTheDocument();
   });
 });

@@ -9,8 +9,9 @@
  *     keeps the delivery_config (repo) JSON.
  *   - github.pack still sends a non-empty signing_secret placeholder (the
  *     backend column is NOT NULL) plus the parsed delivery_config.
- *   - ConnectorRow shows "Connected as @login" when oauth_account_label is set,
- *     and a "Connect with GitHub" button when it is not.
+ *   - ConnectorRow (L6 3b) shows a SINGLE connected indicator — the green
+ *     "Connected" pill — and drops the redundant "Connected as @login" OAuth
+ *     line. Only a needs_reauth binding surfaces a "Reconnect with GitHub" CTA.
  */
 
 import AddConnector from "@/components/settings/AddConnector";
@@ -78,8 +79,8 @@ describe("Lift 1 — AddConnector github form", () => {
   });
 });
 
-describe("Lift 1 — ConnectorRow github connect state", () => {
-  it("shows the connected identity when oauth_account_label is set", () => {
+describe("Lift 1 — ConnectorRow github connect state (L6 3b — single indicator)", () => {
+  it("shows ONLY the green Connected pill, not a duplicate 'Connected as @login' line", () => {
     render(
       <ConnectorRow
         connector={makeConnector({ connector: "github", oauth_account_label: "@octocat" })}
@@ -87,18 +88,28 @@ describe("Lift 1 — ConnectorRow github connect state", () => {
         revoke={vi.fn()}
       />,
     );
-    expect(screen.getByText(/@octocat/)).toBeInTheDocument();
+    // The single connected indicator (green pill) is present…
+    expect(screen.getByText(/^Connected$/i)).toBeInTheDocument();
+    // …and the redundant OAuth-section identity line is gone.
+    expect(screen.queryByText(/@octocat/)).toBeNull();
+    expect(screen.queryByText(/connected as/i)).toBeNull();
     expect(screen.queryByRole("button", { name: /connect with github/i })).toBeNull();
   });
 
-  it("shows a Connect button when not yet connected", () => {
+  it("surfaces a single Reconnect CTA when the bound token needs re-auth", () => {
     render(
       <ConnectorRow
-        connector={makeConnector({ connector: "github", oauth_account_label: null })}
+        connector={makeConnector({
+          connector: "github",
+          oauth_account_label: "@octocat",
+          needs_reauth: true,
+        })}
         onRevoked={() => {}}
         revoke={vi.fn()}
       />,
     );
-    expect(screen.getByRole("button", { name: /connect with github/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /reconnect with github/i })).toBeInTheDocument();
+    // Still no duplicate "Connected as" identity chip.
+    expect(screen.queryByText(/connected as/i)).toBeNull();
   });
 });
