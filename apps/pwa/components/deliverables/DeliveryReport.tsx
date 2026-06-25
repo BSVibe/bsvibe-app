@@ -24,6 +24,8 @@ import "@git-diff-view/react/styles/diff-view.css";
 import { useTranslations } from "next-intl";
 import Link from "next/link";
 import { useEffect, useState } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 
 /**
  * Delivery Report — the "glass box proof" for one shipped deliverable, read as a
@@ -486,15 +488,35 @@ function FileContentPanel({
   if (artifact.binary) {
     return <p className="report-artifact-view__binary">{artifact.content}</p>;
   }
+  // A freshly produced Markdown doc reads best RENDERED (headings, lists, bold)
+  // — a code-diff with `+` gutters is a developer metaphor that confuses a
+  // non-developer. An EDITED Markdown file still shows the diff (handled by the
+  // caller's captured-diff branch); only a no-before doc reaches here.
+  const isMarkdown = langFromFileName(fileName) === "markdown";
   return (
     <>
       {artifact.truncated && (
         <p className="report-artifact-view__truncated">{t("artifactTruncated")}</p>
       )}
-      <HighlightedDiff
-        fileName={fileName}
-        hunk={synthesizeAdditionHunk(fileName, artifact.content)}
-      />
+      {isMarkdown ? (
+        <MarkdownDoc content={artifact.content} />
+      ) : (
+        <HighlightedDiff
+          fileName={fileName}
+          hunk={synthesizeAdditionHunk(fileName, artifact.content)}
+        />
+      )}
     </>
+  );
+}
+
+/** A no-before Markdown deliverable rendered for READING (GitHub-Flavored
+ *  Markdown via remark-gfm). react-markdown is safe by default — raw HTML in the
+ *  content is NOT rendered — so an agent-authored doc can't inject markup. */
+function MarkdownDoc({ content }: { content: string }) {
+  return (
+    <div className="report-markdown">
+      <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>
+    </div>
   );
 }

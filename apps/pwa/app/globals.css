@@ -6245,6 +6245,118 @@ main.login {
   max-height: 760px;
 }
 
+/* Rendered-Markdown reading view for a no-before doc deliverable — prose, not a
+ * code diff. Framed + scrollable like the diff pane; in the multi-file split it
+ * gets the same fixed-height viewport so switching files never reflows. */
+.report-markdown {
+  border: 1px solid var(--hair);
+  border-radius: var(--radius-sm);
+  overflow: auto;
+  padding: 18px 22px;
+  background: var(--surface);
+  color: var(--ink);
+  font-size: 0.92rem;
+  line-height: 1.65;
+}
+
+.report-built--split .report-markdown {
+  height: 68vh;
+  min-height: 320px;
+  max-height: 760px;
+}
+
+.report-markdown > :first-child {
+  margin-top: 0;
+}
+
+.report-markdown > :last-child {
+  margin-bottom: 0;
+}
+
+.report-markdown h1,
+.report-markdown h2,
+.report-markdown h3,
+.report-markdown h4 {
+  margin: 1.4em 0 0.5em;
+  line-height: 1.3;
+  font-weight: 650;
+}
+
+.report-markdown h1 {
+  font-size: 1.4rem;
+}
+
+.report-markdown h2 {
+  font-size: 1.2rem;
+}
+
+.report-markdown h3 {
+  font-size: 1.05rem;
+}
+
+.report-markdown p,
+.report-markdown ul,
+.report-markdown ol,
+.report-markdown blockquote,
+.report-markdown table {
+  margin: 0.7em 0;
+}
+
+.report-markdown ul,
+.report-markdown ol {
+  padding-left: 1.5em;
+}
+
+.report-markdown li {
+  margin: 0.25em 0;
+}
+
+.report-markdown a {
+  color: var(--ink);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.report-markdown blockquote {
+  margin-left: 0;
+  padding: 2px 14px;
+  border-left: 3px solid var(--hair-strong);
+  color: var(--ink-2);
+}
+
+.report-markdown code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.85em;
+  background: var(--accent-bg);
+  padding: 0.1em 0.35em;
+  border-radius: 4px;
+}
+
+.report-markdown pre {
+  margin: 0.8em 0;
+  padding: 12px 14px;
+  overflow: auto;
+  background: var(--accent-bg);
+  border-radius: var(--radius-sm);
+}
+
+.report-markdown pre code {
+  background: none;
+  padding: 0;
+}
+
+.report-markdown table {
+  border-collapse: collapse;
+  width: 100%;
+}
+
+.report-markdown th,
+.report-markdown td {
+  border: 1px solid var(--hair);
+  padding: 6px 10px;
+  text-align: left;
+}
+
 .product-shipped__report-link {
   font-size: 0.78rem;
   color: var(--ink-2);
