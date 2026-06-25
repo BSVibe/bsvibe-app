@@ -1,24 +1,49 @@
 /**
- * Delivery Report — "What was built" GitHub-style diff viewer (Lift 1).
+ * Delivery Report — "What was built" viewer (Lift 3a, @git-diff-view/react).
  *
- * The old top-tabs + single content pane is replaced by a GitHub PR-review
- * layout: a left FILE LIST + a right DIFF PANEL. Switching a file updates only
- * the right panel (the file list persists, the current marker moves). File
- * content renders as GitHub-style ADDITIONS — every line is a green "+" row with
- * a line-number gutter (content-as-additions: a freshly produced file is all-new,
- * so each line reads honestly as an addition; true red/green for modified files
- * is a follow-up lift).
- *
- * These assertions are layout/behaviour contracts on top of the existing
- * delivery-report.test.tsx document tests (which still hold).
+ * The left FILE LIST + right panel split is unchanged; the right panel is now
+ * rendered by @git-diff-view/react (mocked here so we assert OUR integration —
+ * which file, and what diff data we feed it — not the library's internals):
+ *  - a file WITH a captured diff → the library gets the real `git diff` hunk,
+ *  - a file WITHOUT one → the library gets a synthesized all-additions hunk of
+ *    the fetched content,
+ *  - switching a file swaps only the right panel; the list persists + current
+ *    marker moves,
+ *  - a lone file shows no rail.
  */
+
+import { render, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+// Mock the heavy diff library: render the filename + theme + the hunk text it
+// receives, so we can assert our integration contract deterministically.
+vi.mock("@git-diff-view/react", () => {
+  const React = require("react");
+  return {
+    DiffModeEnum: { SplitGitHub: 1, SplitGitLab: 2, Split: 3, Unified: 4 },
+    DiffView: ({
+      data,
+      diffViewTheme,
+    }: {
+      data?: { newFile?: { fileName?: string | null }; hunks?: string[] };
+      diffViewTheme?: string;
+    }) =>
+      React.createElement(
+        "div",
+        {
+          "data-testid": "git-diff-view",
+          "data-filename": data?.newFile?.fileName ?? "",
+          "data-theme": diffViewTheme ?? "",
+        },
+        React.createElement("pre", null, (data?.hunks ?? []).join("\n")),
+      ),
+  };
+});
 
 import DeliveryReport from "@/components/deliverables/DeliveryReport";
 import type { DeliverableReport } from "@/lib/api/types";
 import { type Session, clearSession, setSession } from "@/lib/auth/session";
-import { render, screen, waitFor, within } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const SESSION: Session = {
   accessToken: "tok",
@@ -35,11 +60,11 @@ const REPORT: DeliverableReport = {
     id: "d1",
     run_id: "r1",
     workspace_id: "ws-1",
-    deliverable_type: "pr",
+    deliverable_type: "code",
     summary: "Add getRelatedPosts to blog.ts",
     artifact_refs: ["src/blog.ts", "tests/blog.test.ts"],
-    artifact_uri: "https://github.com/acme/repo/pull/15",
-    diff_url: "https://github.com/acme/repo/commit/abc123",
+    artifact_uri: null,
+    diff_url: null,
     verified: true,
     created_at: NOW,
   },
@@ -51,6 +76,14 @@ const REPORT: DeliverableReport = {
 
 const BLOG_CONTENT = "export function getRelatedPosts() {\n  return [];\n}\n";
 const TEST_CONTENT = "test('related', () => {})\n";
+// A captured diff that touches ONLY src/blog.ts.
+const DIFF = `diff --git a/src/blog.ts b/src/blog.ts
+--- a/src/blog.ts
++++ b/src/blog.ts
+@@ -1,1 +1,1 @@
+-export const old = 1
++export const next = 2
+`;
 
 function json(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -59,11 +92,8 @@ function json(body: unknown, status = 200) {
   });
 }
 
-function installFetch(opts?: {
-  report?: () => DeliverableReport | Response;
-  artifact?: (url: string) => Response;
-}) {
-  const reportFn = opts?.report ?? (() => REPORT);
+function installFetch(opts?: { diff?: () => unknown; artifact?: (url: string) => Response }) {
+  const diffFn = opts?.diff ?? (() => ({ diff: null, truncated: false }));
   const artifactFn =
     opts?.artifact ??
     ((url: string) =>
@@ -77,13 +107,17 @@ function installFetch(opts?: {
         : json({ ref: "src/blog.ts", content: BLOG_CONTENT, truncated: false, binary: false }));
   global.fetch = vi.fn(async (input: RequestInfo | URL) => {
     const url = typeof input === "string" ? input : input.toString();
+    if (url.includes("/diff")) return json(diffFn());
     if (url.includes("/artifacts/")) return artifactFn(url);
-    const r = reportFn();
-    return r instanceof Response ? r : json(r);
+    return json(REPORT);
   }) as unknown as typeof fetch;
 }
 
-describe("Delivery Report — GitHub-style diff viewer", () => {
+function panel() {
+  return document.querySelector('[data-testid="git-diff-view"]');
+}
+
+describe("Delivery Report — git-diff-view viewer", () => {
   beforeEach(() => {
     clearSession();
     setSession(SESSION);
@@ -97,36 +131,38 @@ describe("Delivery Report — GitHub-style diff viewer", () => {
     render(<DeliveryReport deliverableId="d1" />);
 
     const built = await screen.findByRole("region", { name: /what was built/i });
-    // The left rail is a navigation listing every produced file as a button.
     const files = within(built).getByRole("navigation", { name: /files/i });
-    expect(within(files).getByRole("button", { name: /src\/blog\.ts/ })).toBeInTheDocument();
-    expect(
-      within(files).getByRole("button", { name: /tests\/blog\.test\.ts/ }),
-    ).toBeInTheDocument();
-    // The first file is the current/active one by default.
     expect(within(files).getByRole("button", { name: /src\/blog\.ts/ })).toHaveAttribute(
       "aria-current",
       "true",
     );
+    expect(
+      within(files).getByRole("button", { name: /tests\/blog\.test\.ts/ }),
+    ).toBeInTheDocument();
   });
 
-  it("renders the selected file content as green additions with a line-number gutter", async () => {
-    installFetch();
-    const { container } = render(<DeliveryReport deliverableId="d1" />);
+  it("feeds the library the real captured diff hunk for a file in the diff", async () => {
+    installFetch({ diff: () => ({ diff: DIFF, truncated: false }) });
+    render(<DeliveryReport deliverableId="d1" />);
 
-    const built = await screen.findByRole("region", { name: /what was built/i });
+    await screen.findByRole("region", { name: /what was built/i });
     await waitFor(() => {
-      expect(within(built).getByText(/export function getRelatedPosts/)).toBeInTheDocument();
+      expect(panel()?.getAttribute("data-filename")).toBe("src/blog.ts");
     });
-    // Content is rendered as a diff: every line is an "addition" row.
-    const addLines = container.querySelectorAll(".report-diff__line--add");
-    // BLOG_CONTENT has 3 non-empty lines (trailing newline dropped).
-    expect(addLines.length).toBe(3);
-    // A line-number gutter starts at 1.
-    const firstNum = container.querySelector(".report-diff__num");
-    expect(firstNum?.textContent).toBe("1");
-    // Each addition carries the "+" marker.
-    expect(container.querySelector(".report-diff__marker")?.textContent).toBe("+");
+    // The hunk carries the true old/new lines (not a synthesized additions block).
+    expect(panel()?.textContent).toContain("-export const old = 1");
+    expect(panel()?.textContent).toContain("+export const next = 2");
+  });
+
+  it("feeds a synthesized additions hunk of the fetched content for a file NOT in the diff", async () => {
+    installFetch(); // diff: null → additions fallback
+    render(<DeliveryReport deliverableId="d1" />);
+
+    await screen.findByRole("region", { name: /what was built/i });
+    await waitFor(() => {
+      // The first file's content arrives as additions (every line a `+`).
+      expect(panel()?.textContent).toContain("+export function getRelatedPosts() {");
+    });
   });
 
   it("updates only the right panel when another file is selected (list persists, current moves)", async () => {
@@ -135,55 +171,38 @@ describe("Delivery Report — GitHub-style diff viewer", () => {
 
     const built = await screen.findByRole("region", { name: /what was built/i });
     const files = within(built).getByRole("navigation", { name: /files/i });
-    await waitFor(() => {
-      expect(within(built).getByText(/export function getRelatedPosts/)).toBeInTheDocument();
-    });
+    await waitFor(() => expect(panel()?.getAttribute("data-filename")).toBe("src/blog.ts"));
 
-    // Switch to the second file.
     await userEvent.click(within(files).getByRole("button", { name: /tests\/blog\.test\.ts/ }));
 
-    // Right panel now shows the second file's content; the first file's content is gone.
-    await waitFor(() => {
-      expect(within(built).getByText(/test\('related'/)).toBeInTheDocument();
-    });
-    expect(within(built).queryByText(/export function getRelatedPosts/)).toBeNull();
-
-    // The file list persists — both files still listed — and current has moved.
-    expect(within(files).getByRole("button", { name: /src\/blog\.ts/ })).toBeInTheDocument();
-    expect(within(files).getByRole("button", { name: /tests\/blog\.test\.ts/ })).toHaveAttribute(
-      "aria-current",
-      "true",
-    );
+    await waitFor(() => expect(panel()?.getAttribute("data-filename")).toBe("tests/blog.test.ts"));
+    expect(panel()?.textContent).toContain("+test('related'");
+    // List persists; current moved.
     expect(within(files).getByRole("button", { name: /src\/blog\.ts/ })).not.toHaveAttribute(
       "aria-current",
       "true",
     );
+    expect(within(files).getByRole("button", { name: /tests\/blog\.test\.ts/ })).toHaveAttribute(
+      "aria-current",
+      "true",
+    );
   });
 
-  it("shows an additions count for the selected file (GitHub-style +N)", async () => {
-    installFetch();
-    const { container } = render(<DeliveryReport deliverableId="d1" />);
-
-    await screen.findByRole("region", { name: /what was built/i });
-    await waitFor(() => {
-      expect(container.querySelector(".report-diff__added")?.textContent).toContain("+3");
-    });
-  });
-
-  it("does not render the file list for a single-artifact deliverable (just the panel)", async () => {
-    installFetch({
-      report: () => ({
+  it("does not render the file list for a single-artifact deliverable", async () => {
+    global.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : input.toString();
+      if (url.includes("/diff")) return json({ diff: null, truncated: false });
+      if (url.includes("/artifacts/"))
+        return json({ ref: "src/blog.ts", content: BLOG_CONTENT, truncated: false, binary: false });
+      return json({
         ...REPORT,
         deliverable: { ...REPORT.deliverable, artifact_refs: ["src/blog.ts"] },
-      }),
-    });
+      });
+    }) as unknown as typeof fetch;
     render(<DeliveryReport deliverableId="d1" />);
 
     const built = await screen.findByRole("region", { name: /what was built/i });
-    await waitFor(() => {
-      expect(within(built).getByText(/export function getRelatedPosts/)).toBeInTheDocument();
-    });
-    // A lone file needs no rail — keep the single-file view calm.
+    await waitFor(() => expect(panel()).not.toBeNull());
     expect(within(built).queryByRole("navigation", { name: /files/i })).toBeNull();
   });
 });

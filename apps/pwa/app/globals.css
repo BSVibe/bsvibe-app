@@ -21,10 +21,6 @@
   --green-ink: #4f8a5b;
   --green-dot: #5ba877;
   --green-pill-bg: #eef4ee;
-  /* Diff "removed" red — paired with --green-* for the delivery-report diff
-     viewer (light). */
-  --red-ink: #b23b3b;
-  --red-pill-bg: #fbecec;
 
   --rail-w: 248px;
   --col-w: 760px;
@@ -63,10 +59,6 @@
   --green-ink: #7cc08c;
   --green-dot: #5ba877;
   --green-pill-bg: #243027;
-  /* Diff "removed" red — paired with --green-* for the delivery-report diff
-     viewer (dark). */
-  --red-ink: #d98a8a;
-  --red-pill-bg: #34211f;
 
   color-scheme: dark;
 }
@@ -6226,27 +6218,10 @@ main.login {
   width: fit-content;
 }
 
-/* ── Artifact content viewer (the "What was built" inline file panel) ──────── */
-.report-artifact-view {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.report-artifact-view__head {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 12px;
-  font-size: 0.78rem;
-}
-
-.report-artifact-view__path {
-  color: var(--ink-2);
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  word-break: break-all;
-}
-
+/* ── Artifact viewer (the "What was built" file panel) ─────────────────────── */
+/* Calm one-line notes for the non-content states (loading / cleaned run dir /
+ * truncated / binary). The actual file + diff rendering is owned by
+ * @git-diff-view/react inside .report-diffview. */
 .report-artifact-view__loading,
 .report-artifact-view__unavailable,
 .report-artifact-view__truncated,
@@ -6255,84 +6230,19 @@ main.login {
   color: var(--ink-3);
 }
 
-/* The GitHub-style change-count chips in the panel head (+N / −N). */
-.report-diff__counts {
-  flex: none;
-  display: inline-flex;
-  gap: 8px;
-}
-
-.report-diff__added,
-.report-diff__removed {
-  flex: none;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 0.76rem;
-  font-weight: 600;
-}
-
-.report-diff__added {
-  color: var(--green-ink);
-}
-
-.report-diff__removed {
-  color: var(--red-ink);
-}
-
-/* The diff body: a scrollable monospace block of line rows. Each row is a
- * three-track grid — line number, change marker, code — so the gutters stay
- * aligned while the code column scrolls. */
-.report-diff {
-  margin: 0;
-  max-height: 420px;
-  overflow: auto;
+/* The diff pane — @git-diff-view/react renders inside; this wrapper owns the
+ * frame + scroll. In the multi-file split it's a fixed-height viewport so
+ * switching files (or a tall file) never reflows the rest of the document. */
+.report-diffview {
   border: 1px solid var(--hair);
   border-radius: var(--radius-sm);
-  background: var(--surface);
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 0.82rem;
-  line-height: 1.5;
+  overflow: auto;
 }
 
-.report-diff__line {
-  display: grid;
-  grid-template-columns: auto auto 1fr;
-  align-items: baseline;
-}
-
-.report-diff__line--add {
-  background: var(--green-pill-bg);
-}
-
-.report-diff__line--del {
-  background: var(--red-pill-bg);
-}
-
-.report-diff__num {
-  padding: 0 10px;
-  text-align: right;
-  color: var(--ink-3);
-  user-select: none;
-}
-
-.report-diff__marker {
-  padding-right: 8px;
-  color: var(--ink-3);
-  user-select: none;
-}
-
-.report-diff__line--add .report-diff__marker {
-  color: var(--green-ink);
-}
-
-.report-diff__line--del .report-diff__marker {
-  color: var(--red-ink);
-}
-
-.report-diff__code {
-  padding-right: 12px;
-  color: var(--ink);
-  white-space: pre;
-  overflow-wrap: normal;
+.report-built--split .report-diffview {
+  height: 68vh;
+  min-height: 320px;
+  max-height: 760px;
 }
 
 .product-shipped__report-link {
