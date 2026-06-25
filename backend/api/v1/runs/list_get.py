@@ -18,7 +18,7 @@ from backend.api.deps import get_workspace_id
 from backend.api.v1._workflow_deps import get_run_repository
 from backend.workflow.domain.repositories import RunRepository
 
-from ._helpers import _frame_field, _intent_of
+from ._helpers import _frame_field, _intent_of, _restarted_at_of
 from ._schemas import RunResponse
 
 router = APIRouter()
@@ -43,6 +43,7 @@ async def list_runs(
             intent=_intent_of(row.payload),
             summary_title=_frame_field(row.payload, "summary_title"),
             framed_intent=_frame_field(row.payload, "framed_intent"),
+            restarted_at=_restarted_at_of(row.payload),
             created_at=row.created_at,
             updated_at=row.updated_at,
         )
@@ -69,6 +70,7 @@ async def get_run(
         intent=_intent_of(row.payload),
         summary_title=_frame_field(row.payload, "summary_title"),
         framed_intent=_frame_field(row.payload, "framed_intent"),
+        restarted_at=_restarted_at_of(row.payload),
         created_at=row.created_at,
         updated_at=row.updated_at,
     )

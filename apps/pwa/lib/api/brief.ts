@@ -72,7 +72,9 @@ function activeWorkFrom(runs: Run[], products: Product[]): ActiveWork[] {
       title: r.summary_title || r.framed_intent || r.intent,
       productSlug: productSlug(products, r.product_id),
       status: r.status,
-      startedAt: r.created_at,
+      // L9 — count elapsed from the last restart (retry) when present, so a
+      // retried run's clock resets instead of counting from the first start.
+      startedAt: r.restarted_at || r.created_at,
     }));
 }
 

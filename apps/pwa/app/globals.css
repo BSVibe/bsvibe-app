@@ -6994,6 +6994,34 @@ main.login {
   color: var(--amber-ink);
 }
 
+/* L9 — Stop affordance on an in-flight run. A quiet secondary button (the run
+   is working fine; stopping is the rarer, deliberate action). */
+.run-next__cancel {
+  width: fit-content;
+  margin-top: 2px;
+  padding: 7px 14px;
+  border: 1px solid var(--hair-strong);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--ink-3);
+  font: inherit;
+  font-size: 0.85rem;
+  font-weight: 550;
+  cursor: pointer;
+  transition: background 0.12s ease, border-color 0.12s ease, color 0.12s ease;
+}
+
+.run-next__cancel:hover:not(:disabled) {
+  background: var(--accent-bg);
+  border-color: var(--ink-3);
+  color: var(--ink-2);
+}
+
+.run-next__cancel:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
 .run-timeline {
   display: flex;
   flex-direction: column;
