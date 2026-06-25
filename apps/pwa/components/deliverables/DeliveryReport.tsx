@@ -5,6 +5,7 @@ import {
   getDeliverableArtifact,
   getDeliverableDiff,
   getDeliverableReport,
+  retractDeliverable,
 } from "@/lib/api/deliverables";
 import type {
   ArtifactContent,
@@ -223,7 +224,130 @@ function ReportDocument({ report }: { report: DeliverableReport }) {
           {t("viewDiff")}
         </a>
       )}
+
+      {canRollBack(deliverable) && (
+        <section className="report-doc__section" aria-label={t("rollback")}>
+          <h2 className="report-doc__label">{t("rollback")}</h2>
+          <p className="report-doc__muted">{t("rollbackHint")}</p>
+          <RollbackAffordance deliverableId={deliverable.id} />
+        </section>
+      )}
     </article>
+  );
+}
+
+/** Whether a Rollback affordance makes sense for this deliverable. A pure
+ *  DIRECT_OUTPUT answer produced no external artifact (no PR / message / page)
+ *  to reverse, so the backend would 400 `no_compensation_handle` — hide it
+ *  rather than offer a button that can only say "nothing to roll back". Every
+ *  other type CAN carry a compensation handle; if it happens not to, the backend
+ *  400 still degrades to the calm "nothing to roll back" state. */
+function canRollBack(deliverable: DeliverableReport["deliverable"]): boolean {
+  return deliverable.deliverable_type !== "direct_output";
+}
+
+/** Rollback / 되돌리기 — the read-only report's ONE mutating affordance. A button
+ *  opens an inline confirm (no modal dependency — the report is a document, not a
+ *  graph); confirming POSTs `retract` and settles into a calm terminal state.
+ *
+ *  Response variants are mapped to calm copy, never an error wall:
+ *   - 200 first retract → "Rolled back" (+ what was reverted, when the backend
+ *     names it, e.g. "PR closed").
+ *   - 200 already_retracted → calm "Already rolled back".
+ *   - 400 no_compensation_handle → calm "Nothing to roll back" (no external
+ *     artifact existed).
+ *   - 502 / other → calm "Couldn't roll back — try again" (the button returns so
+ *     the founder can retry; the backend left the row un-retracted).
+ */
+function RollbackAffordance({ deliverableId }: { deliverableId: string }) {
+  const t = useTranslations("report");
+  // idle → confirming → pending → done (terminal). A recoverable failure (502 /
+  // network) returns to `confirming` carrying `error` so the founder retries in
+  // one click without losing the confirm context.
+  type Phase =
+    | { kind: "idle" }
+    | { kind: "confirming"; error: string | null }
+    | { kind: "pending" }
+    | { kind: "done"; message: string };
+  const [phase, setPhase] = useState<Phase>({ kind: "idle" });
+
+  const confirm = async () => {
+    setPhase({ kind: "pending" });
+    try {
+      const result = await retractDeliverable(deliverableId);
+      if (result.already_retracted) {
+        setPhase({ kind: "done", message: t("rollbackAlready") });
+        return;
+      }
+      // Name what was reverted when the backend reports a compensated entry
+      // (e.g. "pr" / "github"); otherwise the plain "Rolled back".
+      const what = result.compensated
+        .map((entry) => entry.artifact_type || entry.plugin)
+        .filter(Boolean)
+        .join(", ");
+      setPhase({
+        kind: "done",
+        message: what ? t("rollbackDoneWith", { what }) : t("rollbackDone"),
+      });
+    } catch (error: unknown) {
+      // 400 no_compensation_handle → nothing to revert (calm terminal). Any other
+      // failure (502 compensate_failed, network) → back to the confirm step with
+      // a calm "couldn't roll back, try again" so a retry is one click away.
+      if (error instanceof ApiError && error.status === 400) {
+        setPhase({ kind: "done", message: t("rollbackNothing") });
+      } else {
+        setPhase({ kind: "confirming", error: t("rollbackFailed") });
+      }
+    }
+  };
+
+  if (phase.kind === "done") {
+    return (
+      <p className="report-rollback__done" aria-live="polite">
+        {phase.message}
+      </p>
+    );
+  }
+
+  return (
+    <div className="report-rollback">
+      {phase.kind === "idle" ? (
+        <button
+          type="button"
+          className="report-rollback__open"
+          onClick={() => setPhase({ kind: "confirming", error: null })}
+        >
+          {t("rollback")}
+        </button>
+      ) : (
+        <div className="report-rollback__confirm">
+          <p className="report-rollback__lede">{t("rollbackConfirmLede")}</p>
+          {phase.kind === "confirming" && phase.error && (
+            <p className="report-rollback__error" aria-live="polite">
+              {phase.error}
+            </p>
+          )}
+          <div className="report-rollback__actions">
+            <button
+              type="button"
+              className="report-rollback__cancel"
+              onClick={() => setPhase({ kind: "idle" })}
+              disabled={phase.kind === "pending"}
+            >
+              {t("rollbackCancel")}
+            </button>
+            <button
+              type="button"
+              className="report-rollback__danger"
+              onClick={confirm}
+              disabled={phase.kind === "pending"}
+            >
+              {phase.kind === "pending" ? t("rollbackPending") : t("rollbackConfirmButton")}
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -264,18 +388,42 @@ const _RATIONALE_KEY: Record<string, string> = {
   "BSage canonical patterns retrieved for this change": "retrievedKnowledgeRationale",
 };
 
+// The retrieved-knowledge judge checks (rationale below) are NOT verification —
+// they're the canon/prior-decision statements the retriever folded into the
+// contract, which the backend ALSO extracts into the separate `references`
+// array (surfaced as "What BSVibe referenced"). Surfacing them again in the
+// "How BSVibe checked this" list double-counts knowledge as a check. Mirror the
+// backend's RETRIEVED_KNOWLEDGE_RATIONALE / LEGACY_… constants
+// (backend/workflow/application/verification_service.py) to filter them out so
+// the verification list shows ONLY real checks (ruff/format/mypy/pytest commands
+// + genuine acceptance-judge criteria). Knowledge is reference, not verification.
+const _RETRIEVED_KNOWLEDGE_RATIONALES: ReadonlySet<string> = new Set([
+  "Canonical patterns retrieved for this change",
+  "BSage canonical patterns retrieved for this change",
+]);
+
 function VerificationBlock({ verification }: { verification: VerificationReportItem }) {
   const t = useTranslations("report");
   const rationaleLabel = (raw: string): string => {
     const key = _RATIONALE_KEY[raw];
     return key ? t(key) : raw;
   };
-  const checks = checksFromContract(verification.contract);
+  // Drop the retrieved-knowledge checks — they belong only in "What BSVibe
+  // referenced", never the verification list (they'd otherwise duplicate the
+  // `references` section AND read as a check the change had to pass).
+  const allChecks = checksFromContract(verification.contract);
+  const checks = allChecks.filter((check) => !_RETRIEVED_KNOWLEDGE_RATIONALES.has(check.rationale));
   const resultSummary = summarizeResult(verification.result);
+  // Two distinct empty states: the contract genuinely declared no checks
+  // (`noChecksDeclared`), vs. its only checks were retrieved-knowledge ones we
+  // filtered out (`noChecksAfterKnowledge` — the knowledge shows under "What
+  // BSVibe referenced"; don't claim "nothing was verified"). The verdict line
+  // above already carries the outcome in both cases.
+  const emptyKey = allChecks.length > 0 ? "noChecksAfterKnowledge" : "noChecksDeclared";
   return (
     <div className="report-checks__block">
       {checks.length === 0 ? (
-        <p className="report-checks__none">{t("noChecksDeclared")}</p>
+        <p className="report-checks__none">{t(emptyKey)}</p>
       ) : (
         <ul className="report-checks__list">
           {checks.map((check, i) => (

@@ -4,7 +4,13 @@
  *  shipped" reads this to surface real artifact detail. */
 
 import { apiFetch } from "./client";
-import type { ArtifactContent, Deliverable, DeliverableDiff, DeliverableReport } from "./types";
+import type {
+  ArtifactContent,
+  Deliverable,
+  DeliverableDiff,
+  DeliverableReport,
+  RetractResult,
+} from "./types";
 
 /** Recent Deliverable rows for the active workspace (newest first).
  *  `runId` narrows to one run's deliverables; the backend clamps `limit` to
@@ -53,5 +59,20 @@ export function getDeliverableArtifact(
     .join("/");
   return apiFetch<ArtifactContent>(
     `/api/v1/deliverables/${encodeURIComponent(deliverableId)}/artifacts/${encodedRef}`,
+  );
+}
+
+/** Roll a shipped deliverable back — REAL backend
+ *  `POST /api/v1/deliverables/{id}/retract`. Reverses the external action the
+ *  deliverable produced via stored compensation handles (close the GitHub PR,
+ *  delete the Slack/Discord/Telegram message, archive the Notion page / Linear
+ *  issue / Trello card). Idempotent: a second call on an already-retracted row
+ *  returns `already_retracted: true` (200). A `400` (no captured handles —
+ *  nothing to revert) or a `502` (a compensate dispatch failed) surfaces as an
+ *  `ApiError` the caller maps to a calm state. */
+export function retractDeliverable(deliverableId: string): Promise<RetractResult> {
+  return apiFetch<RetractResult>(
+    `/api/v1/deliverables/${encodeURIComponent(deliverableId)}/retract`,
+    { method: "POST" },
   );
 }

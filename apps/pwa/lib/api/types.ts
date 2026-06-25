@@ -407,6 +407,31 @@ export interface DeliverableDiff {
   truncated: boolean;
 }
 
+/** One per-handle compensation outcome in a retract response (backend
+ *  RetractedCompensationEntry). `plugin` is the originating plugin (e.g.
+ *  `github`), `artifact_type` the action that was reversed (e.g. `pr`), and
+ *  `output` the plugin's free-form compensate result. */
+export interface RetractCompensationEntry {
+  plugin: string;
+  artifact_type: string;
+  output: Record<string, unknown>;
+}
+
+/** `POST /api/v1/deliverables/{id}/retract` body (backend RetractResponse) —
+ *  the outcome of rolling a shipped deliverable back via per-connector
+ *  compensation (close the PR, delete the message, archive the page).
+ *  `already_retracted` is `true` when the row was retracted before this call
+ *  (200 idempotent no-op); `compensated` lists what was reverted on a first
+ *  successful retract. A `400` (no captured handles → nothing to revert) or a
+ *  `502` (a compensate dispatch failed) surfaces as an `ApiError`. */
+export interface RetractResult {
+  deliverable_id: string;
+  retracted: boolean;
+  retracted_at: string;
+  already_retracted: boolean;
+  compensated: RetractCompensationEntry[];
+}
+
 /** One node in a product repo's `main` tree (backend FileTreeEntryResponse).
  *  `path` is the full repo-relative path; `name` is the leaf; `kind` is the
  *  git object kind mapped to file/dir. */

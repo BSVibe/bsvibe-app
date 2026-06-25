@@ -4,7 +4,11 @@
  * and returns the deliverable + verification rows verbatim.
  */
 
-import { getDeliverableArtifact, getDeliverableReport } from "@/lib/api/deliverables";
+import {
+  getDeliverableArtifact,
+  getDeliverableReport,
+  retractDeliverable,
+} from "@/lib/api/deliverables";
 import { type Session, clearSession, setSession } from "@/lib/auth/session";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -111,5 +115,32 @@ describe("getDeliverableArtifact", () => {
 
     const url = String(fetchSpy.mock.calls[0]?.[0]);
     expect(url).toContain("/api/v1/deliverables/d1/artifacts/a%20b.ts");
+  });
+});
+
+describe("retractDeliverable", () => {
+  it("POSTs /api/v1/deliverables/{id}/retract and returns the body verbatim", async () => {
+    const body = {
+      deliverable_id: "d1",
+      retracted: true,
+      retracted_at: NOW,
+      already_retracted: false,
+      compensated: [{ plugin: "github", artifact_type: "pr", output: { closed: true } }],
+    };
+    const fetchSpy = vi.fn(
+      async (_input: RequestInfo | URL, _init?: RequestInit) =>
+        new Response(JSON.stringify(body), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+    );
+    global.fetch = fetchSpy as unknown as typeof fetch;
+
+    const result = await retractDeliverable("d1");
+
+    expect(result).toEqual(body);
+    const [url, init] = fetchSpy.mock.calls[0] ?? [];
+    expect(String(url)).toContain("/api/v1/deliverables/d1/retract");
+    expect(init?.method).toBe("POST");
   });
 });

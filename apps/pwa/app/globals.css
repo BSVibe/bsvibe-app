@@ -6288,6 +6288,88 @@ main.login {
   width: fit-content;
 }
 
+/* Rollback affordance — the read-only report's one mutating action (#6).
+   A calm text button opens an inline confirm; the terminal state reads as a
+   muted line. Intentionally low-key: rollback is rare and consequential, so it
+   sits below the proof rather than competing with it. */
+.report-rollback {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.report-rollback__open {
+  font-size: 0.85rem;
+  color: var(--ink-2);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  width: fit-content;
+  cursor: pointer;
+}
+
+.report-rollback__confirm {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface-2, var(--surface));
+  width: fit-content;
+  max-width: 480px;
+}
+
+.report-rollback__lede {
+  font-size: 0.85rem;
+  color: var(--ink-2);
+}
+
+.report-rollback__error {
+  font-size: 0.8rem;
+  color: var(--danger, #c0392b);
+}
+
+.report-rollback__actions {
+  display: flex;
+  gap: 8px;
+}
+
+.report-rollback__cancel,
+.report-rollback__danger {
+  font-size: 0.85rem;
+  padding: 6px 14px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  cursor: pointer;
+}
+
+.report-rollback__cancel {
+  color: var(--ink-2);
+  background: transparent;
+}
+
+.report-rollback__danger {
+  background: var(--ink);
+  color: var(--surface);
+  border-color: var(--ink);
+}
+
+.report-rollback__danger:hover {
+  background: var(--ink-2);
+  border-color: var(--ink-2);
+}
+
+.report-rollback__cancel:disabled,
+.report-rollback__danger:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.report-rollback__done {
+  font-size: 0.85rem;
+  color: var(--ink-2);
+}
+
 /* Inner verification check rows (the document's How-checked block). */
 .report-checks__none {
   font-size: 0.85rem;
