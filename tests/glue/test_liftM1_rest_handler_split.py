@@ -39,6 +39,9 @@ EXPECTED_ROUTES: dict[str, set[tuple[str, str]]] = {
         ("GET", ""),
         ("GET", "/{run_id}"),
         ("GET", "/{run_id}/detail"),
+        # L2 (#9) — the one founder-initiated mutation: re-open a terminal-failed
+        # run for another attempt (it never CREATES a run).
+        ("POST", "/{run_id}/retry"),
     },
     "backend.api.v1.inside": {
         ("GET", "/concepts"),
@@ -158,6 +161,8 @@ EXPECTED_SUBMODULES: dict[str, list[str]] = {
     "backend.api.v1.runs": [
         "backend.api.v1.runs.list_get",
         "backend.api.v1.runs.detail",
+        # L2 (#9) — the founder-initiated retry mutation in its own thin sub-file.
+        "backend.api.v1.runs.retry",
         "backend.api.v1.runs._schemas",
         "backend.api.v1.runs._helpers",
     ],
