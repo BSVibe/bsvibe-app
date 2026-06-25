@@ -3371,6 +3371,70 @@ main.login {
   text-align: right;
 }
 
+/* Settings → Models → "Default model for this workspace" (Lift E2 / L5).
+   Workspace default-account picker. Mirrors the .settings-field__select
+   border/radius/padding/background tokens so the native <select> matches the
+   rest of Settings instead of rendering as unstyled browser chrome. */
+.default-account {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.default-account__lede {
+  margin: 0;
+  font-size: 0.82rem;
+  color: var(--ink-2);
+}
+
+.default-account__field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.default-account__label-text {
+  font-size: 0.78rem;
+  font-weight: 550;
+  color: var(--ink-2);
+}
+
+.default-account__select {
+  font: inherit;
+  font-size: 0.88rem;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--hair-strong);
+  border-radius: var(--radius-sm);
+  padding: 7px 10px;
+  min-width: 240px;
+  max-width: 100%;
+}
+
+.default-account__select:focus-visible {
+  outline: 2px solid var(--ink-3);
+  outline-offset: 1px;
+}
+
+.default-account__select:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.default-account__loading,
+.default-account__note,
+.default-account__hint {
+  margin: 0;
+  font-size: 0.78rem;
+  color: var(--ink-3);
+}
+
+.default-account__error {
+  margin: 0;
+  font-size: 0.78rem;
+  color: var(--amber-ink);
+}
+
 /* Workspace name editable row — the value sits next to a quiet "Rename"
    button until tapped; tapping swaps it for an inline form (input + Save +
    Cancel). The form lives in the same flex row as the label so the layout
@@ -7326,6 +7390,114 @@ main.login {
 
 .decisions-row__answer:disabled {
   opacity: 0.6;
+}
+
+/* One-click action buttons for executor B2b Decisions (L-D2 / L5).
+   The backend ships `actions` like ship / discard / retry; render them as a
+   wrapping button row. Mirrors the .decisions-row__primary token family:
+   pill border, surface secondary by default, dark fill for the primary
+   `--ship` variant. */
+.decisions-row__action-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.decisions-row__action {
+  border: 1px solid var(--hair-strong);
+  border-radius: 999px;
+  padding: 9px 14px;
+  font: inherit;
+  font-size: 0.8rem;
+  font-weight: 550;
+  background: var(--surface);
+  color: var(--ink-2);
+  cursor: pointer;
+}
+
+.decisions-row__action:hover:not(:disabled) {
+  background: var(--accent-bg);
+}
+
+.decisions-row__action:focus-visible {
+  outline: 2px solid var(--ink-3);
+  outline-offset: 1px;
+}
+
+.decisions-row__action:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+/* Primary / affirmative action (ship). Dark fill matches .decisions-row__primary. */
+.decisions-row__action--ship {
+  border-color: transparent;
+  background: #1f1d1a;
+  color: #fff;
+}
+
+.decisions-row__action--ship:hover:not(:disabled) {
+  background: #000;
+}
+
+/* Destructive action (discard) — quiet, with an amber-leaning hover so it
+   reads distinctly from the affirmative ship without shouting. */
+.decisions-row__action--discard:hover:not(:disabled) {
+  border-color: var(--amber-ink);
+  color: var(--amber-ink);
+  background: var(--surface);
+}
+
+/* Quiet disclosure that reveals the optional free-text reply alongside the
+   one-click actions. Reads as a low-key text affordance, not a button block. */
+.decisions-row__free-text-toggle {
+  align-self: flex-start;
+  border: none;
+  background: none;
+  padding: 0;
+  font: inherit;
+  font-size: 0.78rem;
+  font-weight: 550;
+  color: var(--ink-3);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+.decisions-row__free-text-toggle:hover:not(:disabled) {
+  color: var(--ink-2);
+}
+
+.decisions-row__free-text-toggle:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+/* Suggested-option radio group (L-D1). The work LLM offered `options`; render
+   them as a vertical radio list plus the "Other" radio that reveals the
+   free-text textarea (.decisions-row__answer, already styled above). */
+.decisions-row__options {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  border: none;
+}
+
+.decisions-row__option {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 0.85rem;
+  color: var(--ink);
+  cursor: pointer;
+}
+
+.decisions-row__option input[type="radio"] {
+  margin-top: 2px;
+  accent-color: var(--ink);
+  cursor: pointer;
 }
 /* ── END feat/decisions-unify block ────────────────────────────────────── */
 

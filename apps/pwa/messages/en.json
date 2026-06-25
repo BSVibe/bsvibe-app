@@ -546,7 +546,7 @@
       "connect": "Connect",
       "comingSoon": "Coming soon. There’s no backend for this yet.",
       "customTitle": "Add a custom Connector",
-      "customDetail": "Point me at your own MCP server endpoint or a BSage plugin built with the plugin SDK.",
+      "customDetail": "Point me at your own MCP server endpoint or a plugin built with the plugin SDK.",
       "addCustom": "Add custom",
       "connectDialogLabel": "Connect a service",
       "connectTitle": "Connect {service}",
