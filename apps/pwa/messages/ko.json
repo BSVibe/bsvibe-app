@@ -935,7 +935,11 @@
     "nextReviewLink": "전달 리포트 보기",
     "nextWorking": "작업하고 있어요…",
     "nextShipped": "완료됐어요. 따로 하실 일은 없어요.",
-    "nextFailed": "완료하지 못했어요. 지금 하실 일은 없어요."
+    "nextFailed": "완료하지 못했어요. 다시 시도할 수 있어요.",
+    "failureReasonLabel": "멈춘 이유:",
+    "retry": "다시 시도",
+    "retrying": "다시 시도하는 중…",
+    "retryError": "다시 시도하지 못했어요 — 잠시 후 다시 해보세요."
   },
   "trust": {
     "glyphLabel": {

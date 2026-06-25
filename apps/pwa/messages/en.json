@@ -935,7 +935,11 @@
     "nextReviewLink": "See the delivery report",
     "nextWorking": "Working on it…",
     "nextShipped": "Shipped. Nothing needed from you.",
-    "nextFailed": "This didn't finish. Nothing for you to do right now."
+    "nextFailed": "This didn't finish. You can try again.",
+    "failureReasonLabel": "Why it stopped:",
+    "retry": "Retry",
+    "retrying": "Retrying…",
+    "retryError": "Couldn't retry — please try again."
   },
   "trust": {
     "glyphLabel": {

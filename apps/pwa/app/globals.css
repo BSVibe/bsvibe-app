@@ -6871,6 +6871,48 @@ main.login {
   width: fit-content;
 }
 
+/* L2 (#9) — the failure reason + Retry affordance on a terminal-failed run. */
+.run-next__reason {
+  font-size: 0.88rem;
+  color: var(--ink-2);
+  line-height: 1.45;
+}
+
+.run-next__reason-label {
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.run-next__retry {
+  width: fit-content;
+  margin-top: 2px;
+  padding: 7px 14px;
+  border: 1px solid var(--hair-strong);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+  font-size: 0.85rem;
+  font-weight: 550;
+  cursor: pointer;
+  transition: background 0.12s ease, border-color 0.12s ease;
+}
+
+.run-next__retry:hover:not(:disabled) {
+  background: var(--accent-bg);
+  border-color: var(--ink-3);
+}
+
+.run-next__retry:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.run-next__retry-error {
+  font-size: 0.82rem;
+  color: var(--amber-ink);
+}
+
 .run-timeline {
   display: flex;
   flex-direction: column;

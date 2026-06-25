@@ -12,8 +12,10 @@ app service → serialize):
 Shared response models live in :mod:`._schemas`; defensive payload mappers +
 the timeline builder live in :mod:`._helpers`.
 
-Read-only on the HTTP surface: runs are *created* by the agent loop / workers
-(Bundle G), never by an HTTP POST.
+Runs are *created* only by the agent loop / workers (Bundle G), never by an
+HTTP POST. The one founder-initiated mutation is :mod:`.retry` — re-opening a
+terminal-failed run (FAILED / CANCELLED → OPEN) for another attempt (L2 #9);
+it never creates a run.
 
 The single ``router`` exposed here is the same object the v1 aggregator mounts
 at ``/runs`` — call sites that ``from backend.api.v1.runs import router`` keep
@@ -24,7 +26,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
-from . import detail, list_get
+from . import detail, list_get, retry
 
 # Single aggregator router — each sub-module owns its own APIRouter and the
 # aggregator merges their routes directly (same pattern §17.9 deliverables uses).
@@ -34,7 +36,7 @@ from . import detail, list_get
 # prefix. The v1 aggregator still mounts THIS router under ``/runs``, so each
 # sub-router's paths land at the same final URLs as the legacy module.
 router = APIRouter()
-for _sub in (list_get.router, detail.router):
+for _sub in (list_get.router, detail.router, retry.router):
     router.routes.extend(_sub.routes)
 
 __all__ = ["router"]

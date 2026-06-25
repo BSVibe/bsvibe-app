@@ -63,6 +63,7 @@ const TRIGGERED: RunDetailModel = {
     { type: "settle", label: "Settled into knowledge", created_at: NOW },
   ],
   timeline_source: "activities",
+  failure_reason: null,
 };
 
 /** A clean `review_ready` run (no pending decision) — drives the next-step
@@ -173,6 +174,7 @@ describe("Run-detail surface (Triggered)", () => {
       partial_deliverables: [],
       activities: [],
       timeline_source: "derived",
+      failure_reason: null,
     };
     global.fetch = vi.fn(async () => json(sparse)) as unknown as typeof fetch;
 
@@ -290,14 +292,57 @@ describe("Run-detail surface (Triggered)", () => {
     expect(within(nextStep).getByText(/shipped|all done|nothing needed/i)).toBeInTheDocument();
   });
 
-  it("next step: a failed run shows a calm failure line", async () => {
-    const failed: RunDetailModel = { ...REVIEW_READY, status: "failed" };
+  it("next step: a failed run shows a calm failure line + a Retry button", async () => {
+    const failed: RunDetailModel = { ...REVIEW_READY, status: "failed", deliverable_id: null };
     global.fetch = vi.fn(async () => json(failed)) as unknown as typeof fetch;
 
     render(<RunDetail runId="rr" />);
 
     const nextStep = await screen.findByRole("region", { name: /next step|what.s next/i });
-    expect(within(nextStep).getByText(/didn.t finish|something went wrong/i)).toBeInTheDocument();
+    expect(within(nextStep).getByText(/didn.t finish/i)).toBeInTheDocument();
+    // L2 (#9) — recoverable, not a dead-end: a Retry affordance is present.
+    expect(within(nextStep).getByRole("button", { name: /retry/i })).toBeInTheDocument();
+  });
+
+  it("next step: a failed run surfaces WHY it failed when a reason is recorded", async () => {
+    const failed: RunDetailModel = {
+      ...REVIEW_READY,
+      status: "failed",
+      deliverable_id: null,
+      failure_reason: "the sandbox could not start",
+    };
+    global.fetch = vi.fn(async () => json(failed)) as unknown as typeof fetch;
+
+    render(<RunDetail runId="rr" />);
+
+    const nextStep = await screen.findByRole("region", { name: /next step|what.s next/i });
+    expect(within(nextStep).getByText(/the sandbox could not start/i)).toBeInTheDocument();
+  });
+
+  it("clicking Retry POSTs /api/v1/runs/{id}/retry and reloads", async () => {
+    const failed: RunDetailModel = { ...REVIEW_READY, status: "failed", deliverable_id: null };
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      if (typeof url === "string" && url.includes("/retry")) {
+        return json({ id: "rr", status: "open", retry_count: 1 });
+      }
+      return json(failed);
+    });
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    render(<RunDetail runId="rr" />);
+
+    const retryButton = await screen.findByRole("button", { name: /retry/i });
+    await userEvent.click(retryButton);
+
+    await waitFor(() => {
+      const retryCall = fetchMock.mock.calls.find(
+        (c) => typeof c[0] === "string" && (c[0] as string).includes("/retry"),
+      );
+      expect(retryCall).toBeTruthy();
+      const [url, init] = retryCall as unknown as [string, RequestInit];
+      expect(url).toBe("/api/v1/runs/rr/retry");
+      expect(init.method).toBe("POST");
+    });
   });
 
   // D6 — mid-loop partial Deliverables render distinguished from the verified
