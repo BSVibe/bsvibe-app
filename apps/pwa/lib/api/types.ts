@@ -206,6 +206,12 @@ export interface Run {
   /** The founder's Direction for this run (backend RunResponse.intent, from the
    *  run payload); `null` when the run carries none. */
   intent: string | null;
+  /** L8 — a SHORT plain-language title of the task (frame stage). Review
+   *  surfaces prefer this over the raw, developer-y `intent`. `framed_intent`
+   *  is the retroactive fallback for runs framed before L8. Optional on the
+   *  wire so pre-L8 fixtures keep validating. */
+  summary_title?: string | null;
+  framed_intent?: string | null;
   created_at: string;
   updated_at: string;
 }

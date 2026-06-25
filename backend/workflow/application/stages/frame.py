@@ -58,6 +58,11 @@ class FramedRequest:
     # B9a — the LLM's refined natural-language intent (``None`` on the keyword
     # fallback path, which has no LLM to refine with).
     framed_intent: str | None = None
+    # L8 — a SHORT, plain-language title of the task (≤ ~8 words, no file paths /
+    # type signatures / code identifiers) the founder-facing review surfaces lead
+    # with instead of the raw, developer-y Direction. ``None`` on the keyword
+    # fallback (no LLM) — the surface then falls back to framed_intent / intent.
+    summary_title: str | None = None
     # B9a — the path branch (Workflow §1.2). ``agent_loop`` keeps today's
     # behaviour; ``knowledge_only`` is recorded for B9b to act on.
     path_classification: PathClassification = "agent_loop"
@@ -68,6 +73,9 @@ class FramedRequest:
 # Cap the skill catalog we send to the cheap LLM so a workspace with many skills
 # cannot blow the (local-model) framing budget. Descriptions are the match
 # signal (Workflow §6 #5) so each is clamped, not dropped.
+# L8 — hard cap on the plain-language ``summary_title`` so a verbose model can't
+# blow up a review row (the prompt asks for ≤ 8 words; this is the backstop).
+_SUMMARY_TITLE_CAP = 120
 _FRAME_MAX_SKILLS = 40
 _FRAME_MAX_DESC_CHARS = 300
 
@@ -272,6 +280,11 @@ _FRAME_SYSTEM_PROMPT = (
     "the founder's request and respond with ONE JSON object (no prose, no code "
     "fences) with these keys:\n"
     '  "framed_intent": a one-sentence restatement of what the founder wants,\n'
+    '  "summary_title": a SHORT (max 8 words) plain-language title of the task '
+    "that a non-developer can scan — NO file paths, NO type signatures, NO code "
+    'identifiers in backticks, and NO "in the X product" preamble. Write it in '
+    "the SAME language as framed_intent (e.g. 'Add a mean helper', not 'add "
+    "`mean(values: list[float]) -> float` in backend/common/mean.py'),\n"
     '  "skill_match": the EXACT name of the single best-matching skill from the '
     "catalog below (match on the skill's description), or null if none fits,\n"
     '  "artifact_type_hint": the likely deliverable type '
@@ -389,6 +402,15 @@ def _framed_from_llm(parsed: dict[str, Any], config: FrameConfig, text: str) -> 
     if not isinstance(framed_intent, str) or not framed_intent.strip():
         framed_intent = None
 
+    # L8 — short plain-language title for the review surfaces. Trimmed + length-
+    # capped (a verbose model can't blow the row); blank / non-string → None so
+    # the surface falls back to framed_intent / intent.
+    summary_title = parsed.get("summary_title")
+    if not isinstance(summary_title, str) or not summary_title.strip():
+        summary_title = None
+    else:
+        summary_title = summary_title.strip()[:_SUMMARY_TITLE_CAP]
+
     path = parsed.get("path_classification")
     path_classification: PathClassification = "agent_loop"
     # Coherence guard: a concrete WORK artifact (code/page/page_image/pr) means
@@ -416,6 +438,7 @@ def _framed_from_llm(parsed: dict[str, Any], config: FrameConfig, text: str) -> 
         skill_match=skill_match,
         artifact_type_hint=artifact_hint,
         framed_intent=framed_intent,
+        summary_title=summary_title,
         path_classification=path_classification,
         pipeline=pipeline,
     )

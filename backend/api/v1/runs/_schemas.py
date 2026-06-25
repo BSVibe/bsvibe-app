@@ -31,6 +31,13 @@ class RunResponse(BaseModel):
     # ``intent_text`` / ``text``); ``None`` when the run carries none. Powers the
     # "what is BSVibe working on" title on the merged Brief / Work-Home surface.
     intent: str | None = None
+    # L8 — a SHORT plain-language title of the task (from the frame stage). The
+    # founder-facing review surfaces prefer this over the raw, developer-y
+    # ``intent``; ``framed_intent`` is the retroactive fallback for runs framed
+    # before L8 (no ``summary_title`` yet). Both ``None`` on the keyword-fallback
+    # frame (no LLM) — the surface then uses ``intent``.
+    summary_title: str | None = None
+    framed_intent: str | None = None
     created_at: datetime
     updated_at: datetime
 

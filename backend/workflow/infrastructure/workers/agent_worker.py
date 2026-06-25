@@ -250,6 +250,8 @@ class AgentWorker(BaseWorker):
                         "skill_match": framed.skill_match,
                         "artifact_type_hint": framed.artifact_type_hint,
                         "framed_intent": framed.framed_intent,
+                        # L8 — short plain-language title the review surfaces lead with.
+                        "summary_title": framed.summary_title,
                         "path_classification": framed.path_classification,
                         # P1-L2 — design→impl pipeline signal the orchestrator
                         # chaining acts on at the verified terminal.

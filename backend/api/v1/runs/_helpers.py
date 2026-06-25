@@ -40,6 +40,16 @@ def _intent_of(payload: Any) -> str | None:
     return _opt_str(payload.get("intent_text")) or _opt_str(payload.get("text"))
 
 
+def _frame_field(payload: Any, key: str) -> str | None:
+    """A non-empty string field out of the run's ``payload["frame"]`` block
+    (L8 — ``summary_title`` / ``framed_intent``); ``None`` when absent or odd."""
+    payload = payload if isinstance(payload, dict) else {}
+    frame = payload.get("frame")
+    if not isinstance(frame, dict):
+        return None
+    return _opt_str(frame.get(key))
+
+
 def _trigger_context(payload: Any) -> RunTriggerContext:
     """Map the free-form run payload onto the trigger-context fields, defensively."""
     payload = payload if isinstance(payload, dict) else {}
