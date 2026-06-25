@@ -110,7 +110,8 @@
     "sending": "Sending…",
     "sent": "Sent. Working on it.",
     "errorSend": "Couldn’t send that. Please try again.",
-    "errorNetwork": "Network hiccup. Please try again."
+    "errorNetwork": "Network hiccup. Please try again.",
+    "answerLabel": "Answer"
   },
   "productsIndex": {
     "heading": "Products",

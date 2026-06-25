@@ -197,6 +197,74 @@ describe("Direct compose", () => {
     _currentPathname = "/brief";
   });
 
+  it("L10: a question is answered INLINE and is NOT dispatched as a run", async () => {
+    _currentPathname = "/brief";
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/v1/messages/ask")) {
+        return new Response(
+          JSON.stringify({ answered: true, answer: "The project shipped 9 lifts this round." }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+      if (url.endsWith("/api/v1/products")) {
+        return new Response("[]", { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      return new Response(JSON.stringify(ACCEPTED), {
+        status: 202,
+        headers: { "Content-Type": "application/json" },
+      });
+    });
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    render(<DirectOverlay open onClose={() => {}} />);
+    await userEvent.type(screen.getByRole("textbox"), "how's the project doing?");
+    fireEvent.click(screen.getByRole("button", { name: "Direct" }));
+
+    // The answer renders inline.
+    await waitFor(() => {
+      expect(screen.getByText(/shipped 9 lifts this round/)).toBeInTheDocument();
+    });
+    // It was NOT dispatched as a run (no POST to /api/v1/messages).
+    const dispatched = (fetchMock.mock.calls as unknown as Array<[string, RequestInit]>).find(
+      ([url]) => String(url).endsWith("/api/v1/messages"),
+    );
+    expect(dispatched).toBeUndefined();
+  });
+
+  it("L10: a work request (answered=false) is dispatched as a run", async () => {
+    _currentPathname = "/brief";
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/v1/messages/ask")) {
+        return new Response(JSON.stringify({ answered: false, answer: null }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (url.endsWith("/api/v1/products")) {
+        return new Response("[]", { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      return new Response(JSON.stringify(ACCEPTED), {
+        status: 202,
+        headers: { "Content-Type": "application/json" },
+      });
+    });
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    render(<DirectOverlay open onClose={() => {}} />);
+    await userEvent.type(screen.getByRole("textbox"), "build a TTL cache");
+    fireEvent.click(screen.getByRole("button", { name: "Direct" }));
+
+    await waitFor(() => {
+      expect(screen.getByText("Sent. Working on it.")).toBeInTheDocument();
+    });
+    const dispatched = (fetchMock.mock.calls as unknown as Array<[string, RequestInit]>).find(
+      ([url]) => String(url).endsWith("/api/v1/messages"),
+    );
+    expect(dispatched).toBeTruthy();
+  });
+
   it("shows an error state when the submit fails", async () => {
     global.fetch = vi.fn(
       async () => new Response("boom", { status: 500 }),

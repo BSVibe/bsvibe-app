@@ -463,6 +463,14 @@ export interface MessageAccepted {
   workspace_id: string;
 }
 
+/** `POST /api/v1/messages/ask` → inline Direct-question answer (backend
+ *  AskResponse). `answered: false` → the text is work (or no chat model) →
+ *  dispatch via `submitMessage` instead. */
+export interface AskResult {
+  answered: boolean;
+  answer: string | null;
+}
+
 /** `GET /api/v1/decisions` element (backend ProposalResponse). The decisions
  *  surface is the canonicalization proposal queue; `action_path` is the
  *  human-readable handle for what the proposal touches. */

@@ -1,7 +1,7 @@
 "use client";
 
 import { ApiError } from "@/lib/api/client";
-import { submitMessage } from "@/lib/api/messages";
+import { askMessage, submitMessage } from "@/lib/api/messages";
 import { listProducts } from "@/lib/api/products";
 import type { Product } from "@/lib/api/types";
 import { useTranslations } from "next-intl";
@@ -28,7 +28,7 @@ export function DirectFab({ onClick }: { onClick: () => void }) {
   );
 }
 
-type SubmitState = "idle" | "submitting" | "success" | "error";
+type SubmitState = "idle" | "submitting" | "success" | "error" | "answered";
 
 /**
  * Direct compose overlay — the global compose action (UX §4). A textarea →
@@ -58,6 +58,8 @@ export function DirectOverlay({ open, onClose }: { open: boolean; onClose: () =>
   const [error, setError] = useState<string | null>(null);
   const [productId, setProductId] = useState<string | null>(null);
   const [products, setProducts] = useState<Product[]>([]);
+  // L10 — the inline answer when the founder asked a question (not a work request).
+  const [answer, setAnswer] = useState<string | null>(null);
   const t = useTranslations("direct");
   const pathname = usePathname();
   const currentSlug = _currentProductSlug(pathname);
@@ -94,6 +96,7 @@ export function DirectOverlay({ open, onClose }: { open: boolean; onClose: () =>
       setText("");
       setState("idle");
       setError(null);
+      setAnswer(null);
     }
   }, [open]);
 
@@ -123,7 +126,17 @@ export function DirectOverlay({ open, onClose }: { open: boolean; onClose: () =>
     if (!canSubmit) return;
     setState("submitting");
     setError(null);
+    setAnswer(null);
     try {
+      // L10 — a QUESTION is answered inline (no run, no executor); only a WORK
+      // request is dispatched. The backend classifies + answers; answered=false
+      // means "this is work" (or no chat model) → fall through to dispatch.
+      const asked = await askMessage(trimmed);
+      if (asked.answered && asked.answer) {
+        setAnswer(asked.answer);
+        setState("answered");
+        return;
+      }
       await submitMessage({
         text: trimmed,
         ...(productId ? { product_id: productId } : {}),
@@ -184,6 +197,16 @@ export function DirectOverlay({ open, onClose }: { open: boolean; onClose: () =>
               {state === "submitting" ? t("sending") : t("label")}
             </button>
           </div>
+          {state === "answered" && answer && (
+            <section
+              className="direct-overlay__answer"
+              aria-label={t("answerLabel")}
+              aria-live="polite"
+            >
+              <span className="direct-overlay__answer-label">{t("answerLabel")}</span>
+              <p className="direct-overlay__answer-body">{answer}</p>
+            </section>
+          )}
         </form>
       </dialog>
     </div>

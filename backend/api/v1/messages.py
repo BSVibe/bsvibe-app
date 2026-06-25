@@ -25,6 +25,7 @@ from backend.config import get_settings
 from backend.identity.db import UserRow
 from backend.identity.workspaces_db import ProductRow
 from backend.workers.emit import STREAM_INTAKE, emit_stream_notification, get_emit_redis_client
+from backend.workflow.application.direct_answer import DirectAnswerService, is_question
 from backend.workflow.application.intake.direct import DirectTrigger
 
 router = APIRouter()
@@ -44,6 +45,23 @@ class MessageAccepted(BaseModel):
     accepted: bool
     duplicate: bool
     workspace_id: uuid.UUID
+
+
+class AskRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    text: str = Field(..., min_length=1, max_length=20000)
+
+
+class AskResponse(BaseModel):
+    """L10 — the inline Direct-question answer. ``answered=False`` means the text
+    is NOT a question (or no chat model resolved) → the caller dispatches it as
+    work via ``POST /api/v1/messages`` instead."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    answered: bool
+    answer: str | None = None
 
 
 async def _resolve_product_id(
@@ -153,4 +171,28 @@ async def submit_message(
     )
 
 
-__all__ = ["MessageAccepted", "MessageCreate", "router"]
+@router.post("/ask")
+async def ask_message(
+    body: AskRequest,
+    workspace_id: Annotated[uuid.UUID, Depends(get_workspace_id)],
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+) -> AskResponse:
+    """L10 (#4/#5) — answer a founder's Direct *question* INLINE, synchronously.
+
+    A question (no build intent) is answered from workspace knowledge with a
+    CHAT model and returned right here — no run, no executor. ``answered=False``
+    when the text is a work request OR no chat model is configured; the PWA then
+    falls back to ``POST /api/v1/messages`` (the normal async dispatch).
+    """
+    if not is_question(body.text):
+        return AskResponse(answered=False)
+    service = DirectAnswerService(session, settings=get_settings())
+    answer = await service.answer(workspace_id=workspace_id, text=body.text)
+    if answer is None or not answer.strip():
+        # No chat account resolved (or an empty answer) — let the caller dispatch
+        # it as work rather than showing a blank inline reply.
+        return AskResponse(answered=False)
+    return AskResponse(answered=True, answer=answer.strip())
+
+
+__all__ = ["AskRequest", "AskResponse", "MessageAccepted", "MessageCreate", "router"]

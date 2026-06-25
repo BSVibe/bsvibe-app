@@ -284,6 +284,35 @@ def build_agent_execution_deps(
         # artifact_refs. ``None`` keeps the pre-E32 empty-tempdir path
         # for runs without a product (substrate-only tasks).
         repo_url = await _product_repo_url(session, run.product_id) if run.product_id else None
+
+        # L10 (#5) — Knowledge-only short-circuit (B9b): a frame-classified
+        # ``knowledge_only`` ask is a CHAT answer, no engineering work. It MUST
+        # use a chat model (``CALLER_FRAME``), NOT the act-stage executor — a
+        # coding-agent CLI fails on a chat prompt with "executor chat task …
+        # failed: exit 1" (prod symptom, [[bsvibe-executor-subprocess-too-heavy]]).
+        # Resolve the chat account BEFORE the act account so a question never
+        # touches the executor. No chat account → fall through to the act path
+        # (preserves the existing UX, incl. the no-account Decision).
+        if _is_knowledge_only(run):
+            chat = await _resolve_via_caller(
+                session,
+                caller_id=CALLER_FRAME,
+                workspace_id=run.workspace_id,
+                settings=settings,
+                redis=redis_client,
+            )
+            if chat is not None:
+                logger.info(
+                    "knowledge_only_route",
+                    run_id=str(run.id),
+                    workspace_id=str(run.workspace_id),
+                )
+                return KnowledgeAnswerOrchestrator(
+                    session=session,
+                    llm=ResolverLoopLlm(adapter=chat.adapter),
+                    retriever=await _retriever_for(session, run.workspace_id),
+                )
+
         resolved = await _resolve_via_caller(
             session,
             caller_id=CALLER_AGENT_LOOP_ACT,
@@ -314,20 +343,6 @@ def build_agent_execution_deps(
         suggested_skill, suggested_skill_description = _frame_skill_hint(run, _skill_loader_for)
 
         llm = ResolverLoopLlm(adapter=resolved.adapter)
-
-        # Knowledge-only short-circuit (B9b): a frame-classified
-        # ``knowledge_only`` ask answers from the BSage ontology.
-        if _is_knowledge_only(run):
-            logger.info(
-                "knowledge_only_route",
-                run_id=str(run.id),
-                workspace_id=str(run.workspace_id),
-            )
-            return KnowledgeAnswerOrchestrator(
-                session=session,
-                llm=llm,
-                retriever=retriever,
-            )
 
         skill_loader = _skill_loader_for(run.workspace_id)
         connector_actions = (
