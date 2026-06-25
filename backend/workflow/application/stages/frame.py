@@ -126,6 +126,138 @@ _BUILD_INTENT_WORDS = frozenset(
 )
 
 
+# answer-first (#12): a Direct request that is a *question* with no concrete
+# work artifact is answered directly (``knowledge_only``), never routed into the
+# agent loop where it has nothing to build and stands down. Deterministic so it
+# holds with OR without the frame LLM — the prod dogfood that died on
+# "지금 프로젝트 상황 어때?" hit the no-LLM keyword fallback, which historically
+# forced ``agent_loop``.
+#
+# Korean has no token spaces, so its interrogative cues are matched as
+# substrings; English interrogatives are matched as the leading token.
+_KO_QUESTION_CUES: tuple[str, ...] = (
+    "어때",
+    "어떄",
+    "어떻게",
+    "무엇",
+    "뭐야",
+    "뭔가",
+    "뭐예",
+    "뭐죠",
+    "어디",
+    "언제",
+    "누가",
+    "얼마",
+    "까요",
+    "나요",
+    "가요",
+    "ㄹ까",
+    "을까",
+    "할까",
+    "될까",
+    "인가",
+    "는가",
+    "은가",
+    "ㅂ니까",
+    "습니까",
+)
+_EN_INTERROGATIVES: frozenset[str] = frozenset(
+    {
+        "what",
+        "whats",
+        "how",
+        "hows",
+        "why",
+        "when",
+        "where",
+        "who",
+        "which",
+        "whose",
+        "whom",
+        "is",
+        "are",
+        "am",
+        "do",
+        "does",
+        "did",
+        "can",
+        "could",
+        "should",
+        "would",
+        "will",
+    }
+)
+# Verbs that imply DOING work — used to keep a build request phrased as a
+# question ("can you build X?") on the agent loop while a genuine question
+# ("how does X work?") is answered. Deliberately VERBS only: nouns like
+# "api"/"system"/"module" appear in legitimate questions, so the broad
+# :data:`_BUILD_INTENT_WORDS` set is wrong for this purpose.
+_EN_BUILD_VERBS: frozenset[str] = frozenset(
+    {
+        "build",
+        "implement",
+        "create",
+        "add",
+        "make",
+        "write",
+        "fix",
+        "refactor",
+        "rewrite",
+        "wire",
+        "integrate",
+        "generate",
+    }
+)
+_KO_BUILD_STEMS: tuple[str, ...] = (
+    "만들",
+    "구현",
+    "추가",
+    "수정",
+    "고쳐",
+    "고치",
+    "작성",
+    "리팩터",
+    "리팩토",
+    "빌드",
+    "생성",
+    "연동",
+)
+
+
+def _looks_like_question(text: str) -> bool:
+    """Deterministic: does the text read as a question? (`?`, a Korean
+    interrogative cue, or a leading English interrogative.)"""
+    if not text:
+        return False
+    stripped = text.strip()
+    if "?" in stripped or "？" in stripped:
+        return True
+    low = stripped.lower()
+    if any(cue in low for cue in _KO_QUESTION_CUES):
+        return True
+    tokens = low.split()
+    return bool(tokens) and tokens[0].strip(".,!:;()\"'") in _EN_INTERROGATIVES
+
+
+def _has_build_verb(text: str) -> bool:
+    """Does the text carry a build VERB (real work to produce)?"""
+    low = text.lower()
+    tokens = {tok.strip(".,!?:;()\"'") for tok in low.split()}
+    if tokens & _EN_BUILD_VERBS:
+        return True
+    return any(stem in low for stem in _KO_BUILD_STEMS)
+
+
+def _is_answer_first_question(text: str, artifact_hint: str | None) -> bool:
+    """answer-first (#12): a question with no concrete WORK artifact and no
+    build verb is answered directly (``knowledge_only``)."""
+    if artifact_hint in _WORK_ARTIFACT_TYPES:
+        return False
+    if not _looks_like_question(text):
+        return False
+    return not _has_build_verb(text)
+
+
 def _derive_pipeline(artifact_hint: str | None, intent: str | None) -> PipelineKind:
     """``design_then_impl`` for a code/PR build whose intent implies
     construction; ``single`` otherwise (the default for everything else)."""
@@ -199,7 +331,7 @@ class FrameStage:
         if parsed is None:
             logger.warning("frame_stage_llm_unparseable")
             return None
-        return _framed_from_llm(parsed, config)
+        return _framed_from_llm(parsed, config, text)
 
 
 # --------------------------------------------------------------------------
@@ -237,7 +369,7 @@ def _parse_frame_json(raw: str) -> dict[str, Any] | None:
     return data if isinstance(data, dict) else None
 
 
-def _framed_from_llm(parsed: dict[str, Any], config: FrameConfig) -> FramedRequest:
+def _framed_from_llm(parsed: dict[str, Any], config: FrameConfig, text: str) -> FramedRequest:
     """Build a :class:`FramedRequest` from the parsed LLM JSON, validated.
 
     A hallucinated ``skill_match`` (not in the loader's registry) is dropped —
@@ -268,6 +400,14 @@ def _framed_from_llm(parsed: dict[str, Any], config: FrameConfig) -> FramedReque
     # yet shipped). A concrete artifact always wins; only an artifact-less ask
     # (None / direct_output) may stay knowledge_only.
     if path == "knowledge_only" and artifact_hint not in _WORK_ARTIFACT_TYPES:
+        path_classification = "knowledge_only"
+
+    # answer-first (#12): a genuine question with no concrete work artifact is
+    # answered directly even when the LLM routed it to the loop — the founder
+    # rule is "questions are answered first". A build request phrased as a
+    # question keeps a work ``artifact_hint`` (or a build verb) and stays on the
+    # loop. This mirrors the keyword-fallback behaviour so both paths agree.
+    if path_classification == "agent_loop" and _is_answer_first_question(text, artifact_hint):
         path_classification = "knowledge_only"
 
     pipeline = _resolve_pipeline(parsed, artifact_hint, framed_intent)
@@ -323,17 +463,22 @@ def _resolve_pipeline(
 def _frame_via_keyword(*, text: str, config: FrameConfig) -> FramedRequest:
     """The deterministic keyword heuristic — Phase 1 behaviour, no LLM.
 
-    Always classifies the path as ``agent_loop`` (the loop drives, as today);
-    knowledge-only detection needs the LLM."""
+    Classifies the path as ``agent_loop`` (the loop drives, as today) EXCEPT for
+    a genuine question with no work artifact, which is answered first (#12,
+    ``knowledge_only``) — so a Direct question never silently routes into a
+    coding loop just because no frame LLM was resolvable."""
     skill_match = _match_skill(text, config.skill_loader)
     artifact_hint = _guess_artifact_type(skill_match, config.skill_loader) or (
         config.default_artifact_type
+    )
+    path: PathClassification = (
+        "knowledge_only" if _is_answer_first_question(text, artifact_hint) else "agent_loop"
     )
     return FramedRequest(
         skill_match=skill_match,
         artifact_type_hint=artifact_hint,
         framed_intent=None,
-        path_classification="agent_loop",
+        path_classification=path,
         pipeline=_derive_pipeline(artifact_hint, text),
     )
 
