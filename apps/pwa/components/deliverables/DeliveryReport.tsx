@@ -429,11 +429,6 @@ function HighlightedDiff({ fileName, hunk }: { fileName: string; hunk: string })
   );
 }
 
-type ArtifactLoaded =
-  | { state: "loading" }
-  | { state: "unavailable" }
-  | { state: "ready"; artifact: ArtifactContent };
-
 /** The right panel for a file with NO captured diff — fetches the produced
  *  CONTENT and renders it as syntax-highlighted additions (every line new, since
  *  there is no "before"). A 404 (cleaned run dir) degrades to a calm note that
@@ -449,34 +444,34 @@ function FileContentPanel({
   hasDiff: boolean;
 }) {
   const t = useTranslations("report");
-  const [loaded, setLoaded] = useState<ArtifactLoaded>({ state: "loading" });
+  // Keep the currently DISPLAYED file as a consistent (name, content) pair and
+  // hold it on screen while the NEXT file's content is fetched — so switching a
+  // file never blanks to a loading note (and never reflows). The left file
+  // list's active marker moves instantly, signalling the load; we swap the panel
+  // only when the new content arrives. The very first load (nothing to keep yet)
+  // shows the loading note; a failed read surfaces the calm note rather than
+  // leaving a stale file under a new selection.
+  const [shown, setShown] = useState<{ fileName: string; artifact: ArtifactContent } | null>(null);
+  const [failed, setFailed] = useState(false);
 
   useEffect(() => {
     let active = true;
-    setLoaded({ state: "loading" });
+    setFailed(false);
     getDeliverableArtifact(deliverableId, fileName)
       .then((artifact) => {
-        if (active) setLoaded({ state: "ready", artifact });
+        if (active) setShown({ fileName, artifact });
       })
       .catch(() => {
-        // 404 (file cleaned / not whitelisted) OR any read failure → the same
-        // calm "couldn't show this file" fallback (never an error wall).
-        if (active) setLoaded({ state: "unavailable" });
+        // 404 (file cleaned / not whitelisted) OR any read failure → the calm
+        // "couldn't show this file" fallback (never an error wall).
+        if (active) setFailed(true);
       });
     return () => {
       active = false;
     };
   }, [deliverableId, fileName]);
 
-  if (loaded.state === "loading") {
-    return (
-      <p className="report-artifact-view__loading" aria-busy="true">
-        {t("artifactLoading")}
-      </p>
-    );
-  }
-
-  if (loaded.state === "unavailable") {
+  if (failed) {
     return (
       <p className="report-artifact-view__unavailable">
         {hasDiff ? t("artifactUnavailableWithDiff") : t("artifactUnavailable")}
@@ -484,7 +479,15 @@ function FileContentPanel({
     );
   }
 
-  const { artifact } = loaded;
+  if (shown === null) {
+    return (
+      <p className="report-artifact-view__loading" aria-busy="true">
+        {t("artifactLoading")}
+      </p>
+    );
+  }
+
+  const { artifact } = shown;
   if (artifact.binary) {
     return <p className="report-artifact-view__binary">{artifact.content}</p>;
   }
@@ -492,7 +495,7 @@ function FileContentPanel({
   // — a code-diff with `+` gutters is a developer metaphor that confuses a
   // non-developer. An EDITED Markdown file still shows the diff (handled by the
   // caller's captured-diff branch); only a no-before doc reaches here.
-  const isMarkdown = langFromFileName(fileName) === "markdown";
+  const isMarkdown = langFromFileName(shown.fileName) === "markdown";
   return (
     <>
       {artifact.truncated && (
@@ -502,8 +505,8 @@ function FileContentPanel({
         <MarkdownDoc content={artifact.content} />
       ) : (
         <HighlightedDiff
-          fileName={fileName}
-          hunk={synthesizeAdditionHunk(fileName, artifact.content)}
+          fileName={shown.fileName}
+          hunk={synthesizeAdditionHunk(shown.fileName, artifact.content)}
         />
       )}
     </>
