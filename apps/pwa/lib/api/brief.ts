@@ -4,9 +4,12 @@
  * This is the single "what is BSVibe doing + what has it done" surface (the old
  * Brief and Activity tabs were merged because they overlapped). It folds:
  *  - working   ← /api/v1/runs in an in-flight status (open / running)
- *  - needsYou  ← /api/v1/decisions (pending proposals) + /api/v1/safemode/queue
  *  - stream    ← /api/v1/runs (ALL, newest first) joined to /api/v1/deliverables
  *               by run_id (the chronological work history)
+ *
+ * Decisions are deliberately absent — they live in the dedicated Decisions tab.
+ * The Brief used to duplicate the Safe-Mode "Needs you" strip; that has been
+ * removed (the work-stream review_ready rows deep-link to their Decision).
  *
  * Every surface is live, so a successful read — even an empty workspace — is
  * never `placeholder`; that flips true ONLY on a hard non-401 failure, so the
@@ -21,23 +24,17 @@
 import { isActiveStatus } from "../runs/status";
 import { conciseSummary } from "../text/summary";
 import { ApiError } from "./client";
-import { listPendingProposals } from "./decisions";
 import { listDeliverables } from "./deliverables";
 import { listProducts } from "./products";
-import { type ReviewLookup, buildReviewLookup } from "./review-context";
 import { listRuns } from "./runs";
-import { listSafeModeQueue } from "./safemode";
 import type {
   ActiveWork,
   ArtifactType,
   BriefView,
   Deliverable,
   DeliverableType,
-  NeedsYouItem,
   Product,
-  Proposal,
   Run,
-  SafeModeItem,
   WorkStreamItem,
 } from "./types";
 
@@ -47,36 +44,6 @@ const _RUN_WINDOW = 50;
 function productSlug(products: Product[], productId: string | null): string {
   if (!productId) return "workspace";
   return products.find((p) => p.id === productId)?.slug ?? "workspace";
-}
-
-function needsYouFrom(
-  proposals: Proposal[],
-  queue: SafeModeItem[],
-  lookup: ReviewLookup,
-): NeedsYouItem[] {
-  const items: NeedsYouItem[] = [];
-  for (const p of proposals) {
-    items.push({
-      id: `proposal-${p.id}`,
-      productSlug: "knowledge",
-      question: `Approve ${p.action_kind} on “${p.action_path}”?`,
-    });
-  }
-  for (const item of queue) {
-    // Join the run/deliverable so "Needs you" names WHAT is held + links to the
-    // proof, instead of a bare "a delivery is held in Safe Mode".
-    const ctx = lookup.forDelivery(item.deliverable_id, item.run_id ?? null);
-    items.push({
-      id: `safemode-${item.id}`,
-      productSlug: ctx.productSlug !== "workspace" ? ctx.productSlug : "delivery",
-      question: "A delivery is held in Safe Mode. Approve to send it out?",
-      title: ctx.title,
-      detailHref: ctx.detailHref,
-      // Resolvable in-place: approve dispatches it out, deny dismisses it.
-      resolve: { kind: "safemode", itemId: item.id },
-    });
-  }
-  return items;
 }
 
 /** Map a backend DeliverableType → the calmer ArtifactType UI vocabulary. */
@@ -143,20 +110,16 @@ function workStreamFrom(
 export async function getBrief(): Promise<BriefView> {
   try {
     // Core surfaces (products / runs) bubble a 4xx to the fallback; the optional
-    // surfaces (decisions / safemode / deliverables) degrade to empty on their
-    // own ApiError so one failing never blanks the whole surface.
-    const [products, runs, proposals, queue, deliverables] = await Promise.all([
+    // deliverables surface degrades to empty on its own ApiError so it failing
+    // never blanks the whole surface.
+    const [products, runs, deliverables] = await Promise.all([
       listProducts(),
       listRuns(_RUN_WINDOW),
-      listPendingProposals().catch(emptyOnApiError<Proposal>),
-      listSafeModeQueue().catch(emptyOnApiError<SafeModeItem>),
       listDeliverables(_RUN_WINDOW).catch(emptyOnApiError<Deliverable>),
     ]);
 
-    const lookup = buildReviewLookup(runs, deliverables, products);
     return {
       working: activeWorkFrom(runs, products),
-      needsYou: needsYouFrom(proposals, queue, lookup),
       stream: workStreamFrom(runs, deliverables, products),
       placeholder: false,
     };
@@ -165,12 +128,12 @@ export async function getBrief(): Promise<BriefView> {
     // /login fire, rather than masking it behind calm empty states.
     if (error instanceof ApiError && error.status === 401) throw error;
     if (!(error instanceof ApiError) && !(error instanceof TypeError)) throw error;
-    return { working: [], needsYou: [], stream: [], placeholder: true };
+    return { working: [], stream: [], placeholder: true };
   }
 }
 
 /** Swallow a per-surface ApiError into an empty list so a single optional
- *  surface (decisions / safemode / deliverables) failing does not blank it. */
+ *  surface (deliverables) failing does not blank it. */
 function emptyOnApiError<T>(error: unknown): T[] {
   if (error instanceof ApiError || error instanceof TypeError) return [];
   throw error;

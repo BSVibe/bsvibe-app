@@ -74,6 +74,16 @@ export default function WorkStream({ items }: { items: WorkStreamItem[] }) {
                         reinforcement. */}
                     <span className={`stream__status stream__status--${tone}`}>{statusLabel}</span>
                     <span className="stream__product">{item.productSlug}</span>
+                    {/* A review_ready run NEEDS the founder's judgment — deep-link
+                        it to the Decisions tab (its Safe-Mode held delivery /
+                        checkpoint lives there) so "needs review" isn't a dead
+                        end. The two surfaces share the run; the Decisions tab is
+                        the single place the founder acts. */}
+                    {item.status === "review_ready" && (
+                      <Link className="stream__review" href="/decisions">
+                        {t("reviewLink")}
+                      </Link>
+                    )}
                     <span className="stream__time">{relativeTime(item.updatedAt, t)}</span>
                   </span>
                 </div>

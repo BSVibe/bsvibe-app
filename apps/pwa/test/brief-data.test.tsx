@@ -1,8 +1,10 @@
 /**
  * brief.ts real-data composition — drives getBrief() against a mocked fetch and
- * asserts it folds /api/v1/{products,runs,decisions,safemode/queue,deliverables}
- * into the merged Work-Home shape: active runs → the "working" hero, done runs →
- * the "stream" (joined to their deliverable), and the needs-you count.
+ * asserts it folds /api/v1/{products,runs,deliverables} into the merged
+ * Work-Home shape: active runs → the "working" hero, done runs → the "stream"
+ * (joined to their deliverable). Decisions are NOT part of this view — they live
+ * in the dedicated Decisions tab (the duplicated Safe-Mode "Needs you" strip was
+ * removed), so getBrief no longer reads /decisions or /safemode/queue.
  */
 
 import { getBrief } from "@/lib/api/brief";
@@ -115,41 +117,16 @@ describe("getBrief (merged Work-Home composition)", () => {
     expect(view.placeholder).toBe(false);
   });
 
-  it("counts needs-you from pending proposals + safe-mode queue", async () => {
+  it("does NOT carry a needs-you / decisions block — decisions live in their own tab (#6)", async () => {
     global.fetch = mockFetch({
       "/api/v1/products": [product("p1", "alpha", "alpha")],
       "/api/v1/runs": [],
-      "/api/v1/decisions": [
-        {
-          id: "prop-1",
-          proposal_kind: "merge",
-          action_kind: "merge_notes",
-          action_path: "notes/auth",
-          status: "pending",
-          score: 80,
-          created_at: NOW,
-          expires_at: null,
-        },
-      ],
-      "/api/v1/safemode/queue": [
-        {
-          id: "sm-1",
-          workspace_id: "ws-1",
-          deliverable_id: "d-1",
-          status: "pending",
-          compensation_tier: null,
-          expires_at: NOW,
-          extension_count: 0,
-          created_at: NOW,
-        },
-      ],
       "/api/v1/deliverables": [],
     }) as unknown as typeof fetch;
 
     const view = await getBrief();
-    expect(view.needsYou).toHaveLength(2);
-    expect(view.needsYou.some((n) => n.question.includes("notes/auth"))).toBe(true);
-    expect(view.needsYou.some((n) => n.question.includes("Safe Mode"))).toBe(true);
+    // The merged view no longer models decisions at all.
+    expect("needsYou" in view).toBe(false);
   });
 
   it("joins a stream row to its deliverable (concise title + report link)", async () => {
@@ -199,7 +176,6 @@ describe("getBrief (merged Work-Home composition)", () => {
 
     const view = await getBrief();
     expect(view.working).toEqual([]);
-    expect(view.needsYou).toEqual([]);
     expect(view.stream).toEqual([]);
     expect(view.placeholder).toBe(false);
   });

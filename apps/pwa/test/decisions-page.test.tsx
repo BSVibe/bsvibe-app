@@ -487,6 +487,66 @@ describe("Decisions surface", () => {
     expect(screen.getByText(/yes, staging then prod/)).toBeInTheDocument();
   });
 
+  it("titles a RESOLVED delivery with its task + links to the proof (#7 — not blind history)", async () => {
+    // Mirror of the pending-delivery review-context join, on the Resolved tab:
+    // the resolved row leads with the joined task title + product chip + a
+    // "View proof" link instead of a blind generic "Delivery approved".
+    installFetch({
+      resolvedSafemode: () => [RESOLVED_DELIVERY], // deliverable_id "del-9"
+      deliverables: () =>
+        [
+          {
+            id: "del-9",
+            run_id: "run-42",
+            workspace_id: "ws-1",
+            deliverable_type: "pr",
+            summary: "Add the CSV export endpoint with pagination.",
+            artifact_refs: [],
+            artifact_uri: null,
+            verified: true,
+            created_at: "2026-05-24T08:00:00Z",
+          },
+        ] as Deliverable[],
+      runs: () =>
+        [
+          {
+            id: "run-42",
+            workspace_id: "ws-1",
+            product_id: "prod-9",
+            request_id: null,
+            status: "shipped",
+            intent: "Add a CSV export",
+            created_at: "2026-05-24T08:00:00Z",
+            updated_at: "2026-05-24T09:00:00Z",
+          },
+        ] as Run[],
+      products: () =>
+        [
+          {
+            id: "prod-9",
+            workspace_id: "ws-1",
+            name: "acme-corp",
+            slug: "acme-corp",
+            repo_url: null,
+            created_at: "2026-05-24T08:00:00Z",
+            updated_at: "2026-05-24T08:00:00Z",
+          },
+        ] as Product[],
+    });
+
+    render(<Decisions />);
+    await userEvent.click(await screen.findByRole("tab", { name: /Resolved/ }));
+
+    // Concise title (the deliverable's summary), the product chip, and a proof
+    // link — the same context the PENDING delivery row carries.
+    expect(screen.getByText("Add the CSV export endpoint with pagination.")).toBeInTheDocument();
+    expect(screen.getByText("acme-corp")).toBeInTheDocument();
+    const proof = screen.getByRole("link", { name: /View proof/ });
+    expect(proof).toHaveAttribute("href", "/deliverables/del-9");
+    // The outcome ("Delivery approved") is still present as the subtitle.
+    expect(screen.getByText("Delivery approved")).toBeInTheDocument();
+  });
+
   it("opens a detail/resolve panel for a pending item and Accepts it", async () => {
     let proposals = [PROPOSAL];
     const posts: Array<[string, RequestInit]> = [];

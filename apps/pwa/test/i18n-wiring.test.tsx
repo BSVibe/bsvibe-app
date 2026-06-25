@@ -20,7 +20,7 @@ import { useTranslations } from "next-intl";
 import type { ReactNode } from "react";
 import { describe, expect, it } from "vitest";
 
-const EMPTY_BRIEF: BriefView = { working: [], needsYou: [], stream: [], placeholder: true };
+const EMPTY_BRIEF: BriefView = { working: [], stream: [], placeholder: true };
 
 function ko(children: ReactNode) {
   return (
@@ -66,9 +66,9 @@ describe("i18n wiring", () => {
 
   it("renders a real surface (Brief) in Korean under the ko catalog", () => {
     render(ko(<BriefContent view={EMPTY_BRIEF} />));
-    // Heading + the calm empty state, both from the brief catalog.
+    // Heading + the calm "all caught up" empty state, both from the brief catalog.
     expect(screen.getByText("요약")).toBeInTheDocument();
-    expect(screen.getByText("지금은 확인할 것이 없어요.")).toBeInTheDocument();
+    expect(screen.getByText("모두 처리됨. 지금 진행 중인 작업이 없어요.")).toBeInTheDocument();
   });
 
   it("en and ko catalogs share the exact same key shape", () => {
