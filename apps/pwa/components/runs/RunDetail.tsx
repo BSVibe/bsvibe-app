@@ -2,7 +2,7 @@
 
 import { resolveCheckpoint } from "@/lib/api/checkpoints";
 import { ApiError } from "@/lib/api/client";
-import { getRunDetail, retryRun } from "@/lib/api/runs";
+import { cancelRun, getRunDetail, retryRun } from "@/lib/api/runs";
 import type {
   RunActivity,
   RunDecision,
@@ -273,6 +273,8 @@ function NextStep({
   const t = useTranslations("run");
   const [retrying, setRetrying] = useState(false);
   const [retryError, setRetryError] = useState(false);
+  const [canceling, setCanceling] = useState(false);
+  const [cancelError, setCancelError] = useState(false);
 
   // The genuine blocker wins, regardless of the run's status word.
   if (hasPendingDecision) {
@@ -326,6 +328,20 @@ function NextStep({
   // review_ready points one tap from the proof when a deliverable exists.
   const showReportLink = status === "review_ready" && Boolean(deliverableId);
 
+  // L9 — an in-flight run (open / running) can be STOPPED. Cancel is cooperative;
+  // the run flips to cancelled (recoverable later via Retry).
+  const isInflight = status === "running" || status === "open";
+  const onCancel = () => {
+    setCanceling(true);
+    setCancelError(false);
+    cancelRun(runId)
+      .then(() => onRetried())
+      .catch(() => {
+        setCanceling(false);
+        setCancelError(true);
+      });
+  };
+
   return (
     <section className={`run-next run-next--${status}`} aria-label={t("nextStep")}>
       <h2 className="section-label">{t("nextStep")}</h2>
@@ -335,6 +351,12 @@ function NextStep({
           {t("nextReviewLink")}
         </Link>
       )}
+      {isInflight && (
+        <button type="button" className="run-next__cancel" onClick={onCancel} disabled={canceling}>
+          {canceling ? t("stopping") : t("stop")}
+        </button>
+      )}
+      {cancelError && <p className="run-next__retry-error">{t("stopError")}</p>}
     </section>
   );
 }

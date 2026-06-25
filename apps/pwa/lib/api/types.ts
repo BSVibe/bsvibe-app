@@ -212,8 +212,19 @@ export interface Run {
    *  wire so pre-L8 fixtures keep validating. */
   summary_title?: string | null;
   framed_intent?: string | null;
+  /** L9 — when the run was last restarted (founder retry); the elapsed-time
+   *  surface counts from here instead of `created_at` so a retried run's clock
+   *  resets. `null`/absent for a run that has never been retried. */
+  restarted_at?: string | null;
   created_at: string;
   updated_at: string;
+}
+
+/** `POST /api/v1/runs/{id}/cancel` body (backend RunCancelResponse) — the run
+ *  is now `cancelled` (recoverable via `retryRun`). */
+export interface RunCancel {
+  id: string;
+  status: RunStatus;
 }
 
 /** The "outside" that asked for this run (backend RunTriggerContext) — pulled

@@ -904,7 +904,10 @@
     "failureReasonLabel": "멈춘 이유:",
     "retry": "다시 시도",
     "retrying": "다시 시도하는 중…",
-    "retryError": "다시 시도하지 못했어요 — 잠시 후 다시 해보세요."
+    "retryError": "다시 시도하지 못했어요 — 잠시 후 다시 해보세요.",
+    "stop": "중단",
+    "stopping": "중단하는 중…",
+    "stopError": "중단하지 못했어요 — 잠시 후 다시 해보세요."
   },
   "trust": {
     "glyphLabel": {

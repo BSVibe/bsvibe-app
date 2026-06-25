@@ -904,7 +904,10 @@
     "failureReasonLabel": "Why it stopped:",
     "retry": "Retry",
     "retrying": "Retrying…",
-    "retryError": "Couldn't retry — please try again."
+    "retryError": "Couldn't retry — please try again.",
+    "stop": "Stop",
+    "stopping": "Stopping…",
+    "stopError": "Couldn't stop it — please try again."
   },
   "trust": {
     "glyphLabel": {

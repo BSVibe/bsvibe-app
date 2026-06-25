@@ -26,7 +26,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
-from . import detail, list_get, retry
+from . import cancel, detail, list_get, retry
 
 # Single aggregator router — each sub-module owns its own APIRouter and the
 # aggregator merges their routes directly (same pattern §17.9 deliverables uses).
@@ -36,7 +36,7 @@ from . import detail, list_get, retry
 # prefix. The v1 aggregator still mounts THIS router under ``/runs``, so each
 # sub-router's paths land at the same final URLs as the legacy module.
 router = APIRouter()
-for _sub in (list_get.router, detail.router, retry.router):
+for _sub in (list_get.router, detail.router, retry.router, cancel.router):
     router.routes.extend(_sub.routes)
 
 __all__ = ["router"]

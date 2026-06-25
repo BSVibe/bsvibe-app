@@ -227,6 +227,13 @@ class AgentRunner:
             return False
         if run.status is to_status:
             return False
+        # L9 — cooperative cancel: CANCELLED is terminal. Once the founder
+        # cancels a run, the worker's in-flight drive must NOT flip it back
+        # (→ RUNNING at start, → REVIEW_READY / FAILED at the end) — those
+        # transitions no-op. The ONLY allowed exit is the explicit retry
+        # (CANCELLED → OPEN, which re-opens the run for another attempt).
+        if run.status is RunStatus.CANCELLED and to_status is not RunStatus.OPEN:
+            return False
         from_status = run.status
         run.status = to_status
         run.updated_at = datetime.now(tz=UTC)

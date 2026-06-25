@@ -38,6 +38,10 @@ class RunResponse(BaseModel):
     # frame (no LLM) — the surface then uses ``intent``.
     summary_title: str | None = None
     framed_intent: str | None = None
+    # L9 — when the run was last RESTARTED (founder retry). The elapsed-time
+    # surface counts from here instead of ``created_at`` so a retried run's clock
+    # resets. ``None`` for a run that has never been retried.
+    restarted_at: datetime | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -182,8 +186,19 @@ class RunRetryResponse(BaseModel):
     retry_count: int
 
 
+class RunCancelResponse(BaseModel):
+    """The result of cancelling an in-flight run (L9): it is now ``cancelled``
+    (recoverable later via the retry endpoint)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: uuid.UUID
+    status: RunStatus
+
+
 __all__ = [
     "RunActivity",
+    "RunCancelResponse",
     "RunDecision",
     "RunDetailResponse",
     "RunPartialDeliverable",

@@ -117,6 +117,27 @@ describe("getBrief (merged Work-Home composition)", () => {
     expect(view.placeholder).toBe(false);
   });
 
+  it("L9: a retried run's elapsed clock starts at restarted_at, not created_at", async () => {
+    const RESTART = "2026-06-25T12:00:00Z";
+    global.fetch = mockFetch({
+      "/api/v1/products": [product("p1", "alpha", "alpha")],
+      "/api/v1/runs": [
+        { ...run("r-retried", "p1", "running", "Retried task"), restarted_at: RESTART },
+        run("r-fresh", "p1", "running", "Fresh task"),
+      ],
+      "/api/v1/decisions": [],
+      "/api/v1/safemode/queue": [],
+      "/api/v1/deliverables": [],
+    }) as unknown as typeof fetch;
+
+    const view = await getBrief();
+    const retried = view.working.find((w) => w.runId === "r-retried");
+    const fresh = view.working.find((w) => w.runId === "r-fresh");
+    expect(retried?.startedAt).toBe(RESTART);
+    // A run that was never retried still counts from created_at.
+    expect(fresh?.startedAt).toBe(NOW);
+  });
+
   it("does NOT carry a needs-you / decisions block — decisions live in their own tab (#6)", async () => {
     global.fetch = mockFetch({
       "/api/v1/products": [product("p1", "alpha", "alpha")],

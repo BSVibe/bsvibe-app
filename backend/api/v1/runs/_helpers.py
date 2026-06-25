@@ -50,6 +50,20 @@ def _frame_field(payload: Any, key: str) -> str | None:
     return _opt_str(frame.get(key))
 
 
+def _restarted_at_of(payload: Any) -> datetime | None:
+    """L9 — when the run was last restarted (founder retry), parsed from the
+    ``restarted_at`` ISO string the retry endpoint stamps; ``None`` when absent
+    or unparseable. The elapsed-time surface counts from here, not created_at."""
+    payload = payload if isinstance(payload, dict) else {}
+    raw = _opt_str(payload.get("restarted_at"))
+    if raw is None:
+        return None
+    try:
+        return datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+
+
 def _trigger_context(payload: Any) -> RunTriggerContext:
     """Map the free-form run payload onto the trigger-context fields, defensively."""
     payload = payload if isinstance(payload, dict) else {}

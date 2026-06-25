@@ -272,7 +272,7 @@ describe("Run-detail surface (Triggered)", () => {
     expect(screen.getByRole("button", { name: /let it continue/i })).toBeInTheDocument();
   });
 
-  it("next step: a running run shows a calm working line", async () => {
+  it("next step: a running run shows a calm working line + a Stop button", async () => {
     const running: RunDetailModel = { ...REVIEW_READY, status: "running" };
     global.fetch = vi.fn(async () => json(running)) as unknown as typeof fetch;
 
@@ -280,6 +280,44 @@ describe("Run-detail surface (Triggered)", () => {
 
     const nextStep = await screen.findByRole("region", { name: /next step|what.s next/i });
     expect(within(nextStep).getByText(/working|on it/i)).toBeInTheDocument();
+    // L9 — an in-flight run can be stopped.
+    expect(within(nextStep).getByRole("button", { name: /stop/i })).toBeInTheDocument();
+  });
+
+  it("clicking Stop POSTs /api/v1/runs/{id}/cancel and reloads", async () => {
+    const running: RunDetailModel = { ...REVIEW_READY, status: "running" };
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      if (typeof url === "string" && url.includes("/cancel")) {
+        return json({ id: "rr", status: "cancelled" });
+      }
+      return json(running);
+    });
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    render(<RunDetail runId="rr" />);
+
+    const stop = await screen.findByRole("button", { name: /stop/i });
+    await userEvent.click(stop);
+
+    await waitFor(() => {
+      const call = fetchMock.mock.calls.find(
+        (c) => typeof c[0] === "string" && (c[0] as string).includes("/cancel"),
+      );
+      expect(call).toBeTruthy();
+      const [url, init] = call as unknown as [string, RequestInit];
+      expect(url).toBe("/api/v1/runs/rr/cancel");
+      expect(init.method).toBe("POST");
+    });
+  });
+
+  it("next step: a shipped run shows NO Stop button (terminal)", async () => {
+    const shipped: RunDetailModel = { ...REVIEW_READY, status: "shipped" };
+    global.fetch = vi.fn(async () => json(shipped)) as unknown as typeof fetch;
+
+    render(<RunDetail runId="rr" />);
+
+    const nextStep = await screen.findByRole("region", { name: /next step|what.s next/i });
+    expect(within(nextStep).queryByRole("button", { name: /stop/i })).not.toBeInTheDocument();
   });
 
   it("next step: a shipped run says shipped and needs nothing", async () => {

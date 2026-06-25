@@ -14,6 +14,7 @@ drives a fresh attempt. A failed run is recoverable, not a dead-end.
 from __future__ import annotations
 
 import uuid
+from datetime import UTC, datetime
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -64,6 +65,10 @@ async def retry_run(
     payload: dict[str, Any] = dict(run.payload or {})
     retry_count = int(payload.get("retry_count", 0)) + 1
     payload["retry_count"] = retry_count
+    # L9 — reset the elapsed-time clock: the review surfaces count from
+    # ``restarted_at`` (when present) instead of ``created_at`` so a retried run
+    # shows time since THIS attempt began, not since the first start.
+    payload["restarted_at"] = datetime.now(tz=UTC).isoformat()
     run.payload = payload
     await session.flush()
 
