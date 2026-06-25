@@ -903,6 +903,16 @@
     "nextShipped": "완료됐어요. 따로 하실 일은 없어요.",
     "nextFailed": "완료하지 못했어요. 다시 시도할 수 있어요.",
     "failureReasonLabel": "멈춘 이유:",
+    "failureHuman": {
+      "executorCrash": "코딩 에이전트가 작업 중 예기치 않게 멈췄어요.",
+      "loopCrashed": "실행 중 문제가 생겼어요.",
+      "systemError": "내부 오류로 작업이 중단됐어요.",
+      "timeout": "시간이 너무 오래 걸려 중단됐어요.",
+      "sandbox": "작업 샌드박스를 시작하지 못했어요.",
+      "cancelled": "직접 중단했어요.",
+      "generic": "예상대로 끝내지 못했어요."
+    },
+    "failureDetails": "기술 정보",
     "retry": "다시 시도",
     "retrying": "다시 시도하는 중…",
     "retryError": "다시 시도하지 못했어요 — 잠시 후 다시 해보세요.",
