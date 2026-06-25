@@ -110,7 +110,8 @@
     "sending": "보내는 중…",
     "sent": "전송됨. 작업하고 있어요.",
     "errorSend": "전송하지 못했어요. 다시 시도해 주세요.",
-    "errorNetwork": "네트워크 오류. 다시 시도해 주세요."
+    "errorNetwork": "네트워크 오류. 다시 시도해 주세요.",
+    "answerLabel": "답변"
   },
   "productsIndex": {
     "heading": "제품",

@@ -665,6 +665,33 @@ main.login {
   color: var(--amber-ink);
 }
 
+/* L10 — the inline answer to a Direct question (no run; answered right here). */
+.direct-overlay__answer {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 12px;
+  padding: 12px 14px;
+  border-radius: var(--radius-sm);
+  background: var(--accent-bg);
+}
+
+.direct-overlay__answer-label {
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+
+.direct-overlay__answer-body {
+  margin: 0;
+  font-size: 0.92rem;
+  line-height: 1.55;
+  color: var(--ink);
+  white-space: pre-wrap;
+}
+
 .direct-overlay__submit {
   border: none;
   border-radius: 999px;

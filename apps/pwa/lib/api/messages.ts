@@ -4,7 +4,7 @@
  *  receipt, NOT a run — the run is created by the worker pipeline. */
 
 import { apiFetch } from "./client";
-import type { MessageAccepted, MessageCreate } from "./types";
+import type { AskResult, MessageAccepted, MessageCreate } from "./types";
 
 /** Submit a founder-direct message. `product_id` is optional (workspace-wide
  *  when omitted). A double-submit of the same text collapses server-side and
@@ -13,5 +13,17 @@ export function submitMessage(body: MessageCreate): Promise<MessageAccepted> {
   return apiFetch<MessageAccepted>("/api/v1/messages", {
     method: "POST",
     body: JSON.stringify(body),
+  });
+}
+
+/** L10 — ask a Direct *question* and get an inline answer. REAL backend
+ *  `POST /api/v1/messages/ask`. `answered: false` means the text is a work
+ *  request (or no chat model is configured) → the caller should dispatch it via
+ *  `submitMessage` instead. A question is answered synchronously (no run, no
+ *  executor). */
+export function askMessage(text: string): Promise<AskResult> {
+  return apiFetch<AskResult>("/api/v1/messages/ask", {
+    method: "POST",
+    body: JSON.stringify({ text }),
   });
 }
