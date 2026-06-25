@@ -13,12 +13,29 @@
  *  - artifact content edge cases: truncated note, 404 "unavailable — see diff"
  */
 
-import DeliveryReport from "@/components/deliverables/DeliveryReport";
-import type { ArtifactContent, DeliverableReport } from "@/lib/api/types";
-import { type Session, clearSession, setSession } from "@/lib/auth/session";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+// The "What was built" panel renders via @git-diff-view/react; mock it to a
+// lightweight surface that exposes the hunk text it receives, so the document
+// tests assert produced content without the heavy library in jsdom.
+vi.mock("@git-diff-view/react", () => {
+  const React = require("react");
+  return {
+    DiffModeEnum: { SplitGitHub: 1, SplitGitLab: 2, Split: 3, Unified: 4 },
+    DiffView: ({ data }: { data?: { newFile?: { fileName?: string | null }; hunks?: string[] } }) =>
+      React.createElement(
+        "div",
+        { "data-testid": "git-diff-view", "data-filename": data?.newFile?.fileName ?? "" },
+        React.createElement("pre", null, (data?.hunks ?? []).join("\n")),
+      ),
+  };
+});
+
+import DeliveryReport from "@/components/deliverables/DeliveryReport";
+import type { ArtifactContent, DeliverableReport } from "@/lib/api/types";
+import { type Session, clearSession, setSession } from "@/lib/auth/session";
 
 const SESSION: Session = {
   accessToken: "tok",

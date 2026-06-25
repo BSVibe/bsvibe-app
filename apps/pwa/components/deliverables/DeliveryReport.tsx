@@ -12,8 +12,15 @@ import type {
   VerificationOutcome,
   VerificationReportItem,
 } from "@/lib/api/types";
-import { type FileDiff, parseUnifiedDiff } from "@/lib/diff/parseUnifiedDiff";
+import {
+  langFromFileName,
+  splitUnifiedDiffByFile,
+  synthesizeAdditionHunk,
+} from "@/lib/diff/diffData";
 import { conciseSummary } from "@/lib/text/summary";
+import { useResolvedTheme } from "@/lib/theme/useTheme";
+import { DiffModeEnum, DiffView as GitDiffView } from "@git-diff-view/react";
+import "@git-diff-view/react/styles/diff-view.css";
 import { useTranslations } from "next-intl";
 import Link from "next/link";
 import { useEffect, useState } from "react";
@@ -315,11 +322,12 @@ function WhatWasBuilt({
   const t = useTranslations("report");
   const { id, artifact_refs, artifact_uri } = deliverable;
   const [selected, setSelected] = useState<string | null>(artifact_refs[0] ?? null);
-  // The run's captured old↔new diff (product runs), parsed into a path→FileDiff
-  // map. `null` while loading; an empty map = nothing captured (Direct run / a
-  // pre-feature row) → every file falls back to the additions render. Best-effort:
-  // a 404 / read failure degrades to the empty map, never an error wall.
-  const [diffMap, setDiffMap] = useState<Map<string, FileDiff> | null>(null);
+  // The run's captured old↔new diff (product runs), split into a path→raw
+  // per-file `git diff` section. `null` while loading; an empty map = nothing
+  // captured (Direct run / a pre-feature row) → every file falls back to the
+  // additions render. Best-effort: a 404 / read failure degrades to the empty
+  // map, never an error wall.
+  const [diffMap, setDiffMap] = useState<Map<string, string> | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -327,7 +335,7 @@ function WhatWasBuilt({
     getDeliverableDiff(id)
       .then((res) => {
         if (active)
-          setDiffMap(typeof res.diff === "string" ? parseUnifiedDiff(res.diff) : new Map());
+          setDiffMap(typeof res.diff === "string" ? splitUnifiedDiffByFile(res.diff) : new Map());
       })
       .catch(() => {
         if (active) setDiffMap(new Map());
@@ -342,7 +350,7 @@ function WhatWasBuilt({
   }
 
   const showFiles = artifact_refs.length > 1;
-  const selectedDiff = selected !== null ? (diffMap?.get(selected) ?? null) : null;
+  const selectedHunk = selected !== null ? (diffMap?.get(selected) ?? null) : null;
   return (
     <div className={`report-doc__built${showFiles ? " report-built--split" : ""}`}>
       {showFiles && (
@@ -373,10 +381,10 @@ function WhatWasBuilt({
             <p className="report-artifact-view__loading" aria-busy="true">
               {t("artifactLoading")}
             </p>
-          ) : selectedDiff ? (
-            <DiffView fileDiff={selectedDiff} />
+          ) : selectedHunk ? (
+            <HighlightedDiff fileName={selected} hunk={selectedHunk} />
           ) : (
-            <ArtifactViewer deliverableId={id} refName={selected} hasDiff={hasDiff} />
+            <FileContentPanel deliverableId={id} fileName={selected} hasDiff={hasDiff} />
           ))}
         {artifact_uri && (
           <a
@@ -393,69 +401,28 @@ function WhatWasBuilt({
   );
 }
 
-/** Split the produced file CONTENT into the lines shown as additions. A single
- *  trailing newline (almost every text file ends with one) would otherwise
- *  render a phantom blank addition row, so it's dropped — but genuine interior
- *  blank lines are kept. */
-function toAdditionLines(content: string): string[] {
-  const lines = content.split("\n");
-  if (lines.length > 1 && lines[lines.length - 1] === "") lines.pop();
-  return lines;
-}
-
-/** The change marker shown in each diff row's gutter. */
-const _DIFF_MARKER: Record<FileDiff["lines"][number]["kind"], string> = {
-  add: "+",
-  del: "-",
-  context: " ",
-};
-
-/** The right DIFF PANEL for a file that has a captured ``git diff`` — true
- *  old↔new: removed lines red, added lines green, context plain, each with a
- *  line-number gutter (the new-file number, or the old-file number for a removed
- *  line). The +N / −N change counts head the panel. */
-function DiffView({ fileDiff }: { fileDiff: FileDiff }) {
-  const t = useTranslations("report");
+/** The shared diff pane — a `@git-diff-view/react` unified view of one file's
+ *  `hunk` (a real captured diff, or a synthesized all-additions hunk for a
+ *  no-before file). Syntax-highlighted, line-wrapped (no horizontal scroll), and
+ *  themed to the document; the surrounding `report-diffview` owns the scroll so a
+ *  tall file never reflows the page. */
+function HighlightedDiff({ fileName, hunk }: { fileName: string; hunk: string }) {
+  const theme = useResolvedTheme();
+  const lang = langFromFileName(fileName);
   return (
-    <div className="report-artifact-view">
-      <div className="report-artifact-view__head">
-        <span className="report-artifact-view__path">{fileDiff.path}</span>
-        <span className="report-diff__counts">
-          {fileDiff.additions > 0 && (
-            <span
-              className="report-diff__added"
-              aria-label={t("linesAdded", { count: fileDiff.additions })}
-            >
-              +{fileDiff.additions}
-            </span>
-          )}
-          {fileDiff.deletions > 0 && (
-            <span
-              className="report-diff__removed"
-              aria-label={t("linesRemoved", { count: fileDiff.deletions })}
-            >
-              -{fileDiff.deletions}
-            </span>
-          )}
-        </span>
-      </div>
-      <div className="report-diff">
-        {fileDiff.lines.map((line, i) => (
-          <div
-            // Diff lines are positional and may repeat — the index keys the row.
-            key={`${i}-${line.text}`}
-            className={`report-diff__line report-diff__line--${line.kind}`}
-          >
-            <span className="report-diff__num" aria-hidden="true">
-              {line.kind === "del" ? line.oldNumber : line.newNumber}
-            </span>
-            <span className="report-diff__marker" aria-hidden="true">
-              {_DIFF_MARKER[line.kind]}
-            </span>
-            <code className="report-diff__code">{line.text || " "}</code>
-          </div>
-        ))}
-      </div>
+    <div className="report-diffview">
+      <GitDiffView
+        data={{
+          oldFile: { fileName, fileLang: lang },
+          newFile: { fileName, fileLang: lang },
+          hunks: [hunk],
+        }}
+        diffViewMode={DiffModeEnum.Unified}
+        diffViewHighlight
+        diffViewWrap
+        diffViewTheme={theme}
+        diffViewFontSize={13}
+      />
     </div>
   );
 }
@@ -465,21 +432,18 @@ type ArtifactLoaded =
   | { state: "unavailable" }
   | { state: "ready"; artifact: ArtifactContent };
 
-/** Inline content viewer for one artifact ref — the right DIFF PANEL. Fetches the
- *  produced file CONTENT and renders it GitHub-style: every line an "addition"
- *  (green "+" row with a line-number gutter), since a freshly produced file is
- *  all-new — each line reads honestly as added (true red/green for modified files
- *  is a follow-up lift). A 404 (cleaned run dir / unavailable) degrades to a
- *  "couldn't show this file" note that points back at the git diff; any other
- *  failure shows the same calm note. A binary file shows its metadata note; a
- *  truncated file shows a note. */
-function ArtifactViewer({
+/** The right panel for a file with NO captured diff — fetches the produced
+ *  CONTENT and renders it as syntax-highlighted additions (every line new, since
+ *  there is no "before"). A 404 (cleaned run dir) degrades to a calm note that
+ *  points at the git diff; a binary file shows its metadata note; a truncated
+ *  file shows a note above the content. */
+function FileContentPanel({
   deliverableId,
-  refName,
+  fileName,
   hasDiff,
 }: {
   deliverableId: string;
-  refName: string;
+  fileName: string;
   hasDiff: boolean;
 }) {
   const t = useTranslations("report");
@@ -488,7 +452,7 @@ function ArtifactViewer({
   useEffect(() => {
     let active = true;
     setLoaded({ state: "loading" });
-    getDeliverableArtifact(deliverableId, refName)
+    getDeliverableArtifact(deliverableId, fileName)
       .then((artifact) => {
         if (active) setLoaded({ state: "ready", artifact });
       })
@@ -500,7 +464,7 @@ function ArtifactViewer({
     return () => {
       active = false;
     };
-  }, [deliverableId, refName]);
+  }, [deliverableId, fileName]);
 
   if (loaded.state === "loading") {
     return (
@@ -519,46 +483,18 @@ function ArtifactViewer({
   }
 
   const { artifact } = loaded;
-  const lines = artifact.binary ? [] : toAdditionLines(artifact.content);
+  if (artifact.binary) {
+    return <p className="report-artifact-view__binary">{artifact.content}</p>;
+  }
   return (
-    <div className="report-artifact-view">
-      <div className="report-artifact-view__head">
-        <span className="report-artifact-view__path">{artifact.ref}</span>
-        {!artifact.binary && (
-          <span
-            className="report-diff__added"
-            aria-label={t("linesAdded", { count: lines.length })}
-          >
-            +{lines.length}
-          </span>
-        )}
-      </div>
-      {artifact.binary ? (
-        <p className="report-artifact-view__binary">{artifact.content}</p>
-      ) : (
-        <>
-          {artifact.truncated && (
-            <p className="report-artifact-view__truncated">{t("artifactTruncated")}</p>
-          )}
-          <div className="report-diff">
-            {lines.map((line, i) => (
-              <div
-                // Lines are positional and may repeat — the index keys the row.
-                key={`${i}-${line}`}
-                className="report-diff__line report-diff__line--add"
-              >
-                <span className="report-diff__num" aria-hidden="true">
-                  {i + 1}
-                </span>
-                <span className="report-diff__marker" aria-hidden="true">
-                  +
-                </span>
-                <code className="report-diff__code">{line || " "}</code>
-              </div>
-            ))}
-          </div>
-        </>
+    <>
+      {artifact.truncated && (
+        <p className="report-artifact-view__truncated">{t("artifactTruncated")}</p>
       )}
-    </div>
+      <HighlightedDiff
+        fileName={fileName}
+        hunk={synthesizeAdditionHunk(fileName, artifact.content)}
+      />
+    </>
   );
 }
