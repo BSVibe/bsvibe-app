@@ -85,6 +85,26 @@ describe("buildReviewLookup", () => {
     expect(ctx.detailHref).toBe("/deliverables/d-1");
   });
 
+  it("L8: prefers the frame's summary_title over the deliverable summary + raw intent", () => {
+    const titled = {
+      ...run("r-3", "p-1", "In the bsvibe-app product, add `mean(values: list[float]) -> float`…"),
+      summary_title: "Add a mean helper",
+      framed_intent: "Add a pure utility function to calculate the arithmetic mean.",
+    } as Run;
+    const deliv = deliverable("d-3", "r-3", "Changed backend/common/mean.py, tests/test_mean.py");
+    const lookup = buildReviewLookup([titled], [deliv], PRODUCTS);
+    expect(lookup.forDelivery("d-3", "r-3").title).toBe("Add a mean helper");
+  });
+
+  it("L8: falls back to framed_intent when no summary_title (retroactive runs)", () => {
+    const retro = {
+      ...run("r-4", "p-1", "In the bsvibe-app product, add `factorial(n: int) -> int`…"),
+      framed_intent: "Add a factorial utility with unit tests.",
+    } as Run;
+    const lookup = buildReviewLookup([retro], [], PRODUCTS);
+    expect(lookup.forRun("r-4").title).toBe("Add a factorial utility with unit tests.");
+  });
+
   it("degrades calmly for an unknown id (no title, no link, workspace slug)", () => {
     const lookup = buildReviewLookup(RUNS, DELIVERABLES, PRODUCTS);
     const ctx = lookup.forDelivery("nope", null);

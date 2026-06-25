@@ -57,7 +57,11 @@ export function buildReviewLookup(
 
   function contextOf(run: Run | undefined, deliverable: Deliverable | undefined): ReviewContext {
     const summaryTitle = deliverable?.summary ? conciseSummary(deliverable.summary, "") : "";
-    const title = summaryTitle || run?.intent || null;
+    // L8 — lead with the frame's short, plain-language task title; fall back to
+    // the retroactive framed_intent, then the deliverable's concise summary,
+    // then the raw (developer-y) Direction. So the founder reads "Add a mean
+    // helper", not "In the bsvibe-app product, add `mean(values: list[float])…".
+    const title = run?.summary_title || run?.framed_intent || summaryTitle || run?.intent || null;
     const deliverableId = deliverable?.id ?? null;
     const runId = run?.id ?? deliverable?.run_id ?? null;
     const detailHref = deliverableId

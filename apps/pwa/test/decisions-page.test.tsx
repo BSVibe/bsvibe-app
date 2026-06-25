@@ -304,7 +304,7 @@ describe("Decisions surface", () => {
       await screen.findByText("Add factorial(n) utility with ValueError on negatives."),
     ).toBeInTheDocument();
     // A "view proof" link pointing at the deliverable detail.
-    const proof = screen.getByRole("link", { name: /View proof/ });
+    const proof = screen.getByRole("link", { name: /View report/ });
     expect(proof).toHaveAttribute("href", "/deliverables/del-1");
     // The product chip.
     expect(screen.getByText("bsvibe-app")).toBeInTheDocument();
@@ -490,7 +490,7 @@ describe("Decisions surface", () => {
   it("titles a RESOLVED delivery with its task + links to the proof (#7 — not blind history)", async () => {
     // Mirror of the pending-delivery review-context join, on the Resolved tab:
     // the resolved row leads with the joined task title + product chip + a
-    // "View proof" link instead of a blind generic "Delivery approved".
+    // "View report" link instead of a blind generic "Delivery approved".
     installFetch({
       resolvedSafemode: () => [RESOLVED_DELIVERY], // deliverable_id "del-9"
       deliverables: () =>
@@ -541,7 +541,7 @@ describe("Decisions surface", () => {
     // link — the same context the PENDING delivery row carries.
     expect(screen.getByText("Add the CSV export endpoint with pagination.")).toBeInTheDocument();
     expect(screen.getByText("acme-corp")).toBeInTheDocument();
-    const proof = screen.getByRole("link", { name: /View proof/ });
+    const proof = screen.getByRole("link", { name: /View report/ });
     expect(proof).toHaveAttribute("href", "/deliverables/del-9");
     // The outcome ("Delivery approved") is still present as the subtitle.
     expect(screen.getByText("Delivery approved")).toBeInTheDocument();

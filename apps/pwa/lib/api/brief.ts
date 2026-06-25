@@ -68,7 +68,8 @@ function activeWorkFrom(runs: Run[], products: Product[]): ActiveWork[] {
     .filter((r) => isActiveStatus(r.status))
     .map((r) => ({
       runId: r.id,
-      title: r.intent,
+      // L8 — short plain-language task title; fall back to framed_intent / raw.
+      title: r.summary_title || r.framed_intent || r.intent,
       productSlug: productSlug(products, r.product_id),
       status: r.status,
       startedAt: r.created_at,
@@ -97,7 +98,9 @@ function workStreamFrom(
       const summaryTitle = deliverable?.summary ? conciseSummary(deliverable.summary, "") : "";
       return {
         runId: run.id,
-        title: summaryTitle || run.intent || null,
+        // L8 — short plain-language task title preferred over the deliverable's
+        // file-list summary and the raw, developer-y Direction.
+        title: run.summary_title || run.framed_intent || summaryTitle || run.intent || null,
         productSlug: productSlug(products, run.product_id),
         status: run.status,
         updatedAt: run.updated_at,
