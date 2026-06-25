@@ -71,13 +71,21 @@ const REPORT: DeliverableReport = {
         checks: [
           { kind: "command", command: "pytest -q", rationale: "the suite must pass" },
           { kind: "judge", criteria: ["reads cleanly", "matches the spec"], rationale: "style" },
+          // The retriever-folded knowledge check — same rationale the backend
+          // extracts into `references`. MUST be filtered out of the verification
+          // list (knowledge is reference, not verification).
+          {
+            kind: "judge",
+            criteria: ["Reuse the existing date helper"],
+            rationale: "Canonical patterns retrieved for this change",
+          },
         ],
       },
       result: { summary: "19 passed" },
       created_at: NOW,
     },
   ],
-  references: [],
+  references: ["Reuse the existing date helper"],
 };
 
 const BLOG_CONTENT = "export function getRelatedPosts() {\n  return [];\n}\n";
@@ -94,6 +102,7 @@ function json(body: unknown, status = 200) {
 function installFetch(opts?: {
   report?: () => DeliverableReport | Response;
   artifact?: (url: string) => Response;
+  retract?: () => Response;
 }) {
   const reportFn = opts?.report ?? (() => REPORT);
   const artifactFn =
@@ -102,8 +111,21 @@ function installFetch(opts?: {
       url.includes("src/blog.ts")
         ? json({ ref: "src/blog.ts", content: BLOG_CONTENT, truncated: false, binary: false })
         : json({ ref: "x", content: "// other", truncated: false, binary: false }));
+  const retractFn = opts?.retract;
   global.fetch = vi.fn(async (input: RequestInfo | URL) => {
     const url = typeof input === "string" ? input : input.toString();
+    if (url.includes("/retract")) {
+      return (
+        retractFn?.() ??
+        json({
+          deliverable_id: "d1",
+          retracted: true,
+          retracted_at: NOW,
+          already_retracted: false,
+          compensated: [{ plugin: "github", artifact_type: "pr", output: {} }],
+        })
+      );
+    }
     if (url.includes("/artifacts/")) return artifactFn(url);
     const r = reportFn();
     return r instanceof Response ? r : json(r);
@@ -144,6 +166,8 @@ describe("Delivery Report document", () => {
     expect(within(checks).getByText(/this is verified/i)).toBeInTheDocument();
     expect(within(checks).getByText(/pytest -q/)).toBeInTheDocument();
     expect(within(checks).getByText(/reads cleanly/)).toBeInTheDocument();
+    // #3 — the retrieved-knowledge judge check is NOT in the verification list.
+    expect(within(checks).queryByText(/reuse the existing date helper/i)).toBeNull();
 
     // Diff link.
     expect(screen.getByRole("link", { name: /diff/i })).toHaveAttribute(
@@ -196,7 +220,7 @@ describe("Delivery Report document", () => {
   });
 
   it("hides the 'What BSVibe referenced' section when nothing was retrieved", async () => {
-    installFetch(); // REPORT.references === []
+    installFetch({ report: () => ({ ...REPORT, references: [] }) });
     render(<DeliveryReport deliverableId="d1" />);
 
     // Wait for the document to render, then assert the section is absent.
@@ -365,5 +389,146 @@ describe("Delivery Report document", () => {
     });
     // The diff link is still offered as the fallback path.
     expect(screen.getByRole("link", { name: /diff/i })).toBeInTheDocument();
+  });
+
+  // ---- #3: knowledge is reference, NOT verification ----
+
+  it("keeps retrieved-knowledge out of the verification list but in references", async () => {
+    installFetch(); // default REPORT carries the knowledge check + matching reference
+    render(<DeliveryReport deliverableId="d1" />);
+
+    const checks = await screen.findByRole("region", { name: /how bsvibe checked this/i });
+    // The REAL checks stay visible.
+    expect(within(checks).getByText(/pytest -q/)).toBeInTheDocument();
+    expect(within(checks).getByText(/reads cleanly/)).toBeInTheDocument();
+    // The retrieved-knowledge judge check is filtered OUT of the verification list.
+    expect(within(checks).queryByText(/reuse the existing date helper/i)).toBeNull();
+    // …but it still surfaces in "What BSVibe referenced".
+    const referenced = screen.getByRole("region", { name: /what bsvibe referenced/i });
+    expect(within(referenced).getByText(/reuse the existing date helper/i)).toBeInTheDocument();
+  });
+
+  it("when the only checks were retrieved-knowledge, the block reads calmly (not 'nothing verified')", async () => {
+    installFetch({
+      report: () => ({
+        ...REPORT,
+        verifications: [
+          {
+            id: "v1",
+            outcome: "passed",
+            contract: {
+              checks: [
+                {
+                  kind: "judge",
+                  criteria: ["Reuse the existing date helper"],
+                  rationale: "Canonical patterns retrieved for this change",
+                },
+              ],
+            },
+            result: {},
+            created_at: NOW,
+          },
+        ],
+        references: ["Reuse the existing date helper"],
+      }),
+    });
+    render(<DeliveryReport deliverableId="d1" />);
+
+    const checks = await screen.findByRole("region", { name: /how bsvibe checked this/i });
+    // No knowledge leaks into the verification list…
+    expect(within(checks).queryByText(/reuse the existing date helper/i)).toBeNull();
+    // …and it does NOT claim "no checks were declared" (there WERE checks, just
+    // knowledge ones surfaced under references) — the verdict still reads.
+    expect(within(checks).queryByText(/no checks were declared/i)).toBeNull();
+    expect(
+      within(checks).getByText(/no additional checks beyond the referenced knowledge/i),
+    ).toBeInTheDocument();
+  });
+
+  // ---- #6: rollback a shipped deliverable ----
+
+  it("rolls back a shipped deliverable and shows what was reverted", async () => {
+    installFetch();
+    render(<DeliveryReport deliverableId="d1" />);
+
+    const rollback = await screen.findByRole("region", { name: /roll back/i });
+    // Opening the affordance reveals a confirm step.
+    await userEvent.click(within(rollback).getByRole("button", { name: /^roll back$/i }));
+    await userEvent.click(within(rollback).getByRole("button", { name: /^roll back$/i }));
+
+    // POST landed → calm "rolled back" with what was reverted ("pr").
+    await waitFor(() => {
+      expect(within(rollback).getByText(/rolled back — pr/i)).toBeInTheDocument();
+    });
+    // The retract endpoint was POSTed.
+    const calls = (global.fetch as ReturnType<typeof vi.fn>).mock.calls;
+    expect(
+      calls.some(
+        ([url, init]) =>
+          String(url).includes("/retract") && (init as RequestInit | undefined)?.method === "POST",
+      ),
+    ).toBe(true);
+  });
+
+  it("shows a calm 'already rolled back' when the deliverable was already retracted", async () => {
+    installFetch({
+      retract: () =>
+        json({
+          deliverable_id: "d1",
+          retracted: true,
+          retracted_at: NOW,
+          already_retracted: true,
+          compensated: [],
+        }),
+    });
+    render(<DeliveryReport deliverableId="d1" />);
+
+    const rollback = await screen.findByRole("region", { name: /roll back/i });
+    await userEvent.click(within(rollback).getByRole("button", { name: /^roll back$/i }));
+    await userEvent.click(within(rollback).getByRole("button", { name: /^roll back$/i }));
+    await waitFor(() => {
+      expect(within(rollback).getByText(/already rolled back/i)).toBeInTheDocument();
+    });
+  });
+
+  it("shows a calm 'nothing to roll back' on a 400 no_compensation_handle", async () => {
+    installFetch({ retract: () => json({ detail: "no_compensation_handle" }, 400) });
+    render(<DeliveryReport deliverableId="d1" />);
+
+    const rollback = await screen.findByRole("region", { name: /roll back/i });
+    await userEvent.click(within(rollback).getByRole("button", { name: /^roll back$/i }));
+    await userEvent.click(within(rollback).getByRole("button", { name: /^roll back$/i }));
+    await waitFor(() => {
+      expect(within(rollback).getByText(/nothing to roll back/i)).toBeInTheDocument();
+    });
+  });
+
+  it("shows a calm retry message on a 502 and returns to the confirm step", async () => {
+    installFetch({ retract: () => json({ detail: "compensate_failed" }, 502) });
+    render(<DeliveryReport deliverableId="d1" />);
+
+    const rollback = await screen.findByRole("region", { name: /roll back/i });
+    await userEvent.click(within(rollback).getByRole("button", { name: /^roll back$/i }));
+    await userEvent.click(within(rollback).getByRole("button", { name: /^roll back$/i }));
+    await waitFor(() => {
+      expect(
+        within(rollback).getByText(/couldn’t roll back|couldn't roll back/i),
+      ).toBeInTheDocument();
+    });
+    // The confirm button is still present so a retry is one click away.
+    expect(within(rollback).getByRole("button", { name: /^roll back$/i })).toBeInTheDocument();
+  });
+
+  it("hides the rollback affordance for a pure direct_output answer", async () => {
+    installFetch({
+      report: () => ({
+        ...REPORT,
+        deliverable: { ...REPORT.deliverable, deliverable_type: "direct_output" },
+      }),
+    });
+    render(<DeliveryReport deliverableId="d1" />);
+
+    await screen.findByText("Add getRelatedPosts to blog.ts");
+    expect(screen.queryByRole("region", { name: /roll back/i })).toBeNull();
   });
 });

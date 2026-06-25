@@ -845,6 +845,7 @@
     "howChecked": "어떻게 확인했나요",
     "noVerification": "아직 이 산출물에 대한 검증 기록이 없어요.",
     "noChecksDeclared": "이 검증에 선언된 확인 항목이 없어요.",
+    "noChecksAfterKnowledge": "위에 참고한 지식 외에 추가 확인 항목은 없어요.",
     "artifacts": "산출물",
     "files": "파일",
     "noArtifacts": "이 산출물에서 만들어진 것이 없어요.",
@@ -853,7 +854,19 @@
     "artifactTruncated": "이 파일의 앞부분만 보여드려요. 인라인으로 표시하기엔 너무 커요.",
     "artifactUnavailable": "지금은 이 파일을 표시할 수 없어요.",
     "artifactUnavailableWithDiff": "이 파일을 표시할 수 없어요. 전체 변경 내용은 변경 내용에서 확인하세요.",
-    "viewDiff": "변경 내용 보기"
+    "viewDiff": "변경 내용 보기",
+    "rollback": "되돌리기",
+    "rollbackHint": "전달된 내용을 되돌려요 — PR 닫기, 메시지 삭제, 페이지 보관.",
+    "rollbackConfirm": "이 작업을 되돌릴까요?",
+    "rollbackConfirmLede": "이 산출물이 만든 외부 작업을 되돌려요. 다시 되돌릴 수는 없어요.",
+    "rollbackConfirmButton": "되돌리기",
+    "rollbackCancel": "그대로 두기",
+    "rollbackPending": "되돌리는 중…",
+    "rollbackDone": "되돌렸어요.",
+    "rollbackDoneWith": "되돌렸어요 — {what}.",
+    "rollbackAlready": "이미 되돌렸어요.",
+    "rollbackNothing": "되돌릴 것이 없어요 — 외부 산출물이 만들어지지 않았어요.",
+    "rollbackFailed": "지금은 되돌릴 수 없어요. 잠시 후 다시 시도해 주세요."
   },
   "run": {
     "back": "‹ 요약",
