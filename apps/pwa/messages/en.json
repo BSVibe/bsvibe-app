@@ -567,32 +567,9 @@
         "claude": "import Claude conversation history",
         "gpt": "import ChatGPT conversation history"
       },
-      "aspirational": {
-        "figma": {
-          "name": "Figma",
-          "blurb": "design files, reads and comments"
-        },
-        "linear": {
-          "name": "Linear",
-          "blurb": "issues and projects"
-        },
-        "googleDrive": {
-          "name": "Google Drive",
-          "blurb": "docs, sheets, slides"
-        },
-        "powerpoint": {
-          "name": "PowerPoint",
-          "blurb": "create .pptx via Graph"
-        },
-        "postgres": {
-          "name": "Postgres",
-          "blurb": "SQL data sources"
-        }
-      },
       "row": {
         "revoked": "Revoked",
         "needs_reauth": "Reconnect needed",
-        "deliversOut": "delivers out · {keys}",
         "tokenHintTitle": "Webhook token (masked)",
         "revokeError": "Couldn’t revoke that. Please try again.",
         "revoking": "Revoking…",
@@ -747,7 +724,7 @@
       "quietHoursCaption": "During quiet hours, only “Needs you” reaches you in-app. Everything else waits for morning."
     },
     "account": {
-      "lede": "Account: your profile and plan.",
+      "lede": "Account: your profile and sign-in.",
       "comingSoon": "Coming soon",
       "profile": "Profile",
       "changePhoto": "Change photo",
@@ -755,24 +732,14 @@
       "nameHint": "Editing your name is coming soon.",
       "email": "Email",
       "notSignedIn": "Not signed in",
-      "plan": "Plan",
-      "planTier": "Free",
-      "planPrice": "$0/mo",
-      "planStatus": "Active",
-      "manageBilling": "Manage billing",
-      "planQuota": "Usage & quota appear here once billing lands.",
-      "viewInvoices": "View invoices",
       "signInIdentities": "Sign-in identities",
       "connected": "Connected",
-      "disconnect": "Disconnect",
-      "connect": "Connect",
-      "identitiesNote": "Linking and unlinking sign-in methods is coming soon.",
+      "signedInWith": "Signed in with {provider}",
       "activeSessions": "Active sessions",
       "thisDevice": "This device",
       "activeNow": "{email} · Active now",
       "signingOut": "Signing out…",
       "signOut": "Sign out",
-      "sessionsNote": "Seeing and signing out other devices is coming soon.",
       "providers": {
         "google": "Google",
         "github": "GitHub",

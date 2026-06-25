@@ -88,12 +88,14 @@ describe("Settings tab content", () => {
     expect(screen.getByRole("heading", { name: /quiet hours/i })).toBeInTheDocument();
   });
 
-  it("Account tab renders the real Profile / Plan / identities / sessions surface", () => {
+  it("Account tab renders the real Profile / identities / sessions surface (L6 §4 — no Plan)", () => {
     render(<AccountTab />);
     // The signed-in email (real, from session) anchors the Profile section.
     expect(screen.getByText("founder@bsvibe.dev")).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: /profile/i })).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: /plan/i })).toBeInTheDocument();
+    // Plan/billing is hidden until billing is real.
+    expect(screen.queryByRole("heading", { name: /^plan$/i })).toBeNull();
+    expect(screen.getByRole("heading", { name: /sign-in identities/i })).toBeInTheDocument();
     expect(screen.getByText(/this device/i)).toBeInTheDocument();
   });
 });

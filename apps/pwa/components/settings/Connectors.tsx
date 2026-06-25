@@ -30,11 +30,8 @@ import { isInstallConnector, isOAuthConnector, isPasteCredsConnector } from "./c
  *                 no backend update endpoint yet → coming-soon).
  *  - AVAILABLE  — the catalog. The supported KNOWN_CONNECTORS not yet connected
  *                 render as REAL "Connect" cards (Connect opens the create panel
- *                 pre-selected to that service). The design's aspirational
- *                 services (Figma / Linear / Google Drive / PowerPoint /
- *                 Postgres) render as DISABLED coming-soon cards so the catalog
- *                 matches the design while staying honest — there is no backend
- *                 for them.
+ *                 pre-selected to that service). Only real, usable connectors are
+ *                 listed — no aspirational / coming-soon cards.
  *  - CUSTOM     — "Add a custom Connector" (point at your own MCP server / BSage
  *                 plugin SDK). Present per the design but DISABLED — there is no
  *                 custom-MCP backend yet.
@@ -48,11 +45,6 @@ import { isInstallConnector, isOAuthConnector, isPasteCredsConnector } from "./c
  * control pretending to work.
  */
 type ListState = { data: Connector[]; failed: boolean } | null;
-
-/** The design's aspirational services — rendered as disabled coming-soon cards
- *  so the catalog visually matches the design. No backend exists for these.
- *  Names + blurbs come from the `settings.connectors.aspirational` catalog. */
-const ASPIRATIONAL_KEYS = ["figma", "linear", "googleDrive", "powerpoint", "postgres"] as const;
 
 export default function Connectors() {
   const [list, setList] = useState<ListState>(null);
@@ -307,24 +299,6 @@ export default function Connectors() {
                   </button>
                 </div>
               )}
-            </li>
-          ))}
-          {ASPIRATIONAL_KEYS.map((key) => (
-            <li key={key} className="connector-card connector-card--available">
-              <div className="connector-card__body">
-                <span className="connector-card__name">{t(`aspirational.${key}.name`)}</span>
-                <p className="connector-card__detail">{t(`aspirational.${key}.blurb`)}</p>
-              </div>
-              <div className="connector-card__actions">
-                <button
-                  type="button"
-                  className="connector-card__connect"
-                  disabled
-                  title={t("comingSoon")}
-                >
-                  {t("connect")}
-                </button>
-              </div>
             </li>
           ))}
         </ul>

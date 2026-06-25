@@ -1,17 +1,17 @@
 /**
- * Account tab — the real surface. Four sections per the design:
+ * Account tab — the real, HONEST surface (L6 §4 cleanup). Three sections:
  *
  *  - Profile: avatar initials + email (real, from session), display name (from
- *    JWT user_metadata.name or the email local-part). Editing is a disabled
- *    "coming soon" affordance (no Supabase write in this lift).
- *  - Plan: a clearly non-functional placeholder card; Manage billing is disabled
- *    (Stripe deferred).
- *  - Sign-in identities: the provider(s) in the JWT app_metadata.providers show
- *    "Connected"; the other named providers show a DISABLED "Connect" (OAuth
- *    identity linking needs a backend — deferred).
+ *    JWT user_metadata.name or the email local-part). "Change photo" stays a
+ *    disabled "coming soon" affordance (no Supabase write in this lift).
+ *  - Sign-in identities: READ-ONLY. Only the provider(s) actually present in the
+ *    JWT render as "Signed in with X" — no Connect/Disconnect buttons (no backend
+ *    identity linking, so the dead controls were removed).
  *  - Active sessions: the CURRENT session only ("This device") with a REAL sign
- *    out wired to the same `logout()` path AccountChip uses. Listing other
- *    devices / remote sign-out is disabled (needs Supabase admin — deferred).
+ *    out wired to the same `logout()` path AccountChip uses. No "other devices
+ *    coming soon" note (no remote-session listing backend).
+ *
+ *  Plan/billing is hidden entirely until billing is real.
  */
 
 import AccountTab from "@/components/settings/AccountTab";
@@ -92,31 +92,36 @@ describe("Account tab — Profile", () => {
   });
 });
 
-describe("Account tab — Plan", () => {
-  it("renders a plan placeholder card", () => {
+describe("Account tab — Plan (L6 §4 — hidden until billing is real)", () => {
+  it("does NOT render a Plan section", () => {
     render(<AccountTab />);
-    expect(screen.getByRole("heading", { name: /^plan$/i })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: /^plan$/i })).toBeNull();
   });
 
-  it("disables Manage billing (Stripe deferred)", () => {
+  it("does NOT render a Manage billing control", () => {
     render(<AccountTab />);
-    expect(screen.getByRole("button", { name: /manage billing/i })).toBeDisabled();
+    expect(screen.queryByRole("button", { name: /manage billing/i })).toBeNull();
   });
 });
 
-describe("Account tab — Sign-in identities", () => {
-  it("marks the logged-in provider as Connected", () => {
+describe("Account tab — Sign-in identities (L6 §4 — read-only, no dead controls)", () => {
+  it("marks the logged-in provider as signed in (read-only)", () => {
     render(<AccountTab />);
     const google = screen.getByText(/google/i).closest("li");
     expect(google).not.toBeNull();
     expect(within(google as HTMLElement).getByText(/connected/i)).toBeInTheDocument();
   });
 
-  it("shows other providers with a disabled Connect (linking deferred)", () => {
+  it("renders NO Connect/Disconnect identity buttons (no backend linking)", () => {
     render(<AccountTab />);
-    const github = screen.getByText(/github/i).closest("li");
-    expect(github).not.toBeNull();
-    expect(within(github as HTMLElement).getByRole("button", { name: /connect/i })).toBeDisabled();
+    const identities = screen.getByRole("region", { name: /sign-in identities/i });
+    expect(within(identities).queryByRole("button")).toBeNull();
+  });
+
+  it("does NOT list providers that aren't in the JWT (github not signed in)", () => {
+    render(<AccountTab />);
+    const identities = screen.getByRole("region", { name: /sign-in identities/i });
+    expect(within(identities).queryByText(/github/i)).toBeNull();
   });
 });
 
@@ -124,6 +129,13 @@ describe("Account tab — Active sessions", () => {
   it("shows a 'This device' row for the current session", () => {
     render(<AccountTab />);
     expect(screen.getByText(/this device/i)).toBeInTheDocument();
+  });
+
+  it("does NOT render an 'other devices coming soon' note (L6 §4)", () => {
+    render(<AccountTab />);
+    const sessions = screen.getByRole("region", { name: /active sessions/i });
+    expect(within(sessions).queryByText(/other devices/i)).toBeNull();
+    expect(within(sessions).queryByText(/coming soon/i)).toBeNull();
   });
 
   it("signs out via the same logout() path AccountChip uses", async () => {
