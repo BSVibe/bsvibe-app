@@ -865,6 +865,9 @@
     "knowledge": "Knowledge",
     "written": "Added",
     "writtenHint": "Notes this work added to your knowledge base.",
+    "noteClose": "Close",
+    "noteLoading": "Opening the note…",
+    "noteError": "Couldn't open this note.",
     "seeFilesChanged": "See what files changed ({count})",
     "outcomeTag": {
       "passed": "passed",

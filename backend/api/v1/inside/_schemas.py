@@ -172,12 +172,29 @@ class ConceptDetailResponse(BaseModel):
     type: str | None = None
 
 
+class NoteResponse(BaseModel):
+    """One vault note's full content for the report deep-link (R12).
+
+    ``path`` is the vault-relative note path (echoed back), ``title`` its H1 (or
+    the de-slugged filename), ``content`` the markdown body with the YAML
+    frontmatter stripped — what the founder reads to SEE the note a run wrote or
+    consulted, since a fresh low-degree note is dropped from the hub-capped graph.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    path: str
+    title: str
+    content: str
+
+
 __all__ = [
     "ConceptDetailResponse",
     "ConceptResponse",
     "GraphEdge",
     "GraphNode",
     "GraphResponse",
+    "NoteResponse",
     "ObservationResponse",
     "RelatedConcept",
     "SourceObservation",

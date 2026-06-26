@@ -109,8 +109,13 @@ function installFetch(opts?: {
   artifact?: (url: string) => Response;
   retract?: () => Response;
   safemode?: (url: string) => Response;
+  note?: (url: string) => Response;
 }) {
   const reportFn = opts?.report ?? (() => REPORT);
+  const noteFn =
+    opts?.note ??
+    (() =>
+      json({ path: "garden/seedling/settle-x.md", title: "Note X", content: "# Note X\n\nbody" }));
   const safemodeFn = opts?.safemode ?? (() => json({ item_id: "item-1", status: "approved" }));
   const artifactFn =
     opts?.artifact ??
@@ -134,6 +139,7 @@ function installFetch(opts?: {
       );
     }
     if (url.includes("/safemode/")) return safemodeFn(url);
+    if (url.includes("/inside/note")) return noteFn(url);
     if (url.includes("/artifacts/")) return artifactFn(url);
     const r = reportFn();
     return r instanceof Response ? r : json(r);
@@ -243,12 +249,50 @@ describe("Delivery Report (R3)", () => {
 
   it("renders an Added (written) sub-group when report.written is non-empty", async () => {
     installFetch({
-      report: () => ({ ...REPORT, references: [], written: ["getRelatedPosts pattern"] }),
+      report: () => ({
+        ...REPORT,
+        references: [],
+        written: [{ title: "getRelatedPosts pattern", path: "garden/seedling/settle-grp.md" }],
+      }),
     });
     render(<DeliveryReport deliverableId="d1" />);
 
     const knowledge = await screen.findByRole("region", { name: /knowledge/i });
     expect(within(knowledge).getByText(/getRelatedPosts pattern/)).toBeInTheDocument();
+  });
+
+  it("R12: clicking an added-knowledge chip opens the note viewer with its content", async () => {
+    installFetch({
+      report: () => ({
+        ...REPORT,
+        references: [],
+        written: [{ title: "mean utility", path: "garden/seedling/settle-mean.md" }],
+      }),
+      note: () =>
+        json({
+          path: "garden/seedling/settle-mean.md",
+          title: "mean utility",
+          content: "# mean utility\n\nReturns the arithmetic mean; raises on empty.",
+        }),
+    });
+    render(<DeliveryReport deliverableId="d1" />);
+
+    const knowledge = await screen.findByRole("region", { name: /knowledge/i });
+    await userEvent.click(within(knowledge).getByRole("button", { name: /mean utility/i }));
+
+    const dialog = await screen.findByRole("dialog", { name: /mean utility/i });
+    expect(within(dialog).getByText(/arithmetic mean; raises on empty/i)).toBeInTheDocument();
+  });
+
+  it("R12: a non-note reference stays plain text (not a button)", async () => {
+    installFetch({
+      report: () => ({ ...REPORT, references: ["Decision: round to 2 decimals"], written: [] }),
+    });
+    render(<DeliveryReport deliverableId="d1" />);
+
+    const knowledge = await screen.findByRole("region", { name: /knowledge/i });
+    expect(within(knowledge).getByText(/round to 2 decimals/)).toBeInTheDocument();
+    expect(within(knowledge).queryByRole("button", { name: /round to 2 decimals/ })).toBeNull();
   });
 
   it("keeps the diff BEHIND a collapsed disclosure (not expanded on load)", async () => {
