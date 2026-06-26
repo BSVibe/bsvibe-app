@@ -110,12 +110,16 @@ function installFetch(opts?: {
   retract?: () => Response;
   safemode?: (url: string) => Response;
   note?: (url: string) => Response;
+  concept?: (url: string) => Response;
 }) {
   const reportFn = opts?.report ?? (() => REPORT);
   const noteFn =
     opts?.note ??
     (() =>
       json({ path: "garden/seedling/settle-x.md", title: "Note X", content: "# Note X\n\nbody" }));
+  const conceptFn =
+    opts?.concept ??
+    (() => json({ id: "x", name: "X", aliases: [], related: [], observations: [] }));
   const safemodeFn = opts?.safemode ?? (() => json({ item_id: "item-1", status: "approved" }));
   const artifactFn =
     opts?.artifact ??
@@ -140,6 +144,7 @@ function installFetch(opts?: {
     }
     if (url.includes("/safemode/")) return safemodeFn(url);
     if (url.includes("/inside/note")) return noteFn(url);
+    if (url.includes("/inside/concepts/")) return conceptFn(url);
     if (url.includes("/artifacts/")) return artifactFn(url);
     const r = reportFn();
     return r instanceof Response ? r : json(r);
@@ -284,15 +289,48 @@ describe("Delivery Report (R3)", () => {
     expect(within(dialog).getByText(/arithmetic mean; raises on empty/i)).toBeInTheDocument();
   });
 
-  it("R12: a non-note reference stays plain text (not a button)", async () => {
+  it("a prior-decision / rejection reference stays plain text (not a button)", async () => {
     installFetch({
-      report: () => ({ ...REPORT, references: ["Decision: round to 2 decimals"], written: [] }),
+      report: () => ({
+        ...REPORT,
+        references: ["Prior decision — Q: Which DB? A: Postgres"],
+        written: [],
+      }),
     });
     render(<DeliveryReport deliverableId="d1" />);
 
     const knowledge = await screen.findByRole("region", { name: /knowledge/i });
-    expect(within(knowledge).getByText(/round to 2 decimals/)).toBeInTheDocument();
-    expect(within(knowledge).queryByRole("button", { name: /round to 2 decimals/ })).toBeNull();
+    expect(within(knowledge).getByText(/Which DB\? A: Postgres/)).toBeInTheDocument();
+    expect(within(knowledge).queryByRole("button", { name: /Which DB/ })).toBeNull();
+  });
+
+  it("R13: clicking a concept reference opens the concept viewer with related concepts", async () => {
+    installFetch({
+      report: () => ({ ...REPORT, references: ["Function"], written: [] }),
+      concept: () =>
+        json({
+          id: "function",
+          name: "Function",
+          aliases: [],
+          related: [{ id: "pure-functions", name: "Pure functions", weight: 3 }],
+          observations: [
+            {
+              id: "garden/seedling/settle-mean.md",
+              title: "Add a mean utility",
+              excerpt: "",
+              body: "",
+            },
+          ],
+        }),
+    });
+    render(<DeliveryReport deliverableId="d1" />);
+
+    const knowledge = await screen.findByRole("region", { name: /knowledge/i });
+    await userEvent.click(within(knowledge).getByRole("button", { name: /^Function$/ }));
+
+    const dialog = await screen.findByRole("dialog", { name: /function/i });
+    expect(within(dialog).getByText(/Pure functions/)).toBeInTheDocument();
+    expect(within(dialog).getByText(/Add a mean utility/)).toBeInTheDocument();
   });
 
   it("keeps the diff BEHIND a collapsed disclosure (not expanded on load)", async () => {

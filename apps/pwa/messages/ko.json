@@ -868,6 +868,10 @@
     "noteClose": "닫기",
     "noteLoading": "노트를 여는 중…",
     "noteError": "이 노트를 열지 못했어요.",
+    "conceptError": "이 개념을 열지 못했어요.",
+    "conceptRelated": "관련 개념",
+    "conceptObservations": "어디에 나오는지",
+    "conceptEmpty": "아직 연결이 없어요.",
     "seeFilesChanged": "코드 변경 보기 ({count}개 파일)",
     "outcomeTag": {
       "passed": "통과",

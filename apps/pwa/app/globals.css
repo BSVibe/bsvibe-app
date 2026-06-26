@@ -6379,6 +6379,34 @@ main.login {
   color: var(--ink);
 }
 
+/* R13 — concept viewer body (related concepts + where the concept shows up). */
+.concept-viewer {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.concept-viewer__group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.concept-viewer__obs {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.concept-viewer__obs-item {
+  font-size: 0.88rem;
+  color: var(--ink-2);
+  padding: 8px 12px;
+  border: 1px solid var(--hair);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+
 /* The verification CHECKLIST — a green check + the plain check + a small tag. */
 .report-checklist {
   list-style: none;
