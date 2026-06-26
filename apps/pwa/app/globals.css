@@ -6389,11 +6389,34 @@ main.login {
   color: var(--ink);
 }
 
-/* R13 — concept viewer body (related concepts + where the concept shows up). */
+/* R13/R15 — concept viewer body (what it is + related concepts + where it shows
+   up, with related concepts navigating and observations linking to the note). */
 .concept-viewer {
   display: flex;
   flex-direction: column;
   gap: 16px;
+}
+/* "What this concept is": a kind badge + any alternative names. */
+.concept-viewer__lead {
+  margin: 0;
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 8px 10px;
+}
+.concept-viewer__type {
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  background: var(--accent-bg);
+  border-radius: 999px;
+  padding: 3px 10px;
+}
+.concept-viewer__aliases {
+  font-size: 0.84rem;
+  color: var(--ink-3);
 }
 .concept-viewer__group {
   display: flex;
@@ -6415,6 +6438,21 @@ main.login {
   border: 1px solid var(--hair);
   border-radius: var(--radius-sm);
   background: var(--surface);
+}
+/* An observation that links to its note — a full-width button reset to the row
+   shape, with a quiet hover so it reads as openable (R15). */
+.concept-viewer__obs-item--link {
+  display: block;
+  width: 100%;
+  text-align: left;
+  font: inherit;
+  color: var(--ink);
+  cursor: pointer;
+  appearance: none;
+  -webkit-appearance: none;
+}
+.concept-viewer__obs-item--link:hover {
+  border-color: var(--ink-3);
 }
 
 /* The verification CHECKLIST — a green check + the plain check + a small tag. */

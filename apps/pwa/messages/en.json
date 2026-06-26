@@ -869,6 +869,8 @@
     "noteLoading": "Opening the note…",
     "noteError": "Couldn't open this note.",
     "conceptError": "Couldn't open this concept.",
+    "conceptKind": "Concept",
+    "conceptAliases": "Also: {names}",
     "conceptRelated": "Related concepts",
     "conceptObservations": "Where it shows up",
     "conceptEmpty": "No connections yet.",

@@ -415,6 +415,13 @@ function ReportDocument({
           conceptId={openConcept.id}
           fallbackLabel={openConcept.label}
           onClose={() => setOpenConcept(null)}
+          // Click a related concept → navigate the same modal to it.
+          onOpenConcept={(id, label) => setOpenConcept({ id, label })}
+          // Click an observation → switch to the note viewer for that note.
+          onOpenNote={(path, title) => {
+            setOpenConcept(null);
+            setOpenNote({ path, title });
+          }}
         />
       )}
     </article>
@@ -430,10 +437,14 @@ function ConceptViewer({
   conceptId,
   fallbackLabel,
   onClose,
+  onOpenConcept,
+  onOpenNote,
 }: {
   conceptId: string;
   fallbackLabel: string;
   onClose: () => void;
+  onOpenConcept: (id: string, label: string) => void;
+  onOpenNote: (path: string, title: string) => void;
 }) {
   const t = useTranslations("report");
   const ref = useRef<HTMLDialogElement>(null);
@@ -484,13 +495,36 @@ function ConceptViewer({
           {state.phase === "error" && <p className="note-viewer__muted">{t("conceptError")}</p>}
           {state.phase === "ready" && (
             <div className="concept-viewer">
+              {/* "What this concept is": its kind (Pattern / Principle / …) and any
+                  alternative names. The concept notes carry no prose definition,
+                  so the type + the linked example notes below ARE the definition. */}
+              <p className="concept-viewer__lead">
+                {state.concept.type ? (
+                  <span className="concept-viewer__type">{state.concept.type}</span>
+                ) : (
+                  <span className="concept-viewer__type concept-viewer__type--plain">
+                    {t("conceptKind")}
+                  </span>
+                )}
+                {state.concept.aliases.length > 0 && (
+                  <span className="concept-viewer__aliases">
+                    {t("conceptAliases", { names: state.concept.aliases.join(", ") })}
+                  </span>
+                )}
+              </p>
               {state.concept.related.length > 0 && (
                 <section className="concept-viewer__group">
                   <p className="report-knowledge__sublabel">{t("conceptRelated")}</p>
                   <ul className="report-chips">
                     {state.concept.related.map((r) => (
-                      <li key={r.id} className="report-chip">
-                        {r.name}
+                      <li key={r.id}>
+                        <button
+                          type="button"
+                          className="report-chip report-chip--link"
+                          onClick={() => onOpenConcept(r.id, r.name)}
+                        >
+                          {r.name}
+                        </button>
                       </li>
                     ))}
                   </ul>
@@ -501,8 +535,14 @@ function ConceptViewer({
                   <p className="report-knowledge__sublabel">{t("conceptObservations")}</p>
                   <ul className="concept-viewer__obs">
                     {state.concept.observations.map((o) => (
-                      <li key={o.id} className="concept-viewer__obs-item">
-                        {o.title}
+                      <li key={o.id}>
+                        <button
+                          type="button"
+                          className="concept-viewer__obs-item concept-viewer__obs-item--link"
+                          onClick={() => onOpenNote(o.id, o.title)}
+                        >
+                          {o.title}
+                        </button>
                       </li>
                     ))}
                   </ul>

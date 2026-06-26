@@ -835,6 +835,9 @@ export interface ConceptDetail {
   aliases: string[];
   related: RelatedConcept[];
   observations: ConceptSourceObservation[];
+  /** E28 — the concept's note kind (Pattern / Principle / TechInsight /
+   *  DomainModel / …), shown as the "what kind of concept this is" badge. */
+  type?: string | null;
 }
 
 /** `GET /api/v1/inside/observations` element (backend ObservationResponse). One
