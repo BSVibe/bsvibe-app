@@ -342,7 +342,10 @@ function ReportDeliveryActions({
   itemId: string;
   onResolved: () => void;
 }) {
-  const t = useTranslations("report");
+  // Use the SAME (decisions) namespace as the Brief's DeliveryRow so the report
+  // footer buttons read IDENTICALLY to the Brief card (founder: "보고서 버튼과
+  // 요약탭 버튼 이름은 동일해야 해") — Approve / Decline, not "Approve & ship".
+  const t = useTranslations("decisions");
   const [state, setState] = useState<"idle" | "working" | "error">("idle");
   const working = state === "working";
 
@@ -369,7 +372,7 @@ function ReportDeliveryActions({
         onClick={() => run("approve")}
         disabled={working}
       >
-        {working ? t("actionWorking") : t("approveShip")}
+        {working ? t("working") : t("approve")}
       </button>
       <button
         type="button"
@@ -381,7 +384,7 @@ function ReportDeliveryActions({
       </button>
       {state === "error" && (
         <span className="need-card__error" aria-live="polite">
-          {t("actionError")}
+          {t("resolveError")}
         </span>
       )}
     </div>
