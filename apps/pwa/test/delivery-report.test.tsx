@@ -114,7 +114,8 @@ function installFetch(opts?: {
   const reportFn = opts?.report ?? (() => REPORT);
   const noteFn =
     opts?.note ??
-    (() => json({ path: "garden/seedling/settle-x.md", title: "Note X", content: "# Note X\n\nbody" }));
+    (() =>
+      json({ path: "garden/seedling/settle-x.md", title: "Note X", content: "# Note X\n\nbody" }));
   const safemodeFn = opts?.safemode ?? (() => json({ item_id: "item-1", status: "approved" }));
   const artifactFn =
     opts?.artifact ??
@@ -291,9 +292,7 @@ describe("Delivery Report (R3)", () => {
 
     const knowledge = await screen.findByRole("region", { name: /knowledge/i });
     expect(within(knowledge).getByText(/round to 2 decimals/)).toBeInTheDocument();
-    expect(
-      within(knowledge).queryByRole("button", { name: /round to 2 decimals/ }),
-    ).toBeNull();
+    expect(within(knowledge).queryByRole("button", { name: /round to 2 decimals/ })).toBeNull();
   });
 
   it("keeps the diff BEHIND a collapsed disclosure (not expanded on load)", async () => {
