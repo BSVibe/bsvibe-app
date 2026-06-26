@@ -867,7 +867,8 @@
     "note": "Note",
     "howVerified": "How it was verified",
     "knowledge": "Knowledge",
-    "learned": "Learned",
+    "written": "Added",
+    "writtenHint": "Notes this work added to your knowledge base.",
     "seeFilesChanged": "See what files changed ({count})",
     "outcomeTag": {
       "passed": "passed",

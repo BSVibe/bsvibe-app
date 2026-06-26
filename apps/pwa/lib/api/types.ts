@@ -392,11 +392,11 @@ export interface DeliverableReport {
    *  intent + captured diff; cached on the deliverable on first view. The
    *  redesigned report LEADS with this; `null` falls back to `request`. */
   narrative: string | null;
-  /** R3 — the knowledge this work newly WROTE (settled observations / promoted
-   *  canon), distinct from `references` (what it read). Not yet populated by the
-   *  backend (a future lift fills it); the report renders the "Learned" group
-   *  only when non-empty, so an absent/empty field simply omits the group. */
-  learned?: string[];
+  /** R10 — the knowledge this run WROTE: the notes it added to the vault
+   *  (de-slugged titles, from settle_drains), distinct from `references` (what it
+   *  consulted). The report's "추가한 지식" group; empty until the settle drain runs,
+   *  in which case the group is omitted. */
+  written?: string[];
 }
 
 /** `GET /api/v1/deliverables/{id}/artifacts/{ref:path}` body (backend

@@ -6295,7 +6295,7 @@ main.login {
   overflow-wrap: anywhere;
 }
 
-.report-chip--learned {
+.report-chip--written {
   color: var(--amber-ink);
   border-color: var(--amber-dot);
   background: var(--accent-bg);

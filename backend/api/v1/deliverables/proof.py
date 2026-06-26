@@ -37,7 +37,7 @@ from backend.workflow.infrastructure.db import (
     VerificationResult,
 )
 
-from ._narrative import held_delivery_item_for, learned_for, report_narrative_for
+from ._narrative import held_delivery_item_for, report_narrative_for, split_knowledge
 from ._schemas import (
     MAX_CONTENT_BYTES,
     ArtifactContentResponse,
@@ -102,16 +102,19 @@ async def get_deliverable_report(
         else None
     )
 
-    # R1 — the redesigned report leads with a plain-language "what this did",
-    # generated lazily by a chat model + cached (verified-only, best-effort).
-    # Lives in :mod:`._narrative` to keep this adapter under the D35 ceiling.
+    # R1 — lazy plain-language "what this did" (cached); in ._narrative for D35.
     narrative = await report_narrative_for(session, row, run, request, verified, workspace_id)
 
-    # R8 — the footer action mirrors the Brief: a still-held delivery (a pending
-    # Safe-Mode item) gets Approve & ship / Decline; only a shipped run gets
-    # Rollback. Surface the held item id + the run status so the report can pick.
+    # R8 — the footer mirrors the Brief: a still-held delivery (pending Safe-Mode
+    # item) gets Approve & ship / Decline; only a shipped run gets Rollback.
     run_status = run.status.value if run is not None and run.workspace_id == workspace_id else None
     held_item_id = await held_delivery_item_for(session, row.id, workspace_id)
+
+    # R10 — keep "참고한 지식" (referenced/consulted) and "추가한 지식" (written by THIS
+    # run) distinct; a run's own writes are excluded from referenced.
+    referenced, written = await split_knowledge(
+        session, row.run_id, workspace_id, references_of(verifications)
+    )
 
     return DeliverableReportResponse(
         deliverable=to_response(row, verified=verified),
@@ -120,8 +123,8 @@ async def get_deliverable_report(
         verifications=verifications,
         run_status=run_status,
         held_delivery_item_id=held_item_id,
-        references=references_of(verifications),
-        learned=await learned_for(session, row.run_id, workspace_id),
+        references=referenced,
+        written=written,
         narrative=narrative,
     )
 
