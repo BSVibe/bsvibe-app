@@ -5,33 +5,28 @@ import type { CheckpointAction, PendingCheckpoint } from "@/lib/api/types";
 import { useLocale, useTranslations } from "next-intl";
 import Link from "next/link";
 import { useId, useState } from "react";
-import { relativeTime } from "./relative-time";
 
 type RowState = "idle" | "working" | "error";
 
-// Sentinel for the "Other → free-text" radio. Picked so it can never collide
-// with a real LLM-supplied option string.
-const OTHER_SENTINEL = "__bsvibe_other__";
-
 /**
- * One paused-run checkpoint row in the unified Pending list. The agent is
- * blocked on a question (`item.question`); the founder's resolution resumes
- * the run via POST /api/v1/checkpoints/{id}/resolve.
+ * One paused-run checkpoint as a CARD in the unified Brief "Needs you" (R7). The
+ * agent is blocked on a question (`item.question`); the founder's resolution
+ * resumes the run via POST /api/v1/checkpoints/{id}/resolve.
  *
- * Two interaction shapes:
+ * The card leads with the task (`item.title`) + an amber "Needs your answer"
+ * status, then the question as the body. Two interaction shapes:
  *
- * 1. **Free-text / suggestions (L-D1).** When the work LLM offered
- *    `options`, render them as radios PLUS an "Other" radio that reveals
- *    a free-text textarea. The backend records whichever string was
- *    submitted verbatim. Pure free-text (no options) → plain textarea.
+ * 1. **Options + free-text (the AskUserQuestion shape).** When the work LLM
+ *    offered `options`, they render as selectable CHIPS plus a persistent
+ *    "Or type your own answer…" input — pick a chip OR type a custom reply.
+ *    A typed answer takes precedence over a selected chip. Pure free-text (no
+ *    options) is the same input on its own.
  *
- * 2. **One-click actions (L-D2).** For executor B2b Decisions
- *    (`verification_failed`, `human_review_required`), the backend ships
- *    `actions` like `[{key:"ship",label_en:"Approve & ship",...}, ...]`.
- *    Render those as dedicated buttons that POST `{ action_key }` and
- *    trigger side effects (ship → deliverable + shipped run; discard →
- *    cancelled run). A small "Other (free-text)" disclosure stays
- *    available below so the founder can always type a free reply.
+ * 2. **One-click actions (executor B2b Decisions).** For
+ *    `verification_failed` / `human_review_required`, the backend ships
+ *    `actions` like `[{key:"ship",...}, {key:"discard",...}]`, rendered as
+ *    buttons that POST `{ action_key }`. An "Other (free-text)" disclosure
+ *    stays available so the founder can always explain a custom path.
  */
 export default function CheckpointRow({
   item,
@@ -48,35 +43,25 @@ export default function CheckpointRow({
     item.actions && item.actions.length > 0 ? item.actions : null;
   const hasActions = actions !== null;
 
-  // In options mode the radio drives `selected`; "Other" reveals `otherText`.
-  // In free-text mode only `answer` is used. In actions mode `freeTextOpen`
-  // toggles the disclosure for an optional free-text reply alongside the
-  // action buttons (the founder may explain a discard or a custom path).
+  // `selected` is the chosen option chip (options mode); `answer` is the
+  // free-text input. A typed answer takes precedence over a selected chip.
+  // `freeTextOpen` toggles the optional free-text reply in actions mode.
   const [selected, setSelected] = useState<string | null>(null);
-  const [otherText, setOtherText] = useState("");
   const [answer, setAnswer] = useState("");
   const [freeTextOpen, setFreeTextOpen] = useState(false);
   const [state, setState] = useState<RowState>("idle");
 
   const answerId = useId();
-  const otherId = useId();
   const actionFreeTextId = useId();
-  const optionsGroupName = useId();
 
-  const otherActive = hasOptions && selected === OTHER_SENTINEL;
-  const otherTrimmed = otherText.trim();
-  const freeTrimmed = answer.trim();
+  const answerTrimmed = answer.trim();
   const working = state === "working";
 
   const labelFor = (a: CheckpointAction): string => (locale === "ko" ? a.label_ko : a.label_en);
 
-  // Free-text payload (used outside of the action-button path).
-  const freeTextPayload = (() => {
-    if (hasActions) return freeTrimmed;
-    if (!hasOptions) return freeTrimmed;
-    if (selected === OTHER_SENTINEL) return otherTrimmed;
-    return selected ?? "";
-  })();
+  // The resolution payload (used outside the one-click action path): a typed
+  // answer wins; otherwise the selected chip (options mode); else nothing.
+  const freeTextPayload = answerTrimmed || (hasOptions ? (selected ?? "") : "");
   const freeTextSubmitDisabled = working || freeTextPayload.length === 0;
 
   async function submitFreeText() {
@@ -102,37 +87,33 @@ export default function CheckpointRow({
   }
 
   return (
-    <li className="decisions-row decisions-row--decision">
-      <span className="decisions-row__main">
-        <span className="decisions-row__q">{item.question}</span>
-        {/* The task this checkpoint belongs to, so the founder knows which work
-            they're judging instead of answering a bare question. */}
-        {item.title && <span className="decisions-row__sub">{item.title}</span>}
-        <span className="decisions-row__meta">
-          <span className="decisions-chip decisions-chip--decision">{t("kindDecision")}</span>
+    <li className="need-card need-card--decision">
+      <div className="need-card__head">
+        {/* Lead with the task the founder is judging, not a bare question. */}
+        <div className="need-card__title-wrap">
+          <span className="need-card__title">{item.title || item.question}</span>
           {item.productSlug && item.productSlug !== "workspace" && (
-            <span className="decisions-row__product">{item.productSlug}</span>
+            <span className="need-card__product">{item.productSlug}</span>
           )}
-          {item.detailHref && (
-            <Link className="decisions-row__view" href={item.detailHref}>
-              {t("viewProof")}
-            </Link>
-          )}
-          <span className="decisions-row__time">{relativeTime(item.createdAt, t)}</span>
+        </div>
+        <span className="need-card__status">
+          <span className="need-card__status-dot" aria-hidden="true" />
+          {t("needsYourAnswer")}
         </span>
-      </span>
-      {item.rationale ? <p className="decisions-row__rationale">{item.rationale}</p> : null}
+      </div>
+
+      {/* The ask itself is the card body (when a title leads above it). */}
+      {item.title ? <p className="need-card__body">{item.question}</p> : null}
+      {item.rationale ? <p className="need-card__rationale">{item.rationale}</p> : null}
 
       {item.priorDecisions.length > 0 ? (
-        <div className="decisions-row__prior" aria-label={t("priorDecisions")}>
-          <span className="decisions-row__prior-label">{t("priorDecisions")}</span>
-          <ul className="decisions-row__prior-list">
+        <div className="need-card__prior" aria-label={t("priorDecisions")}>
+          <span className="need-card__prior-label">{t("priorDecisions")}</span>
+          <ul className="need-card__prior-list">
             {item.priorDecisions.map((prior, i) => (
               // Prior statements are free-form and may repeat across re-asks
               // (deduped server-side); index keys the row.
-              <li key={`${i}-${prior}`} className="decisions-row__prior-item">
-                {prior}
-              </li>
+              <li key={`${i}-${prior}`}>{prior}</li>
             ))}
           </ul>
         </div>
@@ -140,156 +121,108 @@ export default function CheckpointRow({
 
       {hasActions && actions !== null ? (
         <>
-          <div className="decisions-row__action-buttons">
-            {actions.map((a) => (
+          <div className="need-card__actions">
+            {actions.map((a, i) => (
               <button
                 key={a.key}
                 type="button"
-                className={`decisions-row__action decisions-row__action--${a.key}`}
+                className={`need-card__btn ${i === 0 ? "need-card__btn--primary" : "need-card__btn--secondary"}`}
                 onClick={() => submitAction(a.key)}
                 disabled={working}
               >
                 {labelFor(a)}
               </button>
             ))}
+            {state === "error" && (
+              <span className="need-card__error" aria-live="polite">
+                {t("resolveError")}
+              </span>
+            )}
+            {item.detailHref && (
+              <>
+                <span className="need-card__spacer" />
+                <Link className="need-card__view" href={item.detailHref}>
+                  {t("viewProof")}
+                </Link>
+              </>
+            )}
           </div>
           {/* Optional free-text reply alongside the one-click actions. */}
           {!freeTextOpen ? (
             <button
               type="button"
-              className="decisions-row__free-text-toggle"
+              className="need-card__free-toggle"
               onClick={() => setFreeTextOpen(true)}
               disabled={working}
             >
               {t("otherOptionLabel")}
             </button>
           ) : (
-            <>
-              <label className="decisions-row__answer-label" htmlFor={actionFreeTextId}>
-                {t("answerLabel")}
-              </label>
-              <textarea
+            <div className="need-card__answer-row">
+              <input
                 id={actionFreeTextId}
-                className="decisions-row__answer"
-                rows={2}
+                className="need-card__input"
                 placeholder={t("otherAnswerPlaceholder")}
                 value={answer}
                 disabled={working}
+                aria-label={t("answerLabel")}
                 onChange={(e) => setAnswer(e.target.value)}
               />
               <button
                 type="button"
-                className="decisions-row__primary"
+                className="need-card__btn need-card__btn--primary"
                 onClick={submitFreeText}
                 disabled={freeTextSubmitDisabled}
               >
                 {working ? t("working") : t("answer")}
               </button>
-            </>
+            </div>
           )}
-        </>
-      ) : hasOptions && offered !== null ? (
-        <>
-          <fieldset className="decisions-row__options" aria-label={t("answerLabel")}>
-            {offered.map((opt) => {
-              const id = `${optionsGroupName}-${opt}`;
-              return (
-                <label key={opt} className="decisions-row__option" htmlFor={id}>
-                  <input
-                    id={id}
-                    type="radio"
-                    name={optionsGroupName}
-                    value={opt}
-                    checked={selected === opt}
-                    disabled={working}
-                    onChange={() => setSelected(opt)}
-                  />
-                  <span>{opt}</span>
-                </label>
-              );
-            })}
-            <label
-              key={OTHER_SENTINEL}
-              className="decisions-row__option"
-              htmlFor={`${optionsGroupName}-other`}
-            >
-              <input
-                id={`${optionsGroupName}-other`}
-                type="radio"
-                name={optionsGroupName}
-                value={OTHER_SENTINEL}
-                checked={otherActive}
-                disabled={working}
-                onChange={() => setSelected(OTHER_SENTINEL)}
-              />
-              <span>{t("otherOptionLabel")}</span>
-            </label>
-            {otherActive ? (
-              <textarea
-                id={otherId}
-                className="decisions-row__answer"
-                rows={2}
-                placeholder={t("otherAnswerPlaceholder")}
-                value={otherText}
-                disabled={working}
-                aria-label={t("otherOptionLabel")}
-                onChange={(e) => setOtherText(e.target.value)}
-              />
-            ) : null}
-          </fieldset>
-          <span className="decisions-row__actions">
-            {state === "error" && (
-              <span className="decisions-row__error" aria-live="polite">
-                {t("resolveError")}
-              </span>
-            )}
-            <button
-              type="button"
-              className="decisions-row__primary"
-              onClick={submitFreeText}
-              disabled={freeTextSubmitDisabled}
-            >
-              {working ? t("working") : t("answer")}
-            </button>
-          </span>
         </>
       ) : (
         <>
-          <label className="decisions-row__answer-label" htmlFor={answerId}>
-            {t("answerLabel")}
-          </label>
-          <textarea
-            id={answerId}
-            className="decisions-row__answer"
-            rows={2}
-            placeholder={t("answerPlaceholder")}
-            value={answer}
-            disabled={working}
-            onChange={(e) => setAnswer(e.target.value)}
-          />
-          <span className="decisions-row__actions">
-            {state === "error" && (
-              <span className="decisions-row__error" aria-live="polite">
-                {t("resolveError")}
-              </span>
-            )}
+          {hasOptions && offered !== null ? (
+            <fieldset className="need-card__options" aria-label={t("answerLabel")}>
+              {offered.map((opt) => (
+                <button
+                  key={opt}
+                  type="button"
+                  className={`need-card__opt${selected === opt ? " need-card__opt--on" : ""}`}
+                  aria-pressed={selected === opt}
+                  disabled={working}
+                  onClick={() => setSelected(selected === opt ? null : opt)}
+                >
+                  {opt}
+                </button>
+              ))}
+            </fieldset>
+          ) : null}
+          <div className="need-card__answer-row">
+            <input
+              id={answerId}
+              className="need-card__input"
+              placeholder={hasOptions ? t("orTypeYourOwn") : t("answerPlaceholder")}
+              value={answer}
+              disabled={working}
+              aria-label={t("answerLabel")}
+              onChange={(e) => setAnswer(e.target.value)}
+            />
             <button
               type="button"
-              className="decisions-row__primary"
+              className="need-card__btn need-card__btn--primary"
               onClick={submitFreeText}
               disabled={freeTextSubmitDisabled}
             >
               {working ? t("working") : t("answer")}
             </button>
-          </span>
+          </div>
+          {state === "error" ? (
+            <span className="need-card__error" aria-live="polite">
+              {t("resolveError")}
+            </span>
+          ) : null}
         </>
       )}
-
-      {hasActions && state === "error" ? (
-        <span className="decisions-row__error" aria-live="polite">
-          {t("resolveError")}
-        </span>
-      ) : null}
     </li>
   );
 }

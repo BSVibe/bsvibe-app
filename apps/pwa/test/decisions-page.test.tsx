@@ -239,13 +239,13 @@ describe("Decisions surface", () => {
 
     render(<Decisions />);
 
-    // delivery (Safe Mode held delivery) — its kind chip + plain-language line
-    expect(await screen.findByText("Delivery")).toBeInTheDocument();
+    // delivery (Safe Mode held delivery) — its amber status badge + plain line
+    expect(await screen.findByText("Ready to ship")).toBeInTheDocument();
     expect(screen.getByText(/A delivery is held in Safe Mode/)).toBeInTheDocument();
     // decision (paused-run checkpoint) carries the agent's blocking question +
-    // its kind chip
+    // its amber status badge
     expect(screen.getByText(/Should the export include archived items\?/)).toBeInTheDocument();
-    expect(screen.getByText("Decision")).toBeInTheDocument();
+    expect(screen.getByText("Needs your answer")).toBeInTheDocument();
     // knowledge (canon proposal) — verb + the Knowledge kind chip is the
     // proposal's existing proposal_kind chip ("merge")
     expect(screen.getByText(/merge concepts/)).toBeInTheDocument();

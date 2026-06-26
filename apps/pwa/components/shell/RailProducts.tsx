@@ -1,10 +1,6 @@
 "use client";
 
-import GlyphLegendTooltip from "@/components/products/GlyphLegendTooltip";
-import TrendArrowGlyph from "@/components/products/TrendArrowGlyph";
 import { listProducts } from "@/lib/api/products";
-import { getFleetTrust } from "@/lib/api/trust";
-import type { TrendArrow } from "@/lib/api/trust.types";
 import type { Product } from "@/lib/api/types";
 import { useTranslations } from "next-intl";
 import Link from "next/link";
@@ -17,8 +13,7 @@ import { PlusIcon } from "./icons";
  * The left rail's "PRODUCTS" section (Stitch design's PRODUCTS heading): a
  * separate section BELOW the primary nav listing the workspace's products, each
  * a link to its `/products/{slug}` detail. This rail IS the product index —
- * there is no separate `/products` overview page. Each row carries the M4 trust
- * trend glyph (best-effort) for fleet-at-a-glance. A calm "No products yet"
+ * there is no separate `/products` overview page. A calm "No products yet"
  * empty state and a prominent "+ Product" CTA (where the old "+ Direct" rail
  * button sat — Direct is now the omnipresent FAB) opens the create flow in a
  * modal, so product creation lives entirely in the rail.
@@ -32,9 +27,6 @@ type ListState = { data: Product[]; failed: boolean } | null;
 
 export default function RailProducts() {
   const [list, setList] = useState<ListState>(null);
-  // Fleet trust glyphs (Lift M4b), keyed by product_id. Missing/failed entries
-  // fall back to "no glyph" — the rail must never blank on a trust regression.
-  const [trust, setTrust] = useState<Map<string, TrendArrow>>(new Map());
   const [creating, setCreating] = useState(false);
   const dialogRef = useRef<HTMLDialogElement>(null);
   const pathname = usePathname();
@@ -53,24 +45,6 @@ export default function RailProducts() {
     listProducts()
       .then((data) => active && setList({ data, failed: false }))
       .catch(() => active && setList({ data: [], failed: true }));
-    return () => {
-      active = false;
-    };
-  }, []);
-
-  // Fleet trust glyphs (design §3.4). One read on mount; no live updates.
-  useEffect(() => {
-    let active = true;
-    getFleetTrust()
-      .then((res) => {
-        if (!active) return;
-        const next = new Map<string, TrendArrow>();
-        for (const entry of res.products) next.set(entry.product_id, entry.trend_arrow);
-        setTrust(next);
-      })
-      .catch(() => {
-        /* calm: trust failure leaves glyph-less product rows. */
-      });
     return () => {
       active = false;
     };
@@ -118,7 +92,6 @@ export default function RailProducts() {
           {products.map((p) => {
             const href = `/products/${p.slug}`;
             const active = pathname === href;
-            const arrow = trust.get(p.id);
             return (
               <li key={p.id}>
                 <Link
@@ -128,19 +101,12 @@ export default function RailProducts() {
                 >
                   <span className="rail-products__dot" aria-hidden="true" />
                   <span className="rail-products__name">{p.name}</span>
-                  {arrow ? (
-                    <TrendArrowGlyph arrow={arrow} className="rail-products__arrow" />
-                  ) : null}
                 </Link>
               </li>
             );
           })}
         </ul>
       )}
-
-      {/* First-visit legend for the trend glyphs — the rail is now the sole
-          product index, so the glyph key lives here (once per session). */}
-      <GlyphLegendTooltip hasGlyphs={trust.size > 0} />
 
       {/* "+ Product" CTA — the prominent create action, sitting where the old
           "+ Direct" rail button was (Direct is now the omnipresent FAB). */}

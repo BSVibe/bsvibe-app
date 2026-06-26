@@ -36,7 +36,7 @@ export default function NeedsYou({
   return (
     <section className="needs-you" aria-label={t("needsYou")}>
       <h2 className="section-label section-label--amber">{t("needsYou")}</h2>
-      <ul className="decisions-list" aria-label={t("needsYou")}>
+      <ul className="needs-list" aria-label={t("needsYou")}>
         {items.map((item) =>
           item.kind === "delivery" ? (
             <DeliveryRow key={item.id} item={item} onResolved={onResolved} />
