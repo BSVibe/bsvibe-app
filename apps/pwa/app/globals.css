@@ -6501,8 +6501,9 @@ main.login {
 
 .report-markdown blockquote {
   margin-left: 0;
-  padding: 2px 14px;
-  border-left: 3px solid var(--hair-strong);
+  padding: 8px 14px;
+  background: var(--accent-bg);
+  border-radius: var(--radius-sm);
   color: var(--ink-2);
 }
 
