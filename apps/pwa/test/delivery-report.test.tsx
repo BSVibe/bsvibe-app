@@ -64,6 +64,10 @@ const REPORT: DeliverableReport = {
   narrative:
     "Added a getRelatedPosts helper so each blog post can show a few related reads. It picks posts that share the most tags and skips the post itself.",
   verified: true,
+  // Shipped run → the footer shows the Rollback affordance (R8). A held delivery
+  // (held_delivery_item_id set) would show Approve & ship / Decline instead.
+  run_status: "shipped",
+  held_delivery_item_id: null,
   verifications: [
     {
       id: "v1",
@@ -104,8 +108,10 @@ function installFetch(opts?: {
   report?: () => DeliverableReport | Response;
   artifact?: (url: string) => Response;
   retract?: () => Response;
+  safemode?: (url: string) => Response;
 }) {
   const reportFn = opts?.report ?? (() => REPORT);
+  const safemodeFn = opts?.safemode ?? (() => json({ item_id: "item-1", status: "approved" }));
   const artifactFn =
     opts?.artifact ??
     ((url: string) =>
@@ -127,6 +133,7 @@ function installFetch(opts?: {
         })
       );
     }
+    if (url.includes("/safemode/")) return safemodeFn(url);
     if (url.includes("/artifacts/")) return artifactFn(url);
     const r = reportFn();
     return r instanceof Response ? r : json(r);
@@ -262,6 +269,25 @@ describe("Delivery Report (R3)", () => {
 
     const footer = await screen.findByRole("contentinfo");
     expect(within(footer).getByRole("button", { name: /roll back|되돌리기/i })).toBeInTheDocument();
+  });
+
+  it("R8: a HELD delivery shows Approve & ship / Decline (not Rollback) and dispatches it", async () => {
+    const safemode = vi.fn((url: string) => json({ item_id: "item-1", status: "approved" }));
+    installFetch({
+      report: () => ({ ...REPORT, run_status: "review_ready", held_delivery_item_id: "item-1" }),
+      safemode,
+    });
+    render(<DeliveryReport deliverableId="d1" />);
+
+    const footer = await screen.findByRole("contentinfo");
+    // The held state mirrors the Brief: Approve & ship / Decline, NOT Rollback.
+    expect(within(footer).queryByRole("button", { name: /roll back|되돌리기/i })).toBeNull();
+    const approve = within(footer).getByRole("button", { name: /Approve & ship/i });
+    expect(within(footer).getByRole("button", { name: /Decline/i })).toBeInTheDocument();
+
+    await userEvent.click(approve);
+    await waitFor(() => expect(safemode).toHaveBeenCalled());
+    expect(safemode.mock.calls[0][0]).toContain("/api/v1/safemode/item-1/approve");
   });
 
   it("shows a calm no-verification state when the run has no verification recorded", async () => {

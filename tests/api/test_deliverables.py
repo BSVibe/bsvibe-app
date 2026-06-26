@@ -35,6 +35,10 @@ from backend.workflow.infrastructure.db import (
     VerificationOutcome,
     VerificationResult,
 )
+from backend.workflow.infrastructure.delivery.db import (
+    SafeModeQueueItemRow,
+    SafeModeStatus,
+)
 
 from .._support import db_engine, fake_current_user
 
@@ -79,6 +83,7 @@ async def _seed_run(
     ws: uuid.UUID,
     payload: dict | None = None,
     product_id: uuid.UUID | None = None,
+    status: RunStatus = RunStatus.SHIPPED,
 ) -> None:
     """Create the parent ExecutionRun so the deliverables FK resolves (PG).
 
@@ -92,7 +97,7 @@ async def _seed_run(
             id=run_id,
             workspace_id=ws,
             product_id=product_id,
-            status=RunStatus.SHIPPED,
+            status=status,
             payload=payload or {},
             created_at=datetime.now(tz=UTC),
             updated_at=datetime.now(tz=UTC),
@@ -412,6 +417,68 @@ async def test_report_learned_empty_for_clean_run(configured_client, db, workspa
     r = await configured_client.get(f"/api/v1/deliverables/{deliverable_id}/report")
     assert r.status_code == 200, r.text
     assert r.json()["learned"] == []
+
+
+async def test_report_surfaces_held_delivery_for_approval(
+    configured_client, db, workspace_id
+) -> None:
+    """R8 — a verified deliverable still HELD in Safe Mode (a pending queue item)
+    surfaces ``held_delivery_item_id`` so the report footer offers Approve & ship
+    / Decline (mirroring the Brief), not Rollback. ``run_status`` is reported too."""
+    run_id, deliverable_id, item_id = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
+    async with db() as s:
+        await _seed_run(s, run_id=run_id, ws=workspace_id, status=RunStatus.REVIEW_READY)
+        s.add(
+            Deliverable(
+                id=deliverable_id,
+                run_id=run_id,
+                workspace_id=workspace_id,
+                deliverable_type=DeliverableType.CODE,
+                payload={"summary": "x.py"},
+                created_at=datetime.now(tz=UTC),
+            )
+        )
+        s.add(
+            SafeModeQueueItemRow(
+                id=item_id,
+                workspace_id=workspace_id,
+                deliverable_id=deliverable_id,
+                run_id=run_id,
+                status=SafeModeStatus.PENDING,
+                expires_at=datetime.now(tz=UTC),
+            )
+        )
+        await s.commit()
+
+    r = await configured_client.get(f"/api/v1/deliverables/{deliverable_id}/report")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["held_delivery_item_id"] == str(item_id)
+    assert body["run_status"] == "review_ready"
+
+
+async def test_report_shipped_run_has_no_held_item(configured_client, db, workspace_id) -> None:
+    """A shipped run (no pending Safe-Mode item) → ``held_delivery_item_id`` is
+    None and ``run_status`` is shipped, so the report footer shows Rollback."""
+    run_id, deliverable_id = uuid.uuid4(), uuid.uuid4()
+    async with db() as s:
+        await _seed_run(s, run_id=run_id, ws=workspace_id, status=RunStatus.SHIPPED)
+        s.add(
+            Deliverable(
+                id=deliverable_id,
+                run_id=run_id,
+                workspace_id=workspace_id,
+                deliverable_type=DeliverableType.CODE,
+                payload={"summary": "x.py"},
+                created_at=datetime.now(tz=UTC),
+            )
+        )
+        await s.commit()
+    r = await configured_client.get(f"/api/v1/deliverables/{deliverable_id}/report")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["held_delivery_item_id"] is None
+    assert body["run_status"] == "shipped"
 
 
 async def test_report_returns_cached_narrative(configured_client, db, workspace_id) -> None:

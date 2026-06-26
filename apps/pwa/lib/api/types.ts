@@ -375,6 +375,14 @@ export interface DeliverableReport {
    *  review — never a green "verified". */
   verified: boolean;
   verifications: VerificationReportItem[];
+  /** R8 — the producing run's status (e.g. "review_ready" / "shipped"), so the
+   *  report footer can mirror the Brief: a held delivery shows Approve & ship /
+   *  Decline; only a shipped run shows Rollback. `null` when the run is gone. */
+  run_status?: string | null;
+  /** R8 — the id of the PENDING Safe-Mode held delivery for this deliverable, if
+   *  any. When set, the footer offers Approve & ship / Decline on this item
+   *  (same as the Brief card); `null` when nothing is held. */
+  held_delivery_item_id?: string | null;
   /** G2 "근거 포함 답변": the BSage knowledge the agent referenced for this work
    *  — promoted canon patterns, prior resolved decisions, and prior rejections
    *  folded into the verify contract. Deduped, first-seen order. Empty when

@@ -1,17 +1,15 @@
 "use client";
 
-import { usePendingDecisionsCount } from "@/lib/decisions/pending-count";
 import { useTranslations } from "next-intl";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import AccountChip from "./AccountChip";
 import RailProducts from "./RailProducts";
-import { BriefIcon, DecisionsIcon, KnowledgeIcon, SettingsIcon, SkillsIcon } from "./icons";
+import { BriefIcon, KnowledgeIcon, SettingsIcon, SkillsIcon } from "./icons";
 import { type NavKey, PRIMARY_NAV } from "./nav";
 
 const ICONS: Record<NavKey, typeof BriefIcon> = {
   brief: BriefIcon,
-  decisions: DecisionsIcon,
   knowledge: KnowledgeIcon,
   skills: SkillsIcon,
 };
@@ -21,7 +19,6 @@ const ICONS: Record<NavKey, typeof BriefIcon> = {
  *  the omnipresent FAB (AppShell), not a rail button. */
 export default function LeftRail() {
   const pathname = usePathname();
-  const pendingDecisions = usePendingDecisionsCount();
   const tNav = useTranslations("nav");
   const tShell = useTranslations("shell");
 
@@ -50,7 +47,6 @@ export default function LeftRail() {
               </button>
             );
           }
-          const badge = item.key === "decisions" && pendingDecisions > 0 ? pendingDecisions : null;
           return (
             <Link
               key={item.key}
@@ -60,11 +56,6 @@ export default function LeftRail() {
             >
               <Icon />
               <span>{tNav(item.key)}</span>
-              {badge !== null && (
-                <span className="rail__badge" aria-label={tShell("pending", { count: badge })}>
-                  {badge}
-                </span>
-              )}
             </Link>
           );
         })}
