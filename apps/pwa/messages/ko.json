@@ -113,15 +113,6 @@
     "errorNetwork": "네트워크 오류. 다시 시도해 주세요.",
     "answerLabel": "답변"
   },
-  "productsIndex": {
-    "heading": "제품",
-    "lede": "BSVibe로 만들고 있는 모든 것. 하나를 열어 Direction을 주거나 완료된 작업을 확인하세요.",
-    "newProduct": "새 제품",
-    "listLabel": "제품",
-    "loading": "제품을 불러오는 중…",
-    "loadError": "제품을 불러오지 못했어요. 잠시 후 다시 시도해 주세요.",
-    "empty": "아직 제품이 없어요. 하나를 만들면 작업할 대상이 생겨요."
-  },
   "products": {
     "back": "‹ 요약",
     "region": "제품",
