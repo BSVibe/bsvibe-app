@@ -25,12 +25,12 @@ from backend.api.deps import (
 )
 from backend.api.main import create_app
 from backend.config import get_settings
+from backend.workers.db import SettleDrainRow
 from backend.workflow.infrastructure.db import (
     Deliverable,
     DeliverableType,
     ExecutionBase,
     ExecutionRun,
-    ExecutionRunActivity,
     RunStatus,
     VerificationOutcome,
     VerificationResult,
@@ -352,71 +352,116 @@ async def test_report_returns_deliverable_with_verification(
     assert v["result"] == result
 
 
-async def test_report_surfaces_learned_from_settles(configured_client, db, workspace_id) -> None:
-    """R2b — the report's ``learned`` carries the knowledge the run NEWLY wrote:
-    the founder decisions it resolved + approaches it rejected (settle activities
-    of those kinds). The verified-work settle (file-list summary) is excluded."""
-    run_id, deliverable_id = uuid.uuid4(), uuid.uuid4()
-    async with db() as s:
-        await _seed_run(s, run_id=run_id, ws=workspace_id, payload={"intent_text": "Add X"})
-        s.add(
-            Deliverable(
-                id=deliverable_id,
-                run_id=run_id,
-                workspace_id=workspace_id,
-                deliverable_type=DeliverableType.CODE,
-                payload={"summary": "x.py"},
-                created_at=datetime.now(tz=UTC),
-            )
+async def _seed_deliverable(s, *, deliverable_id, run_id, workspace_id) -> None:
+    s.add(
+        Deliverable(
+            id=deliverable_id,
+            run_id=run_id,
+            workspace_id=workspace_id,
+            deliverable_type=DeliverableType.CODE,
+            payload={"summary": "x.py"},
+            created_at=datetime.now(tz=UTC),
         )
-        for kind, summary in [
-            ("decision_resolution", "Decision resolved — Q: Which DB? A: Postgres"),
-            ("negative_pattern", "Rejected approach — do not use Flask"),
-            (None, "x.py, test_x.py"),  # the verified-work settle — excluded
-        ]:
-            payload = {"summary": summary}
-            if kind is not None:
-                payload["kind"] = kind
-            s.add(
-                ExecutionRunActivity(
-                    id=uuid.uuid4(),
-                    run_id=run_id,
-                    workspace_id=workspace_id,
-                    activity_type="settle",
-                    payload=payload,
-                )
-            )
-        await s.commit()
-
-    r = await configured_client.get(f"/api/v1/deliverables/{deliverable_id}/report")
-    assert r.status_code == 200, r.text
-    learned = r.json()["learned"]
-    assert any("Postgres" in x for x in learned)
-    assert any("Flask" in x for x in learned)
-    # the file-list verified-work settle is NOT surfaced as "learned"
-    assert not any("test_x.py" in x for x in learned)
+    )
 
 
-async def test_report_learned_empty_for_clean_run(configured_client, db, workspace_id) -> None:
-    """A run that recorded no decisions/rejections → empty ``learned`` (the
-    report's Learned group hides)."""
+async def test_report_surfaces_written_from_settle_drains(
+    configured_client, db, workspace_id
+) -> None:
+    """R10 — ``written`` ("추가한 지식") carries the notes THIS run added to the
+    vault, from settle_drains (run_id → node_ref), de-slugged to readable titles."""
     run_id, deliverable_id = uuid.uuid4(), uuid.uuid4()
     async with db() as s:
         await _seed_run(s, run_id=run_id, ws=workspace_id)
+        await _seed_deliverable(
+            s, deliverable_id=deliverable_id, run_id=run_id, workspace_id=workspace_id
+        )
         s.add(
-            Deliverable(
-                id=deliverable_id,
+            SettleDrainRow(
+                activity_id=uuid.uuid4(),
+                workspace_id=workspace_id,
+                run_id=run_id,
+                node_ref="garden/seedling/settle-add-a-tiny-title-case-helper-to-the-backend.md",
+            )
+        )
+        await s.commit()
+
+    r = await configured_client.get(f"/api/v1/deliverables/{deliverable_id}/report")
+    assert r.status_code == 200, r.text
+    written = r.json()["written"]
+    assert "Add a tiny title case helper to the backend" in written
+
+
+async def test_report_self_written_note_not_in_referenced(
+    configured_client, db, workspace_id
+) -> None:
+    """A run's OWN written note must not appear under ``references`` ("참고한 지식")
+    — it belongs in ``written``. A retrieved "Related note — <path>" whose path is
+    one of this run's settle_drains node_refs is moved out of referenced (R10)."""
+    run_id, deliverable_id = uuid.uuid4(), uuid.uuid4()
+    note_path = "garden/seedling/settle-add-a-title-case-helper.md"
+    async with db() as s:
+        await _seed_run(s, run_id=run_id, ws=workspace_id)
+        await _seed_deliverable(
+            s, deliverable_id=deliverable_id, run_id=run_id, workspace_id=workspace_id
+        )
+        s.add(
+            SettleDrainRow(
+                activity_id=uuid.uuid4(),
+                workspace_id=workspace_id,
+                run_id=run_id,
+                node_ref=note_path,
+            )
+        )
+        # A verification whose retrieved-knowledge check references THIS run's own
+        # note plus a genuine prior reference.
+        s.add(
+            VerificationResult(
+                id=uuid.uuid4(),
                 run_id=run_id,
                 workspace_id=workspace_id,
-                deliverable_type=DeliverableType.CODE,
-                payload={"summary": "x.py"},
+                outcome=VerificationOutcome.PASSED,
+                contract={
+                    "checks": [
+                        {
+                            "kind": "judge",
+                            "criteria": [
+                                f"Related note — {note_path}",
+                                "Decision: round to 2 decimals",
+                            ],
+                            "rationale": "Canonical patterns retrieved for this change",
+                        }
+                    ]
+                },
+                result={},
                 created_at=datetime.now(tz=UTC),
             )
         )
         await s.commit()
+
     r = await configured_client.get(f"/api/v1/deliverables/{deliverable_id}/report")
     assert r.status_code == 200, r.text
-    assert r.json()["learned"] == []
+    body = r.json()
+    # The self-written note is OUT of referenced and IN written.
+    assert not any(note_path in x for x in body["references"])
+    assert "Add a title case helper" in body["written"]
+    # The genuine prior reference stays referenced.
+    assert any("round to 2 decimals" in x for x in body["references"])
+
+
+async def test_report_written_empty_before_drain(configured_client, db, workspace_id) -> None:
+    """A run with no settle_drains rows (drain not yet run, or nothing written) →
+    empty ``written`` (the "추가한 지식" group hides)."""
+    run_id, deliverable_id = uuid.uuid4(), uuid.uuid4()
+    async with db() as s:
+        await _seed_run(s, run_id=run_id, ws=workspace_id)
+        await _seed_deliverable(
+            s, deliverable_id=deliverable_id, run_id=run_id, workspace_id=workspace_id
+        )
+        await s.commit()
+    r = await configured_client.get(f"/api/v1/deliverables/{deliverable_id}/report")
+    assert r.status_code == 200, r.text
+    assert r.json()["written"] == []
 
 
 async def test_report_surfaces_held_delivery_for_approval(

@@ -867,7 +867,8 @@
     "note": "메모",
     "howVerified": "어떻게 검증했나요",
     "knowledge": "지식",
-    "learned": "새로 쓴 지식",
+    "written": "추가한 지식",
+    "writtenHint": "이 작업이 지식 베이스에 새로 추가한 노트예요.",
     "seeFilesChanged": "코드 변경 보기 ({count}개 파일)",
     "outcomeTag": {
       "passed": "통과",

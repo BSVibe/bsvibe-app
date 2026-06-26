@@ -99,11 +99,11 @@ class DeliverableReportResponse(BaseModel):
     # shows Approve & ship / Decline; only run_status=="shipped" shows Rollback.
     run_status: str | None = None
     held_delivery_item_id: uuid.UUID | None = None
-    # G2 — knowledge the agent REFERENCED: canon/prior decisions/rejections (deduped).
+    # G2 — knowledge REFERENCED (consulted), minus this run's own writes ("참고한 지식").
     references: list[str] = []
-    # R2b — knowledge the run NEWLY wrote this time (founder decisions it resolved
-    # + approaches it rejected). The report's "Learned" group; empty when none.
-    learned: list[str] = []
+    # R10 — knowledge this run WROTE (notes added to the vault, de-slugged from
+    # settle_drains). The "추가한 지식" group; empty until the settle drain runs.
+    written: list[str] = []
     # R1 — chat-composed plain-language "what this did" (cached); falls back to request.
     narrative: str | None = None
 

@@ -233,17 +233,17 @@ describe("Delivery Report (R3)", () => {
     expect(within(knowledge).getByText(/Use Postgres/)).toBeInTheDocument();
   });
 
-  it("hides the Knowledge section when neither referenced nor learned exist", async () => {
-    installFetch({ report: () => ({ ...REPORT, references: [], learned: [] }) });
+  it("hides the Knowledge section when neither referenced nor written exist", async () => {
+    installFetch({ report: () => ({ ...REPORT, references: [], written: [] }) });
     render(<DeliveryReport deliverableId="d1" />);
 
     await screen.findByText("Add getRelatedPosts to blog.ts");
     expect(screen.queryByRole("region", { name: /knowledge/i })).toBeNull();
   });
 
-  it("renders a Learned sub-group when report.learned is non-empty", async () => {
+  it("renders an Added (written) sub-group when report.written is non-empty", async () => {
     installFetch({
-      report: () => ({ ...REPORT, references: [], learned: ["getRelatedPosts pattern"] }),
+      report: () => ({ ...REPORT, references: [], written: ["getRelatedPosts pattern"] }),
     });
     render(<DeliveryReport deliverableId="d1" />);
 

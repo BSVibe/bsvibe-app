@@ -181,10 +181,10 @@ function ReportDocument({
 }) {
   const t = useTranslations("report");
   const { deliverable, request, narrative, verified, verifications } = report;
-  // Defensive: an older / malformed payload may omit references / learned —
+  // Defensive: an older / malformed payload may omit references / written —
   // degrade to empty lists (the group simply doesn't render), never a crash.
   const references = report.references ?? [];
-  const learned = report.learned ?? [];
+  const written = report.written ?? [];
   // Concise document title — the first sentence of the (often paragraph-long)
   // LLM summary, not the whole blob; the detail lives in the narrative lead.
   const summary = conciseSummary(deliverable.summary, t("untitled"));
@@ -201,7 +201,7 @@ function ReportDocument({
   // non-passed outcome that carries a message surfaces as a quiet amber line.
   const noteMessage = nonPassedNote(verifications);
   const fileCount = deliverable.artifact_refs.length;
-  const showKnowledge = references.length > 0 || learned.length > 0;
+  const showKnowledge = references.length > 0 || written.length > 0;
 
   return (
     <article className="report-doc">
@@ -284,12 +284,13 @@ function ReportDocument({
               </ul>
             </div>
           )}
-          {learned.length > 0 && (
+          {written.length > 0 && (
             <div className="report-knowledge">
-              <p className="report-knowledge__sublabel">{t("learned")}</p>
+              <p className="report-knowledge__sublabel">{t("written")}</p>
+              <p className="report-doc__muted">{t("writtenHint")}</p>
               <ul className="report-chips">
-                {learned.map((note, i) => (
-                  <li key={`learned-${i}-${note}`} className="report-chip report-chip--learned">
+                {written.map((note, i) => (
+                  <li key={`written-${i}-${note}`} className="report-chip report-chip--written">
                     {note}
                   </li>
                 ))}
