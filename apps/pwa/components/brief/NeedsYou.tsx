@@ -4,24 +4,24 @@ import CheckpointRow from "@/components/decisions/CheckpointRow";
 import DeliveryRow from "@/components/decisions/DeliveryRow";
 import type { PendingDecision } from "@/lib/api/types";
 import { useTranslations } from "next-intl";
+import ProposalCard from "./ProposalCard";
 
 /**
  * "Needs you" — the hero of the unified Brief (R4). The pending decisions the
  * founder must judge are rendered INLINE, with context, using the EXISTING
  * Decisions rows so both action shapes work in place:
- *   - "delivery"  → DeliveryRow  (Approve & ship / Decline a held delivery)
+ *   - "delivery"  → DeliveryRow   (Approve & ship / Decline a held delivery)
  *   - "decision"  → CheckpointRow (ship-gate one-click actions OR an
- *                   ask_user_question's LLM options + an "Other" free-text)
+ *                   ask_user_question's LLM options + a free-text answer)
+ *   - "knowledge" → ProposalCard  (Accept / Reject a canon proposal) — R9
  *
  * This is the core of the Brief/Decisions unification: a decision is an inline
- * STATE of a work-stream, resolved HERE — not on a divorced inbox tab.
- * Resolving a row calls its existing resolve endpoint and then `onResolved`,
+ * STATE of a work-stream, resolved HERE — not on a divorced inbox tab. ALL three
+ * pending kinds (held deliveries, paused-run checkpoints, AND canon proposals
+ * that arise while doing the work) are judged here; the Decisions tab is gone.
+ * Resolving a card calls its existing resolve endpoint and then `onResolved`,
  * which re-reads the Brief so the item leaves the list. Multiple concurrent
- * items stack as separate rows.
- *
- * Only the two inline-resolvable kinds reach here (brief.ts filters them);
- * knowledge proposals, which open a focused detail panel, stay on the Decisions
- * tab.
+ * items stack as separate cards.
  */
 export default function NeedsYou({
   items,
@@ -42,6 +42,8 @@ export default function NeedsYou({
             <DeliveryRow key={item.id} item={item} onResolved={onResolved} />
           ) : item.kind === "decision" ? (
             <CheckpointRow key={item.id} item={item} onResolved={onResolved} />
+          ) : item.kind === "knowledge" ? (
+            <ProposalCard key={item.id} item={item.proposal} onResolved={onResolved} />
           ) : null,
         )}
       </ul>
