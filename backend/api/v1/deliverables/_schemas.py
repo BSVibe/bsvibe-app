@@ -97,13 +97,12 @@ class DeliverableReportResponse(BaseModel):
     # deliverable without a PASSED proof reads as needs-review, not verified.
     verified: bool = False
     verifications: list[VerificationReport] = []
-    # G2 "근거 포함 답변": the BSage knowledge the agent referenced for this work
-    # — promoted canon patterns, prior resolved decisions, and prior rejections
-    # the retriever folded into the verify contract. Surfaced as a first-class
-    # section (deduped, first-seen order) so the founder sees WHAT past docs /
-    # decisions informed the answer, separate from the verification checklist.
-    # Empty when nothing was retrieved — never a fabricated reference.
+    # G2 — knowledge the agent REFERENCED (used) for this work: promoted canon
+    # patterns, prior resolved decisions, prior rejections. Deduped, first-seen.
     references: list[str] = []
+    # R2b — knowledge the run NEWLY wrote this time (founder decisions it resolved
+    # + approaches it rejected). The report's "Learned" group; empty when none.
+    learned: list[str] = []
     # R1 — chat-composed plain-language "what this did" (cached); falls back to request.
     narrative: str | None = None
 

@@ -37,7 +37,7 @@ from backend.workflow.infrastructure.db import (
     VerificationResult,
 )
 
-from ._narrative import report_narrative_for
+from ._narrative import learned_for, report_narrative_for
 from ._schemas import (
     MAX_CONTENT_BYTES,
     ArtifactContentResponse,
@@ -113,6 +113,7 @@ async def get_deliverable_report(
         verified=verified,
         verifications=verifications,
         references=references_of(verifications),
+        learned=await learned_for(session, row.run_id, workspace_id),
         narrative=narrative,
     )
 

@@ -1,22 +1,65 @@
-"""R1 — lazy "what this did" narrative for the deliverable report.
+"""Report enrichment helpers for the deliverable report (R1 + R2b).
 
 Kept in its own thin sub-file so :mod:`.proof` stays under the D35 250-LOC
-adapter ceiling. Generates a plain-language narrative (chat model) on first
-report view and caches it on the deliverable payload; verified-only,
-best-effort (never breaks the read).
+adapter ceiling. ``report_narrative_for`` lazily generates the plain-language
+"what this did" (R1); ``learned_for`` surfaces the knowledge the run NEWLY
+wrote this time (R2b — the founder decisions + rejections it recorded).
 """
 
 from __future__ import annotations
 
 import uuid
+from typing import Any
 
 import structlog
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.config import get_settings
-from backend.workflow.infrastructure.db import Deliverable, ExecutionRun
+from backend.workflow.infrastructure.db import (
+    Deliverable,
+    ExecutionRun,
+    ExecutionRunActivity,
+)
 
 logger = structlog.get_logger(__name__)
+
+# R2b — settle kinds that represent knowledge the run NEWLY wrote (vs. the
+# verified-work settle, whose summary is just the changed-file list). These are
+# the synchronous, meaningful "Learned" items: a founder decision the run
+# resolved, and an approach the founder rejected. The async-promoted canonical
+# implementation pattern is a future addition (it needs the settle→garden drain).
+_LEARNED_SETTLE_KINDS = frozenset({"decision_resolution", "negative_pattern"})
+_LEARNED_MAX = 8
+
+
+async def learned_for(
+    session: AsyncSession, run_id: uuid.UUID, workspace_id: uuid.UUID
+) -> list[str]:
+    """The knowledge this run newly recorded — the founder decisions it resolved
+    and the approaches it rejected, from the run's ``settle`` activities. Deduped,
+    oldest-first; empty for a clean run that recorded no decisions/rejections."""
+    stmt = (
+        select(ExecutionRunActivity)
+        .where(
+            ExecutionRunActivity.run_id == run_id,
+            ExecutionRunActivity.workspace_id == workspace_id,
+            ExecutionRunActivity.activity_type == "settle",
+        )
+        .order_by(ExecutionRunActivity.created_at.asc())
+    )
+    rows = (await session.execute(stmt)).scalars().all()
+    learned: list[str] = []
+    seen: set[str] = set()
+    for row in rows:
+        payload: dict[str, Any] = row.payload if isinstance(row.payload, dict) else {}
+        if payload.get("kind") not in _LEARNED_SETTLE_KINDS:
+            continue
+        summary = payload.get("summary")
+        if isinstance(summary, str) and summary.strip() and summary.strip() not in seen:
+            seen.add(summary.strip())
+            learned.append(summary.strip())
+    return learned[:_LEARNED_MAX]
 
 
 async def report_narrative_for(
@@ -67,4 +110,4 @@ async def report_narrative_for(
     return narrative
 
 
-__all__ = ["report_narrative_for"]
+__all__ = ["learned_for", "report_narrative_for"]
