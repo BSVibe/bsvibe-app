@@ -397,9 +397,7 @@ async def test_report_surfaces_written_from_settle_drains(
     assert any(w["path"] == rel for w in written)
 
 
-async def test_report_references_are_concept_centric(
-    configured_client, db, workspace_id
-) -> None:
+async def test_report_references_are_concept_centric(configured_client, db, workspace_id) -> None:
     """R16 — "참고한 지식" stays concept-centric (matching the knowledge graph): the
     raw seedling "Related note — garden/seedling/settle-*" hits (episodic layer)
     are DROPPED, while CONCEPTS and prior decisions/rejections are kept. The run's
