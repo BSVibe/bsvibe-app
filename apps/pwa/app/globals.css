@@ -716,6 +716,113 @@ main.login {
   gap: 30px;
 }
 
+/* ── Brief header: title + filter chips (R4) ──────────────────────────────── */
+.brief__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.brief__filters {
+  display: inline-flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+/* The unified Brief/Decisions filter chips — flat pills, hairline border on the
+   active one, no side-stripes or cards (matches the existing stream filters). */
+.filter-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font: inherit;
+  font-size: 0.78rem;
+  color: var(--ink-3);
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  padding: 8px 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.filter-chip--on {
+  color: var(--ink);
+  background: var(--accent-bg);
+  border-color: var(--hair-strong);
+}
+
+/* Amber when there are items that need the founder — the one bit of urgency. */
+.filter-chip--amber {
+  color: var(--amber-ink);
+}
+
+.filter-chip__count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--amber-ink);
+  color: var(--on-amber);
+  font-size: 0.7rem;
+  font-weight: 650;
+}
+
+/* ── Needs-you (the hero): pending decisions resolved inline (R4) ──────────── */
+.needs-you {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.section-label--amber {
+  color: var(--amber-ink);
+}
+
+/* ── Shipped (collapsed, count + View all) (R4) ───────────────────────────── */
+.shipped {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.shipped__head {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.shipped__head .section-label {
+  margin: 0;
+}
+
+.shipped__count {
+  font-size: 0.78rem;
+  color: var(--ink-3);
+}
+
+.shipped__view-all {
+  margin-left: auto;
+  font: inherit;
+  font-size: 0.78rem;
+  color: var(--ink-3);
+  background: none;
+  border: none;
+  padding: 4px 6px;
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+.shipped__view-all:hover {
+  color: var(--ink);
+}
+
 /* ── Products index (full-page overview) ──────────────────────────────────── */
 .products-index {
   max-width: var(--col-w);

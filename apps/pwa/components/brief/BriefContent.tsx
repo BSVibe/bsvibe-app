@@ -1,34 +1,93 @@
+"use client";
+
 import RailProducts from "@/components/shell/RailProducts";
 import type { BriefView } from "@/lib/api/types";
 import { useTranslations } from "next-intl";
-import WorkStream from "./WorkStream";
+import { useMemo, useState } from "react";
+import NeedsYou from "./NeedsYou";
+import ShippedSection from "./ShippedSection";
 import WorkingNow from "./WorkingNow";
 
 /**
- * The merged Work-Home surface (Brief + Activity in one): "Working on now"
- * hero (what BSVibe is doing right now), then the "Work stream" (the full work
- * history). Takes a ready `BriefView`, so it is trivially testable.
+ * The unified Brief home (R4) — one work-stream = one row, and a decision is an
+ * inline STATE of a work-stream, not a divorced inbox tab. A single content
+ * column (the app shell/rail stays), top to bottom:
  *
- * Decisions deliberately do NOT live here — the dedicated Decisions tab is the
- * single place for everything that needs the founder's judgment (Safe-Mode held
- * deliveries + paused-run checkpoints + canon proposals, with inline approve /
- * deny). The Brief used to duplicate the Safe-Mode block as a "Needs you" strip;
- * that duplication is removed. The work-stream rows that still NEED review
- * (review_ready runs) deep-link to their Decision instead (WorkStream).
+ *  1. Header — "Brief" title + filter chips ("All" / "Needs you N" / "Working" /
+ *     "Shipped"). The chips are the new home for what used to be the separate
+ *     Decisions tab; they narrow the visible sections client-side.
+ *  2. Needs you (hero) — the pending decisions resolved INLINE with context via
+ *     the EXISTING DeliveryRow / CheckpointRow (both action shapes work in
+ *     place). Resolving re-reads the Brief.
+ *  3. Working — the in-flight runs (WorkingNow).
+ *  4. Shipped — COLLAPSED to a count + the most-recent few + a "View all"
+ *     affordance, so endless shipped history never floods the page.
  *
- * The mobile-only Products section at the bottom mirrors the desktop left
- * rail's PRODUCTS block — on mobile the rail is hidden and there was no other
- * entry point to a product detail page short of clicking through a work-stream
- * row. The CSS wrapper (.brief__mobile-products) hides the block on desktop
- * where the rail already shows it.
+ * This supersedes L7 (#6), which had removed the needs-you block from the Brief
+ * because it duplicated a separate Decisions tab. Decisions now LIVE here; the
+ * /decisions route remains a focused view but is no longer the ONLY place.
+ *
+ * `onNeedsYouResolved` is the container's re-read hook; it defaults to a no-op so
+ * the component stays trivially testable with a ready `BriefView`.
  */
-export default function BriefContent({ view }: { view: BriefView }) {
+type Filter = "all" | "needs-you" | "working" | "shipped";
+
+export default function BriefContent({
+  view,
+  onNeedsYouResolved = () => {},
+}: {
+  view: BriefView;
+  onNeedsYouResolved?: () => void;
+}) {
   const t = useTranslations("brief");
+  const [filter, setFilter] = useState<Filter>("all");
+
+  // Shipped section = the shipped work-stream rows (the chronological history of
+  // delivered work); other terminal states are represented elsewhere (review →
+  // an inline needs-you decision; the run page holds the rest).
+  const shipped = useMemo(() => view.stream.filter((s) => s.status === "shipped"), [view.stream]);
+  const needsCount = view.needsYou.length;
+
+  const chips: { id: Filter; label: string; count?: number; amber?: boolean }[] = [
+    { id: "all", label: t("filterAll") },
+    { id: "needs-you", label: t("filterNeedsYou"), count: needsCount, amber: needsCount > 0 },
+    { id: "working", label: t("filterWorking") },
+    { id: "shipped", label: t("filterShipped") },
+  ];
+
+  const showNeedsYou = filter === "all" || filter === "needs-you";
+  const showWorking = filter === "all" || filter === "working";
+  const showShipped = filter === "all" || filter === "shipped";
+
   return (
     <div className="brief">
-      <h1 className="brief__heading">{t("heading")}</h1>
-      <WorkingNow items={view.working} />
-      <WorkStream items={view.stream} />
+      <header className="brief__head">
+        <h1 className="brief__heading">{t("heading")}</h1>
+        <div className="brief__filters" role="tablist" aria-label={t("filtersLabel")}>
+          {chips.map((c) => (
+            <button
+              key={c.id}
+              type="button"
+              role="tab"
+              aria-selected={filter === c.id}
+              className={`filter-chip${filter === c.id ? " filter-chip--on" : ""}${
+                c.amber ? " filter-chip--amber" : ""
+              }`}
+              onClick={() => setFilter(c.id)}
+            >
+              {c.label}
+              {c.count !== undefined && c.count > 0 && (
+                <span className="filter-chip__count">{c.count}</span>
+              )}
+            </button>
+          ))}
+        </div>
+      </header>
+
+      {showNeedsYou && <NeedsYou items={view.needsYou} onResolved={onNeedsYouResolved} />}
+      {showWorking && <WorkingNow items={view.working} />}
+      {showShipped && <ShippedSection items={shipped} forceExpanded={filter === "shipped"} />}
+
       <div className="brief__mobile-products">
         <RailProducts />
       </div>
