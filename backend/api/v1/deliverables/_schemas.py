@@ -104,6 +104,8 @@ class DeliverableReportResponse(BaseModel):
     # decisions informed the answer, separate from the verification checklist.
     # Empty when nothing was retrieved — never a fabricated reference.
     references: list[str] = []
+    # R1 — chat-composed plain-language "what this did" (cached); falls back to request.
+    narrative: str | None = None
 
 
 class DeliverableDiffResponse(BaseModel):

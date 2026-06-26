@@ -69,6 +69,7 @@ def test_all_endpoint_urls_still_routable() -> None:
         "backend.api.v1.deliverables.proof",
         "backend.api.v1.deliverables.diff",
         "backend.api.v1.deliverables.retract",
+        "backend.api.v1.deliverables._narrative",
         "backend.api.v1.deliverables._schemas",
     ],
 )

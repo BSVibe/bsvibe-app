@@ -37,6 +37,7 @@ from backend.workflow.infrastructure.db import (
     VerificationResult,
 )
 
+from ._narrative import report_narrative_for
 from ._schemas import (
     MAX_CONTENT_BYTES,
     ArtifactContentResponse,
@@ -101,12 +102,18 @@ async def get_deliverable_report(
         else None
     )
 
+    # R1 — the redesigned report leads with a plain-language "what this did",
+    # generated lazily by a chat model + cached (verified-only, best-effort).
+    # Lives in :mod:`._narrative` to keep this adapter under the D35 ceiling.
+    narrative = await report_narrative_for(session, row, run, request, verified, workspace_id)
+
     return DeliverableReportResponse(
         deliverable=to_response(row, verified=verified),
         request=request,
         verified=verified,
         verifications=verifications,
         references=references_of(verifications),
+        narrative=narrative,
     )
 
 
