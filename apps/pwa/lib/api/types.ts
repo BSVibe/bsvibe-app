@@ -1315,15 +1315,21 @@ export interface WorkStreamItem {
   artifactType: ArtifactType | null;
 }
 
-/** The merged Brief / Work-Home view-model: what BSVibe is doing now and the
- *  full chronological work stream (this replaces the old product lanes +
- *  recently-shipped + the separate Activity surface).
+/** The unified Brief / Work-Home view-model: what needs the founder NOW, what
+ *  BSVibe is doing, and the full chronological work stream.
  *
- *  Decisions are intentionally NOT part of this view — they live in the
- *  dedicated Decisions tab (the Brief used to duplicate the Safe-Mode "Needs
- *  you" strip; that duplication was removed). Work-stream rows that need review
- *  deep-link to their Decision instead. */
+ *  R4 — decisions are UNIFIED back into the Brief: `needsYou` carries the
+ *  pending Safe-Mode held deliveries + paused-run checkpoints (the same item
+ *  shape DeliveryRow / CheckpointRow consume, joined to the run/deliverable for
+ *  a concise title + proof link). A decision is an inline STATE of a work-stream
+ *  resolved HERE with context — not a divorced inbox tab. This supersedes L7
+ *  (#6), which had removed the needs-you block to avoid duplicating the separate
+ *  Decisions tab; the duplication is gone the other way now — decisions live in
+ *  the Brief. */
 export interface BriefView {
+  /** Pending items the founder must judge, resolved inline in the Brief
+   *  (deliveries + checkpoints). Empty when nothing needs a call. */
+  needsYou: PendingDecision[];
   working: ActiveWork[];
   stream: WorkStreamItem[];
   placeholder: boolean;

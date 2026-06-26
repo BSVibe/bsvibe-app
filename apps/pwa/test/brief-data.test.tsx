@@ -2,9 +2,15 @@
  * brief.ts real-data composition — drives getBrief() against a mocked fetch and
  * asserts it folds /api/v1/{products,runs,deliverables} into the merged
  * Work-Home shape: active runs → the "working" hero, done runs → the "stream"
- * (joined to their deliverable). Decisions are NOT part of this view — they live
- * in the dedicated Decisions tab (the duplicated Safe-Mode "Needs you" strip was
- * removed), so getBrief no longer reads /decisions or /safemode/queue.
+ * (joined to their deliverable).
+ *
+ * R4 — decisions are UNIFIED back into the Brief: getBrief also folds the
+ * pending Safe-Mode deliveries (/api/v1/safemode/queue) + paused-run checkpoints
+ * (/api/v1/checkpoints) into a `needsYou` list (the same item shape the existing
+ * CheckpointRow / DeliveryRow consume, joined to the run/deliverable for a
+ * concise title + proof link). This REVERSES L7 (#6), which had removed the
+ * needs-you block from the Brief — decisions now LIVE inline in the Brief, with
+ * context, rather than on a divorced inbox tab.
  */
 
 import { getBrief } from "@/lib/api/brief";
@@ -138,16 +144,75 @@ describe("getBrief (merged Work-Home composition)", () => {
     expect(fresh?.startedAt).toBe(NOW);
   });
 
-  it("does NOT carry a needs-you / decisions block — decisions live in their own tab (#6)", async () => {
+  it("R4: DOES carry a needsYou list — decisions are unified back into the Brief (supersedes #6)", async () => {
+    global.fetch = mockFetch({
+      "/api/v1/products": [product("p1", "alpha", "alpha")],
+      "/api/v1/runs": [run("r-paused", "p1", "running", "Build the export")],
+      "/api/v1/deliverables": [],
+      "/api/v1/safemode/queue": [],
+      "/api/v1/checkpoints": [],
+      "/api/v1/decisions": [],
+    }) as unknown as typeof fetch;
+
+    const view = await getBrief();
+    // The merged view now models decisions inline (R4 unification).
+    expect("needsYou" in view).toBe(true);
+    expect(Array.isArray(view.needsYou)).toBe(true);
+  });
+
+  it("R4: folds a paused-run checkpoint + a held delivery into needsYou with joined context", async () => {
+    global.fetch = mockFetch({
+      "/api/v1/products": [product("p1", "alpha", "alpha")],
+      "/api/v1/runs": [
+        {
+          ...run("r-paused", "p1", "running", "raw direction"),
+          summary_title: "Build the export endpoint",
+        },
+      ],
+      "/api/v1/deliverables": [
+        deliverable("d-held", "r-paused", "pr", "Add the export endpoint. With docs."),
+      ],
+      "/api/v1/safemode/queue": [
+        { id: "sm-1", deliverable_id: "d-held", run_id: "r-paused", created_at: NOW },
+      ],
+      "/api/v1/checkpoints": [
+        {
+          id: "cp-1",
+          run_id: "r-paused",
+          question: "Ship to prod or staging?",
+          options: ["prod", "staging"],
+          actions: null,
+          decision: "ask_user_question",
+          rationale: null,
+          prior_decisions: [],
+          created_at: NOW,
+        },
+      ],
+      "/api/v1/decisions": [],
+    }) as unknown as typeof fetch;
+
+    const view = await getBrief();
+    const kinds = view.needsYou.map((n) => n.kind).sort();
+    expect(kinds).toEqual(["decision", "delivery"]);
+    const checkpoint = view.needsYou.find((n) => n.kind === "decision");
+    // Joined context — the checkpoint carries the task title + product, not just
+    // the bare question.
+    expect(checkpoint?.title).toBe("Build the export endpoint");
+    expect(checkpoint?.productSlug).toBe("alpha");
+  });
+
+  it("R4: needsYou degrades to empty (never blanks the Brief) when its queues blip", async () => {
     global.fetch = mockFetch({
       "/api/v1/products": [product("p1", "alpha", "alpha")],
       "/api/v1/runs": [],
       "/api/v1/deliverables": [],
+      // safemode + checkpoints + decisions intentionally absent → 404 each,
+      // each degrades to empty rather than throwing.
     }) as unknown as typeof fetch;
 
     const view = await getBrief();
-    // The merged view no longer models decisions at all.
-    expect("needsYou" in view).toBe(false);
+    expect(view.needsYou).toEqual([]);
+    expect(view.placeholder).toBe(false);
   });
 
   it("joins a stream row to its deliverable (concise title + report link)", async () => {

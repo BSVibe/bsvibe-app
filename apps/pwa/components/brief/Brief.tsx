@@ -64,5 +64,7 @@ export default function Brief() {
     );
   }
 
-  return <BriefContent view={view} />;
+  // Resolving a needs-you decision inline re-reads the Brief so the item leaves
+  // the list and any downstream state (shipped row, run status) reflects it.
+  return <BriefContent view={view} onNeedsYouResolved={refresh} />;
 }

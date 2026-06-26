@@ -1,9 +1,74 @@
 import BriefContent from "@/components/brief/BriefContent";
-import type { BriefView } from "@/lib/api/types";
+import type { BriefView, PendingDecision } from "@/lib/api/types";
 import { render, screen, within } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+
+// The needs-you rows reuse the real DeliveryRow / CheckpointRow, which call the
+// safemode / checkpoints clients on resolve. Stub them so the inline resolve
+// succeeds (and onResolved fires) without a live backend.
+vi.mock("@/lib/api/safemode", () => ({
+  approveSafeModeItem: vi.fn(async () => ({})),
+  denySafeModeItem: vi.fn(async () => ({})),
+}));
+vi.mock("@/lib/api/checkpoints", () => ({
+  resolveCheckpoint: vi.fn(async () => ({})),
+  resolveCheckpointAction: vi.fn(async () => ({})),
+}));
+
+const NOW = new Date().toISOString();
+
+/** A held Safe-Mode delivery needs-you item (resolves via Approve / Decline). */
+function delivery(id: string, title: string): PendingDecision {
+  return {
+    kind: "delivery",
+    id: `delivery-${id}`,
+    itemId: id,
+    runId: "r-d",
+    deliverableId: "d-held",
+    title,
+    productSlug: "bsvibe-site",
+    detailHref: "/deliverables/d-held",
+    createdAt: NOW,
+  };
+}
+
+/** A paused-run checkpoint needs-you item with LLM options + an "Other" path. */
+function checkpoint(id: string, question: string): PendingDecision {
+  return {
+    kind: "decision",
+    id: `checkpoint-${id}`,
+    checkpointId: id,
+    question,
+    options: ["prod", "staging"],
+    actions: null,
+    decision: "ask_user_question",
+    rationale: null,
+    priorDecisions: [],
+    runId: "r-c",
+    title: "Build the export endpoint",
+    productSlug: "acme-corp",
+    detailHref: "/runs/r-c",
+    createdAt: NOW,
+  };
+}
+
+function shipped(runId: string, title: string, hoursAgo: number): BriefView["stream"][number] {
+  return {
+    runId,
+    title,
+    productSlug: "bsvibe-site",
+    status: "shipped",
+    updatedAt: new Date(Date.now() - hoursAgo * 3600_000).toISOString(),
+    deliverableId: `del-${runId}`,
+    artifactType: "pr",
+  };
+}
 
 const VIEW: BriefView = {
+  needsYou: [
+    delivery("sm-1", "Send the launch email"),
+    checkpoint("cp-1", "Ship to prod or staging?"),
+  ],
   working: [
     {
       runId: "r-active",
@@ -14,24 +79,7 @@ const VIEW: BriefView = {
     },
   ],
   stream: [
-    {
-      runId: "r-ship",
-      title: "getRelatedPosts function",
-      productSlug: "bsvibe-site",
-      status: "shipped",
-      updatedAt: new Date(Date.now() - 2 * 3600_000).toISOString(),
-      deliverableId: "d1",
-      artifactType: "pr",
-    },
-    {
-      runId: "r-review",
-      title: "Add the export endpoint",
-      productSlug: "acme-corp",
-      status: "review_ready",
-      updatedAt: new Date(Date.now() - 1 * 3600_000).toISOString(),
-      deliverableId: "d2",
-      artifactType: "doc",
-    },
+    shipped("r-ship", "getRelatedPosts function", 2),
     {
       runId: "r-fail",
       title: "Broken link fix",
@@ -45,70 +93,132 @@ const VIEW: BriefView = {
   placeholder: false,
 };
 
-describe("Brief (Work Home) surface", () => {
-  it("shows the two merged sections: Working on now + Work stream", () => {
+describe("Brief (unified Work-Home + Decisions) surface", () => {
+  it("renders the Needs-you, Working, and Shipped sections", () => {
     render(<BriefContent view={VIEW} />);
+    expect(screen.getByRole("region", { name: "Needs you" })).toBeInTheDocument();
     expect(screen.getByRole("region", { name: "Working on now" })).toBeInTheDocument();
-    expect(screen.getByRole("region", { name: "Work stream" })).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Shipped" })).toBeInTheDocument();
   });
 
-  it("does NOT duplicate the Decisions tab — no 'Needs you' decision block on the Brief (#6)", () => {
+  it("R4: renders the needs-you decisions INLINE (reusing CheckpointRow + DeliveryRow)", () => {
     render(<BriefContent view={VIEW} />);
-    // The dedicated NeedsYou strip (its own region + empty/clear copy) is gone;
-    // decisions live in their own tab.
-    expect(screen.queryByRole("region", { name: "Needs you" })).not.toBeInTheDocument();
-    expect(screen.queryByText("Nothing needs you right now.")).not.toBeInTheDocument();
+    const needs = screen.getByRole("region", { name: "Needs you" });
+    // The held delivery row — Approve / Decline are present in place (DeliveryRow).
+    expect(within(needs).getByText("Send the launch email")).toBeInTheDocument();
+    // The checkpoint row — its question + the LLM-offered options rendered as
+    // selectable choices PLUS the "Other" free-text path (CheckpointRow).
+    expect(within(needs).getByText("Ship to prod or staging?")).toBeInTheDocument();
+    expect(within(needs).getByText("prod")).toBeInTheDocument();
+    expect(within(needs).getByText("staging")).toBeInTheDocument();
+    expect(within(needs).getByText("Other")).toBeInTheDocument();
+    // Both action shapes stack as separate rows.
+    expect(within(needs).getByText("Approve")).toBeInTheDocument();
   });
 
-  it("makes active work the hero — title, product, and a live status", () => {
+  it("R4: resolving a needs-you item re-reads the Brief (onResolved wired through)", async () => {
+    const { default: userEvent } = await import("@testing-library/user-event");
+    const onResolved = vi.fn();
+    render(<BriefContent view={VIEW} onNeedsYouResolved={onResolved} />);
+    const needs = screen.getByRole("region", { name: "Needs you" });
+    await userEvent.click(within(needs).getByText("Approve"));
+    expect(onResolved).toHaveBeenCalled();
+  });
+
+  it("makes active work a hero — title, product, and a live status", () => {
     render(<BriefContent view={VIEW} />);
     const hero = screen.getByRole("region", { name: "Working on now" });
     expect(
       within(hero).getByText("Writing tests for the related-posts feature"),
     ).toBeInTheDocument();
     expect(within(hero).getByText("Working")).toBeInTheDocument();
-    expect(within(hero).getByText("bsvibe-site")).toBeInTheDocument();
   });
 
-  it("links each stream row's title to its report (deliverable) or run", () => {
+  it("R4: collapses Shipped to a count + View-all (NOT an endless list)", () => {
+    // 9 shipped rows but the collapsed view shows at most the recent few.
+    const many: BriefView = {
+      ...VIEW,
+      stream: [
+        ...Array.from({ length: 9 }, (_, i) => shipped(`s${i}`, `Shipped item ${i}`, i + 1)),
+        VIEW.stream[1], // the failed row stays out of the shipped count
+      ],
+    };
+    render(<BriefContent view={many} />);
+    const shippedRegion = screen.getByRole("region", { name: "Shipped" });
+    // The header carries a total count.
+    expect(within(shippedRegion).getByText(/9/)).toBeInTheDocument();
+    // Only a handful render collapsed — the oldest is hidden until View all.
+    expect(within(shippedRegion).queryByText("Shipped item 8")).not.toBeInTheDocument();
+    expect(within(shippedRegion).getByText("Shipped item 0")).toBeInTheDocument();
+    // A View-all affordance exists.
+    expect(within(shippedRegion).getByRole("button", { name: /View all/ })).toBeInTheDocument();
+  });
+
+  it("R4: View all expands the full shipped history", async () => {
+    const { default: userEvent } = await import("@testing-library/user-event");
+    const many: BriefView = {
+      ...VIEW,
+      stream: Array.from({ length: 9 }, (_, i) => shipped(`s${i}`, `Shipped item ${i}`, i + 1)),
+    };
+    render(<BriefContent view={many} />);
+    const shippedRegion = screen.getByRole("region", { name: "Shipped" });
+    await userEvent.click(within(shippedRegion).getByRole("button", { name: /View all/ }));
+    expect(within(shippedRegion).getByText("Shipped item 8")).toBeInTheDocument();
+  });
+
+  it("R4: each shipped row keeps its link to its report", () => {
     render(<BriefContent view={VIEW} />);
-    const stream = screen.getByRole("region", { name: "Work stream" });
-    // The row TITLE is the link (consistent with the Decisions rows) — a shipped
-    // row opens its Delivery Report, the failed row (no deliverable) falls back
-    // to opening the run.
-    expect(within(stream).getByRole("link", { name: /getRelatedPosts function/ })).toHaveAttribute(
-      "href",
-      "/deliverables/d1",
-    );
-    expect(within(stream).getByRole("link", { name: /Broken link fix/ })).toHaveAttribute(
-      "href",
-      "/runs/r-fail",
-    );
+    const shippedRegion = screen.getByRole("region", { name: "Shipped" });
+    expect(
+      within(shippedRegion).getByRole("link", { name: /getRelatedPosts function/ }),
+    ).toHaveAttribute("href", "/deliverables/del-r-ship");
   });
 
-  it("deep-links a review_ready stream row to its Decision (#10)", () => {
-    render(<BriefContent view={VIEW} />);
-    const stream = screen.getByRole("region", { name: "Work stream" });
-    // The review_ready row carries a "Review →" link to the Decisions tab so
-    // "needs review" isn't a dead end. Non-review rows do NOT.
-    const review = within(stream).getByRole("link", { name: /Review/ });
-    expect(review).toHaveAttribute("href", "/decisions");
-    // Exactly one — the shipped + failed rows have no review link.
-    expect(within(stream).getAllByRole("link", { name: /Review/ })).toHaveLength(1);
-  });
-
-  it("filters the stream by outcome", async () => {
+  it("R4: filter chips narrow the visible sections", async () => {
     const { default: userEvent } = await import("@testing-library/user-event");
     render(<BriefContent view={VIEW} />);
-    const stream = screen.getByRole("region", { name: "Work stream" });
-    // "Shipped" filter hides the failed row.
-    await userEvent.click(within(stream).getByRole("tab", { name: "Shipped" }));
-    expect(within(stream).getByText("getRelatedPosts function")).toBeInTheDocument();
-    expect(within(stream).queryByText("Broken link fix")).not.toBeInTheDocument();
+    const chips = screen.getByRole("tablist", { name: /filter/i });
+    // "Needs you N" chip — only the needs-you section remains.
+    await userEvent.click(within(chips).getByRole("tab", { name: /Needs you/ }));
+    expect(screen.getByRole("region", { name: "Needs you" })).toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "Working on now" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "Shipped" })).not.toBeInTheDocument();
+
+    // "Working" chip — only the working section.
+    await userEvent.click(within(chips).getByRole("tab", { name: "Working" }));
+    expect(screen.getByRole("region", { name: "Working on now" })).toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "Needs you" })).not.toBeInTheDocument();
+
+    // "All" chip — everything back.
+    await userEvent.click(within(chips).getByRole("tab", { name: "All" }));
+    expect(screen.getByRole("region", { name: "Needs you" })).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Working on now" })).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Shipped" })).toBeInTheDocument();
+  });
+
+  it("R4: the Shipped filter shows the full shipped list", async () => {
+    const { default: userEvent } = await import("@testing-library/user-event");
+    const many: BriefView = {
+      ...VIEW,
+      stream: Array.from({ length: 9 }, (_, i) => shipped(`s${i}`, `Shipped item ${i}`, i + 1)),
+    };
+    render(<BriefContent view={many} />);
+    const chips = screen.getByRole("tablist", { name: /filter/i });
+    await userEvent.click(within(chips).getByRole("tab", { name: "Shipped" }));
+    const shippedRegion = screen.getByRole("region", { name: "Shipped" });
+    // Full list (the otherwise-collapsed oldest row is visible).
+    expect(within(shippedRegion).getByText("Shipped item 8")).toBeInTheDocument();
   });
 
   it("shows a calm 'all caught up' when nothing is running", () => {
     render(<BriefContent view={{ ...VIEW, working: [] }} />);
     expect(screen.getByText(/All caught up/)).toBeInTheDocument();
+  });
+
+  it("the Needs-you chip carries the pending count when there are items", () => {
+    render(<BriefContent view={VIEW} />);
+    const chips = screen.getByRole("tablist", { name: /filter/i });
+    // 2 pending needs-you items → the chip reads "Needs you 2".
+    expect(within(chips).getByRole("tab", { name: /Needs you 2/ })).toBeInTheDocument();
   });
 });

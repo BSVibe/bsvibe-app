@@ -20,7 +20,7 @@ import { useTranslations } from "next-intl";
 import type { ReactNode } from "react";
 import { describe, expect, it } from "vitest";
 
-const EMPTY_BRIEF: BriefView = { working: [], stream: [], placeholder: true };
+const EMPTY_BRIEF: BriefView = { needsYou: [], working: [], stream: [], placeholder: true };
 
 function ko(children: ReactNode) {
   return (
