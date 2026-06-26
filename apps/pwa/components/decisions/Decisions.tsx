@@ -166,7 +166,7 @@ export default function Decisions() {
         filteredPending.length === 0 ? (
           <EmptyPending muted={query.length > 0} t={t} />
         ) : (
-          <ul className="decisions-list" aria-label={t("tabPending")}>
+          <ul className="needs-list" aria-label={t("tabPending")}>
             {renderPendingWithRunGroups(filteredPending, {
               onOpen: (id) => setSelectedId(id),
               onResolved: reload,

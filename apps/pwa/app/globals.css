@@ -784,6 +784,222 @@ main.login {
   color: var(--amber-ink);
 }
 
+.needs-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+/* ── Brief / Decisions PENDING items as CARDS (R7) ─────────────────────────────
+   The hero of the unified Brief: each pending decision the founder must judge is
+   a distinct CARD (not a hairline list row) — title + product + an amber status
+   ("Ready to ship" / "Needs your answer"), a one-line context body, and the
+   inline action (approve/discard, or option chips + a free-text answer). Shared
+   by the Brief's "Needs you" and the focused /decisions view, so a decision
+   reads the same everywhere. Buttons/chips use var(--ink)/var(--bg) so the dark
+   fill inverts correctly in the dark theme. */
+.need-card {
+  list-style: none;
+  background: var(--surface);
+  border: 1px solid var(--hair-strong);
+  border-radius: var(--radius);
+  padding: 16px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.need-card + .need-card {
+  margin-top: 12px;
+}
+.need-card__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+.need-card__title-wrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+.need-card__title {
+  margin: 0;
+  font-size: 0.98rem;
+  font-weight: 600;
+  color: var(--ink);
+}
+.need-card__product {
+  font-size: 0.72rem;
+  color: var(--ink-3);
+  background: var(--accent-bg);
+  border-radius: 5px;
+  padding: 2px 7px;
+}
+.need-card__status {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 0.74rem;
+  font-weight: 600;
+  color: var(--amber-ink);
+  white-space: nowrap;
+}
+.need-card__status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--amber-dot);
+}
+.need-card__body {
+  margin: 0;
+  font-size: 0.88rem;
+  line-height: 1.5;
+  color: var(--ink-2);
+}
+.need-card__rationale {
+  margin: 0;
+  font-size: 0.82rem;
+  color: var(--ink-3);
+}
+.need-card__prior {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.need-card__prior-label {
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+.need-card__prior-list {
+  margin: 0;
+  padding-left: 16px;
+  font-size: 0.82rem;
+  color: var(--ink-3);
+}
+.need-card__actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.need-card__spacer {
+  flex: 1 1 auto;
+}
+.need-card__view {
+  font-size: 0.82rem;
+  color: var(--ink-3);
+  text-decoration: none;
+}
+.need-card__view:hover {
+  color: var(--ink);
+}
+.need-card__btn {
+  font-size: 0.85rem;
+  font-weight: 550;
+  border-radius: var(--radius-sm);
+  padding: 7px 14px;
+  cursor: pointer;
+  border: 1px solid var(--hair-strong);
+  background: var(--surface);
+  color: var(--ink-2);
+}
+.need-card__btn--primary {
+  background: var(--ink);
+  color: var(--bg);
+  border-color: var(--ink);
+}
+.need-card__btn--primary:hover:not(:disabled) {
+  opacity: 0.88;
+}
+.need-card__btn--secondary:hover:not(:disabled) {
+  background: var(--accent-bg);
+}
+.need-card__btn:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+.need-card__options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  padding: 0;
+  margin: 0;
+  border: none;
+}
+.need-card__opt {
+  font-size: 0.82rem;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--hair-strong);
+  border-radius: 999px;
+  padding: 6px 13px;
+  cursor: pointer;
+}
+.need-card__opt:hover:not(:disabled) {
+  border-color: var(--ink-3);
+}
+.need-card__opt--on {
+  color: var(--bg);
+  background: var(--ink);
+  border-color: var(--ink);
+}
+.need-card__opt:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+.need-card__answer-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.need-card__input {
+  flex: 1 1 auto;
+  min-width: 0;
+  font: inherit;
+  font-size: 0.86rem;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--hair-strong);
+  border-radius: var(--radius-sm);
+  padding: 8px 12px;
+}
+.need-card__answer {
+  width: 100%;
+  resize: vertical;
+  font: inherit;
+  font-size: 0.86rem;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--hair-strong);
+  border-radius: var(--radius-sm);
+  padding: 8px 12px;
+}
+.need-card__input:focus-visible,
+.need-card__answer:focus-visible {
+  outline: 2px solid var(--amber-dot);
+  outline-offset: 1px;
+}
+.need-card__free-toggle {
+  align-self: flex-start;
+  font-size: 0.8rem;
+  color: var(--ink-3);
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  text-decoration: underline;
+}
+.need-card__error {
+  font-size: 0.8rem;
+  color: var(--amber-ink);
+}
+
 /* ── Shipped (collapsed, count + View all) (R4) ───────────────────────────── */
 .shipped {
   display: flex;

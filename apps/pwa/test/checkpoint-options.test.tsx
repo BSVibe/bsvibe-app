@@ -77,18 +77,18 @@ describe("CheckpointRow — structured options (B11a)", () => {
     vi.restoreAllMocks();
   });
 
-  it("renders the offered options as a single-select control", async () => {
+  it("renders the offered options as selectable chips + a free-text input", async () => {
     vi.stubGlobal("fetch", vi.fn());
     render(<CheckpointRow item={CHECKPOINT_WITH_OPTIONS} onResolved={() => {}} />);
 
     // The question text is still surfaced.
     expect(screen.getByText("Which database should I target?")).toBeInTheDocument();
-    // Each offered option renders as its own selectable control (radio).
+    // Each offered option renders as its own selectable chip (a button).
     for (const opt of ["postgres", "sqlite", "mysql"]) {
-      expect(screen.getByRole("radio", { name: opt })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: opt })).toBeInTheDocument();
     }
-    // The free-text textarea must NOT render in options mode.
-    expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
+    // A persistent "or type your own" input is always present alongside chips.
+    expect(screen.getByRole("textbox")).toBeInTheDocument();
   });
 
   it("posts the selected option to the resolve endpoint", async () => {
@@ -101,7 +101,7 @@ describe("CheckpointRow — structured options (B11a)", () => {
     const onResolved = vi.fn();
     render(<CheckpointRow item={CHECKPOINT_WITH_OPTIONS} onResolved={onResolved} />);
 
-    await userEvent.click(screen.getByRole("radio", { name: "sqlite" }));
+    await userEvent.click(screen.getByRole("button", { name: "sqlite" }));
     await userEvent.click(screen.getByRole("button", { name: /Answer|Resolve|Send/ }));
 
     await waitFor(() => expect(onResolved).toHaveBeenCalled());
@@ -114,16 +114,16 @@ describe("CheckpointRow — structured options (B11a)", () => {
     expect(JSON.parse((init as RequestInit).body as string)).toEqual({ answer: "sqlite" });
   });
 
-  it("keeps the submit button disabled until an option is selected", async () => {
+  it("keeps the submit button disabled until a chip is selected (or text typed)", async () => {
     vi.stubGlobal("fetch", vi.fn());
     render(<CheckpointRow item={CHECKPOINT_WITH_OPTIONS} onResolved={() => {}} />);
 
     expect(screen.getByRole("button", { name: /Answer|Resolve|Send/ })).toBeDisabled();
-    await userEvent.click(screen.getByRole("radio", { name: "postgres" }));
+    await userEvent.click(screen.getByRole("button", { name: "postgres" }));
     expect(screen.getByRole("button", { name: /Answer|Resolve|Send/ })).not.toBeDisabled();
   });
 
-  it("L-D1: offers an Other radio that reveals a free-text textarea", async () => {
+  it("L-D1: a typed answer overrides a chip — the verbatim off-list reply is POSTed", async () => {
     const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
       const body = JSON.parse(init?.body as string) as { answer: string };
       return okResolveResponse(CHECKPOINT_WITH_OPTIONS.checkpointId, body.answer);
@@ -133,22 +133,14 @@ describe("CheckpointRow — structured options (B11a)", () => {
     const onResolved = vi.fn();
     render(<CheckpointRow item={CHECKPOINT_WITH_OPTIONS} onResolved={onResolved} />);
 
-    // An "Other" radio renders alongside the LLM-supplied options.
-    const otherRadio = screen.getByRole("radio", { name: "Other" });
-    expect(otherRadio).toBeInTheDocument();
-
-    // Before Other is picked, no textarea is shown (single-select feel intact).
-    expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
-
-    await userEvent.click(otherRadio);
-
-    // Picking Other reveals a free-text textarea; submit stays disabled until
-    // the founder types something.
-    const textarea = screen.getByRole("textbox");
-    expect(textarea).toBeInTheDocument();
+    // No "Other" radio anymore — the persistent input IS the off-list path.
+    expect(screen.queryByRole("radio", { name: "Other" })).not.toBeInTheDocument();
+    const input = screen.getByRole("textbox");
     expect(screen.getByRole("button", { name: /Answer|Resolve|Send/ })).toBeDisabled();
 
-    await userEvent.type(textarea, "duckdb");
+    // Even with a chip selected, a typed answer takes precedence.
+    await userEvent.click(screen.getByRole("button", { name: "postgres" }));
+    await userEvent.type(input, "duckdb");
     await userEvent.click(screen.getByRole("button", { name: /Answer|Resolve|Send/ }));
 
     await waitFor(() => expect(onResolved).toHaveBeenCalled());

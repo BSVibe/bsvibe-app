@@ -9,7 +9,7 @@
  *  - offers a "+ Product" CTA that opens the create flow
  *  - is the product INDEX itself — the heading is plain text, NOT a link to a
  *    (removed) /products overview page
- *  - renders each product's M4 trust trend glyph (best-effort) for fleet glance
+ *  - renders no trust trend glyph (removed — the rail is a plain index)
  *
  * The list loads asynchronously, so every assertion that depends on it is gated
  * behind findBy / waitFor — never a synchronous getBy right after render.
@@ -161,37 +161,12 @@ describe("Sidebar PRODUCTS section", () => {
     expect(overviewLink).toBeUndefined();
   });
 
-  it("renders each product's trust trend glyph when fleet trust is present", async () => {
-    global.fetch = routedFetch({
-      "/api/v1/inside/trust/fleet": {
-        products: [
-          { product_id: PRODUCT_A.id, trend_arrow: { glyph: "↗", reason: "rising" } },
-          { product_id: PRODUCT_B.id, trend_arrow: { glyph: "↘", reason: "needs you" } },
-        ],
-      },
-      "/api/v1/products": [PRODUCT_A, PRODUCT_B],
-    }) as unknown as typeof fetch;
+  it("renders no trend glyph — the rail is a plain product index", async () => {
+    global.fetch = vi.fn(async () => jsonResponse([PRODUCT_A])) as unknown as typeof fetch;
 
     render(<RailProducts />);
 
-    await screen.findByRole("list", { name: /products/i });
-    await waitFor(() => {
-      expect(screen.getByRole("img", { name: /trust rising/i })).toHaveTextContent("↗");
-      expect(screen.getByRole("img", { name: /trust falling/i })).toHaveTextContent("↘");
-    });
-  });
-
-  it("omits the glyphs (never breaks the rail) when the fleet-trust read fails", async () => {
-    global.fetch = vi.fn(async (url: string) => {
-      if (typeof url === "string" && url.includes("/api/v1/inside/trust/fleet")) {
-        return jsonResponse("boom", 500);
-      }
-      return jsonResponse([PRODUCT_A]);
-    }) as unknown as typeof fetch;
-
-    render(<RailProducts />);
-
-    // The product list still renders; just no trend glyph.
+    // The product list renders; the trust trend glyph was removed from the rail.
     expect(await screen.findByRole("link", { name: /Related Posts/ })).toBeInTheDocument();
     expect(screen.queryByRole("img", { name: /trust/i })).not.toBeInTheDocument();
   });

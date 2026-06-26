@@ -4,7 +4,6 @@ import { approveSafeModeRun } from "@/lib/api/safemode";
 import type { PendingDelivery } from "@/lib/api/types";
 import { useTranslations } from "next-intl";
 import { useState } from "react";
-import { relativeTime } from "./relative-time";
 
 type RowState = "idle" | "working" | "error";
 
@@ -48,34 +47,35 @@ export default function DeliveryRunGroupRow({
   }
 
   const working = state === "working";
-  // Newest item drives the "when" label so the group sits near the most-recent
-  // delivery in the unified Pending list.
-  const newest = items.reduce(
-    (latest, item) => (Date.parse(item.createdAt) > Date.parse(latest.createdAt) ? item : latest),
-    items[0],
-  );
 
   return (
-    <li className="decisions-row decisions-row--delivery-group">
-      <span className="decisions-row__main">
-        <span className="decisions-row__q">
-          {t("deliveryGroupQuestion", { count: items.length })}
+    <li className="need-card need-card--delivery">
+      <div className="need-card__head">
+        <div className="need-card__title-wrap">
+          <span className="need-card__title">
+            {t("deliveryGroupQuestion", { count: items.length })}
+          </span>
+        </div>
+        <span className="need-card__status">
+          <span className="need-card__status-dot" aria-hidden="true" />
+          {t("readyToShip")}
         </span>
-        <span className="decisions-row__meta">
-          <span className="decisions-chip decisions-chip--delivery">{t("kindDelivery")}</span>
-          <span className="decisions-row__time">{relativeTime(newest.createdAt, t)}</span>
-        </span>
-      </span>
-      <span className="decisions-row__actions">
+      </div>
+      <div className="need-card__actions">
+        <button
+          type="button"
+          className="need-card__btn need-card__btn--primary"
+          onClick={run}
+          disabled={working}
+        >
+          {working ? t("working") : t("approveAll", { count: items.length })}
+        </button>
         {state === "error" && (
-          <span className="decisions-row__error" aria-live="polite">
+          <span className="need-card__error" aria-live="polite">
             {t("resolveError")}
           </span>
         )}
-        <button type="button" className="decisions-row__primary" onClick={run} disabled={working}>
-          {working ? t("working") : t("approveAll", { count: items.length })}
-        </button>
-      </span>
+      </div>
     </li>
   );
 }

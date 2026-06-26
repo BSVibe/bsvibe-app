@@ -106,13 +106,14 @@ describe("Brief (unified Work-Home + Decisions) surface", () => {
     const needs = screen.getByRole("region", { name: "Needs you" });
     // The held delivery row — Approve / Decline are present in place (DeliveryRow).
     expect(within(needs).getByText("Send the launch email")).toBeInTheDocument();
-    // The checkpoint row — its question + the LLM-offered options rendered as
-    // selectable choices PLUS the "Other" free-text path (CheckpointRow).
+    // The checkpoint card — its question + the LLM-offered options rendered as
+    // selectable CHIPS, plus a persistent "type your own" input (CheckpointRow).
     expect(within(needs).getByText("Ship to prod or staging?")).toBeInTheDocument();
-    expect(within(needs).getByText("prod")).toBeInTheDocument();
-    expect(within(needs).getByText("staging")).toBeInTheDocument();
-    expect(within(needs).getByText("Other")).toBeInTheDocument();
-    // Both action shapes stack as separate rows.
+    expect(within(needs).getByRole("button", { name: "prod" })).toBeInTheDocument();
+    expect(within(needs).getByRole("button", { name: "staging" })).toBeInTheDocument();
+    // The contextual amber status badge replaces the old generic kind chip.
+    expect(within(needs).getByText("Needs your answer")).toBeInTheDocument();
+    // Both action shapes stack as separate cards.
     expect(within(needs).getByText("Approve")).toBeInTheDocument();
   });
 
