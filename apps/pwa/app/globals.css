@@ -6337,16 +6337,26 @@ main.login {
   background: var(--surface);
   border: 1px solid var(--hair-strong);
   border-radius: var(--radius);
-  padding: 20px 22px;
   max-height: 80vh;
-  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
+/* The head is PINNED (flex:none) — only .note-viewer__scroll below it scrolls,
+   so the title + Close button stay in view and the modal is always dismissable. */
 .note-viewer__head {
+  flex: none;
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
   gap: 12px;
-  margin-bottom: 12px;
+  padding: 20px 22px 12px;
+  border-bottom: 1px solid var(--hair);
+}
+.note-viewer__scroll {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  padding: 16px 22px 20px;
 }
 .note-viewer__title {
   margin: 0;
