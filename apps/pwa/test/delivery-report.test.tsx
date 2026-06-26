@@ -333,6 +333,92 @@ describe("Delivery Report (R3)", () => {
     expect(within(dialog).getByText(/Add a mean utility/)).toBeInTheDocument();
   });
 
+  it("R15: a related concept navigates the modal; an observation opens its note", async () => {
+    installFetch({
+      report: () => ({ ...REPORT, references: ["Function"], written: [] }),
+      // Route concept detail by id so navigating to a related concept changes content.
+      concept: (url: string) =>
+        url.includes("pure-functions")
+          ? json({
+              id: "pure-functions",
+              name: "Pure functions",
+              aliases: ["Pure function"],
+              type: "Pattern",
+              related: [],
+              observations: [],
+            })
+          : json({
+              id: "function",
+              name: "Function",
+              aliases: [],
+              type: null,
+              related: [{ id: "pure-functions", name: "Pure functions", weight: 3 }],
+              observations: [
+                {
+                  id: "garden/seedling/settle-mean.md",
+                  title: "Add a mean utility",
+                  excerpt: "",
+                  body: "",
+                },
+              ],
+            }),
+      note: () =>
+        json({
+          path: "garden/seedling/settle-mean.md",
+          title: "Add a mean utility",
+          content: "# mean\n\nbody",
+        }),
+    });
+    render(<DeliveryReport deliverableId="d1" />);
+
+    const knowledge = await screen.findByRole("region", { name: /knowledge/i });
+    await userEvent.click(within(knowledge).getByRole("button", { name: /^Function$/ }));
+    const dialog = await screen.findByRole("dialog");
+
+    // Click the related concept → the SAME modal navigates to it (Pattern badge).
+    await userEvent.click(within(dialog).getByRole("button", { name: /Pure functions/ }));
+    expect(await within(dialog).findByText("Pattern")).toBeInTheDocument();
+  });
+
+  it("R15: clicking an observation opens that note in the note viewer", async () => {
+    installFetch({
+      report: () => ({ ...REPORT, references: ["Function"], written: [] }),
+      concept: () =>
+        json({
+          id: "function",
+          name: "Function",
+          aliases: [],
+          type: null,
+          related: [],
+          observations: [
+            {
+              id: "garden/seedling/settle-mean.md",
+              title: "Add a mean utility",
+              excerpt: "",
+              body: "",
+            },
+          ],
+        }),
+      note: () =>
+        json({
+          path: "garden/seedling/settle-mean.md",
+          title: "Add a mean utility",
+          content: "# mean\n\nReturns the arithmetic mean.",
+        }),
+    });
+    render(<DeliveryReport deliverableId="d1" />);
+
+    const knowledge = await screen.findByRole("region", { name: /knowledge/i });
+    await userEvent.click(within(knowledge).getByRole("button", { name: /^Function$/ }));
+    const conceptDialog = await screen.findByRole("dialog", { name: /function/i });
+    await userEvent.click(
+      within(conceptDialog).getByRole("button", { name: /Add a mean utility/ }),
+    );
+
+    const noteDialog = await screen.findByRole("dialog", { name: /add a mean utility/i });
+    expect(within(noteDialog).getByText(/arithmetic mean/i)).toBeInTheDocument();
+  });
+
   it("keeps the diff BEHIND a collapsed disclosure (not expanded on load)", async () => {
     installFetch();
     const { container } = render(<DeliveryReport deliverableId="d1" />);

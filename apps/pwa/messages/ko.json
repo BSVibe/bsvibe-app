@@ -869,6 +869,8 @@
     "noteLoading": "노트를 여는 중…",
     "noteError": "이 노트를 열지 못했어요.",
     "conceptError": "이 개념을 열지 못했어요.",
+    "conceptKind": "개념",
+    "conceptAliases": "다른 이름: {names}",
     "conceptRelated": "관련 개념",
     "conceptObservations": "어디에 나오는지",
     "conceptEmpty": "아직 연결이 없어요.",
