@@ -11,7 +11,8 @@ type DeleteState = "idle" | "confirming" | "deleting" | "error";
  * Product "danger zone" — delete this product. The founder accumulates finished
  * / abandoned / smoke-test products with no way to clear them; this removes one
  * so the Products list stays the real ones. Two-step (Delete → Confirm) so it's
- * never a single accidental click; on success it routes back to the list.
+ * never a single accidental click; on success it routes back to the Brief (the
+ * rail's product list — the product index — re-reads on navigation).
  */
 export default function ProductDanger({
   productId,
@@ -28,8 +29,9 @@ export default function ProductDanger({
     setState("deleting");
     try {
       await deleteProduct(productId);
-      // Leave the now-gone product's page; the list re-reads on navigation.
-      router.push("/products");
+      // Leave the now-gone product's page for the Brief; the rail's product
+      // list (the product index) re-reads on navigation.
+      router.push("/brief");
       router.refresh();
     } catch {
       setState("error");

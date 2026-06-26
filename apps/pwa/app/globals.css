@@ -716,107 +716,6 @@ main.login {
   gap: 30px;
 }
 
-/* ── Products index (full-page overview) ──────────────────────────────────── */
-.products-index {
-  max-width: var(--col-w);
-  margin: 0 auto;
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-}
-
-.products-index__head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-}
-
-.products-index__heading {
-  margin: 0;
-  font-size: 1.5rem;
-  font-weight: 650;
-  letter-spacing: -0.01em;
-}
-
-.products-index__lede {
-  margin: 0;
-  font-size: 0.9rem;
-  color: var(--ink-2);
-}
-
-.products-index__cta {
-  flex: none;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 9px 14px;
-  border: none;
-  border-radius: var(--radius-sm);
-  background: #1f1d1a;
-  color: #fff;
-  font: inherit;
-  font-size: 0.84rem;
-  font-weight: 550;
-  cursor: pointer;
-}
-
-.products-index__note,
-.products-index__empty {
-  margin: 8px 0 0;
-  font-size: 0.9rem;
-  color: var(--ink-3);
-}
-
-.products-index__list {
-  list-style: none;
-  margin: 4px 0 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-}
-
-.products-index__item {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  /* 12px y-pad → ~44px row: the index is a primary navigation surface, so it
-     gets the comfortable touch row on every viewport (not the denser 30px
-     desktop floor the compact rail uses). */
-  padding: 12px 8px;
-  border-top: 1px solid var(--hair);
-  color: var(--ink);
-  text-decoration: none;
-}
-
-.products-index__item:first-child {
-  border-top: none;
-}
-
-.products-index__item:hover {
-  background: var(--accent-bg);
-}
-
-.products-index__dot {
-  flex: none;
-  width: 8px;
-  height: 8px;
-  border-radius: 999px;
-  background: var(--green-dot);
-}
-
-.products-index__name {
-  font-size: 0.95rem;
-  font-weight: 540;
-}
-
-.products-index__slug {
-  margin-left: auto;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 0.78rem;
-  color: var(--ink-3);
-}
-
 .brief__heading {
   margin: 0;
   font-size: 1.5rem;
@@ -5837,14 +5736,6 @@ main.login {
   padding: 0 10px;
 }
 
-.rail-products__heading-link {
-  text-decoration: none;
-  border-radius: var(--radius-sm);
-}
-.rail-products__heading-link:hover .rail-products__heading {
-  color: var(--ink-2);
-}
-
 .rail-products__heading {
   margin: 0;
   font-size: 0.68rem;
@@ -8045,12 +7936,8 @@ main.login {
   opacity: 0.6;
 }
 
-/* Placement modifiers — context-specific (rail vs. products-index row vs.
-   trust panel) so each surface controls its own spacing. */
-.products-index__arrow {
-  margin-left: 0.5rem;
-  margin-right: 0.25rem;
-}
+/* Placement modifiers — context-specific (rail vs. trust panel) so each
+   surface controls its own spacing. */
 .rail-products__arrow {
   margin-left: auto;
   padding-left: 0.5rem;
