@@ -1,7 +1,8 @@
 /**
  * ProductDanger — the per-product delete control. Two-step (Delete → Confirm),
- * then DELETE /api/v1/products/{id} and route back to the list. fetch + router
- * mocked.
+ * then DELETE /api/v1/products/{id} and route back to the Brief (the rail's
+ * product list re-reads on navigation; the /products overview page was removed).
+ * fetch + router mocked.
  */
 
 import ProductDanger from "@/components/products/ProductDanger";
@@ -44,7 +45,7 @@ describe("ProductDanger", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("DELETEs the product on confirm and routes back to the list", async () => {
+  it("DELETEs the product on confirm and routes back to the Brief", async () => {
     const fetchMock = vi.fn(async () => new Response(null, { status: 204 }));
     global.fetch = fetchMock as unknown as typeof fetch;
 
@@ -52,7 +53,7 @@ describe("ProductDanger", () => {
     fireEvent.click(screen.getByRole("button", { name: "Delete product" }));
     fireEvent.click(screen.getByRole("button", { name: "Delete permanently" }));
 
-    await waitFor(() => expect(push).toHaveBeenCalledWith("/products"));
+    await waitFor(() => expect(push).toHaveBeenCalledWith("/brief"));
     const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
     expect(url).toContain("/api/v1/products/p-1");
     expect(init.method).toBe("DELETE");
