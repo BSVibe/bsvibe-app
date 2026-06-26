@@ -473,43 +473,47 @@ function ConceptViewer({
             {t("noteClose")}
           </button>
         </header>
-        {state.phase === "loading" && (
-          <p className="note-viewer__muted" aria-busy="true">
-            {t("noteLoading")}
-          </p>
-        )}
-        {state.phase === "error" && <p className="note-viewer__muted">{t("conceptError")}</p>}
-        {state.phase === "ready" && (
-          <div className="concept-viewer">
-            {state.concept.related.length > 0 && (
-              <section className="concept-viewer__group">
-                <p className="report-knowledge__sublabel">{t("conceptRelated")}</p>
-                <ul className="report-chips">
-                  {state.concept.related.map((r) => (
-                    <li key={r.id} className="report-chip">
-                      {r.name}
-                    </li>
-                  ))}
-                </ul>
-              </section>
-            )}
-            {state.concept.observations.length > 0 && (
-              <section className="concept-viewer__group">
-                <p className="report-knowledge__sublabel">{t("conceptObservations")}</p>
-                <ul className="concept-viewer__obs">
-                  {state.concept.observations.map((o) => (
-                    <li key={o.id} className="concept-viewer__obs-item">
-                      {o.title}
-                    </li>
-                  ))}
-                </ul>
-              </section>
-            )}
-            {state.concept.related.length === 0 && state.concept.observations.length === 0 && (
-              <p className="note-viewer__muted">{t("conceptEmpty")}</p>
-            )}
-          </div>
-        )}
+        {/* Only the BODY scrolls — the head (title + Close) stays pinned so the
+            founder can always dismiss the modal without scrolling back up. */}
+        <div className="note-viewer__scroll">
+          {state.phase === "loading" && (
+            <p className="note-viewer__muted" aria-busy="true">
+              {t("noteLoading")}
+            </p>
+          )}
+          {state.phase === "error" && <p className="note-viewer__muted">{t("conceptError")}</p>}
+          {state.phase === "ready" && (
+            <div className="concept-viewer">
+              {state.concept.related.length > 0 && (
+                <section className="concept-viewer__group">
+                  <p className="report-knowledge__sublabel">{t("conceptRelated")}</p>
+                  <ul className="report-chips">
+                    {state.concept.related.map((r) => (
+                      <li key={r.id} className="report-chip">
+                        {r.name}
+                      </li>
+                    ))}
+                  </ul>
+                </section>
+              )}
+              {state.concept.observations.length > 0 && (
+                <section className="concept-viewer__group">
+                  <p className="report-knowledge__sublabel">{t("conceptObservations")}</p>
+                  <ul className="concept-viewer__obs">
+                    {state.concept.observations.map((o) => (
+                      <li key={o.id} className="concept-viewer__obs-item">
+                        {o.title}
+                      </li>
+                    ))}
+                  </ul>
+                </section>
+              )}
+              {state.concept.related.length === 0 && state.concept.observations.length === 0 && (
+                <p className="note-viewer__muted">{t("conceptEmpty")}</p>
+              )}
+            </div>
+          )}
+        </div>
       </div>
     </dialog>
   );
@@ -567,17 +571,21 @@ function NoteViewer({
             {t("noteClose")}
           </button>
         </header>
-        {state.phase === "loading" && (
-          <p className="note-viewer__muted" aria-busy="true">
-            {t("noteLoading")}
-          </p>
-        )}
-        {state.phase === "error" && <p className="note-viewer__muted">{t("noteError")}</p>}
-        {state.phase === "ready" && (
-          <div className="note-viewer__body report-markdown">
-            <ReactMarkdown remarkPlugins={[remarkGfm]}>{state.note.content}</ReactMarkdown>
-          </div>
-        )}
+        {/* Only the BODY scrolls — the head (title + Close) stays pinned so the
+            founder can always dismiss the modal without scrolling back up. */}
+        <div className="note-viewer__scroll">
+          {state.phase === "loading" && (
+            <p className="note-viewer__muted" aria-busy="true">
+              {t("noteLoading")}
+            </p>
+          )}
+          {state.phase === "error" && <p className="note-viewer__muted">{t("noteError")}</p>}
+          {state.phase === "ready" && (
+            <div className="note-viewer__body report-markdown">
+              <ReactMarkdown remarkPlugins={[remarkGfm]}>{state.note.content}</ReactMarkdown>
+            </div>
+          )}
+        </div>
       </div>
     </dialog>
   );
