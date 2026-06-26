@@ -8,10 +8,11 @@ import {
   getDeliverableReport,
   retractDeliverable,
 } from "@/lib/api/deliverables";
-import { getNote } from "@/lib/api/knowledge";
+import { getConceptDetail, getNote } from "@/lib/api/knowledge";
 import { approveSafeModeItem, denySafeModeItem } from "@/lib/api/safemode";
 import type {
   ArtifactContent,
+  ConceptDetail,
   DeliverableReport,
   KnowledgeNote,
   VerificationOutcome,
@@ -116,6 +117,29 @@ function referenceNotePath(reference: string): string | null {
   return match ? match[1].trim() : null;
 }
 
+// Prefixes the retrievers stamp on NON-concept references (note / prior decision
+// / prior rejection). Everything else the CompositeCanonRetriever folds in is a
+// CanonConceptRetriever statement — the concept's display name (R13).
+const NON_CONCEPT_REFERENCE = [
+  /^related note\s*[—–-]/i,
+  /^prior decision\s*[—–-]/i,
+  /^avoid \(prior rejection\)\s*[—–-]/i,
+];
+
+/** The concept id (vault slug) for a canon-concept reference, so the chip can
+ *  deep-link to the concept viewer (R13). `null` for a note / decision /
+ *  rejection statement, which is handled elsewhere or stays plain text. The
+ *  canon retriever emits the concept's display name; its id is the slug. */
+function referenceConceptId(reference: string): string | null {
+  const text = reference.trim();
+  if (!text || NON_CONCEPT_REFERENCE.some((re) => re.test(text))) return null;
+  const slug = text
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return slug || null;
+}
+
 export default function DeliveryReport({ deliverableId }: { deliverableId: string }) {
   const [loaded, setLoaded] = useState<Loaded>({ state: "loading" });
   // Bumped after a footer action (approve / decline a held delivery) so the
@@ -194,6 +218,9 @@ function ReportDocument({
   // R12 — the knowledge note open in the viewer panel (a 추가한/참고한 지식 chip
   // click), or null. The viewer fetches the note's content on open.
   const [openNote, setOpenNote] = useState<{ path: string; title: string } | null>(null);
+  // R13 — the canon concept open in the concept viewer (a 참고한 지식 concept chip
+  // click), or null.
+  const [openConcept, setOpenConcept] = useState<{ id: string; label: string } | null>(null);
   // Defensive: an older / malformed payload may omit references / written —
   // degrade to empty lists (the group simply doesn't render), never a crash.
   const references = report.references ?? [];
@@ -286,13 +313,14 @@ function ReportDocument({
               <p className="report-doc__muted">{t("referencedHint")}</p>
               <ul className="report-chips">
                 {references.map((reference, i) => {
-                  // A "Related note — <path>.md" statement deep-links to the
-                  // note viewer; a non-note statement (prior decision) is plain.
+                  // A "Related note —" statement deep-links to the note viewer
+                  // (R12); a canon-concept statement to the concept viewer (R13);
+                  // a prior decision / rejection stays plain text.
                   const path = referenceNotePath(reference);
-                  const label = prettyReference(reference);
-                  return (
-                    <li key={`ref-${i}-${reference}`}>
-                      {path ? (
+                  if (path) {
+                    const label = prettyReference(reference);
+                    return (
+                      <li key={`ref-${i}-${reference}`}>
                         <button
                           type="button"
                           className="report-chip report-chip--link"
@@ -300,9 +328,26 @@ function ReportDocument({
                         >
                           {label}
                         </button>
-                      ) : (
-                        <span className="report-chip">{label}</span>
-                      )}
+                      </li>
+                    );
+                  }
+                  const conceptId = referenceConceptId(reference);
+                  if (conceptId) {
+                    return (
+                      <li key={`ref-${i}-${reference}`}>
+                        <button
+                          type="button"
+                          className="report-chip report-chip--link"
+                          onClick={() => setOpenConcept({ id: conceptId, label: reference })}
+                        >
+                          {reference}
+                        </button>
+                      </li>
+                    );
+                  }
+                  return (
+                    <li key={`ref-${i}-${reference}`}>
+                      <span className="report-chip">{reference}</span>
                     </li>
                   );
                 })}
@@ -365,7 +410,108 @@ function ReportDocument({
           onClose={() => setOpenNote(null)}
         />
       )}
+      {openConcept && (
+        <ConceptViewer
+          conceptId={openConcept.id}
+          fallbackLabel={openConcept.label}
+          onClose={() => setOpenConcept(null)}
+        />
+      )}
     </article>
+  );
+}
+
+/** R13 — the concept viewer: a modal that fetches ONE canon concept's detail
+ *  (its aliases, the related concepts it co-occurs with, and the observations
+ *  that mention it) so a "참고한 지식" CONCEPT chip is verifiable in place — the
+ *  hub-capped graph is hard to navigate to a single concept. Reuses the note
+ *  viewer's <dialog> shell. A failed read shows a calm line, never a crash. */
+function ConceptViewer({
+  conceptId,
+  fallbackLabel,
+  onClose,
+}: {
+  conceptId: string;
+  fallbackLabel: string;
+  onClose: () => void;
+}) {
+  const t = useTranslations("report");
+  const ref = useRef<HTMLDialogElement>(null);
+  const [state, setState] = useState<
+    { phase: "loading" } | { phase: "ready"; concept: ConceptDetail } | { phase: "error" }
+  >({ phase: "loading" });
+
+  useEffect(() => {
+    const dialog = ref.current;
+    if (dialog && !dialog.open) {
+      try {
+        dialog.showModal();
+      } catch {
+        dialog.open = true;
+      }
+    }
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    getConceptDetail(conceptId)
+      .then((concept) => active && setState({ phase: "ready", concept }))
+      .catch(() => active && setState({ phase: "error" }));
+    return () => {
+      active = false;
+    };
+  }, [conceptId]);
+
+  const title = state.phase === "ready" ? state.concept.name : fallbackLabel;
+
+  return (
+    <dialog ref={ref} className="note-viewer" aria-label={title} onClose={onClose}>
+      <div className="note-viewer__panel">
+        <header className="note-viewer__head">
+          <h2 className="note-viewer__title">{title}</h2>
+          <button type="button" className="note-viewer__close" onClick={onClose}>
+            {t("noteClose")}
+          </button>
+        </header>
+        {state.phase === "loading" && (
+          <p className="note-viewer__muted" aria-busy="true">
+            {t("noteLoading")}
+          </p>
+        )}
+        {state.phase === "error" && <p className="note-viewer__muted">{t("conceptError")}</p>}
+        {state.phase === "ready" && (
+          <div className="concept-viewer">
+            {state.concept.related.length > 0 && (
+              <section className="concept-viewer__group">
+                <p className="report-knowledge__sublabel">{t("conceptRelated")}</p>
+                <ul className="report-chips">
+                  {state.concept.related.map((r) => (
+                    <li key={r.id} className="report-chip">
+                      {r.name}
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            )}
+            {state.concept.observations.length > 0 && (
+              <section className="concept-viewer__group">
+                <p className="report-knowledge__sublabel">{t("conceptObservations")}</p>
+                <ul className="concept-viewer__obs">
+                  {state.concept.observations.map((o) => (
+                    <li key={o.id} className="concept-viewer__obs-item">
+                      {o.title}
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            )}
+            {state.concept.related.length === 0 && state.concept.observations.length === 0 && (
+              <p className="note-viewer__muted">{t("conceptEmpty")}</p>
+            )}
+          </div>
+        )}
+      </div>
+    </dialog>
   );
 }
 
