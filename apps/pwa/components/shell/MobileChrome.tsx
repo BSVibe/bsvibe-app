@@ -1,22 +1,13 @@
 "use client";
 
-import { usePendingDecisionsCount } from "@/lib/decisions/pending-count";
 import { useTranslations } from "next-intl";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import {
-  BellIcon,
-  BriefIcon,
-  DecisionsIcon,
-  KnowledgeIcon,
-  SettingsIcon,
-  SkillsIcon,
-} from "./icons";
+import { BellIcon, BriefIcon, KnowledgeIcon, SettingsIcon, SkillsIcon } from "./icons";
 import { type NavKey, PRIMARY_NAV } from "./nav";
 
 const ICONS: Record<NavKey, typeof BriefIcon> = {
   brief: BriefIcon,
-  decisions: DecisionsIcon,
   knowledge: KnowledgeIcon,
   skills: SkillsIcon,
 };
@@ -27,7 +18,6 @@ const ICONS: Record<NavKey, typeof BriefIcon> = {
  *  surface context instead of falling through to the BSVibe wordmark. */
 const TITLE_KEYS: Record<string, NavKey | "settings" | "deliverable" | "run" | "product"> = {
   "/brief": "brief",
-  "/decisions": "decisions",
   "/knowledge": "knowledge",
   "/skills": "skills",
   "/settings": "settings",
@@ -75,10 +65,9 @@ export function MobileTopBar() {
   );
 }
 
-/** Mobile bottom tab bar — Brief / Decisions / Inside. */
+/** Mobile bottom tab bar — Brief / Knowledge / Skills. */
 export function MobileNav() {
   const pathname = usePathname();
-  const pendingDecisions = usePendingDecisionsCount();
   const tNav = useTranslations("nav");
   const tShell = useTranslations("shell");
   return (
@@ -94,7 +83,6 @@ export function MobileNav() {
             </button>
           );
         }
-        const badge = item.key === "decisions" && pendingDecisions > 0 ? pendingDecisions : null;
         return (
           <Link
             key={item.key}
@@ -104,11 +92,6 @@ export function MobileNav() {
           >
             <span className="tabbar__icon">
               <Icon />
-              {badge !== null && (
-                <span className="tabbar__badge" aria-label={tShell("pending", { count: badge })}>
-                  {badge}
-                </span>
-              )}
             </span>
             <span>{tNav(item.key)}</span>
           </Link>

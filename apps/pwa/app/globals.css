@@ -6532,7 +6532,23 @@ main.login {
   gap: 8px;
 }
 
+/* R8 — the held-delivery footer action row (Approve & ship / Decline), the same
+   decision as the Brief's "Ready to ship" card. Reuses the .need-card__btn
+   family for a consistent button look across the two surfaces. */
+.report-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
 .report-rollback__open {
+  /* A text button — reset the native button chrome so it reads as a quiet
+     underline link, not a default-bordered box. */
+  appearance: none;
+  background: none;
+  border: none;
+  padding: 0;
   font-size: 0.85rem;
   color: var(--ink-2);
   text-decoration: underline;
@@ -6541,14 +6557,18 @@ main.login {
   cursor: pointer;
 }
 
+.report-rollback__open:hover {
+  color: var(--ink);
+}
+
 .report-rollback__confirm {
   display: flex;
   flex-direction: column;
   gap: 10px;
   padding: 12px 14px;
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  background: var(--surface-2, var(--surface));
+  border: 1px solid var(--hair-strong);
+  border-radius: var(--radius-sm);
+  background: var(--accent-bg);
   width: fit-content;
   max-width: 480px;
 }
@@ -6572,8 +6592,8 @@ main.login {
 .report-rollback__danger {
   font-size: 0.85rem;
   padding: 6px 14px;
-  border-radius: 8px;
-  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--hair-strong);
   cursor: pointer;
 }
 

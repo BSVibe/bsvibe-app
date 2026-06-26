@@ -1,13 +1,13 @@
 /**
- * Decisions nav wiring — the previously-inert "Decisions" item is now a real
- * route ((app)/decisions) in both the desktop left rail and the mobile tab bar,
- * and both surface a pending-count badge fed by the shared store.
+ * Decisions nav removal (R8) — Decisions was folded into the Brief ("Needs
+ * you"), so it is no longer a primary-nav tab in either the desktop left rail
+ * or the mobile tab bar. The /decisions route still exists (reachable by URL),
+ * but it is not advertised in the nav.
  */
 
 import LeftRail from "@/components/shell/LeftRail";
 import { MobileNav } from "@/components/shell/MobileChrome";
 import { type Session, clearSession, setSession } from "@/lib/auth/session";
-import { setPendingDecisionsCount } from "@/lib/decisions/pending-count";
 import { render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -24,44 +24,30 @@ const SESSION: Session = {
   expiresAt: Date.now() + 3_600_000,
 };
 
-describe("Decisions nav wiring", () => {
+describe("Decisions nav removal", () => {
   beforeEach(() => {
     clearSession();
     setSession(SESSION);
-    setPendingDecisionsCount(0);
   });
 
   afterEach(() => {
     vi.restoreAllMocks();
   });
 
-  it("renders Decisions as a real link to /decisions in the left rail", () => {
+  it("does not show a Decisions tab in the left rail", () => {
     render(<LeftRail />);
 
-    const link = screen.getByRole("link", { name: /Decisions/ });
-    expect(link).toHaveAttribute("href", "/decisions");
-    // No longer a disabled placeholder button.
-    expect(screen.queryByRole("button", { name: "Decisions" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /Decisions/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Decisions/ })).not.toBeInTheDocument();
+    // The remaining primary surfaces are still present.
+    expect(screen.getByRole("link", { name: /Brief/ })).toHaveAttribute("href", "/brief");
+    expect(screen.getByRole("link", { name: /Knowledge/ })).toHaveAttribute("href", "/knowledge");
   });
 
-  it("renders Decisions as a real link in the mobile tab bar", () => {
+  it("does not show a Decisions tab in the mobile tab bar", () => {
     render(<MobileNav />);
 
-    const link = screen.getByRole("link", { name: /Decisions/ });
-    expect(link).toHaveAttribute("href", "/decisions");
-  });
-
-  it("shows a pending-count badge when there are pending decisions", () => {
-    setPendingDecisionsCount(3);
-    render(<LeftRail />);
-
-    expect(screen.getByLabelText("3 pending")).toHaveTextContent("3");
-  });
-
-  it("hides the badge when nothing is pending", () => {
-    setPendingDecisionsCount(0);
-    render(<LeftRail />);
-
-    expect(screen.queryByLabelText(/pending/)).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /Decisions/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /Brief/ })).toHaveAttribute("href", "/brief");
   });
 });

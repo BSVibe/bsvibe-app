@@ -21,8 +21,32 @@ from backend.workflow.infrastructure.db import (
     ExecutionRun,
     ExecutionRunActivity,
 )
+from backend.workflow.infrastructure.delivery.db import (
+    SafeModeQueueItemRow,
+    SafeModeStatus,
+)
 
 logger = structlog.get_logger(__name__)
+
+
+async def held_delivery_item_for(
+    session: AsyncSession, deliverable_id: uuid.UUID, workspace_id: uuid.UUID
+) -> uuid.UUID | None:
+    """The id of the PENDING Safe-Mode held delivery for this deliverable, if any
+    (R8). When set, the report footer offers Approve & ship / Decline on it —
+    mirroring the Brief's "Needs you" card — instead of Rollback. ``None`` when
+    nothing is held (a shipped run, or one already denied/expired)."""
+    stmt = (
+        select(SafeModeQueueItemRow.id)
+        .where(
+            SafeModeQueueItemRow.deliverable_id == deliverable_id,
+            SafeModeQueueItemRow.workspace_id == workspace_id,
+            SafeModeQueueItemRow.status == SafeModeStatus.PENDING,
+        )
+        .limit(1)
+    )
+    return (await session.execute(stmt)).scalars().first()
+
 
 # R2b — settle kinds that represent knowledge the run NEWLY wrote (vs. the
 # verified-work settle, whose summary is just the changed-file list). These are
@@ -110,4 +134,4 @@ async def report_narrative_for(
     return narrative
 
 
-__all__ = ["learned_for", "report_narrative_for"]
+__all__ = ["held_delivery_item_for", "learned_for", "report_narrative_for"]

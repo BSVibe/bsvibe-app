@@ -37,7 +37,7 @@ from backend.workflow.infrastructure.db import (
     VerificationResult,
 )
 
-from ._narrative import learned_for, report_narrative_for
+from ._narrative import held_delivery_item_for, learned_for, report_narrative_for
 from ._schemas import (
     MAX_CONTENT_BYTES,
     ArtifactContentResponse,
@@ -107,11 +107,19 @@ async def get_deliverable_report(
     # Lives in :mod:`._narrative` to keep this adapter under the D35 ceiling.
     narrative = await report_narrative_for(session, row, run, request, verified, workspace_id)
 
+    # R8 — the footer action mirrors the Brief: a still-held delivery (a pending
+    # Safe-Mode item) gets Approve & ship / Decline; only a shipped run gets
+    # Rollback. Surface the held item id + the run status so the report can pick.
+    run_status = run.status.value if run is not None and run.workspace_id == workspace_id else None
+    held_item_id = await held_delivery_item_for(session, row.id, workspace_id)
+
     return DeliverableReportResponse(
         deliverable=to_response(row, verified=verified),
         request=request,
         verified=verified,
         verifications=verifications,
+        run_status=run_status,
+        held_delivery_item_id=held_item_id,
         references=references_of(verifications),
         learned=await learned_for(session, row.run_id, workspace_id),
         narrative=narrative,

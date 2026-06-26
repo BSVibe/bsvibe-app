@@ -8,6 +8,7 @@ import {
   getDeliverableReport,
   retractDeliverable,
 } from "@/lib/api/deliverables";
+import { approveSafeModeItem, denySafeModeItem } from "@/lib/api/safemode";
 import type {
   ArtifactContent,
   DeliverableReport,
@@ -90,10 +91,30 @@ function checksFromContract(contract: Record<string, unknown>): DisplayCheck[] {
   return out;
 }
 
+/** Note-level reference label (R8). The retriever folds garden-note references
+ *  as free-form "Related note — garden/seedling/settle-<slug>.md" statements;
+ *  there's no note viewer yet, so rather than show a raw internal path that
+ *  looks clickable but isn't, surface a readable note title (de-slugged from the
+ *  filename). Non-note statements (a prior decision / rejection) pass through. */
+function prettyReference(reference: string): string {
+  const match = reference.match(/^related note\s*[—–-]\s*(.+\.md)$/i);
+  if (!match) return reference;
+  const file = (match[1].split("/").pop() ?? match[1]).replace(/\.md$/i, "");
+  const slug = file.replace(/^settle-/, "").trim();
+  if (!slug) return reference;
+  const title = slug.replace(/[-_]+/g, " ").trim();
+  return title.charAt(0).toUpperCase() + title.slice(1);
+}
+
 export default function DeliveryReport({ deliverableId }: { deliverableId: string }) {
   const [loaded, setLoaded] = useState<Loaded>({ state: "loading" });
+  // Bumped after a footer action (approve / decline a held delivery) so the
+  // report re-reads and the footer reflects the new state (shipped → Rollback,
+  // declined → nothing).
+  const [reloadKey, setReloadKey] = useState(0);
   const t = useTranslations("report");
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: reloadKey is a deliberate re-fetch trigger (bumped after a footer action), not read inside.
   useEffect(() => {
     let active = true;
     setLoaded({ state: "loading" });
@@ -114,7 +135,7 @@ export default function DeliveryReport({ deliverableId }: { deliverableId: strin
     return () => {
       active = false;
     };
-  }, [deliverableId]);
+  }, [deliverableId, reloadKey]);
 
   return (
     <div className="report">
@@ -144,12 +165,20 @@ export default function DeliveryReport({ deliverableId }: { deliverableId: strin
         </section>
       )}
 
-      {loaded.state === "ready" && <ReportDocument report={loaded.report} />}
+      {loaded.state === "ready" && (
+        <ReportDocument report={loaded.report} onResolved={() => setReloadKey((k) => k + 1)} />
+      )}
     </div>
   );
 }
 
-function ReportDocument({ report }: { report: DeliverableReport }) {
+function ReportDocument({
+  report,
+  onResolved,
+}: {
+  report: DeliverableReport;
+  onResolved: () => void;
+}) {
   const t = useTranslations("report");
   const { deliverable, request, narrative, verified, verifications } = report;
   // Defensive: an older / malformed payload may omit references / learned —
@@ -245,9 +274,11 @@ function ReportDocument({ report }: { report: DeliverableReport }) {
               <ul className="report-chips">
                 {references.map((reference, i) => (
                   // References are free-form statements that may repeat across
-                  // re-attempts (deduped server-side); index keys the chip.
+                  // re-attempts (deduped server-side); index keys the chip. A
+                  // "Related note — <path>.md" statement is shown as a readable
+                  // note title (note-level), not a raw internal path.
                   <li key={`ref-${i}-${reference}`} className="report-chip">
-                    {reference}
+                    {prettyReference(reference)}
                   </li>
                 ))}
               </ul>
@@ -281,12 +312,78 @@ function ReportDocument({ report }: { report: DeliverableReport }) {
         </details>
       )}
 
-      {canRollBack(deliverable) && (
+      {/* The footer action MIRRORS the Brief for this item's state: a verified
+          deliverable still HELD for approval ("Ready to ship") gets Approve &
+          ship / Decline on its Safe-Mode item; only a SHIPPED run gets Rollback.
+          Neither when there's nothing to act on. */}
+      {report.held_delivery_item_id ? (
+        <footer className="report-doc__footer">
+          <ReportDeliveryActions itemId={report.held_delivery_item_id} onResolved={onResolved} />
+        </footer>
+      ) : report.run_status === "shipped" && canRollBack(deliverable) ? (
         <footer className="report-doc__footer">
           <RollbackAffordance deliverableId={deliverable.id} />
         </footer>
-      )}
+      ) : null}
     </article>
+  );
+}
+
+/** R8 — the held-delivery footer action, the SAME decision as the Brief's
+ *  "Ready to ship" card: Approve & ship dispatches the held delivery
+ *  (`POST /api/v1/safemode/{id}/approve`), Decline drops it (`…/deny`). Resolves
+ *  inline; on success the parent re-reads the report so the footer reflects the
+ *  new state. A failed call keeps the buttons actionable with a calm message. */
+function ReportDeliveryActions({
+  itemId,
+  onResolved,
+}: {
+  itemId: string;
+  onResolved: () => void;
+}) {
+  const t = useTranslations("report");
+  const [state, setState] = useState<"idle" | "working" | "error">("idle");
+  const working = state === "working";
+
+  const run = async (action: "approve" | "deny") => {
+    if (working) return;
+    setState("working");
+    try {
+      if (action === "approve") {
+        await approveSafeModeItem(itemId);
+      } else {
+        await denySafeModeItem(itemId);
+      }
+      onResolved();
+    } catch {
+      setState("error");
+    }
+  };
+
+  return (
+    <div className="report-actions">
+      <button
+        type="button"
+        className="need-card__btn need-card__btn--primary"
+        onClick={() => run("approve")}
+        disabled={working}
+      >
+        {working ? t("actionWorking") : t("approveShip")}
+      </button>
+      <button
+        type="button"
+        className="need-card__btn need-card__btn--secondary"
+        onClick={() => run("deny")}
+        disabled={working}
+      >
+        {t("decline")}
+      </button>
+      {state === "error" && (
+        <span className="need-card__error" aria-live="polite">
+          {t("actionError")}
+        </span>
+      )}
+    </div>
   );
 }
 

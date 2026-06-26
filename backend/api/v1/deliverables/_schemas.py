@@ -91,14 +91,15 @@ class DeliverableReportResponse(BaseModel):
 
     deliverable: DeliverableResponse
     request: str | None = None
-    # B4 trust-integrity: True ONLY when at least one PASSED VerificationResult is
-    # recorded for the producing run (mirrors ``deliverable.verified``). The
-    # report's "verified" / "This is verified" signal derives from this, so a
-    # deliverable without a PASSED proof reads as needs-review, not verified.
+    # B4 trust-integrity: True ONLY when ≥1 PASSED VerificationResult is recorded
+    # for the producing run (mirrors ``deliverable.verified``); else needs-review.
     verified: bool = False
     verifications: list[VerificationReport] = []
-    # G2 — knowledge the agent REFERENCED (used) for this work: promoted canon
-    # patterns, prior resolved decisions, prior rejections. Deduped, first-seen.
+    # R8 — footer mirrors the Brief: a HELD delivery (held_delivery_item_id set)
+    # shows Approve & ship / Decline; only run_status=="shipped" shows Rollback.
+    run_status: str | None = None
+    held_delivery_item_id: uuid.UUID | None = None
+    # G2 — knowledge the agent REFERENCED: canon/prior decisions/rejections (deduped).
     references: list[str] = []
     # R2b — knowledge the run NEWLY wrote this time (founder decisions it resolved
     # + approaches it rejected). The report's "Learned" group; empty when none.
