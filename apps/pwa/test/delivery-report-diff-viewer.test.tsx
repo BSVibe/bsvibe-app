@@ -72,6 +72,7 @@ const REPORT: DeliverableReport = {
   verified: true,
   verifications: [],
   references: [],
+  narrative: null,
 };
 
 const BLOG_CONTENT = "export function getRelatedPosts() {\n  return [];\n}\n";

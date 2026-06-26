@@ -56,6 +56,7 @@ const REPORT: DeliverableReport = {
   verified: true,
   verifications: [],
   references: [],
+  narrative: null,
 };
 
 function json(body: unknown, status = 200) {
