@@ -50,25 +50,19 @@ async def held_delivery_item_for(
 
 
 _WRITTEN_MAX = 12
-# A retrieved-knowledge statement that points at a vault NOTE — "Related note —
-# garden/seedling/settle-<slug>.md". The path is what we de-dupe against the
-# run's own written notes (a run must not "reference" what it itself wrote).
+# A retrieved-knowledge statement that points at a raw vault SEEDLING note —
+# "Related note — garden/seedling/settle-<slug>.md". These come from the
+# SemanticNoteRetriever's search over garden embeddings (seedlings only). They
+# are the EPISODIC layer (per-run observations), not the canonical knowledge the
+# concept graph shows — so the report DROPS them to stay concept-centric (R16).
 _RELATED_NOTE_RE = re.compile(r"^related note\s*[—–-]\s*(.+\.md)$", re.IGNORECASE)
 
 
-def _ref_note_path(reference: str) -> str | None:
-    """The vault path inside a "Related note — <path>" statement, else None (a
-    non-note reference — a prior decision/rejection — which is never a self-write)."""
-    match = _RELATED_NOTE_RE.match(reference.strip())
-    return match.group(1) if match else None
-
-
-def _path_key(path: str | None) -> str | None:
-    """Normalize a vault path to its filename so a settle_drains ``node_ref``
-    (stored ABSOLUTE, e.g. ``/app/var/vault/.../garden/seedling/settle-x.md``)
-    matches a reference's RELATIVE path (``garden/seedling/settle-x.md``). Settle
-    slugs are unique, so the basename is a safe key. ``None`` passes through."""
-    return path.rsplit("/", 1)[-1] if path else None
+def _is_seedling_note_ref(reference: str) -> bool:
+    """True for a "Related note — <path>.md" statement (a raw seedling hit from
+    the semantic note search). Concept / decision / rejection statements are not
+    note refs → False, and stay in the report's referenced knowledge."""
+    return _RELATED_NOTE_RE.match(reference.strip()) is not None
 
 
 def _note_title(node_ref: str) -> str:
@@ -99,15 +93,21 @@ async def split_knowledge(
     workspace_id: uuid.UUID,
     references: list[str],
 ) -> tuple[list[str], list[WrittenNote]]:
-    """Split the report's knowledge into (referenced, written) — the founder's
-    ask to keep "참고한 지식" and "추가한 지식" distinct.
+    """Split the report's knowledge into (referenced, written) — keeping "참고한
+    지식" and "추가한 지식" distinct AND concept-centric (R16).
+
+    REFERENCED = the PROMOTED/canonical knowledge the run drew on — the retrieved
+    CONCEPTS (graph anchors) + prior decisions/rejections. The raw seedling
+    "Related note —" hits (the SemanticNoteRetriever's search over garden
+    seedlings) are DROPPED: they're the episodic layer, NOT what the concept
+    graph shows, so surfacing them made the report inconsistent with the graph
+    (founder: the graph's mature notes are the main axis). The seedling search
+    still feeds the verify contract — this only trims the founder-facing report.
 
     WRITTEN = the notes THIS run itself added, from ``settle_drains`` (run_id →
-    the written note's vault ``node_ref``): a de-slugged ``title`` + the
-    vault-relative ``path`` so the report chip can deep-link to the note viewer.
-    Empty until the async settle drain has run. REFERENCED = the retrieved prior
-    knowledge MINUS any statement pointing at one of this run's OWN written notes
-    — a run consulting its own freshly-written note is not a real reference.
+    node_ref): a de-slugged ``title`` + the vault-relative ``path`` so the chip
+    deep-links to the note viewer. This is the run's own contribution (a fresh
+    seedling), distinct from referenced knowledge; empty until the drain runs.
     """
     stmt = select(SettleDrainRow.node_ref).where(
         SettleDrainRow.run_id == run_id,
@@ -115,10 +115,10 @@ async def split_knowledge(
         SettleDrainRow.node_ref.is_not(None),
     )
     written_paths = [p for p in (await session.execute(stmt)).scalars().all() if p]
-    # Match by filename: node_ref is absolute, a reference's path is relative.
-    written_keys = {_path_key(p) for p in written_paths}
 
-    referenced = [r for r in references if _path_key(_ref_note_path(r)) not in written_keys]
+    # Concept-centric: keep concepts + decisions/rejections; drop the raw
+    # seedling note hits (they're the episodic layer, not the graph's canon).
+    referenced = [r for r in references if not _is_seedling_note_ref(r)]
 
     written: list[WrittenNote] = []
     seen: set[str] = set()

@@ -397,18 +397,13 @@ async def test_report_surfaces_written_from_settle_drains(
     assert any(w["path"] == rel for w in written)
 
 
-async def test_report_self_written_note_not_in_referenced(
-    configured_client, db, workspace_id
-) -> None:
-    """A run's OWN written note must not appear under ``references`` ("참고한 지식")
-    — it belongs in ``written``. A retrieved "Related note — <relative path>" is
-    matched by filename against this run's settle_drains node_ref (which is stored
-    ABSOLUTE in prod) and moved out of referenced (R10 + R11 path normalization)."""
+async def test_report_references_are_concept_centric(configured_client, db, workspace_id) -> None:
+    """R16 — "참고한 지식" stays concept-centric (matching the knowledge graph): the
+    raw seedling "Related note — garden/seedling/settle-*" hits (episodic layer)
+    are DROPPED, while CONCEPTS and prior decisions/rejections are kept. The run's
+    own written note still surfaces under ``written``."""
     run_id, deliverable_id = uuid.uuid4(), uuid.uuid4()
-    # node_ref is ABSOLUTE in prod; the reference path is RELATIVE — they must
-    # still match (by filename) so the self-write is excluded from referenced.
     note_abs = "/app/var/vault/us-1/ws/garden/seedling/settle-add-a-title-case-helper.md"
-    note_rel = "garden/seedling/settle-add-a-title-case-helper.md"
     async with db() as s:
         await _seed_run(s, run_id=run_id, ws=workspace_id)
         await _seed_deliverable(
@@ -422,8 +417,8 @@ async def test_report_self_written_note_not_in_referenced(
                 node_ref=note_abs,
             )
         )
-        # A verification whose retrieved-knowledge check references THIS run's own
-        # note (by its RELATIVE path) plus a genuine prior reference.
+        # A retrieved-knowledge check mixing a CONCEPT, a prior decision, and a raw
+        # seedling note hit (the latter must be dropped from the report).
         s.add(
             VerificationResult(
                 id=uuid.uuid4(),
@@ -435,8 +430,9 @@ async def test_report_self_written_note_not_in_referenced(
                         {
                             "kind": "judge",
                             "criteria": [
-                                f"Related note — {note_rel}",
-                                "Decision: round to 2 decimals",
+                                "Function",
+                                "Prior decision — Q: Which DB? A: Postgres",
+                                "Related note — garden/seedling/settle-add-a-tiny-clamp-utility.md",
                             ],
                             "rationale": "Canonical patterns retrieved for this change",
                         }
@@ -451,11 +447,14 @@ async def test_report_self_written_note_not_in_referenced(
     r = await configured_client.get(f"/api/v1/deliverables/{deliverable_id}/report")
     assert r.status_code == 200, r.text
     body = r.json()
-    # The self-written note is OUT of referenced and IN written.
-    assert not any("settle-add-a-title-case-helper" in x for x in body["references"])
+    # The raw seedling "Related note —" hits are dropped (concept-centric).
+    assert not any("Related note" in x for x in body["references"])
+    assert not any("settle-add-a-tiny-clamp-utility" in x for x in body["references"])
+    # The concept + the prior decision stay referenced.
+    assert "Function" in body["references"]
+    assert any("Postgres" in x for x in body["references"])
+    # The run's own written note still surfaces under written.
     assert any(w["title"] == "Add a title case helper" for w in body["written"])
-    # The genuine prior reference stays referenced.
-    assert any("round to 2 decimals" in x for x in body["references"])
 
 
 async def test_report_written_empty_before_drain(configured_client, db, workspace_id) -> None:
