@@ -125,11 +125,14 @@ function workStreamFrom(
     });
 }
 
-/** The two INLINE-resolvable needs-you kinds the Brief surfaces (held
- *  deliveries + paused-run checkpoints). Knowledge proposals open a focused
- *  detail panel, so they stay on the Decisions tab rather than the Brief. */
+/** All three INLINE-resolvable needs-you kinds the Brief surfaces (R9): held
+ *  deliveries, paused-run checkpoints, AND canon/knowledge proposals — every
+ *  pending decision is judged in the Brief now (the Decisions tab is gone), so
+ *  this no longer filters anything out. Kept as a named seam for clarity. */
 function inlineNeedsYou(items: PendingDecision[]): PendingDecision[] {
-  return items.filter((i) => i.kind === "delivery" || i.kind === "decision");
+  return items.filter(
+    (i) => i.kind === "delivery" || i.kind === "decision" || i.kind === "knowledge",
+  );
 }
 
 export async function getBrief(): Promise<BriefView> {

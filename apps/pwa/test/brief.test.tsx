@@ -14,6 +14,10 @@ vi.mock("@/lib/api/checkpoints", () => ({
   resolveCheckpoint: vi.fn(async () => ({})),
   resolveCheckpointAction: vi.fn(async () => ({})),
 }));
+vi.mock("@/lib/api/decisions", () => ({
+  acceptProposal: vi.fn(async () => ({})),
+  rejectProposal: vi.fn(async () => ({})),
+}));
 
 const NOW = new Date().toISOString();
 
@@ -48,6 +52,25 @@ function checkpoint(id: string, question: string): PendingDecision {
     title: "Build the export endpoint",
     productSlug: "acme-corp",
     detailHref: "/runs/r-c",
+    createdAt: NOW,
+  };
+}
+
+/** A canon/knowledge proposal needs-you item (resolves via Accept / Reject). */
+function proposal(id: string): PendingDecision {
+  return {
+    kind: "knowledge",
+    id: `proposal-${id}`,
+    proposal: {
+      id,
+      proposal_kind: "merge",
+      action_kind: "merge-concepts",
+      action_path: `proposals/merge-concepts/${id}.md`,
+      status: "pending",
+      score: 0.8,
+      created_at: NOW,
+      expires_at: null,
+    },
     createdAt: NOW,
   };
 }
@@ -123,6 +146,19 @@ describe("Brief (unified Work-Home + Decisions) surface", () => {
     render(<BriefContent view={VIEW} onNeedsYouResolved={onResolved} />);
     const needs = screen.getByRole("region", { name: "Needs you" });
     await userEvent.click(within(needs).getByText("Approve"));
+    expect(onResolved).toHaveBeenCalled();
+  });
+
+  it("R9: a canon proposal is judged inline in Needs you (Accept / Reject card)", async () => {
+    const { default: userEvent } = await import("@testing-library/user-event");
+    const view: BriefView = { ...VIEW, needsYou: [proposal("merge-clamp")] };
+    const onResolved = vi.fn();
+    render(<BriefContent view={view} onNeedsYouResolved={onResolved} />);
+    const needs = screen.getByRole("region", { name: "Needs you" });
+    // The proposal renders as a card: a readable title + Accept / Reject inline.
+    expect(within(needs).getByText("Merge concepts")).toBeInTheDocument();
+    expect(within(needs).getByRole("button", { name: /Reject/i })).toBeInTheDocument();
+    await userEvent.click(within(needs).getByRole("button", { name: /Accept/i }));
     expect(onResolved).toHaveBeenCalled();
   });
 
