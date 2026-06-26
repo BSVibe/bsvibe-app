@@ -396,10 +396,14 @@ async def test_report_self_written_note_not_in_referenced(
     configured_client, db, workspace_id
 ) -> None:
     """A run's OWN written note must not appear under ``references`` ("참고한 지식")
-    — it belongs in ``written``. A retrieved "Related note — <path>" whose path is
-    one of this run's settle_drains node_refs is moved out of referenced (R10)."""
+    — it belongs in ``written``. A retrieved "Related note — <relative path>" is
+    matched by filename against this run's settle_drains node_ref (which is stored
+    ABSOLUTE in prod) and moved out of referenced (R10 + R11 path normalization)."""
     run_id, deliverable_id = uuid.uuid4(), uuid.uuid4()
-    note_path = "garden/seedling/settle-add-a-title-case-helper.md"
+    # node_ref is ABSOLUTE in prod; the reference path is RELATIVE — they must
+    # still match (by filename) so the self-write is excluded from referenced.
+    note_abs = "/app/var/vault/us-1/ws/garden/seedling/settle-add-a-title-case-helper.md"
+    note_rel = "garden/seedling/settle-add-a-title-case-helper.md"
     async with db() as s:
         await _seed_run(s, run_id=run_id, ws=workspace_id)
         await _seed_deliverable(
@@ -410,11 +414,11 @@ async def test_report_self_written_note_not_in_referenced(
                 activity_id=uuid.uuid4(),
                 workspace_id=workspace_id,
                 run_id=run_id,
-                node_ref=note_path,
+                node_ref=note_abs,
             )
         )
         # A verification whose retrieved-knowledge check references THIS run's own
-        # note plus a genuine prior reference.
+        # note (by its RELATIVE path) plus a genuine prior reference.
         s.add(
             VerificationResult(
                 id=uuid.uuid4(),
@@ -426,7 +430,7 @@ async def test_report_self_written_note_not_in_referenced(
                         {
                             "kind": "judge",
                             "criteria": [
-                                f"Related note — {note_path}",
+                                f"Related note — {note_rel}",
                                 "Decision: round to 2 decimals",
                             ],
                             "rationale": "Canonical patterns retrieved for this change",
@@ -443,7 +447,7 @@ async def test_report_self_written_note_not_in_referenced(
     assert r.status_code == 200, r.text
     body = r.json()
     # The self-written note is OUT of referenced and IN written.
-    assert not any(note_path in x for x in body["references"])
+    assert not any("settle-add-a-title-case-helper" in x for x in body["references"])
     assert "Add a title case helper" in body["written"]
     # The genuine prior reference stays referenced.
     assert any("round to 2 decimals" in x for x in body["references"])

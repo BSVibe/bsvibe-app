@@ -61,6 +61,14 @@ def _ref_note_path(reference: str) -> str | None:
     return match.group(1) if match else None
 
 
+def _path_key(path: str | None) -> str | None:
+    """Normalize a vault path to its filename so a settle_drains ``node_ref``
+    (stored ABSOLUTE, e.g. ``/app/var/vault/.../garden/seedling/settle-x.md``)
+    matches a reference's RELATIVE path (``garden/seedling/settle-x.md``). Settle
+    slugs are unique, so the basename is a safe key. ``None`` passes through."""
+    return path.rsplit("/", 1)[-1] if path else None
+
+
 def _note_title(node_ref: str) -> str:
     """A readable title for a written note's vault path — the last segment,
     de-slugged ("garden/seedling/settle-add-a-title-case-helper.md" → "Add a
@@ -93,9 +101,10 @@ async def split_knowledge(
         SettleDrainRow.node_ref.is_not(None),
     )
     written_paths = [p for p in (await session.execute(stmt)).scalars().all() if p]
-    written_set = set(written_paths)
+    # Match by filename: node_ref is absolute, a reference's path is relative.
+    written_keys = {_path_key(p) for p in written_paths}
 
-    referenced = [r for r in references if _ref_note_path(r) not in written_set]
+    referenced = [r for r in references if _path_key(_ref_note_path(r)) not in written_keys]
 
     written: list[str] = []
     seen: set[str] = set()

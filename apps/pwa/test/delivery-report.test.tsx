@@ -271,7 +271,7 @@ describe("Delivery Report (R3)", () => {
     expect(within(footer).getByRole("button", { name: /roll back|되돌리기/i })).toBeInTheDocument();
   });
 
-  it("R8: a HELD delivery shows Approve & ship / Decline (not Rollback) and dispatches it", async () => {
+  it("R8: a HELD delivery shows Approve / Decline (not Rollback) and dispatches it", async () => {
     const safemode = vi.fn((url: string) => json({ item_id: "item-1", status: "approved" }));
     installFetch({
       report: () => ({ ...REPORT, run_status: "review_ready", held_delivery_item_id: "item-1" }),
@@ -280,9 +280,10 @@ describe("Delivery Report (R3)", () => {
     render(<DeliveryReport deliverableId="d1" />);
 
     const footer = await screen.findByRole("contentinfo");
-    // The held state mirrors the Brief: Approve & ship / Decline, NOT Rollback.
+    // R11: the footer buttons read IDENTICALLY to the Brief card — Approve /
+    // Decline (decisions namespace), NOT "Approve & ship". And never Rollback.
     expect(within(footer).queryByRole("button", { name: /roll back|되돌리기/i })).toBeNull();
-    const approve = within(footer).getByRole("button", { name: /Approve & ship/i });
+    const approve = within(footer).getByRole("button", { name: /^Approve$/i });
     expect(within(footer).getByRole("button", { name: /Decline/i })).toBeInTheDocument();
 
     await userEvent.click(approve);
