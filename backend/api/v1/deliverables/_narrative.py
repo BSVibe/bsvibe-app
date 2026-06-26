@@ -25,6 +25,8 @@ from backend.workflow.infrastructure.delivery.db import (
     SafeModeStatus,
 )
 
+from ._schemas import WrittenNote
+
 logger = structlog.get_logger(__name__)
 
 
@@ -80,20 +82,32 @@ def _note_title(node_ref: str) -> str:
     return text[:1].upper() + text[1:] if text else node_ref
 
 
+def _ws_relative(node_ref: str, workspace_id: uuid.UUID) -> str:
+    """The vault-relative path the note viewer expects ("garden/seedling/x.md")
+    from a settle_drains ``node_ref`` (ABSOLUTE in prod:
+    ``/app/var/vault/<region>/<ws>/garden/...``). Splits on the workspace-id
+    segment; an already-relative ref passes through (just trims a leading /)."""
+    marker = f"/{workspace_id}/"
+    if marker in node_ref:
+        return node_ref.split(marker, 1)[1]
+    return node_ref.lstrip("/")
+
+
 async def split_knowledge(
     session: AsyncSession,
     run_id: uuid.UUID,
     workspace_id: uuid.UUID,
     references: list[str],
-) -> tuple[list[str], list[str]]:
+) -> tuple[list[str], list[WrittenNote]]:
     """Split the report's knowledge into (referenced, written) — the founder's
-    ask to keep "참고한 지식" and "수정한/추가한 지식" distinct.
+    ask to keep "참고한 지식" and "추가한 지식" distinct.
 
     WRITTEN = the notes THIS run itself added, from ``settle_drains`` (run_id →
-    the written note's vault ``node_ref``), de-slugged to readable titles. Empty
-    until the async settle drain has run. REFERENCED = the retrieved prior
-    knowledge MINUS any statement that points at one of this run's OWN written
-    notes — a run consulting its own freshly-written note is not a real reference.
+    the written note's vault ``node_ref``): a de-slugged ``title`` + the
+    vault-relative ``path`` so the report chip can deep-link to the note viewer.
+    Empty until the async settle drain has run. REFERENCED = the retrieved prior
+    knowledge MINUS any statement pointing at one of this run's OWN written notes
+    — a run consulting its own freshly-written note is not a real reference.
     """
     stmt = select(SettleDrainRow.node_ref).where(
         SettleDrainRow.run_id == run_id,
@@ -106,13 +120,13 @@ async def split_knowledge(
 
     referenced = [r for r in references if _path_key(_ref_note_path(r)) not in written_keys]
 
-    written: list[str] = []
+    written: list[WrittenNote] = []
     seen: set[str] = set()
-    for path in written_paths:
-        title = _note_title(path)
+    for node_ref in written_paths:
+        title = _note_title(node_ref)
         if title and title not in seen:
             seen.add(title)
-            written.append(title)
+            written.append(WrittenNote(title=title, path=_ws_relative(node_ref, workspace_id)))
     return referenced, written[:_WRITTEN_MAX]
 
 

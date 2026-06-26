@@ -305,3 +305,51 @@ async def test_observations_workspace_isolation(client, vault_root) -> None:
     r = await client.get("/api/v1/inside/observations")
     assert r.status_code == 200, r.text
     assert r.json() == []
+
+
+# ---------------------------------------------------------------------------
+# note (R12) — the report's knowledge deep-link target
+# ---------------------------------------------------------------------------
+async def test_note_returns_a_written_note(
+    client, workspace_storage, vault_root, workspace_id
+) -> None:
+    """GET /inside/note returns one note's title + body (frontmatter stripped),
+    so the report's '추가한 지식' chip can show the actual note the run wrote."""
+    await _seed_settle_observation(vault_root, workspace_id, "Add a mean utility")
+    paths = await workspace_storage.list_files("garden", "*.md")
+    assert paths, "seed wrote a garden note"
+    path = paths[0]
+
+    r = await client.get("/api/v1/inside/note", params={"path": path})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["path"] == path
+    assert body["title"]
+    assert "verified work step left this observation" in body["content"]
+    # The YAML frontmatter is stripped from the rendered content.
+    assert "tags:" not in body["content"]
+
+
+async def test_note_404_for_missing(client) -> None:
+    r = await client.get(
+        "/api/v1/inside/note", params={"path": "garden/seedling/does-not-exist.md"}
+    )
+    assert r.status_code == 404
+
+
+async def test_note_404_for_traversal_or_non_note_path(client) -> None:
+    for bad in ("../secret.md", "/etc/passwd", ".bsage/internal.md", "garden/x.txt"):
+        r = await client.get("/api/v1/inside/note", params={"path": bad})
+        assert r.status_code == 404, bad
+
+
+async def test_note_is_workspace_scoped(client, vault_root) -> None:
+    """A note in ANOTHER workspace's vault is not addressable — 404."""
+    other_ws = uuid.uuid4()
+    await _seed_settle_observation(vault_root, other_ws, "Other workspace note")
+    other_root = FileSystemStorage(vault_root / _REGION / str(other_ws))
+    paths = await other_root.list_files("garden", "*.md")
+    assert paths
+    # Same relative path, but the caller's vault doesn't contain it → 404.
+    r = await client.get("/api/v1/inside/note", params={"path": paths[0]})
+    assert r.status_code == 404

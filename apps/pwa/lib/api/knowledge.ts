@@ -34,6 +34,7 @@ import type {
   ConceptDetail,
   CorrectRequestBody,
   KnowledgeGraph,
+  KnowledgeNote,
   Observation,
   RetractRequestBody,
   RetractResponse,
@@ -63,6 +64,13 @@ export function listObservations(limit = 25): Promise<Observation[]> {
  *  A fresh/sparse workspace yields `{ nodes: [], edges: [] }`. */
 export function getKnowledgeGraph(): Promise<KnowledgeGraph> {
   return apiFetch<KnowledgeGraph>("/api/v1/inside/graph");
+}
+
+/** R12 — one vault note's full content (title + body, frontmatter stripped) for
+ *  the report's note viewer. `path` is the vault-relative note path; the backend
+ *  404s for a path outside the note dirs / a traversal / a missing file. */
+export function getNote(path: string): Promise<KnowledgeNote> {
+  return apiFetch<KnowledgeNote>(`/api/v1/inside/note?path=${encodeURIComponent(path)}`);
 }
 
 /** Path-encode a `node_ref` for the retract/correct endpoints. `node_ref` is a

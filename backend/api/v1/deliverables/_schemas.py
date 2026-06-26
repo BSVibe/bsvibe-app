@@ -64,10 +64,8 @@ class DeliverableResponse(BaseModel):
 class VerificationReport(BaseModel):
     """One VerificationResult — the "how BSVibe checked this" proof.
 
-    ``contract`` is the work LLM's declared list of checks (the checks BSVibe
-    promised to run) and ``result`` is the execution outcome of running them;
-    both are free-form JSON (shape varies by verifier), so they are surfaced
-    verbatim and rendered defensively by the report view.
+    ``contract`` is the work LLM's declared checks and ``result`` the outcome of
+    running them; both free-form JSON, surfaced verbatim + rendered defensively.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -79,31 +77,37 @@ class VerificationReport(BaseModel):
     created_at: datetime
 
 
+class WrittenNote(BaseModel):
+    """A note this run added — de-slugged ``title`` + vault-relative ``path`` so
+    the report's "추가한 지식" chip deep-links to the note viewer (R12)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    title: str
+    path: str
+
+
 class DeliverableReportResponse(BaseModel):
-    """The glass-box proof for one shipped deliverable: the founder's original
-    request, the artifact, and the verification(s) recorded for its producing
-    run. ``request`` is the founder's Direction that led to this work (pulled
-    from the producing run's free-form payload), so the report reads as a
-    document — request → what was built → how it was checked. ``None`` when the
-    run carries no recorded intent."""
+    """The glass-box proof for one shipped deliverable: the founder's request,
+    the artifact, and the verification(s) for its producing run — request → what
+    was built → how it was checked. ``request`` is ``None`` when none recorded."""
 
     model_config = ConfigDict(extra="forbid")
 
     deliverable: DeliverableResponse
     request: str | None = None
-    # B4 trust-integrity: True ONLY when ≥1 PASSED VerificationResult is recorded
-    # for the producing run (mirrors ``deliverable.verified``); else needs-review.
+    # B4 trust-integrity: True ONLY when ≥1 PASSED VerificationResult exists.
     verified: bool = False
     verifications: list[VerificationReport] = []
     # R8 — footer mirrors the Brief: a HELD delivery (held_delivery_item_id set)
-    # shows Approve & ship / Decline; only run_status=="shipped" shows Rollback.
+    # shows Approve / Decline; only run_status=="shipped" shows Rollback.
     run_status: str | None = None
     held_delivery_item_id: uuid.UUID | None = None
     # G2 — knowledge REFERENCED (consulted), minus this run's own writes ("참고한 지식").
     references: list[str] = []
-    # R10 — knowledge this run WROTE (notes added to the vault, de-slugged from
-    # settle_drains). The "추가한 지식" group; empty until the settle drain runs.
-    written: list[str] = []
+    # R10/R12 — notes this run WROTE: de-slugged ``title`` + vault-relative ``path``
+    # so the "추가한 지식" chip deep-links to the note viewer. Empty until drain.
+    written: list[WrittenNote] = []
     # R1 — chat-composed plain-language "what this did" (cached); falls back to request.
     narrative: str | None = None
 
@@ -127,15 +131,10 @@ class DeliverableDiffResponse(BaseModel):
 class ArtifactContentResponse(BaseModel):
     """The produced CONTENT of one artifact file, read-only.
 
-    Served from the persisted run workspace
-    (``<run_workspace_root>/<run_id>/<ref>``) so the founder can SEE what the
-    agent actually wrote — not just a filename or a (often-null) git link.
-
-    ``content`` is the file decoded as UTF-8 text with ``errors="replace"``
-    (lossy but never throws), capped at 256 KiB. ``truncated`` flags that the
-    file was larger than the cap (only the leading bytes are returned).
-    ``binary`` flags a non-text file, in which case ``content`` is a short
-    "binary file, N bytes" note rather than the raw bytes.
+    Served from the persisted run workspace so the founder can SEE what the agent
+    wrote. ``content`` is UTF-8 (``errors="replace"``) capped at 256 KiB;
+    ``truncated`` flags the cap; ``binary`` flags a non-text file (``content`` is
+    then a short "binary file, N bytes" note).
     """
 
     model_config = ConfigDict(extra="forbid")

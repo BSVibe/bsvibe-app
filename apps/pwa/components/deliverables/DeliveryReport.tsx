@@ -8,10 +8,12 @@ import {
   getDeliverableReport,
   retractDeliverable,
 } from "@/lib/api/deliverables";
+import { getNote } from "@/lib/api/knowledge";
 import { approveSafeModeItem, denySafeModeItem } from "@/lib/api/safemode";
 import type {
   ArtifactContent,
   DeliverableReport,
+  KnowledgeNote,
   VerificationOutcome,
   VerificationReportItem,
 } from "@/lib/api/types";
@@ -26,7 +28,7 @@ import { DiffModeEnum, DiffView as GitDiffView } from "@git-diff-view/react";
 import "@git-diff-view/react/styles/diff-view.css";
 import { useTranslations } from "next-intl";
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
@@ -106,6 +108,14 @@ function prettyReference(reference: string): string {
   return title.charAt(0).toUpperCase() + title.slice(1);
 }
 
+/** The vault-relative note path inside a "Related note — <path>.md" reference,
+ *  so the chip can deep-link to the note viewer (R12). `null` for a non-note
+ *  reference (a prior decision/preference), which stays plain text. */
+function referenceNotePath(reference: string): string | null {
+  const match = reference.match(/^related note\s*[—–-]\s*(.+\.md)$/i);
+  return match ? match[1].trim() : null;
+}
+
 export default function DeliveryReport({ deliverableId }: { deliverableId: string }) {
   const [loaded, setLoaded] = useState<Loaded>({ state: "loading" });
   // Bumped after a footer action (approve / decline a held delivery) so the
@@ -181,6 +191,9 @@ function ReportDocument({
 }) {
   const t = useTranslations("report");
   const { deliverable, request, narrative, verified, verifications } = report;
+  // R12 — the knowledge note open in the viewer panel (a 추가한/참고한 지식 chip
+  // click), or null. The viewer fetches the note's content on open.
+  const [openNote, setOpenNote] = useState<{ path: string; title: string } | null>(null);
   // Defensive: an older / malformed payload may omit references / written —
   // degrade to empty lists (the group simply doesn't render), never a crash.
   const references = report.references ?? [];
@@ -272,15 +285,27 @@ function ReportDocument({
               <p className="report-knowledge__sublabel">{t("referenced")}</p>
               <p className="report-doc__muted">{t("referencedHint")}</p>
               <ul className="report-chips">
-                {references.map((reference, i) => (
-                  // References are free-form statements that may repeat across
-                  // re-attempts (deduped server-side); index keys the chip. A
-                  // "Related note — <path>.md" statement is shown as a readable
-                  // note title (note-level), not a raw internal path.
-                  <li key={`ref-${i}-${reference}`} className="report-chip">
-                    {prettyReference(reference)}
-                  </li>
-                ))}
+                {references.map((reference, i) => {
+                  // A "Related note — <path>.md" statement deep-links to the
+                  // note viewer; a non-note statement (prior decision) is plain.
+                  const path = referenceNotePath(reference);
+                  const label = prettyReference(reference);
+                  return (
+                    <li key={`ref-${i}-${reference}`}>
+                      {path ? (
+                        <button
+                          type="button"
+                          className="report-chip report-chip--link"
+                          onClick={() => setOpenNote({ path, title: label })}
+                        >
+                          {label}
+                        </button>
+                      ) : (
+                        <span className="report-chip">{label}</span>
+                      )}
+                    </li>
+                  );
+                })}
               </ul>
             </div>
           )}
@@ -290,8 +315,14 @@ function ReportDocument({
               <p className="report-doc__muted">{t("writtenHint")}</p>
               <ul className="report-chips">
                 {written.map((note, i) => (
-                  <li key={`written-${i}-${note}`} className="report-chip report-chip--written">
-                    {note}
+                  <li key={`written-${i}-${note.path}`}>
+                    <button
+                      type="button"
+                      className="report-chip report-chip--written report-chip--link"
+                      onClick={() => setOpenNote({ path: note.path, title: note.title })}
+                    >
+                      {note.title}
+                    </button>
                   </li>
                 ))}
               </ul>
@@ -326,7 +357,83 @@ function ReportDocument({
           <RollbackAffordance deliverableId={deliverable.id} />
         </footer>
       ) : null}
+
+      {openNote && (
+        <NoteViewer
+          path={openNote.path}
+          fallbackTitle={openNote.title}
+          onClose={() => setOpenNote(null)}
+        />
+      )}
     </article>
+  );
+}
+
+/** R12 — the note viewer: a modal that fetches ONE vault note's content (the
+ *  note a run wrote or consulted) and renders it as Markdown, so a chip click
+ *  shows the founder the ACTUAL note — the hub-capped graph drops fresh notes,
+ *  so this is how a just-written note is verifiable. A native <dialog> gives the
+ *  backdrop + Escape-to-close; a failed read shows a calm line, never a crash. */
+function NoteViewer({
+  path,
+  fallbackTitle,
+  onClose,
+}: {
+  path: string;
+  fallbackTitle: string;
+  onClose: () => void;
+}) {
+  const t = useTranslations("report");
+  const ref = useRef<HTMLDialogElement>(null);
+  const [state, setState] = useState<
+    { phase: "loading" } | { phase: "ready"; note: KnowledgeNote } | { phase: "error" }
+  >({ phase: "loading" });
+
+  useEffect(() => {
+    const dialog = ref.current;
+    if (dialog && !dialog.open) {
+      try {
+        dialog.showModal();
+      } catch {
+        dialog.open = true;
+      }
+    }
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    getNote(path)
+      .then((note) => active && setState({ phase: "ready", note }))
+      .catch(() => active && setState({ phase: "error" }));
+    return () => {
+      active = false;
+    };
+  }, [path]);
+
+  const title = state.phase === "ready" ? state.note.title : fallbackTitle;
+
+  return (
+    <dialog ref={ref} className="note-viewer" aria-label={title} onClose={onClose}>
+      <div className="note-viewer__panel">
+        <header className="note-viewer__head">
+          <h2 className="note-viewer__title">{title}</h2>
+          <button type="button" className="note-viewer__close" onClick={onClose}>
+            {t("noteClose")}
+          </button>
+        </header>
+        {state.phase === "loading" && (
+          <p className="note-viewer__muted" aria-busy="true">
+            {t("noteLoading")}
+          </p>
+        )}
+        {state.phase === "error" && <p className="note-viewer__muted">{t("noteError")}</p>}
+        {state.phase === "ready" && (
+          <div className="note-viewer__body report-markdown">
+            <ReactMarkdown remarkPlugins={[remarkGfm]}>{state.note.content}</ReactMarkdown>
+          </div>
+        )}
+      </div>
+    </dialog>
   );
 }
 

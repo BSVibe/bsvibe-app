@@ -6301,6 +6301,84 @@ main.login {
   background: var(--accent-bg);
 }
 
+/* R12 — a chip that deep-links to the note viewer. A <button> reset to the chip
+ * shape (no native chrome), with a quiet hover so it reads as openable. */
+.report-chip--link {
+  font: inherit;
+  cursor: pointer;
+  text-align: left;
+  appearance: none;
+  -webkit-appearance: none;
+}
+.report-chip--link:hover {
+  border-color: var(--ink-3);
+  color: var(--ink);
+}
+.report-chip--written.report-chip--link:hover {
+  border-color: var(--amber-ink);
+  color: var(--amber-ink);
+}
+
+/* ── Note viewer (R12) — the report's knowledge deep-link target ──────────────
+   A centered <dialog> showing ONE vault note's content (markdown), opened from a
+   추가한/참고한 지식 chip so a fresh note (dropped from the hub-capped graph) is
+   verifiable. ::backdrop dims the report behind it. */
+.note-viewer {
+  border: none;
+  background: transparent;
+  padding: 0;
+  max-width: min(640px, 92vw);
+  width: 100%;
+}
+.note-viewer::backdrop {
+  background: rgba(28, 27, 25, 0.32);
+}
+.note-viewer__panel {
+  background: var(--surface);
+  border: 1px solid var(--hair-strong);
+  border-radius: var(--radius);
+  padding: 20px 22px;
+  max-height: 80vh;
+  overflow: auto;
+}
+.note-viewer__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.note-viewer__title {
+  margin: 0;
+  font-size: 1.05rem;
+  font-weight: 600;
+  color: var(--ink);
+}
+.note-viewer__close {
+  flex: none;
+  font: inherit;
+  font-size: 0.82rem;
+  color: var(--ink-3);
+  background: none;
+  border: none;
+  cursor: pointer;
+  appearance: none;
+  -webkit-appearance: none;
+}
+.note-viewer__close:hover {
+  color: var(--ink);
+}
+.note-viewer__muted {
+  margin: 0;
+  font-size: 0.88rem;
+  color: var(--ink-3);
+}
+.note-viewer__body {
+  font-size: 0.9rem;
+  line-height: 1.6;
+  color: var(--ink);
+}
+
 /* The verification CHECKLIST — a green check + the plain check + a small tag. */
 .report-checklist {
   list-style: none;

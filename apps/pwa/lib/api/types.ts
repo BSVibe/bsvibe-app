@@ -392,11 +392,25 @@ export interface DeliverableReport {
    *  intent + captured diff; cached on the deliverable on first view. The
    *  redesigned report LEADS with this; `null` falls back to `request`. */
   narrative: string | null;
-  /** R10 — the knowledge this run WROTE: the notes it added to the vault
-   *  (de-slugged titles, from settle_drains), distinct from `references` (what it
-   *  consulted). The report's "추가한 지식" group; empty until the settle drain runs,
-   *  in which case the group is omitted. */
-  written?: string[];
+  /** R10/R12 — the knowledge this run WROTE: the notes it added to the vault,
+   *  distinct from `references` (what it consulted). Each carries a de-slugged
+   *  `title` + the vault-relative `path` so the "추가한 지식" chip deep-links to the
+   *  note viewer. Empty until the settle drain runs (the group is then omitted). */
+  written?: WrittenNote[];
+}
+
+/** R12 — one note this run added: a readable title + its vault-relative path,
+ *  used to deep-link the report's "추가한 지식" chip to the note viewer. */
+export interface WrittenNote {
+  title: string;
+  path: string;
+}
+
+/** R12 — one vault note's full content, for the report's note viewer. */
+export interface KnowledgeNote {
+  path: string;
+  title: string;
+  content: string;
 }
 
 /** `GET /api/v1/deliverables/{id}/artifacts/{ref:path}` body (backend

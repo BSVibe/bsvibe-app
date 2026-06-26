@@ -34,7 +34,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
-from . import concepts, graph, observations, retraction, trust
+from . import concepts, graph, note, observations, retraction, trust
 from ._dependencies import build_inside_graph, build_inside_index, build_inside_storage
 
 # Single aggregator router — see deliverables/__init__.py for the rationale
@@ -45,6 +45,7 @@ for _sub in (
     concepts.router,
     observations.router,
     graph.router,
+    note.router,
     retraction.router,
     trust.router,
 ):

@@ -368,9 +368,11 @@ async def _seed_deliverable(s, *, deliverable_id, run_id, workspace_id) -> None:
 async def test_report_surfaces_written_from_settle_drains(
     configured_client, db, workspace_id
 ) -> None:
-    """R10 — ``written`` ("추가한 지식") carries the notes THIS run added to the
-    vault, from settle_drains (run_id → node_ref), de-slugged to readable titles."""
+    """R10/R12 — ``written`` ("추가한 지식") carries the notes THIS run added: a
+    de-slugged title + the vault-relative path (stripped from the ABSOLUTE
+    settle_drains node_ref) so the chip can deep-link to the note viewer."""
     run_id, deliverable_id = uuid.uuid4(), uuid.uuid4()
+    rel = "garden/seedling/settle-add-a-tiny-title-case-helper-to-the-backend.md"
     async with db() as s:
         await _seed_run(s, run_id=run_id, ws=workspace_id)
         await _seed_deliverable(
@@ -381,7 +383,9 @@ async def test_report_surfaces_written_from_settle_drains(
                 activity_id=uuid.uuid4(),
                 workspace_id=workspace_id,
                 run_id=run_id,
-                node_ref="garden/seedling/settle-add-a-tiny-title-case-helper-to-the-backend.md",
+                # ABSOLUTE, as written in prod — the report must hand back the
+                # vault-relative path so the viewer can fetch it.
+                node_ref=f"/app/var/vault/us-1/{workspace_id}/{rel}",
             )
         )
         await s.commit()
@@ -389,7 +393,8 @@ async def test_report_surfaces_written_from_settle_drains(
     r = await configured_client.get(f"/api/v1/deliverables/{deliverable_id}/report")
     assert r.status_code == 200, r.text
     written = r.json()["written"]
-    assert "Add a tiny title case helper to the backend" in written
+    assert any(w["title"] == "Add a tiny title case helper to the backend" for w in written)
+    assert any(w["path"] == rel for w in written)
 
 
 async def test_report_self_written_note_not_in_referenced(
@@ -448,7 +453,7 @@ async def test_report_self_written_note_not_in_referenced(
     body = r.json()
     # The self-written note is OUT of referenced and IN written.
     assert not any("settle-add-a-title-case-helper" in x for x in body["references"])
-    assert "Add a title case helper" in body["written"]
+    assert any(w["title"] == "Add a title case helper" for w in body["written"])
     # The genuine prior reference stays referenced.
     assert any("round to 2 decimals" in x for x in body["references"])
 

@@ -50,6 +50,8 @@ EXPECTED_ROUTES: dict[str, set[tuple[str, str]]] = {
         ("GET", "/concepts/{concept_id}"),
         ("GET", "/observations"),
         ("GET", "/graph"),
+        # R12 — read ONE vault note for the report's knowledge deep-link.
+        ("GET", "/note"),
         # Lift M3a — ontology retraction / correction surface.
         ("POST", "/nodes/{node_ref:path}/retract"),
         ("POST", "/nodes/{node_ref:path}/correct"),
@@ -174,6 +176,7 @@ EXPECTED_SUBMODULES: dict[str, list[str]] = {
         "backend.api.v1.inside.concepts",
         "backend.api.v1.inside.observations",
         "backend.api.v1.inside.graph",
+        "backend.api.v1.inside.note",
         "backend.api.v1.inside.retraction",
         "backend.api.v1.inside.trust",
         "backend.api.v1.inside._schemas",
