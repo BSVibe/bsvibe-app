@@ -58,6 +58,7 @@ function reportWith(refs: string[], diffUrl: string | null = null): DeliverableR
     verified: true,
     verifications: [],
     references: [],
+    narrative: null,
   };
 }
 

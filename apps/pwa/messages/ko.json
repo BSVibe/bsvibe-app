@@ -823,13 +823,6 @@
     "errorLine": "지금은 이 리포트를 불러올 수 없어요.",
     "errorSub": "잠시 후 다시 시도해 주세요.",
     "untitled": "완료된 산출물",
-    "verdict": "검증 결과",
-    "verdictLabel": {
-      "passed": "검증됐어요",
-      "failed": "검증에 실패했어요",
-      "inconclusive": "검증이 불확실해요",
-      "none": "아직 검증되지 않음"
-    },
     "typeLabel": {
       "code": "코드",
       "pr": "풀 리퀘스트",
@@ -837,13 +830,9 @@
       "page_image": "페이지 미리보기",
       "direct_output": "결과물"
     },
-    "yourRequest": "보내신 요청",
     "whatWasBuilt": "무엇을 만들었나요",
-    "mandatoryGateRationale": "프로젝트 필수 품질 게이트 — 변경된 파일에 적용",
-    "retrievedKnowledgeRationale": "이 변경에 반영된 표준 패턴",
     "referenced": "참고한 지식",
     "referencedHint": "이 작업에 반영된 과거 결정·선호·반려 기록이에요.",
-    "howChecked": "어떻게 확인했나요",
     "noVerification": "아직 이 산출물에 대한 검증 기록이 없어요.",
     "noChecksDeclared": "이 검증에 선언된 확인 항목이 없어요.",
     "noChecksAfterKnowledge": "위에 참고한 지식 외에 추가 확인 항목은 없어요.",
@@ -855,10 +844,7 @@
     "artifactTruncated": "이 파일의 앞부분만 보여드려요. 인라인으로 표시하기엔 너무 커요.",
     "artifactUnavailable": "지금은 이 파일을 표시할 수 없어요.",
     "artifactUnavailableWithDiff": "이 파일을 표시할 수 없어요. 전체 변경 내용은 변경 내용에서 확인하세요.",
-    "viewDiff": "변경 내용 보기",
     "rollback": "되돌리기",
-    "rollbackHint": "전달된 내용을 되돌려요 — PR 닫기, 메시지 삭제, 페이지 보관.",
-    "rollbackConfirm": "이 작업을 되돌릴까요?",
     "rollbackConfirmLede": "이 산출물이 만든 외부 작업을 되돌려요. 다시 되돌릴 수는 없어요.",
     "rollbackConfirmButton": "되돌리기",
     "rollbackCancel": "그대로 두기",
@@ -867,7 +853,24 @@
     "rollbackDoneWith": "되돌렸어요 — {what}.",
     "rollbackAlready": "이미 되돌렸어요.",
     "rollbackNothing": "되돌릴 것이 없어요 — 외부 산출물이 만들어지지 않았어요.",
-    "rollbackFailed": "지금은 되돌릴 수 없어요. 잠시 후 다시 시도해 주세요."
+    "rollbackFailed": "지금은 되돌릴 수 없어요. 잠시 후 다시 시도해 주세요.",
+    "statusVerified": "검증됨",
+    "statusReview": "검토 필요",
+    "whatThisDid": "무엇을 했나요",
+    "note": "메모",
+    "howVerified": "어떻게 검증했나요",
+    "knowledge": "지식",
+    "learned": "새로 쓴 지식",
+    "seeFilesChanged": "코드 변경 보기 ({count}개 파일)",
+    "outcomeTag": {
+      "passed": "통과",
+      "failed": "실패",
+      "inconclusive": "불확실"
+    },
+    "timeJustNow": "방금",
+    "timeMinutes": "{n}분 전",
+    "timeHours": "{n}시간 전",
+    "timeDays": "{n}일 전"
   },
   "run": {
     "back": "‹ 요약",

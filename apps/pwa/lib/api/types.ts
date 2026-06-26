@@ -380,6 +380,15 @@ export interface DeliverableReport {
    *  folded into the verify contract. Deduped, first-seen order. Empty when
    *  nothing was retrieved (never a fabricated reference). */
   references: string[];
+  /** R1 — a plain-language "what this did" composed (chat model) from the
+   *  intent + captured diff; cached on the deliverable on first view. The
+   *  redesigned report LEADS with this; `null` falls back to `request`. */
+  narrative: string | null;
+  /** R3 — the knowledge this work newly WROTE (settled observations / promoted
+   *  canon), distinct from `references` (what it read). Not yet populated by the
+   *  backend (a future lift fills it); the report renders the "Learned" group
+   *  only when non-empty, so an absent/empty field simply omits the group. */
+  learned?: string[];
 }
 
 /** `GET /api/v1/deliverables/{id}/artifacts/{ref:path}` body (backend
