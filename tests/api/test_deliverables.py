@@ -346,6 +346,99 @@ async def test_report_returns_deliverable_with_verification(
     assert v["result"] == result
 
 
+async def test_report_returns_cached_narrative(configured_client, db, workspace_id) -> None:
+    """R1 — a deliverable with a cached ``narrative`` surfaces it on the report
+    without re-generating (no chat model needed)."""
+    run_id, deliverable_id = uuid.uuid4(), uuid.uuid4()
+    async with db() as s:
+        await _seed_run(s, run_id=run_id, ws=workspace_id, payload={"intent_text": "Add mean()"})
+        s.add(
+            Deliverable(
+                id=deliverable_id,
+                run_id=run_id,
+                workspace_id=workspace_id,
+                deliverable_type=DeliverableType.CODE,
+                payload={
+                    "summary": "mean.py",
+                    "narrative": "Added a mean() helper that averages a list and rejects empties.",
+                },
+                created_at=datetime.now(tz=UTC),
+            )
+        )
+        s.add(
+            VerificationResult(
+                id=uuid.uuid4(),
+                run_id=run_id,
+                work_step_id=None,
+                workspace_id=workspace_id,
+                outcome=VerificationOutcome.PASSED,
+                contract={},
+                result={},
+                created_at=datetime.now(tz=UTC),
+            )
+        )
+        await s.commit()
+
+    r = await configured_client.get(f"/api/v1/deliverables/{deliverable_id}/report")
+    assert r.status_code == 200, r.text
+    assert "averages a list" in r.json()["narrative"]
+
+
+async def test_report_lazy_generates_and_caches_narrative(
+    configured_client, db, workspace_id, monkeypatch
+) -> None:
+    """R1 — a verified deliverable with no cached narrative generates one (chat
+    model stubbed) and caches it on the deliverable payload."""
+
+    class _StubNarrative:
+        def __init__(self, session, *, settings) -> None:  # noqa: ANN001
+            pass
+
+        async def narrate(self, *, workspace_id, intent, summary, diff):  # noqa: ANN001, ANN201
+            return "Built a percent_change helper that rounds deltas to two decimals."
+
+    monkeypatch.setattr(
+        "backend.workflow.application.report_narrative.ReportNarrativeService", _StubNarrative
+    )
+
+    run_id, deliverable_id = uuid.uuid4(), uuid.uuid4()
+    async with db() as s:
+        await _seed_run(
+            s, run_id=run_id, ws=workspace_id, payload={"intent_text": "Add percent_change"}
+        )
+        s.add(
+            Deliverable(
+                id=deliverable_id,
+                run_id=run_id,
+                workspace_id=workspace_id,
+                deliverable_type=DeliverableType.CODE,
+                payload={"summary": "percent_change.py", "diff": "+def percent_change(): ..."},
+                created_at=datetime.now(tz=UTC),
+            )
+        )
+        s.add(
+            VerificationResult(
+                id=uuid.uuid4(),
+                run_id=run_id,
+                work_step_id=None,
+                workspace_id=workspace_id,
+                outcome=VerificationOutcome.PASSED,
+                contract={},
+                result={},
+                created_at=datetime.now(tz=UTC),
+            )
+        )
+        await s.commit()
+
+    r = await configured_client.get(f"/api/v1/deliverables/{deliverable_id}/report")
+    assert r.status_code == 200, r.text
+    assert "percent_change helper" in r.json()["narrative"]
+    # It was cached on the deliverable payload.
+    async with db() as s:
+        row = await s.get(Deliverable, deliverable_id)
+        assert row is not None and "percent_change helper" in row.payload.get("narrative", "")
+
+
 async def test_report_empty_verification_does_not_error(
     configured_client, db, workspace_id
 ) -> None:
