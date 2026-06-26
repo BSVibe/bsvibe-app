@@ -113,15 +113,6 @@
     "errorNetwork": "Network hiccup. Please try again.",
     "answerLabel": "Answer"
   },
-  "productsIndex": {
-    "heading": "Products",
-    "lede": "Everything you’re building with BSVibe. Open one to give it a Direction or see what shipped.",
-    "newProduct": "New product",
-    "listLabel": "Products",
-    "loading": "Loading products…",
-    "loadError": "Couldn’t load your products. Try again in a moment.",
-    "empty": "No products yet. Create one to give BSVibe something to work on."
-  },
   "products": {
     "back": "‹ Brief",
     "region": "Product",
@@ -832,13 +823,6 @@
     "errorLine": "Couldn’t load this report just now.",
     "errorSub": "Try again in a moment.",
     "untitled": "Shipped deliverable",
-    "verdict": "Verdict",
-    "verdictLabel": {
-      "passed": "This is verified",
-      "failed": "Verification failed",
-      "inconclusive": "Verification inconclusive",
-      "none": "Not yet verified"
-    },
     "typeLabel": {
       "code": "Code",
       "pr": "Pull request",
@@ -846,13 +830,9 @@
       "page_image": "Page preview",
       "direct_output": "Output"
     },
-    "yourRequest": "Your request",
     "whatWasBuilt": "What was built",
-    "mandatoryGateRationale": "Mandatory project quality gate — enforced on the changed files",
-    "retrievedKnowledgeRationale": "Canonical patterns retrieved for this change",
-    "referenced": "What BSVibe referenced",
+    "referenced": "Referenced",
     "referencedHint": "Past decisions, preferences, and rejections that informed this work.",
-    "howChecked": "How BSVibe checked this",
     "noVerification": "No verification recorded for this deliverable yet.",
     "noChecksDeclared": "No checks were declared for this verification.",
     "noChecksAfterKnowledge": "No additional checks beyond the referenced knowledge above.",
@@ -864,10 +844,7 @@
     "artifactTruncated": "Showing the first part of this file. It was larger than we display inline.",
     "artifactUnavailable": "Couldn’t show this file right now.",
     "artifactUnavailableWithDiff": "Couldn’t show this file. See the diff for the full change.",
-    "viewDiff": "View the diff",
     "rollback": "Roll back",
-    "rollbackHint": "Reverse what was delivered — close the PR, delete the message, archive the page.",
-    "rollbackConfirm": "Roll this back?",
     "rollbackConfirmLede": "This reverses the external action this deliverable produced. It can’t be undone.",
     "rollbackConfirmButton": "Roll back",
     "rollbackCancel": "Keep it",
@@ -876,7 +853,24 @@
     "rollbackDoneWith": "Rolled back — {what}.",
     "rollbackAlready": "Already rolled back.",
     "rollbackNothing": "Nothing to roll back — this produced no external artifact.",
-    "rollbackFailed": "Couldn’t roll back just now. Try again in a moment."
+    "rollbackFailed": "Couldn’t roll back just now. Try again in a moment.",
+    "statusVerified": "Verified",
+    "statusReview": "Needs review",
+    "whatThisDid": "What this did",
+    "note": "Note",
+    "howVerified": "How it was verified",
+    "knowledge": "Knowledge",
+    "learned": "Learned",
+    "seeFilesChanged": "See what files changed ({count})",
+    "outcomeTag": {
+      "passed": "passed",
+      "failed": "failed",
+      "inconclusive": "inconclusive"
+    },
+    "timeJustNow": "just now",
+    "timeMinutes": "{n}m ago",
+    "timeHours": "{n}h ago",
+    "timeDays": "{n}d ago"
   },
   "run": {
     "back": "‹ Brief",

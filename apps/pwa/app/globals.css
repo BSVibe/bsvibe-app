@@ -823,107 +823,6 @@ main.login {
   color: var(--ink);
 }
 
-/* ── Products index (full-page overview) ──────────────────────────────────── */
-.products-index {
-  max-width: var(--col-w);
-  margin: 0 auto;
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-}
-
-.products-index__head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-}
-
-.products-index__heading {
-  margin: 0;
-  font-size: 1.5rem;
-  font-weight: 650;
-  letter-spacing: -0.01em;
-}
-
-.products-index__lede {
-  margin: 0;
-  font-size: 0.9rem;
-  color: var(--ink-2);
-}
-
-.products-index__cta {
-  flex: none;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 9px 14px;
-  border: none;
-  border-radius: var(--radius-sm);
-  background: #1f1d1a;
-  color: #fff;
-  font: inherit;
-  font-size: 0.84rem;
-  font-weight: 550;
-  cursor: pointer;
-}
-
-.products-index__note,
-.products-index__empty {
-  margin: 8px 0 0;
-  font-size: 0.9rem;
-  color: var(--ink-3);
-}
-
-.products-index__list {
-  list-style: none;
-  margin: 4px 0 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-}
-
-.products-index__item {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  /* 12px y-pad → ~44px row: the index is a primary navigation surface, so it
-     gets the comfortable touch row on every viewport (not the denser 30px
-     desktop floor the compact rail uses). */
-  padding: 12px 8px;
-  border-top: 1px solid var(--hair);
-  color: var(--ink);
-  text-decoration: none;
-}
-
-.products-index__item:first-child {
-  border-top: none;
-}
-
-.products-index__item:hover {
-  background: var(--accent-bg);
-}
-
-.products-index__dot {
-  flex: none;
-  width: 8px;
-  height: 8px;
-  border-radius: 999px;
-  background: var(--green-dot);
-}
-
-.products-index__name {
-  font-size: 0.95rem;
-  font-weight: 540;
-}
-
-.products-index__slug {
-  margin-left: auto;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 0.78rem;
-  color: var(--ink-3);
-}
-
 .brief__heading {
   margin: 0;
   font-size: 1.5rem;
@@ -1235,161 +1134,6 @@ main.login {
   letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--ink-3);
-}
-
-/* Needs you */
-.needs-you {
-  background: var(--surface);
-  border: 1px solid var(--hair-strong);
-  border-radius: var(--radius);
-  padding: 16px 18px;
-}
-
-.needs-you--empty {
-  padding: 18px;
-}
-
-.needs-you__clear {
-  margin: 0;
-  color: var(--ink-3);
-  font-size: 0.88rem;
-}
-
-.needs-you__head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 8px;
-}
-
-.needs-you__title {
-  font-size: 0.95rem;
-  font-weight: 600;
-}
-
-.needs-you__count {
-  min-width: 20px;
-  height: 20px;
-  padding: 0 6px;
-  border-radius: 999px;
-  background: var(--accent-bg);
-  color: var(--ink-2);
-  font-size: 0.75rem;
-  font-weight: 600;
-  display: grid;
-  place-items: center;
-}
-
-.needs-you__list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-}
-
-.needs-you__row {
-  display: flex;
-  align-items: baseline;
-  flex-wrap: wrap;
-  gap: 6px;
-  padding: 9px 0;
-  font-size: 0.88rem;
-  color: var(--ink-2);
-  border-top: 1px solid var(--hair);
-}
-
-.needs-you__row:first-child {
-  border-top: none;
-}
-
-.needs-you__product {
-  font-weight: 550;
-  color: var(--ink);
-}
-
-.needs-you__sep {
-  color: var(--ink-3);
-}
-
-.needs-you__q {
-  flex: 1 1 12ch;
-  min-width: 12ch;
-}
-
-.needs-you__chev {
-  color: var(--ink-3);
-}
-
-/* Needs you — Decide affordances (Safe-Mode approve / deny) */
-.needs-you__actions {
-  margin-left: auto;
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-  gap: 8px;
-}
-
-/* Inline error sits on its own line within the actions group so the buttons
- * never overflow on a narrow (mobile) viewport. */
-.needs-you__actions .needs-you__error {
-  flex: 1 0 100%;
-  text-align: right;
-}
-
-.needs-you__approve,
-.needs-you__deny {
-  border: 1px solid var(--hair-strong);
-  border-radius: 999px;
-  /* 8px y-padding lifts the decision CTAs from ~25px to ~32px tall (matches
-     the sidebar/row baseline); mobile bumps to 44px. These two buttons sit
-     side-by-side on the high-stakes "Approve / Deny" row — generous padding
-     is worth more than density here. */
-  padding: 8px 14px;
-  font-size: 0.78rem;
-  font-weight: 550;
-  background: var(--surface);
-  color: var(--ink-2);
-  cursor: pointer;
-}
-
-.needs-you__approve {
-  border-color: transparent;
-  background: #1f1d1a;
-  color: #fff;
-}
-
-.needs-you__approve:hover {
-  background: #000;
-}
-
-.needs-you__deny:hover {
-  background: var(--accent-bg);
-}
-
-.needs-you__approve:disabled,
-.needs-you__deny:disabled {
-  cursor: default;
-  opacity: 0.55;
-}
-
-.needs-you__error {
-  font-size: 0.78rem;
-  color: var(--amber-ink);
-}
-
-.needs-you__resolved {
-  margin-left: auto;
-  font-size: 0.8rem;
-  font-weight: 550;
-  color: var(--green-ink);
-}
-
-.needs-you__row--denied .needs-you__resolved {
-  color: var(--ink-3);
-}
-
-.needs-you__row--resolving {
-  opacity: 0.8;
 }
 
 /* ── Decisions ────────────────────────────────────────────────────────────
@@ -5944,14 +5688,6 @@ main.login {
   padding: 0 10px;
 }
 
-.rail-products__heading-link {
-  text-decoration: none;
-  border-radius: var(--radius-sm);
-}
-.rail-products__heading-link:hover .rail-products__heading {
-  color: var(--ink-2);
-}
-
 .rail-products__heading {
   margin: 0;
   font-size: 0.68rem;
@@ -6221,40 +5957,241 @@ main.login {
 .report-doc__head {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 12px;
 }
 
-.report-doc__chips {
-  display: flex;
-  flex-wrap: wrap;
+/* Status pill — a calm green "Verified" (with a check) or a neutral amber
+ * "Needs review". Color carries status meaning only; no loud fill. */
+.report-status {
+  display: inline-flex;
   align-items: center;
-  gap: 8px;
-}
-
-.report-doc__chip {
-  font-size: 0.72rem;
+  gap: 5px;
+  width: fit-content;
+  font-size: 0.74rem;
   font-weight: 600;
-  color: var(--ink-2);
-  background: var(--accent-bg);
   border-radius: 999px;
-  padding: 3px 10px;
+  padding: 3px 11px;
 }
 
-.report-doc__chip--passed {
+.report-status--verified {
   color: var(--green-ink);
   background: var(--green-pill-bg);
 }
 
-.report-doc__date {
+.report-status--review {
+  color: var(--amber-ink);
+  background: var(--accent-bg);
+}
+
+.report-status__check {
+  display: block;
+}
+
+.report-doc__title {
+  font-size: 1.5rem;
+  font-weight: 650;
+  line-height: 1.28;
+  color: var(--ink);
+}
+
+/* Meta chip row — the deliverable type chip, a dot, and the relative time. */
+.report-doc__meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
   font-size: 0.74rem;
   color: var(--ink-3);
 }
 
-.report-doc__title {
-  font-size: 1.4rem;
+.report-doc__meta-chip {
   font-weight: 600;
-  line-height: 1.3;
+  color: var(--ink-2);
+  background: var(--accent-bg);
+  border-radius: 999px;
+  padding: 2px 9px;
+}
+
+.report-doc__meta-dot {
+  color: var(--ink-3);
+}
+
+.report-doc__meta-time {
+  color: var(--ink-3);
+}
+
+/* The LEAD paragraph — "What this did" (the R1 narrative). The most prominent
+ * body after the header: comfortable reading measure + generous line height. */
+.report-doc__lead {
+  font-size: 1.02rem;
+  line-height: 1.65;
   color: var(--ink);
+  overflow-wrap: anywhere;
+}
+
+/* The OPTIONAL quiet Note — surfaced only on a non-passed verification signal.
+ * Slightly amber-tinted hairline line, never an alarm. */
+.report-note {
+  font-size: 0.9rem;
+  line-height: 1.55;
+  color: var(--amber-ink);
+  border: 1px solid var(--hair-strong);
+  border-radius: var(--radius-sm);
+  background: var(--accent-bg);
+  padding: 10px 14px;
+  overflow-wrap: anywhere;
+}
+
+/* Knowledge group — Referenced (neutral) and Learned (amber-accented) chips. */
+.report-knowledge {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.report-knowledge + .report-knowledge {
+  margin-top: 6px;
+}
+
+.report-knowledge__sublabel {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--ink-2);
+}
+
+.report-chips {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.report-chip {
+  font-size: 0.8rem;
+  line-height: 1.4;
+  color: var(--ink-2);
+  background: var(--surface);
+  border: 1px solid var(--hair-strong);
+  border-radius: 999px;
+  padding: 4px 12px;
+  overflow-wrap: anywhere;
+}
+
+.report-chip--learned {
+  color: var(--amber-ink);
+  border-color: var(--amber-dot);
+  background: var(--accent-bg);
+}
+
+/* The verification CHECKLIST — a green check + the plain check + a small tag. */
+.report-checklist {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.report-checklist__row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid var(--hair);
+  border-radius: var(--radius-sm);
+  padding: 8px 12px;
+  background: var(--surface);
+}
+
+.report-checklist__mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 16px;
+  height: 16px;
+}
+
+.report-checklist__mark--passed {
+  color: var(--green-ink);
+}
+
+.report-checklist__mark--other {
+  color: var(--ink-3);
+}
+
+.report-checklist__label {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 0.85rem;
+  line-height: 1.45;
+  color: var(--ink);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  overflow-wrap: anywhere;
+}
+
+.report-checklist__tag {
+  flex: none;
+  font-size: 0.7rem;
+  font-weight: 600;
+  border-radius: 999px;
+  padding: 2px 8px;
+}
+
+.report-checklist__tag--passed {
+  color: var(--green-ink);
+  background: var(--green-pill-bg);
+}
+
+.report-checklist__tag--other {
+  color: var(--amber-ink);
+  background: var(--accent-bg);
+}
+
+/* The DEMOTED diff disclosure — the captured diff sits behind this, collapsed
+ * by default. A quiet hairline-framed summary, not a primary surface. */
+.report-diff-disclosure {
+  border: 1px solid var(--hair);
+  border-radius: var(--radius-sm);
+}
+
+.report-diff-disclosure__summary {
+  font-size: 0.85rem;
+  color: var(--ink-2);
+  padding: 10px 14px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.report-diff-disclosure__summary::-webkit-details-marker {
+  display: none;
+}
+
+.report-diff-disclosure__summary::before {
+  content: "›";
+  display: inline-block;
+  margin-right: 8px;
+  color: var(--ink-3);
+  transition: transform 0.15s ease;
+}
+
+.report-diff-disclosure[open] .report-diff-disclosure__summary::before {
+  transform: rotate(90deg);
+}
+
+.report-diff-disclosure__body {
+  border-top: 1px solid var(--hair);
+  padding: 14px;
+}
+
+/* The de-emphasized footer — separated by a hairline, carrying the quiet,
+ * secondary rollback affordance. */
+.report-doc__footer {
+  border-top: 1px solid var(--hair);
+  padding-top: 18px;
+  margin-top: 6px;
 }
 
 .report-doc__section {
@@ -6269,19 +6206,6 @@ main.login {
   letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--ink-3);
-}
-
-.report-doc__request {
-  margin: 0;
-  padding: 10px 14px;
-  border-left: 3px solid var(--hair-strong);
-  background: var(--accent-bg);
-  border-radius: var(--radius-sm);
-  font-size: 0.92rem;
-  line-height: 1.55;
-  color: var(--ink);
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
 }
 
 .report-doc__built {
@@ -6369,24 +6293,11 @@ main.login {
   margin: auto;
 }
 
-.report-doc__verdict {
-  font-size: 0.92rem;
-  font-weight: 600;
-  color: var(--green-ink);
-}
-
-.report-doc__verdict--failed,
-.report-doc__verdict--inconclusive,
-.report-doc__verdict--none {
-  color: var(--amber-ink);
-}
-
 .report-doc__muted {
   font-size: 0.85rem;
   color: var(--ink-3);
 }
 
-.report-doc__diff,
 .report-doc__open {
   font-size: 0.85rem;
   color: var(--ink-2);
@@ -6477,51 +6388,10 @@ main.login {
   color: var(--ink-2);
 }
 
-/* Inner verification check rows (the document's How-checked block). */
+/* The calm empty state for a verification with no real (non-knowledge) checks. */
 .report-checks__none {
   font-size: 0.85rem;
   color: var(--ink-3);
-}
-
-.report-checks__block {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.report-checks__list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.report-checks__row {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  border: 1px solid var(--hair);
-  border-radius: var(--radius-sm);
-  padding: 8px 12px;
-  background: var(--surface);
-}
-
-.report-checks__cmd {
-  font-size: 0.85rem;
-  color: var(--ink);
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-}
-
-.report-checks__rationale {
-  font-size: 0.78rem;
-  color: var(--ink-3);
-}
-
-.report-checks__result {
-  font-size: 0.82rem;
-  color: var(--ink-2);
 }
 
 .shipped__report-link {
@@ -8152,12 +8022,8 @@ main.login {
   opacity: 0.6;
 }
 
-/* Placement modifiers — context-specific (rail vs. products-index row vs.
-   trust panel) so each surface controls its own spacing. */
-.products-index__arrow {
-  margin-left: 0.5rem;
-  margin-right: 0.25rem;
-}
+/* Placement modifiers — context-specific (rail vs. trust panel) so each
+   surface controls its own spacing. */
 .rail-products__arrow {
   margin-left: auto;
   padding-left: 0.5rem;

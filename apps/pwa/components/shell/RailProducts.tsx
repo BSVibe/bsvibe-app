@@ -1,5 +1,6 @@
 "use client";
 
+import GlyphLegendTooltip from "@/components/products/GlyphLegendTooltip";
 import TrendArrowGlyph from "@/components/products/TrendArrowGlyph";
 import { listProducts } from "@/lib/api/products";
 import { getFleetTrust } from "@/lib/api/trust";
@@ -15,9 +16,12 @@ import { PlusIcon } from "./icons";
 /**
  * The left rail's "PRODUCTS" section (Stitch design's PRODUCTS heading): a
  * separate section BELOW the primary nav listing the workspace's products, each
- * a link to its `/products/{slug}` detail. A calm "No products yet" empty state
- * and a prominent "+ Product" CTA (where the old "+ Direct" rail button sat —
- * Direct is now the omnipresent FAB) that opens the create flow in a modal.
+ * a link to its `/products/{slug}` detail. This rail IS the product index —
+ * there is no separate `/products` overview page. Each row carries the M4 trust
+ * trend glyph (best-effort) for fleet-at-a-glance. A calm "No products yet"
+ * empty state and a prominent "+ Product" CTA (where the old "+ Direct" rail
+ * button sat — Direct is now the omnipresent FAB) opens the create flow in a
+ * modal, so product creation lives entirely in the rail.
  *
  * The list loads on mount and re-reads after a successful create so the section
  * reflects the server. A failed read degrades to a calm inline note rather than
@@ -93,11 +97,10 @@ export default function RailProducts() {
   return (
     <section className="rail-products" aria-label={t("sectionLabel")}>
       <header className="rail-products__head">
-        {/* The heading links to the full /products overview — the compact list
-            below is the quick switcher, the index page is "see/manage all". */}
-        <Link href="/products" className="rail-products__heading-link">
-          <h2 className="rail-products__heading">{t("heading")}</h2>
-        </Link>
+        {/* The rail IS the product index — there's no separate overview page,
+            so the heading is plain text (the per-product rows below link to
+            each product's /products/{slug} detail). */}
+        <h2 className="rail-products__heading">{t("heading")}</h2>
       </header>
 
       {list === null ? (
@@ -134,6 +137,10 @@ export default function RailProducts() {
           })}
         </ul>
       )}
+
+      {/* First-visit legend for the trend glyphs — the rail is now the sole
+          product index, so the glyph key lives here (once per session). */}
+      <GlyphLegendTooltip hasGlyphs={trust.size > 0} />
 
       {/* "+ Product" CTA — the prominent create action, sitting where the old
           "+ Direct" rail button was (Direct is now the omnipresent FAB). */}

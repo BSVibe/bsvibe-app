@@ -1,5 +1,6 @@
 "use client";
 
+import { relativeTime } from "@/components/decisions/relative-time";
 import { ApiError } from "@/lib/api/client";
 import {
   getDeliverableArtifact,
@@ -29,23 +30,27 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
 /**
- * Delivery Report — the "glass box proof" for one shipped deliverable, read as a
- * single Notion-like DOCUMENT (Stitch "Delivery Report" redesign): a masthead
- * (title + type / verdict chips + date), then the founder's "Your request", the
- * prominent "What was built" (the produced file CONTENT shown inline by default,
- * switchable across artifacts), "How BSVibe checked this" (the verdict + the
- * declared verification contract and the result of running it), and a diff link.
+ * Delivery Report (R3 redesign) — the "glass box proof" for one shipped
+ * deliverable, read as a calm, editorial DOCUMENT. Top to bottom: a small
+ * status pill (Verified / Needs review) + the plain title + a meta chip row,
+ * then the LEAD "What this did" (the R1 plain-language narrative, falling back
+ * to the founder's Direction), an OPTIONAL quiet "Note" (surfaced only on a
+ * non-passed verification signal), "How it was verified" as a clean CHECKLIST,
+ * a "Knowledge" group (referenced chips + a future-ready Learned group), the
+ * captured diff DEMOTED behind a collapsed disclosure, and a de-emphasized
+ * footer carrying the one mutating affordance (roll back).
  *
  * Composed client-side from REAL `GET /api/v1/deliverables/{id}/report` — which
- * now also carries `request` (the founder's Direction, from the producing run).
- * The contract/result JSON is free-form (shape varies by verifier), so it is
- * rendered DEFENSIVELY — an odd shape degrades to a calm line, never a crash.
- * States: loading / not-found (404, NOT an error) / error / ready.
+ * carries `narrative` (R1), `request` (the founder's Direction), `references`
+ * (knowledge read), and the verification contract/result. The contract/result
+ * JSON is free-form (shape varies by verifier), so it is rendered DEFENSIVELY —
+ * an odd shape degrades to a calm line, never a crash. States: loading /
+ * not-found (404, NOT an error) / error / ready.
  *
- * "What was built" auto-opens the first artifact's CONTENT (the document's
- * centerpiece — the founder SEES the produced file without a click). A 404 /
- * cleaned run dir degrades to a calm "couldn't show this file — see the diff"
- * note; binary files surface metadata only; a truncated file shows a note.
+ * The diff viewer is behind a collapsed disclosure (secondary, not shown
+ * expanded on load). A 404 / cleaned run dir degrades to a calm "couldn't show
+ * this file — see the diff" note; binary files surface metadata only; a
+ * truncated file shows a note.
  *
  * Read-only proof: no approve / follow-up actions here (those live on Decisions
  * and have no per-report endpoint), and no risk score the model doesn't carry.
@@ -146,67 +151,83 @@ export default function DeliveryReport({ deliverableId }: { deliverableId: strin
 
 function ReportDocument({ report }: { report: DeliverableReport }) {
   const t = useTranslations("report");
-  const { deliverable, request, verified, verifications } = report;
-  // Defensive: an older / malformed payload may omit references — degrade to an
-  // empty list (the section simply doesn't render), never a crash.
+  const { deliverable, request, narrative, verified, verifications } = report;
+  // Defensive: an older / malformed payload may omit references / learned —
+  // degrade to empty lists (the group simply doesn't render), never a crash.
   const references = report.references ?? [];
+  const learned = report.learned ?? [];
   // Concise document title — the first sentence of the (often paragraph-long)
-  // LLM summary, not the whole blob; the detail lives in the body + request.
+  // LLM summary, not the whole blob; the detail lives in the narrative lead.
   const summary = conciseSummary(deliverable.summary, t("untitled"));
-  // B4 defense-in-depth: the green "This is verified" verdict ("passed" tone)
-  // shows ONLY when the backend's authoritative `verified` flag is set (a real
-  // PASSED VerificationResult). If a stray verification row claims "passed" but
-  // the backend did not certify the deliverable, the verdict reads honestly as
-  // "Not yet verified" ("none") rather than a hollow green.
+  // B4 defense-in-depth: the green "Verified" pill ("passed" tone) shows ONLY
+  // when the backend's authoritative `verified` flag is set (a real PASSED
+  // VerificationResult). A stray "passed" row the backend did not certify
+  // reads honestly as "Needs review" ("none"), never a hollow green.
   const tone = verdictTone(verified, verifications);
   const hasDiff = Boolean(deliverable.diff_url);
+  // The R1 plain-language "what this did" LEADS the document; when it's absent
+  // (older row, narrative hiccup) we fall back to the founder's own Direction.
+  const lead = narrative ?? request;
+  // The strongest verification result drives the OPTIONAL Note: only a
+  // non-passed outcome that carries a message surfaces as a quiet amber line.
+  const noteMessage = nonPassedNote(verifications);
+  const fileCount = deliverable.artifact_refs.length;
+  const showKnowledge = references.length > 0 || learned.length > 0;
 
   return (
     <article className="report-doc">
       <header className="report-doc__head">
-        <div className="report-doc__chips">
-          <span className="report-doc__chip">{t(`typeLabel.${deliverable.deliverable_type}`)}</span>
-          <span className={`report-doc__chip report-doc__chip--${tone}`}>
-            {t(`verdictLabel.${tone}`)}
-          </span>
-          <span className="report-doc__date">{deliverable.created_at.slice(0, 10)}</span>
-        </div>
+        <span
+          className={`report-status report-status--${tone === "passed" ? "verified" : "review"}`}
+        >
+          {tone === "passed" && (
+            <svg
+              className="report-status__check"
+              viewBox="0 0 16 16"
+              width="13"
+              height="13"
+              aria-hidden="true"
+            >
+              <path
+                d="M13 4.5 6.5 11 3 7.5"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+            </svg>
+          )}
+          {t(tone === "passed" ? "statusVerified" : "statusReview")}
+        </span>
         <h1 className="report-doc__title">{summary}</h1>
+        <div className="report-doc__meta">
+          <span className="report-doc__meta-chip">
+            {t(`typeLabel.${deliverable.deliverable_type}`)}
+          </span>
+          <span className="report-doc__meta-dot" aria-hidden="true">
+            ·
+          </span>
+          <span className="report-doc__meta-time">{relativeTime(deliverable.created_at, t)}</span>
+        </div>
       </header>
 
-      {request && (
-        <section className="report-doc__section" aria-label={t("yourRequest")}>
-          <h2 className="report-doc__label">{t("yourRequest")}</h2>
-          <blockquote className="report-doc__request">{request}</blockquote>
+      {lead && (
+        <section className="report-doc__section" aria-label={t("whatThisDid")}>
+          <h2 className="report-doc__label">{t("whatThisDid")}</h2>
+          <p className="report-doc__lead">{lead}</p>
         </section>
       )}
 
-      <section className="report-doc__section" aria-label={t("whatWasBuilt")}>
-        <h2 className="report-doc__label">{t("whatWasBuilt")}</h2>
-        <WhatWasBuilt deliverable={deliverable} hasDiff={hasDiff} />
-      </section>
-
-      {references.length > 0 && (
-        <section className="report-doc__section" aria-label={t("referenced")}>
-          <h2 className="report-doc__label">{t("referenced")}</h2>
-          <p className="report-doc__muted">{t("referencedHint")}</p>
-          <ul className="report-doc__references">
-            {references.map((reference, i) => (
-              // References are free-form statements that may repeat across
-              // re-attempts (deduped server-side); index keys the row.
-              <li key={`${i}-${reference}`} className="report-doc__reference">
-                {reference}
-              </li>
-            ))}
-          </ul>
+      {noteMessage && (
+        <section className="report-doc__section" aria-label={t("note")}>
+          <h2 className="report-doc__label">{t("note")}</h2>
+          <p className="report-note">{noteMessage}</p>
         </section>
       )}
 
-      <section className="report-doc__section" aria-label={t("howChecked")}>
-        <h2 className="report-doc__label">{t("howChecked")}</h2>
-        <p className={`report-doc__verdict report-doc__verdict--${tone}`}>
-          {t(`verdictLabel.${tone}`)}
-        </p>
+      <section className="report-doc__section" aria-label={t("howVerified")}>
+        <h2 className="report-doc__label">{t("howVerified")}</h2>
         {verifications.length === 0 ? (
           <p className="report-doc__muted">{t("noVerification")}</p>
         ) : (
@@ -214,26 +235,75 @@ function ReportDocument({ report }: { report: DeliverableReport }) {
         )}
       </section>
 
-      {deliverable.diff_url && (
-        <a
-          className="report-doc__diff"
-          href={deliverable.diff_url}
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          {t("viewDiff")}
-        </a>
+      {showKnowledge && (
+        <section className="report-doc__section" aria-label={t("knowledge")}>
+          <h2 className="report-doc__label">{t("knowledge")}</h2>
+          {references.length > 0 && (
+            <div className="report-knowledge">
+              <p className="report-knowledge__sublabel">{t("referenced")}</p>
+              <p className="report-doc__muted">{t("referencedHint")}</p>
+              <ul className="report-chips">
+                {references.map((reference, i) => (
+                  // References are free-form statements that may repeat across
+                  // re-attempts (deduped server-side); index keys the chip.
+                  <li key={`ref-${i}-${reference}`} className="report-chip">
+                    {reference}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+          {learned.length > 0 && (
+            <div className="report-knowledge">
+              <p className="report-knowledge__sublabel">{t("learned")}</p>
+              <ul className="report-chips">
+                {learned.map((note, i) => (
+                  <li key={`learned-${i}-${note}`} className="report-chip report-chip--learned">
+                    {note}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </section>
+      )}
+
+      {(fileCount > 0 || deliverable.artifact_uri) && (
+        <details className="report-diff-disclosure">
+          <summary className="report-diff-disclosure__summary">
+            {t("seeFilesChanged", { count: fileCount })}
+          </summary>
+          {/* The diff/built panel is the document's SECONDARY surface (demoted)
+              — kept in the DOM but collapsed by default behind the disclosure. */}
+          <section className="report-diff-disclosure__body" aria-label={t("whatWasBuilt")}>
+            <WhatWasBuilt deliverable={deliverable} hasDiff={hasDiff} />
+          </section>
+        </details>
       )}
 
       {canRollBack(deliverable) && (
-        <section className="report-doc__section" aria-label={t("rollback")}>
-          <h2 className="report-doc__label">{t("rollback")}</h2>
-          <p className="report-doc__muted">{t("rollbackHint")}</p>
+        <footer className="report-doc__footer">
           <RollbackAffordance deliverableId={deliverable.id} />
-        </section>
+        </footer>
       )}
     </article>
   );
+}
+
+/** The OPTIONAL "Note" message — surfaced ONLY when the strongest verification
+ *  outcome is NOT `passed` AND it carries a human-readable message in its
+ *  result. A clean pass (or a non-passed outcome with no message) returns null,
+ *  so the section is omitted entirely — never a fabricated note. */
+function nonPassedNote(verifications: VerificationReportItem[]): string | null {
+  const strongest = strongestOutcome(verifications);
+  if (strongest === null || strongest === "passed") return null;
+  // Find a verification carrying the strongest outcome and a result message.
+  for (const v of verifications) {
+    if (v.outcome !== strongest) continue;
+    const message = summarizeResult(v.result);
+    if (message) return message;
+  }
+  return null;
 }
 
 /** Whether a Rollback affordance makes sense for this deliverable. A pure
@@ -378,16 +448,6 @@ function verdictTone(
   return strongest;
 }
 
-// The backend stamps verification checks with a few FIXED English rationale
-// strings (the L1 quality gate, the retrieved-knowledge marker incl. its legacy
-// "BSage" wording). They reached the Korean UI untranslated — map the known ones
-// to i18n; a free-form (agent-authored) rationale falls back to its raw text.
-const _RATIONALE_KEY: Record<string, string> = {
-  "Mandatory project quality gate — enforced on the changed files": "mandatoryGateRationale",
-  "Canonical patterns retrieved for this change": "retrievedKnowledgeRationale",
-  "BSage canonical patterns retrieved for this change": "retrievedKnowledgeRationale",
-};
-
 // The retrieved-knowledge judge checks (rationale below) are NOT verification —
 // they're the canon/prior-decision statements the retriever folded into the
 // contract, which the backend ALSO extracts into the separate `references`
@@ -404,44 +464,59 @@ const _RETRIEVED_KNOWLEDGE_RATIONALES: ReadonlySet<string> = new Set([
 
 function VerificationBlock({ verification }: { verification: VerificationReportItem }) {
   const t = useTranslations("report");
-  const rationaleLabel = (raw: string): string => {
-    const key = _RATIONALE_KEY[raw];
-    return key ? t(key) : raw;
-  };
-  // Drop the retrieved-knowledge checks — they belong only in "What BSVibe
-  // referenced", never the verification list (they'd otherwise duplicate the
-  // `references` section AND read as a check the change had to pass).
+  // Drop the retrieved-knowledge checks — they belong only under "Knowledge",
+  // never the verification list (they'd otherwise duplicate the `references`
+  // group AND read as a check the change had to pass). Keep the L12 filter.
   const allChecks = checksFromContract(verification.contract);
   const checks = allChecks.filter((check) => !_RETRIEVED_KNOWLEDGE_RATIONALES.has(check.rationale));
-  const resultSummary = summarizeResult(verification.result);
   // Two distinct empty states: the contract genuinely declared no checks
   // (`noChecksDeclared`), vs. its only checks were retrieved-knowledge ones we
-  // filtered out (`noChecksAfterKnowledge` — the knowledge shows under "What
-  // BSVibe referenced"; don't claim "nothing was verified"). The verdict line
-  // above already carries the outcome in both cases.
+  // filtered out (`noChecksAfterKnowledge` — the knowledge shows under
+  // "Knowledge"; don't claim "nothing was verified").
   const emptyKey = allChecks.length > 0 ? "noChecksAfterKnowledge" : "noChecksDeclared";
+  // The verdict tag each row carries — the verification's outcome rendered as a
+  // small plain tag (passed / failed / inconclusive), not the raw shell exit.
+  const tagKey = `outcomeTag.${verification.outcome}` as const;
+  const passed = verification.outcome === "passed";
+  if (checks.length === 0) {
+    return <p className="report-checks__none">{t(emptyKey)}</p>;
+  }
   return (
-    <div className="report-checks__block">
-      {checks.length === 0 ? (
-        <p className="report-checks__none">{t(emptyKey)}</p>
-      ) : (
-        <ul className="report-checks__list">
-          {checks.map((check, i) => (
-            <li
-              // Checks are positional, free-form, and may repeat — index keys the row.
-              key={`${verification.id}-${i}`}
-              className="report-checks__row"
-            >
-              <span className="report-checks__cmd">{check.label}</span>
-              {check.rationale && (
-                <span className="report-checks__rationale">{rationaleLabel(check.rationale)}</span>
-              )}
-            </li>
-          ))}
-        </ul>
-      )}
-      {resultSummary && <p className="report-checks__result">{resultSummary}</p>}
-    </div>
+    <ul className="report-checklist">
+      {checks.map((check, i) => (
+        <li
+          // Checks are positional, free-form, and may repeat — index keys the row.
+          key={`${verification.id}-${i}`}
+          className="report-checklist__row"
+        >
+          <span
+            className={`report-checklist__mark report-checklist__mark--${passed ? "passed" : "other"}`}
+            aria-hidden="true"
+          >
+            {passed ? (
+              <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">
+                <path
+                  d="M13 4.5 6.5 11 3 7.5"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </svg>
+            ) : (
+              "•"
+            )}
+          </span>
+          <span className="report-checklist__label">{check.label}</span>
+          <span
+            className={`report-checklist__tag report-checklist__tag--${passed ? "passed" : "other"}`}
+          >
+            {t(tagKey)}
+          </span>
+        </li>
+      ))}
+    </ul>
   );
 }
 

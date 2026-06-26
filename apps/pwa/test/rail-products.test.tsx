@@ -7,6 +7,9 @@
  *  - shows a calm "No products yet" empty state when there are none
  *  - degrades to a calm note (and never crashes) when the load fails
  *  - offers a "+ Product" CTA that opens the create flow
+ *  - is the product INDEX itself — the heading is plain text, NOT a link to a
+ *    (removed) /products overview page
+ *  - renders each product's M4 trust trend glyph (best-effort) for fleet glance
  *
  * The list loads asynchronously, so every assertion that depends on it is gated
  * behind findBy / waitFor — never a synchronous getBy right after render.
@@ -35,6 +38,17 @@ function jsonResponse(body: unknown, status = 200) {
   return new Response(status === 204 ? null : JSON.stringify(body), {
     status,
     headers: { "Content-Type": "application/json" },
+  });
+}
+
+/** Routes fetch by URL substring so the products list and the fleet-trust
+ *  glyph endpoint can return different bodies in the same test. */
+function routedFetch(map: Record<string, unknown>) {
+  return vi.fn(async (url: string) => {
+    for (const [needle, body] of Object.entries(map)) {
+      if (typeof url === "string" && url.includes(needle)) return jsonResponse(body);
+    }
+    return jsonResponse([], 404);
   });
 }
 
@@ -128,5 +142,57 @@ describe("Sidebar PRODUCTS section", () => {
     await screen.findByRole("list", { name: /products/i });
     // Exactly one create affordance (the bottom CTA) — the old header link is gone.
     expect(screen.getAllByRole("button", { name: /New product/i })).toHaveLength(1);
+  });
+
+  it("renders the heading as plain text, not a link to a /products overview", async () => {
+    global.fetch = vi.fn(async () => jsonResponse([PRODUCT_A])) as unknown as typeof fetch;
+
+    render(<RailProducts />);
+
+    await screen.findByRole("list", { name: /products/i });
+    const heading = screen.getByRole("heading", { name: /products/i });
+    // The heading is no longer wrapped in an anchor — the rail IS the index, so
+    // there is no /products overview to link to. (The overview page was removed.)
+    expect(heading.closest("a")).toBeNull();
+    // And no link anywhere points at the bare /products overview route.
+    const overviewLink = screen
+      .queryAllByRole("link")
+      .find((el) => el.getAttribute("href") === "/products");
+    expect(overviewLink).toBeUndefined();
+  });
+
+  it("renders each product's trust trend glyph when fleet trust is present", async () => {
+    global.fetch = routedFetch({
+      "/api/v1/inside/trust/fleet": {
+        products: [
+          { product_id: PRODUCT_A.id, trend_arrow: { glyph: "↗", reason: "rising" } },
+          { product_id: PRODUCT_B.id, trend_arrow: { glyph: "↘", reason: "needs you" } },
+        ],
+      },
+      "/api/v1/products": [PRODUCT_A, PRODUCT_B],
+    }) as unknown as typeof fetch;
+
+    render(<RailProducts />);
+
+    await screen.findByRole("list", { name: /products/i });
+    await waitFor(() => {
+      expect(screen.getByRole("img", { name: /trust rising/i })).toHaveTextContent("↗");
+      expect(screen.getByRole("img", { name: /trust falling/i })).toHaveTextContent("↘");
+    });
+  });
+
+  it("omits the glyphs (never breaks the rail) when the fleet-trust read fails", async () => {
+    global.fetch = vi.fn(async (url: string) => {
+      if (typeof url === "string" && url.includes("/api/v1/inside/trust/fleet")) {
+        return jsonResponse("boom", 500);
+      }
+      return jsonResponse([PRODUCT_A]);
+    }) as unknown as typeof fetch;
+
+    render(<RailProducts />);
+
+    // The product list still renders; just no trend glyph.
+    expect(await screen.findByRole("link", { name: /Related Posts/ })).toBeInTheDocument();
+    expect(screen.queryByRole("img", { name: /trust/i })).not.toBeInTheDocument();
   });
 });
