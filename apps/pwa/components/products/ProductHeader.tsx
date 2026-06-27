@@ -1,4 +1,5 @@
 import type { ActivityTone, ProductDetailView } from "@/lib/api/types";
+import { useTranslations } from "next-intl";
 
 /** Status tone → the lone status dot colour (UX §5 — colour for status only).
  *  Reuses the Activity/Brief tone vocabulary so the surfaces feel like one. */
@@ -17,6 +18,7 @@ const TONE_CLASS: Record<ActivityTone, string> = {
  * detail the founder may not have or may differ on; R17) and no trust/health.
  */
 export default function ProductHeader({ view }: { view: ProductDetailView }) {
+  const t = useTranslations("products");
   return (
     <header className="product-head">
       <div className="product-head__row">
@@ -25,7 +27,7 @@ export default function ProductHeader({ view }: { view: ProductDetailView }) {
         </span>
         <h1 className="product-head__name">{view.name}</h1>
       </div>
-      <p className="product-head__status">{view.currentStatus}</p>
+      <p className="product-head__status">{t(view.currentStatusKey)}</p>
     </header>
   );
 }

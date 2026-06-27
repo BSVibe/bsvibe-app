@@ -1262,7 +1262,8 @@ export type ActivityTone = "neutral" | "working" | "review" | "shipped" | "faile
 export interface ProductDetailRun {
   runId: string;
   status: RunStatus;
-  statusLabel: string;
+  /** Lone status tone (the only colour signal). The plain-language label is
+   *  translated in the component from `STATUS_LABEL_KEY[status]`, not stored. */
   tone: ActivityTone;
   /** Writer-stamped `updated_at` (most recent activity), ISO string. */
   updatedAt: string;
@@ -1281,17 +1282,19 @@ export interface ProductDetailRun {
  *  /api/v1/products, its runs filtered out of /api/v1/runs by `product_id`, and
  *  each shipped run's deliverables fetched from /api/v1/deliverables?run_id=.
  *
- *  `currentStatus` is the plain-language headline derived from the product's
- *  latest run (or a calm "Nothing running yet" when it has none). `shipped` are
- *  the delivered artifacts across the product's shipped runs, newest first. */
+ *  `currentStatusKey` is the i18n key (under `products`) for the headline derived
+ *  from the product's latest run (or a calm "Nothing running yet" when it has
+ *  none) — translated in ProductHeader. `shipped` are the delivered artifacts
+ *  across the product's shipped runs, newest first. */
 export interface ProductDetailView {
   id: string;
   slug: string;
   name: string;
   /** External repo landing spot, when the product carries one. */
   repoUrl: string | null;
-  /** Headline status line for the product header, in plain language. */
-  currentStatus: string;
+  /** i18n key (under `products`) for the header headline — translated in the
+   *  component so the status line is localized, not hardcoded English. */
+  currentStatusKey: string;
   /** Lone status tone for the header dot — derived from the latest run. */
   currentTone: ActivityTone;
   runs: ProductDetailRun[];

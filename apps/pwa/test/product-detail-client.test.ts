@@ -160,7 +160,9 @@ describe("getProductDetail (real-data composition)", () => {
 
     const view = await getProductDetail("blog");
     expect(view?.currentTone).toBe("review");
-    expect(view?.currentStatus).toBe("Ready for your review.");
+    // The header carries the i18n KEY now (translated in ProductHeader) — not a
+    // hardcoded English sentence.
+    expect(view?.currentStatusKey).toBe("headlineReview");
   });
 
   it("gives a calm header when the product has no runs yet", async () => {
@@ -172,11 +174,11 @@ describe("getProductDetail (real-data composition)", () => {
     const view = await getProductDetail("blog");
     expect(view?.runs).toEqual([]);
     expect(view?.currentTone).toBe("neutral");
-    expect(view?.currentStatus).toMatch(/Nothing running yet/);
+    expect(view?.currentStatusKey).toBe("headlineEmpty");
     expect(view?.shipped).toEqual([]);
   });
 
-  it("eagerly fetches deliverables for SHIPPED runs only and maps them", async () => {
+  it("lists only SHIPPED runs' deliverables under Shipped (a running run is skipped)", async () => {
     const fetchMock = mockFetch({
       products: [product("p1", "blog", "Blog")],
       runs: [run("r-ship", "p1", "shipped"), run("r-work", "p1", "running")],
@@ -204,6 +206,33 @@ describe("getProductDetail (real-data composition)", () => {
       .filter((u) => u.startsWith("/api/v1/deliverables"));
     expect(delCalls.some((u) => u.includes("run_id=r-ship"))).toBe(true);
     expect(delCalls.some((u) => u.includes("run_id=r-work"))).toBe(false);
+  });
+
+  it("links a review-ready run straight to its report — not the run-detail detour", async () => {
+    // The founder's gripe: a "Needs your review" row used to open the run-status
+    // page, which then linked to the report (two hops). We fetch the review-ready
+    // run's deliverable too, so the row resolves /deliverables/<id> directly.
+    const fetchMock = mockFetch({
+      products: [product("p1", "blog", "Blog")],
+      runs: [run("r-rev", "p1", "review_ready")],
+      deliverablesByRun: {
+        "r-rev": [deliverable("d-rev", "r-rev", "code", "Add clamp util", null)],
+      },
+    });
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    const view = await getProductDetail("blog");
+
+    // The review-ready run's deliverable WAS fetched (so the row can resolve it).
+    const delCalls = fetchMock.mock.calls
+      .map((c) => String(c[0]))
+      .filter((u) => u.startsWith("/api/v1/deliverables"));
+    expect(delCalls.some((u) => u.includes("run_id=r-rev"))).toBe(true);
+
+    // The row links to the REPORT directly, and review-ready work is NOT shipped.
+    const row = view?.runs.find((r) => r.runId === "r-rev");
+    expect(row?.detailHref).toBe("/deliverables/d-rev");
+    expect(view?.shipped).toEqual([]);
   });
 
   it("shows an honest non-verified verdict for a deliverable WITHOUT a PASSED proof", async () => {
