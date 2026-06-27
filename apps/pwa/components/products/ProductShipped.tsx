@@ -39,7 +39,7 @@ export default function ProductShipped({ items }: { items: ShippedItem[] }) {
                   {a.glyph}
                 </span>
                 <div className="product-shipped__body">
-                  <span className="product-shipped__title">{item.title}</span>
+                  <span className="product-shipped__title">{item.title || t("untitled")}</span>
                   <span className="product-shipped__source">{item.source}</span>
                   {/* Glass-box proof: open the deliverable's Delivery Report,
                       where the produced artifact CONTENT is viewable inline. */}
