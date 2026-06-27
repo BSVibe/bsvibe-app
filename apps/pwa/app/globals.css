@@ -931,6 +931,9 @@ main.login {
   padding: 0;
   margin: 0;
   border: none;
+  /* <fieldset> defaults to min-width: min-content, which can refuse to shrink
+     and overflow a narrow viewport — reset it so the chips wrap cleanly. */
+  min-width: 0;
 }
 .need-card__opt {
   font-size: 0.82rem;
@@ -1051,18 +1054,12 @@ main.login {
   font-size: 0.9rem;
 }
 
-/* Brief renders the desktop-rail PRODUCTS block at the bottom of the page so
-   mobile users still have a one-tap path into product detail. The left rail
-   shows the same component on desktop, so we hide the mobile-only embed at
-   the breakpoint where the rail appears (matches the .rail / .tabbar
-   visibility switch at 767px). */
-.brief__mobile-products {
-  display: block;
-}
-@media (min-width: 768px) {
-  .brief__mobile-products {
-    display: none;
-  }
+/* R18 — the mobile products list lives at /products (reached via the bottom-nav
+   "제품" tab); the desktop rail still carries the same PRODUCTS section. A light
+   wrapper so the reused rail list sits with the page's rhythm. */
+.products-page {
+  max-width: var(--col-w);
+  margin: 0 auto;
 }
 
 /* ── Working on now (the live-work hero) ──────────────────────────────────── */
@@ -4703,6 +4700,10 @@ main.login {
 
   .brief {
     gap: 26px;
+    /* The Brief is a vertical document — it must never scroll horizontally.
+       Clip (not hidden, so no scroll container / sticky breakage) guards against
+       any stray wide child causing an unwanted horizontal scroll on mobile. */
+    overflow-x: clip;
   }
 
   .brief__heading,

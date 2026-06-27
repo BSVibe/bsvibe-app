@@ -34,6 +34,21 @@ describe("AppShell", () => {
     expect(briefLinks.some((link) => link.getAttribute("aria-current") === "page")).toBe(true);
   });
 
+  it("R18: the mobile bottom nav exposes a Products tab linking to /products", () => {
+    render(
+      <AppShell>
+        <div>page content</div>
+      </AppShell>,
+    );
+
+    // The mobile nav carries a Product entry (the desktop rail's PRODUCTS
+    // section is hidden on mobile, so the rail's product index needs a home).
+    const productsLink = screen
+      .getAllByRole("link", { name: "Product" })
+      .find((link) => link.getAttribute("href") === "/products");
+    expect(productsLink).toBeDefined();
+  });
+
   it("surfaces the account chip and the Direct affordance, and renders children", () => {
     render(
       <AppShell>
