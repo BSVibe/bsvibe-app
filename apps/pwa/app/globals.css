@@ -4207,6 +4207,142 @@ main.login {
   gap: 8px;
 }
 
+/* R21 (CSS audit) — settings surfaces used with no CSS. The form fields/inputs
+   were already styled; these were the gaps that rendered raw. */
+
+/* AddConnector — the inbound-config fieldset group. */
+.connector-form__group {
+  margin: 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 14px;
+  border: 1px solid var(--hair);
+  border-radius: var(--radius-sm);
+}
+.connector-form__group-label {
+  padding: 0;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--ink-2);
+}
+.connector-form__group-hint {
+  margin: 0;
+  font-size: 0.8rem;
+  line-height: 1.5;
+  color: var(--ink-3);
+}
+.connector-form__required {
+  color: var(--amber-ink);
+}
+
+/* ProviderAppConfig — the GitHub-App / OAuth-app config block. */
+.connector-app-config {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 10px;
+  padding: 16px 18px;
+  background: var(--surface);
+  border: 1px solid var(--hair-strong);
+  border-radius: var(--radius);
+}
+.connector-app-config__hint {
+  margin: 0;
+  font-size: 0.84rem;
+  line-height: 1.5;
+  color: var(--ink-3);
+}
+
+/* ExecutorWorkers — the install-instructions block + extra worker-card fields. */
+.worker-install {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 12px;
+  padding: 14px 16px;
+  background: var(--accent-bg);
+  border-radius: var(--radius-sm);
+}
+.worker-install__title {
+  margin: 0;
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--ink);
+}
+.worker-install__hint,
+.worker-install__notes {
+  margin: 0;
+  font-size: 0.84rem;
+  line-height: 1.5;
+  color: var(--ink-3);
+}
+.worker-install__done {
+  align-self: flex-start;
+  font: inherit;
+  font-size: 0.8rem;
+  font-weight: 550;
+  color: var(--ink-2);
+  background: var(--surface);
+  border: 1px solid var(--hair-strong);
+  border-radius: var(--radius-sm);
+  padding: 6px 12px;
+  cursor: pointer;
+}
+.worker-install__done:hover {
+  background: var(--surface);
+  border-color: var(--ink-3);
+}
+.worker-card__detail {
+  margin: 0;
+  font-size: 0.82rem;
+  color: var(--ink-3);
+}
+.worker-card__stale-marker {
+  font-size: 0.72rem;
+  color: var(--amber-ink);
+}
+
+/* Connectors / ConnectorRow — a connected card's note + import affordance (the
+   --available / --connected variants inherit the styled .connector-card base). */
+.connector-card__note {
+  font-size: 0.8rem;
+  color: var(--ink-3);
+}
+.connector-card__import {
+  font: inherit;
+  font-size: 0.8rem;
+  font-weight: 550;
+  color: var(--ink-2);
+  background: var(--surface);
+  border: 1px solid var(--hair-strong);
+  border-radius: var(--radius-sm);
+  padding: 5px 11px;
+  cursor: pointer;
+}
+.connector-card__import:hover:not(:disabled) {
+  background: var(--accent-bg);
+}
+.connector-card__import:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+.connector-card__import-stamp {
+  font-size: 0.76rem;
+  color: var(--ink-3);
+}
+
+/* GeneralTab — a small badge next to a settings-field value. */
+.settings-field__badge {
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: var(--ink-3);
+  background: var(--accent-bg);
+  border-radius: 999px;
+  padding: 2px 8px;
+}
+
 .connector-form__error {
   flex: 1 1 100%;
   text-align: right;
