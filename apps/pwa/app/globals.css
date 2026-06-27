@@ -7004,6 +7004,161 @@ main.login {
   cursor: pointer;
 }
 
+/* R19 — the "add binding" form. Was unstyled (raw browser inputs + a default
+   blue submit button) — give it the app's calm card + labelled-field shape and
+   the standard dark-primary / outline-secondary button pair. */
+.product-bindings__form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 12px;
+  padding: 16px 18px;
+  background: var(--surface);
+  border: 1px solid var(--hair-strong);
+  border-radius: var(--radius);
+}
+.product-bindings__field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.product-bindings__field > label {
+  font-size: 0.78rem;
+  font-weight: 550;
+  color: var(--ink-2);
+}
+.product-bindings__field > select,
+.product-bindings__field > input {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  font: inherit;
+  font-size: 0.88rem;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--hair-strong);
+  border-radius: var(--radius-sm);
+  padding: 9px 11px;
+}
+.product-bindings__field > select:focus-visible,
+.product-bindings__field > input:focus-visible {
+  outline: 2px solid var(--amber-dot);
+  outline-offset: 1px;
+}
+.product-bindings__field > select:disabled,
+.product-bindings__field > input:disabled {
+  opacity: 0.6;
+}
+.product-bindings__error {
+  margin: 0;
+  font-size: 0.82rem;
+  color: var(--amber-ink);
+}
+.product-bindings__form-foot {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 2px;
+}
+.product-bindings__cancel,
+.product-bindings__submit {
+  font: inherit;
+  font-size: 0.85rem;
+  font-weight: 550;
+  border-radius: var(--radius-sm);
+  padding: 8px 16px;
+  cursor: pointer;
+  border: 1px solid var(--hair-strong);
+}
+.product-bindings__cancel {
+  background: var(--surface);
+  color: var(--ink-2);
+}
+.product-bindings__cancel:hover:not(:disabled) {
+  background: var(--accent-bg);
+}
+.product-bindings__submit {
+  background: var(--ink);
+  color: var(--bg);
+  border-color: var(--ink);
+}
+.product-bindings__submit:hover:not(:disabled) {
+  opacity: 0.9;
+}
+.product-bindings__cancel:disabled,
+.product-bindings__submit:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+/* R19 — an existing binding row: a calm card with the resource id, the trigger
+   toggle + output-mode knobs, and a quiet remove affordance (was unstyled). */
+.product-bindings__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.product-bindings__row {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 16px;
+  background: var(--surface);
+  border: 1px solid var(--hair-strong);
+  border-radius: var(--radius);
+}
+.product-bindings__ident {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.product-bindings__resource {
+  font-size: 0.9rem;
+  font-weight: 550;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+.product-bindings__connector {
+  font-size: 0.72rem;
+  color: var(--ink-3);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.product-bindings__knob {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.84rem;
+  color: var(--ink-2);
+}
+.product-bindings__knob > select {
+  font: inherit;
+  font-size: 0.84rem;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--hair-strong);
+  border-radius: var(--radius-sm);
+  padding: 6px 9px;
+}
+.product-bindings__remove {
+  align-self: flex-start;
+  font: inherit;
+  font-size: 0.8rem;
+  color: var(--ink-3);
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.product-bindings__remove:hover {
+  color: var(--amber-ink);
+}
+
 .product-resources__note,
 .product-resources__empty,
 .product-bindings__note,
