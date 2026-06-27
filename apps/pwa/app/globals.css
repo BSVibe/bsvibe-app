@@ -7838,6 +7838,156 @@ main.login {
   width: fit-content;
 }
 
+/* R22 (CSS audit final batch) — RunDetail partials + failure-reason disclosure,
+   the Direct target selector, ResolvedRow sub-fields, the legal page, and two
+   Brief time labels — all were used with no CSS. */
+.run-deliverables {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.run-deliverable--verified {
+  border-color: var(--green-dot);
+}
+.run-partials {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.run-partial {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 10px 12px;
+  background: var(--surface);
+  border: 1px solid var(--hair);
+  border-radius: var(--radius-sm);
+}
+.run-partial__type {
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+.run-partial__summary {
+  flex: 1;
+  min-width: 0;
+  font-size: 0.86rem;
+  color: var(--ink);
+}
+.run-partial__channel {
+  font-size: 0.76rem;
+  color: var(--ink-3);
+}
+.run-next__reason-details {
+  margin-top: 6px;
+}
+.run-next__reason-details-summary {
+  font-size: 0.82rem;
+  color: var(--ink-3);
+  cursor: pointer;
+}
+.run-next__reason-raw {
+  margin: 8px 0 0;
+  padding: 10px 12px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.78rem;
+  line-height: 1.5;
+  color: var(--ink-2);
+  background: var(--accent-bg);
+  border-radius: var(--radius-sm);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* DirectAction — the target selector in the Direct overlay. */
+.direct-overlay__target {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.direct-overlay__target-label {
+  font-size: 0.78rem;
+  font-weight: 550;
+  color: var(--ink-2);
+}
+.direct-overlay__target-select {
+  font: inherit;
+  font-size: 0.88rem;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--hair-strong);
+  border-radius: var(--radius-sm);
+  padding: 8px 11px;
+}
+
+/* ResolvedRow — the sub-status, product chip, and view link on a resolved row. */
+.decisions-row__sub {
+  font-size: 0.82rem;
+  color: var(--ink-3);
+}
+.decisions-row__product {
+  font-size: 0.72rem;
+  color: var(--ink-3);
+  background: var(--accent-bg);
+  border-radius: 5px;
+  padding: 2px 7px;
+}
+.decisions-row__view {
+  font-size: 0.8rem;
+  color: var(--ink-3);
+  text-decoration: none;
+}
+.decisions-row__view:hover {
+  color: var(--ink);
+}
+
+/* Legal page (sub-processors) — a plain readable document. */
+.legal-page {
+  max-width: var(--col-w);
+  margin: 0 auto;
+  padding: 40px 24px;
+  color: var(--ink);
+}
+.legal-page__lede {
+  font-size: 0.95rem;
+  line-height: 1.6;
+  color: var(--ink-2);
+}
+.legal-page__table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 16px 0;
+  font-size: 0.88rem;
+}
+.legal-page__table th,
+.legal-page__table td {
+  text-align: left;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--hair);
+  vertical-align: top;
+}
+.legal-page__table th {
+  font-weight: 600;
+  color: var(--ink-2);
+}
+.legal-page__note {
+  font-size: 0.84rem;
+  color: var(--ink-3);
+}
+
+/* Brief — the small relative-time labels (shipped row + working card). */
+.stream__time,
+.working__elapsed {
+  font-size: 0.76rem;
+  color: var(--ink-3);
+}
+
 .activity-row__open {
   font-size: 0.8rem;
   color: var(--ink-2);
