@@ -116,6 +116,10 @@
   "products": {
     "back": "‹ 요약",
     "region": "제품",
+    "tabsLabel": "제품 섹션",
+    "tabActivity": "활동",
+    "tabFiles": "파일",
+    "tabSettings": "설정",
     "loadingNote": "이 제품을 살펴보는 중…",
     "notFoundLine": "그 제품은 모르겠어요.",
     "notFoundSubPrefix": "이름이 변경되었거나 삭제되었을 수 있어요. ",

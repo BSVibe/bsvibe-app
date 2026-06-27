@@ -13,12 +13,17 @@ import ProductHeader from "./ProductHeader";
 import ProductResources from "./ProductResources";
 import ProductRuns from "./ProductRuns";
 import ProductShipped from "./ProductShipped";
-import TrustPanel from "./TrustPanel";
+
+/** The product detail tabs (R17): work first, then the codebase, then config. */
+type ProductTab = "activity" | "files" | "settings";
 
 /**
  * The Product detail surface (`/products/[slug]`) — a focused per-product
- * window: the product's name + current status, its recent runs (with
- * plain-language statuses), and the artifacts it has shipped.
+ * window (R17 redesign): a minimal header (name + status) over three tabs —
+ * 활동 (the product's runs + shipped work), 파일 (its codebase file browser),
+ * 설정 (resources + connector bindings + delete). No trust/health, no repo URL,
+ * and no knowledge framing — the knowledge graph + notes are GLOBAL, not
+ * per-product. Replaces the old 9-panel linear stack.
  *
  * Composed entirely client-side from the list endpoints (lib/api/product-
  * detail.ts): the product is found in /api/v1/products, its runs filtered out of
@@ -41,6 +46,7 @@ type Loaded =
 
 export default function ProductDetail({ slug }: { slug: string }) {
   const [loaded, setLoaded] = useState<Loaded>({ state: "loading" });
+  const [tab, setTab] = useState<ProductTab>("activity");
   const t = useTranslations("products");
 
   useEffect(() => {
@@ -92,23 +98,50 @@ export default function ProductDetail({ slug }: { slug: string }) {
       {loaded.state === "ready" && (
         <>
           <ProductHeader view={loaded.view} />
-          {/* Lift A v2 — calm one-line status while the repo bootstrap runs
-              in the background. Renders null when there's nothing to show
-              (no repo_url at create time, or the bootstrap already
-              completed) so it adds zero chrome to a static product. */}
+          {/* Calm one-line status while the repo bootstrap runs in the
+              background. Renders null when there's nothing to show, so a static
+              product gets zero chrome (the only repo-adjacent surface, kept
+              minimal per R17). */}
           <BootstrapStatusPanel productId={loaded.view.id} />
-          {/* L3 Inside trust strip (Lift M4b, design §4.3) — calm four-line
-              summary above the per-product detail. Mounted between the header
-              and the runs list so it sits as the design's right-rail / header
-              strip, but in the linear ProductDetail layout this is the
-              natural position (above the per-product activity). */}
-          <TrustPanel productId={loaded.view.id} />
-          <ProductRuns runs={loaded.view.runs} />
-          <ProductShipped items={loaded.view.shipped} />
-          <ProductFiles productId={loaded.view.id} />
-          <ProductResources productId={loaded.view.id} />
-          <ProductBindings productId={loaded.view.id} />
-          <ProductDanger productId={loaded.view.id} productName={loaded.view.name} />
+
+          {/* Tabs (R17): the work first (활동), then the codebase (파일), then
+              config (설정). Replaces the old 9-panel linear stack; no trust /
+              knowledge framing (the knowledge graph + notes are global). */}
+          <div className="product-tabs" role="tablist" aria-label={t("tabsLabel")}>
+            {(
+              [
+                ["activity", t("tabActivity")],
+                ["files", t("tabFiles")],
+                ["settings", t("tabSettings")],
+              ] as const
+            ).map(([id, label]) => (
+              <button
+                key={id}
+                type="button"
+                role="tab"
+                aria-selected={tab === id}
+                className={`product-tab${tab === id ? " product-tab--on" : ""}`}
+                onClick={() => setTab(id)}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+
+          {tab === "activity" && (
+            <>
+              <ProductRuns runs={loaded.view.runs} />
+              <ProductShipped items={loaded.view.shipped} />
+            </>
+          )}
+          {tab === "files" && <ProductFiles productId={loaded.view.id} />}
+          {tab === "settings" && (
+            <>
+              <ProductResources productId={loaded.view.id} />
+              <ProductBindings productId={loaded.view.id} />
+              <ProductDanger productId={loaded.view.id} productName={loaded.view.name} />
+            </>
+          )}
         </>
       )}
     </div>

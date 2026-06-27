@@ -15,6 +15,7 @@ import ProductDetail from "@/components/products/ProductDetail";
 import type { Deliverable, Product, Run } from "@/lib/api/types";
 import { type Session, clearSession, setSession } from "@/lib/auth/session";
 import { render, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // ProductDetail mounts ProductDanger, which uses next/navigation's useRouter —
@@ -151,9 +152,10 @@ describe("Product detail surface", () => {
       expect(screen.getByRole("heading", { name: "Blog" })).toBeInTheDocument();
     });
     expect(screen.getByText(/Working on your latest direction/)).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: /github\.com\/acme\/blog$/ })).toBeInTheDocument();
+    // R17 — no repo URL in the header (a product's repo is an internal detail).
+    expect(screen.queryByRole("link", { name: /github\.com\/acme\/blog/ })).toBeNull();
 
-    // Recent runs — both statuses present.
+    // Recent runs — both statuses present (the default Activity tab).
     const runsSection = screen.getByRole("region", { name: "Recent runs" });
     expect(within(runsSection).getByText("Shipped")).toBeInTheDocument();
     expect(within(runsSection).getByText("Working")).toBeInTheDocument();
@@ -167,6 +169,25 @@ describe("Product detail surface", () => {
       "href",
       "https://github.com/acme/blog/pull/15",
     );
+  });
+
+  it("R17: tabs switch between Activity, Files, and Settings", async () => {
+    global.fetch = installFetch({
+      runs: () => [SHIPPED_RUN],
+      deliverables: (runId) => (runId === "run-ship" ? [DELIVERABLE] : []),
+    }) as unknown as typeof fetch;
+
+    render(<ProductDetail slug="blog" />);
+    // Activity is the default tab (runs visible).
+    await screen.findByRole("region", { name: "Recent runs" });
+
+    // Switch to Files → Activity's runs leave the DOM.
+    await userEvent.click(screen.getByRole("tab", { name: "Files" }));
+    expect(screen.queryByRole("region", { name: "Recent runs" })).toBeNull();
+
+    // Back to Activity → the runs return.
+    await userEvent.click(screen.getByRole("tab", { name: "Activity" }));
+    expect(screen.getByRole("region", { name: "Recent runs" })).toBeInTheDocument();
   });
 
   it("links each shipped artifact to its Delivery Report (so artifacts are reachable)", async () => {
