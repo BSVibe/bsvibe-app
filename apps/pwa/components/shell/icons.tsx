@@ -65,6 +65,18 @@ export function SkillsIcon(props: SVGProps<SVGSVGElement>) {
   );
 }
 
+export function ProductsIcon(props: SVGProps<SVGSVGElement>) {
+  // Stacked boxes — reads as "products" (the per-product detail surfaces).
+  return (
+    <Svg {...props}>
+      <rect x="3" y="4" width="7" height="7" rx="1.5" />
+      <rect x="14" y="4" width="7" height="7" rx="1.5" />
+      <rect x="3" y="14" width="7" height="7" rx="1.5" />
+      <rect x="14" y="14" width="7" height="7" rx="1.5" />
+    </Svg>
+  );
+}
+
 export function SettingsIcon(props: SVGProps<SVGSVGElement>) {
   // A lobed cog (reads clearly as "settings") — the old circle+rays form read
   // like a sun / theme toggle, which it is NOT.

@@ -3,7 +3,14 @@
 import { useTranslations } from "next-intl";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { BellIcon, BriefIcon, KnowledgeIcon, SettingsIcon, SkillsIcon } from "./icons";
+import {
+  BellIcon,
+  BriefIcon,
+  KnowledgeIcon,
+  ProductsIcon,
+  SettingsIcon,
+  SkillsIcon,
+} from "./icons";
 import { type NavKey, PRIMARY_NAV } from "./nav";
 
 const ICONS: Record<NavKey, typeof BriefIcon> = {
@@ -97,6 +104,19 @@ export function MobileNav() {
           </Link>
         );
       })}
+      {/* Products — mobile-only nav entry (the desktop rail's PRODUCTS section
+          is hidden at this width, so the rail's product index needs a home on
+          mobile). Not part of PRIMARY_NAV so the desktop rail stays unchanged. */}
+      <Link
+        href="/products"
+        className="tabbar__item"
+        aria-current={pathname.startsWith("/products") ? "page" : undefined}
+      >
+        <span className="tabbar__icon">
+          <ProductsIcon />
+        </span>
+        <span>{tNav("product")}</span>
+      </Link>
     </nav>
   );
 }

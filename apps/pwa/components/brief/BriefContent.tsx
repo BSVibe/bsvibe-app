@@ -1,6 +1,5 @@
 "use client";
 
-import RailProducts from "@/components/shell/RailProducts";
 import type { BriefView } from "@/lib/api/types";
 import { useTranslations } from "next-intl";
 import { useMemo, useState } from "react";
@@ -87,10 +86,6 @@ export default function BriefContent({
       {showNeedsYou && <NeedsYou items={view.needsYou} onResolved={onNeedsYouResolved} />}
       {showWorking && <WorkingNow items={view.working} />}
       {showShipped && <ShippedSection items={shipped} forceExpanded={filter === "shipped"} />}
-
-      <div className="brief__mobile-products">
-        <RailProducts />
-      </div>
     </div>
   );
 }
