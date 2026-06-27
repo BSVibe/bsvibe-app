@@ -3154,6 +3154,137 @@ main.login {
   color: var(--ink-3);
 }
 
+/* R20 (CSS audit) — the run row was a default UNDERLINED link wrapping the
+   status/title/time; make it a clean flex row with no underline. */
+.product-run__link {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  text-decoration: none;
+  color: inherit;
+}
+.product-run__title {
+  flex: 1;
+  min-width: 0;
+  font-size: 0.88rem;
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* R20 — BootstrapStatusPanel: a calm one/two-line setup-status strip (was
+   unstyled). The only repo-adjacent surface, kept quiet; red tones on failure. */
+.bootstrap-status {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 8px 0;
+  padding: 12px 14px;
+  background: var(--accent-bg);
+  border-radius: var(--radius-sm);
+}
+.bootstrap-status--failed {
+  background: #f7ece9;
+}
+.bootstrap-status__line {
+  margin: 0;
+  font-size: 0.86rem;
+  color: var(--ink-2);
+}
+.bootstrap-status--failed .bootstrap-status__line {
+  color: #a1564a;
+}
+.bootstrap-status__detail {
+  margin: 0;
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  font-size: 0.8rem;
+  color: var(--ink-3);
+}
+.bootstrap-status__detail-label {
+  font-weight: 600;
+  color: #a1564a;
+}
+.bootstrap-status__detail-text {
+  overflow-wrap: anywhere;
+}
+
+/* R20 — ProductDanger: the delete affordance + confirm step (was unstyled — raw
+   browser buttons). A muted-red outline to delete, a solid-red confirm. */
+.product-danger {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.product-danger__delete {
+  align-self: flex-start;
+  font: inherit;
+  font-size: 0.85rem;
+  font-weight: 550;
+  color: #a1564a;
+  background: var(--surface);
+  border: 1px solid var(--hair-strong);
+  border-radius: var(--radius-sm);
+  padding: 8px 14px;
+  cursor: pointer;
+}
+.product-danger__delete:hover {
+  border-color: #a1564a;
+}
+.product-danger__confirm {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.product-danger__warn {
+  margin: 0;
+  font-size: 0.88rem;
+  color: var(--ink-2);
+}
+.product-danger__actions {
+  display: flex;
+  gap: 8px;
+}
+.product-danger__cancel,
+.product-danger__confirm-delete {
+  font: inherit;
+  font-size: 0.85rem;
+  font-weight: 550;
+  border-radius: var(--radius-sm);
+  padding: 8px 16px;
+  cursor: pointer;
+  border: 1px solid var(--hair-strong);
+}
+.product-danger__cancel {
+  background: var(--surface);
+  color: var(--ink-2);
+}
+.product-danger__cancel:hover:not(:disabled) {
+  background: var(--accent-bg);
+}
+.product-danger__confirm-delete {
+  background: #a1564a;
+  color: #fff;
+  border-color: #a1564a;
+}
+.product-danger__confirm-delete:hover:not(:disabled) {
+  opacity: 0.9;
+}
+.product-danger__cancel:disabled,
+.product-danger__confirm-delete:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+.product-danger__error {
+  margin: 0;
+  font-size: 0.82rem;
+  color: #a1564a;
+}
+
 /* Shipped */
 .product-shipped__list {
   list-style: none;
