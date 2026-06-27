@@ -138,6 +138,7 @@
     "noRuns": "이 제품에는 아직 작업이 없어요.",
     "shipped": "완료됨",
     "noShipped": "이 제품은 아직 완료한 것이 없어요.",
+    "untitled": "완료된 산출물",
     "openArtifact": "산출물 열기",
     "viewReport": "리포트 보기",
     "danger": {
@@ -167,7 +168,8 @@
       "failedIngest": "그 저장소를 분석하지 못했어요.",
       "errorPrefix": "자세히: ",
       "chunkProgress": "{done} / {total} 청크 색인 중",
-      "chunkProgressWithFailures": "{done} / {total} 청크 색인 중 ({failed}개 실패)"
+      "chunkProgressWithFailures": "{done} / {total} 청크 색인 중 ({failed}개 실패)",
+      "progressLabel": "저장소 설정 진행 상황"
     },
     "resources": {
       "heading": "리소스",

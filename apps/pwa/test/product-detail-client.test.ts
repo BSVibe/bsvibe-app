@@ -235,6 +235,21 @@ describe("getProductDetail (real-data composition)", () => {
     expect(view?.shipped).toEqual([]);
   });
 
+  it("leaves a no-summary shipped title EMPTY (the component supplies the i18n fallback)", async () => {
+    // The view-model can't reach i18n, so it must NOT bake an English "Shipped
+    // deliverable" — it returns "" and ProductShipped renders products.untitled.
+    global.fetch = mockFetch({
+      products: [product("p1", "blog", "Blog")],
+      runs: [run("r-ship", "p1", "shipped")],
+      deliverablesByRun: {
+        "r-ship": [deliverable("d-bare", "r-ship", "code", /* summary */ null, null)],
+      },
+    }) as unknown as typeof fetch;
+
+    const view = await getProductDetail("blog");
+    expect(view?.shipped[0]?.title).toBe("");
+  });
+
   it("shows an honest non-verified verdict for a deliverable WITHOUT a PASSED proof", async () => {
     // B4 trust-integrity: a hollow deliverable (backend `verified: false`) must
     // NOT stamp the green "This is verified" — it reads honestly as awaiting

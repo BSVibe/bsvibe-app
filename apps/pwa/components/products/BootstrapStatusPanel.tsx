@@ -79,7 +79,7 @@ export default function BootstrapStatusPanel({
           : "bootstrap-status bootstrap-status--running"
       }
       aria-live="polite"
-      aria-label="bootstrap progress"
+      aria-label={t("progressLabel")}
     >
       <p className="bootstrap-status__line">{message}</p>
       {showChunkLine && chunkProgress ? (

@@ -123,9 +123,11 @@ function sourceFor(type: DeliverableType): string {
 }
 
 /** A concise one-line summary for a shipped deliverable (the shared first-
- *  sentence condenser), so the product surfaces read like the Brief. */
+ *  sentence condenser), so the product surfaces read like the Brief. Empty when
+ *  the deliverable has no summary — the component supplies a TRANSLATED fallback
+ *  (`products.untitled`), since this lib can't reach i18n. */
 function titleFor(summary: string | null): string {
-  return conciseSummary(summary, "Shipped deliverable");
+  return conciseSummary(summary, "");
 }
 
 function toShippedItem(d: Deliverable, productSlug: string): ShippedItem {

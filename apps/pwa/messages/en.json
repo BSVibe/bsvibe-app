@@ -138,6 +138,7 @@
     "noRuns": "No runs for this product yet.",
     "shipped": "Shipped",
     "noShipped": "Nothing shipped for this product yet.",
+    "untitled": "Shipped deliverable",
     "openArtifact": "Open artifact",
     "viewReport": "View report",
     "danger": {
@@ -167,7 +168,8 @@
       "failedIngest": "Couldn’t analyze that repository.",
       "errorPrefix": "Details: ",
       "chunkProgress": "Ingesting {done} / {total} chunks",
-      "chunkProgressWithFailures": "Ingesting {done} / {total} chunks ({failed} failed)"
+      "chunkProgressWithFailures": "Ingesting {done} / {total} chunks ({failed} failed)",
+      "progressLabel": "Bootstrap progress"
     },
     "resources": {
       "heading": "Resources",
