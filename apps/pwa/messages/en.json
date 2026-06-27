@@ -116,6 +116,10 @@
   "products": {
     "back": "‹ Brief",
     "region": "Product",
+    "tabsLabel": "Product sections",
+    "tabActivity": "Activity",
+    "tabFiles": "Files",
+    "tabSettings": "Settings",
     "loadingNote": "Looking at this product…",
     "notFoundLine": "I don’t know that product.",
     "notFoundSubPrefix": "It may have been renamed or removed. ",

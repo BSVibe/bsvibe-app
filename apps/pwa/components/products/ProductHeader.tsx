@@ -11,10 +11,10 @@ const TONE_CLASS: Record<ActivityTone, string> = {
 };
 
 /**
- * The product header — the focused view's headline: the product name, a single
- * plain-language status line (current state, derived from its latest run), and
- * its lone status dot. The repo link, when the product carries one, is a quiet
- * secondary affordance.
+ * The product header — the focused view's headline: the product name, its lone
+ * status dot, and a single plain-language status line (derived from its latest
+ * run). Deliberately minimal — no repo URL (a product's repo is an internal
+ * detail the founder may not have or may differ on; R17) and no trust/health.
  */
 export default function ProductHeader({ view }: { view: ProductDetailView }) {
   return (
@@ -26,16 +26,6 @@ export default function ProductHeader({ view }: { view: ProductDetailView }) {
         <h1 className="product-head__name">{view.name}</h1>
       </div>
       <p className="product-head__status">{view.currentStatus}</p>
-      {view.repoUrl && (
-        <a
-          className="product-head__repo"
-          href={view.repoUrl}
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          {view.repoUrl}
-        </a>
-      )}
     </header>
   );
 }
