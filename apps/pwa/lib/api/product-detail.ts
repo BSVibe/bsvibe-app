@@ -8,13 +8,14 @@
  *
  *  - the product   ← GET /api/v1/products              (found by slug)
  *  - its runs      ← GET /api/v1/runs                  (filtered by product_id)
- *  - shipped art.  ← GET /api/v1/deliverables?run_id=  (per shipped run)
+ *  - deliverables  ← GET /api/v1/deliverables?run_id=  (per shipped/review run)
  *
  * Header status is derived from the product's latest run (the runs list is
- * newest-first; the first run carrying this product_id is its latest). The
- * "Shipped" section eagerly fetches the deliverables of the product's shipped
- * runs only (a focused view wants its proof visible, and shipped runs are a
- * small slice of the history), in parallel.
+ * newest-first; the first run carrying this product_id is its latest). We
+ * eagerly fetch deliverables for runs that HAVE one — shipped runs (the
+ * "Shipped" proof section) AND review-ready runs (so a "Needs your review" row
+ * links straight to its report, no run-detail detour) — in parallel. Both are a
+ * small slice of the history, so this stays cheap.
  *
  * An unknown slug is a first-class result: `getProductDetail` returns `null`
  * (NOT a thrown error), so the surface can render a calm "I don't know that
@@ -43,46 +44,47 @@ import type {
   ShippedItem,
 } from "./types";
 
-/** Calm plain-language label + status tone for a run's lifecycle status — the
- *  same vocabulary the Activity surface uses (UX §5, colour for status only). */
-function describeStatus(status: RunStatus): { label: string; tone: ActivityTone } {
+/** Status tone for a run's lifecycle status — the lone colour signal (UX §5).
+ *  The plain-language LABEL is no longer derived here: the runs surface
+ *  translates it from the shared `STATUS_LABEL_KEY` so it's localized, not the
+ *  hardcoded English this view-model used to carry. */
+function toneFor(status: RunStatus): ActivityTone {
   switch (status) {
-    case "open":
-      return { label: "Just started", tone: "neutral" };
     case "running":
-      return { label: "Working", tone: "working" };
+      return "working";
     case "review_ready":
-      return { label: "Needs your review", tone: "review" };
+      return "review";
     case "shipped":
-      return { label: "Shipped", tone: "shipped" };
+      return "shipped";
     case "failed":
-      return { label: "Didn’t finish", tone: "failed" };
+      return "failed";
     default:
-      // cancelled — stood down on purpose, not an error.
-      return { label: "Stood down", tone: "neutral" };
+      // open (just started) + cancelled (stood down on purpose) — calm/neutral.
+      return "neutral";
   }
 }
 
-/** Plain-language headline for the product header, derived from its latest run.
+/** i18n KEY (under the `products` namespace) for the product-header headline,
+ *  derived from its latest run — translated in ProductHeader, not hardcoded here.
  *  Calm and reassuring — never machinery (no rounds / cost). */
-function headlineFor(latest: Run | undefined): { status: string; tone: ActivityTone } {
+function headlineFor(latest: Run | undefined): { statusKey: string; tone: ActivityTone } {
   if (!latest) {
-    return { status: "Nothing running yet. Give it a Direction.", tone: "neutral" };
+    return { statusKey: "headlineEmpty", tone: "neutral" };
   }
-  const { tone } = describeStatus(latest.status);
+  const tone = toneFor(latest.status);
   switch (latest.status) {
     case "open":
-      return { status: "Just started · decomposing your latest direction…", tone };
+      return { statusKey: "headlineJustStarted", tone };
     case "running":
-      return { status: "Working on your latest direction.", tone };
+      return { statusKey: "headlineWorking", tone };
     case "review_ready":
-      return { status: "Ready for your review.", tone };
+      return { statusKey: "headlineReview", tone };
     case "shipped":
-      return { status: "All caught up. Latest work shipped & verified.", tone };
+      return { statusKey: "headlineShipped", tone };
     case "failed":
-      return { status: "The latest run didn’t finish.", tone };
+      return { statusKey: "headlineFailed", tone };
     default:
-      return { status: "The latest run was stood down.", tone };
+      return { statusKey: "headlineStood", tone };
   }
 }
 
@@ -144,13 +146,11 @@ function toShippedItem(d: Deliverable, productSlug: string): ShippedItem {
 }
 
 function toDetailRun(run: Run, lookup: ReviewLookup): ProductDetailRun {
-  const { label, tone } = describeStatus(run.status);
   const ctx = lookup.forRun(run.id);
   return {
     runId: run.id,
     status: run.status,
-    statusLabel: label,
-    tone,
+    tone: toneFor(run.status),
     updatedAt: run.updated_at,
     shipped: run.status === "shipped",
     title: ctx.title,
@@ -183,23 +183,30 @@ export async function getProductDetail(
   // Runs for THIS product, preserving the newest-first order of the list.
   const productRuns = runs.filter((r) => r.product_id === product.id);
   const latest = productRuns[0];
-  const { status: currentStatus, tone: currentTone } = headlineFor(latest);
+  const { statusKey: currentStatusKey, tone: currentTone } = headlineFor(latest);
 
-  // Eagerly fetch the deliverables of the product's shipped runs, in parallel —
-  // a focused view wants its proof visible without a per-run expand. Shipped
-  // runs are a small slice of the history, so this stays cheap. A per-run
-  // deliverables read failing degrades that run to no artifacts rather than
-  // blanking the whole view.
-  const shippedRuns = productRuns.filter((r) => r.status === "shipped");
+  // Eagerly fetch the deliverables of runs that HAVE one — shipped runs (for the
+  // "Shipped" proof section) AND review-ready runs (so a "Needs your review" row
+  // links straight to its report, with no run-detail status detour). Both are a
+  // small slice of the history, so this stays cheap; a per-run deliverables read
+  // failing degrades that run to no artifacts rather than blanking the view.
+  const runsWithDeliverable = productRuns.filter(
+    (r) => r.status === "shipped" || r.status === "review_ready",
+  );
   const perRun = await Promise.all(
-    shippedRuns.map((r) => listDeliverables(50, r.id).catch((): Deliverable[] => [])),
+    runsWithDeliverable.map((r) => listDeliverables(50, r.id).catch((): Deliverable[] => [])),
   );
   const deliverables = perRun.flat();
-  const shipped = deliverables.map((d) => toShippedItem(d, product.slug));
 
-  // Title + proof link per run: shipped runs link to their deliverable proof,
-  // the rest to the run — so a "Needs your review" row is openable, not a dead
-  // status line.
+  // "Shipped" lists ONLY shipped runs' deliverables — review-ready work isn't
+  // shipped, even though we fetched its deliverable to resolve the report link.
+  const shippedRunIds = new Set(productRuns.filter((r) => r.status === "shipped").map((r) => r.id));
+  const shipped = deliverables
+    .filter((d) => shippedRunIds.has(d.run_id))
+    .map((d) => toShippedItem(d, product.slug));
+
+  // Title + report link per run: any run with a deliverable links straight to
+  // its report (/deliverables/<id>); the rest to the run — so every row opens.
   const lookup = buildReviewLookup(productRuns, deliverables, products);
   const detailRuns = productRuns.map((r) => toDetailRun(r, lookup));
 
@@ -208,7 +215,7 @@ export async function getProductDetail(
     slug: product.slug,
     name: product.name,
     repoUrl: product.repo_url,
-    currentStatus,
+    currentStatusKey,
     currentTone,
     runs: detailRuns,
     shipped,

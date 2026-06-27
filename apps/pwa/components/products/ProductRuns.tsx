@@ -1,4 +1,5 @@
 import type { ProductDetailRun } from "@/lib/api/types";
+import { STATUS_LABEL_KEY } from "@/lib/runs/status";
 import { useTranslations } from "next-intl";
 import Link from "next/link";
 
@@ -20,6 +21,10 @@ function formatWhen(value: string): string {
  */
 export default function ProductRuns({ runs }: { runs: ProductDetailRun[] }) {
   const t = useTranslations("products");
+  // The status label is translated via the SHARED Brief/Activity status keys so
+  // the per-product runs read in the same localized vocabulary (not the
+  // hardcoded English the view-model carried).
+  const tBrief = useTranslations("brief");
   return (
     <section className="product-runs" aria-label={t("recentRuns")}>
       <h2 className="section-label">{t("recentRuns")}</h2>
@@ -31,7 +36,7 @@ export default function ProductRuns({ runs }: { runs: ProductDetailRun[] }) {
             const body = (
               <>
                 <span className={`product-run__status product-run__status--${run.tone}`}>
-                  {run.statusLabel}
+                  {tBrief(STATUS_LABEL_KEY[run.status])}
                 </span>
                 {/* WHAT the run was, so the row is more than a status + time. */}
                 {run.title && <span className="product-run__title">{run.title}</span>}
