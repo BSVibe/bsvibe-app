@@ -80,6 +80,50 @@ async def test_commit_all_no_changes_returns_false(tmp_path: Path) -> None:
     assert committed is False
 
 
+async def test_commit_all_excludes_verification_byproducts(tmp_path: Path) -> None:
+    """Build caches + the verifier's _bsvibe_* acceptance scaffold must NOT land
+    in the delivered commit/PR — only the agent's source changes."""
+    bare = await _make_bare_remote(tmp_path)
+    ops = GitOps()
+    dest = tmp_path / "checkout"
+    await ops.clone(bare.as_uri(), dest, token=None, depth=1)
+    await ops.checkout_new_branch(dest, "bsvibe/run-byp")
+
+    (dest / "mathx.py").write_text("def clamp(v):\n    return v\n")
+    (dest / "__pycache__").mkdir(exist_ok=True)
+    (dest / "__pycache__" / "mathx.cpython-311.pyc").write_bytes(b"\x00")
+    (dest / "tests").mkdir(exist_ok=True)
+    (dest / "tests" / "_bsvibe_independent_acceptance.py").write_text("def test_x():\n    pass\n")
+    (dest / "tests" / "__pycache__").mkdir(exist_ok=True)
+    (dest / "tests" / "__pycache__" / "test_x.pyc").write_bytes(b"\x00")
+
+    committed = await ops.commit_all(dest, "work: clamp")
+    assert committed is True
+
+    files = await _run("show", "--name-only", "--pretty=format:", "HEAD", cwd=dest)
+    assert "mathx.py" in files
+    assert ".pyc" not in files
+    assert "__pycache__" not in files
+    assert "_bsvibe_independent_acceptance" not in files
+
+
+async def test_commit_all_noop_when_only_byproducts(tmp_path: Path) -> None:
+    """A round that produced ONLY byproducts must not commit (no empty PR)."""
+    bare = await _make_bare_remote(tmp_path)
+    ops = GitOps()
+    dest = tmp_path / "checkout"
+    await ops.clone(bare.as_uri(), dest, token=None, depth=1)
+    await ops.checkout_new_branch(dest, "bsvibe/run-byp2")
+
+    (dest / "__pycache__").mkdir(exist_ok=True)
+    (dest / "__pycache__" / "x.cpython-311.pyc").write_bytes(b"\x00")
+    (dest / "tests").mkdir(exist_ok=True)
+    (dest / "tests" / "_bsvibe_independent_acceptance.py").write_text("def test_x():\n    pass\n")
+
+    committed = await ops.commit_all(dest, "byproducts only")
+    assert committed is False
+
+
 async def test_is_ahead_of_base_true_when_branch_has_extra_commit(tmp_path: Path) -> None:
     """Lift E41 — when the verifier's W2 step already committed the agent's
     edits before delivery runs, ``commit_all`` returns ``False`` (working tree

@@ -32,6 +32,21 @@ logger = structlog.get_logger(__name__)
 
 _REDACTED = "***"
 
+#: Verification byproducts un-staged from a delivery commit so they never reach
+#: the PR: build caches (``__pycache__`` / ``*.pyc`` / tool caches / a stray
+#: ``.venv``) and the ``_bsvibe_*`` independent-acceptance scaffold the verifier
+#: writes into the workspace. Git glob pathspecs (``**`` = any depth). Mirrors
+#: ``backend.storage.product_workspace._COMMIT_EXCLUDE_PATHSPECS`` (the G8 path).
+_COMMIT_EXCLUDE_PATHSPECS = (
+    ":(glob)**/__pycache__/**",
+    ":(glob)**/*.py[co]",
+    ":(glob)**/.pytest_cache/**",
+    ":(glob)**/.ruff_cache/**",
+    ":(glob)**/.mypy_cache/**",
+    ":(glob)**/.venv/**",
+    ":(glob)**/_bsvibe_*",
+)
+
 
 def scrub_token(text: str, token: str | None) -> str:
     """Replace ``token`` with ``***`` in ``text`` so secrets never reach logs.
@@ -149,7 +164,14 @@ class GitOps:
         caller treats ``False`` as a clean no-op (no empty PR is opened).
         """
         await self._run_checked("add", "-A", cwd=dest)
-        # `git diff --cached --quiet` exits 1 when there ARE staged changes.
+        # Drop verification byproducts (build caches + the verifier's _bsvibe_*
+        # acceptance scaffold) so the delivered PR carries only the agent's
+        # source. ``reset`` un-stages them; a pathspec matching nothing is a
+        # benign no-op (``_run`` doesn't raise on a non-zero exit).
+        await self._run("reset", "-q", "--", *_COMMIT_EXCLUDE_PATHSPECS, cwd=dest)
+        # `git diff --cached --quiet` exits 1 when there ARE staged changes. The
+        # STAGED set already excludes the byproducts unstaged above, so a round
+        # that produced only byproducts is correctly a no-op (no empty PR).
         code, _out, _err = await self._run("diff", "--cached", "--quiet", cwd=dest)
         if code == 0:
             return False
