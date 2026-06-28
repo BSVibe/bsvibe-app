@@ -33,6 +33,7 @@ status transitions atomically advance the run.
 
 from __future__ import annotations
 
+import re
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
@@ -56,6 +57,32 @@ from backend.workflow.infrastructure.repositories import (
 )
 
 logger = structlog.get_logger(__name__)
+
+
+# A model executor (a coding-agent CLI) can report a *billing* failure — the
+# provider being out of credits — as a generic ``401 Invalid authentication
+# credentials``. We can't tell auth from billing apart from the CLI's string
+# (the mistranslation happens inside the CLI, before we see it), so when a run
+# fails with an auth-shaped reason we APPEND a hint pointing at the provider
+# balance. Reasons that don't look auth-related are left untouched.
+_AUTH_FAILURE_RE = re.compile(
+    r"\b(401|unauthorized|authenticate|authentication credentials)\b", re.IGNORECASE
+)
+_CREDITS_HINT = (
+    " — Hint: an auth error from a model executor often means the model provider is "
+    "OUT OF CREDITS / BALANCE (some agent CLIs report a billing failure as a 401). "
+    "Verify your provider's balance, not just the API key."
+)
+
+
+def _with_credits_hint(reason: str) -> str:
+    """Append the credits/billing hint to an auth-shaped failure reason.
+
+    Idempotent (won't double-append) and a no-op for empty or non-auth reasons.
+    """
+    if not reason or _CREDITS_HINT in reason or not _AUTH_FAILURE_RE.search(reason):
+        return reason
+    return reason + _CREDITS_HINT
 
 
 def _is_linked_worktree(worktree: Path) -> bool:
@@ -197,7 +224,7 @@ class AgentRunner:
             await self.transition(
                 run_id=run_id,
                 to_status=RunStatus.FAILED,
-                reason=result.summary or "agent loop system error",
+                reason=_with_credits_hint(result.summary or "agent loop system error"),
             )
         # needs_decision: run stays RUNNING (paused on a Decision row).
         logger.info(
