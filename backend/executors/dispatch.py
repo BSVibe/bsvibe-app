@@ -132,12 +132,18 @@ async def find_available_worker(
     ``executor_type``. The least-recently-pinged eligible worker wins (cheap
     round-robin, matching BSGateway's ``ORDER BY last_heartbeat ASC``).
 
-    ``pinned_worker_id`` (optional) is accepted even with a stale heartbeat —
-    the caller explicitly bound this worker — as long as it is active + in the
-    workspace + carries the capability. A pinned id that doesn't qualify falls
-    through to the normal availability scan. **Pinned workers are ALSO accepted
-    when saturated** (``last_in_flight >= max_parallel_per_worker``): the
-    founder pinned a specific machine for a reason and the waiting belongs in
+    ``pinned_worker_id`` (optional) is honoured — the caller explicitly bound
+    this worker — as long as it is active + in the workspace + carries the
+    capability + **its heartbeat is FRESH**. A pinned id that doesn't qualify
+    (wrong capability, or a STALE/dead heartbeat) falls through to the normal
+    availability scan, so work lands on another live worker instead of stalling
+    on a dead pin. The freshness gate matters because the executor model account
+    pins ``extra_params.worker_id`` at registration; when that machine is
+    replaced or dies, the pin goes stale and a task dispatched there is never
+    polled — the run silently waits out the dispatch timeout. **A FRESH pinned
+    worker is ALSO accepted when saturated** (``last_in_flight >=
+    max_parallel_per_worker``): the founder pinned a specific machine for a
+    reason and the waiting belongs in
     :class:`~backend.dispatch.adapter.ExecutorAdapter.chat`, not here.
 
     ``max_parallel_per_worker`` (Lift E16, optional) — when set, eligible
@@ -165,7 +171,11 @@ async def find_available_worker(
                 )
             )
         ).scalar_one_or_none()
-        if pinned is not None and executor_type in (pinned.capabilities or []):
+        if (
+            pinned is not None
+            and executor_type in (pinned.capabilities or [])
+            and is_heartbeat_fresh(pinned.last_heartbeat)
+        ):
             return pinned
 
     cutoff = datetime.now(UTC).timestamp() - HEARTBEAT_FRESHNESS_S

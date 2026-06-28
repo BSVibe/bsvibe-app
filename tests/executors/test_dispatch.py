@@ -424,16 +424,58 @@ async def test_find_available_worker_is_workspace_scoped() -> None:
         assert found is None
 
 
-async def test_find_available_worker_pinned_accepts_stale_heartbeat() -> None:
-    """A pinned worker is accepted even with a stale heartbeat (caller bound it)."""
+async def test_find_available_worker_pinned_stale_heartbeat_falls_through() -> None:
+    """A pinned worker whose heartbeat is STALE (dead) is NOT honoured — it would
+    only get a task that the dead worker never polls, stalling the run until the
+    dispatch timeout. With no live alternative, the scan yields ``None`` so the
+    caller fails fast instead of silently waiting."""
     workspace_id = uuid.uuid4()
     async with memory_session() as s:
         worker = await _seed_worker(
             s,
             workspace_id=workspace_id,
             capabilities=["claude_code"],
-            status="offline",
+            status="online",
             heartbeat_age_s=9999,
+        )
+        await s.commit()
+        found = await dispatch.find_available_worker(
+            s,
+            workspace_id=workspace_id,
+            executor_type="claude_code",
+            pinned_worker_id=worker.id,
+        )
+        assert found is None
+
+
+async def test_find_available_worker_pinned_stale_falls_through_to_live() -> None:
+    """A pinned worker that is stale (dead) falls through to a LIVE worker with the
+    capability — work gets done instead of stalling on the dead pin."""
+    workspace_id = uuid.uuid4()
+    async with memory_session() as s:
+        dead_pin = await _seed_worker(
+            s, workspace_id=workspace_id, capabilities=["claude_code"], heartbeat_age_s=9999
+        )
+        live = await _seed_worker(
+            s, workspace_id=workspace_id, capabilities=["claude_code"], heartbeat_age_s=5
+        )
+        await s.commit()
+        found = await dispatch.find_available_worker(
+            s,
+            workspace_id=workspace_id,
+            executor_type="claude_code",
+            pinned_worker_id=dead_pin.id,
+        )
+        assert found is not None
+        assert found.id == live.id
+
+
+async def test_find_available_worker_pinned_fresh_is_honoured() -> None:
+    """A pinned worker with a FRESH heartbeat is still honoured (the pin works)."""
+    workspace_id = uuid.uuid4()
+    async with memory_session() as s:
+        worker = await _seed_worker(
+            s, workspace_id=workspace_id, capabilities=["claude_code"], heartbeat_age_s=5
         )
         await s.commit()
         found = await dispatch.find_available_worker(
