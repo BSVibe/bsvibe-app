@@ -115,6 +115,20 @@ async def test_extracts_text_from_multiple_payload_keys(tmp_path: Path) -> None:
     assert framed.skill_match == "summarizer"
 
 
+@pytest.mark.asyncio
+async def test_extracts_text_from_intent_text_key(tmp_path: Path) -> None:
+    # A connector-sourced request (e.g. a github issue) carries its directive in
+    # ``intent_text`` (the canonical field, what ``_request_intent_text`` reads).
+    # The frame MUST read it too — else the work request degrades to a "no task"
+    # knowledge_only answer instead of being routed into the agent loop.
+    _write_skill(tmp_path, "summarizer", "Summarize meeting notes")
+    loader = SkillLoader(tmp_path)
+    loader.load_all()
+    request = _request({"intent_text": "Please summarize the meeting notes"})
+    framed = await FrameStage().frame(request=request, config=FrameConfig(skill_loader=loader))
+    assert framed.skill_match == "summarizer"
+
+
 # --------------------------------------------------------------------------
 # B9a — real cheap-LLM framing (graceful fallback to keyword heuristic)
 # --------------------------------------------------------------------------

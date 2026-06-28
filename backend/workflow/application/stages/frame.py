@@ -511,7 +511,11 @@ def _extract_text(request: RequestRow) -> str:
     payload = request.payload or {}
     parts: list[str] = []
     if isinstance(payload, dict):
-        for key in ("text", "title", "summary", "body", "message"):
+        # ``intent_text`` is the canonical directive field a connector-sourced
+        # request carries (github issue / PR / comment via the webhook parser);
+        # it must be read here, consistent with ``_request_intent_text``, or the
+        # frame sees "no task" and degrades a real build to a knowledge answer.
+        for key in ("intent_text", "text", "title", "summary", "body", "message"):
             value = payload.get(key)
             if isinstance(value, str):
                 parts.append(value)
