@@ -37,11 +37,13 @@ Response contract:
 
 from __future__ import annotations
 
+import uuid
 from typing import Annotated, Any
 
 import structlog
 from fastapi import APIRouter, Depends, Path, Request, status
 from fastapi.responses import JSONResponse
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.api.deps import get_db_session
@@ -52,6 +54,7 @@ from backend.extensions.plugin.webhook_registry import (
     WebhookParserRegistry,
     get_default_registry,
 )
+from backend.identity.workspaces_db import ProductRow
 from backend.router.accounts.crypto import CredentialCipher, _key_from_settings
 from backend.workers.emit import STREAM_INTAKE, emit_stream_notification, get_emit_redis_client
 from backend.workflow.application.intake.webhook import WebhookReceiver
@@ -60,6 +63,43 @@ from bsvibe_sdk import WebhookSignatureError
 logger = structlog.get_logger(__name__)
 
 router = APIRouter()
+
+
+def _repo_slug(repo: str) -> str:
+    """Normalize a repo URL or ``owner/name`` to a lowercase ``owner/name`` so a
+    connector's ``https://github.com/o/r`` matches a product's ``o/r`` binding."""
+    s = repo.strip().lower().removesuffix(".git")
+    parts = [
+        p
+        for p in s.replace("https://", "")
+        .replace("http://", "")
+        .replace("git@", "")
+        .replace(":", "/")
+        .split("/")
+        if p
+    ]
+    return "/".join(parts[-2:]) if len(parts) >= 2 else s
+
+
+async def _product_id_for_repo(
+    session: AsyncSession, workspace_id: uuid.UUID, repo: str
+) -> uuid.UUID | None:
+    """The workspace product bound to ``repo`` (matched on ``repo_url``), or
+    ``None`` when none carries it — so the run binds to the issue's OWN repo and
+    never to an unrelated one. This is what makes a github issue process like a
+    Direct message ON that product (clone + work in context + repo-native PR)."""
+    slug = _repo_slug(repo)
+    if not slug:
+        return None
+    rows = (
+        (await session.execute(select(ProductRow).where(ProductRow.workspace_id == workspace_id)))
+        .scalars()
+        .all()
+    )
+    for row in rows:
+        if row.repo_url and _repo_slug(row.repo_url) == slug:
+            return row.id
+    return None
 
 
 def get_credential_cipher() -> CredentialCipher:
@@ -141,13 +181,24 @@ async def receive_connector_webhook(
     # The parser already computed a stable idempotency_key (e.g. Slack event_id,
     # GitHub delivery id); thread it through the header the receiver honours so
     # a redelivery collapses regardless of header presence on the wire.
+    # Unify inbound with the Direct path: a github issue/PR is processed like a
+    # direct message ON the product it came from. When the parser didn't bind a
+    # product, resolve it from the repo (the event's repo, else the connector's
+    # bound repo) so the run clones that repo + works in context + delivers a
+    # repo-native PR — instead of running unbound in an empty workspace.
+    product_id = event.product_id
+    if product_id is None:
+        repo = (event.payload or {}).get("repo") or account.external_ref
+        if repo:
+            product_id = await _product_id_for_repo(session, account.workspace_id, str(repo))
+
     receiver = WebhookReceiver(session)
     outcome = await receiver.handle(
         workspace_id=event.workspace_id,
         source=event.source,
         headers={"X-Idempotency-Key": event.idempotency_key},
         body=event.payload,
-        product_id=event.product_id,
+        product_id=product_id,
         trace_id=event.trace_id,
     )
     await session.commit()
