@@ -97,6 +97,55 @@ async def test_commit_worktree_is_noop_when_nothing_changed() -> None:
     assert sha is None
 
 
+async def test_commit_worktree_excludes_verification_byproducts() -> None:
+    """Build caches + the verifier's injected acceptance scaffold must NOT land
+    in the run's commit (else they leak into the delivered PR)."""
+    product_id = uuid.uuid4()
+    run_id = uuid.uuid4()
+    await init_product_workspace(product_id)
+    worktree = await add_run_worktree(product_id, run_id)
+
+    # the agent's REAL change
+    (worktree / "mathx.py").write_text("def clamp(v):\n    return v\n")
+    # verification byproducts that must be excluded
+    (worktree / "__pycache__").mkdir(exist_ok=True)
+    (worktree / "__pycache__" / "mathx.cpython-311.pyc").write_bytes(b"\x00\x01")
+    (worktree / "tests").mkdir(exist_ok=True)
+    (worktree / "tests" / "_bsvibe_independent_acceptance.py").write_text(
+        "def test_x():\n    pass\n"
+    )
+    (worktree / "tests" / "__pycache__").mkdir(exist_ok=True)
+    (worktree / "tests" / "__pycache__" / "test_x.pyc").write_bytes(b"\x00")
+
+    sha = await commit_worktree(product_id, run_id, message="work: clamp")
+    assert sha is not None
+
+    files = await _git("show", "--name-only", "--pretty=format:", sha, cwd=worktree)
+    assert "mathx.py" in files
+    assert ".pyc" not in files
+    assert "__pycache__" not in files
+    assert "_bsvibe_independent_acceptance" not in files
+
+
+async def test_commit_worktree_noop_when_only_byproducts() -> None:
+    """A round that produced ONLY byproducts (no real source change) must not
+    create a commit — no empty PR for a verification-only artifact set."""
+    product_id = uuid.uuid4()
+    run_id = uuid.uuid4()
+    await init_product_workspace(product_id)
+    worktree = await add_run_worktree(product_id, run_id)
+
+    (worktree / "__pycache__").mkdir(exist_ok=True)
+    (worktree / "__pycache__" / "x.cpython-311.pyc").write_bytes(b"\x00")
+    (worktree / "tests").mkdir(exist_ok=True)
+    (worktree / "tests" / "_bsvibe_independent_acceptance.py").write_text(
+        "def test_x():\n    pass\n"
+    )
+
+    sha = await commit_worktree(product_id, run_id, message="byproducts only")
+    assert sha is None
+
+
 # ---------------------------------------------------------------------------
 # merge_main_into_worktree — clean
 # ---------------------------------------------------------------------------

@@ -69,6 +69,20 @@ _RUN_BRANCH_PREFIX = "bsvibe/run/"
 #: is happier with a non-empty tree).
 _PRODUCT_MARKER_PATH = ".bsvibe/PRODUCT.md"
 
+#: Verification byproducts un-staged from a run's commit so they never reach the
+#: delivered PR: build caches (``__pycache__`` / ``*.pyc`` / tool caches / a
+#: stray ``.venv``) and the ``_bsvibe_*`` independent-acceptance scaffold the
+#: verifier writes into the workspace. Git glob pathspecs (``**`` = any depth).
+_COMMIT_EXCLUDE_PATHSPECS = (
+    ":(glob)**/__pycache__/**",
+    ":(glob)**/*.py[co]",
+    ":(glob)**/.pytest_cache/**",
+    ":(glob)**/.ruff_cache/**",
+    ":(glob)**/.mypy_cache/**",
+    ":(glob)**/.venv/**",
+    ":(glob)**/_bsvibe_*",
+)
+
 
 class ProductWorkspaceError(RuntimeError):
     """A git invocation against a product workspace exited non-zero.
@@ -388,14 +402,20 @@ async def commit_worktree(
     """
     worktree = run_worktree_path(run_id)
     await _git("add", "-A", cwd=worktree)
-    # ``--allow-empty`` would mask the "nothing changed" case which we
-    # want to treat as a benign no-op — detect via status check first.
-    status = await _git("status", "--porcelain", cwd=worktree)
-    if not status.stdout.strip():
-        # No staged changes — the agent didn't write anything in this
-        # round. Nothing to commit; return ``None`` so callers can
-        # short-circuit (e.g. verify still calls this, finds nothing,
-        # moves on to merge attempt which will be a no-op too).
+    # Drop verification BYPRODUCTS so the run's commit/PR carries only the
+    # agent's intended source changes — never build caches (``__pycache__`` /
+    # ``*.pyc`` / ``.pytest_cache`` / ``.venv`` …) or the ``_bsvibe_*``
+    # acceptance scaffold the verifier writes into the workspace. ``reset``
+    # un-stages them (left untracked, uncommitted). ``check=False`` — a
+    # pathspec matching nothing is a benign no-op, not a failure.
+    await _git("reset", "-q", "--", *_COMMIT_EXCLUDE_PATHSPECS, cwd=worktree, check=False)
+    # Detect "nothing real to commit" via the STAGED set (not ``status``, which
+    # would also count the now-untracked byproducts) — a benign no-op.
+    staged = await _git("diff", "--cached", "--name-only", cwd=worktree)
+    if not staged.stdout.strip():
+        # No staged source changes — the agent didn't write anything real this
+        # round (or only byproducts). Nothing to commit; return ``None`` so
+        # callers short-circuit (verify finds nothing, the merge is a no-op).
         return None
     await _git("commit", "-m", message, cwd=worktree)
     head = await _git("rev-parse", "HEAD", cwd=worktree)
