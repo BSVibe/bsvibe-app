@@ -119,11 +119,17 @@ def parse_webhook(
         raise WebhookError("missing X-GitHub-Delivery header")
 
     repo = (body.get("repository") or {}).get("full_name")
+    # The framer reads ``intent_text`` as the work directive. Pull the human text
+    # of the issue / PR / comment so a github-triggered run knows WHAT to do —
+    # without it the run has no instruction and degrades to a generic
+    # "how can I help?" answer instead of doing the work.
+    intent_text = _intent_text(event, body)
     payload = {
         "github_event": event,
         "action": action,
         "repo": repo,
         "delivery": delivery,
+        "intent_text": intent_text,
         "body": body,
     }
     return TriggerEvent(
@@ -133,7 +139,30 @@ def parse_webhook(
         idempotency_key=delivery,
         payload=payload,
         trace_id=delivery,
+        intent_text=intent_text,
     )
+
+
+def _join_text(parts: list[Any]) -> str | None:
+    """Join non-empty parts with a blank line, or ``None`` when all are empty."""
+    cleaned = [str(p).strip() for p in parts if p is not None and str(p).strip()]
+    return "\n\n".join(cleaned) or None
+
+
+def _intent_text(event: str, body: dict[str, Any]) -> str | None:
+    """The work directive — the human text of the triggering issue / PR / comment."""
+    if event == "issues":
+        issue = body.get("issue") or {}
+        return _join_text([issue.get("title"), issue.get("body")])
+    if event == "pull_request":
+        pr = body.get("pull_request") or {}
+        return _join_text([pr.get("title"), pr.get("body")])
+    if event == "issue_comment":
+        # The comment is the new instruction; prefix the issue title for context.
+        issue = body.get("issue") or {}
+        comment = body.get("comment") or {}
+        return _join_text([issue.get("title"), comment.get("body")])
+    return None
 
 
 __all__ = [
