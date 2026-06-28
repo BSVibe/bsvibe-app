@@ -93,6 +93,73 @@ class TestParseWebhook:
         assert evt is not None
         assert evt.payload["github_event"] == "issue_comment"
 
+    def test_issue_opened_sets_intent_text_from_title_and_body(self):
+        # The framer reads ``payload.intent_text`` as the work directive. Without
+        # it a github-issue run has no instruction and degrades to a generic
+        # "how can I help?" answer instead of doing the work.
+        body = json.dumps(
+            {
+                "action": "opened",
+                "repository": {"full_name": "o/r"},
+                "issue": {
+                    "number": 1,
+                    "title": "Add a string reverse utility",
+                    "body": "Add src/stringx.py with reverse(s).",
+                },
+                "sender": {"type": "User"},
+            }
+        ).encode()
+        evt = parse_webhook(
+            workspace_id=WORKSPACE,
+            headers=_headers("issues", "del-i1", body=body),
+            raw_body=body,
+            secret=SECRET,
+        )
+        assert evt is not None
+        assert evt.intent_text is not None
+        assert "Add a string reverse utility" in evt.intent_text
+        assert "Add src/stringx.py with reverse(s)." in evt.intent_text
+
+    def test_pull_request_opened_sets_intent_text(self):
+        body = json.dumps(
+            {
+                "action": "opened",
+                "repository": {"full_name": "o/r"},
+                "pull_request": {"number": 9, "title": "Fix the parser", "body": "details here"},
+                "sender": {"type": "User"},
+            }
+        ).encode()
+        evt = parse_webhook(
+            workspace_id=WORKSPACE,
+            headers=_headers("pull_request", "del-p9", body=body),
+            raw_body=body,
+            secret=SECRET,
+        )
+        assert evt is not None
+        assert evt.intent_text is not None
+        assert "Fix the parser" in evt.intent_text
+        assert "details here" in evt.intent_text
+
+    def test_issue_comment_sets_intent_text_from_comment(self):
+        body = json.dumps(
+            {
+                "action": "created",
+                "repository": {"full_name": "o/r"},
+                "issue": {"number": 7, "title": "Existing issue"},
+                "comment": {"id": 99, "body": "please also handle empty input"},
+                "sender": {"type": "User"},
+            }
+        ).encode()
+        evt = parse_webhook(
+            workspace_id=WORKSPACE,
+            headers=_headers("issue_comment", body=body),
+            raw_body=body,
+            secret=SECRET,
+        )
+        assert evt is not None
+        assert evt.intent_text is not None
+        assert "please also handle empty input" in evt.intent_text
+
     def test_ping_event_returns_none(self):
         body = b'{"zen":"x"}'
         evt = parse_webhook(
