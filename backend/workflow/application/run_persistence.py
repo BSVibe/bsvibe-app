@@ -60,12 +60,59 @@ _MAX_SUMMARY_TITLE = 120
 #: streamed chunks without the inter-sentence space.
 _CHUNK_JOIN_RE = re.compile(r"([.!?:])([A-Z])")
 
+#: Map a verification command to a friendly category for the summary line. We
+#: surface the CATEGORY ("tests", "lint", …), never the raw command string —
+#: echoing "uv run pytest …" would re-introduce the contract-block slop the F4
+#: fix removed from the user-facing summary. Ordered = display order.
+_CHECK_CATEGORY_LABELS: tuple[tuple[str, str], ...] = (
+    ("pytest", "tests"),
+    ("ruff check", "lint"),
+    ("ruff format", "format"),
+    ("mypy", "types"),
+)
+
+
+def _verification_sentence(verdict: VerificationResult | None) -> str:
+    """A deterministic, LLM-free sentence describing what the verifier proved.
+
+    Reads the ``VerificationResult.result`` blob the verifier already persisted
+    (``command_results`` + ``judge``) and renders e.g. "Verified: 3 checks
+    passed (tests, lint, format). Acceptance check passed." Returns "" when no
+    verdict / nothing to report, so the caller adds no empty line.
+    """
+    if verdict is None:
+        return ""
+    result = getattr(verdict, "result", None) or {}
+    commands = result.get("command_results") or []
+    passed = [c for c in commands if c.get("passed")]
+    labels: list[str] = []
+    for cmd in commands:
+        text = str(cmd.get("command") or "").lower()
+        for needle, label in _CHECK_CATEGORY_LABELS:
+            if needle in text and label not in labels:
+                labels.append(label)
+
+    pieces: list[str] = []
+    if passed:
+        noun = "check" if len(passed) == 1 else "checks"
+        sentence = f"Verified: {len(passed)} {noun} passed"
+        if labels:
+            sentence += f" ({', '.join(labels)})"
+        pieces.append(sentence + ".")
+    judge = result.get("judge") or {}
+    if judge.get("passed"):
+        pieces.append("Acceptance check passed.")
+    return " ".join(pieces)
+
 
 def _compose_verified_summary(
-    run: ExecutionRun, final_text: str, written_paths: Sequence[str] | None = None
+    run: ExecutionRun,
+    final_text: str,
+    written_paths: Sequence[str] | None = None,
+    verdict: VerificationResult | None = None,
 ) -> str:
     """Build the verified deliverable's summary — titled by the founder INTENT,
-    bodied by the DETERMINISTIC list of changed files.
+    bodied by the DETERMINISTIC list of changed files + what the verifier proved.
 
     The summary's first line becomes the PR title (via ``_split_summary``) and
     the settle note's title. The work LLM's ``final_text`` is raw first-person
@@ -78,6 +125,10 @@ def _compose_verified_summary(
     for debugging. ``final_text`` is only a FALLBACK body (contract-stripped,
     whitespace-repaired) when no changed-file list is available — e.g. a
     non-file deliverable. Falls back to a stable title when there is no intent.
+
+    R1: when a passing ``verdict`` is supplied, a deterministic verification
+    sentence (which checks passed, by category) is appended so the report says
+    not just *what* changed but *that it was proven* — no LLM, no raw commands.
     """
     payload = run.payload or {}
     intent = str(payload.get("intent_text") or payload.get("text") or "").strip()
@@ -85,11 +136,20 @@ def _compose_verified_summary(
     title = first_line[:_MAX_SUMMARY_TITLE].rstrip() or "Delivered change"
 
     files = [p.strip() for p in (written_paths or []) if p and p.strip()]
+    sections: list[str] = []
     if files:
-        body = "Changed files:\n" + "\n".join(f"- {p}" for p in files)
+        sections.append("Changed files:\n" + "\n".join(f"- {p}" for p in files))
     else:
         stripped = _CONTRACT_BLOCK_RE.sub("", final_text or "").strip()
-        body = _CHUNK_JOIN_RE.sub(r"\1 \2", stripped)
+        cleaned = _CHUNK_JOIN_RE.sub(r"\1 \2", stripped)
+        if cleaned:
+            sections.append(cleaned)
+
+    verification = _verification_sentence(verdict)
+    if verification:
+        sections.append(verification)
+
+    body = "\n\n".join(sections)
     return f"{title}\n\n{body}" if body else title
 
 
@@ -213,8 +273,8 @@ async def finish_verified(
         artifact_refs=written_paths,
         # Title the summary by the founder intent + body by the changed files,
         # not the work LLM's raw narration — the first line becomes the PR
-        # title + settle note title.
-        summary=_compose_verified_summary(run, final_text, written_paths),
+        # title + settle note title. R1: weave in what the verifier proved.
+        summary=_compose_verified_summary(run, final_text, written_paths, verdict),
     )
 
     # Wake the delivery + settle consumers (worker_mode="redis_streams"
