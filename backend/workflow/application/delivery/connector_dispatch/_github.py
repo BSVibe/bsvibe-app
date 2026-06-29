@@ -28,13 +28,50 @@ from backend.extensions.plugin.base import PluginMeta
 from backend.extensions.plugin.runner import PluginRunner
 from backend.router.accounts.crypto import CredentialCipher
 from backend.workflow.domain.delivery import ActionResult
+from backend.workflow.infrastructure.db import ExecutionRun
 from backend.workflow.infrastructure.delivery.git_ops import GitOps
+from backend.workflow.infrastructure.intake.db import RequestRow, TriggerEventRow
 
 from ._builders import _split_summary
 from ._context import _build_context
 from ._resolver import GithubBinding, resolve_github_binding
 
 logger = structlog.get_logger(__name__)
+
+# github webhook event kinds that carry a numbered issue / PR the delivery can
+# reply to (the framer's ``github_event`` tag on the TriggerEvent payload).
+_GITHUB_ISSUE_EVENTS = frozenset({"issues", "pull_request", "issue_comment"})
+
+
+async def _source_github_issue_number(
+    session: AsyncSession, run_id: uuid.UUID | None
+) -> int | None:
+    """The github issue / PR number that triggered this run, so the delivery can
+    close the loop back to it — a ``Closes #N`` ref in the PR body plus a comment
+    carrying the PR link. Traces run → request → trigger_event (the run payload
+    only keeps ``intent_text``; the issue number lives on the trigger envelope).
+
+    ``None`` when the run was not github-issue sourced (a Direct chat run, a
+    non-issue webhook, or any missing link) — so non-github runs are untouched.
+    """
+    if run_id is None:
+        return None
+    run = await session.get(ExecutionRun, run_id)
+    if run is None or run.request_id is None:
+        return None
+    request = await session.get(RequestRow, run.request_id)
+    if request is None:
+        return None
+    trigger = await session.get(TriggerEventRow, request.trigger_event_id)
+    if trigger is None:
+        return None
+    payload = trigger.payload or {}
+    if payload.get("github_event") not in _GITHUB_ISSUE_EVENTS:
+        return None
+    body = payload.get("body") or {}
+    target = body.get("issue") or body.get("pull_request") or {}
+    number = target.get("number")
+    return int(number) if isinstance(number, int) else None
 
 
 def github_remote_url(repo: str) -> str:
@@ -227,7 +264,17 @@ async def deliver_github(
         )
         # Persist any token refresh resolve performed under the hood.
         await session.commit()
+        # The issue/PR that triggered this run (if any) — so we can close the
+        # loop back to it. Resolved in the same session; soft (a github-sourced
+        # run with no traceable issue just delivers the PR without the ref).
+        source_issue = await _source_github_issue_number(session, run_id)
     token = creds["token"]
+
+    # Link the PR to the originating issue: ``Closes #N`` cross-links it on the
+    # issue timeline AND auto-closes the issue when the PR merges. Skipped for
+    # non-issue-sourced runs (Direct chat), so they deliver exactly as before.
+    if source_issue is not None:
+        body = f"{body}\n\nCloses #{source_issue}".strip()
 
     # 3. Push the branch to the (real-or-test) remote.
     remote_url = deps.remote_url_for(binding.repo)
@@ -276,6 +323,33 @@ async def deliver_github(
     # surface the PR link (open_pr returns ``url`` = the PR html_url). Soft:
     # a write hiccup never fails an already-opened PR.
     await _persist_pr_url(deps.session_factory, deliverable_id, output.get("url"))
+
+    # Close the loop back to the originating issue: comment with the PR link so
+    # whoever filed it is notified (the PR body's ``Closes #N`` cross-links, but
+    # a comment is the visible signal on the issue itself). Soft — the PR is
+    # already open, so a comment hiccup must never fail the delivery.
+    pr_url = output.get("url")
+    if source_issue is not None and isinstance(pr_url, str) and pr_url:
+        try:
+            await deps.runner.dispatch_action(
+                plugin,
+                action_name="comment",
+                context=ctx,
+                kwargs={
+                    "repo": binding.repo,
+                    "issue_number": source_issue,
+                    "body": f"🤖 Opened a pull request to resolve this: {pr_url}",
+                },
+            )
+        except Exception as exc:  # noqa: BLE001 — soft-fail like the PR-url writeback
+            logger.warning(
+                "github_delivery_issue_comment_failed",
+                workspace_id=str(workspace_id),
+                run_id=str(run_id),
+                issue_number=source_issue,
+                error=str(exc),
+            )
+
     logger.info(
         "github_delivery_pr_opened",
         workspace_id=str(workspace_id),

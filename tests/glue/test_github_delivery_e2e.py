@@ -42,8 +42,12 @@ from backend.workflow.application.delivery.connector_dispatch import (
     build_connector_delivery_adapter,
     build_github_workspace_provisioner,
 )
+from backend.workflow.application.delivery.connector_dispatch._github import (
+    _source_github_issue_number,
+)
 from backend.workflow.infrastructure.db import Deliverable, ExecutionRun, RunStatus
 from backend.workflow.infrastructure.delivery.db import DeliveryEventRow
+from backend.workflow.infrastructure.intake.db import RequestRow, TriggerEventRow, TriggerKind
 from backend.workflow.infrastructure.sandbox import NoopSandboxManager
 from backend.workflow.infrastructure.workers.agent_worker import AgentExecutionDeps, AgentWorker
 from backend.workflow.infrastructure.workers.delivery_worker import (
@@ -364,3 +368,131 @@ async def test_github_no_file_changes_no_push_no_pr_clean_success(
 
     async with sf() as s:
         assert (await s.execute(select(DeliveryEventRow))).first() is None
+
+
+# --------------------------------------------------------------------------
+# Closing the loop back to the originating github issue (Closes #N + comment)
+# --------------------------------------------------------------------------
+
+
+async def _seed_run_from_github_issue(
+    session: AsyncSession, workspace_id: uuid.UUID, issue_number: int
+) -> uuid.UUID:
+    """An OPEN run whose Request traces back to a github ISSUE TriggerEvent — so
+    the delivery can close the loop (``Closes #N`` ref + a PR-link comment). The
+    issue number lives ONLY on the trigger envelope (the run payload keeps just
+    ``intent_text``), mirroring the real intake path."""
+    trigger = TriggerEventRow(
+        id=uuid.uuid4(),
+        workspace_id=workspace_id,
+        source="github",
+        trigger_kind=TriggerKind.WEBHOOK,
+        idempotency_key=uuid.uuid4().hex,
+        payload={
+            "github_event": "issues",
+            "action": "opened",
+            "repo": "owner/name",
+            "intent_text": "add the feature",
+            "body": {"issue": {"number": issue_number, "title": "Add the feature"}},
+        },
+    )
+    session.add(trigger)
+    await session.flush()
+    request = RequestRow(
+        id=uuid.uuid4(),
+        workspace_id=workspace_id,
+        trigger_event_id=trigger.id,
+        payload={},
+    )
+    session.add(request)
+    await session.flush()
+    run = ExecutionRun(
+        id=uuid.uuid4(),
+        workspace_id=workspace_id,
+        request_id=request.id,
+        status=RunStatus.OPEN,
+        payload={"intent_text": "add the feature"},
+    )
+    session.add(run)
+    await session.commit()
+    return run.id
+
+
+@respx.mock
+async def test_github_pr_closes_and_comments_on_source_issue(
+    sf: async_sessionmaker[AsyncSession], cipher: CredentialCipher, tmp_path: Path
+) -> None:
+    """A run triggered by a github ISSUE → the delivered PR references the issue
+    (``Closes #42``, which cross-links it and auto-closes on merge) AND a comment
+    with the PR link lands on the issue — the loop is closed back to the filer."""
+    workspace_id = uuid.uuid4()
+    bare = await _make_bare_remote(tmp_path)
+    workspace_root = tmp_path / "runs"
+
+    pr_route = respx.post(f"{GITHUB_API}/repos/owner/name/pulls").mock(
+        return_value=httpx.Response(
+            201, json={"number": 7, "html_url": "https://github.com/owner/name/pull/7"}
+        )
+    )
+    comment_route = respx.post(f"{GITHUB_API}/repos/owner/name/issues/42/comments").mock(
+        return_value=httpx.Response(
+            201,
+            json={
+                "id": 555,
+                "html_url": "https://github.com/owner/name/issues/42#issuecomment-555",
+            },
+        )
+    )
+
+    async with sf() as s:
+        await _seed_github_connector(s, cipher, workspace_id)
+        await _seed_run_from_github_issue(s, workspace_id, 42)
+
+    deps = _execution_deps(sf, workspace_root, cipher, bare, _scripted_writes_file())
+    agent = AgentWorker(session_factory=sf, execution=deps)
+    assert await agent.drive_once() == 1
+
+    registry = await _plugins()
+    adapter = build_connector_delivery_adapter(
+        session_factory=sf,
+        plugins=list(registry.values()),
+        cipher=cipher,
+        workspace_root=workspace_root,
+        remote_url_for=lambda _repo: bare.as_uri(),
+    )
+    worker = DeliveryWorker(
+        session_factory=sf,
+        dispatcher=adapter,
+        config=DeliveryWorkerConfig(batch_size=10, poll_interval_s=0.01),
+    )
+    assert await worker.drain_once() == 1
+
+    # The PR body references the originating issue.
+    assert pr_route.called
+    pr_body = pr_route.calls.last.request.content.decode()
+    assert "Closes #42" in pr_body
+
+    # A comment carrying the PR link landed on the source issue.
+    assert comment_route.called
+    comment_body = comment_route.calls.last.request.content.decode()
+    assert "pull/7" in comment_body
+
+
+async def test_source_issue_number_none_for_direct_run(
+    sf: async_sessionmaker[AsyncSession],
+) -> None:
+    """A Direct chat run (no Request/TriggerEvent) has no issue to reply to — the
+    tracer returns None so non-github delivery is untouched (no Closes/comment)."""
+    workspace_id = uuid.uuid4()
+    async with sf() as s:
+        run = ExecutionRun(
+            id=uuid.uuid4(),
+            workspace_id=workspace_id,
+            request_id=None,
+            status=RunStatus.OPEN,
+            payload={"intent_text": "just chatting"},
+        )
+        s.add(run)
+        await s.commit()
+        assert await _source_github_issue_number(s, run.id) is None
+        assert await _source_github_issue_number(s, None) is None
