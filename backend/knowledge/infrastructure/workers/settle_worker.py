@@ -65,9 +65,12 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
 
 import structlog
+
+if TYPE_CHECKING:
+    from backend.knowledge.canonicalization.promotion import ConceptFramer
 from sqlalchemy import Select, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -293,6 +296,18 @@ class PromoterFactory(Protocol):
     def __call__(
         self, *, region: str, workspace_id: uuid.UUID, safe_mode: bool
     ) -> WorkspacePromoter | None: ...
+
+
+class ConceptFramerFactory(Protocol):
+    """Builds a :class:`~backend.knowledge.canonicalization.promotion.ConceptFramer`
+    for one workspace (Lift 1b), or ``None`` when the workspace routed no model
+    for ``knowledge.canonicalization``.
+
+    Async because resolving the routed account is a DB read. ``None`` keeps the
+    promoter deterministic (Lift 1 body) — the framing model is 100% user-routed,
+    never hardcoded ([[bsvibe-no-implicit-routing]])."""
+
+    async def __call__(self, *, region: str, workspace_id: uuid.UUID) -> ConceptFramer | None: ...
 
 
 class NoteEmbedHook(Protocol):
@@ -632,7 +647,9 @@ class _WorkspacePolicy:
     safe_mode: bool
 
 
-def build_garden_promoter_factory(*, vault_root: Path) -> PromoterFactory:
+def build_garden_promoter_factory(
+    *, vault_root: Path, framer_factory: ConceptFramerFactory | None = None
+) -> PromoterFactory:
     """Production :class:`PromoterFactory` rooted at the shared vault boundary.
 
     Builds, per call, a :class:`~backend.knowledge.canonicalization.promotion.GardenObservationPromoter`
@@ -644,6 +661,10 @@ def build_garden_promoter_factory(*, vault_root: Path) -> PromoterFactory:
     so the workspace's policy decides queue-vs-apply; the worker never overrides
     it. The returned factory is sync but builds a coroutine-driven promoter, so
     promotion itself runs inside the worker's ``await``.
+
+    Lift 1b: ``framer_factory`` (when wired) is resolved per promote pass to a
+    routed :class:`ConceptFramer` that distils new concept bodies. ``None`` keeps
+    promotion fully deterministic.
     """
 
     def _factory(
@@ -654,6 +675,7 @@ def build_garden_promoter_factory(*, vault_root: Path) -> PromoterFactory:
             region=region,
             workspace_id=workspace_id,
             safe_mode=safe_mode,
+            framer_factory=framer_factory,
         )
 
     return _factory
@@ -668,15 +690,22 @@ class _LazyGardenPromoter:
     just-written vault state each pass — keeping promotion idempotent.
     """
 
-    __slots__ = ("_vault_root", "_region", "_workspace_id", "_safe_mode")
+    __slots__ = ("_vault_root", "_region", "_workspace_id", "_safe_mode", "_framer_factory")
 
     def __init__(
-        self, *, vault_root: Path, region: str, workspace_id: uuid.UUID, safe_mode: bool
+        self,
+        *,
+        vault_root: Path,
+        region: str,
+        workspace_id: uuid.UUID,
+        safe_mode: bool,
+        framer_factory: ConceptFramerFactory | None = None,
     ) -> None:
         self._vault_root = vault_root
         self._region = region
         self._workspace_id = workspace_id
         self._safe_mode = safe_mode
+        self._framer_factory = framer_factory
 
     async def promote(self) -> object:
         # Lazy heavy imports — keep the worker entrypoint cheap.
@@ -724,7 +753,23 @@ class _LazyGardenPromoter:
             policies=policies,
             safe_mode=lambda: safe_mode,
         )
-        return await GardenObservationPromoter(service).promote()
+        # Lift 1b — resolve the routed concept framer for this workspace (None
+        # when no factory is wired OR the workspace routed no canonicalization
+        # model → deterministic Lift 1 body). Soft-fail: a resolution error
+        # never blocks promotion.
+        framer = None
+        if self._framer_factory is not None:
+            try:
+                framer = await self._framer_factory(
+                    region=self._region, workspace_id=self._workspace_id
+                )
+            except Exception:  # noqa: BLE001 — framing is derived; never break promotion
+                logger.warning(
+                    "concept_framer_resolution_failed",
+                    workspace_id=str(self._workspace_id),
+                    exc_info=True,
+                )
+        return await GardenObservationPromoter(service, framer=framer).promote()
 
 
 class SettleWorker(BaseWorker):
@@ -1009,6 +1054,7 @@ def _to_settlement(row: ExecutionRunActivity, region: str) -> Settlement:
 
 
 __all__ = [
+    "ConceptFramerFactory",
     "EntityExtractor",
     "ExtractorFactory",
     "KnowledgeSettleSink",

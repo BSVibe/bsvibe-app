@@ -58,6 +58,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import PurePosixPath
+from typing import Protocol
 
 import structlog
 
@@ -89,6 +90,25 @@ _MIN_OBSERVATIONS_FOR_PROMOTION = 2
 # Map-of-Content stays readable (the digital-garden hairball lesson) while
 # still carrying real substance + the links Lift 5's graph reads as edges.
 _MAX_CONCEPT_MEMBERS = 8
+
+# KG Lift 1b — cap on the distilled synthesis framing prepended to a concept
+# body, so a verbose model can't blow out the hub note. Bounded prose, not a
+# wall of text.
+_MAX_FRAMING_CHARS = 600
+
+
+class ConceptFramer(Protocol):
+    """Distill a 2-4 sentence synthesis framing for a promoted concept (Lift 1b).
+
+    The promoter stays deterministic; this OPTIONAL seam lets a routed LLM turn
+    the member garden seedlings into a real Map-of-Content framing (Matuschak
+    evergreen: a synthesis, not a link dump). The concrete implementation routes
+    the model through the user's routing (caller_id ``knowledge.canonicalization``
+    — never a product-hardcoded model, [[bsvibe-no-implicit-routing]]) and is
+    invoked soft-fail: any error → the deterministic Lift 1 body stands. ``None``
+    means "no framing" (e.g. the model added nothing usable)."""
+
+    async def frame(self, *, concept: str, members: list[tuple[str, str]]) -> str | None: ...
 
 
 @dataclass(slots=True)
@@ -126,8 +146,12 @@ class GardenObservationPromoter:
         proposer: DeterministicProposer | None = None,
         structural_tags: frozenset[str] = _DEFAULT_STRUCTURAL_TAGS,
         actor: str = "promotion",
+        framer: ConceptFramer | None = None,
     ) -> None:
         self._service = service
+        # Lift 1b — optional routed distillation of the concept framing. None
+        # (the default) keeps promotion fully deterministic (Lift 1 body).
+        self._framer = framer
         self._store: NoteStore = service._store
         index = service._index
         if index is None:
@@ -280,18 +304,26 @@ class GardenObservationPromoter:
 
     async def _compose_concept_body(self, normalized: str) -> str | None:
         """A synthesized hub body for a new concept — its member garden
-        seedlings as ``[[wikilinks]]`` with their excerpts (a Map-of-Content).
+        seedlings as ``[[wikilinks]]`` with their excerpts (a Map-of-Content),
+        optionally LED by a distilled synthesis framing (Lift 1b).
 
         This is what makes a promoted concept *substantive*: it carries the
         members' working statements and the explicit links Lift 5's graph reads
         as edges, instead of being an empty ``# Title`` shell. Bounded to
         ``_MAX_CONCEPT_MEMBERS`` so a very common tag stays readable. ``None``
         when no member observation is resolvable (so the concept just falls back
-        to the title rather than carrying an empty section)."""
+        to the title rather than carrying an empty section).
+
+        Lift 1b: when a :class:`ConceptFramer` is wired (the user routed a model
+        to ``knowledge.canonicalization``), the member summaries are distilled
+        into a 2-4 sentence framing prepended ABOVE the MOC list — a real
+        evergreen synthesis, not just a link dump. Soft-fail: any framer error
+        leaves the deterministic body intact."""
         member_paths = getattr(self, "_tag_observations", {}).get(normalized, [])
         if not member_paths:
             return None
         lines: list[str] = []
+        members: list[tuple[str, str]] = []
         for path in member_paths[:_MAX_CONCEPT_MEMBERS]:
             summary = await self._store.read_garden_summary(path)
             if summary is None:
@@ -300,11 +332,29 @@ class GardenObservationPromoter:
             detail = excerpt or title
             stem = PurePosixPath(path).stem
             lines.append(f"- [[{stem}]]" + (f" — {detail}" if detail else ""))
+            members.append((stem, detail))
         if not lines:
             return None
         total = len(member_paths)
         header = f"Synthesized from {total} garden observation{'s' if total != 1 else ''}:"
-        return f"{header}\n\n" + "\n".join(lines)
+        moc = f"{header}\n\n" + "\n".join(lines)
+
+        framing = await self._distill_framing(normalized, members)
+        return f"{framing}\n\n{moc}" if framing else moc
+
+    async def _distill_framing(self, concept: str, members: list[tuple[str, str]]) -> str | None:
+        """Routed distillation of a synthesis framing (Lift 1b). Soft-fail —
+        a framer error / empty result yields ``None`` and the caller keeps the
+        deterministic MOC body."""
+        if self._framer is None:
+            return None
+        try:
+            framing = await self._framer.frame(concept=concept, members=members)
+        except Exception:  # noqa: BLE001 — framing is derived; never break promotion
+            logger.warning("concept_framing_failed", concept=concept, exc_info=True)
+            return None
+        framing = (framing or "").strip()
+        return framing[:_MAX_FRAMING_CHARS].rstrip() or None
 
     async def _seed_concept(self, raw_tag: str, result: PromotionResult) -> None:
         """Ensure a candidate concept exists for ``raw_tag``.
@@ -385,4 +435,4 @@ class GardenObservationPromoter:
         result.applied_anchors = list(dict.fromkeys(result.applied_anchors))
 
 
-__all__ = ["GardenObservationPromoter", "PromotionResult"]
+__all__ = ["ConceptFramer", "GardenObservationPromoter", "PromotionResult"]

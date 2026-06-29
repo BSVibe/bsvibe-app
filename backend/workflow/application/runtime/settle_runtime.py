@@ -22,8 +22,13 @@ import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from backend.config import Settings, get_settings
-from backend.dispatch.caller_registry import CALLER_SETTLE_EXTRACT
+from backend.dispatch.caller_registry import (
+    CALLER_KNOWLEDGE_CANONICALIZATION,
+    CALLER_SETTLE_EXTRACT,
+)
+from backend.knowledge.canonicalization.promotion import ConceptFramer
 from backend.knowledge.infrastructure.workers.settle_worker import (
+    ConceptFramerFactory,
     EntityExtractor,
     ExtractorFactory,
     NoteEmbedHook,
@@ -31,7 +36,10 @@ from backend.knowledge.infrastructure.workers.settle_worker import (
     Settlement,
 )
 from backend.workflow.application.runtime.account_resolution import _resolve_via_caller
-from backend.workflow.application.runtime.dispatcher import _ResolverCompileLlm
+from backend.workflow.application.runtime.dispatcher import (
+    _ResolverCompileLlm,
+    _ResolverFrameLlm,
+)
 
 logger = structlog.get_logger(__name__)
 
@@ -102,6 +110,77 @@ def build_settle_entity_extractor_factory(
                 llm_client=llm,
                 parallelism=settings.ingest_compile_parallelism,
             )
+
+    return _factory
+
+
+#: System prompt for the Lift 1b concept-framing distillation. Asks for plain
+#: evergreen prose (a synthesis, NOT a link dump / list) — the wikilink MOC is
+#: appended deterministically by the promoter, so the model only writes framing.
+_FRAMING_SYSTEM = (
+    "You distill engineering knowledge into evergreen concept notes. Given a "
+    "concept and the source notes that mention it, write a 2-4 sentence synthesis "
+    "of what the concept means and why it matters. Plain prose only — no preamble, "
+    "no bullet lists, no headings, no restating the concept name as a title."
+)
+
+
+class _RoutedConceptFramer:
+    """:class:`ConceptFramer` over a resolver-routed frame LLM (Lift 1b).
+
+    The model is whatever the user routed for ``knowledge.canonicalization`` —
+    never product-chosen. A single ``(system, user)`` → text completion per
+    newly created concept; the promoter bounds + soft-fails the result."""
+
+    __slots__ = ("_llm",)
+
+    def __init__(self, llm: _ResolverFrameLlm) -> None:
+        self._llm = llm
+
+    async def frame(self, *, concept: str, members: list[tuple[str, str]]) -> str | None:
+        notes = "\n".join(f"- {detail}" for _stem, detail in members if detail)
+        if not notes:
+            return None
+        user = f"Concept: {concept}\n\nSource notes:\n{notes}"
+        text = await self._llm.complete_text(system=_FRAMING_SYSTEM, user=user)
+        return text.strip() or None
+
+
+def build_concept_framer(
+    *,
+    session_factory: async_sessionmaker[AsyncSession],
+    settings: Settings | None = None,
+    redis: Any = None,
+) -> ConceptFramerFactory:
+    """Production :class:`ConceptFramerFactory` — Lift 1b routed distillation.
+
+    Per affected workspace (one build per promote pass that creates concepts),
+    resolves an account via caller_id ``knowledge.canonicalization`` and wraps
+    its adapter in a frame LLM. Returns ``None`` on
+    :class:`~backend.dispatch.resolver.NoMatchingRouteError` (the workspace
+    routed no model for canonicalization) so the promoter keeps its deterministic
+    Lift 1 body — the model is 100% user-routed, never hardcoded
+    ([[bsvibe-no-implicit-routing]])."""
+    settings = settings or get_settings()
+
+    async def _factory(*, region: str, workspace_id: uuid.UUID) -> ConceptFramer | None:
+        async with session_factory() as session:
+            resolved = await _resolve_via_caller(
+                session,
+                caller_id=CALLER_KNOWLEDGE_CANONICALIZATION,
+                workspace_id=workspace_id,
+                settings=settings,
+                redis=redis,
+                session_factory=session_factory,
+            )
+            if resolved is None:
+                logger.info(
+                    "concept_framer_account_unresolved",
+                    workspace_id=str(workspace_id),
+                    caller_id=CALLER_KNOWLEDGE_CANONICALIZATION,
+                )
+                return None
+            return _RoutedConceptFramer(_ResolverFrameLlm(adapter=resolved.adapter))
 
     return _factory
 
@@ -204,6 +283,7 @@ def _relative_note_path(
 
 
 __all__ = [
+    "build_concept_framer",
     "build_note_embed_hook",
     "build_reconcile_hook",
     "build_settle_entity_extractor_factory",
