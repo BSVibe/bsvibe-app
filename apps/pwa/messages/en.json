@@ -277,6 +277,7 @@
     "graphEmptySub": "Knowledge links will appear here as I learn, concepts and how they relate.",
     "graphNoMatch": "Nothing here matches that.",
     "graphShowAll": "Show all",
+    "graphBackToOverview": "← Full graph",
     "graphGroupOther": "Other",
     "graphLegendLabel": "Filter by kind",
     "searchLabel": "Search knowledge",

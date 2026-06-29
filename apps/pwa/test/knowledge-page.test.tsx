@@ -228,13 +228,15 @@ describe("Knowledge surface (BSage graph)", () => {
     expect(await screen.findByRole("heading", { name: "Auth" })).toBeInTheDocument();
     expect(screen.getByText("authn")).toBeInTheDocument();
     // The inspector leads with the note's CONTENT (the body, as a readable note),
-    // NOT the source detail — the observation title/date are no longer shown.
+    // NOT the source detail — the observation title/date are no longer shown IN
+    // THE INSPECTOR (the Lift 5 local graph does label its seedling leaves with
+    // the title, but that is the canvas, not the inspector panel).
     expect(screen.getByText(/redirect target/)).toBeInTheDocument();
     expect(screen.getByText(/lands on \/app/)).toBeInTheDocument();
-    expect(screen.queryByText("Wired the auth callback")).not.toBeInTheDocument();
     // Related concept rendered as a clickable pivot — scoped to the panel (a
     // graph-node stub button shares the "JWKS" name in the canvas mock).
     const panel = screen.getByRole("complementary", { name: /concept/i });
+    expect(within(panel).queryByText("Wired the auth callback")).not.toBeInTheDocument();
     expect(within(panel).getByRole("button", { name: /JWKS/ })).toBeInTheDocument();
   });
 
