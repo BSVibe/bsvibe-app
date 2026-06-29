@@ -24,6 +24,7 @@ structurally.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import shlex
 import uuid
@@ -54,6 +55,15 @@ logger = structlog.get_logger(__name__)
 # orchestrator re-imports them for back-compat.
 VERIFY_TIMEOUT_S = 60.0
 _JUDGE_FILE_CONTEXT_BYTES = 8 * 1024
+
+# Hard ceiling on a verify-phase LLM call (the L2 acceptance author + the
+# acceptance judge). ``self._llm`` can be an EXECUTOR account — a chat-shaped
+# completion then dispatches an agentic CLI task whose own await runs for the
+# full executor timeout (~1h). A hung/slow CLI there would block the whole run
+# in ``review_ready``. These calls are bounded so a stuck executor degrades
+# gracefully (author → skip the best-effort check; judge → an explicit
+# non-pass) instead of hanging the run.
+_VERIFY_LLM_TIMEOUT_S = 180.0
 
 # Issue #361 — the sandbox image carries the toolchain (pytest/ruff/uv) but
 # NOT the project's dependency tree, so a plain ``python -m pytest`` cannot
@@ -535,8 +545,14 @@ class VerificationService:
 
         async def _author_and_run(repair_hint: str) -> SandboxResult | None:
             try:
-                turn = await self._llm.complete(
-                    messages=_acceptance_author_messages(intent, sources, repair_hint), tools=None
+                # Bounded — a hung executor CLI must never stall the run on this
+                # best-effort check (TimeoutError is caught below → skip).
+                turn = await asyncio.wait_for(
+                    self._llm.complete(
+                        messages=_acceptance_author_messages(intent, sources, repair_hint),
+                        tools=None,
+                    ),
+                    timeout=_VERIFY_LLM_TIMEOUT_S,
                 )
             except Exception:  # noqa: BLE001 — author hiccup must never break the run
                 return None
@@ -623,7 +639,17 @@ class VerificationService:
                 ),
             },
         ]
-        turn = await self._llm.complete(messages=judge_messages, tools=None)
+        try:
+            # Bounded — if ``self._llm`` is an executor account, a hung agentic
+            # CLI must not stall the run in verify. A timeout is an explicit
+            # NON-pass (consistent with "never a silent pass") so the founder
+            # reviews rather than the run rotting in ``review_ready``.
+            turn = await asyncio.wait_for(
+                self._llm.complete(messages=judge_messages, tools=None),
+                timeout=_VERIFY_LLM_TIMEOUT_S,
+            )
+        except (TimeoutError, asyncio.TimeoutError):
+            return {"passed": False, "reasoning": "judge LLM timed out", "raw": ""}
         return parse_judge_verdict(turn.content)
 
 
