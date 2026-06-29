@@ -59,6 +59,9 @@ EXPECTED_ROUTES: dict[str, set[tuple[str, str]]] = {
         # Lift M4a — proof surface (Fleet + Inside trust panel).
         ("GET", "/trust/fleet"),
         ("GET", "/trust/{product_id}"),
+        # KG Lift 3 — embedding backfill / reconcile trigger (derived-index
+        # rebuild; the vault FS-as-SoT is untouched).
+        ("POST", "/reindex-embeddings"),
     },
     "backend.api.v1.products": {
         ("GET", ""),

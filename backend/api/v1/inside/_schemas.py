@@ -188,6 +188,21 @@ class NoteResponse(BaseModel):
     content: str
 
 
+class ReindexEmbeddingsResponse(BaseModel):
+    """Outcome of ``POST /reindex-embeddings`` — the vector-index backfill.
+
+    ``scanned`` knowledge notes were examined; ``embedded`` were newly vectored;
+    ``already`` already had a current-model vector (skipped). ``disabled`` is
+    True when no embedder is configured (a pure no-op)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    scanned: int
+    embedded: int
+    already: int
+    disabled: bool
+
+
 __all__ = [
     "ConceptDetailResponse",
     "ConceptResponse",
@@ -196,6 +211,7 @@ __all__ = [
     "GraphResponse",
     "NoteResponse",
     "ObservationResponse",
+    "ReindexEmbeddingsResponse",
     "RelatedConcept",
     "SourceObservation",
 ]

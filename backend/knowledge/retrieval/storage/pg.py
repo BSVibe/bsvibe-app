@@ -72,6 +72,18 @@ class PgNoteVectorBackend:
         )
         await self._session.flush()
 
+    async def existing_paths(self) -> set[str]:
+        # Filtered by the current model: vectors from a different model are
+        # incomparable, so reconcile treats them as missing and re-embeds.
+        rows = await self._session.execute(
+            text(
+                "SELECT note_path FROM note_embeddings "
+                "WHERE workspace_id = :ws AND embedding_model = :model"
+            ),
+            {"ws": self._workspace_id, "model": self._embedding_model},
+        )
+        return {row[0] for row in rows}
+
     async def search(
         self, query_embedding: list[float], top_k: int = 10
     ) -> list[tuple[str, float]]:
