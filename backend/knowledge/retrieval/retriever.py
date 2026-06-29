@@ -104,6 +104,7 @@ class VaultRetriever:
 
         if self._index_reader is None:
             dirs = context_dirs or [
+                "concepts/active",  # KG Lift 4 — the substantive concept hubs lead.
                 "seeds",
                 "garden/seedling",
                 "garden/budding",

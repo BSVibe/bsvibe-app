@@ -39,6 +39,7 @@ async def _seed_concept(
     concept_id: str,
     display: str,
     aliases: list[str] | None = None,
+    initial_body: str | None = None,
 ) -> None:
     """Write a promoted active concept into the workspace's vault on disk."""
     store = NoteStore(FileSystemStorage(vault_root / region / workspace_id))
@@ -50,7 +51,8 @@ async def _seed_concept(
             aliases=list(aliases or []),
             created_at=datetime(2026, 5, 6),
             updated_at=datetime(2026, 5, 6),
-        )
+        ),
+        initial_body=initial_body,
     )
 
 
@@ -192,3 +194,48 @@ async def test_retrieve_never_raises_on_storage_error(vault_root: Path) -> None:
     shutil.rmtree(factory.vault_path)
     factory.vault_path.write_text("not a directory")  # make the path a FILE
     assert await retriever.retrieve_for_signals("dependency pinning") == []
+
+
+async def test_concept_body_substance_folds_into_statement(vault_root: Path) -> None:
+    """KG Lift 4 — a matched concept surfaces its SYNTHESIZED body substance (the
+    member excerpts), not just the bare title, so Lift 1's content reaches the
+    verify/answer context."""
+    ws = _ws()
+    await _seed_concept(
+        vault_root,
+        region=_REGION,
+        workspace_id=ws,
+        concept_id="idempotency",
+        display="Idempotency",
+        initial_body=(
+            "Synthesized from 1 garden observation:\n\n"
+            "- [[create-ref-422-reuse]] — create_ref returning 422 means the branch "
+            "already exists; re-fetch and reuse it instead of failing."
+        ),
+    )
+    factory = KnowledgeFactory(region=_REGION, workspace_id=ws, vault_root=vault_root)
+    retriever = factory.retriever()
+
+    patterns = await retriever.retrieve_for_signals("improved idempotency of create_ref\napi.py")
+
+    # The substantive member excerpt reaches the contract (not just "Idempotency").
+    assert any("re-fetch and reuse it instead of failing" in s for s in patterns), patterns
+    # And it's still anchored to the concept title.
+    assert any(s.startswith("Idempotency") for s in patterns), patterns
+
+
+async def test_bodyless_concept_still_returns_title(vault_root: Path) -> None:
+    """Back-compat: a concept with no synthesized body surfaces its title alone."""
+    ws = _ws()
+    await _seed_concept(
+        vault_root,
+        region=_REGION,
+        workspace_id=ws,
+        concept_id="dependency-pinning",
+        display="Always pin dependency versions",
+    )
+    factory = KnowledgeFactory(region=_REGION, workspace_id=ws, vault_root=vault_root)
+    retriever = factory.retriever()
+
+    patterns = await retriever.retrieve_for_signals("dependency pinning\nrequirements.txt")
+    assert "Always pin dependency versions" in patterns

@@ -35,14 +35,20 @@ import re
 
 import structlog
 
+from backend.knowledge.canonicalization import paths
 from backend.knowledge.canonicalization.index import InMemoryCanonicalizationIndex
 from backend.knowledge.canonicalization.resolver import TagResolver
+from backend.knowledge.graph.markdown_utils import body_after_frontmatter
 from backend.knowledge.graph.storage import StorageBackend
 
 logger = structlog.get_logger(__name__)
 
 # At most this many canonical statements fold into one verify contract.
 _MAX_PATTERNS = 5
+
+# Cap on the synthesized-body substance folded onto one concept statement, so a
+# concept with many members stays a calm, bounded contribution to the contract.
+_MAX_BODY_CHARS = 400
 
 # Signals → candidate tokens. The work summary + changed paths are free text; we
 # extract lowercase alnum runs (path separators / punctuation become breaks) and
@@ -120,12 +126,38 @@ class CanonConceptRetriever:
             if concept is None:
                 continue
             seen_ids.add(resolved.concept_id)
-            # The concept's display H1 is its statement (Handoff §0.2 — the H1
-            # carries the human-legible label, not frontmatter).
+            # The concept's display H1 is its label (Handoff §0.2). KG Lift 4 —
+            # fold in the synthesized hub BODY (member excerpts) too, so the
+            # concept's actual substance, not just its title, reaches the
+            # verify/answer context. Bodyless concepts surface the title alone.
             statement = (concept.display or concept.concept_id).strip()
             if statement:
+                body = await self._concept_body_text(resolved.concept_id)
+                if body:
+                    statement = f"{statement} — {body}"
                 statements.append(statement)
         return statements
+
+    async def _concept_body_text(self, concept_id: str) -> str:
+        """The synthesized member excerpts from a concept's hub body (Lift 1),
+        joined + bounded. ``""`` for a bodyless concept or any read failure
+        (the verify path must never crash on canon)."""
+        path = paths.active_concept_path(concept_id)
+        try:
+            if not await self._storage.exists(path):
+                return ""
+            text = await self._storage.read(path)
+        except Exception:  # noqa: BLE001 — never break retrieval on a read
+            return ""
+        excerpts: list[str] = []
+        for line in body_after_frontmatter(text).splitlines():
+            stripped = line.strip()
+            # MOC member line: ``- [[stem]] — excerpt``.
+            if stripped.startswith("- ") and "—" in stripped:
+                excerpt = stripped.split("—", 1)[1].strip()
+                if excerpt:
+                    excerpts.append(excerpt)
+        return " ".join(excerpts)[:_MAX_BODY_CHARS]
 
 
 __all__ = ["CanonConceptRetriever"]
