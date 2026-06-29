@@ -28,7 +28,7 @@ from backend.knowledge.canonicalization.promotion import GardenObservationPromot
 from backend.knowledge.canonicalization.resolver import TagResolver
 from backend.knowledge.canonicalization.service import CanonicalizationService
 from backend.knowledge.canonicalization.store import NoteStore
-from backend.knowledge.graph.markdown_utils import extract_frontmatter
+from backend.knowledge.graph.markdown_utils import body_after_frontmatter, extract_frontmatter
 from backend.knowledge.graph.storage import FileSystemStorage
 
 _FIXED_NOW = datetime(2026, 5, 23, 12, 0, 0)
@@ -443,3 +443,44 @@ class TestPromoterRequiresIndex:
         )
         with pytest.raises(ValueError, match="index"):
             GardenObservationPromoter(service)
+
+
+class TestConceptSynthesisBody:
+    """KG Lift 1 — a promoted concept is a SUBSTANTIVE hub: its body carries the
+    member garden seedlings as ``[[wikilinks]]`` with their excerpts (a MOC),
+    not an empty ``# Title`` shell."""
+
+    @pytest.mark.asyncio
+    async def test_promoted_concept_carries_member_synthesis_body(
+        self, workspace_storage: FileSystemStorage
+    ) -> None:
+        # Two recurring observations (clears the gate) WITH real body content.
+        for i in range(2):
+            await workspace_storage.write(
+                f"garden/seedling/resolver-soft-fallback-{i}.md",
+                "---\n"
+                "tags:\n"
+                "  - settle\n"
+                "  - resolver-pattern\n"
+                "---\n"
+                f"# Resolver soft fallback {i}\n\n"
+                "Resolvers should return None on a miss so callers degrade.\n",
+            )
+        service = await _make_service(workspace_storage, safe_mode=False)
+        promoter = GardenObservationPromoter(service)
+
+        await promoter.promote()
+
+        concept_paths = await workspace_storage.list_files("concepts/active")
+        match = [p for p in concept_paths if "resolver-pattern" in p]
+        assert match, f"expected a resolver-pattern concept, got {concept_paths}"
+        body = await workspace_storage.read(match[0])
+
+        # Links to the member seedlings (explicit wikilinks → Lift 5 graph edges).
+        assert "[[resolver-soft-fallback-0]]" in body
+        # The member's substance is carried (the excerpt), so the concept is not
+        # a hollow ``# Title`` anymore.
+        assert "Resolvers should return None on a miss" in body
+        # And the body after the heading is non-trivial (not just the title line).
+        after_heading = body_after_frontmatter(body).split("\n", 1)[1].strip()
+        assert len(after_heading) > 20

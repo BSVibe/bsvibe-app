@@ -293,6 +293,24 @@ class NoteStore:
         """All garden notes across maturity folders."""
         return list(await self._storage.list_files("garden", "*.md"))
 
+    async def read_garden_summary(self, path: str) -> tuple[str, str] | None:
+        """A garden note's ``(title, excerpt)`` for composing a concept hub body.
+
+        ``excerpt`` is the first non-empty, non-heading line of the body (the
+        seedling's working statement), so a promoted concept can carry its
+        members' substance. ``None`` when the note is gone (listing/read race)."""
+        if not await self._storage.exists(path):
+            return None
+        text = await self._storage.read(path)
+        title = extract_title(text)
+        excerpt = ""
+        for line in body_after_frontmatter(text).splitlines():
+            stripped = line.strip()
+            if stripped and not stripped.startswith("#"):
+                excerpt = stripped
+                break
+        return (title, excerpt)
+
     # ----------------------------------------------------------------- decisions
 
     async def read_decision(self, path: str) -> models.DecisionEntry | None:
