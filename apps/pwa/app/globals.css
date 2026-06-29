@@ -2368,6 +2368,19 @@ main.login {
   color: var(--ink);
 }
 
+/* Local-graph focus label — the focused concept's name beside the "← Full
+   graph" control, so the local view names what it is centred on. */
+.kgraph__focus-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  font-size: 0.82rem;
+  font-weight: 500;
+  color: var(--ink);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
 /* Canvas host — a calm bordered surface the force graph paints onto. A fixed
    height gives the simulation room; the lib sizes its canvas to this measured
    box so clicks land on nodes. The legend floats over the bottom-left corner. */

@@ -277,6 +277,7 @@
     "graphEmptySub": "배워 가면서 지식 사이의 연결이 여기에 나타나요. 개념과 그 관계들이요.",
     "graphNoMatch": "검색과 일치하는 항목이 없어요.",
     "graphShowAll": "모두 보기",
+    "graphBackToOverview": "← 전체 그래프",
     "graphGroupOther": "기타",
     "graphLegendLabel": "유형으로 필터",
     "searchLabel": "지식 검색",

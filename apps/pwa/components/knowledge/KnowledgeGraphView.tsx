@@ -10,6 +10,7 @@ import {
   nodeRadius,
   shouldShowLabel,
 } from "@/lib/knowledge/graphPhysics";
+import { buildLocalGraph } from "@/lib/knowledge/localGraph";
 import { forceCollide, forceX, forceY } from "d3-force";
 import { useTranslations } from "next-intl";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -66,8 +67,16 @@ const GROUP_PALETTE = [
   "#6d7dca",
 ];
 const FALLBACK_COLOR = "#8b6fd6";
+// Member-observation (seedling) leaves in the local view read as a calm, muted
+// node distinct from the coloured concept hubs — the content lives in the
+// leaves, but the hubs are what the eye organises around.
+const SEEDLING_COLOR = "#a8a29a";
 
 type ColorMode = "type" | "community";
+// The canvas is either the global concept overview or a focused concept's
+// 1-hop local graph (Lift 5). Local is the navigable exploration surface; the
+// global view stays concept-only and clean.
+type ViewMode = "global" | "local";
 
 /** The empty/unknown kind gets the translated "Other" label; everything else is
  *  humanized from the backend id. */
@@ -83,8 +92,19 @@ interface GraphNode {
   group: string;
   community: string;
   weight: number;
+  // Set only in the local view: concept hubs vs seedling leaves, and which node
+  // is the focus. Absent (undefined) in the global overview.
+  nodeType?: "concept" | "seedling";
+  focus?: boolean;
   x?: number;
   y?: number;
+}
+
+// The shape fed to ForceGraph2D — the global filtered view and the local view
+// share it so the lib infers one node type for the canvas callbacks.
+interface CanvasData {
+  nodes: GraphNode[];
+  links: { source: string; target: string }[];
 }
 
 type DetailState =
@@ -124,6 +144,9 @@ export default function KnowledgeGraphView({ graph }: { graph: KnowledgeGraph })
   // switching modes starts from a clean (unfiltered) slate.
   const [activeFilters, setActiveFilters] = useState<Set<string> | null>(null);
   const [colorMode, setColorMode] = useState<ColorMode>("type");
+  // Lift 5: selecting a concept drops the canvas into its local graph; the
+  // "full graph" control (and closing the inspector) returns to the overview.
+  const [viewMode, setViewMode] = useState<ViewMode>("global");
   const [detail, setDetail] = useState<DetailState>({ status: "idle" });
   const [selectedId, setSelectedId] = useState<string | null>(null);
   // Session-local "this node was just acted on" markers so the inspector
@@ -299,7 +322,34 @@ export default function KnowledgeGraphView({ graph }: { graph: KnowledgeGraph })
     return { nodes: nodes.map((n) => ({ ...n })), links };
   }, [baseNodes, graph.edges, activeFilters, searchQuery, groupKeyOf]);
 
-  const degreeMap = useMemo(() => computeDegree(filteredData.links as GraphLink[]), [filteredData]);
+  // The selected concept's global-graph node — its TYPE/community feed both the
+  // inspector metadata and the local graph's focus-node colour.
+  const selectedNode = useMemo(
+    () => baseNodes.find((n) => n.id === selectedId) ?? null,
+    [baseNodes, selectedId],
+  );
+
+  // Lift 5 — the focused concept's 1-hop local graph, built purely from the
+  // ConceptDetail the inspector already fetched. Fresh objects each pass so the
+  // sim re-seeds cleanly (same discipline as filteredData).
+  const localData = useMemo<CanvasData>(() => {
+    if (detail.status !== "ready") return { nodes: [], links: [] };
+    const lg = buildLocalGraph(
+      detail.detail,
+      selectedNode ? { group: selectedNode.group, community: selectedNode.community } : null,
+    );
+    return {
+      nodes: lg.nodes.map((n) => ({ ...n })),
+      links: lg.links.map((l) => ({ source: l.source, target: l.target })),
+    };
+  }, [detail, selectedNode]);
+
+  // Which graph the canvas shows. Local only once its detail is ready (until
+  // then the overview stays put — no empty flash).
+  const isLocal = viewMode === "local" && detail.status === "ready" && localData.nodes.length > 0;
+  const activeData: CanvasData = isLocal ? localData : filteredData;
+
+  const degreeMap = useMemo(() => computeDegree(activeData.links as GraphLink[]), [activeData]);
   const hubThreshold = useMemo(() => labelDegreeThreshold(degreeMap, 0.05), [degreeMap]);
 
   // Tune the built-in forces in place (replacing the link force breaks the
@@ -334,6 +384,8 @@ export default function KnowledgeGraphView({ graph }: { graph: KnowledgeGraph })
     try {
       const d = await getConceptDetail(id);
       setDetail({ status: "ready", detail: d });
+      // Lift 5 — a resolved concept becomes the focus of its local graph.
+      setViewMode("local");
     } catch (err) {
       if (err instanceof ApiError && err.status === 404) {
         setDetail({ status: "not-found", id, name });
@@ -343,13 +395,24 @@ export default function KnowledgeGraphView({ graph }: { graph: KnowledgeGraph })
     }
   }, []);
 
-  // Secondary path: the lib's hover-based node click.
-  const handleNodeClick = useCallback(
-    (node: { id?: string; name?: string }) => {
-      if (!node.id) return;
+  // A canvas node activation. Concept hubs pivot the local graph (re-fetch +
+  // re-focus); seedling leaves are member observations, NOT concepts — clicking
+  // one must not fire getConceptDetail (it would 404), so it is a no-op pivot
+  // (the leaf's body already shows in the inspector's Content section).
+  const activateNode = useCallback(
+    (node: { id?: string; name?: string; nodeType?: string }) => {
+      if (!node.id || node.nodeType === "seedling") return;
       void selectConcept(node.id, node.name ?? node.id);
     },
     [selectConcept],
+  );
+
+  // Secondary path: the lib's hover-based node click.
+  const handleNodeClick = useCallback(
+    (node: { id?: string; name?: string; nodeType?: string }) => {
+      activateNode(node);
+    },
+    [activateNode],
   );
 
   // PRIMARY path (the dead-click fix): hover-independent canvas click. Convert
@@ -365,7 +428,7 @@ export default function KnowledgeGraphView({ graph }: { graph: KnowledgeGraph })
 
       let nearest: GraphNode | null = null;
       let nearestDist = Number.POSITIVE_INFINITY;
-      for (const n of filteredData.nodes as GraphNode[]) {
+      for (const n of activeData.nodes as GraphNode[]) {
         if (n.x === undefined || n.y === undefined) continue;
         const dx = n.x - gx;
         const dy = n.y - gy;
@@ -382,16 +445,21 @@ export default function KnowledgeGraphView({ graph }: { graph: KnowledgeGraph })
       const deg = (nearest.id && degreeMap[nearest.id]) || 0;
       const hitRadius = Math.max(12, nodeRadius(deg, false) + 6);
       if (nearestDist <= hitRadius) {
-        void selectConcept(nearest.id, nearest.name);
+        activateNode(nearest);
       }
     },
-    [filteredData, degreeMap, selectConcept],
+    [activeData, degreeMap, activateNode],
   );
 
   const closePanel = useCallback(() => {
     setSelectedId(null);
     setDetail({ status: "idle" });
+    // Closing the inspector returns to the global overview.
+    setViewMode("global");
   }, []);
+
+  // Return to the global overview while keeping the inspector open.
+  const showGlobalOverview = useCallback(() => setViewMode("global"), []);
 
   const nodeCanvasObject = useCallback(
     (rawNode: GraphNode, ctx: CanvasRenderingContext2D, globalScale: number) => {
@@ -399,7 +467,12 @@ export default function KnowledgeGraphView({ graph }: { graph: KnowledgeGraph })
       const y = rawNode.y ?? 0;
       const label = rawNode.name || "";
       const groupKey = colorMode === "type" ? rawNode.group : rawNode.community;
-      const color = groupColorMap[groupKey] ?? FALLBACK_COLOR;
+      // Seedling leaves (local view) read as muted; concept hubs keep the group
+      // colour. A focus node with no resolved group still gets the fallback.
+      const color =
+        rawNode.nodeType === "seedling"
+          ? SEEDLING_COLOR
+          : (groupColorMap[groupKey] ?? FALLBACK_COLOR);
       const isSelected = selectedId === rawNode.id;
       const degree = (rawNode.id && degreeMap[rawNode.id]) || 0;
       const radius = nodeRadius(degree, isSelected);
@@ -461,12 +534,8 @@ export default function KnowledgeGraphView({ graph }: { graph: KnowledgeGraph })
     [degreeMap],
   );
 
-  // The selected node (for inspector metadata that isn't on ConceptDetail —
-  // TYPE/kind + community come from the graph node, not the detail response).
-  const selectedNode = useMemo(
-    () => baseNodes.find((n) => n.id === selectedId) ?? null,
-    [baseNodes, selectedId],
-  );
+  // The selected node's TYPE/community feed the inspector metadata (computed
+  // from `selectedNode`, resolved up near the local-graph build above).
   const selectedTypeLabel = selectedNode?.group ? humanizeGroup(selectedNode.group) : null;
   // Same "Cluster N" label the legend shows — so the inspector and legend agree.
   const selectedCommunityLabel = selectedNode?.community
@@ -476,37 +545,56 @@ export default function KnowledgeGraphView({ graph }: { graph: KnowledgeGraph })
   return (
     <div className="kgraph kgraph--fullscreen">
       <div className="kgraph__main">
-        {/* Floating toolbar: search + reset-filters. */}
+        {/* Floating toolbar. Global: search + reset-filters. Local: a clear
+            way back to the overview + the focused concept's name. */}
         <div className="kgraph__toolbar">
-          <input
-            type="search"
-            className="kgraph__search"
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder={t("searchPlaceholder")}
-            aria-label={t("searchLabel")}
-          />
-          {activeFilters && (
-            <button
-              type="button"
-              className="kgraph__show-all"
-              onClick={() => setActiveFilters(null)}
-            >
-              {t("graphShowAll")}
-            </button>
+          {isLocal ? (
+            <>
+              <button type="button" className="kgraph__show-all" onClick={showGlobalOverview}>
+                {t("graphBackToOverview")}
+              </button>
+              <span className="kgraph__focus-label" data-testid="local-focus-label">
+                {detail.status === "ready" ? detail.detail.name : ""}
+              </span>
+            </>
+          ) : (
+            <>
+              <input
+                type="search"
+                className="kgraph__search"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder={t("searchPlaceholder")}
+                aria-label={t("searchLabel")}
+              />
+              {activeFilters && (
+                <button
+                  type="button"
+                  className="kgraph__show-all"
+                  onClick={() => setActiveFilters(null)}
+                >
+                  {t("graphShowAll")}
+                </button>
+              )}
+            </>
           )}
         </div>
 
         {/* Canvas host — full-bleed, measured + sized so clicks land. */}
-        <div ref={containerRef} className="kgraph__canvas" data-testid="knowledge-graph-canvas">
-          {filteredData.nodes.length === 0 ? (
+        <div
+          ref={containerRef}
+          className="kgraph__canvas"
+          data-testid="knowledge-graph-canvas"
+          data-view-mode={isLocal ? "local" : "global"}
+        >
+          {activeData.nodes.length === 0 ? (
             <div className="kgraph__no-match">
               <p>{searchQuery || activeFilters ? t("graphNoMatch") : t("graphEmptyLine")}</p>
             </div>
           ) : (
             <ForceGraph2D
               ref={fgRef}
-              graphData={filteredData}
+              graphData={activeData}
               width={dimensions.width}
               height={dimensions.height}
               nodeId="id"
@@ -527,8 +615,10 @@ export default function KnowledgeGraphView({ graph }: { graph: KnowledgeGraph })
             />
           )}
 
-          {/* TYPE / COMMUNITY legend — floats over the canvas bottom-left. */}
-          {groupsInfo.length > 0 && (
+          {/* TYPE / COMMUNITY legend — floats over the canvas bottom-left.
+              Overview only; the local view is a single focused neighbourhood
+              where a colour legend / filter adds noise, not navigation. */}
+          {!isLocal && groupsInfo.length > 0 && (
             <div
               className="kgraph__legend"
               aria-label={
