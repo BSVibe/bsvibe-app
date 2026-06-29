@@ -49,6 +49,7 @@ from backend.workers.relays import build_relay
 from backend.workers.streams import RedisStreamConsumer, StreamHandler
 from backend.workflow.application.runtime.settle_runtime import (
     build_note_embed_hook,
+    build_reconcile_hook,
     build_settle_entity_extractor_factory,
 )
 from backend.workflow.application.safe_mode_expiry import SafeModeExpirySweepRunner
@@ -202,6 +203,12 @@ def build_worker_runtime(
             # G5a's SemanticNoteRetriever has data to search. No-op until a
             # workspace configures an embedding model.
             embed_hook=build_note_embed_hook(session_factory=session_factory, settings=settings),
+            # Lift 2 — after a concept-creating promote pass, embed the freshly
+            # created concept body (which fires no write event in the settle
+            # runtime) so it is retrievable without a manual reconcile. Gated on
+            # PromotionResult.created_concepts; soft-fail; no-op until a workspace
+            # configures an embedding model.
+            reconcile_hook=build_reconcile_hook(session_factory=session_factory, settings=settings),
         ),
         # Config-driven relay: HttpRelay when ``audit_relay_url`` is set,
         # else the no-sink LoggingRelay default (drain + ack, no delivery).

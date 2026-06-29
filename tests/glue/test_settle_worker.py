@@ -369,3 +369,108 @@ async def test_settle_worker_sink_failure_is_retryable(sf, tmp_path) -> None:
     async with sf() as s:
         # Not marked drained — eligible for retry on the next tick.
         assert (await s.execute(select(SettleDrainRow))).scalars().all() == []
+
+
+# --- Lift 2: post-promotion embedding reconcile -----------------------------
+#
+# A freshly promoted *active* concept carries body (Lift 1) but fires no write
+# event in the settle runtime (the CanonicalizationService runs without an
+# event bus), so it is never embedded — un-retrievable until a manual
+# reconcile. Lift 2 wires the worker to run the idempotent embedding reconcile
+# right after promotion, gated on the promoter actually having created a
+# concept (``PromotionResult.created_concepts``), so the common no-new-concept
+# pass stays a cheap no-op. The reconcile is soft-fail + per-workspace, exactly
+# like the embed hook and the promotion itself.
+
+
+class _FakePromoter:
+    def __init__(self, result: object) -> None:
+        self._result = result
+
+    async def promote(self) -> object:
+        return self._result
+
+
+def _promoter_factory_returning(result: object):
+    def _factory(*, region: str, workspace_id: uuid.UUID, safe_mode: bool):
+        return _FakePromoter(result)
+
+    return _factory
+
+
+async def test_reconcile_hook_runs_when_promotion_creates_a_concept(sf, tmp_path) -> None:
+    """A promote pass that created an active concept triggers the reconcile hook
+    once for that workspace — so the new concept's body gets embedded."""
+    from backend.knowledge.canonicalization.promotion import PromotionResult
+
+    ws = uuid.uuid4()
+    await _seed_settle_activity(sf, workspace_id=ws, summary="resolver soft-fallback on miss")
+
+    calls: list[tuple[str, uuid.UUID]] = []
+
+    async def _reconcile(*, region: str, workspace_id: uuid.UUID) -> object:
+        calls.append((region, workspace_id))
+        return None
+
+    worker = SettleWorker(
+        session_factory=sf,
+        sink=KnowledgeSettleSink(vault_root=tmp_path),
+        config=SettleWorkerConfig(default_region="us-1"),
+        promoter_factory=_promoter_factory_returning(
+            PromotionResult(created_concepts=["resolver-soft-fallback"])
+        ),
+        reconcile_hook=_reconcile,
+    )
+    assert await worker.drain_once() == 1
+    assert calls == [("us-1", ws)]
+
+
+async def test_reconcile_hook_skipped_when_no_concept_created(sf, tmp_path) -> None:
+    """No new active concept → no reconcile (the full-scan reconcile must not run
+    on every drain pass — only when there is fresh concept body to embed)."""
+    from backend.knowledge.canonicalization.promotion import PromotionResult
+
+    ws = uuid.uuid4()
+    await _seed_settle_activity(sf, workspace_id=ws, summary="some learning")
+
+    calls: list[uuid.UUID] = []
+
+    async def _reconcile(*, region: str, workspace_id: uuid.UUID) -> object:
+        calls.append(workspace_id)
+        return None
+
+    worker = SettleWorker(
+        session_factory=sf,
+        sink=KnowledgeSettleSink(vault_root=tmp_path),
+        config=SettleWorkerConfig(default_region="us-1"),
+        # Safe-Mode shape: candidate queued as a proposal, nothing created/applied.
+        promoter_factory=_promoter_factory_returning(
+            PromotionResult(pending_actions=["create-concept:foo"])
+        ),
+        reconcile_hook=_reconcile,
+    )
+    assert await worker.drain_once() == 1
+    assert calls == []
+
+
+async def test_reconcile_hook_failure_is_soft(sf, tmp_path) -> None:
+    """A failing reconcile must not revert the drain or the promotion — it is a
+    derived, best-effort embedding pass independent of the settle SoT."""
+    from backend.knowledge.canonicalization.promotion import PromotionResult
+
+    ws = uuid.uuid4()
+    await _seed_settle_activity(sf, workspace_id=ws, summary="resolver soft-fallback")
+
+    async def _boom(*, region: str, workspace_id: uuid.UUID) -> object:
+        raise RuntimeError("embedder down")
+
+    worker = SettleWorker(
+        session_factory=sf,
+        sink=KnowledgeSettleSink(vault_root=tmp_path),
+        config=SettleWorkerConfig(default_region="us-1"),
+        promoter_factory=_promoter_factory_returning(PromotionResult(created_concepts=["x"])),
+        reconcile_hook=_boom,
+    )
+    assert await worker.drain_once() == 1
+    async with sf() as s:
+        assert len((await s.execute(select(SettleDrainRow))).scalars().all()) == 1
