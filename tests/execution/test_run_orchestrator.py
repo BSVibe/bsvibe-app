@@ -313,6 +313,61 @@ async def test_compose_verified_summary_falls_back_when_no_intent() -> None:
     assert "a.py" in summary
 
 
+async def test_compose_verified_summary_weaves_verification_result() -> None:
+    """R1 — the report summary is thin (intent title + bare file list). When a
+    passing ``VerificationResult`` is available, weave its outcome into the
+    summary DETERMINISTICALLY (no LLM): how many checks passed, by derived
+    friendly category (tests / lint / format / types), plus the acceptance
+    judge. The raw command strings are NOT echoed (F4 anti-slop — the
+    verification-contract block must never leak into the user-facing summary)."""
+    from types import SimpleNamespace
+
+    from backend.workflow.application.run_persistence import _compose_verified_summary
+
+    run = SimpleNamespace(payload={"intent_text": "Add a TTL cache utility."})
+    verdict = SimpleNamespace(
+        result={
+            "command_results": [
+                {"command": "uv run ruff check backend/", "passed": True},
+                {"command": "uv run ruff format --check backend/", "passed": True},
+                {"command": "uv run pytest -q", "passed": True},
+            ],
+            "judge": {"passed": True, "reasoning": "meets the intent"},
+        },
+    )
+    summary = _compose_verified_summary(
+        run,
+        "raw narration",
+        ["backend/cache.py", "tests/test_cache.py"],
+        verdict,  # type: ignore[arg-type]
+    )
+
+    # Intent still titles it; the changed files still list.
+    assert summary.splitlines()[0].strip() == "Add a TTL cache utility."
+    assert "backend/cache.py" in summary
+    # The verification OUTCOME is woven in, narratively.
+    assert "Verified: 3 checks passed" in summary
+    # Derived friendly categories, NOT the raw command strings.
+    assert "tests" in summary and "lint" in summary and "format" in summary
+    assert "uv run pytest" not in summary
+    assert "ruff check" not in summary
+    # The acceptance judge is surfaced.
+    assert "Acceptance check passed." in summary
+
+
+async def test_compose_verified_summary_no_verdict_unchanged() -> None:
+    """Backward-compat: with no verdict (the existing 3-arg callers), the summary
+    is exactly the prior title + changed-file body — no verification line."""
+    from types import SimpleNamespace
+
+    from backend.workflow.application.run_persistence import _compose_verified_summary
+
+    run = SimpleNamespace(payload={"intent_text": "Add a cache."})
+    summary = _compose_verified_summary(run, "narration", ["a.py"])  # type: ignore[arg-type]
+    assert "Verified:" not in summary
+    assert summary == "Add a cache.\n\nChanged files:\n- a.py"
+
+
 async def test_executor_artifact_refs_flow_into_deliverable(tmp_path: Path) -> None:
     """Coding-agent executors write files in the worker's clone — captured
     worker-side as the executor task's ``artifact_refs``, NOT via the loop's
