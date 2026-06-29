@@ -252,6 +252,7 @@ class CanonicalizationService(
         raw_source: str | None = None,
         auto_apply: bool = True,
         note_type: str | None = None,
+        initial_body: str | None = None,
     ) -> str | None:
         """Tag → canonical concept id (Handoff §11 ingest write policy).
 
@@ -290,6 +291,11 @@ class CanonicalizationService(
             }
             if note_type:
                 params["type"] = note_type
+            # KG Lift 1 — the promoter passes a synthesized hub body (member
+            # seedling [[links]] + excerpts) so the concept is substantive, not
+            # an empty ``# Title`` shell. ``_effect_create_concept`` reads it.
+            if initial_body:
+                params["initial_body"] = initial_body
             draft = await self.create_action_draft(
                 kind="create-concept",
                 params=params,

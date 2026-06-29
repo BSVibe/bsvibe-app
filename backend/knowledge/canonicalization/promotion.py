@@ -57,6 +57,7 @@ read or write another workspace's vault.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from pathlib import PurePosixPath
 
 import structlog
 
@@ -82,6 +83,12 @@ _DEFAULT_STRUCTURAL_TAGS: frozenset[str] = frozenset({"settle", "verified-run"})
 # anchors a concept; a pattern the work keeps coming back to does. Kept small so
 # a genuinely recurring subject is promoted promptly.
 _MIN_OBSERVATIONS_FOR_PROMOTION = 2
+
+# KG Lift 1 — cap on member seedlings listed in a concept's synthesized hub
+# body. A very common tag can recur across dozens of observations; a bounded
+# Map-of-Content stays readable (the digital-garden hairball lesson) while
+# still carrying real substance + the links Lift 5's graph reads as edges.
+_MAX_CONCEPT_MEMBERS = 8
 
 
 @dataclass(slots=True)
@@ -212,6 +219,10 @@ class GardenObservationPromoter:
         # the concept it creates. ``type_counts[normalized][type]`` =
         # observations. The promoter reads this via :attr:`_type_votes`.
         self._type_votes = {}  # type: dict[str, dict[str, int]]
+        # KG Lift 1 — capture which observations carry each tag (normalized), in
+        # the same single pass, so ``_seed_concept`` can compose a hub body from
+        # the members without a second walk over the garden.
+        self._tag_observations = {}  # type: dict[str, list[str]]
         for path in await self._store.list_garden_paths():
             try:
                 tags = await self._store.read_garden_tags(path)
@@ -233,6 +244,7 @@ class GardenObservationPromoter:
                 representative.setdefault(normalized, raw)
             for normalized in in_this_note:
                 observation_counts[normalized] = observation_counts.get(normalized, 0) + 1
+                self._tag_observations.setdefault(normalized, []).append(path)
                 if note_type:
                     bucket = self._type_votes.setdefault(normalized, {})
                     bucket[note_type] = bucket.get(note_type, 0) + 1
@@ -266,6 +278,34 @@ class GardenObservationPromoter:
             key=lambda kv: (kv[1], -priority.get(kv[0], 99)),
         )[0]
 
+    async def _compose_concept_body(self, normalized: str) -> str | None:
+        """A synthesized hub body for a new concept — its member garden
+        seedlings as ``[[wikilinks]]`` with their excerpts (a Map-of-Content).
+
+        This is what makes a promoted concept *substantive*: it carries the
+        members' working statements and the explicit links Lift 5's graph reads
+        as edges, instead of being an empty ``# Title`` shell. Bounded to
+        ``_MAX_CONCEPT_MEMBERS`` so a very common tag stays readable. ``None``
+        when no member observation is resolvable (so the concept just falls back
+        to the title rather than carrying an empty section)."""
+        member_paths = getattr(self, "_tag_observations", {}).get(normalized, [])
+        if not member_paths:
+            return None
+        lines: list[str] = []
+        for path in member_paths[:_MAX_CONCEPT_MEMBERS]:
+            summary = await self._store.read_garden_summary(path)
+            if summary is None:
+                continue
+            title, excerpt = summary
+            detail = excerpt or title
+            stem = PurePosixPath(path).stem
+            lines.append(f"- [[{stem}]]" + (f" — {detail}" if detail else ""))
+        if not lines:
+            return None
+        total = len(member_paths)
+        header = f"Synthesized from {total} garden observation{'s' if total != 1 else ''}:"
+        return f"{header}\n\n" + "\n".join(lines)
+
     async def _seed_concept(self, raw_tag: str, result: PromotionResult) -> None:
         """Ensure a candidate concept exists for ``raw_tag``.
 
@@ -295,11 +335,15 @@ class GardenObservationPromoter:
         # action carries it through to ``ConceptEntry.note_type`` and the
         # concept's frontmatter ``type:`` field.
         note_type = self._dominant_type_for(raw_tag)
+        # KG Lift 1 — synthesize a substantive hub body (member [[links]] +
+        # excerpts) so the new concept is a Map-of-Content, not an empty title.
+        initial_body = await self._compose_concept_body(normalized)
         await self._service.resolve_and_canonicalize(
             raw_tag,
             raw_source="garden-observation",
             auto_apply=False,
             note_type=note_type,
+            initial_body=initial_body,
         )
 
         draft = await self._index.find_pending_concept_draft(normalized)

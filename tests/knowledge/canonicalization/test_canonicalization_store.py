@@ -346,3 +346,29 @@ class TestGardenNoteFrontmatter:
         assert fm["tags"] == ["machine-learning"]
         assert "# Foo" in raw
         assert "body." in raw
+
+
+class TestReadGardenSummary:
+    """KG Lift 1 — (title, excerpt) for composing a concept hub body."""
+
+    @pytest.mark.asyncio
+    async def test_returns_title_and_first_body_line(self, store: NoteStore) -> None:
+        await store._storage.write(
+            "garden/seedling/x.md",
+            "---\ntags:\n  - t\n---\n# A Title\n\nThe working statement line.\nMore detail.\n",
+        )
+        summary = await store.read_garden_summary("garden/seedling/x.md")
+        assert summary == ("A Title", "The working statement line.")
+
+    @pytest.mark.asyncio
+    async def test_excerpt_skips_heading_lines(self, store: NoteStore) -> None:
+        await store._storage.write(
+            "garden/seedling/y.md",
+            "---\ntags: []\n---\n# Heading\n\n## Subheading\n\nReal content here.\n",
+        )
+        _title, excerpt = await store.read_garden_summary("garden/seedling/y.md")
+        assert excerpt == "Real content here."
+
+    @pytest.mark.asyncio
+    async def test_missing_note_returns_none(self, store: NoteStore) -> None:
+        assert await store.read_garden_summary("garden/seedling/nope.md") is None
