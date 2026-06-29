@@ -48,6 +48,7 @@ from backend.workers.emit import STREAM_AGENT, STREAM_DELIVER, STREAM_INTAKE, ST
 from backend.workers.relays import build_relay
 from backend.workers.streams import RedisStreamConsumer, StreamHandler
 from backend.workflow.application.runtime.settle_runtime import (
+    build_concept_framer,
     build_note_embed_hook,
     build_reconcile_hook,
     build_settle_entity_extractor_factory,
@@ -193,11 +194,15 @@ def build_worker_runtime(
                 ),
             ),
             config=SettleWorkerConfig(default_region=settings.knowledge_default_region),
-            # Close the §5 ratchet loop: after each drain batch, promote each
-            # affected workspace's garden observations into canon over the SAME
-            # vault boundary the sink wrote to.
+            # Close the §5 ratchet loop: promote each affected workspace's garden
+            # observations into canon over the sink's vault boundary. Lift 1b —
+            # a routed ConceptFramer distils each new concept body (user-routed
+            # via knowledge.canonicalization; deterministic Lift 1 body on miss).
             promoter_factory=build_garden_promoter_factory(
-                vault_root=Path(settings.knowledge_vault_root)
+                vault_root=Path(settings.knowledge_vault_root),
+                framer_factory=build_concept_framer(
+                    session_factory=session_factory, settings=settings, redis=redis_client
+                ),
             ),
             # G5b — populate the pgvector note store from each absorbed note so
             # G5a's SemanticNoteRetriever has data to search. No-op until a

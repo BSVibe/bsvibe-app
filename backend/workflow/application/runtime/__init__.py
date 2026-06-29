@@ -32,6 +32,7 @@ from backend.workflow.application.runtime.delivery_runtime import (
 )
 from backend.workflow.application.runtime.lifecycle import run_workers
 from backend.workflow.application.runtime.settle_runtime import (
+    build_concept_framer,
     build_note_embed_hook,
     build_reconcile_hook,
     build_settle_entity_extractor_factory,
@@ -53,6 +54,7 @@ __all__ = [
     "StreamConsumerBinding",
     "WorkerRuntime",
     "build_agent_execution_deps",
+    "build_concept_framer",
     "build_delivery_adapter",
     "build_note_embed_hook",
     "build_reconcile_hook",

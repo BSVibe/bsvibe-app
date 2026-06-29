@@ -673,6 +673,71 @@ async def test_settle_extractor_factory_threads_redis_for_executor_dispatch(
     get_settings.cache_clear()
 
 
+async def test_concept_framer_factory_distills_via_routing(
+    sf: async_sessionmaker[AsyncSession],
+    workspace_id: uuid.UUID,
+    account_id: uuid.UUID,
+    kms_key: None,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Lift 1b — with ONE active account the framer factory builds a routed
+    ConceptFramer whose ``frame`` returns the model's distilled framing. The LLM
+    is stubbed at the LlmClient boundary (never a real model)."""
+    monkeypatch.setenv("BSVIBE_KNOWLEDGE_VAULT_ROOT", str(tmp_path / "vault"))
+    get_settings.cache_clear()
+    await _seed_active_account(sf, workspace_id=workspace_id, account_id=account_id)
+
+    framing = "Resolvers degrade on a miss rather than crashing the caller."
+    _patch_scripted_llm(monkeypatch, _ScriptedCompletion([{"content": framing}]))
+
+    factory = runtime.build_concept_framer(session_factory=sf, settings=get_settings())
+    framer = await factory(region="us-1", workspace_id=workspace_id)
+    assert framer is not None
+    text = await framer.frame(
+        concept="resolver-pattern", members=[("resolver-soft-fallback", "return None on a miss")]
+    )
+    assert text == framing
+    get_settings.cache_clear()
+
+
+async def test_concept_framer_factory_routes_via_canonicalization_caller(
+    sf: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """The framer resolves the model via caller_id ``knowledge.canonicalization``
+    (user routing, never hardcoded) and threads redis for an executor route; a
+    routing miss (resolve → None) yields no framer → deterministic Lift 1 body."""
+    from backend.dispatch.caller_registry import CALLER_KNOWLEDGE_CANONICALIZATION
+    from backend.workflow.application.runtime import settle_runtime
+
+    monkeypatch.setenv("BSVIBE_KNOWLEDGE_VAULT_ROOT", str(tmp_path / "vault"))
+    get_settings.cache_clear()
+
+    captured: dict[str, Any] = {}
+
+    async def _fake_resolve(
+        session: Any, *, caller_id: str, redis: Any = None, **kwargs: Any
+    ) -> None:
+        captured["caller_id"] = caller_id
+        captured["redis"] = redis
+        return None  # short-circuit — routing miss
+
+    monkeypatch.setattr(settle_runtime, "_resolve_via_caller", _fake_resolve)
+
+    sentinel = object()
+    factory = runtime.build_concept_framer(
+        session_factory=sf, settings=get_settings(), redis=sentinel
+    )
+    framer = await factory(region="us-1", workspace_id=uuid.uuid4())
+
+    assert framer is None  # routing miss → deterministic body
+    assert captured["caller_id"] == CALLER_KNOWLEDGE_CANONICALIZATION
+    assert captured["redis"] is sentinel, "redis must be threaded into the resolver"
+    get_settings.cache_clear()
+
+
 def _bare_account(provider: str) -> Any:
 
     return ModelAccount(

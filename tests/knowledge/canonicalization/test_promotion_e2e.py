@@ -484,3 +484,81 @@ class TestConceptSynthesisBody:
         # And the body after the heading is non-trivial (not just the title line).
         after_heading = body_after_frontmatter(body).split("\n", 1)[1].strip()
         assert len(after_heading) > 20
+
+    @pytest.mark.asyncio
+    async def test_framer_distills_synthesis_paragraph_above_the_moc(
+        self, workspace_storage: FileSystemStorage
+    ) -> None:
+        """KG Lift 1b — when a ConceptFramer is wired (model resolved via the
+        user's routing), the concept body LEADS with a distilled 2-4 sentence
+        synthesis framing, THEN the deterministic member [[wikilink]] MOC. The
+        framer sees the concept + its member summaries (deterministic inputs)."""
+        for i in range(2):
+            await workspace_storage.write(
+                f"garden/seedling/resolver-soft-fallback-{i}.md",
+                "---\ntags:\n  - settle\n  - resolver-pattern\n---\n"
+                f"# Resolver soft fallback {i}\n\n"
+                "Resolvers should return None on a miss so callers degrade.\n",
+            )
+
+        seen: dict[str, object] = {}
+
+        class _Framer:
+            async def frame(self, *, concept: str, members: list[tuple[str, str]]) -> str | None:
+                seen["concept"] = concept
+                seen["members"] = members
+                return "Resolvers degrade rather than crash on a miss."
+
+        service = await _make_service(workspace_storage, safe_mode=False)
+        await GardenObservationPromoter(service, framer=_Framer()).promote()
+
+        match = [
+            p
+            for p in await workspace_storage.list_files("concepts/active")
+            if "resolver-pattern" in p
+        ]
+        assert match, "expected a resolver-pattern concept"
+        body = await workspace_storage.read(match[0])
+
+        # The distilled framing leads the body, ABOVE the deterministic MOC list.
+        assert "Resolvers degrade rather than crash on a miss." in body
+        framing_at = body.index("Resolvers degrade rather than crash")
+        moc_at = body.index("Synthesized from")
+        assert framing_at < moc_at, "framing must lead, MOC list follows"
+        # The MOC links survive (framing augments, never replaces, Lift 1).
+        assert "[[resolver-soft-fallback-0]]" in body
+        # The framer saw the concept id + its member summaries.
+        assert seen["concept"] == "resolver-pattern"
+        assert seen["members"], "framer received the member summaries"
+
+    @pytest.mark.asyncio
+    async def test_framer_failure_falls_back_to_deterministic_body(
+        self, workspace_storage: FileSystemStorage
+    ) -> None:
+        """A framer that raises (routing miss surfaced as None is handled by the
+        factory; here we cover an LLM error) must NOT break promotion — the
+        concept still gets the deterministic Lift 1 MOC body."""
+        for i in range(2):
+            await workspace_storage.write(
+                f"garden/seedling/resolver-soft-fallback-{i}.md",
+                "---\ntags:\n  - settle\n  - resolver-pattern\n---\n"
+                f"# Resolver soft fallback {i}\n\nResolvers degrade on a miss.\n",
+            )
+
+        class _BoomFramer:
+            async def frame(self, *, concept: str, members: list[tuple[str, str]]) -> str | None:
+                raise RuntimeError("framing model down")
+
+        service = await _make_service(workspace_storage, safe_mode=False)
+        await GardenObservationPromoter(service, framer=_BoomFramer()).promote()
+
+        match = [
+            p
+            for p in await workspace_storage.list_files("concepts/active")
+            if "resolver-pattern" in p
+        ]
+        assert match, "promotion survived the framer failure"
+        body = await workspace_storage.read(match[0])
+        # Deterministic Lift 1 body still present.
+        assert "Synthesized from" in body
+        assert "[[resolver-soft-fallback-0]]" in body
