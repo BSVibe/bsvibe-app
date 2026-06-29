@@ -27,6 +27,7 @@ from backend.knowledge.infrastructure.workers.settle_worker import (
     EntityExtractor,
     ExtractorFactory,
     NoteEmbedHook,
+    ReconcileHook,
     Settlement,
 )
 from backend.workflow.application.runtime.account_resolution import _resolve_via_caller
@@ -146,6 +147,52 @@ def build_note_embed_hook(
     return _hook
 
 
+def build_reconcile_hook(
+    *,
+    session_factory: async_sessionmaker[AsyncSession],
+    settings: Settings | None = None,
+) -> ReconcileHook:
+    """Production :class:`ReconcileHook` — embed a workspace's un-embedded
+    knowledge notes after a concept-creating promote pass (Lift 2).
+
+    Reuses :func:`~backend.knowledge.retrieval.reconcile.reconcile_embeddings`
+    over the SAME ``<vault_root>/<region>/<workspace_id>/`` boundary the sink +
+    promoter operate on. The reconcile is idempotent and model-aware (it diffs
+    against ``existing_paths`` under the current model), so the marginal cost is
+    reading the gap — in steady state just the freshly created concept. Owns its
+    own session + commit; no-op when no embedding model is configured."""
+    settings = settings or get_settings()
+    vault_root = Path(settings.knowledge_vault_root)
+
+    async def _hook(*, region: str, workspace_id: uuid.UUID) -> object:
+        from backend.knowledge.graph.vault import Vault  # noqa: PLC0415
+        from backend.knowledge.retrieval.embedder_resolution import (  # noqa: PLC0415
+            resolve_knowledge_embedder,
+        )
+        from backend.knowledge.retrieval.reconcile import (  # noqa: PLC0415
+            reconcile_embeddings,
+        )
+        from backend.knowledge.retrieval.storage.pg import (  # noqa: PLC0415
+            PgNoteVectorBackend,
+        )
+
+        embedder = resolve_knowledge_embedder(settings)
+        if not embedder.enabled or embedder.model is None:
+            return None
+        vault = Vault(vault_root / region / str(workspace_id))
+        async with session_factory() as session:
+            backend = PgNoteVectorBackend(
+                session,
+                workspace_id=workspace_id,
+                embedding_model=embedder.model,
+            )
+            result = await reconcile_embeddings(vault, embedder, backend)
+            await session.commit()
+            return result
+
+    return _hook
+
+
 def _relative_note_path(
     node_ref: str, vault_root: Path, region: str, workspace_id: uuid.UUID
 ) -> str:
@@ -158,5 +205,6 @@ def _relative_note_path(
 
 __all__ = [
     "build_note_embed_hook",
+    "build_reconcile_hook",
     "build_settle_entity_extractor_factory",
 ]

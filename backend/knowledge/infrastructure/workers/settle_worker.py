@@ -308,6 +308,24 @@ class NoteEmbedHook(Protocol):
     async def __call__(self, settlement: Settlement, node_ref: str) -> None: ...
 
 
+class ReconcileHook(Protocol):
+    """Backfill a workspace's un-embedded knowledge notes after promotion (Lift 2).
+
+    A freshly promoted *active* concept carries body (Lift 1) but fires no
+    vault-write event in the settle runtime (the
+    :class:`~backend.knowledge.canonicalization.service.CanonicalizationService`
+    runs without an event bus), so it would never be embedded — un-retrievable
+    until a manual reconcile. The worker invokes this hook right after a promote
+    pass that created a concept, with the workspace's region + id; the
+    implementation resolves the embedder, walks the vault's knowledge layers,
+    and embeds only the gap (idempotent — see
+    :func:`~backend.knowledge.retrieval.reconcile.reconcile_embeddings`). It owns
+    its OWN DB session + commit and is invoked soft-fail: any error is logged and
+    swallowed, never reverting the promotion or the settle write."""
+
+    async def __call__(self, *, region: str, workspace_id: uuid.UUID) -> object: ...
+
+
 @dataclass(slots=True)
 class SettleWorkerConfig:
     batch_size: int = 50
@@ -720,6 +738,7 @@ class SettleWorker(BaseWorker):
         config: SettleWorkerConfig | None = None,
         promoter_factory: PromoterFactory | None = None,
         embed_hook: NoteEmbedHook | None = None,
+        reconcile_hook: ReconcileHook | None = None,
     ) -> None:
         self._cfg = config or SettleWorkerConfig()
         super().__init__(name="settle_worker", poll_interval_s=self._cfg.poll_interval_s)
@@ -733,6 +752,12 @@ class SettleWorker(BaseWorker):
         # missing/failed embedding never affects the settle SoT. Unset → no-op
         # (tests + workspaces with no embedding model configured).
         self._embed_hook = embed_hook
+        # Lift 2: optional post-promotion embedding reconcile. Invoked once per
+        # affected workspace whose promote pass CREATED an active concept, so the
+        # new concept body (Lift 1) becomes retrievable without waiting for a
+        # manual/cron reconcile. Soft-fail + own session (see ReconcileHook).
+        # Unset → no-op (tests + workspaces with no embedding model configured).
+        self._reconcile_hook = reconcile_hook
 
     async def _tick(self) -> int:
         return await self.drain_once()
@@ -848,7 +873,7 @@ class SettleWorker(BaseWorker):
                     )
                     if promoter is None:
                         continue
-                    await promoter.promote()
+                    result = await promoter.promote()
                 except Exception:  # noqa: BLE001 — promotion is derived; never break the drain
                     logger.exception(
                         "settle_worker_promotion_failed",
@@ -862,8 +887,36 @@ class SettleWorker(BaseWorker):
                         workspace_id=str(workspace_id),
                         safe_mode=policy.safe_mode,
                     )
+                    # Lift 2: a promote that CREATED an active concept produced
+                    # fresh body the settle runtime won't embed on its own.
+                    # Reconcile only then — the no-new-concept pass (the common
+                    # case, and every Safe-Mode pass) stays a cheap no-op rather
+                    # than a full vault scan. Soft-fail: never reverts the
+                    # promotion the drain just logged complete.
+                    await self._reconcile_after_promotion(result, policy.region, workspace_id)
                 finally:
                     await release_workspace_promote_lock(lease_session, workspace_id)
+
+    async def _reconcile_after_promotion(
+        self, result: object, region: str, workspace_id: uuid.UUID
+    ) -> None:
+        """Embed freshly created concepts. Gated + soft-fail (Lift 2)."""
+        if self._reconcile_hook is None:
+            return
+        if not getattr(result, "created_concepts", None):
+            return
+        try:
+            await self._reconcile_hook(region=region, workspace_id=workspace_id)
+        except Exception:  # noqa: BLE001 — reconcile is derived; never break the drain
+            logger.exception(
+                "settle_worker_reconcile_failed",
+                workspace_id=str(workspace_id),
+            )
+        else:
+            logger.info(
+                "settle_worker_reconcile_complete",
+                workspace_id=str(workspace_id),
+            )
 
     async def _claim_undrained(self, session: AsyncSession) -> list[ExecutionRunActivity]:
         stmt = build_settle_claim_stmt(batch_size=self._cfg.batch_size)
@@ -961,6 +1014,7 @@ __all__ = [
     "KnowledgeSettleSink",
     "NoteEmbedHook",
     "PromoterFactory",
+    "ReconcileHook",
     "SettleSink",
     "SettleWorker",
     "SettleWorkerConfig",
