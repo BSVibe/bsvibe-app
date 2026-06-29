@@ -13,12 +13,14 @@ LLM scripts the judge verdict. No real model, no Docker.
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+import backend.workflow.application.verification_service as verification_service
 from backend.workflow.application.agent_loop import LoopTurn
 from backend.workflow.application.verification_service import (
     _UV_SYNC,
@@ -810,3 +812,30 @@ async def test_independent_acceptance_broken_test_is_discarded() -> None:
         assert not any(r.get("independent") for r in vr.result["command_results"])
         # the self-repair retry fired (two author calls)
         assert len(llm.calls) == 2
+
+
+class _HangingLlm:
+    """A judge/author LLM that never returns in time — models a hung executor
+    CLI task (a chat-shaped completion dispatched to an executor account)."""
+
+    async def complete(
+        self, *, messages: list[dict[str, Any]], tools: list[dict[str, Any]] | None = None
+    ) -> LoopTurn:
+        await asyncio.sleep(10)
+        return LoopTurn(content='{"passed": true}')  # pragma: no cover — never reached
+
+
+async def test_run_judge_times_out_to_non_pass(monkeypatch: Any) -> None:
+    # A hung executor LLM must NOT stall the run in verify — _run_judge bounds
+    # the call and returns an explicit NON-pass (never a silent pass) on timeout.
+    monkeypatch.setattr(verification_service, "_VERIFY_LLM_TIMEOUT_S", 0.05)
+    async with memory_session() as session:
+        svc = VerificationService(session=session, llm=_HangingLlm())
+        verdict = await svc._run_judge(
+            criteria=["it works"],
+            written_paths=[],
+            final_text="did the thing",
+            box=FakeBox(),
+        )
+    assert verdict["passed"] is False
+    assert "timed out" in verdict["reasoning"].lower()
