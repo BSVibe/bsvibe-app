@@ -44,3 +44,10 @@ class NoteVectorBackend(Protocol):
     async def search(
         self, query_embedding: list[float], top_k: int = 10
     ) -> list[tuple[str, float]]: ...
+
+    async def existing_paths(self) -> set[str]:
+        """The note paths already embedded under the current model — so a
+        reconcile (backfill) can skip them and embed only the gap. Paths stored
+        under a *different* embedding model are NOT returned (a model swap makes
+        old vectors incomparable), so reconcile re-embeds them."""
+        ...

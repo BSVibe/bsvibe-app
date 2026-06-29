@@ -26,6 +26,10 @@ class InMemoryNoteVectorBackend:
         async with self._lock:
             self._embeddings.pop(note_path, None)
 
+    async def existing_paths(self) -> set[str]:
+        async with self._lock:
+            return set(self._embeddings)
+
     async def search(
         self, query_embedding: list[float], top_k: int = 10
     ) -> list[tuple[str, float]]:

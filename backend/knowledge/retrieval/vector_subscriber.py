@@ -19,6 +19,54 @@ logger = structlog.get_logger(__name__)
 _DEFAULT_MAX_EMBED_CHARS = 8000
 
 
+async def embed_and_store_note(
+    vault: Vault,
+    embedder: Embedder,
+    vector_store: NoteVectorBackend,
+    note_path: str,
+    *,
+    max_embed_chars: int = _DEFAULT_MAX_EMBED_CHARS,
+) -> bool:
+    """Read ``note_path`` from the vault, embed its title+body, and store the
+    vector. Returns True iff a vector was stored. Soft on every failure (missing
+    file, empty text, embed error, empty vector) → False, never raises — shared
+    by the event subscriber (live writes) and the reconcile backfill."""
+    try:
+        abs_path = vault.resolve_path(note_path)
+        content = await vault.read_note_content(abs_path)
+    except (FileNotFoundError, OSError, UnicodeDecodeError):
+        logger.debug("vector_read_failed", path=note_path)
+        return False
+
+    fm = extract_frontmatter(content)
+    title = fm.get("title", "")
+    body = body_after_frontmatter(content)
+
+    text = f"{title}\n{body}".strip()
+    if not text:
+        return False
+
+    if len(text) > max_embed_chars:
+        logger.warning(
+            "vector_text_truncated",
+            path=note_path,
+            original_len=len(text),
+            max_len=max_embed_chars,
+        )
+        text = text[:max_embed_chars]
+
+    try:
+        embedding = await embedder.embed(text)
+    except (RuntimeError, OSError, ValueError):
+        logger.warning("vector_embed_failed", path=note_path, exc_info=True)
+        return False
+    if not embedding:
+        return False
+    await vector_store.store(note_path, embedding)
+    logger.debug("vector_stored", path=note_path, dim=len(embedding))
+    return True
+
+
 class VectorSubscriber:
     """Listens for vault events and updates the vector store.
 
@@ -62,33 +110,10 @@ class VectorSubscriber:
         if not note_path:
             return
 
-        try:
-            abs_path = self._vault.resolve_path(note_path)
-            content = await self._vault.read_note_content(abs_path)
-        except (FileNotFoundError, OSError, UnicodeDecodeError):
-            logger.debug("vector_read_failed", path=note_path)
-            return
-
-        fm = extract_frontmatter(content)
-        title = fm.get("title", "")
-        body = body_after_frontmatter(content)
-
-        text = f"{title}\n{body}".strip()
-        if not text:
-            return
-
-        if len(text) > self._max_embed_chars:
-            logger.warning(
-                "vector_text_truncated",
-                path=note_path,
-                original_len=len(text),
-                max_len=self._max_embed_chars,
-            )
-            text = text[: self._max_embed_chars]
-
-        try:
-            embedding = await self._embedder.embed(text)
-            await self._vector_store.store(note_path, embedding)
-            logger.debug("vector_stored", path=note_path, dim=len(embedding))
-        except (RuntimeError, OSError, ValueError):
-            logger.warning("vector_embed_failed", path=note_path, exc_info=True)
+        await embed_and_store_note(
+            self._vault,
+            self._embedder,
+            self._vector_store,
+            note_path,
+            max_embed_chars=self._max_embed_chars,
+        )
