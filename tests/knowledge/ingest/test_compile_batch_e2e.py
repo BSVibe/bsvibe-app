@@ -203,33 +203,31 @@ async def test_compile_batch_writes_graph_and_is_retrievable(tmp_path: Path) -> 
     # compile-batch prompt — not a tool-call / verifier prompt — was sent.
     assert "knowledge garden curator" in llm.calls[0]["system"].lower()
 
-    # 2. Notes + entity stubs were written under the workspace-scoped vault.
+    # 2. The substantive notes were written under the workspace-scoped vault.
     ws_root = factory.vault_path
     assert ws_root == tmp_path / REGION / WORKSPACE_A
     seedling = sorted((ws_root / "garden" / "seedling").glob("*.md"))
     assert len(seedling) == 2
+    # Import-pipeline noise fix — a ``[[Name]]`` mention NO LONGER materialises an
+    # empty ``garden/entities/<name>.md`` stub FILE (the E20 auto-stub explosion
+    # that polluted the vault + the embedding index). The graph still derives
+    # wikilink NODES from the note bodies (parse, below) — the stub files were
+    # redundant junk, not the source of the edges.
     entity_stubs = {p.stem for p in (ws_root / "garden" / "entities").glob("*.md")}
-    # Every wikilink target got a real vault file (graph extractor needs both
-    # ends of each edge to exist).
-    assert {"vaultwarden", "caddy", "bsage", "networkx"} <= entity_stubs
+    assert entity_stubs == set(), f"no empty entity stub files expected, got {entity_stubs}"
 
-    # 3. Graph nodes + edges materialise from the written vault.
+    # 3. Graph nodes + edges still materialise from the written vault — both the
+    # garden notes AND their wikilinked concepts (parsed from the bodies).
     entities, relationships = _materialise_graph(factory)
     entity_names = {e.name for e in entities}
-    # Note entities (the garden notes themselves, named from their slug since
-    # the body has no title frontmatter) are nodes...
     assert "vaultwarden behind caddy" in entity_names
     assert "bsage graph backend" in entity_names
-    # ...and the wikilinked concepts are nodes too.
     assert "Vaultwarden" in entity_names
     assert "Caddy" in entity_names
     assert "BSage" in entity_names
-    # Edges exist (note -> tag, note -> wikilinked concept, etc.).
     assert len(relationships) > 0
     rel_types = {r.rel_type for r in relationships}
     assert "tagged_with" in rel_types
-    # The wikilinked concepts produce note->concept edges (the graph "emerges
-    # from connections" — the whole point of the ingest compiler).
     target_ids = {e.id for e in entities if e.name in {"Vaultwarden", "Caddy", "BSage"}}
     assert any(r.target_id in target_ids for r in relationships)
 
