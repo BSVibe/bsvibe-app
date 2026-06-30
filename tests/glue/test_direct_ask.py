@@ -73,7 +73,7 @@ async def test_ask_question_returns_inline_answer(client, monkeypatch) -> None:
     """A question is answered inline (chat model stubbed)."""
 
     class _StubService:
-        def __init__(self, session, *, settings) -> None:  # noqa: ANN001
+        def __init__(self, session, *, settings, redis=None) -> None:  # noqa: ANN001
             pass
 
         async def answer(self, *, workspace_id, text):  # noqa: ANN001, ANN201
@@ -91,7 +91,7 @@ async def test_ask_question_no_chat_model_falls_back(client, monkeypatch) -> Non
     """A question but no chat model resolves → answered=False (dispatch as work)."""
 
     class _NoneService:
-        def __init__(self, session, *, settings) -> None:  # noqa: ANN001
+        def __init__(self, session, *, settings, redis=None) -> None:  # noqa: ANN001
             pass
 
         async def answer(self, *, workspace_id, text):  # noqa: ANN001, ANN201

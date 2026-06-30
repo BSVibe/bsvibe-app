@@ -24,7 +24,12 @@ from backend.api.deps import get_current_user_row, get_db_session, get_workspace
 from backend.config import get_settings
 from backend.identity.db import UserRow
 from backend.identity.workspaces_db import ProductRow
-from backend.workers.emit import STREAM_INTAKE, emit_stream_notification, get_emit_redis_client
+from backend.workers.emit import (
+    STREAM_INTAKE,
+    emit_stream_notification,
+    get_dispatch_redis_client,
+    get_emit_redis_client,
+)
 from backend.workflow.application.direct_answer import DirectAnswerService, is_question
 from backend.workflow.application.intake.direct import DirectTrigger
 
@@ -186,7 +191,13 @@ async def ask_message(
     """
     if not is_question(body.text):
         return AskResponse(answered=False)
-    service = DirectAnswerService(session, settings=get_settings())
+    settings = get_settings()
+    # Thread the dispatch redis client so an executor-routed chat account can be
+    # served inline too (functional parity with LiteLLM); None when no redis_url
+    # is configured → the inline answer degrades to async dispatch.
+    service = DirectAnswerService(
+        session, settings=settings, redis=get_dispatch_redis_client(settings)
+    )
     answer = await service.answer(workspace_id=workspace_id, text=body.text)
     if answer is None or not answer.strip():
         # No chat account resolved (or an empty answer) — let the caller dispatch

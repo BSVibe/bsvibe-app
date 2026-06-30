@@ -113,6 +113,40 @@ def reset_emit_redis_client() -> None:
     _EMIT_CACHE.reset()
 
 
+_DISPATCH_CACHE: Final[_EmitClientCache] = _EmitClientCache()
+
+
+def get_dispatch_redis_client(settings: Settings) -> _RedisXadd | None:
+    """Return the process-wide *dispatch* redis client — for the request path.
+
+    Unlike :func:`get_emit_redis_client` (gated on ``worker_mode``), executor
+    dispatch needs Redis whenever ``settings.redis_url`` is set — the worker
+    daemon builds one in :mod:`...runtime.lifecycle` independent of
+    ``worker_mode`` (the orchestrator XADDs the worker-stream + awaits the
+    completion wake). A request-path producer (``messages.py`` inline answer)
+    that may resolve to an executor account acquires the same client here so the
+    ``ExecutorAdapter`` has a transport.
+
+    Returns ``None`` when no ``redis_url`` is configured — the caller then
+    degrades (an executor adapter with no redis raises and the inline answer
+    falls back to async dispatch). Construction is connection-lazy.
+    """
+    if not settings.redis_url:
+        return None
+    if _DISPATCH_CACHE.get() is None:
+        import redis.asyncio as redis_aio  # noqa: PLC0415 — only when a redis_url is set
+
+        _DISPATCH_CACHE.set(
+            cast("_RedisXadd", redis_aio.from_url(settings.redis_url, decode_responses=True))
+        )
+    return _DISPATCH_CACHE.get()
+
+
+def reset_dispatch_redis_client() -> None:
+    """Drop the cached dispatch client (test isolation hook)."""
+    _DISPATCH_CACHE.reset()
+
+
 async def emit_stream_notification(
     client: _RedisXadd | None,
     *,
@@ -143,6 +177,8 @@ __all__ = [
     "STREAM_INTAKE",
     "STREAM_SETTLE",
     "emit_stream_notification",
+    "get_dispatch_redis_client",
     "get_emit_redis_client",
+    "reset_dispatch_redis_client",
     "reset_emit_redis_client",
 ]
