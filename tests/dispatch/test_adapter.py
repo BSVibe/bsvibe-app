@@ -647,6 +647,74 @@ class TestExecutorAdapterChat:
                 # No files shipped → no captured artifact_refs.
                 assert response.artifact_refs == ()
 
+    def _retry_adapter(self) -> ExecutorAdapter:
+        """A minimal ExecutorAdapter that passes chat()'s redis + executor_type
+        guards — the dispatch itself is stubbed per test via ``_chat_with_session``."""
+        account = _stub_account(provider="executor", extra_params={"executor_type": "claude_code"})
+        return ExecutorAdapter(
+            account=account,
+            workspace_id=account.workspace_id,
+            account_id=account.account_id,
+            model_account_id=account.id,
+            session=None,  # unused — _chat_with_session is stubbed
+            settings=get_settings(),
+            redis=object(),  # non-None so the redis guard passes
+        )
+
+    async def test_chat_retries_transient_task_failure_then_succeeds(
+        self, monkeypatch: Any
+    ) -> None:
+        """A transient ``failed`` (worker CLI ``exit 1``, retryable) is
+        re-dispatched — the next attempt succeeds and ``chat`` returns its
+        output. The J4 fix: a single executor blip no longer kills the run."""
+        monkeypatch.setattr("backend.dispatch.adapter._EXECUTOR_CHAT_RETRY_BACKOFF_S", 0.0)
+        adapter = self._retry_adapter()
+        calls: list[int] = []
+
+        async def _fake(_self: Any, **_kw: Any) -> ChatResponse:
+            calls.append(1)
+            if len(calls) == 1:
+                raise ExecutorAdapterUnavailable("task failed: exit 1", retryable=True)
+            return ChatResponse(content="42", tool_calls=(), artifact_refs=())
+
+        monkeypatch.setattr(ExecutorAdapter, "_chat_with_session", _fake)
+        response = await adapter.chat(system="x", messages=[{"role": "user", "content": "hi"}])
+        assert response.content == "42"
+        assert len(calls) == 2  # one failed dispatch + one successful retry
+
+    async def test_chat_persistent_failure_raises_after_bounded_retries(
+        self, monkeypatch: Any
+    ) -> None:
+        """A retryable outcome that never clears exhausts the bounded attempts
+        and raises — clean termination, no infinite re-dispatch."""
+        monkeypatch.setattr("backend.dispatch.adapter._EXECUTOR_CHAT_RETRY_BACKOFF_S", 0.0)
+        adapter = self._retry_adapter()
+        calls: list[int] = []
+
+        async def _always_fail(_self: Any, **_kw: Any) -> ChatResponse:
+            calls.append(1)
+            raise ExecutorAdapterUnavailable("task failed: exit 1", retryable=True)
+
+        monkeypatch.setattr(ExecutorAdapter, "_chat_with_session", _always_fail)
+        with pytest.raises(ExecutorAdapterUnavailable, match="failed"):
+            await adapter.chat(system="x", messages=[{"role": "user", "content": "hi"}])
+        assert len(calls) == 3  # _EXECUTOR_CHAT_ATTEMPTS — bounded, no infinite loop
+
+    async def test_chat_non_retryable_failure_raises_immediately(self, monkeypatch: Any) -> None:
+        """A NON-retryable failure (e.g. timeout / config) is raised on the first
+        attempt — the retry loop only re-dispatches transient task failures."""
+        adapter = self._retry_adapter()
+        calls: list[int] = []
+
+        async def _fail_hard(_self: Any, **_kw: Any) -> ChatResponse:
+            calls.append(1)
+            raise ExecutorAdapterUnavailable("timed out", retryable=False)
+
+        monkeypatch.setattr(ExecutorAdapter, "_chat_with_session", _fail_hard)
+        with pytest.raises(ExecutorAdapterUnavailable, match="timed out"):
+            await adapter.chat(system="x", messages=[{"role": "user", "content": "hi"}])
+        assert len(calls) == 1  # no retry on a non-retryable outcome
+
     async def test_chat_surfaces_worker_captured_artifact_refs(self, tmp_path: Any) -> None:
         """A run-bound executor chat surfaces the files the worker captured
         (persisted on the task row as artifact_refs) on the ChatResponse, so the
@@ -941,10 +1009,19 @@ class TestExecutorAdapterChat:
         assert cancel_calls[0]["worker_id"] == worker.id
         assert "task_id" in cancel_calls[0]
 
-    async def test_chat_worker_failure_raises(self) -> None:
-        """Worker reports ``success=False`` → adapter raises with the error."""
+    async def test_chat_worker_failure_raises(self, monkeypatch: Any) -> None:
+        """Worker reports ``success=False`` on every re-dispatch → after the
+        bounded transient retries, the adapter raises with the worker's error."""
         import asyncio
 
+        from backend.dispatch import adapter as _adapter_mod
+
+        # Pin a single attempt: this test exercises the REAL dispatch →
+        # record_result → raise path; the transient-retry behaviour (3
+        # round-trips) is covered by the fast mocked tests above, and driving 3
+        # real worker round-trips through fakeredis+sqlite is timing-fragile.
+        monkeypatch.setattr(_adapter_mod, "_EXECUTOR_CHAT_ATTEMPTS", 1)
+        monkeypatch.setattr(_adapter_mod, "_EXECUTOR_CHAT_RETRY_BACKOFF_S", 0.0)
         redis = await _make_redis()
         workspace_id = uuid.uuid4()
         settings = get_settings().model_copy(update={"executor_task_timeout_s": 30.0})
@@ -970,8 +1047,13 @@ class TestExecutorAdapterChat:
                 )
 
                 async def _simulate_worker_failure() -> None:
+                    # Fail EVERY re-dispatch (the transient-failure retry loop
+                    # creates a fresh task per attempt) until the attempts are
+                    # exhausted, so the adapter raises the worker's error rather
+                    # than timing out waiting for a result that never comes.
                     stream = dispatch.worker_stream(worker.id)
                     last_id = "0"
+                    handled = 0
                     for _ in _poll_deadline():
                         entries = await redis.xread({stream: last_id}, count=1, block=20)
                         if not entries:
@@ -980,6 +1062,7 @@ class TestExecutorAdapterChat:
                         for msg_id, fields in messages:
                             last_id = msg_id
                             task_id = uuid.UUID(fields["task_id"])
+                            handled += 1
                             async with sf() as ws_session:
                                 await dispatch.record_result(
                                     ws_session,
@@ -990,7 +1073,8 @@ class TestExecutorAdapterChat:
                                     error_message="rate limit exceeded",
                                 )
                                 await ws_session.commit()
-                            return
+                            if handled >= _adapter_mod._EXECUTOR_CHAT_ATTEMPTS:
+                                return
                     raise AssertionError("worker stream never saw the XADD")
 
                 worker_task = asyncio.create_task(_simulate_worker_failure())

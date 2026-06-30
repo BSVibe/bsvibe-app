@@ -142,7 +142,7 @@ class ModelAccountAdapter(Protocol):
 class ExecutorAdapterUnavailable(RuntimeError):
     """Raised by :meth:`ExecutorAdapter.chat` when the chat cannot dispatch.
 
-    Three distinct failure modes share one exception type because every
+    Several distinct failure modes share one exception type because every
     call site treats them the same way (surface to the user / write a
     Decision, never a silent fallback):
 
@@ -151,7 +151,18 @@ class ExecutorAdapterUnavailable(RuntimeError):
       ``executor_type``.
     * No online worker carries the requested capability (Decision in the
       legacy full-run path; here we raise so the chat call site sees it).
+    * A dispatched task came back ``failed`` (the worker's CLI exited non-zero).
+
+    ``retryable`` marks the TRANSIENT modes — a dispatched task that came back
+    ``failed`` (a momentary CLI/API/resource blip on the worker; live dogfood
+    showed an executor ``exit 1`` recover on the very next call). The adapter
+    re-dispatches those a bounded number of times. Config errors (no redis / no
+    executor_type) and a genuine timeout are NOT retryable.
     """
+
+    def __init__(self, *args: object, retryable: bool = False) -> None:
+        super().__init__(*args)
+        self.retryable = retryable
 
 
 # ---------------------------------------------------------------------------
@@ -227,6 +238,14 @@ class LiteLLMAdapter:
 # Executor adapter — thin wrapper around the existing subprocess dispatch
 # substrate (`backend.executors.dispatch`). Single-shot CLI chat call.
 # ---------------------------------------------------------------------------
+
+
+#: Total executor chat dispatch attempts (1 initial + retries) before giving up
+#: on a RETRYABLE (transient task-failed) outcome. A transient worker ``exit 1``
+#: clears on a re-dispatch; without this a single blip killed the whole run.
+_EXECUTOR_CHAT_ATTEMPTS = 3
+#: Linear backoff between retries (``_RETRY_BACKOFF_S * attempt`` seconds).
+_EXECUTOR_CHAT_RETRY_BACKOFF_S = 1.0
 
 
 @dataclass(slots=True)
@@ -356,45 +375,69 @@ class ExecutorAdapter:
         # chat calls on the same adapter no longer race on a shared
         # session's flush state. The legacy ``self.session`` is the
         # fallback path so the optional plumbing is fully additive.
-        if self.session_factory is not None:
-            # Lift E19 telemetry — visible signal that the per-call
-            # session path is active. Helps verify wiring in prod.
-            logger.debug(
-                "executor_adapter_chat_per_call_session",
+        async def _dispatch_once() -> ChatResponse:
+            if self.session_factory is not None:
+                # Lift E19 telemetry — visible signal that the per-call
+                # session path is active. Helps verify wiring in prod.
+                logger.debug(
+                    "executor_adapter_chat_per_call_session",
+                    workspace_id=str(self.workspace_id),
+                    account_id=str(self.model_account_id),
+                )
+                async with self.session_factory() as call_session:
+                    return await self._chat_with_session(
+                        session=call_session,
+                        executor_type=executor_type,
+                        pinned_worker_id=pinned_worker_id,
+                        system=effective_system,
+                        prompt=prompt,
+                    )
+
+            # Legacy path — caller hasn't migrated; use the bound session.
+            # ⚠️ Concurrent ``chat`` calls on the same adapter through this
+            # path race on ``session.flush()`` (the E18 hazard). Callers that
+            # fan out (``IngestCompiler.compile_batch``) MUST wire
+            # ``session_factory`` instead.
+            logger.warning(
+                "executor_adapter_chat_bound_session",
                 workspace_id=str(self.workspace_id),
                 account_id=str(self.model_account_id),
+                note=(
+                    "no session_factory wired — using bound session. "
+                    "Concurrent chat calls will race on session.flush() (E18). "
+                    "Lift E19: thread async_sessionmaker through the resolver."
+                ),
             )
-            async with self.session_factory() as call_session:
-                return await self._chat_with_session(
-                    session=call_session,
-                    executor_type=executor_type,
-                    pinned_worker_id=pinned_worker_id,
-                    system=effective_system,
-                    prompt=prompt,
-                )
+            return await self._chat_with_session(
+                session=self.session,
+                executor_type=executor_type,
+                pinned_worker_id=pinned_worker_id,
+                system=effective_system,
+                prompt=prompt,
+            )
 
-        # Legacy path — caller hasn't migrated; use the bound session.
-        # ⚠️ Concurrent ``chat`` calls on the same adapter through this
-        # path race on ``session.flush()`` (the E18 hazard). Callers that
-        # fan out (``IngestCompiler.compile_batch``) MUST wire
-        # ``session_factory`` instead.
-        logger.warning(
-            "executor_adapter_chat_bound_session",
-            workspace_id=str(self.workspace_id),
-            account_id=str(self.model_account_id),
-            note=(
-                "no session_factory wired — using bound session. "
-                "Concurrent chat calls will race on session.flush() (E18). "
-                "Lift E19: thread async_sessionmaker through the resolver."
-            ),
-        )
-        return await self._chat_with_session(
-            session=self.session,
-            executor_type=executor_type,
-            pinned_worker_id=pinned_worker_id,
-            system=effective_system,
-            prompt=prompt,
-        )
+        # Re-dispatch a RETRYABLE (transient task-failed) outcome a bounded
+        # number of times — a worker ``exit 1`` blip clears on the next call
+        # (live dogfood). Each retry creates a fresh task (and, on the E19 path,
+        # a fresh session). Non-retryable modes (no redis / no executor_type /
+        # timeout / no capacity) raise on the first attempt, unchanged.
+        for attempt in range(1, _EXECUTOR_CHAT_ATTEMPTS + 1):
+            try:
+                return await _dispatch_once()
+            except ExecutorAdapterUnavailable as exc:
+                if not exc.retryable or attempt >= _EXECUTOR_CHAT_ATTEMPTS:
+                    raise
+                logger.warning(
+                    "executor_adapter_chat_retry",
+                    workspace_id=str(self.workspace_id),
+                    account_id=str(self.model_account_id),
+                    attempt=attempt,
+                    max_attempts=_EXECUTOR_CHAT_ATTEMPTS,
+                    error=str(exc),
+                )
+                await asyncio.sleep(_EXECUTOR_CHAT_RETRY_BACKOFF_S * attempt)
+        # Unreachable — the loop returns or raises on the final attempt.
+        raise AssertionError("executor chat retry loop exited without result")
 
     async def _chat_with_session(
         self,
@@ -493,9 +536,13 @@ class ExecutorAdapter:
             ) from exc
 
         if completed.status != "done":
+            # Retryable: a task that came back ``failed`` is usually a transient
+            # worker-side blip (CLI ``exit 1`` / momentary API or resource
+            # pressure) that clears on a re-dispatch — see the chat() retry loop.
             raise ExecutorAdapterUnavailable(
                 f"executor chat task {task.id} failed: "
-                f"{completed.error_message or 'no error message'}"
+                f"{completed.error_message or 'no error message'}",
+                retryable=True,
             )
 
         logger.info(
