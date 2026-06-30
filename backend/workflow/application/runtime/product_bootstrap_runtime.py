@@ -540,6 +540,56 @@ def _build_bootstrap_knowledge_inner(
     return _BootstrapKnowledge()
 
 
+async def _reconcile_embeddings_soft(
+    *,
+    workspace_id: uuid.UUID,
+    region: str,
+    settings: Settings,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """Embed the freshly imported knowledge so the project is retrievable.
+
+    The bootstrap module writes garden seedlings + concept anchors but has no
+    embedding step of its own, so a fresh import was un-retrievable until a
+    manual reconcile (the import-pipeline K3 gap). This runs Lift 3's idempotent
+    :func:`~backend.knowledge.retrieval.reconcile.reconcile_embeddings` over the
+    workspace vault once ingest succeeds. Soft-fail + own session: a missing or
+    failed embedder never reverts the completed bootstrap; no-op when no
+    embedding model is configured."""
+    from pathlib import Path  # noqa: PLC0415
+
+    from backend.knowledge.graph.vault import Vault  # noqa: PLC0415
+    from backend.knowledge.retrieval.embedder_resolution import (  # noqa: PLC0415
+        resolve_knowledge_embedder,
+    )
+    from backend.knowledge.retrieval.reconcile import reconcile_embeddings  # noqa: PLC0415
+    from backend.knowledge.retrieval.storage.pg import PgNoteVectorBackend  # noqa: PLC0415
+
+    try:
+        embedder = resolve_knowledge_embedder(settings)
+        if not embedder.enabled or embedder.model is None:
+            return
+        vault = Vault(Path(settings.knowledge_vault_root) / region / str(workspace_id))
+        async with session_factory() as session:
+            backend = PgNoteVectorBackend(
+                session, workspace_id=workspace_id, embedding_model=embedder.model
+            )
+            result = await reconcile_embeddings(vault, embedder, backend)
+            await session.commit()
+        logger.info(
+            "bootstrap_embeddings_reconciled",
+            workspace_id=str(workspace_id),
+            embedded=getattr(result, "embedded", None),
+            scanned=getattr(result, "scanned", None),
+        )
+    except Exception:  # noqa: BLE001 — embedding is derived; never revert a completed bootstrap
+        logger.warning(
+            "bootstrap_embeddings_reconcile_failed",
+            workspace_id=str(workspace_id),
+            exc_info=True,
+        )
+
+
 async def run_product_bootstrap_job(
     *,
     product_id: uuid.UUID,
@@ -750,6 +800,17 @@ async def run_product_bootstrap_job(
             chunk_failures=chunk_failures,
         )
         return
+
+    # Import-pipeline K3 fix — embed the knowledge ingest just wrote (the
+    # bootstrap path has no embedding step of its own), so the freshly imported
+    # project is immediately retrievable. Soft-fail: an embedding failure never
+    # blocks marking the bootstrap complete.
+    await _reconcile_embeddings_soft(
+        workspace_id=workspace_id,
+        region=region,
+        settings=settings,
+        session_factory=session_factory,
+    )
 
     await repo.mark_status(
         product_id,

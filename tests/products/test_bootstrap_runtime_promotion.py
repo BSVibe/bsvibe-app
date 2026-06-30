@@ -138,3 +138,82 @@ async def test_bootstrap_job_registers_anchors_after_successful_ingest(
         f"expected concepts/active/stub-concept.md after bootstrap, "
         f"vault tree: {sorted(p.relative_to(workspace_vault) for p in workspace_vault.rglob('*.md'))}"
     )
+
+
+async def test_bootstrap_job_reconciles_embeddings_after_successful_ingest(
+    session_factory, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Import-pipeline K3 fix — after a successful ingest, the runtime embeds the
+    freshly imported knowledge (Vault garden + concepts) so the project is
+    immediately retrievable. Without this, a fresh import produces notes that no
+    RAG query can see (the bootstrap module has no embedding step of its own).
+
+    The reconcile is exercised via a spy on the module's soft reconcile helper —
+    the real embedding (pgvector + bge-m3) is Lift 3's tested path; here we pin
+    the WIRING: reconcile runs once, for this workspace, after ingest."""
+    import backend.workflow.application.runtime.product_bootstrap_runtime as rt
+
+    workspace_id = uuid.uuid4()
+    product_id = uuid.uuid4()
+    async with session_factory() as s:
+        s.add(WorkspaceRow(id=workspace_id, name="t", region=_REGION, safe_mode=False))
+        await s.flush()
+        s.add(
+            ProductRow(
+                id=product_id, workspace_id=workspace_id, name="p", slug="p", repo_url="https://x/y"
+            )
+        )
+        await s.commit()
+
+    from backend.config import get_settings
+
+    settings = get_settings()
+    product_root = tmp_path / "product_ws"
+    product_root.mkdir()
+    vault_root = tmp_path / "vault"
+    vault_root.mkdir()
+    object.__setattr__(settings, "product_workspace_root", str(product_root))
+    object.__setattr__(settings, "knowledge_vault_root", str(vault_root))
+
+    fake_git = MagicMock()
+    fake_git.clone = AsyncMock()
+    workspace_vault = vault_root / _REGION / str(workspace_id)
+
+    class _StubKnowledge:
+        async def ingest(self, request):
+            from backend.knowledge.facade import IngestResult
+
+            _seed_observation(workspace_vault, "obs-1", ["settle", "verified-run", "topic"])
+            _seed_observation(workspace_vault, "obs-2", ["settle", "verified-run", "topic"])
+            return IngestResult(proposals_count=0, notes_count=2, run_id=uuid.uuid4())
+
+        async def retrieve_canon(self, query):
+            from backend.knowledge.facade import CanonRetrievalResult
+
+            return CanonRetrievalResult(notes=[])
+
+        async def settle(self, *, workspace_id, region):
+            return 0
+
+    monkeypatch.setattr(rt, "build_bootstrap_knowledge", lambda **_kw: _StubKnowledge())
+
+    calls: list[tuple] = []
+
+    async def _spy(*, workspace_id, region, settings, session_factory) -> None:
+        calls.append((workspace_id, region))
+
+    monkeypatch.setattr(rt, "_reconcile_embeddings_soft", _spy)
+
+    await run_product_bootstrap_job(
+        product_id=product_id,
+        workspace_id=workspace_id,
+        repo_url="https://x/y",
+        session_factory=session_factory,
+        git_ops=fake_git,
+    )
+
+    async with session_factory() as s:
+        row = await s.get(ProductRow, product_id)
+        assert row.bootstrap_status == "complete", row.bootstrap_error
+    # The imported knowledge was embedded — once, for this workspace.
+    assert calls == [(workspace_id, _REGION)]
