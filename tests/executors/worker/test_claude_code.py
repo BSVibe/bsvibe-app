@@ -466,3 +466,29 @@ async def test_subprocess_started_in_new_session_for_pgrp_signal(
     assert spawn_kwargs[0].get("start_new_session") is True, (
         "claude_code executor must pass start_new_session=True"
     )
+
+
+# ── Worker-managed OAuth bearer injection ────────────────────────────────────
+# A launchd-spawned claude can't read the Keychain; the executor injects a
+# worker-managed ANTHROPIC_AUTH_TOKEN (which the env sanitizer preserves) so it
+# authenticates instead of falling back to a stale on-disk token → 401.
+
+
+async def test_subprocess_env_injects_bearer_when_available(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import backend.executors.worker.claude_code as cc
+
+    monkeypatch.setattr(cc, "ensure_claude_bearer", lambda: "oat-live-token")
+    env = cc._subprocess_env_with_bearer()
+    assert env["ANTHROPIC_AUTH_TOKEN"] == "oat-live-token"
+
+
+async def test_subprocess_env_omits_bearer_when_none(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import backend.executors.worker.claude_code as cc
+
+    monkeypatch.setattr(cc, "ensure_claude_bearer", lambda: None)
+    env = cc._subprocess_env_with_bearer()
+    assert "ANTHROPIC_AUTH_TOKEN" not in env

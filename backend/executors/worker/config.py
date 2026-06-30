@@ -98,6 +98,13 @@ class WorkerSettings(BaseSettings):
     # data dir is relocated (``BSVIBE_WORKER_OPENCODE_DATA_DIR``).
     opencode_data_dir: str = ""
 
+    # Worker-managed Claude OAuth credential file (env:
+    # ``BSVIBE_WORKER_CLAUDE_OAUTH_PATH``). The ``claude_code`` executor reads it
+    # to refresh + inject ``ANTHROPIC_AUTH_TOKEN`` so a launchd-spawned claude
+    # (which can't read the Keychain) authenticates instead of falling back to a
+    # stale on-disk token. Blank → ``~/.bsvibe/claude_oauth.json``.
+    claude_oauth_path: str = ""
+
 
 @lru_cache(maxsize=1)
 def get_worker_settings() -> WorkerSettings:

@@ -30,6 +30,7 @@ from typing import Any
 
 import structlog
 
+from backend.executors.worker.claude_auth import ensure_claude_bearer
 from backend.executors.worker.executors import (
     ExecutionChunk,
     _kill_process_group,
@@ -37,6 +38,21 @@ from backend.executors.worker.executors import (
 )
 
 logger = structlog.get_logger(__name__)
+
+
+def _subprocess_env_with_bearer() -> dict[str, str]:
+    """Sanitized subprocess env plus a worker-managed ``ANTHROPIC_AUTH_TOKEN``.
+
+    Synchronous (file IO + a possible network refresh under an flock) — call via
+    :func:`asyncio.to_thread`. When no worker OAuth credential is configured /
+    resolvable, returns the plain sanitized env unchanged (claude uses its own
+    auth)."""
+    env = sanitized_subprocess_env()
+    bearer = ensure_claude_bearer()
+    if bearer:
+        env["ANTHROPIC_AUTH_TOKEN"] = bearer
+    return env
+
 
 # claude_code's JSONL stream can carry a single line past asyncio's default
 # 64 KiB StreamReader limit (full file contents / diffs) — same trap as codex.
@@ -167,6 +183,11 @@ class ClaudeCodeExecutor:
         model: str | None = None,
     ) -> AsyncIterator[ExecutionChunk]:
         cmd_args = self._build_cmd(system, model)
+        # Inject a worker-managed OAuth bearer so a launchd-spawned claude (which
+        # can't read the Keychain) authenticates instead of falling back to a
+        # stale on-disk token → 401. Soft-fail + off the event loop (the helper
+        # does file IO + a network refresh under an flock).
+        env = await asyncio.to_thread(_subprocess_env_with_bearer)
         process: asyncio.subprocess.Process | None = None
         try:
             # Lift E15 — ``start_new_session=True`` so we can group-kill on
@@ -177,7 +198,7 @@ class ClaudeCodeExecutor:
                 stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
-                env=sanitized_subprocess_env(),
+                env=env,
                 start_new_session=True,
                 limit=_STREAM_LIMIT,
             )
