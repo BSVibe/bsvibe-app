@@ -473,3 +473,33 @@ async def test_build_worker_runtime_wires_redis_client_into_intake_in_redis_mode
     )
     intake_db = next(w for w in rt_db.workers if isinstance(w, IntakeWorker))
     assert intake_db._redis_client is None
+
+
+# ── get_dispatch_redis_client (J2 inline-executor parity) ─────────────────────
+# Executor dispatch needs Redis whenever ``redis_url`` is set — independent of
+# ``worker_mode`` (unlike the emit client). The request-path inline answer
+# acquires this client so an executor-routed chat account is served inline.
+
+
+async def test_dispatch_redis_client_built_when_redis_url_set_even_in_db_polling() -> None:
+    from backend.workers.emit import get_dispatch_redis_client, reset_dispatch_redis_client
+
+    reset_dispatch_redis_client()
+    settings = Settings()  # worker_mode defaults to db_polling, redis_url is non-empty
+    assert settings.worker_mode == "db_polling"
+    assert settings.redis_url
+    try:
+        client = get_dispatch_redis_client(settings)
+        # Dispatch needs a transport even in db_polling — unlike the emit client,
+        # which is None here.
+        assert client is not None
+    finally:
+        reset_dispatch_redis_client()
+
+
+async def test_dispatch_redis_client_none_without_redis_url() -> None:
+    from backend.workers.emit import get_dispatch_redis_client, reset_dispatch_redis_client
+
+    reset_dispatch_redis_client()
+    settings = Settings(redis_url="")
+    assert get_dispatch_redis_client(settings) is None

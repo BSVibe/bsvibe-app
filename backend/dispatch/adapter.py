@@ -117,6 +117,11 @@ class ModelAccountAdapter(Protocol):
     """
 
     supported_methods: frozenset[str]
+    #: Per-caller request timeout in seconds (Lift E9). Settable so a call site
+    #: can tighten the bound for its context — e.g. the inline Direct answer
+    #: caps the synchronous HTTP wait below the default frame timeout. ``None``
+    #: leaves each adapter's own default in effect.
+    timeout_s: float | None
 
     async def chat(
         self,
