@@ -17,14 +17,13 @@ chunks or retrieval — those concerns live one level up.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, Protocol, runtime_checkable
 
 import structlog
 
 from backend.knowledge.graph.writer import GardenNote
 
-from ._llm_compile import _WIKILINK_PATTERN, clean_entities, clean_tags
+from ._llm_compile import clean_entities, clean_tags
 
 if TYPE_CHECKING:
     from backend.knowledge.canonicalization.service import CanonicalizationService
@@ -174,12 +173,28 @@ def validate_action(raw: dict[str, Any]) -> bool:
     return True
 
 
+#: Cap on the founding-note body distilled onto an ingest-auto-created concept,
+#: so a long note can't blow out the concept hub. Bounded substance, not a dump.
+_MAX_CONCEPT_SEED_BODY = 600
+
+
+def _concept_seed_body(content: str) -> str | None:
+    """A bounded excerpt of the founding note to seed an auto-created concept's
+    body (import-pipeline K1 fix). ``None`` when the note carries no usable prose
+    — better a title-only concept than a body of whitespace."""
+    text = " ".join((content or "").split()).strip()
+    if not text:
+        return None
+    return text[:_MAX_CONCEPT_SEED_BODY].rstrip()
+
+
 async def canonicalize_tags(
     canon_service: CanonicalizationService | None,
     tags: list[str],
     *,
     raw_source: str,
     note_type: str | None = None,
+    initial_body: str | None = None,
 ) -> list[str]:
     """Resolve cleaned tags to canonical concept ids (Handoff §11).
 
@@ -194,6 +209,11 @@ async def canonicalize_tags(
     frontmatter (E26 wire). Pre-E27 this path always omitted the type
     so every ingest-auto-created concept was untyped even when the
     seedling note that triggered it had one.
+
+    Import-pipeline K1 fix — ``initial_body`` (the founding note's distilled
+    excerpt) is threaded onto the auto-create-concept path so the new concept is
+    born *substantive*, not an empty ``# Title`` shell. Ignored when the tag
+    resolves to an existing concept (its body is owned by its own history).
     """
     if canon_service is None or not tags:
         return tags
@@ -205,6 +225,7 @@ async def canonicalize_tags(
                 raw_tag,
                 raw_source=raw_source,
                 note_type=note_type,
+                initial_body=initial_body,
             )
         except Exception as exc:  # noqa: BLE001 — never abort ingest on resolve error
             logger.warning(
@@ -218,33 +239,6 @@ async def canonicalize_tags(
         canonical.append(resolved)
         seen.add(resolved)
     return canonical
-
-
-async def ensure_entity_stubs(
-    writer: GardenWriter,
-    entities: list[str],
-    mentioned_in: Path | None,
-) -> None:
-    """Best-effort: create / refresh a stub for every ``[[Name]]`` mentioned.
-
-    Failures are logged but never propagated — a single bad entity (e.g.
-    slug that escapes vault boundary) must not abort the whole compile.
-    """
-    if not mentioned_in:
-        return
-    for wikilink in entities:
-        match = _WIKILINK_PATTERN.match(wikilink.strip())
-        if not match:
-            continue
-        name = match.group(1).strip()
-        try:
-            await writer.ensure_entity_stub(name, mentioned_in)
-        except (OSError, ValueError) as exc:
-            logger.warning(
-                "ingest_compile_entity_stub_failed",
-                name=name,
-                error=str(exc),
-            )
 
 
 async def execute_plan(
@@ -275,6 +269,9 @@ async def execute_plan(
             tags,
             raw_source="ingest-compiler",
             note_type=note_kind,
+            # Import-pipeline K1 fix — seed an auto-created concept's body with
+            # the founding note's substance so it is not an empty title shell.
+            initial_body=_concept_seed_body(raw_action["content"]),
         )
         # Lift E20 — the new prompt names the field ``wikilinks`` (strict
         # subset of content); the legacy prompt called it ``entities``.
@@ -296,7 +293,7 @@ async def execute_plan(
 
         try:
             if action.action == "create":
-                written_path = await writer.write_garden(
+                await writer.write_garden(
                     GardenNote(
                         title=action.title,
                         content=action.content,
@@ -312,10 +309,10 @@ async def execute_plan(
                 )
                 notes_created += 1
             elif action.action == "update" and action.target_path:
-                written_path = await writer.update_note(action.target_path, action.content)
+                await writer.update_note(action.target_path, action.content)
                 notes_updated += 1
             elif action.action == "append" and action.target_path:
-                written_path = await writer.append_to_note(action.target_path, action.content)
+                await writer.append_to_note(action.target_path, action.content)
                 notes_updated += 1
             else:
                 logger.warning("ingest_compile_invalid_action", action=action.action)
@@ -330,11 +327,12 @@ async def execute_plan(
             continue
 
         actions_taken.append(action)
-        # Ensure every wikilink target has a real vault file so the
-        # graph extractor's ``WIKILINK_RE`` sweep finds nodes on both
-        # ends. Cleaned by ``clean_entities`` already, so each item
-        # is a valid ``[[Name]]`` actually present in the body.
-        await ensure_entity_stubs(writer, action.entities, written_path)
+        # Import-pipeline noise fix — we NO LONGER generate an empty stub node
+        # for every ``[[Name]]`` mention (the E20 auto-stub explosion). A node
+        # exists only when it has substance: a concept the ingest canonicalizes
+        # (now with a body, above) or one a recurring pattern promotes. A
+        # wikilink whose target has no node yet simply dangles until the entity
+        # earns a node — the digital-garden "no empty stubs" model.
 
     return CompileResult(
         actions_taken=actions_taken,
