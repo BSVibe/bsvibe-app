@@ -190,11 +190,18 @@ class ClaudeCodeExecutor:
             process.stdin.close()
 
             stderr_task = asyncio.create_task(_drain(process.stderr, stderr_buf))
+            # The most recent NON-``allowed`` rate_limit_event status seen on the
+            # stream (e.g. ``rejected`` on a five_hour window with org-disabled
+            # overage). Used only when the CLI then exits non-zero — see below.
+            rate_status: str | None = None
             try:
                 async for line in _aiter_lines(process.stdout, deadline):
                     parsed = _safe_json(line)
                     if parsed is None:
                         continue
+                    status = _rate_limit_event_status(parsed)
+                    if status is not None and status != "allowed":
+                        rate_status = status
                     delta = _claude_extract_delta(parsed)
                     if delta:
                         yield ExecutionChunk(delta=delta, raw=parsed)
@@ -216,11 +223,7 @@ class ClaudeCodeExecutor:
                     timeout=max(0.1, deadline - asyncio.get_event_loop().time()),
                 )
                 await stderr_task
-            err_text = "".join(stderr_buf)
-            if rc != 0:
-                yield ExecutionChunk(done=True, error=err_text or f"exit {rc}")
-            else:
-                yield ExecutionChunk(done=True)
+            yield _terminal_chunk(rc, "".join(stderr_buf), rate_status)
         except TimeoutError:
             # ``TimeoutError`` is a subclass of ``OSError`` (3.11) — re-raise so
             # ``execute`` surfaces the explicit total-timeout message rather than
@@ -244,6 +247,35 @@ class ClaudeCodeExecutor:
 
 
 # ── Stream parsing helpers ────────────────────────────────────────────────────
+
+
+def _terminal_chunk(rc: int, err_text: str, rate_status: str | None) -> ExecutionChunk:
+    """The final ``done`` chunk for a finished subprocess.
+
+    A non-zero exit AFTER a non-``allowed`` rate_limit_event (the five_hour
+    window hit with org-disabled overage exits 1 with NOTHING on stderr — bare
+    "exit 1" otherwise) is surfaced AS a rate-limit failure, so ``_is_rate_limited``
+    routes it through the wait+retry path and the founder gets an actionable
+    reason instead of an opaque "claude exited"."""
+    if rc == 0:
+        return ExecutionChunk(done=True)
+    if rate_status is not None:
+        return ExecutionChunk(done=True, error=f"rate limit ({rate_status}): claude exited {rc}")
+    return ExecutionChunk(done=True, error=err_text or f"exit {rc}")
+
+
+def _rate_limit_event_status(event: dict[str, Any]) -> str | None:
+    """The ``status`` of a ``rate_limit_event`` (``allowed`` / ``rejected`` / …),
+    or ``None`` for any other event. Claude emits these on the ``stream-json``
+    feed; a non-``allowed`` status that precedes a non-zero exit is how a hit
+    five_hour window (with org-disabled overage) manifests — there is no stderr."""
+    if event.get("type") != "rate_limit_event":
+        return None
+    info = event.get("rate_limit_info")
+    if not isinstance(info, dict):
+        return None
+    status = info.get("status")
+    return status if isinstance(status, str) else None
 
 
 def _claude_extract_delta(event: dict[str, Any]) -> str:

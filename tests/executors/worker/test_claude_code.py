@@ -103,6 +103,14 @@ def _assistant_line(text: str) -> bytes:
     return (json.dumps(event) + "\n").encode("utf-8")
 
 
+def _rate_limit_line(status: str) -> bytes:
+    event = {
+        "type": "rate_limit_event",
+        "rate_limit_info": {"status": status, "rateLimitType": "five_hour"},
+    }
+    return (json.dumps(event) + "\n").encode("utf-8")
+
+
 async def _drain(stream: AsyncIterator[ExecutionChunk]) -> list[ExecutionChunk]:
     return [c async for c in stream]
 
@@ -134,6 +142,37 @@ async def test_collect_aggregates_output(monkeypatch: pytest.MonkeyPatch) -> Non
     assert result.success is True
     assert result.stdout == "abcdef"
     assert result.error_message is None
+
+
+async def test_blocking_rate_limit_event_then_exit_is_rate_limited(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A non-``allowed`` rate_limit_event followed by a non-zero exit (the
+    five_hour-window-with-no-overage shape that exits 1 with empty stderr) is
+    surfaced AS rate-limited — the worker's wait+retry path fires and the
+    terminal error is actionable, not an opaque "claude exited"."""
+    proc = _FakeProcess(stdout_lines=[_rate_limit_line("rejected")], returncode=1)
+    _patch_subprocess(monkeypatch, proc)
+
+    # retries=0 so the test asserts the classification without sleeping.
+    result = await collect(ClaudeCodeExecutor(rate_limit_retries=0).execute("p", {}))
+
+    assert result.success is False
+    assert "rate limit" in (result.error_message or "").lower()
+
+
+async def test_allowed_rate_limit_event_with_exit_is_plain_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An ``allowed`` rate_limit_event is benign — a non-zero exit alongside it
+    is a normal failure, NOT classified as rate-limited (no spurious retries)."""
+    proc = _FakeProcess(stdout_lines=[_rate_limit_line("allowed")], returncode=1)
+    _patch_subprocess(monkeypatch, proc)
+
+    result = await collect(ClaudeCodeExecutor(rate_limit_retries=0).execute("p", {}))
+
+    assert result.success is False
+    assert "rate limit" not in (result.error_message or "").lower()
 
 
 async def test_command_includes_print_and_stream_json(monkeypatch: pytest.MonkeyPatch) -> None:
