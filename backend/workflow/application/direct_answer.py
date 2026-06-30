@@ -23,6 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.config import Settings
 from backend.dispatch.caller_registry import CALLER_FRAME
+from backend.router.accounts.predicates import EXECUTOR_PROVIDER
 from backend.workflow.application.knowledge_orchestrator import _ANSWER_SYSTEM_PROMPT
 from backend.workflow.application.loop_llm import ResolverLoopLlm
 from backend.workflow.application.runtime.account_resolution import _resolve_via_caller
@@ -61,6 +62,16 @@ class DirectAnswerService:
         if chat is None:
             logger.info("direct_answer_no_chat_account", workspace_id=str(workspace_id))
             return None
+        # An inline synchronous answer can NOT dispatch to an executor account
+        # (the coding-agent loop needs a worker-stream transport this HTTP path
+        # has no business spinning up) — routing a question there raised
+        # ``ExecutorAdapterUnavailable`` → an unhandled 500 the browser surfaced
+        # as a CORS error ("Network hiccup"). CALLER_FRAME *should* resolve a
+        # chat model, but a workspace with only executor accounts falls back to
+        # one; degrade to ``None`` (answered=false → async dispatch) instead.
+        if getattr(chat.account, "provider", None) == EXECUTOR_PROVIDER:
+            logger.info("direct_answer_executor_only_account", workspace_id=str(workspace_id))
+            return None
         llm = ResolverLoopLlm(adapter=chat.adapter)
         statements = await self._retrieve(workspace_id, text)
         messages: list[dict[str, Any]] = [{"role": "system", "content": _ANSWER_SYSTEM_PROMPT}]
@@ -76,7 +87,16 @@ class DirectAnswerService:
                 }
             )
         messages.append({"role": "user", "content": text[:_ANSWER_MAX_INPUT_CHARS]})
-        turn = await llm.complete(messages=messages, tools=None)
+        # Any LLM failure on the inline path degrades to ``None`` (answered=false
+        # → the PWA dispatches the text as async work) — the endpoint must NEVER
+        # 500 (a 500 here bypasses CORS middleware and reads as a network error).
+        try:
+            turn = await llm.complete(messages=messages, tools=None)
+        except Exception:  # noqa: BLE001 — inline answer must never crash the request
+            logger.warning(
+                "direct_answer_llm_failed", workspace_id=str(workspace_id), exc_info=True
+            )
+            return None
         return turn.content
 
     async def _retrieve(self, workspace_id: uuid.UUID, text: str) -> list[str]:
