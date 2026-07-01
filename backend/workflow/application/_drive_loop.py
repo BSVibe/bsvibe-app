@@ -122,6 +122,13 @@ async def drive_loop(  # noqa: PLR0912, PLR0915 — preserved cycle body, H2a is
     no_work_nudges = 0
 
     for _cycle in range(orch._max_cycles):
+        # Cooperative cancel — stop at the turn boundary if the run was cancelled
+        # mid-flight, instead of dispatching another (expensive) LLM/executor
+        # turn and burning the round budget. The transition-time guard alone let
+        # a cancelled run keep turning to exhaustion (dogfood dd2bd3a3).
+        if await orch._run_cancelled(run):
+            await orch._audit(run, attempt, LoopTerminal, {"outcome": "cancelled", "cycle": _cycle})
+            return orch._cancelled_result(run, work_step, attempt, written_paths, final_text)
         turn = await orch._llm.complete(messages=messages, tools=tools_schema)
         final_text = turn.content or final_text
         # Merge files the compute backend captured outside the loop's tools

@@ -239,6 +239,71 @@ async def test_verified_run_does_file_work_and_passes_command_check(tmp_path: Pa
 
 
 # --------------------------------------------------------------------------
+# Cooperative cancel — the loop stops at a turn boundary when the run is
+# cancelled mid-flight, instead of burning the round budget (dogfood dd2bd3a3).
+# --------------------------------------------------------------------------
+
+
+async def test_cancelled_run_stops_before_any_turn(tmp_path: Path) -> None:
+    """A run cancelled before the loop starts dispatches NO LLM turn — the
+    cooperative cancel check fires on cycle 0. Maps to no status transition
+    (needs_decision); the run stays CANCELLED."""
+    llm = ScriptedLlm([])  # raises if a turn is requested
+    async with memory_session() as session:
+        run = await _make_run(session)
+        run.status = RunStatus.CANCELLED
+        await session.flush()
+        orch = RunOrchestrator(session=session, llm=llm, sandbox_manager=NoopSandboxManager())
+        result = await orch.run(run=run, workspace_dir=tmp_path)
+
+        assert result.outcome == "needs_decision"
+        assert "cancelled" in result.summary.lower()
+        assert llm.calls == []  # NO turn dispatched
+        status = await session.scalar(select(ExecutionRun.status).where(ExecutionRun.id == run.id))
+        assert status is RunStatus.CANCELLED
+
+
+async def test_cancel_between_turns_stops_loop(tmp_path: Path) -> None:
+    """A run cancelled DURING the loop stops at the NEXT turn boundary — not at
+    round-budget exhaustion. The LLM cancels the run on its first turn (and
+    returns a non-terminal turn); the loop must not dispatch a second turn."""
+    from sqlalchemy import update
+
+    class _CancelOnFirstTurnLlm:
+        def __init__(self, session: Any, run_id: Any) -> None:
+            self._session = session
+            self._run_id = run_id
+            self.calls = 0
+
+        async def complete(
+            self, *, messages: list[dict[str, Any]], tools: list[dict[str, Any]] | None
+        ) -> LoopTurn:
+            self.calls += 1
+            if self.calls == 1:
+                await self._session.execute(
+                    update(ExecutionRun)
+                    .where(ExecutionRun.id == self._run_id)
+                    .values(status=RunStatus.CANCELLED)
+                )
+                await self._session.flush()
+                # Non-terminal turn (no declare_verification) → loop would
+                # continue to a 2nd cycle if not for the cancel check.
+                return LoopTurn(content="still working…", tool_calls=())
+            raise AssertionError("loop dispatched a 2nd turn after cancel — cancel not honored")
+
+    async with memory_session() as session:
+        run = await _make_run(session)
+        llm = _CancelOnFirstTurnLlm(session, run.id)
+        orch = RunOrchestrator(session=session, llm=llm, sandbox_manager=NoopSandboxManager())
+        result = await orch.run(run=run, workspace_dir=tmp_path)
+
+        assert llm.calls == 1  # stopped at the turn boundary after the cancel
+        assert result.outcome == "needs_decision"
+        status = await session.scalar(select(ExecutionRun.status).where(ExecutionRun.id == run.id))
+        assert status is RunStatus.CANCELLED
+
+
+# --------------------------------------------------------------------------
 # Verified-deliverable summary — titled by the founder intent, NOT the
 # agent's raw streaming narration.
 # --------------------------------------------------------------------------
