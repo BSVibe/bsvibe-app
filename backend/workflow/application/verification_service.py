@@ -33,6 +33,7 @@ from typing import Any, Protocol, runtime_checkable
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.workflow.domain.gate_discovery import discover_gate
 from backend.workflow.domain.verifier_contract import (
     VerificationCheck,
     VerificationContract,
@@ -96,6 +97,49 @@ MANDATORY_GATE_RATIONALE = "Mandatory project quality gate — enforced on the c
 #: Path prefixes mypy --strict covers in this repo (mirrors CI's ``mypy backend/``
 #: + the sdk run). Changed files outside these get lint/format only.
 _MYPY_PREFIXES = ("backend/", "plugin/", "bsvibe_sdk/")
+
+#: I1 — the TARGET's OWN gate. "verified" must mean the deliverable passes the
+#: project's own definition of done, discovered from the repo (its real CI /
+#: Makefile / package.json / Cargo / go.mod), not a hardcoded Python check list.
+#: The narrow changed-files L1 lets a change pass verify yet fail the repo's real
+#: whole-repo CI (findings 2026-07-01, #413). Here we run the repo's own STATIC
+#: gate (lint / format / type / import-contracts) whole-repo, ALWAYS, fail-closed.
+#:
+#: The verify sandbox is NOT the CI environment (no DB / node deps / secrets), so
+#: the repo's setup + service-dependent + dynamic-test steps are NOT runnable
+#: here and would false-fail a good change. We skip those — they run in the real
+#: CI at PR time and their behaviour is covered by the L2 acceptance check — and
+#: run only the source-deterministic STATIC checks that isolate cleanly.
+GATE_CMD_TIMEOUT_S = 300.0
+#: Command substrings that mark a discovered gate step as NOT a runnable static
+#: check in the isolated sandbox: environment setup, dependency install, live
+#: services, and dynamic test runners (deferred to L2 / real CI).
+_GATE_SKIP_SUBSTRINGS = (
+    "uv sync",
+    "uv python install",
+    "uv venv",
+    "pip install",
+    "poetry install",
+    "npm install",
+    "npm ci",
+    "pnpm install",
+    "yarn install",
+    "corepack",
+    "cargo fetch",
+    "go mod download",
+    "alembic ",
+    "docker",
+    "compose",
+    "actions/",
+    "pytest",
+    "unittest",
+    "vitest",
+    "jest",
+    " test",
+    "go test",
+    "tox",
+    "nox",
+)
 
 #: Where the L2 independent acceptance test is written inside the sandbox.
 _INDEPENDENT_TEST_REL = "tests/_bsvibe_independent_acceptance.py"
@@ -370,6 +414,15 @@ class VerificationService:
 
         all_cmd_pass = all(r["passed"] for r in command_results)
 
+        # I1 — the repo's OWN static gate (whole-repo lint/format/type/contracts),
+        # run in the sandbox regardless of what the agent declared. A genuine gate
+        # failure fails verification (fail-closed): this is what makes "verified"
+        # mean "passes the target's own definition of done" rather than a narrow
+        # changed-files subset (#413). ``None`` (no worktree / no runnable gate)
+        # leaves the decision to the command + judge checks.
+        project_gate = await self._run_project_gate(run, box)
+        gate_pass = project_gate is None or bool(project_gate["passed"])
+
         judge_blob: dict[str, Any] | None = None
         judge_pass = True
         # Split judge criteria: the AGENT'S OWN declared criteria vs the
@@ -411,7 +464,7 @@ class VerificationService:
                 )
                 judge_pass = bool(judge_blob.get("passed"))
 
-        passed = all_cmd_pass and judge_pass
+        passed = all_cmd_pass and judge_pass and gate_pass
         outcome = VerificationOutcome.PASSED if passed else VerificationOutcome.FAILED
         vr = VerificationResult(
             id=uuid.uuid4(),
@@ -420,7 +473,11 @@ class VerificationService:
             workspace_id=run.workspace_id,
             outcome=outcome,
             contract=contract.to_dict(),
-            result={"command_results": command_results, "judge": judge_blob},
+            result={
+                "command_results": command_results,
+                "judge": judge_blob,
+                "project_gate": project_gate,
+            },
         )
         self._session.add(vr)
         self._session.add(
@@ -433,6 +490,15 @@ class VerificationService:
                     "attempt_id": str(attempt.id),
                     "outcome": outcome.value,
                     "commands": len(command_results),
+                    "project_gate": (
+                        None
+                        if project_gate is None
+                        else {
+                            "origin": project_gate["origin"],
+                            "passed": project_gate["passed"],
+                            "checks": len(project_gate["commands"]),
+                        }
+                    ),
                 },
             )
         )
@@ -496,6 +562,58 @@ class VerificationService:
                 }
             )
         return results
+
+    async def _run_project_gate(
+        self, run: ExecutionRun, box: SandboxSession
+    ) -> dict[str, Any] | None:
+        """I1 — run the repo's OWN static gate (lint/format/type/contracts).
+
+        Returns ``None`` when the run has no real worktree or the repo declares
+        no runnable static gate — the caller records that as weaker verification,
+        not a pass. Otherwise a blob: ``origin`` (github-actions/makefile/...),
+        per-command ``results`` (status ∈ passed|failed|unavailable), and
+        ``passed`` (no command RAN and failed). A command that could not run here
+        (exit 127) is ``unavailable`` — recorded, never a false-fail; a command
+        that RAN and failed is a real gate failure → ``passed`` is False.
+        """
+        from backend.storage.product_workspace import run_worktree_path  # noqa: PLC0415
+
+        if run.product_id is None or not self._is_real_worktree(run):
+            return None
+        gate = discover_gate(run_worktree_path(run.id))
+        checks = [
+            c for c in gate.commands if not any(s in c.command for s in _GATE_SKIP_SUBSTRINGS)
+        ]
+        if not checks:
+            return None
+        venv_ready = await self._ensure_project_venv(box)
+        venv_bin = f"{box.workspace_mount}/.venv/bin"
+        results: list[dict[str, Any]] = []
+        for c in checks:
+            run_command = (
+                f'export PATH="{venv_bin}:$PATH"; {c.command}' if venv_ready else c.command
+            )
+            res = await box.exec(run_command, timeout_s=GATE_CMD_TIMEOUT_S, shell=True)
+            output = "\n".join(o for o in (res.stdout, res.stderr) if o)[-2000:]
+            if res.exit_code == 0 and not res.timed_out:
+                status = "passed"
+            elif res.exit_code == 127:
+                status = "unavailable"
+            else:
+                status = "failed"
+            results.append(
+                {
+                    "label": c.label,
+                    "command": c.command,
+                    "source": c.source,
+                    "exit_code": res.exit_code,
+                    "timed_out": res.timed_out,
+                    "status": status,
+                    "output": output,
+                }
+            )
+        passed = not any(r["status"] == "failed" for r in results)
+        return {"origin": gate.origin, "commands": results, "passed": passed}
 
     async def _ensure_project_venv(self, box: SandboxSession) -> bool:
         """For a uv-managed worktree, materialize ``.venv`` (incl. extras —

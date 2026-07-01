@@ -886,3 +886,130 @@ async def test_run_judge_times_out_to_non_pass(monkeypatch: Any) -> None:
         )
     assert verdict["passed"] is False
     assert "timed out" in verdict["reasoning"].lower()
+
+
+# --------------------------------------------------------------------------
+# L-I1b — project gate (run the repo's OWN static gate, fail-closed)
+# --------------------------------------------------------------------------
+
+
+class TestProjectGate:
+    """Verification runs the repo's OWN discovered static gate (whole-repo
+    lint/format/type/contracts) and fail-closes on a genuine gate failure — so
+    'verified' means 'passes the target's own definition of done', not a narrow
+    changed-files subset (findings 2026-07-01, #413)."""
+
+    async def _seed(self, session, tmp_path, monkeypatch, *, ci_yaml, product=True):
+        run = await _make_run(session)
+        if product:
+            run.product_id = uuid.uuid4()
+        wt = tmp_path / str(run.id)
+        (wt / ".github" / "workflows").mkdir(parents=True)
+        (wt / ".git").write_text("gitdir: /elsewhere\n")
+        (wt / ".github" / "workflows" / "ci.yml").write_text(ci_yaml)
+        import backend.storage.product_workspace as pw
+
+        monkeypatch.setattr(pw, "run_worktree_path", lambda _rid: wt)
+        return run
+
+    async def test_gate_failure_marks_gate_not_passed(self, tmp_path, monkeypatch):
+        async with memory_session() as session:
+            svc = VerificationService(session=session, llm=StubLlm([]))
+            run = await self._seed(
+                session,
+                tmp_path,
+                monkeypatch,
+                ci_yaml="jobs:\n  j:\n    steps:\n      - run: ruff check .\n",
+            )
+            box = FakeBox(
+                exec_map={
+                    "ruff check .": SandboxResult(
+                        exit_code=1, stdout="", stderr="E501", timed_out=False
+                    )
+                }
+            )
+            blob = await svc._run_project_gate(run, box)
+            assert blob is not None
+            assert blob["origin"] == "github-actions"
+            assert blob["passed"] is False
+            assert blob["commands"][0]["status"] == "failed"
+
+    async def test_gate_passes_when_all_checks_pass(self, tmp_path, monkeypatch):
+        async with memory_session() as session:
+            svc = VerificationService(session=session, llm=StubLlm([]))
+            run = await self._seed(
+                session,
+                tmp_path,
+                monkeypatch,
+                ci_yaml="jobs:\n  j:\n    steps:\n      - run: ruff check .\n",
+            )
+            blob = await svc._run_project_gate(run, FakeBox())  # default exit 0
+            assert blob is not None and blob["passed"] is True
+            assert blob["commands"][0]["status"] == "passed"
+
+    async def test_setup_and_dynamic_test_steps_are_skipped(self, tmp_path, monkeypatch):
+        async with memory_session() as session:
+            svc = VerificationService(session=session, llm=StubLlm([]))
+            run = await self._seed(
+                session,
+                tmp_path,
+                monkeypatch,
+                ci_yaml=(
+                    "jobs:\n  j:\n    steps:\n"
+                    "      - run: uv sync --all-extras\n"
+                    "      - run: ruff check .\n"
+                    "      - run: uv run pytest -q\n"
+                ),
+            )
+            box = FakeBox()
+            blob = await svc._run_project_gate(run, box)
+            assert blob is not None
+            # only the static check runs; setup + dynamic test are deferred
+            assert [c["command"] for c in blob["commands"]] == ["ruff check ."]
+            assert "uv sync --all-extras" not in box.exec_calls
+            assert "uv run pytest -q" not in box.exec_calls
+
+    async def test_unavailable_command_is_not_a_failure(self, tmp_path, monkeypatch):
+        async with memory_session() as session:
+            svc = VerificationService(session=session, llm=StubLlm([]))
+            run = await self._seed(
+                session,
+                tmp_path,
+                monkeypatch,
+                ci_yaml="jobs:\n  j:\n    steps:\n      - run: eslint .\n",
+            )
+            box = FakeBox(
+                exec_map={
+                    "eslint .": SandboxResult(
+                        exit_code=127, stdout="", stderr="eslint: not found", timed_out=False
+                    )
+                }
+            )
+            blob = await svc._run_project_gate(run, box)
+            assert blob is not None
+            assert blob["commands"][0]["status"] == "unavailable"
+            assert blob["passed"] is True  # couldn't run here ≠ failed
+
+    async def test_none_when_not_a_product_worktree(self, tmp_path, monkeypatch):
+        async with memory_session() as session:
+            svc = VerificationService(session=session, llm=StubLlm([]))
+            run = await self._seed(
+                session,
+                tmp_path,
+                monkeypatch,
+                ci_yaml="jobs:\n  j:\n    steps:\n      - run: ruff check .\n",
+                product=False,
+            )
+            assert await svc._run_project_gate(run, FakeBox()) is None
+
+    async def test_none_when_repo_declares_no_static_gate(self, tmp_path, monkeypatch):
+        async with memory_session() as session:
+            svc = VerificationService(session=session, llm=StubLlm([]))
+            run = await self._seed(
+                session,
+                tmp_path,
+                monkeypatch,
+                ci_yaml="jobs:\n  j:\n    steps:\n      - run: uv run pytest -q\n",
+            )
+            # only a dynamic test → nothing runnable as a static gate here
+            assert await svc._run_project_gate(run, FakeBox()) is None
