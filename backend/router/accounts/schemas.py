@@ -13,6 +13,23 @@ from pydantic import BaseModel, ConfigDict, Field
 # values so the validator chain is uniform.
 Jurisdiction = Literal["us", "eu", "kr", "local", "unknown"]
 
+_VALID_JURISDICTIONS: frozenset[str] = frozenset(("us", "eu", "kr", "local", "unknown"))
+
+
+def _coerce_jurisdiction(value: Any) -> Jurisdiction:
+    """Tolerant read for the OUT schema.
+
+    A ``model_accounts`` row may carry a ``data_jurisdiction`` the OUT Literal
+    does not recognise — e.g. a seeded/legacy value like ``self-hosted-kr``.
+    The write path (``ModelAccountCreate``) constrains new values, but the
+    column is a plain ``VARCHAR`` so any string can already be on disk. Without
+    coercion a single unrecognised row raises ``ValidationError`` and 500s the
+    *entire* ``GET /api/v1/accounts`` list, taking the whole Models settings
+    surface down. Fall back to ``"unknown"`` so one bad row never breaks the
+    list.
+    """
+    return value if value in _VALID_JURISDICTIONS else "unknown"
+
 
 class ModelAccountCreate(BaseModel):
     """Inbound — caller supplies plaintext api_key; service encrypts it."""
@@ -74,7 +91,7 @@ class ModelAccountOut(BaseModel):
             label=row.label,
             litellm_model=row.litellm_model,
             api_base=row.api_base,
-            data_jurisdiction=row.data_jurisdiction,
+            data_jurisdiction=_coerce_jurisdiction(row.data_jurisdiction),
             is_active=row.is_active,
             has_api_key=bool(row.api_key_encrypted),
             extra_params=row.extra_params,

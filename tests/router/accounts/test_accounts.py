@@ -340,3 +340,45 @@ class TestRevealApiKeyLocalProviders:
         )
         with pytest.raises(ValueError, match="has no api key to reveal"):
             service.reveal_api_key(row)
+
+
+class TestFromModelTolerantRead:
+    """A ModelAccount row may hold a data_jurisdiction the OUT Literal doesn't
+    recognise (seeded/legacy value such as 'self-hosted-kr'). One such row must
+    never 500 the whole ``GET /api/v1/accounts`` list — from_model coerces any
+    unrecognised jurisdiction to 'unknown' (tolerant read)."""
+
+    @staticmethod
+    def _row(jurisdiction: str):
+        import types
+        from datetime import datetime, timezone
+
+        return types.SimpleNamespace(
+            id=uuid.uuid4(),
+            workspace_id=uuid.uuid4(),
+            account_id=uuid.uuid4(),
+            provider="ollama",
+            label="Local Ollama",
+            litellm_model="ollama_chat/qwen3-coder:30b",
+            api_base="http://host.docker.internal:11434",
+            data_jurisdiction=jurisdiction,
+            is_active=True,
+            api_key_encrypted=None,
+            extra_params={},
+            created_at=datetime.now(timezone.utc),
+            updated_at=datetime.now(timezone.utc),
+        )
+
+    def test_unrecognised_jurisdiction_coerced_to_unknown(self):
+        from backend.router.accounts.schemas import ModelAccountOut
+
+        out = ModelAccountOut.from_model(self._row("self-hosted-kr"))
+        assert out.data_jurisdiction == "unknown"
+        assert out.has_api_key is False
+
+    def test_recognised_jurisdiction_preserved(self):
+        from backend.router.accounts.schemas import ModelAccountOut
+
+        for j in ("us", "eu", "kr", "local", "unknown"):
+            out = ModelAccountOut.from_model(self._row(j))
+            assert out.data_jurisdiction == j
