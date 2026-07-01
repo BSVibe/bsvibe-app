@@ -115,30 +115,47 @@ GATE_CMD_TIMEOUT_S = 300.0
 #: check in the isolated sandbox: environment setup, dependency install, live
 #: services, and dynamic test runners (deferred to L2 / real CI).
 _GATE_SKIP_SUBSTRINGS = (
+    # setup / dependency install (needed to RUN checks, not a check itself)
     "uv sync",
     "uv python install",
     "uv venv",
     "pip install",
     "poetry install",
-    "npm install",
-    "npm ci",
-    "pnpm install",
-    "yarn install",
-    "corepack",
+    "bundle install",
     "cargo fetch",
     "go mod download",
-    "alembic ",
-    "docker",
-    "compose",
-    "actions/",
+    # node ecosystem — needs an install we skip, and the CI usually runs these
+    # in a sub-package dir via ``working-directory`` (lost by discovery), so a
+    # bare ``pnpm lint`` from the repo root fails on a missing manifest. Not a
+    # runnable isolated static check → deferred to real CI at PR time.
+    "corepack",
+    "pnpm ",
+    "npm ",
+    "npx ",
+    "yarn ",
+    # dynamic test runners (behaviour → L2 acceptance / L-I2 / real CI). NOTE:
+    # match test RUNNERS specifically — never a bare " test" substring, which
+    # also matches a static check's args (e.g. ``ruff check backend/ tests/``,
+    # the exact #413 check) and would silently disable it.
     "pytest",
     "unittest",
     "vitest",
     "jest",
-    " test",
-    "go test",
     "tox",
     "nox",
+    "go test",
+    "cargo test",
+    "gradle test",
+    "mvn test",
+    "dotnet test",
+    "make test",
+    "just test",
+    # live services / db / orchestration
+    "alembic ",
+    "docker",
+    "compose",
+    # a mis-parsed 'uses:' fragment, never a shell command
+    "actions/",
 )
 
 #: Where the L2 independent acceptance test is written inside the sandbox.

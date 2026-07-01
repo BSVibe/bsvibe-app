@@ -969,6 +969,51 @@ class TestProjectGate:
             assert "uv sync --all-extras" not in box.exec_calls
             assert "uv run pytest -q" not in box.exec_calls
 
+    async def test_static_check_over_tests_dir_is_not_skipped(self, tmp_path, monkeypatch):
+        # Regression: a bare " test" skip substring wrongly matched the args of
+        # `ruff check backend/ tests/ ...` (the exact #413 static check) and
+        # silently disabled it. The static check MUST run.
+        async with memory_session() as session:
+            svc = VerificationService(session=session, llm=StubLlm([]))
+            run = await self._seed(
+                session,
+                tmp_path,
+                monkeypatch,
+                ci_yaml=(
+                    "jobs:\n  j:\n    steps:\n"
+                    "      - run: uv run ruff check backend/ tests/ bsvibe_sdk/ plugin/\n"
+                ),
+            )
+            box = FakeBox()
+            blob = await svc._run_project_gate(run, box)
+            assert blob is not None
+            assert [c["command"] for c in blob["commands"]] == [
+                "uv run ruff check backend/ tests/ bsvibe_sdk/ plugin/"
+            ]
+
+    async def test_node_ecosystem_commands_are_deferred(self, tmp_path, monkeypatch):
+        # A monorepo's node sub-project needs an install (skipped) and a sub-dir
+        # cwd (lost by discovery), so `pnpm lint` from /work false-fails on a
+        # missing manifest. Defer node checks to real CI; keep the python one.
+        async with memory_session() as session:
+            svc = VerificationService(session=session, llm=StubLlm([]))
+            run = await self._seed(
+                session,
+                tmp_path,
+                monkeypatch,
+                ci_yaml=(
+                    "jobs:\n  j:\n    steps:\n"
+                    "      - run: pnpm lint\n"
+                    "      - run: pnpm typecheck\n"
+                    "      - run: uv run lint-imports\n"
+                ),
+            )
+            box = FakeBox()
+            blob = await svc._run_project_gate(run, box)
+            assert blob is not None
+            assert [c["command"] for c in blob["commands"]] == ["uv run lint-imports"]
+            assert "pnpm lint" not in box.exec_calls
+
     async def test_unavailable_command_is_not_a_failure(self, tmp_path, monkeypatch):
         async with memory_session() as session:
             svc = VerificationService(session=session, llm=StubLlm([]))
