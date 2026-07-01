@@ -598,6 +598,53 @@ async def test_verify_agent_declared_judge_still_gates_outcome() -> None:
         assert vr.outcome is VerificationOutcome.FAILED
 
 
+async def test_verify_retrieved_knowledge_excluded_from_gating_judge() -> None:
+    """The retriever-added judge (rationale=RETRIEVED_KNOWLEDGE_RATIONALE) is
+    REFERENCES, not acceptance criteria — even when the agent ALSO declared its
+    own judge, only the agent's criteria are graded. The retrieved criteria
+    (folded in by loose semantic similarity, often unrelated to the task) must
+    never pollute the gating grade. Dogfood dd2bd3a3: a rate-limiter run got
+    "Toss Payments webhook HMAC" retrieved criteria and could never pass."""
+    from backend.workflow.application.verification_service import (
+        RETRIEVED_KNOWLEDGE_RATIONALE,
+    )
+
+    async with memory_session() as session:
+        run = await _make_run(session)
+        work_step, attempt = await _make_step_and_attempt(session, run)
+        contract = VerificationContract(
+            checks=(
+                VerificationCheck(kind="command", command="true"),
+                VerificationCheck(kind="judge", criteria=("agent wants X",), rationale=""),
+                VerificationCheck(
+                    kind="judge",
+                    criteria=("Toss Payments webhook HMAC — unrelated to this task",),
+                    rationale=RETRIEVED_KNOWLEDGE_RATIONALE,
+                ),
+            )
+        )
+        seen: dict[str, list[str]] = {}
+
+        async def _fake_judge(criteria, written_paths, final_text, box):  # noqa: ANN001, ANN202
+            seen["criteria"] = list(criteria)
+            return {"passed": True}
+
+        svc = VerificationService(session=session, llm=StubLlm([]))
+        svc._run_judge = _fake_judge  # type: ignore[method-assign]
+        vr = await svc.verify(
+            run=run,
+            work_step=work_step,
+            attempt=attempt,
+            contract=contract,
+            box=FakeBox(),
+            written_paths=[],
+            final_text="",
+        )
+        assert vr.outcome is VerificationOutcome.PASSED
+        # ONLY the agent's own criterion is graded; the retrieved one is excluded.
+        assert seen["criteria"] == ["agent wants X"]
+
+
 async def test_verify_parses_declared_then_verifies_round_trip() -> None:
     """End-to-end through the service surface: parse → assemble → verify."""
     async with memory_session() as session:

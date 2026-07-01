@@ -372,35 +372,44 @@ class VerificationService:
 
         judge_blob: dict[str, Any] | None = None
         judge_pass = True
-        criteria = [c for chk in contract.judge_checks for c in chk.criteria]
-        # Lift E39 — when the ONLY judge check is the one
-        # ``assemble_contract`` adds from BSage retrieval (rationale ==
-        # RETRIEVED_KNOWLEDGE_RATIONALE), and the agent's command_check
-        # attestation already passed, treat the judge as ADVISORY: still
-        # run it + record the verdict on the result, but don't let it
-        # flip a clean command-passed run to FAILED. The agent's command
-        # is the primary attestation; the retriever-added judge is a
-        # secondary "do BSage patterns also look satisfied" signal which
-        # can hallucinate with weak criteria (E38 dogfood run df66a253).
-        judge_advisory = (
-            bool(command_results)
-            and all_cmd_pass
-            and bool(contract.judge_checks)
-            and all(chk.rationale == RETRIEVED_KNOWLEDGE_RATIONALE for chk in contract.judge_checks)
-        )
-        if criteria and judge_advisory:
-            # F6 — the ONLY judge checks are the BSage-retrieved ones and the
-            # agent's command attestation already passed, so the judge cannot
-            # gate (advisory). Running the cheap LLM-judge here adds no signal
-            # and reliably HALLUCINATES against weak single-word criteria
-            # ("Verification"/"Git") + a truncated file view — dogfood F6 saw it
-            # assert "files don't exist" while pytest passed exit-0. Skip the
-            # call; record honestly that it was skipped. The criteria still
-            # surface as Delivery-Report references via the contract.
-            judge_blob = {"advisory": True, "skipped": "advisory_retrieval_only"}
-        elif criteria:
-            judge_blob = await self._run_judge(criteria, written_paths, final_text, box)
+        # Split judge criteria: the AGENT'S OWN declared criteria vs the
+        # retriever-added knowledge (rationale == RETRIEVED_KNOWLEDGE_RATIONALE).
+        # The retriever fold is REFERENCE context ("근거 포함 답변"), pulled in by
+        # loose semantic similarity — in a knowledge-rich workspace it drags in
+        # statements unrelated to THIS task (dogfood dd2bd3a3: a rate-limiter got
+        # "Toss Payments webhook HMAC" criteria).
+        gating_criteria = [
+            c
+            for chk in contract.judge_checks
+            if chk.rationale != RETRIEVED_KNOWLEDGE_RATIONALE
+            for c in chk.criteria
+        ]
+        retrieved_criteria = [
+            c
+            for chk in contract.judge_checks
+            if chk.rationale == RETRIEVED_KNOWLEDGE_RATIONALE
+            for c in chk.criteria
+        ]
+        if gating_criteria:
+            # The agent staked its OWN judge — grade ONLY that. The retriever's
+            # criteria are NEVER merged into a real judge (they would false-fail
+            # an otherwise-good agent judge; dogfood dd2bd3a3). They still surface
+            # as Delivery-Report references via the persisted contract.
+            judge_blob = await self._run_judge(gating_criteria, written_paths, final_text, box)
             judge_pass = bool(judge_blob.get("passed"))
+        elif retrieved_criteria:
+            # No agent judge — only the retriever fold. Lift E39/F6: when the
+            # agent's command attestation already passed, the retriever judge is
+            # ADVISORY (it reliably hallucinates against weak / unrelated criteria
+            # + a truncated file view — skip it, don't flip a clean command-passed
+            # run to FAILED). Otherwise it is the only verdict signal, so grade it.
+            if command_results and all_cmd_pass:
+                judge_blob = {"advisory": True, "skipped": "advisory_retrieval_only"}
+            else:
+                judge_blob = await self._run_judge(
+                    retrieved_criteria, written_paths, final_text, box
+                )
+                judge_pass = bool(judge_blob.get("passed"))
 
         passed = all_cmd_pass and judge_pass
         outcome = VerificationOutcome.PASSED if passed else VerificationOutcome.FAILED
