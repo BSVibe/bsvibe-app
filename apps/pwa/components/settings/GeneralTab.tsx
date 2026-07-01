@@ -33,9 +33,9 @@ import { type FormEvent, useEffect, useState } from "react";
  *    the local preference blob so the select reflects the stored choice.
  *  - Time zone / Date format: LOCAL-only preferences (no backend yet — server
  *    sync is a follow-up).
- *  - Workspace name / Workspace ID: DISPLAY-only. We surface what the client
- *    already knows (the session's personal account id, the signed-in email) —
- *    no new backend endpoints in this lift.
+ *  - Workspace name / Workspace ID: DISPLAY-only. The id is the ACTUAL
+ *    workspace id from GET /api/v1/workspace (not the personal account id),
+ *    falling back to the session account id only while the workspace loads.
  *
  * The Danger zone (Delete workspace) from the design is intentionally OMITTED:
  * it is destructive and needs a backend delete + a confirm flow that are out of
@@ -48,7 +48,10 @@ const THEME_CHOICES: { value: ThemePreference; labelKey: "light" | "system" | "d
   { value: "dark", labelKey: "dark" },
 ];
 
-type WorkspaceState = { kind: "loading" } | { kind: "loaded"; name: string } | { kind: "failed" };
+type WorkspaceState =
+  | { kind: "loading" }
+  | { kind: "loaded"; name: string; id: string }
+  | { kind: "failed" };
 type SaveState = "idle" | "saving" | "saved" | "error";
 
 export default function GeneralTab() {
@@ -58,7 +61,11 @@ export default function GeneralTab() {
   const [prefs, updatePref] = usePreferences();
   const t = useTranslations("settings.general");
 
-  const workspaceId = session?.personalAccountId ?? t("workspaceIdFallback");
+  // Display the ACTUAL workspace id (from GET /api/v1/workspace), not the
+  // session's personal account id — those are different rows, and surfacing
+  // the account id under a "Workspace ID" label hands support the wrong id.
+  // Falls back to the session account id (then the i18n placeholder) only
+  // while the workspace is still loading / failed to load.
 
   // Workspace name: load + editable. Falls back to the i18n placeholder on
   // load failure (so the field is never empty) and surfaces a calm inline
@@ -75,12 +82,15 @@ export default function GeneralTab() {
   const [safeMode, setSafeMode] = useState<boolean | null>(null);
   const [safeModeSaving, setSafeModeSaving] = useState(false);
 
+  const workspaceId =
+    ws.kind === "loaded" ? ws.id : (session?.personalAccountId ?? t("workspaceIdFallback"));
+
   useEffect(() => {
     let active = true;
     getWorkspace()
       .then((w) => {
         if (!active) return;
-        setWs({ kind: "loaded", name: w.name });
+        setWs({ kind: "loaded", name: w.name, id: w.id });
         setSafeMode(w.safe_mode ?? true);
       })
       .catch(() => {
@@ -122,7 +132,7 @@ export default function GeneralTab() {
     setSaveError(null);
     try {
       const updated = await renameWorkspace(trimmed);
-      setWs({ kind: "loaded", name: updated.name });
+      setWs({ kind: "loaded", name: updated.name, id: updated.id });
       setSaveState("saved");
       setEditing(false);
     } catch (err) {

@@ -751,6 +751,7 @@
       "email": "이메일",
       "notSignedIn": "로그인되지 않음",
       "signInIdentities": "로그인 수단",
+      "signInIdentitiesEmpty": "이메일과 비밀번호로 로그인해요.",
       "connected": "연결됨",
       "signedInWith": "{provider}로 로그인됨",
       "activeSessions": "활성 세션",

@@ -751,6 +751,7 @@
       "email": "Email",
       "notSignedIn": "Not signed in",
       "signInIdentities": "Sign-in identities",
+      "signInIdentitiesEmpty": "You sign in with your email and password.",
       "connected": "Connected",
       "signedInWith": "Signed in with {provider}",
       "activeSessions": "Active sessions",

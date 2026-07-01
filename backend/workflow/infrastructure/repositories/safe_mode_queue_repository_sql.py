@@ -11,9 +11,10 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import select, update
+from sqlalchemy import or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.workflow.infrastructure.db import ExecutionRun, RunStatus
 from backend.workflow.infrastructure.delivery.db import (
     SafeModeQueueItemRow,
     SafeModeStatus,
@@ -32,11 +33,27 @@ class SqlAlchemySafeModeQueueRepository:
     async def list_pending_by_workspace(
         self, workspace_id: uuid.UUID
     ) -> list[SafeModeQueueItemRow]:
+        # Defensive: a run that reached ``shipped`` has nothing left to
+        # approve, so its held item must not surface in the founder-facing
+        # "Needs you" queue. Normally the approve path resolves the item
+        # before the run ships, but a stale/legacy ship path can leave a
+        # ``pending`` item behind a ``shipped`` run — that item would then
+        # show up as an already-shipped deliverable begging for approval
+        # (founder confusion + double-approval risk). Exclude items whose
+        # run is shipped; keep items with no run_id (legacy single-emit).
+        shipped_run_ids = select(ExecutionRun.id).where(
+            ExecutionRun.workspace_id == workspace_id,
+            ExecutionRun.status == RunStatus.SHIPPED,
+        )
         stmt = (
             select(SafeModeQueueItemRow)
             .where(
                 SafeModeQueueItemRow.workspace_id == workspace_id,
                 SafeModeQueueItemRow.status == SafeModeStatus.PENDING,
+                or_(
+                    SafeModeQueueItemRow.run_id.is_(None),
+                    SafeModeQueueItemRow.run_id.not_in(shipped_run_ids),
+                ),
             )
             .order_by(SafeModeQueueItemRow.created_at.desc())
         )

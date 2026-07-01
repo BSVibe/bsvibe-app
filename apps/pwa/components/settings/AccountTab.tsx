@@ -58,6 +58,7 @@ export default function AccountTab() {
   const displayName = claims.name ?? (session?.email ?? claims.email ?? "").split("@")[0] ?? "—";
   const initials = initialsFrom(claims.name, session?.email ?? claims.email);
   const connected = new Set(claims.providers.map((p) => p.toLowerCase()));
+  const linkedIdentities = IDENTITY_PROVIDER_KEYS.filter((key) => connected.has(key));
 
   async function handleSignOut() {
     setBusy(true);
@@ -103,14 +104,20 @@ export default function AccountTab() {
       <section className="account-section" aria-label={t("signInIdentities")}>
         <h2 className="section-label">{t("signInIdentities")}</h2>
         <ul className="account-list">
-          {IDENTITY_PROVIDER_KEYS.filter((key) => connected.has(key)).map((key) => (
-            <li key={key} className="account-list__row">
-              <span className="account-list__name">
-                {t("signedInWith", { provider: t(`providers.${key}`) })}
-              </span>
-              <span className="account-pill account-pill--on">{t("connected")}</span>
+          {linkedIdentities.length === 0 ? (
+            <li className="account-list__row account-list__row--empty">
+              <span className="account-list__sub">{t("signInIdentitiesEmpty")}</span>
             </li>
-          ))}
+          ) : (
+            linkedIdentities.map((key) => (
+              <li key={key} className="account-list__row">
+                <span className="account-list__name">
+                  {t("signedInWith", { provider: t(`providers.${key}`) })}
+                </span>
+                <span className="account-pill account-pill--on">{t("connected")}</span>
+              </li>
+            ))
+          )}
         </ul>
       </section>
 
