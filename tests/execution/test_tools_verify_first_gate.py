@@ -110,3 +110,18 @@ async def test_file_list_not_gated_before_declare(tmp_path: Path) -> None:
     (tmp_path / "a.txt").write_text("x", encoding="utf-8")
     result = await registry.invoke("file_list", {"path": "."})
     assert "a.txt" in result
+
+
+def test_declare_verification_directive_steers_uv_run_and_format(tmp_path: Path) -> None:
+    """The declare_verification directive must steer command checks through the
+    project runner (`uv run …`) and remind the agent to format — dogfood
+    dd2bd3a3: codex declared bare `python -m pytest` (→ "No module named
+    pytest" in the uv sandbox) + never formatted, so verify looped to
+    exhaustion."""
+    reg = _registry(tmp_path)
+    desc = reg.schema_for(["declare_verification"])[0]["function"]["description"]
+    assert "uv run pytest" in desc
+    assert "uv run ruff" in desc
+    assert "ruff format" in desc
+    # the anti-pattern is called out explicitly
+    assert "No module named pytest" in desc
