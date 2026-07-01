@@ -131,9 +131,32 @@ describe("General tab — display preferences", () => {
 });
 
 describe("General tab — workspace identity", () => {
-  it("shows the workspace id from the session (display-only)", () => {
+  it("shows the session account id as a placeholder while the workspace loads", () => {
     render(<GeneralTab />);
+    // Before GET /api/v1/workspace resolves, the field falls back to the
+    // session's personal account id so it is never blank.
     expect(screen.getByText("acct-abc-123")).toBeInTheDocument();
+  });
+
+  it("shows the REAL workspace id once loaded, not the account id", async () => {
+    // A-2026-07-01 finding A-3: the field labelled "Workspace ID" must display
+    // the actual workspace id (workspaces.id), not the personal account id.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (typeof url === "string" && url.includes("/api/v1/workspace")) {
+          return new Response(
+            JSON.stringify({ id: "ws-1", name: "Acme", language: "en", safe_mode: true }),
+            { status: 200, headers: { "Content-Type": "application/json" } },
+          );
+        }
+        return new Response("{}", { status: 200, headers: { "Content-Type": "application/json" } });
+      }),
+    );
+    render(<GeneralTab />);
+    await waitFor(() => expect(screen.getByText("ws-1")).toBeInTheDocument());
+    expect(screen.queryByText("acct-abc-123")).not.toBeInTheDocument();
+    vi.unstubAllGlobals();
   });
 
   it("does not render a danger zone in this lift", () => {

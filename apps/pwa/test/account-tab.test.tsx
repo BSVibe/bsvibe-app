@@ -123,6 +123,23 @@ describe("Account tab — Sign-in identities (L6 §4 — read-only, no dead cont
     const identities = screen.getByRole("region", { name: /sign-in identities/i });
     expect(within(identities).queryByText(/github/i)).toBeNull();
   });
+
+  it("shows an empty-state note for a password-only account (finding A-8)", () => {
+    // No linkable OAuth providers in the JWT → the section must not render as a
+    // bare heading with an empty list; it explains the email/password sign-in.
+    clearSession();
+    setSession({
+      ...SESSION,
+      accessToken: makeToken({
+        email: "alex@bsvibe.dev",
+        app_metadata: { providers: ["email"], role: "authenticated" },
+      }),
+    });
+    render(<AccountTab />);
+    const identities = screen.getByRole("region", { name: /sign-in identities/i });
+    expect(within(identities).queryByText(/connected/i)).toBeNull();
+    expect(within(identities).getByText(/email and password/i)).toBeInTheDocument();
+  });
 });
 
 describe("Account tab — Active sessions", () => {
