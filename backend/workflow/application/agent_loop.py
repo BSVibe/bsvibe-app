@@ -31,6 +31,7 @@ from pathlib import Path
 from typing import Any, Literal, Protocol, runtime_checkable
 
 import structlog
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.config import Settings, get_settings
@@ -77,6 +78,7 @@ from backend.workflow.infrastructure.db import (
     ProofState,
     RunAttempt,
     RunAttemptPhase,
+    RunStatus,
     VerificationResult,
     WorkStep,
     WorkStepStatus,
@@ -464,6 +466,44 @@ class RunOrchestrator:
         final_text: str,
     ) -> LoopResult:
         return decision_result(run, work_step, attempt, decision, written_paths, final_text)
+
+    async def _run_cancelled(self, run: ExecutionRun) -> bool:
+        """Fresh-read the run status so a long in-flight attempt stops when the
+        run is cancelled mid-loop.
+
+        The loop's ``run`` ORM object was loaded when the attempt began; a
+        cancel is written by a DIFFERENT session (founder action / operator),
+        so we must re-read from the DB to see it. This is the cooperative side
+        of cancel: the transition-time guard (``AgentRunner.transition`` no-ops
+        a CANCELLED run) only fires at the terminal transition, so a multi-turn
+        attempt kept dispatching turns to round-budget exhaustion after a cancel
+        (dogfood dd2bd3a3). A column-level scalar select bypasses the identity
+        map, returning the committed value under READ COMMITTED."""
+        current = await self._session.scalar(
+            select(ExecutionRun.status).where(ExecutionRun.id == run.id)
+        )
+        return current is RunStatus.CANCELLED
+
+    def _cancelled_result(
+        self,
+        run: ExecutionRun,
+        work_step: WorkStep,
+        attempt: RunAttempt,
+        written_paths: list[str],
+        final_text: str,
+    ) -> LoopResult:
+        """A benign terminal result for a run cancelled mid-loop. Mapped to NO
+        status transition by :class:`AgentRunner` (``needs_decision`` is the
+        non-transitioning outcome) — correct, because the run is already at the
+        terminal CANCELLED state; the loop simply stops burning turns."""
+        return LoopResult(
+            outcome="needs_decision",
+            run_id=run.id,
+            work_step_id=work_step.id,
+            run_attempt_id=attempt.id,
+            written_paths=written_paths,
+            summary="Run cancelled — agent loop stopped between turns.",
+        )
 
     async def _record(
         self,
