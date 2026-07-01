@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid
+from datetime import UTC
 
 import pytest
 from pydantic import ValidationError
@@ -351,7 +352,7 @@ class TestFromModelTolerantRead:
     @staticmethod
     def _row(jurisdiction: str):
         import types
-        from datetime import datetime, timezone
+        from datetime import datetime
 
         return types.SimpleNamespace(
             id=uuid.uuid4(),
@@ -365,8 +366,8 @@ class TestFromModelTolerantRead:
             is_active=True,
             api_key_encrypted=None,
             extra_params={},
-            created_at=datetime.now(timezone.utc),
-            updated_at=datetime.now(timezone.utc),
+            created_at=datetime.now(UTC),
+            updated_at=datetime.now(UTC),
         )
 
     def test_unrecognised_jurisdiction_coerced_to_unknown(self):
