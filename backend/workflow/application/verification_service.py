@@ -34,6 +34,15 @@ import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.workflow.domain.gate_discovery import discover_gate
+from backend.workflow.domain.outcome_demonstration import (
+    DemonstrationOutcome,
+    DemonstrationPlan,
+    Observation,
+    ProbeResult,
+    judge_probe,
+    parse_demonstration_plan,
+    summarize,
+)
 from backend.workflow.domain.verifier_contract import (
     VerificationCheck,
     VerificationContract,
@@ -47,7 +56,7 @@ from backend.workflow.infrastructure.db import (
     VerificationResult,
     WorkStep,
 )
-from backend.workflow.infrastructure.sandbox import SandboxError, SandboxResult, SandboxSession
+from backend.workflow.infrastructure.sandbox import SandboxError, SandboxSession
 
 logger = structlog.get_logger(__name__)
 
@@ -158,11 +167,38 @@ _GATE_SKIP_SUBSTRINGS = (
     "actions/",
 )
 
-#: Where the L2 independent acceptance test is written inside the sandbox.
-_INDEPENDENT_TEST_REL = "tests/_bsvibe_independent_acceptance.py"
-#: Bytes of each changed source file fed to the verifier-author (enough for a
-#: utility/module; the author needs the API, not the whole repo).
+#: Bytes of each changed source file fed to the demonstration planner (enough
+#: for a utility/module; the planner needs the API, not the whole repo).
 _SOURCE_CTX_BYTES = 8 * 1024
+#: Extensions the demonstration planner can meaningfully exercise as CODE. A
+#: prose/data deliverable (``.md`` / ``.txt`` / ``.json``) yields no sources →
+#: no plan → ``undemonstrable`` (honest downgrade, not a fail). This is the
+#: sandbox-shaped starting set (python-centric env); broadening to more stacks
+#: is a later strategy-dispatch lift. NOTE this is only a gate on WHICH files
+#: inform the planner — the plan's probes are stack-agnostic (the verifier picks
+#: how to exercise the code).
+_CODE_EXTS: frozenset[str] = frozenset(
+    {
+        ".py",
+        ".js",
+        ".jsx",
+        ".ts",
+        ".tsx",
+        ".go",
+        ".rs",
+        ".rb",
+        ".java",
+        ".kt",
+        ".cs",
+        ".cpp",
+        ".cc",
+        ".c",
+        ".h",
+        ".php",
+        ".sh",
+        ".sql",
+    }
+)
 
 
 def _is_test_path(path: str) -> bool:
@@ -170,17 +206,9 @@ def _is_test_path(path: str) -> bool:
     return "/tests/" in f"/{path}" or base.startswith("test_") or base.endswith("_test.py")
 
 
-def _extract_python_code(text: str) -> str:
-    """Pull the test source out of an LLM reply. Prefers a ```python fenced
-    block; falls back to a bare ``` block; else the whole stripped reply."""
-    for fence in ("```python", "```py", "```"):
-        start = text.find(fence)
-        if start == -1:
-            continue
-        body = text[start + len(fence) :]
-        end = body.find("```")
-        return (body[:end] if end != -1 else body).strip()
-    return text.strip()
+def _is_code_path(path: str) -> bool:
+    dot = path.rfind(".")
+    return dot != -1 and path[dot:].lower() in _CODE_EXTS
 
 
 def _path_to_module(path: str) -> str:
@@ -188,31 +216,62 @@ def _path_to_module(path: str) -> str:
     return path.removesuffix(".py").replace("/", ".")
 
 
-def _acceptance_author_messages(
-    intent: str, sources: list[tuple[str, str]], repair_hint: str = ""
+def _extract_json_object(text: str) -> Any:
+    """Pull the first JSON object out of an LLM reply (tolerant of prose /
+    ``` fences around it). Returns ``None`` when nothing parses."""
+    start = text.find("{")
+    end = text.rfind("}")
+    if start == -1 or end == -1 or end <= start:
+        return None
+    try:
+        return json.loads(text[start : end + 1])
+    except (ValueError, TypeError):
+        return None
+
+
+def _demonstration_planner_messages(
+    intent: str, sources: list[tuple[str, str]]
 ) -> list[dict[str, str]]:
     blob = "\n\n".join(f"# {p}\n{src}" for p, src in sources)[:12000]
-    imports = "\n".join(f"  from {_path_to_module(p)} import ...   # {p}" for p, _ in sources)
-    # Engineered to yield a RUNNABLE test even from a weak model (the
-    # minimum-spec target): concrete output contract, the exact import paths
-    # spelled out, no prose. A broken authored test is discarded downstream — it
-    # never false-fails good code — but a strong prompt keeps that rare.
-    system = (
-        "You are an INDEPENDENT acceptance-test author. Given a TASK and the implementation "
-        "it produced, write ONE self-contained pytest test file that verifies the TASK's "
-        "stated requirements against the implementation's public API.\n"
-        "RULES:\n"
-        "- Derive every assertion from the TASK REQUIREMENTS, not from any existing test.\n"
-        "- Cover the happy path, the boundaries, and EACH error/edge case the task names "
-        "(use pytest.raises for documented exceptions).\n"
-        "- Import the modules under test by their exact dotted paths:\n" + imports + "\n"
-        "- The file must be runnable as-is: real imports, valid Python, test_ functions.\n"
-        "- Output ONLY the test file as a single ```python code block. No prose, no fences "
-        "around anything else."
+    py_imports = [p for p, _ in sources if p.endswith(".py")]
+    hints = (
+        "\nFor a Python module, import it by its dotted path, e.g.:\n"
+        + "\n".join(
+            f'  python -c "from {_path_to_module(p)} import ...; print(...)"' for p in py_imports
+        )
+        if py_imports
+        else ""
     )
-    user = f"TASK (the requirements):\n{intent}\n\nIMPLEMENTATION under test:\n{blob}"
-    if repair_hint:
-        user += f"\n\n{repair_hint}"
+    # The verdict is decided by a DETERMINISTIC comparison of what the probe
+    # prints/exits vs what this plan declares — no model re-judges it. So the
+    # planner is pushed to (a) exercise the FINISHED deliverable itself, not
+    # re-run the author's tests, and (b) declare a LITERAL observation it is
+    # confident about. An undemonstrable deliverable → empty probes (honest).
+    system = (
+        "You are an INDEPENDENT outcome-demonstration verifier. You do NOT re-run the "
+        "author's tests and you do NOT give an opinion. You design executable PROBES that "
+        "EXERCISE the finished deliverable and OBSERVE whether the TASK's intended RESULT "
+        "actually happens.\n"
+        "For each probe output:\n"
+        '  - "name": what outcome it demonstrates\n'
+        '  - "command": a shell command that exercises the deliverable and prints an '
+        "observable result (call the function, run the built artifact, hit the endpoint, "
+        "grep the produced file). Prefer a single self-contained command.\n"
+        '  - "expect_stdout_contains": the exact substring(s) that MUST appear in the '
+        "output if the intent is satisfied\n"
+        '  - "expect_exit_zero": true if the command must succeed, false if it must fail '
+        "(e.g. the deliverable must REJECT bad input)\n"
+        "RULES:\n"
+        "- Derive expectations from the TASK, exercise the ACTUAL produced code.\n"
+        "- Assert ONLY observations you are confident are correct — a wrong assertion "
+        "wrongly fails good work.\n"
+        '- Optional "setup" (list of prep commands, e.g. a build) runs first and is NOT '
+        "asserted.\n"
+        "- If the deliverable CANNOT be exercised by an executable probe (pure prose / "
+        "design / half-built), return an empty probes list — that is a valid, honest answer.\n"
+        '- Output ONLY a JSON object: {"setup": [...], "probes": [ {...} ]}. No prose.' + hints
+    )
+    user = f"TASK (the intended result):\n{intent}\n\nPRODUCED deliverable:\n{blob}"
     return [{"role": "system", "content": system}, {"role": "user", "content": user}]
 
 
@@ -416,20 +475,19 @@ class VerificationService:
             return vr
 
         command_results = await self._run_command_checks(contract, box)
-
-        # L2 — independent acceptance check, ALWAYS run (a safety net is not
-        # optional). A SEPARATE verifier authors a test from the INTENT (not the
-        # worker's tests) and runs it; its result joins the command results, so a
-        # genuine failure fails verification → the orchestrator routes to human
-        # review — exactly when review is worth it (the independent check
-        # disagreed with the worker). A broken/unusable authored test is
-        # discarded inside the check (never a false-fail), so this is safe to run
-        # unconditionally regardless of how weak the verify model is.
-        independent = await self._run_independent_acceptance_check(run, written_paths, box)
-        if independent is not None:
-            command_results.append(independent)
-
         all_cmd_pass = all(r["passed"] for r in command_results)
+
+        # I2 — outcome demonstration (the "half judge"). A SEPARATE verifier
+        # plans executable probes that EXERCISE the finished deliverable and
+        # declares the literal observation each must produce; the harness runs
+        # them and the verdict is a DETERMINISTIC observation==expectation
+        # comparison (no model in the verdict loop). A probe that RAN and
+        # contradicted its expectation fails verification — this is what stops
+        # garbage passing "verified" (Q-2). A deliverable that can't be exercised
+        # (no probes / all unavailable) is NOT failed — best-effort downgrade
+        # (founder decision #1); it just doesn't earn the strong grade.
+        demonstration = await self._run_outcome_demonstration(run, written_paths, box)
+        demo_pass = demonstration is None or demonstration["verdict"] != "failed"
 
         # I1 — the repo's OWN static gate (whole-repo lint/format/type/contracts),
         # run in the sandbox regardless of what the agent declared. A genuine gate
@@ -481,7 +539,7 @@ class VerificationService:
                 )
                 judge_pass = bool(judge_blob.get("passed"))
 
-        passed = all_cmd_pass and judge_pass and gate_pass
+        passed = all_cmd_pass and judge_pass and gate_pass and demo_pass
         outcome = VerificationOutcome.PASSED if passed else VerificationOutcome.FAILED
         vr = VerificationResult(
             id=uuid.uuid4(),
@@ -494,6 +552,7 @@ class VerificationService:
                 "command_results": command_results,
                 "judge": judge_blob,
                 "project_gate": project_gate,
+                "outcome_demonstration": demonstration,
             },
         )
         self._session.add(vr)
@@ -514,6 +573,14 @@ class VerificationService:
                             "origin": project_gate["origin"],
                             "passed": project_gate["passed"],
                             "checks": len(project_gate["commands"]),
+                        }
+                    ),
+                    "outcome_demonstration": (
+                        None
+                        if demonstration is None
+                        else {
+                            "verdict": demonstration["verdict"],
+                            "probes": len(demonstration["probes"]),
                         }
                     ),
                 },
@@ -653,27 +720,35 @@ class VerificationService:
         sync = await box.exec(_UV_SYNC, timeout_s=VENV_SYNC_TIMEOUT_S, shell=True)
         return sync.exit_code == 0 and not sync.timed_out
 
-    async def _run_independent_acceptance_check(
+    async def _run_outcome_demonstration(
         self,
         run: ExecutionRun,
         written_paths: list[str],
         box: SandboxSession,
     ) -> dict[str, Any] | None:
-        """L2 — author a fresh acceptance test from the INTENT (via a separate
-        LLM that does NOT see the worker's tests) and run it in the sandbox.
+        """I2 — the "half judge". A SEPARATE verifier PLANS executable probes
+        that exercise the finished deliverable and declares the literal
+        observation each must produce; we run them and judge by a DETERMINISTIC
+        ``observation == expectation`` comparison (:func:`judge_probe` — no model
+        in the verdict loop). See :mod:`backend.workflow.domain.outcome_demonstration`.
 
-        Returns a command-result dict (folds into the PASS gate) or ``None`` when
-        there's nothing to do — no intent, no changed source files, or the author
-        produced no test. A best-effort failure (sandbox/LLM hiccup) returns
-        ``None`` rather than failing the run: the worker's own contract + the L1
-        gates still gate it; the independent check only ADDS confidence."""
+        Returns a demonstration blob (``verdict`` ∈ demonstrated | failed |
+        undemonstrable, plus per-probe observations) or ``None`` when there's
+        nothing to demonstrate — no intent, or no exercisable CODE changed
+        (prose/data → the deliverable is honestly undemonstrable here).
+
+        ``verdict == "failed"`` means a probe RAN and the intended result was NOT
+        observed → verification fails (Q-2: garbage no longer passes). Every
+        other outcome (undemonstrable / all-unavailable / an LLM or sandbox
+        hiccup → ``None``) is best-effort: it never false-fails, it just doesn't
+        earn the strong grade (founder decision #1)."""
         payload = run.payload or {}
         intent = str(payload.get("intent_text") or payload.get("text") or "").strip()
         if not intent:
             return None
         sources: list[tuple[str, str]] = []
         for path in written_paths:
-            if not path.endswith(".py") or _is_test_path(path):
+            if not _is_code_path(path) or _is_test_path(path):
                 continue
             try:
                 data = await box.read_file(path, _SOURCE_CTX_BYTES)
@@ -682,72 +757,73 @@ class VerificationService:
             sources.append((path, data.decode("utf-8", errors="replace")))
         if not sources:
             return None
-        # Re-validate the venv (a no-op-fast second `uv sync --frozen` if the
-        # command checks already materialized it) so the authored test resolves
-        # the project deps just like the agent's own tests.
+
+        plan = await self._author_demonstration_plan(intent, sources)
+        if plan is None or plan.is_empty:
+            # Honest downgrade: the deliverable could not be reduced to an
+            # executable demonstration. Not a fail — recorded so the grade /
+            # proof surface (L-honesty) reflects the weaker evidence.
+            outcome = DemonstrationOutcome(verdict="undemonstrable")
+            blob = outcome.to_dict()
+            blob["plan"] = plan.to_dict() if plan is not None else None
+            return blob
+
+        # Materialize the project venv so python probes resolve the deps, then
+        # run the (unasserted) setup and each probe in the sandbox.
         venv_ready = await self._ensure_project_venv(box)
+        venv_bin = f"{box.workspace_mount}/.venv/bin"
 
-        async def _author_and_run(repair_hint: str) -> SandboxResult | None:
-            try:
-                # Bounded — a hung executor CLI must never stall the run on this
-                # best-effort check (TimeoutError is caught below → skip).
-                turn = await asyncio.wait_for(
-                    self._llm.complete(
-                        messages=_acceptance_author_messages(intent, sources, repair_hint),
-                        tools=None,
-                    ),
-                    timeout=_VERIFY_LLM_TIMEOUT_S,
-                )
-            except Exception:  # noqa: BLE001 — author hiccup must never break the run
-                return None
-            code = _extract_python_code(str(getattr(turn, "content", "") or ""))
-            if not code.strip():
-                return None
-            try:
-                await box.write_file(_INDEPENDENT_TEST_REL, code.encode("utf-8"))
-            except SandboxError:
-                return None
-            command = f"uv run pytest {_INDEPENDENT_TEST_REL} -q"
-            venv_bin = f"{box.workspace_mount}/.venv/bin"
-            cmd = f'export PATH="{venv_bin}:$PATH"; {command}' if venv_ready else command
-            return await box.exec(cmd, timeout_s=VERIFY_TIMEOUT_S, shell=True)
+        def _wrap(command: str) -> str:
+            return f'export PATH="{venv_bin}:$PATH"; {command}' if venv_ready else command
 
-        res = await _author_and_run("")
-        if res is None:
-            return None
-        # Robust to a WEAK verify model (the minimum-spec target): a broken
-        # authored test must NEVER false-fail good code. pytest exit codes
-        # discriminate — 0=passed, 1=a test FAILED (a genuine disagreement →
-        # gate → human review), 2/5=collection error / NO tests collected and
-        # 3/4=internal/usage error (the AUTHOR produced an unusable test, not a
-        # code defect). On a collection error retry ONCE, feeding the error back
-        # for self-repair (mirrors the worker safety nets); if still unusable,
-        # DISCARD — the worker contract + L1 gates still hold.
-        if not res.timed_out and res.exit_code in (2, 5):
-            err = "\n".join(c for c in (res.stdout, res.stderr) if c)[-1500:]
-            retry = await _author_and_run(
-                "Your previous test could not be COLLECTED/RUN (import or syntax error). "
-                f"Fix it and output the corrected full test file. Error:\n{err}"
-            )
-            if retry is not None:
-                res = retry
-        if res.timed_out or res.exit_code not in (0, 1):
-            logger.info(
-                "independent_acceptance_unusable",
-                run_id=str(run.id),
+        for setup_cmd in plan.setup:
+            # Best-effort prep (build / install). A failed setup is not asserted
+            # — it just makes the dependent probes unavailable, which downgrades.
+            await box.exec(_wrap(setup_cmd), timeout_s=GATE_CMD_TIMEOUT_S, shell=True)
+
+        results: list[ProbeResult] = []
+        for probe in plan.probes:
+            res = await box.exec(_wrap(probe.command), timeout_s=VERIFY_TIMEOUT_S, shell=True)
+            obs = Observation(
                 exit_code=res.exit_code,
+                stdout=res.stdout,
+                stderr=res.stderr,
                 timed_out=res.timed_out,
             )
+            results.append(
+                ProbeResult(probe=probe, observation=obs, status=judge_probe(probe, obs))
+            )
+
+        outcome = DemonstrationOutcome(verdict=summarize(results), results=tuple(results))
+        logger.info(
+            "outcome_demonstration",
+            run_id=str(run.id),
+            verdict=outcome.verdict,
+            probes=len(results),
+        )
+        blob = outcome.to_dict()
+        blob["plan"] = plan.to_dict()
+        return blob
+
+    async def _author_demonstration_plan(
+        self, intent: str, sources: list[tuple[str, str]]
+    ) -> DemonstrationPlan | None:
+        """Ask the independent verifier for a demonstration plan (bounded — a
+        hung executor CLI must never stall the run; a hiccup → ``None`` →
+        undemonstrable, never a false-fail)."""
+        try:
+            turn = await asyncio.wait_for(
+                self._llm.complete(
+                    messages=_demonstration_planner_messages(intent, sources), tools=None
+                ),
+                timeout=_VERIFY_LLM_TIMEOUT_S,
+            )
+        except Exception:  # noqa: BLE001 — planner hiccup must never break the run
             return None
-        output = "\n".join(c for c in (res.stdout, res.stderr) if c)[-2000:]
-        return {
-            "command": "independent acceptance test (L2)",
-            "exit_code": res.exit_code,
-            "timed_out": False,
-            "passed": res.exit_code == 0,
-            "output": output,
-            "independent": True,
-        }
+        raw = _extract_json_object(str(getattr(turn, "content", "") or ""))
+        if raw is None:
+            return None
+        return parse_demonstration_plan(raw)
 
     async def _run_judge(
         self,
