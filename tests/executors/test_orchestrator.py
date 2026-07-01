@@ -483,7 +483,15 @@ async def test_contract_pass_sets_proved_and_writes_deliverable(tmp_path: Path) 
         box = FakeBox(files={"result.py": b"print('done')\n"})
         manager = FakeSandboxManager(box)
         retriever = StubRetriever(["the change is correct and tested"])
-        judge = StubLlm([LoopTurn(content='{"passed": true, "reasoning": "ok"}')])
+        # verify() now runs the I2 outcome-demonstration planner (on the changed
+        # .py) BEFORE the judge — script an empty plan (undemonstrable, no probe
+        # runs, never fails) so the second turn feeds the judge.
+        judge = StubLlm(
+            [
+                LoopTurn(content='{"probes": []}'),
+                LoopTurn(content='{"passed": true, "reasoning": "ok"}'),
+            ]
+        )
         async with sf() as orch_s:
             run = await orch_s.get(ExecutionRun, run.id)
             assert run is not None

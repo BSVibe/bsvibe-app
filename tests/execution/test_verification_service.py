@@ -14,6 +14,7 @@ LLM scripts the judge verdict. No real model, no Docker.
 from __future__ import annotations
 
 import asyncio
+import json
 import uuid
 from typing import Any
 
@@ -731,26 +732,36 @@ async def test_command_checks_no_prefix_when_uv_sync_fails() -> None:
 
 
 # --------------------------------------------------------------------------
-# L2 — independent acceptance check (separate verifier authors + runs a test)
+# I2 — outcome demonstration (independent verifier plans + runs probes; the
+# verdict is a DETERMINISTIC observation==expectation comparison)
 # --------------------------------------------------------------------------
 
+_PROBE_CMD = "python -c 'from backend.common.x import x; print(x())'"
 
-async def test_independent_acceptance_failure_fails_verification() -> None:
-    """A SEPARATE verifier authors a test from the INTENT and runs it. A failing
-    independent test fails verification (→ human review) even though the worker's
-    own command passed — breaking the self-grading circularity."""
+
+def _plan_turn(command: str, contains: list[str]) -> LoopTurn:
+    """A demonstration-plan reply (the planner emits JSON, not code)."""
+    probe = {"name": "exercise x", "command": command, "expect_stdout_contains": contains}
+    return LoopTurn(content=json.dumps({"probes": [probe]}))
+
+
+async def test_demonstration_contradiction_fails_verification() -> None:
+    """The independent verifier exercises the FINISHED deliverable. When the
+    probe runs and the intended result is NOT observed, verification fails —
+    even though the worker's own command passed (breaking self-grading and
+    catching garbage that a pure intent-judge would wave through, Q-2)."""
     async with memory_session() as session:
         run = await _make_run(session)
         work_step, attempt = await _make_step_and_attempt(session, run)
-        llm = StubLlm([LoopTurn(content="```python\ndef test_spec():\n    assert False\n```")])
+        # Verifier plans: exercise x(), expect it to print "42".
+        llm = StubLlm([_plan_turn(_PROBE_CMD, ["42"])])
         svc = VerificationService(session=session, llm=llm)
+        # The deliverable prints "1", not "42" → observation contradicts.
         box = FakeBox(
             files={"backend/common/x.py": b"def x() -> int:\n    return 1\n"},
             exec_map={
                 "true": SandboxResult(exit_code=0, stdout="", stderr="", timed_out=False),
-                "uv run pytest tests/_bsvibe_independent_acceptance.py -q": SandboxResult(
-                    exit_code=1, stdout="1 failed", stderr="", timed_out=False
-                ),
+                _PROBE_CMD: SandboxResult(exit_code=0, stdout="1\n", stderr="", timed_out=False),
             },
         )
         contract = VerificationContract(checks=(VerificationCheck(kind="command", command="true"),))
@@ -764,83 +775,83 @@ async def test_independent_acceptance_failure_fails_verification() -> None:
             final_text="",
         )
         assert vr.outcome is VerificationOutcome.FAILED
-        assert llm.calls, "the independent author LLM must be called"
-        assert any(r.get("independent") for r in vr.result["command_results"])
+        assert llm.calls, "the independent demonstration planner must be called"
+        assert vr.result["outcome_demonstration"]["verdict"] == "failed"
 
 
-async def test_independent_acceptance_pass_keeps_verified() -> None:
+async def test_demonstration_match_keeps_verified() -> None:
     async with memory_session() as session:
         run = await _make_run(session)
         work_step, attempt = await _make_step_and_attempt(session, run)
-        llm = StubLlm([LoopTurn(content="```python\ndef test_spec():\n    assert True\n```")])
+        llm = StubLlm([_plan_turn(_PROBE_CMD, ["42"])])
         svc = VerificationService(session=session, llm=llm)
-        # The independent pytest command is absent from exec_map → FakeBox
-        # default exit 0 → the authored test passes.
+        # The deliverable prints "42" → observation matches the expectation.
         box = FakeBox(
-            files={"backend/common/x.py": b"def x() -> int:\n    return 1\n"},
-            exec_map={"true": SandboxResult(exit_code=0, stdout="", stderr="", timed_out=False)},
-        )
-        contract = VerificationContract(checks=(VerificationCheck(kind="command", command="true"),))
-        vr = await svc.verify(
-            run=run,
-            work_step=work_step,
-            attempt=attempt,
-            contract=contract,
-            box=box,
-            written_paths=["backend/common/x.py"],
-            final_text="",
-        )
-        assert vr.outcome is VerificationOutcome.PASSED
-        assert any(r.get("independent") for r in vr.result["command_results"])
-
-
-async def test_independent_acceptance_runs_unconditionally() -> None:
-    """L2 is a safety net — it runs on EVERY verify, with no opt-out flag. A
-    plainly-constructed service still authors + runs the independent test."""
-    async with memory_session() as session:
-        run = await _make_run(session)
-        work_step, attempt = await _make_step_and_attempt(session, run)
-        llm = StubLlm([LoopTurn(content="```python\ndef test_spec():\n    assert True\n```")])
-        svc = VerificationService(session=session, llm=llm)  # no flag — always on
-        box = FakeBox(
-            files={"backend/common/x.py": b"def x() -> int:\n    return 1\n"},
-            exec_map={"true": SandboxResult(exit_code=0, stdout="", stderr="", timed_out=False)},
-        )
-        contract = VerificationContract(checks=(VerificationCheck(kind="command", command="true"),))
-        vr = await svc.verify(
-            run=run,
-            work_step=work_step,
-            attempt=attempt,
-            contract=contract,
-            box=box,
-            written_paths=["backend/common/x.py"],
-            final_text="",
-        )
-        assert vr.outcome is VerificationOutcome.PASSED
-        assert any(r.get("independent") for r in vr.result["command_results"])
-        assert llm.calls, "the author runs with no opt-in flag"
-
-
-async def test_independent_acceptance_broken_test_is_discarded() -> None:
-    """Robust to a weak verify model: an UNUSABLE authored test (collection
-    error, pytest exit 2) must NOT false-fail good code. It is retried once for
-    self-repair and, if still unusable, DISCARDED — never a gate."""
-    async with memory_session() as session:
-        run = await _make_run(session)
-        work_step, attempt = await _make_step_and_attempt(session, run)
-        llm = StubLlm(
-            [
-                LoopTurn(content="```python\nimport nope\n```"),  # initial author
-                LoopTurn(content="```python\nimport still_nope\n```"),  # self-repair retry
-            ]
-        )
-        svc = VerificationService(session=session, llm=llm)
-        box = FakeBox(
-            files={"backend/common/x.py": b"def x() -> int:\n    return 1\n"},
+            files={"backend/common/x.py": b"def x() -> int:\n    return 42\n"},
             exec_map={
                 "true": SandboxResult(exit_code=0, stdout="", stderr="", timed_out=False),
-                "uv run pytest tests/_bsvibe_independent_acceptance.py -q": SandboxResult(
-                    exit_code=2, stdout="", stderr="ModuleNotFoundError: nope", timed_out=False
+                _PROBE_CMD: SandboxResult(exit_code=0, stdout="42\n", stderr="", timed_out=False),
+            },
+        )
+        contract = VerificationContract(checks=(VerificationCheck(kind="command", command="true"),))
+        vr = await svc.verify(
+            run=run,
+            work_step=work_step,
+            attempt=attempt,
+            contract=contract,
+            box=box,
+            written_paths=["backend/common/x.py"],
+            final_text="",
+        )
+        assert vr.outcome is VerificationOutcome.PASSED
+        assert vr.result["outcome_demonstration"]["verdict"] == "demonstrated"
+
+
+async def test_demonstration_runs_unconditionally() -> None:
+    """I2 is a safety net — it runs on EVERY verify with code changes, no
+    opt-out flag. A plainly-constructed service still plans + runs probes."""
+    async with memory_session() as session:
+        run = await _make_run(session)
+        work_step, attempt = await _make_step_and_attempt(session, run)
+        llm = StubLlm([_plan_turn(_PROBE_CMD, ["42"])])
+        svc = VerificationService(session=session, llm=llm)  # no flag — always on
+        box = FakeBox(
+            files={"backend/common/x.py": b"def x() -> int:\n    return 42\n"},
+            exec_map={
+                "true": SandboxResult(exit_code=0, stdout="", stderr="", timed_out=False),
+                _PROBE_CMD: SandboxResult(exit_code=0, stdout="42\n", stderr="", timed_out=False),
+            },
+        )
+        contract = VerificationContract(checks=(VerificationCheck(kind="command", command="true"),))
+        vr = await svc.verify(
+            run=run,
+            work_step=work_step,
+            attempt=attempt,
+            contract=contract,
+            box=box,
+            written_paths=["backend/common/x.py"],
+            final_text="",
+        )
+        assert vr.outcome is VerificationOutcome.PASSED
+        assert llm.calls, "the planner runs with no opt-in flag"
+
+
+async def test_demonstration_unavailable_probe_does_not_false_fail() -> None:
+    """Best-effort (founder decision #1): a probe that could not EXERCISE the
+    deliverable (wrong import path / missing command) is unavailable, not a
+    contradiction — good code is never false-failed. Verdict → undemonstrable,
+    verification still PASSES on the worker's own command."""
+    async with memory_session() as session:
+        run = await _make_run(session)
+        work_step, attempt = await _make_step_and_attempt(session, run)
+        llm = StubLlm([_plan_turn(_PROBE_CMD, ["42"])])
+        svc = VerificationService(session=session, llm=llm)
+        box = FakeBox(
+            files={"backend/common/x.py": b"def x() -> int:\n    return 42\n"},
+            exec_map={
+                "true": SandboxResult(exit_code=0, stdout="", stderr="", timed_out=False),
+                _PROBE_CMD: SandboxResult(
+                    exit_code=1, stdout="", stderr="ModuleNotFoundError: no", timed_out=False
                 ),
             },
         )
@@ -854,11 +865,60 @@ async def test_independent_acceptance_broken_test_is_discarded() -> None:
             written_paths=["backend/common/x.py"],
             final_text="",
         )
-        # broken test discarded → the worker's own command alone gates → PASSED
         assert vr.outcome is VerificationOutcome.PASSED
-        assert not any(r.get("independent") for r in vr.result["command_results"])
-        # the self-repair retry fired (two author calls)
-        assert len(llm.calls) == 2
+        assert vr.result["outcome_demonstration"]["verdict"] == "undemonstrable"
+
+
+async def test_demonstration_no_probes_is_undemonstrable_not_fail() -> None:
+    """A deliverable the verifier cannot reduce to an executable probe (returns
+    an empty plan) is honestly UNDEMONSTRABLE — a downgrade, never a fail."""
+    async with memory_session() as session:
+        run = await _make_run(session)
+        work_step, attempt = await _make_step_and_attempt(session, run)
+        llm = StubLlm([LoopTurn(content='{"probes": []}')])
+        svc = VerificationService(session=session, llm=llm)
+        box = FakeBox(
+            files={"backend/common/x.py": b"def x() -> int:\n    return 42\n"},
+            exec_map={"true": SandboxResult(exit_code=0, stdout="", stderr="", timed_out=False)},
+        )
+        contract = VerificationContract(checks=(VerificationCheck(kind="command", command="true"),))
+        vr = await svc.verify(
+            run=run,
+            work_step=work_step,
+            attempt=attempt,
+            contract=contract,
+            box=box,
+            written_paths=["backend/common/x.py"],
+            final_text="",
+        )
+        assert vr.outcome is VerificationOutcome.PASSED
+        assert vr.result["outcome_demonstration"]["verdict"] == "undemonstrable"
+
+
+async def test_demonstration_skipped_for_prose_only_change() -> None:
+    """A prose/data change (no exercisable CODE file) yields no demonstration —
+    the planner is never even called, and the verdict blob is absent."""
+    async with memory_session() as session:
+        run = await _make_run(session)
+        work_step, attempt = await _make_step_and_attempt(session, run)
+        llm = StubLlm([])  # would raise if the planner were called
+        svc = VerificationService(session=session, llm=llm)
+        box = FakeBox(
+            exec_map={"true": SandboxResult(exit_code=0, stdout="", stderr="", timed_out=False)}
+        )
+        contract = VerificationContract(checks=(VerificationCheck(kind="command", command="true"),))
+        vr = await svc.verify(
+            run=run,
+            work_step=work_step,
+            attempt=attempt,
+            contract=contract,
+            box=box,
+            written_paths=["README.md", "docs/x.md"],
+            final_text="",
+        )
+        assert vr.outcome is VerificationOutcome.PASSED
+        assert vr.result["outcome_demonstration"] is None
+        assert llm.calls == []
 
 
 class _HangingLlm:
