@@ -43,29 +43,18 @@ def _read_one(*, root: Path, key: uuid.UUID, ref: str) -> bytes | None:
         return None
 
 
-def read_design_context(run: ExecutionRun, settings: Settings) -> str | None:
-    """The design spec text to seed the impl run's context, or ``None``.
+_SPEC_PREAMBLE = "The prior DESIGN stage produced this specification — implement it:\n\n"
 
-    ``None`` when the run isn't an impl stage (no ``design_run_id`` / refs) or no
-    spec content is readable. A best-effort read: a missing file is skipped, not
-    fatal — the impl run still proceeds (the founder sees an honest partial
-    rather than a crash)."""
+
+def _read_spec_sections(
+    *, product_id: uuid.UUID | None, design_run_id: uuid.UUID, refs: list[str], settings: Settings
+) -> list[str]:
+    """Read the design spec ``refs`` from the product main (shipped) or the
+    design run's own dir, skipping unreadable / binary artifacts."""
     from pathlib import Path  # noqa: PLC0415
-
-    payload = run.payload if isinstance(run.payload, dict) else {}
-    design_run_id_raw = payload.get("design_run_id")
-    refs = payload.get("design_artifact_refs")
-    if not isinstance(design_run_id_raw, str) or not isinstance(refs, list) or not refs:
-        return None
-    try:
-        design_run_id = uuid.UUID(design_run_id_raw)
-    except ValueError:
-        return None
 
     product_root = Path(settings.product_workspace_root)
     run_root = Path(settings.run_workspace_root)
-    product_id = run.product_id
-
     sections: list[str] = []
     for ref in [r for r in refs if isinstance(r, str)][:_MAX_SPECS]:
         raw: bytes | None = None
@@ -75,23 +64,67 @@ def read_design_context(run: ExecutionRun, settings: Settings) -> str | None:
         if raw is None:
             raw = _read_one(root=run_root, key=design_run_id, ref=ref)
         if raw is None:
-            logger.info("design_spec_unreadable", run_id=str(run.id), ref=ref)
+            logger.info("design_spec_unreadable", design_run_id=str(design_run_id), ref=ref)
             continue
         # Skip binary artifacts (e.g. a ``.pyc`` the design stage produced by
         # running its tests). Their NUL bytes are valid UTF-8 but ILLEGAL in a
         # Postgres text column, so folding one into the impl prompt crashes the
         # executor-task write. A NUL byte is the reliable binary signal.
         if b"\x00" in raw:
-            logger.info("design_spec_skipped_binary", run_id=str(run.id), ref=ref)
+            logger.info("design_spec_skipped_binary", design_run_id=str(design_run_id), ref=ref)
             continue
         text = raw[:_MAX_SPEC_BYTES].decode("utf-8", errors="replace")
         sections.append(f"### {ref}\n{text}")
+    return sections
 
-    if not sections:
+
+def capture_design_spec_text(
+    *, product_id: uuid.UUID | None, design_run_id: uuid.UUID, refs: list[str], settings: Settings
+) -> str | None:
+    """Read + join the design spec NOW (at impl-run spawn time, while the design
+    worktree still exists) so the text can be inlined on the impl run's payload.
+
+    This is the durable half of the handoff: reading at DISPATCH time (later)
+    raced worktree cleanup and a held (un-shipped) design run whose spec never
+    reached product main → ``has_spec=false`` (findings 2026-07-01). Capturing
+    the text at spawn — when the design worktree is guaranteed present — removes
+    that dependency. ``None`` when nothing readable (the impl run still proceeds
+    on an honest partial)."""
+    if not refs:
         return None
-    return "The prior DESIGN stage produced this specification — implement it:\n\n" + "\n\n".join(
-        sections
+    sections = _read_spec_sections(
+        product_id=product_id, design_run_id=design_run_id, refs=refs, settings=settings
     )
+    return _SPEC_PREAMBLE + "\n\n".join(sections) if sections else None
 
 
-__all__ = ["read_design_context"]
+def read_design_context(run: ExecutionRun, settings: Settings) -> str | None:
+    """The design spec text to seed the impl run's context, or ``None``.
+
+    Prefers the spec text INLINED on the payload at spawn (``design_spec_text``,
+    see :func:`capture_design_spec_text`) — durable across worktree cleanup /
+    hold. Falls back to reading the ``design_artifact_refs`` from disk for older
+    runs seeded before inlining. ``None`` when the run isn't an impl stage or no
+    spec content is available (best-effort: a missing file is skipped, not
+    fatal)."""
+    payload = run.payload if isinstance(run.payload, dict) else {}
+    inlined = payload.get("design_spec_text")
+    if isinstance(inlined, str) and inlined.strip():
+        return inlined
+
+    design_run_id_raw = payload.get("design_run_id")
+    refs = payload.get("design_artifact_refs")
+    if not isinstance(design_run_id_raw, str) or not isinstance(refs, list) or not refs:
+        return None
+    try:
+        design_run_id = uuid.UUID(design_run_id_raw)
+    except ValueError:
+        return None
+
+    sections = _read_spec_sections(
+        product_id=run.product_id, design_run_id=design_run_id, refs=refs, settings=settings
+    )
+    return _SPEC_PREAMBLE + "\n\n".join(sections) if sections else None
+
+
+__all__ = ["capture_design_spec_text", "read_design_context"]
