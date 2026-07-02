@@ -46,6 +46,16 @@ def test_system_prompt_is_non_empty() -> None:
     assert "engineer" in lower
 
 
+def test_system_prompt_carries_scope_discipline() -> None:
+    """L-exec (Q-1): the prompt steers the agent to the smallest, repo-grounded
+    change — no new modules / unrelated files — so it doesn't produce spurious
+    garbage the I3 scope invariant would flag (findings 2026-07-01, run 9350e71e)."""
+    lower = _executor_system_prompt().lower()
+    assert "scope" in lower
+    assert "smallest change" in lower
+    assert "unrelated" in lower
+
+
 def test_intent_only_when_no_canon_no_decisions() -> None:
     run = _run({"intent_text": "build the widget"})
     framed = _assemble_executor_prompt(run, statements=[])
