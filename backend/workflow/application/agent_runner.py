@@ -41,9 +41,11 @@ from pathlib import Path
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.config import Settings, get_settings
 from backend.router.domain.repositories import RunRoutingRuleRepository
 from backend.router.infrastructure.repositories import SqlAlchemyRunRoutingRuleRepository
 from backend.workflow.application.agent_loop import LoopResult, RunCompute
+from backend.workflow.application.handoff import capture_design_spec_text
 from backend.workflow.domain.repositories import DeliverableRepository, RunRepository
 from backend.workflow.infrastructure.db import (
     ExecutionRun,
@@ -110,8 +112,13 @@ class AgentRunner:
         run_repository: RunRepository | None = None,
         deliverable_repository: DeliverableRepository | None = None,
         run_routing_rule_repository: RunRoutingRuleRepository | None = None,
+        settings: Settings | None = None,
     ) -> None:
         self._session = session
+        # Settings power the design→impl handoff's spawn-time spec capture
+        # (product / run workspace roots). Defaulted so production callers need
+        # not thread it; tests inject one pointing at a tmp root.
+        self._settings = settings or get_settings()
         # Repository constructed from the session by default — the Lift
         # I-Repo-Workflow seam. Tests may inject a fake; production callers
         # rely on the default ``SqlAlchemyRunRepository(session)``.
@@ -416,6 +423,19 @@ class AgentRunner:
             return
 
         refs = await self._design_artifact_refs(design_run.id)
+        # Capture the spec TEXT now — the design worktree is guaranteed present at
+        # this transition (REVIEW_READY, pre-cleanup) and, if the design auto-
+        # shipped just above, its spec is also in product main. Inlining here is
+        # durable: reading refs at the impl run's DISPATCH time (later) raced
+        # worktree cleanup + a held design run whose spec never reached main →
+        # has_spec=false (findings 2026-07-01, D-2). refs kept for provenance /
+        # back-compat fallback.
+        spec_text = capture_design_spec_text(
+            product_id=design_run.product_id,
+            design_run_id=design_run.id,
+            refs=refs,
+            settings=self._settings,
+        )
         impl = ExecutionRun(
             id=uuid.uuid4(),
             workspace_id=design_run.workspace_id,
@@ -431,6 +451,7 @@ class AgentRunner:
                 "pipeline": "design_then_impl",
                 "design_run_id": str(design_run.id),
                 "design_artifact_refs": refs,
+                "design_spec_text": spec_text,
             },
             created_at=datetime.now(tz=UTC),
             updated_at=datetime.now(tz=UTC),
@@ -453,6 +474,7 @@ class AgentRunner:
             design_run_id=str(design_run.id),
             impl_run_id=str(impl.id),
             artifact_refs=len(refs),
+            has_spec=spec_text is not None,
         )
 
     async def _workspace_has_routing_rules(self, workspace_id: uuid.UUID) -> bool:

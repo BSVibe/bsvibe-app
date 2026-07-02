@@ -142,3 +142,51 @@ async def test_no_chaining_without_routing_rules() -> None:
         await runner.transition(run_id=design.id, to_status=RunStatus.REVIEW_READY)
 
         assert await _impl_runs(s, exclude=design.id) == []
+
+
+async def test_spawn_inlines_design_spec_text(tmp_path: Any) -> None:
+    """D-2: at spawn (design worktree present) the spec TEXT is captured inline
+    on the impl payload — durable even if the worktree is later cleaned up or the
+    design run was held and never shipped to main."""
+    from pathlib import Path
+    from types import SimpleNamespace
+
+    from backend.storage.artifact_store import LocalFilesystemArtifactStore
+
+    settings = SimpleNamespace(
+        product_workspace_root=str(tmp_path / "products"),
+        run_workspace_root=str(tmp_path / "runs"),
+    )
+    async with memory_session() as s:
+        design = await _seed_design_run(s, refs=["docs/spec.md"])
+        LocalFilesystemArtifactStore(Path(settings.run_workspace_root)).put(
+            design.id, "docs/spec.md", b"# Spec\nBuild the auth service.\n"
+        )
+        runner = AgentRunner(s, settings=settings)  # type: ignore[arg-type]
+
+        await runner.transition(run_id=design.id, to_status=RunStatus.REVIEW_READY)
+
+        impl = (await _impl_runs(s, exclude=design.id))[0]
+        spec = impl.payload["design_spec_text"]
+        assert spec is not None
+        assert "Build the auth service." in spec
+
+
+async def test_spawn_inlines_none_when_spec_unreadable(tmp_path: Any) -> None:
+    """Refs present but no readable file → design_spec_text is None (honest
+    has_spec=false), refs still recorded for provenance. The impl run proceeds."""
+    from types import SimpleNamespace
+
+    settings = SimpleNamespace(
+        product_workspace_root=str(tmp_path / "products"),
+        run_workspace_root=str(tmp_path / "runs"),
+    )
+    async with memory_session() as s:
+        design = await _seed_design_run(s, refs=["docs/spec.md"])  # no file on disk
+        runner = AgentRunner(s, settings=settings)  # type: ignore[arg-type]
+
+        await runner.transition(run_id=design.id, to_status=RunStatus.REVIEW_READY)
+
+        impl = (await _impl_runs(s, exclude=design.id))[0]
+        assert impl.payload["design_spec_text"] is None
+        assert impl.payload["design_artifact_refs"] == ["docs/spec.md"]
