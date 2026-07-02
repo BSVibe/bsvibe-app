@@ -298,7 +298,10 @@ def _demonstration_planner_messages(
         '  - "name": what outcome it demonstrates\n'
         '  - "command": a shell command that exercises the deliverable and prints an '
         "observable result (call the function, run the built artifact, hit the endpoint, "
-        "grep the produced file). Prefer a single self-contained command.\n"
+        "grep the produced file). Prefer a single self-contained command. Keep it ONE line: "
+        "for Python use `python -c` with statements joined by ';' (NOT literal \\n — inside "
+        "`python -c` a backslash-n is not a newline and raises SyntaxError). For anything "
+        "multi-line, write a here-doc (`python - <<'PY' … PY`) instead.\n"
         '  - "expect_stdout_contains": the exact substring(s) that MUST appear in the '
         "output if the intent is satisfied\n"
         '  - "expect_exit_zero": true if the command must succeed, false if it must fail '

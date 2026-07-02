@@ -38,13 +38,21 @@ ProbeStatus = Literal["matched", "contradicted", "unavailable"]
 DemonstrationVerdict = Literal["demonstrated", "failed", "undemonstrable"]
 
 #: Substrings in a probe's combined output that mark it as UNABLE to exercise
-#: the deliverable — a missing interpreter/command or an import the probe got
-#: wrong — rather than a genuine contradiction of the intended result. These
-#: are the verifier's/environment's fault, not the deliverable's, so they
-#: downgrade (unavailable) instead of false-failing good code. A real source
-#: defect that breaks import is still caught by invariant I1 (the repo's own
-#: lint/type gate), so nothing slips through by classifying these unavailable.
+#: the deliverable — a missing interpreter/command, a wrong import, or a probe
+#: COMMAND that didn't even parse/run — rather than a genuine contradiction of
+#: the intended result. These are the verifier's/environment's fault, not the
+#: deliverable's, so they downgrade (unavailable) instead of false-failing good
+#: code. A real source defect that breaks import/parse is still caught by
+#: invariant I1 (the repo's own lint/type gate), so nothing slips through.
+#:
+#: The parse/usage markers were added after L-measure (2026-07-02): a live run
+#: whose factorial code was CORRECT (probe 1 matched: factorial(5)=120) got a
+#: FALSE fail because the verifier wrote a second probe as
+#: ``python -c "…\ntry:\n…"`` — literal ``\n`` inside a ``python -c`` string is
+#: not a newline, so the command died with a SyntaxError. A probe that can't be
+#: parsed never exercised the deliverable → unavailable, never contradicted.
 _UNAVAILABLE_MARKERS: tuple[str, ...] = (
+    # missing interpreter / command / module (probe couldn't start)
     "command not found",
     "No such file or directory",
     "ModuleNotFoundError",
@@ -53,6 +61,15 @@ _UNAVAILABLE_MARKERS: tuple[str, ...] = (
     "cannot find module",
     "Cannot find module",
     "is not recognized as",
+    # the probe COMMAND itself failed to parse / was mis-authored (verifier's
+    # fault) — it never ran the deliverable, so it cannot contradict it.
+    "SyntaxError",
+    "invalid syntax",
+    "unexpected character after line continuation",
+    "unexpected EOF while parsing",
+    "IndentationError",
+    "unexpected token",  # shell parse error (bash/sh)
+    "syntax error near",  # shell parse error
 )
 
 
