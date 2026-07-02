@@ -34,6 +34,7 @@ import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.workflow.domain.gate_discovery import discover_gate
+from backend.workflow.domain.gate_scaffold import detect_stack
 from backend.workflow.domain.honesty import compute_honesty_grade
 from backend.workflow.domain.outcome_demonstration import (
     DemonstrationOutcome,
@@ -614,6 +615,12 @@ class VerificationService:
             if passed
             else None
         )
+        # Was a gate reasonably EXPECTED here? A repo with a detectable stack is a
+        # real project that should declare a definition of done; an early /
+        # greenfield repo with no stack yet is legitimately gateless. The ratchet
+        # uses this to tell a genuine grade-D weakness ("couldn't verify") from a
+        # legitimate early-stage skip (founder distinction) — see needs_founder_review.
+        gate_expected = applicable and self._stack_detected(run)
 
         vr = VerificationResult(
             id=uuid.uuid4(),
@@ -629,6 +636,7 @@ class VerificationService:
                 "outcome_demonstration": demonstration,
                 "scope": scope,
                 "honesty_grade": honesty_grade,
+                "gate_expected": gate_expected,
             },
         )
         self._session.add(vr)
@@ -668,6 +676,7 @@ class VerificationService:
                         }
                     ),
                     "honesty_grade": honesty_grade,
+                    "gate_expected": gate_expected,
                 },
             )
         )
@@ -689,6 +698,15 @@ class VerificationService:
 
         worktree = run_worktree_path(run.id)
         return (worktree / ".git").exists()
+
+    @staticmethod
+    def _stack_detected(run: ExecutionRun) -> bool:
+        """True iff the run's worktree has a detectable stack manifest — a real
+        project that should declare a gate. Used to tell a genuine grade-D
+        weakness from a legitimate early-stage skip (offline, pure)."""
+        from backend.storage.product_workspace import run_worktree_path  # noqa: PLC0415
+
+        return detect_stack(run_worktree_path(run.id)) is not None
 
     @staticmethod
     def _truncate_intent(run: ExecutionRun, *, max_chars: int = 60) -> str:

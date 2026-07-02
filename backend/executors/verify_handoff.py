@@ -41,7 +41,7 @@ from backend.workflow.application.verification_service import (
     JudgeLlm,
     VerificationService,
 )
-from backend.workflow.domain.honesty import is_auto_trusted
+from backend.workflow.domain.honesty import needs_founder_review
 from backend.workflow.domain.verified_deliverable import write_verified_deliverable
 from backend.workflow.infrastructure.db import (
     ExecutionRun,
@@ -205,12 +205,14 @@ async def verify_and_finish(  # noqa: PLR0911 — one honest return per verify o
         )
         return await decision_terminal(session, run, work_step, attempt, decision)
 
-    # Honesty ladder ratchet (redesign §4, founder: D-only hard gate). A grade-D
-    # pass — a product deliverable whose target declares NO gate to run — rests on
-    # nothing runnable, so it does NOT auto-accumulate trust; route to founder
-    # review instead of PROVED. A/B/C still auto-verify below.
-    grade = vr.result.get("honesty_grade") if isinstance(vr.result, dict) else None
-    if not is_auto_trusted(grade):
+    # Honesty ladder ratchet (redesign §4). A grade-D pass whose repo has a
+    # detectable stack — a real project that SHOULD declare a gate but doesn't —
+    # rests on nothing runnable, so it does NOT auto-accumulate trust; route to
+    # founder review instead of PROVED. A/B/C, and an early/greenfield repo with
+    # no stack yet (legitimately gateless), auto-verify below.
+    vresult = vr.result if isinstance(vr.result, dict) else {}
+    grade = vresult.get("honesty_grade")
+    if needs_founder_review(grade, gate_expected=bool(vresult.get("gate_expected"))):
         decision = await create_decision(
             session,
             run,

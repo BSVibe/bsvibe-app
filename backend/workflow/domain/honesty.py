@@ -58,24 +58,26 @@ def compute_honesty_grade(
     return "D"
 
 
-#: Grades whose trust the ratchet accumulates automatically (Deliverable +
-#: PROVED). Grade D is deliberately excluded — no declared gate means "verified"
-#: rests on nothing runnable, so it routes to founder review instead (L-I3c).
-AUTO_TRUSTED_GRADES: frozenset[str] = frozenset({"A", "B", "C"})
+def needs_founder_review(grade: str | None, *, gate_expected: bool) -> bool:
+    """True when a PASSING verdict must route to founder review instead of
+    auto-accumulating trust (PROVED).
 
+    Only grade **D** (no runnable gate + not demonstrated) is ever withheld — and
+    even then, only when a gate was reasonably EXPECTED: the repo has a detectable
+    stack, so it is a real project that *should* declare a definition of done but
+    doesn't. That is the "couldn't verify" weakness worth a founder's eyes.
 
-def is_auto_trusted(grade: str | None) -> bool:
-    """True when a passing verdict of this grade may auto-accumulate trust.
+    An early / greenfield repo with **no detectable stack** (nothing to gate yet)
+    is *legitimately* gateless — founder's distinction: "couldn't do it" vs
+    "legitimately skipped for a valid reason". Its weak grade is still surfaced,
+    but it auto-proceeds rather than nagging review on every early deliverable.
 
-    ``None`` (ladder N/A — non-product/Direct run) is auto-trusted: those runs
-    are governed by their own checks, not the repo-gate ladder. Only an explicit
-    grade **D** (a product deliverable with no declared gate) is withheld."""
-    return grade != "D"
+    ``None`` (ladder N/A — non-product / Direct run) never needs review here."""
+    return grade == "D" and gate_expected
 
 
 __all__ = [
-    "AUTO_TRUSTED_GRADES",
     "HonestyGrade",
     "compute_honesty_grade",
-    "is_auto_trusted",
+    "needs_founder_review",
 ]

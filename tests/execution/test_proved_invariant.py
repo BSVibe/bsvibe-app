@@ -372,7 +372,7 @@ def test_known_call_sites_are_in_expected_modules() -> None:
 # --------------------------------------------------------------------------
 
 
-def _graded_verify(session, run, grade):
+def _graded_verify(session, run, grade, *, gate_expected=False):
     async def fake_verify(**kwargs):
         ws = kwargs["work_step"]
         vr = VerificationResult(
@@ -382,7 +382,7 @@ def _graded_verify(session, run, grade):
             workspace_id=run.workspace_id,
             outcome=VerificationOutcome.PASSED,
             contract={},
-            result={"honesty_grade": grade},
+            result={"honesty_grade": grade, "gate_expected": gate_expected},
         )
         session.add(vr)
         await session.flush()
@@ -409,7 +409,11 @@ def _declare_and_write_llm() -> _ScriptedLlm:
     )
 
 
-async def test_native_grade_d_routes_to_review_not_proved(tmp_path: Path, monkeypatch) -> None:
+async def test_native_grade_d_with_expected_gate_routes_to_review(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Grade D AND a gate was expected (the repo has a stack — a real project
+    that should declare a gate) → founder review, not auto-PROVED."""
     from backend.workflow.infrastructure.db import Decision, ExecutionRun, RunStatus
 
     async with memory_session() as session:
@@ -424,7 +428,7 @@ async def test_native_grade_d_routes_to_review_not_proved(tmp_path: Path, monkey
         orch = RunOrchestrator(
             session=session, llm=_declare_and_write_llm(), sandbox_manager=NoopSandboxManager()
         )
-        monkeypatch.setattr(orch, "_verify", _graded_verify(session, run, "D"))
+        monkeypatch.setattr(orch, "_verify", _graded_verify(session, run, "D", gate_expected=True))
         result = await orch.run(run=run, workspace_dir=tmp_path)
 
         assert result.outcome != "verified"  # routed to review, not auto-verified
@@ -439,6 +443,34 @@ async def test_native_grade_d_routes_to_review_not_proved(tmp_path: Path, monkey
             for d in decisions
         )
         await _assert_proved_invariant(session)  # holds vacuously (no Deliverable)
+
+
+async def test_native_grade_d_greenfield_no_gate_expected_auto_verifies(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Grade D but NO gate was expected (early/greenfield repo with no stack yet)
+    is a legitimate skip — it auto-verifies rather than nagging review (founder:
+    distinguish 'couldn't verify' from 'legitimately skipped')."""
+    from backend.workflow.infrastructure.db import ExecutionRun, RunStatus
+
+    async with memory_session() as session:
+        run = ExecutionRun(
+            id=uuid.uuid4(),
+            workspace_id=uuid.uuid4(),
+            status=RunStatus.RUNNING,
+            payload={"intent_text": "x"},
+        )
+        session.add(run)
+        await session.flush()
+        orch = RunOrchestrator(
+            session=session, llm=_declare_and_write_llm(), sandbox_manager=NoopSandboxManager()
+        )
+        monkeypatch.setattr(orch, "_verify", _graded_verify(session, run, "D", gate_expected=False))
+        result = await orch.run(run=run, workspace_dir=tmp_path)
+
+        assert result.outcome == "verified"
+        assert (await session.execute(select(Deliverable))).first() is not None
+        await _assert_proved_invariant(session)
 
 
 async def test_native_grade_c_still_auto_verifies(tmp_path: Path, monkeypatch) -> None:

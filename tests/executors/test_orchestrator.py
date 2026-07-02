@@ -622,7 +622,7 @@ async def test_grade_d_pass_routes_to_review_not_proved(tmp_path: Path, monkeypa
             workspace_id=run.workspace_id,
             outcome=VerificationOutcome.PASSED,
             contract={},
-            result={"honesty_grade": "D"},
+            result={"honesty_grade": "D", "gate_expected": True},
         )
         self._session.add(vr)
         await self._session.flush()
