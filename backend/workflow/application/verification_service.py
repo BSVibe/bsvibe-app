@@ -201,9 +201,49 @@ _CODE_EXTS: frozenset[str] = frozenset(
 )
 
 
+#: Files that legitimately change without being part of the task's intent — the
+#: deterministic scope pre-filter drops them before the intent judge sees them,
+#: so a routine lockfile bump is never flagged as a spurious change.
+_SCOPE_EXEMPT_BASENAMES: frozenset[str] = frozenset(
+    {
+        "uv.lock",
+        "poetry.lock",
+        "package-lock.json",
+        "yarn.lock",
+        "pnpm-lock.yaml",
+        "Cargo.lock",
+        "go.sum",
+    }
+)
+
+
 def _is_test_path(path: str) -> bool:
     base = path.rsplit("/", 1)[-1]
     return "/tests/" in f"/{path}" or base.startswith("test_") or base.endswith("_test.py")
+
+
+def _is_scope_exempt(path: str) -> bool:
+    return path.rsplit("/", 1)[-1] in _SCOPE_EXEMPT_BASENAMES
+
+
+def _scope_judge_messages(intent: str, paths: list[str]) -> list[dict[str, str]]:
+    listing = "\n".join(f"- {p}" for p in paths)
+    # A dedicated, ISOLATED judge — it sees ONLY the intent + the changed paths,
+    # never the retriever's canonical criteria (#473: retrieved knowledge must
+    # never pollute a gating/flagging judgement). It flags relatedness, not
+    # correctness, so paths + intent are enough (no file contents needed).
+    system = (
+        "You are a scope reviewer. Given a TASK and the list of files a change modified, "
+        "identify files that are UNRELATED to the task — spurious or out-of-scope edits a "
+        "focused change would not touch.\n"
+        "A file is IN scope if it plausibly implements, tests, documents, or configures the "
+        "task. Be CONSERVATIVE: only flag a file you are confident is unrelated to the stated "
+        "task. When in doubt, do not flag it.\n"
+        'Output ONLY a JSON object: {"flagged": ["path", ...], "reasoning": "<short>"}. '
+        "An empty list means every change is in scope."
+    )
+    user = f"TASK:\n{intent}\n\nCHANGED FILES:\n{listing}"
+    return [{"role": "system", "content": system}, {"role": "user", "content": user}]
 
 
 def _is_code_path(path: str) -> bool:
@@ -489,6 +529,16 @@ class VerificationService:
         demonstration = await self._run_outcome_demonstration(run, written_paths, box)
         demo_pass = demonstration is None or demonstration["verdict"] != "failed"
 
+        # I3 — scope discipline. For a product run with a real worktree (a
+        # durable repo diff that will be delivered/reviewed), flag changed files
+        # that look UNRELATED to the task intent — the spurious-change failure
+        # mode (findings 2026-07-01: a "add one README line" task produced 12
+        # spurious files and still passed verify). This is a SURFACE, not a gate:
+        # founder decision #3 is "no-implicit → surface" (flag it, never silently
+        # fix or block), so it does NOT enter the pass computation below — the
+        # honesty grade + proof surface carry it to the founder (L-I3b).
+        scope = await self._run_scope_check(run, written_paths)
+
         # I1 — the repo's OWN static gate (whole-repo lint/format/type/contracts),
         # run in the sandbox regardless of what the agent declared. A genuine gate
         # failure fails verification (fail-closed): this is what makes "verified"
@@ -553,6 +603,7 @@ class VerificationService:
                 "judge": judge_blob,
                 "project_gate": project_gate,
                 "outcome_demonstration": demonstration,
+                "scope": scope,
             },
         )
         self._session.add(vr)
@@ -581,6 +632,14 @@ class VerificationService:
                         else {
                             "verdict": demonstration["verdict"],
                             "probes": len(demonstration["probes"]),
+                        }
+                    ),
+                    "scope": (
+                        None
+                        if scope is None
+                        else {
+                            "verdict": scope["verdict"],
+                            "flagged": len(scope["flagged_paths"]),
                         }
                     ),
                 },
@@ -824,6 +883,62 @@ class VerificationService:
         if raw is None:
             return None
         return parse_demonstration_plan(raw)
+
+    async def _run_scope_check(
+        self, run: ExecutionRun, written_paths: list[str]
+    ) -> dict[str, Any] | None:
+        """I3 — flag changed files that look unrelated to the task intent.
+
+        Gated to a product run with a real worktree — the durable repo diff that
+        gets delivered / reviewed, where a spurious change actually matters (a
+        Direct-path scratch run has no such diff). Returns a blob
+        ``{verdict: clean|flagged, flagged_paths, reasoning}`` or ``None`` when
+        not applicable (non-product / no worktree / no intent / no candidate
+        files) or on an LLM hiccup. SURFACE only — the caller never folds this
+        into the pass verdict (founder decision #3: flag, never block).
+
+        The judge is ISOLATED: a fresh call seeing only the intent + the changed
+        paths, so the retriever's canonical criteria can never pollute it (#473).
+        The flagged set is intersected with the actual candidates, so the judge
+        cannot invent a path."""
+        if run.product_id is None or not self._is_real_worktree(run):
+            return None
+        payload = run.payload or {}
+        intent = str(payload.get("intent_text") or payload.get("text") or "").strip()
+        if not intent:
+            return None
+        candidates = [p for p in written_paths if not _is_scope_exempt(p)]
+        if not candidates:
+            return None
+        try:
+            turn = await asyncio.wait_for(
+                self._llm.complete(messages=_scope_judge_messages(intent, candidates), tools=None),
+                timeout=_VERIFY_LLM_TIMEOUT_S,
+            )
+        except Exception:  # noqa: BLE001 — a scope hiccup must never break the run
+            return None
+        raw = _extract_json_object(str(getattr(turn, "content", "") or ""))
+        if not isinstance(raw, dict):
+            return None
+        candidate_set = set(candidates)
+        raw_flagged = raw.get("flagged")
+        flagged = [
+            p
+            for item in (raw_flagged if isinstance(raw_flagged, list) else [])
+            if (p := str(item).strip()) in candidate_set
+        ]
+        logger.info(
+            "scope_check",
+            run_id=str(run.id),
+            candidates=len(candidates),
+            flagged=len(flagged),
+        )
+        return {
+            "verdict": "flagged" if flagged else "clean",
+            "flagged_paths": flagged,
+            "reasoning": str(raw.get("reasoning") or "")[:500],
+            "candidates": len(candidates),
+        }
 
     async def _run_judge(
         self,

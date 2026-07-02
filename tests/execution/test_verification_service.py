@@ -16,7 +16,9 @@ from __future__ import annotations
 import asyncio
 import json
 import uuid
+from types import SimpleNamespace
 from typing import Any
+from unittest.mock import AsyncMock
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -1118,3 +1120,127 @@ class TestProjectGate:
             )
             # only a dynamic test → nothing runnable as a static gate here
             assert await svc._run_project_gate(run, FakeBox()) is None
+
+
+# --------------------------------------------------------------------------
+# I3 — scope discipline (flag changed files unrelated to the intent; SURFACE,
+# never block). Gated to a product run with a real worktree (the durable diff).
+# --------------------------------------------------------------------------
+
+
+class TestScopeCheck:
+    async def _seed(self, session, tmp_path, monkeypatch, *, product=True, worktree=True):
+        run = await _make_run(session)  # payload intent_text="do the thing"
+        if product:
+            run.product_id = uuid.uuid4()
+        wt = tmp_path / str(run.id)
+        wt.mkdir(parents=True)
+        if worktree:
+            (wt / ".git").write_text("gitdir: /elsewhere\n")
+        import backend.storage.product_workspace as pw
+
+        monkeypatch.setattr(pw, "run_worktree_path", lambda _rid: wt)
+        return run
+
+    async def test_flags_unrelated_files(self, tmp_path, monkeypatch):
+        async with memory_session() as session:
+            run = await self._seed(session, tmp_path, monkeypatch)
+            llm = StubLlm(
+                [LoopTurn(content='{"flagged": ["backend/eventbus.py"], "reasoning": "unrelated"}')]
+            )
+            svc = VerificationService(session=session, llm=llm)
+            blob = await svc._run_scope_check(run, ["README.md", "backend/eventbus.py"])
+            assert blob is not None
+            assert blob["verdict"] == "flagged"
+            assert blob["flagged_paths"] == ["backend/eventbus.py"]
+            assert blob["candidates"] == 2
+
+    async def test_clean_when_all_related(self, tmp_path, monkeypatch):
+        async with memory_session() as session:
+            run = await self._seed(session, tmp_path, monkeypatch)
+            svc = VerificationService(
+                session=session, llm=StubLlm([LoopTurn(content='{"flagged": []}')])
+            )
+            blob = await svc._run_scope_check(run, ["README.md"])
+            assert blob is not None
+            assert blob["verdict"] == "clean"
+            assert blob["flagged_paths"] == []
+
+    async def test_none_for_non_product_run(self, tmp_path, monkeypatch):
+        async with memory_session() as session:
+            run = await self._seed(session, tmp_path, monkeypatch, product=False)
+            llm = StubLlm([])  # would raise if the judge were called
+            svc = VerificationService(session=session, llm=llm)
+            assert await svc._run_scope_check(run, ["backend/x.py"]) is None
+            assert llm.calls == []
+
+    async def test_none_without_real_worktree(self, tmp_path, monkeypatch):
+        async with memory_session() as session:
+            run = await self._seed(session, tmp_path, monkeypatch, worktree=False)
+            svc = VerificationService(session=session, llm=StubLlm([]))
+            assert await svc._run_scope_check(run, ["backend/x.py"]) is None
+
+    async def test_lockfile_only_change_has_no_candidates(self, tmp_path, monkeypatch):
+        async with memory_session() as session:
+            run = await self._seed(session, tmp_path, monkeypatch)
+            llm = StubLlm([])  # pre-filter drops the lockfile → no judge call
+            svc = VerificationService(session=session, llm=llm)
+            assert await svc._run_scope_check(run, ["uv.lock"]) is None
+            assert llm.calls == []
+
+    async def test_invented_path_is_dropped(self, tmp_path, monkeypatch):
+        # The judge cannot flag a path outside the actual candidate set.
+        async with memory_session() as session:
+            run = await self._seed(session, tmp_path, monkeypatch)
+            svc = VerificationService(
+                session=session,
+                llm=StubLlm([LoopTurn(content='{"flagged": ["does/not/exist.py"]}')]),
+            )
+            blob = await svc._run_scope_check(run, ["backend/x.py"])
+            assert blob is not None
+            assert blob["flagged_paths"] == []
+            assert blob["verdict"] == "clean"
+
+    async def test_unparseable_verdict_returns_none(self, tmp_path, monkeypatch):
+        async with memory_session() as session:
+            run = await self._seed(session, tmp_path, monkeypatch)
+            svc = VerificationService(session=session, llm=StubLlm([LoopTurn(content="not json")]))
+            assert await svc._run_scope_check(run, ["backend/x.py"]) is None
+
+    async def test_scope_flag_surfaces_in_verify_without_failing(self, tmp_path, monkeypatch):
+        """End-to-end through verify(): a scope flag is RECORDED in the result but
+        the outcome stays PASSED — founder decision #3, surface not block."""
+        import backend.storage.product_workspace as pw
+
+        async with memory_session() as session:
+            run = await self._seed(session, tmp_path, monkeypatch)  # product + worktree, no CI
+            work_step, attempt = await _make_step_and_attempt(session, run)
+            # W2 merge step fires for product+worktree runs — stub it clean.
+            monkeypatch.setattr(pw, "commit_worktree", AsyncMock(), raising=False)
+            monkeypatch.setattr(
+                pw,
+                "merge_main_into_worktree",
+                AsyncMock(return_value=SimpleNamespace(status="clean", conflict_paths=[])),
+                raising=False,
+            )
+            # README task, but an unrelated doc got touched → flagged. Prose-only
+            # paths → no demonstration; no CI in the worktree → no project gate.
+            llm = StubLlm(
+                [LoopTurn(content='{"flagged": ["docs/unrelated.md"], "reasoning": "x"}')]
+            )
+            svc = VerificationService(session=session, llm=llm)
+            contract = VerificationContract(
+                checks=(VerificationCheck(kind="command", command="true"),)
+            )
+            vr = await svc.verify(
+                run=run,
+                work_step=work_step,
+                attempt=attempt,
+                contract=contract,
+                box=FakeBox(),
+                written_paths=["README.md", "docs/unrelated.md"],
+                final_text="added a README line",
+            )
+            assert vr.outcome is VerificationOutcome.PASSED  # flag never fails
+            assert vr.result["scope"]["verdict"] == "flagged"
+            assert vr.result["scope"]["flagged_paths"] == ["docs/unrelated.md"]
