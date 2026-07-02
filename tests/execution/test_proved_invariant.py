@@ -362,3 +362,105 @@ def test_known_call_sites_are_in_expected_modules() -> None:
         "workflow/application/run_persistence.py",
         "executors/verify_handoff.py",
     }, f"unexpected caller surface for write_verified_deliverable: {callers}"
+
+
+# --------------------------------------------------------------------------
+# 4. Honesty ratchet (L-I3c) — a PASSED verdict graded D (product deliverable
+#    with no declared gate) does NOT auto-PROVE; it routes to founder review.
+#    A/B/C still auto-verify. The grade itself is computed in verify() (tested
+#    in test_verification_service); here we craft the verdict to pin the branch.
+# --------------------------------------------------------------------------
+
+
+def _graded_verify(session, run, grade):
+    async def fake_verify(**kwargs):
+        ws = kwargs["work_step"]
+        vr = VerificationResult(
+            id=uuid.uuid4(),
+            run_id=run.id,
+            work_step_id=ws.id,
+            workspace_id=run.workspace_id,
+            outcome=VerificationOutcome.PASSED,
+            contract={},
+            result={"honesty_grade": grade},
+        )
+        session.add(vr)
+        await session.flush()
+        return vr
+
+    return fake_verify
+
+
+def _declare_and_write_llm() -> _ScriptedLlm:
+    return _ScriptedLlm(
+        [
+            LoopTurn(
+                content="declare + write",
+                tool_calls=(
+                    _tool(
+                        "declare_verification",
+                        checks=[{"kind": "command", "command": "true"}],
+                    ),
+                    _tool("file_write", path="a.txt", content="x\n"),
+                ),
+            ),
+            LoopTurn(content="done", tool_calls=()),
+        ]
+    )
+
+
+async def test_native_grade_d_routes_to_review_not_proved(tmp_path: Path, monkeypatch) -> None:
+    from backend.workflow.infrastructure.db import Decision, ExecutionRun, RunStatus
+
+    async with memory_session() as session:
+        run = ExecutionRun(
+            id=uuid.uuid4(),
+            workspace_id=uuid.uuid4(),
+            status=RunStatus.RUNNING,
+            payload={"intent_text": "x"},
+        )
+        session.add(run)
+        await session.flush()
+        orch = RunOrchestrator(
+            session=session, llm=_declare_and_write_llm(), sandbox_manager=NoopSandboxManager()
+        )
+        monkeypatch.setattr(orch, "_verify", _graded_verify(session, run, "D"))
+        result = await orch.run(run=run, workspace_dir=tmp_path)
+
+        assert result.outcome != "verified"  # routed to review, not auto-verified
+        assert (await session.execute(select(Deliverable))).first() is None
+        steps = (await session.execute(select(WorkStep))).scalars().all()
+        assert all(s.proof_state is not ProofState.PROVED for s in steps)
+        decisions = (await session.execute(select(Decision))).scalars().all()
+        assert any(
+            d.decision == "human_review_required"
+            and d.payload.get("reason") == "weak_evidence_no_gate"
+            and d.payload.get("honesty_grade") == "D"
+            for d in decisions
+        )
+        await _assert_proved_invariant(session)  # holds vacuously (no Deliverable)
+
+
+async def test_native_grade_c_still_auto_verifies(tmp_path: Path, monkeypatch) -> None:
+    """Grade C (a discovered-but-unrunnable gate) still auto-accumulates trust —
+    only D is withheld (founder: D-only hard gate)."""
+    from backend.workflow.infrastructure.db import ExecutionRun, RunStatus
+
+    async with memory_session() as session:
+        run = ExecutionRun(
+            id=uuid.uuid4(),
+            workspace_id=uuid.uuid4(),
+            status=RunStatus.RUNNING,
+            payload={"intent_text": "x"},
+        )
+        session.add(run)
+        await session.flush()
+        orch = RunOrchestrator(
+            session=session, llm=_declare_and_write_llm(), sandbox_manager=NoopSandboxManager()
+        )
+        monkeypatch.setattr(orch, "_verify", _graded_verify(session, run, "C"))
+        result = await orch.run(run=run, workspace_dir=tmp_path)
+
+        assert result.outcome == "verified"
+        assert (await session.execute(select(Deliverable))).first() is not None
+        await _assert_proved_invariant(session)

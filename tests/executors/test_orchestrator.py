@@ -603,6 +603,78 @@ async def test_contract_fail_yields_verification_failed_decision(tmp_path: Path)
         await redis.aclose()
 
 
+async def test_grade_d_pass_routes_to_review_not_proved(tmp_path: Path, monkeypatch) -> None:
+    """L-I3c ratchet: a PASSED verdict graded D (a product deliverable whose
+    target declares NO gate) does NOT auto-PROVE in the executor path — it routes
+    to human review, NO Deliverable, NO PROVED. Grade computed in verify() is
+    tested elsewhere; here we craft the verdict to pin the ratchet branch."""
+    from sqlalchemy import select
+
+    from backend.workflow.application.verification_service import VerificationService
+
+    async def fake_verify(
+        self, *, run, work_step, attempt, contract, box, written_paths, final_text
+    ):
+        vr = VerificationResult(
+            id=uuid.uuid4(),
+            run_id=run.id,
+            work_step_id=work_step.id,
+            workspace_id=run.workspace_id,
+            outcome=VerificationOutcome.PASSED,
+            contract={},
+            result={"honesty_grade": "D"},
+        )
+        self._session.add(vr)
+        await self._session.flush()
+        return vr
+
+    monkeypatch.setattr(VerificationService, "verify", fake_verify)
+
+    redis = await _make_redis()
+    engine, sf, base = _shared_sqlite_sessionmaker()
+    async with engine.begin() as conn:
+        await conn.run_sync(base.metadata.create_all)
+    try:
+        async with sf() as s:
+            run, account = await _seed(s)
+            worker_id = _parse_uuid(account.extra_params["worker_id"])
+            assert worker_id is not None
+            await s.commit()
+
+        manager = FakeSandboxManager(FakeBox())
+        retriever = StubRetriever(["x"])  # → a non-None contract so verify runs
+        async with sf() as orch_s:
+            run = await orch_s.get(ExecutionRun, run.id)
+            assert run is not None
+            oc = ExecutorOrchestrator(
+                session=orch_s,
+                redis=redis,
+                account=account,
+                settings=Settings(executor_task_timeout_s=30.0),
+                sandbox_manager=manager,
+                retriever=retriever,
+                verify_llm=StubLlm([]),
+            )
+            result = await _drive_with_worker_done(
+                oc, redis=redis, run=run, worker_id=worker_id, workspace_dir=tmp_path, sf=sf
+            )
+            await orch_s.commit()
+
+        assert result.outcome != "verified"
+        async with sf() as s:
+            decision = (await s.execute(select(Decision))).scalar_one()
+            assert decision.decision == "human_review_required"
+            assert decision.payload.get("reason") == "weak_evidence_no_gate"
+            # A PASSED VerificationResult exists, but NO PROVED, NO Deliverable.
+            assert (await s.execute(select(Deliverable))).first() is None
+            step = (await s.execute(select(WorkStep))).scalar_one()
+            assert step.proof_state is not ProofState.PROVED
+        assert len(manager.released) == 1
+    finally:
+        await engine.dispose()
+        await redis.aclose()
+
+
 async def test_judge_contract_without_verify_llm_yields_human_review(tmp_path: Path) -> None:
     """A contract with a JUDGE check but ``verify_llm is None`` (cannot run the
     judge) → ``human_review_required`` (reason ``no_verification_llm``), NOT

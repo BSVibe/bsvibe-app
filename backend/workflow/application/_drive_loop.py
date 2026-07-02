@@ -43,6 +43,7 @@ from backend.workflow.domain.emit_deliverable import (
     _safe_args,
     handle_emit_deliverable,
 )
+from backend.workflow.domain.honesty import is_auto_trusted
 from backend.workflow.infrastructure.db import (
     ExecutionRun,
     RunAttempt,
@@ -318,6 +319,42 @@ async def drive_loop(  # noqa: PLR0912, PLR0915 — preserved cycle body, H2a is
                 "judge_checks": len(contract.judge_checks),
             },
         )
+        grade = verdict.result.get("honesty_grade") if isinstance(verdict.result, dict) else None
+        if verdict.outcome is VerificationOutcome.PASSED and not is_auto_trusted(grade):
+            # Honesty ladder ratchet (redesign §4, founder: D-only hard gate). A
+            # grade-D pass — a product deliverable whose target declares NO gate —
+            # rests on nothing runnable, so it does NOT auto-accumulate trust
+            # (PROVED). Route to founder review instead. A/B/C still auto-verify.
+            decision = await orch._create_decision(
+                run,
+                work_step,
+                kind="human_review_required",
+                payload={
+                    "reason": "weak_evidence_no_gate",
+                    "honesty_grade": grade,
+                    "written_paths": written_paths,
+                },
+                rationale="verified but the target declares no gate to run — weak evidence (grade D)",
+            )
+            await orch._audit(
+                run,
+                attempt,
+                DecisionPending,
+                {
+                    "kind": "human_review_required",
+                    "decision_id": str(decision.id),
+                    "reason": "weak_evidence_no_gate",
+                },
+            )
+            await orch._audit(
+                run,
+                attempt,
+                LoopTerminal,
+                {"outcome": "needs_decision", "decision_id": str(decision.id)},
+            )
+            return orch._decision_result(
+                run, work_step, attempt, decision, written_paths, final_text
+            )
         if verdict.outcome is VerificationOutcome.PASSED:
             result = await orch._finish_verified(
                 run, work_step, attempt, written_paths, final_text, verdict

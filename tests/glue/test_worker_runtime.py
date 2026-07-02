@@ -50,10 +50,6 @@ from backend.workflow.infrastructure.intake.db import RequestRow, RequestStatus
 from backend.workflow.infrastructure.sandbox import NoopSandboxManager
 from backend.workflow.infrastructure.workers import run as runtime
 from backend.workflow.infrastructure.workers.agent_worker import AgentWorker
-from backend.workflow.infrastructure.workers.delivery_worker import (
-    DeliveryWorker,
-    DeliveryWorkerConfig,
-)
 from backend.workflow.infrastructure.workers.intake_worker import IntakeWorker
 
 from .._support import db_engine, fake_current_user
@@ -297,7 +293,7 @@ async def _seed_active_account(
 # --------------------------------------------------------------------------
 
 
-async def test_production_deps_drive_direct_run_to_delivery(
+async def test_production_deps_drive_gateless_product_to_review(
     client: httpx.AsyncClient,
     sf: async_sessionmaker[AsyncSession],
     workspace_id: uuid.UUID,
@@ -330,32 +326,24 @@ async def test_production_deps_drive_direct_run_to_delivery(
 
     async with sf() as s:
         run = (await s.execute(select(ExecutionRun))).scalar_one()
-        # W2: verified product runs auto-merge to main + transition to
-        # SHIPPED immediately (the Direct-path used to stop at
-        # REVIEW_READY before W2's auto-ship landed).
-        assert run.status is RunStatus.SHIPPED
-        deliverable = (await s.execute(select(Deliverable))).scalar_one()
-        assert "answer.txt" in (deliverable.payload.get("artifact_refs") or [])
-        event = (await s.execute(select(DeliveryEventRow))).scalar_one()
-        assert event.deliverable_id == deliverable.id
-        deliverable_id = deliverable.id
+        # The production deps wire up and drive the run end-to-end (frame → work
+        # → verify). This product is greenfield — an empty repo with NO declared
+        # gate — so the verify earns honesty grade D, and the L-I3c ratchet
+        # (founder: D-only hard gate) routes it to FOUNDER REVIEW instead of
+        # auto-shipping: "verified" must not rest on nothing runnable. The run
+        # pauses RUNNING with a pending human_review Decision.
+        # (A gated product would earn grade A/B/C and auto-ship — see the native
+        # ratchet tests in test_proved_invariant.)
+        assert run.status is RunStatus.RUNNING
+        assert (await s.execute(select(Deliverable))).first() is None
+        decision = (await s.execute(select(Decision))).scalar_one()
+        assert decision.decision == "human_review_required"
+        assert decision.payload.get("reason") == "weak_evidence_no_gate"
+        assert decision.payload.get("honesty_grade") == "D"
         run_id = run.id
 
-    # The work LLM actually wrote the artifact into the run's workspace.
+    # The work LLM still actually wrote the artifact into the run's workspace.
     assert (tmp_path / str(run_id) / "answer.txt").read_text() == "42\n"
-
-    # 3. DeliveryWorker drains the event through the REAL plugin dispatcher.
-    adapter = await runtime.build_delivery_adapter(session_factory=sf)
-    delivery = DeliveryWorker(
-        session_factory=sf,
-        dispatcher=adapter,
-        config=DeliveryWorkerConfig(batch_size=10, poll_interval_s=0.01),
-    )
-    assert await delivery.drain_once() == 1
-    async with sf() as s:
-        assert (await s.execute(select(DeliveryEventRow))).first() is None
-    # No matching plugin is fine — the event still drains (queue never wedges).
-    assert deliverable_id is not None
 
 
 # --------------------------------------------------------------------------
