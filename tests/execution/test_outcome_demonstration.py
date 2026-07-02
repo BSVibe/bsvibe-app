@@ -127,6 +127,25 @@ def test_judge_unavailable_on_import_error_not_contradiction() -> None:
     assert judge_probe(probe, obs) == "unavailable"
 
 
+def test_judge_unavailable_when_probe_command_fails_to_parse() -> None:
+    # L-measure 2026-07-02: the verifier wrote `python -c "…\ntry:\n…"` — literal
+    # \n inside python -c is NOT a newline and dies with a SyntaxError. The probe
+    # never ran the deliverable, so it must be unavailable, NOT contradicted (the
+    # deliverable's factorial was in fact correct; a sibling probe matched).
+    probe = Probe(name="neg", command='python -c "x\\ntry:\\n y"', expect_stdout_contains=("ok",))
+    obs = Observation(
+        exit_code=1,
+        stderr="SyntaxError: unexpected character after line continuation character",
+    )
+    assert judge_probe(probe, obs) == "unavailable"
+
+
+def test_judge_unavailable_on_shell_syntax_error() -> None:
+    probe = Probe(name="p", command="run )(", expect_exit_zero=True)
+    obs = Observation(exit_code=2, stderr="sh: syntax error near unexpected token `)'")
+    assert judge_probe(probe, obs) == "unavailable"
+
+
 # ── summarize (fold into one verdict) ────────────────────────────────────────
 
 
