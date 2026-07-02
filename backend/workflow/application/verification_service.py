@@ -34,6 +34,7 @@ import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.workflow.domain.gate_discovery import discover_gate
+from backend.workflow.domain.honesty import compute_honesty_grade
 from backend.workflow.domain.outcome_demonstration import (
     DemonstrationOutcome,
     DemonstrationPlan,
@@ -591,6 +592,29 @@ class VerificationService:
 
         passed = all_cmd_pass and judge_pass and gate_pass and demo_pass
         outcome = VerificationOutcome.PASSED if passed else VerificationOutcome.FAILED
+
+        # The honesty ladder (redesign §4): grade a PASSING verdict by evidence
+        # strength so "verified" is honest about HOW strongly it holds. Recorded
+        # for the proof surface + the trust ratchet (D → founder review, L-I3c).
+        # ``None`` for a non-product/Direct run — the repo-gate ladder is N/A.
+        applicable = run.product_id is not None and self._is_real_worktree(run)
+        gate_passed = bool(
+            project_gate is not None
+            and project_gate["passed"]
+            and any(c["status"] == "passed" for c in project_gate["commands"])
+        )
+        demonstrated = demonstration is not None and demonstration["verdict"] == "demonstrated"
+        honesty_grade = (
+            compute_honesty_grade(
+                applicable=applicable,
+                gate_passed=gate_passed,
+                gate_discovered=project_gate is not None,
+                demonstrated=demonstrated,
+            )
+            if passed
+            else None
+        )
+
         vr = VerificationResult(
             id=uuid.uuid4(),
             run_id=run.id,
@@ -604,6 +628,7 @@ class VerificationService:
                 "project_gate": project_gate,
                 "outcome_demonstration": demonstration,
                 "scope": scope,
+                "honesty_grade": honesty_grade,
             },
         )
         self._session.add(vr)
@@ -642,6 +667,7 @@ class VerificationService:
                             "flagged": len(scope["flagged_paths"]),
                         }
                     ),
+                    "honesty_grade": honesty_grade,
                 },
             )
         )

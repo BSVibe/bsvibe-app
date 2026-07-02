@@ -62,11 +62,8 @@ class DeliverableResponse(BaseModel):
 
 
 class VerificationReport(BaseModel):
-    """One VerificationResult — the "how BSVibe checked this" proof.
-
-    ``contract`` is the work LLM's declared checks and ``result`` the outcome of
-    running them; both free-form JSON, surfaced verbatim + rendered defensively.
-    """
+    """One VerificationResult — the "how BSVibe checked this" proof. ``contract``
+    (declared checks) + ``result`` (outcomes): free-form JSON, surfaced verbatim."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -74,6 +71,8 @@ class VerificationReport(BaseModel):
     outcome: VerificationOutcome
     contract: dict[str, Any] = {}
     result: dict[str, Any] = {}
+    #: Honesty ladder grade A–D (§4): how strongly this passing verdict holds.
+    honesty_grade: str | None = None
     created_at: datetime
 
 
@@ -205,11 +204,13 @@ def to_response(row: Deliverable, *, verified: bool = False) -> DeliverableRespo
 def to_verification(row: VerificationResult) -> VerificationReport:
     contract = row.contract if isinstance(row.contract, dict) else {}
     result = row.result if isinstance(row.result, dict) else {}
+    grade = result.get("honesty_grade") if isinstance(result, dict) else None
     return VerificationReport(
         id=row.id,
         outcome=row.outcome,
         contract=contract,
         result=result,
+        honesty_grade=grade if isinstance(grade, str) else None,
         created_at=row.created_at,
     )
 

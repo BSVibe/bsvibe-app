@@ -1244,3 +1244,106 @@ class TestScopeCheck:
             assert vr.outcome is VerificationOutcome.PASSED  # flag never fails
             assert vr.result["scope"]["verdict"] == "flagged"
             assert vr.result["scope"]["flagged_paths"] == ["docs/unrelated.md"]
+
+
+# --------------------------------------------------------------------------
+# I3 — honesty ladder grade recorded on the verdict (redesign §4)
+# --------------------------------------------------------------------------
+
+
+class TestHonestyGrade:
+    async def _seed_product_worktree(self, session, tmp_path, monkeypatch, *, ci_yaml=None):
+        run = await _make_run(session)
+        run.product_id = uuid.uuid4()
+        wt = tmp_path / str(run.id)
+        wt.mkdir(parents=True)
+        (wt / ".git").write_text("gitdir: /elsewhere\n")
+        if ci_yaml is not None:
+            (wt / ".github" / "workflows").mkdir(parents=True)
+            (wt / ".github" / "workflows" / "ci.yml").write_text(ci_yaml)
+        import backend.storage.product_workspace as pw
+
+        monkeypatch.setattr(pw, "run_worktree_path", lambda _rid: wt)
+        monkeypatch.setattr(pw, "commit_worktree", AsyncMock(), raising=False)
+        monkeypatch.setattr(
+            pw,
+            "merge_main_into_worktree",
+            AsyncMock(return_value=SimpleNamespace(status="clean", conflict_paths=[])),
+            raising=False,
+        )
+        return run
+
+    async def test_grade_d_when_no_gate_and_not_demonstrated(self, tmp_path, monkeypatch):
+        """A product deliverable whose repo declares no runnable gate and whose
+        outcome wasn't demonstrated is graded D (weakest) — still PASSED here, but
+        the grade is recorded for the ratchet + proof surface."""
+        async with memory_session() as session:
+            run = await self._seed_product_worktree(session, tmp_path, monkeypatch)  # no ci.yml
+            work_step, attempt = await _make_step_and_attempt(session, run)
+            # prose-only change → no demonstration; scope judge is the only LLM call.
+            llm = StubLlm([LoopTurn(content='{"flagged": []}')])
+            svc = VerificationService(session=session, llm=llm)
+            contract = VerificationContract(
+                checks=(VerificationCheck(kind="command", command="true"),)
+            )
+            vr = await svc.verify(
+                run=run,
+                work_step=work_step,
+                attempt=attempt,
+                contract=contract,
+                box=FakeBox(),
+                written_paths=["README.md"],
+                final_text="",
+            )
+            assert vr.outcome is VerificationOutcome.PASSED
+            assert vr.result["honesty_grade"] == "D"
+
+    async def test_grade_b_when_gate_passes(self, tmp_path, monkeypatch):
+        """A product run whose repo's static gate RAN and passed earns B (one
+        strong leg) even without a demonstration."""
+        async with memory_session() as session:
+            run = await self._seed_product_worktree(
+                session,
+                tmp_path,
+                monkeypatch,
+                ci_yaml="jobs:\n  j:\n    steps:\n      - run: ruff check .\n",
+            )
+            work_step, attempt = await _make_step_and_attempt(session, run)
+            llm = StubLlm([LoopTurn(content='{"flagged": []}')])  # scope only
+            svc = VerificationService(session=session, llm=llm)
+            contract = VerificationContract(
+                checks=(VerificationCheck(kind="command", command="true"),)
+            )
+            # ``ruff check .`` (the discovered gate) runs → default FakeBox exit 0.
+            vr = await svc.verify(
+                run=run,
+                work_step=work_step,
+                attempt=attempt,
+                contract=contract,
+                box=FakeBox(),
+                written_paths=["README.md"],
+                final_text="",
+            )
+            assert vr.outcome is VerificationOutcome.PASSED
+            assert vr.result["honesty_grade"] == "B"
+
+    async def test_grade_none_for_non_product_run(self, tmp_path, monkeypatch):
+        """A non-product Direct run has no repo-gate ladder — grade is None."""
+        async with memory_session() as session:
+            run = await _make_run(session)  # product_id=None
+            work_step, attempt = await _make_step_and_attempt(session, run)
+            svc = VerificationService(session=session, llm=StubLlm([]))
+            contract = VerificationContract(
+                checks=(VerificationCheck(kind="command", command="true"),)
+            )
+            vr = await svc.verify(
+                run=run,
+                work_step=work_step,
+                attempt=attempt,
+                contract=contract,
+                box=FakeBox(),
+                written_paths=[],
+                final_text="",
+            )
+            assert vr.outcome is VerificationOutcome.PASSED
+            assert vr.result["honesty_grade"] is None

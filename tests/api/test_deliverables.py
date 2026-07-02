@@ -352,6 +352,43 @@ async def test_report_returns_deliverable_with_verification(
     assert v["result"] == result
 
 
+async def test_report_surfaces_honesty_grade(configured_client, db, workspace_id) -> None:
+    """The proof surface lifts the honesty ladder grade (redesign §4) to a
+    first-class field so a weak-evidence 'verified' reads as weak."""
+    run_id = uuid.uuid4()
+    deliverable_id = uuid.uuid4()
+    async with db() as s:
+        await _seed_run(s, run_id=run_id, ws=workspace_id, payload={"intent_text": "x"})
+        s.add(
+            Deliverable(
+                id=deliverable_id,
+                run_id=run_id,
+                workspace_id=workspace_id,
+                deliverable_type=DeliverableType.CODE,
+                payload={"summary": "y", "artifact_refs": []},
+                created_at=datetime.now(tz=UTC),
+            )
+        )
+        s.add(
+            VerificationResult(
+                id=uuid.uuid4(),
+                run_id=run_id,
+                work_step_id=None,
+                workspace_id=workspace_id,
+                outcome=VerificationOutcome.PASSED,
+                contract={},
+                result={"command_results": [], "honesty_grade": "B"},
+                created_at=datetime.now(tz=UTC),
+            )
+        )
+        await s.commit()
+
+    r = await configured_client.get(f"/api/v1/deliverables/{deliverable_id}/report")
+    assert r.status_code == 200, r.text
+    v = r.json()["verifications"][0]
+    assert v["honesty_grade"] == "B"
+
+
 async def _seed_deliverable(s, *, deliverable_id, run_id, workspace_id) -> None:
     s.add(
         Deliverable(
