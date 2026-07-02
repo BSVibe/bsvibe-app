@@ -1252,7 +1252,9 @@ class TestScopeCheck:
 
 
 class TestHonestyGrade:
-    async def _seed_product_worktree(self, session, tmp_path, monkeypatch, *, ci_yaml=None):
+    async def _seed_product_worktree(
+        self, session, tmp_path, monkeypatch, *, ci_yaml=None, manifest=None
+    ):
         run = await _make_run(session)
         run.product_id = uuid.uuid4()
         wt = tmp_path / str(run.id)
@@ -1261,6 +1263,8 @@ class TestHonestyGrade:
         if ci_yaml is not None:
             (wt / ".github" / "workflows").mkdir(parents=True)
             (wt / ".github" / "workflows" / "ci.yml").write_text(ci_yaml)
+        if manifest is not None:
+            (wt / manifest).write_text("")  # a stack manifest → gate_expected
         import backend.storage.product_workspace as pw
 
         monkeypatch.setattr(pw, "run_worktree_path", lambda _rid: wt)
@@ -1273,14 +1277,12 @@ class TestHonestyGrade:
         )
         return run
 
-    async def test_grade_d_when_no_gate_and_not_demonstrated(self, tmp_path, monkeypatch):
-        """A product deliverable whose repo declares no runnable gate and whose
-        outcome wasn't demonstrated is graded D (weakest) — still PASSED here, but
-        the grade is recorded for the ratchet + proof surface."""
+    async def test_grade_d_greenfield_no_stack_is_not_gate_expected(self, tmp_path, monkeypatch):
+        """An early/greenfield product (no manifest) with no gate is graded D but
+        gate_expected=False — legitimately gateless, so the ratchet auto-proceeds."""
         async with memory_session() as session:
-            run = await self._seed_product_worktree(session, tmp_path, monkeypatch)  # no ci.yml
+            run = await self._seed_product_worktree(session, tmp_path, monkeypatch)  # empty repo
             work_step, attempt = await _make_step_and_attempt(session, run)
-            # prose-only change → no demonstration; scope judge is the only LLM call.
             llm = StubLlm([LoopTurn(content='{"flagged": []}')])
             svc = VerificationService(session=session, llm=llm)
             contract = VerificationContract(
@@ -1297,6 +1299,33 @@ class TestHonestyGrade:
             )
             assert vr.outcome is VerificationOutcome.PASSED
             assert vr.result["honesty_grade"] == "D"
+            assert vr.result["gate_expected"] is False
+
+    async def test_grade_d_real_project_no_gate_is_gate_expected(self, tmp_path, monkeypatch):
+        """A repo with a stack manifest but no runnable gate is graded D AND
+        gate_expected=True — a real project that should declare a gate → review."""
+        async with memory_session() as session:
+            run = await self._seed_product_worktree(
+                session, tmp_path, monkeypatch, manifest="pyproject.toml"
+            )
+            work_step, attempt = await _make_step_and_attempt(session, run)
+            llm = StubLlm([LoopTurn(content='{"flagged": []}')])
+            svc = VerificationService(session=session, llm=llm)
+            contract = VerificationContract(
+                checks=(VerificationCheck(kind="command", command="true"),)
+            )
+            vr = await svc.verify(
+                run=run,
+                work_step=work_step,
+                attempt=attempt,
+                contract=contract,
+                box=FakeBox(),
+                written_paths=["README.md"],
+                final_text="",
+            )
+            assert vr.outcome is VerificationOutcome.PASSED
+            assert vr.result["honesty_grade"] == "D"
+            assert vr.result["gate_expected"] is True
 
     async def test_grade_b_when_gate_passes(self, tmp_path, monkeypatch):
         """A product run whose repo's static gate RAN and passed earns B (one

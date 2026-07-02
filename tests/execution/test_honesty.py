@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from backend.workflow.domain.honesty import compute_honesty_grade, is_auto_trusted
+from backend.workflow.domain.honesty import compute_honesty_grade, needs_founder_review
 
 
 def _grade(**kw) -> str | None:
@@ -39,9 +39,15 @@ def test_grade_none_when_not_applicable() -> None:
     assert _grade(applicable=False, gate_passed=True, demonstrated=True) is None
 
 
-def test_is_auto_trusted() -> None:
-    assert is_auto_trusted("A")
-    assert is_auto_trusted("B")
-    assert is_auto_trusted("C")
-    assert not is_auto_trusted("D")  # only D is withheld from the ratchet
-    assert is_auto_trusted(None)  # ladder N/A → governed by its own checks
+def test_needs_review_only_grade_d_with_expected_gate() -> None:
+    # Grade D + a gate was expected (real project, has a stack) → review.
+    assert needs_founder_review("D", gate_expected=True)
+    # Grade D but NO gate expected (early/greenfield, no stack yet) → legitimate
+    # skip, auto-proceed (founder: distinguish "couldn't" from "skipped").
+    assert not needs_founder_review("D", gate_expected=False)
+
+
+def test_needs_review_false_for_strong_grades_and_none() -> None:
+    for g in ("A", "B", "C", None):
+        assert not needs_founder_review(g, gate_expected=True)
+        assert not needs_founder_review(g, gate_expected=False)
