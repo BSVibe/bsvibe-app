@@ -58,6 +58,7 @@ from backend.storage.product_workspace import (
 )
 from backend.workflow.application.runtime.account_resolution import _resolve_via_caller
 from backend.workflow.application.runtime.dispatcher import _ResolverCompileLlm
+from backend.workflow.domain.gate_scaffold import scaffold_gate
 from backend.workflow.infrastructure.delivery.git_ops import GitError, GitOps
 
 logger = structlog.get_logger(__name__)
@@ -590,7 +591,35 @@ async def _reconcile_embeddings_soft(
         )
 
 
-async def run_product_bootstrap_job(
+async def _scaffold_gate_if_missing(repo_path: Path, git_ops: GitOps) -> None:
+    """I1c — scaffold a minimal acceptance gate when the repo declares none.
+
+    :func:`scaffold_gate` is a no-op (returns ``None``) when the repo already
+    has its own gate, a ``ci.yml`` already exists, or the stack is unknown, so
+    this never clobbers a real CI. Best-effort: any write/commit failure is
+    logged and swallowed — a missing gate only weakens the honesty grade and
+    must never fail the bootstrap."""
+    try:
+        gate = scaffold_gate(repo_path)
+        if gate is None:
+            return
+        target = repo_path / gate.path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(gate.content, encoding="utf-8")
+        committed = await git_ops.commit_all(
+            repo_path, "chore(ci): scaffold minimal acceptance gate (BSVibe)"
+        )
+        logger.info(
+            "gate_scaffolded",
+            repo=str(repo_path),
+            stack=gate.stack,
+            committed=committed,
+        )
+    except Exception as exc:  # noqa: BLE001 — scaffolding must never break bootstrap
+        logger.warning("gate_scaffold_failed", repo=str(repo_path), error=str(exc))
+
+
+async def run_product_bootstrap_job(  # noqa: PLR0915 — linear clone→scaffold→ingest job
     *,
     product_id: uuid.UUID,
     workspace_id: uuid.UUID,
@@ -670,6 +699,13 @@ async def run_product_bootstrap_job(
             error=msg,
         )
         return
+
+    # I1c — the target's OWN gate is what I1 verifies against. A cloned repo
+    # that declares no gate (notably a Python project — discover_gate has no
+    # pyproject detector) would leave "verified" at the weakest honesty grade,
+    # so scaffold a minimal CI for its stack and commit it to main. Best-effort:
+    # it never fails the bootstrap.
+    await _scaffold_gate_if_missing(repo_path, git_ops)
 
     await repo.mark_status(product_id, status=STATUS_ANALYZING)
 
