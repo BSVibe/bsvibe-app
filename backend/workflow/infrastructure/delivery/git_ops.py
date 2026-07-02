@@ -61,6 +61,20 @@ def scrub_token(text: str, token: str | None) -> str:
     return text.replace(token, _REDACTED)
 
 
+def _strip_https_userinfo(url: str) -> str:
+    """Drop any ``<userinfo>@`` credential segment from an ``https://`` URL,
+    returning a clean ``https://host/path`` (unchanged for non-https URLs or
+    URLs with no userinfo). Mirrors :meth:`GitOps.authed_url`'s ``@`` handling:
+    the LAST ``@`` is the userinfo/host boundary (E42 percent-encodes tokens so
+    they cannot contain a raw ``@``)."""
+    if not url.startswith("https://"):
+        return url
+    rest = url[len("https://") :]
+    if "@" not in rest:
+        return url
+    return "https://" + rest.rsplit("@", 1)[1]
+
+
 class GitError(RuntimeError):
     """A ``git`` subprocess exited non-zero. The message is token-scrubbed."""
 
@@ -147,10 +161,26 @@ class GitOps:
             args += ["--depth", str(depth)]
         args += [url, str(dest)]
         await self._run_checked(*args, token=token)
+        # SECURITY — the clone URL embedded the token, so git wrote
+        # ``https://x-access-token:<PAT>@github.com/…`` into ``dest/.git/config``.
+        # Leaving it there persists a live credential on disk in the run's verify
+        # sandbox (found via the 2026-07-02 L-measure trace). ``push`` re-embeds
+        # the token per-operation (it rewrites origin from the fresh token), so we
+        # scrub the on-disk URL back to a clean, credential-free form immediately.
+        await self.scrub_origin_token(dest)
         # Set a stable committer identity so commit_all never fails on a runner
         # with no global git identity configured.
         await self._run_checked("config", "user.email", "agent@bsvibe.dev", cwd=dest)
         await self._run_checked("config", "user.name", "BSVibe Agent", cwd=dest)
+
+    async def scrub_origin_token(self, dest: Path) -> None:
+        """Rewrite ``origin`` to a credential-free URL (never persist a PAT in
+        ``.git/config``). A no-op when origin has no embedded userinfo or isn't
+        an ``https://`` remote. Safe: :meth:`push` re-authenticates per push."""
+        origin = (await self._run_checked("remote", "get-url", "origin", cwd=dest)).strip()
+        clean = _strip_https_userinfo(origin)
+        if clean != origin:
+            await self._run_checked("remote", "set-url", "origin", clean, cwd=dest)
 
     async def checkout_new_branch(self, dest: Path, branch: str) -> None:
         """Create + switch to a new ``branch`` in the ``dest`` checkout."""

@@ -12,7 +12,11 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
-from backend.workflow.infrastructure.delivery.git_ops import GitOps, scrub_token
+from backend.workflow.infrastructure.delivery.git_ops import (
+    GitOps,
+    _strip_https_userinfo,
+    scrub_token,
+)
 
 
 async def _run(*args: str, cwd: Path | None = None) -> str:
@@ -250,3 +254,53 @@ def test_authed_url_percent_encodes_token_special_chars() -> None:
     assert "%3A" in authed  # ':'
     assert "%2F" in authed  # '/'
     assert "%25" in authed  # '%'
+
+
+def test_strip_https_userinfo() -> None:
+    # A token-embedded clone URL → clean, credential-free URL.
+    assert (
+        _strip_https_userinfo("https://x-access-token:ghp_secret@github.com/o/r.git")
+        == "https://github.com/o/r.git"
+    )
+    # Already-clean + non-https URLs are unchanged.
+    assert _strip_https_userinfo("https://github.com/o/r.git") == "https://github.com/o/r.git"
+    assert _strip_https_userinfo("file:///tmp/x.git") == "file:///tmp/x.git"
+    # Stacked userinfo (a pre-E42 clone that was later re-auth'd) collapses to host.
+    assert (
+        _strip_https_userinfo("https://u:p@x-access-token:tok@github.com/o/r")
+        == "https://github.com/o/r"
+    )
+
+
+async def test_scrub_origin_token_removes_pat_from_config(tmp_path: Path) -> None:
+    """SECURITY (found via the 2026-07-02 L-measure trace): a token-authed clone
+    leaves the PAT in ``.git/config``. ``scrub_origin_token`` must rewrite origin
+    to a credential-free URL so no live token persists on disk."""
+    bare = await _make_bare_remote(tmp_path)
+    ops = GitOps()
+    dest = tmp_path / "checkout"
+    await ops.clone(bare.as_uri(), dest, token=None, depth=1)
+    # Simulate the state a real ``git clone https://x-access-token:PAT@…`` leaves.
+    await _run(
+        "remote",
+        "set-url",
+        "origin",
+        "https://x-access-token:ghp_SECRET@github.com/o/r.git",
+        cwd=dest,
+    )
+
+    await ops.scrub_origin_token(dest)
+
+    origin = await _run("remote", "get-url", "origin", cwd=dest)
+    assert origin == "https://github.com/o/r.git"
+    assert "ghp_SECRET" not in (dest / ".git" / "config").read_text()
+
+
+async def test_scrub_origin_token_noop_for_clean_origin(tmp_path: Path) -> None:
+    bare = await _make_bare_remote(tmp_path)
+    ops = GitOps()
+    dest = tmp_path / "checkout"
+    await ops.clone(bare.as_uri(), dest, token=None, depth=1)
+    before = await _run("remote", "get-url", "origin", cwd=dest)
+    await ops.scrub_origin_token(dest)
+    assert await _run("remote", "get-url", "origin", cwd=dest) == before
