@@ -140,6 +140,107 @@ function referenceConceptId(reference: string): string | null {
   return slug || null;
 }
 
+/** A referenced-knowledge statement long enough to read as a SENTENCE (a canon
+ *  statement / prior decision), not a short tag. A stadium pill (border-radius
+ *  999px) mangles a multi-line sentence — its rounded ends push the first/last
+ *  line's text outside the visible border — so these render as a readable block
+ *  chip instead (`report-chip--statement`). Short concept-name chips stay pills. */
+function isStatementReference(text: string): boolean {
+  return text.trim().length > 60;
+}
+
+/** One command the verifier actually ran, parsed tolerantly from the free-form
+ *  `result.command_results` blob (shape: {command, passed, exit_code, output}). */
+interface CommandRun {
+  command: string;
+  passed: boolean;
+  exitCode: number | null;
+  output: string;
+}
+
+function commandRuns(result: Record<string, unknown>): CommandRun[] {
+  const raw = result.command_results;
+  if (!Array.isArray(raw)) return [];
+  const out: CommandRun[] = [];
+  for (const item of raw) {
+    if (typeof item !== "object" || item === null) continue;
+    const r = item as Record<string, unknown>;
+    const command = typeof r.command === "string" ? r.command.trim() : "";
+    if (!command) continue;
+    out.push({
+      command,
+      passed: r.passed === true,
+      exitCode: typeof r.exit_code === "number" ? r.exit_code : null,
+      output: typeof r.output === "string" ? r.output : "",
+    });
+  }
+  return out;
+}
+
+/** The I2 result-demonstration ("we ran it and saw this"), parsed tolerantly from
+ *  `result.outcome_demonstration` ({verdict, probes:[{name,status}]}). `null` when
+ *  no demonstration was recorded (older row / verifier didn't run one). */
+interface Demonstration {
+  verdict: string;
+  probes: { name: string; status: string }[];
+}
+
+function demonstration(result: Record<string, unknown>): Demonstration | null {
+  const raw = result.outcome_demonstration;
+  if (typeof raw !== "object" || raw === null) return null;
+  const d = raw as Record<string, unknown>;
+  const verdict = typeof d.verdict === "string" ? d.verdict : "";
+  if (!verdict) return null;
+  const probes: { name: string; status: string }[] = [];
+  const rawProbes = Array.isArray(d.probes) ? d.probes : [];
+  for (const p of rawProbes) {
+    if (typeof p !== "object" || p === null) continue;
+    const pr = p as Record<string, unknown>;
+    const name = typeof pr.name === "string" ? pr.name.trim() : "";
+    if (name) probes.push({ name, status: typeof pr.status === "string" ? pr.status : "" });
+  }
+  return { verdict, probes };
+}
+
+/** The honesty grade (A–D) on a verification, or null when absent / malformed. */
+function honestyGrade(v: VerificationReportItem): string | null {
+  const g = v.honesty_grade;
+  return typeof g === "string" && /^[A-D]$/.test(g.trim()) ? g.trim() : null;
+}
+
+/** The last few lines of a command's output — enough to see the failing assertion
+ *  without dumping a whole log into the report. */
+function tailOutput(output: string, lines = 6): string {
+  const trimmed = output.replace(/\s+$/, "");
+  if (!trimmed) return "";
+  return trimmed.split("\n").slice(-lines).join("\n");
+}
+
+/** Split the run's verifications into the ONE authoritative result (the proof the
+ *  founder should read) and the EARLIER attempts (superseded retries, collapsed
+ *  behind a disclosure so a run that retried N times isn't a wall of red). The
+ *  authoritative result is the latest PASSED one when the deliverable is verified,
+ *  else the most recent attempt. `verifications` arrive oldest→newest. */
+function splitVerifications(
+  verifications: VerificationReportItem[],
+  verified: boolean,
+): { authoritative: VerificationReportItem | null; earlier: VerificationReportItem[] } {
+  if (verifications.length === 0) return { authoritative: null, earlier: [] };
+  let authIdx = verifications.length - 1;
+  if (verified) {
+    for (let i = verifications.length - 1; i >= 0; i--) {
+      if (verifications[i].outcome === "passed") {
+        authIdx = i;
+        break;
+      }
+    }
+  }
+  return {
+    authoritative: verifications[authIdx],
+    earlier: verifications.filter((_, i) => i !== authIdx),
+  };
+}
+
 export default function DeliveryReport({ deliverableId }: { deliverableId: string }) {
   const [loaded, setLoaded] = useState<Loaded>({ state: "loading" });
   // Bumped after a footer action (approve / decline a held delivery) so the
@@ -297,11 +398,7 @@ function ReportDocument({
 
       <section className="report-doc__section" aria-label={t("howVerified")}>
         <h2 className="report-doc__label">{t("howVerified")}</h2>
-        {verifications.length === 0 ? (
-          <p className="report-doc__muted">{t("noVerification")}</p>
-        ) : (
-          verifications.map((v) => <VerificationBlock key={v.id} verification={v} />)
-        )}
+        <VerifiedHow verifications={verifications} verified={verified} runId={deliverable.run_id} />
       </section>
 
       {showKnowledge && (
@@ -315,7 +412,12 @@ function ReportDocument({
                 {references.map((reference, i) => {
                   // A "Related note —" statement deep-links to the note viewer
                   // (R12); a canon-concept statement to the concept viewer (R13);
-                  // a prior decision / rejection stays plain text.
+                  // a prior decision / rejection stays plain text. A long
+                  // sentence-shaped reference renders as a readable block, not a
+                  // stadium pill that mangles multi-line text (founder #1).
+                  const statement = isStatementReference(reference)
+                    ? " report-chip--statement"
+                    : "";
                   const path = referenceNotePath(reference);
                   if (path) {
                     const label = prettyReference(reference);
@@ -323,7 +425,7 @@ function ReportDocument({
                       <li key={`ref-${i}-${reference}`}>
                         <button
                           type="button"
-                          className="report-chip report-chip--link"
+                          className={`report-chip report-chip--link${statement}`}
                           onClick={() => setOpenNote({ path, title: label })}
                         >
                           {label}
@@ -337,7 +439,7 @@ function ReportDocument({
                       <li key={`ref-${i}-${reference}`}>
                         <button
                           type="button"
-                          className="report-chip report-chip--link"
+                          className={`report-chip report-chip--link${statement}`}
                           onClick={() => setOpenConcept({ id: conceptId, label: reference })}
                         >
                           {reference}
@@ -347,7 +449,7 @@ function ReportDocument({
                   }
                   return (
                     <li key={`ref-${i}-${reference}`}>
-                      <span className="report-chip">{reference}</span>
+                      <span className={`report-chip${statement}`}>{reference}</span>
                     </li>
                   );
                 })}
@@ -863,6 +965,139 @@ const _RETRIEVED_KNOWLEDGE_RATIONALES: ReadonlySet<string> = new Set([
   "Canonical patterns retrieved for this change",
   "BSage canonical patterns retrieved for this change",
 ]);
+
+/** "How it was verified" — the ONE authoritative result read as proof, with the
+ *  superseded retry attempts collapsed behind a quiet disclosure so a run that
+ *  retried before passing isn't a wall of red (founder #2). When nothing was
+ *  verified, a calm line. */
+function VerifiedHow({
+  verifications,
+  verified,
+  runId,
+}: {
+  verifications: VerificationReportItem[];
+  verified: boolean;
+  runId: string;
+}) {
+  const t = useTranslations("report");
+  const { authoritative, earlier } = splitVerifications(verifications, verified);
+  if (authoritative === null) {
+    return <p className="report-doc__muted">{t("noVerification")}</p>;
+  }
+  return (
+    <>
+      <AuthoritativeVerification verification={authoritative} runId={runId} />
+      {earlier.length > 0 && (
+        <details className="report-attempts">
+          <summary className="report-attempts__summary">
+            {t("earlierAttempts", { count: earlier.length })}
+          </summary>
+          <div className="report-attempts__body">
+            {earlier.map((v) => (
+              <VerificationBlock key={v.id} verification={v} />
+            ))}
+          </div>
+        </details>
+      )}
+    </>
+  );
+}
+
+/** The authoritative verification, rendered as the founder-facing proof: the
+ *  honesty grade (how strongly a pass holds), the declared checks, the I2
+ *  result-demonstration ("we ran it and saw this"), and — when it did NOT pass —
+ *  WHY (the failing command + its real output) plus a next step (open the run to
+ *  retry). */
+function AuthoritativeVerification({
+  verification,
+  runId,
+}: {
+  verification: VerificationReportItem;
+  runId: string;
+}) {
+  const t = useTranslations("report");
+  const passed = verification.outcome === "passed";
+  const failed = verification.outcome === "failed";
+  const grade = passed ? honestyGrade(verification) : null;
+  const demo = demonstration(verification.result);
+  const failingRuns = failed ? commandRuns(verification.result).filter((c) => !c.passed) : [];
+
+  return (
+    <div className="report-verify">
+      {grade && (
+        <span
+          className={`report-grade report-grade--${grade.toLowerCase()}`}
+          title={t(`gradeHint.${grade}`)}
+        >
+          {t("gradeLabel", { grade })}
+        </span>
+      )}
+      <VerificationBlock verification={verification} />
+      {demo && <DemonstrationLine demo={demo} />}
+      {failed && (
+        <div className="report-verify-fail">
+          <p className="report-verify-fail__lead">{t("verifyFailedLead")}</p>
+          {failingRuns.length > 0 && (
+            <ul className="report-verify-fail__cmds">
+              {failingRuns.map((c, i) => {
+                const tail = tailOutput(c.output);
+                return (
+                  <li key={`${c.command}-${i}`} className="report-verify-fail__cmd">
+                    <div className="report-verify-fail__cmd-head">
+                      <code className="report-verify-fail__cmd-text">{c.command}</code>
+                      {c.exitCode !== null && (
+                        <span className="report-verify-fail__exit">
+                          {t("exitCode", { code: c.exitCode })}
+                        </span>
+                      )}
+                    </div>
+                    {tail && <pre className="report-verify-fail__out">{tail}</pre>}
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+          <p className="report-verify-fail__next">
+            {t("verifyFailedHint")}{" "}
+            <Link href={`/runs/${runId}`} className="report-verify-fail__link">
+              {t("openRunToRetry")}
+            </Link>
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** The I2 result-demonstration line — "we ran it against the result and saw
+ *  this". A `demonstrated` verdict lists the probes that matched; an
+ *  `undemonstrable` / `failed` verdict reads as a calm honest line. */
+function DemonstrationLine({ demo }: { demo: Demonstration }) {
+  const t = useTranslations("report");
+  if (demo.verdict === "demonstrated") {
+    return (
+      <div className="report-demo">
+        <p className="report-demo__lead">{t("demoDemonstrated", { count: demo.probes.length })}</p>
+        {demo.probes.length > 0 && (
+          <ul className="report-demo__probes">
+            {demo.probes.map((p, i) => (
+              <li key={`${p.name}-${i}`} className="report-demo__probe">
+                {p.name}
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    );
+  }
+  if (demo.verdict === "undemonstrable") {
+    return <p className="report-demo__muted">{t("demoUndemonstrable")}</p>;
+  }
+  if (demo.verdict === "failed") {
+    return <p className="report-demo__muted">{t("demoFailed")}</p>;
+  }
+  return null;
+}
 
 function VerificationBlock({ verification }: { verification: VerificationReportItem }) {
   const t = useTranslations("report");

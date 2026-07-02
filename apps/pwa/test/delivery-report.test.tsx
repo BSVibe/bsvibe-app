@@ -631,4 +631,155 @@ describe("Delivery Report (R3)", () => {
     await screen.findByText("Add getRelatedPosts to blog.ts");
     expect(screen.queryByRole("button", { name: /^roll back$/i })).toBeNull();
   });
+
+  // ── Verification proof surface — honesty grade, demonstration, failed next-step,
+  //    and collapsing the retry wall (founder #2) ────────────────────────────────
+  const passedCheck = (command: string) => ({
+    kind: "command" as const,
+    command,
+    rationale: "",
+  });
+
+  it("collapses earlier failed verification attempts behind a disclosure (no wall of red)", async () => {
+    const failedAttempt = (i: number) => ({
+      id: `f${i}`,
+      outcome: "failed" as const,
+      contract: { checks: [passedCheck(`ruff check attempt-${i}`)] },
+      result: {
+        command_results: [
+          { command: `ruff check attempt-${i}`, passed: false, exit_code: 1, output: "E501" },
+        ],
+      },
+      created_at: NOW,
+    });
+    installFetch({
+      report: () => ({
+        ...REPORT,
+        verifications: [
+          failedAttempt(1),
+          failedAttempt(2),
+          failedAttempt(3),
+          {
+            id: "authok",
+            outcome: "passed",
+            contract: { checks: [passedCheck("pytest -q")] },
+            result: {
+              command_results: [
+                { command: "pytest -q", passed: true, exit_code: 0, output: "3 passed" },
+              ],
+            },
+            honesty_grade: "B",
+            created_at: NOW,
+          },
+        ],
+      }),
+    });
+    render(<DeliveryReport deliverableId="d1" />);
+
+    const checks = await screen.findByRole("region", { name: /how it was verified/i });
+    // The authoritative (passing) check leads.
+    expect(within(checks).getByText(/pytest -q/)).toBeInTheDocument();
+    // The 3 failed retries collapse into a single disclosure summary — NOT a wall.
+    expect(within(checks).getByText(/3 earlier attempts/i)).toBeInTheDocument();
+  });
+
+  it("shows the honesty grade on a passing verification", async () => {
+    installFetch({
+      report: () => ({
+        ...REPORT,
+        verifications: [
+          {
+            id: "v1",
+            outcome: "passed",
+            contract: { checks: [passedCheck("pytest -q")] },
+            result: {},
+            honesty_grade: "B",
+            created_at: NOW,
+          },
+        ],
+      }),
+    });
+    render(<DeliveryReport deliverableId="d1" />);
+
+    const checks = await screen.findByRole("region", { name: /how it was verified/i });
+    expect(within(checks).getByText(/evidence\s*b/i)).toBeInTheDocument();
+  });
+
+  it("surfaces the outcome-demonstration probes (ran-against-the-result)", async () => {
+    installFetch({
+      report: () => ({
+        ...REPORT,
+        verifications: [
+          {
+            id: "v1",
+            outcome: "passed",
+            contract: { checks: [passedCheck("pytest -q")] },
+            result: {
+              outcome_demonstration: {
+                verdict: "demonstrated",
+                probes: [
+                  { name: "double returns n*2", status: "matched" },
+                  { name: "handles zero and negatives", status: "matched" },
+                ],
+              },
+            },
+            honesty_grade: "B",
+            created_at: NOW,
+          },
+        ],
+      }),
+    });
+    render(<DeliveryReport deliverableId="d1" />);
+
+    const checks = await screen.findByRole("region", { name: /how it was verified/i });
+    expect(within(checks).getByText(/double returns n\*2/)).toBeInTheDocument();
+  });
+
+  it("explains WHY a failed verification failed and offers a next step (retry the run)", async () => {
+    installFetch({
+      report: () => ({
+        ...REPORT,
+        deliverable: { ...REPORT.deliverable, run_id: "run-77", verified: false },
+        verified: false,
+        run_status: "failed",
+        verifications: [
+          {
+            id: "v1",
+            outcome: "failed",
+            contract: { checks: [passedCheck("pytest -q")] },
+            result: {
+              command_results: [
+                {
+                  command: "pytest -q",
+                  passed: false,
+                  exit_code: 1,
+                  output: "E   assert 3 == 4\n1 failed in 0.01s",
+                },
+              ],
+            },
+            created_at: NOW,
+          },
+        ],
+      }),
+    });
+    render(<DeliveryReport deliverableId="d1" />);
+
+    const checks = await screen.findByRole("region", { name: /how it was verified/i });
+    // WHY: the failing command's real output is surfaced, not a bare "failed".
+    expect(within(checks).getByText(/assert 3 == 4/)).toBeInTheDocument();
+    // NEXT STEP: a link into the producing run (where Retry lives).
+    const retry = within(checks).getByRole("link", { name: /retry/i });
+    expect(retry).toHaveAttribute("href", "/runs/run-77");
+  });
+
+  it("renders a long canon-statement reference as a readable block, not a squished pill", async () => {
+    const longRef =
+      "Agent-verification — webhook verification should authenticate the exact raw request body with an HMAC and compare signatures using timing-safe equality, treating the timestamp as replay protection.";
+    installFetch({ report: () => ({ ...REPORT, references: [longRef], written: [] }) });
+    render(<DeliveryReport deliverableId="d1" />);
+
+    const knowledge = await screen.findByRole("region", { name: /knowledge/i });
+    const chip = within(knowledge).getByText(/timing-safe equality/);
+    expect(chip.className).toMatch(/report-chip--statement/);
+  });
 });

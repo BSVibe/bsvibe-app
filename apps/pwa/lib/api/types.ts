@@ -357,6 +357,10 @@ export interface VerificationReportItem {
   outcome: VerificationOutcome;
   contract: Record<string, unknown>;
   result: Record<string, unknown>;
+  /** Honesty ladder grade A–D (backend §4): how strongly a PASSING verdict holds
+   *  (A = ran the project's own gate, down to D = weak/no gate). `null` on a
+   *  non-passing verification (grade only qualifies a pass). */
+  honesty_grade?: string | null;
   created_at: string;
 }
 
