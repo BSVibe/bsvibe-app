@@ -877,6 +877,12 @@
     "whatThisDid": "What this did",
     "note": "Note",
     "howVerified": "How it was verified",
+    "derivedChecksLabel": "The project's own checks",
+    "gateStatusTag": {
+      "passed": "passed",
+      "failed": "failed",
+      "unavailable": "not available"
+    },
     "earlierAttempts": "{count, plural, one {# earlier attempt didn't pass} other {# earlier attempts didn't pass}}",
     "gradeLabel": "Evidence {grade}",
     "gradeHint": {

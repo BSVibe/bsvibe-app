@@ -177,6 +177,50 @@ function commandRuns(result: Record<string, unknown>): CommandRun[] {
   return out;
 }
 
+/** One command from the AUTHORITATIVE derived gate — the repo's OWN check the
+ *  verifier ran (status ∈ passed | failed | unavailable). */
+interface GateCommand {
+  command: string;
+  kind: string;
+  status: string;
+}
+
+/** The repo's own verification gate, DERIVED by the verifier from the project's
+ *  manifests and run as the authoritative check (backend `result.derived_gate`).
+ *  This is what "How it was verified" should lead with — the agent's own declared
+ *  commands (`command_results`) are only advisory. `null` for an older row that
+ *  predates the derived gate, or a non-code run — the caller falls back to the
+ *  declared-contract checklist. */
+interface DerivedGate {
+  applicable: boolean;
+  passed: boolean;
+  commands: GateCommand[];
+}
+
+function derivedGate(result: Record<string, unknown>): DerivedGate | null {
+  const raw = result.derived_gate;
+  if (typeof raw !== "object" || raw === null) return null;
+  const g = raw as Record<string, unknown>;
+  const rawCommands = Array.isArray(g.commands) ? g.commands : [];
+  const commands: GateCommand[] = [];
+  for (const item of rawCommands) {
+    if (typeof item !== "object" || item === null) continue;
+    const c = item as Record<string, unknown>;
+    const command = typeof c.command === "string" ? c.command.trim() : "";
+    if (!command) continue;
+    commands.push({
+      command,
+      kind: typeof c.kind === "string" ? c.kind : "quality",
+      status: typeof c.status === "string" ? c.status : "",
+    });
+  }
+  return {
+    applicable: g.applicable === true,
+    passed: g.passed === true,
+    commands,
+  };
+}
+
 /** The I2 result-demonstration ("we ran it and saw this"), parsed tolerantly from
  *  `result.outcome_demonstration` ({verdict, probes:[{name,status}]}). `null` when
  *  no demonstration was recorded (older row / verifier didn't run one). */
@@ -1020,7 +1064,20 @@ function AuthoritativeVerification({
   const failed = verification.outcome === "failed";
   const grade = passed ? honestyGrade(verification) : null;
   const demo = demonstration(verification.result);
-  const failingRuns = failed ? commandRuns(verification.result).filter((c) => !c.passed) : [];
+  // The AUTHORITATIVE gate is the repo's OWN derived checks; the agent's declared
+  // commands are advisory. Lead with the derived gate when present; an older row
+  // (no derived gate) falls back to the declared-contract checklist.
+  const gate = derivedGate(verification.result);
+  const hasGate = gate !== null && gate.commands.length > 0;
+  // On a failure, the failing checks come from the authoritative gate when we
+  // have it (a failed derived command), else the run's command_results.
+  const failingRuns = !failed
+    ? []
+    : hasGate
+      ? gate.commands
+          .filter((c) => c.status === "failed")
+          .map((c) => ({ command: c.command, passed: false, exitCode: null, output: "" }))
+      : commandRuns(verification.result).filter((c) => !c.passed);
 
   return (
     <div className="report-verify">
@@ -1032,7 +1089,11 @@ function AuthoritativeVerification({
           {t("gradeLabel", { grade })}
         </span>
       )}
-      <VerificationBlock verification={verification} />
+      {hasGate ? (
+        <DerivedGateChecklist gate={gate} />
+      ) : (
+        <VerificationBlock verification={verification} />
+      )}
       {demo && <DemonstrationLine demo={demo} />}
       {failed && (
         <div className="report-verify-fail">
@@ -1097,6 +1158,54 @@ function DemonstrationLine({ demo }: { demo: Demonstration }) {
     return <p className="report-demo__muted">{t("demoFailed")}</p>;
   }
   return null;
+}
+
+/** The authoritative "How it was verified" list — the repo's OWN derived-gate
+ *  commands, each with the status the verifier observed (passed / failed / a tool
+ *  that wasn't available here). This is what actually gated the verdict; the
+ *  agent's declared commands are advisory and not shown here. */
+function DerivedGateChecklist({ gate }: { gate: DerivedGate }) {
+  const t = useTranslations("report");
+  return (
+    <div className="report-gate">
+      <p className="report-gate__label">{t("derivedChecksLabel")}</p>
+      <ul className="report-checklist">
+        {gate.commands.map((c, i) => {
+          const tone = c.status === "passed" ? "passed" : c.status === "failed" ? "other" : "muted";
+          const tagKey = `gateStatusTag.${c.status === "unavailable" ? "unavailable" : c.status === "failed" ? "failed" : "passed"}`;
+          return (
+            <li key={`gate-${i}-${c.command}`} className="report-checklist__row">
+              <span
+                className={`report-checklist__mark report-checklist__mark--${tone}`}
+                aria-hidden="true"
+              >
+                {c.status === "passed" ? (
+                  <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">
+                    <path
+                      d="M13 4.5 6.5 11 3 7.5"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
+                  </svg>
+                ) : c.status === "unavailable" ? (
+                  "○"
+                ) : (
+                  "•"
+                )}
+              </span>
+              <span className="report-checklist__label">{c.command}</span>
+              <span className={`report-checklist__tag report-checklist__tag--${tone}`}>
+                {t(tagKey)}
+              </span>
+            </li>
+          );
+        })}
+      </ul>
+    </div>
+  );
 }
 
 function VerificationBlock({ verification }: { verification: VerificationReportItem }) {

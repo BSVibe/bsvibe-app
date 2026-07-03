@@ -6813,6 +6813,12 @@ main.login {
   color: var(--ink-3);
 }
 
+/* A tool the derived gate declared but that wasn't available in the sandbox —
+ * recorded, but never a failure. Muted so it reads as neutral, not a red flag. */
+.report-checklist__mark--muted {
+  color: var(--ink-4, var(--ink-3));
+}
+
 .report-checklist__label {
   flex: 1 1 auto;
   min-width: 0;
@@ -6839,6 +6845,23 @@ main.login {
 .report-checklist__tag--other {
   color: var(--amber-ink);
   background: var(--accent-bg);
+}
+
+.report-checklist__tag--muted {
+  color: var(--ink-3);
+  background: var(--hair-bg, var(--surface-2, transparent));
+  border: 1px solid var(--hair);
+}
+
+/* "The project's own checks" — the small label above the authoritative derived
+ * gate checklist, distinguishing it from the agent's (advisory) declared list. */
+.report-gate__label {
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  margin: 0 0 6px;
 }
 
 /* The DEMOTED diff disclosure — the captured diff sits behind this, collapsed
