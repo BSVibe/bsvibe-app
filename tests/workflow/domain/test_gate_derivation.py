@@ -102,3 +102,25 @@ class TestDerivationPlannerMessages:
             manifests={}, changed_files=[], intent="Write a design doc"
         )
         assert [m["role"] for m in msgs] == ["system", "user"]
+
+    def test_system_prompt_hardcodes_no_stack_specific_tool_or_runner(self) -> None:
+        # The deriver must generalise across stacks: the LLM maps the repo's
+        # manifests to commands, so OUR prompt must not steer toward one stack's
+        # tools/runners (that is exactly the coupling this whole redesign removes).
+        sys = derivation_planner_messages(manifests={}, changed_files=[], intent="x")[0][
+            "content"
+        ].lower()
+        for tool in ("ruff", "pytest", "mypy", "cargo", "go test", "npm", "pnpm", "yarn", "uv run"):
+            assert tool not in sys, f"prompt is stack-biased: mentions {tool!r}"
+
+    def test_system_prompt_prefers_a_real_check_over_a_trivial_compile(self) -> None:
+        # The live gap: the deriver returned a syntax/compile-only check instead
+        # of the repo's real lint/test. The prompt must steer to STRONG checks
+        # (the repo's own test run + lint/type) over a trivial parse-only one —
+        # phrased generically, not by naming a stack's tools.
+        sys = derivation_planner_messages(manifests={}, changed_files=[], intent="x")[0][
+            "content"
+        ].lower()
+        assert "test" in sys
+        assert "compile" in sys or "syntax" in sys
+        assert "weak" in sys or "trivial" in sys
