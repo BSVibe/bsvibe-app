@@ -96,6 +96,26 @@ describe("buildReviewLookup", () => {
     expect(lookup.forDelivery("d-3", "r-3").title).toBe("Add a mean helper");
   });
 
+  it("F4: skips a degenerate 'no task' frame title and uses the founder's real request", () => {
+    // The frame LLM can misfire — classifying a real request as "no task" and
+    // stamping summary_title="No task provided" / framed_intent="No concrete
+    // task was provided…". A held delivery PROVES work was produced, so that
+    // verdict is wrong; the card must fall through to the founder's real intent
+    // rather than tell them "No task provided".
+    const misframed = {
+      ...run("r-9", "p-1", "Add an is_palindrome helper to src/mathx.py with a pytest test."),
+      summary_title: "No task provided",
+      framed_intent: "No concrete task was provided, so there is nothing to execute yet.",
+    } as Run;
+    // The produced deliverable had an empty summary (direct_output), so the only
+    // ground truth left is the run's real intent.
+    const deliv = deliverable("d-9", "r-9", "");
+    const lookup = buildReviewLookup([misframed], [deliv], PRODUCTS);
+    expect(lookup.forDelivery("d-9", "r-9").title).toBe(
+      "Add an is_palindrome helper to src/mathx.py with a pytest test.",
+    );
+  });
+
   it("L8: falls back to framed_intent when no summary_title (retroactive runs)", () => {
     const retro = {
       ...run("r-4", "p-1", "In the bsvibe-app product, add `factorial(n: int) -> int`…"),

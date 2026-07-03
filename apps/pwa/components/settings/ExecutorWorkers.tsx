@@ -150,12 +150,15 @@ function WorkerRow({
     }
   }
 
-  const online = worker.status === "online";
-  // Lift E13 — `status` can lie when the worker process died before
-  // clearing the column. Backend now ships `heartbeat_fresh` (mirrors
-  // `find_available_worker`'s cutoff). A row with `status="online"` but
-  // `heartbeat_fresh=false` is the stale-online diagnosis — flag it.
-  const stale = online && worker.heartbeat_fresh === false;
+  // Lift E13 / F3 — `status` can lie when the worker process died before
+  // clearing the column. `heartbeat_fresh` (mirrors `find_available_worker`'s
+  // cutoff) is the SOURCE OF TRUTH for availability, so a worker whose
+  // heartbeat has expired reads Offline even if the status column still says
+  // "online" — never a green "Online" next to a "last seen weeks ago" line
+  // that contradicts it. The stale marker explains the status/heartbeat gap.
+  const registeredOnline = worker.status === "online";
+  const stale = registeredOnline && worker.heartbeat_fresh === false;
+  const online = registeredOnline && !stale;
   const lastSeen = worker.last_heartbeat ? formatRelative(worker.last_heartbeat) : null;
   const createdOn = worker.created_at ? formatDate(worker.created_at) : null;
 

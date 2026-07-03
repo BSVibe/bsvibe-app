@@ -36,6 +36,21 @@ export interface ReviewLookup {
   forDelivery(deliverableId: string | null, runId: string | null): ReviewContext;
 }
 
+// F4 — a frame title that DENIES a task was given ("No task provided", "No
+// concrete request was provided", "nothing to execute"). The frame LLM emits
+// these when it misjudges a real Direction as empty; a produced deliverable
+// contradicts them, so they must not stand as a card title.
+const DEGENERATE_TITLE =
+  /^\s*(no\b.{0,24}\b(task|request|instruction|work|direction)|nothing to (execute|do|build))/i;
+
+/** A frame/intent string usable as a card title — trimmed and non-degenerate,
+ *  else null so the caller falls through to the next ground-truth source. */
+function usableTitle(text: string | null | undefined): string | null {
+  const trimmed = text?.trim();
+  if (!trimmed || DEGENERATE_TITLE.test(trimmed)) return null;
+  return trimmed;
+}
+
 /** Build the lookup once from the three lists, then resolve many items O(1). */
 export function buildReviewLookup(
   runs: Run[],
@@ -61,7 +76,17 @@ export function buildReviewLookup(
     // the retroactive framed_intent, then the deliverable's concise summary,
     // then the raw (developer-y) Direction. So the founder reads "Add a mean
     // helper", not "In the bsvibe-app product, add `mean(values: list[float])…".
-    const title = run?.summary_title || run?.framed_intent || summaryTitle || run?.intent || null;
+    // F4 — but the frame LLM can misfire, classifying a REAL request as "no
+    // task" (summary_title="No task provided"). A produced deliverable proves
+    // work happened, so skip a degenerate "no task" frame title and fall
+    // through to the founder's real Direction rather than tell them nothing
+    // was asked. A genuinely empty request still degrades to the generic card.
+    const title =
+      usableTitle(run?.summary_title) ||
+      usableTitle(run?.framed_intent) ||
+      summaryTitle ||
+      usableTitle(run?.intent) ||
+      null;
     const deliverableId = deliverable?.id ?? null;
     const runId = run?.id ?? deliverable?.run_id ?? null;
     const detailHref = deliverableId

@@ -209,6 +209,11 @@ describe("Executor workers surface", () => {
     // marker so the founder can spot the diagnosis at a glance.
     expect(card.dataset.stale).toBe("true");
     expect(within(card).getByText(/stale/i)).toBeInTheDocument();
+    // F3 — an expired heartbeat is NOT online: the pill must read Offline (an
+    // effective-availability truth), never a green "Online" alongside a
+    // "last seen weeks ago" line that contradicts it.
+    expect(within(card).getByText(/^Offline$/i)).toBeInTheDocument();
+    expect(within(card).queryByText(/^Online$/i)).not.toBeInTheDocument();
   });
 
   it("revokes a worker after confirm → DELETE → re-read", async () => {
