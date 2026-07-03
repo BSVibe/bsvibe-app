@@ -877,6 +877,12 @@
     "whatThisDid": "무엇을 했나요",
     "note": "메모",
     "howVerified": "어떻게 검증했나요",
+    "derivedChecksLabel": "이 프로젝트 자체 검사",
+    "gateStatusTag": {
+      "passed": "통과",
+      "failed": "실패",
+      "unavailable": "실행 불가"
+    },
     "earlierAttempts": "이전 시도 {count}회는 통과하지 못했어요",
     "gradeLabel": "근거 {grade}",
     "gradeHint": {

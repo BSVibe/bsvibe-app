@@ -782,4 +782,54 @@ describe("Delivery Report (R3)", () => {
     const chip = within(knowledge).getByText(/timing-safe equality/);
     expect(chip.className).toMatch(/report-chip--statement/);
   });
+
+  it("leads 'How it was verified' with the repo's OWN derived gate, not the agent's advisory commands", async () => {
+    installFetch({
+      report: () => ({
+        ...REPORT,
+        verifications: [
+          {
+            id: "v1",
+            outcome: "passed",
+            // The agent DECLARED an env-incompatible command (F7) — advisory now.
+            contract: {
+              checks: [
+                { kind: "command", command: "uv run --extra dev ruff check", rationale: "" },
+              ],
+            },
+            result: {
+              command_results: [
+                {
+                  command: "uv run --extra dev ruff check",
+                  passed: false,
+                  exit_code: 2,
+                  output: "",
+                },
+              ],
+              // The AUTHORITATIVE gate: the repo's own derived checks.
+              derived_gate: {
+                applicable: true,
+                passed: true,
+                commands: [
+                  { command: "ruff check money.py", kind: "quality", status: "passed" },
+                  { command: "pytest test_money.py", kind: "test", status: "unavailable" },
+                ],
+              },
+            },
+            honesty_grade: "A",
+            created_at: NOW,
+          },
+        ],
+      }),
+    });
+    render(<DeliveryReport deliverableId="d1" />);
+
+    const checks = await screen.findByRole("region", { name: /how it was verified/i });
+    // The DERIVED gate command (the repo's own check) leads.
+    expect(within(checks).getByText("ruff check money.py")).toBeInTheDocument();
+    // The agent's invented/advisory command is NOT surfaced as a gating check.
+    expect(within(checks).queryByText(/--extra dev/)).toBeNull();
+    // A tool that wasn't available reads neutrally (recorded, not a failure).
+    expect(within(checks).getByText(/not available/i)).toBeInTheDocument();
+  });
 });
