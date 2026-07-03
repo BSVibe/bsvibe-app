@@ -1283,7 +1283,13 @@ class TestHonestyGrade:
         async with memory_session() as session:
             run = await self._seed_product_worktree(session, tmp_path, monkeypatch)  # empty repo
             work_step, attempt = await _make_step_and_attempt(session, run)
-            llm = StubLlm([LoopTurn(content='{"flagged": []}')])
+            # scope, then the deriver: no toolchain here → not-applicable.
+            llm = StubLlm(
+                [
+                    LoopTurn(content='{"flagged": []}'),
+                    LoopTurn(content='{"applicable": false, "commands": []}'),
+                ]
+            )
             svc = VerificationService(session=session, llm=llm)
             contract = VerificationContract(
                 checks=(VerificationCheck(kind="command", command="true"),)
@@ -1309,7 +1315,14 @@ class TestHonestyGrade:
                 session, tmp_path, monkeypatch, manifest="pyproject.toml"
             )
             work_step, attempt = await _make_step_and_attempt(session, run)
-            llm = StubLlm([LoopTurn(content='{"flagged": []}')])
+            # A real toolchain (applicable) but the deriver produced no runnable
+            # command → a gate was EXPECTED yet none ran → grade D, gate_expected.
+            llm = StubLlm(
+                [
+                    LoopTurn(content='{"flagged": []}'),
+                    LoopTurn(content='{"applicable": true, "commands": []}'),
+                ]
+            )
             svc = VerificationService(session=session, llm=llm)
             contract = VerificationContract(
                 checks=(VerificationCheck(kind="command", command="true"),)
@@ -1328,22 +1341,26 @@ class TestHonestyGrade:
             assert vr.result["gate_expected"] is True
 
     async def test_grade_b_when_gate_passes(self, tmp_path, monkeypatch):
-        """A product run whose repo's static gate RAN and passed earns B (one
-        strong leg) even without a demonstration."""
+        """A product run whose DERIVED gate RAN and passed earns B (one strong
+        leg) even without a demonstration."""
         async with memory_session() as session:
             run = await self._seed_product_worktree(
-                session,
-                tmp_path,
-                monkeypatch,
-                ci_yaml="jobs:\n  j:\n    steps:\n      - run: ruff check .\n",
+                session, tmp_path, monkeypatch, manifest="pyproject.toml"
             )
             work_step, attempt = await _make_step_and_attempt(session, run)
-            llm = StubLlm([LoopTurn(content='{"flagged": []}')])  # scope only
+            # scope, then the deriver returns a runnable command → FakeBox exit 0.
+            llm = StubLlm(
+                [
+                    LoopTurn(content='{"flagged": []}'),
+                    LoopTurn(
+                        content='{"applicable": true, "commands": [{"command": "ruff check ."}]}'
+                    ),
+                ]
+            )
             svc = VerificationService(session=session, llm=llm)
             contract = VerificationContract(
                 checks=(VerificationCheck(kind="command", command="true"),)
             )
-            # ``ruff check .`` (the discovered gate) runs → default FakeBox exit 0.
             vr = await svc.verify(
                 run=run,
                 work_step=work_step,
@@ -1376,6 +1393,90 @@ class TestHonestyGrade:
             )
             assert vr.outcome is VerificationOutcome.PASSED
             assert vr.result["honesty_grade"] is None
+
+    async def test_grade_a_when_derived_gate_passes_and_demonstrated(self, tmp_path, monkeypatch):
+        """Both strong legs — the DERIVED gate ran and passed AND the outcome was
+        demonstrated — earns A, the strongest, objective grade."""
+        async with memory_session() as session:
+            run = await self._seed_product_worktree(
+                session, tmp_path, monkeypatch, manifest="pyproject.toml"
+            )
+            work_step, attempt = await _make_step_and_attempt(session, run)
+            # code change → demonstration; then scope; then the derived gate.
+            llm = StubLlm(
+                [
+                    LoopTurn(content='{"probes": [{"name": "ok", "command": "true"}]}'),
+                    LoopTurn(content='{"flagged": []}'),
+                    LoopTurn(
+                        content='{"applicable": true, "commands": [{"command": "ruff check calc.py"}]}'
+                    ),
+                ]
+            )
+            svc = VerificationService(session=session, llm=llm)
+            contract = VerificationContract(
+                checks=(VerificationCheck(kind="command", command="true"),)
+            )
+            vr = await svc.verify(
+                run=run,
+                work_step=work_step,
+                attempt=attempt,
+                contract=contract,
+                box=FakeBox(),  # probe `true` + derived `ruff check calc.py` both exit 0
+                written_paths=["calc.py"],
+                final_text="",
+            )
+            assert vr.outcome is VerificationOutcome.PASSED
+            assert vr.result["outcome_demonstration"]["verdict"] == "demonstrated"
+            assert vr.result["honesty_grade"] == "A"
+
+    async def test_false_positive_zero_passed_has_no_failed_authoritative_command(
+        self, tmp_path, monkeypatch
+    ):
+        """The integrity invariant (Q-2 / false-positive-0): a PASSED verdict can
+        NEVER carry a FAILED command in the authoritative derived gate. An
+        unavailable (127) command doesn't fail; a real failure would flip the
+        verdict — so a green run is always backed by a clean gate."""
+        async with memory_session() as session:
+            run = await self._seed_product_worktree(
+                session, tmp_path, monkeypatch, manifest="pyproject.toml"
+            )
+            work_step, attempt = await _make_step_and_attempt(session, run)
+            llm = StubLlm(
+                [
+                    LoopTurn(content='{"flagged": []}'),
+                    LoopTurn(
+                        content=(
+                            '{"applicable": true, "commands": ['
+                            '{"command": "ruff check x.py"}, {"command": "mypy x.py"}]}'
+                        )
+                    ),
+                ]
+            )
+            svc = VerificationService(session=session, llm=llm)
+            contract = VerificationContract(
+                checks=(VerificationCheck(kind="command", command="true"),)
+            )
+            box = FakeBox(
+                exec_map={
+                    "mypy x.py": SandboxResult(
+                        exit_code=127, stdout="", stderr="mypy: not found", timed_out=False
+                    )
+                    # ruff check x.py → default exit 0 (passed)
+                }
+            )
+            vr = await svc.verify(
+                run=run,
+                work_step=work_step,
+                attempt=attempt,
+                contract=contract,
+                box=box,
+                written_paths=["README.md"],
+                final_text="",
+            )
+            assert vr.outcome is VerificationOutcome.PASSED
+            statuses = [c["status"] for c in vr.result["derived_gate"]["commands"]]
+            assert "failed" not in statuses  # false-positive-0: no failed authoritative command
+            assert "passed" in statuses and "unavailable" in statuses
 
 
 class TestDerivedGate:

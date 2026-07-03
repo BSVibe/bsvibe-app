@@ -641,28 +641,34 @@ class VerificationService:
         # for the proof surface + the trust ratchet (D → founder review, L-I3c).
         # ``None`` for a non-product/Direct run — the repo-gate ladder is N/A.
         applicable = run.product_id is not None and self._is_real_worktree(run)
+        # I4 — the ladder's gate legs now read the LLM-DERIVED gate (grounded in
+        # the repo's own manifests), not the per-stack detector. ``gate_passed``:
+        # the derived gate RAN and a command passed (a real objective leg).
+        # ``gate_discovered``: at least one command was derived (a runnable gate
+        # exists) even if all were unavailable (→ grade C). No derived gate → D.
+        derived_commands = derived_gate["commands"] if derived_gate is not None else []
         gate_passed = bool(
-            project_gate is not None
-            and project_gate["passed"]
-            and any(c["status"] == "passed" for c in project_gate["commands"])
+            derived_gate is not None
+            and derived_gate["passed"]
+            and any(c["status"] == "passed" for c in derived_commands)
         )
         demonstrated = demonstration is not None and demonstration["verdict"] == "demonstrated"
         honesty_grade = (
             compute_honesty_grade(
                 applicable=applicable,
                 gate_passed=gate_passed,
-                gate_discovered=project_gate is not None,
+                gate_discovered=bool(derived_commands),
                 demonstrated=demonstrated,
             )
             if passed
             else None
         )
-        # Was a gate reasonably EXPECTED here? A repo with a detectable stack is a
-        # real project that should declare a definition of done; an early /
-        # greenfield repo with no stack yet is legitimately gateless. The ratchet
-        # uses this to tell a genuine grade-D weakness ("couldn't verify") from a
-        # legitimate early-stage skip (founder distinction) — see needs_founder_review.
-        gate_expected = applicable and self._stack_detected(run)
+        # Was a gate reasonably EXPECTED here? The deriver decides: a repo with a
+        # real toolchain is ``applicable`` (a project that SHOULD verify with a
+        # command), while pure prose / an early greenfield repo is legitimately
+        # non-applicable. The ratchet uses this to tell a genuine grade-D weakness
+        # ("couldn't verify") from a legitimate skip — see needs_founder_review.
+        gate_expected = applicable and bool(derived_gate is not None and derived_gate["applicable"])
 
         vr = VerificationResult(
             id=uuid.uuid4(),
