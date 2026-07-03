@@ -1376,3 +1376,108 @@ class TestHonestyGrade:
             )
             assert vr.outcome is VerificationOutcome.PASSED
             assert vr.result["honesty_grade"] is None
+
+
+class TestDerivedGate:
+    """The repo's OWN verification gate, DERIVED by an LLM grounded in its
+    manifests and then RUN deterministically — the general replacement for the
+    hardcoded `uv run ruff`/mypy bar and the per-stack gate_discovery detectors.
+    The verdict is exit codes, never the model's opinion; a missing tool
+    (exit 127) is unavailable, never a false-fail (I2 — not yet wired into the
+    verdict)."""
+
+    async def _seed(self, session, tmp_path, monkeypatch, *, product=True):
+        run = await _make_run(session)
+        if product:
+            run.product_id = uuid.uuid4()
+        wt = tmp_path / str(run.id)
+        wt.mkdir(parents=True)
+        (wt / ".git").write_text("gitdir: /elsewhere\n")
+        import backend.storage.product_workspace as pw
+
+        monkeypatch.setattr(pw, "run_worktree_path", lambda _rid: wt)
+        return run
+
+    def _gate_turn(self, commands, *, applicable=True):
+        return LoopTurn(content=json.dumps({"applicable": applicable, "commands": commands}))
+
+    async def test_runs_derived_commands_and_passes(self, tmp_path, monkeypatch):
+        async with memory_session() as session:
+            llm = StubLlm(
+                [self._gate_turn([{"command": "uv run ruff check money.py", "kind": "quality"}])]
+            )
+            svc = VerificationService(session=session, llm=llm)
+            run = await self._seed(session, tmp_path, monkeypatch)
+            box = FakeBox()  # default exit 0
+            blob = await svc._run_derived_gate(run, box, ["money.py"])
+            assert blob is not None
+            assert blob["origin"] == "derived" and blob["passed"] is True
+            assert blob["commands"][0]["status"] == "passed"
+            assert "uv run ruff check money.py" in box.exec_calls
+
+    async def test_unavailable_command_is_not_a_failure(self, tmp_path, monkeypatch):
+        async with memory_session() as session:
+            llm = StubLlm([self._gate_turn([{"command": "cargo clippy"}])])
+            svc = VerificationService(session=session, llm=llm)
+            run = await self._seed(session, tmp_path, monkeypatch)
+            box = FakeBox(
+                exec_map={
+                    "cargo clippy": SandboxResult(
+                        exit_code=127, stdout="", stderr="not found", timed_out=False
+                    )
+                }
+            )
+            blob = await svc._run_derived_gate(run, box, ["src/lib.rs"])
+            assert blob is not None
+            assert blob["commands"][0]["status"] == "unavailable"
+            assert blob["passed"] is True  # 127 = tool absent here, not a real failure
+
+    async def test_real_failure_fails_the_gate(self, tmp_path, monkeypatch):
+        async with memory_session() as session:
+            llm = StubLlm([self._gate_turn([{"command": "uv run ruff check money.py"}])])
+            svc = VerificationService(session=session, llm=llm)
+            run = await self._seed(session, tmp_path, monkeypatch)
+            box = FakeBox(
+                exec_map={
+                    "uv run ruff check money.py": SandboxResult(
+                        exit_code=1, stdout="", stderr="I001", timed_out=False
+                    )
+                }
+            )
+            blob = await svc._run_derived_gate(run, box, ["money.py"])
+            assert blob is not None
+            assert blob["commands"][0]["status"] == "failed" and blob["passed"] is False
+
+    async def test_grounds_deriver_in_repo_manifests(self, tmp_path, monkeypatch):
+        async with memory_session() as session:
+            llm = StubLlm([self._gate_turn([{"command": "uv run ruff check money.py"}])])
+            svc = VerificationService(session=session, llm=llm)
+            run = await self._seed(session, tmp_path, monkeypatch)
+            box = FakeBox(files={"pyproject.toml": b"[tool.ruff]\nline-length = 100\n"})
+            await svc._run_derived_gate(run, box, ["money.py"])
+            sent = "\n".join(m["content"] for m in llm.calls[0]["messages"])
+            assert "[tool.ruff]" in sent  # the repo's manifest grounded the deriver
+            assert "money.py" in sent
+
+    async def test_not_applicable_runs_nothing(self, tmp_path, monkeypatch):
+        async with memory_session() as session:
+            llm = StubLlm([self._gate_turn([], applicable=False)])
+            svc = VerificationService(session=session, llm=llm)
+            run = await self._seed(session, tmp_path, monkeypatch)
+            box = FakeBox()
+            blob = await svc._run_derived_gate(run, box, ["design.md"])
+            assert blob is not None
+            assert blob["applicable"] is False and blob["commands"] == []
+            assert blob["passed"] is True and box.exec_calls == []
+
+    async def test_none_when_not_a_product_worktree(self, tmp_path, monkeypatch):
+        async with memory_session() as session:
+            svc = VerificationService(session=session, llm=StubLlm([]))
+            run = await self._seed(session, tmp_path, monkeypatch, product=False)
+            assert await svc._run_derived_gate(run, FakeBox(), ["x.py"]) is None
+
+    async def test_none_on_deriver_hiccup(self, tmp_path, monkeypatch):
+        async with memory_session() as session:
+            svc = VerificationService(session=session, llm=StubLlm([]))  # exhausted → raises
+            run = await self._seed(session, tmp_path, monkeypatch)
+            assert await svc._run_derived_gate(run, FakeBox(), ["x.py"]) is None

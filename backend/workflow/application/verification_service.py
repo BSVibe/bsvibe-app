@@ -33,6 +33,11 @@ from typing import Any, Protocol, runtime_checkable
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.workflow.domain.gate_derivation import (
+    DerivedGate,
+    derivation_planner_messages,
+    parse_derived_gate,
+)
 from backend.workflow.domain.gate_discovery import discover_gate
 from backend.workflow.domain.gate_scaffold import detect_stack
 from backend.workflow.domain.honesty import compute_honesty_grade
@@ -172,6 +177,25 @@ _GATE_SKIP_SUBSTRINGS = (
 #: Bytes of each changed source file fed to the demonstration planner (enough
 #: for a utility/module; the planner needs the API, not the whole repo).
 _SOURCE_CTX_BYTES = 8 * 1024
+#: Bytes of each manifest fed to the gate deriver — a manifest declares the
+#: toolchain (deps, extras, scripts, targets), which fits in a small window.
+_MANIFEST_CTX_BYTES = 8 * 1024
+#: Repo-root declaration files fed to the gate deriver as GROUNDING. These are
+#: universal manifest NAMES (not per-stack command logic — that is exactly the
+#: coupling the deriver removes): whatever exists is shown to the LLM, which
+#: reasons about the stack. Absent files are silently skipped.
+_MANIFEST_FILES: tuple[str, ...] = (
+    "pyproject.toml",
+    "setup.cfg",
+    "setup.py",
+    "package.json",
+    "Cargo.toml",
+    "go.mod",
+    "Makefile",
+    "justfile",
+    "pom.xml",
+    "build.gradle",
+)
 #: Extensions the demonstration planner can meaningfully exercise as CODE. A
 #: prose/data deliverable (``.md`` / ``.txt`` / ``.json``) yields no sources →
 #: no plan → ``undemonstrable`` (honest downgrade, not a fail). This is the
@@ -752,6 +776,109 @@ class VerificationService:
                 }
             )
         return results
+
+    async def _read_repo_manifests(self, box: SandboxSession) -> dict[str, str]:
+        """Read the repo's OWN declaration files (whatever exists) to ground the
+        gate deriver. Best-effort: a missing file raises :class:`SandboxError`
+        on a real sandbox / returns empty on the fake — skipped either way."""
+        manifests: dict[str, str] = {}
+        for path in _MANIFEST_FILES:
+            try:
+                data = await box.read_file(path, _MANIFEST_CTX_BYTES)
+            except SandboxError:
+                continue
+            text = data.decode("utf-8", errors="replace").strip()
+            if text:
+                manifests[path] = text
+        return manifests
+
+    async def _author_derived_gate(
+        self, intent: str, manifests: dict[str, str], written_paths: list[str]
+    ) -> DerivedGate | None:
+        """Ask the independent deriver for this repo's verification commands,
+        grounded in its manifests. Bounded — a hung executor CLI must never
+        stall the run; a hiccup → ``None`` → the caller treats it as no gate
+        (best-effort, never a false-fail)."""
+        try:
+            turn = await asyncio.wait_for(
+                self._llm.complete(
+                    messages=derivation_planner_messages(
+                        manifests=manifests, changed_files=written_paths, intent=intent
+                    ),
+                    tools=None,
+                ),
+                timeout=_VERIFY_LLM_TIMEOUT_S,
+            )
+        except Exception:  # noqa: BLE001 — a deriver hiccup must never break the run
+            return None
+        raw = _extract_json_object(str(getattr(turn, "content", "") or ""))
+        if raw is None:
+            return None
+        return parse_derived_gate(raw)
+
+    async def _run_derived_gate(
+        self, run: ExecutionRun, box: SandboxSession, written_paths: list[str]
+    ) -> dict[str, Any] | None:
+        """I1′ — the repo's OWN verification gate, DERIVED by an LLM grounded in
+        the repo's declarations (not a per-stack detector list nor a hardcoded
+        ``uv run ruff`` bar). The derived commands RUN in the sandbox; the verdict
+        is their exit codes, never a model's opinion. A command whose tool isn't
+        here (exit 127) is ``unavailable`` — recorded, never a false-fail; a
+        command that RAN and failed is a real gate failure.
+
+        Returns ``None`` for a non-product / non-worktree run, or on a deriver
+        hiccup (best-effort). Otherwise a blob: ``origin`` ("derived"),
+        ``applicable`` (does a runnable gate apply — a code change vs pure prose),
+        per-command ``commands`` (status ∈ passed|failed|unavailable), and
+        ``passed`` (no command RAN and failed). An ``applicable`` repo whose
+        commands could not be derived is applicable-but-empty (weak evidence)."""
+        if run.product_id is None or not self._is_real_worktree(run):
+            return None
+        payload = run.payload or {}
+        intent = str(payload.get("intent_text") or payload.get("text") or "").strip()
+        manifests = await self._read_repo_manifests(box)
+        gate = await self._author_derived_gate(intent, manifests, written_paths)
+        if gate is None:
+            return None
+        if not gate.applicable or gate.is_empty:
+            return {
+                "origin": "derived",
+                "applicable": gate.applicable,
+                "commands": [],
+                "passed": True,
+            }
+        venv_ready = await self._ensure_project_venv(box)
+        venv_bin = f"{box.workspace_mount}/.venv/bin"
+        results: list[dict[str, Any]] = []
+        for c in gate.commands:
+            run_command = (
+                f'export PATH="{venv_bin}:$PATH"; {c.command}' if venv_ready else c.command
+            )
+            res = await box.exec(run_command, timeout_s=GATE_CMD_TIMEOUT_S, shell=True)
+            output = "\n".join(o for o in (res.stdout, res.stderr) if o)[-2000:]
+            if res.exit_code == 0 and not res.timed_out:
+                status = "passed"
+            elif res.exit_code == 127:
+                status = "unavailable"
+            else:
+                status = "failed"
+            results.append(
+                {
+                    "command": c.command,
+                    "kind": c.kind,
+                    "status": status,
+                    "exit_code": res.exit_code,
+                    "timed_out": res.timed_out,
+                    "output": output,
+                }
+            )
+        passed = not any(r["status"] == "failed" for r in results)
+        return {
+            "origin": "derived",
+            "applicable": gate.applicable,
+            "commands": results,
+            "passed": passed,
+        }
 
     async def _run_project_gate(
         self, run: ExecutionRun, box: SandboxSession
