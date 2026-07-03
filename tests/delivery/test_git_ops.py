@@ -10,9 +10,11 @@ token-scrubbing of any logged command / URL.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from pathlib import Path
 
 from backend.workflow.infrastructure.delivery.git_ops import (
+    GitError,
     GitOps,
     _strip_https_userinfo,
     scrub_token,
@@ -70,6 +72,34 @@ async def test_clone_branch_commit_push_roundtrip(tmp_path: Path) -> None:
     assert "bsvibe/run-abc123" in branches
     log = await _run("log", "bsvibe/run-abc123", "--oneline", cwd=bare)
     assert "Add the answer" in log
+
+
+async def test_push_scrubs_the_token_from_origin_afterward(tmp_path: Path) -> None:
+    """SECURITY — ``push`` re-embeds the token into ``origin`` to authenticate,
+    but must scrub it back so a live credential never persists in ``.git/config``
+    on disk (the clone-time scrub missed this: a run that DELIVERED left its token
+    in the verify-sandbox origin). The scrub must happen even when the push itself
+    fails (the token was embedded before the push ran)."""
+    dest = tmp_path / "checkout"
+    await _run("init", "-b", "main", str(dest))
+    await _run("config", "user.email", "t@bsvibe.dev", cwd=dest)
+    await _run("config", "user.name", "T", cwd=dest)
+    # An https remote that will NOT be reachable — the push fails, but the token
+    # scrub must still run (via the push's finally).
+    await _run("remote", "add", "origin", "https://github.com/owner/repo.git", cwd=dest)
+    (dest / "f.txt").write_text("x\n")
+    await _run("add", "-A", cwd=dest)
+    await _run("commit", "-m", "c", cwd=dest)
+
+    ops = GitOps()
+    token = "ghp_fakeSecretTokenABC123"  # noqa: S105 — test literal, not a real cred
+    with contextlib.suppress(GitError):  # the push to the fake remote fails — expected
+        await ops.push(dest, "main", token=token)
+
+    origin = await _run("remote", "get-url", "origin", cwd=dest)
+    assert token not in origin
+    assert "x-access-token" not in origin
+    assert origin == "https://github.com/owner/repo.git"
 
 
 async def test_commit_all_no_changes_returns_false(tmp_path: Path) -> None:
