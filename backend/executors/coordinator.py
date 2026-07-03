@@ -200,6 +200,13 @@ class ExecutorOrchestrator:
         # worker's result path persists the files the CLI produced under this
         # run's workspace (``run_workspace_root/<run_id>/``) — surfaced as the
         # verified Deliverable's artifact_refs (executor-pool B1).
+        # Lift E21 parity — forward the account's underlying model id so a
+        # claude_code/opencode account pinned to a specific model (litellm_model
+        # e.g. "opus") runs the CLI with `--model <id>`. The legacy
+        # ``executor/<type>`` placeholder and an empty value both mean "use the
+        # CLI default" (model=None), so codex/default accounts are unchanged.
+        raw_model = (self._account.litellm_model or "").strip()
+        model = None if not raw_model or raw_model.startswith("executor/") else raw_model
         task = await dispatch.create_task(
             self._session,
             workspace_id=run.workspace_id,
@@ -208,6 +215,7 @@ class ExecutorOrchestrator:
             system=system,
             workspace_dir=".",
             run_id=run.id,
+            model=model,
         )
         await dispatch.dispatch_task(
             self._redis, session=self._session, task=task, worker_id=worker.id

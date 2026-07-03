@@ -782,6 +782,33 @@ async def test_dispatch_carries_non_empty_system_prompt(tmp_path: Path) -> None:
     await redis.aclose()
 
 
+async def test_dispatch_threads_account_model_to_task(tmp_path: Path) -> None:
+    # A claude_code account pinned to a real model (litellm_model="opus") must
+    # forward that id onto the task so the worker runs `claude --model opus` —
+    # parity with the resolver/adapter path (Lift E21). Without this, a
+    # founder's "route design to opus" account silently ran the CLI default.
+    redis = await _make_redis()
+    async with memory_session() as s:
+        run, account = await _seed(s)
+        account.litellm_model = "opus"
+        await s.commit()
+        task = await _create_task_only(s, redis=redis, account=account, run=run, tmp_path=tmp_path)
+        assert task.model == "opus"
+    await redis.aclose()
+
+
+async def test_dispatch_omits_executor_placeholder_model(tmp_path: Path) -> None:
+    # The legacy `executor/<type>` placeholder is NOT a real model id — it means
+    # "use the CLI's default", so the dispatched task carries no model override.
+    redis = await _make_redis()
+    async with memory_session() as s:
+        run, account = await _seed(s)  # litellm_model = "executor/claude_code"
+        await s.commit()
+        task = await _create_task_only(s, redis=redis, account=account, run=run, tmp_path=tmp_path)
+        assert task.model is None
+    await redis.aclose()
+
+
 async def test_dispatch_prompt_includes_canon_and_decisions(tmp_path: Path) -> None:
     redis = await _make_redis()
     async with memory_session() as s:
