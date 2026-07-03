@@ -243,7 +243,18 @@ class GitOps:
             origin = await self._run_checked("remote", "get-url", "origin", cwd=dest)
             authed = self.authed_url(origin.strip(), token=token)
             await self._run_checked("remote", "set-url", "origin", authed, cwd=dest, token=token)
-        await self._run_checked("push", "--set-upstream", "origin", branch, cwd=dest, token=token)
+        try:
+            await self._run_checked(
+                "push", "--set-upstream", "origin", branch, cwd=dest, token=token
+            )
+        finally:
+            # SECURITY — the push re-embedded the token into ``origin``; scrub it
+            # back so a live credential never persists in ``.git/config`` on disk.
+            # The clone-time scrub (:meth:`clone`) missed this: a run that
+            # DELIVERED left its token in the verify-sandbox origin. ``finally`` so
+            # a failed push still scrubs (the token was embedded before the push).
+            if token:
+                await self.scrub_origin_token(dest)
 
 
 __all__ = ["GitError", "GitOps", "scrub_token"]
