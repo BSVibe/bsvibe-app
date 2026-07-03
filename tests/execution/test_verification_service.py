@@ -1481,3 +1481,113 @@ class TestDerivedGate:
             svc = VerificationService(session=session, llm=StubLlm([]))  # exhausted → raises
             run = await self._seed(session, tmp_path, monkeypatch)
             assert await svc._run_derived_gate(run, FakeBox(), ["x.py"]) is None
+
+
+class TestVerdictWiring:
+    """I3 — the LLM-derived gate is the AUTHORITATIVE command gate; the agent's
+    declared commands are advisory. An invented command that fails on the sandbox
+    (the F7 loop) no longer false-fails the run; a real gate failure still FAILS
+    it (Q-2: garbage never passes 'verified')."""
+
+    async def _seed(self, session, tmp_path, monkeypatch, *, manifest="pyproject.toml"):
+        run = await _make_run(session)
+        run.product_id = uuid.uuid4()
+        wt = tmp_path / str(run.id)
+        wt.mkdir(parents=True)
+        (wt / ".git").write_text("gitdir: /elsewhere\n")
+        if manifest:
+            (wt / manifest).write_text("")
+        import backend.storage.product_workspace as pw
+
+        monkeypatch.setattr(pw, "run_worktree_path", lambda _rid: wt)
+        monkeypatch.setattr(pw, "commit_worktree", AsyncMock(), raising=False)
+        monkeypatch.setattr(
+            pw,
+            "merge_main_into_worktree",
+            AsyncMock(return_value=SimpleNamespace(status="clean", conflict_paths=[])),
+            raising=False,
+        )
+        return run
+
+    def _turns(self, derived_commands, *, applicable=True):
+        # verify()'s LLM call order for a product+worktree code change with a
+        # command-only contract: demonstration → scope → derived gate.
+        return [
+            LoopTurn(content='{"probes": []}'),  # demonstration → undemonstrable
+            LoopTurn(content='{"flagged": []}'),  # scope → clean
+            LoopTurn(content=json.dumps({"applicable": applicable, "commands": derived_commands})),
+        ]
+
+    async def test_invented_command_does_not_false_fail_when_derived_gate_passes(
+        self, tmp_path, monkeypatch
+    ):
+        async with memory_session() as session:
+            run = await self._seed(session, tmp_path, monkeypatch)
+            work_step, attempt = await _make_step_and_attempt(session, run)
+            svc = VerificationService(
+                session=session,
+                llm=StubLlm(self._turns([{"command": "uv run ruff check money.py"}])),
+            )
+            # The AGENT declared an env-incompatible command (F7): it RUNS and
+            # fails (uv rejects an undefined extra) — but it is advisory now.
+            contract = VerificationContract(
+                checks=(
+                    VerificationCheck(
+                        kind="command", command="uv run --extra dev ruff check money.py"
+                    ),
+                )
+            )
+            box = FakeBox(
+                exec_map={
+                    "uv run --extra dev ruff check money.py": SandboxResult(
+                        exit_code=2,
+                        stdout="",
+                        stderr="error: Extra `dev` is not defined",
+                        timed_out=False,
+                    )
+                    # the DERIVED `uv run ruff check money.py` passes (FakeBox default exit 0)
+                }
+            )
+            vr = await svc.verify(
+                run=run,
+                work_step=work_step,
+                attempt=attempt,
+                contract=contract,
+                box=box,
+                written_paths=["money.py"],
+                final_text="",
+            )
+            assert vr.outcome is VerificationOutcome.PASSED  # invented cmd did not gate
+            assert vr.result["derived_gate"]["passed"] is True
+            # the agent's broken command is still RECORDED (advisory) for the surface
+            assert any(not r["passed"] for r in vr.result["command_results"])
+
+    async def test_real_derived_gate_failure_still_fails(self, tmp_path, monkeypatch):
+        async with memory_session() as session:
+            run = await self._seed(session, tmp_path, monkeypatch)
+            work_step, attempt = await _make_step_and_attempt(session, run)
+            svc = VerificationService(
+                session=session,
+                llm=StubLlm(self._turns([{"command": "uv run ruff check money.py"}])),
+            )
+            contract = VerificationContract(
+                checks=(VerificationCheck(kind="command", command="true"),)  # agent cmd passes
+            )
+            box = FakeBox(
+                exec_map={
+                    "uv run ruff check money.py": SandboxResult(
+                        exit_code=1, stdout="", stderr="I001 import unsorted", timed_out=False
+                    )
+                }
+            )
+            vr = await svc.verify(
+                run=run,
+                work_step=work_step,
+                attempt=attempt,
+                contract=contract,
+                box=box,
+                written_paths=["money.py"],
+                final_text="",
+            )
+            assert vr.outcome is VerificationOutcome.FAILED  # a real gate failure fails (Q-2)
+            assert vr.result["derived_gate"]["passed"] is False

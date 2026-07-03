@@ -618,7 +618,22 @@ class VerificationService:
                 )
                 judge_pass = bool(judge_blob.get("passed"))
 
-        passed = all_cmd_pass and judge_pass and gate_pass and demo_pass
+        # I1′ — the repo's OWN gate, DERIVED by an LLM grounded in the repo's
+        # manifests (the general replacement for the hardcoded quality bar +
+        # per-stack detectors). When present it is the AUTHORITATIVE command
+        # gate, and the agent's declared command_results become ADVISORY —
+        # recorded for the proof surface but never gating, so an invented
+        # `--extra dev` / `python -m ruff` that fails on the sandbox can no
+        # longer false-fail the run (the F7 retry loop). A deriver hiccup /
+        # non-product / non-applicable repo → None → fall back to the agent +
+        # mandatory command attestation, so nothing regresses while the old
+        # path still stands (removed in a later increment).
+        derived_gate = await self._run_derived_gate(run, box, written_paths)
+        command_gate_pass = (
+            bool(derived_gate["passed"]) if derived_gate is not None else all_cmd_pass
+        )
+
+        passed = command_gate_pass and judge_pass and gate_pass and demo_pass
         outcome = VerificationOutcome.PASSED if passed else VerificationOutcome.FAILED
 
         # The honesty ladder (redesign §4): grade a PASSING verdict by evidence
@@ -658,6 +673,7 @@ class VerificationService:
             contract=contract.to_dict(),
             result={
                 "command_results": command_results,
+                "derived_gate": derived_gate,
                 "judge": judge_blob,
                 "project_gate": project_gate,
                 "outcome_demonstration": demonstration,
