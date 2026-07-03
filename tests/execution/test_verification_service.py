@@ -180,14 +180,13 @@ async def test_assemble_contract_keeps_declared_checks() -> None:
         assert "pytest -q" in cmds
 
 
-async def test_assemble_contract_appends_mandatory_quality_gates() -> None:
-    """L1 — ``verified`` must mean the project's deterministic quality bar
-    (lint/format/type) held on the changed files, not just the one command the
-    agent chose to declare. So assemble_contract appends mandatory ruff / ruff
-    format / mypy command checks on the changed ``.py`` files, regardless of the
-    declared contract — closing the self-attestation gap (an agent that only ran
-    a narrow pytest can't pass with unformatted / lint-broken / mistyped code).
-    """
+async def test_assemble_contract_no_longer_appends_a_hardcoded_quality_bar() -> None:
+    """The quality bar is no longer a hardcoded ``uv run ruff``/mypy append on
+    ``.py`` files — it is DERIVED per-repo from the target's own manifests and
+    run as the authoritative gate (``_run_derived_gate``), so the same coverage
+    generalises across stacks. assemble_contract keeps only the agent's declared
+    checks (its advisory attestation) + retrieved knowledge, not an invented
+    Python bar."""
     async with memory_session() as session:
         svc = VerificationService(session=session, llm=StubLlm([]))
         declared = {
@@ -200,12 +199,11 @@ async def test_assemble_contract_appends_mandatory_quality_gates() -> None:
         )
         assert contract is not None
         cmds = [c.command or "" for c in contract.command_checks]
-        # agent's own behavioral check kept
+        # the agent's own behavioral check is kept …
         assert any("pytest tests/common/test_x.py" in c for c in cmds)
-        # mandatory deterministic gates appended on the changed .py files
-        assert any(c.startswith("uv run ruff check") and "backend/common/x.py" in c for c in cmds)
-        assert any("ruff format --check" in c and "tests/common/test_x.py" in c for c in cmds)
-        assert any(c.startswith("uv run mypy") and "backend/common/x.py" in c for c in cmds)
+        # … but NO hardcoded Python quality bar is manufactured here.
+        assert not any(c.startswith("uv run ruff") for c in cmds)
+        assert not any(c.startswith("uv run mypy") for c in cmds)
 
 
 async def test_mandatory_gates_only_augment_a_real_attestation() -> None:
@@ -948,178 +946,6 @@ async def test_run_judge_times_out_to_non_pass(monkeypatch: Any) -> None:
         )
     assert verdict["passed"] is False
     assert "timed out" in verdict["reasoning"].lower()
-
-
-# --------------------------------------------------------------------------
-# L-I1b — project gate (run the repo's OWN static gate, fail-closed)
-# --------------------------------------------------------------------------
-
-
-class TestProjectGate:
-    """Verification runs the repo's OWN discovered static gate (whole-repo
-    lint/format/type/contracts) and fail-closes on a genuine gate failure — so
-    'verified' means 'passes the target's own definition of done', not a narrow
-    changed-files subset (findings 2026-07-01, #413)."""
-
-    async def _seed(self, session, tmp_path, monkeypatch, *, ci_yaml, product=True):
-        run = await _make_run(session)
-        if product:
-            run.product_id = uuid.uuid4()
-        wt = tmp_path / str(run.id)
-        (wt / ".github" / "workflows").mkdir(parents=True)
-        (wt / ".git").write_text("gitdir: /elsewhere\n")
-        (wt / ".github" / "workflows" / "ci.yml").write_text(ci_yaml)
-        import backend.storage.product_workspace as pw
-
-        monkeypatch.setattr(pw, "run_worktree_path", lambda _rid: wt)
-        return run
-
-    async def test_gate_failure_marks_gate_not_passed(self, tmp_path, monkeypatch):
-        async with memory_session() as session:
-            svc = VerificationService(session=session, llm=StubLlm([]))
-            run = await self._seed(
-                session,
-                tmp_path,
-                monkeypatch,
-                ci_yaml="jobs:\n  j:\n    steps:\n      - run: ruff check .\n",
-            )
-            box = FakeBox(
-                exec_map={
-                    "ruff check .": SandboxResult(
-                        exit_code=1, stdout="", stderr="E501", timed_out=False
-                    )
-                }
-            )
-            blob = await svc._run_project_gate(run, box)
-            assert blob is not None
-            assert blob["origin"] == "github-actions"
-            assert blob["passed"] is False
-            assert blob["commands"][0]["status"] == "failed"
-
-    async def test_gate_passes_when_all_checks_pass(self, tmp_path, monkeypatch):
-        async with memory_session() as session:
-            svc = VerificationService(session=session, llm=StubLlm([]))
-            run = await self._seed(
-                session,
-                tmp_path,
-                monkeypatch,
-                ci_yaml="jobs:\n  j:\n    steps:\n      - run: ruff check .\n",
-            )
-            blob = await svc._run_project_gate(run, FakeBox())  # default exit 0
-            assert blob is not None and blob["passed"] is True
-            assert blob["commands"][0]["status"] == "passed"
-
-    async def test_setup_and_dynamic_test_steps_are_skipped(self, tmp_path, monkeypatch):
-        async with memory_session() as session:
-            svc = VerificationService(session=session, llm=StubLlm([]))
-            run = await self._seed(
-                session,
-                tmp_path,
-                monkeypatch,
-                ci_yaml=(
-                    "jobs:\n  j:\n    steps:\n"
-                    "      - run: uv sync --all-extras\n"
-                    "      - run: ruff check .\n"
-                    "      - run: uv run pytest -q\n"
-                ),
-            )
-            box = FakeBox()
-            blob = await svc._run_project_gate(run, box)
-            assert blob is not None
-            # only the static check runs; setup + dynamic test are deferred
-            assert [c["command"] for c in blob["commands"]] == ["ruff check ."]
-            assert "uv sync --all-extras" not in box.exec_calls
-            assert "uv run pytest -q" not in box.exec_calls
-
-    async def test_static_check_over_tests_dir_is_not_skipped(self, tmp_path, monkeypatch):
-        # Regression: a bare " test" skip substring wrongly matched the args of
-        # `ruff check backend/ tests/ ...` (the exact #413 static check) and
-        # silently disabled it. The static check MUST run.
-        async with memory_session() as session:
-            svc = VerificationService(session=session, llm=StubLlm([]))
-            run = await self._seed(
-                session,
-                tmp_path,
-                monkeypatch,
-                ci_yaml=(
-                    "jobs:\n  j:\n    steps:\n"
-                    "      - run: uv run ruff check backend/ tests/ bsvibe_sdk/ plugin/\n"
-                ),
-            )
-            box = FakeBox()
-            blob = await svc._run_project_gate(run, box)
-            assert blob is not None
-            assert [c["command"] for c in blob["commands"]] == [
-                "uv run ruff check backend/ tests/ bsvibe_sdk/ plugin/"
-            ]
-
-    async def test_node_ecosystem_commands_are_deferred(self, tmp_path, monkeypatch):
-        # A monorepo's node sub-project needs an install (skipped) and a sub-dir
-        # cwd (lost by discovery), so `pnpm lint` from /work false-fails on a
-        # missing manifest. Defer node checks to real CI; keep the python one.
-        async with memory_session() as session:
-            svc = VerificationService(session=session, llm=StubLlm([]))
-            run = await self._seed(
-                session,
-                tmp_path,
-                monkeypatch,
-                ci_yaml=(
-                    "jobs:\n  j:\n    steps:\n"
-                    "      - run: pnpm lint\n"
-                    "      - run: pnpm typecheck\n"
-                    "      - run: uv run lint-imports\n"
-                ),
-            )
-            box = FakeBox()
-            blob = await svc._run_project_gate(run, box)
-            assert blob is not None
-            assert [c["command"] for c in blob["commands"]] == ["uv run lint-imports"]
-            assert "pnpm lint" not in box.exec_calls
-
-    async def test_unavailable_command_is_not_a_failure(self, tmp_path, monkeypatch):
-        async with memory_session() as session:
-            svc = VerificationService(session=session, llm=StubLlm([]))
-            run = await self._seed(
-                session,
-                tmp_path,
-                monkeypatch,
-                ci_yaml="jobs:\n  j:\n    steps:\n      - run: eslint .\n",
-            )
-            box = FakeBox(
-                exec_map={
-                    "eslint .": SandboxResult(
-                        exit_code=127, stdout="", stderr="eslint: not found", timed_out=False
-                    )
-                }
-            )
-            blob = await svc._run_project_gate(run, box)
-            assert blob is not None
-            assert blob["commands"][0]["status"] == "unavailable"
-            assert blob["passed"] is True  # couldn't run here ≠ failed
-
-    async def test_none_when_not_a_product_worktree(self, tmp_path, monkeypatch):
-        async with memory_session() as session:
-            svc = VerificationService(session=session, llm=StubLlm([]))
-            run = await self._seed(
-                session,
-                tmp_path,
-                monkeypatch,
-                ci_yaml="jobs:\n  j:\n    steps:\n      - run: ruff check .\n",
-                product=False,
-            )
-            assert await svc._run_project_gate(run, FakeBox()) is None
-
-    async def test_none_when_repo_declares_no_static_gate(self, tmp_path, monkeypatch):
-        async with memory_session() as session:
-            svc = VerificationService(session=session, llm=StubLlm([]))
-            run = await self._seed(
-                session,
-                tmp_path,
-                monkeypatch,
-                ci_yaml="jobs:\n  j:\n    steps:\n      - run: uv run pytest -q\n",
-            )
-            # only a dynamic test → nothing runnable as a static gate here
-            assert await svc._run_project_gate(run, FakeBox()) is None
 
 
 # --------------------------------------------------------------------------
