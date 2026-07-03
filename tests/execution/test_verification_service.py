@@ -180,14 +180,13 @@ async def test_assemble_contract_keeps_declared_checks() -> None:
         assert "pytest -q" in cmds
 
 
-async def test_assemble_contract_appends_mandatory_quality_gates() -> None:
-    """L1 — ``verified`` must mean the project's deterministic quality bar
-    (lint/format/type) held on the changed files, not just the one command the
-    agent chose to declare. So assemble_contract appends mandatory ruff / ruff
-    format / mypy command checks on the changed ``.py`` files, regardless of the
-    declared contract — closing the self-attestation gap (an agent that only ran
-    a narrow pytest can't pass with unformatted / lint-broken / mistyped code).
-    """
+async def test_assemble_contract_no_longer_appends_a_hardcoded_quality_bar() -> None:
+    """The quality bar is no longer a hardcoded ``uv run ruff``/mypy append on
+    ``.py`` files — it is DERIVED per-repo from the target's own manifests and
+    run as the authoritative gate (``_run_derived_gate``), so the same coverage
+    generalises across stacks. assemble_contract keeps only the agent's declared
+    checks (its advisory attestation) + retrieved knowledge, not an invented
+    Python bar."""
     async with memory_session() as session:
         svc = VerificationService(session=session, llm=StubLlm([]))
         declared = {
@@ -200,12 +199,11 @@ async def test_assemble_contract_appends_mandatory_quality_gates() -> None:
         )
         assert contract is not None
         cmds = [c.command or "" for c in contract.command_checks]
-        # agent's own behavioral check kept
+        # the agent's own behavioral check is kept …
         assert any("pytest tests/common/test_x.py" in c for c in cmds)
-        # mandatory deterministic gates appended on the changed .py files
-        assert any(c.startswith("uv run ruff check") and "backend/common/x.py" in c for c in cmds)
-        assert any("ruff format --check" in c and "tests/common/test_x.py" in c for c in cmds)
-        assert any(c.startswith("uv run mypy") and "backend/common/x.py" in c for c in cmds)
+        # … but NO hardcoded Python quality bar is manufactured here.
+        assert not any(c.startswith("uv run ruff") for c in cmds)
+        assert not any(c.startswith("uv run mypy") for c in cmds)
 
 
 async def test_mandatory_gates_only_augment_a_real_attestation() -> None:
@@ -951,178 +949,6 @@ async def test_run_judge_times_out_to_non_pass(monkeypatch: Any) -> None:
 
 
 # --------------------------------------------------------------------------
-# L-I1b — project gate (run the repo's OWN static gate, fail-closed)
-# --------------------------------------------------------------------------
-
-
-class TestProjectGate:
-    """Verification runs the repo's OWN discovered static gate (whole-repo
-    lint/format/type/contracts) and fail-closes on a genuine gate failure — so
-    'verified' means 'passes the target's own definition of done', not a narrow
-    changed-files subset (findings 2026-07-01, #413)."""
-
-    async def _seed(self, session, tmp_path, monkeypatch, *, ci_yaml, product=True):
-        run = await _make_run(session)
-        if product:
-            run.product_id = uuid.uuid4()
-        wt = tmp_path / str(run.id)
-        (wt / ".github" / "workflows").mkdir(parents=True)
-        (wt / ".git").write_text("gitdir: /elsewhere\n")
-        (wt / ".github" / "workflows" / "ci.yml").write_text(ci_yaml)
-        import backend.storage.product_workspace as pw
-
-        monkeypatch.setattr(pw, "run_worktree_path", lambda _rid: wt)
-        return run
-
-    async def test_gate_failure_marks_gate_not_passed(self, tmp_path, monkeypatch):
-        async with memory_session() as session:
-            svc = VerificationService(session=session, llm=StubLlm([]))
-            run = await self._seed(
-                session,
-                tmp_path,
-                monkeypatch,
-                ci_yaml="jobs:\n  j:\n    steps:\n      - run: ruff check .\n",
-            )
-            box = FakeBox(
-                exec_map={
-                    "ruff check .": SandboxResult(
-                        exit_code=1, stdout="", stderr="E501", timed_out=False
-                    )
-                }
-            )
-            blob = await svc._run_project_gate(run, box)
-            assert blob is not None
-            assert blob["origin"] == "github-actions"
-            assert blob["passed"] is False
-            assert blob["commands"][0]["status"] == "failed"
-
-    async def test_gate_passes_when_all_checks_pass(self, tmp_path, monkeypatch):
-        async with memory_session() as session:
-            svc = VerificationService(session=session, llm=StubLlm([]))
-            run = await self._seed(
-                session,
-                tmp_path,
-                monkeypatch,
-                ci_yaml="jobs:\n  j:\n    steps:\n      - run: ruff check .\n",
-            )
-            blob = await svc._run_project_gate(run, FakeBox())  # default exit 0
-            assert blob is not None and blob["passed"] is True
-            assert blob["commands"][0]["status"] == "passed"
-
-    async def test_setup_and_dynamic_test_steps_are_skipped(self, tmp_path, monkeypatch):
-        async with memory_session() as session:
-            svc = VerificationService(session=session, llm=StubLlm([]))
-            run = await self._seed(
-                session,
-                tmp_path,
-                monkeypatch,
-                ci_yaml=(
-                    "jobs:\n  j:\n    steps:\n"
-                    "      - run: uv sync --all-extras\n"
-                    "      - run: ruff check .\n"
-                    "      - run: uv run pytest -q\n"
-                ),
-            )
-            box = FakeBox()
-            blob = await svc._run_project_gate(run, box)
-            assert blob is not None
-            # only the static check runs; setup + dynamic test are deferred
-            assert [c["command"] for c in blob["commands"]] == ["ruff check ."]
-            assert "uv sync --all-extras" not in box.exec_calls
-            assert "uv run pytest -q" not in box.exec_calls
-
-    async def test_static_check_over_tests_dir_is_not_skipped(self, tmp_path, monkeypatch):
-        # Regression: a bare " test" skip substring wrongly matched the args of
-        # `ruff check backend/ tests/ ...` (the exact #413 static check) and
-        # silently disabled it. The static check MUST run.
-        async with memory_session() as session:
-            svc = VerificationService(session=session, llm=StubLlm([]))
-            run = await self._seed(
-                session,
-                tmp_path,
-                monkeypatch,
-                ci_yaml=(
-                    "jobs:\n  j:\n    steps:\n"
-                    "      - run: uv run ruff check backend/ tests/ bsvibe_sdk/ plugin/\n"
-                ),
-            )
-            box = FakeBox()
-            blob = await svc._run_project_gate(run, box)
-            assert blob is not None
-            assert [c["command"] for c in blob["commands"]] == [
-                "uv run ruff check backend/ tests/ bsvibe_sdk/ plugin/"
-            ]
-
-    async def test_node_ecosystem_commands_are_deferred(self, tmp_path, monkeypatch):
-        # A monorepo's node sub-project needs an install (skipped) and a sub-dir
-        # cwd (lost by discovery), so `pnpm lint` from /work false-fails on a
-        # missing manifest. Defer node checks to real CI; keep the python one.
-        async with memory_session() as session:
-            svc = VerificationService(session=session, llm=StubLlm([]))
-            run = await self._seed(
-                session,
-                tmp_path,
-                monkeypatch,
-                ci_yaml=(
-                    "jobs:\n  j:\n    steps:\n"
-                    "      - run: pnpm lint\n"
-                    "      - run: pnpm typecheck\n"
-                    "      - run: uv run lint-imports\n"
-                ),
-            )
-            box = FakeBox()
-            blob = await svc._run_project_gate(run, box)
-            assert blob is not None
-            assert [c["command"] for c in blob["commands"]] == ["uv run lint-imports"]
-            assert "pnpm lint" not in box.exec_calls
-
-    async def test_unavailable_command_is_not_a_failure(self, tmp_path, monkeypatch):
-        async with memory_session() as session:
-            svc = VerificationService(session=session, llm=StubLlm([]))
-            run = await self._seed(
-                session,
-                tmp_path,
-                monkeypatch,
-                ci_yaml="jobs:\n  j:\n    steps:\n      - run: eslint .\n",
-            )
-            box = FakeBox(
-                exec_map={
-                    "eslint .": SandboxResult(
-                        exit_code=127, stdout="", stderr="eslint: not found", timed_out=False
-                    )
-                }
-            )
-            blob = await svc._run_project_gate(run, box)
-            assert blob is not None
-            assert blob["commands"][0]["status"] == "unavailable"
-            assert blob["passed"] is True  # couldn't run here ≠ failed
-
-    async def test_none_when_not_a_product_worktree(self, tmp_path, monkeypatch):
-        async with memory_session() as session:
-            svc = VerificationService(session=session, llm=StubLlm([]))
-            run = await self._seed(
-                session,
-                tmp_path,
-                monkeypatch,
-                ci_yaml="jobs:\n  j:\n    steps:\n      - run: ruff check .\n",
-                product=False,
-            )
-            assert await svc._run_project_gate(run, FakeBox()) is None
-
-    async def test_none_when_repo_declares_no_static_gate(self, tmp_path, monkeypatch):
-        async with memory_session() as session:
-            svc = VerificationService(session=session, llm=StubLlm([]))
-            run = await self._seed(
-                session,
-                tmp_path,
-                monkeypatch,
-                ci_yaml="jobs:\n  j:\n    steps:\n      - run: uv run pytest -q\n",
-            )
-            # only a dynamic test → nothing runnable as a static gate here
-            assert await svc._run_project_gate(run, FakeBox()) is None
-
-
-# --------------------------------------------------------------------------
 # I3 — scope discipline (flag changed files unrelated to the intent; SURFACE,
 # never block). Gated to a product run with a real worktree (the durable diff).
 # --------------------------------------------------------------------------
@@ -1283,7 +1109,13 @@ class TestHonestyGrade:
         async with memory_session() as session:
             run = await self._seed_product_worktree(session, tmp_path, monkeypatch)  # empty repo
             work_step, attempt = await _make_step_and_attempt(session, run)
-            llm = StubLlm([LoopTurn(content='{"flagged": []}')])
+            # scope, then the deriver: no toolchain here → not-applicable.
+            llm = StubLlm(
+                [
+                    LoopTurn(content='{"flagged": []}'),
+                    LoopTurn(content='{"applicable": false, "commands": []}'),
+                ]
+            )
             svc = VerificationService(session=session, llm=llm)
             contract = VerificationContract(
                 checks=(VerificationCheck(kind="command", command="true"),)
@@ -1309,7 +1141,14 @@ class TestHonestyGrade:
                 session, tmp_path, monkeypatch, manifest="pyproject.toml"
             )
             work_step, attempt = await _make_step_and_attempt(session, run)
-            llm = StubLlm([LoopTurn(content='{"flagged": []}')])
+            # A real toolchain (applicable) but the deriver produced no runnable
+            # command → a gate was EXPECTED yet none ran → grade D, gate_expected.
+            llm = StubLlm(
+                [
+                    LoopTurn(content='{"flagged": []}'),
+                    LoopTurn(content='{"applicable": true, "commands": []}'),
+                ]
+            )
             svc = VerificationService(session=session, llm=llm)
             contract = VerificationContract(
                 checks=(VerificationCheck(kind="command", command="true"),)
@@ -1328,22 +1167,26 @@ class TestHonestyGrade:
             assert vr.result["gate_expected"] is True
 
     async def test_grade_b_when_gate_passes(self, tmp_path, monkeypatch):
-        """A product run whose repo's static gate RAN and passed earns B (one
-        strong leg) even without a demonstration."""
+        """A product run whose DERIVED gate RAN and passed earns B (one strong
+        leg) even without a demonstration."""
         async with memory_session() as session:
             run = await self._seed_product_worktree(
-                session,
-                tmp_path,
-                monkeypatch,
-                ci_yaml="jobs:\n  j:\n    steps:\n      - run: ruff check .\n",
+                session, tmp_path, monkeypatch, manifest="pyproject.toml"
             )
             work_step, attempt = await _make_step_and_attempt(session, run)
-            llm = StubLlm([LoopTurn(content='{"flagged": []}')])  # scope only
+            # scope, then the deriver returns a runnable command → FakeBox exit 0.
+            llm = StubLlm(
+                [
+                    LoopTurn(content='{"flagged": []}'),
+                    LoopTurn(
+                        content='{"applicable": true, "commands": [{"command": "ruff check ."}]}'
+                    ),
+                ]
+            )
             svc = VerificationService(session=session, llm=llm)
             contract = VerificationContract(
                 checks=(VerificationCheck(kind="command", command="true"),)
             )
-            # ``ruff check .`` (the discovered gate) runs → default FakeBox exit 0.
             vr = await svc.verify(
                 run=run,
                 work_step=work_step,
@@ -1376,3 +1219,302 @@ class TestHonestyGrade:
             )
             assert vr.outcome is VerificationOutcome.PASSED
             assert vr.result["honesty_grade"] is None
+
+    async def test_grade_a_when_derived_gate_passes_and_demonstrated(self, tmp_path, monkeypatch):
+        """Both strong legs — the DERIVED gate ran and passed AND the outcome was
+        demonstrated — earns A, the strongest, objective grade."""
+        async with memory_session() as session:
+            run = await self._seed_product_worktree(
+                session, tmp_path, monkeypatch, manifest="pyproject.toml"
+            )
+            work_step, attempt = await _make_step_and_attempt(session, run)
+            # code change → demonstration; then scope; then the derived gate.
+            llm = StubLlm(
+                [
+                    LoopTurn(content='{"probes": [{"name": "ok", "command": "true"}]}'),
+                    LoopTurn(content='{"flagged": []}'),
+                    LoopTurn(
+                        content='{"applicable": true, "commands": [{"command": "ruff check calc.py"}]}'
+                    ),
+                ]
+            )
+            svc = VerificationService(session=session, llm=llm)
+            contract = VerificationContract(
+                checks=(VerificationCheck(kind="command", command="true"),)
+            )
+            vr = await svc.verify(
+                run=run,
+                work_step=work_step,
+                attempt=attempt,
+                contract=contract,
+                box=FakeBox(),  # probe `true` + derived `ruff check calc.py` both exit 0
+                written_paths=["calc.py"],
+                final_text="",
+            )
+            assert vr.outcome is VerificationOutcome.PASSED
+            assert vr.result["outcome_demonstration"]["verdict"] == "demonstrated"
+            assert vr.result["honesty_grade"] == "A"
+
+    async def test_false_positive_zero_passed_has_no_failed_authoritative_command(
+        self, tmp_path, monkeypatch
+    ):
+        """The integrity invariant (Q-2 / false-positive-0): a PASSED verdict can
+        NEVER carry a FAILED command in the authoritative derived gate. An
+        unavailable (127) command doesn't fail; a real failure would flip the
+        verdict — so a green run is always backed by a clean gate."""
+        async with memory_session() as session:
+            run = await self._seed_product_worktree(
+                session, tmp_path, monkeypatch, manifest="pyproject.toml"
+            )
+            work_step, attempt = await _make_step_and_attempt(session, run)
+            llm = StubLlm(
+                [
+                    LoopTurn(content='{"flagged": []}'),
+                    LoopTurn(
+                        content=(
+                            '{"applicable": true, "commands": ['
+                            '{"command": "ruff check x.py"}, {"command": "mypy x.py"}]}'
+                        )
+                    ),
+                ]
+            )
+            svc = VerificationService(session=session, llm=llm)
+            contract = VerificationContract(
+                checks=(VerificationCheck(kind="command", command="true"),)
+            )
+            box = FakeBox(
+                exec_map={
+                    "mypy x.py": SandboxResult(
+                        exit_code=127, stdout="", stderr="mypy: not found", timed_out=False
+                    )
+                    # ruff check x.py → default exit 0 (passed)
+                }
+            )
+            vr = await svc.verify(
+                run=run,
+                work_step=work_step,
+                attempt=attempt,
+                contract=contract,
+                box=box,
+                written_paths=["README.md"],
+                final_text="",
+            )
+            assert vr.outcome is VerificationOutcome.PASSED
+            statuses = [c["status"] for c in vr.result["derived_gate"]["commands"]]
+            assert "failed" not in statuses  # false-positive-0: no failed authoritative command
+            assert "passed" in statuses and "unavailable" in statuses
+
+
+class TestDerivedGate:
+    """The repo's OWN verification gate, DERIVED by an LLM grounded in its
+    manifests and then RUN deterministically — the general replacement for the
+    hardcoded `uv run ruff`/mypy bar and the per-stack gate_discovery detectors.
+    The verdict is exit codes, never the model's opinion; a missing tool
+    (exit 127) is unavailable, never a false-fail (I2 — not yet wired into the
+    verdict)."""
+
+    async def _seed(self, session, tmp_path, monkeypatch, *, product=True):
+        run = await _make_run(session)
+        if product:
+            run.product_id = uuid.uuid4()
+        wt = tmp_path / str(run.id)
+        wt.mkdir(parents=True)
+        (wt / ".git").write_text("gitdir: /elsewhere\n")
+        import backend.storage.product_workspace as pw
+
+        monkeypatch.setattr(pw, "run_worktree_path", lambda _rid: wt)
+        return run
+
+    def _gate_turn(self, commands, *, applicable=True):
+        return LoopTurn(content=json.dumps({"applicable": applicable, "commands": commands}))
+
+    async def test_runs_derived_commands_and_passes(self, tmp_path, monkeypatch):
+        async with memory_session() as session:
+            llm = StubLlm(
+                [self._gate_turn([{"command": "uv run ruff check money.py", "kind": "quality"}])]
+            )
+            svc = VerificationService(session=session, llm=llm)
+            run = await self._seed(session, tmp_path, monkeypatch)
+            box = FakeBox()  # default exit 0
+            blob = await svc._run_derived_gate(run, box, ["money.py"])
+            assert blob is not None
+            assert blob["origin"] == "derived" and blob["passed"] is True
+            assert blob["commands"][0]["status"] == "passed"
+            assert "uv run ruff check money.py" in box.exec_calls
+
+    async def test_unavailable_command_is_not_a_failure(self, tmp_path, monkeypatch):
+        async with memory_session() as session:
+            llm = StubLlm([self._gate_turn([{"command": "cargo clippy"}])])
+            svc = VerificationService(session=session, llm=llm)
+            run = await self._seed(session, tmp_path, monkeypatch)
+            box = FakeBox(
+                exec_map={
+                    "cargo clippy": SandboxResult(
+                        exit_code=127, stdout="", stderr="not found", timed_out=False
+                    )
+                }
+            )
+            blob = await svc._run_derived_gate(run, box, ["src/lib.rs"])
+            assert blob is not None
+            assert blob["commands"][0]["status"] == "unavailable"
+            assert blob["passed"] is True  # 127 = tool absent here, not a real failure
+
+    async def test_real_failure_fails_the_gate(self, tmp_path, monkeypatch):
+        async with memory_session() as session:
+            llm = StubLlm([self._gate_turn([{"command": "uv run ruff check money.py"}])])
+            svc = VerificationService(session=session, llm=llm)
+            run = await self._seed(session, tmp_path, monkeypatch)
+            box = FakeBox(
+                exec_map={
+                    "uv run ruff check money.py": SandboxResult(
+                        exit_code=1, stdout="", stderr="I001", timed_out=False
+                    )
+                }
+            )
+            blob = await svc._run_derived_gate(run, box, ["money.py"])
+            assert blob is not None
+            assert blob["commands"][0]["status"] == "failed" and blob["passed"] is False
+
+    async def test_grounds_deriver_in_repo_manifests(self, tmp_path, monkeypatch):
+        async with memory_session() as session:
+            llm = StubLlm([self._gate_turn([{"command": "uv run ruff check money.py"}])])
+            svc = VerificationService(session=session, llm=llm)
+            run = await self._seed(session, tmp_path, monkeypatch)
+            box = FakeBox(files={"pyproject.toml": b"[tool.ruff]\nline-length = 100\n"})
+            await svc._run_derived_gate(run, box, ["money.py"])
+            sent = "\n".join(m["content"] for m in llm.calls[0]["messages"])
+            assert "[tool.ruff]" in sent  # the repo's manifest grounded the deriver
+            assert "money.py" in sent
+
+    async def test_not_applicable_runs_nothing(self, tmp_path, monkeypatch):
+        async with memory_session() as session:
+            llm = StubLlm([self._gate_turn([], applicable=False)])
+            svc = VerificationService(session=session, llm=llm)
+            run = await self._seed(session, tmp_path, monkeypatch)
+            box = FakeBox()
+            blob = await svc._run_derived_gate(run, box, ["design.md"])
+            assert blob is not None
+            assert blob["applicable"] is False and blob["commands"] == []
+            assert blob["passed"] is True and box.exec_calls == []
+
+    async def test_none_when_not_a_product_worktree(self, tmp_path, monkeypatch):
+        async with memory_session() as session:
+            svc = VerificationService(session=session, llm=StubLlm([]))
+            run = await self._seed(session, tmp_path, monkeypatch, product=False)
+            assert await svc._run_derived_gate(run, FakeBox(), ["x.py"]) is None
+
+    async def test_none_on_deriver_hiccup(self, tmp_path, monkeypatch):
+        async with memory_session() as session:
+            svc = VerificationService(session=session, llm=StubLlm([]))  # exhausted → raises
+            run = await self._seed(session, tmp_path, monkeypatch)
+            assert await svc._run_derived_gate(run, FakeBox(), ["x.py"]) is None
+
+
+class TestVerdictWiring:
+    """I3 — the LLM-derived gate is the AUTHORITATIVE command gate; the agent's
+    declared commands are advisory. An invented command that fails on the sandbox
+    (the F7 loop) no longer false-fails the run; a real gate failure still FAILS
+    it (Q-2: garbage never passes 'verified')."""
+
+    async def _seed(self, session, tmp_path, monkeypatch, *, manifest="pyproject.toml"):
+        run = await _make_run(session)
+        run.product_id = uuid.uuid4()
+        wt = tmp_path / str(run.id)
+        wt.mkdir(parents=True)
+        (wt / ".git").write_text("gitdir: /elsewhere\n")
+        if manifest:
+            (wt / manifest).write_text("")
+        import backend.storage.product_workspace as pw
+
+        monkeypatch.setattr(pw, "run_worktree_path", lambda _rid: wt)
+        monkeypatch.setattr(pw, "commit_worktree", AsyncMock(), raising=False)
+        monkeypatch.setattr(
+            pw,
+            "merge_main_into_worktree",
+            AsyncMock(return_value=SimpleNamespace(status="clean", conflict_paths=[])),
+            raising=False,
+        )
+        return run
+
+    def _turns(self, derived_commands, *, applicable=True):
+        # verify()'s LLM call order for a product+worktree code change with a
+        # command-only contract: demonstration → scope → derived gate.
+        return [
+            LoopTurn(content='{"probes": []}'),  # demonstration → undemonstrable
+            LoopTurn(content='{"flagged": []}'),  # scope → clean
+            LoopTurn(content=json.dumps({"applicable": applicable, "commands": derived_commands})),
+        ]
+
+    async def test_invented_command_does_not_false_fail_when_derived_gate_passes(
+        self, tmp_path, monkeypatch
+    ):
+        async with memory_session() as session:
+            run = await self._seed(session, tmp_path, monkeypatch)
+            work_step, attempt = await _make_step_and_attempt(session, run)
+            svc = VerificationService(
+                session=session,
+                llm=StubLlm(self._turns([{"command": "uv run ruff check money.py"}])),
+            )
+            # The AGENT declared an env-incompatible command (F7): it RUNS and
+            # fails (uv rejects an undefined extra) — but it is advisory now.
+            contract = VerificationContract(
+                checks=(
+                    VerificationCheck(
+                        kind="command", command="uv run --extra dev ruff check money.py"
+                    ),
+                )
+            )
+            box = FakeBox(
+                exec_map={
+                    "uv run --extra dev ruff check money.py": SandboxResult(
+                        exit_code=2,
+                        stdout="",
+                        stderr="error: Extra `dev` is not defined",
+                        timed_out=False,
+                    )
+                    # the DERIVED `uv run ruff check money.py` passes (FakeBox default exit 0)
+                }
+            )
+            vr = await svc.verify(
+                run=run,
+                work_step=work_step,
+                attempt=attempt,
+                contract=contract,
+                box=box,
+                written_paths=["money.py"],
+                final_text="",
+            )
+            assert vr.outcome is VerificationOutcome.PASSED  # invented cmd did not gate
+            assert vr.result["derived_gate"]["passed"] is True
+            # the agent's broken command is still RECORDED (advisory) for the surface
+            assert any(not r["passed"] for r in vr.result["command_results"])
+
+    async def test_real_derived_gate_failure_still_fails(self, tmp_path, monkeypatch):
+        async with memory_session() as session:
+            run = await self._seed(session, tmp_path, monkeypatch)
+            work_step, attempt = await _make_step_and_attempt(session, run)
+            svc = VerificationService(
+                session=session,
+                llm=StubLlm(self._turns([{"command": "uv run ruff check money.py"}])),
+            )
+            contract = VerificationContract(
+                checks=(VerificationCheck(kind="command", command="true"),)  # agent cmd passes
+            )
+            box = FakeBox(
+                exec_map={
+                    "uv run ruff check money.py": SandboxResult(
+                        exit_code=1, stdout="", stderr="I001 import unsorted", timed_out=False
+                    )
+                }
+            )
+            vr = await svc.verify(
+                run=run,
+                work_step=work_step,
+                attempt=attempt,
+                contract=contract,
+                box=box,
+                written_paths=["money.py"],
+                final_text="",
+            )
+            assert vr.outcome is VerificationOutcome.FAILED  # a real gate failure fails (Q-2)
+            assert vr.result["derived_gate"]["passed"] is False

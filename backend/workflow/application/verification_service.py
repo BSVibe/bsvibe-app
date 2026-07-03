@@ -26,15 +26,17 @@ from __future__ import annotations
 
 import asyncio
 import json
-import shlex
 import uuid
 from typing import Any, Protocol, runtime_checkable
 
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.workflow.domain.gate_discovery import discover_gate
-from backend.workflow.domain.gate_scaffold import detect_stack
+from backend.workflow.domain.gate_derivation import (
+    DerivedGate,
+    derivation_planner_messages,
+    parse_derived_gate,
+)
 from backend.workflow.domain.honesty import compute_honesty_grade
 from backend.workflow.domain.outcome_demonstration import (
     DemonstrationOutcome,
@@ -101,77 +103,33 @@ RETRIEVED_KNOWLEDGE_RATIONALE = "Canonical patterns retrieved for this change"
 #: extracts the references section from historical verifications; never emitted.
 LEGACY_RETRIEVED_KNOWLEDGE_RATIONALE = "BSage canonical patterns retrieved for this change"
 
-#: Stamped on the L1 mandatory quality-gate checks (lint/format/type) that the
-#: verifier appends regardless of the agent's declared contract.
-MANDATORY_GATE_RATIONALE = "Mandatory project quality gate — enforced on the changed files"
-
-#: Path prefixes mypy --strict covers in this repo (mirrors CI's ``mypy backend/``
-#: + the sdk run). Changed files outside these get lint/format only.
-_MYPY_PREFIXES = ("backend/", "plugin/", "bsvibe_sdk/")
-
-#: I1 — the TARGET's OWN gate. "verified" must mean the deliverable passes the
-#: project's own definition of done, discovered from the repo (its real CI /
-#: Makefile / package.json / Cargo / go.mod), not a hardcoded Python check list.
-#: The narrow changed-files L1 lets a change pass verify yet fail the repo's real
-#: whole-repo CI (findings 2026-07-01, #413). Here we run the repo's own STATIC
-#: gate (lint / format / type / import-contracts) whole-repo, ALWAYS, fail-closed.
-#:
-#: The verify sandbox is NOT the CI environment (no DB / node deps / secrets), so
-#: the repo's setup + service-dependent + dynamic-test steps are NOT runnable
-#: here and would false-fail a good change. We skip those — they run in the real
-#: CI at PR time and their behaviour is covered by the L2 acceptance check — and
-#: run only the source-deterministic STATIC checks that isolate cleanly.
+#: Per-command timeout for a DERIVED-gate check in the isolated sandbox — the
+#: repo's own quality/test command (``uv run ruff …`` / ``cargo clippy`` / …),
+#: which can be slower than the per-file VERIFY_TIMEOUT_S.
 GATE_CMD_TIMEOUT_S = 300.0
-#: Command substrings that mark a discovered gate step as NOT a runnable static
-#: check in the isolated sandbox: environment setup, dependency install, live
-#: services, and dynamic test runners (deferred to L2 / real CI).
-_GATE_SKIP_SUBSTRINGS = (
-    # setup / dependency install (needed to RUN checks, not a check itself)
-    "uv sync",
-    "uv python install",
-    "uv venv",
-    "pip install",
-    "poetry install",
-    "bundle install",
-    "cargo fetch",
-    "go mod download",
-    # node ecosystem — needs an install we skip, and the CI usually runs these
-    # in a sub-package dir via ``working-directory`` (lost by discovery), so a
-    # bare ``pnpm lint`` from the repo root fails on a missing manifest. Not a
-    # runnable isolated static check → deferred to real CI at PR time.
-    "corepack",
-    "pnpm ",
-    "npm ",
-    "npx ",
-    "yarn ",
-    # dynamic test runners (behaviour → L2 acceptance / L-I2 / real CI). NOTE:
-    # match test RUNNERS specifically — never a bare " test" substring, which
-    # also matches a static check's args (e.g. ``ruff check backend/ tests/``,
-    # the exact #413 check) and would silently disable it.
-    "pytest",
-    "unittest",
-    "vitest",
-    "jest",
-    "tox",
-    "nox",
-    "go test",
-    "cargo test",
-    "gradle test",
-    "mvn test",
-    "dotnet test",
-    "make test",
-    "just test",
-    # live services / db / orchestration
-    "alembic ",
-    "docker",
-    "compose",
-    # a mis-parsed 'uses:' fragment, never a shell command
-    "actions/",
-)
 
 #: Bytes of each changed source file fed to the demonstration planner (enough
 #: for a utility/module; the planner needs the API, not the whole repo).
 _SOURCE_CTX_BYTES = 8 * 1024
+#: Bytes of each manifest fed to the gate deriver — a manifest declares the
+#: toolchain (deps, extras, scripts, targets), which fits in a small window.
+_MANIFEST_CTX_BYTES = 8 * 1024
+#: Repo-root declaration files fed to the gate deriver as GROUNDING. These are
+#: universal manifest NAMES (not per-stack command logic — that is exactly the
+#: coupling the deriver removes): whatever exists is shown to the LLM, which
+#: reasons about the stack. Absent files are silently skipped.
+_MANIFEST_FILES: tuple[str, ...] = (
+    "pyproject.toml",
+    "setup.cfg",
+    "setup.py",
+    "package.json",
+    "Cargo.toml",
+    "go.mod",
+    "Makefile",
+    "justfile",
+    "pom.xml",
+    "build.gradle",
+)
 #: Extensions the demonstration planner can meaningfully exercise as CODE. A
 #: prose/data deliverable (``.md`` / ``.txt`` / ``.json``) yields no sources →
 #: no plan → ``undemonstrable`` (honest downgrade, not a fail). This is the
@@ -320,40 +278,6 @@ def _demonstration_planner_messages(
     return [{"role": "system", "content": system}, {"role": "user", "content": user}]
 
 
-def _mandatory_quality_checks(written_paths: list[str]) -> list[VerificationCheck]:
-    """The deterministic quality bar the project enforces in CI (ruff check,
-    ruff format --check, mypy --strict), scoped to the changed Python files.
-
-    These run REGARDLESS of what the agent declared, so ``verified`` cannot mean
-    "the one narrow command I chose passed" while the code is unformatted,
-    lint-broken, or mistyped. Non-Python changes get nothing here (the gates
-    would no-op / error). Returns ``[]`` when no ``.py`` file changed."""
-    py = sorted({p for p in written_paths if p.endswith(".py")})
-    if not py:
-        return []
-    files = " ".join(shlex.quote(p) for p in py)
-    checks = [
-        VerificationCheck(
-            kind="command", command=f"uv run ruff check {files}", rationale=MANDATORY_GATE_RATIONALE
-        ),
-        VerificationCheck(
-            kind="command",
-            command=f"uv run ruff format --check {files}",
-            rationale=MANDATORY_GATE_RATIONALE,
-        ),
-    ]
-    typed = [p for p in py if p.startswith(_MYPY_PREFIXES)]
-    if typed:
-        checks.append(
-            VerificationCheck(
-                kind="command",
-                command=f"uv run mypy {' '.join(shlex.quote(p) for p in typed)}",
-                rationale=MANDATORY_GATE_RATIONALE,
-            )
-        )
-    return checks
-
-
 @runtime_checkable
 class JudgeLlm(Protocol):
     """The completion seam the LLM-judge uses. Structurally identical to
@@ -410,14 +334,11 @@ class VerificationService:
         )
         checks: list[VerificationCheck] = list(declared.checks) if declared is not None else []
 
-        # L1 — when the agent has staked a behavioral check (a declared
-        # command), ALSO enforce the project's deterministic quality bar
-        # (lint/format/type) on the changed files. This augments a real
-        # attestation; it never manufactures one (no command → still None →
-        # human review below), so a lint-clean but untested change isn't
-        # silently called verified.
-        if any(c.kind == "command" for c in checks):
-            checks.extend(_mandatory_quality_checks(written_paths))
+        # The project's quality bar is no longer a hardcoded `uv run ruff`/mypy
+        # append here — it is DERIVED per-repo from the target's own manifests
+        # and run as the authoritative gate at verify time (see
+        # ``_run_derived_gate``), so the same coverage generalises across stacks.
+        # The agent's declared checks stay as its advisory attestation.
 
         if self._retriever is not None:
             signals = (final_text + "\n" + "\n".join(written_paths)).strip()
@@ -544,15 +465,6 @@ class VerificationService:
         # honesty grade + proof surface carry it to the founder (L-I3b).
         scope = await self._run_scope_check(run, written_paths)
 
-        # I1 — the repo's OWN static gate (whole-repo lint/format/type/contracts),
-        # run in the sandbox regardless of what the agent declared. A genuine gate
-        # failure fails verification (fail-closed): this is what makes "verified"
-        # mean "passes the target's own definition of done" rather than a narrow
-        # changed-files subset (#413). ``None`` (no worktree / no runnable gate)
-        # leaves the decision to the command + judge checks.
-        project_gate = await self._run_project_gate(run, box)
-        gate_pass = project_gate is None or bool(project_gate["passed"])
-
         judge_blob: dict[str, Any] | None = None
         judge_pass = True
         # Split judge criteria: the AGENT'S OWN declared criteria vs the
@@ -594,7 +506,22 @@ class VerificationService:
                 )
                 judge_pass = bool(judge_blob.get("passed"))
 
-        passed = all_cmd_pass and judge_pass and gate_pass and demo_pass
+        # I1′ — the repo's OWN gate, DERIVED by an LLM grounded in the repo's
+        # manifests (the general replacement for the hardcoded quality bar +
+        # per-stack detectors). When present it is the AUTHORITATIVE command
+        # gate, and the agent's declared command_results become ADVISORY —
+        # recorded for the proof surface but never gating, so an invented
+        # `--extra dev` / `python -m ruff` that fails on the sandbox can no
+        # longer false-fail the run (the F7 retry loop). A deriver hiccup /
+        # non-product / non-applicable repo → None → fall back to the agent +
+        # mandatory command attestation, so nothing regresses while the old
+        # path still stands (removed in a later increment).
+        derived_gate = await self._run_derived_gate(run, box, written_paths)
+        command_gate_pass = (
+            bool(derived_gate["passed"]) if derived_gate is not None else all_cmd_pass
+        )
+
+        passed = command_gate_pass and judge_pass and demo_pass
         outcome = VerificationOutcome.PASSED if passed else VerificationOutcome.FAILED
 
         # The honesty ladder (redesign §4): grade a PASSING verdict by evidence
@@ -602,28 +529,34 @@ class VerificationService:
         # for the proof surface + the trust ratchet (D → founder review, L-I3c).
         # ``None`` for a non-product/Direct run — the repo-gate ladder is N/A.
         applicable = run.product_id is not None and self._is_real_worktree(run)
+        # I4 — the ladder's gate legs now read the LLM-DERIVED gate (grounded in
+        # the repo's own manifests), not the per-stack detector. ``gate_passed``:
+        # the derived gate RAN and a command passed (a real objective leg).
+        # ``gate_discovered``: at least one command was derived (a runnable gate
+        # exists) even if all were unavailable (→ grade C). No derived gate → D.
+        derived_commands = derived_gate["commands"] if derived_gate is not None else []
         gate_passed = bool(
-            project_gate is not None
-            and project_gate["passed"]
-            and any(c["status"] == "passed" for c in project_gate["commands"])
+            derived_gate is not None
+            and derived_gate["passed"]
+            and any(c["status"] == "passed" for c in derived_commands)
         )
         demonstrated = demonstration is not None and demonstration["verdict"] == "demonstrated"
         honesty_grade = (
             compute_honesty_grade(
                 applicable=applicable,
                 gate_passed=gate_passed,
-                gate_discovered=project_gate is not None,
+                gate_discovered=bool(derived_commands),
                 demonstrated=demonstrated,
             )
             if passed
             else None
         )
-        # Was a gate reasonably EXPECTED here? A repo with a detectable stack is a
-        # real project that should declare a definition of done; an early /
-        # greenfield repo with no stack yet is legitimately gateless. The ratchet
-        # uses this to tell a genuine grade-D weakness ("couldn't verify") from a
-        # legitimate early-stage skip (founder distinction) — see needs_founder_review.
-        gate_expected = applicable and self._stack_detected(run)
+        # Was a gate reasonably EXPECTED here? The deriver decides: a repo with a
+        # real toolchain is ``applicable`` (a project that SHOULD verify with a
+        # command), while pure prose / an early greenfield repo is legitimately
+        # non-applicable. The ratchet uses this to tell a genuine grade-D weakness
+        # ("couldn't verify") from a legitimate skip — see needs_founder_review.
+        gate_expected = applicable and bool(derived_gate is not None and derived_gate["applicable"])
 
         vr = VerificationResult(
             id=uuid.uuid4(),
@@ -634,8 +567,8 @@ class VerificationService:
             contract=contract.to_dict(),
             result={
                 "command_results": command_results,
+                "derived_gate": derived_gate,
                 "judge": judge_blob,
-                "project_gate": project_gate,
                 "outcome_demonstration": demonstration,
                 "scope": scope,
                 "honesty_grade": honesty_grade,
@@ -653,13 +586,13 @@ class VerificationService:
                     "attempt_id": str(attempt.id),
                     "outcome": outcome.value,
                     "commands": len(command_results),
-                    "project_gate": (
+                    "derived_gate": (
                         None
-                        if project_gate is None
+                        if derived_gate is None
                         else {
-                            "origin": project_gate["origin"],
-                            "passed": project_gate["passed"],
-                            "checks": len(project_gate["commands"]),
+                            "applicable": derived_gate["applicable"],
+                            "passed": derived_gate["passed"],
+                            "checks": len(derived_gate["commands"]),
                         }
                     ),
                     "outcome_demonstration": (
@@ -703,15 +636,6 @@ class VerificationService:
         return (worktree / ".git").exists()
 
     @staticmethod
-    def _stack_detected(run: ExecutionRun) -> bool:
-        """True iff the run's worktree has a detectable stack manifest — a real
-        project that should declare a gate. Used to tell a genuine grade-D
-        weakness from a legitimate early-stage skip (offline, pure)."""
-        from backend.storage.product_workspace import run_worktree_path  # noqa: PLC0415
-
-        return detect_stack(run_worktree_path(run.id)) is not None
-
-    @staticmethod
     def _truncate_intent(run: ExecutionRun, *, max_chars: int = 60) -> str:
         """Best-effort one-line summary of the run's intent for the
         agent commit subject. Reads from ``run.payload['intent_text']``
@@ -753,33 +677,80 @@ class VerificationService:
             )
         return results
 
-    async def _run_project_gate(
-        self, run: ExecutionRun, box: SandboxSession
+    async def _read_repo_manifests(self, box: SandboxSession) -> dict[str, str]:
+        """Read the repo's OWN declaration files (whatever exists) to ground the
+        gate deriver. Best-effort: a missing file raises :class:`SandboxError`
+        on a real sandbox / returns empty on the fake — skipped either way."""
+        manifests: dict[str, str] = {}
+        for path in _MANIFEST_FILES:
+            try:
+                data = await box.read_file(path, _MANIFEST_CTX_BYTES)
+            except SandboxError:
+                continue
+            text = data.decode("utf-8", errors="replace").strip()
+            if text:
+                manifests[path] = text
+        return manifests
+
+    async def _author_derived_gate(
+        self, intent: str, manifests: dict[str, str], written_paths: list[str]
+    ) -> DerivedGate | None:
+        """Ask the independent deriver for this repo's verification commands,
+        grounded in its manifests. Bounded — a hung executor CLI must never
+        stall the run; a hiccup → ``None`` → the caller treats it as no gate
+        (best-effort, never a false-fail)."""
+        try:
+            turn = await asyncio.wait_for(
+                self._llm.complete(
+                    messages=derivation_planner_messages(
+                        manifests=manifests, changed_files=written_paths, intent=intent
+                    ),
+                    tools=None,
+                ),
+                timeout=_VERIFY_LLM_TIMEOUT_S,
+            )
+        except Exception:  # noqa: BLE001 — a deriver hiccup must never break the run
+            return None
+        raw = _extract_json_object(str(getattr(turn, "content", "") or ""))
+        if raw is None:
+            return None
+        return parse_derived_gate(raw)
+
+    async def _run_derived_gate(
+        self, run: ExecutionRun, box: SandboxSession, written_paths: list[str]
     ) -> dict[str, Any] | None:
-        """I1 — run the repo's OWN static gate (lint/format/type/contracts).
+        """I1′ — the repo's OWN verification gate, DERIVED by an LLM grounded in
+        the repo's declarations (not a per-stack detector list nor a hardcoded
+        ``uv run ruff`` bar). The derived commands RUN in the sandbox; the verdict
+        is their exit codes, never a model's opinion. A command whose tool isn't
+        here (exit 127) is ``unavailable`` — recorded, never a false-fail; a
+        command that RAN and failed is a real gate failure.
 
-        Returns ``None`` when the run has no real worktree or the repo declares
-        no runnable static gate — the caller records that as weaker verification,
-        not a pass. Otherwise a blob: ``origin`` (github-actions/makefile/...),
-        per-command ``results`` (status ∈ passed|failed|unavailable), and
-        ``passed`` (no command RAN and failed). A command that could not run here
-        (exit 127) is ``unavailable`` — recorded, never a false-fail; a command
-        that RAN and failed is a real gate failure → ``passed`` is False.
-        """
-        from backend.storage.product_workspace import run_worktree_path  # noqa: PLC0415
-
+        Returns ``None`` for a non-product / non-worktree run, or on a deriver
+        hiccup (best-effort). Otherwise a blob: ``origin`` ("derived"),
+        ``applicable`` (does a runnable gate apply — a code change vs pure prose),
+        per-command ``commands`` (status ∈ passed|failed|unavailable), and
+        ``passed`` (no command RAN and failed). An ``applicable`` repo whose
+        commands could not be derived is applicable-but-empty (weak evidence)."""
         if run.product_id is None or not self._is_real_worktree(run):
             return None
-        gate = discover_gate(run_worktree_path(run.id))
-        checks = [
-            c for c in gate.commands if not any(s in c.command for s in _GATE_SKIP_SUBSTRINGS)
-        ]
-        if not checks:
+        payload = run.payload or {}
+        intent = str(payload.get("intent_text") or payload.get("text") or "").strip()
+        manifests = await self._read_repo_manifests(box)
+        gate = await self._author_derived_gate(intent, manifests, written_paths)
+        if gate is None:
             return None
+        if not gate.applicable or gate.is_empty:
+            return {
+                "origin": "derived",
+                "applicable": gate.applicable,
+                "commands": [],
+                "passed": True,
+            }
         venv_ready = await self._ensure_project_venv(box)
         venv_bin = f"{box.workspace_mount}/.venv/bin"
         results: list[dict[str, Any]] = []
-        for c in checks:
+        for c in gate.commands:
             run_command = (
                 f'export PATH="{venv_bin}:$PATH"; {c.command}' if venv_ready else c.command
             )
@@ -793,17 +764,21 @@ class VerificationService:
                 status = "failed"
             results.append(
                 {
-                    "label": c.label,
                     "command": c.command,
-                    "source": c.source,
+                    "kind": c.kind,
+                    "status": status,
                     "exit_code": res.exit_code,
                     "timed_out": res.timed_out,
-                    "status": status,
                     "output": output,
                 }
             )
         passed = not any(r["status"] == "failed" for r in results)
-        return {"origin": gate.origin, "commands": results, "passed": passed}
+        return {
+            "origin": "derived",
+            "applicable": gate.applicable,
+            "commands": results,
+            "passed": passed,
+        }
 
     async def _ensure_project_venv(self, box: SandboxSession) -> bool:
         """For a uv-managed worktree, materialize ``.venv`` (incl. extras —
