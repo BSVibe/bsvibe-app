@@ -6833,6 +6833,15 @@ main.login {
 .concept-viewer__obs-item--link:hover {
   border-color: var(--ink-3);
 }
+/* The observation's substance, shown as a quiet preview under its title so the
+   concept's body reads inline (R13) without a second click into the note. */
+.concept-viewer__obs-excerpt {
+  margin: 4px 2px 0;
+  font-size: 0.82rem;
+  line-height: 1.5;
+  color: var(--ink-3);
+  word-break: break-word;
+}
 
 /* The verification CHECKLIST — a green check + the plain check + a small tag. */
 .report-checklist {

@@ -18,9 +18,11 @@ from backend.knowledge.canonicalization.resolver import TagResolver
 
 
 class ReferenceOut(BaseModel):
-    """One "참고한 지식" statement. ``text`` is what the chip shows; ``concept_id``
-    (set for a canon concept the viewer can open) deep-links by id — ``None`` for
-    a prior decision / rejection, which stays plain text."""
+    """One "참고한 지식" statement. ``text`` is what the chip shows — for a canon
+    concept it's the LABEL only (short pill); the folded-in body stays out of the
+    chip and shows in the concept viewer on click. ``concept_id`` (set for a canon
+    concept) deep-links by id — ``None`` for a prior decision / rejection, which
+    keeps its full statement as plain text."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -42,13 +44,15 @@ _CONCEPT_BODY_SEP = re.compile(r"\s+[—–]\s+")
 
 def to_reference(statement: str) -> ReferenceOut:
     """Structure a referenced-knowledge statement so the chip links by an explicit
-    id: a canon concept carries ``concept_id = normalize(label)`` (the resolver's
-    own normalization); a prior decision / rejection stays plain."""
+    id and shows a short label. A canon concept carries ``concept_id =
+    normalize(label)`` (the resolver's own normalization) and ``text = label``
+    (the body stays in the viewer); a prior decision / rejection keeps its full
+    statement as plain text."""
     text = statement.strip()
     if any(prefix.match(text) for prefix in _NON_CONCEPT_PREFIXES):
         return ReferenceOut(text=text)
     label = _CONCEPT_BODY_SEP.split(text, maxsplit=1)[0].strip()
     concept_id = TagResolver.normalize(label)
     if concept_id and is_valid_concept_id(concept_id):
-        return ReferenceOut(text=text, concept_id=concept_id)
+        return ReferenceOut(text=label, concept_id=concept_id)
     return ReferenceOut(text=text)
