@@ -851,6 +851,15 @@
     "whatWasBuilt": "What was built",
     "referenced": "Referenced",
     "referencedHint": "Past decisions, preferences, and rejections that informed this work.",
+    "priorDecision": "Prior decision",
+    "priorRejection": "Avoid (prior rejection)",
+    "resolution": {
+      "discard": "Discard",
+      "ship": "Ship",
+      "retry": "Retry",
+      "approve": "Approve",
+      "reject": "Reject"
+    },
     "noVerification": "No verification recorded for this deliverable yet.",
     "noChecksDeclared": "No checks were declared for this verification.",
     "noChecksAfterKnowledge": "No additional checks beyond the referenced knowledge above.",

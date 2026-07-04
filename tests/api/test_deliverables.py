@@ -473,6 +473,7 @@ async def test_report_references_are_concept_centric(configured_client, db, work
                                 # is the slug of the LABEL only (agent-verification).
                                 "Agent-verification — verify the raw request body with an HMAC.",
                                 "Prior decision — Q: Which DB? A: Postgres",
+                                "Avoid (prior rejection) — never ship without a test",
                                 "Related note — garden/seedling/settle-add-a-tiny-clamp-utility.md",
                             ],
                             "rationale": "Canonical patterns retrieved for this change",
@@ -494,14 +495,24 @@ async def test_report_references_are_concept_centric(configured_client, db, work
     # The raw seedling "Related note —" hits are dropped (concept-centric).
     assert not any("Related note" in t for t in texts)
     assert not any("settle-add-a-tiny-clamp-utility" in t for t in texts)
-    # A concept chip shows the LABEL only + an explicit concept_id (no frontend
-    # slugify); the folded-in body stays out of the chip (it's in the viewer).
+    # A concept chip is kind=concept: the LABEL only + an explicit concept_id (no
+    # frontend slugify); the folded-in body stays out of the chip.
+    assert by_text["Function"]["kind"] == "concept"
     assert by_text["Function"]["concept_id"] == "function"
     agent = next(x for x in refs if x["concept_id"] == "agent-verification")
+    assert agent["kind"] == "concept"
     assert agent["text"] == "Agent-verification"
-    # A prior decision / rejection stays plain — no concept link.
-    decision = next(x for x in refs if x["text"].startswith("Prior decision —"))
+    # A prior decision is STRUCTURED so the frontend localizes the prefix + the
+    # resolution — the English "Prior decision — Q: … A: …" is split into the
+    # question (text) + the answer (localizable); no concept link.
+    decision = next(x for x in refs if x["kind"] == "decision")
+    assert decision["text"] == "Which DB?"
+    assert decision["answer"] == "Postgres"
     assert decision["concept_id"] is None
+    # A prior rejection is kind=rejection, carrying just the reason as text.
+    rejection = next(x for x in refs if x["kind"] == "rejection")
+    assert rejection["text"] == "never ship without a test"
+    assert rejection["concept_id"] is None
     # The run's own written note still surfaces under written.
     assert any(w["title"] == "Add a title case helper" for w in body["written"])
 
@@ -757,11 +768,14 @@ async def test_report_surfaces_referenced_knowledge(configured_client, db, works
     r = await configured_client.get(f"/api/v1/deliverables/{deliverable_id}/report")
     assert r.status_code == 200, r.text
     references = r.json()["references"]
-    assert [ref["text"] for ref in references] == [
-        "Avoid (prior rejection) — never ship a payment change without a regression test",
-        "Prior decision — Q: Which database? A: Use Postgres",
+    # Structured for locale-aware rendering: the English prefix is stripped, and a
+    # decision splits into question (text) + resolution (answer).
+    assert [(ref["kind"], ref["text"]) for ref in references] == [
+        ("rejection", "never ship a payment change without a regression test"),
+        ("decision", "Which database?"),
     ]
-    # A prior rejection / decision stays plain — no concept link.
+    assert references[1]["answer"] == "Use Postgres"
+    # A prior rejection / decision is never a concept link.
     assert all(ref["concept_id"] is None for ref in references)
     # The non-knowledge judge check's criteria ("reads cleanly") must NOT leak
     # into references — only the retrieved-knowledge check counts.
@@ -818,8 +832,9 @@ async def test_report_references_extracts_legacy_bsage_marker(
 
     r = await configured_client.get(f"/api/v1/deliverables/{deliverable_id}/report")
     assert r.status_code == 200, r.text
-    assert [ref["text"] for ref in r.json()["references"]] == [
-        "Prior decision — Q: Which database? A: Use Postgres"
+    refs = r.json()["references"]
+    assert [(ref["kind"], ref["text"], ref["answer"]) for ref in refs] == [
+        ("decision", "Which database?", "Use Postgres")
     ]
 
 

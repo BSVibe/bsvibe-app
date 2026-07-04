@@ -1,15 +1,20 @@
 """Structured "참고한 지식" references for the deliverable report (R13).
 
 The report reuses the verify contract's retrieved-knowledge statements as
-"참고한 지식" chips. A canon-concept statement must deep-link to the concept
-viewer — so it carries an EXPLICIT ``concept_id`` here, derived with the
-resolver's OWN normalization (the single source of truth), instead of the
-frontend re-slugifying the display text (which 404'd on body-laden statements).
+"참고한 지식" chips. The retrievers stamp them as English strings — a canon
+concept ("{display} — {body}"), a prior decision ("Prior decision — Q: … A: …"),
+or a prior rejection ("Avoid (prior rejection) — …"). Structure each here so the
+frontend renders it in the reader's locale (next-intl) and a concept deep-links
+by an EXPLICIT ``concept_id`` (the resolver's OWN normalization — never a
+frontend re-slugify of display text). The founder-facing free text (the concept
+label, the decision question, the rejection reason) stays as written; only the
+system framing (the prefix + the decision's resolution ``answer``) is localized.
 """
 
 from __future__ import annotations
 
 import re
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict
 
@@ -18,23 +23,28 @@ from backend.knowledge.canonicalization.resolver import TagResolver
 
 
 class ReferenceOut(BaseModel):
-    """One "참고한 지식" statement. ``text`` is what the chip shows — for a canon
-    concept it's the LABEL only (short pill); the folded-in body stays out of the
-    chip and shows in the concept viewer on click. ``concept_id`` (set for a canon
-    concept) deep-links by id — ``None`` for a prior decision / rejection, which
-    keeps its full statement as plain text."""
+    """One "참고한 지식" statement, structured for locale-aware rendering.
+
+    ``kind`` drives the chip: ``concept`` shows ``text`` (the LABEL only, a short
+    pill) and deep-links by ``concept_id``; ``decision`` shows a localized prefix
+    + ``text`` (the question) + the localized ``answer`` (the resolution);
+    ``rejection`` shows a localized prefix + ``text`` (the reason); ``plain`` is a
+    bare statement. ``concept_id`` / ``answer`` are set only for their kind."""
 
     model_config = ConfigDict(extra="forbid")
 
+    kind: Literal["concept", "decision", "rejection", "plain"] = "plain"
     text: str
     concept_id: str | None = None
+    answer: str | None = None
 
 
-# The retrievers stamp these prefixes on NON-concept statements — a prior
-# decision / rejection stays plain text (no concept link).
-_NON_CONCEPT_PREFIXES = (
-    re.compile(r"^prior decision\s*[—–-]", re.IGNORECASE),
-    re.compile(r"^avoid \(prior rejection\)\s*[—–-]", re.IGNORECASE),
+# The retrievers stamp these English prefixes; strip them so the frontend can
+# render a localized prefix instead. A decision folds "Q: … A: …" in.
+_PRIOR_DECISION_PREFIX = re.compile(r"^prior decision\s*[—–-]\s*", re.IGNORECASE)
+_PRIOR_REJECTION_PREFIX = re.compile(r"^avoid \(prior rejection\)\s*[—–-]\s*", re.IGNORECASE)
+_DECISION_QA = re.compile(
+    r"^Q:\s*(?P<question>.*?)\s+A:\s*(?P<answer>.*)$", re.IGNORECASE | re.DOTALL
 )
 # canon_retriever folds the concept BODY in after a spaced em/en-dash:
 # "{display} — {body}". The concept id is the slug of the LABEL only — split on
@@ -43,16 +53,29 @@ _CONCEPT_BODY_SEP = re.compile(r"\s+[—–]\s+")
 
 
 def to_reference(statement: str) -> ReferenceOut:
-    """Structure a referenced-knowledge statement so the chip links by an explicit
-    id and shows a short label. A canon concept carries ``concept_id =
-    normalize(label)`` (the resolver's own normalization) and ``text = label``
-    (the body stays in the viewer); a prior decision / rejection keeps its full
-    statement as plain text."""
+    """Structure a referenced-knowledge statement for locale-aware rendering.
+
+    A prior decision splits into its question (``text``) + resolution (``answer``);
+    a prior rejection keeps its reason (``text``); a canon concept carries
+    ``text = label`` + ``concept_id = normalize(label)`` (the body stays in the
+    viewer); anything else is a bare ``plain`` statement."""
     text = statement.strip()
-    if any(prefix.match(text) for prefix in _NON_CONCEPT_PREFIXES):
-        return ReferenceOut(text=text)
+    decision = _PRIOR_DECISION_PREFIX.match(text)
+    if decision:
+        body = text[decision.end() :].strip()
+        qa = _DECISION_QA.match(body)
+        if qa:
+            return ReferenceOut(
+                kind="decision",
+                text=qa.group("question").strip(),
+                answer=qa.group("answer").strip(),
+            )
+        return ReferenceOut(kind="decision", text=body)
+    rejection = _PRIOR_REJECTION_PREFIX.match(text)
+    if rejection:
+        return ReferenceOut(kind="rejection", text=text[rejection.end() :].strip())
     label = _CONCEPT_BODY_SEP.split(text, maxsplit=1)[0].strip()
     concept_id = TagResolver.normalize(label)
     if concept_id and is_valid_concept_id(concept_id):
-        return ReferenceOut(text=label, concept_id=concept_id)
-    return ReferenceOut(text=text)
+        return ReferenceOut(kind="concept", text=label, concept_id=concept_id)
+    return ReferenceOut(kind="plain", text=text)

@@ -91,7 +91,11 @@ const REPORT: DeliverableReport = {
     },
   ],
   references: [
-    { text: "Reuse the existing date helper", concept_id: "reuse-the-existing-date-helper" },
+    {
+      kind: "concept",
+      text: "Reuse the existing date helper",
+      concept_id: "reuse-the-existing-date-helper",
+    },
   ],
 };
 
@@ -237,9 +241,7 @@ describe("Delivery Report (R3)", () => {
     installFetch({
       report: () => ({
         ...REPORT,
-        references: [
-          { text: "Prior decision — Q: Which database? A: Use Postgres", concept_id: null },
-        ],
+        references: [{ kind: "decision", text: "Which database?", answer: "Use Postgres" }],
       }),
     });
     render(<DeliveryReport deliverableId="d1" />);
@@ -297,22 +299,41 @@ describe("Delivery Report (R3)", () => {
     installFetch({
       report: () => ({
         ...REPORT,
-        references: [{ text: "Prior decision — Q: Which DB? A: Postgres", concept_id: null }],
+        references: [{ kind: "decision", text: "Which DB?", answer: "Postgres" }],
         written: [],
       }),
     });
     render(<DeliveryReport deliverableId="d1" />);
 
     const knowledge = await screen.findByRole("region", { name: /knowledge/i });
-    expect(within(knowledge).getByText(/Which DB\? A: Postgres/)).toBeInTheDocument();
+    // Localized prefix + the founder's question + the localized resolution.
+    expect(
+      within(knowledge).getByText("Prior decision — Which DB? · Postgres"),
+    ).toBeInTheDocument();
     expect(within(knowledge).queryByRole("button", { name: /Which DB/ })).toBeNull();
+  });
+
+  it("a prior-rejection reference renders with a localized prefix + its reason", async () => {
+    installFetch({
+      report: () => ({
+        ...REPORT,
+        references: [{ kind: "rejection", text: "never ship without a regression test" }],
+        written: [],
+      }),
+    });
+    render(<DeliveryReport deliverableId="d1" />);
+
+    const knowledge = await screen.findByRole("region", { name: /knowledge/i });
+    expect(
+      within(knowledge).getByText("Avoid (prior rejection) — never ship without a regression test"),
+    ).toBeInTheDocument();
   });
 
   it("R13: clicking a concept reference opens the concept viewer with related concepts", async () => {
     installFetch({
       report: () => ({
         ...REPORT,
-        references: [{ text: "Function", concept_id: "function" }],
+        references: [{ kind: "concept", text: "Function", concept_id: "function" }],
         written: [],
       }),
       concept: () =>
@@ -345,7 +366,7 @@ describe("Delivery Report (R3)", () => {
     installFetch({
       report: () => ({
         ...REPORT,
-        references: [{ text: "Function", concept_id: "function" }],
+        references: [{ kind: "concept", text: "Function", concept_id: "function" }],
         written: [],
       }),
       // Route concept detail by id so navigating to a related concept changes content.
@@ -396,7 +417,7 @@ describe("Delivery Report (R3)", () => {
     installFetch({
       report: () => ({
         ...REPORT,
-        references: [{ text: "Function", concept_id: "function" }],
+        references: [{ kind: "concept", text: "Function", concept_id: "function" }],
         written: [],
       }),
       concept: () =>
@@ -601,7 +622,11 @@ describe("Delivery Report (R3)", () => {
           },
         ],
         references: [
-          { text: "Reuse the existing date helper", concept_id: "reuse-the-existing-date-helper" },
+          {
+            kind: "concept",
+            text: "Reuse the existing date helper",
+            concept_id: "reuse-the-existing-date-helper",
+          },
         ],
       }),
     });
@@ -791,13 +816,18 @@ describe("Delivery Report (R3)", () => {
   });
 
   it("renders a long statement reference (a prior decision) as a readable block, not a squished pill", async () => {
-    // Concept chips are short labels now; a LONG statement is a decision/rejection.
-    const longRef =
-      "Prior decision — Q: should webhook verification authenticate the exact raw request body with an HMAC and compare signatures using timing-safe equality? A: yes, always, and treat the timestamp as replay protection.";
+    // Concept chips are short labels now; a LONG statement is a decision/rejection,
+    // rendered with a localized prefix + the resolution.
     installFetch({
       report: () => ({
         ...REPORT,
-        references: [{ text: longRef, concept_id: null }],
+        references: [
+          {
+            kind: "decision",
+            text: "should webhook verification authenticate the exact raw request body with an HMAC and compare signatures using timing-safe equality?",
+            answer: "discard",
+          },
+        ],
         written: [],
       }),
     });
@@ -806,6 +836,9 @@ describe("Delivery Report (R3)", () => {
     const knowledge = await screen.findByRole("region", { name: /knowledge/i });
     const chip = within(knowledge).getByText(/timing-safe equality/);
     expect(chip.className).toMatch(/report-chip--statement/);
+    // The localized prefix + resolution frame the founder's (unchanged) question.
+    expect(chip.textContent).toMatch(/^Prior decision — /);
+    expect(chip.textContent).toMatch(/· Discard$/);
   });
 
   it("shows a concept chip as the LABEL, and its BODY appears in the viewer on click", async () => {
@@ -815,7 +848,9 @@ describe("Delivery Report (R3)", () => {
     installFetch({
       report: () => ({
         ...REPORT,
-        references: [{ text: "Agent-verification", concept_id: "agent-verification" }],
+        references: [
+          { kind: "concept", text: "Agent-verification", concept_id: "agent-verification" },
+        ],
         written: [],
       }),
       concept: (url: string) =>

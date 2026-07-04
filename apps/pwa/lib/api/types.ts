@@ -405,14 +405,17 @@ export interface DeliverableReport {
   written?: WrittenNote[];
 }
 
-/** R13 — one "참고한 지식" statement, structured so the chip links by an EXPLICIT
- *  id. `text` is what the chip shows; `concept_id` (set when the statement is a
- *  canon concept the viewer can open) deep-links to the concept viewer without
- *  the frontend re-slugifying the display text. `null` for a prior decision /
- *  rejection, which stays plain text. */
+/** R13 — one "참고한 지식" statement, structured for locale-aware rendering.
+ *  `kind` drives the chip: `concept` shows `text` (the label) and deep-links by
+ *  the backend-supplied `concept_id` (no frontend re-slugify); `decision` shows a
+ *  localized prefix + `text` (the question) + the localized `answer` (its
+ *  resolution); `rejection` a localized prefix + `text` (the reason); `plain` a
+ *  bare statement. `concept_id` / `answer` are set only for their kind. */
 export interface ReportReference {
+  kind: "concept" | "decision" | "rejection" | "plain";
   text: string;
   concept_id?: string | null;
+  answer?: string | null;
 }
 
 /** R12 — one note this run added: a readable title + its vault-relative path,
