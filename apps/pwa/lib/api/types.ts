@@ -387,11 +387,13 @@ export interface DeliverableReport {
    *  any. When set, the footer offers Approve & ship / Decline on this item
    *  (same as the Brief card); `null` when nothing is held. */
   held_delivery_item_id?: string | null;
-  /** G2 "근거 포함 답변": the BSage knowledge the agent referenced for this work
-   *  — promoted canon patterns, prior resolved decisions, and prior rejections
+  /** G2 "근거 포함 답변": the knowledge the agent referenced for this work —
+   *  promoted canon concepts, prior resolved decisions, and prior rejections
    *  folded into the verify contract. Deduped, first-seen order. Empty when
-   *  nothing was retrieved (never a fabricated reference). */
-  references: string[];
+   *  nothing was retrieved (never a fabricated reference). STRUCTURED so a
+   *  concept chip links by its real `concept_id` (backend-supplied), not a
+   *  frontend-reconstructed slug (R13). */
+  references: ReportReference[];
   /** R1 — a plain-language "what this did" composed (chat model) from the
    *  intent + captured diff; cached on the deliverable on first view. The
    *  redesigned report LEADS with this; `null` falls back to `request`. */
@@ -401,6 +403,16 @@ export interface DeliverableReport {
    *  `title` + the vault-relative `path` so the "추가한 지식" chip deep-links to the
    *  note viewer. Empty until the settle drain runs (the group is then omitted). */
   written?: WrittenNote[];
+}
+
+/** R13 — one "참고한 지식" statement, structured so the chip links by an EXPLICIT
+ *  id. `text` is what the chip shows; `concept_id` (set when the statement is a
+ *  canon concept the viewer can open) deep-links to the concept viewer without
+ *  the frontend re-slugifying the display text. `null` for a prior decision /
+ *  rejection, which stays plain text. */
+export interface ReportReference {
+  text: string;
+  concept_id?: string | null;
 }
 
 /** R12 — one note this run added: a readable title + its vault-relative path,

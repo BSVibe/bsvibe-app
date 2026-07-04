@@ -94,52 +94,6 @@ function checksFromContract(contract: Record<string, unknown>): DisplayCheck[] {
   return out;
 }
 
-/** Note-level reference label (R8). The retriever folds garden-note references
- *  as free-form "Related note — garden/seedling/settle-<slug>.md" statements;
- *  there's no note viewer yet, so rather than show a raw internal path that
- *  looks clickable but isn't, surface a readable note title (de-slugged from the
- *  filename). Non-note statements (a prior decision / rejection) pass through. */
-function prettyReference(reference: string): string {
-  const match = reference.match(/^related note\s*[—–-]\s*(.+\.md)$/i);
-  if (!match) return reference;
-  const file = (match[1].split("/").pop() ?? match[1]).replace(/\.md$/i, "");
-  const slug = file.replace(/^settle-/, "").trim();
-  if (!slug) return reference;
-  const title = slug.replace(/[-_]+/g, " ").trim();
-  return title.charAt(0).toUpperCase() + title.slice(1);
-}
-
-/** The vault-relative note path inside a "Related note — <path>.md" reference,
- *  so the chip can deep-link to the note viewer (R12). `null` for a non-note
- *  reference (a prior decision/preference), which stays plain text. */
-function referenceNotePath(reference: string): string | null {
-  const match = reference.match(/^related note\s*[—–-]\s*(.+\.md)$/i);
-  return match ? match[1].trim() : null;
-}
-
-// Prefixes the retrievers stamp on NON-concept references (note / prior decision
-// / prior rejection). Everything else the CompositeCanonRetriever folds in is a
-// CanonConceptRetriever statement — the concept's display name (R13).
-const NON_CONCEPT_REFERENCE = [
-  /^related note\s*[—–-]/i,
-  /^prior decision\s*[—–-]/i,
-  /^avoid \(prior rejection\)\s*[—–-]/i,
-];
-
-/** The concept id (vault slug) for a canon-concept reference, so the chip can
- *  deep-link to the concept viewer (R13). `null` for a note / decision /
- *  rejection statement, which is handled elsewhere or stays plain text. The
- *  canon retriever emits the concept's display name; its id is the slug. */
-function referenceConceptId(reference: string): string | null {
-  const text = reference.trim();
-  if (!text || NON_CONCEPT_REFERENCE.some((re) => re.test(text))) return null;
-  const slug = text
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
-  return slug || null;
-}
-
 /** A referenced-knowledge statement long enough to read as a SENTENCE (a canon
  *  statement / prior decision), not a short tag. A stadium pill (border-radius
  *  999px) mangles a multi-line sentence — its rounded ends push the first/last
@@ -454,46 +408,31 @@ function ReportDocument({
               <p className="report-doc__muted">{t("referencedHint")}</p>
               <ul className="report-chips">
                 {references.map((reference, i) => {
-                  // A "Related note —" statement deep-links to the note viewer
-                  // (R12); a canon-concept statement to the concept viewer (R13);
-                  // a prior decision / rejection stays plain text. A long
+                  // A canon-concept statement deep-links to the concept viewer by
+                  // its backend-supplied concept_id (R13); a prior decision /
+                  // rejection has no id and stays plain text. A long
                   // sentence-shaped reference renders as a readable block, not a
                   // stadium pill that mangles multi-line text (founder #1).
-                  const statement = isStatementReference(reference)
+                  const statement = isStatementReference(reference.text)
                     ? " report-chip--statement"
                     : "";
-                  const path = referenceNotePath(reference);
-                  if (path) {
-                    const label = prettyReference(reference);
+                  if (reference.concept_id) {
+                    const conceptId = reference.concept_id;
                     return (
-                      <li key={`ref-${i}-${reference}`}>
+                      <li key={`ref-${i}-${reference.text}`}>
                         <button
                           type="button"
                           className={`report-chip report-chip--link${statement}`}
-                          onClick={() => setOpenNote({ path, title: label })}
+                          onClick={() => setOpenConcept({ id: conceptId, label: reference.text })}
                         >
-                          {label}
-                        </button>
-                      </li>
-                    );
-                  }
-                  const conceptId = referenceConceptId(reference);
-                  if (conceptId) {
-                    return (
-                      <li key={`ref-${i}-${reference}`}>
-                        <button
-                          type="button"
-                          className={`report-chip report-chip--link${statement}`}
-                          onClick={() => setOpenConcept({ id: conceptId, label: reference })}
-                        >
-                          {reference}
+                          {reference.text}
                         </button>
                       </li>
                     );
                   }
                   return (
-                    <li key={`ref-${i}-${reference}`}>
-                      <span className={`report-chip${statement}`}>{reference}</span>
+                    <li key={`ref-${i}-${reference.text}`}>
+                      <span className={`report-chip${statement}`}>{reference.text}</span>
                     </li>
                   );
                 })}

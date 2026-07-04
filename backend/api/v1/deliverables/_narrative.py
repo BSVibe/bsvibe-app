@@ -25,6 +25,7 @@ from backend.workflow.infrastructure.delivery.db import (
     SafeModeStatus,
 )
 
+from ._references import ReferenceOut, to_reference
 from ._schemas import WrittenNote
 
 logger = structlog.get_logger(__name__)
@@ -92,7 +93,7 @@ async def split_knowledge(
     run_id: uuid.UUID,
     workspace_id: uuid.UUID,
     references: list[str],
-) -> tuple[list[str], list[WrittenNote]]:
+) -> tuple[list[ReferenceOut], list[WrittenNote]]:
     """Split the report's knowledge into (referenced, written) — keeping "참고한
     지식" and "추가한 지식" distinct AND concept-centric (R16).
 
@@ -118,7 +119,8 @@ async def split_knowledge(
 
     # Concept-centric: keep concepts + decisions/rejections; drop the raw
     # seedling note hits (they're the episodic layer, not the graph's canon).
-    referenced = [r for r in references if not _is_seedling_note_ref(r)]
+    # Structure each survivor so a concept chip carries its explicit id (R13).
+    referenced = [to_reference(r) for r in references if not _is_seedling_note_ref(r)]
 
     written: list[WrittenNote] = []
     seen: set[str] = set()
