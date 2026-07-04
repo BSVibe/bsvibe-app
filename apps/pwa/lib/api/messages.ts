@@ -20,10 +20,11 @@ export function submitMessage(body: MessageCreate): Promise<MessageAccepted> {
  *  `POST /api/v1/messages/ask`. `answered: false` means the text is a work
  *  request (or no chat model is configured) → the caller should dispatch it via
  *  `submitMessage` instead. A question is answered synchronously (no run, no
- *  executor). */
-export function askMessage(text: string): Promise<AskResult> {
+ *  executor). `productId` (optional) grounds the answer in that product's
+ *  deliverables + knowledge so "how's the project?" reflects real state. */
+export function askMessage(text: string, productId?: string | null): Promise<AskResult> {
   return apiFetch<AskResult>("/api/v1/messages/ask", {
     method: "POST",
-    body: JSON.stringify({ text }),
+    body: JSON.stringify({ text, ...(productId ? { product_id: productId } : {}) }),
   });
 }

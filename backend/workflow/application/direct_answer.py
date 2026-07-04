@@ -33,20 +33,38 @@ from pathlib import Path
 from typing import Any
 
 import structlog
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.config import Settings
 from backend.dispatch.caller_registry import CALLER_FRAME
+from backend.identity.workspaces_db import ProductRow
 from backend.workflow.application.knowledge_orchestrator import _ANSWER_SYSTEM_PROMPT
 from backend.workflow.application.loop_llm import ResolverLoopLlm
 from backend.workflow.application.runtime.account_resolution import _resolve_via_caller
 from backend.workflow.application.stages.frame import _is_answer_first_question
+from backend.workflow.infrastructure.db import Deliverable, ExecutionRun, RunStatus
 
 logger = structlog.get_logger(__name__)
 
 _KNOWLEDGE_MAX_RESULTS = 6
 _KNOWLEDGE_MAX_CHARS_PER_STATEMENT = 500
 _ANSWER_MAX_INPUT_CHARS = 4000
+#: How many recent runs (units of delivered / in-flight work) to summarise as
+#: the product's current state — enough to convey "where the project is"
+#: without bloating the prompt.
+_PRODUCT_RUNS_LIMIT = 12
+_PRODUCT_TITLE_MAX_CHARS = 140
+#: Founder-facing status wording per run state (the answer is a status readout,
+#: so these mirror the PWA's plain-language pills).
+_RUN_STATUS_LABEL = {
+    RunStatus.OPEN: "queued",
+    RunStatus.RUNNING: "in progress",
+    RunStatus.REVIEW_READY: "ready to ship (awaiting approval)",
+    RunStatus.SHIPPED: "shipped",
+    RunStatus.FAILED: "failed",
+    RunStatus.CANCELLED: "cancelled",
+}
 #: Upper bound (seconds) on the synchronous HTTP wait for an inline answer. An
 #: executor chat task that doesn't finish within this budget raises
 #: ``ExecutorAdapterUnavailable`` (timeout) → degrades to async dispatch rather
@@ -73,9 +91,22 @@ class DirectAnswerService:
         # answer degrades to async, same as any other inline failure.
         self._redis = redis
 
-    async def answer(self, *, workspace_id: uuid.UUID, text: str) -> str | None:
+    async def answer(
+        self,
+        *,
+        workspace_id: uuid.UUID,
+        text: str,
+        product_id: uuid.UUID | None = None,
+    ) -> str | None:
         """Compose a grounded answer, or ``None`` when no account resolves /
-        the inline attempt fails (the caller then dispatches the text as work)."""
+        the inline attempt fails (the caller then dispatches the text as work).
+
+        When ``product_id`` is supplied and names a product in this workspace,
+        the product's current state (name, repo, and recent deliverables with
+        their status) is injected so a "how's the project?" question is answered
+        from real state — not from whatever empty sandbox the chat account runs
+        in (the pre-grounding symptom was an executor reporting its own empty
+        working directory)."""
         chat = await _resolve_via_caller(
             self._session,
             caller_id=CALLER_FRAME,
@@ -98,6 +129,19 @@ class DirectAnswerService:
         llm = ResolverLoopLlm(adapter=adapter)
         statements = await self._retrieve(workspace_id, text)
         messages: list[dict[str, Any]] = [{"role": "system", "content": _ANSWER_SYSTEM_PROMPT}]
+        if product_id is not None:
+            product_ctx = await self._product_context(workspace_id, product_id)
+            if product_ctx:
+                messages.append(
+                    {
+                        "role": "system",
+                        "content": (
+                            "The founder is asking about this product. Its current "
+                            "state (ground your answer in this — do NOT inspect any "
+                            "working directory or claim the project is empty):\n" + product_ctx
+                        ),
+                    }
+                )
         if statements:
             body = "\n".join(f"- {s}" for s in statements)
             messages.append(
@@ -142,6 +186,90 @@ class DirectAnswerService:
         return [
             s.strip()[:_KNOWLEDGE_MAX_CHARS_PER_STATEMENT] for s in statements if s and s.strip()
         ][:_KNOWLEDGE_MAX_RESULTS]
+
+    async def _product_context(self, workspace_id: uuid.UUID, product_id: uuid.UUID) -> str | None:
+        """A compact readout of the target product's current state — its name,
+        repo, and recent runs (units of work) with each one's founder-facing
+        status. ``None`` when the id names no product in this workspace, or on
+        any hiccup (grounding must never crash the answer)."""
+        try:
+            product = await self._session.get(ProductRow, product_id)
+            if product is None or product.workspace_id != workspace_id:
+                return None
+
+            runs = list(
+                (
+                    await self._session.execute(
+                        select(ExecutionRun)
+                        .where(
+                            ExecutionRun.workspace_id == workspace_id,
+                            ExecutionRun.product_id == product_id,
+                        )
+                        .order_by(ExecutionRun.created_at.desc())
+                        .limit(_PRODUCT_RUNS_LIMIT)
+                    )
+                ).scalars()
+            )
+            # Best title per run: the deliverable's summary (what the PWA shows),
+            # falling back to the run's own intent text.
+            summaries = await self._deliverable_summaries([r.id for r in runs])
+
+            header = f"Product: {product.name}"
+            if product.repo_url:
+                header += f" (repo: {product.repo_url})"
+            lines = [header]
+            if not runs:
+                lines.append("No work has run for this product yet.")
+            else:
+                lines.append("Recent work (most recent first):")
+                for run in runs:
+                    title = summaries.get(run.id) or _run_intent(run.payload) or "(untitled)"
+                    label = _RUN_STATUS_LABEL.get(run.status, str(run.status))
+                    lines.append(f"- {title[:_PRODUCT_TITLE_MAX_CHARS]} — {label}")
+            return "\n".join(lines)
+        except Exception:  # noqa: BLE001 — grounding must never crash the answer
+            logger.warning(
+                "direct_answer_product_context_failed",
+                workspace_id=str(workspace_id),
+                product_id=str(product_id),
+                exc_info=True,
+            )
+            return None
+
+    async def _deliverable_summaries(self, run_ids: list[uuid.UUID]) -> dict[uuid.UUID, str]:
+        """Map run_id → its most recent deliverable ``summary`` (the title the
+        PWA shows), for the runs that have shipped/produced a deliverable."""
+        if not run_ids:
+            return {}
+        rows = list(
+            (
+                await self._session.execute(
+                    select(Deliverable)
+                    .where(Deliverable.run_id.in_(run_ids))
+                    .order_by(Deliverable.created_at.desc())
+                )
+            ).scalars()
+        )
+        out: dict[uuid.UUID, str] = {}
+        for row in rows:
+            if row.run_id in out:
+                continue  # newest-first → first seen is the most recent
+            payload = row.payload if isinstance(row.payload, dict) else {}
+            summary = payload.get("summary")
+            if isinstance(summary, str) and summary.strip():
+                out[row.run_id] = summary.strip()
+        return out
+
+
+def _run_intent(payload: dict[str, Any]) -> str | None:
+    """The founder's original request text for a run (mirrors the runs API)."""
+    if not isinstance(payload, dict):
+        return None
+    for key in ("intent_text", "text"):
+        value = payload.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
 
 
 __all__ = ["DirectAnswerService", "is_question"]
