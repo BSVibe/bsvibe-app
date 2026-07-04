@@ -817,6 +817,7 @@
         "redirects": "리다이렉트",
         "revoke": "취소",
         "revoking": "취소 중…",
+        "revokeError": "클라이언트를 취소하지 못했어요. 다시 시도해 주세요.",
         "revoked": "취소됨"
       },
       "mcp": {
