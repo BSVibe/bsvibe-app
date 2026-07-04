@@ -817,6 +817,7 @@
         "redirects": "Redirects",
         "revoke": "Revoke",
         "revoking": "Revoking…",
+        "revokeError": "Couldn’t revoke that client. Please try again.",
         "revoked": "Revoked"
       },
       "mcp": {
