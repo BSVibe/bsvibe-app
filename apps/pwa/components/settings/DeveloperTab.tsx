@@ -322,12 +322,19 @@ interface ClientRowProps {
 function ClientRow({ client, onRevoke }: ClientRowProps) {
   const t = useTranslations("settings.developer");
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(false);
 
   async function handleRevoke() {
     setBusy(true);
+    setError(false);
     try {
       await deleteOAuthClient(client.client_id);
       await onRevoke();
+    } catch {
+      // Surface the failure — a silently-failed revoke reads as "done" and the
+      // founder walks away thinking a live client credential is dead when it
+      // isn't.
+      setError(true);
     } finally {
       setBusy(false);
     }
@@ -351,14 +358,21 @@ function ClientRow({ client, onRevoke }: ClientRowProps) {
       {isRevoked ? (
         <span className="developer-tab__revoked">{t("clients.revoked")}</span>
       ) : (
-        <button
-          type="button"
-          className="developer-tab__revoke"
-          onClick={handleRevoke}
-          disabled={busy}
-        >
-          {busy ? t("clients.revoking") : t("clients.revoke")}
-        </button>
+        <>
+          <button
+            type="button"
+            className="developer-tab__revoke"
+            onClick={handleRevoke}
+            disabled={busy}
+          >
+            {busy ? t("clients.revoking") : t("clients.revoke")}
+          </button>
+          {error && (
+            <span className="developer-tab__error" role="alert" aria-live="polite">
+              {t("clients.revokeError")}
+            </span>
+          )}
+        </>
       )}
     </li>
   );

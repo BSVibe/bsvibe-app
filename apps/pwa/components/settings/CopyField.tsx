@@ -25,12 +25,17 @@ export default function CopyField({
   const t = useTranslations("common");
 
   async function copy() {
+    // No Clipboard API (insecure context / old browser): don't claim success.
+    // `navigator.clipboard?.writeText` would short-circuit to undefined and the
+    // await would resolve without copying, falsely flipping the label to
+    // "Copied". The value is on screen and selectable as the fallback.
+    if (!navigator.clipboard) return;
     try {
-      await navigator.clipboard?.writeText(value);
+      await navigator.clipboard.writeText(value);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } catch {
-      // Clipboard unavailable — the value is on screen and selectable.
+      // Clipboard write denied — the value is on screen and selectable.
     }
   }
 

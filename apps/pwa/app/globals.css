@@ -2547,6 +2547,11 @@ main.login {
   background: var(--surface);
   border: 1px solid var(--hair-strong);
   border-radius: var(--radius);
+  /* A concept with many/long observations can make the docked inspector taller
+     than the viewport; cap it and scroll internally so its bottom (and the
+     actions below it) stay reachable. The fullscreen variant already scrolls. */
+  max-height: calc(100vh - 32px);
+  overflow-y: auto;
 }
 
 .kgraph__panel-head {
