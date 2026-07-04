@@ -22,6 +22,7 @@ export function ConnectorOAuthButton({
   provider,
   connectedLabel,
   needsReauth,
+  connected,
   onRedirect,
 }: {
   provider: string;
@@ -34,6 +35,13 @@ export function ConnectorOAuthButton({
    *  a fresh connect; on success the row's status flips back to
    *  `active` on the first dispatch. */
   needsReauth?: boolean;
+  /** The binding already exists (a connected row) but we want the OAuth
+   *  action available anyway — to migrate a PAT-backed connector onto OAuth
+   *  or to rotate/recover a healthy OAuth credential in place. Flips the
+   *  idle label to `Reconnect with X` (there is nothing to "Connect" — it's
+   *  already connected). Distinct from `needsReauth`, which is the backend
+   *  telling us the token is dead; `connected` is a user-initiated re-auth. */
+  connected?: boolean;
   /** Override the post-start navigation (tests). */
   onRedirect?: (url: string) => void;
 }) {
@@ -77,7 +85,10 @@ export function ConnectorOAuthButton({
     }
   };
 
-  const idleLabel = needsReauth
+  // Already-bound rows (needs_reauth OR a user-initiated re-auth on a healthy
+  // binding) read as "Reconnect"; only the fresh catalog add reads as "Connect".
+  const isReconnect = Boolean(needsReauth || connected);
+  const idleLabel = isReconnect
     ? `Reconnect with ${titleCase(provider)}`
     : `Connect with ${titleCase(provider)}`;
 
@@ -87,7 +98,7 @@ export function ConnectorOAuthButton({
         type="button"
         className="connector-form__oauth-btn"
         data-provider={provider}
-        data-testid={needsReauth ? "connector-oauth-reconnect" : "connector-oauth-connect"}
+        data-testid={isReconnect ? "connector-oauth-reconnect" : "connector-oauth-connect"}
         disabled={busy}
         aria-busy={busy}
         onClick={handleClick}
@@ -98,7 +109,7 @@ export function ConnectorOAuthButton({
           // users re-click (observed: 3× rapid oauth/start). Announce the work.
           <>
             <span className="connector-form__oauth-spinner" aria-hidden="true" />
-            Connecting…
+            {isReconnect ? "Reconnecting…" : "Connecting…"}
           </>
         ) : (
           idleLabel

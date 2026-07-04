@@ -47,7 +47,7 @@ describe("Lift 2-4 — vanilla OAuth cascade", () => {
     }
   });
 
-  it("ConnectorRow shows a single Connected pill for a connected slack binding (L6 3b — no duplicate OAuth line)", () => {
+  it("ConnectorRow shows a single Connected pill AND a Reconnect action for a connected slack binding", () => {
     render(
       <ConnectorRow
         connector={makeConnector({ connector: "slack", oauth_account_label: null })}
@@ -56,8 +56,11 @@ describe("Lift 2-4 — vanilla OAuth cascade", () => {
       />,
     );
     expect(screen.getByText(/^Connected$/i)).toBeInTheDocument();
-    // A healthy connected binding no longer renders an OAuth Connect/identity line.
-    expect(screen.queryByRole("button", { name: /connect with slack/i })).toBeNull();
+    // Single connected indicator (green pill), no duplicate identity line…
+    expect(screen.queryByText(/connected as/i)).toBeNull();
+    // …but every connected oauth binding now offers a Reconnect action so the
+    // credential can be rotated/recovered on demand (consistent with github).
+    expect(screen.getByRole("button", { name: /reconnect with slack/i })).toBeInTheDocument();
   });
 
   it("ConnectorRow drops the redundant 'Connected as @workspace' line for a connected notion binding (L6 3b)", () => {

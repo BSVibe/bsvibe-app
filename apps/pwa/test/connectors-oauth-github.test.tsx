@@ -79,8 +79,13 @@ describe("Lift 1 — AddConnector github form", () => {
   });
 });
 
-describe("Lift 1 — ConnectorRow github connect state (L6 3b — single indicator)", () => {
-  it("shows ONLY the green Connected pill, not a duplicate 'Connected as @login' line", () => {
+describe("Lift 1 — ConnectorRow github connect state (Reconnect / Switch-to-OAuth always available)", () => {
+  it("a healthy OAuth-backed github row keeps the single green pill AND offers Reconnect (rotate)", () => {
+    // Revises L6 3b: a connected binding still shows ONE connected indicator
+    // (the green pill, no duplicate 'Connected as @login' line), but now also
+    // surfaces a Reconnect affordance so a user can rotate/recover the OAuth
+    // credential without first revoking (previously only reachable via the
+    // backend-driven needs_reauth state — a dead end for healthy rotation).
     render(
       <ConnectorRow
         connector={makeConnector({ connector: "github", oauth_account_label: "@octocat" })}
@@ -88,12 +93,28 @@ describe("Lift 1 — ConnectorRow github connect state (L6 3b — single indicat
         revoke={vi.fn()}
       />,
     );
-    // The single connected indicator (green pill) is present…
     expect(screen.getByText(/^Connected$/i)).toBeInTheDocument();
-    // …and the redundant OAuth-section identity line is gone.
+    // No redundant identity line…
     expect(screen.queryByText(/@octocat/)).toBeNull();
     expect(screen.queryByText(/connected as/i)).toBeNull();
-    expect(screen.queryByRole("button", { name: /connect with github/i })).toBeNull();
+    // …but a Reconnect action is now available.
+    expect(screen.getByRole("button", { name: /reconnect with github/i })).toBeInTheDocument();
+  });
+
+  it("a PAT-backed github row (no oauth label) offers Reconnect to migrate onto OAuth", () => {
+    // The gh-e2e case: a connected github binding authenticated by a classic
+    // PAT (no oauth_account_label). It must expose a way to (re)connect via
+    // OAuth in-place — otherwise there is NO UI path to migrate a PAT binding
+    // to OAuth or to rotate the PAT on a healthy connector.
+    render(
+      <ConnectorRow
+        connector={makeConnector({ connector: "github", oauth_account_label: null })}
+        onRevoked={() => {}}
+        revoke={vi.fn()}
+      />,
+    );
+    expect(screen.getByText(/^Connected$/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /reconnect with github/i })).toBeInTheDocument();
   });
 
   it("surfaces a single Reconnect CTA when the bound token needs re-auth", () => {
@@ -111,5 +132,21 @@ describe("Lift 1 — ConnectorRow github connect state (L6 3b — single indicat
     expect(screen.getByRole("button", { name: /reconnect with github/i })).toBeInTheDocument();
     // Still no duplicate "Connected as" identity chip.
     expect(screen.queryByText(/connected as/i)).toBeNull();
+  });
+
+  it("does not offer Reconnect on a revoked (inactive) github row", () => {
+    render(
+      <ConnectorRow
+        connector={makeConnector({
+          connector: "github",
+          is_active: false,
+          oauth_account_label: "@octocat",
+        })}
+        onRevoked={() => {}}
+        revoke={vi.fn()}
+      />,
+    );
+    expect(screen.queryByRole("button", { name: /reconnect with github/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: /connect with github/i })).toBeNull();
   });
 });
