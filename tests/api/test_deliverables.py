@@ -468,6 +468,10 @@ async def test_report_references_are_concept_centric(configured_client, db, work
                             "kind": "judge",
                             "criteria": [
                                 "Function",
+                                # A body-laden concept statement — "{display} — {body}"
+                                # (canon_retriever folds the concept body in). Its id
+                                # is the slug of the LABEL only (agent-verification).
+                                "Agent-verification — verify the raw request body with an HMAC.",
                                 "Prior decision — Q: Which DB? A: Postgres",
                                 "Related note — garden/seedling/settle-add-a-tiny-clamp-utility.md",
                             ],
@@ -484,12 +488,20 @@ async def test_report_references_are_concept_centric(configured_client, db, work
     r = await configured_client.get(f"/api/v1/deliverables/{deliverable_id}/report")
     assert r.status_code == 200, r.text
     body = r.json()
+    refs = body["references"]
+    texts = [x["text"] for x in refs]
+    by_text = {x["text"]: x for x in refs}
     # The raw seedling "Related note —" hits are dropped (concept-centric).
-    assert not any("Related note" in x for x in body["references"])
-    assert not any("settle-add-a-tiny-clamp-utility" in x for x in body["references"])
-    # The concept + the prior decision stay referenced.
-    assert "Function" in body["references"]
-    assert any("Postgres" in x for x in body["references"])
+    assert not any("Related note" in t for t in texts)
+    assert not any("settle-add-a-tiny-clamp-utility" in t for t in texts)
+    # Concept refs carry an EXPLICIT concept_id (no frontend slugify) — the id is
+    # the LABEL slug even when the statement folds the concept body in.
+    assert by_text["Function"]["concept_id"] == "function"
+    agent = next(x for x in refs if x["text"].startswith("Agent-verification —"))
+    assert agent["concept_id"] == "agent-verification"
+    # A prior decision / rejection stays plain — no concept link.
+    decision = next(x for x in refs if x["text"].startswith("Prior decision —"))
+    assert decision["concept_id"] is None
     # The run's own written note still surfaces under written.
     assert any(w["title"] == "Add a title case helper" for w in body["written"])
 
@@ -745,10 +757,12 @@ async def test_report_surfaces_referenced_knowledge(configured_client, db, works
     r = await configured_client.get(f"/api/v1/deliverables/{deliverable_id}/report")
     assert r.status_code == 200, r.text
     references = r.json()["references"]
-    assert references == [
+    assert [ref["text"] for ref in references] == [
         "Avoid (prior rejection) — never ship a payment change without a regression test",
         "Prior decision — Q: Which database? A: Use Postgres",
     ]
+    # A prior rejection / decision stays plain — no concept link.
+    assert all(ref["concept_id"] is None for ref in references)
     # The non-knowledge judge check's criteria ("reads cleanly") must NOT leak
     # into references — only the retrieved-knowledge check counts.
     assert "reads cleanly" not in references
@@ -804,7 +818,9 @@ async def test_report_references_extracts_legacy_bsage_marker(
 
     r = await configured_client.get(f"/api/v1/deliverables/{deliverable_id}/report")
     assert r.status_code == 200, r.text
-    assert r.json()["references"] == ["Prior decision — Q: Which database? A: Use Postgres"]
+    assert [ref["text"] for ref in r.json()["references"]] == [
+        "Prior decision — Q: Which database? A: Use Postgres"
+    ]
 
 
 async def test_report_references_deduped_across_verifications(
@@ -864,7 +880,11 @@ async def test_report_references_deduped_across_verifications(
 
     r = await configured_client.get(f"/api/v1/deliverables/{deliverable_id}/report")
     assert r.status_code == 200, r.text
-    assert r.json()["references"] == ["pattern A", "pattern B", "pattern C"]
+    assert [ref["text"] for ref in r.json()["references"]] == [
+        "pattern A",
+        "pattern B",
+        "pattern C",
+    ]
 
 
 async def test_report_references_empty_without_retrieved_knowledge(

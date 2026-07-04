@@ -90,7 +90,9 @@ const REPORT: DeliverableReport = {
       created_at: NOW,
     },
   ],
-  references: ["Reuse the existing date helper"],
+  references: [
+    { text: "Reuse the existing date helper", concept_id: "reuse-the-existing-date-helper" },
+  ],
 };
 
 const BLOG_CONTENT = "export function getRelatedPosts() {\n  return [];\n}\n";
@@ -235,7 +237,9 @@ describe("Delivery Report (R3)", () => {
     installFetch({
       report: () => ({
         ...REPORT,
-        references: ["Prior decision — Q: Which database? A: Use Postgres"],
+        references: [
+          { text: "Prior decision — Q: Which database? A: Use Postgres", concept_id: null },
+        ],
       }),
     });
     render(<DeliveryReport deliverableId="d1" />);
@@ -293,7 +297,7 @@ describe("Delivery Report (R3)", () => {
     installFetch({
       report: () => ({
         ...REPORT,
-        references: ["Prior decision — Q: Which DB? A: Postgres"],
+        references: [{ text: "Prior decision — Q: Which DB? A: Postgres", concept_id: null }],
         written: [],
       }),
     });
@@ -306,7 +310,11 @@ describe("Delivery Report (R3)", () => {
 
   it("R13: clicking a concept reference opens the concept viewer with related concepts", async () => {
     installFetch({
-      report: () => ({ ...REPORT, references: ["Function"], written: [] }),
+      report: () => ({
+        ...REPORT,
+        references: [{ text: "Function", concept_id: "function" }],
+        written: [],
+      }),
       concept: () =>
         json({
           id: "function",
@@ -335,7 +343,11 @@ describe("Delivery Report (R3)", () => {
 
   it("R15: a related concept navigates the modal; an observation opens its note", async () => {
     installFetch({
-      report: () => ({ ...REPORT, references: ["Function"], written: [] }),
+      report: () => ({
+        ...REPORT,
+        references: [{ text: "Function", concept_id: "function" }],
+        written: [],
+      }),
       // Route concept detail by id so navigating to a related concept changes content.
       concept: (url: string) =>
         url.includes("pure-functions")
@@ -382,7 +394,11 @@ describe("Delivery Report (R3)", () => {
 
   it("R15: clicking an observation opens that note in the note viewer", async () => {
     installFetch({
-      report: () => ({ ...REPORT, references: ["Function"], written: [] }),
+      report: () => ({
+        ...REPORT,
+        references: [{ text: "Function", concept_id: "function" }],
+        written: [],
+      }),
       concept: () =>
         json({
           id: "function",
@@ -584,7 +600,9 @@ describe("Delivery Report (R3)", () => {
             created_at: NOW,
           },
         ],
-        references: ["Reuse the existing date helper"],
+        references: [
+          { text: "Reuse the existing date helper", concept_id: "reuse-the-existing-date-helper" },
+        ],
       }),
     });
     render(<DeliveryReport deliverableId="d1" />);
@@ -775,12 +793,51 @@ describe("Delivery Report (R3)", () => {
   it("renders a long canon-statement reference as a readable block, not a squished pill", async () => {
     const longRef =
       "Agent-verification — webhook verification should authenticate the exact raw request body with an HMAC and compare signatures using timing-safe equality, treating the timestamp as replay protection.";
-    installFetch({ report: () => ({ ...REPORT, references: [longRef], written: [] }) });
+    installFetch({
+      report: () => ({
+        ...REPORT,
+        references: [{ text: longRef, concept_id: "agent-verification" }],
+        written: [],
+      }),
+    });
     render(<DeliveryReport deliverableId="d1" />);
 
     const knowledge = await screen.findByRole("region", { name: /knowledge/i });
     const chip = within(knowledge).getByText(/timing-safe equality/);
     expect(chip.className).toMatch(/report-chip--statement/);
+  });
+
+  it("opens a body-laden concept reference by its backend concept_id, not a re-slugified sentence", async () => {
+    // Regression: the chip must fetch the EXPLICIT concept_id the backend supplies
+    // ("agent-verification"), not slugify the whole "{label} — {body}" statement
+    // (which 404'd → "이 개념을 열지 못했어요").
+    const longRef =
+      "Agent-verification — webhook verification must authenticate the raw body with an HMAC using timing-safe equality.";
+    installFetch({
+      report: () => ({
+        ...REPORT,
+        references: [{ text: longRef, concept_id: "agent-verification" }],
+        written: [],
+      }),
+      concept: (url: string) =>
+        /\/inside\/concepts\/agent-verification($|\?)/.test(url)
+          ? json({
+              id: "agent-verification",
+              name: "Agent-verification",
+              aliases: [],
+              related: [{ id: "hmac-signing", name: "HMAC signing", weight: 2 }],
+              observations: [],
+            })
+          : json({ detail: "not found" }, 404),
+    });
+    render(<DeliveryReport deliverableId="d1" />);
+
+    const knowledge = await screen.findByRole("region", { name: /knowledge/i });
+    await userEvent.click(within(knowledge).getByText(/timing-safe equality/));
+
+    // The related concept only renders when the concept_id fetch succeeds (200).
+    const dialog = await screen.findByRole("dialog");
+    expect(await within(dialog).findByText(/HMAC signing/)).toBeInTheDocument();
   });
 
   it("leads 'How it was verified' with the repo's OWN derived gate, not the agent's advisory commands", async () => {

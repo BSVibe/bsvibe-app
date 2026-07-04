@@ -33,11 +33,11 @@ from backend.workflow.infrastructure.db import (
     VerificationResult,
 )
 
-# Read cap for artifact content. A produced source file is small; this guards
-# against an accidental multi-MB log/blob slipping into a JSON body. Beyond it
-# the response carries the first ``MAX_CONTENT_BYTES`` decoded as text with
-# ``truncated: true`` so the viewer can show a calm "showing the first part"
-# note rather than streaming an unbounded payload.
+from ._references import ReferenceOut
+
+# Read cap for artifact content — guards against a multi-MB blob in a JSON body.
+# Beyond it the response carries the first ``MAX_CONTENT_BYTES`` as text with
+# ``truncated: true`` so the viewer shows a calm "first part" note.
 MAX_CONTENT_BYTES = 256 * 1024
 
 
@@ -53,10 +53,9 @@ class DeliverableResponse(BaseModel):
     artifact_uri: str | None = None
     diff_url: str | None = None
     # B4 trust-integrity: True ONLY when a PASSED VerificationResult exists for
-    # the producing run. The founder-facing "verified" badge MUST derive from
-    # this backend-authoritative flag, never from a Deliverable merely existing.
-    # Defaults False so a hollow row (no PASSED proof) reads honestly as
-    # unverified / needs-review rather than a green "verified".
+    # the producing run — the "verified" badge derives from this backend flag,
+    # never from a Deliverable merely existing. Defaults False → a hollow row
+    # (no PASSED proof) reads honestly as unverified, not a green "verified".
     verified: bool = False
     created_at: datetime
 
@@ -102,8 +101,9 @@ class DeliverableReportResponse(BaseModel):
     # shows Approve / Decline; only run_status=="shipped" shows Rollback.
     run_status: str | None = None
     held_delivery_item_id: uuid.UUID | None = None
-    # G2 — knowledge REFERENCED (consulted), minus this run's own writes ("참고한 지식").
-    references: list[str] = []
+    # G2 — knowledge REFERENCED ("참고한 지식"), structured so a concept chip links
+    # by its real id (see ReferenceOut), not a frontend-reconstructed slug.
+    references: list[ReferenceOut] = []
     # R10/R12 — notes this run WROTE: de-slugged ``title`` + vault-relative ``path``
     # so the "추가한 지식" chip deep-links to the note viewer. Empty until drain.
     written: list[WrittenNote] = []
