@@ -76,10 +76,14 @@ async def test_product_context_is_injected_when_product_id_given(tmp_path, monke
     is answered from real state, not an empty sandbox."""
     ws, pid, rid = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
     product = SimpleNamespace(workspace_id=ws, name="toolkit", repo_url="blas1n/toolkit")
+    # The founder's intent is the clean title; the deliverable's auto-generated
+    # summary is a noisy "Changed files: …" blob that must NOT be the title.
     run = SimpleNamespace(
-        id=rid, status=RunStatus.REVIEW_READY, payload={"intent_text": "raw intent"}
+        id=rid,
+        status=RunStatus.REVIEW_READY,
+        payload={"intent_text": "Add a title-case helper"},
     )
-    deliverable = SimpleNamespace(run_id=rid, payload={"summary": "Add a title-case helper"})
+    deliverable = SimpleNamespace(run_id=rid, payload={"summary": "Changed files:\n- p"})
     session = _FakeSession(product, [[run], [deliverable]])
 
     captured: dict[str, Any] = {}
@@ -109,11 +113,48 @@ async def test_product_context_is_injected_when_product_id_given(tmp_path, monke
     )
     assert "toolkit" in grounding
     assert "blas1n/toolkit" in grounding
-    # deliverable summary is preferred over the raw run intent for the title
+    # the founder's intent is the title; the noisy "Changed files:" summary is not
     assert "Add a title-case helper" in grounding
+    assert "Changed files" not in grounding
     assert "ready to ship" in grounding
     # and it explicitly tells the model NOT to inspect an empty working directory
     assert "do NOT inspect" in grounding.lower() or "do not inspect" in grounding.lower()
+
+
+async def test_product_context_titles_are_single_line(tmp_path, monkeypatch) -> None:
+    """A multi-line intent/summary is collapsed to one bullet line so it can't
+    break the list structure the model reads."""
+    ws, pid, rid = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
+    product = SimpleNamespace(workspace_id=ws, name="toolkit", repo_url=None)
+    run = SimpleNamespace(
+        id=rid,
+        status=RunStatus.SHIPPED,
+        payload={"intent_text": "Add a truncate helper\n\nwith an ellipsis suffix"},
+    )
+    session = _FakeSession(product, [[run], []])
+
+    captured: dict[str, Any] = {}
+    adapter = _capturing_adapter(captured)
+    monkeypatch.setattr(
+        da,
+        "_resolve_via_caller",
+        lambda *_a, **_k: _async(
+            SimpleNamespace(account=SimpleNamespace(provider="litellm"), adapter=adapter)
+        ),
+    )
+    monkeypatch.setattr(DirectAnswerService, "_retrieve", _empty_retrieve)
+
+    settings = SimpleNamespace(
+        knowledge_default_region="us-1", knowledge_vault_root=str(tmp_path / "vault")
+    )
+    svc = DirectAnswerService(session=session, settings=settings)  # type: ignore[arg-type]
+    await svc.answer(workspace_id=ws, product_id=pid, text="status?")
+
+    grounding = "\n".join(
+        str(m.get("content")) for m in captured["messages"] if m.get("role") == "system"
+    )
+    bullet = next(ln for ln in grounding.splitlines() if ln.startswith("- "))
+    assert bullet == "- Add a truncate helper with an ellipsis suffix — shipped"
 
 
 async def test_product_in_another_workspace_is_not_injected(tmp_path, monkeypatch) -> None:
