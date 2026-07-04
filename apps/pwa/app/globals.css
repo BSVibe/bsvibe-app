@@ -5407,6 +5407,39 @@ main.login {
   gap: 8px;
 }
 
+/* On a CONNECTED card the OAuth action is a secondary "Reconnect" affordance,
+   not the primary catalog "Connect with X" button — render it as a quiet,
+   link-like control so it doesn't compete with the card's connected state. */
+.connector-card__oauth .connector-form__oauth-btn {
+  padding: 2px 0;
+  border: none;
+  background: none;
+  border-radius: 4px;
+  color: var(--ink-3);
+  font-size: 0.78rem;
+  font-weight: 500;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  transition: color 120ms ease;
+}
+
+.connector-card__oauth .connector-form__oauth-btn:hover:not(:disabled) {
+  background: none;
+  border: none;
+  color: var(--ink);
+}
+
+.connector-card__oauth .connector-form__oauth-btn:focus-visible {
+  outline: 2px solid var(--amber-dot);
+  outline-offset: 2px;
+}
+
+.connector-card__oauth .connector-form__oauth-spinner {
+  width: 10px;
+  height: 10px;
+  border-width: 1.5px;
+}
+
 .connector-form__oauth {
   display: inline-flex;
   flex-direction: column;
