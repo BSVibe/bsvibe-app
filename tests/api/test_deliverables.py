@@ -494,11 +494,11 @@ async def test_report_references_are_concept_centric(configured_client, db, work
     # The raw seedling "Related note —" hits are dropped (concept-centric).
     assert not any("Related note" in t for t in texts)
     assert not any("settle-add-a-tiny-clamp-utility" in t for t in texts)
-    # Concept refs carry an EXPLICIT concept_id (no frontend slugify) — the id is
-    # the LABEL slug even when the statement folds the concept body in.
+    # A concept chip shows the LABEL only + an explicit concept_id (no frontend
+    # slugify); the folded-in body stays out of the chip (it's in the viewer).
     assert by_text["Function"]["concept_id"] == "function"
-    agent = next(x for x in refs if x["text"].startswith("Agent-verification —"))
-    assert agent["concept_id"] == "agent-verification"
+    agent = next(x for x in refs if x["concept_id"] == "agent-verification")
+    assert agent["text"] == "Agent-verification"
     # A prior decision / rejection stays plain — no concept link.
     decision = next(x for x in refs if x["text"].startswith("Prior decision —"))
     assert decision["concept_id"] is None

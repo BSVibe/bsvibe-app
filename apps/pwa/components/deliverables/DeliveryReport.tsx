@@ -628,6 +628,10 @@ function ConceptViewer({
                         >
                           {o.title}
                         </button>
+                        {/* Show the observation's substance inline (R13) — the
+                            concept's body lives here, so opening the concept
+                            surfaces it without a second click into the note. */}
+                        {o.excerpt && <p className="concept-viewer__obs-excerpt">{o.excerpt}</p>}
                       </li>
                     ))}
                   </ul>

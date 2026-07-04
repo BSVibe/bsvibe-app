@@ -790,13 +790,14 @@ describe("Delivery Report (R3)", () => {
     expect(retry).toHaveAttribute("href", "/runs/run-77");
   });
 
-  it("renders a long canon-statement reference as a readable block, not a squished pill", async () => {
+  it("renders a long statement reference (a prior decision) as a readable block, not a squished pill", async () => {
+    // Concept chips are short labels now; a LONG statement is a decision/rejection.
     const longRef =
-      "Agent-verification — webhook verification should authenticate the exact raw request body with an HMAC and compare signatures using timing-safe equality, treating the timestamp as replay protection.";
+      "Prior decision — Q: should webhook verification authenticate the exact raw request body with an HMAC and compare signatures using timing-safe equality? A: yes, always, and treat the timestamp as replay protection.";
     installFetch({
       report: () => ({
         ...REPORT,
-        references: [{ text: longRef, concept_id: "agent-verification" }],
+        references: [{ text: longRef, concept_id: null }],
         written: [],
       }),
     });
@@ -807,16 +808,14 @@ describe("Delivery Report (R3)", () => {
     expect(chip.className).toMatch(/report-chip--statement/);
   });
 
-  it("opens a body-laden concept reference by its backend concept_id, not a re-slugified sentence", async () => {
-    // Regression: the chip must fetch the EXPLICIT concept_id the backend supplies
-    // ("agent-verification"), not slugify the whole "{label} — {body}" statement
-    // (which 404'd → "이 개념을 열지 못했어요").
-    const longRef =
-      "Agent-verification — webhook verification must authenticate the raw body with an HMAC using timing-safe equality.";
+  it("shows a concept chip as the LABEL, and its BODY appears in the viewer on click", async () => {
+    // #1: the chip is the short label; the folded-in body stays out. Clicking it
+    // fetches by the backend concept_id (not a re-slugified sentence — the 404
+    // regression) and the viewer surfaces the concept's body (observation excerpt).
     installFetch({
       report: () => ({
         ...REPORT,
-        references: [{ text: longRef, concept_id: "agent-verification" }],
+        references: [{ text: "Agent-verification", concept_id: "agent-verification" }],
         written: [],
       }),
       concept: (url: string) =>
@@ -825,19 +824,30 @@ describe("Delivery Report (R3)", () => {
               id: "agent-verification",
               name: "Agent-verification",
               aliases: [],
-              related: [{ id: "hmac-signing", name: "HMAC signing", weight: 2 }],
-              observations: [],
+              related: [],
+              observations: [
+                {
+                  id: "garden/seedling/settle-webhook.md",
+                  title: "Webhook signatures need body HMAC and replay context",
+                  excerpt: "[[Toss Payments]] webhook verification must authenticate the raw body.",
+                  body: "[[Toss Payments]] webhook verification must authenticate the raw body.",
+                  truncated: false,
+                  captured_at: NOW,
+                },
+              ],
             })
           : json({ detail: "not found" }, 404),
     });
     render(<DeliveryReport deliverableId="d1" />);
 
     const knowledge = await screen.findByRole("region", { name: /knowledge/i });
-    await userEvent.click(within(knowledge).getByText(/timing-safe equality/));
+    // The chip is the short label — NOT the long "{label} — {body}" statement.
+    const chip = within(knowledge).getByRole("button", { name: "Agent-verification" });
+    await userEvent.click(chip);
 
-    // The related concept only renders when the concept_id fetch succeeds (200).
+    // The viewer opens (concept_id fetch succeeded) and shows the BODY inline.
     const dialog = await screen.findByRole("dialog");
-    expect(await within(dialog).findByText(/HMAC signing/)).toBeInTheDocument();
+    expect(await within(dialog).findByText(/\[\[Toss Payments\]\]/)).toBeInTheDocument();
   });
 
   it("leads 'How it was verified' with the repo's OWN derived gate, not the agent's advisory commands", async () => {
