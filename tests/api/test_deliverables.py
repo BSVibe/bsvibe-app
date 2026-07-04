@@ -437,8 +437,9 @@ async def test_report_surfaces_written_from_settle_drains(
 async def test_report_references_are_concept_centric(configured_client, db, workspace_id) -> None:
     """R16 — "참고한 지식" stays concept-centric (matching the knowledge graph): the
     raw seedling "Related note — garden/seedling/settle-*" hits (episodic layer)
-    are DROPPED, while CONCEPTS and prior decisions/rejections are kept. The run's
-    own written note still surfaces under ``written``."""
+    are DROPPED; CONCEPTS are kept; and a prior decision/rejection with no
+    locatable garden note is dropped (see the dedicated note-link test for the
+    kept case). The run's own written note still surfaces under ``written``."""
     run_id, deliverable_id = uuid.uuid4(), uuid.uuid4()
     note_abs = "/app/var/vault/us-1/ws/garden/seedling/settle-add-a-title-case-helper.md"
     async with db() as s:
@@ -495,6 +496,11 @@ async def test_report_references_are_concept_centric(configured_client, db, work
     # The raw seedling "Related note —" hits are dropped (concept-centric).
     assert not any("Related note" in t for t in texts)
     assert not any("settle-add-a-tiny-clamp-utility" in t for t in texts)
+    # The prior decision / rejection have NO stored garden note here (none seeded)
+    # → they can't be linked, so they're dropped rather than shown as dead tags.
+    assert not any("Which DB" in t for t in texts)
+    assert not any("never ship" in t for t in texts)
+    assert all(x["kind"] == "concept" for x in refs)
     # A concept chip is kind=concept: the LABEL only + an explicit concept_id (no
     # frontend slugify); the folded-in body stays out of the chip.
     assert by_text["Function"]["kind"] == "concept"
@@ -502,19 +508,102 @@ async def test_report_references_are_concept_centric(configured_client, db, work
     agent = next(x for x in refs if x["concept_id"] == "agent-verification")
     assert agent["kind"] == "concept"
     assert agent["text"] == "Agent-verification"
-    # A prior decision is STRUCTURED so the frontend localizes the prefix + the
-    # resolution — the English "Prior decision — Q: … A: …" is split into the
-    # question (text) + the answer (localizable); no concept link.
-    decision = next(x for x in refs if x["kind"] == "decision")
-    assert decision["text"] == "Which DB?"
-    assert decision["answer"] == "Postgres"
-    assert decision["concept_id"] is None
-    # A prior rejection is kind=rejection, carrying just the reason as text.
-    rejection = next(x for x in refs if x["kind"] == "rejection")
-    assert rejection["text"] == "never ship without a test"
-    assert rejection["concept_id"] is None
     # The run's own written note still surfaces under written.
     assert any(w["title"] == "Add a title case helper" for w in body["written"])
+
+
+@pytest.fixture
+def knowledge_vault_root(tmp_path: Path, monkeypatch):
+    """Point the knowledge vault at a tmp dir (region us-1) so a seeded decision
+    note lands where the report's ``DecisionNoteLocator`` scans; clear the
+    settings cache so the request-time ``get_settings()`` read picks it up."""
+    root = tmp_path / "vault"
+    root.mkdir()
+    monkeypatch.setenv("BSVIBE_KNOWLEDGE_VAULT_ROOT", str(root))
+    get_settings.cache_clear()
+    yield root
+    get_settings.cache_clear()
+
+
+async def _seed_decision_note(
+    vault_root: Path, workspace_id: uuid.UUID, *, question: str, answer: str
+) -> str:
+    """Write a decision-resolution garden note exactly as the settle sink does,
+    into the workspace vault the report scans. Returns its vault-relative path."""
+    from backend.knowledge.graph.vault import Vault
+    from backend.knowledge.graph.writer import GardenNote
+    from backend.knowledge.graph.writer_core import GardenWriter
+
+    ws_root = vault_root / "us-1" / str(workspace_id)
+    ws_root.mkdir(parents=True, exist_ok=True)
+    writer = GardenWriter(vault=Vault(ws_root))
+    note = GardenNote(
+        title=f"Settle: Q {question}",
+        content="body",
+        source="settle_worker",
+        knowledge_layer="episodic",
+        tags=["settle", "decision-resolution"],
+        extra_fields={"kind": "decision_resolution", "question": question, "answer": answer},
+    )
+    return str(await writer.write_garden(note))
+
+
+async def test_report_prior_decision_links_to_its_stored_note(
+    configured_client, db, workspace_id, knowledge_vault_root
+) -> None:
+    """A prior-decision reference LINKS to the garden note it was absorbed into
+    (``kind=note`` + ``path``, the question as the chip label) so the founder can
+    OPEN the stored knowledge — instead of a dead English "Prior decision —" tag."""
+    from backend.workflow.application.verification_service import RETRIEVED_KNOWLEDGE_RATIONALE
+
+    await _seed_decision_note(
+        knowledge_vault_root, workspace_id, question="Which database?", answer="Use Postgres"
+    )
+    run_id, deliverable_id = uuid.uuid4(), uuid.uuid4()
+    contract = {
+        "checks": [
+            {
+                "kind": "judge",
+                "criteria": ["Prior decision — Q: Which database? A: Use Postgres"],
+                "rationale": RETRIEVED_KNOWLEDGE_RATIONALE,
+            }
+        ]
+    }
+    async with db() as s:
+        await _seed_run(s, run_id=run_id, ws=workspace_id, payload={"intent_text": "database"})
+        s.add(
+            Deliverable(
+                id=deliverable_id,
+                run_id=run_id,
+                workspace_id=workspace_id,
+                deliverable_type=DeliverableType.PR,
+                payload={"summary": "x"},
+                created_at=datetime.now(tz=UTC),
+            )
+        )
+        s.add(
+            VerificationResult(
+                id=uuid.uuid4(),
+                run_id=run_id,
+                work_step_id=None,
+                workspace_id=workspace_id,
+                outcome=VerificationOutcome.PASSED,
+                contract=contract,
+                result={},
+                created_at=datetime.now(tz=UTC),
+            )
+        )
+        await s.commit()
+
+    r = await configured_client.get(f"/api/v1/deliverables/{deliverable_id}/report")
+    assert r.status_code == 200, r.text
+    refs = r.json()["references"]
+    assert len(refs) == 1
+    ref = refs[0]
+    assert ref["kind"] == "note"
+    assert ref["text"] == "Which database?"  # the question is the chip label
+    assert ref["path"].startswith("garden/seedling/") and ref["path"].endswith(".md")
+    assert ref["concept_id"] is None
 
 
 async def test_report_written_empty_before_drain(configured_client, db, workspace_id) -> None:
@@ -732,6 +821,7 @@ async def test_report_surfaces_referenced_knowledge(configured_client, db, works
             {
                 "kind": "judge",
                 "criteria": [
+                    "Idempotency-key — reuse the stored key on a webhook retry.",
                     "Avoid (prior rejection) — never ship a payment change without a regression test",
                     "Prior decision — Q: Which database? A: Use Postgres",
                 ],
@@ -768,15 +858,14 @@ async def test_report_surfaces_referenced_knowledge(configured_client, db, works
     r = await configured_client.get(f"/api/v1/deliverables/{deliverable_id}/report")
     assert r.status_code == 200, r.text
     references = r.json()["references"]
-    # Structured for locale-aware rendering: the English prefix is stripped, and a
-    # decision splits into question (text) + resolution (answer).
-    assert [(ref["kind"], ref["text"]) for ref in references] == [
-        ("rejection", "never ship a payment change without a regression test"),
-        ("decision", "Which database?"),
+    # Only the CONCEPT surfaces — a chip (LABEL only + explicit id). The prior
+    # decision/rejection have no locatable garden note here, so they're dropped
+    # (the dedicated note-link test covers the kept case).
+    assert [(ref["kind"], ref["text"], ref["concept_id"]) for ref in references] == [
+        ("concept", "Idempotency-key", "idempotency-key"),
     ]
-    assert references[1]["answer"] == "Use Postgres"
-    # A prior rejection / decision is never a concept link.
-    assert all(ref["concept_id"] is None for ref in references)
+    assert not any("Which database" in ref["text"] for ref in references)
+    assert not any("regression test" in ref["text"] for ref in references)
     # The non-knowledge judge check's criteria ("reads cleanly") must NOT leak
     # into references — only the retrieved-knowledge check counts.
     assert "reads cleanly" not in references
@@ -799,7 +888,7 @@ async def test_report_references_extracts_legacy_bsage_marker(
         "checks": [
             {
                 "kind": "judge",
-                "criteria": ["Prior decision — Q: Which database? A: Use Postgres"],
+                "criteria": ["Idempotency-key — reuse the stored key on a webhook retry."],
                 "rationale": LEGACY_RETRIEVED_KNOWLEDGE_RATIONALE,
             },
         ]
@@ -833,8 +922,8 @@ async def test_report_references_extracts_legacy_bsage_marker(
     r = await configured_client.get(f"/api/v1/deliverables/{deliverable_id}/report")
     assert r.status_code == 200, r.text
     refs = r.json()["references"]
-    assert [(ref["kind"], ref["text"], ref["answer"]) for ref in refs] == [
-        ("decision", "Which database?", "Use Postgres")
+    assert [(ref["kind"], ref["text"], ref["concept_id"]) for ref in refs] == [
+        ("concept", "Idempotency-key", "idempotency-key")
     ]
 
 

@@ -25,10 +25,31 @@ from backend.workflow.infrastructure.delivery.db import (
     SafeModeStatus,
 )
 
-from ._references import ReferenceOut, to_reference
+from ._references import ReferenceOut, is_prior_note_reference, to_reference
 from ._schemas import WrittenNote
 
 logger = structlog.get_logger(__name__)
+
+
+async def _decision_note_paths(workspace_id: uuid.UUID) -> dict[str, str]:
+    """Resolve folded decision/rejection statements → their garden note paths for
+    THIS workspace (so a prior-decision reference links to the stored note). Uses
+    the same per-workspace vault root the retrievers read; graceful-empty."""
+    from pathlib import Path  # noqa: PLC0415 — lazy, keep import cost off the hot path
+
+    from backend.knowledge.factory import KnowledgeFactory  # noqa: PLC0415
+    from backend.knowledge.graph.storage import FileSystemStorage  # noqa: PLC0415
+    from backend.knowledge.retrieval.decision_note_locator import (  # noqa: PLC0415
+        DecisionNoteLocator,
+    )
+
+    settings = get_settings()
+    vault_root = KnowledgeFactory(
+        region=settings.knowledge_default_region,
+        workspace_id=str(workspace_id),
+        vault_root=Path(settings.knowledge_vault_root),
+    ).vault_path
+    return await DecisionNoteLocator(FileSystemStorage(vault_root)).statement_paths()
 
 
 async def held_delivery_item_for(
@@ -98,12 +119,15 @@ async def split_knowledge(
     지식" and "추가한 지식" distinct AND concept-centric (R16).
 
     REFERENCED = the PROMOTED/canonical knowledge the run drew on — the retrieved
-    CONCEPTS (graph anchors) + prior decisions/rejections. The raw seedling
-    "Related note —" hits (the SemanticNoteRetriever's search over garden
-    seedlings) are DROPPED: they're the episodic layer, NOT what the concept
-    graph shows, so surfacing them made the report inconsistent with the graph
-    (founder: the graph's mature notes are the main axis). The seedling search
-    still feeds the verify contract — this only trims the founder-facing report.
+    CONCEPTS (graph anchors, deep-link by concept_id) + prior decisions/rejections
+    (linked to the STORED garden note they were absorbed into, via
+    :func:`_decision_note_paths`, so the founder can OPEN the knowledge instead of
+    reading a dead English tag; a decision whose note can't be located is
+    dropped). The raw seedling "Related note —" hits (the SemanticNoteRetriever's
+    search over garden seedlings) are DROPPED: they're the episodic layer, NOT
+    what the concept graph shows, so surfacing them made the report inconsistent
+    with the graph. The seedling search still feeds the verify contract — this
+    only trims / relinks the founder-facing report.
 
     WRITTEN = the notes THIS run itself added, from ``settle_drains`` (run_id →
     node_ref): a de-slugged ``title`` + the vault-relative ``path`` so the chip
@@ -117,10 +141,21 @@ async def split_knowledge(
     )
     written_paths = [p for p in (await session.execute(stmt)).scalars().all() if p]
 
-    # Concept-centric: keep concepts + decisions/rejections; drop the raw
-    # seedling note hits (they're the episodic layer, not the graph's canon).
-    # Structure each survivor so a concept chip carries its explicit id (R13).
-    referenced = [to_reference(r) for r in references if not _is_seedling_note_ref(r)]
+    # Drop the raw seedling "Related note —" hits (episodic layer, not the graph's
+    # canon). Structure each survivor: a concept carries its explicit id; a prior
+    # decision/rejection links to its stored garden note. Resolve note paths only
+    # when at least one such reference is present (else skip the vault scan).
+    consulted = [r for r in references if not _is_seedling_note_ref(r)]
+    note_paths = (
+        await _decision_note_paths(workspace_id)
+        if any(is_prior_note_reference(r) for r in consulted)
+        else {}
+    )
+    referenced: list[ReferenceOut] = []
+    for r in consulted:
+        ref = to_reference(r, note_paths)
+        if ref is not None:
+            referenced.append(ref)
 
     written: list[WrittenNote] = []
     seen: set[str] = set()
