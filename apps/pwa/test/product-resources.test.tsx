@@ -124,6 +124,24 @@ describe("Product RESOURCES section", () => {
     );
     await waitFor(() => expect(listResources).toHaveBeenCalledTimes(2));
   });
+
+  it("surfaces an inline error when a remove fails — not a silent revert", async () => {
+    const listResources = vi.fn().mockResolvedValue([resource()]);
+    const removeResource = vi.fn().mockRejectedValue(new Error("boom"));
+
+    render(
+      <ProductResources
+        productId={PRODUCT_ID}
+        listResources={listResources}
+        removeResource={removeResource}
+      />,
+    );
+
+    await screen.findByText("Main repo");
+    await userEvent.click(screen.getByRole("button", { name: /Remove/i }));
+
+    expect(await screen.findByText(/couldn.t remove/i)).toBeInTheDocument();
+  });
 });
 
 describe("Add resource form", () => {

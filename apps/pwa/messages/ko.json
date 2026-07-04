@@ -177,6 +177,7 @@
       "empty": "아직 리소스가 없어요.",
       "loading": "리소스를 불러오는 중…",
       "loadError": "이 제품의 리소스를 불러오지 못했어요.",
+      "removeError": "리소스를 제거하지 못했어요. 다시 시도해 주세요.",
       "open": "열기",
       "remove": "삭제",
       "form": {
@@ -210,6 +211,7 @@
       "loadError": "바인딩을 불러올 수 없어요.",
       "empty": "아직 연결된 바인딩이 없어요.",
       "addError": "바인딩을 추가하지 못했어요. 다시 시도해 주세요.",
+      "changeError": "변경을 저장하지 못했어요. 다시 시도해 주세요.",
       "triggerEnabled": "트리거 켜기",
       "outputMode": "전송 모드",
       "outputModes": {

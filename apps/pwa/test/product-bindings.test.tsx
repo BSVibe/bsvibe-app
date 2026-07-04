@@ -145,6 +145,45 @@ describe("ProductBindings", () => {
     );
   });
 
+  it("surfaces an inline error when a knob change fails — not a silent revert", async () => {
+    const listBindings = vi.fn().mockResolvedValue([binding()]);
+    const updateBinding = vi
+      .fn<(id: string, bid: string, p: ResourceBindingUpdate) => Promise<ResourceBinding>>()
+      .mockRejectedValue(new Error("boom"));
+
+    render(
+      <ProductBindings
+        productId={PRODUCT_ID}
+        listBindings={listBindings}
+        updateBinding={updateBinding}
+      />,
+    );
+
+    const select = await screen.findByRole("combobox", { name: /Output/i });
+    await userEvent.selectOptions(select, "direct");
+
+    // The failure is visible, not swallowed by the silent re-read.
+    expect(await screen.findByText(/couldn.t save that change/i)).toBeInTheDocument();
+  });
+
+  it("surfaces an inline error when a remove fails", async () => {
+    const listBindings = vi.fn().mockResolvedValue([binding()]);
+    const removeBinding = vi.fn().mockRejectedValue(new Error("boom"));
+
+    render(
+      <ProductBindings
+        productId={PRODUCT_ID}
+        listBindings={listBindings}
+        removeBinding={removeBinding}
+      />,
+    );
+
+    await screen.findByText("acme/blog");
+    await userEvent.click(screen.getByRole("button", { name: /Remove/i }));
+
+    expect(await screen.findByText(/couldn.t save that change/i)).toBeInTheDocument();
+  });
+
   it("opens the add form, lists connectors, and creates a binding on submit", async () => {
     const listBindings = vi
       .fn()
