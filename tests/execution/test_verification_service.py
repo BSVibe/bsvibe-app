@@ -261,10 +261,11 @@ async def test_assemble_contract_merges_declared_and_canon() -> None:
         assert retriever.queried, "retriever must be queried with change signals"
 
 
-async def test_assemble_contract_persists_structured_knowledge_refs() -> None:
-    """The folded judge check carries the retriever's STRUCTURED identity in
-    ``knowledge_refs`` (serialized onto the contract JSON) so the delivery report
-    deep-links each reference without re-deriving concept ids / note paths."""
+async def test_assemble_contract_carries_structured_knowledge_refs() -> None:
+    """The retriever's STRUCTURED identity rides the contract as an IN-MEMORY
+    transport (``contract.knowledge_refs``) — NOT serialized onto the contract
+    JSON (``to_dict`` omits it). ``verify`` lifts it into the result record; the
+    report reads THAT, so the contract stays purely "what to check"."""
     items = [
         RetrievedKnowledge(
             text="Prior decision — Q: Which DB? A: Postgres",
@@ -287,15 +288,15 @@ async def test_assemble_contract_persists_structured_knowledge_refs() -> None:
         )
         assert contract is not None
         judge = contract.judge_checks[0]
-        # `criteria` stays the flat text (judge reads it; legacy readers work);
-        # `knowledge_refs` carries the identity, serialized on to_dict().
+        # `criteria` stays the flat text (the judge reads it; legacy readers work).
         assert judge.criteria == (
             "Prior decision — Q: Which DB? A: Postgres",
             "Idempotency-key — reuse the stored key.",
         )
-        persisted = judge.to_dict()
-        assert persisted["rationale"] == RETRIEVED_KNOWLEDGE_RATIONALE
-        assert persisted["knowledge_refs"] == [
+        # The contract JSON does NOT carry knowledge_refs — it's a result record.
+        assert "knowledge_refs" not in judge.to_dict()
+        # The identity rides the in-memory contract for `verify` to lift.
+        assert contract.knowledge_refs == [
             {
                 "text": "Prior decision — Q: Which DB? A: Postgres",
                 "kind": "note",
@@ -581,9 +582,6 @@ async def test_verify_retriever_added_judge_is_advisory_when_command_passes() ->
     satisfied" advisory. When the primary passes, the secondary becomes
     informational (still recorded on the result) but not gating.
     """
-    from backend.workflow.application.verification_service import (
-        RETRIEVED_KNOWLEDGE_RATIONALE,
-    )
 
     async with memory_session() as session:
         run = await _make_run(session)
@@ -667,9 +665,6 @@ async def test_verify_retrieved_knowledge_excluded_from_gating_judge() -> None:
     (folded in by loose semantic similarity, often unrelated to the task) must
     never pollute the gating grade. Dogfood dd2bd3a3: a rate-limiter run got
     "Toss Payments webhook HMAC" retrieved criteria and could never pass."""
-    from backend.workflow.application.verification_service import (
-        RETRIEVED_KNOWLEDGE_RATIONALE,
-    )
 
     async with memory_session() as session:
         run = await _make_run(session)
