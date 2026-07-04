@@ -17,6 +17,7 @@ from __future__ import annotations
 import structlog
 
 from backend.knowledge.retrieval.embedder import Embedder
+from backend.knowledge.retrieval.knowledge_item import RetrievedKnowledge
 from backend.knowledge.retrieval.storage.backend import NoteVectorBackend
 
 logger = structlog.get_logger(__name__)
@@ -47,20 +48,30 @@ class SemanticNoteRetriever:
         self._min_similarity = min_similarity
 
     async def retrieve_for_signals(self, signals: str) -> list[str]:
+        return [item.text for item in await self.retrieve_structured(signals)]
+
+    async def retrieve_structured(self, signals: str) -> list[RetrievedKnowledge]:
+        """Like :meth:`retrieve_for_signals` but carries each hit's note ``path``.
+        (The report currently DROPS these episodic seedling hits — R16 — but the
+        identity is carried honestly so the drop stays the report's single call.)"""
         try:
             return await self._retrieve(signals)
         except Exception:  # noqa: BLE001 — verify path must never crash on search
             logger.warning("semantic_note_retrieve_failed", exc_info=True)
             return []
 
-    async def _retrieve(self, signals: str) -> list[str]:
+    async def _retrieve(self, signals: str) -> list[RetrievedKnowledge]:
         if not self._embedder.enabled or not signals.strip():
             return []
         query = await self._embedder.embed(signals)
         if not query:
             return []
         hits = await self._backend.search(query, top_k=self._top_k)
-        return [f"Related note — {path}" for path, score in hits if score >= self._min_similarity]
+        return [
+            RetrievedKnowledge(text=f"Related note — {path}", kind="note", ref=path, label=path)
+            for path, score in hits
+            if score >= self._min_similarity
+        ]
 
 
 __all__ = ["SemanticNoteRetriever"]

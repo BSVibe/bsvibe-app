@@ -40,6 +40,7 @@ from backend.knowledge.canonicalization.index import InMemoryCanonicalizationInd
 from backend.knowledge.canonicalization.resolver import TagResolver
 from backend.knowledge.graph.markdown_utils import body_after_frontmatter
 from backend.knowledge.graph.storage import StorageBackend
+from backend.knowledge.retrieval.knowledge_item import RetrievedKnowledge
 
 logger = structlog.get_logger(__name__)
 
@@ -93,13 +94,19 @@ class CanonConceptRetriever:
         """Return ≤ :data:`_MAX_PATTERNS` canonical statements for the change.
 
         Graceful: no canon / no match / any failure → ``[]``. Never raises."""
+        return [item.text for item in await self.retrieve_structured(signals)]
+
+    async def retrieve_structured(self, signals: str) -> list[RetrievedKnowledge]:
+        """Like :meth:`retrieve_for_signals` but carries each concept's identity
+        (``concept_id``) so the verify contract / report can deep-link without
+        re-slugifying the display label. Graceful-empty; never raises."""
         try:
             return await self._retrieve(signals)
         except Exception:  # noqa: BLE001 — verify path must never crash on canon
             logger.warning("canon_retrieve_failed", exc_info=True)
             return []
 
-    async def _retrieve(self, signals: str) -> list[str]:
+    async def _retrieve(self, signals: str) -> list[RetrievedKnowledge]:
         candidates = _candidate_tags(signals)
         if not candidates:
             return []
@@ -112,10 +119,10 @@ class CanonConceptRetriever:
             return []
 
         resolver = TagResolver(index=index)
-        statements: list[str] = []
+        items: list[RetrievedKnowledge] = []
         seen_ids: set[str] = set()
         for tag in candidates:
-            if len(statements) >= _MAX_PATTERNS:
+            if len(items) >= _MAX_PATTERNS:
                 break
             resolved = await resolver.resolve(tag)
             if resolved.status != "resolved" or resolved.concept_id is None:
@@ -130,13 +137,19 @@ class CanonConceptRetriever:
             # fold in the synthesized hub BODY (member excerpts) too, so the
             # concept's actual substance, not just its title, reaches the
             # verify/answer context. Bodyless concepts surface the title alone.
-            statement = (concept.display or concept.concept_id).strip()
-            if statement:
-                body = await self._concept_body_text(resolved.concept_id)
-                if body:
-                    statement = f"{statement} — {body}"
-                statements.append(statement)
-        return statements
+            label = (concept.display or concept.concept_id).strip()
+            if not label:
+                continue
+            body = await self._concept_body_text(resolved.concept_id)
+            statement = f"{label} — {body}" if body else label
+            # Carry the concept_id (the label IS the report chip; the body stays
+            # folded in `text` for verify/answer context but out of the chip).
+            items.append(
+                RetrievedKnowledge(
+                    text=statement, kind="concept", ref=resolved.concept_id, label=label
+                )
+            )
+        return items
 
     async def _concept_body_text(self, concept_id: str) -> str:
         """The synthesized member excerpts from a concept's hub body (Lift 1),

@@ -28,6 +28,7 @@ from backend.executors import dispatch
 from backend.executors import orchestrator as orch
 from backend.executors.db import ExecutorTaskRow, WorkerRow
 from backend.executors.orchestrator import ExecutorOrchestrator, _parse_uuid
+from backend.knowledge.retrieval.knowledge_item import RetrievedKnowledge
 from backend.router.accounts.models import ModelAccount
 from backend.workflow.application.agent_loop import LoopTurn
 from backend.workflow.infrastructure.db import (
@@ -142,6 +143,9 @@ class StubRetriever:
     async def retrieve_for_signals(self, signals: str) -> list[str]:
         self.queried.append(signals)
         return list(self._patterns)
+
+    async def retrieve_structured(self, signals: str) -> list[RetrievedKnowledge]:
+        return [RetrievedKnowledge(text=t) for t in await self.retrieve_for_signals(signals)]
 
 
 async def _drive_with_worker_done(
@@ -856,6 +860,9 @@ async def test_dispatch_prompt_intent_only_when_empty_knowledge(tmp_path: Path) 
 async def test_dispatch_prompt_graceful_when_retriever_raises(tmp_path: Path) -> None:
     class _BoomRetriever:
         async def retrieve_for_signals(self, signals: str) -> list[str]:
+            raise RuntimeError("canon backend down")
+
+        async def retrieve_structured(self, signals: str) -> list[RetrievedKnowledge]:
             raise RuntimeError("canon backend down")
 
     redis = await _make_redis()

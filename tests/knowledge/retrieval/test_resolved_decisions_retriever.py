@@ -286,3 +286,30 @@ async def test_stopword_only_decision_body_still_filterable(
     # A query carrying a content token from the answer still surfaces it.
     real = await factory.retriever().retrieve_for_signals("throttling")
     assert any("throttling" in s.lower() for s in real), real
+
+
+async def test_retrieve_structured_carries_decision_note_identity(
+    vault_root: Path, workspace_id: str
+) -> None:
+    """retrieve_structured carries each decision's IDENTITY forward — the source
+    garden note ``path`` + the question as the report label — so the verify
+    contract can persist it and the report links without a reverse-lookup."""
+    await _seed_resolved_decision_note(
+        vault_root,
+        region=_REGION,
+        workspace_id=workspace_id,
+        question="Which database should I target?",
+        answer="Use Postgres",
+        intent_text="pick a database",
+    )
+    factory = KnowledgeFactory(region=_REGION, workspace_id=workspace_id, vault_root=vault_root)
+    items = await factory.retriever().retrieve_structured(
+        "the user wants to pick a database for the new service"
+    )
+    decision = next(i for i in items if i.text.startswith("Prior decision"))
+    assert decision.kind == "note"
+    assert decision.ref is not None
+    assert decision.ref.startswith("garden/seedling/") and decision.ref.endswith(".md")
+    assert decision.label == "Which database should I target?"
+    # The text projection stays byte-identical to the legacy list[str] seam.
+    assert decision.text == "Prior decision — Q: Which database should I target? A: Use Postgres"

@@ -22,6 +22,7 @@ from typing import Any
 import pytest
 from sqlalchemy import select
 
+from backend.knowledge.retrieval.knowledge_item import RetrievedKnowledge
 from backend.workflow.application.agent_loop import LoopTurn
 from backend.workflow.application.knowledge_orchestrator import (
     KNOWLEDGE_ANSWER_KIND,
@@ -72,11 +73,17 @@ class _StubRetriever:
         self.queried.append(signals)
         return list(self._patterns)
 
+    async def retrieve_structured(self, signals: str) -> list[RetrievedKnowledge]:
+        return [RetrievedKnowledge(text=t) for t in await self.retrieve_for_signals(signals)]
+
 
 class _ExplodingRetriever:
     """A retriever that raises — proves graceful degradation (never crash)."""
 
     async def retrieve_for_signals(self, signals: str) -> list[str]:
+        raise RuntimeError("vault unavailable")
+
+    async def retrieve_structured(self, signals: str) -> list[RetrievedKnowledge]:
         raise RuntimeError("vault unavailable")
 
 

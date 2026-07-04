@@ -606,6 +606,82 @@ async def test_report_prior_decision_links_to_its_stored_note(
     assert ref["concept_id"] is None
 
 
+async def test_report_reference_uses_structured_knowledge_ref_without_a_vault_scan(
+    configured_client, db, workspace_id
+) -> None:
+    """STRUCTURAL — a contract that carries ``knowledge_refs`` (identity persisted
+    at verify time) links each reference DIRECTLY: no garden note on disk, no
+    reverse-lookup. The note path + concept_id come from the contract, proving the
+    report reads persisted identity instead of re-deriving it (the smell removed)."""
+    from backend.workflow.application.verification_service import RETRIEVED_KNOWLEDGE_RATIONALE
+
+    run_id, deliverable_id = uuid.uuid4(), uuid.uuid4()
+    # NOTE: no knowledge_vault_root fixture, no seeded note — the identity is in
+    # the contract, so a reverse-lookup would find nothing. It still links.
+    contract = {
+        "checks": [
+            {
+                "kind": "judge",
+                "criteria": [
+                    "Prior decision — Q: Which database? A: Use Postgres",
+                    "Idempotency-key — reuse the stored key on a webhook retry.",
+                ],
+                "rationale": RETRIEVED_KNOWLEDGE_RATIONALE,
+                "knowledge_refs": [
+                    {
+                        "text": "Prior decision — Q: Which database? A: Use Postgres",
+                        "kind": "note",
+                        "ref": "garden/seedling/settle-decision-resolved-db.md",
+                        "label": "Which database?",
+                    },
+                    {
+                        "text": "Idempotency-key — reuse the stored key on a webhook retry.",
+                        "kind": "concept",
+                        "ref": "idempotency-key",
+                        "label": "Idempotency-key",
+                    },
+                ],
+            }
+        ]
+    }
+    async with db() as s:
+        await _seed_run(s, run_id=run_id, ws=workspace_id, payload={"intent_text": "db"})
+        s.add(
+            Deliverable(
+                id=deliverable_id,
+                run_id=run_id,
+                workspace_id=workspace_id,
+                deliverable_type=DeliverableType.PR,
+                payload={"summary": "x"},
+                created_at=datetime.now(tz=UTC),
+            )
+        )
+        s.add(
+            VerificationResult(
+                id=uuid.uuid4(),
+                run_id=run_id,
+                work_step_id=None,
+                workspace_id=workspace_id,
+                outcome=VerificationOutcome.PASSED,
+                contract=contract,
+                result={},
+                created_at=datetime.now(tz=UTC),
+            )
+        )
+        await s.commit()
+
+    r = await configured_client.get(f"/api/v1/deliverables/{deliverable_id}/report")
+    assert r.status_code == 200, r.text
+    refs = r.json()["references"]
+    note = next(x for x in refs if x["kind"] == "note")
+    assert note["text"] == "Which database?"
+    # The path comes STRAIGHT from the contract ref — not a vault scan (none exists).
+    assert note["path"] == "garden/seedling/settle-decision-resolved-db.md"
+    concept = next(x for x in refs if x["kind"] == "concept")
+    assert concept["text"] == "Idempotency-key"
+    assert concept["concept_id"] == "idempotency-key"
+
+
 async def test_report_written_empty_before_drain(configured_client, db, workspace_id) -> None:
     """A run with no settle_drains rows (drain not yet run, or nothing written) →
     empty ``written`` (the "추가한 지식" group hides)."""

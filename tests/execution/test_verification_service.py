@@ -24,9 +24,11 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 import backend.workflow.application.verification_service as verification_service
+from backend.knowledge.retrieval.knowledge_item import RetrievedKnowledge
 from backend.workflow.application.agent_loop import LoopTurn
 from backend.workflow.application.verification_service import (
     _UV_SYNC,
+    RETRIEVED_KNOWLEDGE_RATIONALE,
     VerificationService,
 )
 from backend.workflow.domain.verifier_contract import (
@@ -107,13 +109,22 @@ class FakeBox:
 
 
 class StubRetriever:
-    def __init__(self, patterns: list[str]) -> None:
+    def __init__(
+        self, patterns: list[str], *, items: list[RetrievedKnowledge] | None = None
+    ) -> None:
         self._patterns = patterns
+        self._items = items
         self.queried: list[str] = []
 
     async def retrieve_for_signals(self, signals: str) -> list[str]:
         self.queried.append(signals)
         return list(self._patterns)
+
+    async def retrieve_structured(self, signals: str) -> list[RetrievedKnowledge]:
+        self.queried.append(signals)
+        if self._items is not None:
+            return list(self._items)
+        return [RetrievedKnowledge(text=p) for p in self._patterns]
 
 
 async def _make_run(session: AsyncSession) -> ExecutionRun:
@@ -248,6 +259,56 @@ async def test_assemble_contract_merges_declared_and_canon() -> None:
         assert len(contract.judge_checks) == 1
         assert contract.judge_checks[0].criteria == ("always pin dependency versions",)
         assert retriever.queried, "retriever must be queried with change signals"
+
+
+async def test_assemble_contract_persists_structured_knowledge_refs() -> None:
+    """The folded judge check carries the retriever's STRUCTURED identity in
+    ``knowledge_refs`` (serialized onto the contract JSON) so the delivery report
+    deep-links each reference without re-deriving concept ids / note paths."""
+    items = [
+        RetrievedKnowledge(
+            text="Prior decision — Q: Which DB? A: Postgres",
+            kind="note",
+            ref="garden/seedling/settle-db.md",
+            label="Which DB?",
+        ),
+        RetrievedKnowledge(
+            text="Idempotency-key — reuse the stored key.",
+            kind="concept",
+            ref="idempotency-key",
+            label="Idempotency-key",
+        ),
+    ]
+    retriever = StubRetriever([], items=items)
+    async with memory_session() as session:
+        svc = VerificationService(session=session, llm=StubLlm([]), retriever=retriever)
+        contract = await svc.assemble_contract(
+            declared_contract=None, written_paths=["db.py"], final_text="chose a database"
+        )
+        assert contract is not None
+        judge = contract.judge_checks[0]
+        # `criteria` stays the flat text (judge reads it; legacy readers work);
+        # `knowledge_refs` carries the identity, serialized on to_dict().
+        assert judge.criteria == (
+            "Prior decision — Q: Which DB? A: Postgres",
+            "Idempotency-key — reuse the stored key.",
+        )
+        persisted = judge.to_dict()
+        assert persisted["rationale"] == RETRIEVED_KNOWLEDGE_RATIONALE
+        assert persisted["knowledge_refs"] == [
+            {
+                "text": "Prior decision — Q: Which DB? A: Postgres",
+                "kind": "note",
+                "ref": "garden/seedling/settle-db.md",
+                "label": "Which DB?",
+            },
+            {
+                "text": "Idempotency-key — reuse the stored key.",
+                "kind": "concept",
+                "ref": "idempotency-key",
+                "label": "Idempotency-key",
+            },
+        ]
 
 
 async def test_assemble_contract_canon_only_when_no_declared() -> None:

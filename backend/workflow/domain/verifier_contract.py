@@ -28,17 +28,31 @@ _VALID_KINDS: frozenset[str] = frozenset({"command", "judge"})
 @dataclass(frozen=True)
 class VerificationCheck:
     """One declared check. ``command`` is set for ``kind='command'``;
-    ``criteria`` is set for ``kind='judge'``."""
+    ``criteria`` is set for ``kind='judge'``.
+
+    ``knowledge_refs`` (judge only) carries the STRUCTURED identity of retrieved
+    knowledge folded into ``criteria`` — each an already-serialized
+    ``{text, kind, ref, label}`` dict (kept as plain dicts so this domain type
+    stays free of a knowledge-layer import). Persisted on the contract JSON so
+    the delivery report deep-links references without re-deriving identity."""
 
     kind: CheckKind
     command: str | None = None
     criteria: tuple[str, ...] = ()
     rationale: str = ""
+    knowledge_refs: tuple[dict[str, Any], ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         if self.kind == "command":
             return {"kind": "command", "command": self.command, "rationale": self.rationale}
-        return {"kind": "judge", "criteria": list(self.criteria), "rationale": self.rationale}
+        judge: dict[str, Any] = {
+            "kind": "judge",
+            "criteria": list(self.criteria),
+            "rationale": self.rationale,
+        }
+        if self.knowledge_refs:
+            judge["knowledge_refs"] = [dict(r) for r in self.knowledge_refs]
+        return judge
 
 
 @dataclass(frozen=True)

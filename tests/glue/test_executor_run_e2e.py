@@ -36,6 +36,7 @@ from backend.config import get_settings
 from backend.executors import dispatch
 from backend.executors.db import WorkerRow
 from backend.executors.orchestrator import ExecutorOrchestrator
+from backend.knowledge.retrieval.knowledge_item import RetrievedKnowledge
 from backend.router.accounts.models import ModelAccount
 from backend.workflow.application.agent_runner import AgentRunner
 from backend.workflow.infrastructure.db import (
@@ -281,6 +282,9 @@ class _StubRetriever:
 
     async def retrieve_for_signals(self, signals: str) -> list[str]:
         return list(self._patterns)
+
+    async def retrieve_structured(self, signals: str) -> list[RetrievedKnowledge]:
+        return [RetrievedKnowledge(text=t) for t in await self.retrieve_for_signals(signals)]
 
 
 async def _simulate_worker_done(

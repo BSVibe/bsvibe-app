@@ -38,12 +38,12 @@ from backend.workflow.infrastructure.db import (
 )
 
 from ._narrative import held_delivery_item_for, report_narrative_for, split_knowledge
+from ._references import references_of
 from ._schemas import (
     MAX_CONTENT_BYTES,
     ArtifactContentResponse,
     DeliverableReportResponse,
     artifact_refs_of,
-    references_of,
     request_text_of,
     to_response,
     to_verification,

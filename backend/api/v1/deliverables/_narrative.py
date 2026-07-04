@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import re
 import uuid
+from typing import Any
 
 import structlog
 from sqlalchemy import select
@@ -25,7 +26,7 @@ from backend.workflow.infrastructure.delivery.db import (
     SafeModeStatus,
 )
 
-from ._references import ReferenceOut, is_prior_note_reference, to_reference
+from ._references import ReferenceOut, is_prior_note_reference, reference_from_entry
 from ._schemas import WrittenNote
 
 logger = structlog.get_logger(__name__)
@@ -113,21 +114,22 @@ async def split_knowledge(
     session: AsyncSession,
     run_id: uuid.UUID,
     workspace_id: uuid.UUID,
-    references: list[str],
+    references: list[dict[str, Any]],
 ) -> tuple[list[ReferenceOut], list[WrittenNote]]:
     """Split the report's knowledge into (referenced, written) — keeping "참고한
     지식" and "추가한 지식" distinct AND concept-centric (R16).
 
     REFERENCED = the PROMOTED/canonical knowledge the run drew on — the retrieved
     CONCEPTS (graph anchors, deep-link by concept_id) + prior decisions/rejections
-    (linked to the STORED garden note they were absorbed into, via
-    :func:`_decision_note_paths`, so the founder can OPEN the knowledge instead of
-    reading a dead English tag; a decision whose note can't be located is
+    (linked to the STORED garden note they were absorbed into so the founder can
+    OPEN the knowledge instead of reading a dead English tag). New rows carry the
+    identity STRUCTURALLY (``references`` entries have ``kind``/``ref``), so no
+    re-derivation; LEGACY rows (``kind`` absent) fall back to reverse-lookup via
+    :func:`_decision_note_paths` (a decision whose note can't be located is
     dropped). The raw seedling "Related note —" hits (the SemanticNoteRetriever's
     search over garden seedlings) are DROPPED: they're the episodic layer, NOT
-    what the concept graph shows, so surfacing them made the report inconsistent
-    with the graph. The seedling search still feeds the verify contract — this
-    only trims / relinks the founder-facing report.
+    what the concept graph shows. The seedling search still feeds the verify
+    contract — this only trims / relinks the founder-facing report.
 
     WRITTEN = the notes THIS run itself added, from ``settle_drains`` (run_id →
     node_ref): a de-slugged ``title`` + the vault-relative ``path`` so the chip
@@ -142,18 +144,18 @@ async def split_knowledge(
     written_paths = [p for p in (await session.execute(stmt)).scalars().all() if p]
 
     # Drop the raw seedling "Related note —" hits (episodic layer, not the graph's
-    # canon). Structure each survivor: a concept carries its explicit id; a prior
-    # decision/rejection links to its stored garden note. Resolve note paths only
-    # when at least one such reference is present (else skip the vault scan).
-    consulted = [r for r in references if not _is_seedling_note_ref(r)]
-    note_paths = (
-        await _decision_note_paths(workspace_id)
-        if any(is_prior_note_reference(r) for r in consulted)
-        else {}
-    )
+    # canon). Reverse-lookup the vault ONLY for LEGACY prior-note entries (no
+    # structured kind) — structured entries already carry the note path.
+    consulted = [e for e in references if not _is_seedling_note_ref(str(e.get("text") or ""))]
+    legacy_notes = [
+        e
+        for e in consulted
+        if not e.get("kind") and is_prior_note_reference(str(e.get("text") or ""))
+    ]
+    note_paths = await _decision_note_paths(workspace_id) if legacy_notes else {}
     referenced: list[ReferenceOut] = []
-    for r in consulted:
-        ref = to_reference(r, note_paths)
+    for entry in consulted:
+        ref = reference_from_entry(entry, note_paths)
         if ref is not None:
             referenced.append(ref)
 

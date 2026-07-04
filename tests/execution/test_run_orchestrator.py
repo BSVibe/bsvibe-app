@@ -22,6 +22,7 @@ from backend.extensions.plugin.context import SkillContext
 from backend.extensions.skill.loader import SkillLoader
 from backend.extensions.skill.tool_binding import INVOKE_SKILL_NAME
 from backend.identity.workspaces_db import ProductRow, WorkspaceRow
+from backend.knowledge.retrieval.knowledge_item import RetrievedKnowledge
 from backend.workflow.application.agent_loop import (
     CanonRetriever,
     LoopLlm,
@@ -127,6 +128,9 @@ class StubRetriever:
     async def retrieve_for_signals(self, signals: str) -> list[str]:
         self.queried.append(signals)
         return list(self._patterns)
+
+    async def retrieve_structured(self, signals: str) -> list[RetrievedKnowledge]:
+        return [RetrievedKnowledge(text=t) for t in await self.retrieve_for_signals(signals)]
 
 
 def _write_skill(skill_dir: Path, name: str, body: str, description: str = "desc") -> None:
