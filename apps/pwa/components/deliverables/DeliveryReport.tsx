@@ -383,7 +383,9 @@ function ReportDocument({
       {lead && (
         <section className="report-doc__section" aria-label={t("whatThisDid")}>
           <h2 className="report-doc__label">{t("whatThisDid")}</h2>
-          <p className="report-doc__lead">{lead}</p>
+          <div className="report-doc__lead markdown-inline">
+            <ReactMarkdown remarkPlugins={[remarkGfm]}>{lead}</ReactMarkdown>
+          </div>
         </section>
       )}
 

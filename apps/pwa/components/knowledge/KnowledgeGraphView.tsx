@@ -15,6 +15,8 @@ import { forceCollide, forceX, forceY } from "d3-force";
 import { useTranslations } from "next-intl";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ForceGraph2D from "react-force-graph-2d";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import InspectorActions, { type ActionKind } from "./InspectorActions";
 
 /**
@@ -736,8 +738,8 @@ export default function KnowledgeGraphView({ graph }: { graph: KnowledgeGraph })
                       const text = obs.body || obs.excerpt;
                       if (!text) return null;
                       return (
-                        <div key={obs.id} className="kgraph__note-body">
-                          {text}
+                        <div key={obs.id} className="kgraph__note-body markdown-inline">
+                          <ReactMarkdown remarkPlugins={[remarkGfm]}>{text}</ReactMarkdown>
                           {obs.truncated && (
                             <span className="kgraph__obs-more">{t("inspectorObsTruncated")}</span>
                           )}

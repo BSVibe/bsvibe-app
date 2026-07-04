@@ -5,6 +5,8 @@ import type { CheckpointAction, PendingCheckpoint } from "@/lib/api/types";
 import { useLocale, useTranslations } from "next-intl";
 import Link from "next/link";
 import { useId, useState } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 
 type RowState = "idle" | "working" | "error";
 
@@ -102,9 +104,19 @@ export default function CheckpointRow({
         </span>
       </div>
 
-      {/* The ask itself is the card body (when a title leads above it). */}
-      {item.title ? <p className="need-card__body">{item.question}</p> : null}
-      {item.rationale ? <p className="need-card__rationale">{item.rationale}</p> : null}
+      {/* The ask + rationale are agent-authored prose the founder reads to
+          decide — render markdown (lists of options, `code` refs, emphasis)
+          rather than dumping raw syntax. */}
+      {item.title ? (
+        <div className="need-card__body markdown-inline">
+          <ReactMarkdown remarkPlugins={[remarkGfm]}>{item.question}</ReactMarkdown>
+        </div>
+      ) : null}
+      {item.rationale ? (
+        <div className="need-card__rationale markdown-inline">
+          <ReactMarkdown remarkPlugins={[remarkGfm]}>{item.rationale}</ReactMarkdown>
+        </div>
+      ) : null}
 
       {item.priorDecisions.length > 0 ? (
         <div className="need-card__prior" aria-label={t("priorDecisions")}>

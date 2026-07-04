@@ -72,6 +72,25 @@ describe("CheckpointRow — one-click actions (L-D2)", () => {
     expect(screen.getByRole("button", { name: "Discard" })).toBeInTheDocument();
   });
 
+  it("renders the agent-authored question and rationale as markdown, not raw syntax", () => {
+    // The question/rationale are LLM-authored prose the founder reads to decide;
+    // they can carry markdown (options as a list, `code` refs, **emphasis**).
+    vi.stubGlobal("fetch", vi.fn());
+    const item: PendingCheckpoint = {
+      ...VERIFICATION_FAILED,
+      title: "Ship the clamp helper?",
+      question: "Which bound wins when **equal**?\n\n- `low`\n- `high`",
+      rationale: "Because `clamp` must be **total**.",
+    };
+    const { container } = render(<CheckpointRow item={item} onResolved={() => {}} />);
+
+    expect(container.querySelector(".need-card__body strong")?.textContent).toBe("equal");
+    expect(container.querySelectorAll(".need-card__body li")).toHaveLength(2);
+    expect(container.querySelector(".need-card__body code")?.textContent).toBe("low");
+    expect(container.querySelector(".need-card__rationale strong")?.textContent).toBe("total");
+    expect(container.querySelector(".need-card__body")?.textContent).not.toContain("**");
+  });
+
   it("clicking Approve & ship POSTs { action_key: 'ship' } to resolve", async () => {
     const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
       return okResolveResponse(VERIFICATION_FAILED.checkpointId, "ship", "shipped");
