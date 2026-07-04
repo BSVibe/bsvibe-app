@@ -210,8 +210,10 @@ class DirectAnswerService:
                     )
                 ).scalars()
             )
-            # Best title per run: the deliverable's summary (what the PWA shows),
-            # falling back to the run's own intent text.
+            # Best title per run: the founder's own intent text (what they asked
+            # for — the clean, recognisable description), falling back to the
+            # deliverable's auto-generated summary. Intent wins because the
+            # generated summary is often a noisy "Changed files: …" blob.
             summaries = await self._deliverable_summaries([r.id for r in runs])
 
             header = f"Product: {product.name}"
@@ -223,9 +225,9 @@ class DirectAnswerService:
             else:
                 lines.append("Recent work (most recent first):")
                 for run in runs:
-                    title = summaries.get(run.id) or _run_intent(run.payload) or "(untitled)"
+                    raw = _run_intent(run.payload) or summaries.get(run.id) or "(untitled)"
                     label = _RUN_STATUS_LABEL.get(run.status, str(run.status))
-                    lines.append(f"- {title[:_PRODUCT_TITLE_MAX_CHARS]} — {label}")
+                    lines.append(f"- {_one_line(raw)} — {label}")
             return "\n".join(lines)
         except Exception:  # noqa: BLE001 — grounding must never crash the answer
             logger.warning(
@@ -270,6 +272,16 @@ def _run_intent(payload: dict[str, Any]) -> str | None:
         if isinstance(value, str) and value.strip():
             return value.strip()
     return None
+
+
+def _one_line(text: str) -> str:
+    """Collapse whitespace/newlines to single spaces and truncate, so each work
+    item stays a single readable bullet (raw intents / summaries can be multi-
+    line, which would otherwise break the list structure in the prompt)."""
+    collapsed = " ".join(text.split())
+    if len(collapsed) > _PRODUCT_TITLE_MAX_CHARS:
+        return collapsed[: _PRODUCT_TITLE_MAX_CHARS - 1].rstrip() + "…"
+    return collapsed
 
 
 __all__ = ["DirectAnswerService", "is_question"]
