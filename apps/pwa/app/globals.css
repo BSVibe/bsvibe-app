@@ -5457,6 +5457,31 @@ main.login {
   opacity: 0.6;
 }
 
+/* Working feedback for the Connect click — a small spinner next to the
+   Connecting… label so the round-trip to the provider never reads as a
+   frozen no-op (which drove repeated clicks). */
+.connector-form__oauth-spinner {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border: 2px solid var(--ink-3);
+  border-top-color: var(--ink);
+  border-radius: 50%;
+  animation: connector-oauth-spin 700ms linear infinite;
+}
+
+@keyframes connector-oauth-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .connector-form__oauth-spinner {
+    animation: none;
+  }
+}
+
 .connector-card__actions {
   display: flex;
   align-items: center;

@@ -77,6 +77,10 @@ export function ConnectorOAuthButton({
     }
   };
 
+  const idleLabel = needsReauth
+    ? `Reconnect with ${titleCase(provider)}`
+    : `Connect with ${titleCase(provider)}`;
+
   return (
     <div className="connector-form__oauth">
       <button
@@ -85,11 +89,20 @@ export function ConnectorOAuthButton({
         data-provider={provider}
         data-testid={needsReauth ? "connector-oauth-reconnect" : "connector-oauth-connect"}
         disabled={busy}
+        aria-busy={busy}
         onClick={handleClick}
       >
-        {needsReauth
-          ? `Reconnect with ${titleCase(provider)}`
-          : `Connect with ${titleCase(provider)}`}
+        {busy ? (
+          // The start round-trip has latency, then the browser navigates to the
+          // provider. Without visible feedback the click reads as a no-op and
+          // users re-click (observed: 3× rapid oauth/start). Announce the work.
+          <>
+            <span className="connector-form__oauth-spinner" aria-hidden="true" />
+            Connecting…
+          </>
+        ) : (
+          idleLabel
+        )}
       </button>
       {error && (
         <p className="connector-form__oauth-error" role="alert" data-provider={provider}>
