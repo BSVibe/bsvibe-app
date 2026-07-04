@@ -232,6 +232,41 @@ describe("Direct compose", () => {
     expect(dispatched).toBeUndefined();
   });
 
+  it("L10: the inline answer renders markdown (bold/code/list), not raw syntax", async () => {
+    _currentPathname = "/brief";
+    const md = "Status: **shipped** the `title-case` helper.\n\n- one\n- two";
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/v1/messages/ask")) {
+        return new Response(JSON.stringify({ answered: true, answer: md }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (url.endsWith("/api/v1/products")) {
+        return new Response("[]", { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      return new Response(JSON.stringify(ACCEPTED), {
+        status: 202,
+        headers: { "Content-Type": "application/json" },
+      });
+    });
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    const { container } = render(<DirectOverlay open onClose={() => {}} />);
+    await userEvent.type(screen.getByRole("textbox"), "status?");
+    fireEvent.click(screen.getByRole("button", { name: "Direct" }));
+
+    await waitFor(() => {
+      expect(container.querySelector(".direct-overlay__answer")).toBeInTheDocument();
+    });
+    // Markdown is rendered to real elements, not literal ** / ` / - syntax.
+    expect(container.querySelector(".direct-overlay__answer strong")?.textContent).toBe("shipped");
+    expect(container.querySelector(".direct-overlay__answer code")?.textContent).toBe("title-case");
+    expect(container.querySelectorAll(".direct-overlay__answer li")).toHaveLength(2);
+    expect(container.querySelector(".direct-overlay__answer")?.textContent).not.toContain("**");
+  });
+
   it("L10: a work request (answered=false) is dispatched as a run", async () => {
     _currentPathname = "/brief";
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
