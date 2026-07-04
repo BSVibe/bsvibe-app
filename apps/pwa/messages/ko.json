@@ -850,16 +850,7 @@
     },
     "whatWasBuilt": "무엇을 만들었나요",
     "referenced": "참고한 지식",
-    "referencedHint": "이 작업에 반영된 과거 결정·선호·반려 기록이에요.",
-    "priorDecision": "이전 결정",
-    "priorRejection": "이전 반려",
-    "resolution": {
-      "discard": "폐기",
-      "ship": "출시",
-      "retry": "다시 시도",
-      "approve": "승인",
-      "reject": "거절"
-    },
+    "referencedHint": "이 작업에 반영된 지식 그래프의 개념이에요.",
     "noVerification": "아직 이 산출물에 대한 검증 기록이 없어요.",
     "noChecksDeclared": "이 검증에 선언된 확인 항목이 없어요.",
     "noChecksAfterKnowledge": "위에 참고한 지식 외에 추가 확인 항목은 없어요.",

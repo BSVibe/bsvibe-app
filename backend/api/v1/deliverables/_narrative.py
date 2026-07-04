@@ -61,8 +61,9 @@ _RELATED_NOTE_RE = re.compile(r"^related note\s*[—–-]\s*(.+\.md)$", re.IGNOR
 
 def _is_seedling_note_ref(reference: str) -> bool:
     """True for a "Related note — <path>.md" statement (a raw seedling hit from
-    the semantic note search). Concept / decision / rejection statements are not
-    note refs → False, and stay in the report's referenced knowledge."""
+    the semantic note search). Concept statements are not note refs → False, and
+    stay in the report's referenced knowledge (decisions/rejections are dropped
+    separately, by ``to_reference`` returning None)."""
     return _RELATED_NOTE_RE.match(reference.strip()) is not None
 
 
@@ -98,12 +99,13 @@ async def split_knowledge(
     지식" and "추가한 지식" distinct AND concept-centric (R16).
 
     REFERENCED = the PROMOTED/canonical knowledge the run drew on — the retrieved
-    CONCEPTS (graph anchors) + prior decisions/rejections. The raw seedling
-    "Related note —" hits (the SemanticNoteRetriever's search over garden
-    seedlings) are DROPPED: they're the episodic layer, NOT what the concept
-    graph shows, so surfacing them made the report inconsistent with the graph
-    (founder: the graph's mature notes are the main axis). The seedling search
-    still feeds the verify contract — this only trims the founder-facing report.
+    CONCEPTS (graph anchors). The raw seedling "Related note —" hits (the
+    SemanticNoteRetriever's search over garden seedlings) AND the prior
+    decision/rejection statements are DROPPED: the seedlings are the episodic
+    layer (NOT what the concept graph shows), and a prior decision/rejection is a
+    verify-context artifact (a resolved checkpoint, a rejected pattern), not
+    founder-facing knowledge. Both still feed the verify contract — this only
+    trims the founder-facing report to the concepts the graph shows.
 
     WRITTEN = the notes THIS run itself added, from ``settle_drains`` (run_id →
     node_ref): a de-slugged ``title`` + the vault-relative ``path`` so the chip
@@ -117,10 +119,17 @@ async def split_knowledge(
     )
     written_paths = [p for p in (await session.execute(stmt)).scalars().all() if p]
 
-    # Concept-centric: keep concepts + decisions/rejections; drop the raw
-    # seedling note hits (they're the episodic layer, not the graph's canon).
+    # Concept-centric: keep concepts; drop the raw seedling note hits (episodic
+    # layer, not the graph's canon) AND the prior decision/rejection statements
+    # (verify-context artifacts) — ``to_reference`` returns None for the latter.
     # Structure each survivor so a concept chip carries its explicit id (R13).
-    referenced = [to_reference(r) for r in references if not _is_seedling_note_ref(r)]
+    referenced: list[ReferenceOut] = []
+    for r in references:
+        if _is_seedling_note_ref(r):
+            continue
+        ref = to_reference(r)
+        if ref is not None:
+            referenced.append(ref)
 
     written: list[WrittenNote] = []
     seen: set[str] = set()

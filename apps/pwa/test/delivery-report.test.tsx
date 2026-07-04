@@ -241,13 +241,13 @@ describe("Delivery Report (R3)", () => {
     installFetch({
       report: () => ({
         ...REPORT,
-        references: [{ kind: "decision", text: "Which database?", answer: "Use Postgres" }],
+        references: [{ kind: "plain", text: "reuse the existing date helper" }],
       }),
     });
     render(<DeliveryReport deliverableId="d1" />);
 
     const knowledge = await screen.findByRole("region", { name: /knowledge/i });
-    expect(within(knowledge).getByText(/Use Postgres/)).toBeInTheDocument();
+    expect(within(knowledge).getByText(/reuse the existing date helper/)).toBeInTheDocument();
   });
 
   it("hides the Knowledge section when neither referenced nor written exist", async () => {
@@ -295,38 +295,20 @@ describe("Delivery Report (R3)", () => {
     expect(within(dialog).getByText(/arithmetic mean; raises on empty/i)).toBeInTheDocument();
   });
 
-  it("a prior-decision / rejection reference stays plain text (not a button)", async () => {
+  it("a non-concept (plain) reference stays plain text, not a button", async () => {
     installFetch({
       report: () => ({
         ...REPORT,
-        references: [{ kind: "decision", text: "Which DB?", answer: "Postgres" }],
+        references: [{ kind: "plain", text: "reuse the existing date helper" }],
         written: [],
       }),
     });
     render(<DeliveryReport deliverableId="d1" />);
 
     const knowledge = await screen.findByRole("region", { name: /knowledge/i });
-    // Localized prefix + the founder's question + the localized resolution.
-    expect(
-      within(knowledge).getByText("Prior decision — Which DB? · Postgres"),
-    ).toBeInTheDocument();
-    expect(within(knowledge).queryByRole("button", { name: /Which DB/ })).toBeNull();
-  });
-
-  it("a prior-rejection reference renders with a localized prefix + its reason", async () => {
-    installFetch({
-      report: () => ({
-        ...REPORT,
-        references: [{ kind: "rejection", text: "never ship without a regression test" }],
-        written: [],
-      }),
-    });
-    render(<DeliveryReport deliverableId="d1" />);
-
-    const knowledge = await screen.findByRole("region", { name: /knowledge/i });
-    expect(
-      within(knowledge).getByText("Avoid (prior rejection) — never ship without a regression test"),
-    ).toBeInTheDocument();
+    expect(within(knowledge).getByText("reuse the existing date helper")).toBeInTheDocument();
+    // A plain statement is not clickable (no concept to open).
+    expect(within(knowledge).queryByRole("button", { name: /date helper/ })).toBeNull();
   });
 
   it("R13: clicking a concept reference opens the concept viewer with related concepts", async () => {
@@ -815,17 +797,16 @@ describe("Delivery Report (R3)", () => {
     expect(retry).toHaveAttribute("href", "/runs/run-77");
   });
 
-  it("renders a long statement reference (a prior decision) as a readable block, not a squished pill", async () => {
-    // Concept chips are short labels now; a LONG statement is a decision/rejection,
-    // rendered with a localized prefix + the resolution.
+  it("renders a long (plain) statement reference as a readable block, not a squished pill", async () => {
+    // Concept chips are short labels; a LONG plain statement renders as a block
+    // chip so a rounded pill doesn't push its first/last line outside the border.
     installFetch({
       report: () => ({
         ...REPORT,
         references: [
           {
-            kind: "decision",
-            text: "should webhook verification authenticate the exact raw request body with an HMAC and compare signatures using timing-safe equality?",
-            answer: "discard",
+            kind: "plain",
+            text: "authenticate the exact raw request body with an HMAC and compare signatures using timing-safe equality across every webhook handler",
           },
         ],
         written: [],
@@ -836,9 +817,6 @@ describe("Delivery Report (R3)", () => {
     const knowledge = await screen.findByRole("region", { name: /knowledge/i });
     const chip = within(knowledge).getByText(/timing-safe equality/);
     expect(chip.className).toMatch(/report-chip--statement/);
-    // The localized prefix + resolution frame the founder's (unchanged) question.
-    expect(chip.textContent).toMatch(/^Prior decision — /);
-    expect(chip.textContent).toMatch(/· Discard$/);
   });
 
   it("shows a concept chip as the LABEL, and its BODY appears in the viewer on click", async () => {
