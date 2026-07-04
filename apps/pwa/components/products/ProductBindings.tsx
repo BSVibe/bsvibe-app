@@ -74,6 +74,12 @@ export default function ProductBindings({
   const [formOutputMode, setFormOutputMode] = useState<OutputMode>("safe");
   const [formError, setFormError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  // Per-row mutation state: the row whose knob/remove is in flight (to disable
+  // its controls) + a calm inline error when a change fails (previously a
+  // failed mutation just silently re-read the list, reverting the control with
+  // no explanation).
+  const [busyRow, setBusyRow] = useState<string | null>(null);
+  const [changeError, setChangeError] = useState<string | null>(null);
 
   async function load() {
     try {
@@ -141,30 +147,35 @@ export default function ProductBindings({
     }
   }
 
-  async function toggleTrigger(row: ResourceBinding, next: boolean) {
+  async function runRowMutation(rowId: string, op: () => Promise<unknown>) {
+    setBusyRow(rowId);
+    setChangeError(null);
     try {
-      await updateBinding(productId, row.id, {
-        trigger: { enabled: next, filters: row.trigger.filters },
-      });
+      await op();
+    } catch {
+      // Surface the failure instead of letting the re-read silently revert the
+      // control — the founder must know the change didn't take.
+      setChangeError(t("changeError"));
     } finally {
-      load();
+      setBusyRow(null);
+      await load();
     }
+  }
+
+  async function toggleTrigger(row: ResourceBinding, next: boolean) {
+    await runRowMutation(row.id, () =>
+      updateBinding(productId, row.id, {
+        trigger: { enabled: next, filters: row.trigger.filters },
+      }),
+    );
   }
 
   async function setOutputMode(row: ResourceBinding, next: OutputMode) {
-    try {
-      await updateBinding(productId, row.id, { output_mode: next });
-    } finally {
-      load();
-    }
+    await runRowMutation(row.id, () => updateBinding(productId, row.id, { output_mode: next }));
   }
 
   async function remove(row: ResourceBinding) {
-    try {
-      await removeBinding(productId, row.id);
-    } finally {
-      load();
-    }
+    await runRowMutation(row.id, () => removeBinding(productId, row.id));
   }
 
   return (
@@ -210,6 +221,7 @@ export default function ProductBindings({
                   checked={row.trigger.enabled}
                   onChange={(e) => toggleTrigger(row, e.target.checked)}
                   aria-label={t("triggerEnabled")}
+                  disabled={busyRow === row.id}
                 />
                 <span>{t("triggerEnabled")}</span>
               </label>
@@ -220,6 +232,7 @@ export default function ProductBindings({
                   value={row.output_mode}
                   onChange={(e) => setOutputMode(row, e.target.value as OutputMode)}
                   aria-label={t("outputMode")}
+                  disabled={busyRow === row.id}
                 >
                   {OUTPUT_MODES.map((m) => (
                     <option key={m} value={m}>
@@ -235,12 +248,20 @@ export default function ProductBindings({
                 onClick={() => remove(row)}
                 title={t("remove")}
                 aria-label={t("remove")}
+                disabled={busyRow === row.id}
+                aria-busy={busyRow === row.id}
               >
                 {t("remove")}
               </button>
             </li>
           ))}
         </ul>
+      )}
+
+      {changeError && (
+        <p className="product-bindings__error" role="alert" aria-live="polite">
+          {changeError}
+        </p>
       )}
 
       {adding && (

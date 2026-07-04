@@ -36,6 +36,10 @@ export default function ProductResources({
 }) {
   const [list, setList] = useState<ListState>(null);
   const [adding, setAdding] = useState(false);
+  // The resource whose remove is in flight (disable its button) + a calm inline
+  // error when a remove fails (previously it silently re-read the list).
+  const [removingId, setRemovingId] = useState<string | null>(null);
+  const [removeError, setRemoveError] = useState<string | null>(null);
   const dialogRef = useRef<HTMLDialogElement>(null);
   const t = useTranslations("products.resources");
 
@@ -73,10 +77,15 @@ export default function ProductResources({
   }, [adding]);
 
   async function remove(resourceId: string) {
+    setRemovingId(resourceId);
+    setRemoveError(null);
     try {
       await removeResource(productId, resourceId);
+    } catch {
+      setRemoveError(t("removeError"));
     } finally {
-      load();
+      setRemovingId(null);
+      await load();
     }
   }
 
@@ -128,12 +137,20 @@ export default function ProductResources({
                 onClick={() => remove(r.id)}
                 title={t("remove")}
                 aria-label={t("remove")}
+                disabled={removingId === r.id}
+                aria-busy={removingId === r.id}
               >
                 {t("remove")}
               </button>
             </li>
           ))}
         </ul>
+      )}
+
+      {removeError && (
+        <p className="product-resources__note" role="alert" aria-live="polite">
+          {removeError}
+        </p>
       )}
 
       {/* ADD — a native <dialog> hosting the real add form. */}

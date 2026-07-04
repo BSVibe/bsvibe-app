@@ -177,6 +177,7 @@
       "empty": "No resources yet.",
       "loading": "Loading resources…",
       "loadError": "Couldn’t load this product’s resources.",
+      "removeError": "Couldn’t remove that resource. Please try again.",
       "open": "Open",
       "remove": "Remove",
       "form": {
@@ -210,6 +211,7 @@
       "loadError": "Couldn’t load this product’s bindings.",
       "empty": "No connector bindings yet.",
       "addError": "Couldn’t add that binding. Please try again.",
+      "changeError": "Couldn’t save that change. Please try again.",
       "triggerEnabled": "Trigger on",
       "outputMode": "Output",
       "outputModes": {
