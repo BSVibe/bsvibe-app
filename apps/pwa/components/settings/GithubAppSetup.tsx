@@ -46,6 +46,7 @@ export function GithubAppSetup({
   configured,
   connectedLabel,
   needsReauth,
+  connected,
   getStatus = getGithubAppStatus,
   startManifest = startGithubAppManifest,
   submitManifestForm = submitManifestFormToGithub,
@@ -58,6 +59,9 @@ export function GithubAppSetup({
    *  inner button surfaces "Reconnect with GitHub" when the bound
    *  token row was flipped to `needs_reauth`. */
   needsReauth?: boolean;
+  /** Pass-through — a connected row offering a user-initiated re-auth
+   *  (migrate a PAT binding onto OAuth, or rotate a healthy credential). */
+  connected?: boolean;
   getStatus?: () => Promise<GithubAppStatus>;
   startManifest?: () => Promise<GithubAppManifestStart>;
   submitManifestForm?: (postUrl: string, manifest: Record<string, unknown>) => void;
@@ -90,6 +94,7 @@ export function GithubAppSetup({
         provider="github"
         connectedLabel={connectedLabel}
         needsReauth={needsReauth}
+        connected={connected}
         onRedirect={onRedirect}
       />
     );

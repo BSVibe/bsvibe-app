@@ -113,20 +113,29 @@ export default function ConnectorRow({
             </span>
           )}
         </div>
-        {/* L6 3b — a connected, healthy OAuth binding already shows the green
-            "연결됨" pill above; a duplicate "Connected as @login" chip here was
-            redundant, so it's dropped. The OAuth control only renders when the
-            bound token needs re-auth, surfacing a single "Reconnect with X" CTA
-            (the green pill flips to a needs-reauth warning in that same state). */}
-        {isOAuthConnector(connector.connector as ConnectorName) && connector.needs_reauth ? (
+        {/* The green "연결됨" pill above is the single connected indicator (no
+            duplicate "Connected as @login" chip — connectedLabel stays null).
+            A connected oauth-capable binding also surfaces a "Reconnect with X"
+            action so the credential can be re-authed on demand — to MIGRATE a
+            PAT-backed binding onto OAuth, or to ROTATE/RECOVER an OAuth token —
+            without first revoking. Previously this only appeared on the
+            backend-driven needs_reauth state, leaving healthy rotation and
+            PAT→OAuth migration with no UI path. */}
+        {isOAuthConnector(connector.connector as ConnectorName) && connector.is_active ? (
           <div className="connector-card__oauth">
             {connector.connector === "github" ? (
-              <GithubAppSetup configured connectedLabel={null} needsReauth />
+              <GithubAppSetup
+                configured
+                connectedLabel={null}
+                needsReauth={connector.needs_reauth}
+                connected
+              />
             ) : (
               <ConnectorOAuthButton
                 provider={connector.connector}
                 connectedLabel={null}
-                needsReauth
+                needsReauth={connector.needs_reauth}
+                connected
               />
             )}
           </div>
