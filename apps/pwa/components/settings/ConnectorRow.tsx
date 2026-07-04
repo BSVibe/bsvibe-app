@@ -140,14 +140,20 @@ export default function ConnectorRow({
             )}
           </div>
         ) : null}
-        <p className="connector-card__detail">
-          {connector.external_ref ? (
-            <span className="connector-card__ref">{connector.external_ref}</span>
-          ) : null}
-          <span className="connector-card__hint" title={t("tokenHintTitle")}>
-            {connector.token_hint}
-          </span>
-        </p>
+        {/* The detail line shows the inbound webhook token's last 4 + the
+            external ref. An outbound OAuth connector (github, …) has no inbound
+            webhook, so the hint is meaningless and the repo ref is redundant on
+            a connected card — drop the whole line for oauth connectors. */}
+        {isOAuthConnector(connector.connector as ConnectorName) ? null : (
+          <p className="connector-card__detail">
+            {connector.external_ref ? (
+              <span className="connector-card__ref">{connector.external_ref}</span>
+            ) : null}
+            <span className="connector-card__hint" title={t("tokenHintTitle")}>
+              {connector.token_hint}
+            </span>
+          </p>
+        )}
         {lastImportAt !== null && lastImportAt !== undefined ? (
           <p className="connector-card__import-stamp" aria-live="polite">
             {t("lastImported", {

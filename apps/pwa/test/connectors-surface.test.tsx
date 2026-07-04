@@ -80,13 +80,17 @@ describe("Connectors catalog surface", () => {
   });
 
   it("renders a CONNECTED card per active connector with name, ref, masked hint and pill", async () => {
-    global.fetch = vi.fn(async () => jsonResponse([GITHUB_ROW])) as unknown as typeof fetch;
+    // A non-oauth connector (telegram) still shows the ref + masked webhook
+    // hint. OAuth connectors (github, …) drop that line — the webhook hint is
+    // meaningless for them — covered in connectors-oauth-github.test.tsx.
+    const telegramRow = { ...GITHUB_ROW, connector: "telegram", external_ref: "ops" };
+    global.fetch = vi.fn(async () => jsonResponse([telegramRow])) as unknown as typeof fetch;
 
     render(<Connectors />);
 
     const connected = await screen.findByRole("list", { name: /connected/i });
-    expect(within(connected).getByText("github")).toBeInTheDocument();
-    expect(within(connected).getByText("acme/widgets")).toBeInTheDocument();
+    expect(within(connected).getByText("telegram")).toBeInTheDocument();
+    expect(within(connected).getByText("ops")).toBeInTheDocument();
     expect(within(connected).getByText("...wxyz")).toBeInTheDocument();
     expect(within(connected).getByText(/^Connected$/i)).toBeInTheDocument();
     // Real revoke action present.

@@ -149,4 +149,25 @@ describe("Lift 1 — ConnectorRow github connect state (Reconnect / Switch-to-OA
     expect(screen.queryByRole("button", { name: /reconnect with github/i })).toBeNull();
     expect(screen.queryByRole("button", { name: /connect with github/i })).toBeNull();
   });
+
+  it("hides the meaningless detail line (webhook token hint + external ref) for an oauth github row", () => {
+    // The detail line shows the webhook_token's last 4 chars + external_ref.
+    // For an outbound OAuth github connector there is no inbound webhook, so the
+    // hint is meaningless noise and the repo ref is redundant on a connected
+    // card — drop the whole line for oauth connectors.
+    render(
+      <ConnectorRow
+        connector={makeConnector({
+          connector: "github",
+          external_ref: "blas1n/bsvibe-gh-e2e",
+          token_hint: "...wxyz",
+          oauth_account_label: "@blas1n",
+        })}
+        onRevoked={() => {}}
+        revoke={vi.fn()}
+      />,
+    );
+    expect(screen.queryByText("...wxyz")).toBeNull();
+    expect(screen.queryByText("blas1n/bsvibe-gh-e2e")).toBeNull();
+  });
 });
