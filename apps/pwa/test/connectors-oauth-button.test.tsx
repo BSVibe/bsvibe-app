@@ -42,6 +42,36 @@ describe("ConnectorOAuthButton", () => {
     });
   });
 
+  it("shows a Connecting… busy state between click and redirect (no perceived freeze)", async () => {
+    // The start round-trip has latency; without visible feedback the click
+    // looks like a no-op and users re-click (observed: 3× rapid oauth/start).
+    // While the dance is in flight the button must announce it's working:
+    // label flips to Connecting…, aria-busy is set, and it stays disabled.
+    let resolveStart: (v: { authorize_url: string }) => void = () => {};
+    mockedStart.mockReturnValue(
+      new Promise((res) => {
+        resolveStart = res;
+      }),
+    );
+    const onRedirect = vi.fn();
+    render(<ConnectorOAuthButton provider="github" onRedirect={onRedirect} />);
+
+    const btn = screen.getByRole("button");
+    fireEvent.click(btn);
+
+    // In-flight: immediate, visible working feedback.
+    await waitFor(() => {
+      expect(btn.textContent).toMatch(/connecting/i);
+      expect(btn).toHaveAttribute("aria-busy", "true");
+      expect(btn).toBeDisabled();
+    });
+
+    resolveStart({ authorize_url: "https://provider.example/authorize?s=1" });
+    await waitFor(() => {
+      expect(onRedirect).toHaveBeenCalledWith("https://provider.example/authorize?s=1");
+    });
+  });
+
   it("shows the connected identity and no button when connected", () => {
     render(<ConnectorOAuthButton provider="github" connectedLabel="@octocat" />);
     expect(screen.queryByRole("button")).toBeNull();
