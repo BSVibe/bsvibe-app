@@ -114,6 +114,26 @@ describe("Delivery Report — rendered Markdown reading view", () => {
     expect(within(built).queryByTestId("git-diff-view")).toBeNull();
   });
 
+  it("renders the narrative lead ('what this did') as markdown, not raw syntax", async () => {
+    // The lead is the LLM's plain-language summary the founder reads first; it
+    // can carry emphasis / `code` refs and must render, not show raw markdown.
+    const report = {
+      ...reportWith(["README.md"]),
+      narrative: "Shipped the **clamp** helper with `low`/`high` bounds.",
+    };
+    installFetch({ report });
+    const { container } = render(<DeliveryReport deliverableId="d1" />);
+
+    const lead = await waitFor(() => {
+      const el = container.querySelector(".report-doc__lead");
+      if (!el) throw new Error("lead not rendered yet");
+      return el;
+    });
+    expect(lead.querySelector("strong")?.textContent).toBe("clamp");
+    expect(lead.querySelector("code")?.textContent).toBe("low");
+    expect(lead.textContent).not.toContain("**");
+  });
+
   it("keeps the highlighted diff view for a no-before NON-Markdown file", async () => {
     installFetch({ report: reportWith(["app.ts"]) });
     render(<DeliveryReport deliverableId="d1" />);

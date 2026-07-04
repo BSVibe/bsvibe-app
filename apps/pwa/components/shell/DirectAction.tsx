@@ -206,7 +206,7 @@ export function DirectOverlay({ open, onClose }: { open: boolean; onClose: () =>
               aria-live="polite"
             >
               <span className="direct-overlay__answer-label">{t("answerLabel")}</span>
-              <div className="direct-overlay__answer-body report-markdown">
+              <div className="direct-overlay__answer-body markdown-inline">
                 <ReactMarkdown remarkPlugins={[remarkGfm]}>{answer}</ReactMarkdown>
               </div>
             </section>

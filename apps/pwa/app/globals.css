@@ -7386,6 +7386,62 @@ main.login {
   min-height: 0;
 }
 
+/* Inline markdown — renders bold / `code` / lists / links / small headings for
+ * LLM-authored prose embedded in a card (checkpoint asks, the report lead, a
+ * knowledge observation, the Direct answer). Unlike .report-markdown it has NO
+ * framed box (border/background/padding) and INHERITS the parent's font size,
+ * so it reads as part of the card, not a nested panel. */
+.markdown-inline {
+  overflow-wrap: anywhere;
+}
+.markdown-inline > :first-child {
+  margin-top: 0;
+}
+.markdown-inline > :last-child {
+  margin-bottom: 0;
+}
+.markdown-inline p {
+  margin: 0 0 0.5em;
+}
+.markdown-inline ul,
+.markdown-inline ol {
+  margin: 0.4em 0;
+  padding-left: 1.3em;
+}
+.markdown-inline li {
+  margin: 0.15em 0;
+}
+.markdown-inline code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.9em;
+  background: var(--accent-bg);
+  padding: 0.1em 0.3em;
+  border-radius: 4px;
+}
+.markdown-inline pre {
+  overflow-x: auto;
+  background: var(--accent-bg);
+  padding: 10px 12px;
+  border-radius: 6px;
+}
+.markdown-inline pre code {
+  background: none;
+  padding: 0;
+}
+.markdown-inline a {
+  color: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.markdown-inline h1,
+.markdown-inline h2,
+.markdown-inline h3,
+.markdown-inline h4 {
+  font-size: 1em;
+  font-weight: 650;
+  margin: 0.6em 0 0.3em;
+}
+
 /* Rendered-Markdown reading view for a no-before doc deliverable — prose, not a
  * code diff. Framed + scrollable like the diff pane; in the multi-file split it
  * gets the same fixed-height viewport so switching files never reflows. */
