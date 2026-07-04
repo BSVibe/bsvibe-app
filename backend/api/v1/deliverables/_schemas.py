@@ -22,10 +22,6 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict
 
-from backend.workflow.application.verification_service import (
-    LEGACY_RETRIEVED_KNOWLEDGE_RATIONALE,
-    RETRIEVED_KNOWLEDGE_RATIONALE,
-)
 from backend.workflow.infrastructure.db import (
     Deliverable,
     DeliverableType,
@@ -213,38 +209,3 @@ def to_verification(row: VerificationResult) -> VerificationReport:
         honesty_grade=grade if isinstance(grade, str) else None,
         created_at=row.created_at,
     )
-
-
-def references_of(verifications: list[VerificationReport]) -> list[str]:
-    """The referenced-knowledge statements across a run's verifications (G2).
-
-    Pulls the criteria of every judge check stamped with
-    :data:`~backend.workflow.application.verification_service.RETRIEVED_KNOWLEDGE_RATIONALE`
-    (the retriever's canon / prior-decision / prior-rejection fold), deduped in
-    first-seen order. A run may record several verifications (re-attempts), so
-    the same statement can recur — it surfaces once. Defensive against malformed
-    contract JSON: any non-conforming shape contributes nothing, never raises."""
-    references: list[str] = []
-    seen: set[str] = set()
-    for verification in verifications:
-        checks = verification.contract.get("checks")
-        if not isinstance(checks, list):
-            continue
-        for check in checks:
-            if not isinstance(check, dict):
-                continue
-            # Current marker OR the legacy ("BSage") one on historical rows.
-            if check.get("rationale") not in (
-                RETRIEVED_KNOWLEDGE_RATIONALE,
-                LEGACY_RETRIEVED_KNOWLEDGE_RATIONALE,
-            ):
-                continue
-            criteria = check.get("criteria")
-            if not isinstance(criteria, list):
-                continue
-            for item in criteria:
-                statement = str(item).strip()
-                if statement and statement not in seen:
-                    seen.add(statement)
-                    references.append(statement)
-    return references

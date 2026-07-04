@@ -32,6 +32,7 @@ from typing import Any, Protocol, runtime_checkable
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.knowledge.retrieval.knowledge_item import RetrievedKnowledge
 from backend.workflow.domain.gate_derivation import (
     DerivedGate,
     derivation_planner_messages,
@@ -294,9 +295,16 @@ class JudgeLlm(Protocol):
 class CanonRetriever(Protocol):
     """Read-only BSage retrieval seam (Workflow §1.2). Given the signals of
     the change (changed paths + the work summary), returns canonical pattern
-    statements to fold into the verify contract as judge criteria."""
+    statements to fold into the verify contract as judge criteria.
+
+    ``retrieve_structured`` returns the SAME statements but carries each one's
+    identity (concept_id / note path) so the contract can persist it and the
+    delivery report can deep-link without re-deriving it. ``retrieve_for_signals``
+    is the text projection the ~6 LLM-context consumers use."""
 
     async def retrieve_for_signals(self, signals: str) -> list[str]: ...
+
+    async def retrieve_structured(self, signals: str) -> list[RetrievedKnowledge]: ...
 
 
 class VerificationService:
@@ -342,15 +350,20 @@ class VerificationService:
 
         if self._retriever is not None:
             signals = (final_text + "\n" + "\n".join(written_paths)).strip()
-            patterns = [
-                p.strip() for p in await self._retriever.retrieve_for_signals(signals) if p.strip()
+            # Retrieve STRUCTURED so each folded statement carries its identity
+            # (concept_id / note path). `criteria` stays the flat text (the judge
+            # reads it; legacy readers still work); `knowledge_refs` persists the
+            # identity so the delivery report deep-links without a re-derivation.
+            items = [
+                i for i in await self._retriever.retrieve_structured(signals) if i.text.strip()
             ]
-            if patterns:
+            if items:
                 checks.append(
                     VerificationCheck(
                         kind="judge",
-                        criteria=tuple(patterns),
+                        criteria=tuple(i.text.strip() for i in items),
                         rationale=RETRIEVED_KNOWLEDGE_RATIONALE,
+                        knowledge_refs=tuple(i.to_wire() for i in items),
                     )
                 )
 

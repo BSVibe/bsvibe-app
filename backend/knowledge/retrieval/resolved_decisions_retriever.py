@@ -38,6 +38,7 @@ import structlog
 
 from backend.knowledge.graph.markdown_utils import extract_frontmatter
 from backend.knowledge.graph.storage import StorageBackend
+from backend.knowledge.retrieval.knowledge_item import RetrievedKnowledge
 
 logger = structlog.get_logger(__name__)
 
@@ -179,23 +180,29 @@ class ResolvedDecisionsRetriever:
     async def retrieve_for_signals(self, signals: str) -> list[str]:
         """Return ≤ :data:`_MAX_DECISIONS` resolved-decision statements for the
         signals. Graceful-empty + never raises (verify path discipline)."""
+        return [item.text for item in await self.retrieve_structured(signals)]
+
+    async def retrieve_structured(self, signals: str) -> list[RetrievedKnowledge]:
+        """Like :meth:`retrieve_for_signals` but carries each decision's source
+        garden note ``path`` so the report can link to the stored knowledge
+        without a vault scan. Graceful-empty; never raises."""
         try:
             return await self._retrieve(signals)
         except Exception:  # noqa: BLE001 — verify path must never crash on read
             logger.warning("resolved_decisions_retrieve_failed", exc_info=True)
             return []
 
-    async def _retrieve(self, signals: str) -> list[str]:
+    async def _retrieve(self, signals: str) -> list[RetrievedKnowledge]:
         signal_tokens = _tokens(signals)
         if not signal_tokens:
             return []
         paths = await self._storage.list_files(_SEEDLING_DIR)
         if not paths:
             return []
-        statements: list[str] = []
+        items: list[RetrievedKnowledge] = []
         seen: set[str] = set()
         for path in paths:
-            if len(statements) >= _MAX_DECISIONS:
+            if len(items) >= _MAX_DECISIONS:
                 break
             try:
                 content = await self._storage.read(path)
@@ -232,8 +239,9 @@ class ResolvedDecisionsRetriever:
             if statement in seen:
                 continue
             seen.add(statement)
-            statements.append(statement)
-        return statements
+            # Carry the note `path` (identity) + the question as the chip label.
+            items.append(RetrievedKnowledge(text=statement, kind="note", ref=path, label=question))
+        return items
 
 
 __all__ = ["ResolvedDecisionsRetriever"]

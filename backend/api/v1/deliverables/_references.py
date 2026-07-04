@@ -20,12 +20,19 @@ frontend can OPEN the stored knowledge:
 from __future__ import annotations
 
 import re
-from typing import Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 from pydantic import BaseModel, ConfigDict
 
 from backend.knowledge.canonicalization.paths import is_valid_concept_id
 from backend.knowledge.canonicalization.resolver import TagResolver
+from backend.workflow.application.verification_service import (
+    LEGACY_RETRIEVED_KNOWLEDGE_RATIONALE,
+    RETRIEVED_KNOWLEDGE_RATIONALE,
+)
+
+if TYPE_CHECKING:
+    from ._schemas import VerificationReport
 
 
 class ReferenceOut(BaseModel):
@@ -97,3 +104,82 @@ def to_reference(statement: str, note_paths: dict[str, str] | None = None) -> Re
     if concept_id and is_valid_concept_id(concept_id):
         return ReferenceOut(kind="concept", text=label, concept_id=concept_id)
     return ReferenceOut(kind="plain", text=text)
+
+
+def reference_from_entry(
+    entry: dict[str, Any], note_paths: dict[str, str] | None = None
+) -> ReferenceOut | None:
+    """Build a report reference from one :func:`references_of` entry.
+
+    STRUCTURED entries (new rows) carry identity — a concept links by ``ref``
+    (concept_id), a note opens ``ref`` (path); no re-derivation. LEGACY entries
+    (pre-refactor rows, ``kind`` absent) fall back to :func:`to_reference`, which
+    re-slugifies a concept label and reverse-looks-up a note path via
+    ``note_paths``. Returns ``None`` when a reference should be dropped."""
+    kind = entry.get("kind")
+    ref = entry.get("ref")
+    text = str(entry.get("text") or "")
+    label = str(entry.get("label") or text)
+    if kind == "concept" and ref:
+        return ReferenceOut(kind="concept", text=label, concept_id=str(ref))
+    if kind == "note" and ref:
+        return ReferenceOut(kind="note", text=label, path=str(ref))
+    if kind == "plain":
+        return ReferenceOut(kind="plain", text=label)
+    # Legacy row (no structured kind, or a structured item missing its ref) —
+    # derive identity the old way (concept slug / decision-note reverse lookup).
+    return to_reference(text, note_paths)
+
+
+def references_of(verifications: list[VerificationReport]) -> list[dict[str, Any]]:
+    """The referenced-knowledge entries across a run's verifications (G2).
+
+    Pulls from every judge check stamped with :data:`RETRIEVED_KNOWLEDGE_RATIONALE`
+    (the retriever's canon / prior-decision / prior-rejection fold), deduped by
+    statement text in first-seen order. Each entry is either STRUCTURED (new
+    rows, from the check's ``knowledge_refs``: ``{text, kind, ref, label}`` —
+    identity carried) or LEGACY (pre-refactor rows, only ``criteria`` strings:
+    ``{text}`` — identity re-derived downstream). Defensive against malformed
+    contract JSON: any non-conforming shape contributes nothing, never raises."""
+    entries: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for verification in verifications:
+        checks = verification.contract.get("checks")
+        if not isinstance(checks, list):
+            continue
+        for check in checks:
+            if not isinstance(check, dict):
+                continue
+            # Current marker OR the legacy ("BSage") one on historical rows.
+            if check.get("rationale") not in (
+                RETRIEVED_KNOWLEDGE_RATIONALE,
+                LEGACY_RETRIEVED_KNOWLEDGE_RATIONALE,
+            ):
+                continue
+            refs = check.get("knowledge_refs")
+            if isinstance(refs, list) and refs:
+                for raw in refs:
+                    if not isinstance(raw, dict):
+                        continue
+                    text = str(raw.get("text") or "").strip()
+                    if not text or text in seen:
+                        continue
+                    seen.add(text)
+                    entries.append(
+                        {
+                            "text": text,
+                            "kind": raw.get("kind"),
+                            "ref": raw.get("ref"),
+                            "label": raw.get("label"),
+                        }
+                    )
+                continue  # structured present → don't also read this check's criteria
+            criteria = check.get("criteria")
+            if not isinstance(criteria, list):
+                continue
+            for item in criteria:
+                statement = str(item).strip()
+                if statement and statement not in seen:
+                    seen.add(statement)
+                    entries.append({"text": statement})
+    return entries

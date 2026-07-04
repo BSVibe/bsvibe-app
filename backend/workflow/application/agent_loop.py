@@ -36,6 +36,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.config import Settings, get_settings
 from backend.extensions.skill.loader import SkillLoader
+from backend.knowledge.retrieval.knowledge_item import RetrievedKnowledge
 from backend.workflow.application._loop_context import (
     _DESIGN_SPEC_DIRECTIVE,
     _SYSTEM_PROMPT,
@@ -135,9 +136,15 @@ class CanonRetriever(Protocol):
     """Read-only BSage retrieval seam (Workflow §1.2). Given the signals
     of the change (changed paths + the work summary), returns canonical
     pattern statements to fold into the verify contract as judge criteria.
+
+    Mirrors :class:`backend.workflow.application.verification_service.CanonRetriever`
+    (this loop passes its retriever straight to ``VerificationService``):
+    ``retrieve_structured`` carries each statement's identity for the report.
     """
 
     async def retrieve_for_signals(self, signals: str) -> list[str]: ...
+
+    async def retrieve_structured(self, signals: str) -> list[RetrievedKnowledge]: ...
 
 
 @dataclass

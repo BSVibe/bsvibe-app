@@ -23,6 +23,7 @@ from collections.abc import Sequence
 
 import structlog
 
+from backend.knowledge.retrieval.knowledge_item import RetrievedKnowledge
 from backend.workflow.application.verification_service import CanonRetriever
 
 logger = structlog.get_logger(__name__)
@@ -49,11 +50,16 @@ class CompositeCanonRetriever:
 
     async def retrieve_for_signals(self, signals: str) -> list[str]:
         """Return the merged + deduped statements from every source, capped."""
-        merged: list[str] = []
+        return [item.text for item in await self.retrieve_structured(signals)]
+
+    async def retrieve_structured(self, signals: str) -> list[RetrievedKnowledge]:
+        """Merge + dedupe (on statement text) + cap the structured items from
+        every source, preserving each item's carried identity (ref/kind/label)."""
+        merged: list[RetrievedKnowledge] = []
         seen: set[str] = set()
         for source in self._sources:
             try:
-                statements = await source.retrieve_for_signals(signals)
+                items = await source.retrieve_structured(signals)
             except Exception:  # noqa: BLE001 — one source failing must not break others
                 logger.warning(
                     "composite_canon_source_failed",
@@ -61,14 +67,14 @@ class CompositeCanonRetriever:
                     exc_info=True,
                 )
                 continue
-            for statement in statements:
-                if not statement or not statement.strip():
+            for item in items:
+                if not item.text or not item.text.strip():
                     continue
-                key = statement.strip()
+                key = item.text.strip()
                 if key in seen:
                     continue
                 seen.add(key)
-                merged.append(key)
+                merged.append(item)
                 if len(merged) >= _TOTAL_CAP:
                     return merged
         return merged
