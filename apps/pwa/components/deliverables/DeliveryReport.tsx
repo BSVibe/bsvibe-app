@@ -103,6 +103,10 @@ function isStatementReference(text: string): boolean {
   return text.trim().length > 60;
 }
 
+/** A decision's resolution values that localize to a known label (report.resolution.*);
+ *  any other answer (a founder's free-text reply) renders verbatim. */
+const RESOLUTION_KEYS = new Set(["discard", "ship", "retry", "approve", "reject"]);
+
 /** One command the verifier actually ran, parsed tolerantly from the free-form
  *  `result.command_results` blob (shape: {command, passed, exit_code, output}). */
 interface CommandRun {
@@ -408,31 +412,43 @@ function ReportDocument({
               <p className="report-doc__muted">{t("referencedHint")}</p>
               <ul className="report-chips">
                 {references.map((reference, i) => {
-                  // A canon-concept statement deep-links to the concept viewer by
-                  // its backend-supplied concept_id (R13); a prior decision /
-                  // rejection has no id and stays plain text. A long
-                  // sentence-shaped reference renders as a readable block, not a
-                  // stadium pill that mangles multi-line text (founder #1).
-                  const statement = isStatementReference(reference.text)
-                    ? " report-chip--statement"
-                    : "";
-                  if (reference.concept_id) {
-                    const conceptId = reference.concept_id;
+                  // A concept deep-links to the concept viewer by its backend
+                  // concept_id (R13) — chip = the short label. A prior decision /
+                  // rejection is localized here (the English prefix + the
+                  // resolution are stamped by the backend; the free text — the
+                  // question / reason — stays as written). A long statement
+                  // renders as a readable block, not a squished pill (founder #1).
+                  const { kind, text, concept_id, answer } = reference;
+                  if (kind === "concept" && concept_id) {
+                    const label = isStatementReference(text) ? " report-chip--statement" : "";
                     return (
-                      <li key={`ref-${i}-${reference.text}`}>
+                      <li key={`ref-${i}-${text}`}>
                         <button
                           type="button"
-                          className={`report-chip report-chip--link${statement}`}
-                          onClick={() => setOpenConcept({ id: conceptId, label: reference.text })}
+                          className={`report-chip report-chip--link${label}`}
+                          onClick={() => setOpenConcept({ id: concept_id, label: text })}
                         >
-                          {reference.text}
+                          {text}
                         </button>
                       </li>
                     );
                   }
+                  let display = text;
+                  if (kind === "decision") {
+                    const key = (answer ?? "").trim().toLowerCase();
+                    const resolved = answer
+                      ? RESOLUTION_KEYS.has(key)
+                        ? t(`resolution.${key}`)
+                        : answer
+                      : "";
+                    display = `${t("priorDecision")} — ${text}${resolved ? ` · ${resolved}` : ""}`;
+                  } else if (kind === "rejection") {
+                    display = `${t("priorRejection")} — ${text}`;
+                  }
+                  const statement = isStatementReference(display) ? " report-chip--statement" : "";
                   return (
-                    <li key={`ref-${i}-${reference.text}`}>
-                      <span className={`report-chip${statement}`}>{reference.text}</span>
+                    <li key={`ref-${i}-${text}`}>
+                      <span className={`report-chip${statement}`}>{display}</span>
                     </li>
                   );
                 })}
