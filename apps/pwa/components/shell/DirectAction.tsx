@@ -133,7 +133,7 @@ export function DirectOverlay({ open, onClose }: { open: boolean; onClose: () =>
       // L10 — a QUESTION is answered inline (no run, no executor); only a WORK
       // request is dispatched. The backend classifies + answers; answered=false
       // means "this is work" (or no chat model) → fall through to dispatch.
-      const asked = await askMessage(trimmed);
+      const asked = await askMessage(trimmed, productId);
       if (asked.answered && asked.answer) {
         setAnswer(asked.answer);
         setState("answered");

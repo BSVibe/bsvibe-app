@@ -26,8 +26,136 @@ import pytest
 import backend.workflow.application.direct_answer as da
 from backend.dispatch.adapter import ExecutorAdapterUnavailable
 from backend.workflow.application.direct_answer import DirectAnswerService
+from backend.workflow.infrastructure.db import RunStatus
 
 pytestmark = pytest.mark.asyncio
+
+
+class _Result:
+    def __init__(self, items: list[Any]) -> None:
+        self._items = items
+
+    def scalars(self) -> list[Any]:
+        return self._items
+
+
+class _FakeSession:
+    """Minimal AsyncSession stand-in: ``get`` returns a product, ``execute``
+    returns queued results in call order (runs query, then deliverables)."""
+
+    def __init__(self, product: Any, results: list[list[Any]]) -> None:
+        self._product = product
+        self._results = [_Result(r) for r in results]
+
+    async def get(self, _model: Any, _pk: Any) -> Any:
+        return self._product
+
+    async def execute(self, _stmt: Any) -> Any:
+        return self._results.pop(0)
+
+
+def _capturing_adapter(captured: dict[str, Any]) -> Any:
+    class _Adapter:
+        timeout_s: float | None = None
+
+        async def chat(self, *, system: str, messages: list[dict[str, Any]], tools: Any) -> Any:
+            captured["system"] = system
+            captured["messages"] = messages
+            return SimpleNamespace(content="Here is the status.", tool_calls=(), artifact_refs=())
+
+    return _Adapter()
+
+
+async def _empty_retrieve(self: Any, *_a: Any, **_k: Any) -> list[str]:
+    return []
+
+
+async def test_product_context_is_injected_when_product_id_given(tmp_path, monkeypatch) -> None:
+    """When ``product_id`` names a product in the workspace, its name, repo, and
+    recent runs (with status) are injected as grounding — so "how's the project?"
+    is answered from real state, not an empty sandbox."""
+    ws, pid, rid = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
+    product = SimpleNamespace(workspace_id=ws, name="toolkit", repo_url="blas1n/toolkit")
+    run = SimpleNamespace(
+        id=rid, status=RunStatus.REVIEW_READY, payload={"intent_text": "raw intent"}
+    )
+    deliverable = SimpleNamespace(run_id=rid, payload={"summary": "Add a title-case helper"})
+    session = _FakeSession(product, [[run], [deliverable]])
+
+    captured: dict[str, Any] = {}
+    adapter = _capturing_adapter(captured)
+    monkeypatch.setattr(
+        da,
+        "_resolve_via_caller",
+        lambda *_a, **_k: _async(
+            SimpleNamespace(account=SimpleNamespace(provider="litellm"), adapter=adapter)
+        ),
+    )
+    monkeypatch.setattr(DirectAnswerService, "_retrieve", _empty_retrieve)
+
+    settings = SimpleNamespace(
+        knowledge_default_region="us-1", knowledge_vault_root=str(tmp_path / "vault")
+    )
+    svc = DirectAnswerService(session=session, settings=settings)  # type: ignore[arg-type]
+    out = await svc.answer(workspace_id=ws, product_id=pid, text="현재 프로젝트 상황 어때?")
+
+    assert out == "Here is the status."
+    grounding = (
+        captured["system"]
+        + "\n"
+        + "\n".join(
+            str(m.get("content")) for m in captured["messages"] if m.get("role") == "system"
+        )
+    )
+    assert "toolkit" in grounding
+    assert "blas1n/toolkit" in grounding
+    # deliverable summary is preferred over the raw run intent for the title
+    assert "Add a title-case helper" in grounding
+    assert "ready to ship" in grounding
+    # and it explicitly tells the model NOT to inspect an empty working directory
+    assert "do NOT inspect" in grounding.lower() or "do not inspect" in grounding.lower()
+
+
+async def test_product_in_another_workspace_is_not_injected(tmp_path, monkeypatch) -> None:
+    """Defense-in-depth: a product_id whose product belongs to a DIFFERENT
+    workspace injects no grounding (and never leaks its state)."""
+    ws, other_ws, pid = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
+    product = SimpleNamespace(workspace_id=other_ws, name="secret-product", repo_url=None)
+    session = _FakeSession(product, [])  # execute must never be reached
+
+    captured: dict[str, Any] = {}
+    adapter = _capturing_adapter(captured)
+    monkeypatch.setattr(
+        da,
+        "_resolve_via_caller",
+        lambda *_a, **_k: _async(
+            SimpleNamespace(account=SimpleNamespace(provider="litellm"), adapter=adapter)
+        ),
+    )
+    monkeypatch.setattr(DirectAnswerService, "_retrieve", _empty_retrieve)
+
+    settings = SimpleNamespace(
+        knowledge_default_region="us-1", knowledge_vault_root=str(tmp_path / "vault")
+    )
+    svc = DirectAnswerService(session=session, settings=settings)  # type: ignore[arg-type]
+    out = await svc.answer(workspace_id=ws, product_id=pid, text="status?")
+
+    assert out == "Here is the status."
+    grounding = (
+        captured["system"]
+        + "\n"
+        + "\n".join(
+            str(m.get("content")) for m in captured["messages"] if m.get("role") == "system"
+        )
+    )
+    assert "secret-product" not in grounding
+
+
+def _async(value: Any) -> Any:
+    async def _coro() -> Any:
+        return value
+
+    return _coro()
 
 
 def _service(tmp_path, *, redis: Any = None) -> DirectAnswerService:

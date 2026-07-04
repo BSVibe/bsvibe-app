@@ -267,6 +267,56 @@ describe("Direct compose", () => {
     expect(container.querySelector(".direct-overlay__answer")?.textContent).not.toContain("**");
   });
 
+  it("L10: passes the target product_id to /messages/ask so the answer is grounded", async () => {
+    // The grounding fix: the Direct question must tell the backend WHICH product
+    // it's about, else the answer is generated as if the workspace were empty.
+    _currentPathname = "/products/toolkit";
+    const PRODUCTS = [{ id: "prod-tk-1", workspace_id: "ws-1", name: "toolkit", slug: "toolkit" }];
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/v1/products")) {
+        return new Response(JSON.stringify(PRODUCTS), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (url.endsWith("/api/v1/messages/ask")) {
+        return new Response(JSON.stringify({ answered: true, answer: "Status: on track." }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      return new Response(JSON.stringify(ACCEPTED), {
+        status: 202,
+        headers: { "Content-Type": "application/json" },
+      });
+    });
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    render(<DirectOverlay open onClose={() => {}} />);
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        expect.stringContaining("/api/v1/products"),
+        expect.anything(),
+      );
+    });
+    await userEvent.type(screen.getByRole("textbox"), "how's the project?");
+    fireEvent.click(screen.getByRole("button", { name: "Direct" }));
+
+    await waitFor(() => {
+      expect(screen.getByText(/on track/)).toBeInTheDocument();
+    });
+    const askCall = (fetchMock.mock.calls as unknown as Array<[string, RequestInit]>).find(
+      ([url]) => String(url).endsWith("/api/v1/messages/ask"),
+    );
+    if (!askCall) throw new Error("expected a /messages/ask POST");
+    expect(JSON.parse(askCall[1].body as string)).toEqual({
+      text: "how's the project?",
+      product_id: "prod-tk-1",
+    });
+    _currentPathname = "/brief";
+  });
+
   it("L10: a work request (answered=false) is dispatched as a run", async () => {
     _currentPathname = "/brief";
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {

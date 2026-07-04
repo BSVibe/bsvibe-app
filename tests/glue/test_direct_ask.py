@@ -76,7 +76,7 @@ async def test_ask_question_returns_inline_answer(client, monkeypatch) -> None:
         def __init__(self, session, *, settings, redis=None) -> None:  # noqa: ANN001
             pass
 
-        async def answer(self, *, workspace_id, text):  # noqa: ANN001, ANN201
+        async def answer(self, *, workspace_id, text, product_id=None):  # noqa: ANN001, ANN201
             return "The project shipped 9 lifts this round."
 
     monkeypatch.setattr(messages_api, "DirectAnswerService", _StubService)
@@ -94,10 +94,33 @@ async def test_ask_question_no_chat_model_falls_back(client, monkeypatch) -> Non
         def __init__(self, session, *, settings, redis=None) -> None:  # noqa: ANN001
             pass
 
-        async def answer(self, *, workspace_id, text):  # noqa: ANN001, ANN201
+        async def answer(self, *, workspace_id, text, product_id=None):  # noqa: ANN001, ANN201
             return None
 
     monkeypatch.setattr(messages_api, "DirectAnswerService", _NoneService)
     resp = await client.post("/api/v1/messages/ask", json={"text": "how's the project doing?"})
     assert resp.status_code == 200, resp.text
     assert resp.json()["answered"] is False
+
+
+async def test_ask_threads_product_id_to_service(client, monkeypatch) -> None:
+    """The target product_id from the request reaches the service so the answer
+    can be grounded in that product (the pre-fix bug: it was never passed)."""
+    seen: dict[str, object] = {}
+    pid = "3f2504e0-4f89-41d3-9a0c-0305e82c3301"
+
+    class _CapturingService:
+        def __init__(self, session, *, settings, redis=None) -> None:  # noqa: ANN001
+            pass
+
+        async def answer(self, *, workspace_id, text, product_id=None):  # noqa: ANN001, ANN201
+            seen["product_id"] = product_id
+            return "grounded answer"
+
+    monkeypatch.setattr(messages_api, "DirectAnswerService", _CapturingService)
+    resp = await client.post(
+        "/api/v1/messages/ask",
+        json={"text": "현재 프로젝트 상황 어때?", "product_id": pid},
+    )
+    assert resp.status_code == 200, resp.text
+    assert str(seen["product_id"]) == pid

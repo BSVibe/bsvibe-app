@@ -56,6 +56,13 @@ class AskRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     text: str = Field(..., min_length=1, max_length=20000)
+    #: L10 grounding — the product the founder is asking ABOUT. Optional: a
+    #: general question needs no product, but "how's the project?" must be
+    #: grounded in this product's deliverables + knowledge, not answered as if
+    #: the workspace were empty. Validated against the workspace in the service
+    #: (a foreign / unknown id degrades to an ungrounded answer, never a 400 —
+    #: the inline path must not fail a question).
+    product_id: uuid.UUID | None = None
 
 
 class AskResponse(BaseModel):
@@ -198,7 +205,9 @@ async def ask_message(
     service = DirectAnswerService(
         session, settings=settings, redis=get_dispatch_redis_client(settings)
     )
-    answer = await service.answer(workspace_id=workspace_id, text=body.text)
+    answer = await service.answer(
+        workspace_id=workspace_id, product_id=body.product_id, text=body.text
+    )
     if answer is None or not answer.strip():
         # No chat account resolved (or an empty answer) — let the caller dispatch
         # it as work rather than showing a blank inline reply.
