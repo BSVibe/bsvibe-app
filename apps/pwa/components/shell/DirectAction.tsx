@@ -7,6 +7,8 @@ import type { Product } from "@/lib/api/types";
 import { useTranslations } from "next-intl";
 import { usePathname } from "next/navigation";
 import { type FormEvent, useEffect, useState } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { PlusIcon } from "./icons";
 
 /** Sentinel <option> value for "let BSVibe route it" (no explicit product_id —
@@ -204,7 +206,9 @@ export function DirectOverlay({ open, onClose }: { open: boolean; onClose: () =>
               aria-live="polite"
             >
               <span className="direct-overlay__answer-label">{t("answerLabel")}</span>
-              <p className="direct-overlay__answer-body">{answer}</p>
+              <div className="direct-overlay__answer-body report-markdown">
+                <ReactMarkdown remarkPlugins={[remarkGfm]}>{answer}</ReactMarkdown>
+              </div>
             </section>
           )}
         </form>

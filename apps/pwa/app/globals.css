@@ -611,7 +611,12 @@ main.login {
 .direct-overlay__panel {
   position: relative;
   inset: auto;
-  margin: 18vh auto 0;
+  /* Cap the panel to the viewport and scroll internally — a long answer used
+     to grow the panel past the bottom of the screen and get clipped with no
+     way to reach the rest of it. */
+  margin: 12vh auto 4vh;
+  max-height: 84vh;
+  overflow-y: auto;
   width: min(560px, 92vw);
   max-width: 92vw;
   background: var(--surface);
@@ -689,7 +694,6 @@ main.login {
   font-size: 0.92rem;
   line-height: 1.55;
   color: var(--ink);
-  white-space: pre-wrap;
 }
 
 .direct-overlay__submit {
