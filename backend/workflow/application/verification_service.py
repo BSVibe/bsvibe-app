@@ -433,6 +433,11 @@ class VerificationService:
                 result={
                     "merge_conflict": True,
                     "conflict_paths": merge_conflict_paths,
+                    **(
+                        {"knowledge_refs": contract.knowledge_refs}
+                        if contract.knowledge_refs
+                        else {}
+                    ),
                 },
             )
             self._session.add(vr)
@@ -586,6 +591,10 @@ class VerificationService:
                 "scope": scope,
                 "honesty_grade": honesty_grade,
                 "gate_expected": gate_expected,
+                # Dedicated retrieval record — the STRUCTURED knowledge the verify
+                # retrieval surfaced (identity carried from the retriever). The
+                # delivery report reads THIS, not the contract's judge criteria.
+                **({"knowledge_refs": contract.knowledge_refs} if contract.knowledge_refs else {}),
             },
         )
         self._session.add(vr)

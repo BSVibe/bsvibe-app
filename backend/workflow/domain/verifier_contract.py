@@ -32,9 +32,11 @@ class VerificationCheck:
 
     ``knowledge_refs`` (judge only) carries the STRUCTURED identity of retrieved
     knowledge folded into ``criteria`` — each an already-serialized
-    ``{text, kind, ref, label}`` dict (kept as plain dicts so this domain type
-    stays free of a knowledge-layer import). Persisted on the contract JSON so
-    the delivery report deep-links references without re-deriving identity."""
+    ``{text, kind, ref, label}`` dict (plain dicts, so this domain type stays
+    free of a knowledge-layer import). It is an IN-MEMORY transport only: NOT
+    serialized onto the contract JSON (``to_dict`` omits it). ``verify`` lifts it
+    into the ``VerificationResult.result`` as a dedicated retrieval record, which
+    is what the delivery report reads — the contract stays purely "what to check"."""
 
     kind: CheckKind
     command: str | None = None
@@ -45,14 +47,9 @@ class VerificationCheck:
     def to_dict(self) -> dict[str, Any]:
         if self.kind == "command":
             return {"kind": "command", "command": self.command, "rationale": self.rationale}
-        judge: dict[str, Any] = {
-            "kind": "judge",
-            "criteria": list(self.criteria),
-            "rationale": self.rationale,
-        }
-        if self.knowledge_refs:
-            judge["knowledge_refs"] = [dict(r) for r in self.knowledge_refs]
-        return judge
+        # knowledge_refs is deliberately NOT serialized here — it rides to
+        # `verify` on the in-memory object and lands in the result record instead.
+        return {"kind": "judge", "criteria": list(self.criteria), "rationale": self.rationale}
 
 
 @dataclass(frozen=True)
@@ -71,6 +68,14 @@ class VerificationContract:
     @property
     def judge_checks(self) -> tuple[VerificationCheck, ...]:
         return tuple(c for c in self.checks if c.kind == "judge")
+
+    @property
+    def knowledge_refs(self) -> list[dict[str, Any]]:
+        """The flattened structured retrieval record (identity carried from the
+        retriever) across all judge checks — persisted into the verify RESULT by
+        :meth:`~backend.workflow.application.verification_service.VerificationService.verify`
+        and read directly by the delivery report (no verify-contract archaeology)."""
+        return [dict(r) for c in self.checks for r in c.knowledge_refs]
 
 
 #: Lift E38 — natural-English aliases LLMs reach for when the prompt

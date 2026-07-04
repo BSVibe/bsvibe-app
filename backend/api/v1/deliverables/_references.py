@@ -134,52 +134,61 @@ def reference_from_entry(
 def references_of(verifications: list[VerificationReport]) -> list[dict[str, Any]]:
     """The referenced-knowledge entries across a run's verifications (G2).
 
-    Pulls from every judge check stamped with :data:`RETRIEVED_KNOWLEDGE_RATIONALE`
-    (the retriever's canon / prior-decision / prior-rejection fold), deduped by
-    statement text in first-seen order. Each entry is either STRUCTURED (new
-    rows, from the check's ``knowledge_refs``: ``{text, kind, ref, label}`` —
-    identity carried) or LEGACY (pre-refactor rows, only ``criteria`` strings:
-    ``{text}`` — identity re-derived downstream). Defensive against malformed
-    contract JSON: any non-conforming shape contributes nothing, never raises."""
+    Deduped by statement text, first-seen order. Two sources, preferred in order:
+
+    * PRIMARY — the dedicated retrieval record persisted on the verify RESULT
+      (``result["knowledge_refs"]``: ``{text, kind, ref, label}`` — identity
+      carried straight from the retriever). No verify-contract archaeology.
+    * LEGACY — pre-record rows have no result record; fall back to the judge
+      ``criteria`` on the CONTRACT, matched by the retrieved-knowledge rationale
+      marker (identity re-derived downstream: concept slug / note reverse-lookup).
+
+    Defensive against malformed JSON: any non-conforming shape contributes
+    nothing, never raises."""
     entries: list[dict[str, Any]] = []
     seen: set[str] = set()
     for verification in verifications:
-        checks = verification.contract.get("checks")
-        if not isinstance(checks, list):
-            continue
-        for check in checks:
-            if not isinstance(check, dict):
-                continue
-            # Current marker OR the legacy ("BSage") one on historical rows.
-            if check.get("rationale") not in (
-                RETRIEVED_KNOWLEDGE_RATIONALE,
-                LEGACY_RETRIEVED_KNOWLEDGE_RATIONALE,
-            ):
-                continue
-            refs = check.get("knowledge_refs")
-            if isinstance(refs, list) and refs:
-                for raw in refs:
-                    if not isinstance(raw, dict):
-                        continue
-                    text = str(raw.get("text") or "").strip()
-                    if not text or text in seen:
-                        continue
-                    seen.add(text)
-                    entries.append(
-                        {
-                            "text": text,
-                            "kind": raw.get("kind"),
-                            "ref": raw.get("ref"),
-                            "label": raw.get("label"),
-                        }
-                    )
-                continue  # structured present → don't also read this check's criteria
-            criteria = check.get("criteria")
-            if not isinstance(criteria, list):
-                continue
-            for item in criteria:
-                statement = str(item).strip()
-                if statement and statement not in seen:
-                    seen.add(statement)
-                    entries.append({"text": statement})
+        record = verification.result.get("knowledge_refs")
+        if isinstance(record, list) and record:
+            for raw in record:
+                if not isinstance(raw, dict):
+                    continue
+                text = str(raw.get("text") or "").strip()
+                if not text or text in seen:
+                    continue
+                seen.add(text)
+                entries.append(
+                    {
+                        "text": text,
+                        "kind": raw.get("kind"),
+                        "ref": raw.get("ref"),
+                        "label": raw.get("label"),
+                    }
+                )
+            continue  # record present → skip the legacy contract-criteria path
+        _append_legacy_criteria(verification.contract.get("checks"), entries, seen)
     return entries
+
+
+def _append_legacy_criteria(checks: Any, entries: list[dict[str, Any]], seen: set[str]) -> None:
+    """LEGACY read for pre-record rows: the retrieved-knowledge judge ``criteria``
+    on the contract (matched by the rationale marker). Emits bare ``{text}``
+    entries — identity is re-derived by :func:`reference_from_entry`."""
+    if not isinstance(checks, list):
+        return
+    for check in checks:
+        if not isinstance(check, dict):
+            continue
+        if check.get("rationale") not in (
+            RETRIEVED_KNOWLEDGE_RATIONALE,
+            LEGACY_RETRIEVED_KNOWLEDGE_RATIONALE,
+        ):
+            continue
+        criteria = check.get("criteria")
+        if not isinstance(criteria, list):
+            continue
+        for item in criteria:
+            statement = str(item).strip()
+            if statement and statement not in seen:
+                seen.add(statement)
+                entries.append({"text": statement})

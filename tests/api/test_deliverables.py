@@ -609,39 +609,32 @@ async def test_report_prior_decision_links_to_its_stored_note(
 async def test_report_reference_uses_structured_knowledge_ref_without_a_vault_scan(
     configured_client, db, workspace_id
 ) -> None:
-    """STRUCTURAL — a contract that carries ``knowledge_refs`` (identity persisted
-    at verify time) links each reference DIRECTLY: no garden note on disk, no
-    reverse-lookup. The note path + concept_id come from the contract, proving the
+    """STRUCTURAL — the dedicated retrieval RECORD on the verify result
+    (``result["knowledge_refs"]``, identity persisted at verify time) links each
+    reference DIRECTLY: no garden note on disk, no reverse-lookup, no contract
+    archaeology. The note path + concept_id come from the record, proving the
     report reads persisted identity instead of re-deriving it (the smell removed)."""
-    from backend.workflow.application.verification_service import RETRIEVED_KNOWLEDGE_RATIONALE
-
     run_id, deliverable_id = uuid.uuid4(), uuid.uuid4()
     # NOTE: no knowledge_vault_root fixture, no seeded note — the identity is in
-    # the contract, so a reverse-lookup would find nothing. It still links.
+    # the result record, so a reverse-lookup would find nothing. It still links.
+    # The CONTRACT stays purely "what to check" (no knowledge_refs on it).
     contract = {
-        "checks": [
+        "checks": [{"kind": "command", "command": "pytest -q", "rationale": "the suite passes"}]
+    }
+    result = {
+        "knowledge_refs": [
             {
-                "kind": "judge",
-                "criteria": [
-                    "Prior decision — Q: Which database? A: Use Postgres",
-                    "Idempotency-key — reuse the stored key on a webhook retry.",
-                ],
-                "rationale": RETRIEVED_KNOWLEDGE_RATIONALE,
-                "knowledge_refs": [
-                    {
-                        "text": "Prior decision — Q: Which database? A: Use Postgres",
-                        "kind": "note",
-                        "ref": "garden/seedling/settle-decision-resolved-db.md",
-                        "label": "Which database?",
-                    },
-                    {
-                        "text": "Idempotency-key — reuse the stored key on a webhook retry.",
-                        "kind": "concept",
-                        "ref": "idempotency-key",
-                        "label": "Idempotency-key",
-                    },
-                ],
-            }
+                "text": "Prior decision — Q: Which database? A: Use Postgres",
+                "kind": "note",
+                "ref": "garden/seedling/settle-decision-resolved-db.md",
+                "label": "Which database?",
+            },
+            {
+                "text": "Idempotency-key — reuse the stored key on a webhook retry.",
+                "kind": "concept",
+                "ref": "idempotency-key",
+                "label": "Idempotency-key",
+            },
         ]
     }
     async with db() as s:
@@ -664,7 +657,7 @@ async def test_report_reference_uses_structured_knowledge_ref_without_a_vault_sc
                 workspace_id=workspace_id,
                 outcome=VerificationOutcome.PASSED,
                 contract=contract,
-                result={},
+                result=result,
                 created_at=datetime.now(tz=UTC),
             )
         )
@@ -675,7 +668,7 @@ async def test_report_reference_uses_structured_knowledge_ref_without_a_vault_sc
     refs = r.json()["references"]
     note = next(x for x in refs if x["kind"] == "note")
     assert note["text"] == "Which database?"
-    # The path comes STRAIGHT from the contract ref — not a vault scan (none exists).
+    # The path comes STRAIGHT from the result record — not a vault scan (none exists).
     assert note["path"] == "garden/seedling/settle-decision-resolved-db.md"
     concept = next(x for x in refs if x["kind"] == "concept")
     assert concept["text"] == "Idempotency-key"
