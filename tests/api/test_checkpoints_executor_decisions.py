@@ -148,3 +148,54 @@ async def test_executor_decision_carries_honest_question(client, db, workspace_i
     assert r.status_code == 200, r.text
     row = next(row for row in r.json() if row["decision"] == "verification_failed")
     assert row["question"].strip() != ""
+
+
+async def test_question_text_localizes_the_fixed_executor_fallback() -> None:
+    """The fixed executor decision question (no work-LLM ``payload.question``) is
+    rendered in the workspace language — a ``ko`` workspace's founder sees the
+    Korean line, not the English fallback."""
+    from types import SimpleNamespace
+
+    from backend.api.v1.checkpoints import _question_text
+
+    hrr = SimpleNamespace(decision="human_review_required", payload={"reason": "x"})
+    assert _question_text(hrr, "en") == (
+        "This work needs your review before BSVibe can call it verified."
+    )
+    ko = _question_text(hrr, "ko")
+    assert ko != _question_text(hrr, "en")  # actually localized
+    assert "검토" in ko  # reads as Korean prose
+    # A work-LLM ask_user_question is ALREADY in the founder's language (generated
+    # via the localized adapter) — the language arg never overrides it.
+    ask = SimpleNamespace(decision="ask_user_question", payload={"question": "Ship it?"})
+    assert _question_text(ask, "ko") == "Ship it?"
+
+
+async def test_pending_checkpoint_question_renders_in_workspace_language(db, workspace_id) -> None:
+    """END-TO-END: a ko workspace's needs-you list shows the executor decision's
+    fixed question in Korean — the handler threads get_output_language into
+    _question_text (here overridden to ``ko``)."""
+    from backend.api.deps import get_output_language
+
+    run = await _seed_run(db, ws=workspace_id)
+    await _seed_decision(
+        db, ws=workspace_id, run_id=run, kind="human_review_required", payload={"reason": "x"}
+    )
+
+    app = create_app()
+
+    async def _session():
+        async with db() as s:
+            yield s
+
+    app.dependency_overrides[get_current_user] = fake_current_user()
+    app.dependency_overrides[get_workspace_id] = lambda: workspace_id
+    app.dependency_overrides[get_db_session] = _session
+    app.dependency_overrides[get_output_language] = lambda: "ko"
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
+        r = await c.get("/api/v1/checkpoints")
+    assert r.status_code == 200, r.text
+    row = next(row for row in r.json() if row["decision"] == "human_review_required")
+    assert "검토" in row["question"]  # the Korean variant, not the English fallback
