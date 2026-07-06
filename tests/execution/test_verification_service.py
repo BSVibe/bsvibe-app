@@ -165,6 +165,36 @@ async def _make_step_and_attempt(
 
 
 # --------------------------------------------------------------------------
+# demonstration planner helpers (Fix A — dogfood 2026-07-06)
+# --------------------------------------------------------------------------
+
+
+def test_path_to_module_strips_src_layout_prefix() -> None:
+    # A src/ layout package installs under its OWN name — src/toolkit/lists.py is
+    # imported as toolkit.lists, NOT src.toolkit.lists (no `src` package exists
+    # once the wheel is built). The old hint (`from src.toolkit.lists`) made every
+    # python probe ModuleNotFoundError → the demonstration never demonstrated.
+    assert verification_service._path_to_module("src/toolkit/lists.py") == "toolkit.lists"
+    # A flat (non-src) package is unaffected.
+    assert verification_service._path_to_module("backend/common/mean.py") == "backend.common.mean"
+    # A leading slash never leaks into the dotted import (no filesystem-path hint).
+    assert not verification_service._path_to_module("/src/toolkit/text.py").startswith(".")
+    assert verification_service._path_to_module("/src/toolkit/text.py") == "toolkit.text"
+
+
+def test_demonstration_planner_forbids_absolute_paths_and_cd() -> None:
+    # The planner must be told probes run from the repo root (CWD) — never `cd`
+    # to or reference an absolute path, which is GONE by verify time (dogfood
+    # 89397510: probes cd'd into the executor's own host workdir and all failed).
+    messages = verification_service._demonstration_planner_messages(
+        "add chunk()", [("src/toolkit/lists.py", "def chunk(): ...")]
+    )
+    system = next(m["content"] for m in messages if m["role"] == "system")
+    assert "RELATIVE" in system
+    assert "NEVER `cd`" in system
+    assert "absolute" in system.lower()
+
+
 # assemble_contract
 # --------------------------------------------------------------------------
 

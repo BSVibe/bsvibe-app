@@ -146,6 +146,34 @@ def test_judge_unavailable_on_shell_syntax_error() -> None:
     assert judge_probe(probe, obs) == "unavailable"
 
 
+def test_judge_unavailable_when_probe_cds_to_a_missing_absolute_path() -> None:
+    # Dogfood 2026-07-06 (89397510): the demonstration PLANNER (a claude_code CLI
+    # account) authored probes that `cd` into the executor's OWN host workdir
+    # (``/private/var/folders/.../T/bsvibe-task-…``). That dir is gone by verify
+    # time (verify runs in a FRESH /work clone), so every probe died with
+    # ``sh: 1: cd: can't cd to <path>`` — judged CONTRADICTED → the whole
+    # demonstration FALSE-FAILED a correct deliverable. A probe that could not
+    # even enter its directory never exercised the deliverable → unavailable.
+    probe = Probe(
+        name="run chunk",
+        command="cd /private/var/folders/xy/T/bsvibe-task-abc && uv run python -c 'from toolkit.lists import chunk; print(chunk([1,2,3],2))'",
+        expect_stdout_contains=("[[1, 2], [3]]",),
+    )
+    obs = Observation(
+        exit_code=2,
+        stderr="sh: 1: cd: can't cd to /private/var/folders/xy/T/bsvibe-task-abc",
+    )
+    assert judge_probe(probe, obs) == "unavailable"
+
+
+def test_judge_unavailable_on_bash_cd_no_such_directory() -> None:
+    # Bash phrases the same failure differently ("cd: <path>: No such file or
+    # directory") — both dash and bash wordings must downgrade, not false-fail.
+    probe = Probe(name="p", command="cd /gone && ls", expect_exit_zero=True)
+    obs = Observation(exit_code=1, stderr="bash: cd: /gone: No such file or directory")
+    assert judge_probe(probe, obs) == "unavailable"
+
+
 # ── summarize (fold into one verdict) ────────────────────────────────────────
 
 

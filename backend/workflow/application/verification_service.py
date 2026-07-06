@@ -213,8 +213,15 @@ def _is_code_path(path: str) -> bool:
 
 
 def _path_to_module(path: str) -> str:
-    """``backend/common/mean.py`` → ``backend.common.mean`` (import hint)."""
-    return path.removesuffix(".py").replace("/", ".")
+    """``backend/common/mean.py`` → ``backend.common.mean`` (import hint).
+
+    A ``src/``-layout package is INSTALLED under its own name (``src/toolkit/
+    lists.py`` is imported as ``toolkit.lists``, not ``src.toolkit.lists`` — a
+    ``src`` package doesn't exist once the wheel is built), so a leading ``src.``
+    is stripped. Any absolute prefix is dropped too: the module hint must be a
+    dotted import, never a filesystem path."""
+    rel = path.strip().lstrip("/").removesuffix(".py").replace("/", ".")
+    return rel.removeprefix("src.")
 
 
 def _extract_json_object(text: str) -> Any:
@@ -271,6 +278,10 @@ def _demonstration_planner_messages(
         "wrongly fails good work.\n"
         '- Optional "setup" (list of prep commands, e.g. a build) runs first and is NOT '
         "asserted.\n"
+        "- Every probe runs from the REPO ROOT (the deliverable's checkout is your current "
+        "working directory). Use ONLY paths RELATIVE to it. NEVER `cd` and NEVER use an "
+        "absolute filesystem path (e.g. /tmp/..., /private/var/..., /work/...) — that "
+        "location will NOT exist when the probe runs, and the probe will spuriously fail.\n"
         "- If the deliverable CANNOT be exercised by an executable probe (pure prose / "
         "design / half-built), return an empty probes list — that is a valid, honest answer.\n"
         '- Output ONLY a JSON object: {"setup": [...], "probes": [ {...} ]}. No prose.' + hints

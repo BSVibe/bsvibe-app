@@ -70,6 +70,14 @@ _UNAVAILABLE_MARKERS: tuple[str, ...] = (
     "IndentationError",
     "unexpected token",  # shell parse error (bash/sh)
     "syntax error near",  # shell parse error
+    # the probe tried to `cd` into a directory that isn't there at verify time —
+    # e.g. a planner (a claude_code CLI account) that hard-coded its OWN host
+    # workdir, which is GONE by verify (verify runs in a fresh clone). The probe
+    # never reached the deliverable → unavailable, not a contradiction. Both the
+    # dash ("can't cd to") and bash ("cd: <p>: No such file or directory", caught
+    # above) phrasings must downgrade.
+    "can't cd to",
+    "cannot cd to",
 )
 
 
