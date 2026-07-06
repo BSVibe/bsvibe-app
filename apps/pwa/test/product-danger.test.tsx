@@ -6,6 +6,7 @@
  */
 
 import ProductDanger from "@/components/products/ProductDanger";
+import { PRODUCTS_CHANGED_EVENT } from "@/components/shell/RailProducts";
 import { type Session, clearSession, setSession } from "@/lib/auth/session";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -57,6 +58,39 @@ describe("ProductDanger", () => {
     const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
     expect(url).toContain("/api/v1/products/p-1");
     expect(init.method).toBe("DELETE");
+  });
+
+  it("fires PRODUCTS_CHANGED_EVENT on a successful delete so the rail refreshes", async () => {
+    global.fetch = vi.fn(
+      async () => new Response(null, { status: 204 }),
+    ) as unknown as typeof fetch;
+    const onChanged = vi.fn();
+    window.addEventListener(PRODUCTS_CHANGED_EVENT, onChanged);
+
+    render(<ProductDanger productId="p-1" productName="bsvibe-app" />);
+    fireEvent.click(screen.getByRole("button", { name: "Delete product" }));
+    fireEvent.click(screen.getByRole("button", { name: "Delete permanently" }));
+
+    await waitFor(() => expect(onChanged).toHaveBeenCalledTimes(1));
+    window.removeEventListener(PRODUCTS_CHANGED_EVENT, onChanged);
+  });
+
+  it("does NOT fire PRODUCTS_CHANGED_EVENT when the delete fails", async () => {
+    global.fetch = vi.fn(
+      async () => new Response("boom", { status: 500 }),
+    ) as unknown as typeof fetch;
+    const onChanged = vi.fn();
+    window.addEventListener(PRODUCTS_CHANGED_EVENT, onChanged);
+
+    render(<ProductDanger productId="p-1" productName="bsvibe-app" />);
+    fireEvent.click(screen.getByRole("button", { name: "Delete product" }));
+    fireEvent.click(screen.getByRole("button", { name: "Delete permanently" }));
+
+    await waitFor(() =>
+      expect(screen.getByText(/Couldn’t delete that product/)).toBeInTheDocument(),
+    );
+    expect(onChanged).not.toHaveBeenCalled();
+    window.removeEventListener(PRODUCTS_CHANGED_EVENT, onChanged);
   });
 
   it("shows a calm error and stays put when the delete fails", async () => {
