@@ -61,6 +61,9 @@ export default function RailProducts() {
   // Re-read when a product is created/deleted elsewhere (the rail persists
   // across navigation, so its mount effect won't re-run). Without this, a
   // delete on a product page only reflected here after a manual refresh.
+  // Registered once; `load` reads no reactive state (only setList + the
+  // listProducts import), so it's safe to omit from the deps.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: listener registered once; load is stable
   useEffect(() => {
     function onChanged() {
       void load();
