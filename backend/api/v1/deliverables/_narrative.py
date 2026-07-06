@@ -218,11 +218,16 @@ async def report_narrative_for(
     intent = intent or request
     if not (summary or diff or intent):
         return cached.strip() if isinstance(cached, str) and cached.strip() else None
+    from backend.workers.emit import get_dispatch_redis_client  # noqa: PLC0415 — lazy
     from backend.workflow.application.report_narrative import (  # noqa: PLC0415 — lazy
         ReportNarrativeService,
     )
 
-    service = ReportNarrativeService(session, settings=get_settings())
+    # dispatch redis lets an EXECUTOR-account frame caller reach the worker stream
+    settings = get_settings()
+    service = ReportNarrativeService(
+        session, settings=settings, redis=get_dispatch_redis_client(settings)
+    )
     narrative = await service.narrate(
         workspace_id=workspace_id, intent=intent, summary=summary, diff=diff, language=language
     )

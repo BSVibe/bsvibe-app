@@ -39,9 +39,16 @@ _NARRATIVE_SYSTEM_PROMPT = (
 class ReportNarrativeService:
     """Compose a plain-language narrative of a verified deliverable's work."""
 
-    def __init__(self, session: AsyncSession, *, settings: Settings) -> None:
+    def __init__(self, session: AsyncSession, *, settings: Settings, redis: Any = None) -> None:
         self._session = session
         self._settings = settings
+        # The frame caller may resolve an EXECUTOR account (a claude_code CLI
+        # worker). Its adapter needs the dispatch redis to reach the worker
+        # stream — the report endpoint threads the backend's dispatch client in,
+        # exactly like the inline Direct-answer path does. ``None`` keeps a
+        # LiteLLM-account workspace working (executor account then soft-fails to
+        # None, and the report falls back to the request line).
+        self._redis = redis
 
     async def _resolve_chat(self, workspace_id: uuid.UUID) -> ResolverLoopLlm | None:
         resolved = await _resolve_via_caller(
@@ -49,6 +56,7 @@ class ReportNarrativeService:
             caller_id=CALLER_FRAME,
             workspace_id=workspace_id,
             settings=self._settings,
+            redis=self._redis,
         )
         if resolved is None:
             return None
