@@ -169,6 +169,22 @@ async def split_knowledge(
     return referenced, written[:_WRITTEN_MAX]
 
 
+async def _workspace_language(session: AsyncSession, workspace_id: uuid.UUID) -> str:
+    """The workspace's OUTPUT language (``ko`` / ``en``) — the language the report
+    narrative is written in. Defaults to ``en`` (missing row / any read hiccup)."""
+    from backend.identity.workspaces_db import WorkspaceRow  # noqa: PLC0415 — lazy
+
+    try:
+        lang = (
+            await session.execute(
+                select(WorkspaceRow.language).where(WorkspaceRow.id == workspace_id)
+            )
+        ).scalar_one_or_none()
+    except Exception:  # noqa: BLE001 — language is best-effort; never break the report
+        return "en"
+    return (lang or "en").strip() or "en"
+
+
 async def report_narrative_for(
     session: AsyncSession,
     row: Deliverable,
@@ -177,14 +193,21 @@ async def report_narrative_for(
     verified: bool,
     workspace_id: uuid.UUID,
 ) -> str | None:
-    """The cached / lazily-generated "what this did" narrative for the report."""
+    """The cached / lazily-generated "what this did" narrative for the report, in
+    the workspace's output language. The cache is LANGUAGE-AWARE: a narrative
+    cached in another language (incl. a pre-i18n English cache) is regenerated so
+    switching the workspace language reflows the report."""
     payload = row.payload if isinstance(row.payload, dict) else {}
+    language = await _workspace_language(session, workspace_id)
     cached = payload.get("narrative")
-    if isinstance(cached, str) and cached.strip():
+    # Legacy caches (pre-i18n) have no language stamp → treated as English.
+    cached_language = payload.get("narrative_language") if isinstance(payload, dict) else None
+    cached_language = cached_language if isinstance(cached_language, str) else "en"
+    if isinstance(cached, str) and cached.strip() and cached_language == language:
         return cached.strip()
     # Only spend a generation on a verified deliverable with something to describe.
     if not verified:
-        return None
+        return cached.strip() if isinstance(cached, str) and cached.strip() else None
     summary = payload.get("summary") if isinstance(payload.get("summary"), str) else None
     diff = payload.get("diff") if isinstance(payload.get("diff"), str) else None
     intent: str | None = None
@@ -194,21 +217,23 @@ async def report_narrative_for(
             intent = frame.get("framed_intent") or frame.get("summary_title")
     intent = intent or request
     if not (summary or diff or intent):
-        return None
+        return cached.strip() if isinstance(cached, str) and cached.strip() else None
     from backend.workflow.application.report_narrative import (  # noqa: PLC0415 — lazy
         ReportNarrativeService,
     )
 
     service = ReportNarrativeService(session, settings=get_settings())
     narrative = await service.narrate(
-        workspace_id=workspace_id, intent=intent, summary=summary, diff=diff
+        workspace_id=workspace_id, intent=intent, summary=summary, diff=diff, language=language
     )
     if not narrative:
-        return None
+        # Keep any prior (stale-language) narrative rather than blanking the report.
+        return cached.strip() if isinstance(cached, str) and cached.strip() else None
     # Cache on the deliverable payload (re-assign so SQLAlchemy detects the JSON
     # change). Soft: a commit hiccup just means we regenerate next view.
     new_payload = dict(payload)
     new_payload["narrative"] = narrative
+    new_payload["narrative_language"] = language
     row.payload = new_payload
     try:
         await session.commit()

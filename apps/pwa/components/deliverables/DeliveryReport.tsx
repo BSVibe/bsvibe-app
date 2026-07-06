@@ -1212,7 +1212,14 @@ function VerificationBlock({ verification }: { verification: VerificationReportI
               "•"
             )}
           </span>
-          <span className="report-checklist__label">{check.label}</span>
+          <div className="report-checklist__body">
+            <span className="report-checklist__label">{check.label}</span>
+            {/* WHY this check was run / WHAT it proves — the agent's rationale,
+                in the founder's language. Omitted when the agent left it blank. */}
+            {check.rationale.trim() && (
+              <p className="report-checklist__why">{check.rationale.trim()}</p>
+            )}
+          </div>
           <span
             className={`report-checklist__tag report-checklist__tag--${passed ? "passed" : "other"}`}
           >

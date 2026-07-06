@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.config import Settings
 from backend.dispatch.caller_registry import CALLER_FRAME
+from backend.identity.output_language import language_directive
 from backend.workflow.application.loop_llm import ResolverLoopLlm
 from backend.workflow.application.runtime.account_resolution import _resolve_via_caller
 
@@ -60,9 +61,14 @@ class ReportNarrativeService:
         intent: str | None,
         summary: str | None,
         diff: str | None,
+        language: str | None = None,
     ) -> str | None:
         """A 2-3 sentence plain-language "what this did", or ``None`` when no chat
-        model resolves (best-effort: any hiccup degrades to ``None``)."""
+        model resolves (best-effort: any hiccup degrades to ``None``).
+
+        ``language`` (the workspace output language, ``ko`` / ``en``) makes the
+        model write the summary in the founder's language — code / identifiers /
+        paths stay verbatim. ``None`` / ``en`` adds nothing to the prompt."""
         llm = await self._resolve_chat(workspace_id)
         if llm is None:
             return None
@@ -76,7 +82,7 @@ class ReportNarrativeService:
         if not user_parts:
             return None
         messages: list[dict[str, Any]] = [
-            {"role": "system", "content": _NARRATIVE_SYSTEM_PROMPT},
+            {"role": "system", "content": _NARRATIVE_SYSTEM_PROMPT + language_directive(language)},
             {"role": "user", "content": "\n\n".join(user_parts)},
         ]
         try:

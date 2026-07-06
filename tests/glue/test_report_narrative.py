@@ -57,5 +57,40 @@ async def test_narrate_returns_none_without_chat(monkeypatch) -> None:
     assert out is None
 
 
+@pytest.mark.asyncio
+async def test_narrate_writes_in_the_workspace_language(monkeypatch) -> None:
+    """A ``ko`` workspace makes the narrative generate in Korean — the language
+    directive is appended to the system prompt so the model writes user-facing
+    prose in the founder's language (code / identifiers stay verbatim)."""
+    chat = _StubChat("퍼센트 변화를 계산하는 도우미를 추가했어요.")
+    svc = ReportNarrativeService.__new__(ReportNarrativeService)
+    monkeypatch.setattr(svc, "_resolve_chat", lambda workspace_id: _ready(chat))
+
+    out = await svc.narrate(
+        workspace_id=uuid.uuid4(),
+        intent="퍼센트 변화 유틸 추가",
+        summary="backend/common/percent_change.py",
+        diff="+def percent_change(old, new): ...",
+        language="ko",
+    )
+    assert out == "퍼센트 변화를 계산하는 도우미를 추가했어요."
+    system = next(m["content"] for m in chat.seen[0] if m["role"] == "system")
+    assert "Korean" in system  # the language directive was appended
+
+
+@pytest.mark.asyncio
+async def test_narrate_english_workspace_has_no_language_directive(monkeypatch) -> None:
+    """The default (``en``) adds nothing — an English workspace pays zero prompt
+    overhead (the directive is empty)."""
+    chat = _StubChat("Added a helper.")
+    svc = ReportNarrativeService.__new__(ReportNarrativeService)
+    monkeypatch.setattr(svc, "_resolve_chat", lambda workspace_id: _ready(chat))
+
+    await svc.narrate(workspace_id=uuid.uuid4(), intent="x", summary="y", diff=None, language="en")
+    system = next(m["content"] for m in chat.seen[0] if m["role"] == "system")
+    assert "Korean" not in system
+    assert "Write all user-facing prose" not in system
+
+
 async def _ready(value):
     return value
