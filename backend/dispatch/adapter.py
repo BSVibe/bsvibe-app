@@ -171,6 +171,26 @@ class ExecutorAdapterUnavailable(RuntimeError):
 
 
 # ---------------------------------------------------------------------------
+# Output-language — applied UNIFORMLY by every adapter.
+# ---------------------------------------------------------------------------
+
+
+def _system_with_output_language(system: str) -> str:
+    """Append the workspace OUTPUT-language directive to a system prompt.
+
+    The directive makes the model write user-facing prose in the workspace
+    language (empty for English). It is a property of the OUTPUT, not of the
+    TRANSPORT — so EVERY adapter (LiteLLM AND executor) applies it through this
+    one helper, and a caller gets identical localization whichever account
+    resolves. (Previously only the LiteLLM adapter localized, so the same
+    chat-shaped caller wrote Korean on a LiteLLM account but English on an
+    executor account — an abstraction leak this closes.)"""
+    from backend.identity.output_language import language_directive  # noqa: PLC0415
+
+    return system + language_directive()
+
+
+# ---------------------------------------------------------------------------
 # LiteLLM-backed adapter (the canonical happy path).
 # ---------------------------------------------------------------------------
 
@@ -209,14 +229,8 @@ class LiteLLMAdapter:
         messages: list[ChatMessage],
         tools: list[dict[str, Any]] | None = None,
     ) -> ChatResponse:
-        # Thread the workspace OUTPUT language into the prose-generating chat
-        # path (frame / ingest / judge / agent-loop questions all resolve a
-        # LiteLLM adapter): empty for English, else a "write prose in <lang>"
-        # suffix. Set on the contextvar by the resolver from workspaces.language.
-        from backend.identity.output_language import language_directive  # noqa: PLC0415
-
         full_messages: list[ChatMessage] = [
-            {"role": "system", "content": system + language_directive()}
+            {"role": "system", "content": _system_with_output_language(system)}
         ]
         full_messages.extend(dict(m) for m in messages)
         # Fold the per-caller timeout into ``extra_params`` so it lands in
@@ -366,6 +380,12 @@ class ExecutorAdapter:
         pinned_worker_id = _parse_uuid_or_none(pinned_raw)
 
         prompt = _render_prompt(messages)
+
+        # Localize the system prompt the SAME way the LiteLLM adapter does, so
+        # executor-generated prose (verify demonstration, decision questions,
+        # note bodies) follows the workspace language too — one shared helper,
+        # identical behaviour across transports.
+        system = _system_with_output_language(system)
 
         # Lift E30 — when ``tools`` is set, give the agent a short reference
         # of BSVibe's expected verification contract so it can declare one

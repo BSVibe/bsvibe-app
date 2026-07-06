@@ -647,6 +647,81 @@ class TestExecutorAdapterChat:
                 # No files shipped → no captured artifact_refs.
                 assert response.artifact_refs == ()
 
+    async def test_chat_localizes_the_system_prompt_like_litellm(self) -> None:
+        """Abstraction parity — the executor adapter localizes the system prompt
+        the SAME way the LiteLLM adapter does (shared helper). A ``ko`` workspace's
+        executor-generated prose (verify demonstration, decision questions) then
+        follows the workspace language, not English."""
+        import asyncio
+
+        from backend.identity.output_language import set_output_language
+
+        redis = await _make_redis()
+        workspace_id = uuid.uuid4()
+        settings = get_settings().model_copy(update={"executor_task_timeout_s": 30.0})
+        captured: dict[str, str] = {}
+
+        async with shared_file_sessionmaker() as sf:
+            async with sf() as setup:
+                worker = await _seed_worker(
+                    setup, workspace_id=workspace_id, capabilities=["claude_code"]
+                )
+                account = _executor_account(workspace_id, worker.id)
+                setup.add(account)
+                await setup.commit()
+
+            async with sf() as adapter_session:
+                adapter = ExecutorAdapter(
+                    account=account,
+                    workspace_id=workspace_id,
+                    account_id=account.account_id,
+                    model_account_id=account.id,
+                    session=adapter_session,
+                    settings=settings,
+                    redis=redis,
+                )
+
+                async def _simulate_worker() -> None:
+                    stream = dispatch.worker_stream(worker.id)
+                    last_id = "0"
+                    for _ in _poll_deadline():
+                        entries = await redis.xread({stream: last_id}, count=1, block=20)
+                        if not entries:
+                            continue
+                        _name, msgs = entries[0]
+                        for msg_id, fields in msgs:
+                            last_id = msg_id
+                            # The dispatched task carries the (localized) system.
+                            captured["system"] = fields.get("system", "")
+                            async with sf() as ws_session:
+                                await dispatch.record_result(
+                                    ws_session,
+                                    redis,
+                                    task_id=uuid.UUID(fields["task_id"]),
+                                    success=True,
+                                    output="ok",
+                                    error_message=None,
+                                )
+                                await ws_session.commit()
+                            return
+                    raise AssertionError("worker stream never saw the XADD")
+
+                try:
+                    set_output_language("ko")
+                    worker_task = asyncio.create_task(_simulate_worker())
+                    try:
+                        await adapter.chat(
+                            system="be terse", messages=[{"role": "user", "content": "hi"}]
+                        )
+                    finally:
+                        await worker_task
+                finally:
+                    set_output_language("en")
+
+        # The dispatched system prompt carries the Korean output-language directive.
+        assert "Korean" in captured["system"]
+        assert "be terse" in captured["system"]
+
     def _retry_adapter(self) -> ExecutorAdapter:
         """A minimal ExecutorAdapter that passes chat()'s redis + executor_type
         guards — the dispatch itself is stubbed per test via ``_chat_with_session``."""
