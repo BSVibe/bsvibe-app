@@ -797,7 +797,7 @@ async def test_report_lazy_generates_and_caches_narrative(
     model stubbed) and caches it on the deliverable payload."""
 
     class _StubNarrative:
-        def __init__(self, session, *, settings) -> None:  # noqa: ANN001
+        def __init__(self, session, *, settings, redis=None) -> None:  # noqa: ANN001
             pass
 
         async def narrate(self, *, workspace_id, intent, summary, diff, language=None):  # noqa: ANN001, ANN201

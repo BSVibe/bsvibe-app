@@ -92,5 +92,30 @@ async def test_narrate_english_workspace_has_no_language_directive(monkeypatch) 
     assert "Write all user-facing prose" not in system
 
 
+@pytest.mark.asyncio
+async def test_resolve_chat_threads_redis_into_the_resolver(monkeypatch) -> None:
+    """The report endpoint's dispatch redis must reach the resolver so a frame
+    caller resolving an EXECUTOR account can dispatch at report time (else the
+    executor adapter raises 'no redis' and the narrative silently degrades)."""
+    captured: dict = {}
+
+    async def _fake_resolve(session, *, caller_id, workspace_id, settings, redis=None, **kw):  # type: ignore[no-untyped-def]
+        captured["redis"] = redis
+        return None
+
+    monkeypatch.setattr(
+        "backend.workflow.application.report_narrative._resolve_via_caller", _fake_resolve
+    )
+    sentinel = object()
+    svc = ReportNarrativeService.__new__(ReportNarrativeService)
+    svc._session = None
+    svc._settings = None
+    svc._redis = sentinel
+
+    out = await svc._resolve_chat(uuid.uuid4())
+    assert out is None  # the resolver returned None → no chat model
+    assert captured["redis"] is sentinel  # the dispatch redis was threaded through
+
+
 async def _ready(value):
     return value
