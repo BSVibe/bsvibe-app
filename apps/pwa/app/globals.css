@@ -6895,13 +6895,30 @@ main.login {
   color: var(--ink-4, var(--ink-3));
 }
 
-.report-checklist__label {
+.report-checklist__body {
   flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.report-checklist__label {
   min-width: 0;
   font-size: 0.85rem;
   line-height: 1.45;
   color: var(--ink);
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  overflow-wrap: anywhere;
+}
+
+/* The agent's rationale — WHY this check was run / WHAT it proves. Plain sans
+ * prose in the founder's language, muted so the mono command stays the anchor. */
+.report-checklist__why {
+  margin: 0;
+  font-size: 0.8rem;
+  line-height: 1.45;
+  color: var(--ink-3);
   overflow-wrap: anywhere;
 }
 

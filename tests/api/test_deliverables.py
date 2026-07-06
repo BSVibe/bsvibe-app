@@ -800,7 +800,7 @@ async def test_report_lazy_generates_and_caches_narrative(
         def __init__(self, session, *, settings) -> None:  # noqa: ANN001
             pass
 
-        async def narrate(self, *, workspace_id, intent, summary, diff):  # noqa: ANN001, ANN201
+        async def narrate(self, *, workspace_id, intent, summary, diff, language=None):  # noqa: ANN001, ANN201
             return "Built a percent_change helper that rounds deltas to two decimals."
 
     monkeypatch.setattr(

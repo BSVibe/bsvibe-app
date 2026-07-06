@@ -323,7 +323,15 @@ class ToolRegistry:
                                 },
                                 "rationale": {
                                     "type": "string",
-                                    "description": "Why this check proves the work is done.",
+                                    "description": (
+                                        "A SHORT plain-language note of WHAT this check "
+                                        "verifies and WHY it matters — written for the "
+                                        "non-developer founder, NOT jargon. This is SHOWN in "
+                                        "the delivery report next to the check, so make it "
+                                        "meaningful (e.g. 'Confirms the discount never goes "
+                                        "negative', not 'runs the tests'). Write it in the "
+                                        "founder's language."
+                                    ),
                                 },
                             },
                             "required": ["kind"],

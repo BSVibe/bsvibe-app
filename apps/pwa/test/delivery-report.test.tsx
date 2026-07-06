@@ -206,6 +206,37 @@ describe("Delivery Report (R3)", () => {
     expect(within(checks).getAllByText(/passed/i).length).toBeGreaterThan(0);
   });
 
+  it("shows each check's rationale — the why/what — under its command", async () => {
+    installFetch();
+    render(<DeliveryReport deliverableId="d1" />);
+
+    const checks = await screen.findByRole("region", { name: /how it was verified/i });
+    // The command's rationale (why it was run / what it proves) renders as prose
+    // under the command label.
+    expect(within(checks).getByText("the suite must pass")).toBeInTheDocument();
+    expect(within(checks).getByText(/matches the spec/i)).toBeInTheDocument();
+  });
+
+  it("omits the rationale line when the agent left it blank", async () => {
+    installFetch({
+      report: () => ({
+        ...REPORT,
+        verifications: [
+          {
+            ...REPORT.verifications[0],
+            contract: { checks: [{ kind: "command", command: "pytest -q", rationale: "" }] },
+          },
+        ],
+      }),
+    });
+    render(<DeliveryReport deliverableId="d1" />);
+
+    const checks = await screen.findByRole("region", { name: /how it was verified/i });
+    expect(within(checks).getByText(/pytest -q/)).toBeInTheDocument();
+    // No empty rationale paragraph is rendered.
+    expect(checks.querySelector(".report-checklist__why")).toBeNull();
+  });
+
   it("OMITS the Note section when the strongest outcome is passed", async () => {
     installFetch();
     render(<DeliveryReport deliverableId="d1" />);
