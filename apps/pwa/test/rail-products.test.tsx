@@ -15,9 +15,9 @@
  * behind findBy / waitFor — never a synchronous getBy right after render.
  */
 
-import RailProducts from "@/components/shell/RailProducts";
+import RailProducts, { PRODUCTS_CHANGED_EVENT } from "@/components/shell/RailProducts";
 import { type Session, clearSession, setSession } from "@/lib/auth/session";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -100,6 +100,27 @@ describe("Sidebar PRODUCTS section", () => {
     expect(a).toHaveAttribute("href", "/products/related-posts");
     const b = within(list).getByRole("link", { name: /Widgets/ });
     expect(b).toHaveAttribute("href", "/products/widgets");
+  });
+
+  it("re-reads the product list when PRODUCTS_CHANGED_EVENT fires (delete shows without a refresh)", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse([PRODUCT_A, PRODUCT_B]))
+      .mockResolvedValueOnce(jsonResponse([PRODUCT_B]));
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    render(<RailProducts />);
+    await screen.findByRole("link", { name: /Related Posts/ });
+
+    // A product was deleted elsewhere → the event tells the rail to re-read.
+    await act(async () => {
+      window.dispatchEvent(new CustomEvent(PRODUCTS_CHANGED_EVENT));
+    });
+
+    await waitFor(() =>
+      expect(screen.queryByRole("link", { name: /Related Posts/ })).not.toBeInTheDocument(),
+    );
+    expect(screen.getByRole("link", { name: /Widgets/ })).toBeInTheDocument();
   });
 
   it("shows a calm empty state when there are no products", async () => {

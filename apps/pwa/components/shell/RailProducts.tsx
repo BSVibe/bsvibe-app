@@ -25,6 +25,14 @@ import { PlusIcon } from "./icons";
  */
 type ListState = { data: Product[]; failed: boolean } | null;
 
+/**
+ * Fired when the product set changed elsewhere (e.g. a delete on a product's
+ * settings page) so this rail — mounted once in the shell, which would
+ * otherwise only re-read on a full page reload — re-reads and drops/adds the
+ * product without a manual refresh. Mirrors ``DIRECT_SUBMITTED_EVENT``.
+ */
+export const PRODUCTS_CHANGED_EVENT = "bsvibe:products-changed";
+
 export default function RailProducts() {
   const [list, setList] = useState<ListState>(null);
   const [creating, setCreating] = useState(false);
@@ -48,6 +56,20 @@ export default function RailProducts() {
     return () => {
       active = false;
     };
+  }, []);
+
+  // Re-read when a product is created/deleted elsewhere (the rail persists
+  // across navigation, so its mount effect won't re-run). Without this, a
+  // delete on a product page only reflected here after a manual refresh.
+  // Registered once; `load` reads no reactive state (only setList + the
+  // listProducts import), so it's safe to omit from the deps.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: listener registered once; load is stable
+  useEffect(() => {
+    function onChanged() {
+      void load();
+    }
+    window.addEventListener(PRODUCTS_CHANGED_EVENT, onChanged);
+    return () => window.removeEventListener(PRODUCTS_CHANGED_EVENT, onChanged);
   }, []);
 
   // Drive the native <dialog> from `creating`: showModal() gives the backdrop,
