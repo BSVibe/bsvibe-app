@@ -24,9 +24,18 @@
 import Knowledge from "@/components/knowledge/Knowledge";
 import type { ConceptDetail, KnowledgeGraph } from "@/lib/api/types";
 import { type Session, clearSession, setSession } from "@/lib/auth/session";
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { configure, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { forwardRef, useImperativeHandle } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+// The graph mounts ASYNCHRONOUSLY: `Knowledge` loads `KnowledgeGraphView` via
+// `next/dynamic({ ssr: false })`, then the view fetches `/inside/graph` and
+// renders the nodes — a dynamic-import + fetch + state-update chain. The default
+// 1s `findBy*` window is tight under CI load, so a single graph test
+// (`shows the concept TYPE`) flaked on PR #518 while main stayed green. Give the
+// async chain real headroom; a passing assertion still returns the instant the
+// element appears, so this never slows the green path.
+configure({ asyncUtilTimeout: 5000 });
 
 // Stub the canvas lib: render a marker, the node count, and a button per node
 // wired to the real onNodeClick (node object → onNodeClick(node)) so a tap is
