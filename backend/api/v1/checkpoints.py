@@ -32,7 +32,12 @@ from pydantic import BaseModel, ConfigDict
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.api.deps import get_current_user_row, get_db_session, get_workspace_id
+from backend.api.deps import (
+    get_current_user_row,
+    get_db_session,
+    get_output_language,
+    get_workspace_id,
+)
 from backend.api.v1._workflow_deps import (
     get_decision_repository,
     get_deliverable_repository,
@@ -184,9 +189,19 @@ class ResolveResponse(BaseModel):
 # needs you" surfaced as a Decision, not a work-LLM question. Map the kind →
 # a calm, human-readable line so the founder never sees a blank question on a
 # genuinely actionable needs-you item.
-_EXECUTOR_DECISION_QUESTIONS: dict[str, str] = {
-    "verification_failed": "BSVibe couldn't verify this work — review it before it ships?",
-    "human_review_required": "This work needs your review before BSVibe can call it verified.",
+# Per-language so a ko workspace's founder reads the needs-you line in Korean.
+# These are FIXED system strings (no work-LLM question), so they can't ride the
+# generation adapter's language_directive — they're localized here by the
+# workspace output language, mirroring DecisionAction's label_en / label_ko.
+_EXECUTOR_DECISION_QUESTIONS: dict[str, dict[str, str]] = {
+    "verification_failed": {
+        "en": "BSVibe couldn't verify this work — review it before it ships?",
+        "ko": "BSVibe가 이 작업을 검증하지 못했어요 — 출시 전에 검토할까요?",
+    },
+    "human_review_required": {
+        "en": "This work needs your review before BSVibe can call it verified.",
+        "ko": "이 작업은 검증됨으로 표시하기 전에 검토가 필요해요.",
+    },
 }
 
 
@@ -227,21 +242,24 @@ def _decision_actions(decision: Decision) -> list[DecisionAction] | None:
     return _EXECUTOR_DECISION_ACTIONS.get(decision.decision)
 
 
-def _question_text(decision: Decision) -> str:
-    """The founder-facing question for a paused-run Decision.
+def _question_text(decision: Decision, language: str = "en") -> str:
+    """The founder-facing question for a paused-run Decision, in ``language``.
 
     Prefers the work LLM's recorded ``payload.question`` (the ``ask_user_question``
-    path). For an executor B2b Decision — which records ``payload.reason``, not a
-    question — fall back to a calm kind-derived line so the needs-you item is
-    never blank. A wholly unrecognised reason-only Decision degrades to an empty
-    string (unchanged), never raising."""
+    path) — already in the founder's language (generated via the localized
+    adapter), so ``language`` never overrides it. For an executor B2b Decision —
+    which records ``payload.reason``, not a question — fall back to a calm
+    kind-derived line in ``language`` so the needs-you item is never blank. A
+    wholly unrecognised reason-only Decision degrades to an empty string."""
     payload = decision.payload or {}
     if isinstance(payload, dict):
         value = payload.get("question")
         if isinstance(value, str) and value.strip():
             return value
-    fallback = _EXECUTOR_DECISION_QUESTIONS.get(decision.decision)
-    return fallback if fallback is not None else ""
+    variants = _EXECUTOR_DECISION_QUESTIONS.get(decision.decision)
+    if variants is None:
+        return ""
+    return variants.get(language) or variants.get("en") or ""
 
 
 def _decision_options(decision: Decision) -> list[str] | None:
@@ -281,6 +299,7 @@ async def list_checkpoints(
     workspace_id: Annotated[uuid.UUID, Depends(get_workspace_id)],
     decisions: Annotated[DecisionRepository, Depends(get_decision_repository)],
     retriever: Annotated[ResolvedDecisionsRetriever, Depends(build_decisions_retriever)],
+    language: Annotated[str, Depends(get_output_language)],
 ) -> list[CheckpointResponse]:
     """List PENDING execution Decisions for the workspace, newest first.
 
@@ -295,11 +314,11 @@ async def list_checkpoints(
             id=row.id,
             run_id=row.run_id,
             decision=row.decision,
-            question=_question_text(row),
+            question=_question_text(row, language),
             options=_decision_options(row),
             actions=_decision_actions(row),
             rationale=row.rationale,
-            prior_decisions=await retriever.retrieve_for_signals(_question_text(row)),
+            prior_decisions=await retriever.retrieve_for_signals(_question_text(row, language)),
             created_at=row.created_at,
         )
         for row in rows
@@ -310,6 +329,7 @@ async def list_checkpoints(
 async def list_resolved_checkpoints(
     workspace_id: Annotated[uuid.UUID, Depends(get_workspace_id)],
     decisions: Annotated[DecisionRepository, Depends(get_decision_repository)],
+    language: Annotated[str, Depends(get_output_language)],
 ) -> list[ResolvedCheckpointResponse]:
     """List RESOLVED execution Decisions for the Decisions "Resolved" tab,
     most-recently-resolved first (created_at as a stable tiebreaker)."""
@@ -318,7 +338,7 @@ async def list_resolved_checkpoints(
         ResolvedCheckpointResponse(
             id=row.id,
             run_id=row.run_id,
-            question=_question_text(row),
+            question=_question_text(row, language),
             resolution=row.resolution,
             resolved_at=row.resolved_at,
         )
@@ -336,6 +356,7 @@ async def resolve_checkpoint(
     decisions: Annotated[DecisionRepository, Depends(get_decision_repository)],
     runs: Annotated[RunRepository, Depends(get_run_repository)],
     deliverables: Annotated[DeliverableRepository, Depends(get_deliverable_repository)],
+    language: Annotated[str, Depends(get_output_language)],
 ) -> ResolveResponse:
     """Resolve a pending Decision with the founder's answer and resume the run.
 
@@ -412,7 +433,7 @@ async def resolve_checkpoint(
     resolved.append(
         {
             "decision_id": str(decision.id),
-            "question": _question_text(decision),
+            "question": _question_text(decision, language),
             "answer": resolution_text,
         }
     )
@@ -432,7 +453,7 @@ async def resolve_checkpoint(
     settle_payload: dict[str, Any] = {
         "kind": DECISION_RESOLUTION_SETTLE_KIND,
         "decision_id": str(decision.id),
-        "question": _question_text(decision),
+        "question": _question_text(decision, language),
         "answer": resolution_text,
         "options": _decision_options(decision),
         "action_key": action_key,
@@ -441,9 +462,9 @@ async def resolve_checkpoint(
         "verified": False,
         # A human-legible summary the settle sink uses as the garden note body /
         # title. Capped so a long answer can't blow up the note size.
-        "summary": (f"Decision resolved — Q: {_question_text(decision)} A: {resolution_text}")[
-            :_SUMMARY_CAP
-        ],
+        "summary": (
+            f"Decision resolved — Q: {_question_text(decision, language)} A: {resolution_text}"
+        )[:_SUMMARY_CAP],
         **await settle_run_context(session, run),
     }
     session.add(
@@ -469,7 +490,7 @@ async def resolve_checkpoint(
         negative_payload: dict[str, Any] = {
             "kind": NEGATIVE_PATTERN_SETTLE_KIND,
             "decision_id": str(decision.id),
-            "question": _question_text(decision),
+            "question": _question_text(decision, language),
             "reason": reason,
             "resolved_by": str(user_row.id),
             "resolved_at": now.isoformat(),

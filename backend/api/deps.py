@@ -53,6 +53,7 @@ __all__ = [
     "get_current_user_row",
     "get_db_session",
     "get_db_session_factory",
+    "get_output_language",
     "get_workspace_id",
     "require_account_id",
     "require_role",
@@ -171,6 +172,28 @@ async def get_workspace_id(
     conn = await session.connection()
     await set_workspace_guc(conn, workspace_id)
     return workspace_id
+
+
+async def get_output_language(
+    workspace_id: Annotated[uuid.UUID, Depends(get_workspace_id)],
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+) -> str:
+    """The caller's workspace OUTPUT language (``ko`` / ``en``) — the language
+    founder-facing generated + templated text renders in (``workspaces.language``,
+    set via Settings → Language). Defaults to ``en`` (missing row / read hiccup)."""
+    from sqlalchemy import select  # noqa: PLC0415
+
+    from backend.identity.workspaces_db import WorkspaceRow  # noqa: PLC0415
+
+    try:
+        lang = (
+            await session.execute(
+                select(WorkspaceRow.language).where(WorkspaceRow.id == workspace_id)
+            )
+        ).scalar_one_or_none()
+    except Exception:  # noqa: BLE001 — language is best-effort; never fail the request
+        return "en"
+    return (lang or "en").strip() or "en"
 
 
 # ---------------------------------------------------------------------------
