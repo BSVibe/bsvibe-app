@@ -1,5 +1,6 @@
 "use client";
 
+import { PRODUCTS_CHANGED_EVENT } from "@/components/shell/RailProducts";
 import { deleteProduct } from "@/lib/api/products";
 import { useTranslations } from "next-intl";
 import { useRouter } from "next/navigation";
@@ -11,8 +12,9 @@ type DeleteState = "idle" | "confirming" | "deleting" | "error";
  * Product "danger zone" — delete this product. The founder accumulates finished
  * / abandoned / smoke-test products with no way to clear them; this removes one
  * so the Products list stays the real ones. Two-step (Delete → Confirm) so it's
- * never a single accidental click; on success it routes back to the Brief (the
- * rail's product list — the product index — re-reads on navigation).
+ * never a single accidental click; on success it routes back to the Brief and
+ * fires PRODUCTS_CHANGED_EVENT so the rail's product index (mounted once in the
+ * shell) drops the deleted product immediately — without a manual refresh.
  */
 export default function ProductDanger({
   productId,
@@ -29,8 +31,10 @@ export default function ProductDanger({
     setState("deleting");
     try {
       await deleteProduct(productId);
-      // Leave the now-gone product's page for the Brief; the rail's product
-      // list (the product index) re-reads on navigation.
+      // Tell the rail's product index to re-read so the deleted product drops
+      // immediately (the rail is mounted once in the shell — navigation alone
+      // doesn't re-run its load), then leave the now-gone product's page.
+      window.dispatchEvent(new CustomEvent(PRODUCTS_CHANGED_EVENT));
       router.push("/brief");
       router.refresh();
     } catch {
