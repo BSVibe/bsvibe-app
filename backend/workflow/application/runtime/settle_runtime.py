@@ -27,17 +27,10 @@ from backend.dispatch.caller_registry import (
     CALLER_SETTLE_EXTRACT,
 )
 from backend.knowledge.canonicalization.promotion import ConceptFramer
-from backend.knowledge.extraction.worth_remembering import (
-    RememberableKnowledge,
-    parse_verdict_text,
-    worth_remembering_messages,
-)
 from backend.knowledge.infrastructure.workers.settle_worker import (
     ConceptFramerFactory,
     EntityExtractor,
     ExtractorFactory,
-    MemoryExtractor,
-    MemoryExtractorFactory,
     NoteEmbedHook,
     ReconcileHook,
     Settlement,
@@ -117,77 +110,6 @@ def build_settle_entity_extractor_factory(
                 llm_client=llm,
                 parallelism=settings.ingest_compile_parallelism,
             )
-
-    return _factory
-
-
-class _RoutedMemoryExtractor:
-    """:class:`MemoryExtractor` over a resolver-routed frame LLM.
-
-    Runs the SHARED worth-remembering prompt over the settlement (founder intent
-    + verified-work summary) and parses the verdict into ``RememberableKnowledge
-    | None``. The parse is biased to ``None`` (routine work leaves no note), and
-    the caller (:class:`~backend.knowledge.infrastructure.workers.settle_worker.KnowledgeSettleSink`)
-    treats any exception here as ``None`` too — so a thin/odd model response can
-    never fabricate a note, only fail closed to "not worth remembering".
-    """
-
-    __slots__ = ("_llm",)
-
-    def __init__(self, llm: _ResolverFrameLlm) -> None:
-        self._llm = llm
-
-    async def extract(self, settlement: Settlement) -> RememberableKnowledge | None:
-        messages = worth_remembering_messages(
-            intent=settlement.intent_text, summary=settlement.summary
-        )
-        system = messages[0]["content"]
-        user = messages[1]["content"]
-        text = await self._llm.complete_text(system=system, user=user)
-        return parse_verdict_text(text)
-
-
-def build_settle_memory_extractor_factory(
-    *,
-    session_factory: async_sessionmaker[AsyncSession],
-    settings: Settings | None = None,
-    redis: Any = None,
-) -> MemoryExtractorFactory:
-    """Production :class:`MemoryExtractorFactory` — the worth-remembering GATE.
-
-    Per verified-work settlement, resolves the workspace's account via caller_id
-    ``workflow.settle.extract`` (the same settle-extract route the entity
-    extractor uses — a single chat call) and wraps its adapter in a frame LLM
-    that judges whether the work left anything worth remembering. Returns
-    ``None`` on :class:`~backend.dispatch.resolver.NoMatchingRouteError` so a
-    workspace with no routed model writes NOTHING for routine work (the
-    founder-directed default) rather than silently routing to an unintended
-    model. Errors are swallowed by the sink (fail closed to "no note").
-
-    ``redis`` is threaded so an executor-account settle route can dispatch the
-    judgement chat onto the worker stream, matching
-    :func:`build_settle_entity_extractor_factory`.
-    """
-    settings = settings or get_settings()
-
-    async def _factory(*, region: str, workspace_id: uuid.UUID) -> MemoryExtractor | None:
-        async with session_factory() as session:
-            resolved = await _resolve_via_caller(
-                session,
-                caller_id=CALLER_SETTLE_EXTRACT,
-                workspace_id=workspace_id,
-                settings=settings,
-                redis=redis,
-                session_factory=session_factory,
-            )
-            if resolved is None:
-                logger.info(
-                    "settle_memory_extractor_account_unresolved",
-                    workspace_id=str(workspace_id),
-                    caller_id=CALLER_SETTLE_EXTRACT,
-                )
-                return None
-            return _RoutedMemoryExtractor(_ResolverFrameLlm(adapter=resolved.adapter))
 
     return _factory
 
@@ -365,5 +287,4 @@ __all__ = [
     "build_note_embed_hook",
     "build_reconcile_hook",
     "build_settle_entity_extractor_factory",
-    "build_settle_memory_extractor_factory",
 ]

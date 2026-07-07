@@ -48,7 +48,6 @@ from backend.knowledge.canonicalization.index import InMemoryCanonicalizationInd
 from backend.knowledge.canonicalization.models import DecisionEntry
 from backend.knowledge.canonicalization.resolver import TagResolver
 from backend.knowledge.canonicalization.store import NoteStore
-from backend.knowledge.extraction.worth_remembering import RememberableKnowledge
 from backend.knowledge.graph.storage import FileSystemStorage
 from backend.knowledge.infrastructure.workers.settle_worker import (
     KnowledgeSettleSink,
@@ -78,33 +77,14 @@ async def sf():
         yield async_sessionmaker(engine, expire_on_commit=False)
 
 
-def _worth_remembering_factory():
-    """A worth-remembering gate that always affirms (2026-07 directive).
-
-    Verified-work runs only deposit a garden note when the gate returns
-    knowledge — these canonicalization e2e tests exercise the deposit→cluster
-    loop, so they wire an always-affirming extractor. The derived content TAGS
-    (product / intent / artifact) that clustering keys on are computed by the
-    sink independently of the note body, so echoing the summary as the insight
-    keeps the clustering behaviour identical to the pre-gate deposit.
-    """
-
-    class _Extractor:
-        async def extract(self, settlement) -> RememberableKnowledge:
-            return RememberableKnowledge(
-                topic=(settlement.summary.strip().splitlines()[0][:60] or "work"),
-                insight=settlement.summary.strip() or "verified work",
-            )
-
-    async def _factory(*, region: str, workspace_id: uuid.UUID):
-        return _Extractor()
-
-    return _factory
-
-
 def _gated_sink(vault_root):
-    """A :class:`KnowledgeSettleSink` whose worth-remembering gate always writes."""
-    return KnowledgeSettleSink(vault_root=vault_root, memory_extractor=_worth_remembering_factory())
+    """A plain :class:`KnowledgeSettleSink`. Verified-work notes now come from the
+    settlement's agent-declared ``agent_knowledge`` — seeded on the settle payload
+    by :func:`_seed_settle_activity` (echoing the summary) — not a settle-time
+    extractor. The content TAGS clustering keys on are derived from the settlement
+    inputs independently of the note body, so this keeps the clustering behaviour
+    identical to the pre-gate deposit."""
+    return KnowledgeSettleSink(vault_root=vault_root)
 
 
 async def _add_workspace(
@@ -131,6 +111,12 @@ async def _seed_settle_activity(
         "verified": True,
         "artifact_refs": refs if refs is not None else ["deploy/Caddyfile"],
         "summary": summary,
+        # v2 — the agent declared knowledge, so this verified-work settlement
+        # deposits a note (echoing the summary as the insight).
+        "agent_knowledge": {
+            "topic": (summary[:60] or "work"),
+            "insight": summary or "verified work",
+        },
     }
     # Mirror the orchestrator's enriched emission: only present keys are written
     # (a connector-inbound run carries neither).

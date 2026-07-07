@@ -93,6 +93,8 @@ class _NoopJudge:
 
 
 async def _seed_settle(sf, *, workspace_id: uuid.UUID, summary: str) -> None:
+    from tests._support import agent_knowledge_payload  # noqa: PLC0415
+
     async with sf() as s:
         run_id = uuid.uuid4()
         s.add(
@@ -118,6 +120,8 @@ async def _seed_settle(sf, *, workspace_id: uuid.UUID, summary: str) -> None:
                     "artifact_refs": ["backend/api/search.py"],
                     "summary": summary,
                     "intent_text": "harden the search API",
+                    # v2 — the agent declared knowledge, so this deposits a note.
+                    "agent_knowledge": agent_knowledge_payload(summary),
                 },
                 created_at=datetime.now(tz=UTC),
             )
@@ -204,14 +208,9 @@ async def test_accumulated_knowledge_is_used_by_verify_e2e(tmp_path: Path) -> No
             question="Should the search endpoint enforce a rate limit?",
             answer="Yes — token-bucket, 10 requests/second per API key",
         )
-        from tests._support import always_remember_extractor_factory  # noqa: PLC0415
-
         worker = SettleWorker(
             session_factory=sf,
-            sink=KnowledgeSettleSink(
-                vault_root=vault_root,
-                memory_extractor=always_remember_extractor_factory(),
-            ),
+            sink=KnowledgeSettleSink(vault_root=vault_root),
             config=SettleWorkerConfig(default_region=_REGION),
             promoter_factory=build_garden_promoter_factory(vault_root=vault_root),
             embed_hook=build_note_embed_hook(session_factory=sf, settings=settings),

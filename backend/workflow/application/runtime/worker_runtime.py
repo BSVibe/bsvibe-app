@@ -52,7 +52,6 @@ from backend.workflow.application.runtime.settle_runtime import (
     build_note_embed_hook,
     build_reconcile_hook,
     build_settle_entity_extractor_factory,
-    build_settle_memory_extractor_factory,
 )
 from backend.workflow.application.safe_mode_expiry import SafeModeExpirySweepRunner
 from backend.workflow.infrastructure.workers.agent_worker import (
@@ -188,12 +187,10 @@ def build_worker_runtime(
                 extractor_factory=build_settle_entity_extractor_factory(
                     session_factory=session_factory, settings=settings, redis=redis_client
                 ),
-                # The worth-remembering GATE (founder directive, 2026-07): a
-                # verified-work run deposits a note ONLY when this extractor names
-                # an insight; routine work leaves nothing (notable kinds bypass).
-                memory_extractor=build_settle_memory_extractor_factory(
-                    session_factory=session_factory, settings=settings, redis=redis_client
-                ),
+                # v2: verified-work knowledge is AGENT-authored — the working
+                # agent declares it in its verification contract (threaded onto
+                # the settle payload). No post-hoc extractor; the sink writes the
+                # agent's own declaration. Routine work declares none → no note.
             ),
             config=SettleWorkerConfig(default_region=settings.knowledge_default_region),
             # Close the §5 ratchet loop: promote each affected workspace's garden

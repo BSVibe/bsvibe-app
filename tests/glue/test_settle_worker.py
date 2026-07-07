@@ -22,7 +22,6 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from backend.identity.workspaces_db import WorkspaceRow, WorkspacesBase
-from backend.knowledge.extraction.worth_remembering import RememberableKnowledge
 from backend.knowledge.infrastructure.workers.settle_worker import (
     KnowledgeSettleSink,
     Settlement,
@@ -58,8 +57,13 @@ async def _seed_settle_activity(
     artifact_refs: list[str] | None = None,
     activity_type: str = "settle",
     extra_payload: dict | None = None,
+    knowledge: bool = False,
 ) -> uuid.UUID:
-    """Insert a run + one activity, return the activity id."""
+    """Insert a run + one activity, return the activity id.
+
+    ``knowledge=True`` seeds an ``agent_knowledge`` block (echoing the summary as
+    the insight) — the v2 signal a verified-work run leaves a note. Write-path
+    tests set it; routine tests leave it off."""
     run_id = uuid.uuid4()
     activity_id = uuid.uuid4()
     payload = {
@@ -67,6 +71,8 @@ async def _seed_settle_activity(
         "artifact_refs": artifact_refs or ["backend/orders/list.py"],
         "summary": summary,
     }
+    if knowledge:
+        payload["agent_knowledge"] = {"topic": "Remembered knowledge", "insight": summary}
     if extra_payload:
         payload.update(extra_payload)
     async with sf() as s:
@@ -104,50 +110,41 @@ def _written_notes(vault_root, region: str, workspace_id: uuid.UUID) -> list:
     return list(ws_dir.rglob("*.md")) if ws_dir.exists() else []
 
 
-def _remember_factory(*, topic: str = "Remembered knowledge", insight: str | None = None):
-    """A worth-remembering :class:`MemoryExtractor` factory that always affirms.
-
-    Verified-work runs no longer write a note unless the worth-remembering gate
-    returns knowledge — so tests that exercise the WRITE path (embed hook, tags,
-    idempotency, isolation) wire this stub. The insight defaults to echoing the
-    settlement summary so body assertions still read the recorded work text.
-    """
-
-    class _Extractor:
-        async def extract(self, settlement) -> RememberableKnowledge:
-            return RememberableKnowledge(topic=topic, insight=insight or settlement.summary.strip())
-
-    async def _factory(*, region: str, workspace_id: uuid.UUID):
-        return _Extractor()
-
-    return _factory
+def _knowledge(insight: str, *, topic: str = "Remembered knowledge") -> dict:
+    """The agent-declared knowledge block for a settle payload — as
+    ``write_verified_deliverable`` threads it. Defaults the insight to echo the
+    work text so WRITE-path tests (embed hook, tags, idempotency, isolation) can
+    still assert on the recorded content."""
+    return {"topic": topic, "insight": insight}
 
 
-def _rememberer_sink(vault_root, **kwargs):
-    """A :class:`KnowledgeSettleSink` whose worth-remembering gate always writes."""
-    return KnowledgeSettleSink(
-        vault_root=vault_root, memory_extractor=_remember_factory(), **kwargs
-    )
+def _remembered_sink(vault_root, **kwargs):
+    """Plain sink — verified-work notes now come from the settlement's declared
+    ``agent_knowledge`` (seed it via ``_seed_settle_activity(..., knowledge=...)``),
+    not a settle-time extractor."""
+    return KnowledgeSettleSink(vault_root=vault_root, **kwargs)
 
 
-# --- Worth-remembering gate (founder directive, 2026-07) --------------------
+# --- Worth-remembering gate (founder directive, v2) -------------------------
 #
-# Knowledge is NOT a work-history log. A verified-work run only leaves a note
-# when the worth-remembering extractor names an insight; routine work (or no
-# wired extractor) writes nothing. Inherently-notable settlements (a user
-# decision / a discard-with-reason) are always kept, no LLM needed.
+# Knowledge is NOT a work-history log. A verified-work run leaves a note ONLY
+# when the WORKING AGENT declared knowledge in its verification contract
+# (threaded onto the settle payload as ``agent_knowledge``); routine work
+# declares none and writes nothing. Inherently-notable settlements (a user
+# decision / a discard-with-reason) are always kept. There is no post-hoc
+# extractor.
 
 
-async def test_routine_verified_work_writes_nothing_without_extractor(sf, tmp_path) -> None:
-    """A plain verified-work run with no worth-remembering extractor leaves NO
-    note — but is still marked drained (routine work is knowledge noise, and the
-    activity must not be re-evaluated every poll)."""
+async def test_routine_verified_work_writes_nothing(sf, tmp_path) -> None:
+    """A plain verified-work run that declared no knowledge leaves NO note — but
+    is still marked drained (routine work is knowledge noise, and the activity
+    must not be re-evaluated every poll)."""
     ws = uuid.uuid4()
     await _seed_settle_activity(sf, workspace_id=ws, summary="added a gcd() utility")
 
     worker = SettleWorker(
         session_factory=sf,
-        sink=KnowledgeSettleSink(vault_root=tmp_path),  # no memory_extractor
+        sink=KnowledgeSettleSink(vault_root=tmp_path),
         config=SettleWorkerConfig(default_region="us-1"),
     )
     processed = await worker.drain_once()
@@ -160,28 +157,25 @@ async def test_routine_verified_work_writes_nothing_without_extractor(sf, tmp_pa
         assert drains[0].node_ref is None  # no note → no node_ref
 
 
-async def test_worth_remembering_run_writes_topic_titled_insight(sf, tmp_path) -> None:
-    """When the extractor names an insight, the note is titled by the knowledge
+async def test_agent_declared_knowledge_writes_topic_titled_note(sf, tmp_path) -> None:
+    """When the agent declared knowledge, the note is titled by the knowledge
     TOPIC (a short name), not the raw Direction, and the body is the insight."""
     ws = uuid.uuid4()
-    await _seed_settle_activity(sf, workspace_id=ws, summary="made webhooks idempotent")
-
-    def _memory_factory():
-        class _E:
-            async def extract(self, settlement) -> RememberableKnowledge:
-                return RememberableKnowledge(
-                    topic="Idempotent webhooks",
-                    insight="Dedupe webhook deliveries by event id — providers retry.",
-                )
-
-        async def _factory(*, region: str, workspace_id: uuid.UUID):
-            return _E()
-
-        return _factory
+    await _seed_settle_activity(
+        sf,
+        workspace_id=ws,
+        summary="made webhooks idempotent",
+        extra_payload={
+            "agent_knowledge": {
+                "topic": "Idempotent webhooks",
+                "insight": "Dedupe webhook deliveries by event id — providers retry.",
+            }
+        },
+    )
 
     worker = SettleWorker(
         session_factory=sf,
-        sink=KnowledgeSettleSink(vault_root=tmp_path, memory_extractor=_memory_factory()),
+        sink=KnowledgeSettleSink(vault_root=tmp_path),
         config=SettleWorkerConfig(default_region="us-1"),
     )
     assert await worker.drain_once() == 1
@@ -197,49 +191,19 @@ async def test_worth_remembering_run_writes_topic_titled_insight(sf, tmp_path) -
     assert "Settle: made webhooks idempotent" not in body
 
 
-async def test_extractor_none_verdict_writes_nothing(sf, tmp_path) -> None:
-    """The extractor ran but judged the work NOT worth remembering → no note."""
+async def test_blank_declared_knowledge_writes_nothing(sf, tmp_path) -> None:
+    """A malformed / blank knowledge block is not substantive → no note (parsed
+    to None), same as routine work."""
     ws = uuid.uuid4()
-    await _seed_settle_activity(sf, workspace_id=ws, summary="fixed a typo in a docstring")
-
-    def _reject_factory():
-        class _E:
-            async def extract(self, settlement) -> None:
-                return None
-
-        async def _factory(*, region: str, workspace_id: uuid.UUID):
-            return _E()
-
-        return _factory
-
-    worker = SettleWorker(
-        session_factory=sf,
-        sink=KnowledgeSettleSink(vault_root=tmp_path, memory_extractor=_reject_factory()),
-        config=SettleWorkerConfig(default_region="us-1"),
+    await _seed_settle_activity(
+        sf,
+        workspace_id=ws,
+        summary="fixed a typo in a docstring",
+        extra_payload={"agent_knowledge": {"topic": "", "insight": ""}},
     )
-    assert await worker.drain_once() == 1
-    assert _written_notes(tmp_path, "us-1", ws) == []
-
-
-async def test_extractor_failure_writes_nothing_soft(sf, tmp_path) -> None:
-    """A raising extractor never breaks the drain — it degrades to no note (the
-    gate is biased to 'nothing worth remembering')."""
-    ws = uuid.uuid4()
-    await _seed_settle_activity(sf, workspace_id=ws, summary="some routine change")
-
-    def _boom_factory():
-        class _E:
-            async def extract(self, settlement) -> RememberableKnowledge:
-                raise RuntimeError("llm down")
-
-        async def _factory(*, region: str, workspace_id: uuid.UUID):
-            return _E()
-
-        return _factory
-
     worker = SettleWorker(
         session_factory=sf,
-        sink=KnowledgeSettleSink(vault_root=tmp_path, memory_extractor=_boom_factory()),
+        sink=KnowledgeSettleSink(vault_root=tmp_path),
         config=SettleWorkerConfig(default_region="us-1"),
     )
     assert await worker.drain_once() == 1
@@ -262,7 +226,7 @@ async def test_decision_resolution_is_inherently_notable_always_written(sf, tmp_
     )
     worker = SettleWorker(
         session_factory=sf,
-        sink=KnowledgeSettleSink(vault_root=tmp_path),  # no memory_extractor
+        sink=KnowledgeSettleSink(vault_root=tmp_path),  # agent declared no knowledge
         config=SettleWorkerConfig(default_region="us-1"),
     )
     assert await worker.drain_once() == 1
@@ -294,7 +258,7 @@ async def test_settle_worker_calls_embed_hook_per_absorbed_note(sf, tmp_path) ->
     """G5b: when an embed hook is wired, the worker invokes it once per absorbed
     settlement with the written note_ref, so note_embeddings get populated."""
     ws = uuid.uuid4()
-    await _seed_settle_activity(sf, workspace_id=ws, summary="wired the cache")
+    await _seed_settle_activity(sf, workspace_id=ws, summary="wired the cache", knowledge=True)
 
     calls: list[tuple[str, str]] = []
 
@@ -303,7 +267,7 @@ async def test_settle_worker_calls_embed_hook_per_absorbed_note(sf, tmp_path) ->
 
     worker = SettleWorker(
         session_factory=sf,
-        sink=_rememberer_sink(tmp_path),
+        sink=_remembered_sink(tmp_path),
         config=SettleWorkerConfig(batch_size=10, poll_interval_s=0.01, default_region="us-1"),
         embed_hook=_hook,
     )
@@ -320,7 +284,7 @@ async def test_settle_worker_embed_hook_failure_is_soft(sf, tmp_path) -> None:
     """A failing embed hook must NOT break the drain — the note is still absorbed
     + drained (the settle SoT is independent of embedding population)."""
     ws = uuid.uuid4()
-    await _seed_settle_activity(sf, workspace_id=ws, summary="wired the cache")
+    await _seed_settle_activity(sf, workspace_id=ws, summary="wired the cache", knowledge=True)
 
     async def _boom(settlement, node_ref: str) -> None:
         raise RuntimeError("embedding provider down")
@@ -338,11 +302,13 @@ async def test_settle_worker_embed_hook_failure_is_soft(sf, tmp_path) -> None:
 
 async def test_settle_worker_writes_observation_to_bsage(sf, tmp_path) -> None:
     ws = uuid.uuid4()
-    activity_id = await _seed_settle_activity(sf, workspace_id=ws, summary="wired the cache")
+    activity_id = await _seed_settle_activity(
+        sf, workspace_id=ws, summary="wired the cache", knowledge=True
+    )
 
     worker = SettleWorker(
         session_factory=sf,
-        sink=_rememberer_sink(tmp_path),
+        sink=_remembered_sink(tmp_path),
         config=SettleWorkerConfig(batch_size=10, poll_interval_s=0.01, default_region="us-1"),
     )
     processed = await worker.drain_once()
@@ -374,10 +340,11 @@ async def test_settle_worker_note_carries_content_tags_not_just_structural(sf, t
         workspace_id=ws,
         summary="configured the reverse proxy",
         artifact_refs=["backend/auth/client.py"],
+        knowledge=True,
     )
     worker = SettleWorker(
         session_factory=sf,
-        sink=_rememberer_sink(tmp_path),
+        sink=_remembered_sink(tmp_path),
         config=SettleWorkerConfig(default_region="us-1"),
     )
     assert await worker.drain_once() == 1
@@ -422,6 +389,7 @@ async def test_settle_worker_respects_llm_empty_extraction_no_noise_tags(sf, tmp
         workspace_id=ws,
         summary="Add a small list-chunking utility to the backend",
         artifact_refs=["backend/common/chunked.py"],
+        knowledge=True,
     )
 
     async def _factory(*, region: str, workspace_id: uuid.UUID) -> _EmptyExtractor:
@@ -429,9 +397,7 @@ async def test_settle_worker_respects_llm_empty_extraction_no_noise_tags(sf, tmp
 
     worker = SettleWorker(
         session_factory=sf,
-        sink=KnowledgeSettleSink(
-            vault_root=tmp_path, extractor_factory=_factory, memory_extractor=_remember_factory()
-        ),
+        sink=KnowledgeSettleSink(vault_root=tmp_path, extractor_factory=_factory),
         config=SettleWorkerConfig(default_region="us-1"),
     )
     assert await worker.drain_once() == 1
@@ -451,10 +417,10 @@ async def test_settle_worker_respects_llm_empty_extraction_no_noise_tags(sf, tmp
 
 async def test_settle_worker_idempotent_redrain(sf, tmp_path) -> None:
     ws = uuid.uuid4()
-    await _seed_settle_activity(sf, workspace_id=ws)
+    await _seed_settle_activity(sf, workspace_id=ws, knowledge=True)
     worker = SettleWorker(
         session_factory=sf,
-        sink=_rememberer_sink(tmp_path),
+        sink=_remembered_sink(tmp_path),
         config=SettleWorkerConfig(default_region="us-1"),
     )
 
@@ -478,12 +444,12 @@ async def test_settle_worker_workspace_isolation(sf, tmp_path) -> None:
         s.add(WorkspaceRow(id=ws_b, name="ws-b", region="eu-1"))
         await s.commit()
 
-    await _seed_settle_activity(sf, workspace_id=ws_a, summary="alpha learning")
-    await _seed_settle_activity(sf, workspace_id=ws_b, summary="beta learning")
+    await _seed_settle_activity(sf, workspace_id=ws_a, summary="alpha learning", knowledge=True)
+    await _seed_settle_activity(sf, workspace_id=ws_b, summary="beta learning", knowledge=True)
 
     worker = SettleWorker(
         session_factory=sf,
-        sink=_rememberer_sink(tmp_path),
+        sink=_remembered_sink(tmp_path),
         config=SettleWorkerConfig(default_region="us-1"),
     )
     processed = await worker.drain_once()
@@ -532,10 +498,10 @@ async def test_settle_worker_empty_queue(sf, tmp_path) -> None:
 async def test_settle_worker_tick_drains_one_batch(sf, tmp_path) -> None:
     """The BaseWorker Template-Method hook (_tick) drives one drain batch."""
     ws = uuid.uuid4()
-    await _seed_settle_activity(sf, workspace_id=ws)
+    await _seed_settle_activity(sf, workspace_id=ws, knowledge=True)
     worker = SettleWorker(
         session_factory=sf,
-        sink=_rememberer_sink(tmp_path),
+        sink=_remembered_sink(tmp_path),
         config=SettleWorkerConfig(default_region="us-1"),
     )
     assert await worker._tick() == 1
@@ -545,7 +511,7 @@ async def test_settle_worker_tick_drains_one_batch(sf, tmp_path) -> None:
 async def test_settle_worker_sink_failure_is_retryable(sf, tmp_path) -> None:
     """A sink that raises leaves the activity un-drained so the next tick retries."""
     ws = uuid.uuid4()
-    await _seed_settle_activity(sf, workspace_id=ws)
+    await _seed_settle_activity(sf, workspace_id=ws, knowledge=True)
 
     class _BoomSink:
         async def absorb(self, settlement: Settlement) -> str | None:
