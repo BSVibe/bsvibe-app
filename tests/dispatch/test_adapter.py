@@ -1218,7 +1218,12 @@ class TestExecutorAdapterE30ToolsAndContract:
 
         out = _augment_system_for_executor_tools(
             "You are a worker.",
-            [{"type": "function", "function": {"name": "declare_verification", "description": "d"}}],
+            [
+                {
+                    "type": "function",
+                    "function": {"name": "declare_verification", "description": "d"},
+                }
+            ],
         )
         assert '"knowledge"' in out
         assert "topic" in out and "insight" in out
