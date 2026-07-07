@@ -29,6 +29,55 @@ async def _declare(registry: ToolRegistry) -> None:
     )
 
 
+# -- v2: agent-declared knowledge captured off the contract -----------------
+
+
+async def test_declare_verification_captures_declared_knowledge(tmp_path: Path) -> None:
+    """v2 — when the agent includes a ``knowledge`` block in its verification
+    contract (the retrospective-style declaration), the registry latches it as a
+    RememberableKnowledge so the settle path can write it. The block is dropped
+    from the verification contract itself (it isn't a check)."""
+    from backend.knowledge.extraction.worth_remembering import RememberableKnowledge
+
+    registry = _registry(tmp_path)
+    assert registry.declared_knowledge is None
+    await registry.invoke(
+        "declare_verification",
+        {
+            "checks": [{"kind": "command", "command": "pytest"}],
+            "knowledge": {
+                "topic": "Idempotent webhooks",
+                "insight": "Dedupe webhook deliveries by event id — providers retry.",
+            },
+        },
+    )
+    assert registry.declared_knowledge == RememberableKnowledge(
+        topic="Idempotent webhooks",
+        insight="Dedupe webhook deliveries by event id — providers retry.",
+    )
+    # The contract itself carries only the checks (knowledge is not a check).
+    assert "knowledge" not in (registry.declared_contract or {})
+
+
+async def test_declare_verification_without_knowledge_leaves_none(tmp_path: Path) -> None:
+    """Routine work: no knowledge block declared → nothing latched (no note)."""
+    registry = _registry(tmp_path)
+    await _declare(registry)
+    assert registry.declared_knowledge is None
+
+
+def test_declare_verification_schema_exposes_knowledge(tmp_path: Path) -> None:
+    """v2 — the native LLM sees an OPTIONAL ``knowledge`` param on
+    declare_verification (so it can declare a learning like the executor does in
+    its contract). Not required — routine work omits it."""
+    registry = _registry(tmp_path)
+    schema = registry.schema_for(["declare_verification"])[0]["function"]["parameters"]
+    props = schema["properties"]
+    assert "knowledge" in props
+    assert set(props["knowledge"]["properties"]) == {"topic", "insight"}
+    assert "knowledge" not in schema["required"]
+
+
 # -- the core delta: write/edit refused before declare ----------------------
 
 

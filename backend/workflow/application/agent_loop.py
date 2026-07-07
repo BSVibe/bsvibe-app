@@ -36,6 +36,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.config import Settings, get_settings
 from backend.extensions.skill.loader import SkillLoader
+from backend.knowledge.extraction.worth_remembering import RememberableKnowledge
 from backend.knowledge.retrieval.knowledge_item import RetrievedKnowledge
 from backend.workflow.application._loop_context import (
     _DESIGN_SPEC_DIRECTIVE,
@@ -437,6 +438,7 @@ class RunOrchestrator:
         written_paths: list[str],
         final_text: str,
         verdict: VerificationResult,
+        knowledge: RememberableKnowledge | None = None,
     ) -> LoopResult:
         return await finish_verified(
             self._session,
@@ -448,6 +450,7 @@ class RunOrchestrator:
             verdict=verdict,
             redis_client=self._redis_client,
             settings=self._settings,
+            knowledge=knowledge,
         )
 
     async def _create_decision(

@@ -26,11 +26,14 @@ import shlex
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import structlog
 
 from backend.workflow.infrastructure.sandbox import SandboxError, SandboxSession
+
+if TYPE_CHECKING:
+    from backend.knowledge.extraction.worth_remembering import RememberableKnowledge
 
 logger = structlog.get_logger(__name__)
 
@@ -108,6 +111,13 @@ class ToolRegistry:
         # ``RunAttempt.verification_contract``. ``None`` means the work
         # LLM never declared one.
         self.declared_contract: dict[str, Any] | None = None
+        # v2 (agent-authored knowledge): the knowledge the WORKING agent
+        # declared alongside its contract — a retrospective-style
+        # ``knowledge`` block naming what it learned, captured IN THE MOMENT
+        # (full working context). ``None`` when the agent declared none
+        # (routine work). The settle path writes this as a topic-titled note;
+        # there is no post-hoc extractor.
+        self.declared_knowledge: RememberableKnowledge | None = None
         # Paths the LLM has grounded itself in this attempt — via
         # ``file_read`` (saw the content) or ``file_write`` (supplied
         # it). ``file_edit`` requires the path to be here so a local
@@ -337,6 +347,31 @@ class ToolRegistry:
                             "required": ["kind"],
                         },
                     },
+                    "knowledge": {
+                        "type": "object",
+                        "description": (
+                            "OPTIONAL — record what you LEARNED doing this work, IF it "
+                            "is worth remembering: a non-obvious learning (a gotcha, a "
+                            "constraint you discovered, why you chose one approach over "
+                            "another) or a decision future work must honour. OMIT for "
+                            "routine work (adding a utility, fixing a typo) — that is the "
+                            "common case. Only you, who did the work, can see the tacit "
+                            "knowledge that never lands in the diff."
+                        ),
+                        "properties": {
+                            "topic": {
+                                "type": "string",
+                                "description": (
+                                    "A SHORT knowledge NAME — a noun phrase (e.g. "
+                                    "'Idempotent webhooks'), never a task sentence or file path."
+                                ),
+                            },
+                            "insight": {
+                                "type": "string",
+                                "description": "What to remember and WHY it matters (1-3 sentences).",
+                            },
+                        },
+                    },
                 },
                 "required": ["checks"],
             },
@@ -505,6 +540,17 @@ class ToolRegistry:
                 "non-empty 'command'; a 'judge' check needs a non-empty 'criteria' list."
             )
         self.declared_contract = contract.to_dict()
+        # v2 — capture the agent's retrospective knowledge declaration (if any).
+        # ``parse_declared_knowledge`` reads ``args["knowledge"]`` and is biased
+        # to None (no block / blank → routine work leaves no note). A re-declared
+        # contract that omits the block does NOT clear an earlier declaration.
+        from backend.knowledge.extraction.worth_remembering import (  # noqa: PLC0415
+            parse_declared_knowledge,
+        )
+
+        declared = parse_declared_knowledge(args)
+        if declared is not None:
+            self.declared_knowledge = declared
         n_cmd = len(contract.command_checks)
         n_judge = len(contract.judge_checks)
         return (

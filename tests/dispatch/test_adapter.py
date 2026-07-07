@@ -1209,6 +1209,49 @@ class TestExecutorAdapterE30ToolsAndContract:
         assert _augment_system_for_executor_tools("be terse", None) == "be terse"
         assert _augment_system_for_executor_tools("be terse", []) == "be terse"
 
+    def test_guide_documents_optional_knowledge_declaration(self) -> None:
+        """v2 — the guide teaches the agent to record what it LEARNED (a
+        retrospective ``knowledge`` block in the contract) with the shared bar,
+        so verified-work knowledge is agent-authored in the moment."""
+        from backend.dispatch.adapter import _augment_system_for_executor_tools
+        from backend.knowledge.extraction.worth_remembering import WORTH_REMEMBERING_PRINCIPLE
+
+        out = _augment_system_for_executor_tools(
+            "You are a worker.",
+            [
+                {
+                    "type": "function",
+                    "function": {"name": "declare_verification", "description": "d"},
+                }
+            ],
+        )
+        assert '"knowledge"' in out
+        assert "topic" in out and "insight" in out
+        # The shared worth-remembering bar is embedded verbatim.
+        assert WORTH_REMEMBERING_PRINCIPLE in out
+
+    def test_synthesize_forwards_declared_knowledge(self) -> None:
+        """v2 — a contract carrying a ``knowledge`` block forwards it verbatim on
+        the synthesized declare_verification args (the handler latches it)."""
+        import json as _json
+
+        from backend.dispatch.adapter import _synthesize_executor_tool_calls
+
+        out = (
+            "done.\n<verification-contract>\n"
+            '{"checks": [{"kind": "command", "command": "pytest"}], '
+            '"knowledge": {"topic": "Idempotent webhooks", "insight": "Dedupe by event id."}}\n'
+            "</verification-contract>"
+        )
+        calls = _synthesize_executor_tool_calls(out)
+        assert len(calls) == 1
+        args = _json.loads(calls[0].arguments_json)
+        assert args["knowledge"] == {
+            "topic": "Idempotent webhooks",
+            "insight": "Dedupe by event id.",
+        }
+        assert args["checks"][0]["command"] == "pytest"
+
     def test_e37_contract_requirement_is_loud_and_first_in_guide(self) -> None:
         """Lift E37 — qwen3.6-plus dogfood (session ses_12f1a577d, 2026-06-16)
         proved the contract requirement buried at step 4 of the guide gets

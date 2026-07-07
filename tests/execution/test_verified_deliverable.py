@@ -87,6 +87,44 @@ async def test_write_verified_deliverable_emits_full_contract() -> None:
         assert settle[0].payload["summary"] == "all green"
         assert settle[0].payload["intent_text"] == "build it"
         assert settle[0].payload["attempt_id"] == str(attempt_id)
+        # No knowledge declared → the settle payload carries no agent_knowledge.
+        assert "agent_knowledge" not in settle[0].payload
+
+
+async def test_write_verified_deliverable_threads_agent_knowledge() -> None:
+    """v2 — when the working agent declared knowledge, it rides the settle payload
+    as ``agent_knowledge`` {topic, insight} so the sink writes a topic-titled note.
+    Routine work declares none and the key is absent (see the test above)."""
+    from backend.knowledge.extraction.worth_remembering import RememberableKnowledge
+
+    async with memory_session() as s:
+        run = await _seed_run(s, intent="harden webhooks")
+        await write_verified_deliverable(
+            s,
+            run,
+            attempt_id=uuid.uuid4(),
+            artifact_refs=["src/webhooks.py"],
+            summary="all green",
+            knowledge=RememberableKnowledge(
+                topic="Idempotent webhooks",
+                insight="Dedupe webhook deliveries by event id — providers retry.",
+            ),
+        )
+        settle = (
+            (
+                await s.execute(
+                    select(ExecutionRunActivity).where(
+                        ExecutionRunActivity.activity_type == "settle"
+                    )
+                )
+            )
+            .scalars()
+            .one()
+        )
+        assert settle.payload["agent_knowledge"] == {
+            "topic": "Idempotent webhooks",
+            "insight": "Dedupe webhook deliveries by event id — providers retry.",
+        }
 
 
 async def test_write_verified_deliverable_truncates_summary_in_event() -> None:

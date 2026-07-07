@@ -40,6 +40,7 @@ import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from backend.config import Settings
+from backend.knowledge.extraction.worth_remembering import WORTH_REMEMBERING_PRINCIPLE
 from backend.router.accounts.models import ModelAccount
 from backend.router.accounts.predicates import is_executor_account
 from backend.router.llm_client import LlmClient, LlmResponse
@@ -618,6 +619,21 @@ _E30_TOOL_GUIDE_HEADER = (
     "command makes sense, e.g. "
     '``{"checks": [{"kind": "command", "command": "test -f <one-of-the-files-you-changed>"}]}``\n'
     "— but the block ITSELF is non-negotiable.\n"
+    "\n"
+    "OPTIONAL — record what you LEARNED. If, doing this work, you hit a "
+    "non-obvious learning worth remembering, add a ``knowledge`` field to the "
+    "SAME block (topic = a SHORT knowledge NAME, not a task sentence or file path):\n"
+    "\n"
+    "<verification-contract>\n"
+    '{"checks": [ ... ], "knowledge": {"topic": "<short knowledge name>", '
+    '"insight": "<what to remember + why, 1-3 sentences>"}}\n'
+    "</verification-contract>\n"
+    "\n"
+    + WORTH_REMEMBERING_PRINCIPLE
+    + " Only YOU — who did the work — can see the tacit knowledge (the "
+    "dead-ends, the constraint you hit mid-work, why you rejected an approach) "
+    "that never lands in the diff, so no post-hoc reader can recover it. OMIT "
+    "the field entirely for routine work — that is the common case.\n"
     "\n"
     "---\n"
     "\n"

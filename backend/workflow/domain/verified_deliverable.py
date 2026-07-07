@@ -23,11 +23,14 @@ native loop's stream emission is gated on its own redis client). It ``add``s +
 from __future__ import annotations
 
 import uuid
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import structlog
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+
+if TYPE_CHECKING:
+    from backend.knowledge.extraction.worth_remembering import RememberableKnowledge
 
 from backend.workflow.infrastructure.db import (
     Deliverable,
@@ -99,6 +102,7 @@ async def write_verified_deliverable(
     attempt_id: uuid.UUID,
     artifact_refs: list[str],
     summary: str,
+    knowledge: RememberableKnowledge | None = None,
 ) -> Deliverable:
     """Write the verified-terminal artifacts for ``run`` and return the Deliverable.
 
@@ -164,6 +168,15 @@ async def write_verified_deliverable(
         "summary": summary[:_SETTLE_SUMMARY_CAP],
         **await settle_run_context(session, run),
     }
+    # v2 — the knowledge the WORKING agent declared (retrospective-style). Rides
+    # the settle payload so the SettleWorker's sink writes a topic-titled note
+    # authored by the agent with full working context. Absent for routine work
+    # (the agent declared none) — there is no post-hoc extractor.
+    if knowledge is not None:
+        settle_payload["agent_knowledge"] = {
+            "topic": knowledge.topic,
+            "insight": knowledge.insight,
+        }
     session.add(
         ExecutionRunActivity(
             id=uuid.uuid4(),

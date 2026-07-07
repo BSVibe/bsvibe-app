@@ -77,6 +77,8 @@ def _ollama_up() -> bool:
 
 
 async def _seed_settle_activity(sf, *, workspace_id: uuid.UUID, summary: str) -> None:
+    from tests._support import agent_knowledge_payload  # noqa: PLC0415
+
     async with sf() as s:
         run_id = uuid.uuid4()
         s.add(
@@ -102,6 +104,8 @@ async def _seed_settle_activity(sf, *, workspace_id: uuid.UUID, summary: str) ->
                     "artifact_refs": ["backend/payments/checkout.py"],
                     "summary": summary,
                     "intent_text": "harden the payment checkout flow",
+                    # v2 — the agent declared knowledge, so this deposits a note.
+                    "agent_knowledge": agent_knowledge_payload(summary),
                 },
                 created_at=datetime.now(tz=UTC),
             )
@@ -144,14 +148,9 @@ async def test_full_knowledge_accumulation_from_empty_e2e(tmp_path: Path) -> Non
         await _seed_settle_activity(sf, workspace_id=workspace_id, summary=summary)
 
         # --- drive the REAL settle worker: drain → garden note + embedding --
-        from tests._support import always_remember_extractor_factory  # noqa: PLC0415
-
         worker = SettleWorker(
             session_factory=sf,
-            sink=KnowledgeSettleSink(
-                vault_root=vault_root,
-                memory_extractor=always_remember_extractor_factory(),
-            ),
+            sink=KnowledgeSettleSink(vault_root=vault_root),
             config=SettleWorkerConfig(default_region=_REGION),
             promoter_factory=build_garden_promoter_factory(vault_root=vault_root),
             embed_hook=build_note_embed_hook(session_factory=sf, settings=settings),

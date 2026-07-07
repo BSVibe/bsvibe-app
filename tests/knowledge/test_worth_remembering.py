@@ -1,14 +1,15 @@
-"""Worth-remembering knowledge extraction (settle + ingest share this).
+"""Worth-remembering knowledge — the offline core.
 
 Founder directive (2026-07): knowledge is NOT a work-history log. A verified run
-must NOT deposit a mechanical "this run added gcd()" seedling. Knowledge is only
-what is worth REMEMBERING — a retrospective insight, a non-obvious learning, or a
-user decision/choice. Routine work (add a utility, fix a typo) leaves NOTHING.
+only leaves a note when there is something worth REMEMBERING — a retrospective
+insight, a non-obvious learning, or a user decision/choice. Routine work leaves
+NOTHING.
 
-This module owns the stack-agnostic, offline core: the parse of an LLM verdict
-into ``RememberableKnowledge | None``, the "is this settlement inherently
-notable" gate (a user decision / a discard-with-reason is always worth keeping),
-and the extractor prompt. The LLM call lives in the sink/compiler.
+v2: the WORKING AGENT declares what it learned in its verification contract
+(``parse_declared_knowledge``); there is no post-hoc extractor. This module owns
+the stack-agnostic core: the shape, the agent-declared parser, the tolerant dict
+parser, the inherently-notable gate, and the shared bar the ingest compiler
+embeds.
 """
 
 from __future__ import annotations
@@ -16,10 +17,53 @@ from __future__ import annotations
 from backend.knowledge.extraction.worth_remembering import (
     RememberableKnowledge,
     is_inherently_notable,
+    parse_declared_knowledge,
     parse_extraction,
-    parse_verdict_text,
-    worth_remembering_messages,
 )
+
+# ── parse_declared_knowledge — agent-authored knowledge from the contract ─────
+
+
+def test_declared_knowledge_extracts_topic_and_insight() -> None:
+    # v2: the working agent declares knowledge IN its verification contract.
+    # Presence of a substantive knowledge block IS the signal (no separate flag).
+    got = parse_declared_knowledge(
+        {
+            "checks": [{"kind": "command", "command": "pytest"}],
+            "knowledge": {
+                "topic": "Idempotent webhooks",
+                "insight": "Dedupe webhook deliveries by event id — providers retry.",
+            },
+        }
+    )
+    assert got == RememberableKnowledge(
+        topic="Idempotent webhooks",
+        insight="Dedupe webhook deliveries by event id — providers retry.",
+    )
+
+
+def test_declared_knowledge_absent_is_none() -> None:
+    # Routine work: the agent declares no knowledge block → nothing written.
+    assert parse_declared_knowledge({"checks": [{"kind": "command", "command": "pytest"}]}) is None
+    assert parse_declared_knowledge({}) is None
+    assert parse_declared_knowledge(None) is None
+    assert parse_declared_knowledge("not a dict") is None
+
+
+def test_declared_knowledge_blank_fields_is_none() -> None:
+    # A knowledge block with an empty topic or insight is not substantive → None.
+    assert parse_declared_knowledge({"knowledge": {"topic": "", "insight": "x"}}) is None
+    assert parse_declared_knowledge({"knowledge": {"topic": "X", "insight": "  "}}) is None
+    assert parse_declared_knowledge({"knowledge": {}}) is None
+    assert parse_declared_knowledge({"knowledge": "just a string"}) is None
+
+
+def test_declared_knowledge_caps_topic_length() -> None:
+    long_topic = "A very long knowledge name that rambles on well past the eighty character cap for a topic label"
+    got = parse_declared_knowledge({"knowledge": {"topic": long_topic, "insight": "keep it"}})
+    assert got is not None
+    assert len(got.topic) <= 80
+
 
 # ── parse_extraction — LLM verdict → RememberableKnowledge | None ─────────────
 
@@ -92,70 +136,18 @@ def test_plain_verified_work_is_not_inherently_notable() -> None:
     assert is_inherently_notable("verified_work") is False
 
 
-# ── parse_verdict_text — raw LLM text → RememberableKnowledge | None ─────────
+# ── shared bar — the ingest compiler embeds the one principle ────────────────
 
 
-def test_parse_verdict_text_plain_json() -> None:
-    got = parse_verdict_text(
-        '{"worth_remembering": true, "topic": "Idempotent webhooks", '
-        '"insight": "Dedupe by event id."}'
-    )
-    assert got == RememberableKnowledge(topic="Idempotent webhooks", insight="Dedupe by event id.")
-
-
-def test_parse_verdict_text_strips_code_fence_and_preamble() -> None:
-    raw = (
-        "Sure, here is the verdict:\n```json\n"
-        '{"worth_remembering": true, "topic": "Auth loopback", "insight": "redirect_uri must match."}\n'
-        "```\nHope that helps!"
-    )
-    got = parse_verdict_text(raw)
-    assert got is not None
-    assert got.topic == "Auth loopback"
-
-
-def test_parse_verdict_text_routine_false_is_none() -> None:
-    assert parse_verdict_text('{"worth_remembering": false}') is None
-
-
-def test_parse_verdict_text_garbage_is_none() -> None:
-    assert parse_verdict_text("no json here at all") is None
-    assert parse_verdict_text("") is None
-    assert parse_verdict_text(None) is None
-
-
-# ── prompt — the "worth remembering" bar is spelled out ──────────────────────
-
-
-def test_prompt_defines_the_worth_remembering_bar() -> None:
-    messages = worth_remembering_messages(
-        intent="Add a gcd(a, b) utility", summary="src/toolkit/mathx.py", diff="+def gcd(...)"
-    )
-    system = next(m["content"] for m in messages if m["role"] == "system")
-    # It must tell the model: keep insights/learnings/decisions, NOT routine work.
-    assert "worth_remembering" in system
-    assert "routine" in system.lower()
-    lowered = system.lower()
-    assert "insight" in lowered or "learn" in lowered
-    # And the work context is in the user turn.
-    user = next(m["content"] for m in messages if m["role"] == "user")
-    assert "gcd" in user
-
-
-def test_settle_and_ingest_prompts_share_one_bar() -> None:
-    """Both knowledge-writing paths embed the SAME worth-remembering principle,
-    so the settle sink (per run) and the ingest compiler (per file) can't drift
-    to different bars. The principle is stated once and reused verbatim."""
-    from backend.knowledge.extraction.worth_remembering import (
-        WORTH_REMEMBERING_PRINCIPLE,
-        worth_remembering_messages,
-    )
+def test_ingest_prompt_embeds_the_shared_bar() -> None:
+    """The ingest compiler (per imported file) embeds the SAME worth-remembering
+    principle the agent-loop knowledge guidance surfaces — stated once, reused
+    verbatim, so the two knowledge paths can't drift to different bars."""
+    from backend.knowledge.extraction.worth_remembering import WORTH_REMEMBERING_PRINCIPLE
     from backend.knowledge.ingest.ingest_compiler._llm_compile import (
         COMPILE_BATCH_SYSTEM_PROMPT,
     )
 
-    settle_system = worth_remembering_messages(intent="x", summary="y")[0]["content"]
-    assert WORTH_REMEMBERING_PRINCIPLE in settle_system
     assert WORTH_REMEMBERING_PRINCIPLE in COMPILE_BATCH_SYSTEM_PROMPT
     # The shared bar names the exclusions that were the noise source.
     assert "NOT a work log" in WORTH_REMEMBERING_PRINCIPLE

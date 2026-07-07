@@ -1,22 +1,26 @@
-"""Worth-remembering knowledge extraction — the offline core.
+"""Worth-remembering knowledge — the offline core.
 
-Founder directive (2026-07): knowledge is NOT a work-history log. The old settle
-path deposited a mechanical "this run added gcd()" seedling for EVERY verified
-run, titled by the raw Direction — so the "추가한 지식" surface read like a task
-list, and the concept graph filled with noise. New rule: a run/file only leaves
-a note when there is something worth REMEMBERING — a retrospective insight, a
-non-obvious learning, or a user decision/choice. Routine work leaves nothing.
+Founder directive (2026-07): knowledge is NOT a work-history log. A run only
+leaves a note when there is something worth REMEMBERING — a retrospective
+insight, a non-obvious learning, or a user decision/choice. Routine work leaves
+nothing.
 
-This module is pure + offline: the shape of an extracted memory, the parse of an
-LLM verdict into ``RememberableKnowledge | None``, the "inherently notable" gate
-(a user decision / a discard-with-reason is always worth keeping — no LLM needed),
-and the extractor prompt. The LLM call itself lives in the settle sink / ingest
-compiler, which share this core so both paths hold the same bar.
+v2: the WORKING AGENT records what it learned IN THE MOMENT (full working
+context) by declaring an optional ``knowledge`` block in its verification
+contract — there is NO post-hoc extractor, because a settle-time reader can't
+see the tacit knowledge (the dead-ends, the constraint hit mid-work) that never
+lands in the diff.
+
+This module is pure + offline: the shape (:class:`RememberableKnowledge`), the
+parse of the agent's declared block (:func:`parse_declared_knowledge`), the
+tolerant dict parser (:func:`parse_extraction`), the "inherently notable" gate
+(a user decision / a discard-with-reason is always kept), and the shared bar
+(:data:`WORTH_REMEMBERING_PRINCIPLE`) the ingest compiler embeds + the executor
+knowledge-declaration guidance surfaces.
 """
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
 from typing import Any
 
@@ -72,32 +76,38 @@ def parse_extraction(raw: Any) -> RememberableKnowledge | None:
     )
 
 
-def parse_verdict_text(raw_text: Any) -> RememberableKnowledge | None:
-    """Parse an LLM verdict from RAW TEXT into ``RememberableKnowledge | None``.
+def parse_declared_knowledge(contract: Any) -> RememberableKnowledge | None:
+    """Parse the knowledge the WORKING AGENT declared in its verification contract.
 
-    Robust against the two shapes real (often reasoning) models emit around the
-    JSON object: markdown code fences (```json … ```) and preamble/postamble
-    prose. We slice the first ``{`` through the matching last ``}`` and hand the
-    decoded object to :func:`parse_extraction` (which owns the None-bias). Any
-    failure (no object, invalid JSON) yields ``None`` — the routine default.
-    """
-    if not isinstance(raw_text, str):
+    v2 (founder directive): the agent that did the work records what it learned
+    IN THE MOMENT — with the full working context a post-hoc extractor never has
+    — as an optional ``knowledge`` block inside the ``<verification-contract>``.
+    The PRESENCE of a substantive block is the signal (no ``worth_remembering``
+    flag needed): routine work declares no block → nothing written.
+
+    ``None`` when: not a dict, no ``knowledge`` key, the block isn't a dict, or
+    its topic/insight are blank. The topic is trimmed + capped to a short label."""
+    if not isinstance(contract, dict):
         return None
-    start = raw_text.find("{")
-    end = raw_text.rfind("}")
-    if start == -1 or end == -1 or end <= start:
+    block = contract.get("knowledge")
+    if not isinstance(block, dict):
         return None
-    try:
-        decoded = json.loads(raw_text[start : end + 1])
-    except (json.JSONDecodeError, ValueError):
+    topic = str(block.get("topic") or "").strip()
+    insight = str(block.get("insight") or block.get("note") or block.get("body") or "").strip()
+    if not topic or not insight:
         return None
-    return parse_extraction(decoded)
+    return RememberableKnowledge(
+        topic=topic[:MAX_TOPIC_CHARS].rstrip(),
+        insight=insight[:MAX_INSIGHT_CHARS].rstrip(),
+    )
 
 
 #: The ONE bar both knowledge-writing paths hold — the settle sink (per verified
-#: run) and the ingest compiler (per imported file). Stated once here so the two
-#: prompts can't drift apart: knowledge is not a work/file log, keep only what is
-#: worth remembering, default to keeping nothing.
+#: run, via the AGENT's own contract declaration) and the ingest compiler (per
+#: imported file). Stated once here so the guidance can't drift apart: knowledge
+#: is not a work/file log, keep only what is worth remembering, default to
+#: keeping nothing. The ingest compiler embeds this in its system prompt; the
+#: agent-loop path surfaces it in the executor's knowledge-declaration guidance.
 WORTH_REMEMBERING_PRINCIPLE = (
     "Knowledge is NOT a work log or a file catalog. Keep ONLY what is worth "
     "REMEMBERING — a reusable INSIGHT, a non-obvious LEARNING (a gotcha, a "
@@ -107,50 +117,12 @@ WORTH_REMEMBERING_PRINCIPLE = (
 )
 
 
-_SYSTEM_PROMPT = (
-    "You decide whether a completed unit of work left behind anything WORTH "
-    "REMEMBERING, and if so, name it. " + WORTH_REMEMBERING_PRINCIPLE + " A user "
-    "DECISION / choice that future work should honour counts too.\n"
-    "Output ONLY a JSON object:\n"
-    '  {"worth_remembering": true|false, "topic": "<short knowledge name>", '
-    '"insight": "<the thing to remember, 1-3 sentences>"}\n'
-    "RULES:\n"
-    "- Default to false. Most routine work is NOT worth remembering — return "
-    '{"worth_remembering": false} and nothing else.\n'
-    "- ``topic`` is a SHORT noun-phrase knowledge NAME (e.g. 'Idempotent "
-    "webhooks', 'Auth loopback redirect'), never a task sentence or a file path.\n"
-    "- ``insight`` states WHAT to remember and WHY it matters — not what was done.\n"
-    "- No prose outside the JSON object."
-)
-
-
-def worth_remembering_messages(
-    *, intent: str | None, summary: str | None, diff: str | None = None
-) -> list[dict[str, str]]:
-    """Build the extractor chat messages. The system turn spells out the bar
-    (keep insights/learnings/decisions, drop routine work); the user turn carries
-    the work context (the founder's intent + what changed)."""
-    parts: list[str] = []
-    if intent and intent.strip():
-        parts.append(f"The founder asked for:\n{intent.strip()}")
-    if summary and summary.strip():
-        parts.append(f"What changed:\n{summary.strip()[:1500]}")
-    if diff and diff.strip():
-        parts.append(f"The change:\n{diff.strip()[:4000]}")
-    user = "\n\n".join(parts) if parts else "(no work context)"
-    return [
-        {"role": "system", "content": _SYSTEM_PROMPT},
-        {"role": "user", "content": user},
-    ]
-
-
 __all__ = [
     "MAX_INSIGHT_CHARS",
     "MAX_TOPIC_CHARS",
     "RememberableKnowledge",
     "WORTH_REMEMBERING_PRINCIPLE",
     "is_inherently_notable",
+    "parse_declared_knowledge",
     "parse_extraction",
-    "parse_verdict_text",
-    "worth_remembering_messages",
 ]

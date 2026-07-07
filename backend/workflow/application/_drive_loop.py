@@ -361,8 +361,17 @@ async def drive_loop(  # noqa: PLR0912, PLR0915 — preserved cycle body, H2a is
                 run, work_step, attempt, decision, written_paths, final_text
             )
         if verdict.outcome is VerificationOutcome.PASSED:
+            # v2 — thread the agent's own retrospective knowledge declaration
+            # (latched on the registry by declare_verification / record_knowledge)
+            # into the settle payload. None for routine work → no note.
             result = await orch._finish_verified(
-                run, work_step, attempt, written_paths, final_text, verdict
+                run,
+                work_step,
+                attempt,
+                written_paths,
+                final_text,
+                verdict,
+                registry.declared_knowledge,
             )
             await orch._audit(
                 run,
