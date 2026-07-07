@@ -66,6 +66,18 @@ async def test_declare_verification_without_knowledge_leaves_none(tmp_path: Path
     assert registry.declared_knowledge is None
 
 
+def test_declare_verification_schema_exposes_knowledge(tmp_path: Path) -> None:
+    """v2 — the native LLM sees an OPTIONAL ``knowledge`` param on
+    declare_verification (so it can declare a learning like the executor does in
+    its contract). Not required — routine work omits it."""
+    registry = _registry(tmp_path)
+    schema = registry.schema_for(["declare_verification"])[0]["function"]["parameters"]
+    props = schema["properties"]
+    assert "knowledge" in props
+    assert set(props["knowledge"]["properties"]) == {"topic", "insight"}
+    assert "knowledge" not in schema["required"]
+
+
 # -- the core delta: write/edit refused before declare ----------------------
 
 

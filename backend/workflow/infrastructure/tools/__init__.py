@@ -347,6 +347,31 @@ class ToolRegistry:
                             "required": ["kind"],
                         },
                     },
+                    "knowledge": {
+                        "type": "object",
+                        "description": (
+                            "OPTIONAL — record what you LEARNED doing this work, IF it "
+                            "is worth remembering: a non-obvious learning (a gotcha, a "
+                            "constraint you discovered, why you chose one approach over "
+                            "another) or a decision future work must honour. OMIT for "
+                            "routine work (adding a utility, fixing a typo) — that is the "
+                            "common case. Only you, who did the work, can see the tacit "
+                            "knowledge that never lands in the diff."
+                        ),
+                        "properties": {
+                            "topic": {
+                                "type": "string",
+                                "description": (
+                                    "A SHORT knowledge NAME — a noun phrase (e.g. "
+                                    "'Idempotent webhooks'), never a task sentence or file path."
+                                ),
+                            },
+                            "insight": {
+                                "type": "string",
+                                "description": "What to remember and WHY it matters (1-3 sentences).",
+                            },
+                        },
+                    },
                 },
                 "required": ["checks"],
             },
