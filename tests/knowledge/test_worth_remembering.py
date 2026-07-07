@@ -16,10 +16,55 @@ from __future__ import annotations
 from backend.knowledge.extraction.worth_remembering import (
     RememberableKnowledge,
     is_inherently_notable,
+    parse_declared_knowledge,
     parse_extraction,
     parse_verdict_text,
     worth_remembering_messages,
 )
+
+
+# ── parse_declared_knowledge — agent-authored knowledge from the contract ─────
+
+
+def test_declared_knowledge_extracts_topic_and_insight() -> None:
+    # v2: the working agent declares knowledge IN its verification contract.
+    # Presence of a substantive knowledge block IS the signal (no separate flag).
+    got = parse_declared_knowledge(
+        {
+            "checks": [{"kind": "command", "command": "pytest"}],
+            "knowledge": {
+                "topic": "Idempotent webhooks",
+                "insight": "Dedupe webhook deliveries by event id — providers retry.",
+            },
+        }
+    )
+    assert got == RememberableKnowledge(
+        topic="Idempotent webhooks",
+        insight="Dedupe webhook deliveries by event id — providers retry.",
+    )
+
+
+def test_declared_knowledge_absent_is_none() -> None:
+    # Routine work: the agent declares no knowledge block → nothing written.
+    assert parse_declared_knowledge({"checks": [{"kind": "command", "command": "pytest"}]}) is None
+    assert parse_declared_knowledge({}) is None
+    assert parse_declared_knowledge(None) is None
+    assert parse_declared_knowledge("not a dict") is None
+
+
+def test_declared_knowledge_blank_fields_is_none() -> None:
+    # A knowledge block with an empty topic or insight is not substantive → None.
+    assert parse_declared_knowledge({"knowledge": {"topic": "", "insight": "x"}}) is None
+    assert parse_declared_knowledge({"knowledge": {"topic": "X", "insight": "  "}}) is None
+    assert parse_declared_knowledge({"knowledge": {}}) is None
+    assert parse_declared_knowledge({"knowledge": "just a string"}) is None
+
+
+def test_declared_knowledge_caps_topic_length() -> None:
+    long_topic = "A very long knowledge name that rambles on well past the eighty character cap for a topic label"
+    got = parse_declared_knowledge({"knowledge": {"topic": long_topic, "insight": "keep it"}})
+    assert got is not None
+    assert len(got.topic) <= 80
 
 # ── parse_extraction — LLM verdict → RememberableKnowledge | None ─────────────
 

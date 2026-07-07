@@ -72,6 +72,32 @@ def parse_extraction(raw: Any) -> RememberableKnowledge | None:
     )
 
 
+def parse_declared_knowledge(contract: Any) -> RememberableKnowledge | None:
+    """Parse the knowledge the WORKING AGENT declared in its verification contract.
+
+    v2 (founder directive): the agent that did the work records what it learned
+    IN THE MOMENT — with the full working context a post-hoc extractor never has
+    — as an optional ``knowledge`` block inside the ``<verification-contract>``.
+    The PRESENCE of a substantive block is the signal (no ``worth_remembering``
+    flag needed): routine work declares no block → nothing written.
+
+    ``None`` when: not a dict, no ``knowledge`` key, the block isn't a dict, or
+    its topic/insight are blank. The topic is trimmed + capped to a short label."""
+    if not isinstance(contract, dict):
+        return None
+    block = contract.get("knowledge")
+    if not isinstance(block, dict):
+        return None
+    topic = str(block.get("topic") or "").strip()
+    insight = str(block.get("insight") or block.get("note") or block.get("body") or "").strip()
+    if not topic or not insight:
+        return None
+    return RememberableKnowledge(
+        topic=topic[:MAX_TOPIC_CHARS].rstrip(),
+        insight=insight[:MAX_INSIGHT_CHARS].rstrip(),
+    )
+
+
 def parse_verdict_text(raw_text: Any) -> RememberableKnowledge | None:
     """Parse an LLM verdict from RAW TEXT into ``RememberableKnowledge | None``.
 
@@ -150,6 +176,7 @@ __all__ = [
     "RememberableKnowledge",
     "WORTH_REMEMBERING_PRINCIPLE",
     "is_inherently_notable",
+    "parse_declared_knowledge",
     "parse_extraction",
     "parse_verdict_text",
     "worth_remembering_messages",
