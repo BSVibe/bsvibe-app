@@ -192,3 +192,36 @@ def _append_legacy_criteria(checks: Any, entries: list[dict[str, Any]], seen: se
             if statement and statement not in seen:
                 seen.add(statement)
                 entries.append({"text": statement})
+
+
+def note_title(node_ref: str) -> str:
+    """A readable title for a written note — its OWN frontmatter ``title`` (the
+    faithful knowledge NAME the worth-remembering gate wrote, exact casing
+    preserved, e.g. "OAuth loopback redirect"), read from the file at
+    ``node_ref`` (ABSOLUTE in prod). Falls back to de-slugging the filename when
+    the file is unreadable (synthetic test paths / a moved vault); that fallback
+    lowercases, so the frontmatter read keeps the founder-facing chip's casing
+    correct."""
+    title = _frontmatter_title(node_ref)
+    if title:
+        return title
+    file = node_ref.rsplit("/", 1)[-1]
+    file = re.sub(r"\.md$", "", file, flags=re.IGNORECASE)
+    file = re.sub(r"^settle-", "", file)  # legacy settle-titled notes
+    text = file.replace("-", " ").replace("_", " ").strip()
+    return text[:1].upper() + text[1:] if text else node_ref
+
+
+def _frontmatter_title(node_ref: str) -> str:
+    """The note's frontmatter ``title`` from disk, or ``""`` — soft (never raises)
+    so the report renders even if a note file is gone / synthetic."""
+    from pathlib import Path  # noqa: PLC0415 — lazy
+
+    from backend.knowledge.graph.markdown_utils import extract_frontmatter  # noqa: PLC0415
+
+    try:
+        text = Path(node_ref).read_text(encoding="utf-8")
+    except OSError:
+        return ""
+    title = extract_frontmatter(text).get("title")
+    return title.strip() if isinstance(title, str) else ""

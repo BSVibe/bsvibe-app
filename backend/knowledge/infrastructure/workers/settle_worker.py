@@ -75,6 +75,10 @@ from sqlalchemy import Select, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from backend.identity.workspaces_db import WorkspaceRow
+from backend.knowledge.extraction.worth_remembering import (
+    RememberableKnowledge,
+    is_inherently_notable,
+)
 from backend.workers.base import BaseWorker
 from backend.workers.db import SettleDrainRow
 from backend.workflow.infrastructure.db import ExecutionRunActivity
@@ -269,6 +273,36 @@ class ExtractorFactory(Protocol):
     async def __call__(self, *, region: str, workspace_id: uuid.UUID) -> EntityExtractor | None: ...
 
 
+class MemoryExtractor(Protocol):
+    """Judges whether a verified-work settlement left anything WORTH REMEMBERING.
+
+    Founder directive (2026-07): a run only leaves a note when it produced a
+    retrospective insight / a non-obvious learning / a user decision — NOT for
+    routine work (adding a utility, fixing a typo). Given a :class:`Settlement`
+    (intent + summary), the extractor runs the shared worth-remembering prompt
+    (:func:`backend.knowledge.extraction.worth_remembering.worth_remembering_messages`)
+    and returns the parsed
+    :class:`~backend.knowledge.extraction.worth_remembering.RememberableKnowledge`
+    to write, or ``None`` when there is nothing worth keeping (routine → no note).
+    """
+
+    async def extract(self, settlement: Settlement) -> RememberableKnowledge | None: ...
+
+
+class MemoryExtractorFactory(Protocol):
+    """Builds a :class:`MemoryExtractor` for one workspace/region, or ``None``.
+
+    The settle sink calls this per verified-work settlement to judge whether the
+    work is worth remembering. Construction resolves the workspace's routed LLM
+    account (the settle-extract caller); returning ``None`` (no LLM / no active
+    account / not configured) is the documented soft-fallback — a verified-work
+    settlement with no extractor writes NOTHING (routine is the default outcome).
+    Errors raised here are caught by the sink and treated the same way.
+    """
+
+    async def __call__(self, *, region: str, workspace_id: uuid.UUID) -> MemoryExtractor | None: ...
+
+
 class WorkspacePromoter(Protocol):
     """Promotes a workspace's accumulated garden observations into canon.
 
@@ -352,32 +386,68 @@ class SettleWorkerConfig:
 
 
 class KnowledgeSettleSink:
-    """Production sink — writes each settlement as a BSage garden observation.
+    """Production sink — writes a BSage garden note ONLY when the work is worth
+    remembering (founder directive, 2026-07).
 
-    The settle observation is the §5 ratchet deposit: a verified work step
-    leaves a one-way, monotonically-accumulating knowledge sample.
-    Canonicalization (a separate subscriber/cron) later promotes repeatedly
-    observed patterns into canonical nodes — that pipeline is out of scope
-    here; this sink only deposits the raw observation via the writer.
+    Knowledge is NOT a work-history log. The sink gates every settlement:
+
+    * **Inherently notable** (``decision_resolution`` / ``negative_pattern`` — a
+      user CHOICE or a discard-with-reason) is ALWAYS written, no LLM needed
+      (:func:`~backend.knowledge.extraction.worth_remembering.is_inherently_notable`).
+    * **Verified work** must EARN its note through the worth-remembering
+      extractor (:class:`MemoryExtractor`): a retrospective insight / non-obvious
+      learning yields a note titled by its ``topic``; routine work (or no wired
+      extractor) yields ``None`` — nothing written.
+
+    When a note IS written it remains the §5 ratchet deposit that
+    canonicalization later promotes; this sink only deposits the raw observation.
     """
 
-    __slots__ = ("_vault_root", "_extractor_factory")
+    __slots__ = ("_vault_root", "_extractor_factory", "_memory_extractor")
 
     def __init__(
         self,
         *,
         vault_root: Path,
         extractor_factory: ExtractorFactory | None = None,
+        memory_extractor: MemoryExtractorFactory | None = None,
     ) -> None:
         self._vault_root = vault_root
         # PRIMARY content-tag source: when wired, concepts come from LLM-extracted
         # entities (BSage's mechanism). ``None`` (tests / no LLM) keeps the pure
         # deterministic fallback — the sink never *requires* an LLM.
         self._extractor_factory = extractor_factory
+        # The worth-remembering GATE for verified work. ``None`` (tests / no LLM)
+        # means routine verified work writes NOTHING — the founder-directed
+        # default. Inherently-notable settlements bypass this gate entirely.
+        self._memory_extractor = memory_extractor
 
     async def absorb(self, settlement: Settlement) -> str | None:
         from backend.knowledge.factory import KnowledgeFactory  # noqa: PLC0415 — lazy heavy import
         from backend.knowledge.graph.writer import GardenNote  # noqa: PLC0415
+
+        summary = settlement.summary.strip()
+        # GATE (founder directive): decide whether this settlement is worth a note
+        # and, if so, its title + body. Inherently-notable kinds (user decision /
+        # discard-with-reason) are always kept with the descriptive settle title;
+        # verified work must earn its note through the worth-remembering extractor
+        # (topic-titled), and routine work earns none → return None (no write).
+        if is_inherently_notable(settlement.kind):
+            headline = summary.splitlines()[0][:80] if summary else "verified work step"
+            title = f"Settle: {headline}"
+            body = _observation_body(settlement, summary)
+        else:
+            memory = await self._extract_memory(settlement)
+            if memory is None:
+                logger.info(
+                    "settle_sink_skipped_not_worth_remembering",
+                    workspace_id=str(settlement.workspace_id),
+                    run_id=str(settlement.run_id),
+                    activity_id=str(settlement.activity_id),
+                )
+                return None
+            title = memory.topic
+            body = _memory_body(settlement, memory)
 
         factory = KnowledgeFactory(
             region=settlement.region,
@@ -386,10 +456,6 @@ class KnowledgeSettleSink:
         )
         writer = factory.writer()
 
-        summary = settlement.summary.strip()
-        # Title is descriptive only — the drain marker (keyed on activity_id)
-        # owns system identity, so a thin/odd LLM summary can't break dedup.
-        headline = summary.splitlines()[0][:80] if summary else "verified work step"
         # Structural tags first (other consumers rely on them), then the content
         # tags so the GardenObservationPromoter has real candidates to cluster
         # across runs — closing the §5 ratchet loop. Content tags are de-duped
@@ -425,8 +491,8 @@ class KnowledgeSettleSink:
         if settlement.reason is not None:
             extra_fields["reason"] = settlement.reason
         note = GardenNote(
-            title=f"Settle: {headline}",
-            content=_observation_body(settlement, summary),
+            title=title,
+            content=body,
             source="settle_worker",
             knowledge_layer="episodic",
             tags=tags,
@@ -434,6 +500,34 @@ class KnowledgeSettleSink:
         )
         path = await writer.write_garden(note)
         return str(path)
+
+    async def _extract_memory(self, settlement: Settlement) -> RememberableKnowledge | None:
+        """Run the worth-remembering gate over a verified-work settlement.
+
+        Returns the :class:`RememberableKnowledge` to write, or ``None`` when the
+        work is routine (nothing worth keeping). ``None`` is the DEFAULT and
+        biased-for outcome: no factory wired, factory returns ``None`` (no routed
+        account), the extractor's verdict is "not worth remembering", or the
+        extraction raised — all degrade to "write nothing". A verified-work run
+        only leaves a note when the extractor affirmatively names an insight.
+        """
+        if self._memory_extractor is None:
+            return None
+        try:
+            extractor = await self._memory_extractor(
+                region=settlement.region, workspace_id=settlement.workspace_id
+            )
+            if extractor is None:
+                return None
+            return await extractor.extract(settlement)
+        except Exception:  # noqa: BLE001 — the gate is soft; a failure writes nothing
+            logger.warning(
+                "settle_sink_memory_extraction_failed",
+                workspace_id=str(settlement.workspace_id),
+                run_id=str(settlement.run_id),
+                exc_info=True,
+            )
+            return None
 
     async def _derive_tags(self, settlement: Settlement) -> list[str]:
         """Content tags for the observation: extracted entities, else fallback.
@@ -507,6 +601,24 @@ def _entity_names_to_tags(names: Iterable[str]) -> list[str]:
             tags.append(tag)
     deduped = list(dict.fromkeys(tags))  # first-wins, preserves order
     return deduped[:_MAX_CONTENT_TAGS]
+
+
+def _memory_body(settlement: Settlement, memory: RememberableKnowledge) -> str:
+    """Body for a worth-remembering verified-work note.
+
+    The ``insight`` (what to remember + why) leads — this is the knowledge, not a
+    work log. Stable run context (product binding + founder intent, both
+    deterministic inputs, never LLM output) trails as provenance so the note says
+    what the work was ABOUT, and the run id anchors it back to the activity.
+    """
+    lines = [memory.insight, ""]
+    if settlement.product_slug or settlement.product_name:
+        product = settlement.product_slug or settlement.product_name
+        lines.append(f"Product: {product}")
+    if settlement.intent_text:
+        lines.append(f"Intent: {settlement.intent_text}")
+    lines.append(f"Run: {settlement.run_id}")
+    return "\n".join(lines)
 
 
 def _observation_body(settlement: Settlement, summary: str) -> str:
@@ -1058,6 +1170,8 @@ __all__ = [
     "EntityExtractor",
     "ExtractorFactory",
     "KnowledgeSettleSink",
+    "MemoryExtractor",
+    "MemoryExtractorFactory",
     "NoteEmbedHook",
     "PromoterFactory",
     "ReconcileHook",

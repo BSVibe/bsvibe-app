@@ -41,6 +41,7 @@ from backend.workflow.application.runtime.settle_runtime import (
     build_note_embed_hook,
     build_reconcile_hook,
     build_settle_entity_extractor_factory,
+    build_settle_memory_extractor_factory,
 )
 from backend.workflow.application.runtime.worker_runtime import (
     StreamConsumerBinding,
@@ -82,6 +83,7 @@ __all__ = [
     "build_note_embed_hook",
     "build_reconcile_hook",
     "build_settle_entity_extractor_factory",
+    "build_settle_memory_extractor_factory",
     "build_stream_consumers",
     "build_worker_runtime",
     "check_executor_dispatch_health",

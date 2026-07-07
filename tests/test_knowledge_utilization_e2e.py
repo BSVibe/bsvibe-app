@@ -204,9 +204,14 @@ async def test_accumulated_knowledge_is_used_by_verify_e2e(tmp_path: Path) -> No
             question="Should the search endpoint enforce a rate limit?",
             answer="Yes — token-bucket, 10 requests/second per API key",
         )
+        from tests._support import always_remember_extractor_factory  # noqa: PLC0415
+
         worker = SettleWorker(
             session_factory=sf,
-            sink=KnowledgeSettleSink(vault_root=vault_root),
+            sink=KnowledgeSettleSink(
+                vault_root=vault_root,
+                memory_extractor=always_remember_extractor_factory(),
+            ),
             config=SettleWorkerConfig(default_region=_REGION),
             promoter_factory=build_garden_promoter_factory(vault_root=vault_root),
             embed_hook=build_note_embed_hook(session_factory=sf, settings=settings),

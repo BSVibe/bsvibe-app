@@ -219,7 +219,31 @@ def fake_current_user(
     return _user
 
 
+def always_remember_extractor_factory():
+    """A worth-remembering :class:`MemoryExtractor` factory that always affirms.
+
+    Post the 2026-07 founder directive, a verified-work settlement only deposits
+    a garden note when the worth-remembering gate returns knowledge. Settle e2e
+    tests that assert a garden note IS written for verified work wire this stub
+    so the deposit path runs; the insight echoes the settlement summary so body
+    assertions still find the recorded work text.
+    """
+    from backend.knowledge.extraction.worth_remembering import RememberableKnowledge
+
+    class _Extractor:
+        async def extract(self, settlement):
+            summary = settlement.summary.strip()
+            topic = (summary.splitlines()[0][:60] if summary else "verified work") or "work"
+            return RememberableKnowledge(topic=topic, insight=summary or "verified work")
+
+    async def _factory(*, region, workspace_id):
+        return _Extractor()
+
+    return _factory
+
+
 __all__ = [
+    "always_remember_extractor_factory",
     "can_reach_pg",
     "db_engine",
     "fake_current_user",

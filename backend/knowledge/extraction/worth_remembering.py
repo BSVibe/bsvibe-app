@@ -16,6 +16,7 @@ compiler, which share this core so both paths hold the same bar.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from typing import Any
 
@@ -71,6 +72,28 @@ def parse_extraction(raw: Any) -> RememberableKnowledge | None:
     )
 
 
+def parse_verdict_text(raw_text: Any) -> RememberableKnowledge | None:
+    """Parse an LLM verdict from RAW TEXT into ``RememberableKnowledge | None``.
+
+    Robust against the two shapes real (often reasoning) models emit around the
+    JSON object: markdown code fences (```json … ```) and preamble/postamble
+    prose. We slice the first ``{`` through the matching last ``}`` and hand the
+    decoded object to :func:`parse_extraction` (which owns the None-bias). Any
+    failure (no object, invalid JSON) yields ``None`` — the routine default.
+    """
+    if not isinstance(raw_text, str):
+        return None
+    start = raw_text.find("{")
+    end = raw_text.rfind("}")
+    if start == -1 or end == -1 or end <= start:
+        return None
+    try:
+        decoded = json.loads(raw_text[start : end + 1])
+    except (json.JSONDecodeError, ValueError):
+        return None
+    return parse_extraction(decoded)
+
+
 _SYSTEM_PROMPT = (
     "You decide whether a completed unit of work left behind anything WORTH "
     "REMEMBERING, and if so, name it. Knowledge is NOT a work log: do NOT record "
@@ -117,5 +140,6 @@ __all__ = [
     "RememberableKnowledge",
     "is_inherently_notable",
     "parse_extraction",
+    "parse_verdict_text",
     "worth_remembering_messages",
 ]

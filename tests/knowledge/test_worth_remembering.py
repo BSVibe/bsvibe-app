@@ -19,6 +19,7 @@ from backend.knowledge.extraction.worth_remembering import (
     RememberableKnowledge,
     is_inherently_notable,
     parse_extraction,
+    parse_verdict_text,
     worth_remembering_messages,
 )
 
@@ -92,6 +93,38 @@ def test_plain_verified_work_is_not_inherently_notable() -> None:
     # the extractor (and routine utility work earns nothing).
     assert is_inherently_notable(None) is False
     assert is_inherently_notable("verified_work") is False
+
+
+# ── parse_verdict_text — raw LLM text → RememberableKnowledge | None ─────────
+
+
+def test_parse_verdict_text_plain_json() -> None:
+    got = parse_verdict_text(
+        '{"worth_remembering": true, "topic": "Idempotent webhooks", '
+        '"insight": "Dedupe by event id."}'
+    )
+    assert got == RememberableKnowledge(topic="Idempotent webhooks", insight="Dedupe by event id.")
+
+
+def test_parse_verdict_text_strips_code_fence_and_preamble() -> None:
+    raw = (
+        "Sure, here is the verdict:\n```json\n"
+        '{"worth_remembering": true, "topic": "Auth loopback", "insight": "redirect_uri must match."}\n'
+        "```\nHope that helps!"
+    )
+    got = parse_verdict_text(raw)
+    assert got is not None
+    assert got.topic == "Auth loopback"
+
+
+def test_parse_verdict_text_routine_false_is_none() -> None:
+    assert parse_verdict_text('{"worth_remembering": false}') is None
+
+
+def test_parse_verdict_text_garbage_is_none() -> None:
+    assert parse_verdict_text("no json here at all") is None
+    assert parse_verdict_text("") is None
+    assert parse_verdict_text(None) is None
 
 
 # ── prompt — the "worth remembering" bar is spelled out ──────────────────────

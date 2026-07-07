@@ -48,6 +48,7 @@ from backend.knowledge.canonicalization.index import InMemoryCanonicalizationInd
 from backend.knowledge.canonicalization.models import DecisionEntry
 from backend.knowledge.canonicalization.resolver import TagResolver
 from backend.knowledge.canonicalization.store import NoteStore
+from backend.knowledge.extraction.worth_remembering import RememberableKnowledge
 from backend.knowledge.graph.storage import FileSystemStorage
 from backend.knowledge.infrastructure.workers.settle_worker import (
     KnowledgeSettleSink,
@@ -75,6 +76,35 @@ _REGION = "us-1"
 async def sf():
     async with db_engine(*_BASES) as (engine, _is_pg):
         yield async_sessionmaker(engine, expire_on_commit=False)
+
+
+def _worth_remembering_factory():
+    """A worth-remembering gate that always affirms (2026-07 directive).
+
+    Verified-work runs only deposit a garden note when the gate returns
+    knowledge — these canonicalization e2e tests exercise the deposit→cluster
+    loop, so they wire an always-affirming extractor. The derived content TAGS
+    (product / intent / artifact) that clustering keys on are computed by the
+    sink independently of the note body, so echoing the summary as the insight
+    keeps the clustering behaviour identical to the pre-gate deposit.
+    """
+
+    class _Extractor:
+        async def extract(self, settlement) -> RememberableKnowledge:
+            return RememberableKnowledge(
+                topic=(settlement.summary.strip().splitlines()[0][:60] or "work"),
+                insight=settlement.summary.strip() or "verified work",
+            )
+
+    async def _factory(*, region: str, workspace_id: uuid.UUID):
+        return _Extractor()
+
+    return _factory
+
+
+def _gated_sink(vault_root):
+    """A :class:`KnowledgeSettleSink` whose worth-remembering gate always writes."""
+    return KnowledgeSettleSink(vault_root=vault_root, memory_extractor=_worth_remembering_factory())
 
 
 async def _add_workspace(
@@ -178,11 +208,18 @@ async def _seed_content_tagged_observations(storage: FileSystemStorage) -> None:
 
 
 def _written_settle_notes(vault_root: Path, workspace_id: uuid.UUID) -> list[Path]:
-    """Notes the sink wrote this drain (titled ``Settle: ...``)."""
+    """Notes the sink wrote this drain (``source: settle_worker`` frontmatter).
+
+    Post worth-remembering gate the sink titles notes by their knowledge TOPIC
+    (slugified), not ``Settle: …``, so identify sink writes by their source
+    stamp rather than a filename prefix — this also excludes the ``obs-*``
+    fixtures seeded directly into the vault."""
     ws_dir = vault_root / _REGION / str(workspace_id)
     if not ws_dir.exists():
         return []
-    return [p for p in ws_dir.rglob("*.md") if p.name.startswith("settle-")]
+    return [
+        p for p in ws_dir.rglob("*.md") if "source: settle_worker" in p.read_text(encoding="utf-8")
+    ]
 
 
 async def test_drain_then_promote_permissive_creates_canonical_anchor(sf, tmp_path) -> None:
@@ -195,7 +232,7 @@ async def test_drain_then_promote_permissive_creates_canonical_anchor(sf, tmp_pa
 
     worker = SettleWorker(
         session_factory=sf,
-        sink=KnowledgeSettleSink(vault_root=tmp_path),
+        sink=_gated_sink(tmp_path),
         config=SettleWorkerConfig(default_region=_REGION),
         promoter_factory=build_garden_promoter_factory(vault_root=tmp_path),
     )
@@ -250,7 +287,7 @@ async def test_drain_then_promote_safe_mode_auto_applies_low_risk(sf, tmp_path) 
 
     worker = SettleWorker(
         session_factory=sf,
-        sink=KnowledgeSettleSink(vault_root=tmp_path),
+        sink=_gated_sink(tmp_path),
         config=SettleWorkerConfig(default_region=_REGION),
         promoter_factory=build_garden_promoter_factory(vault_root=tmp_path),
     )
@@ -310,7 +347,7 @@ async def test_drain_then_promote_safe_mode_queues_conflicting_merge(sf, tmp_pat
 
     worker = SettleWorker(
         session_factory=sf,
-        sink=KnowledgeSettleSink(vault_root=tmp_path),
+        sink=_gated_sink(tmp_path),
         config=SettleWorkerConfig(default_region=_REGION),
         promoter_factory=build_garden_promoter_factory(vault_root=tmp_path),
     )
@@ -348,7 +385,7 @@ async def test_promotion_failure_is_soft_and_does_not_break_drain(sf, tmp_path) 
 
     worker = SettleWorker(
         session_factory=sf,
-        sink=KnowledgeSettleSink(vault_root=tmp_path),
+        sink=_gated_sink(tmp_path),
         config=SettleWorkerConfig(default_region=_REGION),
         promoter_factory=_boom_factory,
     )
@@ -389,7 +426,7 @@ async def test_promotion_runs_per_affected_workspace_in_isolation(sf, tmp_path) 
 
     worker = SettleWorker(
         session_factory=sf,
-        sink=KnowledgeSettleSink(vault_root=tmp_path),
+        sink=_gated_sink(tmp_path),
         config=SettleWorkerConfig(default_region=_REGION),
         promoter_factory=_selective_factory,
     )
@@ -417,7 +454,7 @@ async def test_promotion_idempotent_across_repeated_drains(sf, tmp_path) -> None
 
     worker = SettleWorker(
         session_factory=sf,
-        sink=KnowledgeSettleSink(vault_root=tmp_path),
+        sink=_gated_sink(tmp_path),
         config=SettleWorkerConfig(default_region=_REGION),
         promoter_factory=build_garden_promoter_factory(vault_root=tmp_path),
     )
@@ -460,7 +497,7 @@ async def test_loop_produces_canon_from_sink_derived_tags_no_seeding(sf, tmp_pat
 
     worker = SettleWorker(
         session_factory=sf,
-        sink=KnowledgeSettleSink(vault_root=tmp_path),
+        sink=_gated_sink(tmp_path),
         config=SettleWorkerConfig(default_region=_REGION),
         promoter_factory=build_garden_promoter_factory(vault_root=tmp_path),
     )
@@ -520,7 +557,7 @@ async def test_loop_clusters_two_runs_by_shared_product_and_intent(sf, tmp_path)
 
     worker = SettleWorker(
         session_factory=sf,
-        sink=KnowledgeSettleSink(vault_root=tmp_path),
+        sink=_gated_sink(tmp_path),
         config=SettleWorkerConfig(default_region=_REGION),
         promoter_factory=build_garden_promoter_factory(vault_root=tmp_path),
     )
@@ -583,7 +620,7 @@ async def test_no_promoter_factory_disables_promotion(sf, tmp_path) -> None:
 
     worker = SettleWorker(
         session_factory=sf,
-        sink=KnowledgeSettleSink(vault_root=tmp_path),
+        sink=_gated_sink(tmp_path),
         config=SettleWorkerConfig(default_region=_REGION),
     )
     assert await worker.drain_once() == 1

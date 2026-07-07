@@ -434,6 +434,44 @@ async def test_report_surfaces_written_from_settle_drains(
     assert any(w["path"] == rel for w in written)
 
 
+async def test_written_note_title_uses_frontmatter_casing(
+    configured_client, db, workspace_id, tmp_path
+) -> None:
+    """The worth-remembering gate titles a written note by its knowledge TOPIC.
+    The chip must show that topic with its EXACT casing/punctuation (read from
+    the note's frontmatter), NOT a lowercased de-slug of the filename — so
+    "OAuth loopback redirect" stays "OAuth loopback redirect", not "Oauth ...".
+    """
+    run_id, deliverable_id = uuid.uuid4(), uuid.uuid4()
+    # A real on-disk note whose frontmatter title preserves acronym casing but
+    # whose slugified filename would lowercase it.
+    note_abs = tmp_path / "oauth-loopback-redirect.md"
+    note_abs.write_text(
+        "---\ntitle: OAuth loopback redirect\nsource: settle_worker\n---\n\n"
+        "redirect_uri must string-match exactly.\n",
+        encoding="utf-8",
+    )
+    async with db() as s:
+        await _seed_run(s, run_id=run_id, ws=workspace_id)
+        await _seed_deliverable(
+            s, deliverable_id=deliverable_id, run_id=run_id, workspace_id=workspace_id
+        )
+        s.add(
+            SettleDrainRow(
+                activity_id=uuid.uuid4(),
+                workspace_id=workspace_id,
+                run_id=run_id,
+                node_ref=str(note_abs),
+            )
+        )
+        await s.commit()
+
+    r = await configured_client.get(f"/api/v1/deliverables/{deliverable_id}/report")
+    assert r.status_code == 200, r.text
+    written = r.json()["written"]
+    assert any(w["title"] == "OAuth loopback redirect" for w in written), written
+
+
 async def test_report_references_are_concept_centric(configured_client, db, workspace_id) -> None:
     """R16 — "참고한 지식" stays concept-centric (matching the knowledge graph): the
     raw seedling "Related note — garden/seedling/settle-*" hits (episodic layer)
