@@ -26,7 +26,12 @@ from backend.workflow.infrastructure.delivery.db import (
     SafeModeStatus,
 )
 
-from ._references import ReferenceOut, is_prior_note_reference, reference_from_entry
+from ._references import (
+    ReferenceOut,
+    is_prior_note_reference,
+    note_title,
+    reference_from_entry,
+)
 from ._schemas import WrittenNote
 
 logger = structlog.get_logger(__name__)
@@ -86,17 +91,6 @@ def _is_seedling_note_ref(reference: str) -> bool:
     the semantic note search). Concept / decision / rejection statements are not
     note refs → False, and stay in the report's referenced knowledge."""
     return _RELATED_NOTE_RE.match(reference.strip()) is not None
-
-
-def _note_title(node_ref: str) -> str:
-    """A readable title for a written note's vault path — the last segment,
-    de-slugged ("garden/seedling/settle-add-a-title-case-helper.md" → "Add a
-    title case helper"). The settle- prefix the garden writer adds is stripped."""
-    file = node_ref.rsplit("/", 1)[-1]
-    file = re.sub(r"\.md$", "", file, flags=re.IGNORECASE)
-    file = re.sub(r"^settle-", "", file)
-    text = file.replace("-", " ").replace("_", " ").strip()
-    return text[:1].upper() + text[1:] if text else node_ref
 
 
 def _ws_relative(node_ref: str, workspace_id: uuid.UUID) -> str:
@@ -162,7 +156,7 @@ async def split_knowledge(
     written: list[WrittenNote] = []
     seen: set[str] = set()
     for node_ref in written_paths:
-        title = _note_title(node_ref)
+        title = note_title(node_ref)
         if title and title not in seen:
             seen.add(title)
             written.append(WrittenNote(title=title, path=_ws_relative(node_ref, workspace_id)))

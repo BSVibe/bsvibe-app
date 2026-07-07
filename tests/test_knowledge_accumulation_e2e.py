@@ -144,9 +144,14 @@ async def test_full_knowledge_accumulation_from_empty_e2e(tmp_path: Path) -> Non
         await _seed_settle_activity(sf, workspace_id=workspace_id, summary=summary)
 
         # --- drive the REAL settle worker: drain → garden note + embedding --
+        from tests._support import always_remember_extractor_factory  # noqa: PLC0415
+
         worker = SettleWorker(
             session_factory=sf,
-            sink=KnowledgeSettleSink(vault_root=vault_root),
+            sink=KnowledgeSettleSink(
+                vault_root=vault_root,
+                memory_extractor=always_remember_extractor_factory(),
+            ),
             config=SettleWorkerConfig(default_region=_REGION),
             promoter_factory=build_garden_promoter_factory(vault_root=vault_root),
             embed_hook=build_note_embed_hook(session_factory=sf, settings=settings),

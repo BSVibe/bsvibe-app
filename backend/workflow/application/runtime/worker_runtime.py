@@ -52,6 +52,7 @@ from backend.workflow.application.runtime.settle_runtime import (
     build_note_embed_hook,
     build_reconcile_hook,
     build_settle_entity_extractor_factory,
+    build_settle_memory_extractor_factory,
 )
 from backend.workflow.application.safe_mode_expiry import SafeModeExpirySweepRunner
 from backend.workflow.infrastructure.workers.agent_worker import (
@@ -181,16 +182,17 @@ def build_worker_runtime(
             session_factory=session_factory,
             sink=KnowledgeSettleSink(
                 vault_root=Path(settings.knowledge_vault_root),
-                # PRIMARY: derive concepts from LLM-extracted entities (BSage's
-                # mechanism) — soft-falls back to the deterministic heuristic
-                # when the workspace has no single active model account.
+                # PRIMARY content-tag source: concepts from LLM-extracted entities
+                # (soft-falls back to the deterministic heuristic). redis lets an
+                # executor-account settle route dispatch the chat onto the stream.
                 extractor_factory=build_settle_entity_extractor_factory(
-                    session_factory=session_factory,
-                    settings=settings,
-                    # Thread redis so an executor-account settle route can
-                    # dispatch the extraction chat onto the worker stream
-                    # (else every settle degrades to deterministic noise tags).
-                    redis=redis_client,
+                    session_factory=session_factory, settings=settings, redis=redis_client
+                ),
+                # The worth-remembering GATE (founder directive, 2026-07): a
+                # verified-work run deposits a note ONLY when this extractor names
+                # an insight; routine work leaves nothing (notable kinds bypass).
+                memory_extractor=build_settle_memory_extractor_factory(
+                    session_factory=session_factory, settings=settings, redis=redis_client
                 ),
             ),
             config=SettleWorkerConfig(default_region=settings.knowledge_default_region),
