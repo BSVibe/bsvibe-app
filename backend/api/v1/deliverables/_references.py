@@ -195,14 +195,15 @@ def _append_legacy_criteria(checks: Any, entries: list[dict[str, Any]], seen: se
 
 
 def note_title(node_ref: str) -> str:
-    """A readable title for a written note — its OWN frontmatter ``title`` (the
-    faithful knowledge NAME the worth-remembering gate wrote, exact casing
-    preserved, e.g. "OAuth loopback redirect"), read from the file at
-    ``node_ref`` (ABSOLUTE in prod). Falls back to de-slugging the filename when
-    the file is unreadable (synthetic test paths / a moved vault); that fallback
-    lowercases, so the frontmatter read keeps the founder-facing chip's casing
-    correct."""
-    title = _frontmatter_title(node_ref)
+    """A readable title for a written note — its OWN title (the faithful knowledge
+    NAME the worth-remembering gate wrote, exact casing preserved, e.g. "OAuth
+    loopback redirect"), read from the file at ``node_ref`` (ABSOLUTE in prod).
+    The garden writer stamps the title as the note's ``# `` H1 heading (with a
+    frontmatter ``title:`` as a secondary source); we read that. Falls back to
+    de-slugging the filename when the file is unreadable (synthetic test paths /
+    a moved vault); that fallback lowercases, so the on-disk read is what keeps
+    the founder-facing chip's casing correct."""
+    title = _read_note_title(node_ref)
     if title:
         return title
     file = node_ref.rsplit("/", 1)[-1]
@@ -212,16 +213,26 @@ def note_title(node_ref: str) -> str:
     return text[:1].upper() + text[1:] if text else node_ref
 
 
-def _frontmatter_title(node_ref: str) -> str:
-    """The note's frontmatter ``title`` from disk, or ``""`` — soft (never raises)
-    so the report renders even if a note file is gone / synthetic."""
+def _read_note_title(node_ref: str) -> str:
+    """The note's own title from disk, or ``""`` — soft (never raises) so the
+    report renders even if a note file is gone / synthetic.
+
+    The garden writer stores the title as the body's first ``# `` heading
+    (:func:`~backend.knowledge.graph.markdown_utils.extract_title`); a frontmatter
+    ``title:`` is read as a secondary source for any producer that uses it."""
     from pathlib import Path  # noqa: PLC0415 — lazy
 
-    from backend.knowledge.graph.markdown_utils import extract_frontmatter  # noqa: PLC0415
+    from backend.knowledge.graph.markdown_utils import (  # noqa: PLC0415
+        extract_frontmatter,
+        extract_title,
+    )
 
     try:
         text = Path(node_ref).read_text(encoding="utf-8")
     except OSError:
         return ""
-    title = extract_frontmatter(text).get("title")
-    return title.strip() if isinstance(title, str) else ""
+    heading = extract_title(text).strip()
+    if heading:
+        return heading
+    fm_title = extract_frontmatter(text).get("title")
+    return fm_title.strip() if isinstance(fm_title, str) else ""

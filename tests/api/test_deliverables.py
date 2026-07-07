@@ -434,21 +434,22 @@ async def test_report_surfaces_written_from_settle_drains(
     assert any(w["path"] == rel for w in written)
 
 
-async def test_written_note_title_uses_frontmatter_casing(
+async def test_written_note_title_uses_heading_casing(
     configured_client, db, workspace_id, tmp_path
 ) -> None:
     """The worth-remembering gate titles a written note by its knowledge TOPIC.
     The chip must show that topic with its EXACT casing/punctuation (read from
-    the note's frontmatter), NOT a lowercased de-slug of the filename — so
-    "OAuth loopback redirect" stays "OAuth loopback redirect", not "Oauth ...".
+    the note's ``# `` H1 heading, the way the garden writer stamps it), NOT a
+    lowercased de-slug of the filename — so "OAuth loopback redirect" stays
+    "OAuth loopback redirect", not "Oauth loopback redirect".
     """
     run_id, deliverable_id = uuid.uuid4(), uuid.uuid4()
-    # A real on-disk note whose frontmatter title preserves acronym casing but
-    # whose slugified filename would lowercase it.
+    # A real on-disk garden note whose H1 title preserves acronym casing but
+    # whose slugified filename would lowercase it (the garden writer format).
     note_abs = tmp_path / "oauth-loopback-redirect.md"
     note_abs.write_text(
-        "---\ntitle: OAuth loopback redirect\nsource: settle_worker\n---\n\n"
-        "redirect_uri must string-match exactly.\n",
+        "---\nsource: settle_worker\nknowledge_layer: episodic\n---\n\n"
+        "# OAuth loopback redirect\n\nredirect_uri must string-match exactly.\n",
         encoding="utf-8",
     )
     async with db() as s:
