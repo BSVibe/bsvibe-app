@@ -24,6 +24,7 @@ import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 
 if TYPE_CHECKING:
+    from backend.knowledge.extraction.worth_remembering import RememberableKnowledge
     from backend.workflow.application.agent_loop import LoopResult
 
 from backend.config import Settings
@@ -247,6 +248,7 @@ async def finish_verified(
     verdict: VerificationResult,
     redis_client: Any,
     settings: Settings,
+    knowledge: RememberableKnowledge | None = None,
 ) -> LoopResult:
     """Land the verified terminal — Deliverable type CODE + Redis wake-up.
 
@@ -275,6 +277,8 @@ async def finish_verified(
         # not the work LLM's raw narration — the first line becomes the PR
         # title + settle note title. R1: weave in what the verifier proved.
         summary=_compose_verified_summary(run, final_text, written_paths, verdict),
+        # v2 — the agent's own retrospective knowledge declaration (or None).
+        knowledge=knowledge,
     )
 
     # Wake the delivery + settle consumers (worker_mode="redis_streams"
