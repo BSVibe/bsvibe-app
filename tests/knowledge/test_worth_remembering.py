@@ -13,8 +13,6 @@ and the extractor prompt. The LLM call lives in the sink/compiler.
 
 from __future__ import annotations
 
-import pytest
-
 from backend.knowledge.extraction.worth_remembering import (
     RememberableKnowledge,
     is_inherently_notable,
@@ -22,7 +20,6 @@ from backend.knowledge.extraction.worth_remembering import (
     parse_verdict_text,
     worth_remembering_messages,
 )
-
 
 # ── parse_extraction — LLM verdict → RememberableKnowledge | None ─────────────
 
@@ -143,3 +140,23 @@ def test_prompt_defines_the_worth_remembering_bar() -> None:
     # And the work context is in the user turn.
     user = next(m["content"] for m in messages if m["role"] == "user")
     assert "gcd" in user
+
+
+def test_settle_and_ingest_prompts_share_one_bar() -> None:
+    """Both knowledge-writing paths embed the SAME worth-remembering principle,
+    so the settle sink (per run) and the ingest compiler (per file) can't drift
+    to different bars. The principle is stated once and reused verbatim."""
+    from backend.knowledge.extraction.worth_remembering import (
+        WORTH_REMEMBERING_PRINCIPLE,
+        worth_remembering_messages,
+    )
+    from backend.knowledge.ingest.ingest_compiler._llm_compile import (
+        COMPILE_BATCH_SYSTEM_PROMPT,
+    )
+
+    settle_system = worth_remembering_messages(intent="x", summary="y")[0]["content"]
+    assert WORTH_REMEMBERING_PRINCIPLE in settle_system
+    assert WORTH_REMEMBERING_PRINCIPLE in COMPILE_BATCH_SYSTEM_PROMPT
+    # The shared bar names the exclusions that were the noise source.
+    assert "NOT a work log" in WORTH_REMEMBERING_PRINCIPLE
+    assert "keep nothing" in WORTH_REMEMBERING_PRINCIPLE.lower()

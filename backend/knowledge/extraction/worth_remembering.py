@@ -94,13 +94,23 @@ def parse_verdict_text(raw_text: Any) -> RememberableKnowledge | None:
     return parse_extraction(decoded)
 
 
+#: The ONE bar both knowledge-writing paths hold — the settle sink (per verified
+#: run) and the ingest compiler (per imported file). Stated once here so the two
+#: prompts can't drift apart: knowledge is not a work/file log, keep only what is
+#: worth remembering, default to keeping nothing.
+WORTH_REMEMBERING_PRINCIPLE = (
+    "Knowledge is NOT a work log or a file catalog. Keep ONLY what is worth "
+    "REMEMBERING — a reusable INSIGHT, a non-obvious LEARNING (a gotcha, a "
+    "constraint discovered, why one approach was chosen over another), or a "
+    "DECISION future work must honour. Routine or boilerplate work leaves "
+    "NOTHING behind; the default outcome is to keep nothing."
+)
+
+
 _SYSTEM_PROMPT = (
     "You decide whether a completed unit of work left behind anything WORTH "
-    "REMEMBERING, and if so, name it. Knowledge is NOT a work log: do NOT record "
-    "that a routine task happened (adding a utility, fixing a typo, writing "
-    "tests). Keep ONLY: a retrospective INSIGHT, a non-obvious LEARNING (a gotcha, "
-    "a constraint discovered, why an approach was chosen over another), or a user "
-    "DECISION / choice that future work should honour.\n"
+    "REMEMBERING, and if so, name it. " + WORTH_REMEMBERING_PRINCIPLE + " A user "
+    "DECISION / choice that future work should honour counts too.\n"
     "Output ONLY a JSON object:\n"
     '  {"worth_remembering": true|false, "topic": "<short knowledge name>", '
     '"insight": "<the thing to remember, 1-3 sentences>"}\n'
@@ -138,6 +148,7 @@ __all__ = [
     "MAX_INSIGHT_CHARS",
     "MAX_TOPIC_CHARS",
     "RememberableKnowledge",
+    "WORTH_REMEMBERING_PRINCIPLE",
     "is_inherently_notable",
     "parse_extraction",
     "parse_verdict_text",

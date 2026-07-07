@@ -20,6 +20,8 @@ from typing import Any, Protocol, runtime_checkable
 
 import structlog
 
+from backend.knowledge.extraction.worth_remembering import WORTH_REMEMBERING_PRINCIPLE
+
 from ._chunking import BatchItem
 
 logger = structlog.get_logger(__name__)
@@ -63,8 +65,16 @@ class CompileLlm(Protocol):
 LLMClient = CompileLlm
 
 
-COMPILE_BATCH_SYSTEM_PROMPT = """\
-You are a knowledge garden curator. You receive code/docs from a project, and you must extract ONLY reusable engineering knowledge worth preserving across projects.
+# The import (per-file) and settle (per-run) paths hold the SAME bar — stated
+# once in :data:`WORTH_REMEMBERING_PRINCIPLE` and embedded verbatim in both
+# prompts so they cannot drift. The ingest prompt then adds its file-specific
+# structure (the four note kinds, the JSON-array schema, the examples). Built by
+# concatenation (NOT an f-string) because the schema/examples below carry literal
+# ``{ }`` braces that an f-string would try to interpolate.
+COMPILE_BATCH_SYSTEM_PROMPT = (
+    "You are a knowledge garden curator. You receive code/docs from a project, and you must extract ONLY reusable engineering knowledge worth preserving across projects.\n\n"  # noqa: E501
+    + WORTH_REMEMBERING_PRINCIPLE
+    + """
 
 ⚠️ THIS IS NOT A FILE CATALOG. Do NOT create notes that describe files, classes, functions, or codebase structure. The source code itself is the source of truth for what code DOES. Notes are for what humans LEARN that they couldn't re-derive by re-reading the code.
 
@@ -116,7 +126,8 @@ Bad note (DO NOT produce):
 This is a codebase description. Not reusable. Return [] for this chunk.
 
 Return [] when the chunk has no insight worth extracting. THIS IS THE COMMON CASE.
-"""  # noqa: E501  -- prompt body has long natural-language lines on purpose
+"""
+)  # noqa: E501  -- prompt body has long natural-language lines on purpose
 
 
 # Tags an LLM might emit even after the prompt says not to. Filtered at
