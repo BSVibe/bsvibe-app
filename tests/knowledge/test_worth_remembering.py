@@ -65,6 +65,37 @@ def test_declared_knowledge_caps_topic_length() -> None:
     assert len(got.topic) <= 80
 
 
+def test_declared_knowledge_humanizes_slug_topic() -> None:
+    # Agents sometimes emit a kebab/snake slug as the topic (observed live in EN:
+    # 'bsvibe-sandbox-editable-install-not-reliable'). The chip must read like a
+    # human knowledge NAME, so a slug (no spaces + separators) is de-slugged.
+    got = parse_declared_knowledge(
+        {"knowledge": {"topic": "auth-loopback-redirect", "insight": "must string-match"}}
+    )
+    assert got is not None
+    assert got.topic == "Auth loopback redirect"
+
+    snake = parse_declared_knowledge(
+        {"knowledge": {"topic": "pytest_pythonpath_for_src_layout", "insight": "x"}}
+    )
+    assert snake is not None
+    assert snake.topic == "Pytest pythonpath for src layout"
+
+
+def test_declared_knowledge_leaves_real_phrase_untouched() -> None:
+    # A topic that already reads as a phrase (has whitespace) is NOT altered —
+    # incl. legitimately hyphenated terms inside a phrase.
+    got = parse_declared_knowledge(
+        {"knowledge": {"topic": "Copy-on-write semantics", "insight": "x"}}
+    )
+    assert got is not None
+    assert got.topic == "Copy-on-write semantics"
+    # A single word (no separators) is left as-is.
+    one = parse_declared_knowledge({"knowledge": {"topic": "Idempotency", "insight": "x"}})
+    assert one is not None
+    assert one.topic == "Idempotency"
+
+
 # ── parse_extraction — LLM verdict → RememberableKnowledge | None ─────────────
 
 

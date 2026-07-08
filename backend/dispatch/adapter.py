@@ -622,7 +622,9 @@ _E30_TOOL_GUIDE_HEADER = (
     "\n"
     "OPTIONAL — record what you LEARNED. If, doing this work, you hit a "
     "non-obvious learning worth remembering, add a ``knowledge`` field to the "
-    "SAME block (topic = a SHORT knowledge NAME, not a task sentence or file path):\n"
+    "SAME block. ``topic`` is a SHORT human-readable knowledge NAME — a noun "
+    "phrase WITH SPACES (e.g. 'Auth loopback redirect'), NOT a kebab-case or "
+    "snake_case slug, a task sentence, or a file path:\n"
     "\n"
     "<verification-contract>\n"
     '{"checks": [ ... ], "knowledge": {"topic": "<short knowledge name>", '

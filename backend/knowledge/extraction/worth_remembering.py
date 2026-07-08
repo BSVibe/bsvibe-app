@@ -76,6 +76,25 @@ def parse_extraction(raw: Any) -> RememberableKnowledge | None:
     )
 
 
+def _humanize_topic(topic: str) -> str:
+    """Normalize a topic into a human-readable knowledge NAME.
+
+    Agents occasionally emit a kebab/snake slug as the topic (observed live:
+    ``bsvibe-sandbox-editable-install-not-reliable``) instead of a noun phrase.
+    When the topic looks like a slug — NO whitespace and it contains a ``-`` or
+    ``_`` — de-slug it: separators to spaces, capitalize the first letter. A
+    topic that already reads as a phrase (has whitespace, incl. legitimately
+    hyphenated terms like ``Copy-on-write semantics``) or a bare single word is
+    left untouched. Deterministic safety net so the "추가한 지식" chip always reads
+    like a name regardless of how well the agent followed the prompt."""
+    if not topic or any(c.isspace() for c in topic):
+        return topic
+    if "-" not in topic and "_" not in topic:
+        return topic
+    deslugged = " ".join(topic.replace("-", " ").replace("_", " ").split())
+    return (deslugged[:1].upper() + deslugged[1:]) if deslugged else topic
+
+
 def parse_declared_knowledge(contract: Any) -> RememberableKnowledge | None:
     """Parse the knowledge the WORKING AGENT declared in its verification contract.
 
@@ -92,7 +111,7 @@ def parse_declared_knowledge(contract: Any) -> RememberableKnowledge | None:
     block = contract.get("knowledge")
     if not isinstance(block, dict):
         return None
-    topic = str(block.get("topic") or "").strip()
+    topic = _humanize_topic(str(block.get("topic") or "").strip())
     insight = str(block.get("insight") or block.get("note") or block.get("body") or "").strip()
     if not topic or not insight:
         return None

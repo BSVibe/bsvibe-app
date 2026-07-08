@@ -362,8 +362,9 @@ class ToolRegistry:
                             "topic": {
                                 "type": "string",
                                 "description": (
-                                    "A SHORT knowledge NAME — a noun phrase (e.g. "
-                                    "'Idempotent webhooks'), never a task sentence or file path."
+                                    "A SHORT human-readable knowledge NAME — a noun phrase "
+                                    "WITH SPACES (e.g. 'Idempotent webhooks'), NOT a kebab-case "
+                                    "or snake_case slug, a task sentence, or a file path."
                                 ),
                             },
                             "insight": {
