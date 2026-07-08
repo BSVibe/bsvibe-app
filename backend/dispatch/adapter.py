@@ -393,7 +393,15 @@ class ExecutorAdapter:
         # in its final text. The agent does its actual work using its own
         # native tools (bash, git, gh, file edit, pytest); BSVibe's tool
         # registry is here only as a verification-contract template.
-        effective_system = _augment_system_for_executor_tools(system, tools) if tools else system
+        # tools set → agentic work loop (contract guide); tools None → a
+        # chat-shaped completion (frame / judge / synthesis), so tell the agent
+        # to answer as a raw completion endpoint. Either way ExecutorAdapter.chat
+        # matches LiteLLMAdapter.chat's clean-output contract.
+        effective_system = (
+            _augment_system_for_executor_tools(system, tools)
+            if tools
+            else _augment_system_for_executor_chat(system)
+        )
 
         # Lift E19 — when wired with a ``session_factory`` the entire
         # dispatch lifecycle (create_task → dispatch_task → commit →
@@ -685,6 +693,33 @@ _E30_CONTRACT_RE = re.compile(
 #: executor never returns — so the loop treats this id as terminal and verifies
 #: straight away (see ``backend.workflow.application._drive_loop``).
 EXECUTOR_DECLARE_VERIFICATION_ID = "e30-declare-verification"
+
+
+#: Directive that makes a coding-agent executor behave like a raw LLM completion
+#: for a chat-shaped (``tools=None``) call — see :func:`_augment_system_for_executor_chat`.
+_EXECUTOR_COMPLETION_DIRECTIVE = (
+    "\n\n---\n"
+    "You are being used as a TEXT-COMPLETION endpoint, NOT an interactive agent. "
+    "Do exactly what the instruction above asks, in ONE reply, and output ONLY "
+    "the requested result — no preamble, no explanation, no clarifying questions, "
+    "no tool use, no markdown code fences. If the instruction asks for a JSON "
+    "object, your ENTIRE reply must be that single JSON object and nothing else."
+)
+
+
+def _augment_system_for_executor_chat(system: str) -> str:
+    """Make a coding-agent executor behave like a raw LLM for a pure completion
+    call (``tools=None`` — framing, judging, note synthesis, decision questions).
+
+    claude_code / codex / opencode are AGENTIC by default: given a "return a JSON
+    object" prompt, ``claude -p`` may reply with preamble, a clarifying question,
+    or an agentic transcript — none of which the caller's parser can read, so the
+    call degrades exactly like a LiteLLM refusal (live: ``frame_stage_llm_unparseable``
+    → no ``summary_title`` → the report title falls back to the raw imperative
+    Direction). Appending a completion directive keeps ``ExecutorAdapter.chat``
+    behaviourally identical to ``LiteLLMAdapter.chat`` for chat-shaped callers —
+    one ``chat`` contract, same clean output, regardless of transport."""
+    return (system.rstrip() if system else "") + _EXECUTOR_COMPLETION_DIRECTIVE
 
 
 def _augment_system_for_executor_tools(system: str, tools: list[dict[str, Any]] | None) -> str:
