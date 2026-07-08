@@ -132,9 +132,15 @@ def _compose_verified_summary(
     not just *what* changed but *that it was proven* — no LLM, no raw commands.
     """
     payload = run.payload or {}
+    # Title in a formal, declarative register — a REPORT, not the founder's raw
+    # imperative Direction ("dedup 함수를 추가해줘"). The FrameStage already produces
+    # a SHORT plain-language, workspace-language ``summary_title`` ("dedup 유틸리티
+    # 추가"); prefer it. Fall back to the intent first-line, then a stable string.
+    frame = payload.get("frame")
+    summary_title = str((frame.get("summary_title") if isinstance(frame, dict) else "") or "").strip()
     intent = str(payload.get("intent_text") or payload.get("text") or "").strip()
     first_line = next((ln.strip() for ln in intent.splitlines() if ln.strip()), "")
-    title = first_line[:_MAX_SUMMARY_TITLE].rstrip() or "Delivered change"
+    title = (summary_title or first_line)[:_MAX_SUMMARY_TITLE].rstrip() or "Delivered change"
 
     files = [p.strip() for p in (written_paths or []) if p and p.strip()]
     sections: list[str] = []

@@ -354,6 +354,29 @@ async def test_verified_summary_titled_by_intent_bodied_by_changed_files() -> No
     assert "uv run pytest" not in summary
 
 
+async def test_verified_summary_prefers_declarative_frame_title() -> None:
+    """A REPORT should read in a formal declarative register, not the founder's
+    raw imperative Direction ("dedup 함수를 추가해줘"). The FrameStage already
+    produces a SHORT plain-language, localized ``summary_title`` ("dedup 유틸리티
+    추가") — the composed summary titles by THAT, so the report / PR / settle
+    titles read like a report, not a chat request. Falls back to the intent
+    first-line only when no framed title exists."""
+    from types import SimpleNamespace
+
+    from backend.workflow.application.run_persistence import _compose_verified_summary
+
+    run = SimpleNamespace(
+        payload={
+            "intent_text": "src/toolkit/dedup.py에 dedup(items) 함수를 추가해줘 — 순서 보존 중복 제거.",
+            "frame": {"summary_title": "dedup 유틸리티 추가"},
+        }
+    )
+    summary = _compose_verified_summary(run, "narration", ["src/toolkit/dedup.py"])  # type: ignore[arg-type]
+    assert summary.splitlines()[0].strip() == "dedup 유틸리티 추가"
+    # The raw imperative Direction is NOT the title.
+    assert "추가해줘" not in summary.splitlines()[0]
+
+
 async def test_compose_verified_summary_falls_back_to_cleaned_prose_without_paths() -> None:
     """When no changed-file list is available (rare — a non-file deliverable),
     fall back to the agent prose, but strip the contract block and repair the
