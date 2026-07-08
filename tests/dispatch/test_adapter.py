@@ -721,6 +721,10 @@ class TestExecutorAdapterChat:
         # The dispatched system prompt carries the Korean output-language directive.
         assert "Korean" in captured["system"]
         assert "be terse" in captured["system"]
+        # v2 — a chat-shaped (tools=None) call also carries the completion
+        # directive so the coding agent answers as a raw LLM (clean output),
+        # not agentically — ExecutorAdapter.chat matches LiteLLMAdapter.chat.
+        assert "TEXT-COMPLETION endpoint" in captured["system"]
 
     def _retry_adapter(self) -> ExecutorAdapter:
         """A minimal ExecutorAdapter that passes chat()'s redis + executor_type
@@ -1208,6 +1212,19 @@ class TestExecutorAdapterE30ToolsAndContract:
 
         assert _augment_system_for_executor_tools("be terse", None) == "be terse"
         assert _augment_system_for_executor_tools("be terse", []) == "be terse"
+
+    def test_augment_system_for_chat_adds_completion_directive(self) -> None:
+        """A chat-shaped (tools=None) executor call gets a completion directive so
+        the coding agent answers as a raw LLM (clean, parseable output) instead of
+        agentically — keeping ExecutorAdapter.chat identical to LiteLLMAdapter.chat.
+        The original system leads; the directive is appended."""
+        from backend.dispatch.adapter import _augment_system_for_executor_chat
+
+        out = _augment_system_for_executor_chat("Output ONLY a JSON object with a title.")
+        assert out.startswith("Output ONLY a JSON object with a title.")
+        assert "TEXT-COMPLETION endpoint" in out
+        assert "no tool use" in out
+        assert "single JSON object" in out
 
     def test_guide_documents_optional_knowledge_declaration(self) -> None:
         """v2 — the guide teaches the agent to record what it LEARNED (a
