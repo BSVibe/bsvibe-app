@@ -137,7 +137,9 @@ def _compose_verified_summary(
     # a SHORT plain-language, workspace-language ``summary_title`` ("dedup 유틸리티
     # 추가"); prefer it. Fall back to the intent first-line, then a stable string.
     frame = payload.get("frame")
-    summary_title = str((frame.get("summary_title") if isinstance(frame, dict) else "") or "").strip()
+    summary_title = str(
+        (frame.get("summary_title") if isinstance(frame, dict) else "") or ""
+    ).strip()
     intent = str(payload.get("intent_text") or payload.get("text") or "").strip()
     first_line = next((ln.strip() for ln in intent.splitlines() if ln.strip()), "")
     title = (summary_title or first_line)[:_MAX_SUMMARY_TITLE].rstrip() or "Delivered change"
