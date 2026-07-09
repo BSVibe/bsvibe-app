@@ -3,6 +3,7 @@
 import { ApiError } from "@/lib/api/client";
 import { getConceptDetail } from "@/lib/api/knowledge";
 import type { ConceptDetail, KnowledgeGraph } from "@/lib/api/types";
+import { graphKindLabel, humanizeGroup } from "@/lib/i18n/graph-kinds";
 import {
   type GraphLink,
   computeDegree,
@@ -79,14 +80,6 @@ type ColorMode = "type" | "community";
 // 1-hop local graph (Lift 5). Local is the navigable exploration surface; the
 // global view stays concept-only and clean.
 type ViewMode = "global" | "local";
-
-/** The empty/unknown kind gets the translated "Other" label; everything else is
- *  humanized from the backend id. */
-function humanizeGroup(group: string): string | null {
-  if (!group) return null;
-  const cleaned = group.replace(/^_/, "").replace(/[-_]/g, " ");
-  return cleaned.charAt(0).toUpperCase() + cleaned.slice(1);
-}
 
 interface GraphNode {
   id: string;
@@ -269,12 +262,13 @@ export default function KnowledgeGraphView({ graph }: { graph: KnowledgeGraph })
         .map(([group, count], idx) => ({
           group,
           count,
-          // TYPE → the humanized kind. COMMUNITY → the shared "Cluster N" label,
-          // never the raw community id (a long concept-id string that overflows
-          // the legend). Unclustered nodes fall back to "Other".
+          // TYPE → the LOCALIZED ontology kind (identity stays the English
+          // `group`). COMMUNITY → the shared "Cluster N" label, never the raw
+          // community id (a long concept-id string that overflows the legend).
+          // Unclustered nodes fall back to "Other".
           label:
             colorMode === "type"
-              ? (humanizeGroup(group) ?? t("graphGroupOther"))
+              ? graphKindLabel(group, t)
               : (communityLabels[group] ?? t("graphGroupOther")),
           color: GROUP_PALETTE[idx % GROUP_PALETTE.length],
         }))
@@ -538,7 +532,7 @@ export default function KnowledgeGraphView({ graph }: { graph: KnowledgeGraph })
 
   // The selected node's TYPE/community feed the inspector metadata (computed
   // from `selectedNode`, resolved up near the local-graph build above).
-  const selectedTypeLabel = selectedNode?.group ? humanizeGroup(selectedNode.group) : null;
+  const selectedTypeLabel = selectedNode?.group ? graphKindLabel(selectedNode.group, t) : null;
   // Same "Cluster N" label the legend shows — so the inspector and legend agree.
   const selectedCommunityLabel = selectedNode?.community
     ? (communityLabels[selectedNode.community] ?? null)

@@ -281,6 +281,13 @@
     "graphShowAll": "Show all",
     "graphBackToOverview": "← Full graph",
     "graphGroupOther": "Other",
+    "graphKind": {
+      "Pattern": "Pattern",
+      "Principle": "Principle",
+      "TechInsight": "Tech insight",
+      "DomainModel": "Domain model",
+      "concept": "Concept"
+    },
     "graphLegendLabel": "Filter by kind",
     "searchLabel": "Search knowledge",
     "searchPlaceholder": "Search what I know…",
