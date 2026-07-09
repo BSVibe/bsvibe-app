@@ -1247,6 +1247,25 @@ class TestExecutorAdapterE30ToolsAndContract:
         # The shared worth-remembering bar is embedded verbatim.
         assert WORTH_REMEMBERING_PRINCIPLE in out
 
+    def test_guide_ties_knowledge_topic_to_output_language(self) -> None:
+        """KO-workspace regression: the note BODY localizes (the language directive
+        reaches the executor) but the ``topic`` — a short label — drifts to English
+        because the guide frames it as a 'noun phrase' with no language instruction,
+        and the directive's 'keep identifiers unchanged' clause captures it. The
+        guide must state that BOTH topic and insight are user-facing prose to be
+        written in the SAME language as the rest of the agent's output (the
+        workspace language), NOT forced English."""
+        from backend.dispatch.adapter import _augment_system_for_executor_tools
+
+        out = _augment_system_for_executor_tools(
+            "You are a worker.",
+            [{"type": "function", "function": {"name": "declare_verification"}}],
+        )
+        low = out.lower()
+        assert "same language" in low
+        # It must scope the instruction to the knowledge fields (prose, not a slug).
+        assert "topic" in low and "insight" in low
+
     def test_synthesize_forwards_declared_knowledge(self) -> None:
         """v2 — a contract carrying a ``knowledge`` block forwards it verbatim on
         the synthesized declare_verification args (the handler latches it)."""

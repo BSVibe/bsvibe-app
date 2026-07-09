@@ -364,12 +364,18 @@ class ToolRegistry:
                                 "description": (
                                     "A SHORT human-readable knowledge NAME — a noun phrase "
                                     "WITH SPACES (e.g. 'Idempotent webhooks'), NOT a kebab-case "
-                                    "or snake_case slug, a task sentence, or a file path."
+                                    "or snake_case slug, a task sentence, or a file path. This "
+                                    "is the note's TITLE (user-facing prose, not an identifier): "
+                                    "write it in the SAME language as the rest of your output "
+                                    "(the workspace language), never forced English."
                                 ),
                             },
                             "insight": {
                                 "type": "string",
-                                "description": "What to remember and WHY it matters (1-3 sentences).",
+                                "description": (
+                                    "What to remember and WHY it matters (1-3 sentences), in "
+                                    "the SAME language as the topic (the workspace language)."
+                                ),
                             },
                         },
                     },

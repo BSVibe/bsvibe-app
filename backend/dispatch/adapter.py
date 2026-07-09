@@ -634,6 +634,11 @@ _E30_TOOL_GUIDE_HEADER = (
     "phrase WITH SPACES (e.g. 'Auth loopback redirect'), NOT a kebab-case or "
     "snake_case slug, a task sentence, or a file path:\n"
     "\n"
+    "Both ``topic`` and ``insight`` are user-facing PROSE (the note's title and "
+    "body), NOT identifiers — write BOTH in the SAME language as the rest of your "
+    "user-facing output (the workspace language stated above), never forced "
+    "English. Keep code, symbols, and file paths verbatim.\n"
+    "\n"
     "<verification-contract>\n"
     '{"checks": [ ... ], "knowledge": {"topic": "<short knowledge name>", '
     '"insight": "<what to remember + why, 1-3 sentences>"}}\n'
