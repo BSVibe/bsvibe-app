@@ -58,6 +58,14 @@ class _EffectsMixin(_ServiceBase):
         # action's params so the concept inherits the same E20 ``type:``
         # field. Empty / unset = legacy concept, no type written.
         note_type = entry.params.get("type") or None
+        # Per-locale display labels (founder decision 2026-07) — promotion /
+        # backfill stamp ``{lang: label}`` so the graph node renders in the
+        # workspace language while the id + H1 stay the English identifier.
+        display_labels = {
+            str(k): str(v)
+            for k, v in (entry.params.get("display_labels") or {}).items()
+            if isinstance(v, str) and v.strip()
+        }
 
         now = self._clock()
         path = paths.active_concept_path(concept)
@@ -71,6 +79,7 @@ class _EffectsMixin(_ServiceBase):
                 updated_at=now,
                 source_action=entry.path,
                 note_type=note_type,
+                display_labels=display_labels,
             ),
             initial_body=initial_body,
         )

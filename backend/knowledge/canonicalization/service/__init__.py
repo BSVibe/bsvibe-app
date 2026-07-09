@@ -253,6 +253,7 @@ class CanonicalizationService(
         auto_apply: bool = True,
         note_type: str | None = None,
         initial_body: str | None = None,
+        display_labels: dict[str, str] | None = None,
     ) -> str | None:
         """Tag → canonical concept id (Handoff §11 ingest write policy).
 
@@ -296,6 +297,16 @@ class CanonicalizationService(
             # an empty ``# Title`` shell. ``_effect_create_concept`` reads it.
             if initial_body:
                 params["initial_body"] = initial_body
+            # Per-locale display labels (founder decision 2026-07) — the promoter
+            # passes a localized concept label so ``_effect_create_concept`` writes
+            # it to frontmatter; the concept id + H1 stay the English identifier.
+            clean_labels = {
+                str(k): str(v)
+                for k, v in (display_labels or {}).items()
+                if isinstance(v, str) and v.strip()
+            }
+            if clean_labels:
+                params["display_labels"] = clean_labels
             draft = await self.create_action_draft(
                 kind="create-concept",
                 params=params,

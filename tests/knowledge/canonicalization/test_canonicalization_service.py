@@ -128,6 +128,28 @@ class TestApplyCreateConcept:
         assert extract_title(raw) == "Machine Learning"
 
     @pytest.mark.asyncio
+    async def test_apply_creates_concept_with_display_labels(
+        self, service: CanonicalizationService, storage: FileSystemStorage
+    ) -> None:
+        """A create-concept action carrying per-locale ``display_labels`` writes
+        them to the concept frontmatter (the write path for the localized graph
+        node label); the H1 stays the English identifier."""
+        path = await service.create_action_draft(
+            kind="create-concept",
+            params={
+                "concept": "http-client",
+                "title": "Http client",
+                "display_labels": {"ko": "HTTP 클라이언트"},
+            },
+        )
+        result = await service.apply_action(path, actor="cli")
+        assert result.final_status == "applied"
+
+        raw = await storage.read("concepts/active/http-client.md")
+        assert extract_frontmatter(raw).get("display_labels") == {"ko": "HTTP 클라이언트"}
+        assert extract_title(raw) == "Http client"
+
+    @pytest.mark.asyncio
     async def test_apply_updates_action_note(
         self, service: CanonicalizationService, storage: FileSystemStorage
     ) -> None:

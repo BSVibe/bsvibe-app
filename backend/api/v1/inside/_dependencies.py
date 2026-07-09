@@ -19,7 +19,7 @@ from typing import Annotated
 import networkx as nx
 from fastapi import Depends
 
-from backend.api.deps import get_workspace_id
+from backend.api.deps import get_output_language, get_workspace_id
 
 # ``_vault_root`` is the same helper :mod:`backend.api.v1.decisions` defines —
 # importing it preserves the FS-as-SoT contract that every per-workspace
@@ -66,6 +66,7 @@ async def build_inside_index(
 
 async def build_inside_graph(
     storage: Annotated[StorageBackend, Depends(build_inside_storage)],
+    language: Annotated[str, Depends(get_output_language)],
 ) -> nx.MultiDiGraph:
     """The caller's per-workspace knowledge graph as a NetworkX snapshot.
 
@@ -81,9 +82,14 @@ async def build_inside_graph(
     Pure + read-only: a vault outside this workspace is not addressable, and a
     fresh workspace yields an empty graph (handled gracefully upstream).
 
+    The ``language`` (the caller's workspace ``workspaces.language``) localizes
+    concept node LABELS when a concept carries a display label for it — the node
+    ids stay the stable English identifiers, so only the founder-facing labels
+    change (founder decision 2026-07).
+
     Overridable in tests via ``app.dependency_overrides``.
     """
-    return await build_concept_graph(storage)
+    return await build_concept_graph(storage, language=language)
 
 
 __all__ = [

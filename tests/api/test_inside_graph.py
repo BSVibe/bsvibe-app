@@ -30,7 +30,7 @@ import httpx
 import pytest
 import pytest_asyncio
 
-from backend.api.deps import get_current_user, get_workspace_id
+from backend.api.deps import get_current_user, get_output_language, get_workspace_id
 from backend.api.main import create_app
 from backend.api.v1.inside import build_inside_storage
 from backend.knowledge.canonicalization.index import InMemoryCanonicalizationIndex
@@ -123,10 +123,40 @@ async def client(vault_root: Path, workspace_id: uuid.UUID):
     app.dependency_overrides[get_current_user] = fake_current_user()
     app.dependency_overrides[get_workspace_id] = _ws
     app.dependency_overrides[build_inside_storage] = _storage
+    # Default English; per-test override sets a workspace language.
+    app.dependency_overrides[get_output_language] = lambda: "en"
 
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
+        c._app = app  # expose for per-test dependency overrides
         yield c
+
+
+async def test_graph_localizes_node_label_for_workspace_language(client, workspace_storage) -> None:
+    """A KO workspace renders concept nodes with their Korean display label while
+    the node ``id`` stays the English identifier (founder decision 2026-07)."""
+    from backend.knowledge.canonicalization import models
+
+    store = NoteStore(workspace_storage)
+    await store.write_concept(
+        models.ConceptEntry(
+            concept_id="http-client",
+            path="concepts/active/http-client.md",
+            display="Http client",
+            aliases=[],
+            created_at=_FIXED_NOW,
+            updated_at=_FIXED_NOW,
+            display_labels={"ko": "HTTP 클라이언트"},
+        )
+    )
+    client._app.dependency_overrides[get_output_language] = lambda: "ko"
+
+    r = await client.get("/api/v1/inside/graph")
+    assert r.status_code == 200, r.text
+    node = next(n for n in r.json()["nodes"] if n["id"] == "http-client")
+    # Identity unchanged; label localized.
+    assert node["id"] == "http-client"
+    assert node["label"] == "HTTP 클라이언트"
 
 
 # ---------------------------------------------------------------------------

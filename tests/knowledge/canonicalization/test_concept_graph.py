@@ -137,6 +137,39 @@ async def test_concept_graph_node_entity_type_carries_note_type(
     assert graph.nodes["no-implicit-routing"]["entity_type"] == "Principle"
 
 
+async def test_concept_graph_node_uses_localized_display_label(
+    workspace_storage: FileSystemStorage,
+) -> None:
+    """Per-locale label (founder decision 2026-07): the node ``id`` stays the
+    stable English identifier, but when a language is requested and the concept
+    carries a display label for it, the node ``name`` (what the graph renders)
+    is the localized label — so a KO workspace sees Korean nodes without changing
+    concept identity."""
+    from backend.knowledge.canonicalization import models
+
+    store = NoteStore(workspace_storage)
+    await store.write_concept(
+        models.ConceptEntry(
+            concept_id="http-client",
+            path="concepts/active/http-client.md",
+            display="Http client",
+            aliases=[],
+            created_at=_FIXED_NOW,
+            updated_at=_FIXED_NOW,
+            display_labels={"ko": "HTTP 클라이언트"},
+        )
+    )
+
+    # KO request → localized node label; identity (id) unchanged.
+    ko_graph = await build_concept_graph(workspace_storage, language="ko")
+    assert ko_graph.nodes["http-client"]["name"] == "HTTP 클라이언트"
+
+    # No language / English / a language with no label → the English display.
+    for lang in (None, "en", "ja"):
+        g = await build_concept_graph(workspace_storage, language=lang)
+        assert g.nodes["http-client"]["name"] == "Http client"
+
+
 async def test_concept_graph_untyped_concept_falls_back_to_generic_kind(
     workspace_storage: FileSystemStorage,
 ) -> None:
