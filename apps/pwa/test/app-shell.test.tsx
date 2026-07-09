@@ -4,8 +4,14 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("next/navigation", () => ({
-  useRouter: () => ({ replace: vi.fn(), push: vi.fn(), prefetch: vi.fn() }),
+  useRouter: () => ({ replace: vi.fn(), push: vi.fn(), prefetch: vi.fn(), refresh: vi.fn() }),
   usePathname: () => "/brief",
+}));
+
+// The shell mounts <LocaleSync/>, which fetches the workspace to sync the
+// chrome locale — stub it so the shell tests never touch the network.
+vi.mock("@/lib/api/workspace", () => ({
+  getWorkspace: vi.fn(async () => ({ id: "w1", name: "W", language: "en" })),
 }));
 
 const SESSION: Session = {

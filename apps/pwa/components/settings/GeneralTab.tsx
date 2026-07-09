@@ -28,9 +28,10 @@ import { type FormEvent, useEffect, useState } from "react";
  *  - Theme (the headline): a Light / System / Dark segmented control wired to
  *    the theme controller. Choosing one persists `bsvibe.theme` and applies
  *    `data-theme` to <html> immediately. This is the must-work piece.
- *  - Language: writes the `bsvibe.locale` cookie and refreshes the route so the
- *    new message catalog applies live (real i18n, via next-intl). Also kept in
- *    the local preference blob so the select reflects the stored choice.
+ *  - Language: `workspaces.language` is the source of truth for BOTH content and
+ *    chrome (founder decision 2026-07). Choosing a language PATCHes the workspace
+ *    FIRST, then mirrors the `bsvibe.locale` cookie + refreshes so the catalog
+ *    applies live; a failed PATCH surfaces an error instead of desyncing the two.
  *  - Time zone / Date format: LOCAL-only preferences (no backend yet — server
  *    sync is a follow-up).
  *  - Workspace name / Workspace ID: DISPLAY-only. The id is the ACTUAL
@@ -81,6 +82,7 @@ export default function GeneralTab() {
   // real value arrives so we never optimistically show the wrong mode.
   const [safeMode, setSafeMode] = useState<boolean | null>(null);
   const [safeModeSaving, setSafeModeSaving] = useState(false);
+  const [langError, setLangError] = useState(false);
 
   const workspaceId =
     ws.kind === "loaded" ? ws.id : (session?.personalAccountId ?? t("workspaceIdFallback"));
@@ -146,17 +148,22 @@ export default function GeneralTab() {
   const workspaceName =
     ws.kind === "loaded" ? ws.name : ws.kind === "failed" ? t("workspaceNameFallback") : "…";
 
-  function chooseLanguage(value: string) {
-    // Keep the local preference in sync (the select reads from it) and apply
-    // the locale live: persist the cookie, then refresh so the server re-renders
-    // with the new catalog.
-    updatePref("language", value);
+  async function chooseLanguage(value: string) {
+    // `workspaces.language` is the source of truth for BOTH server-rendered
+    // content AND the UI chrome (founder decision 2026-07). Persist it FIRST and
+    // only mirror the cookie + refresh once it sticks — so a failed PATCH can no
+    // longer leave the chrome (cookie) and the content (workspace) desynced. A
+    // failure surfaces to the founder instead of being swallowed.
     const locale: Locale = resolveLocale(value);
+    setLangError(false);
+    try {
+      await setWorkspaceLanguage(locale);
+    } catch {
+      setLangError(true);
+      return;
+    }
+    updatePref("language", value);
     setLocaleCookie(locale);
-    // #6 — also persist the workspace's LLM OUTPUT language so generated prose
-    // (knowledge notes, decision questions, framing) follows the same language.
-    // Best-effort: a failed PATCH must never block the live UI locale switch.
-    void setWorkspaceLanguage(locale).catch(() => {});
     router.refresh();
   }
 
@@ -293,6 +300,11 @@ export default function GeneralTab() {
             ))}
           </select>
           <span className="settings-field__caption">{t("languageCaption")}</span>
+          {langError && (
+            <span className="settings-field__error" role="alert" aria-live="polite">
+              {t("languageSaveError")}
+            </span>
+          )}
         </div>
       </section>
 
