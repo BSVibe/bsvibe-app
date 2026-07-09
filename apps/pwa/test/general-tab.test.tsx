@@ -91,14 +91,33 @@ describe("General tab — theme control", () => {
   });
 });
 
+// workspaces.language is the source of truth for BOTH content and chrome, so
+// choosing a language PATCHes the workspace FIRST and only then mirrors the
+// cookie + refreshes. Stub the PATCH so the write succeeds.
+function stubWorkspaceOk() {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(
+      async () =>
+        new Response(JSON.stringify({ id: "ws-1", name: "W", language: "ko", safe_mode: true }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+    ),
+  );
+}
+
 describe("General tab — display preferences", () => {
   it("persists the selected language", async () => {
+    stubWorkspaceOk();
     const user = userEvent.setup();
     render(<GeneralTab />);
 
     await user.selectOptions(screen.getByLabelText(/language/i), "ko");
 
-    expect(JSON.parse(window.localStorage.getItem(PREF_STORAGE_KEY) ?? "{}").language).toBe("ko");
+    await waitFor(() =>
+      expect(JSON.parse(window.localStorage.getItem(PREF_STORAGE_KEY) ?? "{}").language).toBe("ko"),
+    );
   });
 
   it("persists the selected time zone", async () => {
@@ -119,14 +138,33 @@ describe("General tab — display preferences", () => {
     expect(JSON.parse(window.localStorage.getItem(PREF_STORAGE_KEY) ?? "{}").dateFormat).toBe("us");
   });
 
-  it("switching language sets the locale cookie and refreshes the route", async () => {
+  it("switching language persists the workspace, then mirrors the cookie and refreshes", async () => {
+    stubWorkspaceOk();
     const user = userEvent.setup();
     render(<GeneralTab />);
 
     await user.selectOptions(screen.getByLabelText(/language/i), "ko");
 
-    expect(document.cookie).toContain(`${LOCALE_COOKIE}=ko`);
+    await waitFor(() => expect(document.cookie).toContain(`${LOCALE_COOKIE}=ko`));
     expect(refresh).toHaveBeenCalled();
+  });
+
+  it("surfaces an error and does NOT desync the cookie when the workspace write fails", async () => {
+    // The silent-fail bug: previously the cookie (chrome) was written even when
+    // the workspace PATCH (content language) failed, desyncing the two. Now a
+    // failed write surfaces an error and leaves the cookie untouched.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("nope", { status: 500 })),
+    );
+    const user = userEvent.setup();
+    render(<GeneralTab />);
+
+    await user.selectOptions(screen.getByLabelText(/language/i), "ko");
+
+    await waitFor(() => expect(screen.getByRole("alert")).toBeInTheDocument());
+    expect(document.cookie).not.toContain(`${LOCALE_COOKIE}=ko`);
+    expect(refresh).not.toHaveBeenCalled();
   });
 });
 

@@ -45,3 +45,31 @@ export function resolveLocaleFromHeader(header: string | undefined | null): Loca
   }
   return DEFAULT_LOCALE;
 }
+
+/** Is this a locale we actually ship a catalog for? */
+function isSupported(value: string | undefined | null): value is Locale {
+  return !!value && (LOCALES as readonly string[]).includes(value);
+}
+
+/**
+ * The active UI-chrome locale, with `workspaces.language` as the SOURCE OF TRUTH
+ * so the chrome always matches the server-rendered CONTENT language (founder
+ * decision 2026-07). Priority:
+ *   1. the active workspace's `language` (the founder's per-workspace choice) —
+ *      chrome FOLLOWS content, so switching to a Korean workspace shows Korean
+ *      chrome even on a fresh device or with a stale cookie;
+ *   2. the `bsvibe.locale` cookie — a fast hint / pre-auth fallback before the
+ *      workspace resolves (Settings mirrors the workspace choice into it);
+ *   3. the browser `Accept-Language` header (first visit, logged out);
+ *   4. the English default.
+ * Unsupported values at any tier are skipped so a stray tag never wins.
+ */
+export function resolveActiveLocale(sources: {
+  workspaceLanguage?: string | null;
+  cookie?: string | null;
+  header?: string | null;
+}): Locale {
+  if (isSupported(sources.workspaceLanguage)) return sources.workspaceLanguage;
+  if (isSupported(sources.cookie)) return sources.cookie;
+  return resolveLocaleFromHeader(sources.header);
+}

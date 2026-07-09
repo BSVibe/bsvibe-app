@@ -789,6 +789,7 @@
       },
       "language": "Language",
       "languageCaption": "Applies instantly across the app.",
+      "languageSaveError": "Couldn't save the language. Check your connection and try again.",
       "timezone": "Time zone",
       "dateFormat": "Date format",
       "workspaceId": "Workspace ID",

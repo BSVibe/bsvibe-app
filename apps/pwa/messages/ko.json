@@ -789,6 +789,7 @@
       },
       "language": "언어",
       "languageCaption": "앱 전체에 즉시 적용돼요.",
+      "languageSaveError": "언어를 저장하지 못했어요. 연결을 확인하고 다시 시도해 주세요.",
       "timezone": "시간대",
       "dateFormat": "날짜 형식",
       "workspaceId": "워크스페이스 ID",

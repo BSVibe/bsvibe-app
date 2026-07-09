@@ -3,6 +3,7 @@
 import { type ReactNode, useEffect, useState } from "react";
 import { DirectFab, DirectOverlay } from "./DirectAction";
 import LeftRail from "./LeftRail";
+import LocaleSync from "./LocaleSync";
 import { MobileNav, MobileTopBar } from "./MobileChrome";
 
 /**
@@ -25,6 +26,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
 
   return (
     <div className="shell">
+      <LocaleSync />
       <LeftRail />
       <MobileTopBar />
       <main className="shell__main">{children}</main>
