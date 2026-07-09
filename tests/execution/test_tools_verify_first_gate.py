@@ -78,6 +78,17 @@ def test_declare_verification_schema_exposes_knowledge(tmp_path: Path) -> None:
     assert "knowledge" not in schema["required"]
 
 
+def test_declare_verification_topic_follows_output_language(tmp_path: Path) -> None:
+    """KO-workspace regression: ``topic`` is user-facing prose (the note title),
+    not an identifier, so its schema description must tell the model to write it
+    in the SAME language as the rest of its output (the workspace language) — else
+    the short label drifts to English while the note body localizes correctly."""
+    registry = _registry(tmp_path)
+    schema = registry.schema_for(["declare_verification"])[0]["function"]["parameters"]
+    topic_desc = schema["properties"]["knowledge"]["properties"]["topic"]["description"].lower()
+    assert "same language" in topic_desc
+
+
 # -- the core delta: write/edit refused before declare ----------------------
 
 
