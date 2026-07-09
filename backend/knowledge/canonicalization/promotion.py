@@ -342,6 +342,32 @@ class GardenObservationPromoter:
         framing = await self._distill_framing(normalized, members)
         return f"{framing}\n\n{moc}" if framing else moc
 
+    async def _compose_display_labels(self, raw_tag: str) -> dict[str, str] | None:
+        """A ``{lang: label}`` map localizing the concept's display name for the
+        workspace language (founder decision 2026-07). Empty/None for English
+        workspaces (the English display is the identity) and soft-fail: any framer
+        error or a framer without a ``label`` method leaves the English display.
+
+        The framer runs through the routed canonicalization adapter, which set the
+        workspace output language on the contextvar when it resolved — so
+        ``current_output_language`` is the language the label should be written in.
+        """
+        from backend.identity.output_language import current_output_language  # noqa: PLC0415
+
+        language = current_output_language()
+        if not language or language == "en" or self._framer is None:
+            return None
+        make_label = getattr(self._framer, "label", None)
+        if make_label is None:
+            return None
+        try:
+            label = await make_label(concept=raw_tag)
+        except Exception:  # noqa: BLE001 — label is derived; never break promotion
+            logger.warning("concept_display_label_failed", concept=raw_tag, exc_info=True)
+            return None
+        label = (label or "").strip()
+        return {language: label} if label else None
+
     async def _distill_framing(self, concept: str, members: list[tuple[str, str]]) -> str | None:
         """Routed distillation of a synthesis framing (Lift 1b). Soft-fail —
         a framer error / empty result yields ``None`` and the caller keeps the
@@ -388,12 +414,18 @@ class GardenObservationPromoter:
         # KG Lift 1 — synthesize a substantive hub body (member [[links]] +
         # excerpts) so the new concept is a Map-of-Content, not an empty title.
         initial_body = await self._compose_concept_body(normalized)
+        # Founder decision 2026-07 — in a non-English workspace, ask the routed
+        # framer for a localized display label so the graph node renders in the
+        # workspace language (the id + H1 stay the English identifier). Soft-fail
+        # and English-workspace skip: no label → English display stands.
+        display_labels = await self._compose_display_labels(raw_tag)
         await self._service.resolve_and_canonicalize(
             raw_tag,
             raw_source="garden-observation",
             auto_apply=False,
             note_type=note_type,
             initial_body=initial_body,
+            display_labels=display_labels,
         )
 
         draft = await self._index.find_pending_concept_draft(normalized)

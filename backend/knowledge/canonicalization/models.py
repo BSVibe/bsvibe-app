@@ -58,6 +58,12 @@ class ConceptEntry:
     # (E20 whitelist). NULL on pre-E26 concepts and on concepts created from
     # a tag with no typed seedling backing — the read path is permissive.
     note_type: str | None = None
+    # Per-locale display labels (founder decision 2026-07): the concept ID and
+    # H1 stay the stable English identifier (identity / dedup / cross-link key),
+    # but a localized label per language tag (e.g. ``{"ko": "HTTP 클라이언트"}``)
+    # lets a non-English workspace render the graph node in its own language
+    # WITHOUT fragmenting concept identity. Empty {} = English-only (the default).
+    display_labels: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass

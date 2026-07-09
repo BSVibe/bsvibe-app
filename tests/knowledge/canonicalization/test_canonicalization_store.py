@@ -126,6 +126,93 @@ class TestReadWriteConcept:
         assert got.note_type is None
 
     @pytest.mark.asyncio
+    async def test_write_concept_carries_display_labels_in_frontmatter(
+        self, store: NoteStore, storage: FileSystemStorage
+    ) -> None:
+        """Per-locale display label: the concept ID + H1 stay the stable English
+        identifier ('http-client' / 'Http client'), but a localized display label
+        rides in frontmatter so a KO workspace graph can render the node in Korean
+        without fragmenting concept identity (founder decision, 2026-07)."""
+        entry = models.ConceptEntry(
+            concept_id="http-client",
+            path="concepts/active/http-client.md",
+            display="Http client",
+            aliases=[],
+            created_at=datetime(2026, 7, 9),
+            updated_at=datetime(2026, 7, 9),
+            display_labels={"ko": "HTTP 클라이언트"},
+        )
+        await store.write_concept(entry)
+
+        raw = await storage.read("concepts/active/http-client.md")
+        fm = extract_frontmatter(raw)
+        assert fm.get("display_labels") == {"ko": "HTTP 클라이언트"}
+        # Identity is unchanged: H1 stays the English display, not the label.
+        assert extract_title(raw) == "Http client"
+
+        got = await store.read_concept("http-client")
+        assert got is not None
+        assert got.display == "Http client"
+        assert got.display_labels == {"ko": "HTTP 클라이언트"}
+
+    @pytest.mark.asyncio
+    async def test_write_concept_without_labels_omits_field(
+        self, store: NoteStore, storage: FileSystemStorage
+    ) -> None:
+        """Back-compat — a concept written without display labels keeps the
+        prior frontmatter shape (no ``display_labels`` key) and reads back as {}."""
+        entry = models.ConceptEntry(
+            concept_id="unlabelled",
+            path="concepts/active/unlabelled.md",
+            display="Unlabelled",
+            aliases=[],
+            created_at=datetime(2026, 7, 9),
+            updated_at=datetime(2026, 7, 9),
+        )
+        await store.write_concept(entry)
+        fm = extract_frontmatter(await storage.read("concepts/active/unlabelled.md"))
+        assert "display_labels" not in fm
+        got = await store.read_concept("unlabelled")
+        assert got is not None
+        assert got.display_labels == {}
+
+    @pytest.mark.asyncio
+    async def test_update_display_labels_preserves_body(
+        self, store: NoteStore, storage: FileSystemStorage
+    ) -> None:
+        """Backfill primitive: add a localized label to an EXISTING concept
+        WITHOUT clobbering its synthesized body (framing + MOC) or its identity
+        (id / H1). Merges into any labels already present."""
+        entry = models.ConceptEntry(
+            concept_id="http-client",
+            path="concepts/active/http-client.md",
+            display="Http client",
+            aliases=["httpclient"],
+            created_at=datetime(2026, 7, 9),
+            updated_at=datetime(2026, 7, 9),
+            note_type="Pattern",
+        )
+        await store.write_concept(entry, initial_body="HTTP 요청을 보내는 클라이언트.")
+
+        await store.update_concept_display_labels("http-client", {"ko": "HTTP 클라이언트"})
+
+        got = await store.read_concept("http-client")
+        assert got is not None
+        assert got.display_labels == {"ko": "HTTP 클라이언트"}
+        # Identity + body + other frontmatter survived the read-modify-write.
+        assert got.display == "Http client"
+        assert got.note_type == "Pattern"
+        assert got.aliases == ["httpclient"]
+        raw = await storage.read("concepts/active/http-client.md")
+        assert "HTTP 요청을 보내는 클라이언트." in raw
+
+    @pytest.mark.asyncio
+    async def test_update_display_labels_missing_concept_is_noop(self, store: NoteStore) -> None:
+        """Updating a concept that doesn't exist is a safe no-op (no write)."""
+        await store.update_concept_display_labels("nope", {"ko": "없음"})
+        assert await store.read_concept("nope") is None
+
+    @pytest.mark.asyncio
     async def test_read_missing_returns_none(self, store: NoteStore) -> None:
         assert await store.read_concept("does-not-exist") is None
 

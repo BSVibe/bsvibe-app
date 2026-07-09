@@ -56,12 +56,21 @@ _ALIAS_REL = "alias-of"
 _COOCCUR_REL = "co-occurs"
 
 
-async def build_concept_graph(storage: StorageBackend) -> nx.MultiDiGraph:
+async def build_concept_graph(
+    storage: StorageBackend, *, language: str | None = None
+) -> nx.MultiDiGraph:
     """Build the workspace concept graph deterministically from the vault.
 
     Pure + idempotent: building twice over the same vault yields the same
     graph; a fresh/empty workspace yields an empty graph. Reads only ``storage``
     (the caller's per-workspace root) — never another workspace's vault.
+
+    ``language`` (founder decision 2026-07) — when set to a workspace language
+    tag (e.g. ``"ko"``), a concept that carries a display label for that tag
+    renders its node ``name`` in that language. The node ``id`` is always the
+    stable English identifier, so identity / edges / dedup are unchanged; only
+    the human-facing label localizes. ``None`` / ``"en"`` / an unlabelled tag
+    keep the English display.
     """
     index = InMemoryCanonicalizationIndex()
     await index.initialize(storage)
@@ -82,9 +91,14 @@ async def build_concept_graph(storage: StorageBackend) -> nx.MultiDiGraph:
         # Pre-E26 / untyped concepts fall back to the generic ``concept``
         # so the legend never breaks on a NULL.
         entity_type = concept.note_type or "concept"
+        # Localized node label when the workspace language has one; else the
+        # English display. The id stays English so edges / dedup are unchanged.
+        label = concept.display or concept.concept_id
+        if language and language != "en":
+            label = concept.display_labels.get(language) or label
         graph.add_node(
             concept.concept_id,
-            name=concept.display or concept.concept_id,
+            name=label,
             entity_type=entity_type,
         )
 

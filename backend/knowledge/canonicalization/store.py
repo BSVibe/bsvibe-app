@@ -98,6 +98,13 @@ class NoteStore:
             source_action=fm.get("source_action"),
             # Lift E26 — read the seedling note kind back if present.
             note_type=fm.get("type"),
+            # Per-locale display labels (permissive — {} on concepts written
+            # before the field existed, and any non-str values are dropped).
+            display_labels={
+                str(k): str(v)
+                for k, v in (fm.get("display_labels") or {}).items()
+                if isinstance(v, str) and v.strip()
+            },
         )
 
     async def write_concept(
@@ -120,6 +127,10 @@ class NoteStore:
         # TechInsight at a glance. Pre-E26 promotion dropped this.
         if entry.note_type is not None:
             fm["type"] = entry.note_type
+        # Per-locale display labels — the H1 (identity) stays English; these let
+        # a non-English workspace render the graph node in its own language.
+        if entry.display_labels:
+            fm["display_labels"] = dict(entry.display_labels)
 
         body_lines = [f"# {entry.display}", ""]
         if initial_body:
@@ -127,6 +138,27 @@ class NoteStore:
         body = "\n".join(body_lines)
         text = build_frontmatter(fm) + body
         await self._storage.write(entry.path, text)
+
+    async def update_concept_display_labels(self, concept_id: str, labels: dict[str, str]) -> bool:
+        """Merge per-locale display labels into an EXISTING active concept via a
+        read-modify-write that preserves the body (framing + MOC) and every other
+        frontmatter key. The backfill primitive for localizing already-created
+        concept graph nodes without re-running promotion. Returns False (no-op)
+        when the concept doesn't exist. Blank / non-str label values are skipped.
+        """
+        clean = {str(k): str(v) for k, v in labels.items() if isinstance(v, str) and v.strip()}
+        if not clean:
+            return False
+        path = paths.active_concept_path(concept_id)
+        if not await self._storage.exists(path):
+            return False
+        text = await self._storage.read(path)
+        fm = dict(extract_frontmatter(text))
+        merged = {**(fm.get("display_labels") or {}), **clean}
+        fm["display_labels"] = merged
+        rewritten = build_frontmatter(fm) + body_after_frontmatter(text)
+        await self._storage.write(path, rewritten)
+        return True
 
     # ------------------------------------------------------------------- actions
 

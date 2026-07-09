@@ -124,6 +124,17 @@ _FRAMING_SYSTEM = (
     "no bullet lists, no headings, no restating the concept name as a title."
 )
 
+#: System prompt for the localized concept DISPLAY LABEL (founder decision
+#: 2026-07). The adapter appends the workspace output-language directive, so the
+#: label comes back in that language; acronyms / code identifiers stay verbatim.
+_DISPLAY_LABEL_SYSTEM = (
+    "You localize a short engineering CONCEPT NAME for display in a knowledge "
+    "graph. Given an English concept identifier, reply with ONLY its natural "
+    "display name — a short noun phrase, no quotes, no explanation, no trailing "
+    "punctuation. Keep well-known acronyms, code symbols, and product names "
+    "verbatim (e.g. HTTP, JWT, OAuth, PKCE stay as-is)."
+)
+
 
 class _RoutedConceptFramer:
     """:class:`ConceptFramer` over a resolver-routed frame LLM (Lift 1b).
@@ -144,6 +155,18 @@ class _RoutedConceptFramer:
         user = f"Concept: {concept}\n\nSource notes:\n{notes}"
         text = await self._llm.complete_text(system=_FRAMING_SYSTEM, user=user)
         return text.strip() or None
+
+    async def label(self, *, concept: str) -> str | None:
+        """A localized DISPLAY label for the concept name (founder decision
+        2026-07). The routed adapter appends the workspace output-language
+        directive, so the reply is in that language; a single line, bounded and
+        soft-failed by the promoter."""
+        text = await self._llm.complete_text(
+            system=_DISPLAY_LABEL_SYSTEM, user=f"Concept: {concept}"
+        )
+        # Defensive: take the first non-empty line, strip wrapping quotes.
+        line = next((ln.strip() for ln in text.splitlines() if ln.strip()), "")
+        return line.strip("\"'").strip() or None
 
 
 def build_concept_framer(
