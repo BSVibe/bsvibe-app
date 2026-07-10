@@ -21,9 +21,21 @@ entries). REST `/runs/{id}/cancel` only accepts OPEN/RUNNING.
       `test_runs_cancel_review_ready_errors`.
 - [x] Requires `mcp:write`; unknown/cross-workspace → not found.
 
+## Summary dashboard is driven by pending Decisions (follow-up)
+
+- [x] The Summary "확인 필요" tab lists PENDING `Decision` rows
+      (`GET /api/v1/checkpoints`), NOT run status — so cancelling the run alone
+      left its "답변이 필요해요" card up. discard + product-cascade now resolve the
+      run's pending Decisions (status→RESOLVED, resolution/resolved_at/resolved_by) —
+      `test_discard_resolves_pending_decisions`,
+      `test_cancel_product_runs_resolves_pending_decisions`.
+- [x] Already-resolved Decisions are left untouched —
+      `test_discard_already_resolved_decision_untouched`.
+
 ## bsvibe_runs_discard (MCP, the 폐기 primitive)
 
-- [x] Transitions any non-terminal run (incl. review_ready) → `cancelled` —
+- [x] Transitions any non-terminal run (incl. review_ready) → `cancelled` +
+      resolves its pending Decisions (returned in `decisions_resolved`) —
       `test_runs_discard_cancels_review_ready`.
 - [x] Tombstones handle-less deliverables (`retracted_at`), returned in
       `deliverables_retracted`.

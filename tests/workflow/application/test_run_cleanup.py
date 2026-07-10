@@ -21,6 +21,8 @@ from backend.workflow.application.run_cleanup import (
     discard_run,
 )
 from backend.workflow.infrastructure.db import (
+    Decision,
+    DecisionStatus,
     Deliverable,
     DeliverableType,
     ExecutionRun,
@@ -78,6 +80,27 @@ async def _seed_deliverable(
         deliverable_type=DeliverableType.DIRECT_OUTPUT,
         payload={},
         compensation_handles=handles,
+        created_at=datetime.now(tz=UTC),
+    )
+    session.add(d)
+    await session.flush()
+    return d.id
+
+
+async def _seed_decision(
+    session: AsyncSession,
+    workspace_id: uuid.UUID,
+    run_id: uuid.UUID,
+    *,
+    status: DecisionStatus = DecisionStatus.PENDING,
+) -> uuid.UUID:
+    d = Decision(
+        id=uuid.uuid4(),
+        run_id=run_id,
+        workspace_id=workspace_id,
+        decision="verify",
+        status=status,
+        payload={},
         created_at=datetime.now(tz=UTC),
     )
     session.add(d)
@@ -157,6 +180,50 @@ async def test_discard_surfaces_deliverables_with_compensation_handles(sf, works
     async with sf() as s:
         deliv = await s.get(Deliverable, d_id)
         assert deliv.retracted_at is None  # not faked
+
+
+async def test_discard_resolves_pending_decisions(sf, workspace_id) -> None:
+    """Discard must resolve the run's PENDING decisions — the Summary dashboard
+    lists pending Decisions, so cancelling the run alone leaves the card up."""
+    actor = uuid.uuid4()
+    async with sf() as s:
+        run_id = await _seed_run(s, workspace_id, status=RunStatus.REVIEW_READY)
+        dec_id = await _seed_decision(s, workspace_id, run_id)
+        outcome = await discard_run(
+            s, run_id=run_id, workspace_id=workspace_id, reason="mcp", actor_id=actor
+        )
+        await s.commit()
+
+    assert str(dec_id) in outcome.decisions_resolved
+    async with sf() as s:
+        dec = await s.get(Decision, dec_id)
+        assert dec.status is DecisionStatus.RESOLVED
+        assert dec.resolved_at is not None
+        assert dec.resolved_by == actor
+
+
+async def test_discard_already_resolved_decision_untouched(sf, workspace_id) -> None:
+    async with sf() as s:
+        run_id = await _seed_run(s, workspace_id, status=RunStatus.REVIEW_READY)
+        dec_id = await _seed_decision(s, workspace_id, run_id, status=DecisionStatus.RESOLVED)
+        outcome = await discard_run(s, run_id=run_id, workspace_id=workspace_id, reason="mcp")
+        await s.commit()
+    assert str(dec_id) not in outcome.decisions_resolved
+
+
+async def test_cancel_product_runs_resolves_pending_decisions(sf, workspace_id) -> None:
+    product_id = uuid.uuid4()
+    async with sf() as s:
+        run_id = await _seed_run(
+            s, workspace_id, status=RunStatus.REVIEW_READY, product_id=product_id
+        )
+        dec_id = await _seed_decision(s, workspace_id, run_id)
+        await cancel_product_runs(
+            s, product_id=product_id, workspace_id=workspace_id, reason="product deleted"
+        )
+        await s.commit()
+    async with sf() as s:
+        assert (await s.get(Decision, dec_id)).status is DecisionStatus.RESOLVED
 
 
 async def test_discard_unknown_returns_none(sf, workspace_id) -> None:

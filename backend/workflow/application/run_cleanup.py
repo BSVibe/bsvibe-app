@@ -40,11 +40,13 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.workflow.infrastructure.db import (
+    DecisionStatus,
     ExecutionRun,
     ExecutionRunHistory,
     RunStatus,
 )
 from backend.workflow.infrastructure.repositories import (
+    SqlAlchemyDecisionRepository,
     SqlAlchemyDeliverableRepository,
     SqlAlchemyRunRepository,
 )
@@ -89,6 +91,36 @@ async def _cancel(session: AsyncSession, run: ExecutionRun, *, reason: str) -> b
     return True
 
 
+async def _resolve_pending_decisions(
+    session: AsyncSession,
+    run: ExecutionRun,
+    *,
+    reason: str,
+    actor_id: uuid.UUID | None,
+) -> list[str]:
+    """Resolve a run's PENDING decisions so they drop off the Summary dashboard.
+
+    The Summary "확인 필요" surface lists PENDING :class:`Decision` rows
+    (``GET /api/v1/checkpoints`` → ``list_pending_by_workspace``), NOT run
+    status — so cancelling the run alone leaves its "답변이 필요해요" card up.
+    Mirrors the fields the ``/checkpoints/{id}/resolve`` handler writes.
+    """
+    decisions = SqlAlchemyDecisionRepository(session)
+    now = datetime.now(tz=UTC)
+    resolved: list[str] = []
+    for dec in await decisions.list_by_run(run.id, run.workspace_id):
+        if dec.status is not DecisionStatus.PENDING:
+            continue
+        dec.status = DecisionStatus.RESOLVED
+        dec.resolution = reason
+        dec.resolved_at = now
+        dec.resolved_by = actor_id
+        resolved.append(str(dec.id))
+    if resolved:
+        await session.flush()
+    return resolved
+
+
 @dataclass
 class CancelOutcome:
     """Result of :func:`cancel_run`."""
@@ -107,6 +139,7 @@ class DiscardOutcome:
     cancelled: bool
     deliverables_retracted: list[str] = field(default_factory=list)
     deliverables_need_compensation: list[str] = field(default_factory=list)
+    decisions_resolved: list[str] = field(default_factory=list)
 
 
 async def cancel_run(
@@ -138,6 +171,7 @@ async def discard_run(
     run_id: uuid.UUID,
     workspace_id: uuid.UUID,
     reason: str,
+    actor_id: uuid.UUID | None = None,
 ) -> DiscardOutcome | None:
     """Discard a run — cancel it (if non-terminal) + best-effort tombstone.
 
@@ -153,6 +187,9 @@ async def discard_run(
         return None
 
     cancelled = await _cancel(session, run, reason=reason)
+    decisions_resolved = await _resolve_pending_decisions(
+        session, run, reason=reason, actor_id=actor_id
+    )
 
     deliverables = SqlAlchemyDeliverableRepository(session)
     now = datetime.now(tz=UTC)
@@ -178,6 +215,7 @@ async def discard_run(
         cancelled=cancelled,
         deliverables_retracted=len(retracted),
         deliverables_need_compensation=len(need_compensation),
+        decisions_resolved=len(decisions_resolved),
     )
     return DiscardOutcome(
         run_id=run.id,
@@ -185,6 +223,7 @@ async def discard_run(
         cancelled=cancelled,
         deliverables_retracted=retracted,
         deliverables_need_compensation=need_compensation,
+        decisions_resolved=decisions_resolved,
     )
 
 
@@ -194,6 +233,7 @@ async def cancel_product_runs(
     product_id: uuid.UUID,
     workspace_id: uuid.UUID,
     reason: str,
+    actor_id: uuid.UUID | None = None,
 ) -> int:
     """Cancel every non-terminal run bound to a product; return the count.
 
@@ -210,6 +250,7 @@ async def cancel_product_runs(
     for run in rows:
         if await _cancel(session, run, reason=reason):
             cancelled += 1
+        await _resolve_pending_decisions(session, run, reason=reason, actor_id=actor_id)
     return cancelled
 
 
