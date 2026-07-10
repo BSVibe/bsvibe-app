@@ -191,6 +191,77 @@ async def test_empty_workspace_yields_empty_graph(
 # ---------------------------------------------------------------------------
 # co-occurrence edges
 # ---------------------------------------------------------------------------
+async def _retract_note(storage: FileSystemStorage, path: str) -> None:
+    """Inject a ``retracted_at`` tombstone into an existing note's frontmatter,
+    mirroring what ``GardenWriter.tombstone_note`` writes on retract apply."""
+    text = await storage.read(path)
+    assert text.startswith("---\n"), f"{path} has no frontmatter to tombstone"
+    new = text.replace("---\n", "---\nretracted_at: '2026-07-10T00:00:00+00:00'\n", 1)
+    await storage.write(path, new)
+
+
+def _garden_note_retracted(*tags: str) -> str:
+    lines = ["---", "tags:"]
+    lines += [f"  - {t}" for t in tags]
+    lines += ["retracted_at: '2026-07-10T00:00:00+00:00'", "---", "# obs", ""]
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# retraction tombstones — a retracted concept/observation must vanish from the
+# graph (mirrors the RAG retriever's `retracted_at` skip predicate; the graph
+# was a separate materialization that ignored the tombstone).
+# ---------------------------------------------------------------------------
+async def test_retracted_concept_excluded_from_nodes(
+    workspace_storage: FileSystemStorage,
+) -> None:
+    await _seed_concepts(workspace_storage, ["python", "calculator"])
+    await _retract_note(workspace_storage, "concepts/active/calculator.md")
+
+    graph = await build_concept_graph(workspace_storage)
+
+    assert set(graph.nodes()) == {"python"}
+    assert "calculator" not in graph.nodes()
+
+
+async def test_retracted_concept_forms_no_edges(
+    workspace_storage: FileSystemStorage,
+) -> None:
+    """A retracted concept must not co-occur with anything, even when its id
+    still appears in live observation tags."""
+    await _seed_concepts(workspace_storage, ["python", "calculator"])
+    await _retract_note(workspace_storage, "concepts/active/calculator.md")
+    await workspace_storage.write(
+        "garden/seedling/obs-a.md",
+        _garden_note("settle", "python", "calculator"),
+    )
+
+    graph = await build_concept_graph(workspace_storage)
+
+    assert _cooccurs_pairs(graph) == set()
+
+
+async def test_retracted_observation_excluded_from_cooccurrence(
+    workspace_storage: FileSystemStorage,
+) -> None:
+    """A retracted garden observation must not contribute co-occurrence edges."""
+    await _seed_concepts(workspace_storage, ["python", "calculator"])
+    # One live observation (contributes) + one retracted (must be ignored).
+    await workspace_storage.write(
+        "garden/seedling/obs-live.md",
+        _garden_note("settle", "python", "calculator"),
+    )
+    await workspace_storage.write(
+        "garden/seedling/obs-retracted.md",
+        _garden_note_retracted("settle", "python", "calculator"),
+    )
+
+    graph = await build_concept_graph(workspace_storage)
+
+    # Only the live observation counts → weight 1.0, not 2.0.
+    assert _edge_weight(graph, "python", "calculator", "co-occurs") == 1.0
+
+
 async def test_cooccurring_concepts_get_a_single_edge(
     workspace_storage: FileSystemStorage,
 ) -> None:

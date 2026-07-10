@@ -64,6 +64,11 @@ class ConceptEntry:
     # lets a non-English workspace render the graph node in its own language
     # WITHOUT fragmenting concept identity. Empty {} = English-only (the default).
     display_labels: dict[str, str] = field(default_factory=dict)
+    # Lift M3a retraction tombstone — the ISO timestamp written to the concept
+    # note's ``retracted_at`` frontmatter when the concept is retracted. Truthy
+    # = tombstoned; surfaces (e.g. the concept graph) skip it, mirroring the RAG
+    # retriever's skip predicate. ``None`` on a live concept (the default).
+    retracted_at: str | None = None
 
 
 @dataclass
