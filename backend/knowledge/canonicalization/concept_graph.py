@@ -79,8 +79,12 @@ async def build_concept_graph(
 
     graph: nx.MultiDiGraph = nx.MultiDiGraph()
 
-    # 1. Nodes — the workspace's active concepts.
-    concepts = await index.list_active_concepts()
+    # 1. Nodes — the workspace's active concepts, minus any that carry a
+    #    ``retracted_at`` tombstone. Filtering here (not in the shared
+    #    ``read_concept``) keeps retraction invisible to the graph without
+    #    changing canonicalization's merge/resolve invariants. Mirrors the RAG
+    #    retriever's skip predicate — falsy = live (a half-written note fails open).
+    concepts = [c for c in await index.list_active_concepts() if not c.retracted_at]
     concept_ids: set[str] = set()
     for concept in concepts:
         concept_ids.add(concept.concept_id)
@@ -126,6 +130,10 @@ async def build_concept_graph(
     pair_counts: dict[tuple[str, str], int] = {}
     for path in await store.list_garden_paths():
         present = await concept_ids_in_observation(path, store, resolver)
+        # Only live concept nodes may form edges — a retracted concept whose id
+        # still appears in a live observation's tags must not be re-introduced as
+        # a node via ``add_edge``'s implicit node creation.
+        present &= concept_ids
         ordered = sorted(present)
         for i, left in enumerate(ordered):
             for right in ordered[i + 1 :]:
@@ -216,9 +224,15 @@ async def concept_ids_in_observation(
     uses, rather than re-deriving (and drifting from) it.
     """
     try:
-        tags = await store.read_garden_tags(path)
+        fm = await store.read_garden_frontmatter(path)
     except FileNotFoundError:  # pragma: no cover — listing/read race
         return set()
+
+    # A retracted observation contributes nothing — same tombstone predicate as
+    # the RAG retriever (falsy value = live, so a half-written note fails open).
+    if fm.get("retracted_at"):
+        return set()
+    tags = list(fm.get("tags") or [])
 
     present: set[str] = set()
     for raw in tags:

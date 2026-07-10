@@ -105,6 +105,10 @@ class NoteStore:
                 for k, v in (fm.get("display_labels") or {}).items()
                 if isinstance(v, str) and v.strip()
             },
+            # Lift M3a — carry the retraction tombstone so graph/read surfaces
+            # can skip it. Read-only here; `read_concept` stays non-filtering so
+            # canonicalization callers (merge/resolve) keep their invariants.
+            retracted_at=(str(rt) if (rt := fm.get("retracted_at")) else None),
         )
 
     async def write_concept(
@@ -459,12 +463,20 @@ class NoteStore:
 
     # ------------------------------------------------------------------- garden
 
-    async def read_garden_tags(self, garden_path: str) -> list[str]:
+    async def read_garden_frontmatter(self, garden_path: str) -> dict[str, Any]:
+        """Return a garden note's parsed YAML frontmatter dict.
+
+        Single source for both the tag list and the ``retracted_at`` tombstone
+        the concept-graph builder needs, so the two never drift apart.
+        """
         if not await self._storage.exists(garden_path):
             msg = f"garden note not found: {garden_path}"
             raise FileNotFoundError(msg)
         text = await self._storage.read(garden_path)
-        fm = extract_frontmatter(text)
+        return extract_frontmatter(text)
+
+    async def read_garden_tags(self, garden_path: str) -> list[str]:
+        fm = await self.read_garden_frontmatter(garden_path)
         return list(fm.get("tags") or [])
 
     async def read_garden_note_type(self, garden_path: str) -> str | None:
