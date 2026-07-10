@@ -209,6 +209,105 @@ async def test_runs_list_and_show(db, workspace_id, user_id, registry, seeded) -
     assert shown["id"] == str(run_id)
 
 
+async def _seed_run(db, workspace_id, *, status, product_id=None) -> uuid.UUID:
+    run_id = uuid.uuid4()
+    async with db() as s:
+        s.add(
+            ExecutionRun(
+                id=run_id,
+                workspace_id=workspace_id,
+                product_id=product_id,
+                status=status,
+                payload={},
+                created_at=datetime.now(UTC),
+                updated_at=datetime.now(UTC),
+            )
+        )
+        await s.commit()
+    return run_id
+
+
+async def test_runs_cancel_cancels_inflight(db, workspace_id, user_id, registry, seeded) -> None:
+    run_id = await _seed_run(db, workspace_id, status=RunStatus.RUNNING)
+    async with db() as s:
+        ctx = ToolContext(
+            principal=_principal(workspace_id=workspace_id, user_id=user_id, scopes=("mcp:write",)),
+            session=s,
+        )
+        out = await registry.call_tool("bsvibe_runs_cancel", {"run_id": str(run_id)}, ctx)
+    assert out["cancelled"] is True
+    assert out["status"] == "cancelled"
+    async with db() as s:
+        run = await s.get(ExecutionRun, run_id)
+        assert run.status is RunStatus.CANCELLED
+
+
+async def test_runs_cancel_review_ready_errors(db, workspace_id, user_id, registry, seeded) -> None:
+    """review_ready is not in-flight — cancel must error (guide to discard)."""
+    run_id = await _seed_run(db, workspace_id, status=RunStatus.REVIEW_READY)
+    async with db() as s:
+        ctx = ToolContext(
+            principal=_principal(workspace_id=workspace_id, user_id=user_id, scopes=("mcp:write",)),
+            session=s,
+        )
+        with pytest.raises(ToolError, match="discard|review_ready|in-flight"):
+            await registry.call_tool("bsvibe_runs_cancel", {"run_id": str(run_id)}, ctx)
+
+
+async def test_runs_discard_cancels_review_ready(
+    db, workspace_id, user_id, registry, seeded
+) -> None:
+    run_id = await _seed_run(db, workspace_id, status=RunStatus.REVIEW_READY)
+    async with db() as s:
+        s.add(
+            Deliverable(
+                id=uuid.uuid4(),
+                workspace_id=workspace_id,
+                run_id=run_id,
+                deliverable_type=DeliverableType.DIRECT_OUTPUT,
+                payload={},
+                compensation_handles=None,
+                created_at=datetime.now(UTC),
+            )
+        )
+        await s.commit()
+    async with db() as s:
+        ctx = ToolContext(
+            principal=_principal(workspace_id=workspace_id, user_id=user_id, scopes=("mcp:write",)),
+            session=s,
+        )
+        out = await registry.call_tool("bsvibe_runs_discard", {"run_id": str(run_id)}, ctx)
+    assert out["cancelled"] is True
+    assert out["status"] == "cancelled"
+    assert len(out["deliverables_retracted"]) == 1
+    async with db() as s:
+        run = await s.get(ExecutionRun, run_id)
+        assert run.status is RunStatus.CANCELLED
+
+
+async def test_runs_discard_unknown_errors(db, workspace_id, user_id, registry, seeded) -> None:
+    async with db() as s:
+        ctx = ToolContext(
+            principal=_principal(workspace_id=workspace_id, user_id=user_id, scopes=("mcp:write",)),
+            session=s,
+        )
+        with pytest.raises(ToolError, match="not found"):
+            await registry.call_tool("bsvibe_runs_discard", {"run_id": str(uuid.uuid4())}, ctx)
+
+
+async def test_runs_discard_requires_write_scope(
+    db, workspace_id, user_id, registry, seeded
+) -> None:
+    run_id = await _seed_run(db, workspace_id, status=RunStatus.REVIEW_READY)
+    async with db() as s:
+        ctx = ToolContext(
+            principal=_principal(workspace_id=workspace_id, user_id=user_id, scopes=("mcp:read",)),
+            session=s,
+        )
+        with pytest.raises(Exception, match="requires scope"):
+            await registry.call_tool("bsvibe_runs_discard", {"run_id": str(run_id)}, ctx)
+
+
 async def test_deliverables_list_filters_by_run(
     db, workspace_id, user_id, registry, seeded
 ) -> None:
