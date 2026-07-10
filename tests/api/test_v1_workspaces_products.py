@@ -17,6 +17,11 @@ from backend.api.deps import (
 from backend.api.main import create_app
 from backend.identity.db import MembershipRow, UserRow  # noqa: F401 — register tables
 from backend.identity.workspaces_db import WorkspacesBase
+from backend.workflow.infrastructure.db import (  # noqa: F401 — register run tables
+    ExecutionBase,
+    ExecutionRun,
+    RunStatus,
+)
 
 from .._support import db_engine, fake_current_user
 
@@ -25,7 +30,7 @@ pytestmark = pytest.mark.asyncio
 
 @pytest_asyncio.fixture
 async def db():
-    async with db_engine(WorkspacesBase) as (engine, _is_pg):
+    async with db_engine(WorkspacesBase, ExecutionBase) as (engine, _is_pg):
         yield async_sessionmaker(engine, expire_on_commit=False)
 
 
@@ -153,6 +158,47 @@ async def test_products_full_lifecycle(client_with_ws) -> None:
     # Delete
     r = await c.delete(f"/api/v1/products/{product_id}")
     assert r.status_code == 204
+
+
+async def test_delete_product_cascade_cancels_runs(client_with_ws, db) -> None:
+    """Deleting a product cancels its non-terminal runs (no orphans); terminal
+    runs and other products' runs are untouched."""
+    c, workspace_id = client_with_ws
+    r = await c.post("/api/v1/products", json={"name": "P", "slug": "p"})
+    assert r.status_code == 201, r.text
+    product_id = uuid.UUID(r.json()["id"])
+
+    import datetime as _dt
+
+    async with db() as s:
+        open_run = ExecutionRun(
+            id=uuid.uuid4(),
+            workspace_id=workspace_id,
+            product_id=product_id,
+            status=RunStatus.REVIEW_READY,
+            payload={},
+            created_at=_dt.datetime.now(_dt.UTC),
+            updated_at=_dt.datetime.now(_dt.UTC),
+        )
+        shipped_run = ExecutionRun(
+            id=uuid.uuid4(),
+            workspace_id=workspace_id,
+            product_id=product_id,
+            status=RunStatus.SHIPPED,
+            payload={},
+            created_at=_dt.datetime.now(_dt.UTC),
+            updated_at=_dt.datetime.now(_dt.UTC),
+        )
+        s.add_all([open_run, shipped_run])
+        await s.commit()
+        open_id, shipped_id = open_run.id, shipped_run.id
+
+    r = await c.delete(f"/api/v1/products/{product_id}")
+    assert r.status_code == 204, r.text
+
+    async with db() as s:
+        assert (await s.get(ExecutionRun, open_id)).status is RunStatus.CANCELLED
+        assert (await s.get(ExecutionRun, shipped_id)).status is RunStatus.SHIPPED
 
 
 async def test_create_product_initialises_git_workspace(client_with_ws) -> None:

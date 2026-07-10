@@ -450,6 +450,67 @@ async def _h_runs_show(args: RunsShowInput, ctx: ToolContext) -> Any:
 
 
 # ---------------------------------------------------------------------------
+# bsvibe_runs_cancel — stop an in-flight (open/running) run
+# ---------------------------------------------------------------------------
+class RunsCancelInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    run_id: uuid.UUID
+    reason: str | None = Field(default=None, max_length=280)
+
+
+async def _h_runs_cancel(args: RunsCancelInput, ctx: ToolContext) -> Any:
+    from backend.workflow.application.run_cleanup import cancel_run  # noqa: PLC0415
+
+    outcome = await cancel_run(
+        ctx.session,
+        run_id=args.run_id,
+        workspace_id=ctx.principal.workspace_id,
+        reason=args.reason or "cancelled via MCP",
+    )
+    if not outcome.found:
+        raise ToolError(f"run not found: {args.run_id}")
+    if not outcome.cancelled:
+        raise ToolError(
+            f"run {args.run_id} is {outcome.status}; only an in-flight (open/running) "
+            f"run can be cancelled — use bsvibe_runs_discard for a review_ready run"
+        )
+    await ctx.session.commit()
+    return _Envelope({"run_id": str(args.run_id), "status": outcome.status, "cancelled": True})
+
+
+# ---------------------------------------------------------------------------
+# bsvibe_runs_discard — abandon any non-terminal run (incl. review_ready)
+# ---------------------------------------------------------------------------
+class RunsDiscardInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    run_id: uuid.UUID
+    reason: str | None = Field(default=None, max_length=280)
+
+
+async def _h_runs_discard(args: RunsDiscardInput, ctx: ToolContext) -> Any:
+    from backend.workflow.application.run_cleanup import discard_run  # noqa: PLC0415
+
+    outcome = await discard_run(
+        ctx.session,
+        run_id=args.run_id,
+        workspace_id=ctx.principal.workspace_id,
+        reason=args.reason or "discarded via MCP",
+    )
+    if outcome is None:
+        raise ToolError(f"run not found: {args.run_id}")
+    await ctx.session.commit()
+    return _Envelope(
+        {
+            "run_id": str(outcome.run_id),
+            "status": outcome.status,
+            "cancelled": outcome.cancelled,
+            "deliverables_retracted": outcome.deliverables_retracted,
+            "deliverables_need_compensation": outcome.deliverables_need_compensation,
+        }
+    )
+
+
+# ---------------------------------------------------------------------------
 # bsvibe_deliverables_list
 # ---------------------------------------------------------------------------
 class DeliverablesListInput(BaseModel):
@@ -583,6 +644,42 @@ def register_workflow_tools(registry: ToolRegistry) -> None:
             output_schema=_Envelope,
             handler=_h_runs_show,
             required_scopes=("mcp:read",),
+        )
+    )
+    registry.register(
+        Tool(
+            name="bsvibe_runs_cancel",
+            description=(
+                "Cancel an in-flight ExecutionRun (status `open` or `running`) → "
+                "`cancelled`. Mirrors the PWA/REST cancel action; a cancelled run "
+                "is recoverable via retry. Errors on a terminal run, and on a "
+                "`review_ready` run (use `bsvibe_runs_discard` for that)."
+            ),
+            input_schema=RunsCancelInput,
+            output_schema=_Envelope,
+            handler=_h_runs_cancel,
+            required_scopes=("mcp:write",),
+            audit_event="bsvibe.mcp.runs_cancel.invoked",
+        )
+    )
+    registry.register(
+        Tool(
+            name="bsvibe_runs_discard",
+            description=(
+                "Discard (폐기) an ExecutionRun — the cleanup primitive for a "
+                "`review_ready` run with no Safe Mode entry, or any non-terminal "
+                "run. Transitions it to `cancelled`, best-effort removes its "
+                "worktree, and tombstones its handle-less deliverables "
+                "(`retracted_at`). Deliverables that carry compensation handles (a "
+                "delivered external artifact) are NOT silently tombstoned — they are "
+                "returned in `deliverables_need_compensation` for an explicit "
+                "compensating retract via POST /deliverables/{id}/retract."
+            ),
+            input_schema=RunsDiscardInput,
+            output_schema=_Envelope,
+            handler=_h_runs_discard,
+            required_scopes=("mcp:write",),
+            audit_event="bsvibe.mcp.runs_discard.invoked",
         )
     )
     registry.register(

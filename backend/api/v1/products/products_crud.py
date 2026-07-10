@@ -238,8 +238,18 @@ async def delete_product(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail=f"Product {product_id} not found"
         )
+    # Cascade-cancel the product's in-flight / review_ready runs before deleting.
+    # ``ExecutionRun.product_id`` is a loose reference (no FK cascade), so without
+    # this the runs are orphaned — they keep surfacing in the Summary dashboard
+    # for a product that no longer exists.
+    from backend.workflow.application.run_cleanup import cancel_product_runs  # noqa: PLC0415
+
+    cancelled = await cancel_product_runs(
+        session, product_id=product_id, workspace_id=workspace_id, reason="product deleted"
+    )
     await session.delete(row)
     await session.commit()
+    logger.info("product_deleted", product_id=str(product_id), runs_cancelled=cancelled)
 
 
 __all__ = ["BootstrapScheduler", "get_bootstrap_scheduler", "router"]
