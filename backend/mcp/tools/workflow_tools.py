@@ -495,6 +495,7 @@ async def _h_runs_discard(args: RunsDiscardInput, ctx: ToolContext) -> Any:
         run_id=args.run_id,
         workspace_id=ctx.principal.workspace_id,
         reason=args.reason or "discarded via MCP",
+        actor_id=ctx.principal.user_id,
     )
     if outcome is None:
         raise ToolError(f"run not found: {args.run_id}")
@@ -506,6 +507,7 @@ async def _h_runs_discard(args: RunsDiscardInput, ctx: ToolContext) -> Any:
             "cancelled": outcome.cancelled,
             "deliverables_retracted": outcome.deliverables_retracted,
             "deliverables_need_compensation": outcome.deliverables_need_compensation,
+            "decisions_resolved": outcome.decisions_resolved,
         }
     )
 
@@ -668,9 +670,10 @@ def register_workflow_tools(registry: ToolRegistry) -> None:
             description=(
                 "Discard (폐기) an ExecutionRun — the cleanup primitive for a "
                 "`review_ready` run with no Safe Mode entry, or any non-terminal "
-                "run. Transitions it to `cancelled`, best-effort removes its "
-                "worktree, and tombstones its handle-less deliverables "
-                "(`retracted_at`). Deliverables that carry compensation handles (a "
+                "run. Transitions it to `cancelled`, resolves its pending Decisions "
+                "(so its 답변이 필요해요 card leaves the Summary dashboard), "
+                "best-effort removes its worktree, and tombstones its handle-less "
+                "deliverables (`retracted_at`). Deliverables that carry compensation handles (a "
                 "delivered external artifact) are NOT silently tombstoned — they are "
                 "returned in `deliverables_need_compensation` for an explicit "
                 "compensating retract via POST /deliverables/{id}/retract."
