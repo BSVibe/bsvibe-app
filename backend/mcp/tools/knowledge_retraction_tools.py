@@ -92,7 +92,7 @@ async def _issue_with_action(
     """Shared intake — verify, issue, commit, return the wire payload."""
     await _ensure_node_exists(ctx.principal.workspace_id, node_ref)
     service = _build_service(ctx)
-    signal, created = await service.issue(
+    signal, outcome = await service.issue(
         workspace_id=ctx.principal.workspace_id,
         actor_id=ctx.principal.user_id,
         node_ref=node_ref,
@@ -103,7 +103,8 @@ async def _issue_with_action(
     await ctx.session.commit()
     return {
         "signal": signal.model_dump(mode="json"),
-        "created": created,
+        "created": outcome == "created",
+        "outcome": outcome,
         "undo_window_seconds": UNDO_WINDOW_SECONDS,
     }
 

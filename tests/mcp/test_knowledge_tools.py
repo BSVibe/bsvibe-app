@@ -411,3 +411,79 @@ async def test_list_tags_recurses_into_subdirs_by_default(
     assert by_tag.get("seedling") == 1
     assert by_tag.get("deep") == 1
     assert by_tag.get("root") == 1
+
+
+# ---------------------------------------------------------------------------
+# Retraction lazy-apply — the garden read tools must (a) commit a queued
+# retract's tombstone once its 30s window has closed, and (b) skip any note
+# carrying a ``retracted_at`` frontmatter marker. Regression for: retract is
+# a no-op after the undo window and the note keeps surfacing forever.
+# ---------------------------------------------------------------------------
+async def _queue_expired_retract(db, vault: Path, workspace_id, actor_id, rel_path: str) -> None:
+    """Issue a retract whose undo window has ALREADY closed (apply_at in the past)."""
+    from datetime import UTC, datetime
+
+    from backend.knowledge.application.retraction_service import RetractionService
+    from backend.knowledge.graph.vault import Vault
+    from backend.knowledge.graph.writer import GardenWriter
+
+    past = datetime(2020, 1, 1, tzinfo=UTC)
+    async with db() as s:
+        service = RetractionService(session=s, writer=GardenWriter(vault=Vault(vault)))
+        await service.issue(
+            workspace_id=workspace_id,
+            actor_id=actor_id,
+            node_ref=rel_path,
+            action="retract",
+            reason="cleanup",
+            now=past,
+        )
+        await s.commit()
+
+
+async def test_list_recent_lazy_applies_tombstone_and_hides_note(
+    db, workspace_id, user_id, registry, seeded
+) -> None:
+    await _queue_expired_retract(db, seeded, workspace_id, user_id, "garden/alpha.md")
+
+    async with db() as s:
+        ctx = ToolContext(
+            principal=_principal(workspace_id=workspace_id, user_id=user_id, scopes=("mcp:read",)),
+            session=s,
+        )
+        out = await registry.call_tool("bsvibe_knowledge_list_recent", {}, ctx)
+
+    paths = {n["path"] for n in out["notes"]}
+    assert paths == {"garden/beta.md"}, "the retracted note must be hidden"
+    assert out["total"] == 1
+    # The tombstone must have actually been written to disk by the lazy apply.
+    text = (seeded / "garden" / "alpha.md").read_text(encoding="utf-8")
+    assert "retracted_at:" in text
+    assert (seeded / "garden" / "alpha.md").exists(), "tombstone must not delete the file"
+
+
+async def test_search_hides_retracted_note(db, workspace_id, user_id, registry, seeded) -> None:
+    # beta.md contains "something special inside" — retract it, then search must miss it.
+    await _queue_expired_retract(db, seeded, workspace_id, user_id, "garden/beta.md")
+
+    async with db() as s:
+        ctx = ToolContext(
+            principal=_principal(workspace_id=workspace_id, user_id=user_id, scopes=("mcp:read",)),
+            session=s,
+        )
+        out = await registry.call_tool(
+            "bsvibe_knowledge_search", {"query": "something special"}, ctx
+        )
+    assert out["total"] == 0
+
+
+async def test_get_note_hides_retracted_note(db, workspace_id, user_id, registry, seeded) -> None:
+    await _queue_expired_retract(db, seeded, workspace_id, user_id, "garden/alpha.md")
+
+    async with db() as s:
+        ctx = ToolContext(
+            principal=_principal(workspace_id=workspace_id, user_id=user_id, scopes=("mcp:read",)),
+            session=s,
+        )
+        with pytest.raises(ToolError, match="not found"):
+            await registry.call_tool("bsvibe_knowledge_get_note", {"path": "garden/alpha.md"}, ctx)

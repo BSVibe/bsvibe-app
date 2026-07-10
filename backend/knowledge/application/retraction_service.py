@@ -65,6 +65,14 @@ logger = structlog.get_logger(__name__)
 
 UndoResult = Literal["undone", "expired", "already_applied", "already_undone", "not_found"]
 
+#: Outcome of an :meth:`RetractionService.issue` call. ``created`` — a fresh
+#: correction row was minted. ``already_pending`` — an in-flight (queued, not
+#: yet applied, not cancelled) correction already exists for this node; the
+#: existing signal is returned. ``already_applied`` — the node's tombstone is
+#: already committed. Dedupe prevents the ~200-duplicate-signal fan-out seen
+#: when a bulk cleanup re-issues retracts on the same node_ref.
+IssueOutcome = Literal["created", "already_pending", "already_applied"]
+
 
 def _as_utc(value: datetime) -> datetime:
     """Force a tz-aware UTC datetime — SQLite drops the offset on round-trip
@@ -74,6 +82,11 @@ def _as_utc(value: datetime) -> datetime:
     if value.tzinfo is None:
         return value.replace(tzinfo=UTC)
     return value.astimezone(UTC)
+
+
+def _outcome_for_row(row: OntologyCorrection) -> IssueOutcome:
+    """Map an existing correction row to the dedupe outcome the caller returns."""
+    return "already_applied" if row.applied_at is not None else "already_pending"
 
 
 class TombstoneWriter(Protocol):
@@ -120,13 +133,21 @@ class RetractionService:
         reason: str | None = None,
         correction_id: uuid.UUID | None = None,
         now: datetime | None = None,
-    ) -> tuple[RetractionSignal, bool]:
-        """Persist a new correction; return ``(signal, created)``.
+    ) -> tuple[RetractionSignal, IssueOutcome]:
+        """Persist a new correction; return ``(signal, outcome)``.
 
-        Idempotent on ``correction_id`` — if a row already exists for the
-        supplied id, returns the persisted signal and ``created=False``
-        with no audit re-emit. When ``correction_id`` is ``None``, a fresh
-        uuid is minted and a new row is created.
+        Two layers of dedupe keep a bulk cleanup from minting a fresh signal
+        every time it touches the same node:
+
+        * **Idempotency on ``correction_id``** — if a row already exists for
+          the supplied id, returns the persisted signal with no audit
+          re-emit (``already_pending`` / ``already_applied`` per its state).
+        * **Dedupe on ``node_ref``** (retract only) — if a non-cancelled
+          retract already exists for this ``(workspace_id, node_ref)``,
+          returns that signal instead of a new row. A cancelled (undone)
+          retract does NOT block a fresh one, so re-retracting after undo
+          works. ``correct`` is not deduped — a founder may correct the same
+          node repeatedly.
 
         Caller (the REST handler) is responsible for: (1) RBAC checks
         before calling, (2) ``node_ref`` existence check (so a 404 is
@@ -139,7 +160,25 @@ class RetractionService:
         # Idempotency check — re-issue on same id returns the existing row.
         existing = await self._session.get(OntologyCorrection, cid)
         if existing is not None:
-            return self._signal_from_row(existing), False
+            return self._signal_from_row(existing), _outcome_for_row(existing)
+
+        # Node dedupe (retract only) — an in-flight or applied retract on the
+        # same node short-circuits so we never queue a duplicate tombstone.
+        if action == "retract":
+            dupe_stmt = (
+                select(OntologyCorrection)
+                .where(
+                    OntologyCorrection.workspace_id == workspace_id,
+                    OntologyCorrection.node_ref == node_ref,
+                    OntologyCorrection.action == "retract",
+                    OntologyCorrection.cancelled_at.is_(None),
+                )
+                .order_by(OntologyCorrection.issued_at.desc())
+                .limit(1)
+            )
+            dupe = (await self._session.execute(dupe_stmt)).scalars().first()
+            if dupe is not None:
+                return self._signal_from_row(dupe), _outcome_for_row(dupe)
 
         signal = RetractionSignal(
             id=cid,
@@ -176,7 +215,7 @@ class RetractionService:
             action=signal.action,
             node_ref=signal.node_ref,
         )
-        return signal, True
+        return signal, "created"
 
     # --- Undo ---------------------------------------------------------
 
@@ -279,12 +318,24 @@ class RetractionService:
         """Write the tombstone (retract) or rewrite fields (correct), then mark applied."""
         signal = self._signal_from_row(row)
         if row.action == "retract":
-            await self._writer.tombstone_note(
-                row.node_ref,
-                retracted_at=now.isoformat(),
-                retracted_by=str(row.actor_id),
-                retraction_reason=row.reason,
-            )
+            try:
+                await self._writer.tombstone_note(
+                    row.node_ref,
+                    retracted_at=now.isoformat(),
+                    retracted_by=str(row.actor_id),
+                    retraction_reason=row.reason,
+                )
+            except FileNotFoundError:
+                # The note was deleted between issue and apply — the retraction
+                # goal (node gone) is already met, so mark the row applied
+                # rather than letting one missing file wedge the whole sweep
+                # (a lazy-resolver read must never 500 on a stale backlog row).
+                logger.warning(
+                    "ontology_correction_apply_note_missing",
+                    correction_id=str(row.id),
+                    workspace_id=str(row.workspace_id),
+                    node_ref=row.node_ref,
+                )
         # ``correct`` is whitelisted-field rewrite; field-payload is carried
         # in ``signal_json["corrections"]`` when set by the (future) correct
         # surface — M3a wires the row + audit + tombstone path; the actual
@@ -360,6 +411,7 @@ class RetractionService:
 
 
 __all__ = [
+    "IssueOutcome",
     "RetractionService",
     "TombstoneWriter",
     "UndoResult",

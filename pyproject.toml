@@ -327,6 +327,12 @@ ignore_imports = [
     # internally. The MCP touch-point is the application service the REST
     # surface uses; the audit pipeline is a leaf concern not under MCP's control.
     "backend.mcp.tools.knowledge_retraction_tools -> backend.knowledge.application.retraction_service",
+    # Same chain — the garden read tools (list_recent/search/get_note/list_tags)
+    # run RetractionService.apply_pending as a lazy resolver so a queued retract's
+    # tombstone is committed on the next read (there is no background sweep). Reuses
+    # the one canonical service; the transitive audit/eventbus pull-in is identical
+    # to the retraction-tools exemption above.
+    "backend.mcp.tools.knowledge_tools -> backend.knowledge.application.retraction_service",
     # Lift D3d — UI-parity Inside Trust + Account read-only tools. The
     # account-get tool calls the SAME ``ensure_personal_account`` service the
     # REST /api/v1/account discovery endpoint calls — one canonical

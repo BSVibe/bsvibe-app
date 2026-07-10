@@ -18,11 +18,17 @@ import re
 from pathlib import Path
 from typing import Any
 
+import structlog
 from pydantic import BaseModel, ConfigDict, Field
 
+from backend.knowledge.application.retraction_service import RetractionService
+from backend.knowledge.graph.markdown_utils import extract_frontmatter
 from backend.knowledge.graph.vault import Vault
+from backend.knowledge.graph.writer import GardenWriter
 from backend.mcp.api import Tool, ToolContext, ToolError, ToolRegistry
 from backend.mcp.tools._helpers import vault_root_for, workspace_region
+
+logger = structlog.get_logger(__name__)
 
 
 class _PermissiveModel(BaseModel):
@@ -39,6 +45,46 @@ async def _vault_for_call(ctx: ToolContext) -> Vault:
     root = vault_root_for(region=region, workspace_id=ctx.principal.workspace_id)
     root.mkdir(parents=True, exist_ok=True)
     return Vault(root)
+
+
+async def _resolve_pending_retractions(ctx: ToolContext, vault: Vault) -> None:
+    """Lazy resolver — commit any retract whose 30s undo window has closed.
+
+    The retract queue (``RetractionService``) has no background sweep; the
+    tombstone is written on the *next call that knows the workspace*. Every
+    garden read runs this first so a queued retract actually lands its
+    ``retracted_at`` frontmatter (and the note then drops out of the results
+    below). Rooted at the *same* :class:`Vault` the read scans, so the write
+    lands exactly where we're about to look.
+
+    Best-effort: a read must never 500 because the sweep hit a bad row, so
+    any failure is logged and swallowed (the row stays pending and is retried
+    on the next read).
+    """
+    try:
+        service = RetractionService(session=ctx.session, writer=GardenWriter(vault=vault))
+        applied = await service.apply_pending(workspace_id=ctx.principal.workspace_id)
+        if applied:
+            await ctx.session.commit()
+    except Exception:  # noqa: BLE001 — a read must survive a bad sweep row
+        logger.warning(
+            "retraction_lazy_apply_failed",
+            workspace_id=str(ctx.principal.workspace_id),
+            exc_info=True,
+        )
+
+
+def _is_retracted(content: str) -> bool:
+    """True when a note carries the ``retracted_at`` tombstone marker.
+
+    Matches the retriever skip predicate (``ResolvedDecisionsRetriever``):
+    a falsy value ('' / None) is treated as *not* retracted so a half-written
+    note fails open. Malformed frontmatter is soft-skipped (not retracted).
+    """
+    try:
+        return bool(extract_frontmatter(content).get("retracted_at"))
+    except Exception:  # noqa: BLE001 — malformed note is not a tombstone
+        return False
 
 
 _TAG_RE = re.compile(r"(?<!\w)#([A-Za-z0-9_\-/]+)")
@@ -100,6 +146,7 @@ class ListRecentOutput(_PermissiveModel):
 
 async def _h_list_recent(args: ListRecentInput, ctx: ToolContext) -> Any:
     vault = await _vault_for_call(ctx)
+    await _resolve_pending_retractions(ctx, vault)
     files = await vault.read_notes(args.subdir, recursive=args.recursive)
 
     # Founder UX = "show me what just happened" — sort by mtime descending,
@@ -110,12 +157,16 @@ async def _h_list_recent(args: ListRecentInput, ctx: ToolContext) -> Any:
         except OSError:
             return 0.0
 
-    files = sorted(files, key=_mtime, reverse=True)[: args.limit]
+    files = sorted(files, key=_mtime, reverse=True)
     notes: list[NoteSummary] = []
     for f in files:
+        if len(notes) >= args.limit:
+            break
         try:
             content = await vault.read_note_content(f)
         except OSError:
+            continue
+        if _is_retracted(content):
             continue
         notes.append(
             NoteSummary(
@@ -147,6 +198,7 @@ class GetNoteOutput(BaseModel):
 
 async def _h_get_note(args: GetNoteInput, ctx: ToolContext) -> Any:
     vault = await _vault_for_call(ctx)
+    await _resolve_pending_retractions(ctx, vault)
     try:
         target = vault.resolve_path(args.path)
     except Exception as exc:  # noqa: BLE001 — boundary
@@ -154,6 +206,10 @@ async def _h_get_note(args: GetNoteInput, ctx: ToolContext) -> Any:
     if not target.is_file():
         raise ToolError(f"note not found: {args.path}")
     content = await vault.read_note_content(target)
+    # A tombstoned note is hidden from the read surface (mirrors the retriever
+    # skip predicate) — the file stays on disk for provenance.
+    if _is_retracted(content):
+        raise ToolError(f"note not found: {args.path}")
     return GetNoteOutput(path=args.path, content=content, tags=_extract_tags(content))
 
 
@@ -187,6 +243,7 @@ class SearchKnowledgeOutput(_PermissiveModel):
 
 async def _h_search_knowledge(args: SearchKnowledgeInput, ctx: ToolContext) -> Any:
     vault = await _vault_for_call(ctx)
+    await _resolve_pending_retractions(ctx, vault)
     files = await vault.read_notes(args.subdir, recursive=args.recursive)
     needle = args.query.lower()
     hits: list[SearchHit] = []
@@ -194,6 +251,8 @@ async def _h_search_knowledge(args: SearchKnowledgeInput, ctx: ToolContext) -> A
         try:
             content = await vault.read_note_content(f)
         except OSError:
+            continue
+        if _is_retracted(content):
             continue
         if needle in content.lower():
             hits.append(
@@ -237,12 +296,15 @@ class ListTagsOutput(_PermissiveModel):
 
 async def _h_list_tags(args: ListTagsInput, ctx: ToolContext) -> Any:
     vault = await _vault_for_call(ctx)
+    await _resolve_pending_retractions(ctx, vault)
     files = await vault.read_notes(args.subdir, recursive=args.recursive)
     counts: dict[str, int] = {}
     for f in files:
         try:
             content = await vault.read_note_content(f)
         except OSError:
+            continue
+        if _is_retracted(content):
             continue
         for tag in _extract_tags(content):
             counts[tag] = counts.get(tag, 0) + 1
