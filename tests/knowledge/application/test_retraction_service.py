@@ -96,7 +96,7 @@ async def test_issue_persists_row_and_returns_signal(
     rel_path = _seed_note(vault_root)
     async with sf() as session:
         service = RetractionService(session=session, writer=_writer(vault_root))
-        signal, created = await service.issue(
+        signal, outcome = await service.issue(
             workspace_id=workspace_id,
             actor_id=actor_id,
             node_ref=rel_path,
@@ -105,7 +105,7 @@ async def test_issue_persists_row_and_returns_signal(
         )
         await session.commit()
 
-    assert created is True
+    assert outcome == "created"
     assert signal.workspace_id == workspace_id
     assert signal.actor_id == actor_id
     assert signal.action == "retract"
@@ -128,7 +128,7 @@ async def test_issue_is_idempotent_on_correction_id(
     cid = uuid.uuid4()
     async with sf() as session:
         service = RetractionService(session=session, writer=_writer(vault_root))
-        _first, created1 = await service.issue(
+        _first, outcome1 = await service.issue(
             workspace_id=workspace_id,
             actor_id=actor_id,
             node_ref=rel_path,
@@ -136,15 +136,15 @@ async def test_issue_is_idempotent_on_correction_id(
             correction_id=cid,
         )
         await session.commit()
-        second, created2 = await service.issue(
+        second, outcome2 = await service.issue(
             workspace_id=workspace_id,
             actor_id=actor_id,
             node_ref=rel_path,
             action="retract",
             correction_id=cid,
         )
-    assert created1 is True
-    assert created2 is False
+    assert outcome1 == "created"
+    assert outcome2 == "already_pending"
     assert second.id == cid
 
 
@@ -372,6 +372,141 @@ async def test_correct_action_persists_row_without_tombstone(
     # No tombstone — correct does not retract.
     text = (vault_root / rel_path).read_text(encoding="utf-8")
     assert "retracted_at" not in text
+
+
+async def test_issue_dedupes_pending_retract_on_node_ref(
+    sf: async_sessionmaker[AsyncSession],
+    vault_root: Path,
+    workspace_id: uuid.UUID,
+    actor_id: uuid.UUID,
+) -> None:
+    """A second retract on the SAME node (no correction_id) returns the existing
+    pending signal + ``already_pending`` — it must NOT mint a duplicate row."""
+    rel_path = _seed_note(vault_root)
+    async with sf() as session:
+        service = RetractionService(session=session, writer=_writer(vault_root))
+        first, outcome1 = await service.issue(
+            workspace_id=workspace_id,
+            actor_id=actor_id,
+            node_ref=rel_path,
+            action="retract",
+        )
+        await session.commit()
+        second, outcome2 = await service.issue(
+            workspace_id=workspace_id,
+            actor_id=actor_id,
+            node_ref=rel_path,
+            action="retract",
+        )
+        await session.commit()
+        # Only one row should exist for this node.
+        pending = await service.apply_pending(
+            workspace_id=workspace_id,
+            now=first.apply_at + timedelta(seconds=1),
+        )
+
+    assert outcome1 == "created"
+    assert outcome2 == "already_pending"
+    assert second.id == first.id
+    assert pending == 1, "dedupe must have prevented a second queued row"
+
+
+async def test_issue_after_applied_returns_already_applied(
+    sf: async_sessionmaker[AsyncSession],
+    vault_root: Path,
+    workspace_id: uuid.UUID,
+    actor_id: uuid.UUID,
+) -> None:
+    """Re-retracting a node whose tombstone is already committed → ``already_applied``."""
+    rel_path = _seed_note(vault_root)
+    async with sf() as session:
+        service = RetractionService(session=session, writer=_writer(vault_root))
+        first, _ = await service.issue(
+            workspace_id=workspace_id,
+            actor_id=actor_id,
+            node_ref=rel_path,
+            action="retract",
+        )
+        await session.commit()
+        await service.apply_pending(
+            workspace_id=workspace_id,
+            now=first.apply_at + timedelta(seconds=1),
+        )
+        await session.commit()
+        again, outcome = await service.issue(
+            workspace_id=workspace_id,
+            actor_id=actor_id,
+            node_ref=rel_path,
+            action="retract",
+        )
+
+    assert outcome == "already_applied"
+    assert again.id == first.id
+
+
+async def test_issue_after_undo_allows_new_retract(
+    sf: async_sessionmaker[AsyncSession],
+    vault_root: Path,
+    workspace_id: uuid.UUID,
+    actor_id: uuid.UUID,
+) -> None:
+    """A cancelled (undone) retract must NOT block a fresh retract on the node."""
+    rel_path = _seed_note(vault_root)
+    async with sf() as session:
+        service = RetractionService(session=session, writer=_writer(vault_root))
+        first, _ = await service.issue(
+            workspace_id=workspace_id,
+            actor_id=actor_id,
+            node_ref=rel_path,
+            action="retract",
+        )
+        await session.commit()
+        await service.undo(correction_id=first.id, workspace_id=workspace_id)
+        await session.commit()
+        second, outcome = await service.issue(
+            workspace_id=workspace_id,
+            actor_id=actor_id,
+            node_ref=rel_path,
+            action="retract",
+        )
+
+    assert outcome == "created"
+    assert second.id != first.id
+
+
+async def test_apply_pending_missing_note_marks_applied_without_raising(
+    sf: async_sessionmaker[AsyncSession],
+    vault_root: Path,
+    workspace_id: uuid.UUID,
+    actor_id: uuid.UUID,
+) -> None:
+    """A queued retract for a since-deleted note must not wedge the sweep —
+    the row is marked applied (retraction goal already met) and no error escapes."""
+    rel_path = _seed_note(vault_root)
+    async with sf() as session:
+        service = RetractionService(session=session, writer=_writer(vault_root))
+        signal, _ = await service.issue(
+            workspace_id=workspace_id,
+            actor_id=actor_id,
+            node_ref=rel_path,
+            action="retract",
+        )
+        await session.commit()
+        # The note vanishes before the window closes.
+        (vault_root / rel_path).unlink()
+        applied = await service.apply_pending(
+            workspace_id=workspace_id,
+            now=signal.apply_at + timedelta(seconds=1),
+        )
+        await session.commit()
+        # A subsequent sweep is a no-op (row is terminal).
+        re_applied = await service.apply_pending(
+            workspace_id=workspace_id,
+            now=signal.apply_at + timedelta(seconds=5),
+        )
+
+    assert applied == 1
+    assert re_applied == 0
 
 
 async def test_issue_now_parameter_controls_timestamps(

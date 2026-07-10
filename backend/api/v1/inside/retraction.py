@@ -40,6 +40,7 @@ from backend.api.deps import get_current_user_row, get_db_session, get_workspace
 from backend.api.v1.decisions import _vault_root
 from backend.identity.db import UserRow
 from backend.knowledge.application.retraction_service import (
+    IssueOutcome,
     RetractionService,
     UndoResult,
 )
@@ -94,6 +95,10 @@ class RetractResponse(BaseModel):
 
     signal: RetractionSignal
     created: bool
+    #: Dedupe outcome — ``created`` for a fresh signal, ``already_pending`` /
+    #: ``already_applied`` when an existing correction on the same node was
+    #: returned instead of minting a duplicate.
+    outcome: IssueOutcome = "created"
     undo_window_seconds: int = UNDO_WINDOW_SECONDS
 
 
@@ -164,7 +169,7 @@ async def _issue_with_action(
     now: datetime | None = None,
 ) -> RetractResponse:
     """Shared intake path — issue the signal + commit."""
-    signal, created = await service.issue(
+    signal, outcome = await service.issue(
         workspace_id=workspace_id,
         actor_id=actor_id,
         node_ref=node_ref,
@@ -174,7 +179,7 @@ async def _issue_with_action(
         now=now,
     )
     await session.commit()
-    return RetractResponse(signal=signal, created=created)
+    return RetractResponse(signal=signal, created=outcome == "created", outcome=outcome)
 
 
 # --- Endpoints -------------------------------------------------------------
