@@ -1,17 +1,19 @@
 """OpenAI-compatible chat completions endpoint (Lift E2 — no classifier).
 
 Wires :class:`backend.api.v1.chat_service.ChatService` against
-the per-request session + workspace budget. The caller passes
-``model_account_id`` explicitly via ``metadata.bsvibe_model_account_id`` —
-routing is the caller's responsibility on this proxy surface (unlike
-the internal workflow paths, which route through
-:class:`backend.dispatch.resolver.ModelAccountResolver`).
+the per-request session + workspace budget. Unified routing Lift 3 — this
+surface now routes through the SAME
+:class:`backend.dispatch.resolver.ModelAccountResolver` the internal workflow
+callers use (caller ``chat.completions``): a request without an explicit
+``metadata.bsvibe_model_account_id`` is routed by run-routing rule +
+workspace default, and only hard-fails (400) when neither is configured.
+An explicit ``metadata.bsvibe_model_account_id`` still wins as an override.
 
 Endpoint:
 
     POST /api/v1/chat/completions
     Body: OpenAI-shape + ``metadata.bsvibe_account_id``
-          + ``metadata.bsvibe_model_account_id``
+          + optional ``metadata.bsvibe_model_account_id`` (override)
     Returns: OpenAI-shape completion + ``bsvibe`` metadata
 """
 
@@ -30,6 +32,9 @@ from backend.api.v1.chat_audit_events import (
     GatewayCompletionFailed,
 )
 from backend.api.v1.chat_service import ChatCompletionContext, ChatService
+from backend.config import Settings, get_settings
+from backend.dispatch.caller_registry import CALLER_CHAT_COMPLETIONS
+from backend.dispatch.resolver import ModelAccountResolver, NoMatchingRouteError
 from backend.router.accounts.crypto import CredentialCipher, _key_from_settings
 from backend.router.accounts.service import ModelAccountService
 from backend.router.budget.errors import BudgetExceeded
@@ -64,6 +69,31 @@ class ChatCompletionRequest(BaseModel):
     metadata: ChatCompletionMetadata | None = None
 
 
+async def _resolve_chat_model_account_id(
+    session: AsyncSession,
+    settings: Settings,
+    *,
+    workspace_id: uuid.UUID,
+    explicit: uuid.UUID | None,
+) -> uuid.UUID:
+    """Pick the ModelAccount id for a chat-completions request.
+
+    An explicit ``metadata.bsvibe_model_account_id`` wins (back-compat for
+    callers that pin a model). Otherwise the request routes through the SAME
+    :class:`ModelAccountResolver` the internal callers use — matching
+    run-routing rules for the ``chat.completions`` caller, then the workspace
+    default. Raises :class:`NoMatchingRouteError` when neither matches (the
+    endpoint surfaces it as a 400, never a silent pick).
+    """
+    if explicit is not None:
+        return explicit
+    resolver = ModelAccountResolver(session, settings=settings)
+    resolved = await resolver.resolve_for(
+        caller_id=CALLER_CHAT_COMPLETIONS, workspace_id=workspace_id
+    )
+    return resolved.account.id
+
+
 def _build_service(session: AsyncSession) -> ChatService:
     cipher = CredentialCipher(_key_from_settings())
     accounts = ModelAccountService(session, cipher=cipher)
@@ -88,12 +118,22 @@ async def chat_completions(
 ) -> dict[str, Any]:
     """OpenAI-shape chat completions — dispatches via the router service."""
     md = payload.metadata or ChatCompletionMetadata()
-    model_account_id = md.bsvibe_model_account_id
-    if model_account_id is None:
+    try:
+        model_account_id = await _resolve_chat_model_account_id(
+            session,
+            get_settings(),
+            workspace_id=workspace_id,
+            explicit=md.bsvibe_model_account_id,
+        )
+    except NoMatchingRouteError as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="metadata.bsvibe_model_account_id required (the proxy does not auto-route)",
-        )
+            detail=(
+                "no routing rule matched the chat.completions caller and no "
+                "workspace default model is configured — set a default model "
+                "or add a routing rule"
+            ),
+        ) from exc
 
     service = _build_service(session)
     ctx = ChatCompletionContext(

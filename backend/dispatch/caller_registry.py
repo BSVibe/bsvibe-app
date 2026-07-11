@@ -32,6 +32,7 @@ from dataclasses import dataclass, field
 __all__ = [
     "CALLER_AGENT_LOOP_ACT",
     "CALLER_AGENT_LOOP_PLAN",
+    "CALLER_CHAT_COMPLETIONS",
     "CALLER_FRAME",
     "CALLER_JUDGE",
     "CALLER_KNOWLEDGE_CANONICALIZATION",
@@ -102,6 +103,10 @@ CALLER_AGENT_LOOP_ACT = "workflow.agent_loop.act"
 CALLER_JUDGE = "workflow.judge"
 #: Settle worker's entity extractor — populates the ontology from finished runs.
 CALLER_SETTLE_EXTRACT = "workflow.settle.extract"
+#: External OpenAI-compatible ``/api/v1/chat/completions`` gateway. Lift 3 —
+#: this surface now routes through the resolver like every internal caller
+#: instead of demanding an explicit ``metadata.bsvibe_model_account_id``.
+CALLER_CHAT_COMPLETIONS = "chat.completions"
 
 #: Prefix for the dynamic skill caller_id namespace. ``skill.<name>``.
 SKILL_CALLER_PREFIX = "skill."
@@ -200,6 +205,16 @@ KNOWN_CALLERS: dict[str, CallerSpec] = {
             "verified deliverable's transcript to populate the ontology."
         ),
         default_timeout_s=300.0,
+    ),
+    CALLER_CHAT_COMPLETIONS: CallerSpec(
+        caller_id=CALLER_CHAT_COMPLETIONS,
+        required_methods=frozenset({"chat"}),
+        description=(
+            "External OpenAI-compatible /chat/completions gateway — routes to a "
+            "ModelAccount by rule + workspace default, like the internal callers."
+        ),
+        # Interactive proxy surface — a caller is waiting on the response.
+        default_timeout_s=120.0,
     ),
 }
 
