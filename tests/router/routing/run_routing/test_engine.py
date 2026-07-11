@@ -199,6 +199,94 @@ def test_from_run_derives_design_stage_from_pipeline() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Lift 1 (unified routing) — content signals absorbed from legacy Layer 2
+# (estimated_tokens / classified_intent / detected_language). Additive: the
+# new fields are addressable and populated when derivable, but adding them
+# must not change how any pre-existing rule matches.
+# ---------------------------------------------------------------------------
+
+
+def test_content_signal_fields_are_addressable() -> None:
+    from backend.router.routing.run_routing.engine import ALLOWED_FIELDS
+
+    assert {"estimated_tokens", "classified_intent", "detected_language"} <= ALLOWED_FIELDS
+
+
+def test_content_signals_default_to_empty_when_absent() -> None:
+    ctx = _ctx()
+    assert ctx.estimated_tokens == 0
+    assert ctx.classified_intent is None
+    assert ctx.detected_language is None
+
+
+def test_from_run_estimates_tokens_from_intent_text() -> None:
+    ws = uuid.uuid4()
+    ctx = RoutingContext.from_run(_run(ws, {"intent_text": "build a login page with oauth"}))
+    assert ctx.estimated_tokens > 0
+    # No text → zero, never a crash.
+    assert RoutingContext.from_run(_run(ws, {})).estimated_tokens == 0
+
+
+def test_from_run_detects_language_from_intent_text() -> None:
+    ws = uuid.uuid4()
+    ko = RoutingContext.from_run(_run(ws, {"intent_text": "로그인 페이지를 만들어줘"}))
+    assert ko.detected_language == "ko"
+    en = RoutingContext.from_run(_run(ws, {"intent_text": "build a login page"}))
+    assert en.detected_language == "en"
+    # No text → None.
+    assert RoutingContext.from_run(_run(ws, {})).detected_language is None
+
+
+def test_from_run_reads_classified_intent_from_frame() -> None:
+    ws = uuid.uuid4()
+    ctx = RoutingContext.from_run(_run(ws, {"frame": {"classified_intent": "code_generation"}}))
+    assert ctx.classified_intent == "code_generation"
+    # Missing / non-str → None.
+    assert RoutingContext.from_run(_run(ws, {"frame": {}})).classified_intent is None
+
+
+def test_rule_can_match_on_content_signal() -> None:
+    ws = uuid.uuid4()
+    heavy = _rule(
+        name="big-context",
+        target="executor/opus",
+        ws=ws,
+        conditions=[{"field": "estimated_tokens", "operator": "gt", "value": 1000}],
+    )
+    assert evaluate_rules([heavy], _ctx(estimated_tokens=5000)) == "executor/opus"
+    assert evaluate_rules([heavy], _ctx(estimated_tokens=10)) is None
+
+    korean = _rule(
+        name="ko-route",
+        target="executor/sonnet",
+        ws=ws,
+        conditions=[{"field": "detected_language", "operator": "eq", "value": "ko"}],
+    )
+    assert evaluate_rules([korean], _ctx(detected_language="ko")) == "executor/sonnet"
+    assert evaluate_rules([korean], _ctx(detected_language="en")) is None
+
+
+def test_content_signals_do_not_change_existing_rule_matching() -> None:
+    """Additive guarantee: a rule authored against the old field set matches
+    exactly as before, whatever the new signals hold."""
+    ws = uuid.uuid4()
+    rule = _rule(
+        name="code",
+        target="executor/codex",
+        ws=ws,
+        conditions=[{"field": "artifact_type_hint", "operator": "eq", "value": "code"}],
+    )
+    with_signals = _ctx(
+        artifact_type_hint="code",
+        estimated_tokens=9999,
+        classified_intent="anything",
+        detected_language="ja",
+    )
+    assert evaluate_rules([rule], with_signals) == "executor/codex"
+    assert evaluate_rules([rule], _ctx(artifact_type_hint="pr", estimated_tokens=9999)) is None
+
+
+# ---------------------------------------------------------------------------
 # resolve_route — DB-backed, no tier fallback
 # ---------------------------------------------------------------------------
 
