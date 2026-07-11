@@ -45,6 +45,18 @@ async def client(db):
         yield c
 
 
+async def test_list_callers_returns_known_callers(client) -> None:
+    """The PWA rule form reads the selectable callers from here so the caller
+    whitelist stays a single source of truth (the registry)."""
+    r = await client.get("/api/v1/run-routing/callers")
+    assert r.status_code == 200
+    body = r.json()
+    ids = {c["caller_id"] for c in body}
+    assert "workflow.agent_loop.plan" in ids
+    assert "chat.completions" in ids
+    assert all(c["description"] for c in body)
+
+
 async def test_create_list_delete_run_rule(client) -> None:
     # Empty initially.
     r = await client.get("/api/v1/run-routing")

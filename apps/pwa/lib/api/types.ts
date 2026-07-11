@@ -1190,52 +1190,62 @@ export interface ModelAccount {
 
 // ── Routing rules (Settings → Models → ROUTING) ───────────────────────────
 
-/** One condition the routing engine evaluates. `field` is one of the
- *  evaluator's whitelisted ALLOWED_FIELDS (e.g. `classified_intent`). The UI
- *  only surfaces the value as "what a rule matches" — it does not edit complex
- *  conditions (deferred). Mirrors the backend ConditionResponse 1:1. */
-export interface RuleCondition {
-  condition_type: string;
+/** One condition a run-routing rule evaluates. `field` is one of the engine's
+ *  whitelisted ALLOWED_FIELDS (stage / pipeline / classified_intent / …). The UI
+ *  surfaces the value as "what a rule matches"; complex condition editing is
+ *  deferred. Mirrors the backend ConditionResponse. */
+export interface RunRoutingCondition {
   field: string;
   operator: string;
   value: unknown;
   negate: boolean;
 }
 
-/** POST-body condition (backend ConditionPayload). `negate` defaults to `false`
- *  server-side, so callers may omit it. */
-export interface RuleConditionInput {
-  condition_type: string;
+/** POST-body condition (backend ConditionPayload, extra=forbid). `operator`
+ *  defaults to `eq` and `negate` to `false` server-side, so both are optional. */
+export interface RunRoutingConditionInput {
   field: string;
-  operator: string;
-  value: unknown;
+  operator?: string;
+  value?: unknown;
   negate?: boolean;
 }
 
-/** `GET /api/v1/rules` element / `POST` 201 (backend RuleResponse). A rule maps
- *  a unit of work to a `target_model`, ordered by `priority` (ascending wins
- *  first). `is_default` marks the catch-all; `is_active` toggles it. Mirrors the
- *  backend response model field-for-field. */
-export interface RoutingRule {
+/** `GET /api/v1/run-routing` element / `POST` 201 (backend RunRuleResponse). A
+ *  rule routes a caller's work to a `target` ModelAccount, ordered by `priority`
+ *  (ascending wins first). `caller_id` is the dispatch call site (null only for
+ *  the catch-all default); `is_default` marks the catch-all; `is_active` toggles
+ *  it. Mirrors the backend response model. */
+export interface RunRoutingRule {
   id: string;
+  workspace_id: string;
   name: string;
+  caller_id: string | null;
   priority: number;
-  target_model: string;
   is_default: boolean;
+  target: string;
+  conditions: RunRoutingCondition[];
   is_active: boolean;
-  conditions: RuleCondition[];
+  created_at: string;
 }
 
-/** POST body for creating a routing rule (backend RuleCreate, extra=forbid).
- *  `conditions` is dropped from the wire when empty so a catch-all rule's body
- *  stays minimal; the backend defaults it to `[]`. */
-export interface RoutingRuleCreate {
+/** POST body for creating a run-routing rule (backend RunRuleCreate,
+ *  extra=forbid). A non-default rule MUST carry a `caller_id`. `conditions` is
+ *  dropped from the wire when empty so a catch-all body stays minimal. */
+export interface RunRoutingRuleCreate {
   name: string;
-  target_model: string;
+  caller_id?: string | null;
+  target: string;
   priority: number;
   is_default?: boolean;
   is_active?: boolean;
-  conditions?: RuleConditionInput[];
+  conditions?: RunRoutingConditionInput[];
+}
+
+/** `GET /api/v1/run-routing/callers` element (backend RunCallerResponse) — one
+ *  selectable dispatch caller for the rule form's caller dropdown. */
+export interface RunRoutingCaller {
+  caller_id: string;
+  description: string;
 }
 
 // ── Brief / Work-Home view-model ──────────────────────────────────────────

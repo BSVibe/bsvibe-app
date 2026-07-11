@@ -549,7 +549,9 @@
         "addError": "Couldn’t add that rule. Check the details and try again.",
         "addSuccess": "Added “{name}”.",
         "adding": "Adding…",
-        "addRule": "Add rule"
+        "addRule": "Add rule",
+        "caller": "Caller",
+        "callerPlaceholder": "Pick a caller…"
       }
     },
     "connectors": {
