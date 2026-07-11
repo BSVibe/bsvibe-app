@@ -1248,6 +1248,13 @@ export interface RunRoutingCaller {
   description: string;
 }
 
+/** `POST /api/v1/run-routing/compile` response (backend CompileResponse). Each
+ *  proposal is a `RunRoutingRuleCreate` body the founder can apply as-is — a
+ *  dry-run, nothing is persisted until applied. */
+export interface RunRoutingCompileResult {
+  proposals: RunRoutingRuleCreate[];
+}
+
 // ── Brief / Work-Home view-model ──────────────────────────────────────────
 //
 // Decisions are NOT modelled here — they live in the dedicated Decisions tab

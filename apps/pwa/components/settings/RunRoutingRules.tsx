@@ -2,12 +2,18 @@
 
 import { listAccounts } from "@/lib/api/accounts";
 import {
+  compileRunRoutingRules,
   createRunRoutingRule,
   deleteRunRoutingRule,
   listRunRoutingCallers,
   listRunRoutingRules,
 } from "@/lib/api/run-routing";
-import type { ModelAccount, RunRoutingCaller, RunRoutingRule } from "@/lib/api/types";
+import type {
+  ModelAccount,
+  RunRoutingCaller,
+  RunRoutingRule,
+  RunRoutingRuleCreate,
+} from "@/lib/api/types";
 import { useTranslations } from "next-intl";
 import { useEffect, useState } from "react";
 
@@ -40,6 +46,7 @@ function callerSummary(rule: RunRoutingRule, anyLabel: string): string {
 export default function RunRoutingRules() {
   const [list, setList] = useState<ListState>(null);
   const [showAdd, setShowAdd] = useState(false);
+  const [showNl, setShowNl] = useState(false);
   const t = useTranslations("settings.models.routing");
 
   async function load() {
@@ -67,6 +74,11 @@ export default function RunRoutingRules() {
         {list && !list.failed && list.data.length > 0 ? (
           <span className="routing__count">{list.data.length}</span>
         ) : null}
+        {!showNl && (
+          <button type="button" className="settings-add-toggle" onClick={() => setShowNl(true)}>
+            {t("nlToggle")}
+          </button>
+        )}
         {!showAdd && (
           <button type="button" className="settings-add-toggle" onClick={() => setShowAdd(true)}>
             {t("addToggle")}
@@ -74,6 +86,20 @@ export default function RunRoutingRules() {
         )}
       </header>
       <p className="routing__lede">{t("lede")}</p>
+
+      {showNl && (
+        <div className="settings-add-panel">
+          <NlCompilePanel
+            onApplied={() => {
+              load();
+              setShowNl(false);
+            }}
+          />
+          <button type="button" className="settings-add-cancel" onClick={() => setShowNl(false)}>
+            {t("cancel")}
+          </button>
+        </div>
+      )}
 
       {showAdd && (
         <div className="settings-add-panel">
@@ -382,5 +408,120 @@ function AddRunRoutingRule({ onCreated }: { onCreated: () => void }) {
         </button>
       </div>
     </form>
+  );
+}
+
+type NlState = "idle" | "compiling" | "applying" | "error";
+
+/**
+ * NL → rules panel: the founder describes routing in plain language, one cheap
+ * LLM call drafts VALIDATED proposals (dry-run — nothing saved), and "Apply all"
+ * creates each via the normal create endpoint. Proposals surface for review
+ * first, so a bad draft is never silently persisted.
+ */
+function NlCompilePanel({ onApplied }: { onApplied: () => void }) {
+  const [text, setText] = useState("");
+  const [proposals, setProposals] = useState<RunRoutingRuleCreate[] | null>(null);
+  const [state, setState] = useState<NlState>("idle");
+  const t = useTranslations("settings.models.routing");
+
+  async function compile() {
+    if (state === "compiling" || text.trim().length === 0) return;
+    setState("compiling");
+    setProposals(null);
+    try {
+      const res = await compileRunRoutingRules(text.trim());
+      setProposals(res.proposals);
+      setState("idle");
+    } catch {
+      setState("error");
+    }
+  }
+
+  async function applyAll() {
+    if (state === "applying" || !proposals || proposals.length === 0) return;
+    setState("applying");
+    try {
+      for (const p of proposals) {
+        await createRunRoutingRule(p);
+      }
+      onApplied();
+    } catch {
+      setState("error");
+    }
+  }
+
+  return (
+    <div className="routing-nl">
+      <p className="routing-form__label">{t("nlLede")}</p>
+      <textarea
+        className="routing-form__input"
+        rows={2}
+        placeholder={t("nlPlaceholder")}
+        value={text}
+        disabled={state === "compiling" || state === "applying"}
+        onChange={(e) => setText(e.target.value)}
+      />
+      <div className="routing-form__foot">
+        {state === "error" && (
+          <span className="routing-form__error" aria-live="polite">
+            {t("nlError")}
+          </span>
+        )}
+        <button
+          type="button"
+          className="routing-form__submit"
+          onClick={compile}
+          disabled={state === "compiling" || state === "applying" || text.trim().length === 0}
+        >
+          {state === "compiling" ? t("nlCompiling") : t("nlCompile")}
+        </button>
+      </div>
+
+      {proposals !== null &&
+        (proposals.length === 0 ? (
+          <p className="routing__empty">{t("nlEmpty")}</p>
+        ) : (
+          <div className="routing-nl__preview">
+            <p className="section-label">{t("nlProposed")}</p>
+            <ul className="routing__list" aria-label={t("nlProposed")}>
+              {proposals.map((p, i) => (
+                <li className="routing-card" key={`${p.name}-${i}`}>
+                  <div className="routing-card__body">
+                    <div className="routing-card__head">
+                      <span className="routing-card__name">{p.name}</span>
+                      {p.is_default ? (
+                        <span className="routing-card__chip routing-card__chip--default">
+                          {t("default")}
+                        </span>
+                      ) : null}
+                      <span className="routing-card__chip">
+                        {t("priorityChip", { priority: p.priority })}
+                      </span>
+                    </div>
+                    <p className="routing-card__route">
+                      <span className="routing-card__match">
+                        {p.caller_id ?? t("nlDefaultCaller")}
+                      </span>
+                      <span className="routing-card__arrow" aria-hidden="true">
+                        {" → "}
+                      </span>
+                      <span className="routing-card__target">{p.target}</span>
+                    </p>
+                  </div>
+                </li>
+              ))}
+            </ul>
+            <button
+              type="button"
+              className="routing-form__submit"
+              onClick={applyAll}
+              disabled={state === "applying"}
+            >
+              {state === "applying" ? t("nlApplying") : t("nlApply")}
+            </button>
+          </div>
+        ))}
+    </div>
   );
 }

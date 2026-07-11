@@ -11,6 +11,7 @@
 
 import { ApiError } from "@/lib/api/client";
 import {
+  compileRunRoutingRules,
   createRunRoutingRule,
   deleteRunRoutingRule,
   listRunRoutingCallers,
@@ -127,6 +128,22 @@ describe("run-routing client", () => {
     const body = JSON.parse(init.body as string);
     expect("caller_id" in body).toBe(false);
     expect(body.is_default).toBe(true);
+  });
+
+  it("compileRunRoutingRules POSTs /api/v1/run-routing/compile with the text", async () => {
+    const result = {
+      proposals: [{ name: "d", caller_id: null, target: "opus", priority: 10, is_default: true }],
+    };
+    const fetchMock = okFetch(result);
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    const res = await compileRunRoutingRules("설계는 opus");
+
+    expect(res).toEqual(result);
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe("/api/v1/run-routing/compile");
+    expect(init.method).toBe("POST");
+    expect(JSON.parse(init.body as string)).toEqual({ text: "설계는 opus" });
   });
 
   it("deleteRunRoutingRule DELETEs /api/v1/run-routing/{id} and resolves void", async () => {

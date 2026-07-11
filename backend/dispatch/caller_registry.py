@@ -107,6 +107,9 @@ CALLER_SETTLE_EXTRACT = "workflow.settle.extract"
 #: this surface now routes through the resolver like every internal caller
 #: instead of demanding an explicit ``metadata.bsvibe_model_account_id``.
 CALLER_CHAT_COMPLETIONS = "chat.completions"
+#: The NL → run-routing-rules compiler (Lift 5) — one cheap chat call that turns
+#: the founder's plain-language routing description into structured proposals.
+CALLER_ROUTING_COMPILE = "routing.compile"
 
 #: Prefix for the dynamic skill caller_id namespace. ``skill.<name>``.
 SKILL_CALLER_PREFIX = "skill."
@@ -214,6 +217,16 @@ KNOWN_CALLERS: dict[str, CallerSpec] = {
             "ModelAccount by rule + workspace default, like the internal callers."
         ),
         # Interactive proxy surface — a caller is waiting on the response.
+        default_timeout_s=120.0,
+    ),
+    CALLER_ROUTING_COMPILE: CallerSpec(
+        caller_id=CALLER_ROUTING_COMPILE,
+        required_methods=frozenset({"chat"}),
+        description=(
+            "NL → routing-rules compiler — one cheap chat call that turns a "
+            "plain-language routing description into structured rule proposals."
+        ),
+        # Interactive authoring — the founder is waiting on the preview.
         default_timeout_s=120.0,
     ),
 }
