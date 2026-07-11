@@ -76,10 +76,11 @@ def test_alembic_head_is_connector_last_import():
     )
     assert result.returncode == 0
     # Lift E16 → worker_last_in_flight; E21 → executor_task_model; E32 →
-    # connector_oauth_tokens_status → workspace_language (#6 output language).
-    # Keep the test name (function name is the historical revision id, kept for
+    # connector_oauth_tokens_status → workspace_language (#6 output language) →
+    # drop_layer2_routing_rules (unified routing Lift 2 — legacy tables dropped).
+    # Keep the test name (function name is a historical revision id, kept for
     # git-blame stability) and assert the current tip.
-    assert "workspace_language" in result.stdout
+    assert "drop_layer2_routing_rules" in result.stdout
 
 
 def test_target_metadata_covers_all_bases():
@@ -98,7 +99,6 @@ def test_target_metadata_covers_all_bases():
     from backend.router.accounts.models import AccountsBase
     from backend.router.budget.models import GatewayBudgetBase
     from backend.router.routing.db import GatewayRoutingBase
-    from backend.router.rules.db import GatewayRulesBase
     from backend.workers.db import WorkersBase
     from backend.workflow.infrastructure.db import ExecutionBase
     from backend.workflow.infrastructure.delivery.db import DeliveryBase
@@ -111,9 +111,6 @@ def test_target_metadata_covers_all_bases():
         "account_budget_policies",
         "audit_events",
         "audit_outbox",
-        # Bundle 1.5a
-        "routing_rules",
-        "rule_conditions",
         # Bundle 1.5b
         "account_embedding_settings",
         "intent_definitions",
@@ -175,7 +172,6 @@ def test_target_metadata_covers_all_bases():
     actual_tables = (
         set(AccountsBase.metadata.tables)
         | set(GatewayBudgetBase.metadata.tables)
-        | set(GatewayRulesBase.metadata.tables)
         | set(GatewayEmbeddingBase.metadata.tables)
         | set(GatewayRoutingBase.metadata.tables)
         | set(SupervisorBase.metadata.tables)

@@ -1,6 +1,6 @@
 """B15 — Agent-loop audit events are emitted into the supervisor outbox.
 
-Before B15 only ``backend.api.litellm_hook`` emitted audit events: a run could
+Before B15 only the chat-completions gateway path emitted audit events: a run could
 plan, act, verify, raise a Decision, and terminate without the supervisor audit
 stream (drained by :class:`backend.workflow.infrastructure.workers.relay_worker.RelayWorker`) ever
 seeing it. These tests pin the high-signal event SET — ``RunStarted``,

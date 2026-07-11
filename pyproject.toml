@@ -171,7 +171,6 @@ ignore_imports = [
     "backend.data.migrations.env -> backend.router.budget.models",
     "backend.data.migrations.env -> backend.router.routing.db",
     "backend.data.migrations.env -> backend.router.routing.run_routing.db",
-    "backend.data.migrations.env -> backend.router.rules.db",
     "backend.data.migrations.env -> backend.schedule.infrastructure.schedule_db",
     "backend.data.migrations.env -> backend.workflow.infrastructure.db",
     "backend.data.migrations.env -> backend.workflow.infrastructure.delivery.db",
@@ -311,10 +310,6 @@ ignore_imports = [
     # service primitives the REST surface uses so MCP and PWA paths stay one
     # canonical mutation chain.
     "backend.mcp.tools.bindings_tools -> backend.connectors.db",
-    "backend.mcp.tools.routing_rules_tools -> backend.router.accounts.account_service",
-    "backend.mcp.tools.routing_rules_tools -> backend.router.rules.conditions",
-    "backend.mcp.tools.routing_rules_tools -> backend.router.rules.db",
-    "backend.mcp.tools.routing_rules_tools -> backend.router.rules.repository",
     # Lift D3c — UI-parity Knowledge retract/correct + Skills + Workspace.
     # Same pattern as D3a/b: each new tool module calls the SAME service /
     # loader the REST surface uses so MCP and PWA paths stay one canonical
@@ -364,7 +359,7 @@ ignore_imports = [
     "backend.mcp.tools.workers_tools -> backend.executors.dispatch",
     # Lift E7 — UI-parity for the NEW run-routing rules surface
     # (/api/v1/run-routing). Same one-canonical-mutation-chain pattern
-    # as D3b's routing_rules_tools: the MCP module calls the same repo
+    # as the other D3b tools: the MCP module calls the same repo
     # + engine + caller_registry the REST handler uses so MCP and PWA
     # paths land on one validation contract (no second copy of the
     # caller_id whitelist, the ALLOWED_FIELDS set, or the

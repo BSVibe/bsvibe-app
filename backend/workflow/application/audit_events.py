@@ -2,7 +2,7 @@
 
 Per Workflow §4 the ``audit`` stream is meant to be the always-on observability
 backbone across all steps, not just the chat-completions surface. Before B15
-only :mod:`backend.api.litellm_hook.audit_events` was wired, so the supervisor
+only the chat-completions gateway path emitted audit events, so the supervisor
 outbox (drained by :class:`backend.workflow.infrastructure.workers.relay_worker.RelayWorker`) saw no
 run-level events at all — :class:`backend.workflow.infrastructure.db.ExecutionRunActivity`
 rows existed in the DB but the audit stream was blind to them.

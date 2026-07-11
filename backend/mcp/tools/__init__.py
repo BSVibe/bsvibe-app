@@ -16,7 +16,6 @@ from backend.mcp.tools.knowledge_retraction_tools import (
 from backend.mcp.tools.knowledge_tools import register_knowledge_tools
 from backend.mcp.tools.model_accounts_tools import register_model_accounts_tools
 from backend.mcp.tools.notifications_tools import register_notifications_tools
-from backend.mcp.tools.routing_rules_tools import register_routing_rules_tools
 from backend.mcp.tools.run_routing_rules_tools import register_run_routing_rules_tools
 from backend.mcp.tools.safe_mode_tools import register_safe_mode_tools
 from backend.mcp.tools.skills_tools import register_skills_tools
@@ -32,7 +31,7 @@ def register_all_tools(registry: ToolRegistry) -> None:
     knowledge (5), workflow (7), safe-mode (3), direct (1),
     model-accounts (4 — D3a), connectors (5 — D3a),
     notifications (2 — D3a),
-    bindings (4 — D3b), decisions (4 — D3b), routing-rules (3 — D3b),
+    bindings (4 — D3b), decisions (4 — D3b),
     knowledge-retraction (3 — D3c), skills (4 — D3c), workspace (2 — D3c),
     inside-trust (2 — D3d), account (2 — D3d),
     run-routing-rules (3 — E7).
@@ -46,7 +45,6 @@ def register_all_tools(registry: ToolRegistry) -> None:
     register_notifications_tools(registry)
     register_bindings_tools(registry)
     register_decisions_tools(registry)
-    register_routing_rules_tools(registry)
     register_run_routing_rules_tools(registry)
     register_knowledge_retraction_tools(registry)
     register_skills_tools(registry)
@@ -71,7 +69,6 @@ __all__ = [
     "register_knowledge_tools",
     "register_model_accounts_tools",
     "register_notifications_tools",
-    "register_routing_rules_tools",
     "register_run_routing_rules_tools",
     "register_safe_mode_tools",
     "register_skills_tools",

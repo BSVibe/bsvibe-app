@@ -21,7 +21,6 @@ import backend.identity.workspaces_db  # noqa: F401
 import backend.router.accounts.account_models  # noqa: F401
 import backend.router.accounts.models  # noqa: F401
 import backend.router.routing.run_routing.db  # noqa: F401
-import backend.router.rules.db  # noqa: F401
 from backend.config import get_settings
 from backend.identity.workspaces_db import WorkspaceRow
 from backend.mcp.api import McpPrincipal, ToolContext, ToolError, ToolRegistry

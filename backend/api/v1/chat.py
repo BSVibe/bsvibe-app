@@ -1,6 +1,6 @@
 """OpenAI-compatible chat completions endpoint (Lift E2 — no classifier).
 
-Wires :class:`backend.api.litellm_hook.chat_service.ChatService` against
+Wires :class:`backend.api.v1.chat_service.ChatService` against
 the per-request session + workspace budget. The caller passes
 ``model_account_id`` explicitly via ``metadata.bsvibe_model_account_id`` —
 routing is the caller's responsibility on this proxy surface (unlike
@@ -25,11 +25,11 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.api.deps import get_db_session, get_workspace_id, require_account_id
-from backend.api.litellm_hook.audit_events import (
+from backend.api.v1.chat_audit_events import (
     GatewayCompletionDispatched,
     GatewayCompletionFailed,
 )
-from backend.api.litellm_hook.chat_service import ChatCompletionContext, ChatService
+from backend.api.v1.chat_service import ChatCompletionContext, ChatService
 from backend.router.accounts.crypto import CredentialCipher, _key_from_settings
 from backend.router.accounts.service import ModelAccountService
 from backend.router.budget.errors import BudgetExceeded
