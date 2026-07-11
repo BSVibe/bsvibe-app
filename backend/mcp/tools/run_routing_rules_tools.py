@@ -34,7 +34,11 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field, RootModel, field_validator, model_validator
 from sqlalchemy.exc import IntegrityError
 
-from backend.api.v1.run_routing import _validate_caller_id
+from backend.api.v1.run_routing import (
+    NoCompileModelError,
+    _validate_caller_id,
+    compile_for_workspace,
+)
 from backend.mcp.api import Tool, ToolContext, ToolError, ToolRegistry
 from backend.router.infrastructure.repositories import SqlAlchemyRunRoutingRuleRepository
 from backend.router.routing.run_routing.db import RunRoutingRuleRow
@@ -192,6 +196,26 @@ async def _h_delete(args: RunRoutingRulesDeleteInput, ctx: ToolContext) -> Any:
 
 
 # ---------------------------------------------------------------------------
+# bsvibe_run_routing_rules_compile (Lift 5 — NL → proposals, dry-run)
+# ---------------------------------------------------------------------------
+class RunRoutingRulesCompileInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    text: str = Field(min_length=1, max_length=4000)
+
+
+async def _h_compile(args: RunRoutingRulesCompileInput, ctx: ToolContext) -> Any:
+    try:
+        proposals = await compile_for_workspace(ctx.session, ctx.principal.workspace_id, args.text)
+    except NoCompileModelError as exc:
+        raise ToolError(
+            "no model is configured to compile with — set a default model or add "
+            "a model account first"
+        ) from exc
+    return _Envelope({"proposals": proposals})
+
+
+# ---------------------------------------------------------------------------
 # Registration
 # ---------------------------------------------------------------------------
 def register_run_routing_rules_tools(registry: ToolRegistry) -> None:
@@ -241,6 +265,24 @@ def register_run_routing_rules_tools(registry: ToolRegistry) -> None:
             handler=_h_delete,
             required_scopes=("mcp:write",),
             audit_event="bsvibe.mcp.run_routing_rules_delete.invoked",
+        )
+    )
+    registry.register(
+        Tool(
+            name="bsvibe_run_routing_rules_compile",
+            description=(
+                "Compile a plain-language routing description (e.g. '설계는 opus, "
+                "나머지는 sonnet') into structured run-routing rule PROPOSALS. "
+                "Dry-run — nothing is persisted; each proposal is the "
+                "bsvibe_run_routing_rules_create body (name / caller_id / target / "
+                "priority / is_default), validated against the caller registry + "
+                "the workspace's active model accounts. Apply the ones you want "
+                "with bsvibe_run_routing_rules_create."
+            ),
+            input_schema=RunRoutingRulesCompileInput,
+            output_schema=_Envelope,
+            handler=_h_compile,
+            required_scopes=("mcp:read",),
         )
     )
 

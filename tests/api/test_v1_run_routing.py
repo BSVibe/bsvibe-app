@@ -45,6 +45,50 @@ async def client(db):
         yield c
 
 
+async def test_compile_returns_proposals(client, monkeypatch) -> None:
+    """POST /compile is a dry-run: it returns rule PROPOSALS (nothing persisted).
+    The LLM + account gather live in compile_for_workspace, monkeypatched here."""
+    import backend.api.v1.run_routing as rr
+
+    async def _fake_compile(session, workspace_id, text, *, llm=None):
+        assert text == "design → opus, rest → sonnet"
+        return [
+            {
+                "name": "design → opus",
+                "caller_id": "workflow.agent_loop.plan",
+                "target": "opus",
+                "priority": 10,
+                "is_default": False,
+            }
+        ]
+
+    monkeypatch.setattr(rr, "compile_for_workspace", _fake_compile)
+
+    r = await client.post(
+        "/api/v1/run-routing/compile", json={"text": "design → opus, rest → sonnet"}
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["proposals"][0]["caller_id"] == "workflow.agent_loop.plan"
+    assert body["proposals"][0]["target"] == "opus"
+
+    # Dry-run — nothing was created.
+    assert (await client.get("/api/v1/run-routing")).json() == []
+
+
+async def test_compile_no_model_returns_400(client, monkeypatch) -> None:
+    import backend.api.v1.run_routing as rr
+
+    async def _no_model(session, workspace_id, text, *, llm=None):
+        raise rr.NoCompileModelError
+
+    monkeypatch.setattr(rr, "compile_for_workspace", _no_model)
+
+    r = await client.post("/api/v1/run-routing/compile", json={"text": "route it"})
+    assert r.status_code == 400
+    assert "no model" in r.json()["detail"].lower()
+
+
 async def test_list_callers_returns_known_callers(client) -> None:
     """The PWA rule form reads the selectable callers from here so the caller
     whitelist stays a single source of truth (the registry)."""

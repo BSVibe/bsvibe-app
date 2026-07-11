@@ -551,7 +551,18 @@
         "adding": "Adding…",
         "addRule": "Add rule",
         "caller": "Caller",
-        "callerPlaceholder": "Pick a caller…"
+        "callerPlaceholder": "Pick a caller…",
+        "nlToggle": "✨ Describe in words",
+        "nlLede": "Describe your routing in plain language — I'll draft the rules for you to review before anything is saved.",
+        "nlPlaceholder": "e.g. Design work goes to opus, everything else to sonnet",
+        "nlCompile": "Draft rules",
+        "nlCompiling": "Drafting…",
+        "nlApply": "Apply all",
+        "nlApplying": "Applying…",
+        "nlEmpty": "I couldn't derive any rules from that. Try naming a stage (design / implement) and a model.",
+        "nlError": "Couldn't draft rules right now. Try again in a moment.",
+        "nlProposed": "Proposed rules",
+        "nlDefaultCaller": "All callers"
       }
     },
     "connectors": {

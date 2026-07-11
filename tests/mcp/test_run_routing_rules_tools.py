@@ -81,6 +81,40 @@ async def seeded(db, workspace_id) -> AsyncIterator[None]:
     yield
 
 
+async def test_compile_returns_proposals(
+    db, workspace_id, user_id, registry, seeded, monkeypatch
+) -> None:
+    """bsvibe_run_routing_rules_compile is a dry-run: it returns proposals from
+    the shared compile helper (monkeypatched — the LLM never runs here)."""
+    import backend.mcp.tools.run_routing_rules_tools as tools
+
+    async def _fake_compile(session, ws, text, *, llm=None):
+        return [
+            {
+                "name": "design → opus",
+                "caller_id": "workflow.agent_loop.plan",
+                "target": "opus",
+                "priority": 10,
+                "is_default": False,
+            }
+        ]
+
+    # The handler imports compile_for_workspace at module top-level, so patch the
+    # binding on the tool module (not the source module).
+    monkeypatch.setattr(tools, "compile_for_workspace", _fake_compile)
+
+    async with db() as s:
+        ctx = ToolContext(
+            principal=_principal(workspace_id=workspace_id, user_id=user_id, scopes=("mcp:read",)),
+            session=s,
+        )
+        out = await registry.call_tool(
+            "bsvibe_run_routing_rules_compile", {"text": "설계는 opus"}, ctx
+        )
+    assert out["proposals"][0]["caller_id"] == "workflow.agent_loop.plan"
+    assert out["proposals"][0]["target"] == "opus"
+
+
 async def test_create_lists_delete_round_trip(db, workspace_id, user_id, registry, seeded) -> None:
     # Create — non-default rule with caller_id (top-level column).
     async with db() as s:

@@ -34,6 +34,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.api.deps import get_db_session, get_workspace_id
 from backend.api.v1._router_deps import get_run_routing_rule_repository
 from backend.dispatch.caller_registry import (
+    CALLER_ROUTING_COMPILE,
     KNOWN_CALLERS,
     SKILL_CALLER_PREFIX,
     list_all_callers,
@@ -41,6 +42,11 @@ from backend.dispatch.caller_registry import (
 from backend.router.domain.repositories import RunRoutingRuleRepository
 from backend.router.routing.run_routing.db import RunRoutingRuleRow
 from backend.router.routing.run_routing.engine import ALLOWED_FIELDS, VALID_OPERATORS
+from backend.router.routing.run_routing.nl_compile import (
+    RoutingCompileLlm,
+    as_dicts,
+    compile_rules,
+)
 
 logger = structlog.get_logger(__name__)
 
@@ -241,3 +247,118 @@ async def delete_run_rule(
         )
     await rules.delete(row)
     await session.commit()
+
+
+# ---------------------------------------------------------------------------
+# NL → rules compiler (Lift 5) — dry-run: returns proposals, never persists.
+# ---------------------------------------------------------------------------
+
+
+class NoCompileModelError(Exception):
+    """No model is configured to run the NL compiler on (no route for the
+    ``routing.compile`` caller + no workspace default). The founder must set a
+    default model or add an account before the compiler can run."""
+
+
+class _AdapterCompileLlm:
+    """Bridges a resolved dispatch adapter to the compiler's ``complete_text``
+    seam — one ``(system, user)`` → text chat call (no tools)."""
+
+    __slots__ = ("_adapter",)
+
+    def __init__(self, adapter: Any) -> None:
+        self._adapter = adapter
+
+    async def complete_text(self, *, system: str, user: str) -> str:
+        response = await self._adapter.chat(
+            system=system,
+            messages=[{"role": "user", "content": user}],
+            tools=None,
+        )
+        return str(response.content)
+
+
+async def _resolve_compile_llm(
+    session: AsyncSession, workspace_id: uuid.UUID
+) -> RoutingCompileLlm | None:
+    """Resolve the model the compiler runs ON via the same resolver everything
+    else uses (caller ``routing.compile``). ``None`` when nothing is configured."""
+    from backend.config import get_settings  # noqa: PLC0415
+    from backend.dispatch.resolver import (  # noqa: PLC0415
+        ModelAccountResolver,
+        NoMatchingRouteError,
+    )
+
+    resolver = ModelAccountResolver(session, settings=get_settings())
+    try:
+        resolved = await resolver.resolve_for(
+            caller_id=CALLER_ROUTING_COMPILE, workspace_id=workspace_id
+        )
+    except NoMatchingRouteError:
+        return None
+    return _AdapterCompileLlm(resolved.adapter)
+
+
+async def compile_for_workspace(
+    session: AsyncSession,
+    workspace_id: uuid.UUID,
+    text: str,
+    *,
+    llm: RoutingCompileLlm | None = None,
+) -> list[dict[str, Any]]:
+    """Compile ``text`` into validated rule-proposal dicts for ``workspace_id``.
+
+    Gathers the caller catalog (registry) + the workspace's active model accounts,
+    resolves the compiler's own model (unless ``llm`` is injected for tests), and
+    returns the create-endpoint wire shape for each proposal. Raises
+    :class:`NoCompileModelError` when no model is configured to compile on. Shared
+    by the REST endpoint and the MCP tool so both land on one compile path."""
+    from backend.router.infrastructure.repositories import (  # noqa: PLC0415
+        SqlAlchemyModelAccountRepository,
+    )
+
+    callers = [(spec.caller_id, spec.description) for spec in list_all_callers()]
+    accounts = await SqlAlchemyModelAccountRepository(session).list_active_for_workspace(
+        workspace_id=workspace_id
+    )
+    targets = [(a.label, a.litellm_model) for a in accounts]
+
+    if llm is None:
+        llm = await _resolve_compile_llm(session, workspace_id)
+        if llm is None:
+            raise NoCompileModelError
+    rules = await compile_rules(text, callers=callers, targets=targets, llm=llm)
+    return as_dicts(rules)
+
+
+class CompileRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    text: str = Field(min_length=1, max_length=4000)
+
+
+class CompileResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    proposals: list[dict[str, Any]]
+
+
+@router.post("/compile")
+async def compile_run_rules(
+    payload: CompileRequest,
+    workspace_id: Annotated[uuid.UUID, Depends(get_workspace_id)],
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+) -> CompileResponse:
+    """Compile a plain-language routing description into rule PROPOSALS (dry-run —
+    nothing is persisted; the caller previews then POSTs the ones it wants)."""
+    try:
+        proposals = await compile_for_workspace(session, workspace_id, payload.text)
+    except NoCompileModelError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "no model is configured to compile with — set a default model or "
+                "add a model account first"
+            ),
+        ) from None
+    return CompileResponse(proposals=proposals)

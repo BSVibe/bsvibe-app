@@ -17,7 +17,12 @@
  *  are given so the wire shape stays minimal. */
 
 import { apiFetch } from "./client";
-import type { RunRoutingCaller, RunRoutingRule, RunRoutingRuleCreate } from "./types";
+import type {
+  RunRoutingCaller,
+  RunRoutingCompileResult,
+  RunRoutingRule,
+  RunRoutingRuleCreate,
+} from "./types";
 
 /** Run-routing rules for the active workspace, priority ascending. */
 export function listRunRoutingRules(): Promise<RunRoutingRule[]> {
@@ -46,6 +51,15 @@ export function createRunRoutingRule(input: RunRoutingRuleCreate): Promise<RunRo
   return apiFetch<RunRoutingRule>("/api/v1/run-routing", {
     method: "POST",
     body: JSON.stringify(body),
+  });
+}
+
+/** Compile a plain-language routing description into rule PROPOSALS (dry-run —
+ *  nothing is persisted; the caller previews then applies via createRunRoutingRule). */
+export function compileRunRoutingRules(text: string): Promise<RunRoutingCompileResult> {
+  return apiFetch<RunRoutingCompileResult>("/api/v1/run-routing/compile", {
+    method: "POST",
+    body: JSON.stringify({ text }),
   });
 }
 

@@ -173,6 +173,63 @@ describe("Run-routing surface", () => {
     });
   });
 
+  it("drafts rules from plain language, previews them, and applies (creates)", async () => {
+    const PROPOSAL = {
+      name: "design → opus",
+      caller_id: "workflow.agent_loop.plan",
+      target: "opus",
+      priority: 10,
+      is_default: false,
+    };
+    let created = 0;
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      const u = String(url);
+      const method = (init?.method ?? "GET").toUpperCase();
+      if (u.endsWith("/api/v1/run-routing/compile")) return jsonResponse({ proposals: [PROPOSAL] });
+      if (u.endsWith("/api/v1/run-routing") && method === "POST") {
+        created += 1;
+        return jsonResponse(
+          {
+            ...PROPOSAL,
+            id: "x",
+            workspace_id: "w",
+            conditions: [],
+            is_active: true,
+            created_at: "t",
+          },
+          201,
+        );
+      }
+      return jsonResponse([]);
+    });
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    render(<RunRoutingRules />);
+    await waitFor(() =>
+      expect(screen.getByText(/All work goes to the active model account/i)).toBeInTheDocument(),
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: /Describe in words/i }));
+    await userEvent.type(
+      screen.getByPlaceholderText(/Design work goes to opus/i),
+      "design → opus, rest → sonnet",
+    );
+    await userEvent.click(screen.getByRole("button", { name: /^Draft rules$/i }));
+
+    // The proposal previews before anything is saved.
+    await waitFor(() => expect(screen.getByText("design → opus")).toBeInTheDocument());
+    expect(created).toBe(0);
+
+    await userEvent.click(screen.getByRole("button", { name: /^Apply all$/i }));
+    await waitFor(() => expect(created).toBe(1));
+    const applyCall = (fetchMock.mock.calls as unknown as Array<[string, RequestInit]>).find(
+      ([u, init]) =>
+        String(u).endsWith("/api/v1/run-routing") && (init?.method ?? "GET") === "POST",
+    );
+    if (!applyCall) throw new Error("expected an apply POST");
+    expect(JSON.parse(applyCall[1].body as string).caller_id).toBe("workflow.agent_loop.plan");
+  });
+
   it("surfaces a calm note when the list read fails", async () => {
     global.fetch = vi.fn(
       async () => new Response("boom", { status: 500 }),
