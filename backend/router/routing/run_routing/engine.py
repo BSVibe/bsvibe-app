@@ -51,11 +51,28 @@ ALLOWED_FIELDS: frozenset[str] = frozenset(
         # rules persist caller_id on the column; legacy rows may carry it
         # as a condition clause instead.
         "caller_id",
+        # Lift 1 (unified routing) — content signals absorbed from the
+        # deleted Layer-2 model-routing engine, so one rule table can express
+        # token-size / language / classified-intent routing too.
+        "estimated_tokens",  # crude token estimate of the run's intent text
+        "classified_intent",  # embedding-classifier label | None
+        "detected_language",  # "ko" | "ja" | "zh" | "en" | None
     }
 )
 
 # Reject nested-quantifier regexes (ReDoS) — carried from BSGateway.
 _REDOS_PATTERN = re.compile(r"\(.+[*+]\)[*+?]|\[.+[*+]\][*+?]")
+
+# Crude token / language heuristics — salvaged from the deleted Layer-2
+# model-routing engine so the unified rule table can also route on context
+# size + language. Kept self-contained here (no import from the doomed
+# ``backend.router.rules.*``, which Lift 3 hard-deletes).
+_WORDS_TO_TOKENS_RATIO = 1.3
+_CJK_RE = re.compile("[　-鿿가-힯぀-ゟ゠-ヿ]")
+_HANGUL_RE = re.compile("[가-힯ㄱ-ㅣ]")
+_KANA_RE = re.compile("[぀-ゟ゠-ヿ]")
+_CJK_IDEO_RE = re.compile("[一-鿿]")
+_LATIN_RE = re.compile(r"[a-zA-Z]")
 
 
 @dataclass(frozen=True, slots=True)
@@ -73,6 +90,12 @@ class RoutingContext:
     # ``None`` outside the run-routing path (callers route through the
     # resolver's column-first matcher instead).
     caller_id: str | None = None
+    # Lift 1 — content signals (see ALLOWED_FIELDS). Defaults are the
+    # "no signal" values, so a context built without them matches exactly as
+    # it did before these fields existed.
+    estimated_tokens: int = 0
+    classified_intent: str | None = None
+    detected_language: str | None = None
 
     @classmethod
     def from_run(cls, run: ExecutionRun) -> RoutingContext:
@@ -82,15 +105,20 @@ class RoutingContext:
         raw_frame = payload.get("frame")
         frame: dict[str, Any] = raw_frame if isinstance(raw_frame, dict) else {}
         intent = payload.get("intent_text") or frame.get("framed_intent") or payload.get("text")
+        intent_str = intent if isinstance(intent, str) else None
         pipeline = frame.get("pipeline")
+        classified_intent = frame.get("classified_intent")
         return cls(
             artifact_type_hint=frame.get("artifact_type_hint"),
             path_classification=frame.get("path_classification"),
             skill_match=frame.get("skill_match"),
-            intent_text=intent if isinstance(intent, str) else None,
+            intent_text=intent_str,
             stage=_derive_stage(payload, frame),
             pipeline=pipeline if pipeline in ("single", "design_then_impl") else "single",
             product_id=str(run.product_id) if run.product_id is not None else None,
+            estimated_tokens=_estimate_tokens(intent_str or ""),
+            classified_intent=classified_intent if isinstance(classified_intent, str) else None,
+            detected_language=_detect_language(intent_str or ""),
         )
 
 
@@ -102,6 +130,40 @@ def _derive_stage(payload: dict[str, Any], frame: dict[str, Any]) -> str:
     if frame.get("pipeline") == "design_then_impl":
         return "design"
     return "single"
+
+
+def _estimate_tokens(text: str) -> int:
+    """Crude token estimate — CJK counts per-char, Latin per-word. Zero for
+    empty text. Ported from the deleted Layer-2 engine for parity."""
+    if not text:
+        return 0
+    cjk_chars = len(_CJK_RE.findall(text))
+    non_cjk = _CJK_RE.sub("", text)
+    word_tokens = len(non_cjk.split())
+    return int((word_tokens + cjk_chars) * _WORDS_TO_TOKENS_RATIO)
+
+
+def _detect_language(text: str) -> str | None:  # noqa: PLR0911 — script dispatch
+    """Crude script-based language detection (ko/ja/zh/en) — None when
+    undetermined. Ported from the deleted Layer-2 engine for parity."""
+    if not text:
+        return None
+    hangul = len(_HANGUL_RE.findall(text))
+    kana = len(_KANA_RE.findall(text))
+    cjk_ideo = len(_CJK_IDEO_RE.findall(text))
+    total_cjk = hangul + kana + cjk_ideo
+    if total_cjk == 0:
+        latin = len(_LATIN_RE.findall(text))
+        if latin / max(len(text), 1) > 0.3:
+            return "en"
+        return None
+    if hangul > kana and hangul > cjk_ideo:
+        return "ko"
+    if kana > hangul:
+        return "ja"
+    if cjk_ideo > 0:
+        return "zh"
+    return None
 
 
 def _field_value(ctx: RoutingContext, field: str) -> Any:

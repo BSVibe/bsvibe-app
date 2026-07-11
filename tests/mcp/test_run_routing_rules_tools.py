@@ -268,11 +268,12 @@ async def test_non_default_requires_caller_id(db, workspace_id, user_id, registr
             )
 
 
-async def test_create_rejects_legacy_field_in_conditions(
+async def test_create_rejects_unknown_field_in_conditions(
     db, workspace_id, user_id, registry, seeded
 ) -> None:
-    """Conditions are validated against the NEW engine ALLOWED_FIELDS —
-    legacy heuristic vocab like ``estimated_tokens`` must be rejected."""
+    """Conditions are validated against the engine ALLOWED_FIELDS. Legacy
+    heuristic vocab NOT absorbed into the unified table (e.g. ``user_text``)
+    is still rejected — only the Lift-1 content signals crossed over."""
     async with db() as s:
         ctx = ToolContext(
             principal=_principal(
@@ -291,16 +292,40 @@ async def test_create_rejects_legacy_field_in_conditions(
                     "priority": 1,
                     "is_default": False,
                     "target": "executor/codex",
-                    "conditions": [
-                        {
-                            "field": "estimated_tokens",
-                            "operator": "gt",
-                            "value": 1000,
-                        }
-                    ],
+                    "conditions": [{"field": "user_text", "operator": "contains", "value": "x"}],
                 },
                 ctx,
             )
+
+
+async def test_create_accepts_absorbed_content_signal_field(
+    db, workspace_id, user_id, registry, seeded
+) -> None:
+    """Lift 1: the content signals absorbed from the deleted Layer-2 engine
+    (``estimated_tokens`` / ``classified_intent`` / ``detected_language``)
+    are now valid condition fields on the unified run-routing table."""
+    async with db() as s:
+        ctx = ToolContext(
+            principal=_principal(
+                workspace_id=workspace_id,
+                user_id=user_id,
+                scopes=("mcp:read", "mcp:write"),
+            ),
+            session=s,
+        )
+        result = await registry.call_tool(
+            "bsvibe_run_routing_rules_create",
+            {
+                "name": "big-context-to-opus",
+                "caller_id": "workflow.agent_loop.plan",
+                "priority": 1,
+                "is_default": False,
+                "target": "executor/codex",
+                "conditions": [{"field": "estimated_tokens", "operator": "gt", "value": 1000}],
+            },
+            ctx,
+        )
+        assert result.get("id")
 
 
 async def test_create_rejects_duplicate_name(db, workspace_id, user_id, registry, seeded) -> None:
