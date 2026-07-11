@@ -1,13 +1,13 @@
 /**
- * Run-routing surface — Settings → Models → ROUTING. Drives the real
- * list/callers/create/delete clients against a mocked fetch and asserts:
+ * Run-routing surface — Settings → Models → ROUTING (Lift 6 refined). Drives the
+ * real list/callers/create/update/delete/compile clients against a mocked fetch:
  *
- *  - the calm empty state when there are no rules
- *  - list renders each rule (name, caller → target, priority, chips)
- *  - Add: opening the form loads callers + accounts, a submit POSTs the body
- *    (name, caller_id, target) and re-reads
- *  - Delete: confirm → DELETE fires → re-read
- *  - a calm inline note when the list read fails
+ *  - calm empty state; is_default rules hidden (the default is the picker above)
+ *  - each rule is one line `caller → friendly model` (target resolved via accounts)
+ *  - Add: caller + target selects only (no name / priority) → POST
+ *  - Edit: inline form → PATCH
+ *  - Delete: confirm → DELETE
+ *  - NL: draft → preview → apply (a default proposal sets the workspace default)
  */
 
 import RunRoutingRules from "@/components/settings/RunRoutingRules";
@@ -44,19 +44,26 @@ const RULE = {
   created_at: "2026-07-11T00:00:00Z",
 };
 
+const DEFAULT_RULE = {
+  ...RULE,
+  id: "99999999-9999-9999-9999-999999999999",
+  is_default: true,
+  caller_id: null,
+};
+
 const CALLERS = [
   { caller_id: "workflow.agent_loop.plan", description: "design step" },
   { caller_id: "workflow.judge", description: "verifier" },
 ];
 
-const ACCOUNTS = [
-  {
-    id: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+function acct(id: string, label: string, litellm_model: string) {
+  return {
+    id,
     workspace_id: "22222222-2222-2222-2222-222222222222",
     account_id: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
     provider: "executor",
-    label: "dogfood (opus)",
-    litellm_model: "opus",
+    label,
+    litellm_model,
     api_base: null,
     data_jurisdiction: "unknown",
     is_active: true,
@@ -64,58 +71,74 @@ const ACCOUNTS = [
     extra_params: {},
     created_at: "2026-07-11T00:00:00Z",
     updated_at: "2026-07-11T00:00:00Z",
-  },
+  };
+}
+const ACCOUNTS = [
+  acct("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", "dogfood (opus)", "opus"),
+  acct("cccccccc-cccc-cccc-cccc-cccccccccccc", "dogfood (sonnet)", "sonnet"),
 ];
 
-/** URL-routed fetch: the Add form fetches callers + accounts concurrently, so a
- *  sequential once-mock is fragile — route by path + method instead. */
-function routedFetch(rules: unknown, opts: { onPost?: () => void } = {}) {
+function routedFetch(rules: unknown, hooks: Record<string, () => void> = {}) {
   return vi.fn(async (url: string, init?: RequestInit) => {
     const u = String(url);
     const method = (init?.method ?? "GET").toUpperCase();
     if (u.endsWith("/api/v1/run-routing/callers")) return jsonResponse(CALLERS);
     if (u.includes("/api/v1/accounts")) return jsonResponse(ACCOUNTS);
+    if (u.endsWith("/api/v1/run-routing/compile")) return jsonResponse({ proposals: [] });
     if (u.endsWith("/api/v1/run-routing") && method === "POST") {
-      opts.onPost?.();
+      hooks.onPost?.();
       return jsonResponse(RULE, 201);
     }
+    if (u.match(/\/api\/v1\/run-routing\/[^/]+$/) && method === "PATCH") {
+      hooks.onPatch?.();
+      return jsonResponse({ ...RULE, target: "sonnet", caller_id: "workflow.judge" });
+    }
+    if (u.match(/\/api\/v1\/run-routing\/[^/]+$/) && method === "DELETE") {
+      hooks.onDelete?.();
+      return jsonResponse(null, 204);
+    }
     if (u.endsWith("/api/v1/run-routing")) return jsonResponse(rules);
-    if (method === "DELETE") return jsonResponse(null, 204);
     return jsonResponse([]);
   });
 }
 
-describe("Run-routing surface", () => {
+describe("Run-routing surface (Lift 6)", () => {
   beforeEach(() => {
     clearSession();
     setSession(SESSION);
   });
-
   afterEach(() => {
     vi.restoreAllMocks();
   });
 
   it("shows the calm empty state when there are no rules", async () => {
     global.fetch = routedFetch([]) as unknown as typeof fetch;
-
     render(<RunRoutingRules />);
-
-    await waitFor(() => {
-      expect(screen.getByText(/All work goes to the active model account/i)).toBeInTheDocument();
-    });
+    await waitFor(() =>
+      expect(screen.getByText(/All work goes to the active model account/i)).toBeInTheDocument(),
+    );
   });
 
-  it("lists each rule with name, caller → target, and chips", async () => {
+  it("renders one line caller → friendly model; no priority chip", async () => {
     global.fetch = routedFetch([RULE]) as unknown as typeof fetch;
-
     render(<RunRoutingRules />);
-
-    await waitFor(() => expect(screen.getByText("design → opus")).toBeInTheDocument());
-    expect(screen.getByText("workflow.agent_loop.plan")).toBeInTheDocument();
-    expect(screen.getByText("opus")).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText("workflow.agent_loop.plan")).toBeInTheDocument());
+    // Target resolves to the friendly account label, not the raw litellm id.
+    expect(screen.getByText("dogfood (opus)")).toBeInTheDocument();
+    // The rule's freeform name is NOT shown (no duplication) and no priority chip.
+    expect(screen.queryByText("design → opus")).not.toBeInTheDocument();
+    expect(screen.queryByText(/Priority \d/i)).not.toBeInTheDocument();
   });
 
-  it("creates a rule: loads callers/accounts, POSTs the body, re-reads", async () => {
+  it("hides is_default rules (the default is the picker above)", async () => {
+    global.fetch = routedFetch([DEFAULT_RULE]) as unknown as typeof fetch;
+    render(<RunRoutingRules />);
+    await waitFor(() =>
+      expect(screen.getByText(/All work goes to the active model account/i)).toBeInTheDocument(),
+    );
+  });
+
+  it("creates a rule from caller + target selects (no name/priority) → POST", async () => {
     let posted = false;
     const fetchMock = routedFetch([], {
       onPost: () => {
@@ -123,82 +146,103 @@ describe("Run-routing surface", () => {
       },
     });
     global.fetch = fetchMock as unknown as typeof fetch;
-
     render(<RunRoutingRules />);
     await waitFor(() =>
       expect(screen.getByText(/All work goes to the active model account/i)).toBeInTheDocument(),
     );
 
     await userEvent.click(screen.getByRole("button", { name: "+ Add rule" }));
-    await userEvent.type(screen.getByLabelText(/Rule name/i), "design → opus");
-
-    // Caller + target selects populate from the fetched lists.
     const callerOption = await screen.findByRole("option", { name: "workflow.agent_loop.plan" });
     await userEvent.selectOptions(screen.getByLabelText(/Caller/i), callerOption);
     await userEvent.selectOptions(screen.getByLabelText(/Route to/i), "opus");
-
     await userEvent.click(screen.getByRole("button", { name: /^Add rule$/i }));
 
     await waitFor(() => expect(posted).toBe(true));
-    const postCall = (fetchMock.mock.calls as unknown as Array<[string, RequestInit]>).find(
-      ([u, init]) =>
-        String(u).endsWith("/api/v1/run-routing") && (init?.method ?? "GET") === "POST",
+    const call = (fetchMock.mock.calls as unknown as Array<[string, RequestInit]>).find(
+      ([u, i]) => String(u).endsWith("/api/v1/run-routing") && (i?.method ?? "GET") === "POST",
     );
-    if (!postCall) throw new Error("expected a run-routing POST");
-    const body = JSON.parse(postCall[1].body as string);
-    expect(body.name).toBe("design → opus");
+    if (!call) throw new Error("expected POST");
+    const body = JSON.parse(call[1].body as string);
     expect(body.caller_id).toBe("workflow.agent_loop.plan");
     expect(body.target).toBe("opus");
+    // Name auto-derived; no priority surfaced.
+    expect(body.name).toBe("workflow.agent_loop.plan → opus");
   });
 
-  it("deletes a rule after confirm → DELETE → re-read", async () => {
-    const fetchMock = routedFetch([RULE]);
+  it("edits a rule inline → PATCH", async () => {
+    let patched = false;
+    const fetchMock = routedFetch([RULE], {
+      onPatch: () => {
+        patched = true;
+      },
+    });
     global.fetch = fetchMock as unknown as typeof fetch;
-
     render(<RunRoutingRules />);
     const list = await screen.findByRole("list");
-    await waitFor(() => expect(within(list).getByText("design → opus")).toBeInTheDocument());
+    await waitFor(() =>
+      expect(within(list).getByText("workflow.agent_loop.plan")).toBeInTheDocument(),
+    );
 
-    const row = within(list).getByText("design → opus").closest("li") as HTMLElement;
-    await userEvent.click(within(row).getByRole("button", { name: /^Remove$/i }));
-    const confirm = await within(row).findByRole("button", { name: /^Confirm remove$/i });
-    await userEvent.click(confirm);
+    await userEvent.click(within(list).getByRole("button", { name: /^Edit$/i }));
+    // The edit form is prefilled; change the target then save.
+    await userEvent.selectOptions(screen.getByLabelText(/Route to/i), "sonnet");
+    await userEvent.click(screen.getByRole("button", { name: /^Save$/i }));
 
-    await waitFor(() => {
-      const deleteCall = (fetchMock.mock.calls as unknown as Array<[string, RequestInit]>).find(
-        ([, init]) => (init?.method ?? "GET") === "DELETE",
-      );
-      if (!deleteCall) throw new Error("expected a DELETE");
-      expect(deleteCall[0]).toBe(`/api/v1/run-routing/${RULE.id}`);
-    });
+    await waitFor(() => expect(patched).toBe(true));
+    const call = (fetchMock.mock.calls as unknown as Array<[string, RequestInit]>).find(
+      ([, i]) => (i?.method ?? "GET") === "PATCH",
+    );
+    if (!call) throw new Error("expected PATCH");
+    expect(JSON.parse(call[1].body as string).target).toBe("sonnet");
   });
 
-  it("drafts rules from plain language, previews them, and applies (creates)", async () => {
-    const PROPOSAL = {
-      name: "design → opus",
-      caller_id: "workflow.agent_loop.plan",
-      target: "opus",
-      priority: 10,
-      is_default: false,
-    };
-    let created = 0;
+  it("deletes a rule after confirm → DELETE", async () => {
+    let deleted = false;
+    const fetchMock = routedFetch([RULE], {
+      onDelete: () => {
+        deleted = true;
+      },
+    });
+    global.fetch = fetchMock as unknown as typeof fetch;
+    render(<RunRoutingRules />);
+    const list = await screen.findByRole("list");
+    await waitFor(() =>
+      expect(within(list).getByText("workflow.agent_loop.plan")).toBeInTheDocument(),
+    );
+
+    await userEvent.click(within(list).getByRole("button", { name: /^Remove$/i }));
+    await userEvent.click(await screen.findByRole("button", { name: /^Confirm remove$/i }));
+    await waitFor(() => expect(deleted).toBe(true));
+  });
+
+  it("NL: a default proposal sets the workspace default, a caller proposal creates a rule", async () => {
+    let putDefault = false;
+    let created = false;
     const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
       const u = String(url);
       const method = (init?.method ?? "GET").toUpperCase();
-      if (u.endsWith("/api/v1/run-routing/compile")) return jsonResponse({ proposals: [PROPOSAL] });
+      if (u.endsWith("/api/v1/run-routing/callers")) return jsonResponse(CALLERS);
+      if (u.includes("/api/v1/accounts")) return jsonResponse(ACCOUNTS);
+      if (u.endsWith("/api/v1/run-routing/compile"))
+        return jsonResponse({
+          proposals: [
+            { name: "d", caller_id: null, target: "sonnet", priority: 100, is_default: true },
+            {
+              name: "p",
+              caller_id: "workflow.agent_loop.plan",
+              target: "opus",
+              priority: 10,
+              is_default: false,
+            },
+          ],
+        });
+      if (u.includes("/api/v1/workspace") && method === "PATCH") {
+        putDefault = true;
+        return jsonResponse({});
+      }
       if (u.endsWith("/api/v1/run-routing") && method === "POST") {
-        created += 1;
-        return jsonResponse(
-          {
-            ...PROPOSAL,
-            id: "x",
-            workspace_id: "w",
-            conditions: [],
-            is_active: true,
-            created_at: "t",
-          },
-          201,
-        );
+        created = true;
+        return jsonResponse(RULE, 201);
       }
       return jsonResponse([]);
     });
@@ -208,37 +252,24 @@ describe("Run-routing surface", () => {
     await waitFor(() =>
       expect(screen.getByText(/All work goes to the active model account/i)).toBeInTheDocument(),
     );
-
     await userEvent.click(screen.getByRole("button", { name: /Describe in words/i }));
-    await userEvent.type(
-      screen.getByPlaceholderText(/Design work goes to opus/i),
-      "design → opus, rest → sonnet",
-    );
+    await userEvent.type(screen.getByPlaceholderText(/Design work goes to opus/i), "설계는 opus");
     await userEvent.click(screen.getByRole("button", { name: /^Draft rules$/i }));
 
-    // The proposal previews before anything is saved.
-    await waitFor(() => expect(screen.getByText("design → opus")).toBeInTheDocument());
-    expect(created).toBe(0);
-
+    await waitFor(() => expect(screen.getByText("workflow.agent_loop.plan")).toBeInTheDocument());
     await userEvent.click(screen.getByRole("button", { name: /^Apply all$/i }));
-    await waitFor(() => expect(created).toBe(1));
-    const applyCall = (fetchMock.mock.calls as unknown as Array<[string, RequestInit]>).find(
-      ([u, init]) =>
-        String(u).endsWith("/api/v1/run-routing") && (init?.method ?? "GET") === "POST",
-    );
-    if (!applyCall) throw new Error("expected an apply POST");
-    expect(JSON.parse(applyCall[1].body as string).caller_id).toBe("workflow.agent_loop.plan");
+
+    await waitFor(() => expect(putDefault).toBe(true));
+    expect(created).toBe(true);
   });
 
   it("surfaces a calm note when the list read fails", async () => {
     global.fetch = vi.fn(
       async () => new Response("boom", { status: 500 }),
     ) as unknown as typeof fetch;
-
     render(<RunRoutingRules />);
-
-    await waitFor(() => {
-      expect(screen.getByText(/Couldn.t load your routing rules/i)).toBeInTheDocument();
-    });
+    await waitFor(() =>
+      expect(screen.getByText(/Couldn.t load your routing rules/i)).toBeInTheDocument(),
+    );
   });
 });

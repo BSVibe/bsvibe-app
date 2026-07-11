@@ -233,6 +233,48 @@ async def create_run_rule(
     return _to_response(row)
 
 
+class RunRuleUpdate(BaseModel):
+    """Partial edit of a run-routing rule (Lift 6). Only the user-facing knobs:
+    which caller it routes, the target model, and active toggle."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    caller_id: str | None = Field(default=None, max_length=120)
+    target: str | None = Field(default=None, min_length=1, max_length=255)
+    is_active: bool | None = None
+
+    @field_validator("caller_id")
+    @classmethod
+    def _caller_known(cls, v: str | None) -> str | None:
+        if v is None:
+            return v
+        return _validate_caller_id(v)
+
+
+@router.patch("/{rule_id}")
+async def update_run_rule(
+    rule_id: uuid.UUID,
+    payload: RunRuleUpdate,
+    workspace_id: Annotated[uuid.UUID, Depends(get_workspace_id)],
+    rules: Annotated[RunRoutingRuleRepository, Depends(get_run_routing_rule_repository)],
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+) -> RunRuleResponse:
+    row = await rules.get(workspace_id=workspace_id, rule_id=rule_id)
+    if row is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=f"rule {rule_id} not found"
+        )
+    if payload.caller_id is not None:
+        row.caller_id = payload.caller_id
+    if payload.target is not None:
+        row.target = payload.target
+    if payload.is_active is not None:
+        row.is_active = payload.is_active
+    await session.commit()
+    logger.info("run_routing_rule_updated", workspace_id=str(workspace_id), rule_id=str(rule_id))
+    return _to_response(row)
+
+
 @router.delete("/{rule_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_run_rule(
     rule_id: uuid.UUID,

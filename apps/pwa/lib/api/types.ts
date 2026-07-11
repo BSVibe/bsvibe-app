@@ -1241,6 +1241,14 @@ export interface RunRoutingRuleCreate {
   conditions?: RunRoutingConditionInput[];
 }
 
+/** `PATCH /api/v1/run-routing/{id}` body (backend RunRuleUpdate) — a partial edit
+ *  of a rule's user-facing knobs. */
+export interface RunRoutingRuleUpdate {
+  caller_id?: string;
+  target?: string;
+  is_active?: boolean;
+}
+
 /** `GET /api/v1/run-routing/callers` element (backend RunCallerResponse) — one
  *  selectable dispatch caller for the rule form's caller dropdown. */
 export interface RunRoutingCaller {

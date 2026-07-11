@@ -8520,6 +8520,15 @@ main.login {
   margin: 0;
 }
 
+/* Push the action buttons (Describe in words / + Add rule) to the right as one
+   group instead of floating in the middle of the header. */
+.routing__actions {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .routing__count {
   min-width: 18px;
   height: 18px;
@@ -8646,6 +8655,7 @@ main.login {
 }
 
 .routing-card__remove,
+.routing-card__edit,
 .routing-card__ghost,
 .routing-card__danger {
   border: 1px solid var(--hair-strong);
@@ -8672,6 +8682,7 @@ main.login {
 }
 
 .routing-card__remove:focus-visible,
+.routing-card__edit:focus-visible,
 .routing-card__ghost:focus-visible,
 .routing-card__danger:focus-visible {
   outline: 2px solid var(--amber-dot);

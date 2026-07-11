@@ -115,6 +115,30 @@ async def test_compile_returns_proposals(
     assert out["proposals"][0]["target"] == "opus"
 
 
+async def test_update_rule_changes_caller_and_target(
+    db, workspace_id, user_id, registry, seeded
+) -> None:
+    async with db() as s:
+        ctx = ToolContext(
+            principal=_principal(
+                workspace_id=workspace_id, user_id=user_id, scopes=("mcp:read", "mcp:write")
+            ),
+            session=s,
+        )
+        created = await registry.call_tool(
+            "bsvibe_run_routing_rules_create",
+            {"name": "r", "caller_id": "workflow.agent_loop.plan", "target": "opus"},
+            ctx,
+        )
+        updated = await registry.call_tool(
+            "bsvibe_run_routing_rules_update",
+            {"rule_id": created["id"], "caller_id": "workflow.judge", "target": "sonnet"},
+            ctx,
+        )
+    assert updated["caller_id"] == "workflow.judge"
+    assert updated["target"] == "sonnet"
+
+
 async def test_create_lists_delete_round_trip(db, workspace_id, user_id, registry, seeded) -> None:
     # Create — non-default rule with caller_id (top-level column).
     async with db() as s:

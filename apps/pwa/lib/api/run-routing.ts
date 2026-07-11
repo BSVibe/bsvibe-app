@@ -22,6 +22,7 @@ import type {
   RunRoutingCompileResult,
   RunRoutingRule,
   RunRoutingRuleCreate,
+  RunRoutingRuleUpdate,
 } from "./types";
 
 /** Run-routing rules for the active workspace, priority ascending. */
@@ -60,6 +61,17 @@ export function compileRunRoutingRules(text: string): Promise<RunRoutingCompileR
   return apiFetch<RunRoutingCompileResult>("/api/v1/run-routing/compile", {
     method: "POST",
     body: JSON.stringify({ text }),
+  });
+}
+
+/** Edit an existing run-routing rule (PATCH — caller / target / active). */
+export function updateRunRoutingRule(
+  id: string,
+  patch: RunRoutingRuleUpdate,
+): Promise<RunRoutingRule> {
+  return apiFetch<RunRoutingRule>(`/api/v1/run-routing/${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    body: JSON.stringify(patch),
   });
 }
 

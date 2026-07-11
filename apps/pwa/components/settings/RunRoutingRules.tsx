@@ -7,6 +7,7 @@ import {
   deleteRunRoutingRule,
   listRunRoutingCallers,
   listRunRoutingRules,
+  updateRunRoutingRule,
 } from "@/lib/api/run-routing";
 import type {
   ModelAccount,
@@ -14,37 +15,41 @@ import type {
   RunRoutingRule,
   RunRoutingRuleCreate,
 } from "@/lib/api/types";
+import { setWorkspaceDefaultAccount } from "@/lib/api/workspace";
 import { useTranslations } from "next-intl";
 import { useEffect, useState } from "react";
 
 /**
- * Settings → Models → ROUTING. The founder sees and manages how each dispatch
- * caller's work routes to a model. Backed by the REAL /api/v1/run-routing
- * endpoints (backend/api/v1/run_routing.py) — the SINGLE routing layer after the
- * legacy Layer-2 model-routing surface was hard-deleted. This surface only
- * reads/writes the rows the dispatch resolver consumes at runtime; it never
- * touches how rules are evaluated.
+ * Settings → Models → ROUTING. The founder maps each dispatch caller's work to a
+ * model. Backed by the REAL /api/v1/run-routing endpoints — the SINGLE routing
+ * layer after the legacy Layer-2 surface was hard-deleted.
  *
- *  - List    ← GET    /api/v1/run-routing          (priority ascending)
- *  - Callers ← GET    /api/v1/run-routing/callers  (the caller dropdown source)
- *  - Add     → POST   /api/v1/run-routing          (201 RunRuleResponse)
- *  - Remove  → DELETE /api/v1/run-routing/{id}     (confirm-gated; 204)
- *
- * A rule maps a caller (e.g. `workflow.agent_loop.plan` — the design step) to a
- * target model account. Non-default rules MUST name a caller; the catch-all
- * default (set via the "Default model for this workspace" picker above) handles
- * everything else. The empty state is calm: with no rules, all work goes to the
- * workspace default. A failed list read degrades to a calm inline note.
+ * Lift 6 refinements: no priority (natural-language routing picks one rule per
+ * caller, so priority was noise); the catch-all default lives ONLY in the
+ * "Default model" picker above (is_default rules are hidden here to avoid the
+ * double display); each rule is one line `caller → model` (the target resolved
+ * to a friendly account label, not a raw id); and rules are editable in place.
  */
 type ListState = { data: RunRoutingRule[]; failed: boolean } | null;
 
-/** Row subtitle — the caller a rule matches, or "All callers" for the default. */
-function callerSummary(rule: RunRoutingRule, anyLabel: string): string {
-  return rule.caller_id ?? anyLabel;
+/** Resolve a rule's `target` (a litellm_model id, or a legacy account id) to a
+ *  friendly account label. Falls back to the raw target when unknown. */
+function friendlyTarget(target: string, accounts: ModelAccount[]): string {
+  const acct = accounts.find((a) => a.litellm_model === target || a.id === target);
+  return acct ? acct.label : target;
+}
+
+/** The select value for a target — always the litellm_model. A legacy rule whose
+ *  target is an account id is normalised to that account's litellm_model. */
+function targetSelectValue(target: string, accounts: ModelAccount[]): string {
+  const byId = accounts.find((a) => a.id === target);
+  return byId ? byId.litellm_model : target;
 }
 
 export default function RunRoutingRules() {
   const [list, setList] = useState<ListState>(null);
+  const [accounts, setAccounts] = useState<ModelAccount[]>([]);
+  const [callers, setCallers] = useState<RunRoutingCaller[]>([]);
   const [showAdd, setShowAdd] = useState(false);
   const [showNl, setShowNl] = useState(false);
   const t = useTranslations("settings.models.routing");
@@ -62,34 +67,45 @@ export default function RunRoutingRules() {
     listRunRoutingRules()
       .then((data) => active && setList({ data, failed: false }))
       .catch(() => active && setList({ data: [], failed: true }));
+    listAccounts()
+      .then((data) => active && setAccounts(data.filter((a) => a.is_active)))
+      .catch(() => active && setAccounts([]));
+    listRunRoutingCallers()
+      .then((data) => active && setCallers(data))
+      .catch(() => active && setCallers([]));
     return () => {
       active = false;
     };
   }, []);
 
+  // The catch-all default is the "Default model" picker above — hide is_default
+  // rules here so the default isn't displayed in two places.
+  const visible = list && !list.failed ? list.data.filter((r) => !r.is_default) : [];
+
   return (
     <section className="routing" aria-label={t("sectionLabel")}>
       <header className="routing__head">
         <h2 className="section-label">{t("sectionHeading")}</h2>
-        {list && !list.failed && list.data.length > 0 ? (
-          <span className="routing__count">{list.data.length}</span>
-        ) : null}
-        {!showNl && (
-          <button type="button" className="settings-add-toggle" onClick={() => setShowNl(true)}>
-            {t("nlToggle")}
-          </button>
-        )}
-        {!showAdd && (
-          <button type="button" className="settings-add-toggle" onClick={() => setShowAdd(true)}>
-            {t("addToggle")}
-          </button>
-        )}
+        {visible.length > 0 ? <span className="routing__count">{visible.length}</span> : null}
+        <div className="routing__actions">
+          {!showNl && (
+            <button type="button" className="settings-add-toggle" onClick={() => setShowNl(true)}>
+              {t("nlToggle")}
+            </button>
+          )}
+          {!showAdd && (
+            <button type="button" className="settings-add-toggle" onClick={() => setShowAdd(true)}>
+              {t("addToggle")}
+            </button>
+          )}
+        </div>
       </header>
       <p className="routing__lede">{t("lede")}</p>
 
       {showNl && (
         <div className="settings-add-panel">
           <NlCompilePanel
+            accounts={accounts}
             onApplied={() => {
               load();
               setShowNl(false);
@@ -103,8 +119,10 @@ export default function RunRoutingRules() {
 
       {showAdd && (
         <div className="settings-add-panel">
-          <AddRunRoutingRule
-            onCreated={() => {
+          <RuleForm
+            callers={callers}
+            accounts={accounts}
+            onDone={() => {
               load();
               setShowAdd(false);
             }}
@@ -123,16 +141,17 @@ export default function RunRoutingRules() {
         <p className="routing__note" aria-live="polite">
           {t("loadError")}
         </p>
-      ) : list.data.length === 0 ? (
+      ) : visible.length === 0 ? (
         <p className="routing__empty">{t("empty")}</p>
       ) : (
         <ul className="routing__list" aria-label={t("listLabel")}>
-          {list.data.map((rule) => (
+          {visible.map((rule) => (
             <RunRoutingRuleRow
               key={rule.id}
               rule={rule}
-              onRemoved={load}
-              remove={deleteRunRoutingRule}
+              callers={callers}
+              accounts={accounts}
+              onChanged={load}
             />
           ))}
         </ul>
@@ -141,20 +160,20 @@ export default function RunRoutingRules() {
   );
 }
 
-type RowState = "idle" | "confirming" | "removing" | "error";
+type RowState = "idle" | "editing" | "confirming" | "removing" | "error";
 
-/**
- * One run-routing rule as a card: name, the caller it matches → target model, a
- * priority chip, and default / inactive chips. Remove is REAL and confirm-gated.
- */
+/** One rule as a single line `caller → model` with Edit + confirm-gated Remove.
+ *  Edit swaps the row body for an inline {@link RuleForm}. */
 function RunRoutingRuleRow({
   rule,
-  onRemoved,
-  remove,
+  callers,
+  accounts,
+  onChanged,
 }: {
   rule: RunRoutingRule;
-  onRemoved: () => void;
-  remove: (id: string) => Promise<void>;
+  callers: RunRoutingCaller[];
+  accounts: ModelAccount[];
+  onChanged: () => void;
 }) {
   const [state, setState] = useState<RowState>("idle");
   const t = useTranslations("settings.models.routing");
@@ -163,34 +182,44 @@ function RunRoutingRuleRow({
     if (state === "removing") return;
     setState("removing");
     try {
-      await remove(rule.id);
-      onRemoved();
+      await deleteRunRoutingRule(rule.id);
+      onChanged();
     } catch {
       setState("error");
     }
   }
 
+  if (state === "editing") {
+    return (
+      <li className="routing-card">
+        <RuleForm
+          callers={callers}
+          accounts={accounts}
+          rule={rule}
+          onDone={() => {
+            setState("idle");
+            onChanged();
+          }}
+        />
+        <button type="button" className="settings-add-cancel" onClick={() => setState("idle")}>
+          {t("cancel")}
+        </button>
+      </li>
+    );
+  }
+
   return (
     <li className="routing-card">
       <div className="routing-card__body">
-        <div className="routing-card__head">
-          <span className="routing-card__name">{rule.name}</span>
-          {rule.is_default ? (
-            <span className="routing-card__chip routing-card__chip--default">{t("default")}</span>
-          ) : null}
-          {rule.is_active ? null : (
-            <span className="routing-card__chip routing-card__chip--inactive">{t("inactive")}</span>
-          )}
-          <span className="routing-card__chip" title={t("priorityTitle")}>
-            {t("priorityChip", { priority: rule.priority })}
-          </span>
-        </div>
         <p className="routing-card__route">
-          <span className="routing-card__match">{callerSummary(rule, t("matchAny"))}</span>
+          <span className="routing-card__match">{rule.caller_id}</span>
           <span className="routing-card__arrow" aria-hidden="true">
             {" → "}
           </span>
-          <span className="routing-card__target">{rule.target}</span>
+          <span className="routing-card__target">{friendlyTarget(rule.target, accounts)}</span>
+          {rule.is_active ? null : (
+            <span className="routing-card__chip routing-card__chip--inactive">{t("inactive")}</span>
+          )}
         </p>
       </div>
 
@@ -221,84 +250,71 @@ function RunRoutingRuleRow({
             </button>
           </>
         ) : (
-          <button
-            type="button"
-            className="routing-card__remove"
-            onClick={() => setState("confirming")}
-          >
-            {t("remove")}
-          </button>
+          <>
+            <button
+              type="button"
+              className="routing-card__edit"
+              onClick={() => setState("editing")}
+            >
+              {t("edit")}
+            </button>
+            <button
+              type="button"
+              className="routing-card__remove"
+              onClick={() => setState("confirming")}
+            >
+              {t("remove")}
+            </button>
+          </>
         )}
       </div>
     </li>
   );
 }
 
-type FormState = "idle" | "submitting" | "error" | "success";
+type FormState = "idle" | "submitting" | "error";
 
 /**
- * The "Add rule" form: a name, the caller this rule matches (a dispatch call
- * site from the registry — required unless the rule is the default), the target
- * model (picked from the workspace's model accounts), a priority, and an
- * optional "make this the default (catch-all)" toggle. Callers + accounts load
- * on mount; a submit POSTs the rule and `onCreated` re-reads the list.
+ * Add / edit form — pick a caller and a target model. No name (auto-derived
+ * `caller → model`), no priority (natural-language routing is one rule per
+ * caller), no default toggle (the default lives in the picker above). When
+ * `rule` is passed the form edits it (PATCH); otherwise it creates (POST).
  */
-function AddRunRoutingRule({ onCreated }: { onCreated: () => void }) {
-  const [name, setName] = useState("");
-  const [callerId, setCallerId] = useState("");
-  const [target, setTarget] = useState("");
-  const [priority, setPriority] = useState("10");
-  const [isDefault, setIsDefault] = useState(false);
-  const [callers, setCallers] = useState<RunRoutingCaller[]>([]);
-  const [accounts, setAccounts] = useState<ModelAccount[]>([]);
+function RuleForm({
+  callers,
+  accounts,
+  rule,
+  onDone,
+}: {
+  callers: RunRoutingCaller[];
+  accounts: ModelAccount[];
+  rule?: RunRoutingRule;
+  onDone: () => void;
+}) {
+  const editing = rule !== undefined;
+  const [callerId, setCallerId] = useState(rule?.caller_id ?? "");
+  const [target, setTarget] = useState(rule ? targetSelectValue(rule.target, accounts) : "");
   const [state, setState] = useState<FormState>("idle");
-  const [createdName, setCreatedName] = useState("");
   const t = useTranslations("settings.models.routing");
 
-  useEffect(() => {
-    let active = true;
-    listRunRoutingCallers()
-      .then((data) => active && setCallers(data))
-      .catch(() => active && setCallers([]));
-    listAccounts()
-      .then((data) => active && setAccounts(data.filter((a) => a.is_active)))
-      .catch(() => active && setAccounts([]));
-    return () => {
-      active = false;
-    };
-  }, []);
-
-  const parsedPriority = Number.parseInt(priority, 10);
-  const ready =
-    name.trim().length > 0 &&
-    target.trim().length > 0 &&
-    (isDefault || callerId.trim().length > 0) &&
-    Number.isInteger(parsedPriority) &&
-    parsedPriority >= 1;
-
-  function reset() {
-    setName("");
-    setCallerId("");
-    setTarget("");
-    setPriority("10");
-    setIsDefault(false);
-  }
+  const ready = callerId.trim().length > 0 && target.trim().length > 0;
 
   async function submit() {
     if (state === "submitting" || !ready) return;
     setState("submitting");
     try {
-      const created = await createRunRoutingRule({
-        name: name.trim(),
-        caller_id: isDefault ? null : callerId.trim(),
-        target: target.trim(),
-        priority: parsedPriority,
-        is_default: isDefault,
-      });
-      setCreatedName(created.name);
-      reset();
-      setState("success");
-      onCreated();
+      if (editing && rule) {
+        await updateRunRoutingRule(rule.id, { caller_id: callerId, target });
+      } else {
+        const body: RunRoutingRuleCreate = {
+          name: `${callerId} → ${target}`,
+          caller_id: callerId,
+          target,
+          priority: 10,
+        };
+        await createRunRoutingRule(body);
+      }
+      onDone();
     } catch {
       setState("error");
     }
@@ -312,40 +328,25 @@ function AddRunRoutingRule({ onCreated }: { onCreated: () => void }) {
         submit();
       }}
     >
+      {editing ? <p className="routing-form__label">{t("editTitle")}</p> : null}
       <div className="routing-form__row">
         <label className="routing-form__field">
-          <span className="routing-form__label">{t("ruleName")}</span>
-          <input
+          <span className="routing-form__label">{t("caller")}</span>
+          <select
             className="routing-form__input"
-            type="text"
-            placeholder={t("ruleNamePlaceholder")}
-            value={name}
+            value={callerId}
             disabled={state === "submitting"}
-            onChange={(e) => setName(e.target.value)}
-          />
+            onChange={(e) => setCallerId(e.target.value)}
+          >
+            <option value="">{t("callerPlaceholder")}</option>
+            {callers.map((c) => (
+              <option key={c.caller_id} value={c.caller_id} title={c.description}>
+                {c.caller_id}
+              </option>
+            ))}
+          </select>
         </label>
 
-        {!isDefault && (
-          <label className="routing-form__field">
-            <span className="routing-form__label">{t("caller")}</span>
-            <select
-              className="routing-form__input"
-              value={callerId}
-              disabled={state === "submitting"}
-              onChange={(e) => setCallerId(e.target.value)}
-            >
-              <option value="">{t("callerPlaceholder")}</option>
-              {callers.map((c) => (
-                <option key={c.caller_id} value={c.caller_id} title={c.description}>
-                  {c.caller_id}
-                </option>
-              ))}
-            </select>
-          </label>
-        )}
-      </div>
-
-      <div className="routing-form__row">
         <label className="routing-form__field">
           <span className="routing-form__label">{t("routeTo")}</span>
           <select
@@ -362,30 +363,6 @@ function AddRunRoutingRule({ onCreated }: { onCreated: () => void }) {
             ))}
           </select>
         </label>
-
-        <label className="routing-form__field routing-form__field--narrow">
-          <span className="routing-form__label">{t("priority")}</span>
-          <input
-            className="routing-form__input"
-            type="number"
-            min={1}
-            value={priority}
-            disabled={state === "submitting"}
-            onChange={(e) => setPriority(e.target.value)}
-          />
-        </label>
-      </div>
-
-      <div className="routing-form__row">
-        <label className="routing-form__check">
-          <input
-            type="checkbox"
-            checked={isDefault}
-            disabled={state === "submitting"}
-            onChange={(e) => setIsDefault(e.target.checked)}
-          />
-          <span>{t("makeDefault")}</span>
-        </label>
       </div>
 
       <div className="routing-form__foot">
@@ -394,17 +371,18 @@ function AddRunRoutingRule({ onCreated }: { onCreated: () => void }) {
             {t("addError")}
           </span>
         )}
-        {state === "success" && (
-          <span className="routing-form__success" aria-live="polite">
-            {t("addSuccess", { name: createdName })}
-          </span>
-        )}
         <button
           type="submit"
           className="routing-form__submit"
           disabled={state === "submitting" || !ready}
         >
-          {state === "submitting" ? t("adding") : t("addRule")}
+          {state === "submitting"
+            ? editing
+              ? t("saving")
+              : t("adding")
+            : editing
+              ? t("save")
+              : t("addRule")}
         </button>
       </div>
     </form>
@@ -414,12 +392,18 @@ function AddRunRoutingRule({ onCreated }: { onCreated: () => void }) {
 type NlState = "idle" | "compiling" | "applying" | "error";
 
 /**
- * NL → rules panel: the founder describes routing in plain language, one cheap
- * LLM call drafts VALIDATED proposals (dry-run — nothing saved), and "Apply all"
- * creates each via the normal create endpoint. Proposals surface for review
- * first, so a bad draft is never silently persisted.
+ * NL → rules panel: describe routing in plain language, one cheap LLM call
+ * drafts VALIDATED proposals (dry-run — nothing saved), and "Apply all" commits
+ * them. A default proposal (caller_id null) sets the workspace "Default model"
+ * picker rather than creating a hidden rule; the rest become caller rules.
  */
-function NlCompilePanel({ onApplied }: { onApplied: () => void }) {
+function NlCompilePanel({
+  accounts,
+  onApplied,
+}: {
+  accounts: ModelAccount[];
+  onApplied: () => void;
+}) {
   const [text, setText] = useState("");
   const [proposals, setProposals] = useState<RunRoutingRuleCreate[] | null>(null);
   const [state, setState] = useState<NlState>("idle");
@@ -443,7 +427,17 @@ function NlCompilePanel({ onApplied }: { onApplied: () => void }) {
     setState("applying");
     try {
       for (const p of proposals) {
-        await createRunRoutingRule(p);
+        if (p.is_default) {
+          const acct = accounts.find((a) => a.litellm_model === p.target);
+          if (acct) await setWorkspaceDefaultAccount(acct.id);
+        } else {
+          await createRunRoutingRule({
+            name: `${p.caller_id} → ${p.target}`,
+            caller_id: p.caller_id ?? null,
+            target: p.target,
+            priority: 10,
+          });
+        }
       }
       onApplied();
     } catch {
@@ -486,27 +480,24 @@ function NlCompilePanel({ onApplied }: { onApplied: () => void }) {
             <p className="section-label">{t("nlProposed")}</p>
             <ul className="routing__list" aria-label={t("nlProposed")}>
               {proposals.map((p, i) => (
-                <li className="routing-card" key={`${p.name}-${i}`}>
+                <li className="routing-card" key={`${p.caller_id ?? "default"}-${p.target}-${i}`}>
                   <div className="routing-card__body">
-                    <div className="routing-card__head">
-                      <span className="routing-card__name">{p.name}</span>
-                      {p.is_default ? (
-                        <span className="routing-card__chip routing-card__chip--default">
-                          {t("default")}
-                        </span>
-                      ) : null}
-                      <span className="routing-card__chip">
-                        {t("priorityChip", { priority: p.priority })}
-                      </span>
-                    </div>
                     <p className="routing-card__route">
-                      <span className="routing-card__match">
-                        {p.caller_id ?? t("nlDefaultCaller")}
-                      </span>
-                      <span className="routing-card__arrow" aria-hidden="true">
-                        {" → "}
-                      </span>
-                      <span className="routing-card__target">{p.target}</span>
+                      {p.is_default ? (
+                        <span className="routing-card__match">
+                          {t("nlSetsDefault", { target: friendlyTarget(p.target, accounts) })}
+                        </span>
+                      ) : (
+                        <>
+                          <span className="routing-card__match">{p.caller_id}</span>
+                          <span className="routing-card__arrow" aria-hidden="true">
+                            {" → "}
+                          </span>
+                          <span className="routing-card__target">
+                            {friendlyTarget(p.target, accounts)}
+                          </span>
+                        </>
+                      )}
                     </p>
                   </div>
                 </li>

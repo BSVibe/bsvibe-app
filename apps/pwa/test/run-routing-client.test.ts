@@ -16,6 +16,7 @@ import {
   deleteRunRoutingRule,
   listRunRoutingCallers,
   listRunRoutingRules,
+  updateRunRoutingRule,
 } from "@/lib/api/run-routing";
 import { type Session, clearSession, setSession } from "@/lib/auth/session";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -144,6 +145,19 @@ describe("run-routing client", () => {
     expect(url).toBe("/api/v1/run-routing/compile");
     expect(init.method).toBe("POST");
     expect(JSON.parse(init.body as string)).toEqual({ text: "설계는 opus" });
+  });
+
+  it("updateRunRoutingRule PATCHes /api/v1/run-routing/{id} with the patch", async () => {
+    const fetchMock = okFetch({ ...RULE, target: "sonnet" });
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    const res = await updateRunRoutingRule(RULE.id, { target: "sonnet" });
+
+    expect(res.target).toBe("sonnet");
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe(`/api/v1/run-routing/${RULE.id}`);
+    expect(init.method).toBe("PATCH");
+    expect(JSON.parse(init.body as string)).toEqual({ target: "sonnet" });
   });
 
   it("deleteRunRoutingRule DELETEs /api/v1/run-routing/{id} and resolves void", async () => {
