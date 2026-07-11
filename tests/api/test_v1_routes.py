@@ -25,10 +25,7 @@ def test_openapi_advertises_all_v1_routes() -> None:
         "/api/v1/workspaces",
         "/api/v1/products",
         "/api/v1/accounts",
-        "/api/v1/rules",
         "/api/v1/intents",
-        "/api/v1/presets",
-        "/api/v1/presets/{preset_name}/apply",
         "/api/v1/skills",
         "/api/v1/decisions",
         "/api/v1/settings",
@@ -53,7 +50,28 @@ def test_settings_requires_auth() -> None:
     assert r.status_code == 401
 
 
-def test_presets_list_requires_auth() -> None:
-    """Even the preset catalog requires a verified principal (all v1 routers)."""
-    r = _client().get("/api/v1/presets")
+def test_intents_list_requires_auth() -> None:
+    """Even the intents catalog requires a verified principal (all v1 routers)."""
+    r = _client().get("/api/v1/intents")
     assert r.status_code == 401
+
+
+def test_legacy_layer2_routes_are_gone() -> None:
+    """Unified routing Lift 2 hard-deleted the Layer-2 model-routing surface.
+    The /rules + /presets routes must NOT reappear in the OpenAPI spec."""
+    paths = set(_client().get("/api/openapi.json").json()["paths"].keys())
+    for gone in ("/api/v1/rules", "/api/v1/presets", "/api/v1/presets/{preset_name}/apply"):
+        assert gone not in paths, f"{gone} should have been deleted"
+
+
+def test_legacy_routing_rules_mcp_tools_are_gone() -> None:
+    """The bsvibe_routing_rules_* MCP tools were hard-deleted; only the
+    run-routing (bsvibe_run_routing_rules_*) surface survives."""
+    from backend.mcp.api import ToolRegistry
+    from backend.mcp.tools import register_all_tools
+
+    reg = ToolRegistry()
+    register_all_tools(reg)
+    names = set(reg.names())
+    assert not any(n.startswith("bsvibe_routing_rules_") for n in names)
+    assert any(n.startswith("bsvibe_run_routing_rules_") for n in names)

@@ -17,7 +17,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 # Imported for table-registration side effects on the shared Base.metadata.
 import backend.embedding.db  # noqa: F401
 import backend.router.accounts.models  # noqa: F401
-import backend.router.rules.db  # noqa: F401
 from tests._support import memory_session
 
 

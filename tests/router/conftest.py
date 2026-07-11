@@ -16,7 +16,6 @@ import backend.embedding.db  # noqa: F401
 import backend.router.accounts.models  # noqa: F401
 import backend.router.budget.models  # noqa: F401
 import backend.router.routing.db  # noqa: F401
-import backend.router.rules.db  # noqa: F401
 from backend.router.accounts.crypto import CredentialCipher
 from tests._support import memory_session
 

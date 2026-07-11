@@ -18,9 +18,7 @@ from backend.api.v1 import (
     intents,
     messages,
     notifications,
-    presets,
     products,
-    rules,
     run_routing,
     runs,
     safemode,
@@ -36,7 +34,7 @@ from backend.api.v1 import (
 
 # Every v1 route requires a verified principal. The per-route workspace
 # resolution (get_workspace_id) layers on top; this router-level dependency
-# guarantees even routes without it (settings, presets list) return 401 when
+# guarantees even routes without it (settings, intents list) return 401 when
 # unauthenticated.
 router = APIRouter(prefix="/v1", dependencies=[Depends(get_current_user)])
 router.include_router(chat.router, prefix="/chat", tags=["chat"])
@@ -60,10 +58,8 @@ router.include_router(connectors.router, prefix="/connectors", tags=["connectors
 # OAuth connect (founder-authed /start only; the public /callback is mounted
 # outside this auth-gated router in backend.api.main).
 router.include_router(connector_oauth.router, prefix="/connectors/oauth", tags=["connectors"])
-router.include_router(rules.router, prefix="/rules", tags=["rules"])
 router.include_router(run_routing.router, prefix="/run-routing", tags=["run-routing"])
 router.include_router(intents.router, prefix="/intents", tags=["intents"])
-router.include_router(presets.router, prefix="/presets", tags=["presets"])
 router.include_router(skills.router, prefix="/skills", tags=["skills"])
 router.include_router(decisions.router, prefix="/decisions", tags=["decisions"])
 router.include_router(checkpoints.router, prefix="/checkpoints", tags=["checkpoints"])
