@@ -210,3 +210,42 @@ async def test_accepts_skill_caller_id(client) -> None:
 async def test_delete_unknown_rule_404(client) -> None:
     r = await client.delete(f"/api/v1/run-routing/{uuid.uuid4()}")
     assert r.status_code == 404
+
+
+async def test_update_rule_changes_caller_and_target(client) -> None:
+    """PATCH edits an existing rule's caller/target (Lift 6 — edit feature)."""
+    body = {
+        "name": "r",
+        "caller_id": "workflow.agent_loop.plan",
+        "target": "opus",
+    }
+    created = (await client.post("/api/v1/run-routing", json=body)).json()
+    rule_id = created["id"]
+
+    r = await client.patch(
+        f"/api/v1/run-routing/{rule_id}",
+        json={"caller_id": "workflow.judge", "target": "sonnet"},
+    )
+    assert r.status_code == 200, r.text
+    updated = r.json()
+    assert updated["caller_id"] == "workflow.judge"
+    assert updated["target"] == "sonnet"
+    # Persisted.
+    listed = (await client.get("/api/v1/run-routing")).json()
+    assert listed[0]["caller_id"] == "workflow.judge"
+
+
+async def test_update_rejects_unknown_caller(client) -> None:
+    created = (
+        await client.post(
+            "/api/v1/run-routing",
+            json={"name": "r", "caller_id": "workflow.frame", "target": "opus"},
+        )
+    ).json()
+    r = await client.patch(f"/api/v1/run-routing/{created['id']}", json={"caller_id": "not.real"})
+    assert r.status_code == 422
+
+
+async def test_update_unknown_rule_404(client) -> None:
+    r = await client.patch(f"/api/v1/run-routing/{uuid.uuid4()}", json={"target": "sonnet"})
+    assert r.status_code == 404

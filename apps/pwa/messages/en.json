@@ -525,7 +525,7 @@
         "sectionLabel": "Routing",
         "sectionHeading": "Routing",
         "addToggle": "+ Add rule",
-        "lede": "How I pick a model for each unit of work. Rules run by priority (lowest first); the first match wins. The default catches everything else.",
+        "lede": "How I pick a model for each unit of work. The first rule that matches a caller wins; everything else uses the default model above.",
         "loading": "Loading your routing rules…",
         "loadError": "Couldn’t load your routing rules right now. Try again in a moment.",
         "empty": "No routing rules yet. All work goes to the active model account. Add a rule to send some work elsewhere.",
@@ -552,7 +552,7 @@
         "addRule": "Add rule",
         "caller": "Caller",
         "callerPlaceholder": "Pick a caller…",
-        "nlToggle": "✨ Describe in words",
+        "nlToggle": "Describe in words",
         "nlLede": "Describe your routing in plain language — I'll draft the rules for you to review before anything is saved.",
         "nlPlaceholder": "e.g. Design work goes to opus, everything else to sonnet",
         "nlCompile": "Draft rules",
@@ -562,7 +562,12 @@
         "nlEmpty": "I couldn't derive any rules from that. Try naming a stage (design / implement) and a model.",
         "nlError": "Couldn't draft rules right now. Try again in a moment.",
         "nlProposed": "Proposed rules",
-        "nlDefaultCaller": "All callers"
+        "nlDefaultCaller": "All callers",
+        "edit": "Edit",
+        "save": "Save",
+        "saving": "Saving…",
+        "editTitle": "Edit rule",
+        "nlSetsDefault": "Sets default model → {target}"
       }
     },
     "connectors": {

@@ -196,6 +196,40 @@ async def _h_delete(args: RunRoutingRulesDeleteInput, ctx: ToolContext) -> Any:
 
 
 # ---------------------------------------------------------------------------
+# bsvibe_run_routing_rules_update (Lift 6 — edit an existing rule)
+# ---------------------------------------------------------------------------
+class RunRoutingRulesUpdateInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    rule_id: uuid.UUID
+    caller_id: str | None = Field(default=None, max_length=120)
+    target: str | None = Field(default=None, min_length=1, max_length=255)
+    is_active: bool | None = None
+
+    @field_validator("caller_id")
+    @classmethod
+    def _caller_known(cls, v: str | None) -> str | None:
+        if v is None:
+            return v
+        return _validate_caller_id(v)
+
+
+async def _h_update(args: RunRoutingRulesUpdateInput, ctx: ToolContext) -> Any:
+    repo = SqlAlchemyRunRoutingRuleRepository(ctx.session)
+    row = await repo.get(workspace_id=ctx.principal.workspace_id, rule_id=args.rule_id)
+    if row is None:
+        raise ToolError(f"run-routing rule not found: {args.rule_id}")
+    if args.caller_id is not None:
+        row.caller_id = args.caller_id
+    if args.target is not None:
+        row.target = args.target
+    if args.is_active is not None:
+        row.is_active = args.is_active
+    await ctx.session.commit()
+    return _Envelope(_row_to_dict(row))
+
+
+# ---------------------------------------------------------------------------
 # bsvibe_run_routing_rules_compile (Lift 5 — NL → proposals, dry-run)
 # ---------------------------------------------------------------------------
 class RunRoutingRulesCompileInput(BaseModel):
@@ -265,6 +299,21 @@ def register_run_routing_rules_tools(registry: ToolRegistry) -> None:
             handler=_h_delete,
             required_scopes=("mcp:write",),
             audit_event="bsvibe.mcp.run_routing_rules_delete.invoked",
+        )
+    )
+    registry.register(
+        Tool(
+            name="bsvibe_run_routing_rules_update",
+            description=(
+                "Edit an existing run-routing rule (Lift 6). Mirrors PATCH "
+                "/api/v1/run-routing/{id}: change caller_id / target / is_active. "
+                "caller_id is validated against the registry."
+            ),
+            input_schema=RunRoutingRulesUpdateInput,
+            output_schema=_Envelope,
+            handler=_h_update,
+            required_scopes=("mcp:write",),
+            audit_event="bsvibe.mcp.run_routing_rules_update.invoked",
         )
     )
     registry.register(
