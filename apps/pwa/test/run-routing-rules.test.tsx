@@ -122,7 +122,9 @@ describe("Run-routing surface (Lift 6)", () => {
   it("renders one line caller → friendly model; no priority chip", async () => {
     global.fetch = routedFetch([RULE]) as unknown as typeof fetch;
     render(<RunRoutingRules />);
-    await waitFor(() => expect(screen.getByText("workflow.agent_loop.plan")).toBeInTheDocument());
+    // The caller shows a localized human label, NOT the raw technical id.
+    await waitFor(() => expect(screen.getByText("Design & planning")).toBeInTheDocument());
+    expect(screen.queryByText("workflow.agent_loop.plan")).not.toBeInTheDocument();
     // Target resolves to the friendly account label, not the raw litellm id.
     expect(screen.getByText("dogfood (opus)")).toBeInTheDocument();
     // The rule's freeform name is NOT shown (no duplication) and no priority chip.
@@ -152,8 +154,9 @@ describe("Run-routing surface (Lift 6)", () => {
     );
 
     await userEvent.click(screen.getByRole("button", { name: "+ Add rule" }));
-    const callerOption = await screen.findByRole("option", { name: "workflow.agent_loop.plan" });
-    await userEvent.selectOptions(screen.getByLabelText(/Caller/i), callerOption);
+    // Options show the localized label; the value is still the caller_id.
+    await screen.findByRole("option", { name: "Design & planning" });
+    await userEvent.selectOptions(screen.getByLabelText(/Caller/i), "workflow.agent_loop.plan");
     await userEvent.selectOptions(screen.getByLabelText(/Route to/i), "opus");
     await userEvent.click(screen.getByRole("button", { name: /^Add rule$/i }));
 
@@ -179,9 +182,7 @@ describe("Run-routing surface (Lift 6)", () => {
     global.fetch = fetchMock as unknown as typeof fetch;
     render(<RunRoutingRules />);
     const list = await screen.findByRole("list");
-    await waitFor(() =>
-      expect(within(list).getByText("workflow.agent_loop.plan")).toBeInTheDocument(),
-    );
+    await waitFor(() => expect(within(list).getByText("Design & planning")).toBeInTheDocument());
 
     await userEvent.click(within(list).getByRole("button", { name: /^Edit$/i }));
     // The edit form is prefilled; change the target then save.
@@ -206,9 +207,7 @@ describe("Run-routing surface (Lift 6)", () => {
     global.fetch = fetchMock as unknown as typeof fetch;
     render(<RunRoutingRules />);
     const list = await screen.findByRole("list");
-    await waitFor(() =>
-      expect(within(list).getByText("workflow.agent_loop.plan")).toBeInTheDocument(),
-    );
+    await waitFor(() => expect(within(list).getByText("Design & planning")).toBeInTheDocument());
 
     await userEvent.click(within(list).getByRole("button", { name: /^Remove$/i }));
     await userEvent.click(await screen.findByRole("button", { name: /^Confirm remove$/i }));
@@ -256,7 +255,7 @@ describe("Run-routing surface (Lift 6)", () => {
     await userEvent.type(screen.getByPlaceholderText(/Design work goes to opus/i), "설계는 opus");
     await userEvent.click(screen.getByRole("button", { name: /^Draft rules$/i }));
 
-    await waitFor(() => expect(screen.getByText("workflow.agent_loop.plan")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("Design & planning")).toBeInTheDocument());
     await userEvent.click(screen.getByRole("button", { name: /^Apply all$/i }));
 
     await waitFor(() => expect(putDefault).toBe(true));
