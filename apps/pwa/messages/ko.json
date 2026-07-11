@@ -549,7 +549,9 @@
         "addError": "규칙을 추가하지 못했어요. 내용을 확인하고 다시 시도해 주세요.",
         "addSuccess": "“{name}” 추가됨.",
         "adding": "추가 중…",
-        "addRule": "규칙 추가"
+        "addRule": "규칙 추가",
+        "caller": "호출자",
+        "callerPlaceholder": "호출자를 선택하세요…"
       }
     },
     "connectors": {

@@ -2,7 +2,7 @@ import { useTranslations } from "next-intl";
 import DefaultAccountPicker from "./DefaultAccountPicker";
 import ExecutorWorkers from "./ExecutorWorkers";
 import ModelAccounts from "./ModelAccounts";
-import RoutingRules from "./RoutingRules";
+import RunRoutingRules from "./RunRoutingRules";
 
 /**
  * Settings → Models tab. Hosts the existing model-accounts surface, the
@@ -32,7 +32,7 @@ export default function ModelsTab() {
       <div className="models-group">
         <p className="models-group__label">{t("groupRouting")}</p>
         <DefaultAccountPicker />
-        <RoutingRules />
+        <RunRoutingRules />
       </div>
     </div>
   );

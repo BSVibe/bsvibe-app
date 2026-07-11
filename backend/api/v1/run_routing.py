@@ -33,7 +33,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.api.deps import get_db_session, get_workspace_id
 from backend.api.v1._router_deps import get_run_routing_rule_repository
-from backend.dispatch.caller_registry import KNOWN_CALLERS, SKILL_CALLER_PREFIX
+from backend.dispatch.caller_registry import (
+    KNOWN_CALLERS,
+    SKILL_CALLER_PREFIX,
+    list_all_callers,
+)
 from backend.router.domain.repositories import RunRoutingRuleRepository
 from backend.router.routing.run_routing.db import RunRoutingRuleRow
 from backend.router.routing.run_routing.engine import ALLOWED_FIELDS, VALID_OPERATORS
@@ -155,6 +159,27 @@ def _to_response(row: RunRoutingRuleRow) -> RunRuleResponse:
         is_active=row.is_active,
         created_at=row.created_at,
     )
+
+
+class RunCallerResponse(BaseModel):
+    """One selectable caller for the PWA's run-routing rule form. Keeps the
+    caller whitelist a single source of truth (the registry), so the UI never
+    hardcodes it."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    caller_id: str
+    description: str
+
+
+@router.get("/callers")
+async def list_callers() -> list[RunCallerResponse]:
+    """The static known callers a rule may target (skill.<name> callers are
+    workspace-scoped and authored by typing the id, so they're not listed)."""
+    return [
+        RunCallerResponse(caller_id=spec.caller_id, description=spec.description)
+        for spec in list_all_callers()
+    ]
 
 
 @router.get("")
