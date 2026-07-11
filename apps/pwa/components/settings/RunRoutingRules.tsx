@@ -16,6 +16,7 @@ import type {
   RunRoutingRuleCreate,
 } from "@/lib/api/types";
 import { setWorkspaceDefaultAccount } from "@/lib/api/workspace";
+import { callerDisplay } from "@/lib/routing-caller-labels";
 import { useTranslations } from "next-intl";
 import { useEffect, useState } from "react";
 
@@ -212,7 +213,9 @@ function RunRoutingRuleRow({
     <li className="routing-card">
       <div className="routing-card__body">
         <p className="routing-card__route">
-          <span className="routing-card__match">{rule.caller_id}</span>
+          <span className="routing-card__match" title={rule.caller_id ?? undefined}>
+            {callerDisplay(rule.caller_id, t)}
+          </span>
           <span className="routing-card__arrow" aria-hidden="true">
             {" → "}
           </span>
@@ -341,7 +344,7 @@ function RuleForm({
             <option value="">{t("callerPlaceholder")}</option>
             {callers.map((c) => (
               <option key={c.caller_id} value={c.caller_id} title={c.description}>
-                {c.caller_id}
+                {callerDisplay(c.caller_id, t)}
               </option>
             ))}
           </select>
@@ -489,7 +492,9 @@ function NlCompilePanel({
                         </span>
                       ) : (
                         <>
-                          <span className="routing-card__match">{p.caller_id}</span>
+                          <span className="routing-card__match" title={p.caller_id ?? undefined}>
+                            {callerDisplay(p.caller_id, t)}
+                          </span>
                           <span className="routing-card__arrow" aria-hidden="true">
                             {" → "}
                           </span>

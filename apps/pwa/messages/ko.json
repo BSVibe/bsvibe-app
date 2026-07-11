@@ -567,7 +567,19 @@
         "save": "저장",
         "saving": "저장 중…",
         "editTitle": "규칙 수정",
-        "nlSetsDefault": "기본 모델로 설정 → {target}"
+        "nlSetsDefault": "기본 모델로 설정 → {target}",
+        "callerLabels": {
+          "plan": "설계·계획",
+          "act": "구현",
+          "frame": "요청 분류",
+          "judge": "검증",
+          "settle": "지식 추출",
+          "ingest": "지식 수집",
+          "query": "지식 질의응답",
+          "canonicalization": "지식 정규화",
+          "chat": "외부 채팅 API",
+          "compile": "라우팅 컴파일러"
+        }
       }
     },
     "connectors": {

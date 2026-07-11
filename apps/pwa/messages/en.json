@@ -567,7 +567,19 @@
         "save": "Save",
         "saving": "Saving…",
         "editTitle": "Edit rule",
-        "nlSetsDefault": "Sets default model → {target}"
+        "nlSetsDefault": "Sets default model → {target}",
+        "callerLabels": {
+          "plan": "Design & planning",
+          "act": "Implementation",
+          "frame": "Request triage",
+          "judge": "Verification",
+          "settle": "Knowledge extraction",
+          "ingest": "Knowledge ingest",
+          "query": "Knowledge Q&A",
+          "canonicalization": "Knowledge cleanup",
+          "chat": "External chat API",
+          "compile": "Routing compiler"
+        }
       }
     },
     "connectors": {
