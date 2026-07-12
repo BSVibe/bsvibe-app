@@ -89,6 +89,25 @@ async def test_compile_no_model_returns_400(client, monkeypatch) -> None:
     assert "no model" in r.json()["detail"].lower()
 
 
+async def test_compile_model_unreachable_returns_502(client, monkeypatch) -> None:
+    """A model is CONFIGURED but we couldn't REACH it (executor dispatch failure,
+    timeout, provider 5xx). That is infrastructure — a 502 with "couldn't reach",
+    never a 422 telling the founder to rephrase."""
+    import backend.api.v1.run_routing as rr
+    from backend.router.routing.run_routing.nl_compile import CompileLlmUnavailable
+
+    async def _unreachable(session, workspace_id, text, *, llm=None):
+        raise CompileLlmUnavailable("ExecutorAdapter requires a Redis client")
+
+    monkeypatch.setattr(rr, "compile_for_workspace", _unreachable)
+
+    r = await client.post("/api/v1/run-routing/compile", json={"text": "route it"})
+    assert r.status_code == 502, r.text
+    detail = r.json()["detail"].lower()
+    assert "reach" in detail
+    assert "rephras" not in detail
+
+
 async def test_list_callers_returns_known_callers(client) -> None:
     """The PWA rule form reads the selectable callers from here so the caller
     whitelist stays a single source of truth (the registry)."""

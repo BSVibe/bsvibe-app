@@ -44,12 +44,28 @@ from backend.router.routing.run_routing.db import RunRoutingRuleRow
 from backend.router.routing.run_routing.engine import ALLOWED_FIELDS, VALID_OPERATORS
 from backend.router.routing.run_routing.nl_compile import (
     CompiledCondition,
+    CompileLlmUnavailable,
     RoutingCompileLlm,
     UninterpretableCondition,
     as_dicts,
     compile_rules,
     compile_source_text,
 )
+
+# The founder-facing copy for each compile failure. Keeping the two apart is the
+# point of this module's error handling — see :class:`CompileLlmUnavailable`.
+_UNREACHABLE_DETAIL = (
+    "couldn't reach the routing model to compile the condition — this is a "
+    "connection problem on our side, not your wording. Try again in a moment."
+)
+
+
+def _rephrase_detail(text: str) -> str:
+    return (
+        f"could not interpret the condition {text!r} as a routing rule — try "
+        "rephrasing (e.g. '복잡한 작업', '마케팅 관련', '한국어 요청')"
+    )
+
 
 logger = structlog.get_logger(__name__)
 
@@ -247,9 +263,11 @@ async def compile_source_text_for_workspace(
 
     Gathers the caller catalog + resolves the compiler's own model (unless
     ``llm`` is injected for tests). Raises :class:`NoCompileModelError` when no
-    model is configured to compile on, and
+    model is configured to compile on,
+    :class:`~backend.router.routing.run_routing.nl_compile.CompileLlmUnavailable`
+    when the configured model could not be REACHED (→ 502), and
     :class:`SourceTextUninterpretableError` when the phrase compiles to nothing
-    valid. Shared by the REST + MCP create/update paths."""
+    valid (→ 422). Shared by the REST + MCP create/update paths."""
     callers = [(spec.caller_id, spec.description) for spec in list_all_callers()]
     if llm is None:
         llm = await _resolve_compile_llm(session, workspace_id)
@@ -321,13 +339,15 @@ async def create_run_rule(
                     "default model or add a model account first"
                 ),
             ) from None
+        except CompileLlmUnavailable:
+            # Infrastructure, not the founder's wording — never say "rephrase".
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY, detail=_UNREACHABLE_DETAIL
+            ) from None
         except SourceTextUninterpretableError:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail=(
-                    f"could not interpret the condition {payload.source_text!r} as a routing "
-                    "rule — try rephrasing (e.g. '복잡한 작업', '마케팅 관련', '한국어 요청')"
-                ),
+                detail=_rephrase_detail(payload.source_text),
             ) from None
         caller_id = compiled.caller_id
         conditions = await _conditions_from_compiled(
@@ -423,14 +443,16 @@ async def update_run_rule(
                     "default model or add a model account first"
                 ),
             ) from None
+        except CompileLlmUnavailable:
+            await session.rollback()
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY, detail=_UNREACHABLE_DETAIL
+            ) from None
         except SourceTextUninterpretableError:
             await session.rollback()
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail=(
-                    f"could not interpret the condition {payload.source_text!r} as a routing "
-                    "rule — try rephrasing (e.g. '복잡한 작업', '마케팅 관련', '한국어 요청')"
-                ),
+                detail=_rephrase_detail(payload.source_text),
             ) from None
         row.source_text = payload.source_text
         row.caller_id = compiled.caller_id
@@ -497,14 +519,35 @@ async def _resolve_compile_llm(
     session: AsyncSession, workspace_id: uuid.UUID
 ) -> RoutingCompileLlm | None:
     """Resolve the model the compiler runs ON via the same resolver everything
-    else uses (caller ``routing.compile``). ``None`` when nothing is configured."""
+    else uses (caller ``routing.compile``). ``None`` when nothing is configured.
+
+    The Redis client is threaded in from :func:`backend.api.redis_client.get_api_redis`
+    — the app's process-wide client, published at startup by
+    :func:`backend.api.main.bind_process_redis`. This is NOT optional plumbing:
+    the compile model resolves to the workspace default, which for a founder
+    running claude_code is an **executor** account, and
+    :meth:`ExecutorAdapter.chat` dispatches onto the worker stream over Redis. A
+    resolver built without it raises ``ExecutorAdapterUnavailable`` on EVERY
+    compile — the bug that made this feature dead on arrival in production. The
+    workflow runtime always threaded it (see
+    :func:`backend.workflow.application.runtime.account_resolution._resolve_via_caller`);
+    the API layer did not.
+
+    ``None`` (no Redis configured — unit tests, dev without Redis) is a clean
+    no-op: LiteLLM accounts never touch Redis, and an executor account raises a
+    clean ``ExecutorAdapterUnavailable`` that surfaces as a 502."""
+    from backend.api.redis_client import get_api_redis  # noqa: PLC0415
     from backend.config import get_settings  # noqa: PLC0415
     from backend.dispatch.resolver import (  # noqa: PLC0415
         ModelAccountResolver,
         NoMatchingRouteError,
     )
 
-    resolver = ModelAccountResolver(session, settings=get_settings())
+    resolver = ModelAccountResolver(
+        session,
+        settings=get_settings(),
+        redis=get_api_redis(),
+    )
     try:
         resolved = await resolver.resolve_for(
             caller_id=CALLER_ROUTING_COMPILE, workspace_id=workspace_id
@@ -526,8 +569,10 @@ async def compile_for_workspace(
     Gathers the caller catalog (registry) + the workspace's active model accounts,
     resolves the compiler's own model (unless ``llm`` is injected for tests), and
     returns the create-endpoint wire shape for each proposal. Raises
-    :class:`NoCompileModelError` when no model is configured to compile on. Shared
-    by the REST endpoint and the MCP tool so both land on one compile path."""
+    :class:`NoCompileModelError` when no model is configured to compile on, and
+    :class:`~backend.router.routing.run_routing.nl_compile.CompileLlmUnavailable`
+    when the configured model could not be REACHED (→ 502, not a 422). Shared by
+    the REST endpoint and the MCP tool so both land on one compile path."""
     from backend.router.infrastructure.repositories import (  # noqa: PLC0415
         SqlAlchemyModelAccountRepository,
     )
@@ -565,7 +610,12 @@ async def compile_run_rules(
     session: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> CompileResponse:
     """Compile a plain-language routing description into rule PROPOSALS (dry-run —
-    nothing is persisted; the caller previews then applies the ones it wants)."""
+    nothing is persisted; the caller previews then applies the ones it wants).
+
+    400 — no model is configured to compile ON.
+    502 — a model IS configured but we couldn't reach it (dispatch / transport).
+    200 with ``proposals: []`` — the model answered but nothing compiled; the PWA
+    surfaces that as "couldn't derive rules — try rephrasing"."""
     try:
         proposals = await compile_for_workspace(session, workspace_id, payload.text)
     except NoCompileModelError:
@@ -575,6 +625,10 @@ async def compile_run_rules(
                 "no model is configured to compile with — set a default model or "
                 "add a model account first"
             ),
+        ) from None
+    except CompileLlmUnavailable:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY, detail=_UNREACHABLE_DETAIL
         ) from None
     return CompileResponse(proposals=proposals)
 

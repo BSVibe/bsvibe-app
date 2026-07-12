@@ -266,6 +266,45 @@ describe("Run-routing surface (Lift N5 — 2-column NL condition + model)", () =
     expect(screen.getByLabelText(/^Condition$/i)).toBeInTheDocument();
   });
 
+  it("surfaces a 502 as 'couldn't reach the model', NOT the rephrase hint", async () => {
+    // The compile model was unreachable (executor dispatch / transport failure).
+    // Telling the founder to rephrase a perfectly good phrase is the bug this
+    // guards: it blamed their wording for an unwired backend dependency.
+    const fetchMock = routedFetch([], {
+      postStatus: 502,
+      postBody: { detail: "couldn't reach the routing model to compile the condition" },
+    });
+    global.fetch = fetchMock as unknown as typeof fetch;
+    render(<RunRoutingRules />);
+    await waitFor(() =>
+      expect(screen.getByText(/All work goes to the active model account/i)).toBeInTheDocument(),
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: "+ Add rule" }));
+    await userEvent.type(screen.getByLabelText(/^Condition$/i), "복잡한 작업");
+    await userEvent.selectOptions(screen.getByLabelText(/^Model$/i), "opus");
+    await userEvent.click(screen.getByRole("button", { name: /^Add rule$/i }));
+
+    await waitFor(() => expect(screen.getByText(/couldn.t reach the model/i)).toBeInTheDocument());
+    expect(screen.queryByText(/couldn.t interpret that condition/i)).not.toBeInTheDocument();
+  });
+
+  it("pre-fills the editor with the human condition when editing a LEGACY rule", async () => {
+    // A legacy (structured/caller) rule has source_text: null. Initialising the
+    // input from `source_text` left the condition box BLANK on Edit — the row
+    // read fine, then vanished the moment you touched it.
+    global.fetch = routedFetch([LEGACY_STAGE_RULE]) as unknown as typeof fetch;
+    render(<RunRoutingRules />);
+    const list = await screen.findByRole("list");
+    await waitFor(() => expect(within(list).getByText("Design & planning")).toBeInTheDocument());
+
+    await userEvent.click(within(list).getByRole("button", { name: /^Edit$/i }));
+
+    const input = screen.getByLabelText(/^Condition$/i) as HTMLInputElement;
+    expect(input.value).not.toBe("");
+    expect(input.value).toBe("Design & planning");
+  });
+
   it("deletes a rule after confirm → DELETE", async () => {
     let deleted = false;
     const fetchMock = routedFetch([RULE], {

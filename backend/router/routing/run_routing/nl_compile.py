@@ -25,8 +25,21 @@ execution stage  ``caller_id`` == a known caller
 Every field is validated against the engine's ``ALLOWED_FIELDS`` /
 ``VALID_OPERATORS`` and the workspace's active accounts (the target catalog), so
 a hallucinated field / operator / caller / target is DROPPED rather than trusted.
-The LLM is INJECTED behind a Protocol (mocked in tests). The compiler never
-raises — it degrades to ``[]`` on failure / unparseable / nothing-valid.
+The LLM is INJECTED behind a Protocol (mocked in tests).
+
+**Two failure modes, deliberately distinct** — collapsing them is what let an
+infrastructure outage masquerade as the founder's bad phrasing for the entire
+life of this feature:
+
+* **We never reached the model** — ``llm.complete_text`` RAISED
+  (``ExecutorAdapterUnavailable`` because no Redis was wired into the resolver, a
+  dispatch timeout, a provider 5xx). Nothing about the founder's words is known
+  to be wrong. → :class:`CompileLlmUnavailable`, which the REST / MCP callers
+  surface as a 502 "couldn't reach the routing model".
+* **The model answered, but nothing compiles** — unparseable output, or every
+  proposal dropped by validation. → the historical degrade (``[]`` /
+  :class:`UninterpretableCondition`), which the callers surface as a 422
+  "couldn't interpret — try rephrasing".
 """
 
 from __future__ import annotations
@@ -49,6 +62,24 @@ class RoutingCompileLlm(Protocol):
     per-workspace gateway adapter; tests inject a stub returning canned JSON."""
 
     async def complete_text(self, *, system: str, user: str) -> str: ...
+
+
+class CompileLlmUnavailable(Exception):
+    """The compile model could not be REACHED — an INFRASTRUCTURE failure.
+
+    Raised when ``llm.complete_text`` itself raises: the executor adapter has no
+    Redis transport for the worker stream
+    (:class:`~backend.dispatch.adapter.ExecutorAdapterUnavailable`), the dispatch
+    times out, the provider 5xxs. We never got an ANSWER, so we know nothing
+    about whether the founder's phrase was interpretable.
+
+    This is emphatically NOT :class:`UninterpretableCondition` / an empty
+    proposal list. Callers map it to a 502 "couldn't reach the routing model —
+    try again", never to the 422 "try rephrasing" hint. The original production
+    bug (a resolver built with no ``redis=``) was invisible for exactly this
+    reason: the compiler swallowed the dispatch error and the founder was told
+    their perfectly good Korean phrase was uninterpretable.
+    """
 
 
 @dataclass(frozen=True, slots=True)
@@ -290,8 +321,12 @@ async def compile_rules(
 
     ``callers`` is ``[(caller_id, description)]`` and ``targets`` is
     ``[(account_label, litellm_model)]`` — the catalogs the LLM maps against.
-    Returns ``[]`` on an empty description, an LLM failure, unparseable output, or
-    when nothing validates (the caller surfaces "couldn't derive rules")."""
+
+    Returns ``[]`` on an empty description, unparseable output, or when nothing
+    validates — i.e. the model ANSWERED and the answer was unusable (the caller
+    surfaces "couldn't derive rules"). Raises :class:`CompileLlmUnavailable` when
+    the model could not be reached at all — an infrastructure failure the caller
+    must NOT report as the founder's bad wording."""
     if not text or not text.strip():
         return []
     known_callers = {c for c, _ in callers}
@@ -302,9 +337,12 @@ async def compile_rules(
     prompt = _build_user_prompt(text, callers, targets)
     try:
         raw = await llm.complete_text(system=_SYSTEM_PROMPT, user=prompt)
-    except Exception:  # noqa: BLE001 — compile must never raise; it degrades to []
+    except Exception as exc:
+        # We never reached the model. Degrading to [] here would report an
+        # outage as "couldn't derive rules" — the exact masquerade this lift
+        # removes. Surface it as infrastructure.
         logger.warning("routing_compile_llm_failed", exc_info=True)
-        return []
+        raise CompileLlmUnavailable(str(exc)) from exc
 
     items = _parse_json_array(raw)
     if items is None:
@@ -476,8 +514,16 @@ async def compile_source_text(
 
     ``callers`` is ``[(caller_id, description)]`` — the catalog the LLM maps stage
     phrases against. Returns a :class:`CompiledCondition` on success, or an
-    :class:`UninterpretableCondition` on an empty phrase, an LLM failure,
-    unparseable output, or when nothing validates. Never raises."""
+    :class:`UninterpretableCondition` on an empty phrase, unparseable output, or
+    when nothing validates — i.e. the model ANSWERED and the answer was unusable.
+
+    Raises :class:`CompileLlmUnavailable` when the model could not be REACHED. The
+    live production symptom of collapsing the two was this log line, emitted on
+    every single rule save, while the founder saw "try rephrasing"::
+
+        event: routing_source_text_compile_llm_failed
+        ExecutorAdapterUnavailable: ExecutorAdapter requires a Redis client …
+    """
     if not text or not text.strip():
         return UninterpretableCondition()
     known_callers = {c for c, _ in callers}
@@ -485,9 +531,9 @@ async def compile_source_text(
     prompt = _build_single_user_prompt(text, callers)
     try:
         raw = await llm.complete_text(system=_SINGLE_SYSTEM_PROMPT, user=prompt)
-    except Exception:  # noqa: BLE001 — compile must never raise; it degrades to uninterpretable
+    except Exception as exc:
         logger.warning("routing_source_text_compile_llm_failed", exc_info=True)
-        return UninterpretableCondition()
+        raise CompileLlmUnavailable(str(exc)) from exc
 
     item = _parse_json_object(raw)
     if item is None:
@@ -518,6 +564,7 @@ def as_dicts(proposals: Iterable[CompiledProposal]) -> list[dict[str, Any]]:
 
 
 __all__ = [
+    "CompileLlmUnavailable",
     "CompiledCondition",
     "CompiledProposal",
     "RoutingCompileLlm",

@@ -285,8 +285,16 @@ type EditorState = "idle" | "submitting" | "error";
 /**
  * The minimal row editor — a text input for the NL condition + a `<select>` for
  * the model. Adds (POST `{name, source_text, target}`) or edits (PATCH
- * `{source_text, target}`) a rule. A 422 (uninterpretable condition) surfaces
- * the backend's rephrase hint inline without discarding the row.
+ * `{source_text, target}`) a rule.
+ *
+ * Failures are surfaced with the RIGHT cause, which the backend now distinguishes:
+ *
+ *  - 502/503 — the compile model was unreachable (dispatch / transport). NOT the
+ *    founder's wording. Say so and invite a retry.
+ *  - 422 — the model answered but the phrase compiled to nothing → rephrase hint.
+ *
+ * Conflating them is what shipped: an unwired backend dependency told every
+ * founder that their perfectly good condition was uninterpretable.
  */
 function RuleRowEditor({
   rule,
@@ -300,17 +308,25 @@ function RuleRowEditor({
   onCancel: () => void;
 }) {
   const editing = rule !== undefined;
-  const [condition, setCondition] = useState(rule?.source_text ?? "");
+  const t = useTranslations("settings.models.routing");
+  // A LEGACY rule (structured / caller-keyed) has `source_text: null`, so seeding
+  // the input from it left the condition box BLANK on Edit — the row displayed
+  // fine, then emptied the instant you touched it. Seed the SAME human text the
+  // row shows (`conditionText`), so the box is never blank and saving round-trips
+  // the visible condition through the compiler.
+  const [condition, setCondition] = useState(rule ? conditionText(rule, t) : "");
   const [target, setTarget] = useState(rule ? targetSelectValue(rule.target, accounts) : "");
   const [state, setState] = useState<EditorState>("idle");
   const [errorText, setErrorText] = useState<string | null>(null);
-  const t = useTranslations("settings.models.routing");
 
   const ready = condition.trim().length > 0 && target.trim().length > 0;
 
-  /** A 422 means the phrase compiled to nothing valid — show the rephrase hint.
-   *  Any other failure shows the generic add/edit error. */
+  /** 502/503 → we couldn't REACH the model (infrastructure; retry). 422 → the
+   *  phrase compiled to nothing valid (rephrase). Anything else → generic. */
   function messageFor(error: unknown): string {
+    if (error instanceof ApiError && (error.status === 502 || error.status === 503)) {
+      return t("modelUnreachable");
+    }
     if (error instanceof ApiError && error.status === 422) return t("rephrase");
     return editing ? t("saveError") : t("addError");
   }
