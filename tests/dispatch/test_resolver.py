@@ -378,3 +378,72 @@ class TestResolverConditionEvaluation:
         # Condition matched → rule's target wins over the default.
         assert resolved.account.id == cloud_account.id
         assert resolved.source == "explicit_rule"
+
+
+class _StubClassifier:
+    """Injected in place of the embedding classifier — returns a fixed intent."""
+
+    def __init__(self, intent: str | None) -> None:
+        self._intent = intent
+
+    async def classify(self, text: str) -> str | None:  # noqa: ARG002
+        return self._intent
+
+
+class TestClassifiedIntentRouting:
+    """Lift N1 — a rule keyed on classified_intent matches via the classifier."""
+
+    async def test_classified_intent_rule_matches(
+        self,
+        session: AsyncSession,
+        workspace: WorkspaceRow,
+        cloud_account: ModelAccount,
+    ) -> None:
+        session.add(
+            RunRoutingRuleRow(
+                workspace_id=workspace.id,
+                name="marketing -> cloud",
+                caller_id=CALLER_FRAME,
+                priority=10,
+                is_default=False,
+                target=cloud_account.litellm_model,
+                conditions=[{"field": "classified_intent", "operator": "eq", "value": "marketing"}],
+                is_active=True,
+            )
+        )
+        await session.flush()
+
+        resolver = ModelAccountResolver(
+            session, settings=get_settings(), intent_classifier=_StubClassifier("marketing")
+        )
+        resolved = await resolver.resolve_for(caller_id=CALLER_FRAME, workspace_id=workspace.id)
+        assert resolved.account.id == cloud_account.id
+        assert resolved.source == "explicit_rule"
+
+    async def test_classifier_miss_does_not_match(
+        self,
+        session: AsyncSession,
+        workspace: WorkspaceRow,
+        cloud_account: ModelAccount,
+    ) -> None:
+        session.add(
+            RunRoutingRuleRow(
+                workspace_id=workspace.id,
+                name="marketing -> cloud",
+                caller_id=CALLER_FRAME,
+                priority=10,
+                is_default=False,
+                target=cloud_account.litellm_model,
+                conditions=[{"field": "classified_intent", "operator": "eq", "value": "marketing"}],
+                is_active=True,
+            )
+        )
+        await session.flush()
+
+        # Classifier returns a different intent → the rule's condition fails → no
+        # match + no workspace default → hard fail.
+        resolver = ModelAccountResolver(
+            session, settings=get_settings(), intent_classifier=_StubClassifier("coding")
+        )
+        with pytest.raises(NoMatchingRouteError):
+            await resolver.resolve_for(caller_id=CALLER_FRAME, workspace_id=workspace.id)
