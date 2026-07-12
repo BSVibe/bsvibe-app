@@ -33,12 +33,59 @@ import { useEffect, useState } from "react";
  * to a friendly account label, not a raw id); and rules are editable in place.
  */
 type ListState = { data: RunRoutingRule[]; failed: boolean } | null;
+type Translate = ReturnType<typeof useTranslations>;
 
 /** Resolve a rule's `target` (a litellm_model id, or a legacy account id) to a
  *  friendly account label. Falls back to the raw target when unknown. */
 function friendlyTarget(target: string, accounts: ModelAccount[]): string {
   const acct = accounts.find((a) => a.litellm_model === target || a.id === target);
   return acct ? acct.label : target;
+}
+
+/** Compact, human operator glyphs for the match preview (falls back to the raw op). */
+const OPERATOR_SYMBOL: Record<string, string> = {
+  eq: "=",
+  ne: "≠",
+  gt: ">",
+  lt: "<",
+  gte: "≥",
+  lte: "≤",
+};
+
+function formatConditionValue(value: unknown): string {
+  if (value === null || value === undefined) return "";
+  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+  return JSON.stringify(value);
+}
+
+/** One condition (persisted rule or dry-run proposal) in human terms. A
+ *  `classified_intent` condition reads as the category "<value> (category)";
+ *  anything else reads "<field> <op> <value>" with the compact op glyph. */
+function conditionLabel(
+  cond: { field: string; operator: string; value?: unknown },
+  t: Translate,
+): string {
+  if (cond.field === "classified_intent") {
+    return t("dim.category", { name: formatConditionValue(cond.value) });
+  }
+  const op = OPERATOR_SYMBOL[cond.operator] ?? cond.operator;
+  return `${cond.field} ${op} ${formatConditionValue(cond.value)}`.trim();
+}
+
+/** The MATCH (left) side of a route in human terms, shared by the persisted
+ *  rules list and the NL preview: a caller (execution stage) via the localized
+ *  label, else the first condition (category / complexity / language / artifact),
+ *  else the "all work" catch-all label. Keeps the founder in NL, never in JSON. */
+function matchLabel(
+  callerId: string | null | undefined,
+  conditions: ReadonlyArray<{ field: string; operator: string; value?: unknown }> | undefined,
+  t: Translate,
+): string {
+  if (callerId) return callerDisplay(callerId, t);
+  if (conditions && conditions.length > 0) return conditionLabel(conditions[0], t);
+  return t("matchAny");
 }
 
 /** The select value for a target — always the litellm_model. A legacy rule whose
@@ -198,8 +245,11 @@ function RunRoutingRuleRow({
     <li className="routing-card">
       <div className="routing-card__body">
         <p className="routing-card__route">
-          <span className="routing-card__match" title={rule.caller_id ?? undefined}>
-            {callerDisplay(rule.caller_id, t)}
+          <span
+            className="routing-card__match"
+            title={rule.caller_id ?? rule.conditions?.[0]?.field ?? undefined}
+          >
+            {matchLabel(rule.caller_id, rule.conditions, t)}
           </span>
           <span className="routing-card__arrow" aria-hidden="true">
             {" → "}
@@ -378,39 +428,13 @@ function RuleForm({
 }
 
 type NlState = "idle" | "compiling" | "applying" | "error";
-type Translate = ReturnType<typeof useTranslations>;
 
-/** Describe one proposal's MATCH side in human terms — the routing DIMENSION it
- *  expresses, not the raw wire keys. A category reads "<intent> (category)", a
- *  condition "<field> <op> <value>", a stage via the localized caller label, and
- *  a default "Default model". Keeps the founder in NL, never in JSON. */
+/** Describe one dry-run proposal's MATCH side in human terms. A default reads
+ *  "Default model"; everything else reuses {@link matchLabel} (caller / condition
+ *  / catch-all), so the preview and the persisted list read identically. */
 function proposalMatchLabel(p: RunRoutingProposal, t: Translate): string {
   if (p.is_default) return t("dim.default");
-  if (p.intent_name) return t("dim.category", { name: p.intent_name });
-  if (p.caller_id) return callerDisplay(p.caller_id, t);
-  if (p.condition) {
-    const op = OPERATOR_SYMBOL[p.condition.operator] ?? p.condition.operator;
-    return `${p.condition.field} ${op} ${formatConditionValue(p.condition.value)}`;
-  }
-  return p.name;
-}
-
-/** Compact, human operator glyphs for the preview (falls back to the raw op). */
-const OPERATOR_SYMBOL: Record<string, string> = {
-  eq: "=",
-  ne: "≠",
-  gt: ">",
-  lt: "<",
-  gte: "≥",
-  lte: "≤",
-};
-
-function formatConditionValue(value: unknown): string {
-  if (value === null || value === undefined) return "";
-  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
-    return String(value);
-  }
-  return JSON.stringify(value);
+  return matchLabel(p.caller_id, p.condition ? [p.condition] : undefined, t);
 }
 
 /**

@@ -51,6 +51,24 @@ const DEFAULT_RULE = {
   caller_id: null,
 };
 
+// An N3 non-stage rule: caller_id null + a category condition (classified_intent).
+const CATEGORY_RULE = {
+  ...RULE,
+  id: "33333333-3333-3333-3333-333333333333",
+  name: "marketing → opus",
+  caller_id: null,
+  conditions: [{ field: "classified_intent", operator: "eq", value: "marketing", negate: false }],
+};
+
+// A complexity condition rule (caller_id null + estimated_tokens > N).
+const COMPLEXITY_RULE = {
+  ...RULE,
+  id: "44444444-4444-4444-4444-444444444444",
+  name: "complex → opus",
+  caller_id: null,
+  conditions: [{ field: "estimated_tokens", operator: "gt", value: 8000, negate: false }],
+};
+
 const CALLERS = [
   { caller_id: "workflow.agent_loop.plan", description: "design step" },
   { caller_id: "workflow.judge", description: "verifier" },
@@ -130,6 +148,21 @@ describe("Run-routing surface (Lift 6)", () => {
     // The rule's freeform name is NOT shown (no duplication) and no priority chip.
     expect(screen.queryByText("design → opus")).not.toBeInTheDocument();
     expect(screen.queryByText(/Priority \d/i)).not.toBeInTheDocument();
+  });
+
+  it("renders a condition-based rule's match in human terms in the LIST (not blank)", async () => {
+    global.fetch = routedFetch([CATEGORY_RULE, COMPLEXITY_RULE]) as unknown as typeof fetch;
+    render(<RunRoutingRules />);
+    const list = await screen.findByRole("list", { name: /Routing rules/i });
+    // Category rule: caller_id is null but the left side is NOT blank — it reads
+    // "<value> (category)", never an empty span before the arrow.
+    await waitFor(() =>
+      expect(within(list).getByText(/marketing \(category\)/i)).toBeInTheDocument(),
+    );
+    // Complexity rule: "<field> <op> <value>".
+    expect(within(list).getByText(/estimated_tokens > 8000/i)).toBeInTheDocument();
+    // Both still resolve their target to the friendly account label.
+    expect(within(list).getAllByText("dogfood (opus)").length).toBe(2);
   });
 
   it("hides is_default rules (the default is the picker above)", async () => {
