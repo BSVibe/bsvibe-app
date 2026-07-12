@@ -62,6 +62,8 @@ def test_alembic_history_loads():
         "connector_oauth_app_credentials",
         "connector_oauth_unclaimed",
         "workspace_default_account",
+        "drop_layer2_routing_rules",
+        "run_routing_source_text",
     ):
         assert rev in result.stdout, f"missing revision {rev} in:\n{result.stdout}"
 
@@ -77,10 +79,11 @@ def test_alembic_head_is_connector_last_import():
     assert result.returncode == 0
     # Lift E16 → worker_last_in_flight; E21 → executor_task_model; E32 →
     # connector_oauth_tokens_status → workspace_language (#6 output language) →
-    # drop_layer2_routing_rules (unified routing Lift 2 — legacy tables dropped).
+    # drop_layer2_routing_rules (unified routing Lift 2 — legacy tables dropped) →
+    # run_routing_source_text (NL-native routing Lift N5 — NL condition column).
     # Keep the test name (function name is a historical revision id, kept for
     # git-blame stability) and assert the current tip.
-    assert "drop_layer2_routing_rules" in result.stdout
+    assert "run_routing_source_text" in result.stdout
 
 
 def test_target_metadata_covers_all_bases():

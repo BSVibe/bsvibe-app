@@ -121,8 +121,8 @@ def test_fresh_pg_upgrade_round_trip():
     # Phase 1 — fresh upgrade.
     _alembic(["upgrade", "head"], env_extra=env_extra)
     stamped = asyncio.run(_stamped_head(url))
-    assert stamped == "drop_layer2_routing_rules", (
-        f"expected head drop_layer2_routing_rules, got {stamped}"
+    assert stamped == "run_routing_source_text", (
+        f"expected head run_routing_source_text, got {stamped}"
     )
 
     # Phase 2 — full downgrade. Verifies every revision's downgrade path.
@@ -131,7 +131,54 @@ def test_fresh_pg_upgrade_round_trip():
     # Phase 3 — re-upgrade. Verifies the chain is idempotent.
     _alembic(["upgrade", "head"], env_extra=env_extra)
     stamped = asyncio.run(_stamped_head(url))
-    assert stamped == "drop_layer2_routing_rules"
+    assert stamped == "run_routing_source_text"
+
+
+def test_run_routing_source_text_column_round_trips():
+    """Lift N5 — the ``run_routing_rules.source_text`` column adds + drops cleanly.
+
+    Up migration adds a ``VARCHAR(500)`` NULLable column (the founder's original
+    NL condition phrase); down migration removes it. Both must run without error
+    against a fresh PG so the operational rollback path is safe.
+    """
+    url = _skip_if_no_pg()
+    env_extra = {"BSVIBE_DATABASE_URL": url}
+
+    asyncio.run(_drop_everything(url))
+    _alembic(["upgrade", "head"], env_extra=env_extra)
+
+    async def _column_exists() -> bool:
+        engine = create_async_engine(url, future=True)
+        try:
+            async with engine.connect() as conn:
+                row = (
+                    await conn.execute(
+                        text(
+                            "SELECT 1 FROM information_schema.columns "
+                            "WHERE table_name='run_routing_rules' "
+                            "AND column_name='source_text'"
+                        )
+                    )
+                ).first()
+                return row is not None
+        finally:
+            await engine.dispose()
+
+    assert asyncio.run(_column_exists()), (
+        "run_routing_rules.source_text column missing after upgrade"
+    )
+
+    # Downgrade to the parent revision; column must be gone.
+    _alembic(["downgrade", "drop_layer2_routing_rules"], env_extra=env_extra)
+    assert not asyncio.run(_column_exists()), (
+        "run_routing_rules.source_text column survived downgrade"
+    )
+
+    # Re-upgrade restores it.
+    _alembic(["upgrade", "head"], env_extra=env_extra)
+    assert asyncio.run(_column_exists()), (
+        "run_routing_rules.source_text column missing after re-upgrade"
+    )
 
 
 def test_model_account_api_key_encrypted_is_nullable_after_upgrade():

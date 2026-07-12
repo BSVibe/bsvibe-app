@@ -38,9 +38,12 @@ from backend.api.v1.run_routing import (
     ApplyError,
     ApplyProposal,
     NoCompileModelError,
+    SourceTextUninterpretableError,
+    _conditions_from_compiled,
     _validate_caller_id,
     apply_proposals,
     compile_for_workspace,
+    compile_source_text_for_workspace,
 )
 from backend.mcp.api import Tool, ToolContext, ToolError, ToolRegistry
 from backend.router.infrastructure.repositories import SqlAlchemyRunRoutingRuleRepository
@@ -57,6 +60,7 @@ def _row_to_dict(row: RunRoutingRuleRow) -> dict[str, Any]:
         "id": str(row.id),
         "name": row.name,
         "caller_id": row.caller_id,
+        "source_text": row.source_text,
         "priority": row.priority,
         "is_default": row.is_default,
         "target": row.target,
@@ -117,6 +121,10 @@ class RunRoutingRulesCreateInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     name: str = Field(min_length=1, max_length=255)
+    # Lift N5 — the founder's free-text NL CONDITION phrase. When set, the rule
+    # is compiled FROM it (caller_id/conditions derived, a category also creates
+    # an intent def) and it is mutually exclusive with caller_id / conditions.
+    source_text: str | None = Field(default=None, min_length=1, max_length=500)
     caller_id: str | None = Field(default=None, max_length=120)
     priority: int = Field(default=0, ge=0)
     is_default: bool = False
@@ -132,9 +140,16 @@ class RunRoutingRulesCreateInput(BaseModel):
         return _validate_caller_id(v)
 
     @model_validator(mode="after")
-    def _non_default_requires_caller(self) -> RunRoutingRulesCreateInput:
-        # Non-default rules must declare a caller_id (top-level column or
-        # a back-compat ``{field:'caller_id', operator:'eq'}`` condition).
+    def _shape_valid(self) -> RunRoutingRulesCreateInput:
+        # NL path: source_text owns the caller_id/conditions — reject a mix.
+        if self.source_text is not None:
+            if self.caller_id or self.conditions or self.is_default:
+                raise ValueError(
+                    "source_text is mutually exclusive with caller_id / conditions / is_default"
+                )
+            return self
+        # Non-default STRUCTURED rules must declare a caller_id (top-level column
+        # or a back-compat ``{field:'caller_id', operator:'eq'}`` condition).
         if self.is_default:
             return self
         if self.caller_id:
@@ -152,17 +167,61 @@ class RunRoutingRulesCreateInput(BaseModel):
         return self
 
 
+async def _resolve_personal_account_id(ctx: ToolContext) -> uuid.UUID:
+    """The personal billing account intents are scoped to (create-on-read) —
+    the SAME account the N1 classifier reads at resolve time."""
+    from backend.router.accounts.account_service import ensure_personal_account  # noqa: PLC0415
+
+    account = await ensure_personal_account(ctx.session, workspace_id=ctx.principal.workspace_id)
+    return account.id
+
+
+async def _compile_source_text_or_error(
+    ctx: ToolContext, source_text: str
+) -> tuple[str | None, list[dict[str, Any]]]:
+    """Compile an NL condition → (caller_id, conditions), creating an intent def
+    for a category. Raises :class:`ToolError` on an uninterpretable phrase or a
+    missing compile model."""
+    account_id = await _resolve_personal_account_id(ctx)
+    try:
+        compiled = await compile_source_text_for_workspace(
+            ctx.session, ctx.principal.workspace_id, source_text
+        )
+    except NoCompileModelError as exc:
+        raise ToolError(
+            "no model is configured to compile the condition with — set a default "
+            "model or add a model account first"
+        ) from exc
+    except SourceTextUninterpretableError as exc:
+        raise ToolError(
+            f"could not interpret the condition {source_text!r} as a routing rule — "
+            "try rephrasing (e.g. '복잡한 작업', '마케팅 관련', '한국어 요청')"
+        ) from exc
+    conditions = await _conditions_from_compiled(
+        ctx.session,
+        workspace_id=ctx.principal.workspace_id,
+        account_id=account_id,
+        compiled=compiled,
+    )
+    return compiled.caller_id, conditions
+
+
 async def _h_create(args: RunRoutingRulesCreateInput, ctx: ToolContext) -> Any:
     repo = SqlAlchemyRunRoutingRuleRepository(ctx.session)
+    caller_id = args.caller_id
+    conditions = [c.model_dump() for c in args.conditions]
+    if args.source_text is not None:
+        caller_id, conditions = await _compile_source_text_or_error(ctx, args.source_text)
     row = RunRoutingRuleRow(
         id=uuid.uuid4(),
         workspace_id=ctx.principal.workspace_id,
         name=args.name,
-        caller_id=args.caller_id,
+        caller_id=caller_id,
+        source_text=args.source_text,
         priority=args.priority,
         is_default=args.is_default,
         target=args.target,
-        conditions=[c.model_dump() for c in args.conditions],
+        conditions=conditions,
         is_active=args.is_active,
     )
     try:
@@ -205,6 +264,8 @@ class RunRoutingRulesUpdateInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     rule_id: uuid.UUID
+    # Lift N5 — editing source_text recompiles + rewrites caller_id/conditions.
+    source_text: str | None = Field(default=None, min_length=1, max_length=500)
     caller_id: str | None = Field(default=None, max_length=120)
     target: str | None = Field(default=None, min_length=1, max_length=255)
     is_active: bool | None = None
@@ -216,12 +277,23 @@ class RunRoutingRulesUpdateInput(BaseModel):
             return v
         return _validate_caller_id(v)
 
+    @model_validator(mode="after")
+    def _source_text_not_mixed_with_caller(self) -> RunRoutingRulesUpdateInput:
+        if self.source_text is not None and self.caller_id is not None:
+            raise ValueError("source_text and caller_id are mutually exclusive on update")
+        return self
+
 
 async def _h_update(args: RunRoutingRulesUpdateInput, ctx: ToolContext) -> Any:
     repo = SqlAlchemyRunRoutingRuleRepository(ctx.session)
     row = await repo.get(workspace_id=ctx.principal.workspace_id, rule_id=args.rule_id)
     if row is None:
         raise ToolError(f"run-routing rule not found: {args.rule_id}")
+    if args.source_text is not None:
+        caller_id, conditions = await _compile_source_text_or_error(ctx, args.source_text)
+        row.source_text = args.source_text
+        row.caller_id = caller_id
+        row.conditions = conditions
     if args.caller_id is not None:
         row.caller_id = args.caller_id
     if args.target is not None:
@@ -314,15 +386,18 @@ def register_run_routing_rules_tools(registry: ToolRegistry) -> None:
         Tool(
             name="bsvibe_run_routing_rules_create",
             description=(
-                "Create a run-routing rule. Mirrors POST /api/v1/run-routing: "
-                "name + caller_id + priority + target ModelAccount selector + "
-                "optional conditions + optional is_default flag. Non-default "
-                "rules must declare a caller_id (validated against the caller "
-                "registry — static known callers + skill.<name> namespace). "
-                "Conditions are validated against the new engine's "
-                "ALLOWED_FIELDS (caller_id / artifact_type_hint / "
-                "path_classification / skill_match / intent_text / stage / "
-                "pipeline / product_id)."
+                "Create a run-routing rule. Mirrors POST /api/v1/run-routing. "
+                "TWO ways to author: (1) NL-first — pass a free-text `source_text` "
+                "CONDITION ('복잡한 작업', '마케팅 관련', '한국어 요청') + a `target` "
+                "model; it compiles into the structured caller_id/conditions (a "
+                "category also creates an intent def), and an uninterpretable "
+                "phrase errors rather than persisting a dead rule. (2) Structured — "
+                "name + caller_id + priority + target + optional conditions + "
+                "optional is_default. source_text is mutually exclusive with "
+                "caller_id/conditions/is_default. Non-default structured rules must "
+                "declare a caller_id (validated against the caller registry — static "
+                "known callers + skill.<name>). Conditions are validated against the "
+                "engine ALLOWED_FIELDS."
             ),
             input_schema=RunRoutingRulesCreateInput,
             output_schema=_Envelope,
@@ -346,9 +421,11 @@ def register_run_routing_rules_tools(registry: ToolRegistry) -> None:
         Tool(
             name="bsvibe_run_routing_rules_update",
             description=(
-                "Edit an existing run-routing rule (Lift 6). Mirrors PATCH "
-                "/api/v1/run-routing/{id}: change caller_id / target / is_active. "
-                "caller_id is validated against the registry."
+                "Edit an existing run-routing rule. Mirrors PATCH "
+                "/api/v1/run-routing/{id}: change source_text (recompiles + rewrites "
+                "caller_id/conditions), caller_id, target, or is_active. source_text "
+                "and caller_id are mutually exclusive; caller_id is validated against "
+                "the registry."
             ),
             input_schema=RunRoutingRulesUpdateInput,
             output_schema=_Envelope,

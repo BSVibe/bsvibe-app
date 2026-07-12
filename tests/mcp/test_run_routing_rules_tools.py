@@ -675,3 +675,172 @@ async def test_compile_apply_requires_write_scope(
                 {"proposals": [{"name": "x", "target": "opus", "is_default": True}]},
                 ctx,
             )
+
+
+# ---------------------------------------------------------------------------
+# NL condition (source_text) create/update — Lift N5 MCP parity
+# ---------------------------------------------------------------------------
+def _rw_ctx(session, *, workspace_id: uuid.UUID, user_id: uuid.UUID) -> ToolContext:
+    return ToolContext(
+        principal=_principal(
+            workspace_id=workspace_id, user_id=user_id, scopes=("mcp:read", "mcp:write")
+        ),
+        session=session,
+    )
+
+
+async def test_create_from_source_text_complexity(
+    db, workspace_id, user_id, registry, seeded, monkeypatch
+) -> None:
+    """A complexity condition compiles to an estimated_tokens rule; source_text
+    is stored and returned. The compiler helper is stubbed (no LLM/model)."""
+    import backend.mcp.tools.run_routing_rules_tools as tools
+    from backend.router.routing.run_routing.nl_compile import CompiledCondition
+
+    async def _fake(session, ws, text, *, llm=None):
+        return CompiledCondition(
+            condition={"field": "estimated_tokens", "operator": "gt", "value": 2000}
+        )
+
+    monkeypatch.setattr(tools, "compile_source_text_for_workspace", _fake)
+
+    async with db() as s:
+        s.add(_model_account(workspace_id, "opus"))
+        await s.commit()
+
+    async with db() as s:
+        ctx = _rw_ctx(s, workspace_id=workspace_id, user_id=user_id)
+        created = await registry.call_tool(
+            "bsvibe_run_routing_rules_create",
+            {"name": "big → opus", "source_text": "복잡한 작업", "target": "opus"},
+            ctx,
+        )
+    assert created["source_text"] == "복잡한 작업"
+    assert created["caller_id"] is None
+    assert created["conditions"] == [
+        {"field": "estimated_tokens", "operator": "gt", "value": 2000, "negate": False}
+    ]
+
+
+async def test_create_from_source_text_category_creates_intent(
+    db, workspace_id, user_id, registry, seeded, monkeypatch
+) -> None:
+    import backend.mcp.tools.run_routing_rules_tools as tools
+    from backend.router.routing.run_routing.nl_compile import CompiledCondition
+
+    async def _fake(session, ws, text, *, llm=None):
+        return CompiledCondition(
+            condition={"field": "classified_intent", "operator": "eq", "value": "marketing"},
+            intent_name="marketing",
+            intent_examples=["write a marketing email", "plan a campaign", "draft copy"],
+        )
+
+    async def _fake_builder(session, *, workspace_id, account_id):
+        return _StubEmbedder()
+
+    monkeypatch.setattr(tools, "compile_source_text_for_workspace", _fake)
+    monkeypatch.setattr("backend.embedding.authoring.build_account_embedder", _fake_builder)
+
+    async with db() as s:
+        s.add(_model_account(workspace_id, "sonnet"))
+        await s.commit()
+
+    async with db() as s:
+        ctx = _rw_ctx(s, workspace_id=workspace_id, user_id=user_id)
+        created = await registry.call_tool(
+            "bsvibe_run_routing_rules_create",
+            {"name": "marketing → sonnet", "source_text": "마케팅 관련", "target": "sonnet"},
+            ctx,
+        )
+    assert created["source_text"] == "마케팅 관련"
+    assert created["conditions"][0]["value"] == "marketing"
+
+    async with db() as s:
+        from sqlalchemy import select
+
+        from backend.embedding.db import IntentDefinitionRow
+
+        intents = (
+            (
+                await s.execute(
+                    select(IntentDefinitionRow).where(
+                        IntentDefinitionRow.workspace_id == workspace_id
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        assert [i.name for i in intents] == ["marketing"]
+
+
+async def test_create_source_text_uninterpretable_raises(
+    db, workspace_id, user_id, registry, seeded, monkeypatch
+) -> None:
+    import backend.mcp.tools.run_routing_rules_tools as tools
+    from backend.api.v1.run_routing import SourceTextUninterpretableError
+
+    async def _fake(session, ws, text, *, llm=None):
+        raise SourceTextUninterpretableError(text)
+
+    monkeypatch.setattr(tools, "compile_source_text_for_workspace", _fake)
+
+    async with db() as s:
+        s.add(_model_account(workspace_id, "opus"))
+        await s.commit()
+
+    async with db() as s:
+        ctx = _rw_ctx(s, workspace_id=workspace_id, user_id=user_id)
+        with pytest.raises(ToolError, match="could not interpret"):
+            await registry.call_tool(
+                "bsvibe_run_routing_rules_create",
+                {"name": "huh", "source_text": "asdf", "target": "opus"},
+                ctx,
+            )
+
+
+async def test_update_source_text_recompiles(
+    db, workspace_id, user_id, registry, seeded, monkeypatch
+) -> None:
+    import backend.mcp.tools.run_routing_rules_tools as tools
+    from backend.router.routing.run_routing.nl_compile import CompiledCondition
+
+    async def _fake_complexity(session, ws, text, *, llm=None):
+        return CompiledCondition(
+            condition={"field": "estimated_tokens", "operator": "gt", "value": 2000}
+        )
+
+    monkeypatch.setattr(tools, "compile_source_text_for_workspace", _fake_complexity)
+
+    async with db() as s:
+        s.add_all([_model_account(workspace_id, "opus"), _model_account(workspace_id, "sonnet")])
+        await s.commit()
+
+    async with db() as s:
+        ctx = _rw_ctx(s, workspace_id=workspace_id, user_id=user_id)
+        created = await registry.call_tool(
+            "bsvibe_run_routing_rules_create",
+            {"name": "r", "source_text": "복잡한 작업", "target": "opus"},
+            ctx,
+        )
+    rule_id = created["id"]
+
+    async def _fake_language(session, ws, text, *, llm=None):
+        return CompiledCondition(
+            condition={"field": "detected_language", "operator": "eq", "value": "ko"}
+        )
+
+    monkeypatch.setattr(tools, "compile_source_text_for_workspace", _fake_language)
+
+    async with db() as s:
+        ctx = _rw_ctx(s, workspace_id=workspace_id, user_id=user_id)
+        updated = await registry.call_tool(
+            "bsvibe_run_routing_rules_update",
+            {"rule_id": rule_id, "source_text": "한국어 요청", "target": "sonnet"},
+            ctx,
+        )
+    assert updated["source_text"] == "한국어 요청"
+    assert updated["target"] == "sonnet"
+    assert updated["conditions"] == [
+        {"field": "detected_language", "operator": "eq", "value": "ko", "negate": False}
+    ]

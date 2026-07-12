@@ -43,9 +43,12 @@ from backend.router.domain.repositories import RunRoutingRuleRepository
 from backend.router.routing.run_routing.db import RunRoutingRuleRow
 from backend.router.routing.run_routing.engine import ALLOWED_FIELDS, VALID_OPERATORS
 from backend.router.routing.run_routing.nl_compile import (
+    CompiledCondition,
     RoutingCompileLlm,
+    UninterpretableCondition,
     as_dicts,
     compile_rules,
+    compile_source_text,
 )
 
 logger = structlog.get_logger(__name__)
@@ -97,8 +100,14 @@ class RunRuleCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     name: str = Field(min_length=1, max_length=255)
-    # Lift E2 — required for any non-default rule; ``None`` only for the
-    # catch-all default. Validated against the caller registry.
+    # Lift N5 — the founder's free-text NL CONDITION phrase. When set, the rule
+    # is compiled FROM it (caller_id / conditions are derived, a category also
+    # creates an intent def) and it is mutually exclusive with the structured
+    # caller_id / conditions fields. ``None`` → the structured (back-compat) path.
+    source_text: str | None = Field(default=None, min_length=1, max_length=500)
+    # Lift E2 — required for any non-default STRUCTURED rule; ``None`` for the
+    # catch-all default OR when source_text drives the rule. Validated against
+    # the caller registry.
     caller_id: str | None = Field(default=None, max_length=120)
     priority: int = Field(default=0, ge=0)
     is_default: bool = False
@@ -114,7 +123,19 @@ class RunRuleCreate(BaseModel):
         return _validate_caller_id(v)
 
     @model_validator(mode="after")
-    def _non_default_requires_caller(self) -> RunRuleCreate:
+    def _shape_valid(self) -> RunRuleCreate:
+        # NL path: source_text owns the caller_id/conditions — reject a mix so a
+        # caller can't silently ship a half-structured rule.
+        if self.source_text is not None:
+            if self.caller_id or self.conditions or self.is_default:
+                raise ValueError(
+                    "source_text is mutually exclusive with caller_id / conditions / is_default; "
+                    "provide a natural-language condition OR the structured fields, not both"
+                )
+            return self
+        return self._require_structured_caller()
+
+    def _require_structured_caller(self) -> RunRuleCreate:
         # Non-default rules must declare a caller_id (otherwise they'd
         # match nothing through the resolver's column-first matcher).
         # Back-compat: the row may still carry an in-conditions
@@ -144,6 +165,7 @@ class RunRuleResponse(BaseModel):
     workspace_id: uuid.UUID
     name: str
     caller_id: str | None = None
+    source_text: str | None = None
     priority: int
     is_default: bool
     target: str
@@ -158,6 +180,7 @@ def _to_response(row: RunRoutingRuleRow) -> RunRuleResponse:
         workspace_id=row.workspace_id,
         name=row.name,
         caller_id=row.caller_id,
+        source_text=row.source_text,
         priority=row.priority,
         is_default=row.is_default,
         target=row.target,
@@ -197,22 +220,130 @@ async def list_run_rules(
     return [_to_response(r) for r in rows]
 
 
+# ---------------------------------------------------------------------------
+# NL condition → single-rule structure (Lift N5).
+#
+# A rule can be authored from ONE free-text condition phrase + a target. The
+# phrase compiles — per single rule — into the structured caller_id / conditions;
+# a category also creates an intent def (under the personal account) so the N1
+# classifier has something to match. An uninterpretable phrase raises so the
+# endpoint 422s rather than persisting a dead rule.
+# ---------------------------------------------------------------------------
+
+
+class SourceTextUninterpretableError(Exception):
+    """The NL condition phrase compiled to nothing valid — the endpoint 422s and
+    persists no rule."""
+
+
+async def compile_source_text_for_workspace(
+    session: AsyncSession,
+    workspace_id: uuid.UUID,
+    text: str,
+    *,
+    llm: RoutingCompileLlm | None = None,
+) -> CompiledCondition:
+    """Compile ONE NL condition ``text`` into a validated single dimension.
+
+    Gathers the caller catalog + resolves the compiler's own model (unless
+    ``llm`` is injected for tests). Raises :class:`NoCompileModelError` when no
+    model is configured to compile on, and
+    :class:`SourceTextUninterpretableError` when the phrase compiles to nothing
+    valid. Shared by the REST + MCP create/update paths."""
+    callers = [(spec.caller_id, spec.description) for spec in list_all_callers()]
+    if llm is None:
+        llm = await _resolve_compile_llm(session, workspace_id)
+        if llm is None:
+            raise NoCompileModelError
+    result = await compile_source_text(text, callers=callers, llm=llm)
+    if isinstance(result, UninterpretableCondition):
+        raise SourceTextUninterpretableError(text)
+    return result
+
+
+async def _conditions_from_compiled(
+    session: AsyncSession,
+    *,
+    workspace_id: uuid.UUID,
+    account_id: uuid.UUID,
+    compiled: CompiledCondition,
+) -> list[dict[str, Any]]:
+    """Materialise the rule's ``conditions`` from a compiled dimension.
+
+    For a **category** this creates the intent definition (name + seed examples,
+    embedded via the account's :class:`EmbeddingService`) first, then keys the
+    rule on ``classified_intent == intent_name``. Flushes but does not commit —
+    the caller owns the transaction so intent + rule land atomically."""
+    if compiled.intent_name is not None:
+        from backend.embedding.authoring import (  # noqa: PLC0415
+            build_account_embedder,
+            create_intent_with_examples,
+        )
+
+        embedder = await build_account_embedder(
+            session, workspace_id=workspace_id, account_id=account_id
+        )
+        await create_intent_with_examples(
+            session,
+            workspace_id=workspace_id,
+            account_id=account_id,
+            name=compiled.intent_name,
+            threshold=0.65,
+            examples=compiled.intent_examples or [],
+            embedder=embedder,
+        )
+    if compiled.condition is not None:
+        return [{**compiled.condition, "negate": False}]
+    return []
+
+
 @router.post("", status_code=status.HTTP_201_CREATED)
 async def create_run_rule(
     payload: RunRuleCreate,
     workspace_id: Annotated[uuid.UUID, Depends(get_workspace_id)],
+    account_id: Annotated[uuid.UUID, Depends(require_account_id)],
     rules: Annotated[RunRoutingRuleRepository, Depends(get_run_routing_rule_repository)],
     session: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> RunRuleResponse:
+    caller_id = payload.caller_id
+    conditions = [c.model_dump() for c in payload.conditions]
+
+    if payload.source_text is not None:
+        try:
+            compiled = await compile_source_text_for_workspace(
+                session, workspace_id, payload.source_text
+            )
+        except NoCompileModelError:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    "no model is configured to compile the condition with — set a "
+                    "default model or add a model account first"
+                ),
+            ) from None
+        except SourceTextUninterpretableError:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=(
+                    f"could not interpret the condition {payload.source_text!r} as a routing "
+                    "rule — try rephrasing (e.g. '복잡한 작업', '마케팅 관련', '한국어 요청')"
+                ),
+            ) from None
+        caller_id = compiled.caller_id
+        conditions = await _conditions_from_compiled(
+            session, workspace_id=workspace_id, account_id=account_id, compiled=compiled
+        )
+
     row = RunRoutingRuleRow(
         id=uuid.uuid4(),
         workspace_id=workspace_id,
         name=payload.name,
-        caller_id=payload.caller_id,
+        caller_id=caller_id,
+        source_text=payload.source_text,
         priority=payload.priority,
         is_default=payload.is_default,
         target=payload.target,
-        conditions=[c.model_dump() for c in payload.conditions],
+        conditions=conditions,
         is_active=payload.is_active,
     )
     try:
@@ -228,17 +359,20 @@ async def create_run_rule(
         "run_routing_rule_created",
         workspace_id=str(workspace_id),
         name=payload.name,
-        caller_id=payload.caller_id,
+        caller_id=caller_id,
+        from_source_text=payload.source_text is not None,
     )
     return _to_response(row)
 
 
 class RunRuleUpdate(BaseModel):
-    """Partial edit of a run-routing rule (Lift 6). Only the user-facing knobs:
-    which caller it routes, the target model, and active toggle."""
+    """Partial edit of a run-routing rule (Lift 6 + N5). The user-facing knobs:
+    the NL ``source_text`` condition (recompiled + rewrites caller_id/conditions
+    on save), which caller it routes, the target model, and the active toggle."""
 
     model_config = ConfigDict(extra="forbid")
 
+    source_text: str | None = Field(default=None, min_length=1, max_length=500)
     caller_id: str | None = Field(default=None, max_length=120)
     target: str | None = Field(default=None, min_length=1, max_length=255)
     is_active: bool | None = None
@@ -250,12 +384,22 @@ class RunRuleUpdate(BaseModel):
             return v
         return _validate_caller_id(v)
 
+    @model_validator(mode="after")
+    def _source_text_not_mixed_with_caller(self) -> RunRuleUpdate:
+        if self.source_text is not None and self.caller_id is not None:
+            raise ValueError(
+                "source_text and caller_id are mutually exclusive on update — "
+                "editing source_text recompiles the caller_id/conditions"
+            )
+        return self
+
 
 @router.patch("/{rule_id}")
 async def update_run_rule(
     rule_id: uuid.UUID,
     payload: RunRuleUpdate,
     workspace_id: Annotated[uuid.UUID, Depends(get_workspace_id)],
+    account_id: Annotated[uuid.UUID, Depends(require_account_id)],
     rules: Annotated[RunRoutingRuleRepository, Depends(get_run_routing_rule_repository)],
     session: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> RunRuleResponse:
@@ -263,6 +407,35 @@ async def update_run_rule(
     if row is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail=f"rule {rule_id} not found"
+        )
+    if payload.source_text is not None:
+        # Recompile the NL condition → rewrite caller_id/conditions (an
+        # uninterpretable phrase 422s and leaves the rule untouched).
+        try:
+            compiled = await compile_source_text_for_workspace(
+                session, workspace_id, payload.source_text
+            )
+        except NoCompileModelError:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    "no model is configured to compile the condition with — set a "
+                    "default model or add a model account first"
+                ),
+            ) from None
+        except SourceTextUninterpretableError:
+            await session.rollback()
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=(
+                    f"could not interpret the condition {payload.source_text!r} as a routing "
+                    "rule — try rephrasing (e.g. '복잡한 작업', '마케팅 관련', '한국어 요청')"
+                ),
+            ) from None
+        row.source_text = payload.source_text
+        row.caller_id = compiled.caller_id
+        row.conditions = await _conditions_from_compiled(
+            session, workspace_id=workspace_id, account_id=account_id, compiled=compiled
         )
     if payload.caller_id is not None:
         row.caller_id = payload.caller_id

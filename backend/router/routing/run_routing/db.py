@@ -42,6 +42,11 @@ class RunRoutingRuleRow(Base):
     is_default: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     # ModelAccount selector — matched against an active account's litellm_model.
     target: Mapped[str] = mapped_column(String(255), nullable=False)
+    # Lift N5 — the founder's ORIGINAL plain-language CONDITION phrase this rule
+    # was compiled from ("복잡한 작업", "마케팅 관련"). NULL for legacy /
+    # directly-structured rules. Display + edit metadata: the compiled
+    # caller_id/conditions (not this text) is what the resolver evaluates.
+    source_text: Mapped[str | None] = mapped_column(String(500), nullable=True)
     # list[{field, operator, value, negate}] — AND-ed at evaluation time.
     conditions: Mapped[list[dict[str, Any]]] = mapped_column(JSON, nullable=False, default=list)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
