@@ -10,6 +10,7 @@ from backend.mcp.tools.decisions_tools import register_decisions_tools
 from backend.mcp.tools.direct_tools import register_direct_tools
 from backend.mcp.tools.graph_tools import register_graph_tools
 from backend.mcp.tools.inside_trust_tools import register_inside_trust_tools
+from backend.mcp.tools.intents_tools import register_intents_tools
 from backend.mcp.tools.knowledge_retraction_tools import (
     register_knowledge_retraction_tools,
 )
@@ -34,7 +35,7 @@ def register_all_tools(registry: ToolRegistry) -> None:
     bindings (4 — D3b), decisions (4 — D3b),
     knowledge-retraction (3 — D3c), skills (4 — D3c), workspace (2 — D3c),
     inside-trust (2 — D3d), account (2 — D3d),
-    run-routing-rules (3 — E7).
+    run-routing-rules (3 — E7), intents (3 — NL-native routing N2).
     """
     register_knowledge_tools(registry)
     register_workflow_tools(registry)
@@ -46,6 +47,7 @@ def register_all_tools(registry: ToolRegistry) -> None:
     register_bindings_tools(registry)
     register_decisions_tools(registry)
     register_run_routing_rules_tools(registry)
+    register_intents_tools(registry)
     register_knowledge_retraction_tools(registry)
     register_skills_tools(registry)
     register_workspace_tools(registry)
@@ -65,6 +67,7 @@ __all__ = [
     "register_direct_tools",
     "register_graph_tools",
     "register_inside_trust_tools",
+    "register_intents_tools",
     "register_knowledge_retraction_tools",
     "register_knowledge_tools",
     "register_model_accounts_tools",

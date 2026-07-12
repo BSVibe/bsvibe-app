@@ -284,6 +284,11 @@ ignore_imports = [
     # scoped to the three new tool modules; the rest of backend.mcp is
     # still bound by the contract above.
     "backend.mcp.tools.model_accounts_tools -> backend.router.accounts.account_service",
+    # NL-native routing N2 — intent authoring tools resolve the workspace's
+    # personal account (the same axis as the REST require_account_id dep) to
+    # scope intent definitions. Same account_service touch-point as
+    # model_accounts_tools / account_tools above.
+    "backend.mcp.tools.intents_tools -> backend.router.accounts.account_service",
     "backend.mcp.tools.model_accounts_tools -> backend.router.accounts.crypto",
     "backend.mcp.tools.model_accounts_tools -> backend.router.accounts.schemas",
     "backend.mcp.tools.model_accounts_tools -> backend.router.accounts.service",
