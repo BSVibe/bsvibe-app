@@ -24,10 +24,13 @@ consumers.
 from __future__ import annotations
 
 import uuid
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+if TYPE_CHECKING:
+    from backend.router.routing.run_routing.intent_classifier import IntentClassifier
 
 from backend.config import Settings
 from backend.dispatch.adapter import ModelAccountAdapter
@@ -92,7 +95,7 @@ async def _resolve_via_caller(
     ``session.flush()`` ("Session is already flushing") — the E18 bug.
     """
 
-    async def _build_intent_classifier():
+    async def _build_intent_classifier() -> IntentClassifier | None:
         # Lift N1 — built lazily by the resolver ONLY when a rule keys on
         # classified_intent (semantic category routing). Scoped to the
         # workspace's personal account, where intents + embedding config live.
