@@ -11,6 +11,7 @@
 
 import { ApiError } from "@/lib/api/client";
 import {
+  applyRunRoutingProposals,
   compileRunRoutingRules,
   createRunRoutingRule,
   deleteRunRoutingRule,
@@ -18,6 +19,7 @@ import {
   listRunRoutingRules,
   updateRunRoutingRule,
 } from "@/lib/api/run-routing";
+import type { RunRoutingProposal } from "@/lib/api/types";
 import { type Session, clearSession, setSession } from "@/lib/auth/session";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -133,7 +135,18 @@ describe("run-routing client", () => {
 
   it("compileRunRoutingRules POSTs /api/v1/run-routing/compile with the text", async () => {
     const result = {
-      proposals: [{ name: "d", caller_id: null, target: "opus", priority: 10, is_default: true }],
+      proposals: [
+        {
+          name: "default",
+          target: "opus",
+          is_default: true,
+          priority: 10,
+          caller_id: null,
+          condition: null,
+          intent_name: null,
+          intent_examples: null,
+        },
+      ],
     };
     const fetchMock = okFetch(result);
     global.fetch = fetchMock as unknown as typeof fetch;
@@ -145,6 +158,42 @@ describe("run-routing client", () => {
     expect(url).toBe("/api/v1/run-routing/compile");
     expect(init.method).toBe("POST");
     expect(JSON.parse(init.body as string)).toEqual({ text: "설계는 opus" });
+  });
+
+  it("applyRunRoutingProposals POSTs /api/v1/run-routing/compile/apply with the proposals", async () => {
+    const proposals: RunRoutingProposal[] = [
+      {
+        name: "marketing → sonnet",
+        target: "sonnet",
+        is_default: false,
+        priority: 10,
+        caller_id: null,
+        condition: { field: "classified_intent", operator: "eq", value: "marketing" },
+        intent_name: "marketing",
+        intent_examples: ["write a launch blog post", "draft ad copy"],
+      },
+      {
+        name: "the rest → opus",
+        target: "opus",
+        is_default: true,
+        priority: 10,
+        caller_id: null,
+        condition: null,
+        intent_name: null,
+        intent_examples: null,
+      },
+    ];
+    const fetchMock = okFetch({ created: [RULE], default_set: true }, 201);
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    const res = await applyRunRoutingProposals(proposals);
+
+    expect(res.default_set).toBe(true);
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe("/api/v1/run-routing/compile/apply");
+    expect(init.method).toBe("POST");
+    // The compile proposals are forwarded as-is (1:1 with the backend ApplyProposal).
+    expect(JSON.parse(init.body as string)).toEqual({ proposals });
   });
 
   it("updateRunRoutingRule PATCHes /api/v1/run-routing/{id} with the patch", async () => {

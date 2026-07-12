@@ -214,52 +214,158 @@ describe("Run-routing surface (Lift 6)", () => {
     await waitFor(() => expect(deleted).toBe(true));
   });
 
-  it("NL: a default proposal sets the workspace default, a caller proposal creates a rule", async () => {
-    let putDefault = false;
-    let created = false;
+  it("NL is the primary surface — the textarea shows without any toggle", async () => {
+    global.fetch = routedFetch([]) as unknown as typeof fetch;
+    render(<RunRoutingRules />);
+    // No "Describe in words" toggle to click — the NL textarea is right there.
+    expect(await screen.findByPlaceholderText(/Design work goes to opus/i)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Describe in words/i })).not.toBeInTheDocument();
+  });
+
+  it("NL: rich preview renders each dimension in human terms, Apply → one POST /compile/apply", async () => {
+    let applyBody: unknown = null;
+    let applyCalls = 0;
+    let perRuleCreate = 0;
+    let defaultPatch = 0;
     const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
       const u = String(url);
       const method = (init?.method ?? "GET").toUpperCase();
       if (u.endsWith("/api/v1/run-routing/callers")) return jsonResponse(CALLERS);
       if (u.includes("/api/v1/accounts")) return jsonResponse(ACCOUNTS);
-      if (u.endsWith("/api/v1/run-routing/compile"))
+      if (u.endsWith("/api/v1/run-routing/compile") && method === "POST")
         return jsonResponse({
           proposals: [
-            { name: "d", caller_id: null, target: "sonnet", priority: 100, is_default: true },
             {
-              name: "p",
-              caller_id: "workflow.agent_loop.plan",
-              target: "opus",
-              priority: 10,
+              name: "marketing",
+              target: "sonnet",
               is_default: false,
+              priority: 10,
+              caller_id: null,
+              condition: { field: "classified_intent", operator: "eq", value: "marketing" },
+              intent_name: "marketing",
+              intent_examples: ["draft ad copy", "write a launch post"],
+            },
+            {
+              name: "complex",
+              target: "opus",
+              is_default: false,
+              priority: 10,
+              caller_id: null,
+              condition: { field: "estimated_tokens", operator: "gt", value: 8000 },
+              intent_name: null,
+              intent_examples: null,
+            },
+            {
+              name: "korean",
+              target: "sonnet",
+              is_default: false,
+              priority: 10,
+              caller_id: null,
+              condition: { field: "detected_language", operator: "eq", value: "ko" },
+              intent_name: null,
+              intent_examples: null,
+            },
+            {
+              name: "design stage",
+              target: "opus",
+              is_default: false,
+              priority: 10,
+              caller_id: "workflow.agent_loop.plan",
+              condition: null,
+              intent_name: null,
+              intent_examples: null,
+            },
+            {
+              name: "the rest",
+              target: "sonnet",
+              is_default: true,
+              priority: 100,
+              caller_id: null,
+              condition: null,
+              intent_name: null,
+              intent_examples: null,
             },
           ],
         });
-      if (u.includes("/api/v1/workspace") && method === "PATCH") {
-        putDefault = true;
-        return jsonResponse({});
+      if (u.endsWith("/api/v1/run-routing/compile/apply") && method === "POST") {
+        applyCalls += 1;
+        applyBody = JSON.parse(init?.body as string);
+        return jsonResponse({ created: [RULE], default_set: true }, 201);
       }
-      if (u.endsWith("/api/v1/run-routing") && method === "POST") {
-        created = true;
-        return jsonResponse(RULE, 201);
-      }
+      // These MUST NOT be hit — apply is one backend call now.
+      if (u.endsWith("/api/v1/run-routing") && method === "POST") perRuleCreate += 1;
+      if (u.includes("/api/v1/workspace") && method === "PATCH") defaultPatch += 1;
       return jsonResponse([]);
     });
     global.fetch = fetchMock as unknown as typeof fetch;
 
     render(<RunRoutingRules />);
-    await waitFor(() =>
-      expect(screen.getByText(/All work goes to the active model account/i)).toBeInTheDocument(),
+    await userEvent.type(
+      await screen.findByPlaceholderText(/Design work goes to opus/i),
+      "마케팅은 sonnet, 복잡한 건 opus",
     );
-    await userEvent.click(screen.getByRole("button", { name: /Describe in words/i }));
-    await userEvent.type(screen.getByPlaceholderText(/Design work goes to opus/i), "설계는 opus");
     await userEvent.click(screen.getByRole("button", { name: /^Draft rules$/i }));
 
-    await waitFor(() => expect(screen.getByText("Design & planning")).toBeInTheDocument());
+    // Category: "<intent> (category) → <model>".
+    await waitFor(() => expect(screen.getByText(/marketing \(category\)/i)).toBeInTheDocument());
+    // Complexity: the field + operator + value are shown in human terms.
+    expect(screen.getByText(/estimated_tokens > 8000/i)).toBeInTheDocument();
+    // Language dimension.
+    expect(screen.getByText(/detected_language = ko/i)).toBeInTheDocument();
+    // Stage via callerDisplay (localized).
+    expect(screen.getByText("Design & planning")).toBeInTheDocument();
+    // Default proposal reads as "Default model → <model>".
+    const proposed = screen.getByRole("list", { name: /Proposed rules/i });
+    expect(within(proposed).getByText(/Default model/i)).toBeInTheDocument();
+
     await userEvent.click(screen.getByRole("button", { name: /^Apply all$/i }));
 
-    await waitFor(() => expect(putDefault).toBe(true));
-    expect(created).toBe(true);
+    await waitFor(() => expect(applyCalls).toBe(1));
+    // Exactly one backend apply call — no per-proposal client loop.
+    expect(perRuleCreate).toBe(0);
+    expect(defaultPatch).toBe(0);
+    const body = applyBody as { proposals: unknown[] };
+    expect(body.proposals).toHaveLength(5);
+  });
+
+  it("NL: a calm error shows when apply fails", async () => {
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      const u = String(url);
+      const method = (init?.method ?? "GET").toUpperCase();
+      if (u.endsWith("/api/v1/run-routing/callers")) return jsonResponse(CALLERS);
+      if (u.includes("/api/v1/accounts")) return jsonResponse(ACCOUNTS);
+      if (u.endsWith("/api/v1/run-routing/compile") && method === "POST")
+        return jsonResponse({
+          proposals: [
+            {
+              name: "the rest",
+              target: "sonnet",
+              is_default: true,
+              priority: 100,
+              caller_id: null,
+              condition: null,
+              intent_name: null,
+              intent_examples: null,
+            },
+          ],
+        });
+      if (u.endsWith("/api/v1/run-routing/compile/apply") && method === "POST")
+        return new Response("boom", { status: 500 });
+      return jsonResponse([]);
+    });
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    render(<RunRoutingRules />);
+    await userEvent.type(
+      await screen.findByPlaceholderText(/Design work goes to opus/i),
+      "나머지는 sonnet",
+    );
+    await userEvent.click(screen.getByRole("button", { name: /^Draft rules$/i }));
+    await userEvent.click(await screen.findByRole("button", { name: /^Apply all$/i }));
+
+    await waitFor(() =>
+      expect(screen.getByText(/Couldn.t apply those rules/i)).toBeInTheDocument(),
+    );
   });
 
   it("surfaces a calm note when the list read fails", async () => {

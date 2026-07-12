@@ -18,8 +18,10 @@
 
 import { apiFetch } from "./client";
 import type {
+  RunRoutingApplyResult,
   RunRoutingCaller,
   RunRoutingCompileResult,
+  RunRoutingProposal,
   RunRoutingRule,
   RunRoutingRuleCreate,
   RunRoutingRuleUpdate,
@@ -55,12 +57,28 @@ export function createRunRoutingRule(input: RunRoutingRuleCreate): Promise<RunRo
   });
 }
 
-/** Compile a plain-language routing description into rule PROPOSALS (dry-run —
- *  nothing is persisted; the caller previews then applies via createRunRoutingRule). */
+/** Compile a plain-language routing description into rich rule PROPOSALS (dry-run
+ *  — nothing is persisted; the caller previews then applies the accepted set in
+ *  ONE call via {@link applyRunRoutingProposals}). Each proposal expresses a single
+ *  routing dimension (category / complexity / language / artifact / stage / default). */
 export function compileRunRoutingRules(text: string): Promise<RunRoutingCompileResult> {
   return apiFetch<RunRoutingCompileResult>("/api/v1/run-routing/compile", {
     method: "POST",
     body: JSON.stringify({ text }),
+  });
+}
+
+/** Apply the founder-accepted proposals ATOMICALLY (backend
+ *  `POST /api/v1/run-routing/compile/apply`): the backend creates the intent
+ *  definitions + rules and sets the workspace default in one transaction — never a
+ *  partial write. The proposal dicts are the exact `as_dicts` wire shape the
+ *  compile endpoint returned, so they're forwarded as-is. */
+export function applyRunRoutingProposals(
+  proposals: RunRoutingProposal[],
+): Promise<RunRoutingApplyResult> {
+  return apiFetch<RunRoutingApplyResult>("/api/v1/run-routing/compile/apply", {
+    method: "POST",
+    body: JSON.stringify({ proposals }),
   });
 }
 
