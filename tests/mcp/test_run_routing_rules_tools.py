@@ -16,6 +16,7 @@ import pytest
 import pytest_asyncio
 
 # Imported for table registration on the shared Base.metadata.
+import backend.embedding.db  # noqa: F401
 import backend.identity.db  # noqa: F401
 import backend.identity.workspaces_db  # noqa: F401
 import backend.router.accounts.account_models  # noqa: F401
@@ -556,4 +557,121 @@ async def test_delete_returns_error_when_not_found(
         with pytest.raises(ToolError, match="not found"):
             await registry.call_tool(
                 "bsvibe_run_routing_rules_delete", {"rule_id": str(uuid.uuid4())}, ctx
+            )
+
+
+class _StubEmbedder:
+    """Deterministic embedder — never touches a real embedding API."""
+
+    model = "stub-embed"
+
+    async def embed_one(self, text: str):
+        from backend.embedding.service import EmbeddedExample
+
+        return EmbeddedExample(text=text, embedding=[0.1, 0.2, 0.3], model=self.model)
+
+
+def _model_account(ws: uuid.UUID, litellm_model: str):
+    from backend.router.accounts.models import ModelAccount
+
+    return ModelAccount(
+        id=uuid.uuid4(),
+        workspace_id=ws,
+        account_id=uuid.uuid4(),
+        provider="executor",
+        label=f"dogfood ({litellm_model})",
+        litellm_model=litellm_model,
+        api_base=None,
+        api_key_encrypted=None,
+        data_jurisdiction="unknown",
+        is_active=True,
+        extra_params={"executor_type": "claude_code", "worker_id": str(uuid.uuid4())},
+    )
+
+
+async def test_compile_apply_creates_intent_rule_and_default(
+    db, workspace_id, user_id, registry, seeded, monkeypatch
+) -> None:
+    """The apply tool persists a category (intent + rule) and sets the default,
+    atomically — with the embedder stubbed (no real embedding API)."""
+
+    async def _fake_builder(session, *, workspace_id, account_id):
+        return _StubEmbedder()
+
+    monkeypatch.setattr("backend.embedding.authoring.build_account_embedder", _fake_builder)
+
+    async with db() as s:
+        s.add_all([_model_account(workspace_id, "sonnet"), _model_account(workspace_id, "opus")])
+        await s.commit()
+
+    async with db() as s:
+        ctx = ToolContext(
+            principal=_principal(
+                workspace_id=workspace_id,
+                user_id=user_id,
+                scopes=("mcp:read", "mcp:write"),
+            ),
+            session=s,
+        )
+        out = await registry.call_tool(
+            "bsvibe_run_routing_rules_compile_apply",
+            {
+                "proposals": [
+                    {
+                        "name": "marketing → sonnet",
+                        "target": "sonnet",
+                        "intent_name": "marketing",
+                        "intent_examples": [
+                            "write a marketing email",
+                            "plan a campaign",
+                            "draft copy",
+                        ],
+                    },
+                    {"name": "rest → opus", "target": "opus", "is_default": True},
+                ]
+            },
+            ctx,
+        )
+    assert out["default_set"] is True
+    assert len(out["created"]) == 1
+    assert out["created"][0]["conditions"] == [
+        {"field": "classified_intent", "operator": "eq", "value": "marketing", "negate": False}
+    ]
+
+    # The intent def + the workspace default both persisted.
+    async with db() as s:
+        from sqlalchemy import select
+
+        from backend.embedding.db import IntentDefinitionRow
+        from backend.identity.workspaces_db import WorkspaceRow
+
+        intents = (
+            (
+                await s.execute(
+                    select(IntentDefinitionRow).where(
+                        IntentDefinitionRow.workspace_id == workspace_id
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        assert [i.name for i in intents] == ["marketing"]
+        ws = await s.get(WorkspaceRow, workspace_id)
+        assert ws is not None and ws.default_account_id is not None
+
+
+async def test_compile_apply_requires_write_scope(
+    db, workspace_id, user_id, registry, seeded
+) -> None:
+    async with db() as s:
+        ctx = ToolContext(
+            principal=_principal(workspace_id=workspace_id, user_id=user_id, scopes=("mcp:read",)),
+            session=s,
+        )
+        with pytest.raises(Exception):  # noqa: B017,PT011 — scope guard raises before handler
+            await registry.call_tool(
+                "bsvibe_run_routing_rules_compile_apply",
+                {"proposals": [{"name": "x", "target": "opus", "is_default": True}]},
+                ctx,
             )

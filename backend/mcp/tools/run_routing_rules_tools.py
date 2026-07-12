@@ -35,8 +35,11 @@ from pydantic import BaseModel, ConfigDict, Field, RootModel, field_validator, m
 from sqlalchemy.exc import IntegrityError
 
 from backend.api.v1.run_routing import (
+    ApplyError,
+    ApplyProposal,
     NoCompileModelError,
     _validate_caller_id,
+    apply_proposals,
     compile_for_workspace,
 )
 from backend.mcp.api import Tool, ToolContext, ToolError, ToolRegistry
@@ -250,6 +253,44 @@ async def _h_compile(args: RunRoutingRulesCompileInput, ctx: ToolContext) -> Any
 
 
 # ---------------------------------------------------------------------------
+# bsvibe_run_routing_rules_compile_apply (Lift N3 — persist accepted proposals)
+# ---------------------------------------------------------------------------
+class RunRoutingRulesCompileApplyInput(BaseModel):
+    """Mirror of :class:`backend.api.v1.run_routing.ApplyRequest`.
+
+    Each proposal is one accepted item from ``bsvibe_run_routing_rules_compile``
+    — exactly one dimension (caller / condition / category / default)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    proposals: list[ApplyProposal] = Field(min_length=1)
+
+
+async def _h_compile_apply(args: RunRoutingRulesCompileApplyInput, ctx: ToolContext) -> Any:
+    from backend.router.accounts.account_service import ensure_personal_account  # noqa: PLC0415
+
+    account = await ensure_personal_account(ctx.session, workspace_id=ctx.principal.workspace_id)
+    try:
+        created = await apply_proposals(
+            ctx.session,
+            workspace_id=ctx.principal.workspace_id,
+            account_id=account.id,
+            proposals=args.proposals,
+        )
+    except ApplyError as exc:
+        raise ToolError(str(exc)) from exc
+    except IntegrityError as exc:
+        await ctx.session.rollback()
+        raise ToolError("a rule or intent with one of these names already exists") from exc
+    return _Envelope(
+        {
+            "created": [_row_to_dict(r) for r in created],
+            "default_set": any(p.is_default for p in args.proposals),
+        }
+    )
+
+
+# ---------------------------------------------------------------------------
 # Registration
 # ---------------------------------------------------------------------------
 def register_run_routing_rules_tools(registry: ToolRegistry) -> None:
@@ -320,18 +361,40 @@ def register_run_routing_rules_tools(registry: ToolRegistry) -> None:
         Tool(
             name="bsvibe_run_routing_rules_compile",
             description=(
-                "Compile a plain-language routing description (e.g. '설계는 opus, "
-                "나머지는 sonnet') into structured run-routing rule PROPOSALS. "
-                "Dry-run — nothing is persisted; each proposal is the "
-                "bsvibe_run_routing_rules_create body (name / caller_id / target / "
-                "priority / is_default), validated against the caller registry + "
-                "the workspace's active model accounts. Apply the ones you want "
-                "with bsvibe_run_routing_rules_create."
+                "Compile a plain-language routing description (e.g. '마케팅은 sonnet, "
+                "복잡한 건 opus, 나머지는 haiku') into structured run-routing rule "
+                "PROPOSALS. Dry-run — nothing is persisted. Detects which DIMENSION "
+                "each clause is about (not just categories): a domain/category "
+                "(classified_intent + intent_name + intent_examples), complexity "
+                "(estimated_tokens / pipeline), language (detected_language), "
+                "artifact (artifact_type_hint), execution stage (caller_id), or the "
+                "catch-all default. Each proposal is validated against the caller "
+                "registry + engine field/operator whitelist + the workspace's active "
+                "model accounts. Apply the ones you want with "
+                "bsvibe_run_routing_rules_compile_apply."
             ),
             input_schema=RunRoutingRulesCompileInput,
             output_schema=_Envelope,
             handler=_h_compile,
             required_scopes=("mcp:read",),
+        )
+    )
+    registry.register(
+        Tool(
+            name="bsvibe_run_routing_rules_compile_apply",
+            description=(
+                "Persist the accepted proposals from bsvibe_run_routing_rules_compile "
+                "atomically. For a category proposal it creates the intent definition "
+                "(name + seed examples) then the classified_intent rule; for a "
+                "caller/condition proposal a plain rule; for the default proposal it "
+                "sets the workspace default model account. All-or-nothing — any "
+                "failure rolls back the whole batch."
+            ),
+            input_schema=RunRoutingRulesCompileApplyInput,
+            output_schema=_Envelope,
+            handler=_h_compile_apply,
+            required_scopes=("mcp:write",),
+            audit_event="bsvibe.mcp.run_routing_rules_compile_apply.invoked",
         )
     )
 
