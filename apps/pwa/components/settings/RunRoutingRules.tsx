@@ -2,6 +2,7 @@
 
 import { listAccounts } from "@/lib/api/accounts";
 import {
+  applyRunRoutingProposals,
   compileRunRoutingRules,
   createRunRoutingRule,
   deleteRunRoutingRule,
@@ -12,10 +13,10 @@ import {
 import type {
   ModelAccount,
   RunRoutingCaller,
+  RunRoutingProposal,
   RunRoutingRule,
   RunRoutingRuleCreate,
 } from "@/lib/api/types";
-import { setWorkspaceDefaultAccount } from "@/lib/api/workspace";
 import { callerDisplay } from "@/lib/routing-caller-labels";
 import { useTranslations } from "next-intl";
 import { useEffect, useState } from "react";
@@ -32,12 +33,59 @@ import { useEffect, useState } from "react";
  * to a friendly account label, not a raw id); and rules are editable in place.
  */
 type ListState = { data: RunRoutingRule[]; failed: boolean } | null;
+type Translate = ReturnType<typeof useTranslations>;
 
 /** Resolve a rule's `target` (a litellm_model id, or a legacy account id) to a
  *  friendly account label. Falls back to the raw target when unknown. */
 function friendlyTarget(target: string, accounts: ModelAccount[]): string {
   const acct = accounts.find((a) => a.litellm_model === target || a.id === target);
   return acct ? acct.label : target;
+}
+
+/** Compact, human operator glyphs for the match preview (falls back to the raw op). */
+const OPERATOR_SYMBOL: Record<string, string> = {
+  eq: "=",
+  ne: "≠",
+  gt: ">",
+  lt: "<",
+  gte: "≥",
+  lte: "≤",
+};
+
+function formatConditionValue(value: unknown): string {
+  if (value === null || value === undefined) return "";
+  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+  return JSON.stringify(value);
+}
+
+/** One condition (persisted rule or dry-run proposal) in human terms. A
+ *  `classified_intent` condition reads as the category "<value> (category)";
+ *  anything else reads "<field> <op> <value>" with the compact op glyph. */
+function conditionLabel(
+  cond: { field: string; operator: string; value?: unknown },
+  t: Translate,
+): string {
+  if (cond.field === "classified_intent") {
+    return t("dim.category", { name: formatConditionValue(cond.value) });
+  }
+  const op = OPERATOR_SYMBOL[cond.operator] ?? cond.operator;
+  return `${cond.field} ${op} ${formatConditionValue(cond.value)}`.trim();
+}
+
+/** The MATCH (left) side of a route in human terms, shared by the persisted
+ *  rules list and the NL preview: a caller (execution stage) via the localized
+ *  label, else the first condition (category / complexity / language / artifact),
+ *  else the "all work" catch-all label. Keeps the founder in NL, never in JSON. */
+function matchLabel(
+  callerId: string | null | undefined,
+  conditions: ReadonlyArray<{ field: string; operator: string; value?: unknown }> | undefined,
+  t: Translate,
+): string {
+  if (callerId) return callerDisplay(callerId, t);
+  if (conditions && conditions.length > 0) return conditionLabel(conditions[0], t);
+  return t("matchAny");
 }
 
 /** The select value for a target — always the litellm_model. A legacy rule whose
@@ -52,7 +100,6 @@ export default function RunRoutingRules() {
   const [accounts, setAccounts] = useState<ModelAccount[]>([]);
   const [callers, setCallers] = useState<RunRoutingCaller[]>([]);
   const [showAdd, setShowAdd] = useState(false);
-  const [showNl, setShowNl] = useState(false);
   const t = useTranslations("settings.models.routing");
 
   async function load() {
@@ -88,51 +135,36 @@ export default function RunRoutingRules() {
       <header className="routing__head">
         <h2 className="section-label">{t("sectionHeading")}</h2>
         {visible.length > 0 ? <span className="routing__count">{visible.length}</span> : null}
-        <div className="routing__actions">
-          {!showNl && (
-            <button type="button" className="settings-add-toggle" onClick={() => setShowNl(true)}>
-              {t("nlToggle")}
-            </button>
-          )}
-          {!showAdd && (
-            <button type="button" className="settings-add-toggle" onClick={() => setShowAdd(true)}>
-              {t("addToggle")}
-            </button>
-          )}
-        </div>
       </header>
       <p className="routing__lede">{t("lede")}</p>
 
-      {showNl && (
-        <div className="settings-add-panel">
-          <NlCompilePanel
-            accounts={accounts}
-            onApplied={() => {
-              load();
-              setShowNl(false);
-            }}
-          />
-          <button type="button" className="settings-add-cancel" onClick={() => setShowNl(false)}>
-            {t("cancel")}
-          </button>
-        </div>
-      )}
+      {/* NL-first: describing routing in plain language IS the primary surface. */}
+      <div className="settings-add-panel routing-nl-primary">
+        <NlCompilePanel accounts={accounts} onApplied={load} />
+      </div>
 
-      {showAdd && (
-        <div className="settings-add-panel">
-          <RuleForm
-            callers={callers}
-            accounts={accounts}
-            onDone={() => {
-              load();
-              setShowAdd(false);
-            }}
-          />
-          <button type="button" className="settings-add-cancel" onClick={() => setShowAdd(false)}>
-            {t("cancel")}
+      {/* The caller/target dropdown form is the demoted "advanced" manual path. */}
+      <div className="routing__advanced">
+        {!showAdd ? (
+          <button type="button" className="settings-add-toggle" onClick={() => setShowAdd(true)}>
+            {t("addToggle")}
           </button>
-        </div>
-      )}
+        ) : (
+          <div className="settings-add-panel">
+            <RuleForm
+              callers={callers}
+              accounts={accounts}
+              onDone={() => {
+                load();
+                setShowAdd(false);
+              }}
+            />
+            <button type="button" className="settings-add-cancel" onClick={() => setShowAdd(false)}>
+              {t("cancel")}
+            </button>
+          </div>
+        )}
+      </div>
 
       {list === null ? (
         <p className="routing__loading" aria-busy="true">
@@ -213,8 +245,11 @@ function RunRoutingRuleRow({
     <li className="routing-card">
       <div className="routing-card__body">
         <p className="routing-card__route">
-          <span className="routing-card__match" title={rule.caller_id ?? undefined}>
-            {callerDisplay(rule.caller_id, t)}
+          <span
+            className="routing-card__match"
+            title={rule.caller_id ?? rule.conditions?.[0]?.field ?? undefined}
+          >
+            {matchLabel(rule.caller_id, rule.conditions, t)}
           </span>
           <span className="routing-card__arrow" aria-hidden="true">
             {" → "}
@@ -394,11 +429,21 @@ function RuleForm({
 
 type NlState = "idle" | "compiling" | "applying" | "error";
 
+/** Describe one dry-run proposal's MATCH side in human terms. A default reads
+ *  "Default model"; everything else reuses {@link matchLabel} (caller / condition
+ *  / catch-all), so the preview and the persisted list read identically. */
+function proposalMatchLabel(p: RunRoutingProposal, t: Translate): string {
+  if (p.is_default) return t("dim.default");
+  return matchLabel(p.caller_id, p.condition ? [p.condition] : undefined, t);
+}
+
 /**
- * NL → rules panel: describe routing in plain language, one cheap LLM call
- * drafts VALIDATED proposals (dry-run — nothing saved), and "Apply all" commits
- * them. A default proposal (caller_id null) sets the workspace "Default model"
- * picker rather than creating a hidden rule; the rest become caller rules.
+ * NL → rules panel (NL-first primary surface). The founder describes routing in
+ * plain language; one cheap LLM call drafts VALIDATED, multi-dimension proposals
+ * (dry-run — nothing saved). The preview renders each proposal in human terms
+ * (category / complexity / language / artifact / stage / default). "Apply all"
+ * commits the WHOLE set in ONE backend call (`/compile/apply`) — the backend
+ * creates the intents + rules + default atomically — then reloads.
  */
 function NlCompilePanel({
   accounts,
@@ -408,7 +453,7 @@ function NlCompilePanel({
   onApplied: () => void;
 }) {
   const [text, setText] = useState("");
-  const [proposals, setProposals] = useState<RunRoutingRuleCreate[] | null>(null);
+  const [proposals, setProposals] = useState<RunRoutingProposal[] | null>(null);
   const [state, setState] = useState<NlState>("idle");
   const t = useTranslations("settings.models.routing");
 
@@ -429,19 +474,7 @@ function NlCompilePanel({
     if (state === "applying" || !proposals || proposals.length === 0) return;
     setState("applying");
     try {
-      for (const p of proposals) {
-        if (p.is_default) {
-          const acct = accounts.find((a) => a.litellm_model === p.target);
-          if (acct) await setWorkspaceDefaultAccount(acct.id);
-        } else {
-          await createRunRoutingRule({
-            name: `${p.caller_id} → ${p.target}`,
-            caller_id: p.caller_id ?? null,
-            target: p.target,
-            priority: 10,
-          });
-        }
-      }
+      await applyRunRoutingProposals(proposals);
       onApplied();
     } catch {
       setState("error");
@@ -450,10 +483,11 @@ function NlCompilePanel({
 
   return (
     <div className="routing-nl">
+      <p className="routing-nl__title section-label">{t("nlHeading")}</p>
       <p className="routing-form__label">{t("nlLede")}</p>
       <textarea
         className="routing-form__input"
-        rows={2}
+        rows={3}
         placeholder={t("nlPlaceholder")}
         value={text}
         disabled={state === "compiling" || state === "applying"}
@@ -462,7 +496,7 @@ function NlCompilePanel({
       <div className="routing-form__foot">
         {state === "error" && (
           <span className="routing-form__error" aria-live="polite">
-            {t("nlError")}
+            {proposals === null ? t("nlError") : t("nlApplyError")}
           </span>
         )}
         <button
@@ -483,26 +517,21 @@ function NlCompilePanel({
             <p className="section-label">{t("nlProposed")}</p>
             <ul className="routing__list" aria-label={t("nlProposed")}>
               {proposals.map((p, i) => (
-                <li className="routing-card" key={`${p.caller_id ?? "default"}-${p.target}-${i}`}>
+                <li className="routing-card" key={`${p.name}-${p.target}-${i}`}>
                   <div className="routing-card__body">
                     <p className="routing-card__route">
-                      {p.is_default ? (
-                        <span className="routing-card__match">
-                          {t("nlSetsDefault", { target: friendlyTarget(p.target, accounts) })}
-                        </span>
-                      ) : (
-                        <>
-                          <span className="routing-card__match" title={p.caller_id ?? undefined}>
-                            {callerDisplay(p.caller_id, t)}
-                          </span>
-                          <span className="routing-card__arrow" aria-hidden="true">
-                            {" → "}
-                          </span>
-                          <span className="routing-card__target">
-                            {friendlyTarget(p.target, accounts)}
-                          </span>
-                        </>
-                      )}
+                      <span
+                        className="routing-card__match"
+                        title={p.caller_id ?? p.condition?.field ?? undefined}
+                      >
+                        {proposalMatchLabel(p, t)}
+                      </span>
+                      <span className="routing-card__arrow" aria-hidden="true">
+                        {" → "}
+                      </span>
+                      <span className="routing-card__target">
+                        {friendlyTarget(p.target, accounts)}
+                      </span>
                     </p>
                   </div>
                 </li>

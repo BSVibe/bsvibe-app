@@ -1256,11 +1256,43 @@ export interface RunRoutingCaller {
   description: string;
 }
 
-/** `POST /api/v1/run-routing/compile` response (backend CompileResponse). Each
- *  proposal is a `RunRoutingRuleCreate` body the founder can apply as-is — a
- *  dry-run, nothing is persisted until applied. */
+/** One `POST /api/v1/run-routing/compile` proposal (backend `as_dicts`, 1:1 with
+ *  the apply endpoint's `ApplyProposal`). NL-native routing (Lift N4): a proposal
+ *  expresses exactly ONE dimension —
+ *   - `is_default` → sets the workspace default model;
+ *   - `caller_id` → an execution-stage rule;
+ *   - `condition` `{field, operator, value}` → a complexity / language / artifact
+ *     rule (`field` ∈ estimated_tokens / detected_language / artifact_type_hint /
+ *     pipeline / …);
+ *   - `intent_name` + `intent_examples` → a category: the backend creates the
+ *     intent definition then a `classified_intent == intent_name` rule.
+ *  Dry-run — nothing is persisted until applied via `applyRunRoutingProposals`. */
+export interface RunRoutingProposalCondition {
+  field: string;
+  operator: string;
+  value?: unknown;
+}
+
+export interface RunRoutingProposal {
+  name: string;
+  target: string;
+  is_default: boolean;
+  priority: number;
+  caller_id: string | null;
+  condition: RunRoutingProposalCondition | null;
+  intent_name: string | null;
+  intent_examples: string[] | null;
+}
+
+/** `POST /api/v1/run-routing/compile` response (backend CompileResponse). */
 export interface RunRoutingCompileResult {
-  proposals: RunRoutingRuleCreate[];
+  proposals: RunRoutingProposal[];
+}
+
+/** `POST /api/v1/run-routing/compile/apply` response (backend ApplyResponse). */
+export interface RunRoutingApplyResult {
+  created: RunRoutingRule[];
+  default_set: boolean;
 }
 
 // ── Brief / Work-Home view-model ──────────────────────────────────────────
