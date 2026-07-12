@@ -374,5 +374,9 @@ ignore_imports = [
     "backend.mcp.tools.run_routing_rules_tools -> backend.router.infrastructure.repositories",
     "backend.mcp.tools.run_routing_rules_tools -> backend.router.routing.run_routing.db",
     "backend.mcp.tools.run_routing_rules_tools -> backend.router.routing.run_routing.engine",
+    # Lift N3 — the compile-apply tool resolves the personal billing account
+    # (the account intents are scoped to) to persist category intent defs, the
+    # same account_service touch-point account_tools + intents_tools already use.
+    "backend.mcp.tools.run_routing_rules_tools -> backend.router.accounts.account_service",
 ]
 

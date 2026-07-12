@@ -31,7 +31,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.api.deps import get_db_session, get_workspace_id
+from backend.api.deps import get_db_session, get_workspace_id, require_account_id
 from backend.api.v1._router_deps import get_run_routing_rule_repository
 from backend.dispatch.caller_registry import (
     CALLER_ROUTING_COMPILE,
@@ -392,7 +392,7 @@ async def compile_run_rules(
     session: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> CompileResponse:
     """Compile a plain-language routing description into rule PROPOSALS (dry-run —
-    nothing is persisted; the caller previews then POSTs the ones it wants)."""
+    nothing is persisted; the caller previews then applies the ones it wants)."""
     try:
         proposals = await compile_for_workspace(session, workspace_id, payload.text)
     except NoCompileModelError:
@@ -404,3 +404,211 @@ async def compile_run_rules(
             ),
         ) from None
     return CompileResponse(proposals=proposals)
+
+
+# ---------------------------------------------------------------------------
+# Apply — persist the accepted proposals atomically (Lift N3).
+# ---------------------------------------------------------------------------
+
+
+class ApplyError(Exception):
+    """A proposal could not be applied (e.g. its target is not an active
+    account). The whole apply is rolled back — never a partial write."""
+
+
+class ApplyProposal(BaseModel):
+    """One accepted proposal to persist — the wire shape :func:`as_dicts` emits.
+
+    Exactly one dimension is expressed: ``caller_id`` (execution stage), a
+    ``condition`` (complexity / language / artifact), a category (``condition``
+    keyed on ``classified_intent`` + ``intent_name`` + ``intent_examples``), or
+    ``is_default`` (the workspace default)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1, max_length=255)
+    target: str = Field(min_length=1, max_length=255)
+    is_default: bool = False
+    priority: int = Field(default=10, ge=0)
+    caller_id: str | None = Field(default=None, max_length=120)
+    condition: ConditionPayload | None = None
+    intent_name: str | None = Field(default=None, max_length=120)
+    intent_examples: list[str] | None = None
+
+    @field_validator("caller_id")
+    @classmethod
+    def _caller_known(cls, v: str | None) -> str | None:
+        if v is None:
+            return v
+        return _validate_caller_id(v)
+
+    @model_validator(mode="after")
+    def _shape_valid(self) -> ApplyProposal:
+        if self.is_default:
+            return self
+        if self.intent_name is not None:
+            # Category — needs seed examples so the classifier can match. The
+            # rule's condition is derived server-side (classified_intent ==
+            # intent_name), so a model-supplied condition is not required here.
+            if not self.intent_examples:
+                raise ValueError("a category proposal requires intent_examples")
+            return self
+        if not (self.caller_id or self.condition):
+            raise ValueError("a non-default proposal must declare a caller_id or a condition")
+        return self
+
+
+async def apply_proposals(
+    session: AsyncSession,
+    *,
+    workspace_id: uuid.UUID,
+    account_id: uuid.UUID,
+    proposals: list[ApplyProposal],
+) -> list[RunRoutingRuleRow]:
+    """Persist accepted proposals atomically for ``workspace_id``.
+
+    For each proposal:
+
+    * **category** — create the intent definition (name + seed examples, embedded
+      via the account's :class:`EmbeddingService`) THEN the run-routing rule with
+      its ``classified_intent`` condition;
+    * **caller / condition** — create the run-routing rule with its caller /
+      condition;
+    * **default** — set the workspace's ``default_account_id`` to the account whose
+      ``litellm_model`` == the proposal's ``target``.
+
+    Everything happens in ONE transaction: this flushes each write and commits at
+    the end, rolling back on any failure (:class:`ApplyError`). ``account_id`` is
+    the personal billing account intents are scoped to (the SAME one the N1
+    classifier reads at resolve time). The embedder is resolved once per apply."""
+    from backend.embedding.authoring import (  # noqa: PLC0415
+        build_account_embedder,
+        create_intent_with_examples,
+    )
+    from backend.identity.workspaces_db import WorkspaceRow  # noqa: PLC0415
+    from backend.router.infrastructure.repositories import (  # noqa: PLC0415
+        SqlAlchemyModelAccountRepository,
+        SqlAlchemyRunRoutingRuleRepository,
+    )
+
+    accounts_repo = SqlAlchemyModelAccountRepository(session)
+    active = await accounts_repo.list_active_for_workspace(workspace_id=workspace_id)
+    model_to_account = {a.litellm_model: a for a in active}
+    rules_repo = SqlAlchemyRunRoutingRuleRepository(session)
+
+    embedder = None
+    if any(p.intent_name is not None and not p.is_default for p in proposals):
+        embedder = await build_account_embedder(
+            session, workspace_id=workspace_id, account_id=account_id
+        )
+
+    try:
+        created: list[RunRoutingRuleRow] = []
+        for proposal in proposals:
+            account = model_to_account.get(proposal.target)
+            if account is None:
+                raise ApplyError(
+                    f"proposal {proposal.name!r} targets {proposal.target!r}, "
+                    "which is not an active model account in this workspace"
+                )
+
+            if proposal.is_default:
+                workspace = await session.get(WorkspaceRow, workspace_id)
+                if workspace is None:
+                    raise ApplyError("workspace not found")
+                workspace.default_account_id = account.id
+                await session.flush()
+                continue
+
+            conditions: list[dict[str, Any]] = []
+            if proposal.intent_name is not None:
+                # Category — create the intent def first, then key the rule on it.
+                await create_intent_with_examples(
+                    session,
+                    workspace_id=workspace_id,
+                    account_id=account_id,
+                    name=proposal.intent_name,
+                    threshold=0.65,
+                    examples=proposal.intent_examples or [],
+                    embedder=embedder,
+                )
+                conditions.append(
+                    {
+                        "field": "classified_intent",
+                        "operator": "eq",
+                        "value": proposal.intent_name,
+                        "negate": False,
+                    }
+                )
+            elif proposal.condition is not None:
+                conditions.append(proposal.condition.model_dump())
+
+            row = RunRoutingRuleRow(
+                id=uuid.uuid4(),
+                workspace_id=workspace_id,
+                name=proposal.name,
+                caller_id=proposal.caller_id,
+                priority=proposal.priority,
+                is_default=False,
+                target=proposal.target,
+                conditions=conditions,
+                is_active=True,
+            )
+            await rules_repo.add(row)
+            created.append(row)
+    except Exception:
+        await session.rollback()
+        raise
+
+    await session.commit()
+    logger.info(
+        "run_routing_rules_applied",
+        workspace_id=str(workspace_id),
+        rules=len(created),
+        proposals=len(proposals),
+    )
+    return created
+
+
+class ApplyRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    proposals: list[ApplyProposal] = Field(min_length=1)
+
+
+class ApplyResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    created: list[RunRuleResponse]
+    default_set: bool
+
+
+@router.post("/compile/apply", status_code=status.HTTP_201_CREATED)
+async def apply_compiled_rules(
+    payload: ApplyRequest,
+    workspace_id: Annotated[uuid.UUID, Depends(get_workspace_id)],
+    account_id: Annotated[uuid.UUID, Depends(require_account_id)],
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+) -> ApplyResponse:
+    """Persist the founder-accepted proposals atomically (create intents + rules,
+    set the workspace default). Rolls back on any failure — never partial."""
+    try:
+        created = await apply_proposals(
+            session,
+            workspace_id=workspace_id,
+            account_id=account_id,
+            proposals=payload.proposals,
+        )
+    except ApplyError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+        ) from exc
+    except IntegrityError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="a rule or intent with one of these names already exists",
+        ) from None
+    return ApplyResponse(
+        created=[_to_response(r) for r in created],
+        default_set=any(p.is_default for p in payload.proposals),
+    )
