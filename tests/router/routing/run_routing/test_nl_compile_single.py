@@ -17,6 +17,7 @@ import pytest
 
 from backend.router.routing.run_routing.nl_compile import (
     CompiledCondition,
+    CompileLlmUnavailable,
     UninterpretableCondition,
     compile_source_text,
 )
@@ -202,13 +203,17 @@ async def test_empty_text_is_uninterpretable() -> None:
 
 
 @pytest.mark.asyncio
-async def test_llm_failure_is_uninterpretable() -> None:
-    result = await compile_source_text("복잡한 작업", callers=CALLERS, llm=_RaisingLlm())
-    assert isinstance(result, UninterpretableCondition)
+async def test_llm_dispatch_failure_raises_compile_llm_unavailable() -> None:
+    """We never REACHED the model — that is infrastructure, not the founder's
+    wording. Returning UNINTERPRETABLE here is exactly what made the unwired-redis
+    ``ExecutorAdapterUnavailable`` surface to the founder as "try rephrasing"."""
+    with pytest.raises(CompileLlmUnavailable):
+        await compile_source_text("복잡한 작업", callers=CALLERS, llm=_RaisingLlm())
 
 
 @pytest.mark.asyncio
 async def test_unparseable_is_uninterpretable() -> None:
+    """The model ANSWERED, just not with anything that compiles — still a 422."""
     result = await compile_source_text(
         "복잡한 작업", callers=CALLERS, llm=_StubLlm("sorry, no idea")
     )

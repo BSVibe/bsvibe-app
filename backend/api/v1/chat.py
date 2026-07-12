@@ -84,10 +84,20 @@ async def _resolve_chat_model_account_id(
     run-routing rules for the ``chat.completions`` caller, then the workspace
     default. Raises :class:`NoMatchingRouteError` when neither matches (the
     endpoint surfaces it as a 400, never a silent pick).
+
+    The Redis client is threaded in from
+    :func:`backend.api.redis_client.get_api_redis` for the same reason the
+    run-routing compile path does it: when the resolved account is an
+    **executor**, the adapter this resolver hands back dispatches onto the worker
+    stream over Redis and is unusable without a client
+    (``ExecutorAdapterUnavailable``). ``None`` (no Redis configured) is a clean
+    no-op — LiteLLM accounts never touch it.
     """
     if explicit is not None:
         return explicit
-    resolver = ModelAccountResolver(session, settings=settings)
+    from backend.api.redis_client import get_api_redis  # noqa: PLC0415
+
+    resolver = ModelAccountResolver(session, settings=settings, redis=get_api_redis())
     resolved = await resolver.resolve_for(
         caller_id=CALLER_CHAT_COMPLETIONS, workspace_id=workspace_id
     )

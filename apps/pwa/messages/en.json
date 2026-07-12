@@ -562,6 +562,7 @@
         "colModel": "Model",
         "conditionPlaceholder": "e.g. complex tasks",
         "modelPlaceholder": "Pick a model…",
+        "modelUnreachable": "I couldn’t reach the model that reads your condition — that’s on my side, not your wording. Try again in a moment.",
         "rephrase": "I couldn’t interpret that condition — try rephrasing (e.g. complex tasks, marketing, Korean requests).",
         "saveError": "Couldn’t save that change. Try again in a moment."
       }

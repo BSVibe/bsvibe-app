@@ -20,6 +20,7 @@ import pytest
 
 from backend.router.routing.run_routing.nl_compile import (
     CompiledProposal,
+    CompileLlmUnavailable,
     as_dicts,
     compile_rules,
 )
@@ -410,12 +411,21 @@ async def test_no_targets_returns_empty() -> None:
 
 
 @pytest.mark.asyncio
-async def test_llm_failure_degrades_to_empty() -> None:
-    assert await compile_rules("route", callers=CALLERS, targets=TARGETS, llm=_RaisingLlm()) == []
+async def test_llm_dispatch_failure_raises_compile_llm_unavailable() -> None:
+    """Infrastructure failure is NOT "the founder phrased it badly".
+
+    A raise out of ``llm.complete_text`` (ExecutorAdapterUnavailable, a timeout,
+    a provider 5xx) means we never got an ANSWER — degrading to ``[]`` here is
+    what let the unwired-redis bug masquerade as "couldn't derive rules". It now
+    propagates as :class:`CompileLlmUnavailable` so the endpoint 502s."""
+    with pytest.raises(CompileLlmUnavailable):
+        await compile_rules("route", callers=CALLERS, targets=TARGETS, llm=_RaisingLlm())
 
 
 @pytest.mark.asyncio
 async def test_unparseable_output_degrades_to_empty() -> None:
+    """The model ANSWERED — it just answered with nothing usable. That IS a
+    "couldn't derive rules" (422), so the ``[]`` degrade is kept."""
     assert await _compile("sorry, I can't help with that") == []
 
 

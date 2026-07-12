@@ -119,18 +119,24 @@ def _stub_compile(monkeypatch, result) -> None:
 
     ``result`` is a :class:`CompiledCondition` (success) — the model-resolution +
     LLM call are stubbed out. Pass ``UNINTERPRETABLE`` to simulate a phrase that
-    compiles to nothing (the helper raises ``SourceTextUninterpretableError``)."""
+    compiles to nothing (the helper raises ``SourceTextUninterpretableError``), or
+    ``LLM_UNAVAILABLE`` to simulate the compile MODEL being unreachable (dispatch
+    failure — the helper raises ``CompileLlmUnavailable``)."""
     from backend.api.v1.run_routing import SourceTextUninterpretableError
+    from backend.router.routing.run_routing.nl_compile import CompileLlmUnavailable
 
     async def _fake(session, workspace_id, text, *, llm=None):
         if result is UNINTERPRETABLE:
             raise SourceTextUninterpretableError(text)
+        if result is LLM_UNAVAILABLE:
+            raise CompileLlmUnavailable("ExecutorAdapter requires a Redis client")
         return result
 
     monkeypatch.setattr("backend.api.v1.run_routing.compile_source_text_for_workspace", _fake)
 
 
 UNINTERPRETABLE = object()
+LLM_UNAVAILABLE = object()
 
 
 # ---------------------------------------------------------------------------
@@ -256,6 +262,51 @@ async def test_uninterpretable_source_text_422_nothing_persisted(
             .all()
         )
         assert intents == []
+
+
+# ---------------------------------------------------------------------------
+# Compile MODEL unreachable → 502, NOT a 422 "rephrase" (the production bug:
+# an unwired redis made every compile blame the founder's wording).
+# ---------------------------------------------------------------------------
+async def test_compile_model_unreachable_502_not_rephrase(
+    client, maker, workspace_id, seeded, monkeypatch
+) -> None:
+    _stub_compile(monkeypatch, LLM_UNAVAILABLE)
+    r = await client.post(
+        "/api/v1/run-routing",
+        json={"name": "복잡한 작업", "source_text": "복잡한 작업", "target": "opus"},
+    )
+    assert r.status_code == 502, r.text
+    detail = r.json()["detail"].lower()
+    assert "reach" in detail
+    # It must NOT tell the founder to rephrase a perfectly good phrase.
+    assert "rephras" not in detail
+
+    # Nothing persisted.
+    assert (await client.get("/api/v1/run-routing")).json() == []
+
+
+async def test_patch_compile_model_unreachable_502(client, seeded, monkeypatch) -> None:
+    _stub_compile(
+        monkeypatch,
+        CompiledCondition(condition={"field": "estimated_tokens", "operator": "gt", "value": 2000}),
+    )
+    created = (
+        await client.post(
+            "/api/v1/run-routing",
+            json={"name": "r3", "source_text": "복잡한 작업", "target": "opus"},
+        )
+    ).json()
+
+    _stub_compile(monkeypatch, LLM_UNAVAILABLE)
+    r = await client.patch(
+        f"/api/v1/run-routing/{created['id']}", json={"source_text": "한국어 요청"}
+    )
+    assert r.status_code == 502, r.text
+
+    # The original rule is untouched.
+    listed = (await client.get("/api/v1/run-routing")).json()
+    assert listed[0]["source_text"] == "복잡한 작업"
 
 
 # ---------------------------------------------------------------------------

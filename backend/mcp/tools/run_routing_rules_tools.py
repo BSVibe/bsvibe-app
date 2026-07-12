@@ -49,6 +49,14 @@ from backend.mcp.api import Tool, ToolContext, ToolError, ToolRegistry
 from backend.router.infrastructure.repositories import SqlAlchemyRunRoutingRuleRepository
 from backend.router.routing.run_routing.db import RunRoutingRuleRow
 from backend.router.routing.run_routing.engine import ALLOWED_FIELDS, VALID_OPERATORS
+from backend.router.routing.run_routing.nl_compile import CompileLlmUnavailable
+
+# MCP parity for the REST 502 (see :mod:`backend.api.v1.run_routing`): a compile
+# model that could not be REACHED is infrastructure, never the caller's wording.
+_UNREACHABLE_MESSAGE = (
+    "couldn't reach the routing model to compile — this is a connection problem "
+    "on the server, not your wording. Try again in a moment."
+)
 
 
 class _Envelope(RootModel[Any]):
@@ -180,8 +188,9 @@ async def _compile_source_text_or_error(
     ctx: ToolContext, source_text: str
 ) -> tuple[str | None, list[dict[str, Any]]]:
     """Compile an NL condition → (caller_id, conditions), creating an intent def
-    for a category. Raises :class:`ToolError` on an uninterpretable phrase or a
-    missing compile model."""
+    for a category. Raises :class:`ToolError` on a missing compile model, an
+    UNREACHABLE compile model (infrastructure), or an uninterpretable phrase —
+    three distinct messages, mirroring the REST 400 / 502 / 422 split."""
     account_id = await _resolve_personal_account_id(ctx)
     try:
         compiled = await compile_source_text_for_workspace(
@@ -192,6 +201,8 @@ async def _compile_source_text_or_error(
             "no model is configured to compile the condition with — set a default "
             "model or add a model account first"
         ) from exc
+    except CompileLlmUnavailable as exc:
+        raise ToolError(_UNREACHABLE_MESSAGE) from exc
     except SourceTextUninterpretableError as exc:
         raise ToolError(
             f"could not interpret the condition {source_text!r} as a routing rule — "
@@ -321,6 +332,8 @@ async def _h_compile(args: RunRoutingRulesCompileInput, ctx: ToolContext) -> Any
             "no model is configured to compile with — set a default model or add "
             "a model account first"
         ) from exc
+    except CompileLlmUnavailable as exc:
+        raise ToolError(_UNREACHABLE_MESSAGE) from exc
     return _Envelope({"proposals": proposals})
 
 

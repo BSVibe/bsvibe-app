@@ -799,6 +799,56 @@ async def test_create_source_text_uninterpretable_raises(
             )
 
 
+async def test_create_source_text_model_unreachable_raises_distinct_error(
+    db, workspace_id, user_id, registry, seeded, monkeypatch
+) -> None:
+    """MCP parity for the REST 502: "couldn't reach the routing model", NOT the
+    422 "try rephrasing" hint. The unwired-redis bug surfaced as the latter."""
+    import backend.mcp.tools.run_routing_rules_tools as tools
+    from backend.router.routing.run_routing.nl_compile import CompileLlmUnavailable
+
+    async def _fake(session, ws, text, *, llm=None):
+        raise CompileLlmUnavailable("ExecutorAdapter requires a Redis client")
+
+    monkeypatch.setattr(tools, "compile_source_text_for_workspace", _fake)
+
+    async with db() as s:
+        s.add(_model_account(workspace_id, "opus"))
+        await s.commit()
+
+    async with db() as s:
+        ctx = _rw_ctx(s, workspace_id=workspace_id, user_id=user_id)
+        with pytest.raises(ToolError, match="reach") as exc:
+            await registry.call_tool(
+                "bsvibe_run_routing_rules_create",
+                {"name": "복잡한 작업", "source_text": "복잡한 작업", "target": "opus"},
+                ctx,
+            )
+    assert "rephras" not in str(exc.value).lower()
+
+
+async def test_compile_model_unreachable_raises_distinct_error(
+    db, workspace_id, user_id, registry, seeded, monkeypatch
+) -> None:
+    import backend.mcp.tools.run_routing_rules_tools as tools
+    from backend.router.routing.run_routing.nl_compile import CompileLlmUnavailable
+
+    async def _unreachable(session, ws, text, *, llm=None):
+        raise CompileLlmUnavailable("ExecutorAdapter requires a Redis client")
+
+    monkeypatch.setattr(tools, "compile_for_workspace", _unreachable)
+
+    async with db() as s:
+        ctx = ToolContext(
+            principal=_principal(workspace_id=workspace_id, user_id=user_id, scopes=("mcp:read",)),
+            session=s,
+        )
+        with pytest.raises(ToolError, match="reach"):
+            await registry.call_tool(
+                "bsvibe_run_routing_rules_compile", {"text": "설계는 opus"}, ctx
+            )
+
+
 async def test_update_source_text_recompiles(
     db, workspace_id, user_id, registry, seeded, monkeypatch
 ) -> None:
