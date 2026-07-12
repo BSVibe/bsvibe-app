@@ -91,6 +91,23 @@ async def _resolve_via_caller(
     single-flight callers. Without it, parallel chunks race on
     ``session.flush()`` ("Session is already flushing") — the E18 bug.
     """
+
+    async def _build_intent_classifier():
+        # Lift N1 — built lazily by the resolver ONLY when a rule keys on
+        # classified_intent (semantic category routing). Scoped to the
+        # workspace's personal account, where intents + embedding config live.
+        from backend.router.accounts.account_service import (  # noqa: PLC0415
+            ensure_personal_account,
+        )
+        from backend.router.routing.run_routing.intent_classifier import (  # noqa: PLC0415
+            build_intent_classifier,
+        )
+
+        account = await ensure_personal_account(session, workspace_id=workspace_id)
+        return await build_intent_classifier(
+            session, settings, workspace_id=workspace_id, account_id=account.id
+        )
+
     resolver = ModelAccountResolver(
         session,
         settings=settings,
@@ -98,6 +115,7 @@ async def _resolve_via_caller(
         session_factory=session_factory,
         run_id=run_id,
         repo_url=repo_url,
+        intent_classifier_builder=_build_intent_classifier,
     )
     try:
         return await resolver.resolve_for(caller_id=caller_id, workspace_id=workspace_id)

@@ -22,8 +22,9 @@ provider allow-list. Dispatch flows through this resolver alone.
 from __future__ import annotations
 
 import uuid
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -38,6 +39,9 @@ from backend.router.accounts.crypto import CredentialCipher, _key_from_settings
 from backend.router.accounts.models import ModelAccount
 from backend.router.accounts.service import ModelAccountService
 from backend.router.routing.run_routing.db import RunRoutingRuleRow
+
+if TYPE_CHECKING:
+    from backend.router.routing.run_routing.intent_classifier import IntentClassifier
 
 logger = structlog.get_logger(__name__)
 
@@ -99,6 +103,17 @@ class ResolvedAccount:
     timeout_s: float | None = None
 
 
+def _needs_classified_intent(rules: list[RunRoutingRuleRow]) -> bool:
+    """True when any active rule keys on ``classified_intent`` — the gate that
+    decides whether the resolver bothers running the (embedding) classifier."""
+    for rule in rules:
+        conditions = rule.conditions if isinstance(rule.conditions, list) else []
+        for c in conditions:
+            if isinstance(c, dict) and c.get("field") == "classified_intent":
+                return True
+    return False
+
+
 class ModelAccountResolver:
     """Resolve a :class:`ResolvedAccount` for ``(caller_id, workspace_id)``."""
 
@@ -114,6 +129,8 @@ class ModelAccountResolver:
         session_factory: async_sessionmaker[AsyncSession] | None = None,
         run_id: uuid.UUID | None = None,
         repo_url: str | None = None,
+        intent_classifier: IntentClassifier | None = None,
+        intent_classifier_builder: Callable[[], Awaitable[IntentClassifier | None]] | None = None,
     ) -> None:
         self._session = session
         self._settings = settings
@@ -150,6 +167,16 @@ class ModelAccountResolver:
         # back tells the worker to clone the repo into the per-task
         # workspace before invoking the executor.
         self._repo_url = repo_url
+        # Lift N1 — optional semantic intent classifier. When set AND an active
+        # rule conditions on ``classified_intent``, the resolver classifies the
+        # run's intent_text so category rules ("마케팅 작업 → X") can match.
+        # ``None`` (no intents / no embedding model configured) → classified_intent
+        # stays frame-derived, i.e. no behaviour change. The builder defers the
+        # (personal-account + embedding-config + intents) reads to ONLY when a
+        # rule actually keys on classified_intent — zero cost otherwise.
+        self._intent_classifier = intent_classifier
+        self._intent_classifier_builder = intent_classifier_builder
+        self._intent_classifier_built = intent_classifier is not None
 
     def _ensure_accounts(self) -> ModelAccountService:
         if self._accounts is not None:
@@ -268,6 +295,16 @@ class ModelAccountResolver:
 
     # ----- internals -----
 
+    async def _resolve_intent_classifier(self) -> IntentClassifier | None:
+        """Lazily build the classifier (once), or return the injected one. Only
+        called when a rule keys on classified_intent, so the build's reads are
+        never paid in the common (no category-rule) case."""
+        if not self._intent_classifier_built:
+            self._intent_classifier_built = True
+            if self._intent_classifier_builder is not None:
+                self._intent_classifier = await self._intent_classifier_builder()
+        return self._intent_classifier
+
     async def _match_rule(self, caller_id: str, workspace_id: uuid.UUID) -> ModelAccount | None:
         """Resolve the rule-selected account via the run-routing ENGINE.
 
@@ -299,6 +336,15 @@ class ModelAccountResolver:
             return None
 
         ctx = await self._build_routing_context(caller_id)
+        # Lift N1 — only build/run the classifier when a rule actually keys on
+        # classified_intent. The classifier degrades to None on any hiccup.
+        if _needs_classified_intent(rules):
+            classifier = await self._resolve_intent_classifier()
+            if classifier is not None:
+                from dataclasses import replace  # noqa: PLC0415
+
+                classified = await classifier.classify(ctx.intent_text or "")
+                ctx = replace(ctx, classified_intent=classified)
         target = evaluate_rules(rules, ctx)
         if target is None:
             return None
