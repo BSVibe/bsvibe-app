@@ -325,6 +325,181 @@ async def compile_rules(
     return out
 
 
+# ---------------------------------------------------------------------------
+# Single-condition compiler (NL-native routing Lift N5).
+#
+# The founder authors ONE rule = a free-text CONDITION phrase + a target model.
+# The phrase compiles — transparently, per single rule — into ONE structured
+# dimension: a caller_id (execution stage), a condition (complexity / language /
+# artifact), or a category (classified_intent + an intent def to create). Unlike
+# the paragraph compiler, there is no default / catch-all here (that's the
+# workspace default), no target in the LLM's job (the founder picks it), and a
+# nothing-valid result is an explicit UNINTERPRETABLE signal so the endpoint can
+# 422 rather than persist a dead rule.
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class CompiledCondition:
+    """One validated dimension compiled from a single NL condition phrase.
+
+    Exactly one dimension is expressed:
+
+    * **caller** — ``caller_id`` set, ``condition`` / ``intent_*`` None.
+    * **condition** — ``condition`` set (complexity / language / artifact), rest None.
+    * **category** — ``condition`` keyed on ``classified_intent`` PLUS
+      ``intent_name`` + ``intent_examples`` (the intent def to create on save).
+    """
+
+    caller_id: str | None = None
+    condition: dict[str, Any] | None = None
+    intent_name: str | None = None
+    intent_examples: list[str] | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class UninterpretableCondition:
+    """Signal that the phrase compiled to nothing valid — the endpoint 422s
+    rather than persisting a rule that could never route."""
+
+
+_SINGLE_SYSTEM_PROMPT = (
+    "You compile ONE plain-language routing CONDITION (the founder's free text, "
+    "e.g. '복잡한 작업' / '마케팅 관련' / '한국어 요청' / '설계 단계') into ONE "
+    "structured routing dimension. Detect which DIMENSION the phrase is about — do "
+    "NOT force everything into categories. Respond with ONE JSON object (no prose, "
+    "no code fences) containing EXACTLY ONE of these dimension shapes:\n"
+    '  - "caller_id": a caller id from the "Callers" catalog — for an EXECUTION '
+    "STAGE phrase ('design'/'설계' → the plan caller, 'implement'/'구현' → the act "
+    "caller, 'verify'/'검증' → the judge caller);\n"
+    '  - "condition": {"field", "operator", "value"} for a non-category dimension:\n'
+    "      * COMPLEXITY ('복잡한'/'큰 작업'/'간단한') → "
+    'field "estimated_tokens" (operator gt/lt, an integer value) OR '
+    'field "pipeline" (operator eq, value "design_then_impl" for complex);\n'
+    "      * LANGUAGE ('한국어'/'영어') → "
+    'field "detected_language" (operator eq, value one of ko/en/ja/zh);\n'
+    "      * ARTIFACT ('코드'/'PR'/'페이지') → "
+    'field "artifact_type_hint" (operator eq, value one of code/pr/page/page_image);\n'
+    '  - "intent_name" (a short snake_case id) PLUS "intent_examples" (3-6 short '
+    "example phrases that belong to this category) — for a DOMAIN/CATEGORY phrase "
+    "('마케팅'/'디자인'/'문서'/'marketing'/'design'). The rule is keyed on "
+    "classified_intent automatically.\n"
+    "Rules:\n"
+    "- Use ONLY caller ids that appear verbatim in the catalog. Emit nothing you "
+    "cannot map.\n"
+    "- A category MUST include intent_name AND at least a few intent_examples.\n"
+    "- Do NOT emit a target model — the founder picks it separately."
+)
+
+
+def _build_single_user_prompt(text: str, callers: list[tuple[str, str]]) -> str:
+    lines = [f"Condition:\n{text.strip() or '(empty)'}", "", "Callers:"]
+    for caller_id, desc in callers:
+        lines.append(f"- {caller_id}: {desc}")
+    return "\n".join(lines)
+
+
+def _parse_json_object(raw: str) -> dict[str, Any] | None:
+    """Parse the LLM's single JSON object, tolerating a code fence or an array
+    wrapper (take the first object element)."""
+    if not raw or not raw.strip():
+        return None
+    candidate = raw.strip()
+    obj_start = candidate.find("{")
+    arr_start = candidate.find("[")
+    # An array wrapper only when '[' precedes the first '{' (else the '[' is a
+    # nested intent_examples list inside the object).
+    if arr_start != -1 and (obj_start == -1 or arr_start < obj_start):
+        arr = _parse_json_array(candidate)
+        if arr is not None:
+            for item in arr:
+                if isinstance(item, dict):
+                    return item
+        return None
+    end = candidate.rfind("}")
+    if obj_start == -1 or end == -1 or end < obj_start:
+        return None
+    try:
+        data = json.loads(candidate[obj_start : end + 1])
+    except (ValueError, json.JSONDecodeError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _coerce_single_condition(  # noqa: PLR0911 — one return per dimension shape reads clearest
+    item: dict[str, Any],
+    *,
+    known_callers: set[str],
+) -> CompiledCondition | None:
+    """Validate one raw object into a :class:`CompiledCondition`, or ``None``.
+
+    Dispatches on the dimension the object declares — every field is checked
+    against the caller registry / the engine whitelist. There is no default and
+    no target here (the single-rule model owns those elsewhere)."""
+    # (1) Category — an intent_name signals the domain dimension.
+    intent_name_raw = item.get("intent_name")
+    if intent_name_raw is not None:
+        if not isinstance(intent_name_raw, str) or not intent_name_raw.strip():
+            return None
+        intent_name = intent_name_raw.strip()[:_MAX_INTENT_NAME]
+        examples = _coerce_intent_examples(item.get("intent_examples"))
+        if examples is None:
+            return None
+        return CompiledCondition(
+            condition={"field": "classified_intent", "operator": "eq", "value": intent_name},
+            intent_name=intent_name,
+            intent_examples=examples,
+        )
+
+    # (2) Caller (execution stage).
+    caller_id = item.get("caller_id")
+    if isinstance(caller_id, str) and caller_id:
+        if caller_id not in known_callers:
+            return None
+        return CompiledCondition(caller_id=caller_id)
+
+    # (3) Condition (complexity / language / artifact / etc.).
+    condition = _coerce_condition(item.get("condition"))
+    if condition is not None:
+        return CompiledCondition(condition=condition)
+
+    return None
+
+
+async def compile_source_text(
+    text: str,
+    *,
+    callers: list[tuple[str, str]],
+    llm: RoutingCompileLlm,
+) -> CompiledCondition | UninterpretableCondition:
+    """Compile ONE NL condition phrase into ONE validated dimension.
+
+    ``callers`` is ``[(caller_id, description)]`` — the catalog the LLM maps stage
+    phrases against. Returns a :class:`CompiledCondition` on success, or an
+    :class:`UninterpretableCondition` on an empty phrase, an LLM failure,
+    unparseable output, or when nothing validates. Never raises."""
+    if not text or not text.strip():
+        return UninterpretableCondition()
+    known_callers = {c for c, _ in callers}
+
+    prompt = _build_single_user_prompt(text, callers)
+    try:
+        raw = await llm.complete_text(system=_SINGLE_SYSTEM_PROMPT, user=prompt)
+    except Exception:  # noqa: BLE001 — compile must never raise; it degrades to uninterpretable
+        logger.warning("routing_source_text_compile_llm_failed", exc_info=True)
+        return UninterpretableCondition()
+
+    item = _parse_json_object(raw)
+    if item is None:
+        logger.warning("routing_source_text_unparseable")
+        return UninterpretableCondition()
+
+    compiled = _coerce_single_condition(item, known_callers=known_callers)
+    if compiled is None:
+        return UninterpretableCondition()
+    return compiled
+
+
 def as_dicts(proposals: Iterable[CompiledProposal]) -> list[dict[str, Any]]:
     """The apply-endpoint wire shape for each proposal (:class:`ApplyProposal` 1:1)."""
     return [
@@ -343,8 +518,11 @@ def as_dicts(proposals: Iterable[CompiledProposal]) -> list[dict[str, Any]]:
 
 
 __all__ = [
+    "CompiledCondition",
     "CompiledProposal",
     "RoutingCompileLlm",
+    "UninterpretableCondition",
     "as_dicts",
     "compile_rules",
+    "compile_source_text",
 ]
