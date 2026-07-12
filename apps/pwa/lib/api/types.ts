@@ -1220,6 +1220,9 @@ export interface RunRoutingRule {
   workspace_id: string;
   name: string;
   caller_id: string | null;
+  /** The founder's free-text NL condition phrase (Lift N5). Present on rules
+   *  authored from natural language; `null` for legacy structured/caller rules. */
+  source_text: string | null;
   priority: number;
   is_default: boolean;
   target: string;
@@ -1229,21 +1232,26 @@ export interface RunRoutingRule {
 }
 
 /** POST body for creating a run-routing rule (backend RunRuleCreate,
- *  extra=forbid). A non-default rule MUST carry a `caller_id`. `conditions` is
- *  dropped from the wire when empty so a catch-all body stays minimal. */
+ *  extra=forbid). Lift N5 — the founder authors a rule from a free-text NL
+ *  `source_text` condition + a `target`; the backend compiles it into the
+ *  structured caller_id / conditions. The legacy structured fields
+ *  (caller_id / conditions / is_default) remain in the type for back-compat but
+ *  the NL surface only ever sends `name` / `source_text` / `target`. */
 export interface RunRoutingRuleCreate {
   name: string;
+  source_text?: string | null;
   caller_id?: string | null;
   target: string;
-  priority: number;
+  priority?: number;
   is_default?: boolean;
   is_active?: boolean;
   conditions?: RunRoutingConditionInput[];
 }
 
-/** `PATCH /api/v1/run-routing/{id}` body (backend RunRuleUpdate) — a partial edit
- *  of a rule's user-facing knobs. */
+/** `PATCH /api/v1/run-routing/{id}` body (backend RunRuleUpdate) — a partial edit.
+ *  Lift N5 — editing `source_text` recompiles the caller_id/conditions server-side. */
 export interface RunRoutingRuleUpdate {
+  source_text?: string;
   caller_id?: string;
   target?: string;
   is_active?: boolean;

@@ -1,36 +1,31 @@
 "use client";
 
 import { listAccounts } from "@/lib/api/accounts";
+import { ApiError } from "@/lib/api/client";
 import {
-  applyRunRoutingProposals,
-  compileRunRoutingRules,
   createRunRoutingRule,
   deleteRunRoutingRule,
-  listRunRoutingCallers,
   listRunRoutingRules,
   updateRunRoutingRule,
 } from "@/lib/api/run-routing";
-import type {
-  ModelAccount,
-  RunRoutingCaller,
-  RunRoutingProposal,
-  RunRoutingRule,
-  RunRoutingRuleCreate,
-} from "@/lib/api/types";
+import type { ModelAccount, RunRoutingRule } from "@/lib/api/types";
 import { callerDisplay } from "@/lib/routing-caller-labels";
 import { useTranslations } from "next-intl";
 import { useEffect, useState } from "react";
 
 /**
- * Settings → Models → ROUTING. The founder maps each dispatch caller's work to a
- * model. Backed by the REAL /api/v1/run-routing endpoints — the SINGLE routing
- * layer after the legacy Layer-2 surface was hard-deleted.
+ * Settings → Models → ROUTING (Lift N5). The founder authors routing as a table
+ * of rows, each `[NL condition] [model]`:
  *
- * Lift 6 refinements: no priority (natural-language routing picks one rule per
- * caller, so priority was noise); the catch-all default lives ONLY in the
- * "Default model" picker above (is_default rules are hidden here to avoid the
- * double display); each rule is one line `caller → model` (the target resolved
- * to a friendly account label, not a raw id); and rules are editable in place.
+ *  - Condition — a free-text natural-language phrase the founder types (e.g.
+ *    "복잡한 작업", "마케팅 관련", "한국어 요청"), stored on the rule as `source_text`.
+ *    The backend compiles it into the structured caller_id / conditions on save.
+ *  - Model — the target model, picked from the workspace's registered accounts.
+ *
+ * No "describe your routing" NL-compile panel; no caller / dimension dropdowns.
+ * Legacy rules (`source_text: null`) show their human {@link matchLabel} in the
+ * condition column. The catch-all default lives ONLY in the "Default model"
+ * picker above (is_default rules are hidden here to avoid double display).
  */
 type ListState = { data: RunRoutingRule[]; failed: boolean } | null;
 type Translate = ReturnType<typeof useTranslations>;
@@ -42,7 +37,7 @@ function friendlyTarget(target: string, accounts: ModelAccount[]): string {
   return acct ? acct.label : target;
 }
 
-/** Compact, human operator glyphs for the match preview (falls back to the raw op). */
+/** Compact, human operator glyphs for the legacy-rule condition preview. */
 const OPERATOR_SYMBOL: Record<string, string> = {
   eq: "=",
   ne: "≠",
@@ -60,9 +55,8 @@ function formatConditionValue(value: unknown): string {
   return JSON.stringify(value);
 }
 
-/** One condition (persisted rule or dry-run proposal) in human terms. A
- *  `classified_intent` condition reads as the category "<value> (category)";
- *  anything else reads "<field> <op> <value>" with the compact op glyph. */
+/** One legacy condition in human terms. A `classified_intent` condition reads as
+ *  "<value> (category)"; anything else reads "<field> <op> <value>". */
 function conditionLabel(
   cond: { field: string; operator: string; value?: unknown },
   t: Translate,
@@ -74,10 +68,9 @@ function conditionLabel(
   return `${cond.field} ${op} ${formatConditionValue(cond.value)}`.trim();
 }
 
-/** The MATCH (left) side of a route in human terms, shared by the persisted
- *  rules list and the NL preview: a caller (execution stage) via the localized
- *  label, else the first condition (category / complexity / language / artifact),
- *  else the "all work" catch-all label. Keeps the founder in NL, never in JSON. */
+/** The CONDITION column for a LEGACY (source_text-null) rule in human terms: a
+ *  caller (execution stage) via the localized label, else the first condition,
+ *  else the "all work" catch-all label. Keeps the founder out of raw JSON. */
 function matchLabel(
   callerId: string | null | undefined,
   conditions: ReadonlyArray<{ field: string; operator: string; value?: unknown }> | undefined,
@@ -86,6 +79,13 @@ function matchLabel(
   if (callerId) return callerDisplay(callerId, t);
   if (conditions && conditions.length > 0) return conditionLabel(conditions[0], t);
   return t("matchAny");
+}
+
+/** The condition text a rule shows: the verbatim NL `source_text` when set, else
+ *  the human {@link matchLabel} for a legacy structured rule. */
+function conditionText(rule: RunRoutingRule, t: Translate): string {
+  if (rule.source_text) return rule.source_text;
+  return matchLabel(rule.caller_id, rule.conditions, t);
 }
 
 /** The select value for a target — always the litellm_model. A legacy rule whose
@@ -98,7 +98,6 @@ function targetSelectValue(target: string, accounts: ModelAccount[]): string {
 export default function RunRoutingRules() {
   const [list, setList] = useState<ListState>(null);
   const [accounts, setAccounts] = useState<ModelAccount[]>([]);
-  const [callers, setCallers] = useState<RunRoutingCaller[]>([]);
   const [showAdd, setShowAdd] = useState(false);
   const t = useTranslations("settings.models.routing");
 
@@ -118,9 +117,6 @@ export default function RunRoutingRules() {
     listAccounts()
       .then((data) => active && setAccounts(data.filter((a) => a.is_active)))
       .catch(() => active && setAccounts([]));
-    listRunRoutingCallers()
-      .then((data) => active && setCallers(data))
-      .catch(() => active && setCallers([]));
     return () => {
       active = false;
     };
@@ -138,30 +134,21 @@ export default function RunRoutingRules() {
       </header>
       <p className="routing__lede">{t("lede")}</p>
 
-      {/* NL-first: describing routing in plain language IS the primary surface. */}
-      <div className="settings-add-panel routing-nl-primary">
-        <NlCompilePanel accounts={accounts} onApplied={load} />
-      </div>
-
-      {/* The caller/target dropdown form is the demoted "advanced" manual path. */}
-      <div className="routing__advanced">
+      <div className="routing__add">
         {!showAdd ? (
           <button type="button" className="settings-add-toggle" onClick={() => setShowAdd(true)}>
             {t("addToggle")}
           </button>
         ) : (
           <div className="settings-add-panel">
-            <RuleForm
-              callers={callers}
+            <RuleRowEditor
               accounts={accounts}
               onDone={() => {
                 load();
                 setShowAdd(false);
               }}
+              onCancel={() => setShowAdd(false)}
             />
-            <button type="button" className="settings-add-cancel" onClick={() => setShowAdd(false)}>
-              {t("cancel")}
-            </button>
           </div>
         )}
       </div>
@@ -178,14 +165,12 @@ export default function RunRoutingRules() {
         <p className="routing__empty">{t("empty")}</p>
       ) : (
         <ul className="routing__list" aria-label={t("listLabel")}>
+          <li className="routing-row routing-row--head" aria-hidden="true">
+            <span className="routing-row__col-head">{t("colCondition")}</span>
+            <span className="routing-row__col-head">{t("colModel")}</span>
+          </li>
           {visible.map((rule) => (
-            <RunRoutingRuleRow
-              key={rule.id}
-              rule={rule}
-              callers={callers}
-              accounts={accounts}
-              onChanged={load}
-            />
+            <RunRoutingRuleRow key={rule.id} rule={rule} accounts={accounts} onChanged={load} />
           ))}
         </ul>
       )}
@@ -195,16 +180,14 @@ export default function RunRoutingRules() {
 
 type RowState = "idle" | "editing" | "confirming" | "removing" | "error";
 
-/** One rule as a single line `caller → model` with Edit + confirm-gated Remove.
- *  Edit swaps the row body for an inline {@link RuleForm}. */
+/** One rule as a two-column row `[condition] [model]` with Edit + confirm-gated
+ *  Remove. Edit swaps the row body for an inline {@link RuleRowEditor}. */
 function RunRoutingRuleRow({
   rule,
-  callers,
   accounts,
   onChanged,
 }: {
   rule: RunRoutingRule;
-  callers: RunRoutingCaller[];
   accounts: ModelAccount[];
   onChanged: () => void;
 }) {
@@ -224,44 +207,31 @@ function RunRoutingRuleRow({
 
   if (state === "editing") {
     return (
-      <li className="routing-card">
-        <RuleForm
-          callers={callers}
-          accounts={accounts}
+      <li className="routing-row routing-row--editing">
+        <RuleRowEditor
           rule={rule}
+          accounts={accounts}
           onDone={() => {
             setState("idle");
             onChanged();
           }}
+          onCancel={() => setState("idle")}
         />
-        <button type="button" className="settings-add-cancel" onClick={() => setState("idle")}>
-          {t("cancel")}
-        </button>
       </li>
     );
   }
 
   return (
-    <li className="routing-card">
-      <div className="routing-card__body">
-        <p className="routing-card__route">
-          <span
-            className="routing-card__match"
-            title={rule.caller_id ?? rule.conditions?.[0]?.field ?? undefined}
-          >
-            {matchLabel(rule.caller_id, rule.conditions, t)}
-          </span>
-          <span className="routing-card__arrow" aria-hidden="true">
-            {" → "}
-          </span>
-          <span className="routing-card__target">{friendlyTarget(rule.target, accounts)}</span>
-          {rule.is_active ? null : (
-            <span className="routing-card__chip routing-card__chip--inactive">{t("inactive")}</span>
-          )}
-        </p>
-      </div>
+    <li className="routing-row">
+      <span className="routing-row__condition" title={rule.source_text ?? undefined}>
+        {conditionText(rule, t)}
+      </span>
+      <span className="routing-row__model">{friendlyTarget(rule.target, accounts)}</span>
 
-      <div className="routing-card__actions">
+      <div className="routing-row__actions">
+        {rule.is_active ? null : (
+          <span className="routing-card__chip routing-card__chip--inactive">{t("inactive")}</span>
+        )}
         {state === "error" ? (
           <span className="routing-card__error" aria-live="polite">
             {t("removeError")}
@@ -310,90 +280,89 @@ function RunRoutingRuleRow({
   );
 }
 
-type FormState = "idle" | "submitting" | "error";
+type EditorState = "idle" | "submitting" | "error";
 
 /**
- * Add / edit form — pick a caller and a target model. No name (auto-derived
- * `caller → model`), no priority (natural-language routing is one rule per
- * caller), no default toggle (the default lives in the picker above). When
- * `rule` is passed the form edits it (PATCH); otherwise it creates (POST).
+ * The minimal row editor — a text input for the NL condition + a `<select>` for
+ * the model. Adds (POST `{name, source_text, target}`) or edits (PATCH
+ * `{source_text, target}`) a rule. A 422 (uninterpretable condition) surfaces
+ * the backend's rephrase hint inline without discarding the row.
  */
-function RuleForm({
-  callers,
-  accounts,
+function RuleRowEditor({
   rule,
+  accounts,
   onDone,
+  onCancel,
 }: {
-  callers: RunRoutingCaller[];
-  accounts: ModelAccount[];
   rule?: RunRoutingRule;
+  accounts: ModelAccount[];
   onDone: () => void;
+  onCancel: () => void;
 }) {
   const editing = rule !== undefined;
-  const [callerId, setCallerId] = useState(rule?.caller_id ?? "");
+  const [condition, setCondition] = useState(rule?.source_text ?? "");
   const [target, setTarget] = useState(rule ? targetSelectValue(rule.target, accounts) : "");
-  const [state, setState] = useState<FormState>("idle");
+  const [state, setState] = useState<EditorState>("idle");
+  const [errorText, setErrorText] = useState<string | null>(null);
   const t = useTranslations("settings.models.routing");
 
-  const ready = callerId.trim().length > 0 && target.trim().length > 0;
+  const ready = condition.trim().length > 0 && target.trim().length > 0;
+
+  /** A 422 means the phrase compiled to nothing valid — show the rephrase hint.
+   *  Any other failure shows the generic add/edit error. */
+  function messageFor(error: unknown): string {
+    if (error instanceof ApiError && error.status === 422) return t("rephrase");
+    return editing ? t("saveError") : t("addError");
+  }
 
   async function submit() {
     if (state === "submitting" || !ready) return;
     setState("submitting");
+    setErrorText(null);
     try {
+      const text = condition.trim();
       if (editing && rule) {
-        await updateRunRoutingRule(rule.id, { caller_id: callerId, target });
+        await updateRunRoutingRule(rule.id, { source_text: text, target });
       } else {
-        const body: RunRoutingRuleCreate = {
-          name: `${callerId} → ${target}`,
-          caller_id: callerId,
-          target,
-          priority: 10,
-        };
-        await createRunRoutingRule(body);
+        await createRunRoutingRule({ name: text, source_text: text, target });
       }
       onDone();
-    } catch {
+    } catch (error) {
+      setErrorText(messageFor(error));
       setState("error");
     }
   }
 
   return (
     <form
-      className="routing-form"
+      className="routing-editor"
       onSubmit={(e) => {
         e.preventDefault();
         submit();
       }}
     >
-      {editing ? <p className="routing-form__label">{t("editTitle")}</p> : null}
-      <div className="routing-form__row">
-        <label className="routing-form__field">
-          <span className="routing-form__label">{t("caller")}</span>
-          <select
-            className="routing-form__input"
-            value={callerId}
+      <div className="routing-editor__row">
+        <label className="routing-editor__field routing-editor__field--condition">
+          <span className="routing-editor__label">{t("colCondition")}</span>
+          <input
+            type="text"
+            className="routing-editor__input"
+            value={condition}
+            placeholder={t("conditionPlaceholder")}
             disabled={state === "submitting"}
-            onChange={(e) => setCallerId(e.target.value)}
-          >
-            <option value="">{t("callerPlaceholder")}</option>
-            {callers.map((c) => (
-              <option key={c.caller_id} value={c.caller_id} title={c.description}>
-                {callerDisplay(c.caller_id, t)}
-              </option>
-            ))}
-          </select>
+            onChange={(e) => setCondition(e.target.value)}
+          />
         </label>
 
-        <label className="routing-form__field">
-          <span className="routing-form__label">{t("routeTo")}</span>
+        <label className="routing-editor__field routing-editor__field--model">
+          <span className="routing-editor__label">{t("colModel")}</span>
           <select
-            className="routing-form__input"
+            className="routing-editor__input"
             value={target}
             disabled={state === "submitting"}
             onChange={(e) => setTarget(e.target.value)}
           >
-            <option value="">{t("routeToPlaceholder")}</option>
+            <option value="">{t("modelPlaceholder")}</option>
             {accounts.map((a) => (
               <option key={a.id} value={a.litellm_model}>
                 {a.label} ({a.litellm_model})
@@ -403,12 +372,12 @@ function RuleForm({
         </label>
       </div>
 
-      <div className="routing-form__foot">
-        {state === "error" && (
+      <div className="routing-editor__foot">
+        {errorText ? (
           <span className="routing-form__error" aria-live="polite">
-            {t("addError")}
+            {errorText}
           </span>
-        )}
+        ) : null}
         <button
           type="submit"
           className="routing-form__submit"
@@ -422,131 +391,10 @@ function RuleForm({
               ? t("save")
               : t("addRule")}
         </button>
-      </div>
-    </form>
-  );
-}
-
-type NlState = "idle" | "compiling" | "applying" | "error";
-
-/** Describe one dry-run proposal's MATCH side in human terms. A default reads
- *  "Default model"; everything else reuses {@link matchLabel} (caller / condition
- *  / catch-all), so the preview and the persisted list read identically. */
-function proposalMatchLabel(p: RunRoutingProposal, t: Translate): string {
-  if (p.is_default) return t("dim.default");
-  return matchLabel(p.caller_id, p.condition ? [p.condition] : undefined, t);
-}
-
-/**
- * NL → rules panel (NL-first primary surface). The founder describes routing in
- * plain language; one cheap LLM call drafts VALIDATED, multi-dimension proposals
- * (dry-run — nothing saved). The preview renders each proposal in human terms
- * (category / complexity / language / artifact / stage / default). "Apply all"
- * commits the WHOLE set in ONE backend call (`/compile/apply`) — the backend
- * creates the intents + rules + default atomically — then reloads.
- */
-function NlCompilePanel({
-  accounts,
-  onApplied,
-}: {
-  accounts: ModelAccount[];
-  onApplied: () => void;
-}) {
-  const [text, setText] = useState("");
-  const [proposals, setProposals] = useState<RunRoutingProposal[] | null>(null);
-  const [state, setState] = useState<NlState>("idle");
-  const t = useTranslations("settings.models.routing");
-
-  async function compile() {
-    if (state === "compiling" || text.trim().length === 0) return;
-    setState("compiling");
-    setProposals(null);
-    try {
-      const res = await compileRunRoutingRules(text.trim());
-      setProposals(res.proposals);
-      setState("idle");
-    } catch {
-      setState("error");
-    }
-  }
-
-  async function applyAll() {
-    if (state === "applying" || !proposals || proposals.length === 0) return;
-    setState("applying");
-    try {
-      await applyRunRoutingProposals(proposals);
-      onApplied();
-    } catch {
-      setState("error");
-    }
-  }
-
-  return (
-    <div className="routing-nl">
-      <p className="routing-nl__title section-label">{t("nlHeading")}</p>
-      <p className="routing-form__label">{t("nlLede")}</p>
-      <textarea
-        className="routing-form__input"
-        rows={3}
-        placeholder={t("nlPlaceholder")}
-        value={text}
-        disabled={state === "compiling" || state === "applying"}
-        onChange={(e) => setText(e.target.value)}
-      />
-      <div className="routing-form__foot">
-        {state === "error" && (
-          <span className="routing-form__error" aria-live="polite">
-            {proposals === null ? t("nlError") : t("nlApplyError")}
-          </span>
-        )}
-        <button
-          type="button"
-          className="routing-form__submit"
-          onClick={compile}
-          disabled={state === "compiling" || state === "applying" || text.trim().length === 0}
-        >
-          {state === "compiling" ? t("nlCompiling") : t("nlCompile")}
+        <button type="button" className="settings-add-cancel" onClick={onCancel}>
+          {t("cancel")}
         </button>
       </div>
-
-      {proposals !== null &&
-        (proposals.length === 0 ? (
-          <p className="routing__empty">{t("nlEmpty")}</p>
-        ) : (
-          <div className="routing-nl__preview">
-            <p className="section-label">{t("nlProposed")}</p>
-            <ul className="routing__list" aria-label={t("nlProposed")}>
-              {proposals.map((p, i) => (
-                <li className="routing-card" key={`${p.name}-${p.target}-${i}`}>
-                  <div className="routing-card__body">
-                    <p className="routing-card__route">
-                      <span
-                        className="routing-card__match"
-                        title={p.caller_id ?? p.condition?.field ?? undefined}
-                      >
-                        {proposalMatchLabel(p, t)}
-                      </span>
-                      <span className="routing-card__arrow" aria-hidden="true">
-                        {" → "}
-                      </span>
-                      <span className="routing-card__target">
-                        {friendlyTarget(p.target, accounts)}
-                      </span>
-                    </p>
-                  </div>
-                </li>
-              ))}
-            </ul>
-            <button
-              type="button"
-              className="routing-form__submit"
-              onClick={applyAll}
-              disabled={state === "applying"}
-            >
-              {state === "applying" ? t("nlApplying") : t("nlApply")}
-            </button>
-          </div>
-        ))}
-    </div>
+    </form>
   );
 }

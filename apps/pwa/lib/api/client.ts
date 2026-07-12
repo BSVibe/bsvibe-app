@@ -30,12 +30,29 @@ export function backendBaseUrl(): string {
 
 export class ApiError extends Error {
   readonly status: number;
+  /** The backend's parsed `detail` (FastAPI error body), when present. Lets a
+   *  caller surface a human hint (e.g. the 422 rephrase message for an
+   *  uninterpretable routing condition) instead of the generic status message. */
+  readonly detail?: string;
 
-  constructor(status: number, message: string) {
+  constructor(status: number, message: string, detail?: string) {
     super(message);
     this.name = "ApiError";
     this.status = status;
+    this.detail = detail;
   }
+}
+
+/** Best-effort read of a FastAPI `{detail}` error body. Clones the response so
+ *  the caller keeps its stream, and never throws (a non-JSON body → undefined). */
+async function readErrorDetail(response: Response): Promise<string | undefined> {
+  try {
+    const body = (await response.clone().json()) as { detail?: unknown };
+    if (typeof body.detail === "string") return body.detail;
+  } catch {
+    // Non-JSON / empty body — fall through to no detail.
+  }
+  return undefined;
 }
 
 /**
@@ -154,7 +171,12 @@ export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise
     if (response.status === 401) {
       handleUnauthorized(path);
     }
-    throw new ApiError(response.status, `${init.method ?? "GET"} ${path} → ${response.status}`);
+    const detail = await readErrorDetail(response);
+    throw new ApiError(
+      response.status,
+      `${init.method ?? "GET"} ${path} → ${response.status}`,
+      detail,
+    );
   }
   if (response.status === 204) {
     return undefined as T;
