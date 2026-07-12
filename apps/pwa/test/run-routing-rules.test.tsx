@@ -1,13 +1,15 @@
 /**
- * Run-routing surface — Settings → Models → ROUTING (Lift 6 refined). Drives the
- * real list/callers/create/update/delete/compile clients against a mocked fetch:
+ * Run-routing surface — Settings → Models → ROUTING (Lift N5, 2-column). The
+ * founder's routing rules are now a table of `[NL condition text] [model]`:
  *
  *  - calm empty state; is_default rules hidden (the default is the picker above)
- *  - each rule is one line `caller → friendly model` (target resolved via accounts)
- *  - Add: caller + target selects only (no name / priority) → POST
- *  - Edit: inline form → PATCH
+ *  - each rule is a row: condition (source_text, or matchLabel for legacy null
+ *    rows) + the friendly model
+ *  - Add: type a free-text condition + pick a model → POST {name, source_text, target}
+ *  - Edit: inline text + select → PATCH {source_text, target}
  *  - Delete: confirm → DELETE
- *  - NL: draft → preview → apply (a default proposal sets the workspace default)
+ *  - A 422 (uninterpretable condition) surfaces the rephrase hint inline, no crash
+ *  - No "describe your routing" NL-compile panel; no caller/dimension dropdowns
  */
 
 import RunRoutingRules from "@/components/settings/RunRoutingRules";
@@ -31,15 +33,17 @@ function jsonResponse(body: unknown, status = 200) {
   });
 }
 
+// An N5 source_text rule: the condition is the founder's verbatim NL phrase.
 const RULE = {
   id: "11111111-1111-1111-1111-111111111111",
   workspace_id: "22222222-2222-2222-2222-222222222222",
-  name: "design → opus",
-  caller_id: "workflow.agent_loop.plan",
+  name: "복잡한 작업",
+  caller_id: null,
+  source_text: "복잡한 작업",
   priority: 10,
   is_default: false,
   target: "opus",
-  conditions: [],
+  conditions: [{ field: "estimated_tokens", operator: "gt", value: 8000, negate: false }],
   is_active: true,
   created_at: "2026-07-11T00:00:00Z",
 };
@@ -48,31 +52,20 @@ const DEFAULT_RULE = {
   ...RULE,
   id: "99999999-9999-9999-9999-999999999999",
   is_default: true,
+  source_text: null,
   caller_id: null,
 };
 
-// An N3 non-stage rule: caller_id null + a category condition (classified_intent).
-const CATEGORY_RULE = {
+// A LEGACY structured rule (source_text null) — the condition column falls back
+// to the human matchLabel (the stage caller's localized label).
+const LEGACY_STAGE_RULE = {
   ...RULE,
   id: "33333333-3333-3333-3333-333333333333",
-  name: "marketing → opus",
-  caller_id: null,
-  conditions: [{ field: "classified_intent", operator: "eq", value: "marketing", negate: false }],
+  name: "design → opus",
+  source_text: null,
+  caller_id: "workflow.agent_loop.plan",
+  conditions: [],
 };
-
-// A complexity condition rule (caller_id null + estimated_tokens > N).
-const COMPLEXITY_RULE = {
-  ...RULE,
-  id: "44444444-4444-4444-4444-444444444444",
-  name: "complex → opus",
-  caller_id: null,
-  conditions: [{ field: "estimated_tokens", operator: "gt", value: 8000, negate: false }],
-};
-
-const CALLERS = [
-  { caller_id: "workflow.agent_loop.plan", description: "design step" },
-  { caller_id: "workflow.judge", description: "verifier" },
-];
 
 function acct(id: string, label: string, litellm_model: string) {
   return {
@@ -96,20 +89,30 @@ const ACCOUNTS = [
   acct("cccccccc-cccc-cccc-cccc-cccccccccccc", "dogfood (sonnet)", "sonnet"),
 ];
 
-function routedFetch(rules: unknown, hooks: Record<string, () => void> = {}) {
+type Hooks = {
+  onPost?: () => void;
+  onPatch?: () => void;
+  onDelete?: () => void;
+  postStatus?: number;
+  postBody?: unknown;
+  patchBody?: unknown;
+};
+
+function routedFetch(rules: unknown, hooks: Hooks = {}) {
   return vi.fn(async (url: string, init?: RequestInit) => {
     const u = String(url);
     const method = (init?.method ?? "GET").toUpperCase();
-    if (u.endsWith("/api/v1/run-routing/callers")) return jsonResponse(CALLERS);
     if (u.includes("/api/v1/accounts")) return jsonResponse(ACCOUNTS);
-    if (u.endsWith("/api/v1/run-routing/compile")) return jsonResponse({ proposals: [] });
     if (u.endsWith("/api/v1/run-routing") && method === "POST") {
       hooks.onPost?.();
-      return jsonResponse(RULE, 201);
+      if (hooks.postStatus && hooks.postStatus >= 400) {
+        return jsonResponse(hooks.postBody ?? { detail: "boom" }, hooks.postStatus);
+      }
+      return jsonResponse(hooks.postBody ?? RULE, 201);
     }
     if (u.match(/\/api\/v1\/run-routing\/[^/]+$/) && method === "PATCH") {
       hooks.onPatch?.();
-      return jsonResponse({ ...RULE, target: "sonnet", caller_id: "workflow.judge" });
+      return jsonResponse(hooks.patchBody ?? { ...RULE, target: "sonnet" });
     }
     if (u.match(/\/api\/v1\/run-routing\/[^/]+$/) && method === "DELETE") {
       hooks.onDelete?.();
@@ -120,7 +123,7 @@ function routedFetch(rules: unknown, hooks: Record<string, () => void> = {}) {
   });
 }
 
-describe("Run-routing surface (Lift 6)", () => {
+describe("Run-routing surface (Lift N5 — 2-column NL condition + model)", () => {
   beforeEach(() => {
     clearSession();
     setSession(SESSION);
@@ -137,32 +140,38 @@ describe("Run-routing surface (Lift 6)", () => {
     );
   });
 
-  it("renders one line caller → friendly model; no priority chip", async () => {
-    global.fetch = routedFetch([RULE]) as unknown as typeof fetch;
+  it("has NO 'describe your routing' NL panel and NO caller/dimension dropdown", async () => {
+    global.fetch = routedFetch([]) as unknown as typeof fetch;
     render(<RunRoutingRules />);
-    // The caller shows a localized human label, NOT the raw technical id.
-    await waitFor(() => expect(screen.getByText("Design & planning")).toBeInTheDocument());
-    expect(screen.queryByText("workflow.agent_loop.plan")).not.toBeInTheDocument();
-    // Target resolves to the friendly account label, not the raw litellm id.
-    expect(screen.getByText("dogfood (opus)")).toBeInTheDocument();
-    // The rule's freeform name is NOT shown (no duplication) and no priority chip.
-    expect(screen.queryByText("design → opus")).not.toBeInTheDocument();
-    expect(screen.queryByText(/Priority \d/i)).not.toBeInTheDocument();
+    await waitFor(() =>
+      expect(screen.getByText(/All work goes to the active model account/i)).toBeInTheDocument(),
+    );
+    // The rejected NL-compile textarea is gone.
+    expect(screen.queryByPlaceholderText(/Design work goes to opus/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Draft rules/i })).not.toBeInTheDocument();
+    // The rejected caller dropdown is gone.
+    expect(screen.queryByLabelText(/^Caller$/i)).not.toBeInTheDocument();
   });
 
-  it("renders a condition-based rule's match in human terms in the LIST (not blank)", async () => {
-    global.fetch = routedFetch([CATEGORY_RULE, COMPLEXITY_RULE]) as unknown as typeof fetch;
+  it("renders a source_text rule as a row: [condition] [friendly model]", async () => {
+    global.fetch = routedFetch([RULE]) as unknown as typeof fetch;
     render(<RunRoutingRules />);
     const list = await screen.findByRole("list", { name: /Routing rules/i });
-    // Category rule: caller_id is null but the left side is NOT blank — it reads
-    // "<value> (category)", never an empty span before the arrow.
-    await waitFor(() =>
-      expect(within(list).getByText(/marketing \(category\)/i)).toBeInTheDocument(),
-    );
-    // Complexity rule: "<field> <op> <value>".
-    expect(within(list).getByText(/estimated_tokens > 8000/i)).toBeInTheDocument();
-    // Both still resolve their target to the friendly account label.
-    expect(within(list).getAllByText("dogfood (opus)").length).toBe(2);
+    // Column 1: the founder's verbatim NL condition phrase.
+    await waitFor(() => expect(within(list).getByText("복잡한 작업")).toBeInTheDocument());
+    // Column 2: the friendly account label, not the raw litellm id.
+    expect(within(list).getByText("dogfood (opus)")).toBeInTheDocument();
+    // The rule's freeform name is NOT separately shown when it equals source_text.
+    expect(within(list).queryByText("estimated_tokens > 8000")).not.toBeInTheDocument();
+  });
+
+  it("renders a LEGACY null source_text rule via its human matchLabel", async () => {
+    global.fetch = routedFetch([LEGACY_STAGE_RULE]) as unknown as typeof fetch;
+    render(<RunRoutingRules />);
+    const list = await screen.findByRole("list", { name: /Routing rules/i });
+    // caller_id-based legacy rule → the localized stage label, never blank / raw id.
+    await waitFor(() => expect(within(list).getByText("Design & planning")).toBeInTheDocument());
+    expect(within(list).queryByText("workflow.agent_loop.plan")).not.toBeInTheDocument();
   });
 
   it("hides is_default rules (the default is the picker above)", async () => {
@@ -173,7 +182,7 @@ describe("Run-routing surface (Lift 6)", () => {
     );
   });
 
-  it("creates a rule from caller + target selects (no name/priority) → POST", async () => {
+  it("adds a row: type a condition + pick a model → POST {name, source_text, target}", async () => {
     let posted = false;
     const fetchMock = routedFetch([], {
       onPost: () => {
@@ -187,10 +196,8 @@ describe("Run-routing surface (Lift 6)", () => {
     );
 
     await userEvent.click(screen.getByRole("button", { name: "+ Add rule" }));
-    // Options show the localized label; the value is still the caller_id.
-    await screen.findByRole("option", { name: "Design & planning" });
-    await userEvent.selectOptions(screen.getByLabelText(/Caller/i), "workflow.agent_loop.plan");
-    await userEvent.selectOptions(screen.getByLabelText(/Route to/i), "opus");
+    await userEvent.type(screen.getByLabelText(/^Condition$/i), "마케팅 관련");
+    await userEvent.selectOptions(screen.getByLabelText(/^Model$/i), "opus");
     await userEvent.click(screen.getByRole("button", { name: /^Add rule$/i }));
 
     await waitFor(() => expect(posted).toBe(true));
@@ -199,13 +206,15 @@ describe("Run-routing surface (Lift 6)", () => {
     );
     if (!call) throw new Error("expected POST");
     const body = JSON.parse(call[1].body as string);
-    expect(body.caller_id).toBe("workflow.agent_loop.plan");
+    expect(body.source_text).toBe("마케팅 관련");
     expect(body.target).toBe("opus");
-    // Name auto-derived; no priority surfaced.
-    expect(body.name).toBe("workflow.agent_loop.plan → opus");
+    expect(body.name).toBe("마케팅 관련");
+    // The rejected structured fields are NOT sent.
+    expect(body.caller_id).toBeUndefined();
+    expect(body.is_default).toBeUndefined();
   });
 
-  it("edits a rule inline → PATCH", async () => {
+  it("edits a row inline (text + select) → PATCH {source_text, target}", async () => {
     let patched = false;
     const fetchMock = routedFetch([RULE], {
       onPatch: () => {
@@ -215,11 +224,13 @@ describe("Run-routing surface (Lift 6)", () => {
     global.fetch = fetchMock as unknown as typeof fetch;
     render(<RunRoutingRules />);
     const list = await screen.findByRole("list");
-    await waitFor(() => expect(within(list).getByText("Design & planning")).toBeInTheDocument());
+    await waitFor(() => expect(within(list).getByText("복잡한 작업")).toBeInTheDocument());
 
     await userEvent.click(within(list).getByRole("button", { name: /^Edit$/i }));
-    // The edit form is prefilled; change the target then save.
-    await userEvent.selectOptions(screen.getByLabelText(/Route to/i), "sonnet");
+    const input = screen.getByLabelText(/^Condition$/i);
+    await userEvent.clear(input);
+    await userEvent.type(input, "한국어 요청");
+    await userEvent.selectOptions(screen.getByLabelText(/^Model$/i), "sonnet");
     await userEvent.click(screen.getByRole("button", { name: /^Save$/i }));
 
     await waitFor(() => expect(patched).toBe(true));
@@ -227,7 +238,32 @@ describe("Run-routing surface (Lift 6)", () => {
       ([, i]) => (i?.method ?? "GET") === "PATCH",
     );
     if (!call) throw new Error("expected PATCH");
-    expect(JSON.parse(call[1].body as string).target).toBe("sonnet");
+    const body = JSON.parse(call[1].body as string);
+    expect(body.source_text).toBe("한국어 요청");
+    expect(body.target).toBe("sonnet");
+  });
+
+  it("surfaces the 422 rephrase hint inline on add — and does not blow up", async () => {
+    const fetchMock = routedFetch([], {
+      postStatus: 422,
+      postBody: { detail: "could not interpret the condition — try rephrasing" },
+    });
+    global.fetch = fetchMock as unknown as typeof fetch;
+    render(<RunRoutingRules />);
+    await waitFor(() =>
+      expect(screen.getByText(/All work goes to the active model account/i)).toBeInTheDocument(),
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: "+ Add rule" }));
+    await userEvent.type(screen.getByLabelText(/^Condition$/i), "asdf qwer");
+    await userEvent.selectOptions(screen.getByLabelText(/^Model$/i), "opus");
+    await userEvent.click(screen.getByRole("button", { name: /^Add rule$/i }));
+
+    // The inline rephrase hint appears; the row editor is still there (no crash).
+    await waitFor(() =>
+      expect(screen.getByText(/couldn.t interpret that condition/i)).toBeInTheDocument(),
+    );
+    expect(screen.getByLabelText(/^Condition$/i)).toBeInTheDocument();
   });
 
   it("deletes a rule after confirm → DELETE", async () => {
@@ -240,165 +276,11 @@ describe("Run-routing surface (Lift 6)", () => {
     global.fetch = fetchMock as unknown as typeof fetch;
     render(<RunRoutingRules />);
     const list = await screen.findByRole("list");
-    await waitFor(() => expect(within(list).getByText("Design & planning")).toBeInTheDocument());
+    await waitFor(() => expect(within(list).getByText("복잡한 작업")).toBeInTheDocument());
 
     await userEvent.click(within(list).getByRole("button", { name: /^Remove$/i }));
     await userEvent.click(await screen.findByRole("button", { name: /^Confirm remove$/i }));
     await waitFor(() => expect(deleted).toBe(true));
-  });
-
-  it("NL is the primary surface — the textarea shows without any toggle", async () => {
-    global.fetch = routedFetch([]) as unknown as typeof fetch;
-    render(<RunRoutingRules />);
-    // No "Describe in words" toggle to click — the NL textarea is right there.
-    expect(await screen.findByPlaceholderText(/Design work goes to opus/i)).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /Describe in words/i })).not.toBeInTheDocument();
-  });
-
-  it("NL: rich preview renders each dimension in human terms, Apply → one POST /compile/apply", async () => {
-    let applyBody: unknown = null;
-    let applyCalls = 0;
-    let perRuleCreate = 0;
-    let defaultPatch = 0;
-    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
-      const u = String(url);
-      const method = (init?.method ?? "GET").toUpperCase();
-      if (u.endsWith("/api/v1/run-routing/callers")) return jsonResponse(CALLERS);
-      if (u.includes("/api/v1/accounts")) return jsonResponse(ACCOUNTS);
-      if (u.endsWith("/api/v1/run-routing/compile") && method === "POST")
-        return jsonResponse({
-          proposals: [
-            {
-              name: "marketing",
-              target: "sonnet",
-              is_default: false,
-              priority: 10,
-              caller_id: null,
-              condition: { field: "classified_intent", operator: "eq", value: "marketing" },
-              intent_name: "marketing",
-              intent_examples: ["draft ad copy", "write a launch post"],
-            },
-            {
-              name: "complex",
-              target: "opus",
-              is_default: false,
-              priority: 10,
-              caller_id: null,
-              condition: { field: "estimated_tokens", operator: "gt", value: 8000 },
-              intent_name: null,
-              intent_examples: null,
-            },
-            {
-              name: "korean",
-              target: "sonnet",
-              is_default: false,
-              priority: 10,
-              caller_id: null,
-              condition: { field: "detected_language", operator: "eq", value: "ko" },
-              intent_name: null,
-              intent_examples: null,
-            },
-            {
-              name: "design stage",
-              target: "opus",
-              is_default: false,
-              priority: 10,
-              caller_id: "workflow.agent_loop.plan",
-              condition: null,
-              intent_name: null,
-              intent_examples: null,
-            },
-            {
-              name: "the rest",
-              target: "sonnet",
-              is_default: true,
-              priority: 100,
-              caller_id: null,
-              condition: null,
-              intent_name: null,
-              intent_examples: null,
-            },
-          ],
-        });
-      if (u.endsWith("/api/v1/run-routing/compile/apply") && method === "POST") {
-        applyCalls += 1;
-        applyBody = JSON.parse(init?.body as string);
-        return jsonResponse({ created: [RULE], default_set: true }, 201);
-      }
-      // These MUST NOT be hit — apply is one backend call now.
-      if (u.endsWith("/api/v1/run-routing") && method === "POST") perRuleCreate += 1;
-      if (u.includes("/api/v1/workspace") && method === "PATCH") defaultPatch += 1;
-      return jsonResponse([]);
-    });
-    global.fetch = fetchMock as unknown as typeof fetch;
-
-    render(<RunRoutingRules />);
-    await userEvent.type(
-      await screen.findByPlaceholderText(/Design work goes to opus/i),
-      "마케팅은 sonnet, 복잡한 건 opus",
-    );
-    await userEvent.click(screen.getByRole("button", { name: /^Draft rules$/i }));
-
-    // Category: "<intent> (category) → <model>".
-    await waitFor(() => expect(screen.getByText(/marketing \(category\)/i)).toBeInTheDocument());
-    // Complexity: the field + operator + value are shown in human terms.
-    expect(screen.getByText(/estimated_tokens > 8000/i)).toBeInTheDocument();
-    // Language dimension.
-    expect(screen.getByText(/detected_language = ko/i)).toBeInTheDocument();
-    // Stage via callerDisplay (localized).
-    expect(screen.getByText("Design & planning")).toBeInTheDocument();
-    // Default proposal reads as "Default model → <model>".
-    const proposed = screen.getByRole("list", { name: /Proposed rules/i });
-    expect(within(proposed).getByText(/Default model/i)).toBeInTheDocument();
-
-    await userEvent.click(screen.getByRole("button", { name: /^Apply all$/i }));
-
-    await waitFor(() => expect(applyCalls).toBe(1));
-    // Exactly one backend apply call — no per-proposal client loop.
-    expect(perRuleCreate).toBe(0);
-    expect(defaultPatch).toBe(0);
-    const body = applyBody as { proposals: unknown[] };
-    expect(body.proposals).toHaveLength(5);
-  });
-
-  it("NL: a calm error shows when apply fails", async () => {
-    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
-      const u = String(url);
-      const method = (init?.method ?? "GET").toUpperCase();
-      if (u.endsWith("/api/v1/run-routing/callers")) return jsonResponse(CALLERS);
-      if (u.includes("/api/v1/accounts")) return jsonResponse(ACCOUNTS);
-      if (u.endsWith("/api/v1/run-routing/compile") && method === "POST")
-        return jsonResponse({
-          proposals: [
-            {
-              name: "the rest",
-              target: "sonnet",
-              is_default: true,
-              priority: 100,
-              caller_id: null,
-              condition: null,
-              intent_name: null,
-              intent_examples: null,
-            },
-          ],
-        });
-      if (u.endsWith("/api/v1/run-routing/compile/apply") && method === "POST")
-        return new Response("boom", { status: 500 });
-      return jsonResponse([]);
-    });
-    global.fetch = fetchMock as unknown as typeof fetch;
-
-    render(<RunRoutingRules />);
-    await userEvent.type(
-      await screen.findByPlaceholderText(/Design work goes to opus/i),
-      "나머지는 sonnet",
-    );
-    await userEvent.click(screen.getByRole("button", { name: /^Draft rules$/i }));
-    await userEvent.click(await screen.findByRole("button", { name: /^Apply all$/i }));
-
-    await waitFor(() =>
-      expect(screen.getByText(/Couldn.t apply those rules/i)).toBeInTheDocument(),
-    );
   });
 
   it("surfaces a calm note when the list read fails", async () => {

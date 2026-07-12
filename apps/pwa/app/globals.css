@@ -8798,6 +8798,141 @@ main.login {
     max-width: none;
   }
 }
+
+/* ── 2-column rule table (Lift N5) ─────────────────────────────────────── */
+.routing__add {
+  margin: 4px 0 12px;
+}
+
+/* Each rule is a row: [NL condition] [model] [actions]. */
+.routing-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  background: var(--surface);
+  border: 1px solid var(--hair-strong);
+  border-radius: var(--radius);
+}
+
+.routing-row--head {
+  padding: 4px 16px;
+  background: transparent;
+  border: none;
+}
+
+.routing-row__col-head {
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+
+.routing-row__condition {
+  min-width: 0;
+  font-size: 0.88rem;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+
+.routing-row__model {
+  min-width: 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.84rem;
+  color: var(--ink-2);
+  overflow-wrap: anywhere;
+}
+
+.routing-row__actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+/* The whole editing row spans the grid so the inline editor gets full width. */
+.routing-row--editing {
+  display: block;
+  padding: 0;
+  background: transparent;
+  border: none;
+}
+
+/* Inline row editor: a condition text input + a model select. */
+.routing-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+  background: var(--surface);
+  border: 1px solid var(--hair-strong);
+  border-radius: var(--radius);
+}
+
+.routing-editor__row {
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr);
+  gap: 12px;
+  align-items: end;
+}
+
+.routing-editor__field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+
+.routing-editor__label {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--ink-2);
+}
+
+.routing-editor__input {
+  width: 100%;
+  padding: 9px 11px;
+  border: 1px solid var(--hair-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+  font-size: 0.88rem;
+}
+
+.routing-editor__input:focus-visible {
+  outline: 2px solid var(--amber-dot);
+  outline-offset: 1px;
+}
+
+.routing-editor__input:disabled {
+  opacity: 0.6;
+}
+
+.routing-editor__foot {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+@media (max-width: 640px) {
+  .routing-row {
+    grid-template-columns: 1fr;
+  }
+
+  .routing-row--head {
+    display: none;
+  }
+
+  .routing-editor__row {
+    grid-template-columns: 1fr;
+  }
+}
 /* ── END Routing rules ─────────────────────────────────────────────────── */
 
 /* ── BEGIN feat/decisions-unify: unified Pending kinds (isolated block) ─────

@@ -1,53 +1,37 @@
 /** Run-routing API — REAL backend `/api/v1/run-routing`
- *  (backend/api/v1/run_routing.py): the founder's single ROUTING surface after
- *  the Layer-2 model-routing layer was hard-deleted. A rule maps a dispatch
- *  caller's work to a target ModelAccount; the dispatch resolver consumes these
- *  rows at runtime (we only read/write the rows here).
+ *  (backend/api/v1/run_routing.py): the founder's single ROUTING surface. Each
+ *  rule maps a natural-language CONDITION (`source_text`) to a target
+ *  ModelAccount; the backend compiles the phrase into structured caller_id /
+ *  conditions on save (transparent to the founder). The dispatch resolver
+ *  consumes these rows at runtime (we only read/write the rows here).
  *
- *   GET    /api/v1/run-routing           — list rules for the workspace,
- *                                          priority ascending
- *   GET    /api/v1/run-routing/callers   — the selectable dispatch callers
- *                                          (single source of truth for the form)
- *   POST   /api/v1/run-routing           — create one (201 RunRuleResponse)
- *   DELETE /api/v1/run-routing/{id}      — delete a rule, 204 No Content
+ *   GET    /api/v1/run-routing        — list rules for the workspace
+ *   POST   /api/v1/run-routing        — create one from {name, source_text, target}
+ *   PATCH  /api/v1/run-routing/{id}   — edit {source_text?, target?}; editing
+ *                                       source_text recompiles server-side
+ *   DELETE /api/v1/run-routing/{id}   — delete a rule, 204 No Content
  *
- *  The create body mirrors the backend `RunRuleCreate` (extra=forbid) 1:1: we
- *  send name / target / priority / is_default, include `caller_id` only when set
- *  (the catch-all default omits it), and DROP `conditions` entirely when none
- *  are given so the wire shape stays minimal. */
+ *  A 422 on create/update means the phrase compiled to nothing valid — the
+ *  `ApiError.detail` carries a rephrase hint the surface renders inline. */
 
 import { apiFetch } from "./client";
-import type {
-  RunRoutingApplyResult,
-  RunRoutingCaller,
-  RunRoutingCompileResult,
-  RunRoutingProposal,
-  RunRoutingRule,
-  RunRoutingRuleCreate,
-  RunRoutingRuleUpdate,
-} from "./types";
+import type { RunRoutingRule, RunRoutingRuleCreate, RunRoutingRuleUpdate } from "./types";
 
 /** Run-routing rules for the active workspace, priority ascending. */
 export function listRunRoutingRules(): Promise<RunRoutingRule[]> {
   return apiFetch<RunRoutingRule[]>("/api/v1/run-routing");
 }
 
-/** The dispatch callers a non-default rule may target (registry-backed). */
-export function listRunRoutingCallers(): Promise<RunRoutingCaller[]> {
-  return apiFetch<RunRoutingCaller[]>("/api/v1/run-routing/callers");
-}
-
-/** Create a run-routing rule. Builds the body to match the backend
- *  extra=forbid schema: always send name / target / priority / is_default;
- *  include `caller_id` only when set, and `conditions` only when non-empty. */
+/** Create a run-routing rule. The NL surface sends only `name` / `source_text`
+ *  / `target`; the backend compiles `source_text` into the structured
+ *  caller_id / conditions. A 422 surfaces via `ApiError.detail`. */
 export function createRunRoutingRule(input: RunRoutingRuleCreate): Promise<RunRoutingRule> {
-  const body: RunRoutingRuleCreate = {
-    name: input.name,
-    target: input.target,
-    priority: input.priority,
-    is_default: input.is_default ?? false,
-  };
+  const body: RunRoutingRuleCreate = { name: input.name, target: input.target };
+  if (input.source_text) body.source_text = input.source_text;
+  // Structured fields kept for back-compat callers; the NL surface omits them.
   if (input.caller_id) body.caller_id = input.caller_id;
+  if (input.priority !== undefined) body.priority = input.priority;
+  if (input.is_default !== undefined) body.is_default = input.is_default;
   if (input.is_active !== undefined) body.is_active = input.is_active;
   if (input.conditions && input.conditions.length > 0) body.conditions = input.conditions;
 
@@ -57,32 +41,8 @@ export function createRunRoutingRule(input: RunRoutingRuleCreate): Promise<RunRo
   });
 }
 
-/** Compile a plain-language routing description into rich rule PROPOSALS (dry-run
- *  — nothing is persisted; the caller previews then applies the accepted set in
- *  ONE call via {@link applyRunRoutingProposals}). Each proposal expresses a single
- *  routing dimension (category / complexity / language / artifact / stage / default). */
-export function compileRunRoutingRules(text: string): Promise<RunRoutingCompileResult> {
-  return apiFetch<RunRoutingCompileResult>("/api/v1/run-routing/compile", {
-    method: "POST",
-    body: JSON.stringify({ text }),
-  });
-}
-
-/** Apply the founder-accepted proposals ATOMICALLY (backend
- *  `POST /api/v1/run-routing/compile/apply`): the backend creates the intent
- *  definitions + rules and sets the workspace default in one transaction — never a
- *  partial write. The proposal dicts are the exact `as_dicts` wire shape the
- *  compile endpoint returned, so they're forwarded as-is. */
-export function applyRunRoutingProposals(
-  proposals: RunRoutingProposal[],
-): Promise<RunRoutingApplyResult> {
-  return apiFetch<RunRoutingApplyResult>("/api/v1/run-routing/compile/apply", {
-    method: "POST",
-    body: JSON.stringify({ proposals }),
-  });
-}
-
-/** Edit an existing run-routing rule (PATCH — caller / target / active). */
+/** Edit an existing run-routing rule (PATCH). Editing `source_text` recompiles
+ *  the caller_id/conditions server-side; a 422 surfaces via `ApiError.detail`. */
 export function updateRunRoutingRule(
   id: string,
   patch: RunRoutingRuleUpdate,
