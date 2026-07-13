@@ -121,8 +121,8 @@ def test_fresh_pg_upgrade_round_trip():
     # Phase 1 — fresh upgrade.
     _alembic(["upgrade", "head"], env_extra=env_extra)
     stamped = asyncio.run(_stamped_head(url))
-    assert stamped == "run_routing_source_text", (
-        f"expected head run_routing_source_text, got {stamped}"
+    assert stamped == "executor_task_agentic", (
+        f"expected head executor_task_agentic, got {stamped}"
     )
 
     # Phase 2 — full downgrade. Verifies every revision's downgrade path.
@@ -131,7 +131,7 @@ def test_fresh_pg_upgrade_round_trip():
     # Phase 3 — re-upgrade. Verifies the chain is idempotent.
     _alembic(["upgrade", "head"], env_extra=env_extra)
     stamped = asyncio.run(_stamped_head(url))
-    assert stamped == "run_routing_source_text"
+    assert stamped == "executor_task_agentic"
 
 
 def test_run_routing_source_text_column_round_trips():
