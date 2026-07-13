@@ -30,7 +30,7 @@ from backend.workers.emit import (
     get_dispatch_redis_client,
     get_emit_redis_client,
 )
-from backend.workflow.application.direct_answer import DirectAnswerService, is_question
+from backend.workflow.application.direct_answer import DirectAnswerService
 from backend.workflow.application.intake.direct import DirectTrigger
 
 router = APIRouter()
@@ -191,13 +191,16 @@ async def ask_message(
 ) -> AskResponse:
     """L10 (#4/#5) — answer a founder's Direct *question* INLINE, synchronously.
 
-    A question (no build intent) is answered from workspace knowledge with a
-    CHAT model and returned right here — no run, no executor. ``answered=False``
-    when the text is a work request OR no chat model is configured; the PWA then
-    falls back to ``POST /api/v1/messages`` (the normal async dispatch).
+    A question is answered from workspace knowledge with a CHAT model and
+    returned right here — no run, no executor. Whether the text IS a question is
+    the model's call (the ASK-vs-PRODUCE rubric it shares with the frame stage),
+    made inside the same completion that writes the answer — there is no keyword
+    pre-gate: word lists read grammar, not intent, and sent "현 프로젝트 상황
+    설명해줘" to a coding executor (prod run ff1615e8). ``answered=False`` when the
+    model reads the text as work, no chat model is configured, or the inline
+    attempt fails; the PWA then falls back to ``POST /api/v1/messages`` (the
+    normal async dispatch), where the frame stage classifies it again.
     """
-    if not is_question(body.text):
-        return AskResponse(answered=False)
     settings = get_settings()
     # Thread the dispatch redis client so an executor-routed chat account can be
     # served inline too (functional parity with LiteLLM); None when no redis_url

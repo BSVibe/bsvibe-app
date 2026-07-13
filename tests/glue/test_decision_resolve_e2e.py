@@ -51,7 +51,7 @@ from backend.workflow.infrastructure.intake.db import (
 from backend.workflow.infrastructure.sandbox import NoopSandboxManager
 from backend.workflow.infrastructure.workers.agent_worker import AgentExecutionDeps, AgentWorker
 
-from .._support import db_engine, fake_current_user
+from .._support import BuildFrameLlm, db_engine, fake_current_user
 
 pytestmark = pytest.mark.asyncio
 
@@ -147,6 +147,8 @@ def _execution_deps(
             session=session, llm=holder, sandbox_manager=NoopSandboxManager()
         ),
         workspace_root=workspace_root,
+        # prod always routes a frame model; the stage refuses to guess without one
+        frame_llm=BuildFrameLlm(),
     )
 
 

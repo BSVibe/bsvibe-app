@@ -85,11 +85,20 @@ async def test_summary_title_none_when_llm_omits_it(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_summary_title_none_on_keyword_fallback(tmp_path: Path) -> None:
-    """No frame LLM → no summary_title (the review surface falls back to intent)."""
+async def test_summary_title_none_when_model_omits_it(tmp_path: Path) -> None:
+    """The model omitted the key → no summary_title (the review surface falls back
+    to the intent). Absent is not an error: only the KIND verdict is mandatory."""
+    llm = _StubFrameLlm(
+        {
+            "framed_intent": "Add a weekly digest.",
+            "skill_match": None,
+            "artifact_type_hint": "code",
+            "path_classification": "agent_loop",
+        }
+    )
     framed = await FrameStage().frame(
         request=_request({"text": "add a weekly digest"}),
-        config=FrameConfig(skill_loader=_loader(tmp_path)),
+        config=FrameConfig(skill_loader=_loader(tmp_path), llm=llm),
     )
     assert framed.summary_title is None
 

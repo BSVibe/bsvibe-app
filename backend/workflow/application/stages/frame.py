@@ -14,11 +14,14 @@ decides:
   ``knowledge_only`` (answer from BSage, skip the loop).
 
 The framing uses ONE cheap LLM call via the :class:`FrameLlm` seam (resolved
-per-workspace through the gateway, like the settle extractor). When no LLM is
-resolvable (executor-only / no active account / a transient failure / malformed
-output) it FALLS BACK to the deterministic keyword heuristic — the original
-Phase 1 behaviour. Framing must never raise: a frame hiccup degrades, it never
-breaks intake.
+per-workspace through the gateway, like the settle extractor). The path branch is
+the LLM's judgment — ASK vs PRODUCE (:data:`_PATH_RUBRIC`) — and is never guessed
+from keywords: the heuristic this replaced (interrogative cues + build verbs,
+Korean and English only) read grammar rather than intent, so an ask phrased as an
+imperative ("현 프로젝트 상황 설명해줘") was handed to a coding executor, which had
+nothing to build and shipped an unrelated diff (prod run ff1615e8, 2026-07-13).
+When no verdict is obtainable the stage raises :class:`FrameUnclassifiedError` —
+the caller fails the run explicitly rather than silently picking a kind.
 """
 
 from __future__ import annotations
@@ -55,16 +58,14 @@ class FramedRequest:
 
     skill_match: str | None
     artifact_type_hint: str | None
-    # B9a — the LLM's refined natural-language intent (``None`` on the keyword
-    # fallback path, which has no LLM to refine with).
+    # B9a — the LLM's refined natural-language intent.
     framed_intent: str | None = None
     # L8 — a SHORT, plain-language title of the task (≤ ~8 words, no file paths /
     # type signatures / code identifiers) the founder-facing review surfaces lead
-    # with instead of the raw, developer-y Direction. ``None`` on the keyword
-    # fallback (no LLM) — the surface then falls back to framed_intent / intent.
+    # with instead of the raw, developer-y Direction. ``None`` when the model
+    # omits it — the surface then falls back to framed_intent / intent.
     summary_title: str | None = None
-    # B9a — the path branch (Workflow §1.2). ``agent_loop`` keeps today's
-    # behaviour; ``knowledge_only`` is recorded for B9b to act on.
+    # B9a — the path branch (Workflow §1.2), always the LLM's verdict.
     path_classification: PathClassification = "agent_loop"
     # P1-L2 — whether this request should run as a design→impl pipeline.
     pipeline: PipelineKind = "single"
@@ -99,8 +100,8 @@ class FrameConfig:
     skill_loader: SkillLoader
     # Default artifact-type when the framer can't guess from skill content.
     default_artifact_type: str | None = None
-    # B9a — the cheap-LLM seam. ``None`` (executor-only / no account / legacy
-    # caller) → the keyword heuristic runs, preserving Phase 1 behaviour.
+    # B9a — the cheap-LLM seam. ``None`` (no frame route resolved) is not a
+    # fallback: the stage raises :class:`FrameUnclassifiedError`.
     llm: FrameLlm | None = None
 
 
@@ -134,138 +135,6 @@ _BUILD_INTENT_WORDS = frozenset(
 )
 
 
-# answer-first (#12): a Direct request that is a *question* with no concrete
-# work artifact is answered directly (``knowledge_only``), never routed into the
-# agent loop where it has nothing to build and stands down. Deterministic so it
-# holds with OR without the frame LLM — the prod dogfood that died on
-# "지금 프로젝트 상황 어때?" hit the no-LLM keyword fallback, which historically
-# forced ``agent_loop``.
-#
-# Korean has no token spaces, so its interrogative cues are matched as
-# substrings; English interrogatives are matched as the leading token.
-_KO_QUESTION_CUES: tuple[str, ...] = (
-    "어때",
-    "어떄",
-    "어떻게",
-    "무엇",
-    "뭐야",
-    "뭔가",
-    "뭐예",
-    "뭐죠",
-    "어디",
-    "언제",
-    "누가",
-    "얼마",
-    "까요",
-    "나요",
-    "가요",
-    "ㄹ까",
-    "을까",
-    "할까",
-    "될까",
-    "인가",
-    "는가",
-    "은가",
-    "ㅂ니까",
-    "습니까",
-)
-_EN_INTERROGATIVES: frozenset[str] = frozenset(
-    {
-        "what",
-        "whats",
-        "how",
-        "hows",
-        "why",
-        "when",
-        "where",
-        "who",
-        "which",
-        "whose",
-        "whom",
-        "is",
-        "are",
-        "am",
-        "do",
-        "does",
-        "did",
-        "can",
-        "could",
-        "should",
-        "would",
-        "will",
-    }
-)
-# Verbs that imply DOING work — used to keep a build request phrased as a
-# question ("can you build X?") on the agent loop while a genuine question
-# ("how does X work?") is answered. Deliberately VERBS only: nouns like
-# "api"/"system"/"module" appear in legitimate questions, so the broad
-# :data:`_BUILD_INTENT_WORDS` set is wrong for this purpose.
-_EN_BUILD_VERBS: frozenset[str] = frozenset(
-    {
-        "build",
-        "implement",
-        "create",
-        "add",
-        "make",
-        "write",
-        "fix",
-        "refactor",
-        "rewrite",
-        "wire",
-        "integrate",
-        "generate",
-    }
-)
-_KO_BUILD_STEMS: tuple[str, ...] = (
-    "만들",
-    "구현",
-    "추가",
-    "수정",
-    "고쳐",
-    "고치",
-    "작성",
-    "리팩터",
-    "리팩토",
-    "빌드",
-    "생성",
-    "연동",
-)
-
-
-def _looks_like_question(text: str) -> bool:
-    """Deterministic: does the text read as a question? (`?`, a Korean
-    interrogative cue, or a leading English interrogative.)"""
-    if not text:
-        return False
-    stripped = text.strip()
-    if "?" in stripped or "？" in stripped:
-        return True
-    low = stripped.lower()
-    if any(cue in low for cue in _KO_QUESTION_CUES):
-        return True
-    tokens = low.split()
-    return bool(tokens) and tokens[0].strip(".,!:;()\"'") in _EN_INTERROGATIVES
-
-
-def _has_build_verb(text: str) -> bool:
-    """Does the text carry a build VERB (real work to produce)?"""
-    low = text.lower()
-    tokens = {tok.strip(".,!?:;()\"'") for tok in low.split()}
-    if tokens & _EN_BUILD_VERBS:
-        return True
-    return any(stem in low for stem in _KO_BUILD_STEMS)
-
-
-def _is_answer_first_question(text: str, artifact_hint: str | None) -> bool:
-    """answer-first (#12): a question with no concrete WORK artifact and no
-    build verb is answered directly (``knowledge_only``)."""
-    if artifact_hint in _WORK_ARTIFACT_TYPES:
-        return False
-    if not _looks_like_question(text):
-        return False
-    return not _has_build_verb(text)
-
-
 def _derive_pipeline(artifact_hint: str | None, intent: str | None) -> PipelineKind:
     """``design_then_impl`` for a code/PR build whose intent implies
     construction; ``single`` otherwise (the default for everything else)."""
@@ -274,6 +143,32 @@ def _derive_pipeline(artifact_hint: str | None, intent: str | None) -> PipelineK
     words = {w.strip(".,!?:;()") for w in (intent or "").lower().split()}
     return "design_then_impl" if words & _BUILD_INTENT_WORDS else "single"
 
+
+#: The ASK-vs-PRODUCE rubric — the single definition of what makes a request a
+#: question. It is stated for the LLM because it is a semantic judgment, not a
+#: lexical one: the deleted keyword heuristic (interrogative cues + build verbs,
+#: Korean and English only) could not see that "설명해줘" / "explain X" ask by
+#: telling, and it had nothing at all to say about any other language.
+ASK_VS_PRODUCE_RUBRIC = (
+    "Decide by what the founder wants BACK — never by grammar, mood, punctuation, "
+    "or language:\n"
+    "- ASK: they want to be TOLD something — the project's status, an explanation, "
+    "a summary, a history, an opinion. The reply itself IS the deliverable. This "
+    'holds when the ask is phrased as a command ("explain the routing", '
+    '"상황 설명해줘", "状況を教えて"), and it holds even when answering requires '
+    "consulting the workspace's knowledge or the product's recorded state. If "
+    "nothing would be created or changed, it is an ASK.\n"
+    "- PRODUCE: they want something MADE or CHANGED — code, a page, a PR, a "
+    "document, a config edit. Some artifact must exist or differ afterwards.\n"
+    'When a request both produces and explains ("build X and tell me how it works"), '
+    "producing wins: PRODUCE."
+)
+
+_PATH_RUBRIC = (
+    '  "path_classification": "knowledge_only" (an ASK) or "agent_loop" (a PRODUCE). '
+    + ASK_VS_PRODUCE_RUBRIC.replace("\n", "\n    ")
+    + "\n"
+)
 
 _FRAME_SYSTEM_PROMPT = (
     "You are the framing stage of an autonomous engineering workflow. Interpret "
@@ -288,10 +183,9 @@ _FRAME_SYSTEM_PROMPT = (
     '  "skill_match": the EXACT name of the single best-matching skill from the '
     "catalog below (match on the skill's description), or null if none fits,\n"
     '  "artifact_type_hint": the likely deliverable type '
-    '("code" | "page" | "page_image" | "pr" | null),\n'
-    '  "path_classification": "knowledge_only" if the request can be answered '
-    'purely from existing knowledge with no work, otherwise "agent_loop",\n'
-    '  "pipeline": "single" for a focused one-pass task, or "design_then_impl" '
+    '("code" | "page" | "page_image" | "pr" | null). A pure answer has null,\n'
+    + _PATH_RUBRIC
+    + '  "pipeline": "single" for a focused one-pass task, or "design_then_impl" '
     "for substantial / multi-part work that genuinely benefits from a separate "
     "design pass (producing a spec) before implementation. Judge by COMPLEXITY "
     "and SCOPE, not keywords: a tiny tweak or a small focused endpoint is "
@@ -302,18 +196,39 @@ _FRAME_SYSTEM_PROMPT = (
 )
 
 
+class FrameUnclassifiedError(RuntimeError):
+    """The frame LLM produced no usable ``path_classification``.
+
+    Raised when the call fails, the output is unparseable, or the verdict is
+    missing/invalid. The stage must NOT guess: guessing ``agent_loop`` hands a
+    question to a coding executor, which has nothing to build and edits whatever
+    it finds (prod run ff1615e8 — "현 프로젝트 상황 설명해줘" shipped an unrelated
+    diff). Guessing ``knowledge_only`` silently answers instead of building. Per
+    no-implicit-routing, an undecidable route is an explicit error — the caller
+    fails the run and the founder sees why.
+    """
+
+
+class FrameModelUnresolvedError(FrameUnclassifiedError):
+    """No frame model is routed for this workspace, so nothing can classify.
+
+    Distinct from its parent because the remedy is different: this is the
+    familiar "no model account" condition, and the caller pauses the run on a
+    Decision (founder picks a model) rather than failing it — the same UX an
+    unresolved act-stage account already gets.
+    """
+
+
 class FrameStage:
     """Convert a raw Request into a framed plan."""
 
     async def frame(self, *, request: RequestRow, config: FrameConfig) -> FramedRequest:
         """Inspect the request and return framing hints.
 
-        Uses the cheap LLM when one is configured; degrades to the keyword
-        heuristic on no-LLM / failure / malformed output. Never raises."""
+        Raises :class:`FrameUnclassifiedError` when the frame LLM yields no
+        verdict — the run's KIND (answer vs. build) is never guessed."""
         text = _extract_text(request)
         framed = await self._frame_via_llm(text=text, config=config)
-        if framed is None:
-            framed = _frame_via_keyword(text=text, config=config)
         logger.info(
             "frame_stage_resolved",
             request_id=str(request.id),
@@ -321,30 +236,25 @@ class FrameStage:
             skill_match=framed.skill_match,
             artifact_type_hint=framed.artifact_type_hint,
             path_classification=framed.path_classification,
-            used_llm=config.llm is not None and framed.framed_intent is not None,
         )
         return framed
 
-    async def _frame_via_llm(self, *, text: str, config: FrameConfig) -> FramedRequest | None:
-        """Run the single cheap-LLM framing call, or ``None`` to fall back.
-
-        Returns ``None`` (caller falls back to the keyword heuristic) when there
-        is no LLM, the call fails, or the output cannot be parsed — framing must
-        never raise."""
+    async def _frame_via_llm(self, *, text: str, config: FrameConfig) -> FramedRequest:
+        """Run the single cheap-LLM framing call."""
         llm = config.llm
         if llm is None:
-            return None
+            raise FrameModelUnresolvedError("no frame model is routed for this workspace")
         user_prompt = _build_user_prompt(text, config.skill_loader)
         try:
             raw = await llm.complete_text(system=_FRAME_SYSTEM_PROMPT, user=user_prompt)
-        except Exception:  # noqa: BLE001 — framing must never break intake
+        except Exception as exc:
             logger.warning("frame_stage_llm_failed", exc_info=True)
-            return None
+            raise FrameUnclassifiedError("the frame model call failed") from exc
         parsed = _parse_frame_json(raw)
         if parsed is None:
             logger.warning("frame_stage_llm_unparseable")
-            return None
-        return _framed_from_llm(parsed, config, text)
+            raise FrameUnclassifiedError("the frame model returned unparseable output")
+        return _framed_from_llm(parsed, config)
 
 
 # --------------------------------------------------------------------------
@@ -382,7 +292,7 @@ def _parse_frame_json(raw: str) -> dict[str, Any] | None:
     return data if isinstance(data, dict) else None
 
 
-def _framed_from_llm(parsed: dict[str, Any], config: FrameConfig, text: str) -> FramedRequest:
+def _framed_from_llm(parsed: dict[str, Any], config: FrameConfig) -> FramedRequest:
     """Build a :class:`FramedRequest` from the parsed LLM JSON, validated.
 
     A hallucinated ``skill_match`` (not in the loader's registry) is dropped —
@@ -411,26 +321,26 @@ def _framed_from_llm(parsed: dict[str, Any], config: FrameConfig, text: str) -> 
     else:
         summary_title = summary_title.strip()[:_SUMMARY_TITLE_CAP]
 
+    # The run's KIND is the LLM's verdict (rubric: :data:`_PATH_RUBRIC`) and only
+    # the LLM's — a missing or invalid value is NOT defaulted, because both
+    # possible defaults are destructive (see :class:`FrameUnclassifiedError`).
     path = parsed.get("path_classification")
-    path_classification: PathClassification = "agent_loop"
-    # Coherence guard: a concrete WORK artifact (code/page/page_image/pr) means
-    # there is something to PRODUCE, which contradicts ``knowledge_only``
-    # ("answerable from existing knowledge with no work"). Local models are
-    # unreliable on this binary and emit the incoherent pair — trusting it routes
-    # real work to a text-only answer that ships nothing (prod dogfood
-    # 2026-05-28: "Create a Python file calc.py" → knowledge_answer, no file,
-    # yet shipped). A concrete artifact always wins; only an artifact-less ask
-    # (None / direct_output) may stay knowledge_only.
-    if path == "knowledge_only" and artifact_hint not in _WORK_ARTIFACT_TYPES:
-        path_classification = "knowledge_only"
+    if path not in ("knowledge_only", "agent_loop"):
+        raise FrameUnclassifiedError(f"the frame model returned no valid verdict: {path!r}")
+    path_classification: PathClassification = path
 
-    # answer-first (#12): a genuine question with no concrete work artifact is
-    # answered directly even when the LLM routed it to the loop — the founder
-    # rule is "questions are answered first". A build request phrased as a
-    # question keeps a work ``artifact_hint`` (or a build verb) and stays on the
-    # loop. This mirrors the keyword-fallback behaviour so both paths agree.
-    if path_classification == "agent_loop" and _is_answer_first_question(text, artifact_hint):
-        path_classification = "knowledge_only"
+    # Coherence guard: a concrete WORK artifact (code/page/page_image/pr) means
+    # there is something to PRODUCE, which contradicts ``knowledge_only``. Local
+    # models are unreliable on this binary and emit the incoherent pair —
+    # trusting it routes real work to a text-only answer that ships nothing (prod
+    # dogfood 2026-05-28: "Create a Python file calc.py" → knowledge_answer, no
+    # file, yet shipped). A concrete artifact always wins; only an artifact-less
+    # ask (None / direct_output) may stay knowledge_only. Note the guard is
+    # one-directional on purpose: ``direct_output`` is what an answer AND a prose
+    # deliverable (a blog post, a report) both carry, so it cannot pull the other
+    # way — that judgment is the rubric's.
+    if path_classification == "knowledge_only" and artifact_hint in _WORK_ARTIFACT_TYPES:
+        path_classification = "agent_loop"
 
     pipeline = _resolve_pipeline(parsed, artifact_hint, framed_intent)
 
@@ -483,29 +393,6 @@ def _resolve_pipeline(
 # --------------------------------------------------------------------------
 
 
-def _frame_via_keyword(*, text: str, config: FrameConfig) -> FramedRequest:
-    """The deterministic keyword heuristic — Phase 1 behaviour, no LLM.
-
-    Classifies the path as ``agent_loop`` (the loop drives, as today) EXCEPT for
-    a genuine question with no work artifact, which is answered first (#12,
-    ``knowledge_only``) — so a Direct question never silently routes into a
-    coding loop just because no frame LLM was resolvable."""
-    skill_match = _match_skill(text, config.skill_loader)
-    artifact_hint = _guess_artifact_type(skill_match, config.skill_loader) or (
-        config.default_artifact_type
-    )
-    path: PathClassification = (
-        "knowledge_only" if _is_answer_first_question(text, artifact_hint) else "agent_loop"
-    )
-    return FramedRequest(
-        skill_match=skill_match,
-        artifact_type_hint=artifact_hint,
-        framed_intent=None,
-        path_classification=path,
-        pipeline=_derive_pipeline(artifact_hint, text),
-    )
-
-
 def _extract_text(request: RequestRow) -> str:
     """Pull a flat text representation out of a Request payload."""
     payload = request.payload or {}
@@ -522,46 +409,12 @@ def _extract_text(request: RequestRow) -> str:
     return "\n".join(parts).lower()
 
 
-def _match_skill(text: str, loader: SkillLoader) -> str | None:
-    """Pick the first skill whose name or description is referenced in the text."""
-    if not text:
-        return None
-    for skill in loader.registry.values():
-        haystack = f"{skill.name} {skill.description}".lower()
-        # Crude but deterministic: any tokenized keyword from the skill
-        # description appearing in the request text counts as a match.
-        for word in haystack.split():
-            if len(word) >= 4 and word in text:
-                return skill.name
-    return None
-
-
-_ARTIFACT_KEYWORDS: tuple[tuple[str, str], ...] = (
-    ("pull request", "pr"),
-    ("page", "page"),
-    ("image", "page_image"),
-    ("code", "code"),
-)
-
-
-def _guess_artifact_type(skill_name: str | None, loader: SkillLoader) -> str | None:
-    """If the skill's description hints at an artifact_type, surface it."""
-    if skill_name is None:
-        return None
-    skill = loader.registry.get(skill_name)
-    if skill is None:
-        return None
-    desc = skill.description.lower()
-    for keyword, artifact in _ARTIFACT_KEYWORDS:
-        if keyword in desc:
-            return artifact
-    return None
-
-
 __all__ = [
     "FrameConfig",
     "FrameLlm",
+    "FrameModelUnresolvedError",
     "FrameStage",
+    "FrameUnclassifiedError",
     "FramedRequest",
     "PathClassification",
     "PipelineKind",

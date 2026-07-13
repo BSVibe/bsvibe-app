@@ -1,4 +1,9 @@
-"""FrameStage — keyword skill match + artifact_type hint, plus real LLM framing."""
+"""FrameStage — LLM framing: skill match, artifact_type hint, path branch.
+
+There is no keyword fallback. The frame LLM picks the skill (by description, from
+the catalog it is sent) and rules on ASK vs PRODUCE; when it cannot be reached or
+does not answer, the stage raises rather than guessing the run's kind.
+"""
 
 from __future__ import annotations
 
@@ -11,7 +16,13 @@ from typing import Any
 import pytest
 
 from backend.extensions.skill.loader import SkillLoader
-from backend.workflow.application.stages.frame import FrameConfig, FrameLlm, FrameStage
+from backend.workflow.application.stages.frame import (
+    FrameConfig,
+    FrameLlm,
+    FrameModelUnresolvedError,
+    FrameStage,
+    FrameUnclassifiedError,
+)
 from backend.workflow.infrastructure.intake.db import RequestRow, RequestStatus
 
 
@@ -31,7 +42,7 @@ class _StubFrameLlm:
 
 
 class _RaisingFrameLlm:
-    """A :class:`FrameLlm` whose call always raises — exercises graceful fallback."""
+    """A :class:`FrameLlm` whose call always raises."""
 
     async def complete_text(self, *, system: str, user: str) -> str:
         raise RuntimeError("gateway exploded")
@@ -58,75 +69,55 @@ def _request(payload: dict) -> RequestRow:
 
 
 @pytest.mark.asyncio
-async def test_skill_match_on_keyword(tmp_path: Path) -> None:
-    _write_skill(tmp_path, "weekly-digest", "Generate a weekly digest from recent notes")
-    loader = SkillLoader(tmp_path)
-    loader.load_all()
-    request = _request({"text": "Please create the weekly digest for this week"})
-    framed = await FrameStage().frame(request=request, config=FrameConfig(skill_loader=loader))
-    assert framed.skill_match == "weekly-digest"
-
-
-@pytest.mark.asyncio
-async def test_no_skill_match_returns_none(tmp_path: Path) -> None:
-    _write_skill(tmp_path, "weekly-digest", "Weekly digest skill")
-    loader = SkillLoader(tmp_path)
-    loader.load_all()
-    request = _request({"text": "buy groceries"})
-    framed = await FrameStage().frame(request=request, config=FrameConfig(skill_loader=loader))
-    assert framed.skill_match is None
-
-
-@pytest.mark.asyncio
-async def test_artifact_type_hint_from_skill_description(tmp_path: Path) -> None:
-    _write_skill(
-        tmp_path,
-        "pr-reviewer",
-        "Review pull request diffs and suggest improvements",
-    )
-    loader = SkillLoader(tmp_path)
-    loader.load_all()
-    request = _request({"text": "Please review my pull request"})
-    framed = await FrameStage().frame(request=request, config=FrameConfig(skill_loader=loader))
-    assert framed.skill_match == "pr-reviewer"
-    assert framed.artifact_type_hint == "pr"
-
-
-@pytest.mark.asyncio
-async def test_default_artifact_type_when_no_hint(tmp_path: Path) -> None:
+async def test_default_artifact_type_when_llm_gives_no_hint(tmp_path: Path) -> None:
+    """A pure-answer ask carries no artifact type — the caller's default stands in."""
     _write_skill(tmp_path, "digest", "A skill")
     loader = SkillLoader(tmp_path)
     loader.load_all()
-    request = _request({"text": "ignore"})
+    llm = _StubFrameLlm(
+        {
+            "framed_intent": "Explain the release process.",
+            "skill_match": None,
+            "artifact_type_hint": None,
+            "path_classification": "knowledge_only",
+        }
+    )
     framed = await FrameStage().frame(
-        request=request,
-        config=FrameConfig(skill_loader=loader, default_artifact_type="direct_output"),
+        request=_request({"text": "릴리스 프로세스 설명해줘"}),
+        config=FrameConfig(skill_loader=loader, default_artifact_type="direct_output", llm=llm),
     )
     assert framed.artifact_type_hint == "direct_output"
 
 
 @pytest.mark.asyncio
 async def test_extracts_text_from_multiple_payload_keys(tmp_path: Path) -> None:
+    """The request's text — wherever it sits in the payload — reaches the model."""
     _write_skill(tmp_path, "summarizer", "Summarize meeting notes")
     loader = SkillLoader(tmp_path)
     loader.load_all()
-    request = _request({"title": "Weekly meeting", "body": "Need a summary"})
-    framed = await FrameStage().frame(request=request, config=FrameConfig(skill_loader=loader))
-    assert framed.skill_match == "summarizer"
+    llm = _StubFrameLlm({"path_classification": "agent_loop"})
+    await FrameStage().frame(
+        request=_request({"title": "Weekly meeting", "body": "Need a summary"}),
+        config=FrameConfig(skill_loader=loader, llm=llm),
+    )
+    assert "weekly meeting" in llm.calls[0]
+    assert "need a summary" in llm.calls[0]
 
 
 @pytest.mark.asyncio
 async def test_extracts_text_from_intent_text_key(tmp_path: Path) -> None:
     # A connector-sourced request (e.g. a github issue) carries its directive in
     # ``intent_text`` (the canonical field, what ``_request_intent_text`` reads).
-    # The frame MUST read it too — else the work request degrades to a "no task"
-    # knowledge_only answer instead of being routed into the agent loop.
+    # The frame MUST read it too — else the model frames an empty request.
     _write_skill(tmp_path, "summarizer", "Summarize meeting notes")
     loader = SkillLoader(tmp_path)
     loader.load_all()
-    request = _request({"intent_text": "Please summarize the meeting notes"})
-    framed = await FrameStage().frame(request=request, config=FrameConfig(skill_loader=loader))
-    assert framed.skill_match == "summarizer"
+    llm = _StubFrameLlm({"path_classification": "agent_loop"})
+    await FrameStage().frame(
+        request=_request({"intent_text": "Please summarize the meeting notes"}),
+        config=FrameConfig(skill_loader=loader, llm=llm),
+    )
+    assert "summarize the meeting notes" in llm.calls[0]
 
 
 # --------------------------------------------------------------------------
@@ -425,45 +416,40 @@ async def test_llm_framing_rejects_hallucinated_skill(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_falls_back_to_keyword_when_no_llm(tmp_path: Path) -> None:
-    """No FrameLlm seam → the keyword heuristic runs (existing behaviour)."""
-    _write_skill(tmp_path, "weekly-digest", "Generate a weekly digest from recent notes")
+async def test_no_llm_raises(tmp_path: Path) -> None:
+    """No FrameLlm seam → nothing can rule on ASK vs PRODUCE. The stage raises the
+    unresolved-MODEL variant, which the worker pauses on a Decision."""
     loader = SkillLoader(tmp_path)
     loader.load_all()
-    request = _request({"text": "Please create the weekly digest for this week"})
-    framed = await FrameStage().frame(request=request, config=FrameConfig(skill_loader=loader))
-    assert framed.skill_match == "weekly-digest"
-    # No-LLM path classifies as agent_loop (the loop drives, as today).
-    assert framed.path_classification == "agent_loop"
+    with pytest.raises(FrameModelUnresolvedError):
+        await FrameStage().frame(
+            request=_request({"text": "Please create the weekly digest for this week"}),
+            config=FrameConfig(skill_loader=loader),
+        )
 
 
 @pytest.mark.asyncio
-async def test_llm_failure_falls_back_to_keyword(tmp_path: Path) -> None:
-    """A FrameLlm that raises must NOT break intake — fall back to keywords."""
-    _write_skill(tmp_path, "weekly-digest", "Generate a weekly digest from recent notes")
+async def test_llm_failure_raises(tmp_path: Path) -> None:
+    """A FrameLlm that raises must not be papered over with a guessed kind."""
     loader = SkillLoader(tmp_path)
     loader.load_all()
-    request = _request({"text": "Please create the weekly digest for this week"})
-    framed = await FrameStage().frame(
-        request=request,
-        config=FrameConfig(skill_loader=loader, llm=_RaisingFrameLlm()),
-    )
-    assert framed.skill_match == "weekly-digest"
-    assert framed.path_classification == "agent_loop"
+    with pytest.raises(FrameUnclassifiedError):
+        await FrameStage().frame(
+            request=_request({"text": "Please create the weekly digest for this week"}),
+            config=FrameConfig(skill_loader=loader, llm=_RaisingFrameLlm()),
+        )
 
 
 @pytest.mark.asyncio
-async def test_llm_malformed_json_falls_back_to_keyword(tmp_path: Path) -> None:
-    """A FrameLlm returning non-JSON garbage falls back to the keyword heuristic."""
-    _write_skill(tmp_path, "weekly-digest", "Generate a weekly digest from recent notes")
+async def test_llm_malformed_json_raises(tmp_path: Path) -> None:
+    """Garbage out of the model is not a verdict."""
     loader = SkillLoader(tmp_path)
     loader.load_all()
-    request = _request({"text": "Please create the weekly digest for this week"})
-    framed = await FrameStage().frame(
-        request=request,
-        config=FrameConfig(skill_loader=loader, llm=_StubFrameLlm("not json at all")),
-    )
-    assert framed.skill_match == "weekly-digest"
+    with pytest.raises(FrameUnclassifiedError):
+        await FrameStage().frame(
+            request=_request({"text": "Please create the weekly digest for this week"}),
+            config=FrameConfig(skill_loader=loader, llm=_StubFrameLlm("not json at all")),
+        )
 
 
 def test_frame_llm_protocol_is_runtime_checkable() -> None:
