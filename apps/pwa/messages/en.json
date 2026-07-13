@@ -40,7 +40,7 @@
     "scopesLabel": "Requested permissions",
     "scopesHeading": "Permissions",
     "scopeReadDesc": "Read your products, runs, and knowledge.",
-    "scopeWriteDesc": "Create direct messages and approve Safe Mode actions.",
+    "scopeWriteDesc": "Send requests and approve Safe Mode actions.",
     "scopeAdminDesc": "Manage workspace settings and billing.",
     "scopeUnknownDesc": "Permission requested by the application.",
     "allow": "Allow",
@@ -102,7 +102,7 @@
     }
   },
   "direct": {
-    "label": "Direct",
+    "label": "Request",
     "hint": "Tell BSVibe what to do. Ask a question or start work.",
     "targetLabel": "For",
     "targetAuto": "Auto (let BSVibe route it)",
@@ -140,7 +140,6 @@
     "noShipped": "Nothing shipped for this product yet.",
     "untitled": "Shipped deliverable",
     "openArtifact": "Open artifact",
-    "viewReport": "View report",
     "danger": {
       "heading": "Danger zone",
       "delete": "Delete product",
@@ -373,7 +372,6 @@
     "readyToShip": "Ready to ship",
     "needsYourAnswer": "Needs your answer",
     "orTypeYourOwn": "Or type your own answer…",
-    "viewProof": "View report",
     "deliveryGroupQuestion": "{count} deliveries from one run are held in Safe Mode. Send them all out?",
     "approveAll": "Approve all ({count})",
     "approve": "Approve",
@@ -853,7 +851,7 @@
         "configHint": "Add this entry to `~/.config/claude-code/mcp.json` (or run `claude mcp add bsvibe <url>`). The CLI handles the OAuth dance via the WWW-Authenticate header — no token in this file.",
         "scopesLabel": "OAuth scopes",
         "scopeRead": "mcp:read — list products, runs, deliverables, Safe Mode queue; search and read vault notes.",
-        "scopeWrite": "mcp:write — create products, post Direct messages, approve/deny Safe Mode items, write vault seeds.",
+        "scopeWrite": "mcp:write — create products, send requests, approve/deny Safe Mode items, write vault seeds.",
         "scopeAdmin": "mcp:admin — reserved for future admin tools (settings mutations, dangerous deletes)."
       }
     }

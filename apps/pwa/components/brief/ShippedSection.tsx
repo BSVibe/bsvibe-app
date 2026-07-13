@@ -17,8 +17,10 @@ const WEEK_MS = 7 * 24 * 3600_000;
  * "Shipped" (R4) — the quiet tail of the unified Brief. Shipped work accumulates
  * forever, so the section is COLLAPSED by default: a calm header with the total
  * count (+ "N this week" when derivable), then only the most-recent few rows,
- * and a "View all" affordance that expands the full list. Each row keeps its
- * existing link to its report (where rollback lives).
+ * and a "View all" affordance that expands the full list. Each row is itself the
+ * tap target for its report (where rollback lives) — the title is the one <a>,
+ * stretched over the whole row by `.tap-card__link::after`, so the row is easy
+ * to hit on mobile.
  *
  * `forceExpanded` is set when the Shipped filter chip is active, so the chip and
  * the local View-all toggle both reveal the full list.
@@ -71,10 +73,10 @@ export default function ShippedSection({
               ? `/deliverables/${item.deliverableId}`
               : `/runs/${item.runId}`;
             return (
-              <li key={item.runId} className="stream__row">
+              <li key={item.runId} className="stream__row tap-card">
                 <span className={`stream__marker stream__marker--${tone}`} aria-hidden="true" />
                 <div className="stream__body">
-                  <Link className="stream__title stream__title--link" href={href}>
+                  <Link className="stream__title stream__title--link tap-card__link" href={href}>
                     {item.title ?? statusLabel}
                   </Link>
                   <span className="stream__meta">

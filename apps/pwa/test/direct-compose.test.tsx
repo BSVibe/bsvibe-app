@@ -37,12 +37,12 @@ describe("Direct compose", () => {
 
   it("does not render when closed", () => {
     render(<DirectOverlay open={false} onClose={() => {}} />);
-    expect(screen.queryByRole("dialog", { name: "Direct" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: "Request" })).not.toBeInTheDocument();
   });
 
   it("disables submit until the textarea has content", async () => {
     render(<DirectOverlay open onClose={() => {}} />);
-    const submit = screen.getByRole("button", { name: "Direct" });
+    const submit = screen.getByRole("button", { name: "Request" });
     expect(submit).toBeDisabled();
 
     await userEvent.type(screen.getByRole("textbox"), "draft the launch post");
@@ -64,7 +64,7 @@ describe("Direct compose", () => {
 
     render(<DirectOverlay open onClose={() => {}} />);
     await userEvent.type(screen.getByRole("textbox"), "draft the launch post");
-    fireEvent.click(screen.getByRole("button", { name: "Direct" }));
+    fireEvent.click(screen.getByRole("button", { name: "Request" }));
 
     await waitFor(() => {
       expect(screen.getByText("Sent. Working on it.")).toBeInTheDocument();
@@ -130,7 +130,7 @@ describe("Direct compose", () => {
     });
 
     await userEvent.type(screen.getByRole("textbox"), "ship the add() helper");
-    fireEvent.click(screen.getByRole("button", { name: "Direct" }));
+    fireEvent.click(screen.getByRole("button", { name: "Request" }));
 
     await waitFor(() => {
       expect(screen.getByText("Sent. Working on it.")).toBeInTheDocument();
@@ -180,7 +180,7 @@ describe("Direct compose", () => {
     // Pick Beta explicitly, then submit.
     await userEvent.selectOptions(select, "p-bbbb");
     await userEvent.type(screen.getByRole("textbox"), "ship it");
-    fireEvent.click(screen.getByRole("button", { name: "Direct" }));
+    fireEvent.click(screen.getByRole("button", { name: "Request" }));
 
     await waitFor(() => {
       expect(screen.getByText("Sent. Working on it.")).toBeInTheDocument();
@@ -219,7 +219,7 @@ describe("Direct compose", () => {
 
     render(<DirectOverlay open onClose={() => {}} />);
     await userEvent.type(screen.getByRole("textbox"), "how's the project doing?");
-    fireEvent.click(screen.getByRole("button", { name: "Direct" }));
+    fireEvent.click(screen.getByRole("button", { name: "Request" }));
 
     // The answer renders inline.
     await waitFor(() => {
@@ -255,7 +255,7 @@ describe("Direct compose", () => {
 
     const { container } = render(<DirectOverlay open onClose={() => {}} />);
     await userEvent.type(screen.getByRole("textbox"), "status?");
-    fireEvent.click(screen.getByRole("button", { name: "Direct" }));
+    fireEvent.click(screen.getByRole("button", { name: "Request" }));
 
     await waitFor(() => {
       expect(container.querySelector(".direct-overlay__answer")).toBeInTheDocument();
@@ -301,7 +301,7 @@ describe("Direct compose", () => {
       );
     });
     await userEvent.type(screen.getByRole("textbox"), "how's the project?");
-    fireEvent.click(screen.getByRole("button", { name: "Direct" }));
+    fireEvent.click(screen.getByRole("button", { name: "Request" }));
 
     await waitFor(() => {
       expect(screen.getByText(/on track/)).toBeInTheDocument();
@@ -339,7 +339,7 @@ describe("Direct compose", () => {
 
     render(<DirectOverlay open onClose={() => {}} />);
     await userEvent.type(screen.getByRole("textbox"), "build a TTL cache");
-    fireEvent.click(screen.getByRole("button", { name: "Direct" }));
+    fireEvent.click(screen.getByRole("button", { name: "Request" }));
 
     await waitFor(() => {
       expect(screen.getByText("Sent. Working on it.")).toBeInTheDocument();
@@ -357,7 +357,7 @@ describe("Direct compose", () => {
 
     render(<DirectOverlay open onClose={() => {}} />);
     await userEvent.type(screen.getByRole("textbox"), "do the thing");
-    fireEvent.click(screen.getByRole("button", { name: "Direct" }));
+    fireEvent.click(screen.getByRole("button", { name: "Request" }));
 
     await waitFor(() => {
       expect(screen.getByText("Couldn’t send that. Please try again.")).toBeInTheDocument();

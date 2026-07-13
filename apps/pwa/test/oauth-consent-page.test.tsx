@@ -100,9 +100,7 @@ describe("oauth consent page", () => {
       await screen.findByRole("heading", { name: /Allow Claude Code to access BSVibe\?/i }),
     ).toBeInTheDocument();
     expect(screen.getByText("Read your products, runs, and knowledge.")).toBeInTheDocument();
-    expect(
-      screen.getByText("Create direct messages and approve Safe Mode actions."),
-    ).toBeInTheDocument();
+    expect(screen.getByText("Send requests and approve Safe Mode actions.")).toBeInTheDocument();
   });
 
   it("Allow button POSTs action=approve and navigates to redirect_to", async () => {

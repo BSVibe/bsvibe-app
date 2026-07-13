@@ -19,7 +19,10 @@ const AUTO_TARGET = "";
  *  reflect that a new run is in flight (re-fetch its lanes). */
 export const DIRECT_SUBMITTED_EVENT = "bsvibe:direct-submitted";
 
-/** Floating "+ Direct" trigger — the global compose affordance (UX §1.1). */
+/** Floating "+ 요청 / Request" trigger — the global compose affordance (UX §1.1).
+ *  The founder-facing NOUN for this surface is "Request" (the `direct.*` i18n
+ *  namespace + the component/CSS names are kept as internal identifiers). It is
+ *  deliberately NOT framed as chat/대화 — the product's core is reports. */
 export function DirectFab({ onClick }: { onClick: () => void }) {
   const t = useTranslations("direct");
   return (

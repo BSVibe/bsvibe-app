@@ -29,6 +29,12 @@ type RowState = "idle" | "working" | "error";
  *    `actions` like `[{key:"ship",...}, {key:"discard",...}]`, rendered as
  *    buttons that POST `{ action_key }`. An "Other (free-text)" disclosure
  *    stays available so the founder can always explain a custom path.
+ *
+ * The CARD is the tap target for its report (mobile-first): the title is the
+ * one and only <a>, and `.tap-card__link::after` stretches it over the whole
+ * card. Every control (action buttons, option chips, the answer row) sits ABOVE
+ * that overlay (`.tap-card__above`) and outside the link, so a tap on a control
+ * resolves the checkpoint instead of navigating.
  */
 export default function CheckpointRow({
   item,
@@ -88,12 +94,21 @@ export default function CheckpointRow({
     }
   }
 
+  const title = item.title || item.question;
+
   return (
-    <li className="need-card need-card--decision">
+    <li className="need-card need-card--decision tap-card">
       <div className="need-card__head">
-        {/* Lead with the task the founder is judging, not a bare question. */}
+        {/* Lead with the task the founder is judging, not a bare question — and
+            make that title the card-wide link to the report. */}
         <div className="need-card__title-wrap">
-          <span className="need-card__title">{item.title || item.question}</span>
+          {item.detailHref ? (
+            <Link className="need-card__title tap-card__link" href={item.detailHref}>
+              {title}
+            </Link>
+          ) : (
+            <span className="need-card__title">{title}</span>
+          )}
           {item.productSlug && item.productSlug !== "workspace" && (
             <span className="need-card__product">{item.productSlug}</span>
           )}
@@ -133,7 +148,7 @@ export default function CheckpointRow({
 
       {hasActions && actions !== null ? (
         <>
-          <div className="need-card__actions">
+          <div className="need-card__actions tap-card__above">
             {actions.map((a, i) => (
               <button
                 key={a.key}
@@ -150,27 +165,19 @@ export default function CheckpointRow({
                 {t("resolveError")}
               </span>
             )}
-            {item.detailHref && (
-              <>
-                <span className="need-card__spacer" />
-                <Link className="need-card__view" href={item.detailHref}>
-                  {t("viewProof")}
-                </Link>
-              </>
-            )}
           </div>
           {/* Optional free-text reply alongside the one-click actions. */}
           {!freeTextOpen ? (
             <button
               type="button"
-              className="need-card__free-toggle"
+              className="need-card__free-toggle tap-card__above"
               onClick={() => setFreeTextOpen(true)}
               disabled={working}
             >
               {t("otherOptionLabel")}
             </button>
           ) : (
-            <div className="need-card__answer-row">
+            <div className="need-card__answer-row tap-card__above">
               <input
                 id={actionFreeTextId}
                 className="need-card__input"
@@ -194,7 +201,7 @@ export default function CheckpointRow({
       ) : (
         <>
           {hasOptions && offered !== null ? (
-            <fieldset className="need-card__options" aria-label={t("answerLabel")}>
+            <fieldset className="need-card__options tap-card__above" aria-label={t("answerLabel")}>
               {offered.map((opt) => (
                 <button
                   key={opt}
@@ -209,7 +216,7 @@ export default function CheckpointRow({
               ))}
             </fieldset>
           ) : null}
-          <div className="need-card__answer-row">
+          <div className="need-card__answer-row tap-card__above">
             <input
               id={answerId}
               className="need-card__input"
