@@ -252,6 +252,7 @@ async def create_task(
     run_id: uuid.UUID | None = None,
     model: str | None = None,
     repo_url: str | None = None,
+    agentic: bool = True,
 ) -> ExecutorTaskRow:
     """Create a ``pending`` :class:`ExecutorTaskRow` and flush it (no commit).
 
@@ -277,6 +278,7 @@ async def create_task(
         workspace_dir=workspace_dir,
         model=model,
         repo_url=repo_url,
+        agentic=agentic,
         status="pending",
     )
     session.add(task)
@@ -325,6 +327,10 @@ async def dispatch_task(
     # before calling the executor. Same omit-when-empty rule as ``model``.
     if task.repo_url:
         payload["repo_url"] = task.repo_url
+    # Agent run vs. chat turn (Redis Streams take flat strings only). Always
+    # emitted — the worker defaults a MISSING key to the agent run, so silence
+    # would quietly restore the pre-fix behaviour for chat turns.
+    payload["agentic"] = "1" if task.agentic else "0"
     msg_id = await redis.xadd(worker_stream(worker_id), payload)
 
     task.worker_id = worker_id

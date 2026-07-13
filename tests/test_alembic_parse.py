@@ -80,10 +80,11 @@ def test_alembic_head_is_connector_last_import():
     # Lift E16 → worker_last_in_flight; E21 → executor_task_model; E32 →
     # connector_oauth_tokens_status → workspace_language (#6 output language) →
     # drop_layer2_routing_rules (unified routing Lift 2 — legacy tables dropped) →
-    # run_routing_source_text (NL-native routing Lift N5 — NL condition column).
+    # run_routing_source_text (NL-native routing Lift N5 — NL condition column) →
+    # executor_task_agentic (chat/executor parity — a chat turn runs tool-less).
     # Keep the test name (function name is a historical revision id, kept for
     # git-blame stability) and assert the current tip.
-    assert "run_routing_source_text" in result.stdout
+    assert "executor_task_agentic" in result.stdout
 
 
 def test_target_metadata_covers_all_bases():

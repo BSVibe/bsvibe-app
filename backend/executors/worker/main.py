@@ -508,6 +508,11 @@ async def handle_task(
         # ``model`` is not part of the current dispatch payload; forwarded when
         # present for forward-compatibility (CLI default otherwise).
         "model": task.get("model") or None,
+        # Agent run (the executor uses its OWN tools inside the sandbox) vs. a
+        # chat turn (a plain completion — no tools, nothing to inspect). A task
+        # from an older backend carries no key: default to the agent run, because
+        # a coding loop that silently lost its tools would ship empty diffs.
+        "agentic": task.get("agentic", "1") != "0",
     }
 
     # Lift E14 — register the asyncio Task this handler runs in so the

@@ -65,6 +65,29 @@ _STREAM_LIMIT = 16 * 1024 * 1024
 #: (the per-task workspace) because the blanket bypass is no longer set.
 _CONFINED_SETTINGS = json.dumps({"permissions": {"allow": ["Bash"]}})
 
+#: Every built-in tool, denied. A CHAT turn (``agentic=False``) must be a plain
+#: completion — the same thing a LiteLLM account does when the caller passes no
+#: tools. Left agentic, the CLI reads its own (empty, per-task) cwd and answers
+#: about THAT: prod 2026-07-13, "현 프로젝트 상황 설명해줘" → "완전히 비어 있는
+#: 임시 디렉토리입니다", with the injected product grounding ignored because the
+#: agent trusts what its tools "saw". Denying the tools removes the temptation and
+#: the tool-loop latency (which is what timed out async answers at 300 s).
+_CHAT_DENIED_TOOLS = " ".join(
+    (
+        "Bash",
+        "Read",
+        "Write",
+        "Edit",
+        "Glob",
+        "Grep",
+        "Task",
+        "WebFetch",
+        "WebSearch",
+        "NotebookEdit",
+        "TodoWrite",
+    )
+)
+
 
 class ClaudeCodeExecutor:
     """Stream from ``claude --print --output-format stream-json``."""
@@ -100,6 +123,10 @@ class ClaudeCodeExecutor:
         workspace = context.get("workspace_dir") or "."
         system = context.get("system") or ""
         model = context.get("model") or None
+        # Absent → an agent run (back-compat: a task dispatched by an older
+        # backend carries no flag, and the coding loop must never silently lose
+        # its tools).
+        agentic = context.get("agentic", True) is not False
         attempts_remaining = self._rate_limit_retries
         deadline = asyncio.get_event_loop().time() + self._total_timeout
         while True:
@@ -108,7 +135,7 @@ class ClaudeCodeExecutor:
             had_delta = False
             try:
                 async for chunk in self._run_once(
-                    prompt, workspace, system, deadline, stderr_buf, model
+                    prompt, workspace, system, deadline, stderr_buf, model, agentic
                 ):
                     if chunk.delta:
                         had_delta = True
@@ -146,8 +173,8 @@ class ClaudeCodeExecutor:
             )
             return
 
-    def _build_cmd(self, system: str, model: str | None) -> list[str]:
-        # The executor inherits the host operator's harness (CLAUDE.md / skills /
+    def _build_cmd(self, system: str, model: str | None, agentic: bool = True) -> list[str]:
+        # An AGENT RUN inherits the host operator's harness (CLAUDE.md / skills /
         # memory) by design — but the agent's native file writes must stay inside
         # the per-task workspace. ``--dangerously-skip-permissions`` disabled ALL
         # guards including the working-directory confinement, so an agent that
@@ -156,17 +183,29 @@ class ClaudeCodeExecutor:
         # auto-applies edits headlessly but ONLY inside an allowed dir (the cwd =
         # the per-task clone), and the settings allow Bash so the verify step
         # (uv/pytest) still runs without re-opening writes outside the workspace.
+        #
+        # A CHAT TURN has no tools at all (:data:`_CHAT_DENIED_TOOLS`) — that is
+        # what makes an executor account behave identically to a LiteLLM one,
+        # which is BSVibe's first principle.
         cmd_args = [
             self._cmd,
             "--print",
-            "--permission-mode",
-            "acceptEdits",
-            "--settings",
-            _CONFINED_SETTINGS,
             "--output-format",
             "stream-json",
             "--verbose",
         ]
+        if agentic:
+            # An agent run: edits auto-apply headlessly but ONLY inside the cwd
+            # (the per-task clone), and Bash is allowed so the verify step runs.
+            cmd_args += [
+                "--permission-mode",
+                "acceptEdits",
+                "--settings",
+                _CONFINED_SETTINGS,
+            ]
+        else:
+            # A chat turn: no tools at all. Nothing to permit, nothing to inspect.
+            cmd_args += ["--disallowedTools", _CHAT_DENIED_TOOLS]
         if system:
             cmd_args += ["--append-system-prompt", system]
         if model:
@@ -181,8 +220,9 @@ class ClaudeCodeExecutor:
         deadline: float,
         stderr_buf: list[str],
         model: str | None = None,
+        agentic: bool = True,
     ) -> AsyncIterator[ExecutionChunk]:
-        cmd_args = self._build_cmd(system, model)
+        cmd_args = self._build_cmd(system, model, agentic)
         # Inject a worker-managed OAuth bearer so a launchd-spawned claude (which
         # can't read the Keychain) authenticates instead of falling back to a
         # stale on-disk token → 401. Soft-fail + off the event loop (the helper

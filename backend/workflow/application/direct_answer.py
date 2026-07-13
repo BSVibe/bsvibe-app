@@ -35,7 +35,6 @@ English only — which read grammar rather than intent and sent "현 프로젝�
 from __future__ import annotations
 
 import uuid
-from pathlib import Path
 from typing import Any
 
 import structlog
@@ -202,16 +201,20 @@ class DirectAnswerService:
         return turn.content
 
     async def _retrieve(self, workspace_id: uuid.UUID, text: str) -> list[str]:
-        """Workspace canon relevant to the question — graceful-empty on any
-        hiccup (an ungrounded answer beats a crash; mirrors the native path)."""
-        try:
-            from backend.knowledge.factory import KnowledgeFactory  # noqa: PLC0415
+        """Workspace knowledge relevant to the question — canon PLUS semantic note
+        search, with note hits expanded to their content
+        (:func:`build_answer_retriever`, shared with the async answer path, which
+        is the only one that used to have semantic search at all).
 
-            retriever = KnowledgeFactory(
-                region=self._settings.knowledge_default_region,
-                workspace_id=str(workspace_id),
-                vault_root=Path(self._settings.knowledge_vault_root),
-            ).retriever()
+        Graceful-empty on any hiccup (an ungrounded answer beats a crash)."""
+        try:
+            from backend.knowledge.retrieval.answer_grounding import (  # noqa: PLC0415
+                build_answer_retriever,
+            )
+
+            retriever = build_answer_retriever(
+                self._session, settings=self._settings, workspace_id=workspace_id
+            )
             statements = await retriever.retrieve_for_signals(text)
         except Exception:  # noqa: BLE001 — grounding must never crash the answer
             logger.warning(

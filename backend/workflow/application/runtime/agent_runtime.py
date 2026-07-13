@@ -36,6 +36,7 @@ from backend.dispatch.caller_registry import (
 )
 from backend.extensions.plugin.base import PluginMeta
 from backend.extensions.skill.loader import SkillLoader
+from backend.knowledge.retrieval.answer_grounding import build_answer_retriever
 from backend.router.accounts.crypto import CredentialCipher, _key_from_settings
 from backend.workflow.application.agent_loop import (
     CanonRetriever,
@@ -311,7 +312,12 @@ def build_agent_execution_deps(
             return KnowledgeAnswerOrchestrator(
                 session=session,
                 llm=ResolverLoopLlm(adapter=chat.adapter),
-                retriever=await _retriever_for(session, run.workspace_id),
+                # An ANSWER needs note CONTENT; the verify path's retriever carries
+                # only "Related note — <path>" pointers. Same builder as the inline
+                # /ask service, so both surfaces ground identically.
+                retriever=build_answer_retriever(
+                    session, settings=settings, workspace_id=run.workspace_id
+                ),
             )
 
         resolved = await _resolve_via_caller(

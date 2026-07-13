@@ -538,6 +538,77 @@ class TestExecutorAdapterChat:
                 )
                 assert execute_entry["model"] == "opencode-go/qwen3.6-plus"
 
+    async def _dispatch_and_read_entry(self, *, tools: Any) -> dict[str, Any]:
+        """Fire one executor chat and return its ``execute`` stream entry."""
+        redis = await _make_redis()
+        workspace_id = uuid.uuid4()
+        async with shared_file_sessionmaker() as sf:
+            async with sf() as setup:
+                worker = await _seed_worker(
+                    setup, workspace_id=workspace_id, capabilities=["claude_code"]
+                )
+                account = ModelAccount(
+                    id=uuid.uuid4(),
+                    workspace_id=workspace_id,
+                    account_id=uuid.uuid4(),
+                    provider="executor",
+                    label="mac-mini",
+                    litellm_model="sonnet",
+                    api_base=None,
+                    api_key_encrypted=None,
+                    data_jurisdiction="unknown",
+                    is_active=True,
+                    extra_params={
+                        "worker_id": str(worker.id),
+                        "executor_type": "claude_code",
+                    },
+                )
+                setup.add(account)
+                await setup.commit()
+
+            async with sf() as adapter_session:
+                adapter = ExecutorAdapter(
+                    account=account,
+                    workspace_id=workspace_id,
+                    account_id=account.account_id,
+                    model_account_id=account.id,
+                    session=adapter_session,
+                    settings=get_settings().model_copy(update={"executor_task_timeout_s": 5.0}),
+                    redis=redis,
+                )
+                # No worker answers → await_completion times out. The XADD we
+                # inspect already happened.
+                with pytest.raises(ExecutorAdapterUnavailable):
+                    await adapter.chat(
+                        system="",
+                        messages=[{"role": "user", "content": "hi"}],
+                        tools=tools,
+                    )
+                entries = await redis.xrange(dispatch.worker_stream(worker.id))
+                return next(
+                    fields for _id, fields in entries if fields.get("action") == "execute"
+                )
+
+    async def test_chat_without_tools_dispatches_a_non_agentic_turn(self) -> None:
+        """BSVibe's first principle: an executor account behaves IDENTICALLY to a
+        LiteLLM one through ``chat()``. A LiteLLM call with no tools cannot inspect
+        anything — so neither may the executor. The dispatched task says so.
+
+        It did not, and the coding CLI answered a founder's "현 프로젝트 상황
+        설명해줘" by reading its own empty per-task temp dir ("완전히 비어 있는 임시
+        디렉토리입니다"), ignoring the product grounding we injected (prod,
+        2026-07-13)."""
+        entry = await self._dispatch_and_read_entry(tools=None)
+        assert entry["agentic"] == "0"
+
+    async def test_chat_with_tools_dispatches_an_agent_run(self) -> None:
+        """The agent loop passes tools — that IS the request for an agent run, and
+        the sandbox tools must stay on (else the coding loop ships empty diffs)."""
+        entry = await self._dispatch_and_read_entry(
+            tools=[{"type": "function", "function": {"name": "write_file"}}]
+        )
+        assert entry["agentic"] == "1"
+
     async def test_chat_legacy_executor_placeholder_omits_model(self) -> None:
         """E21 back-compat — accounts whose ``litellm_model`` is the legacy
         ``executor/<type>`` placeholder MUST NOT propagate that string as the

@@ -27,7 +27,7 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import JSON, Boolean, DateTime, Integer, String, Text
+from sqlalchemy import JSON, Boolean, DateTime, Integer, String, Text, true
 from sqlalchemy.orm import Mapped, mapped_column
 
 from backend.data import Base
@@ -117,6 +117,21 @@ class ExecutorTaskRow(Base):
     # files instead of an empty ``tempfile.mkdtemp()``. NULL keeps the
     # pre-E32 chat-shaped semantics (frame / judge / knowledge.ingest).
     repo_url: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    # Does this task want the executor's OWN tools (file edit / bash / web)?
+    #
+    # It mirrors the ``tools`` argument of :meth:`ModelAccountAdapter.chat`, and
+    # that is the whole point: BSVibe's first principle is that an executor
+    # account and a LiteLLM account behave IDENTICALLY through ``chat()``. A
+    # LiteLLM call with no tools cannot inspect anything — it answers from the
+    # prompt — so an executor chat turn must not either. Left agentic, the coding
+    # CLI reads its own (empty) per-task dir and answers about THAT: prod
+    # 2026-07-13, "현 프로젝트 상황 설명해줘" → "완전히 비어 있는 임시 디렉토리입니다".
+    #
+    # TRUE (the default) = an agent run: sandbox tools on, as the coding loop
+    # needs. FALSE = a chat turn: a plain completion.
+    agentic: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default=true()
+    )
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending", index=True)
     output: Mapped[str] = mapped_column(Text, nullable=False, default="")
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)

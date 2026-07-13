@@ -220,6 +220,72 @@ async def test_writes_are_confined_to_the_workspace(monkeypatch: pytest.MonkeyPa
     assert "Bash" in settings_blob
 
 
+# ── chat parity: a chat turn is a plain completion, not an agent run ─────────
+#
+# BSVibe's first principle: an executor account and a LiteLLM account behave
+# IDENTICALLY through the ``chat()`` abstraction. A LiteLLM call with no tools
+# cannot inspect anything — it answers from the prompt. The executor must match.
+#
+# It did not. Every task, chat turns included, ran the full agentic CLI with tool
+# access in an empty per-task temp dir — so a founder asking "현 프로젝트 상황
+# 설명해줘" got an answer ABOUT THAT TEMP DIR ("완전히 비어 있는 임시 디렉토리입니다"),
+# because the agent trusted its own tools over the injected grounding (prod,
+# 2026-07-13). The same agentic boot is why async knowledge answers hit the 300 s
+# executor timeout.
+#
+# ``agentic`` in the task context carries the ``tools`` argument's meaning down to
+# the CLI: tools → agent run; no tools → completion, no tools, nothing to inspect.
+
+
+async def test_chat_turn_runs_without_tools(monkeypatch: pytest.MonkeyPatch) -> None:
+    """agentic=False → the CLI gets NO tools, so it cannot read its cwd and must
+    answer from the prompt (verified against the real CLI: same empty dir, the
+    tool-less invocation answers from the injected grounding)."""
+    proc = _FakeProcess(stdout_lines=[_assistant_line("x")])
+    calls = _patch_subprocess(monkeypatch, proc)
+
+    await _drain(ClaudeCodeExecutor().execute("p", {"system": "ctx", "agentic": False}))
+
+    argv = calls[0]
+    assert "--disallowedTools" in argv
+    denied = argv[argv.index("--disallowedTools") + 1]
+    for tool in ("Bash", "Read", "Glob", "Grep", "Edit", "Write", "WebFetch", "Task"):
+        assert tool in denied
+    # No edit permissions and no Bash allow-list — there is nothing to permit.
+    assert "--permission-mode" not in argv
+    assert "--settings" not in argv
+    # The grounding still reaches the model; that is all it has to answer from.
+    assert "--append-system-prompt" in argv
+    assert "ctx" in argv
+
+
+async def test_agent_run_keeps_its_tools(monkeypatch: pytest.MonkeyPatch) -> None:
+    """agentic=True → unchanged: the coding agent works in its sandbox."""
+    proc = _FakeProcess(stdout_lines=[_assistant_line("x")])
+    calls = _patch_subprocess(monkeypatch, proc)
+
+    await _drain(ClaudeCodeExecutor().execute("p", {"agentic": True}))
+
+    argv = calls[0]
+    assert "--disallowedTools" not in argv
+    assert "--permission-mode" in argv
+    assert "acceptEdits" in argv
+
+
+async def test_missing_agentic_defaults_to_agent_run(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Back-compat: a task dispatched by an older backend carries no ``agentic``
+    key. Default to the agent run — the coding loop must never silently lose its
+    tools (that would ship empty diffs)."""
+    proc = _FakeProcess(stdout_lines=[_assistant_line("x")])
+    calls = _patch_subprocess(monkeypatch, proc)
+
+    await _drain(ClaudeCodeExecutor().execute("p", {}))
+
+    argv = calls[0]
+    assert "--disallowedTools" not in argv
+    assert "--permission-mode" in argv
+
+
 # ── Failure paths ────────────────────────────────────────────────────────────
 
 

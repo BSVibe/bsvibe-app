@@ -425,6 +425,7 @@ class ExecutorAdapter:
                         pinned_worker_id=pinned_worker_id,
                         system=effective_system,
                         prompt=prompt,
+                        agentic=bool(tools),
                     )
 
             # Legacy path — caller hasn't migrated; use the bound session.
@@ -448,6 +449,7 @@ class ExecutorAdapter:
                 pinned_worker_id=pinned_worker_id,
                 system=effective_system,
                 prompt=prompt,
+                agentic=bool(tools),
             )
 
         # Re-dispatch a RETRYABLE (transient task-failed) outcome a bounded
@@ -481,6 +483,7 @@ class ExecutorAdapter:
         pinned_worker_id: uuid.UUID | None,
         system: str,
         prompt: str,
+        agentic: bool,
     ) -> ChatResponse:
         """Run one chat-task dispatch lifecycle against a single session.
 
@@ -521,6 +524,12 @@ class ExecutorAdapter:
             run_id=self.run_id,
             model=model,
             repo_url=self.repo_url,
+            # Parity with LiteLLM (BSVibe's first principle): ``tools`` is what
+            # tells a model it may act. No tools → a plain completion, so the
+            # executor CLI must run WITHOUT its own tools too. Left agentic, it
+            # reads its empty per-task dir and answers about that instead of the
+            # grounding we injected (prod 2026-07-13, "현 프로젝트 상황 설명해줘").
+            agentic=agentic,
         )
         await dispatch.dispatch_task(self.redis, session=session, task=task, worker_id=worker.id)
         # Commit before awaiting — the worker reports its result on a
