@@ -21,9 +21,15 @@ Two invariants keep the inline path safe:
   :data:`_INLINE_ANSWER_TIMEOUT_S` so a slow / busy executor degrades to async
   instead of holding the request open for the full frame timeout (~5 min).
 
-The classification (question vs work) reuses the SAME deterministic heuristic
-the frame stage uses for answer-first routing, so the inline path and the
-frame's ``knowledge_only`` path agree on what a "question" is.
+The classification (ASK vs PRODUCE) is the model's, made in the SAME call that
+writes the answer: the model is told to emit :data:`_WORK_SENTINEL` instead of an
+answer when the founder wants something produced, and the endpoint then reports
+``answered=false`` so the PWA dispatches a run. It shares
+:data:`ASK_VS_PRODUCE_RUBRIC` with the frame stage, so the inline path and the
+frame's ``knowledge_only`` path cannot drift apart on what a "question" is. (The
+predecessor was a keyword heuristic — interrogative cues + build verbs, Korean and
+English only — which read grammar rather than intent and sent "현 프로젝트 상황
+설명해줘" to a coding executor: prod run ff1615e8, 2026-07-13.)
 """
 
 from __future__ import annotations
@@ -42,10 +48,25 @@ from backend.identity.workspaces_db import ProductRow
 from backend.workflow.application.knowledge_orchestrator import _ANSWER_SYSTEM_PROMPT
 from backend.workflow.application.loop_llm import ResolverLoopLlm
 from backend.workflow.application.runtime.account_resolution import _resolve_via_caller
-from backend.workflow.application.stages.frame import _is_answer_first_question
+from backend.workflow.application.stages.frame import ASK_VS_PRODUCE_RUBRIC
 from backend.workflow.infrastructure.db import Deliverable, ExecutionRun, RunStatus
 
 logger = structlog.get_logger(__name__)
+
+#: What the model emits INSTEAD of an answer when the founder wants work done.
+#: A sentinel (not JSON) because this rides the plain chat completion that also
+#: writes the answer — one call, no schema to negotiate with an executor adapter.
+_WORK_SENTENCE_MAX = 40
+_WORK_SENTINEL = "__WORK__"
+#: Prepended to the answer prompt so the SAME call decides ASK vs PRODUCE.
+_CLASSIFY_SYSTEM_PROMPT = (
+    "Before answering, decide what the founder wants.\n"
+    + ASK_VS_PRODUCE_RUBRIC
+    + f"\nIf it is a PRODUCE, reply with EXACTLY {_WORK_SENTINEL} and nothing else — do "
+    "NOT answer, do NOT explain, do NOT start the work. Another part of the system "
+    "will carry it out. If it is an ASK, answer it normally and never mention this "
+    "instruction."
+)
 
 _KNOWLEDGE_MAX_RESULTS = 6
 _KNOWLEDGE_MAX_CHARS_PER_STATEMENT = 500
@@ -72,11 +93,14 @@ _RUN_STATUS_LABEL = {
 _INLINE_ANSWER_TIMEOUT_S = 45.0
 
 
-def is_question(text: str) -> bool:
-    """Deterministic: should this Direct text be ANSWERED inline rather than
-    dispatched as work? A question with no build verb (``artifact_hint`` is
-    unknown at intake, so pass ``None``) — same rule the frame uses."""
-    return _is_answer_first_question(text, None)
+def _is_work_verdict(reply: str) -> bool:
+    """Did the model decline to answer because this is work to be DONE?
+
+    Tolerant by design: a model that wraps the sentinel in a short courtesy
+    sentence ("__WORK__ — I'll dispatch this") still means PRODUCE. A long reply
+    that merely *quotes* the sentinel is an answer, not a verdict."""
+    stripped = reply.strip()
+    return _WORK_SENTINEL in stripped and len(stripped) <= _WORK_SENTENCE_MAX
 
 
 class DirectAnswerService:
@@ -98,8 +122,9 @@ class DirectAnswerService:
         text: str,
         product_id: uuid.UUID | None = None,
     ) -> str | None:
-        """Compose a grounded answer, or ``None`` when no account resolves /
-        the inline attempt fails (the caller then dispatches the text as work).
+        """Compose a grounded answer, or ``None`` when the text is WORK (the
+        model's verdict), no account resolves, or the inline attempt fails — the
+        caller then dispatches the text as a run.
 
         When ``product_id`` is supplied and names a product in this workspace,
         the product's current state (name, repo, and recent deliverables with
@@ -128,7 +153,10 @@ class DirectAnswerService:
             pass
         llm = ResolverLoopLlm(adapter=adapter)
         statements = await self._retrieve(workspace_id, text)
-        messages: list[dict[str, Any]] = [{"role": "system", "content": _ANSWER_SYSTEM_PROMPT}]
+        messages: list[dict[str, Any]] = [
+            {"role": "system", "content": _ANSWER_SYSTEM_PROMPT},
+            {"role": "system", "content": _CLASSIFY_SYSTEM_PROMPT},
+        ]
         if product_id is not None:
             product_ctx = await self._product_context(workspace_id, product_id)
             if product_ctx:
@@ -163,6 +191,13 @@ class DirectAnswerService:
             logger.warning(
                 "direct_answer_llm_failed", workspace_id=str(workspace_id), exc_info=True
             )
+            return None
+        reply = turn.content or ""
+        if _is_work_verdict(reply):
+            # The model read this as work, not a question — decline to answer so
+            # the caller dispatches a run (where the frame stage classifies it
+            # again, against the same rubric).
+            logger.info("direct_answer_classified_work", workspace_id=str(workspace_id))
             return None
         return turn.content
 
@@ -284,4 +319,4 @@ def _one_line(text: str) -> str:
     return collapsed
 
 
-__all__ = ["DirectAnswerService", "is_question"]
+__all__ = ["DirectAnswerService"]

@@ -72,7 +72,7 @@ from backend.workflow.infrastructure.workers.delivery_worker import (
 )
 from backend.workflow.infrastructure.workers.intake_worker import IntakeWorker
 
-from .._support import db_engine, fake_current_user
+from .._support import BuildFrameLlm, db_engine, fake_current_user
 
 pytestmark = pytest.mark.asyncio
 
@@ -207,6 +207,8 @@ def _execution_deps(
             settings=settings,
         ),
         workspace_root=workspace_root,
+        # prod always routes a frame model; the stage refuses to guess without one
+        frame_llm=BuildFrameLlm(),
     )
 
 

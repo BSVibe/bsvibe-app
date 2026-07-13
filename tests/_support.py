@@ -21,6 +21,7 @@ event-loop-safe (callable synchronously inside pytest-asyncio's running loop).
 
 from __future__ import annotations
 
+import json
 import os
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
@@ -229,7 +230,32 @@ def agent_knowledge_payload(summary: str) -> dict:
     return {"topic": topic, "insight": text or "verified work"}
 
 
+class BuildFrameLlm:
+    """A :class:`~backend.workflow.application.stages.frame.FrameLlm` stub that frames
+    everything as WORK.
+
+    Every run has a frame model in production (the frame stage refuses to guess a
+    run's kind without one — it raises ``FrameModelUnresolvedError``, and the worker
+    pauses the run on a Decision). E2E fixtures that drive the BUILD path therefore
+    have to wire a frame model, exactly as production does; this is it."""
+
+    def __init__(self, artifact_type_hint: str | None = "code") -> None:
+        self._hint = artifact_type_hint
+
+    async def complete_text(self, *, system: str, user: str) -> str:
+        return json.dumps(
+            {
+                "framed_intent": None,
+                "skill_match": None,
+                "artifact_type_hint": self._hint,
+                "path_classification": "agent_loop",
+                "pipeline": "single",
+            }
+        )
+
+
 __all__ = [
+    "BuildFrameLlm",
     "agent_knowledge_payload",
     "can_reach_pg",
     "db_engine",

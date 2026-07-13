@@ -291,8 +291,7 @@ def build_agent_execution_deps(
         # coding-agent CLI fails on a chat prompt with "executor chat task …
         # failed: exit 1" (prod symptom, [[bsvibe-executor-subprocess-too-heavy]]).
         # Resolve the chat account BEFORE the act account so a question never
-        # touches the executor. No chat account → fall through to the act path
-        # (preserves the existing UX, incl. the no-account Decision).
+        # touches the executor.
         if _is_knowledge_only(run):
             chat = await _resolve_via_caller(
                 session,
@@ -301,17 +300,19 @@ def build_agent_execution_deps(
                 settings=settings,
                 redis=redis_client,
             )
-            if chat is not None:
-                logger.info(
-                    "knowledge_only_route",
-                    run_id=str(run.id),
-                    workspace_id=str(run.workspace_id),
-                )
-                return KnowledgeAnswerOrchestrator(
-                    session=session,
-                    llm=ResolverLoopLlm(adapter=chat.adapter),
-                    retriever=await _retriever_for(session, run.workspace_id),
-                )
+            if chat is None:
+                # A question with no chat model does NOT become work. Falling
+                # through to the act path would hand it to the coding executor —
+                # the misroute the frame stage exists to prevent. Decision + pause.
+                await resolve_workspace_model_account(session, run)
+                logger.info("knowledge_only_chat_unresolved", run_id=str(run.id))
+                return None
+            logger.info("knowledge_only_route", run_id=str(run.id))
+            return KnowledgeAnswerOrchestrator(
+                session=session,
+                llm=ResolverLoopLlm(adapter=chat.adapter),
+                retriever=await _retriever_for(session, run.workspace_id),
+            )
 
         resolved = await _resolve_via_caller(
             session,

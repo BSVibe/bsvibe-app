@@ -56,7 +56,7 @@ from backend.workflow.infrastructure.workers.delivery_worker import (
 )
 from plugin.github import plugin as github_module
 
-from .._support import db_engine
+from .._support import BuildFrameLlm, db_engine
 
 GITHUB_API = "https://api.github.test"
 TEST_KEY = b"0123456789abcdef0123456789abcdef"
@@ -230,6 +230,8 @@ def _execution_deps(
         ),
         workspace_root=workspace_root,
         workspace_provisioner=provisioner,
+        # prod always routes a frame model; the stage refuses to guess without one
+        frame_llm=BuildFrameLlm(),
     )
 
 

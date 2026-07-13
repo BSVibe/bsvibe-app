@@ -182,11 +182,15 @@ async def test_frame_skill_hint_reaches_loop_initial_context(
     assert "Draft a product requirements document" in blob
 
 
-async def test_no_frame_llm_records_keyword_frame_and_no_skill_hint(
+async def test_no_frame_llm_never_drives_the_loop(
     sf: async_sessionmaker[AsyncSession], tmp_path: Path
 ) -> None:
-    """No FrameLlm → keyword frame (no match here) recorded, no skill hint in the
-    loop (regression: the no-LLM keyword path is unchanged)."""
+    """No FrameLlm → nothing can rule on ASK vs PRODUCE, so the loop MUST NOT run.
+
+    The old behaviour guessed ``agent_loop`` from keywords and drove the executor —
+    which is how a question ended up shipping an unrelated diff (prod ff1615e8).
+    Now the run pauses (RUNNING) with no frame recorded and the work LLM untouched;
+    the founder resolves the Decision by routing a frame model."""
     workspace_id = uuid.uuid4()
     _write_skill(
         tmp_path / "skills" / str(workspace_id),
@@ -220,21 +224,16 @@ async def test_no_frame_llm_records_keyword_frame_and_no_skill_hint(
         skill_loader_for=_skill_loader_for,
         orchestrator_factory=_orchestrator_factory,
         workspace_root=tmp_path / "runs",
-    )  # no frame_llm → keyword fallback
+    )  # no frame_llm → the run cannot be classified
     agent = AgentWorker(session_factory=sf, execution=deps)
     assert await agent.drive_once() == 1
 
     async with sf() as session:
         run = await session.get(ExecutionRun, run_id)
         assert run is not None
-        assert run.status is RunStatus.REVIEW_READY or run.status is RunStatus.RUNNING
-        frame = run.payload["frame"]
-        assert frame["skill_match"] is None
-        assert frame["path_classification"] == "agent_loop"
+        # Paused, not driven: no terminal outcome, and no frame was recorded.
+        assert run.status is RunStatus.RUNNING
+        assert "frame" not in (run.payload or {})
 
-    blob = "\n".join(
-        m.get("content", "")
-        for m in recording_llm.calls[0]["messages"]
-        if isinstance(m.get("content"), str)
-    ).lower()
-    assert "suggested skill" not in blob
+    # The decisive assertion: the work LLM was never called. Nothing was built.
+    assert recording_llm.calls == []

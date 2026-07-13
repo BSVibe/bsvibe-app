@@ -58,7 +58,13 @@ from backend.storage.artifact_store import ArtifactStore, LocalFilesystemArtifac
 from backend.workers.base import BaseWorker
 from backend.workflow.application.agent_loop import RunCompute
 from backend.workflow.application.agent_runner import AgentRunner
-from backend.workflow.application.stages.frame import FrameConfig, FrameLlm, FrameStage
+from backend.workflow.application.stages.frame import (
+    FrameConfig,
+    FrameLlm,
+    FrameModelUnresolvedError,
+    FrameStage,
+    FrameUnclassifiedError,
+)
 from backend.workflow.infrastructure.db import ExecutionRun, RunStatus
 from backend.workflow.infrastructure.intake.db import RequestRow, RequestStatus
 from backend.workflow.infrastructure.repositories import SqlAlchemyRequestRepository
@@ -229,17 +235,51 @@ class AgentWorker(BaseWorker):
                 # not a single shared root-level set.
                 skill_loader = execution.skill_loader_for(run.workspace_id)
                 # B9a — resolve the per-workspace cheap-LLM for real framing,
-                # bound to this framing session. None (executor-only / no
-                # account) → keyword fallback.
+                # bound to this framing session.
                 frame_llm = await _resolve_frame_llm(execution, session, run.workspace_id)
-                framed = await self._frame_stage.frame(
-                    request=request,
-                    config=FrameConfig(
-                        skill_loader=skill_loader,
-                        default_artifact_type=execution.default_artifact_type,
-                        llm=frame_llm,
-                    ),
-                )
+                try:
+                    framed = await self._frame_stage.frame(
+                        request=request,
+                        config=FrameConfig(
+                            skill_loader=skill_loader,
+                            default_artifact_type=execution.default_artifact_type,
+                            llm=frame_llm,
+                        ),
+                    )
+                except FrameModelUnresolvedError:
+                    # No frame model routed → nothing can classify this run. Same
+                    # remedy as any unresolved account: write the Decision and pause
+                    # the run on it (founder picks a model), NOT a failure.
+                    # Imported here: account_resolution reaches back into the worker
+                    # deps, so a module-level import cycles.
+                    from backend.workflow.application.runtime.account_resolution import (  # noqa: PLC0415
+                        resolve_workspace_model_account,
+                    )
+
+                    await resolve_workspace_model_account(session, run)
+                    logger.info("agent_worker_frame_model_unresolved", run_id=str(run.id))
+                    await AgentRunner(session).transition(
+                        run_id=run.id,
+                        to_status=RunStatus.RUNNING,
+                        reason="paused on decision: no frame model to classify the request",
+                    )
+                    return
+                except FrameUnclassifiedError as exc:
+                    # A frame model answered, but not with a verdict on ASK vs
+                    # PRODUCE → the run's KIND is unknown, and both guesses are
+                    # destructive: driving the loop hands a question to a coding
+                    # executor (which edits whatever it finds — prod run ff1615e8),
+                    # while answering silently never builds. Fail the run so the
+                    # founder sees WHY (no-implicit-routing).
+                    logger.warning(
+                        "agent_worker_frame_unclassified", run_id=str(run.id), reason=str(exc)
+                    )
+                    await AgentRunner(session).transition(
+                        run_id=run.id,
+                        to_status=RunStatus.FAILED,
+                        reason=f"frame could not classify the request: {exc}",
+                    )
+                    return
                 # Record the FULL framing (B9a): skill match + artifact-type hint
                 # (for delivery routing) + the refined intent + the path
                 # classification (recorded for B9b, which acts on knowledge_only).
@@ -331,8 +371,8 @@ async def _resolve_frame_llm(
     an async factory ``(session, workspace_id) -> FrameLlm | None``. A static
     instance (one that exposes ``complete_text``) is returned as-is; a callable
     is invoked with the framing session + workspace id (awaited when it returns a
-    coroutine). ``None`` anywhere → the keyword fallback (no regression for
-    executor-only / accountless workspaces)."""
+    coroutine). ``None`` anywhere → no frame model, and the stage raises
+    :class:`FrameModelUnresolvedError` (the run pauses on a Decision)."""
     frame_llm = execution.frame_llm
     if frame_llm is None:
         return None

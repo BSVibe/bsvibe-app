@@ -26,6 +26,7 @@ import pytest
 import backend.workflow.application.direct_answer as da
 from backend.dispatch.adapter import ExecutorAdapterUnavailable
 from backend.workflow.application.direct_answer import DirectAnswerService
+from backend.workflow.application.stages.frame import ASK_VS_PRODUCE_RUBRIC
 from backend.workflow.infrastructure.db import RunStatus
 
 pytestmark = pytest.mark.asyncio
@@ -150,10 +151,14 @@ async def test_product_context_titles_are_single_line(tmp_path, monkeypatch) -> 
     svc = DirectAnswerService(session=session, settings=settings)  # type: ignore[arg-type]
     await svc.answer(workspace_id=ws, product_id=pid, text="status?")
 
-    grounding = "\n".join(
-        str(m.get("content")) for m in captured["messages"] if m.get("role") == "system"
+    # Scan the PRODUCT-CONTEXT message only — other system messages (the
+    # ASK-vs-PRODUCE rubric) carry bullets of their own.
+    product_ctx = next(
+        str(m["content"])
+        for m in captured["messages"]
+        if m.get("role") == "system" and "toolkit" in str(m.get("content"))
     )
-    bullet = next(ln for ln in grounding.splitlines() if ln.startswith("- "))
+    bullet = next(ln for ln in product_ctx.splitlines() if ln.startswith("- "))
     assert bullet == "- Add a truncate helper with an ellipsis suffix — shipped"
 
 
@@ -315,3 +320,75 @@ async def test_no_chat_account_returns_none(tmp_path, monkeypatch) -> None:
 
     out = await _service(tmp_path).answer(workspace_id=uuid.uuid4(), text="What is X?")
     assert out is None
+
+
+# --------------------------------------------------------------------------
+# ASK vs PRODUCE — the model's verdict, in the same call that writes the answer
+# --------------------------------------------------------------------------
+
+
+def _adapter_replying(content: str) -> Any:
+    class _Adapter:
+        timeout_s: float | None = None
+
+        async def chat(self, **_kw: Any) -> Any:
+            return SimpleNamespace(content=content, tool_calls=(), artifact_refs=())
+
+    return _Adapter()
+
+
+@pytest.mark.parametrize("reply", ["__WORK__", "  __WORK__  ", "__WORK__ — dispatching this."])
+async def test_work_verdict_declines_to_answer(tmp_path, monkeypatch, reply: str) -> None:
+    """The model read the text as work → the service answers nothing, so the
+    endpoint reports answered=false and the PWA dispatches a run."""
+    resolved = SimpleNamespace(
+        account=SimpleNamespace(provider="litellm"), adapter=_adapter_replying(reply)
+    )
+    monkeypatch.setattr(da, "_resolve_via_caller", lambda *_a, **_k: _async(resolved))
+
+    out = await _service(tmp_path).answer(
+        workspace_id=uuid.uuid4(), text="backend 에 mean 함수 추가해줘"
+    )
+    assert out is None
+
+
+async def test_answer_quoting_the_sentinel_is_still_an_answer(tmp_path, monkeypatch) -> None:
+    """A real answer that happens to mention the sentinel is NOT a verdict — only
+    a short, bare reply is (otherwise a knowledge answer about this very code
+    would be silently swallowed and dispatched as work)."""
+    reply = (
+        "The inline ask path declines by emitting __WORK__, which the service reads "
+        "as a verdict that the founder wants something produced rather than explained."
+    )
+    resolved = SimpleNamespace(
+        account=SimpleNamespace(provider="litellm"), adapter=_adapter_replying(reply)
+    )
+    monkeypatch.setattr(da, "_resolve_via_caller", lambda *_a, **_k: _async(resolved))
+
+    out = await _service(tmp_path).answer(
+        workspace_id=uuid.uuid4(), text="inline ask 경로가 작업을 어떻게 구분해?"
+    )
+    assert out == reply
+
+
+async def test_ask_vs_produce_rubric_is_sent_to_the_model(tmp_path, monkeypatch) -> None:
+    """The classification instruction actually reaches the model, and it is the
+    SAME rubric the frame stage uses — the two must not drift apart."""
+    captured: dict[str, Any] = {}
+    adapter = _capturing_adapter(captured)
+    monkeypatch.setattr(
+        da,
+        "_resolve_via_caller",
+        lambda *_a, **_k: _async(
+            SimpleNamespace(account=SimpleNamespace(provider="litellm"), adapter=adapter)
+        ),
+    )
+    monkeypatch.setattr(DirectAnswerService, "_retrieve", _empty_retrieve)
+
+    await _service(tmp_path).answer(workspace_id=uuid.uuid4(), text="현 프로젝트 상황 설명해줘")
+
+    sent = "\n".join(
+        str(m.get("content")) for m in captured["messages"] if m.get("role") == "system"
+    )
+    assert ASK_VS_PRODUCE_RUBRIC in sent
+    assert "__WORK__" in sent
