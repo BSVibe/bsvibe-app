@@ -65,27 +65,33 @@ _STREAM_LIMIT = 16 * 1024 * 1024
 #: (the per-task workspace) because the blanket bypass is no longer set.
 _CONFINED_SETTINGS = json.dumps({"permissions": {"allow": ["Bash"]}})
 
-#: Every built-in tool, denied. A CHAT turn (``agentic=False``) must be a plain
-#: completion — the same thing a LiteLLM account does when the caller passes no
-#: tools. Left agentic, the CLI reads its own (empty, per-task) cwd and answers
-#: about THAT: prod 2026-07-13, "현 프로젝트 상황 설명해줘" → "완전히 비어 있는
-#: 임시 디렉토리입니다", with the injected product grounding ignored because the
-#: agent trusts what its tools "saw". Denying the tools removes the temptation and
-#: the tool-loop latency (which is what timed out async answers at 300 s).
-_CHAT_DENIED_TOOLS = " ".join(
-    (
-        "Bash",
-        "Read",
-        "Write",
-        "Edit",
-        "Glob",
-        "Grep",
-        "Task",
-        "WebFetch",
-        "WebSearch",
-        "NotebookEdit",
-        "TodoWrite",
-    )
+#: A CHAT turn is a plain completion — the same thing a LiteLLM account does when
+#: the caller passes no tools. Getting there takes four flags, each learned against
+#: the real CLI (prod 2026-07-13, "현 프로젝트 상황 설명해줘"):
+#:
+#: * ``--disallowedTools "*"`` — the WILDCARD, never an enumerated list. Naming the
+#:   obvious tools (Bash/Read/Edit/…) left the CLI's OTHER built-ins (ToolSearch,
+#:   Skill, Workflow, Cron*, …) exposed, and the model burned 12 turns calling
+#:   ToolSearch trying to go look at the project.
+#: * ``--strict-mcp-config`` + an empty ``--mcp-config`` — the worker host has MCP
+#:   servers configured; those are tools too.
+#: * ``--setting-sources ""`` — do not load the operator's CLAUDE.md / skills. That
+#:   harness belongs to an agent run, not to a chat completion.
+#: * ``--system-prompt`` (REPLACE, not append; see :meth:`_build_cmd`) — Claude
+#:   Code's default system prompt announces the working directory, so even with every
+#:   tool denied the model still "knew" it sat in an empty temp dir and said so.
+#:
+#: Measured, same empty dir, same question: append + named denies → 12 turns / 44 s,
+#: answering about the temp dir (44 s also blew the 45 s inline-answer budget). This
+#: invocation → 1 turn / 9 s, answering from the grounding we injected.
+_CHAT_FLAGS: tuple[str, ...] = (
+    "--disallowedTools",
+    "*",
+    "--strict-mcp-config",
+    "--mcp-config",
+    '{"mcpServers":{}}',
+    "--setting-sources",
+    "",
 )
 
 
@@ -204,10 +210,13 @@ class ClaudeCodeExecutor:
                 _CONFINED_SETTINGS,
             ]
         else:
-            # A chat turn: no tools at all. Nothing to permit, nothing to inspect.
-            cmd_args += ["--disallowedTools", _CHAT_DENIED_TOOLS]
+            # A chat turn: no tools, no MCP, no host harness (:data:`_CHAT_FLAGS`).
+            cmd_args += list(_CHAT_FLAGS)
         if system:
-            cmd_args += ["--append-system-prompt", system]
+            # An agent run APPENDS to Claude Code's harness prompt (it needs that
+            # coding context). A chat turn REPLACES it — the default prompt announces
+            # the cwd, which is precisely what it must not answer about.
+            cmd_args += ["--append-system-prompt" if agentic else "--system-prompt", system]
         if model:
             cmd_args += ["--model", model]
         return cmd_args

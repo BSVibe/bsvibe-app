@@ -238,25 +238,35 @@ async def test_writes_are_confined_to_the_workspace(monkeypatch: pytest.MonkeyPa
 
 
 async def test_chat_turn_runs_without_tools(monkeypatch: pytest.MonkeyPatch) -> None:
-    """agentic=False → the CLI gets NO tools, so it cannot read its cwd and must
-    answer from the prompt (verified against the real CLI: same empty dir, the
-    tool-less invocation answers from the injected grounding)."""
+    """agentic=False → a plain completion: no tools, no MCP, no host harness, and
+    OUR system prompt — not Claude Code's (its default announces the cwd, so the
+    model "knows" it sits in an empty temp dir even with every tool denied).
+
+    Measured against the real CLI, same empty dir, same question:
+      append-prompt + named denies → 12 turns, 44 s, answers about the temp dir
+      this invocation             →  1 turn,   9 s, answers from the grounding
+    """
     proc = _FakeProcess(stdout_lines=[_assistant_line("x")])
     calls = _patch_subprocess(monkeypatch, proc)
 
     await _drain(ClaudeCodeExecutor().execute("p", {"system": "ctx", "agentic": False}))
 
     argv = calls[0]
-    assert "--disallowedTools" in argv
-    denied = argv[argv.index("--disallowedTools") + 1]
-    for tool in ("Bash", "Read", "Glob", "Grep", "Edit", "Write", "WebFetch", "Task"):
-        assert tool in denied
-    # No edit permissions and no Bash allow-list — there is nothing to permit.
+    # Wildcard, never an enumerated denylist: naming tools one by one left the CLI's
+    # OTHER built-ins (ToolSearch, Skill, Workflow, Cron*, …) exposed, and the model
+    # burned turns calling ToolSearch to go look at the project.
+    assert argv[argv.index("--disallowedTools") + 1] == "*"
+    # The host operator's MCP servers and settings (CLAUDE.md / skills) are the
+    # agent's harness — a chat turn has no business inheriting them.
+    assert "--strict-mcp-config" in argv
+    assert argv[argv.index("--mcp-config") + 1] == '{"mcpServers":{}}'
+    assert argv[argv.index("--setting-sources") + 1] == ""
+    # REPLACE the system prompt, never append.
+    assert argv[argv.index("--system-prompt") + 1] == "ctx"
+    assert "--append-system-prompt" not in argv
+    # Nothing to permit: no edit mode, no Bash allow-list.
     assert "--permission-mode" not in argv
     assert "--settings" not in argv
-    # The grounding still reaches the model; that is all it has to answer from.
-    assert "--append-system-prompt" in argv
-    assert "ctx" in argv
 
 
 async def test_agent_run_keeps_its_tools(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -264,12 +274,16 @@ async def test_agent_run_keeps_its_tools(monkeypatch: pytest.MonkeyPatch) -> Non
     proc = _FakeProcess(stdout_lines=[_assistant_line("x")])
     calls = _patch_subprocess(monkeypatch, proc)
 
-    await _drain(ClaudeCodeExecutor().execute("p", {"agentic": True}))
+    await _drain(ClaudeCodeExecutor().execute("p", {"system": "ctx", "agentic": True}))
 
     argv = calls[0]
     assert "--disallowedTools" not in argv
+    assert "--strict-mcp-config" not in argv
     assert "--permission-mode" in argv
     assert "acceptEdits" in argv
+    # An agent run keeps the host harness: the prompt is APPENDED to it.
+    assert "--append-system-prompt" in argv
+    assert "--system-prompt" not in argv
 
 
 async def test_missing_agentic_defaults_to_agent_run(monkeypatch: pytest.MonkeyPatch) -> None:
