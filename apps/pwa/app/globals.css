@@ -9969,4 +9969,12 @@ main.login {
   position: relative;
   z-index: 1;
 }
+
+/* A card body can be rendered markdown (the checkpoint question, its rationale),
+ * which may carry its own links. Those must stay independently tappable rather
+ * than being swallowed by the card-wide overlay. */
+.tap-card .markdown-inline a {
+  position: relative;
+  z-index: 1;
+}
 /* ── END card-tap ──────────────────────────────────────────────────────── */
