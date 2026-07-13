@@ -15,6 +15,7 @@ statements are untouched, so judge criteria keep their exact wire format.
 
 from __future__ import annotations
 
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -148,3 +149,40 @@ async def test_structured_items_keep_their_identity(tmp_path: Path) -> None:
     assert items[0].ref == path
     assert items[0].kind == "note"
     assert "chat 모델로 답해야 한다" in items[0].text
+
+
+# ── the builder itself — the seam both answer paths actually call ────────────
+#
+# Twice now a defect slipped past the unit tests above because they construct
+# AnswerGroundingRetriever by hand: the vault-relative/absolute path mismatch, and
+# ``factory.vault_path()`` (a PROPERTY, called like a method). Exercise the real
+# builder against a real vault so the wiring itself is covered.
+
+
+async def test_build_answer_retriever_reads_real_notes(tmp_path, monkeypatch) -> None:
+    from types import SimpleNamespace
+
+    from backend.knowledge.retrieval import answer_grounding as ag
+
+    region, ws = "us-1", uuid.uuid4()
+    note = "garden/seedling/routing.md"
+    vault_root = tmp_path / region / str(ws)
+    (vault_root / "garden" / "seedling").mkdir(parents=True)
+    (vault_root / note).write_text(_NOTE, encoding="utf-8")
+
+    # No embedder configured → the canon retriever alone; the note still has to be
+    # readable through the wrapper, which is what these two bugs broke.
+    monkeypatch.setattr(ag, "_DEFAULT_MAX_CHARS", 1200, raising=False)
+    settings = SimpleNamespace(
+        knowledge_default_region=region,
+        knowledge_vault_root=str(tmp_path),
+        knowledge_embedding_model=None,
+    )
+
+    retriever = ag.build_answer_retriever(None, settings=settings, workspace_id=ws)
+
+    # The wrapper resolves refs against the vault root — prove it on a real note.
+    expanded = await retriever._expand(
+        RetrievedKnowledge(text=f"Related note — {note}", kind="note", ref=note, label=note)
+    )
+    assert "chat 모델로 답해야 한다" in expanded.text

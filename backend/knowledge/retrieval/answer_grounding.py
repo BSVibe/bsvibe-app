@@ -145,7 +145,7 @@ def build_answer_retriever(session: Any, *, settings: Any, workspace_id: uuid.UU
             PgNoteVectorBackend(session, workspace_id=workspace_id, embedding_model=embedder.model),
         )
         inner = CompositeCanonRetriever([base, semantic])
-    return AnswerGroundingRetriever(inner, factory.vault(), root=factory.vault_path())
+    return AnswerGroundingRetriever(inner, factory.vault(), root=factory.vault_path)
 
 
 __all__ = ["AnswerGroundingRetriever", "build_answer_retriever"]
