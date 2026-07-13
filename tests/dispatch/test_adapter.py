@@ -585,9 +585,7 @@ class TestExecutorAdapterChat:
                         tools=tools,
                     )
                 entries = await redis.xrange(dispatch.worker_stream(worker.id))
-                return next(
-                    fields for _id, fields in entries if fields.get("action") == "execute"
-                )
+                return next(fields for _id, fields in entries if fields.get("action") == "execute")
 
     async def test_chat_without_tools_dispatches_a_non_agentic_turn(self) -> None:
         """BSVibe's first principle: an executor account behaves IDENTICALLY to a
