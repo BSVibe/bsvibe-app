@@ -1,0 +1,70 @@
+# Retrieval eval set (L0) — founder questions × the notes that answer them.
+#
+# Labelled by hand against the demo workspace's real corpus (1,649 embedded notes:
+# 935 concepts/active, 599 garden/seedling, 86 merged, 29 entities). ``expected`` is
+# a distinctive SLUG of the note path, not the full path — paths carry a
+# region/workspace prefix and notes get renamed as the corpus settles.
+#
+# Two kinds, and the distinction is the point:
+#
+#   specific — the answer IS in a note. Scored (hit@k / recall@k).
+#   broad    — "현 프로젝트 상황 설명해줘". NO note answers it; the answer is an
+#              aggregate over the workspace (runs, deliverables, concepts). These
+#              are reported, never scored: they exist to show that a better search
+#              cannot fix them, so we do not tune retrieval against a question
+#              retrieval is the wrong tool for.
+
+questions:
+  # ── specific: the founder asks about something a note actually records ──────
+  - question: "웹훅 서명 검증은 플랫폼마다 어떻게 달라?"
+    kind: specific
+    expected: ["플랫폼별-웹훅-서명-검증"]
+
+  - question: "워커는 태스크를 어떻게 받아가?"
+    kind: specific
+    expected: ["redis-streams-for-worker-task-polling"]
+
+  - question: "이벤트 버스에서 구독자가 예외를 던지면 어떻게 돼?"
+    kind: specific
+    expected: ["eventbus-publish"]
+
+  - question: "run을 취소하면 pending decision은 정리돼?"
+    kind: specific
+    expected: ["run-취소만으로는-pending-decision"]
+
+  - question: "비밀번호 재설정할 때 이메일 존재 여부가 노출되나?"
+    kind: specific
+    expected: ["gotrue-비밀번호-재설정", "인증-조회-실패를-구분-불가능하게"]
+
+  - question: "샌드박스는 어떻게 추상화했어?"
+    kind: specific
+    expected: ["protocol-based-sandbox"]
+
+  - question: "LLM이 enum 값을 이상하게 뱉으면 어떻게 처리해?"
+    kind: specific
+    expected: ["llm-enum-출력은"]
+
+  - question: "브랜치에서 그 브랜치만의 변경분을 어떻게 뽑아?"
+    kind: specific
+    expected: ["git-diff-세-점-연산자"]
+
+  - question: "지식이 노이즈로 쌓이는 건 어떻게 막아?"
+    kind: specific
+    expected: ["지식-추출의-기본값은-보존-없음"]
+
+  - question: "남의 워크스페이스 리소스에 접근하면 어떤 응답이 나가?"
+    kind: specific
+    expected: ["비회원-워크스페이스-접근"]
+
+  # ── broad: aggregate questions — retrieval structurally cannot answer these ──
+  - question: "현 프로젝트 상황 설명해줘"
+    kind: broad
+    expected: []
+
+  - question: "지금 어디까지 구현됐어?"
+    kind: broad
+    expected: []
+
+  - question: "이 프로젝트 아키텍처를 전체적으로 설명해줘"
+    kind: broad
+    expected: []
