@@ -380,6 +380,15 @@ class ExecutorAdapter:
         pinned_raw = extra.get("worker_id")
         pinned_worker_id = _parse_uuid_or_none(pinned_raw)
 
+        # Fold EVERY system-role message into the system slot. ``ResolverLoopLlm``
+        # lifts only the first one; a caller that grounds an answer sends several
+        # (the product's state, the retrieved knowledge). LiteLLM passes them all to
+        # the provider — dropping them here (which ``_render_prompt`` used to do)
+        # meant the executor handed the model the bare question and it answered
+        # "제공된 지식이 없습니다" (prod, 2026-07-13). Same input, either transport.
+        system = "\n\n".join(
+            part for part in [system, *(_system_texts(messages))] if part and part.strip()
+        )
         prompt = _render_prompt(messages)
 
         # Localize the system prompt the SAME way the LiteLLM adapter does, so
@@ -1004,14 +1013,31 @@ def _render_prompt(messages: list[ChatMessage]) -> str:
             tool_name = str(message.get("name") or "tool")
             parts.append(f"[tool:{tool_name}] {content}")
         elif role == "system":
-            # Defensive: ResolverLoopLlm already strips the leading
-            # system message before calling the adapter, but a caller may
-            # forget. Don't render it here — the adapter ships
-            # ``system`` separately via ``--append-system-prompt``.
+            # Not dropped — :meth:`ExecutorAdapter.chat` has already folded every
+            # system message into the ``system`` slot the CLI is given. Skipping it
+            # here just avoids rendering it twice.
             continue
         else:
             parts.append(f"{role}: {content}")
     return "\n\n".join(parts).strip()
+
+
+def _system_texts(messages: list[ChatMessage]) -> list[str]:
+    """Every system-role message's text, in order (see :meth:`ExecutorAdapter.chat`)."""
+    texts: list[str] = []
+    for message in messages:
+        if message.get("role") != "system":
+            continue
+        content = message.get("content")
+        if isinstance(content, list):
+            content = "".join(
+                str(part.get("text") or "")
+                for part in content
+                if isinstance(part, dict) and part.get("type") == "text"
+            )
+        if content:
+            texts.append(str(content))
+    return texts
 
 
 def _parse_uuid_or_none(value: Any) -> uuid.UUID | None:

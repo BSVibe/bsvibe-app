@@ -538,7 +538,7 @@ class TestExecutorAdapterChat:
                 )
                 assert execute_entry["model"] == "opencode-go/qwen3.6-plus"
 
-    async def _dispatch_and_read_entry(self, *, tools: Any) -> dict[str, Any]:
+    async def _dispatch_and_read_entry(self, *, tools: Any, messages: Any = None) -> dict[str, Any]:
         """Fire one executor chat and return its ``execute`` stream entry."""
         redis = await _make_redis()
         workspace_id = uuid.uuid4()
@@ -581,7 +581,7 @@ class TestExecutorAdapterChat:
                 with pytest.raises(ExecutorAdapterUnavailable):
                     await adapter.chat(
                         system="",
-                        messages=[{"role": "user", "content": "hi"}],
+                        messages=messages or [{"role": "user", "content": "hi"}],
                         tools=tools,
                     )
                 entries = await redis.xrange(dispatch.worker_stream(worker.id))
@@ -606,6 +606,29 @@ class TestExecutorAdapterChat:
             tools=[{"type": "function", "function": {"name": "write_file"}}]
         )
         assert entry["agentic"] == "1"
+
+    async def test_extra_system_messages_reach_the_model(self) -> None:
+        """Grounding rides in system-role MESSAGES, and it must survive the executor
+        transport exactly as it survives LiteLLM's.
+
+        ``ResolverLoopLlm`` lifts only the FIRST system message into the ``system``
+        slot; a caller that grounds an answer sends several (the product's state, the
+        retrieved knowledge). ``_render_prompt`` dropped every one of them, so on the
+        executor path the model was handed the question alone and answered "제공된
+        지식이 없습니다" — while the identical call through LiteLLM saw everything
+        (prod, 2026-07-13)."""
+        entry = await self._dispatch_and_read_entry(
+            tools=None,
+            messages=[
+                {"role": "system", "content": "Product: BSVibe (repo bsvibe-app)."},
+                {"role": "system", "content": "Knowledge: routing redesign shipped."},
+                {"role": "user", "content": "현 프로젝트 상황 설명해줘"},
+            ],
+        )
+        assert "Product: BSVibe" in entry["system"]
+        assert "routing redesign shipped" in entry["system"]
+        # The conversation itself still renders as the turn transcript.
+        assert "현 프로젝트 상황 설명해줘" in entry["prompt"]
 
     async def test_chat_legacy_executor_placeholder_omits_model(self) -> None:
         """E21 back-compat — accounts whose ``litellm_model`` is the legacy
