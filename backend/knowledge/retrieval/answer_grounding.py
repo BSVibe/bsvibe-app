@@ -21,6 +21,7 @@ verify path keeps its exact statement wire format, so judge criteria are unchang
 from __future__ import annotations
 
 import uuid
+from pathlib import Path
 from typing import Any, Protocol
 
 import structlog
@@ -40,7 +41,10 @@ class _Retriever(Protocol):
 
 
 class _NoteReader(Protocol):
-    async def read_note_content(self, path: Any) -> str: ...
+    #: NOTE the contract: an ABSOLUTE path, inside the vault root. ``Vault`` resolves
+    #: it and rejects anything escaping the boundary — a vault-relative ref resolves
+    #: against the PROCESS cwd and is refused, so every hit reads back as unreadable.
+    async def read_note_content(self, path: Path) -> str: ...
 
 
 def _strip_frontmatter(raw: str) -> str:
@@ -63,10 +67,14 @@ class AnswerGroundingRetriever:
         inner: _Retriever,
         vault: _NoteReader,
         *,
+        root: Path,
         max_chars: int = _DEFAULT_MAX_CHARS,
     ) -> None:
         self._inner = inner
         self._vault = vault
+        # A retrieved ``ref`` is vault-RELATIVE ("garden/seedling/x.md"); the vault
+        # reads by absolute path. Resolving the two is this class's job.
+        self._root = root
         self._max_chars = max_chars
 
     async def retrieve_for_signals(self, signals: str) -> list[str]:
@@ -84,7 +92,7 @@ class AnswerGroundingRetriever:
         if item.kind != "note" or not item.ref:
             return item
         try:
-            raw = await self._vault.read_note_content(item.ref)
+            raw = await self._vault.read_note_content(self._root / item.ref)
         except Exception:  # noqa: BLE001 — grounding must never crash the answer
             logger.warning("answer_grounding_note_unreadable", ref=item.ref)
             return item
@@ -110,8 +118,6 @@ def build_answer_retriever(session: Any, *, settings: Any, workspace_id: uuid.UU
     from (and the inline one, on a workspace with no promoted concepts yet, was
     grounded in nothing at all).
     """
-    from pathlib import Path  # noqa: PLC0415
-
     from backend.knowledge.factory import KnowledgeFactory  # noqa: PLC0415
     from backend.knowledge.retrieval.composite_retriever import (  # noqa: PLC0415
         CompositeCanonRetriever,
@@ -139,7 +145,7 @@ def build_answer_retriever(session: Any, *, settings: Any, workspace_id: uuid.UU
             PgNoteVectorBackend(session, workspace_id=workspace_id, embedding_model=embedder.model),
         )
         inner = CompositeCanonRetriever([base, semantic])
-    return AnswerGroundingRetriever(inner, factory.vault())
+    return AnswerGroundingRetriever(inner, factory.vault(), root=factory.vault_path())
 
 
 __all__ = ["AnswerGroundingRetriever", "build_answer_retriever"]
