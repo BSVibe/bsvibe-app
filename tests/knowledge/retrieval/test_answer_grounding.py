@@ -151,6 +151,35 @@ async def test_structured_items_keep_their_identity(tmp_path: Path) -> None:
     assert "chat 모델로 답해야 한다" in items[0].text
 
 
+async def test_retracted_note_is_dropped_from_grounding(tmp_path: Path) -> None:
+    """A retracted note must not ground an answer.
+
+    Retraction tombstones the note in place (``retracted_at`` in its frontmatter) —
+    but the embedding index keeps its row, so semantic search still returns it. The
+    founder then reads their own retracted knowledge quoted back as fact: prod
+    2026-07-13, the note settle wrote from a MISROUTED run ("현 프로젝트 상황
+    설명해줘" → an unrelated diff) was retracted, and the next answer still cited it
+    as the workspace's core pattern.
+
+    Retraction has to be honoured at every CONSUMER, not just at the writer."""
+    live, dead = "garden/seedling/live.md", "garden/seedling/dead.md"
+    vault, root = _vault(
+        tmp_path,
+        {
+            live: _NOTE,
+            dead: "---\nretracted_at: '2026-07-13T11:32:42+00:00'\n---\n\n# 철회된 지식\n\n틀린 내용.",
+        },
+    )
+    inner = _StubInner([_note_item(dead), _note_item(live)])
+    retriever = AnswerGroundingRetriever(inner, vault, root=root)
+
+    statements = await retriever.retrieve_for_signals("x")
+
+    assert len(statements) == 1
+    assert "틀린 내용" not in statements[0]
+    assert "chat 모델로 답해야 한다" in statements[0]
+
+
 # ── the builder itself — the seam both answer paths actually call ────────────
 #
 # Twice now a defect slipped past the unit tests above because they construct

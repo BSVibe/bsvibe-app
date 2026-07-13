@@ -47,6 +47,18 @@ class _NoteReader(Protocol):
     async def read_note_content(self, path: Path) -> str: ...
 
 
+def _is_retracted(raw: str) -> bool:
+    """Does the note carry a retraction tombstone (``retracted_at``) in its
+    frontmatter? Retraction rewrites the note in place; the embedding index does not
+    forget it, so every READER has to check."""
+    text = raw.lstrip()
+    if not text.startswith("---"):
+        return False
+    end = text.find("\n---", 3)
+    frontmatter = text[:end] if end != -1 else text
+    return "retracted_at:" in frontmatter
+
+
 def _strip_frontmatter(raw: str) -> str:
     """Drop a leading YAML frontmatter block — it is metadata, not knowledge, and
     it would otherwise eat most of the per-note budget."""
@@ -82,12 +94,19 @@ class AnswerGroundingRetriever:
 
     async def retrieve_structured(self, signals: str) -> list[RetrievedKnowledge]:
         items = await self._inner.retrieve_structured(signals)
-        return [await self._expand(item) for item in items]
+        expanded = [await self._expand(item) for item in items]
+        return [item for item in expanded if item is not None]
 
-    async def _expand(self, item: RetrievedKnowledge) -> RetrievedKnowledge:
+    async def _expand(self, item: RetrievedKnowledge) -> RetrievedKnowledge | None:
         """Replace a note pointer with the note's text, keeping its identity.
 
-        A note that cannot be read (retracted, moved, permission) degrades to the
+        ``None`` drops the item: a RETRACTED note must never ground an answer. The
+        tombstone lives in the note's frontmatter, but the embedding index keeps its
+        row, so semantic search still returns retracted notes — the founder then gets
+        their own retracted knowledge quoted back as fact (prod, 2026-07-13).
+        Retraction has to be honoured at every consumer, not just at the writer.
+
+        A note that cannot be read (moved, deleted, permission) degrades to the
         pointer it already was — grounding degrades, the answer never breaks."""
         if item.kind != "note" or not item.ref:
             return item
@@ -96,6 +115,9 @@ class AnswerGroundingRetriever:
         except Exception:  # noqa: BLE001 — grounding must never crash the answer
             logger.warning("answer_grounding_note_unreadable", ref=item.ref)
             return item
+        if _is_retracted(raw):
+            logger.info("answer_grounding_note_retracted", ref=item.ref)
+            return None
         body = _strip_frontmatter(raw)
         if not body:
             return item
