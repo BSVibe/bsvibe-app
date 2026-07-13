@@ -15,6 +15,12 @@ type RowState = "idle" | "working" | "error";
  * a { reason } body). Resolves inline; a failed call keeps the row actionable
  * with a calm message and does NOT crash the list. On success the container
  * re-reads so the resolved item leaves Pending.
+ *
+ * The CARD is the tap target for its report (mobile-first): the title is the
+ * one and only <a>, and `.tap-card__link::after` stretches it over the whole
+ * card, so tapping any non-button part opens /deliverables/{id}. Approve /
+ * Decline sit ABOVE that overlay (`.tap-card__above`) and are never nested in
+ * the link, so they resolve instead of navigating.
  */
 export default function DeliveryRow({
   item,
@@ -42,14 +48,22 @@ export default function DeliveryRow({
   }
 
   const working = state === "working";
+  const title = item.title || t("deliveryQuestion");
 
   return (
-    <li className="need-card need-card--delivery">
+    <li className="need-card need-card--delivery tap-card">
       <div className="need-card__head">
         {/* Lead with WHAT is shipping (concise title) so the approve decision
-            is informed, not blind. */}
+            is informed, not blind — and make that title the card-wide link to
+            the report. */}
         <div className="need-card__title-wrap">
-          <span className="need-card__title">{item.title || t("deliveryQuestion")}</span>
+          {item.detailHref ? (
+            <Link className="need-card__title tap-card__link" href={item.detailHref}>
+              {title}
+            </Link>
+          ) : (
+            <span className="need-card__title">{title}</span>
+          )}
           {item.productSlug && item.productSlug !== "workspace" && (
             <span className="need-card__product">{item.productSlug}</span>
           )}
@@ -61,7 +75,7 @@ export default function DeliveryRow({
       </div>
       {/* The held-delivery context becomes the card body when a title leads. */}
       {item.title && <p className="need-card__body">{t("deliveryQuestion")}</p>}
-      <div className="need-card__actions">
+      <div className="need-card__actions tap-card__above">
         <button
           type="button"
           className="need-card__btn need-card__btn--primary"
@@ -82,12 +96,6 @@ export default function DeliveryRow({
           <span className="need-card__error" aria-live="polite">
             {t("resolveError")}
           </span>
-        )}
-        <span className="need-card__spacer" />
-        {item.detailHref && (
-          <Link className="need-card__view" href={item.detailHref}>
-            {t("viewProof")}
-          </Link>
         )}
       </div>
     </li>

@@ -64,7 +64,7 @@ describe("AppShell", () => {
 
     expect(screen.getByText("founder@bsvibe.dev")).toBeInTheDocument();
     expect(screen.getByText("page content")).toBeInTheDocument();
-    expect(screen.getAllByText("Direct").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Request").length).toBeGreaterThan(0);
   });
 
   it("opens the Direct overlay on ⌘K", () => {
@@ -74,10 +74,10 @@ describe("AppShell", () => {
       </AppShell>,
     );
 
-    expect(screen.queryByRole("dialog", { name: "Direct" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: "Request" })).not.toBeInTheDocument();
 
     fireEvent.keyDown(window, { key: "k", metaKey: true });
 
-    expect(screen.getByRole("dialog", { name: "Direct" })).toBeInTheDocument();
+    expect(screen.getByRole("dialog", { name: "Request" })).toBeInTheDocument();
   });
 });

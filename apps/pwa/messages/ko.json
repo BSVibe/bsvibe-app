@@ -40,7 +40,7 @@
     "scopesLabel": "요청한 권한",
     "scopesHeading": "권한",
     "scopeReadDesc": "제품·실행·지식을 읽어요.",
-    "scopeWriteDesc": "다이렉트 메시지 작성과 Safe Mode 승인을 해요.",
+    "scopeWriteDesc": "요청 전송과 Safe Mode 승인을 해요.",
     "scopeAdminDesc": "워크스페이스 설정과 결제를 관리해요.",
     "scopeUnknownDesc": "앱이 요청한 권한이에요.",
     "allow": "허용",
@@ -102,7 +102,7 @@
     }
   },
   "direct": {
-    "label": "다이렉트",
+    "label": "요청",
     "hint": "BSVibe에게 무엇을 할지 알려주세요. 질문하거나 작업을 시작하세요.",
     "targetLabel": "대상",
     "targetAuto": "자동 (자동 라우팅)",
@@ -140,7 +140,6 @@
     "noShipped": "이 제품은 아직 완료한 것이 없어요.",
     "untitled": "완료된 산출물",
     "openArtifact": "산출물 열기",
-    "viewReport": "리포트 보기",
     "danger": {
       "heading": "위험 구역",
       "delete": "제품 삭제",
@@ -373,7 +372,6 @@
     "readyToShip": "출시 준비됨",
     "needsYourAnswer": "답변이 필요해요",
     "orTypeYourOwn": "직접 입력해도 돼요…",
-    "viewProof": "보고서 보기",
     "deliveryGroupQuestion": "한 실행에서 {count}개의 전달물이 안전 모드에 보류되어 있어요. 모두 내보낼까요?",
     "approveAll": "모두 승인 ({count})",
     "approve": "승인",
@@ -853,7 +851,7 @@
         "configHint": "`~/.config/claude-code/mcp.json`에 아래 항목을 추가하거나 `claude mcp add bsvibe <url>` 명령을 실행하세요. CLI가 WWW-Authenticate 헤더로 OAuth를 처리하므로 토큰을 직접 넣을 필요는 없어요.",
         "scopesLabel": "OAuth 스코프",
         "scopeRead": "mcp:read — 제품·런·산출물·Safe Mode 큐 조회, 볼트 검색·읽기.",
-        "scopeWrite": "mcp:write — 제품 생성, Direct 메시지 전송, Safe Mode 승인/거절, 볼트 시드 작성.",
+        "scopeWrite": "mcp:write — 제품 생성, 요청 전송, Safe Mode 승인/거절, 볼트 시드 작성.",
         "scopeAdmin": "mcp:admin — 미래의 관리자 도구(설정 변경, 파괴적 삭제)에 예약."
       }
     }

@@ -199,12 +199,13 @@ describe("Product detail surface", () => {
     render(<ProductDetail slug="blog" />);
 
     const shippedSection = await screen.findByRole("region", { name: "Shipped" });
-    // The report link points at the deliverable's report route — where the new
-    // interactive artifact viewer lives.
-    expect(within(shippedSection).getByRole("link", { name: /report/i })).toHaveAttribute(
-      "href",
-      "/deliverables/d1",
-    );
+    // The ROW is the tap target: its title is the stretched link to the
+    // deliverable's report route — where the interactive artifact viewer lives.
+    // (The old separate "View report" link is gone.)
+    expect(
+      within(shippedSection).getByRole("link", { name: "Add related-posts widget" }),
+    ).toHaveAttribute("href", "/deliverables/d1");
+    expect(within(shippedSection).queryByText("View report")).not.toBeInTheDocument();
   });
 
   it("shows the calm not-found state for an unknown slug", async () => {

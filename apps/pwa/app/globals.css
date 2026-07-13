@@ -892,17 +892,6 @@ main.login {
   gap: 8px;
   flex-wrap: wrap;
 }
-.need-card__spacer {
-  flex: 1 1 auto;
-}
-.need-card__view {
-  font-size: 0.82rem;
-  color: var(--ink-3);
-  text-decoration: none;
-}
-.need-card__view:hover {
-  color: var(--ink);
-}
 .need-card__btn {
   font-size: 0.85rem;
   font-weight: 550;
@@ -3361,6 +3350,9 @@ main.login {
 .product-shipped__title {
   font-size: 0.9rem;
   font-weight: 550;
+  /* Now the row's stretched link — keep the ink, not the UA link colour. */
+  color: inherit;
+  width: fit-content;
 }
 
 .product-shipped__source {
@@ -7576,13 +7568,6 @@ main.login {
   text-align: left;
 }
 
-.product-shipped__report-link {
-  font-size: 0.78rem;
-  color: var(--ink-2);
-  text-decoration: underline;
-  text-underline-offset: 2px;
-  width: fit-content;
-}
 /* ── END artifact-viewer ────────────────────────────────────────────────── */
 
 /* ── END Delivery Report ───────────────────────────────────────────────── */
@@ -8288,15 +8273,6 @@ main.login {
   border-radius: 5px;
   padding: 2px 7px;
 }
-.decisions-row__view {
-  font-size: 0.8rem;
-  color: var(--ink-3);
-  text-decoration: none;
-}
-.decisions-row__view:hover {
-  color: var(--ink);
-}
-
 /* Legal page (sub-processors) — a plain readable document. */
 .legal-page {
   max-width: var(--col-w);
@@ -9938,3 +9914,59 @@ main.login {
   word-break: break-all;
 }
 /* ── END Developer tab block ───────────────────────────────────────────── */
+
+/* ── BEGIN card-tap (stretched link) ───────────────────────────────────────
+ * Tapping a CARD opens its report — easier on mobile than hunting a small
+ * "View report" link (which is now gone from every card that has one).
+ *
+ * The pattern: the card is `position: relative` (`.tap-card`), its TITLE is the
+ * one and only <a> on the card (`.tap-card__link`), and that link's ::after is
+ * absolutely positioned over the entire card (`inset: 0`) — so a tap anywhere
+ * on the card activates the link, while the accessible name stays the title
+ * (not the card's whole text dump) and the link is normally keyboard-focusable.
+ *
+ * Cards that also carry actions (approve / deny / option chips / answer input)
+ * put those controls ABOVE the overlay with `.tap-card__above`
+ * (`position: relative; z-index: 1`), so a tap on a control fires its handler
+ * instead of navigating. Buttons are NEVER nested inside the link (invalid HTML
+ * + the link would swallow the tap).
+ *
+ * Focus: the browser's default ring would hug the title text only, so the ring
+ * is moved onto the stretched ::after — a keyboard user sees the CARD focused,
+ * which is what the tap target actually is. */
+.tap-card {
+  position: relative;
+}
+
+.tap-card__link {
+  text-decoration: none;
+}
+
+.tap-card__link:hover {
+  text-decoration: underline;
+}
+
+.tap-card__link::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  border-radius: inherit;
+}
+
+.tap-card__link:focus-visible {
+  outline: none;
+}
+
+.tap-card__link:focus-visible::after {
+  outline: 2px solid var(--amber-dot);
+  outline-offset: 2px;
+  border-radius: var(--radius);
+}
+
+/* Controls (and secondary links) sit above the stretched overlay. */
+.tap-card__above {
+  position: relative;
+  z-index: 1;
+}
+/* ── END card-tap ──────────────────────────────────────────────────────── */

@@ -23,14 +23,22 @@ export default function ResolvedRow({ item }: { item: ResolvedDecision }) {
   const t = useTranslations("decisions");
 
   if (item.kind === "delivery") {
+    const title = item.title || deliveryStatusLabel(item.status, t);
     return (
-      <li className="decisions-row decisions-row--resolved">
+      // The row has no actions, so the WHOLE row is the tap target for its
+      // report: the title is the one <a>, stretched over the row by
+      // `.tap-card__link::after`. No separate "View report" link.
+      <li className="decisions-row decisions-row--resolved tap-card">
         {/* Lead with WHAT was decided (the joined task title) so the history is
             legible, not a blind "delivery approved"; the outcome is the
             subtitle. Mirrors the PENDING DeliveryRow's title + product + proof. */}
-        <span className="decisions-row__q">
-          {item.title || deliveryStatusLabel(item.status, t)}
-        </span>
+        {item.detailHref ? (
+          <Link className="decisions-row__q tap-card__link" href={item.detailHref}>
+            {title}
+          </Link>
+        ) : (
+          <span className="decisions-row__q">{title}</span>
+        )}
         {item.title && (
           <span className="decisions-row__sub">{deliveryStatusLabel(item.status, t)}</span>
         )}
@@ -38,11 +46,6 @@ export default function ResolvedRow({ item }: { item: ResolvedDecision }) {
           <span className="decisions-chip">{t("kindDelivery")}</span>
           {item.productSlug && item.productSlug !== "workspace" && (
             <span className="decisions-row__product">{item.productSlug}</span>
-          )}
-          {item.detailHref && (
-            <Link className="decisions-row__view" href={item.detailHref}>
-              {t("viewProof")}
-            </Link>
           )}
           <span className="decisions-row__time">{relativeTime(item.resolvedAt, t)}</span>
         </span>

@@ -299,13 +299,14 @@ describe("Decisions surface", () => {
 
     render(<Decisions />);
 
-    // Concise title (the deliverable's summary), not just the generic question.
-    expect(
-      await screen.findByText("Add factorial(n) utility with ValueError on negatives."),
-    ).toBeInTheDocument();
-    // A "view proof" link pointing at the deliverable detail.
-    const proof = screen.getByRole("link", { name: /View report/ });
+    // Concise title (the deliverable's summary), not just the generic question —
+    // and the title IS the card's stretched link to the proof (the separate
+    // "View report" button is gone).
+    const proof = await screen.findByRole("link", {
+      name: "Add factorial(n) utility with ValueError on negatives.",
+    });
     expect(proof).toHaveAttribute("href", "/deliverables/del-1");
+    expect(screen.queryByText("View report")).not.toBeInTheDocument();
     // The product chip.
     expect(screen.getByText("bsvibe-app")).toBeInTheDocument();
   });
@@ -489,8 +490,9 @@ describe("Decisions surface", () => {
 
   it("titles a RESOLVED delivery with its task + links to the proof (#7 — not blind history)", async () => {
     // Mirror of the pending-delivery review-context join, on the Resolved tab:
-    // the resolved row leads with the joined task title + product chip + a
-    // "View report" link instead of a blind generic "Delivery approved".
+    // the resolved row leads with the joined task title + product chip, and the
+    // row links to the report instead of showing a blind generic
+    // "Delivery approved".
     installFetch({
       resolvedSafemode: () => [RESOLVED_DELIVERY], // deliverable_id "del-9"
       deliverables: () =>
@@ -537,12 +539,15 @@ describe("Decisions surface", () => {
     render(<Decisions />);
     await userEvent.click(await screen.findByRole("tab", { name: /Resolved/ }));
 
-    // Concise title (the deliverable's summary), the product chip, and a proof
-    // link — the same context the PENDING delivery row carries.
-    expect(screen.getByText("Add the CSV export endpoint with pagination.")).toBeInTheDocument();
+    // Concise title (the deliverable's summary), the product chip, and the title
+    // AS the proof link (the row itself is the tap target) — the same context
+    // the PENDING delivery row carries.
     expect(screen.getByText("acme-corp")).toBeInTheDocument();
-    const proof = screen.getByRole("link", { name: /View report/ });
+    const proof = screen.getByRole("link", {
+      name: "Add the CSV export endpoint with pagination.",
+    });
     expect(proof).toHaveAttribute("href", "/deliverables/del-9");
+    expect(screen.queryByText("View report")).not.toBeInTheDocument();
     // The outcome ("Delivery approved") is still present as the subtitle.
     expect(screen.getByText("Delivery approved")).toBeInTheDocument();
   });
