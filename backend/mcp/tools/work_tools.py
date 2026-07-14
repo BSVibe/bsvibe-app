@@ -110,8 +110,59 @@ class ShellExecInput(_WorkInput):
     command: str = Field(..., min_length=1, description="Runs in the run's sandbox.")
 
 
+class VerificationCheck(BaseModel):
+    """One check. ``command`` = a shell command whose exit code is the verdict (exit 0 = pass).
+    ``judge`` = concrete statements an LLM reviewer grades (for non-executable work)."""
+
+    model_config = ConfigDict(extra="allow")
+
+    kind: str = Field(..., description="'command' or 'judge'.")
+    command: str | None = Field(
+        None,
+        description=(
+            "For kind='command': the shell command to run. Use the PROJECT RUNNER so it "
+            "resolves in the sandbox (`uv run pytest tests/test_x.py`, `uv run ruff check "
+            "src/x.py`) and SCOPE it to the files you changed — never the whole repo."
+        ),
+    )
+    criteria: list[str] | None = Field(
+        None, description="For kind='judge': independently checkable statements."
+    )
+
+
 class DeclareVerificationInput(_WorkInput):
-    model_config = ConfigDict(extra="allow")  # the contract's shape is the loop's, not ours
+    """The registry's contract, ADVERTISED.
+
+    This declared no fields (``extra="allow"`` and nothing else), so the tool advertised a
+    PARAMETERLESS object: the CLI could not know it had to send ``checks``, and guessed. A wrong
+    guess meant ``declare_verification requires a non-empty 'checks' array`` — and because the
+    verify-first gate refuses writes until a contract is declared, EVERY subsequent file_write
+    and file_edit was refused too, and the agent flailed to the round cap (live: run cc4ea261).
+
+    Same class as the file_edit ``old``/``new`` bug: a transport that paraphrases the registry
+    instead of mirroring it. (INV-7 #2 — these schemas should be DERIVED from the registry.)
+    """
+
+    model_config = ConfigDict(extra="allow")  # the loop's contract may carry more
+
+    checks: list[VerificationCheck] = Field(
+        ...,
+        min_length=1,
+        description=(
+            "How this work will be verified — declare it BEFORE writing code (TDD-style "
+            "commitment; the file tools refuse until you do). Declare test, lint and build as "
+            "SEPARATE command checks where they apply. A check that merely compiles or imports "
+            "a file does NOT exercise its behaviour: when the step has tests, run the test "
+            "runner. You may call this again to refine the contract."
+        ),
+    )
+    knowledge: dict[str, Any] | None = Field(
+        None,
+        description=(
+            "OPTIONAL — something non-obvious you learned doing this work, as "
+            "{topic, insight}. Prose, in the workspace's language."
+        ),
+    )
 
 
 class KnowledgeSearchInput(_WorkInput):
@@ -255,7 +306,12 @@ def register_work_tools(
         dict(
             name="bsvibe_work_declare_verification",
             inner="declare_verification",
-            description=("Declare how this work will be verified. Required BEFORE writing files."),
+            description=(
+                "Declare HOW this work will be verified, as a list of `checks` — REQUIRED "
+                "before you may write any file. A 'command' check is a shell command whose "
+                "exit code is the verdict, run through the project runner and scoped to the "
+                "files you change (e.g. `uv run pytest tests/test_x.py`). Call this FIRST."
+            ),
             input_schema=DeclareVerificationInput,
             write=True,
         ),

@@ -262,3 +262,49 @@ async def test_mcp_file_edit_speaks_the_registrys_argument_names(tmp_path) -> No
 
     assert "edited" in result
     assert (tmp_path / "a.py").read_text() == "x = 2\n"
+
+
+# ── The advertised contract must BE the registry's contract (INV-7 #2) ────────
+# `DeclareVerificationInput` declared NO fields (extra="allow"), so the MCP tool advertised a
+# parameterless object: the CLI had no way to know it must send `checks`, and guessed. When it
+# guessed wrong the registry refused —
+#
+#   ToolError: declare_verification requires a non-empty 'checks' array
+#
+# — so the contract was never declared, EVERY file_write/file_edit was then refused (verify-first
+# gate), and the agent flailed until the round cap. Measured live (run cc4ea261, 2026-07-15).
+# Same class as the file_edit old/new bug: the transport paraphrased the registry instead of
+# mirroring it.
+
+
+async def test_mcp_declare_verification_advertises_the_checks_it_requires() -> None:
+    """The agent can only send what the schema tells it to send."""
+    from backend.mcp.tools.work_tools import DeclareVerificationInput
+
+    schema = DeclareVerificationInput.model_json_schema()
+
+    assert "checks" in schema["properties"], (
+        "the tool must ADVERTISE `checks` — an empty schema makes the agent guess, and a wrong "
+        "guess means the verify-first gate refuses every write for the rest of the run"
+    )
+    assert "checks" in schema.get("required", [])
+
+
+async def test_mcp_declare_verification_round_trips_through_the_real_registry(tmp_path) -> None:
+    """Drive the REAL registry with what the MCP schema produces — the only test that can see
+    a transport/registry mismatch."""
+    from backend.mcp.tools.work_tools import DeclareVerificationInput
+    from backend.workflow.infrastructure.tools import ToolRegistry
+
+    registry = ToolRegistry(workspace_dir=tmp_path)
+    args = DeclareVerificationInput(
+        checks=[{"kind": "command", "command": "uv run pytest tests/test_x.py"}]
+    ).model_dump(exclude_none=False)
+
+    result = await registry.invoke("declare_verification", args)
+
+    assert registry.declared_contract is not None
+    assert "recorded" in result.lower() or "contract" in result.lower()
+    # …and the verify-first gate is now genuinely unlocked.
+    await registry.invoke("file_write", {"path": "x.py", "content": "x = 1"})
+    assert registry.written_paths == ["x.py"]
