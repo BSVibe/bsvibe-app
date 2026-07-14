@@ -47,8 +47,12 @@ async def _sandbox_for(run: ExecutionRun, workspace_dir: Path) -> Any:
     return await manager.acquire(run.product_id, str(workspace_dir))
 
 
-async def build_run_tool_registry(run_id: uuid.UUID, ctx: ToolContext) -> ToolRegistry:
-    """Bind the workflow ToolRegistry to ``run_id``'s server-side worktree + sandbox."""
+async def load_run(run_id: uuid.UUID, ctx: ToolContext) -> ExecutionRun:
+    """The run this token may act on — with the cross-tenant guard.
+
+    Shared by every work tool, including the two that touch no files
+    (``ask_user_question`` / ``emit_deliverable``), so the guard cannot drift between them.
+    """
     run = await ctx.session.get(ExecutionRun, run_id)
     if run is None:
         raise ToolError(f"run {run_id} does not exist")
@@ -61,6 +65,12 @@ async def build_run_tool_registry(run_id: uuid.UUID, ctx: ToolContext) -> ToolRe
             token_workspace=str(ctx.principal.workspace_id),
         )
         raise ToolError("this run belongs to another workspace")
+    return run
+
+
+async def build_run_tool_registry(run_id: uuid.UUID, ctx: ToolContext) -> ToolRegistry:
+    """Bind the workflow ToolRegistry to ``run_id``'s server-side worktree + sandbox."""
+    run = await load_run(run_id, ctx)
 
     workspace_dir = run_worktree_path(run_id)
     workspace_dir.mkdir(parents=True, exist_ok=True)
@@ -68,4 +78,4 @@ async def build_run_tool_registry(run_id: uuid.UUID, ctx: ToolContext) -> ToolRe
     return ToolRegistry(workspace_dir=workspace_dir, sandbox=sandbox)
 
 
-__all__ = ["build_run_tool_registry"]
+__all__ = ["build_run_tool_registry", "load_run"]

@@ -45,6 +45,8 @@ from backend.workflow.domain.emit_deliverable import (
 )
 from backend.workflow.domain.honesty import needs_founder_review
 from backend.workflow.infrastructure.db import (
+    Decision,
+    DecisionStatus,
     ExecutionRun,
     RunAttempt,
     RunAttemptPhase,
@@ -58,7 +60,26 @@ if TYPE_CHECKING:
     from backend.workflow.application.agent_loop import LoopResult, RunOrchestrator
 
 
-async def drive_loop(  # noqa: PLR0912, PLR0915 — preserved cycle body, H2a is mechanical
+async def _pending_question(session: Any, run: ExecutionRun) -> Decision | None:
+    """A question the agent asked the founder OUT OF BAND — i.e. not via a tool call the loop
+    could see, but by calling the MCP work tool, which records the Decision server-side.
+
+    That is the only way an executor's CLI can ask anything (parity audit #20: no tool call
+    other than ``declare_verification`` can come back from an executor), so without this the
+    run would keep working while the founder's question sat pending, unanswered."""
+    from sqlalchemy import select  # noqa: PLC0415
+
+    rows = await session.execute(
+        select(Decision).where(
+            Decision.run_id == run.id,
+            Decision.decision == "ask_user_question",
+            Decision.status == DecisionStatus.PENDING,
+        )
+    )
+    return rows.scalars().first()  # type: ignore[no-any-return]
+
+
+async def drive_loop(  # noqa: PLR0911, PLR0912, PLR0915 — preserved cycle body
     orch: RunOrchestrator,
     *,
     run: ExecutionRun,
@@ -155,6 +176,23 @@ async def drive_loop(  # noqa: PLR0912, PLR0915 — preserved cycle body, H2a is
                 "content_len": len(turn.content or ""),
             },
         )
+
+        # T1b — the agent may also have asked the founder OUT OF BAND: an executor's CLI
+        # cannot emit an ``ask_user_question`` tool call, so it asks by calling the MCP tool,
+        # which records the Decision server-side. Nothing in ``turn.tool_calls`` says so.
+        # The pause is therefore owned by the SERVER: ask the run, do not trust the agent to
+        # stop (a coding CLI trusts its own tools over anything the prompt says — measured).
+        out_of_band = await _pending_question(orch._session, run)
+        if out_of_band is not None:
+            await orch._audit(
+                run,
+                attempt,
+                LoopTerminal,
+                {"outcome": "needs_decision", "decision_id": str(out_of_band.id)},
+            )
+            return orch._decision_result(
+                run, work_step, attempt, out_of_band, written_paths, final_text
+            )
 
         ask = next((c for c in turn.tool_calls if c.name == "ask_user_question"), None)
         if ask is not None:

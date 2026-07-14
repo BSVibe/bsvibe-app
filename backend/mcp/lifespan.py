@@ -35,6 +35,8 @@ async def mcp_lifespan(
     *,
     session_factory: async_sessionmaker[Any],
     delivery_dispatcher: Any | None = None,
+    record_question: Any | None = None,
+    record_deliverable: Any | None = None,
 ) -> AsyncIterator[None]:
     """Bring up the MCP transport for the duration of the FastAPI app.
 
@@ -46,7 +48,9 @@ async def mcp_lifespan(
     """
     settings = get_settings()
     issuer = settings.oauth_issuer
-    registry = build_registry()
+    registry = build_registry(
+        record_question=record_question, record_deliverable=record_deliverable
+    )
     server = build_server(
         session_factory=session_factory,
         registry=registry,

@@ -189,7 +189,10 @@ async def record_activity(
 async def create_decision(
     session: AsyncSession,
     run: ExecutionRun,
-    work_step: WorkStep,
+    # Unused by the Decision row (kept positionally for the loop's call sites). ``None`` is
+    # what the MCP transport passes: an executor asks the founder OUT OF BAND, from outside
+    # any loop WorkStep (T1b).
+    work_step: WorkStep | None,
     *,
     kind: str,
     payload: dict[str, Any],
