@@ -513,6 +513,10 @@ async def handle_task(
         # from an older backend carries no key: default to the agent run, because
         # a coding loop that silently lost its tools would ship empty diffs.
         "agentic": task.get("agentic", "1") != "0",
+        # T2b-4 — BSVibe's tools, over MCP, with a run-scoped token. Absent → the pre-redesign
+        # agentic shape (the CLI's own local tools).
+        "mcp_config": task.get("mcp_config") or "",
+        "allowed_tools": [t for t in str(task.get("allowed_tools") or "").split() if t],
     }
 
     # Lift E14 — register the asyncio Task this handler runs in so the

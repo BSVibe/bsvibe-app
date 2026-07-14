@@ -48,6 +48,12 @@ def _subprocess_env_with_bearer() -> dict[str, str]:
     resolvable, returns the plain sanitized env unchanged (claude uses its own
     auth)."""
     env = sanitized_subprocess_env()
+    # T2b-4 — the operator's shell may set MCP_CONNECTION_NONBLOCKING=true, which makes the
+    # CLI start its turn BEFORE the MCP server connects: BSVibe's tools would simply not be
+    # there, and the agent would fall back to answering without them (measured, 2026-07-14 —
+    # the server sat at status "pending" and the model reported it had no such tool). The
+    # worker owns this decision, not the host it happens to run on.
+    env.pop("MCP_CONNECTION_NONBLOCKING", None)
     bearer = ensure_claude_bearer()
     if bearer:
         env["ANTHROPIC_AUTH_TOKEN"] = bearer
@@ -84,6 +90,88 @@ _CONFINED_SETTINGS = json.dumps({"permissions": {"allow": ["Bash"]}})
 #: Measured, same empty dir, same question: append + named denies → 12 turns / 44 s,
 #: answering about the temp dir (44 s also blew the 45 s inline-answer budget). This
 #: invocation → 1 turn / 9 s, answering from the grounding we injected.
+#: Claude Code's built-in tools, denied by NAME for an agentic turn that must act only through
+#: BSVibe's MCP tools. The wildcard cannot be used here: ``--disallowedTools "*"`` kills the
+#: MCP tools too (measured — the model reports NO_MCP_TOOLS), and ``--allowedTools`` does not
+#: override it.
+#:
+#: An enumerated denylist over a vendor's built-ins ROTS — my first attempt at one, hours
+#: earlier, missed ToolSearch/Skill/Workflow and the agent burned 12 turns calling ToolSearch.
+#: A tool added in the next CLI release would silently hand the agent back the user's
+#: filesystem. So this list is BEST EFFORT, and the guarantee is elsewhere:
+#: :func:`_exposed_tools_are_ours` reads the CLI's own ``system/init`` event, which announces
+#: what it actually exposed, and aborts the task if anything but our tools is in it. Do not
+#: trust the flags; check the outcome.
+_NATIVE_TOOLS: str = " ".join(
+    (
+        "Bash",
+        "Read",
+        "Write",
+        "Edit",
+        "MultiEdit",
+        "NotebookEdit",
+        "Glob",
+        "Grep",
+        "LS",
+        "Task",
+        "TodoWrite",
+        "WebFetch",
+        "WebSearch",
+        "ToolSearch",
+        "Skill",
+        "Workflow",
+        "Monitor",
+        "AskUserQuestion",
+        "SlashCommand",
+        "BashOutput",
+        "KillShell",
+        "CronCreate",
+        "CronDelete",
+        "CronList",
+        "DesignSync",
+        "EnterPlanMode",
+        "ExitPlanMode",
+        "EnterWorktree",
+        "ExitWorktree",
+        "PushNotification",
+        "RemoteTrigger",
+        "ScheduleWakeup",
+        "TaskOutput",
+        "TaskStop",
+    )
+)
+
+
+def _unsanctioned_abort(
+    event: dict[str, Any], mcp_config: str, allowed_tools: list[str] | None
+) -> ExecutionChunk | None:
+    """Terminal chunk when the CLI exposed a tool we never gave it — else ``None``."""
+    if not mcp_config:
+        return None
+    leaked = _exposed_tools_are_ours(event, allowed_tools or [])
+    if not leaked:
+        return None
+    logger.error("claude_code_unsanctioned_tools", tools=leaked)
+    return ExecutionChunk(
+        done=True,
+        error=(
+            f"aborted: the CLI exposed tools BSVibe did not sanction ({leaked}). The agent "
+            "must act only through BSVibe's tools; refusing to run with local ones."
+        ),
+    )
+
+
+def _exposed_tools_are_ours(event: dict[str, Any], allowed: list[str]) -> str | None:
+    """The CLI's ``system/init`` announces the tools it exposed. Anything beyond the ones we
+    sanctioned means the agent has hands we did not give it — abort. Returns the offending
+    tools, or ``None`` when the exposure is clean."""
+    if event.get("type") != "system" or event.get("subtype") != "init":
+        return None
+    exposed = {str(t) for t in (event.get("tools") or [])}
+    unsanctioned = sorted(exposed - set(allowed))
+    return ", ".join(unsanctioned) if unsanctioned else None
+
+
 _CHAT_FLAGS: tuple[str, ...] = (
     "--disallowedTools",
     "*",
@@ -133,6 +221,10 @@ class ClaudeCodeExecutor:
         # backend carries no flag, and the coding loop must never silently lose
         # its tools).
         agentic = context.get("agentic", True) is not False
+        # T2b-4 — the run's MCP config (BSVibe's tools, run-scoped token) and the exact tool
+        # names we sanction. Absent → the pre-redesign agentic shape.
+        mcp_config = str(context.get("mcp_config") or "")
+        allowed_tools = [str(t) for t in (context.get("allowed_tools") or [])]
         attempts_remaining = self._rate_limit_retries
         deadline = asyncio.get_event_loop().time() + self._total_timeout
         while True:
@@ -141,7 +233,15 @@ class ClaudeCodeExecutor:
             had_delta = False
             try:
                 async for chunk in self._run_once(
-                    prompt, workspace, system, deadline, stderr_buf, model, agentic
+                    prompt,
+                    workspace,
+                    system,
+                    deadline,
+                    stderr_buf,
+                    model,
+                    agentic,
+                    mcp_config,
+                    allowed_tools,
                 ):
                     if chunk.delta:
                         had_delta = True
@@ -179,7 +279,14 @@ class ClaudeCodeExecutor:
             )
             return
 
-    def _build_cmd(self, system: str, model: str | None, agentic: bool = True) -> list[str]:
+    def _build_cmd(
+        self,
+        system: str,
+        model: str | None,
+        agentic: bool = True,
+        mcp_config: str = "",
+        allowed_tools: list[str] | None = None,
+    ) -> list[str]:
         # An AGENT RUN inherits the host operator's harness (CLAUDE.md / skills /
         # memory) by design — but the agent's native file writes must stay inside
         # the per-task workspace. ``--dangerously-skip-permissions`` disabled ALL
@@ -200,7 +307,23 @@ class ClaudeCodeExecutor:
             "stream-json",
             "--verbose",
         ]
-        if agentic:
+        if agentic and mcp_config:
+            # T2b-4 — the agent acts ONLY through BSVibe's tools: the run's server-side
+            # worktree and sandbox, reached over MCP with a run-scoped token. Its own local
+            # tools are taken away, so there is no temp dir to invent code in, nothing for the
+            # worker to scrape back, and no way to reach the founder's filesystem.
+            cmd_args += [
+                "--strict-mcp-config",
+                "--mcp-config",
+                mcp_config,
+                "--allowedTools",
+                " ".join(allowed_tools or ()),
+                "--disallowedTools",
+                _NATIVE_TOOLS,
+                "--setting-sources",
+                "",
+            ]
+        elif agentic:
             # An agent run: edits auto-apply headlessly but ONLY inside the cwd
             # (the per-task clone), and Bash is allowed so the verify step runs.
             cmd_args += [
@@ -230,8 +353,10 @@ class ClaudeCodeExecutor:
         stderr_buf: list[str],
         model: str | None = None,
         agentic: bool = True,
+        mcp_config: str = "",
+        allowed_tools: list[str] | None = None,
     ) -> AsyncIterator[ExecutionChunk]:
-        cmd_args = self._build_cmd(system, model, agentic)
+        cmd_args = self._build_cmd(system, model, agentic, mcp_config, allowed_tools)
         # Inject a worker-managed OAuth bearer so a launchd-spawned claude (which
         # can't read the Keychain) authenticates instead of falling back to a
         # stale on-disk token → 401. Soft-fail + off the event loop (the helper
@@ -269,6 +394,15 @@ class ClaudeCodeExecutor:
                     parsed = _safe_json(line)
                     if parsed is None:
                         continue
+                    # T2b-4 — do not trust the deny flags; check what the CLI actually
+                    # exposed. A tool we did not sanction means the agent has hands we never
+                    # gave it (a new built-in in a CLI upgrade, say) and could reach the
+                    # user's filesystem. Stop it, do not merely report it.
+                    abort = _unsanctioned_abort(parsed, mcp_config, allowed_tools)
+                    if abort is not None:
+                        _kill_process_group(process)
+                        yield abort
+                        return
                     status = _rate_limit_event_status(parsed)
                     if status is not None and status != "allowed":
                         rate_status = status

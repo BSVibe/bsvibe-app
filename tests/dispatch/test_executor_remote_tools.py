@@ -94,3 +94,38 @@ async def test_a_chat_turn_on_an_unsupported_executor_still_works(executor: str)
         )
 
     assert "cannot use BSVibe's tools" not in str(exc.value)
+
+
+# ── the dispatched task carries BSVibe's tools ──────────────────────────────
+
+
+async def test_the_task_carries_an_mcp_config_and_a_run_token() -> None:
+    """An agentic turn on claude_code must reach the run's state through BSVibe's tools. The
+    worker cannot invent that: the dispatch has to hand it the MCP endpoint, a token scoped to
+    THIS run, and the exact tool names it may use."""
+    import json
+    import uuid as _uuid
+
+    from backend.dispatch.adapter import build_work_tool_dispatch
+
+    run_id = _uuid.uuid4()
+    payload = build_work_tool_dispatch(token="tok-123", issuer="https://api.bsvibe.dev")
+
+    config = json.loads(payload["mcp_config"])
+    server = config["mcpServers"]["bsvibe"]
+    assert server["url"] == "https://api.bsvibe.dev/mcp/"
+    assert server["headers"]["Authorization"] == "Bearer tok-123"
+    # Exactly BSVibe's work tools — nothing else is sanctioned, and the worker verifies that
+    # against the CLI's own init event.
+    assert payload["allowed_tools"] == [
+        "mcp__bsvibe__bsvibe_work_file_read",
+        "mcp__bsvibe__bsvibe_work_file_list",
+        "mcp__bsvibe__bsvibe_work_file_write",
+        "mcp__bsvibe__bsvibe_work_file_edit",
+        "mcp__bsvibe__bsvibe_work_shell_exec",
+        "mcp__bsvibe__bsvibe_work_declare_verification",
+        "mcp__bsvibe__bsvibe_work_knowledge_search",
+        "mcp__bsvibe__bsvibe_work_ask_user_question",
+        "mcp__bsvibe__bsvibe_work_emit_deliverable",
+    ]
+    assert str(run_id) not in payload["mcp_config"], "the run rides in the TOKEN, not the URL"

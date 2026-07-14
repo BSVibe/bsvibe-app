@@ -298,6 +298,7 @@ async def dispatch_task(
     session: AsyncSession,
     task: ExecutorTaskRow,
     worker_id: uuid.UUID,
+    mcp: dict[str, Any] | None = None,
 ) -> str:
     """XADD ``task`` onto the worker's stream + mark it ``dispatched``.
 
@@ -331,6 +332,12 @@ async def dispatch_task(
     # emitted — the worker defaults a MISSING key to the agent run, so silence
     # would quietly restore the pre-fix behaviour for chat turns.
     payload["agentic"] = "1" if task.agentic else "0"
+    # T2b-4 — BSVibe's tools for an agentic turn: the MCP endpoint + a token scoped to THIS
+    # run, and the exact tool names the CLI may expose. Not persisted on the row: the token is
+    # ephemeral and belongs to this dispatch only.
+    if mcp:
+        payload["mcp_config"] = str(mcp.get("mcp_config") or "")
+        payload["allowed_tools"] = " ".join(mcp.get("allowed_tools") or ())
     msg_id = await redis.xadd(worker_stream(worker_id), payload)
 
     task.worker_id = worker_id
