@@ -254,324 +254,7 @@ async def test_handle_task_cleans_up_local_temp_dir_on_executor_error() -> None:
     assert state["results"][0]["success"] is False
 
 
-async def test_handle_task_captures_produced_files_in_result(tmp_path: Any) -> None:
-    """B1: files the executor writes into its work dir are collected and shipped
-    in the ``/result`` POST body as base64-encoded ``files`` entries."""
-    import base64
-
-    executor = _FileWritingExecutor({"out.txt": b"hello world", "src/app.py": b"x = 1\n"})
-    state: dict[str, Any] = {}
-    async with _client(state) as client:
-        await worker_main.handle_task(
-            _task(prompt="build"),
-            executors={"claude_code": executor},
-            client=client,
-            headers={"X-Worker-Token": "WORKER-TOKEN"},
-            redis=None,
-            workspace_root=str(tmp_path),
-        )
-    body = state["results"][0]
-    assert body["success"] is True
-    files = {f["path"]: f for f in body["files"]}
-    assert set(files) == {"out.txt", "src/app.py"}
-    assert base64.b64decode(files["out.txt"]["content_b64"]) == b"hello world"
-    assert base64.b64decode(files["src/app.py"]["content_b64"]) == b"x = 1\n"
-    assert files["out.txt"]["truncated"] is False
-
-
-async def test_handle_task_no_files_when_executor_writes_nothing(tmp_path: Any) -> None:
-    """B1: an executor that produces no files reports an empty ``files`` list."""
-    state: dict[str, Any] = {}
-    async with _client(state) as client:
-        await worker_main.handle_task(
-            _task(prompt="noop"),
-            executors={"claude_code": _StubExecutor()},
-            client=client,
-            headers={"X-Worker-Token": "WORKER-TOKEN"},
-            redis=None,
-            workspace_root=str(tmp_path),
-        )
-    assert state["results"][0]["files"] == []
-
-
-async def test_handle_task_skips_oversized_file_with_truncation_marker(tmp_path: Any) -> None:
-    """B1: a file larger than the per-file cap is skipped (content empty) with a
-    ``truncated: True`` marker — never shipped in full."""
-    big = b"A" * (300 * 1024)  # > 256 KiB cap
-    executor = _FileWritingExecutor({"big.bin": big, "small.txt": b"ok"})
-    state: dict[str, Any] = {}
-    async with _client(state) as client:
-        await worker_main.handle_task(
-            _task(),
-            executors={"claude_code": executor},
-            client=client,
-            headers={"X-Worker-Token": "WORKER-TOKEN"},
-            redis=None,
-            workspace_root=str(tmp_path),
-        )
-    files = {f["path"]: f for f in state["results"][0]["files"]}
-    assert files["big.bin"]["truncated"] is True
-    assert files["big.bin"]["content_b64"] == ""
-    assert files["small.txt"]["truncated"] is False
-
-
-async def test_handle_task_clones_repo_when_repo_url_set(monkeypatch: Any) -> None:
-    """Lift E32 — when the dispatched task carries ``repo_url``, the worker
-    invokes ``_clone_repo_into_workspace`` BEFORE running the executor so
-    the coding agent has real files to read + edit.
-
-    Pre-E32 the worker handed the executor an empty ``tempfile.mkdtemp()``
-    and the agent could only describe what it would do (the E31 dogfood
-    symptom: success=True per call, git status empty, artifact_refs NULL)."""
-    clone_calls: list[tuple[str, str]] = []
-
-    async def _fake_clone(repo_url: str, workspace_dir: str) -> None:
-        clone_calls.append((repo_url, workspace_dir))
-
-    monkeypatch.setattr(worker_main, "_clone_repo_into_workspace", _fake_clone)
-
-    executor = _WorkspaceCapturingExecutor()
-    state: dict[str, Any] = {}
-    async with _client(state) as client:
-        await worker_main.handle_task(
-            _task(repo_url="https://github.com/BSVibe/bsvibe-app"),
-            executors={"claude_code": executor},
-            client=client,
-            headers={"X-Worker-Token": "WORKER-TOKEN"},
-            redis=None,
-        )
-    # Clone fired once with the dispatched URL, targeting the SAME local
-    # workspace the executor then ran inside (so the agent sees the files).
-    assert len(clone_calls) == 1
-    assert clone_calls[0][0] == "https://github.com/BSVibe/bsvibe-app"
-    assert clone_calls[0][1] == executor.seen_workspace
-
-
-async def test_handle_task_skips_clone_when_repo_url_unset(monkeypatch: Any) -> None:
-    """E32 back-compat — chat-shaped callers (frame / judge / ingest) omit
-    ``repo_url`` and the worker MUST NOT clone anything, keeping the
-    pre-E32 empty-tempdir behaviour."""
-    clone_called = False
-
-    async def _fake_clone(repo_url: str, workspace_dir: str) -> None:
-        nonlocal clone_called
-        clone_called = True
-
-    monkeypatch.setattr(worker_main, "_clone_repo_into_workspace", _fake_clone)
-
-    executor = _WorkspaceCapturingExecutor()
-    state: dict[str, Any] = {}
-    async with _client(state) as client:
-        await worker_main.handle_task(
-            _task(),  # no repo_url
-            executors={"claude_code": executor},
-            client=client,
-            headers={"X-Worker-Token": "WORKER-TOKEN"},
-            redis=None,
-        )
-    assert clone_called is False
-
-
-async def test_collect_changed_files_returns_only_git_modified_paths(tmp_path: Any) -> None:
-    """Lift E33 — when the work dir is a git repo, capture ONLY the files
-    that git status reports as changed against the post-clone baseline.
-
-    Pre-E33 the worker walked the WHOLE work dir and hit a 100-file cap
-    sorted alphabetically — the E32 dogfood (run a180f51e) proved this
-    captures the same first 100 files of the repo across every cycle and
-    misses the agent's actual edits whenever they sort lexically later
-    than the cap. The new helper enumerates ``git status --porcelain``
-    and reads only those paths, so the diff IS the deliverable.
-    """
-    import asyncio
-    import base64
-    import subprocess
-
-    work_dir = str(tmp_path)
-
-    def _seed_baseline() -> None:
-        subprocess.check_call(["git", "init", "-q"], cwd=work_dir)
-        subprocess.check_call(["git", "config", "user.email", "t@t"], cwd=work_dir)
-        subprocess.check_call(["git", "config", "user.name", "t"], cwd=work_dir)
-        (tmp_path / "alpha.py").write_text("# baseline\n")
-        (tmp_path / "deep" / "module.py").parent.mkdir()
-        (tmp_path / "deep" / "module.py").write_text("# baseline\n")
-        subprocess.check_call(["git", "add", "-A"], cwd=work_dir)
-        subprocess.check_call(["git", "commit", "-q", "-m", "baseline"], cwd=work_dir)
-
-    await asyncio.to_thread(_seed_baseline)
-
-    # Agent edits: one modified, one new, one deleted.
-    (tmp_path / "alpha.py").write_text("# modified by agent\n")
-    (tmp_path / "tests" / "new_test.py").parent.mkdir()
-    (tmp_path / "tests" / "new_test.py").write_text("assert True\n")
-    (tmp_path / "deep" / "module.py").unlink()
-
-    files = await worker_main._collect_changed_files(work_dir)
-
-    by_path = {f["path"]: f for f in files}
-    assert set(by_path) == {"alpha.py", "tests/new_test.py", "deep/module.py"}
-    assert base64.b64decode(by_path["alpha.py"]["content_b64"]) == b"# modified by agent\n"
-    assert base64.b64decode(by_path["tests/new_test.py"]["content_b64"]) == b"assert True\n"
-    # Deleted entry surfaces with the deletion marker; content stays empty.
-    assert by_path["deep/module.py"]["content_b64"] == ""
-    assert by_path["deep/module.py"].get("deleted") is True
-
-
-async def test_collect_changed_files_empty_when_no_changes(tmp_path: Any) -> None:
-    """E33 — a quiescent post-clone repo (agent did nothing) returns ``[]``.
-    Pre-E33 the walker would have shipped 100 untouched-clone files and
-    the loop would have surfaced them as the agent's deliverable."""
-    import asyncio
-    import subprocess
-
-    def _seed_baseline() -> None:
-        subprocess.check_call(["git", "init", "-q"], cwd=str(tmp_path))
-        subprocess.check_call(["git", "config", "user.email", "t@t"], cwd=str(tmp_path))
-        subprocess.check_call(["git", "config", "user.name", "t"], cwd=str(tmp_path))
-        (tmp_path / "alpha.py").write_text("x = 1\n")
-        subprocess.check_call(["git", "add", "-A"], cwd=str(tmp_path))
-        subprocess.check_call(["git", "commit", "-q", "-m", "baseline"], cwd=str(tmp_path))
-
-    await asyncio.to_thread(_seed_baseline)
-
-    assert await worker_main._collect_changed_files(str(tmp_path)) == []
-
-
-async def test_collect_changed_files_returns_empty_when_not_a_git_repo(tmp_path: Any) -> None:
-    """E33 — chat-shaped callers (no E32 clone) leave the work dir without
-    a ``.git`` directory; the new collector returns ``[]`` and the
-    handler falls back to the legacy walker."""
-    (tmp_path / "out.txt").write_text("hello")
-    assert await worker_main._collect_changed_files(str(tmp_path)) == []
-
-
 # ── Lift E36 — commits made by the agent must also surface ──────────────────
-
-
-async def test_collect_changed_files_surfaces_agent_commits_to_new_branch(
-    tmp_path: Any,
-) -> None:
-    """Lift E36 — the E35 dogfood (session ses_12f86f499) proved the agent
-    edits the right file in the right per-task workspace, but the agent
-    then ran ``git checkout -b lift-e35-truncate-docstring && git add ... &&
-    git commit`` — the human-developer reflex. The commit moved the change
-    OUT of the porcelain working-tree view, so the E33 capture saw zero
-    changes and the run shipped an empty deliverable.
-
-    Fix: also diff against the ``FETCH_HEAD`` ref the E32 clone wrote, so
-    any commit the agent made on top of the cloned baseline surfaces too.
-    """
-    import asyncio
-    import base64
-    import subprocess
-
-    # Put upstream + work outside each other so the clone init doesn't
-    # see upstream/ as an untracked subdir.
-    work_path = tmp_path / "work"
-    work_path.mkdir()
-    work_dir = str(work_path)
-    upstream = tmp_path / "upstream"
-
-    def _seed_baseline_and_agent_commit() -> None:
-        upstream.mkdir()
-        subprocess.check_call(["git", "init", "-q", "-b", "main"], cwd=upstream)
-        subprocess.check_call(["git", "config", "user.email", "u@u"], cwd=upstream)
-        subprocess.check_call(["git", "config", "user.name", "u"], cwd=upstream)
-        (upstream / "alpha.py").write_text("# baseline\n")
-        subprocess.check_call(["git", "add", "-A"], cwd=upstream)
-        subprocess.check_call(["git", "commit", "-q", "-m", "baseline"], cwd=upstream)
-
-        # Mirror the E32 clone sequence into the per-task workspace.
-        subprocess.check_call(["git", "init", "-q"], cwd=work_dir)
-        subprocess.check_call(["git", "config", "user.email", "a@a"], cwd=work_dir)
-        subprocess.check_call(["git", "config", "user.name", "a"], cwd=work_dir)
-        subprocess.check_call(
-            ["git", "fetch", "--depth=1", "--quiet", str(upstream), "HEAD"],
-            cwd=work_dir,
-        )
-        subprocess.check_call(["git", "checkout", "--quiet", "FETCH_HEAD"], cwd=work_dir)
-
-        # Agent edits a file then commits it to a new branch (no working-tree leftover).
-        (work_path / "alpha.py").write_text("# edited by agent\n")
-        subprocess.check_call(
-            ["git", "checkout", "-q", "-b", "lift-e36-agent-branch"],
-            cwd=work_dir,
-        )
-        subprocess.check_call(["git", "add", "-A"], cwd=work_dir)
-        subprocess.check_call(["git", "commit", "-q", "-m", "agent edit"], cwd=work_dir)
-
-    await asyncio.to_thread(_seed_baseline_and_agent_commit)
-
-    # Sanity: porcelain alone would miss it (this is exactly why E33 failed).
-    porcelain = await asyncio.to_thread(
-        subprocess.check_output,
-        ["git", "status", "--porcelain", "--untracked-files=all"],
-        cwd=work_dir,
-    )
-    assert porcelain == b"", "test setup must reproduce the E35 dogfood symptom"
-
-    files = await worker_main._collect_changed_files(work_dir)
-    by_path = {f["path"]: f for f in files}
-    assert set(by_path) == {"alpha.py"}, f"expected committed edit to surface, got {set(by_path)!r}"
-    assert base64.b64decode(by_path["alpha.py"]["content_b64"]) == b"# edited by agent\n"
-
-
-async def test_collect_changed_files_unions_commits_and_working_tree(
-    tmp_path: Any,
-) -> None:
-    """Lift E36 — when the agent both commits some files and leaves others
-    in the working tree (committed: ``alpha.py``; untracked: ``new.py``;
-    modified-uncommitted: ``beta.py``), every category must surface. This
-    is the realistic shape of a mid-iteration agent state where it commits
-    the main change but hasn't yet `git add`'d a follow-up tweak.
-    """
-    import asyncio
-    import base64
-    import subprocess
-
-    work_path = tmp_path / "work"
-    work_path.mkdir()
-    work_dir = str(work_path)
-    upstream = tmp_path / "upstream"
-
-    def _seed() -> None:
-        upstream.mkdir()
-        subprocess.check_call(["git", "init", "-q", "-b", "main"], cwd=upstream)
-        subprocess.check_call(["git", "config", "user.email", "u@u"], cwd=upstream)
-        subprocess.check_call(["git", "config", "user.name", "u"], cwd=upstream)
-        (upstream / "alpha.py").write_text("# baseline alpha\n")
-        (upstream / "beta.py").write_text("# baseline beta\n")
-        subprocess.check_call(["git", "add", "-A"], cwd=upstream)
-        subprocess.check_call(["git", "commit", "-q", "-m", "baseline"], cwd=upstream)
-
-        subprocess.check_call(["git", "init", "-q"], cwd=work_dir)
-        subprocess.check_call(["git", "config", "user.email", "a@a"], cwd=work_dir)
-        subprocess.check_call(["git", "config", "user.name", "a"], cwd=work_dir)
-        subprocess.check_call(
-            ["git", "fetch", "--depth=1", "--quiet", str(upstream), "HEAD"],
-            cwd=work_dir,
-        )
-        subprocess.check_call(["git", "checkout", "--quiet", "FETCH_HEAD"], cwd=work_dir)
-
-        # Agent: commit alpha; modify beta but don't commit; create untracked new.py.
-        (work_path / "alpha.py").write_text("# committed alpha\n")
-        subprocess.check_call(["git", "checkout", "-q", "-b", "agent-branch"], cwd=work_dir)
-        subprocess.check_call(["git", "add", "alpha.py"], cwd=work_dir)
-        subprocess.check_call(["git", "commit", "-q", "-m", "alpha"], cwd=work_dir)
-        (work_path / "beta.py").write_text("# modified beta\n")
-        (work_path / "new.py").write_text("# new untracked\n")
-
-    await asyncio.to_thread(_seed)
-
-    files = await worker_main._collect_changed_files(work_dir)
-    by_path = {f["path"]: f for f in files}
-    assert set(by_path) == {"alpha.py", "beta.py", "new.py"}, (
-        f"expected union of commits + working-tree + untracked, got {set(by_path)!r}"
-    )
-    assert base64.b64decode(by_path["alpha.py"]["content_b64"]) == b"# committed alpha\n"
-    assert base64.b64decode(by_path["beta.py"]["content_b64"]) == b"# modified beta\n"
-    assert base64.b64decode(by_path["new.py"]["content_b64"]) == b"# new untracked\n"
 
 
 async def test_handle_task_reports_failure_on_error_chunk() -> None:
@@ -1427,3 +1110,54 @@ async def test_poll_and_execute_continues_when_opencode_serve_startup_fails(
         await worker_main.poll_and_execute(settings=settings, client=client, redis=None, stop=stop)
 
     assert tick_ran == [True]
+
+
+# ── T3: the worker ships NOTHING back, and clones NOTHING ─────────────────────
+# The agent no longer writes into the worker's temp dir — it acts through BSVibe's tools over
+# MCP, which write to the run's SERVER-SIDE worktree. So there is nothing to scrape and nothing
+# to clone. What used to live here produced the audit's entire code-corruption cluster: a
+# 100-file cap that captured the first 100 files of a 1,500-file clone (zero agent edits
+# visible), whole-file capture reverting shipped work, a >256 KB edit ZEROED (raw = b"" if
+# truncated) straight into the live server worktree, and a deletion 422-ing a whole run.
+
+
+async def test_the_result_carries_no_files() -> None:
+    state: dict[str, Any] = {}
+    async with _client(state) as client:
+        await worker_main.handle_task(
+            _task(prompt="hello"),
+            executors={"claude_code": _StubExecutor()},
+            client=client,
+            headers={"X-Worker-Token": "WORKER-TOKEN"},
+            redis=None,
+        )
+
+    body = state["results"][0]
+    assert "files" not in body, (
+        "the backend REFUSES a files payload (extra=forbid) — shipping one loses the result"
+    )
+
+
+async def test_the_worker_does_not_clone_the_repo(monkeypatch: Any) -> None:
+    """E32 is gone: a second, private copy of the repo that nothing read, which the worker then
+    scraped back over the real one. The agent reads the server-side worktree through file_read.
+    """
+    executor = _WorkspaceCapturingExecutor()
+    state: dict[str, Any] = {}
+    task = _task()
+    task["repo_url"] = "https://github.com/BSVibe/BSvibe-app"
+
+    async with _client(state) as client:
+        await worker_main.handle_task(
+            task,
+            executors={"claude_code": executor},
+            client=client,
+            headers={"X-Worker-Token": "WORKER-TOKEN"},
+            redis=None,
+        )
+
+    assert executor.seen_workspace is not None
+    assert not os.path.exists(os.path.join(executor.seen_workspace, ".git")), (
+        "the CLI's cwd must stay an empty temp dir — it has no local file tools to use it with"
+    )
+    assert state["results"][0]["success"] is True

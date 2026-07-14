@@ -233,16 +233,19 @@ async def test_result_publishes_done_channel(db, redis) -> None:
     await pubsub.aclose()
 
 
-async def test_result_persists_files_and_records_refs(db, redis, tmp_path, monkeypatch) -> None:
-    """B1: POST /result with ``files`` writes them under
-    ``run_workspace_root/<run_id>/`` and records ``task.artifact_refs``."""
+async def test_result_REFUSES_a_files_payload(db, redis, tmp_path, monkeypatch) -> None:
+    """T3 — a worker result carries NO files, and a payload that ships them is REFUSED.
+
+    The old ``files`` payload is what the audit's code-corruption cluster rode in on: it was
+    persisted into ``artifact_store.run_dir(run_id)`` — the SAME directory as the live server
+    worktree — so a file over the 256 KB cap came back ``truncated`` and was written as
+    ``raw = b""``, ZEROING the agent's real work in place; and a deletion 422-ed the entire
+    run's result. The agent now writes to that worktree directly, through BSVibe's tools.
+
+    ``extra="forbid"`` is what makes this loud instead of silently ignored: a worker still
+    running the old code fails visibly rather than having its scrape quietly dropped.
+    """
     import base64
-
-    from backend.config import get_settings
-
-    root = tmp_path / "runs"
-    monkeypatch.setenv("BSVIBE_RUN_WORKSPACE_ROOT", str(root))
-    get_settings.cache_clear()
 
     run_id = uuid.uuid4()
     worker_id, token = await _seed_worker(db, capabilities=["claude_code"])
@@ -259,34 +262,58 @@ async def test_result_persists_files_and_records_refs(db, redis, tmp_path, monke
         task_id = task.id
 
     app = create_app()
-    try:
-        async with _client(app, db, redis) as c:
-            r = await c.post(
-                "/api/v1/workers/result",
-                headers={"X-Worker-Token": token},
-                json={
-                    "task_id": str(task_id),
-                    "success": True,
-                    "output": "ok",
-                    "error_message": None,
-                    "files": [
-                        {
-                            "path": "out.txt",
-                            "content_b64": base64.b64encode(b"captured").decode(),
-                            "truncated": False,
-                        }
-                    ],
-                },
-            )
-            assert r.status_code == 200, r.text
+    async with _client(app, db, redis) as c:
+        r = await c.post(
+            "/api/v1/workers/result",
+            headers={"X-Worker-Token": token},
+            json={
+                "task_id": str(task_id),
+                "success": True,
+                "output": "ok",
+                "error_message": None,
+                "files": [
+                    {
+                        "path": "out.txt",
+                        "content_b64": base64.b64encode(b"captured").decode(),
+                        "truncated": False,
+                    }
+                ],
+            },
+        )
 
-        assert (root / str(run_id) / "out.txt").read_bytes() == b"captured"
-        async with db() as s:
-            row = await s.get(ExecutorTaskRow, task_id)
-            assert row is not None
-            assert row.artifact_refs == ["out.txt"]
-    finally:
-        get_settings.cache_clear()
+    assert r.status_code == 422, r.text
+    assert "files" in r.text
+
+
+async def test_result_without_files_is_recorded(db, redis) -> None:
+    """The new contract: output + success only."""
+    worker_id, token = await _seed_worker(db, capabilities=["claude_code"])
+    async with db() as s:
+        worker = await s.get(WorkerRow, worker_id)
+        task = await dispatch.create_task(
+            s,
+            workspace_id=worker.workspace_id,
+            executor_type="claude_code",
+            prompt="p",
+            run_id=uuid.uuid4(),
+        )
+        await s.commit()
+        task_id = task.id
+
+    app = create_app()
+    async with _client(app, db, redis) as c:
+        r = await c.post(
+            "/api/v1/workers/result",
+            headers={"X-Worker-Token": token},
+            json={"task_id": str(task_id), "success": True, "output": "ok"},
+        )
+
+    assert r.status_code == 200, r.text
+    async with db() as s:
+        row = await s.get(ExecutorTaskRow, task_id)
+        assert row is not None
+        assert row.status == "done"
+        assert row.output == "ok"
 
 
 async def test_result_requires_worker_token(db, redis) -> None:

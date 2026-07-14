@@ -16,7 +16,6 @@ import json
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from backend.dispatch.adapter import EXECUTOR_DECLARE_VERIFICATION_ID
 from backend.workflow.application._loop_context import (
     _SYSTEM_PROMPT,
     _intent_title,
@@ -204,12 +203,6 @@ async def drive_loop(  # noqa: PLR0911, PLR0912, PLR0915 — preserved cycle bod
             written_paths,
             state=await _remote_work_state(orch, run),
         )
-        # Files a compute backend captured outside the loop's tools. Legacy (the worker's file
-        # scrape); empty on both live transports now — the executor writes server-side through
-        # the work tools above, and LiteLLM writes through the loop's own file_write.
-        for captured_path in turn.artifact_refs:
-            if captured_path not in written_paths:
-                written_paths.append(captured_path)
         await orch._record(
             run,
             attempt,
@@ -319,21 +312,14 @@ async def drive_loop(  # noqa: PLR0911, PLR0912, PLR0915 — preserved cycle bod
                 )
                 messages.append({"role": "tool", "tool_call_id": call.id, "content": output})
 
-            # Single-shot executor (claude_code / codex / opencode): the agent
-            # does ALL its work in one turn and the ExecutorAdapter synthesizes
-            # a ``declare_verification`` (id ``e30-declare-verification``) from
-            # its ``<verification-contract>`` block on EVERY turn — so
-            # ``tool_calls`` is never empty and the "model returned no tool
-            # calls = done" branch below never fires. Once that synthesized
-            # declare has registered a contract, THIS turn is terminal: fall
-            # through to verification instead of re-prompting the agent (which
-            # would just redo the work every cycle until the round cap — the
-            # live dogfood failure with claude/sonnet, which declares reliably).
-            executor_declared_terminal = registry.declared_contract is not None and any(
-                c.id == EXECUTOR_DECLARE_VERIFICATION_ID for c in turn.tool_calls
-            )
-            if not executor_declared_terminal:
-                continue
+            # The model called tools, so it is not done — keep looping.
+            #
+            # T3 — there is no longer a SYNTHETIC executor tool call to special-case here.
+            # An executor turn now comes back with NO tool_calls (its real calls went to the
+            # MCP work tools, server-side), so it falls straight through to the "model is done"
+            # branch below — where the state this loop synced from the run (its declared
+            # contract, the paths it wrote) is what proves the work happened.
+            continue
 
         # No tool calls (or the single-shot executor just declared): the model
         # believes the step is done.

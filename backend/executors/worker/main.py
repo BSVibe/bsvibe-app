@@ -42,7 +42,6 @@ point. No split needed.
 from __future__ import annotations
 
 import asyncio
-import base64
 import json
 import os
 import shutil
@@ -50,7 +49,6 @@ import signal
 import sys
 import tempfile
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any, Protocol, cast
 
 import httpx
@@ -75,20 +73,6 @@ logger = structlog.get_logger(__name__)
 
 _HTTP_TIMEOUT_S = 30.0
 
-# Artifact-capture caps (executor-pool B1). The per-task work dir starts EMPTY
-# for executor tasks, so every regular file in it is the CLI's output — but cap
-# the count + per-file size so a runaway build (node_modules, large binaries)
-# can't blow up the result POST. A file over the byte cap is reported as a
-# truncation marker (empty content + ``truncated: True``), never shipped in full.
-_MAX_CAPTURED_FILES = 100
-_MAX_FILE_BYTES = 256 * 1024
-
-
-#: Directory names + suffixes that are build/cache junk, never real artifacts.
-_JUNK_DIRS = frozenset({"__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache", ".git"})
-_JUNK_SUFFIXES = (".pyc", ".pyo")
-
-
 #: Lift E14 — in-flight task registry keyed by ``task_id`` string.
 #:
 #: When the backend's :class:`~backend.dispatch.adapter.ExecutorAdapter`
@@ -109,237 +93,19 @@ _JUNK_SUFFIXES = (".pyc", ".pyo")
 _RUNNING_TASKS: dict[str, asyncio.Task[None]] = {}
 
 
-def _is_build_junk(rel: Path) -> bool:
-    """True for build/cache artifacts (any segment a junk dir, or a junk suffix)."""
-    if rel.suffix in _JUNK_SUFFIXES:
-        return True
-    return any(part in _JUNK_DIRS for part in rel.parts)
+async def _finalize_task(stream: Any, local_workspace: str, *, task_id: Any) -> None:
+    """Close the executor stream, then remove the work dir.
 
+    T3 — there is nothing left to capture. The agent no longer writes into this directory:
+    it acts through BSVibe's tools over MCP, which write to the run's SERVER-SIDE worktree.
+    The dir exists only because a CLI subprocess needs a cwd.
 
-def _collect_workspace_files(work_dir: str) -> list[dict[str, Any]]:
-    """Walk ``work_dir`` and return the files the CLI produced (B1, legacy).
-
-    Used by chat-shaped callers (no ``repo_url`` → no git checkout) where
-    the work dir starts EMPTY and every regular file IS the CLI's output.
-    Sorted with a hard ``_MAX_CAPTURED_FILES`` cap so the result POST stays
-    bounded.
-
-    Lift E33 — when the dispatcher cloned a repo into the work dir
-    (1500+ files for bsvibe-app), this walker hits its cap on file 100
-    sorted alphabetically and CANNOT tell apart "files the agent edited"
-    from "files that were in the original checkout". The E32 dogfood (run
-    a180f51e) proved it: all six executor tasks captured the same first
-    100 files (``.devcontainer/Dockerfile`` …), zero agent edits visible.
-    For the repo-cloned path use :func:`_collect_changed_files` instead.
-
-    Build/cache junk is skipped (``__pycache__`` / ``.pytest_cache`` dirs,
-    ``.pyc`` files): an agent that RUNS its tests leaves these behind,
-    they aren't real deliverables.
-    """
-    root = Path(work_dir)
-    if not root.is_dir():
-        return []
-    candidates = sorted(
-        p
-        for p in root.rglob("*")
-        if p.is_file() and not p.is_symlink() and not _is_build_junk(p.relative_to(root))
-    )
-    collected: list[dict[str, Any]] = []
-    for path in candidates[:_MAX_CAPTURED_FILES]:
-        rel = path.relative_to(root).as_posix()
-        try:
-            size = path.stat().st_size
-        except OSError:
-            logger.warning("artifact_stat_failed", path=rel)
-            continue
-        if size > _MAX_FILE_BYTES:
-            logger.info("artifact_skipped_oversized", path=rel, size=size)
-            collected.append({"path": rel, "content_b64": "", "truncated": True})
-            continue
-        try:
-            content = path.read_bytes()
-        except OSError:
-            logger.warning("artifact_read_failed", path=rel)
-            continue
-        collected.append(
-            {
-                "path": rel,
-                "content_b64": base64.b64encode(content).decode("ascii"),
-                "truncated": False,
-            }
-        )
-    if len(candidates) > _MAX_CAPTURED_FILES:
-        logger.info(
-            "artifact_capture_truncated",
-            work_dir=work_dir,
-            total=len(candidates),
-            kept=_MAX_CAPTURED_FILES,
-        )
-    return collected
-
-
-async def _git_lines(work_dir: str, *args: str) -> list[str]:
-    """Run a git subcommand and return its stdout split into non-empty lines.
-    Empty list on any non-zero exit or subprocess failure — soft-fail.
-    """
-    try:
-        proc = await asyncio.create_subprocess_exec(
-            "git",
-            *args,
-            cwd=work_dir,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        stdout, _stderr = await proc.communicate()
-    except Exception:  # noqa: BLE001 — soft-fail keeps the run path alive
-        return []
-    if proc.returncode != 0:
-        return []
-    return [ln for ln in stdout.decode("utf-8", errors="replace").splitlines() if ln]
-
-
-async def _changes_from_fetch_head(work_dir: str) -> dict[str, str]:
-    """E36 — diff vs the cloned baseline ref + untracked files. Returns
-    ``path → status_letter (M/A/D)``, first writer wins on collisions
-    (a path committed *and* with working-tree mods surfaces once)."""
-    changes: dict[str, str] = {}
-    for line in await _git_lines(work_dir, "diff", "--name-status", "FETCH_HEAD"):
-        parts = line.split("\t")
-        if not parts:
-            continue
-        status = parts[0][:1] if parts[0] else "M"
-        rel = parts[-1]
-        if rel and not _is_build_junk(Path(rel)):
-            changes.setdefault(rel, status)
-    for rel in await _git_lines(work_dir, "ls-files", "--others", "--exclude-standard"):
-        if rel and not _is_build_junk(Path(rel)):
-            changes.setdefault(rel, "A")
-    return changes
-
-
-async def _changes_from_porcelain(work_dir: str) -> dict[str, str]:
-    """E33 legacy fallback for chat-shaped tasks that bypass E32 clone."""
-    changes: dict[str, str] = {}
-    for line in await _git_lines(work_dir, "status", "--porcelain", "--untracked-files=all"):
-        if len(line) < 4:
-            continue
-        status_code = line[:2]
-        path_segment = line[3:].strip()
-        rel = path_segment.rsplit(" -> ", 1)[-1]
-        if not rel or _is_build_junk(Path(rel)):
-            continue
-        if status_code[0] == "D" or status_code[1] == "D":
-            changes.setdefault(rel, "D")
-        else:
-            changes.setdefault(rel, status_code[0] if status_code[0] != " " else status_code[1])
-    return changes
-
-
-def _read_change_entry(root: Path, rel: str, status: str) -> dict[str, Any] | None:
-    """Read one changed file into the B1 ``{path, content_b64, truncated}``
-    payload shape. Deletions surface as empty content + ``deleted=True``;
-    oversized files surface as a truncation marker; OS errors soft-fail
-    (logged, dropped from the result)."""
-    if status == "D":
-        return {"path": rel, "content_b64": "", "truncated": False, "deleted": True}
-    abs_path = root / rel
-    try:
-        size = abs_path.stat().st_size
-    except OSError:
-        logger.warning("artifact_stat_failed", path=rel)
-        return None
-    if size > _MAX_FILE_BYTES:
-        logger.info("artifact_skipped_oversized", path=rel, size=size)
-        return {"path": rel, "content_b64": "", "truncated": True}
-    try:
-        content = abs_path.read_bytes()
-    except OSError:
-        logger.warning("artifact_read_failed", path=rel)
-        return None
-    return {
-        "path": rel,
-        "content_b64": base64.b64encode(content).decode("ascii"),
-        "truncated": False,
-    }
-
-
-async def _collect_changed_files(work_dir: str) -> list[dict[str, Any]]:
-    """Lift E33 + E36 — capture ONLY the files the agent changed (anything
-    that differs from the post-clone baseline) instead of walking the whole
-    work dir.
-
-    Coding agents (opencode / codex / claude_code) work the way a human
-    developer does: read files on demand, edit, run bash — and *sometimes
-    commit*. The E35 dogfood (session ses_12f86f499, 2026-06-16) caught
-    qwen3.6-plus doing exactly that:
-
-        edit alpha.py
-        git checkout -b lift-e35-truncate-docstring
-        git add alpha.py
-        git commit -m "..."
-        git push    # fails silently — no auth
-        gh repo create ...  # also fails
-
-    `git status --porcelain` AFTER the commit sees zero working-tree
-    changes — the edit lives in the new branch, not in the index. E33
-    alone surfaced empty. E36 unions three sources so every variant
-    (committed / modified / untracked) lands:
-
-    * ``git diff --name-status FETCH_HEAD`` — every tracked file whose
-      content differs from the cloned baseline. FETCH_HEAD is the ref
-      ``_clone_repo_into_workspace`` wrote (E32); if the agent rebased it
-      away, this list is empty and we still fall back through.
-    * ``git ls-files --others --exclude-standard`` — net-new untracked
-      files the agent created but hasn't ``git add``'d.
-    * ``git status --porcelain --untracked-files=all`` — legacy fallback
-      for chat-shaped E32-bypass cases (no FETCH_HEAD ref present).
-
-    Each path is read once and shipped in the same
-    ``{path, content_b64, truncated}`` shape as B1 so the record_result
-    + artifact_store path stays unchanged. Deleted files surface with
-    empty content + ``deleted: True``.
-
-    Returns ``[]`` when the work dir isn't a git repo or every git call
-    soft-failed.
-    """
-    root = Path(work_dir)
-    if not (root / ".git").exists():
-        return []
-
-    # E36 — pull from three sources and union by path. ``has_fetch_head``
-    # decides whether we trust the commit-aware path (diff vs FETCH_HEAD +
-    # ls-files) or fall back to legacy porcelain.
-    has_fetch_head = (root / ".git" / "FETCH_HEAD").exists()
-    if has_fetch_head:
-        changes = await _changes_from_fetch_head(work_dir)
-    else:
-        changes = await _changes_from_porcelain(work_dir)
-
-    collected: list[dict[str, Any]] = []
-    for rel, status in changes.items():
-        entry = _read_change_entry(root, rel, status)
-        if entry is not None:
-            collected.append(entry)
-    logger.info(
-        "artifact_changed_files_captured",
-        work_dir=work_dir,
-        captured=len(collected),
-    )
-    return collected
-
-
-async def _finalize_task(
-    stream: Any, local_workspace: str, *, task_id: Any
-) -> list[dict[str, Any]]:
-    """Close the executor stream, capture produced files, then remove the work dir.
-
-    Returns the captured ``files`` (B1) — collected BEFORE the rmtree, else the
-    CLI's output is lost. Both close and capture are best-effort: a failure here
-    must never crash the loop or drop the result POST.
-
-    Lift E33 — when the work dir has a ``.git`` (the E32 clone path), capture
-    only the files git knows changed since the clone. The plain walker keeps
-    serving chat-shaped callers whose work dir is the legacy empty tempdir.
+    What used to live here — walk the dir, base64 every file, ship them back on
+    ``POST /workers/result`` — is the model that produced the audit's whole code-corruption
+    cluster: a 100-file cap that silently captured the first 100 files of a 1,500-file clone
+    (zero agent edits visible), whole-file capture reverting shipped work from a stale
+    baseline, a >256 KB edit ZEROED (``raw = b"" if truncated``) straight into the live server
+    worktree, and a deletion 422-ing an entire run's result.
     """
     aclose = getattr(stream, "aclose", None)
     if aclose is not None:
@@ -347,16 +113,7 @@ async def _finalize_task(
             await aclose()
         except Exception:  # noqa: BLE001, S110 — cleanup best-effort
             pass
-    files: list[dict[str, Any]] = []
-    try:
-        if (Path(local_workspace) / ".git").exists():
-            files = await _collect_changed_files(local_workspace)
-        else:
-            files = await asyncio.to_thread(_collect_workspace_files, local_workspace)
-    except Exception:  # noqa: BLE001 — capture is best-effort, never fails a task
-        logger.warning("artifact_capture_failed", task_id=task_id, exc_info=True)
     shutil.rmtree(local_workspace, ignore_errors=True)
-    return files
 
 
 class _RedisPublisher(Protocol):
@@ -404,51 +161,6 @@ async def register(
 # ── Single-task handling ───────────────────────────────────────────────────────
 
 
-async def _clone_repo_into_workspace(repo_url: str, workspace_dir: str) -> None:
-    """Lift E32 — shallow-clone ``repo_url`` into the per-task workspace.
-
-    ``git clone --depth 1 <repo_url> <workspace_dir>`` would fail because
-    ``workspace_dir`` already exists (``tempfile.mkdtemp`` created it).
-    ``git init`` + ``git fetch`` + ``git checkout FETCH_HEAD`` is the
-    idiomatic recovery: it clones into an existing-but-empty dir without
-    the ``destination path already exists`` error and stays shallow.
-
-    Soft-fail: any subprocess error degrades to the empty-tempdir
-    behaviour so a transient network/git issue doesn't take down the
-    whole task. The agent will see no files and likely write nothing,
-    but the run still terminates rather than hanging.
-    """
-    cmds = [
-        ["git", "init", "-q"],
-        ["git", "fetch", "--depth=1", "--quiet", repo_url, "HEAD"],
-        ["git", "checkout", "--quiet", "FETCH_HEAD"],
-    ]
-    for cmd in cmds:
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                *cmd,
-                cwd=workspace_dir,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            _stdout, stderr = await proc.communicate()
-        except Exception:  # noqa: BLE001 — best-effort clone
-            logger.warning(
-                "repo_clone_subprocess_failed", repo_url=repo_url, cmd=cmd[0], exc_info=True
-            )
-            return
-        if proc.returncode != 0:
-            logger.warning(
-                "repo_clone_step_failed",
-                repo_url=repo_url,
-                cmd=cmd[0],
-                returncode=proc.returncode,
-                stderr=stderr.decode("utf-8", errors="replace")[:500],
-            )
-            return
-    logger.info("repo_cloned", repo_url=repo_url, workspace_dir=workspace_dir)
-
-
 async def handle_task(
     task: dict[str, Any],
     *,
@@ -467,12 +179,9 @@ async def handle_task(
     this (remote) machine — so it is intentionally ignored: the executor's cwd is
     always the worker-local dir.
 
-    B1: before removing that local dir, the worker walks it and collects the
-    files the CLI produced (the dir started empty, so every regular file is
-    output), base64-encoding each so binary and text carry safely. They ship in
-    the ``/result`` POST body as ``files`` alongside the existing output/success/
-    error fields; the backend persists them under the run workspace and records
-    real ``artifact_refs`` (see :func:`backend.executors.dispatch.record_result`).
+    T3: nothing is captured FROM that dir. The agent acts through BSVibe's tools over MCP,
+    which write to the run's server-side worktree — the local dir exists only because a CLI
+    subprocess needs a cwd, and it is simply removed at the end.
     """
     task_id = task["task_id"]
     prompt = task.get("prompt") or ""
@@ -487,19 +196,11 @@ async def handle_task(
         executor = select_executor(executor_type)
         executors[executor_type] = executor
 
+    # T3 — no clone. The repo the agent works on is the run's SERVER-SIDE worktree, reached
+    # through the MCP work tools; cloning it again here (E32) gave the agent a second, private
+    # copy that nothing read and the worker then scraped back over the real one. The CLI still
+    # needs a cwd, so an empty temp dir it is.
     local_workspace = tempfile.mkdtemp(prefix="bsvibe-task-", dir=workspace_root or None)
-    # Lift E32 — when the dispatcher told the worker about a repo URL,
-    # shallow-clone it into ``local_workspace`` BEFORE handing the
-    # workspace to the executor. Without this the coding agent
-    # (opencode / codex / claude_code) gets an empty tempdir and the
-    # E31 dogfood symptom returns: success=True per call but ``git
-    # status --short`` empty, ``artifact_refs`` NULL — the agent had
-    # nothing to read or edit. Soft-fails: a clone error degrades to
-    # the empty-tempdir behaviour rather than killing the task, so a
-    # transient network blip doesn't take down the whole agent_loop.
-    repo_url = task.get("repo_url") or None
-    if repo_url:
-        await _clone_repo_into_workspace(repo_url, local_workspace)
     context: dict[str, Any] = {
         "task_id": task_id,
         # ALWAYS the worker-local dir — never the backend's foreign run path.
@@ -547,7 +248,6 @@ async def handle_task(
                 "success": outcome.success,
                 "output": "".join(outcome.parts),
                 "error_message": outcome.error,
-                "files": outcome.files,
             },
         )
         if redis is not None:
@@ -578,7 +278,6 @@ class _StreamOutcome:
     success: bool
     parts: list[str]
     error: str | None
-    files: list[dict[str, Any]]
 
 
 async def _stream_and_collect(
@@ -591,7 +290,7 @@ async def _stream_and_collect(
     task_id: str,
     local_workspace: str,
 ) -> _StreamOutcome:
-    """Drain the executor's chunk stream, then finalize + capture files.
+    """Drain the executor's chunk stream, then finalize.
 
     Split out of :func:`handle_task` for branch-count hygiene (PLR0912):
     the chunk loop, its cancel/error handling, and the post-loop
@@ -606,7 +305,7 @@ async def _stream_and_collect(
     parts: list[str] = []
     error: str | None = None
     success = True
-    files: list[dict[str, Any]] = []
+
     stream = executor.execute(prompt, context)
     try:
         async for chunk in stream:
@@ -631,8 +330,8 @@ async def _stream_and_collect(
         if redis is not None:
             await _publish(redis, stream_chan, {"delta": "", "done": True, "error": error})
     finally:
-        files = await _finalize_task(stream, local_workspace, task_id=task_id)
-    return _StreamOutcome(success=success, parts=parts, error=error, files=files)
+        await _finalize_task(stream, local_workspace, task_id=task_id)
+    return _StreamOutcome(success=success, parts=parts, error=error)
 
 
 async def _publish(redis: _RedisPublisher, channel: str, payload: dict[str, Any]) -> None:
