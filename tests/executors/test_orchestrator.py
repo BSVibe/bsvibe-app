@@ -494,7 +494,6 @@ async def test_contract_pass_sets_proved_and_writes_deliverable(tmp_path: Path) 
     engine, sf, base = _shared_sqlite_sessionmaker()
     async with engine.begin() as conn:
         await conn.run_sync(base.metadata.create_all)
-    root = tmp_path / "runs"
     try:
         async with sf() as s:
             run, account = await _seed(s)

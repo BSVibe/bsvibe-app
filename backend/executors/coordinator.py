@@ -66,7 +66,23 @@ from backend.executors.terminal import (
     fail_terminal,
 )
 from backend.executors.verify_handoff import verify_and_finish
+from backend.router.accounts.models import ModelAccount
+from backend.workflow.application.agent_loop import LoopResult
+from backend.workflow.application.audit_events import RunStarted
+from backend.workflow.application.handoff import read_design_context
 from backend.workflow.application.tool_registry import WORK_TOOL_STATE_KEY
+from backend.workflow.application.verification_service import CanonRetriever, JudgeLlm
+from backend.workflow.infrastructure.db import (
+    ExecutionRun,
+    ProofState,
+    RunAttempt,
+    RunAttemptPhase,
+    WorkStep,
+    WorkStepStatus,
+)
+from backend.workflow.infrastructure.sandbox import SandboxManager
+
+logger = structlog.get_logger(__name__)
 
 
 async def _written_paths_of(session: Any, run: Any) -> list[str]:
@@ -85,23 +101,6 @@ async def _written_paths_of(session: Any, run: Any) -> list[str]:
     state = payload.get(WORK_TOOL_STATE_KEY) or {}
     return [str(p) for p in (state.get("written_paths") or [])]
 
-
-from backend.router.accounts.models import ModelAccount
-from backend.workflow.application.agent_loop import LoopResult
-from backend.workflow.application.audit_events import RunStarted
-from backend.workflow.application.handoff import read_design_context
-from backend.workflow.application.verification_service import CanonRetriever, JudgeLlm
-from backend.workflow.infrastructure.db import (
-    ExecutionRun,
-    ProofState,
-    RunAttempt,
-    RunAttemptPhase,
-    WorkStep,
-    WorkStepStatus,
-)
-from backend.workflow.infrastructure.sandbox import SandboxManager
-
-logger = structlog.get_logger(__name__)
 
 # Decision kinds raised when an executor run cannot dispatch.
 DECISION_NO_WORKER_AVAILABLE = "no_executor_worker_available"
