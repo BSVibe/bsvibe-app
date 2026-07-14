@@ -89,12 +89,19 @@ async def build_run_tool_registry(run_id: uuid.UUID, ctx: ToolContext) -> ToolRe
 
 
 async def persist_tool_state(run_id: uuid.UUID, ctx: ToolContext, registry: ToolRegistry) -> None:
-    """Write the registry's per-run latches back onto the run, after a tool call."""
+    """Write the registry's per-run latches back onto the run, after a tool call.
+
+    COMMIT, not flush: the MCP dispatcher opens the request session and never commits it
+    (``backend/mcp/server.py``), so every write a handler leaves uncommitted is rolled back
+    when the request ends. Each MCP write tool commits for itself — that is the convention
+    here, and a flush-only handler silently does nothing (measured on the live surface,
+    2026-07-14: the agent declared its contract and was still refused the write).
+    """
     run = await ctx.session.get(ExecutionRun, run_id)
     if run is None:
         return
     run.payload = {**(run.payload or {}), WORK_TOOL_STATE_KEY: registry.export_state()}
-    await ctx.session.flush()
+    await ctx.session.commit()
 
 
 __all__ = ["WORK_TOOL_STATE_KEY", "build_run_tool_registry", "load_run", "persist_tool_state"]
