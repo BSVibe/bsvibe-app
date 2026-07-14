@@ -123,7 +123,29 @@ class ToolRegistry:
         # it). ``file_edit`` requires the path to be here so a local
         # model edits against real content, not a hallucinated recall.
         self._grounded_paths: set[str] = set()
+        # The paths this agent WROTE (file_write / file_edit), in order, deduped. Distinct
+        # from ``_grounded_paths``, which is polluted with everything the agent merely READ.
+        #
+        # The in-process loop derives this by sniffing its own tool-call arguments
+        # (``_invoke_tool_safely``). The MCP transport invokes the registry directly, in the
+        # API process, so the loop never sees those calls — and the run's verified Deliverable
+        # came out with ``artifact_refs: []`` (measured, run 96dd7cfc). That list is
+        # load-bearing: the PR/Slack changed-file list, the settle knowledge tags, the
+        # design→impl handoff seed, the proof view's file WHITELIST, and the body the
+        # deliverable summary is composed from. So the writes ride the same per-run state the
+        # contract does.
+        self._written_paths: list[str] = []
         self._register_defaults()
+
+    @property
+    def written_paths(self) -> list[str]:
+        """Paths the agent wrote this run, in order — the deliverable's ``artifact_refs``."""
+        return list(self._written_paths)
+
+    def _record_write(self, raw_path: str) -> None:
+        path = os.path.normpath(raw_path)
+        if path not in self._written_paths:
+            self._written_paths.append(path)
 
     def export_state(self) -> dict[str, Any]:
         """The per-RUN state this registry accumulated — JSON-safe.
@@ -137,9 +159,18 @@ class ToolRegistry:
         The state belongs to the run, not to the object: exported after a call, restored before
         the next.
         """
+        knowledge = self.declared_knowledge
         return {
             "declared_contract": self.declared_contract,
             "grounded_paths": sorted(self._grounded_paths),
+            # What the agent DID — the loop's only channel to the work an executor agent did
+            # over MCP, in another process.
+            "written_paths": list(self._written_paths),
+            # The agent's retrospective knowledge. Dropped here before, so an executor-driven
+            # run could never produce a knowledge note — the settle path had nothing to write.
+            "declared_knowledge": (
+                {"topic": knowledge.topic, "insight": knowledge.insight} if knowledge else None
+            ),
         }
 
     def restore_state(self, state: dict[str, Any] | None) -> None:
@@ -151,6 +182,19 @@ class ToolRegistry:
         if contract:
             self.declared_contract = contract
         self._grounded_paths |= {str(p) for p in (state.get("grounded_paths") or [])}
+        for path in state.get("written_paths") or []:
+            self._record_write(str(path))
+        knowledge = state.get("declared_knowledge")
+        if knowledge and self.declared_knowledge is None:
+            from backend.knowledge.extraction.worth_remembering import (  # noqa: PLC0415
+                RememberableKnowledge,
+            )
+
+            topic, insight = knowledge.get("topic"), knowledge.get("insight")
+            if topic and insight:
+                self.declared_knowledge = RememberableKnowledge(
+                    topic=str(topic), insight=str(insight)
+                )
 
     @property
     def sandbox(self) -> SandboxSession | None:
@@ -491,10 +535,12 @@ class ToolRegistry:
             except SandboxError as exc:
                 raise ToolError(f"file_write: {exc}") from exc
             self._grounded_paths.add(os.path.normpath(raw_path))
+            self._record_write(raw_path)
             return f"wrote {raw_path} ({len(content)} chars)"
         target = self._resolve(raw_path)
         await asyncio.to_thread(_write_text, target, content)
         self._grounded_paths.add(os.path.normpath(raw_path))
+        self._record_write(raw_path)
         return f"wrote {raw_path} ({len(content)} chars)"
 
     async def _read_for_edit(self, raw_path: str) -> str:
@@ -560,6 +606,7 @@ class ToolRegistry:
                 raise ToolError(f"file_edit: {exc}") from exc
         else:
             await asyncio.to_thread(_write_text, self._resolve(raw_path), updated)
+        self._record_write(raw_path)
         count = occurrences if replace_all else 1
         return f"edited {raw_path} ({count} replacement{'s' if count != 1 else ''})"
 

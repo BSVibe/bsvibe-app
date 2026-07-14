@@ -117,6 +117,15 @@ def _sanitize_ask_user_question_options(raw: Any) -> list[str] | None:
     return cleaned or None
 
 
+#: Where a run carries the work-tool registry's per-run state (``ToolRegistry.export_state``).
+#:
+#: The in-process loop keeps its registry in memory. The MCP transport builds one PER REQUEST,
+#: in ANOTHER PROCESS (the API container), so the run row is the only channel between them —
+#: both for what the agent declared and for what it wrote. Defined here, in the workflow layer,
+#: because it is a property of the RUN: ``backend.mcp`` imports it, never the other way round.
+WORK_TOOL_STATE_KEY = "work_tool_state"
+
+
 async def _invoke_tool_safely(
     registry: ToolRegistry, name: str, arguments: dict[str, Any]
 ) -> tuple[str, bool, list[str]]:
