@@ -70,6 +70,16 @@ class McpPrincipal:
     client_id: str
     scopes: frozenset[str]
     jti: uuid.UUID
+    #: The ExecutionRun this token may act on — set ONLY on the short-lived token a
+    #: dispatched executor task carries, so the agent's remote tools
+    #: (:mod:`backend.mcp.tools.work_tools`) are bound to exactly one run's worktree.
+    #: ``None`` on every ordinary token (the founder's editor, the CLI): those may read
+    #: the workspace, but they may not reach into a run and edit code.
+    #:
+    #: It lives on the PRINCIPAL, never in the tool arguments: the blast radius of a
+    #: leaked worker token has to be one run, and an argument the agent controls could
+    #: redirect a write into another run's tree.
+    run_id: uuid.UUID | None = None
 
     def has_scope(self, scope: str) -> bool:
         return scope in self.scopes

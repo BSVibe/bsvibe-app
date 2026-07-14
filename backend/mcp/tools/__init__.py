@@ -20,6 +20,8 @@ from backend.mcp.tools.notifications_tools import register_notifications_tools
 from backend.mcp.tools.run_routing_rules_tools import register_run_routing_rules_tools
 from backend.mcp.tools.safe_mode_tools import register_safe_mode_tools
 from backend.mcp.tools.skills_tools import register_skills_tools
+from backend.mcp.tools.work_registry import build_run_tool_registry
+from backend.mcp.tools.work_tools import register_work_tools
 from backend.mcp.tools.workers_tools import register_workers_tools
 from backend.mcp.tools.workflow_tools import register_workflow_tools
 from backend.mcp.tools.workspace_tools import register_workspace_tools
@@ -38,6 +40,10 @@ def register_all_tools(registry: ToolRegistry) -> None:
     run-routing-rules (3 — E7), intents (3 — NL-native routing N2).
     """
     register_knowledge_tools(registry)
+    # T1 — the agent's REMOTE hands on a run (file/shell/declare/knowledge), bound to the
+    # run's server-side worktree + sandbox. Only reachable with a run-scoped token (the one a
+    # dispatched executor task carries), never with the founder's workspace token.
+    register_work_tools(registry, registry_for_run=build_run_tool_registry)
     register_workflow_tools(registry)
     register_safe_mode_tools(registry)
     register_direct_tools(registry)
