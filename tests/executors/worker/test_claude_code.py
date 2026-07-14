@@ -572,3 +572,99 @@ async def test_subprocess_env_omits_bearer_when_none(
     monkeypatch.setattr(cc, "ensure_claude_bearer", lambda: None)
     env = cc._subprocess_env_with_bearer()
     assert "ANTHROPIC_AUTH_TOKEN" not in env
+
+
+# ── The agent must actually RECEIVE BSVibe's tools ───────────────────────────
+# Everything below was measured against the real CLI (2.1.172) on 2026-07-14, driving the
+# first real coding run through the T2b-4 path. Each assertion is a bug that run exposed.
+
+
+async def test_subprocess_env_forces_a_BLOCKING_mcp_connect(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Popping the var is NOT enough — the CLI's DEFAULT is non-blocking.
+
+    With a non-blocking connect the CLI starts the turn before the (remote) MCP server has
+    connected: ``system/init`` carries ``status: pending`` and ZERO tools. The agent then has
+    no tools at all — natives denied, ours not yet there — and it does not say so. It emits
+    fake tool calls as prose and fabricates a result ("The directory appears to be empty"),
+    and the CLI reports success. Only ``=false`` makes the CLI wait (measured: status
+    ``connected``, all 9 work tools in ``system/init``, real tool call, real result).
+    """
+    import backend.executors.worker.claude_code as cc
+
+    monkeypatch.setattr(cc, "ensure_claude_bearer", lambda: None)
+    monkeypatch.setenv("MCP_CONNECTION_NONBLOCKING", "true")  # the operator's shell sets this
+
+    env = cc._subprocess_env_with_bearer()
+
+    assert env.get("MCP_CONNECTION_NONBLOCKING") == "false", (
+        "the worker must force a blocking MCP connect; unset != false (the CLI default is "
+        "non-blocking, so the agent starts with no tools and fabricates)"
+    )
+
+
+async def test_native_denylist_covers_the_task_tool_family() -> None:
+    """CLI 2.1.172 added TaskCreate/TaskGet/TaskList/TaskUpdate. The enumerated denylist rots;
+    the guard below is the guarantee, but keep the list current so runs do not abort."""
+    import backend.executors.worker.claude_code as cc
+
+    denied = set(cc._NATIVE_TOOLS.split())
+
+    assert {"TaskCreate", "TaskGet", "TaskList", "TaskUpdate"} <= denied
+
+
+def _init(tools: list[str]) -> dict[str, object]:
+    return {"type": "system", "subtype": "init", "tools": tools}
+
+
+async def test_init_guard_aborts_when_OUR_TOOLS_ARE_ABSENT() -> None:
+    """Absence is the dangerous case, and the guard used to miss it entirely.
+
+    It only ever checked for EXCESS (``exposed - allowed``). An agent with nothing exposed
+    passes that check — and then invents its answer. A loud abort beats a silent fabrication.
+    """
+    import backend.executors.worker.claude_code as cc
+
+    allowed = ["mcp__bsvibe__bsvibe_work_file_read", "mcp__bsvibe__bsvibe_work_file_list"]
+
+    abort = cc._unsanctioned_abort(_init([]), "{'mcpServers':{}}", allowed)
+
+    assert abort is not None, "no tools at all must abort — the agent would fabricate"
+    assert abort.done is True
+    assert abort.error
+
+
+async def test_init_guard_aborts_when_only_SOME_of_our_tools_arrived() -> None:
+    import backend.executors.worker.claude_code as cc
+
+    allowed = ["mcp__bsvibe__bsvibe_work_file_read", "mcp__bsvibe__bsvibe_work_file_list"]
+
+    abort = cc._unsanctioned_abort(
+        _init(["mcp__bsvibe__bsvibe_work_file_read"]), "{'mcpServers':{}}", allowed
+    )
+
+    assert abort is not None
+
+
+async def test_init_guard_still_aborts_on_an_unsanctioned_native() -> None:
+    import backend.executors.worker.claude_code as cc
+
+    allowed = ["mcp__bsvibe__bsvibe_work_file_read"]
+
+    abort = cc._unsanctioned_abort(
+        _init(["mcp__bsvibe__bsvibe_work_file_read", "TaskCreate"]),
+        "{'mcpServers':{}}",
+        allowed,
+    )
+
+    assert abort is not None
+    assert "TaskCreate" in (abort.error or "")
+
+
+async def test_init_guard_passes_when_exactly_our_tools_are_exposed() -> None:
+    import backend.executors.worker.claude_code as cc
+
+    allowed = ["mcp__bsvibe__bsvibe_work_file_read", "mcp__bsvibe__bsvibe_work_file_list"]
+
+    assert cc._unsanctioned_abort(_init(list(allowed)), "{'mcpServers':{}}", allowed) is None

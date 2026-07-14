@@ -48,12 +48,22 @@ def _subprocess_env_with_bearer() -> dict[str, str]:
     resolvable, returns the plain sanitized env unchanged (claude uses its own
     auth)."""
     env = sanitized_subprocess_env()
-    # T2b-4 — the operator's shell may set MCP_CONNECTION_NONBLOCKING=true, which makes the
-    # CLI start its turn BEFORE the MCP server connects: BSVibe's tools would simply not be
-    # there, and the agent would fall back to answering without them (measured, 2026-07-14 —
-    # the server sat at status "pending" and the model reported it had no such tool). The
-    # worker owns this decision, not the host it happens to run on.
-    env.pop("MCP_CONNECTION_NONBLOCKING", None)
+    # The CLI must WAIT for the MCP server before it starts the turn, or BSVibe's tools are
+    # simply not there when the model runs.
+    #
+    # Popping the var was not enough — UNSET IS NOT FALSE. The CLI's own default is
+    # non-blocking, so removing the operator's `true` changed nothing (measured against the
+    # real CLI, 2026-07-14, all four combinations). With a remote MCP server the connect never
+    # wins the race: `system/init` carries `status: pending` and ZERO tools.
+    #
+    # And an agent with no tools does not say so. Natives denied, ours not yet arrived, it
+    # emitted fake tool calls as prose and fabricated the result — "The directory appears to be
+    # empty" — while the CLI reported success. That is the very bug this redesign exists to
+    # kill, re-entering through the back door.
+    #
+    # `=false` makes the CLI block: status `connected`, all nine work tools in `system/init`,
+    # a real tool call, a real result.
+    env["MCP_CONNECTION_NONBLOCKING"] = "false"
     bearer = ensure_claude_bearer()
     if bearer:
         env["ANTHROPIC_AUTH_TOKEN"] = bearer
@@ -138,6 +148,13 @@ _NATIVE_TOOLS: str = " ".join(
         "ScheduleWakeup",
         "TaskOutput",
         "TaskStop",
+        # Added in CLI 2.1.172 — exactly the rot this list was predicted to suffer. The guard
+        # below caught them on the first real agentic run (they are not in `claude --print`'s
+        # vanilla tool list; they appear once a session is not nested inside another one).
+        "TaskCreate",
+        "TaskGet",
+        "TaskList",
+        "TaskUpdate",
     )
 )
 
@@ -145,31 +162,52 @@ _NATIVE_TOOLS: str = " ".join(
 def _unsanctioned_abort(
     event: dict[str, Any], mcp_config: str, allowed_tools: list[str] | None
 ) -> ExecutionChunk | None:
-    """Terminal chunk when the CLI exposed a tool we never gave it — else ``None``."""
+    """Terminal chunk when the CLI's exposed tool set is not EXACTLY the one we sanctioned.
+
+    Two ways to fail, and the second one is the dangerous half this guard originally missed:
+
+    * **Excess** — a tool we never gave it (a new built-in after a CLI upgrade). The agent has
+      hands we did not sanction and could reach the founder's filesystem.
+    * **Absence** — none (or only some) of BSVibe's tools arrived. An agent with no tools does
+      NOT report that it has none: it fabricates. Driving the first real coding run, the CLI
+      raced its own MCP connect, the model got zero tools, invented `<invoke name="glob">` in
+      prose, and answered "The directory appears to be empty" — reported as success. A loud
+      abort beats a confident lie.
+    """
     if not mcp_config:
         return None
-    leaked = _exposed_tools_are_ours(event, allowed_tools or [])
-    if not leaked:
+    problem = _exposed_tools_are_ours(event, allowed_tools or [])
+    if not problem:
         return None
-    logger.error("claude_code_unsanctioned_tools", tools=leaked)
+    logger.error("claude_code_unsanctioned_tools", problem=problem)
     return ExecutionChunk(
         done=True,
         error=(
-            f"aborted: the CLI exposed tools BSVibe did not sanction ({leaked}). The agent "
-            "must act only through BSVibe's tools; refusing to run with local ones."
+            f"aborted: the CLI's tools are not the ones BSVibe sanctioned ({problem}). The "
+            "agent must act only through BSVibe's tools — and it must actually have them."
         ),
     )
 
 
 def _exposed_tools_are_ours(event: dict[str, Any], allowed: list[str]) -> str | None:
-    """The CLI's ``system/init`` announces the tools it exposed. Anything beyond the ones we
-    sanctioned means the agent has hands we did not give it — abort. Returns the offending
-    tools, or ``None`` when the exposure is clean."""
+    """The CLI's ``system/init`` announces the tools it exposed. It must be EXACTLY our set.
+
+    Returns a description of the mismatch, or ``None`` when the exposure is clean.
+    """
     if event.get("type") != "system" or event.get("subtype") != "init":
         return None
     exposed = {str(t) for t in (event.get("tools") or [])}
-    unsanctioned = sorted(exposed - set(allowed))
-    return ", ".join(unsanctioned) if unsanctioned else None
+    sanctioned = set(allowed)
+    leaked = sorted(exposed - sanctioned)
+    missing = sorted(sanctioned - exposed)
+    problems: list[str] = []
+    if leaked:
+        problems.append(f"unsanctioned: {', '.join(leaked)}")
+    if missing:
+        # Almost always the MCP server losing the race to the turn — see
+        # :func:`_subprocess_env_with_bearer` on MCP_CONNECTION_NONBLOCKING.
+        problems.append(f"BSVibe's tools never arrived: {', '.join(missing)}")
+    return "; ".join(problems) if problems else None
 
 
 _CHAT_FLAGS: tuple[str, ...] = (
