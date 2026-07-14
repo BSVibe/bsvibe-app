@@ -89,9 +89,21 @@ class FileWriteInput(_WorkInput):
 
 
 class FileEditInput(_WorkInput):
+    """The registry's contract, exactly — NOT a paraphrase of it.
+
+    These names are forwarded straight to ``ToolRegistry._file_edit``, which reads
+    ``old_string`` / ``new_string``. They were ``old`` / ``new`` here, so every file_edit over
+    MCP was refused with "file_edit requires a non-empty string 'old_string'" — 100% failure,
+    invisible to the delegation tests because their fake registry only recorded the arguments
+    instead of invoking the real handler (INV-7).
+    """
+
     path: str = Field(..., min_length=1)
-    old: str = Field(..., description="Exact text to replace.")
-    new: str = Field(...)
+    old_string: str = Field(..., description="Exact text to replace. Must match the file.")
+    new_string: str = Field(..., description="Replacement text.")
+    replace_all: bool = Field(
+        default=False, description="Replace every occurrence instead of requiring a unique match."
+    )
 
 
 class ShellExecInput(_WorkInput):

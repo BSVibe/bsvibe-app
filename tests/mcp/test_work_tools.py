@@ -235,3 +235,30 @@ async def test_file_tools_still_work_without_a_sandbox() -> None:
         "bsvibe_work_file_read", {"path": "a.py"}, _ctx(_principal(run_id=run_id))
     )
     assert "file_read" in out["result"]
+
+
+# ── The MCP surface must speak the registry's contract (INV-7) ────────────────
+# ``FileEditInput`` exposed ``old``/``new`` while ``ToolRegistry._file_edit`` reads
+# ``old_string``/``new_string`` — so every file_edit over MCP hit
+# "file_edit requires a non-empty string 'old_string'". 100% failure, and the delegation test
+# below never caught it because the fake registry only RECORDED the arguments instead of
+# invoking the real handler. Live proof (run 96dd7cfc): the agent's file_edit failed and it
+# fell back to rewriting the whole file with file_write.
+
+
+async def test_mcp_file_edit_speaks_the_registrys_argument_names(tmp_path) -> None:
+    """Drive the REAL registry — a fake that only records args cannot see this class of bug."""
+    from backend.mcp.tools.work_tools import FileEditInput
+    from backend.workflow.infrastructure.tools import ToolRegistry
+
+    registry = ToolRegistry(workspace_dir=tmp_path)
+    registry.declared_contract = {"checks": [{"kind": "shell", "command": "pytest -q"}]}
+    await registry.invoke("file_write", {"path": "a.py", "content": "x = 1\n"})
+
+    args = FileEditInput(path="a.py", old_string="x = 1", new_string="x = 2").model_dump(
+        exclude_none=False
+    )
+    result = await registry.invoke("file_edit", args)
+
+    assert "edited" in result
+    assert (tmp_path / "a.py").read_text() == "x = 2\n"

@@ -24,6 +24,9 @@ import structlog
 
 from backend.mcp.api import ToolContext, ToolError
 from backend.storage.product_workspace import run_worktree_path
+from backend.workflow.application.tool_registry import (
+    WORK_TOOL_STATE_KEY as _WORK_TOOL_STATE_KEY,
+)
 from backend.workflow.infrastructure.db import ExecutionRun
 from backend.workflow.infrastructure.sandbox import build_sandbox_manager
 from backend.workflow.infrastructure.tools import ToolRegistry
@@ -31,7 +34,9 @@ from backend.workflow.infrastructure.tools import ToolRegistry
 logger = structlog.get_logger(__name__)
 
 #: Where the run carries the work tools' per-run latches between MCP calls.
-WORK_TOOL_STATE_KEY = "work_tool_state"
+#: Re-exported — the key is a property of the RUN and lives in the workflow layer, so the loop
+#: (which cannot import ``backend.mcp``) reads the same state this transport writes.
+WORK_TOOL_STATE_KEY = _WORK_TOOL_STATE_KEY
 
 
 async def _sandbox_for(run: ExecutionRun, workspace_dir: Path) -> Any:

@@ -32,6 +32,7 @@ from backend.workflow.application.audit_events import (
 from backend.workflow.application.tool_registry import (
     ASK_USER_QUESTION_TOOL,
     MAX_NO_WORK_NUDGES,
+    WORK_TOOL_STATE_KEY,
     WORK_TOOLS,
     _assistant_tool_call_message,
     _invoke_tool_safely,
@@ -77,6 +78,42 @@ async def _pending_question(session: Any, run: ExecutionRun) -> Decision | None:
         )
     )
     return rows.scalars().first()  # type: ignore[no-any-return]
+
+
+async def _remote_work_state(orch: RunOrchestrator, run: ExecutionRun) -> dict[str, Any] | None:
+    """The work-tool state the MCP transport committed for this run — read FRESH.
+
+    The MCP handlers run in the API process and commit there, so the loop's own ORM copy of the
+    run never learns about it. Select the column rather than refreshing the instance: the loop
+    mutates ``run`` itself, and a refresh would clobber its pending changes.
+    """
+    from sqlalchemy import select  # noqa: PLC0415
+
+    rows = await orch._session.execute(
+        select(ExecutionRun.payload).where(ExecutionRun.id == run.id)
+    )
+    payload = rows.scalar_one_or_none() or {}
+    state = payload.get(WORK_TOOL_STATE_KEY)
+    return state if isinstance(state, dict) else None
+
+
+async def _sync_remote_tool_state(
+    registry: Any, written_paths: list[str], *, state: dict[str, Any] | None
+) -> None:
+    """Teach the loop's registry what the agent did through the MCP work tools.
+
+    Restores the same per-run latches the MCP transport persists — the declared contract, the
+    grounding, the declared knowledge — and merges the paths the agent WROTE into the loop's
+    accumulator, which becomes the verified Deliverable's ``artifact_refs``.
+
+    Idempotent: it runs every turn, and both the registry and ``written_paths`` dedupe.
+    """
+    if not state:
+        return
+    registry.restore_state(state)
+    for path in registry.written_paths:
+        if path not in written_paths:
+            written_paths.append(path)
 
 
 async def drive_loop(  # noqa: PLR0911, PLR0912, PLR0915 — preserved cycle body
@@ -153,10 +190,23 @@ async def drive_loop(  # noqa: PLR0911, PLR0912, PLR0915 — preserved cycle bod
             return orch._cancelled_result(run, work_step, attempt, written_paths, final_text)
         turn = await orch._llm.complete(messages=messages, tools=tools_schema)
         final_text = turn.content or final_text
-        # Merge files the compute backend captured outside the loop's tools
-        # (a coding-agent executor's edits in the worker clone) so the verified
-        # deliverable's artifact_refs record what actually changed. Empty for
-        # the LiteLLM path, which writes through the loop's file_write tools.
+        # An EXECUTOR agent acts through the MCP work tools, which run in the API process —
+        # its calls never pass through this loop's ``_invoke_tool_safely``, the only place the
+        # native path learns what was written. Without this the loop ends the run believing the
+        # agent did nothing: empty ``artifact_refs`` (the PR's changed-file list, the settle
+        # tags, the proof view's file whitelist), a summary that falls back to the model's raw
+        # narration, and a verify-first gate that looks undeclared.
+        #
+        # The registry already exports that state and the MCP transport already persists it on
+        # the run. The loop simply never read it back. A LiteLLM run persists none: no-op.
+        await _sync_remote_tool_state(
+            registry,
+            written_paths,
+            state=await _remote_work_state(orch, run),
+        )
+        # Files a compute backend captured outside the loop's tools. Legacy (the worker's file
+        # scrape); empty on both live transports now — the executor writes server-side through
+        # the work tools above, and LiteLLM writes through the loop's own file_write.
         for captured_path in turn.artifact_refs:
             if captured_path not in written_paths:
                 written_paths.append(captured_path)
