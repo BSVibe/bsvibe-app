@@ -27,10 +27,20 @@ logger = structlog.get_logger(__name__)
 SERVER_NAME = "bsvibe"
 
 
-def build_registry() -> ToolRegistry:
-    """Build a fresh :class:`ToolRegistry` with every D2 tool registered."""
+def build_registry(
+    *,
+    record_question: Any | None = None,
+    record_deliverable: Any | None = None,
+) -> ToolRegistry:
+    """Build a fresh :class:`ToolRegistry` with every D2 tool registered.
+
+    ``record_question`` / ``record_deliverable`` (T1b) are the two loop-owned effects behind
+    the run-scoped work tools, injected from the composition root — see
+    :func:`backend.mcp.tools.register_all_tools`."""
     registry = ToolRegistry()
-    register_all_tools(registry)
+    register_all_tools(
+        registry, record_question=record_question, record_deliverable=record_deliverable
+    )
     return registry
 
 

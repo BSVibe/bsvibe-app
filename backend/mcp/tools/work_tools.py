@@ -89,6 +89,19 @@ class KnowledgeSearchInput(_WorkInput):
     query: str = Field(..., min_length=1)
 
 
+class AskUserQuestionInput(_WorkInput):
+    question: str = Field(..., min_length=1)
+    context: str = Field("")
+    options: list[str] | None = Field(None)
+
+
+class EmitDeliverableInput(_WorkInput):
+    model_config = ConfigDict(extra="allow")  # the loop's own shape, not ours
+
+    artifact_type: str = Field(..., min_length=1)
+    summary: str = Field(..., min_length=1)
+
+
 class WorkToolOutput(BaseModel):
     result: str
 
@@ -108,7 +121,33 @@ def _run_of(ctx: ToolContext) -> uuid.UUID:
     return run_id
 
 
-def register_work_tools(registry: ToolRegistry, *, registry_for_run: RegistryForRun) -> None:
+#: What the agent is told after it asks the founder something. It is a courtesy, not the
+#: mechanism: the loop terminates on the pending Decision whether or not the CLI obeys —
+#: a coding CLI trusts its own tools over anything the prompt says (measured, 2026-07-13).
+_STOP_AFTER_ASKING = (
+    "The founder has been asked and the run is paused on their answer. STOP now — do not "
+    "continue working. The run resumes with their decision."
+)
+
+
+#: The two LOOP-owned effects, injected from the composition root (``backend.api.main``).
+#:
+#: They are not imported here on purpose. ``create_decision`` and ``handle_emit_deliverable``
+#: live in the workflow layer, and the latter reaches ``backend.api.v1.live_events`` for the
+#: live-event bus — which the MCP import contract forbids this context from importing (the
+#: same reason ``delivery_dispatcher`` is built in ``main.py`` and passed down). Injecting them
+#: keeps this module a TRANSPORT: it decides who may act on which run, never what the act is.
+RecordQuestion = Callable[[Any, Any, dict[str, Any]], Awaitable[str]]
+RecordDeliverable = Callable[[Any, Any, dict[str, Any]], Awaitable[str]]
+
+
+def register_work_tools(
+    registry: ToolRegistry,
+    *,
+    registry_for_run: RegistryForRun,
+    record_question: RecordQuestion,
+    record_deliverable: RecordDeliverable,
+) -> None:
     """Expose the run's ToolRegistry over MCP."""
 
     def _tool(
@@ -195,6 +234,41 @@ def register_work_tools(registry: ToolRegistry, *, registry_for_run: RegistryFor
         ),
     ):
         registry.register(_tool(**spec))  # type: ignore[arg-type]
+
+    async def _h_ask(args: BaseModel, ctx: ToolContext) -> dict[str, str]:
+        run_id = _run_of(ctx)
+        payload = args.model_dump(exclude_none=True)
+        logger.info("mcp_work_ask_user_question", run_id=str(run_id))
+        await record_question(run_id, ctx, payload)
+        return {"result": _STOP_AFTER_ASKING}
+
+    async def _h_emit(args: BaseModel, ctx: ToolContext) -> dict[str, str]:
+        run_id = _run_of(ctx)
+        return {"result": await record_deliverable(run_id, ctx, args.model_dump())}
+
+    registry.register(
+        Tool(
+            name="bsvibe_work_ask_user_question",
+            description=(
+                "Ask the founder a blocking question. The run PAUSES on their answer — stop "
+                "working after calling this."
+            ),
+            input_schema=AskUserQuestionInput,
+            output_schema=WorkToolOutput,
+            handler=_h_ask,
+            required_scopes=("mcp:write",),
+        )
+    )
+    registry.register(
+        Tool(
+            name="bsvibe_work_emit_deliverable",
+            description="Record a deliverable produced DURING the run (before it finishes).",
+            input_schema=EmitDeliverableInput,
+            output_schema=WorkToolOutput,
+            handler=_h_emit,
+            required_scopes=("mcp:write",),
+        )
+    )
 
 
 __all__ = ["RegistryForRun", "WorkToolRegistry", "register_work_tools"]

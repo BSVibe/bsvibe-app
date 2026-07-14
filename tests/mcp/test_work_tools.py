@@ -57,6 +57,11 @@ def _ctx(principal: McpPrincipal) -> ToolContext:
     return ToolContext(principal=principal, session=None)  # type: ignore[arg-type]
 
 
+async def _unused_effect(*_a: Any, **_k: Any) -> str:
+    """The two loop-owned effects are covered in test_work_tools_ask_and_deliver.py."""
+    return "ok"
+
+
 class _FakeWorkRegistry:
     """Stands in for the workflow ToolRegistry bound to ONE run."""
 
@@ -79,7 +84,12 @@ def registry(tmp_path: Path) -> ToolRegistry:
         return built[run_id]
 
     reg = ToolRegistry()
-    register_work_tools(reg, registry_for_run=_registry_for_run)
+    register_work_tools(
+        reg,
+        registry_for_run=_registry_for_run,
+        record_question=_unused_effect,
+        record_deliverable=_unused_effect,
+    )
     reg.built = built  # type: ignore[attr-defined]
     return reg
 
@@ -190,7 +200,12 @@ async def test_shell_exec_is_refused_when_the_run_has_no_sandbox() -> None:
         return _FakeWorkRegistry(rid, sandbox=None)
 
     reg = ToolRegistry()
-    register_work_tools(reg, registry_for_run=_registry_for_run)
+    register_work_tools(
+        reg,
+        registry_for_run=_registry_for_run,
+        record_question=_unused_effect,
+        record_deliverable=_unused_effect,
+    )
 
     with pytest.raises(ToolError, match="sandbox"):
         await reg.call_tool(
@@ -206,7 +221,12 @@ async def test_file_tools_still_work_without_a_sandbox() -> None:
         return _FakeWorkRegistry(rid, sandbox=None)
 
     reg = ToolRegistry()
-    register_work_tools(reg, registry_for_run=_registry_for_run)
+    register_work_tools(
+        reg,
+        registry_for_run=_registry_for_run,
+        record_question=_unused_effect,
+        record_deliverable=_unused_effect,
+    )
 
     out = await reg.call_tool(
         "bsvibe_work_file_read", {"path": "a.py"}, _ctx(_principal(run_id=run_id))

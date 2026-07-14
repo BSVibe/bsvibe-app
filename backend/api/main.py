@@ -79,10 +79,45 @@ def create_app() -> FastAPI:
         )
 
         delivery_dispatcher = await build_delivery_adapter(session_factory=session_factory)
+
+        # T1b — the two LOOP-owned effects behind the run-scoped work tools. Built here for
+        # the same reason as ``delivery_dispatcher``: they live in the workflow layer and
+        # ``handle_emit_deliverable`` reaches ``backend.api.v1.live_events`` for the live bus,
+        # which the MCP import contract forbids the MCP context from importing. Injecting them
+        # keeps ``backend.mcp`` a transport — it decides who may act on which run, never what
+        # the act is.
+        #
+        # Without them an executor-driven run can never ask the founder a blocking question and
+        # never emits a mid-run Deliver event, while the identical run on a LiteLLM account
+        # does both (parity audit #20).
+        from backend.mcp.tools.work_registry import load_run  # noqa: PLC0415
+        from backend.workflow.application.run_persistence import create_decision  # noqa: PLC0415
+        from backend.workflow.domain.emit_deliverable import (  # noqa: PLC0415
+            handle_emit_deliverable,
+        )
+
+        async def _record_question(run_id: Any, ctx: Any, payload: dict[str, Any]) -> str:
+            run = await load_run(run_id, ctx)
+            decision = await create_decision(
+                ctx.session,
+                run,
+                None,  # work_step is unused by the Decision row
+                kind="ask_user_question",
+                payload=payload,
+                rationale="the working agent asked the founder a blocking question",
+            )
+            return str(decision.id)
+
+        async def _record_deliverable(run_id: Any, ctx: Any, arguments: dict[str, Any]) -> str:
+            run = await load_run(run_id, ctx)
+            return await handle_emit_deliverable(ctx.session, run, arguments)
+
         async with mcp_lifespan(
             app,
             session_factory=session_factory,
             delivery_dispatcher=delivery_dispatcher,
+            record_question=_record_question,
+            record_deliverable=_record_deliverable,
         ):
             # Lift 1.5 — load connector OAuth App credentials minted via the
             # GitHub App Manifest flow from the DB; these override any env-set
