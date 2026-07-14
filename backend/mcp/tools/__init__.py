@@ -20,7 +20,7 @@ from backend.mcp.tools.notifications_tools import register_notifications_tools
 from backend.mcp.tools.run_routing_rules_tools import register_run_routing_rules_tools
 from backend.mcp.tools.safe_mode_tools import register_safe_mode_tools
 from backend.mcp.tools.skills_tools import register_skills_tools
-from backend.mcp.tools.work_registry import build_run_tool_registry
+from backend.mcp.tools.work_registry import build_run_tool_registry, persist_tool_state
 from backend.mcp.tools.work_tools import (
     RecordDeliverable,
     RecordQuestion,
@@ -63,6 +63,7 @@ def register_all_tools(
             registry_for_run=build_run_tool_registry,
             record_question=record_question,
             record_deliverable=record_deliverable,
+            persist_state=persist_tool_state,
         )
     register_workflow_tools(registry)
     register_safe_mode_tools(registry)

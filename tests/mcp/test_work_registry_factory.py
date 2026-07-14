@@ -52,6 +52,8 @@ class _Run:
         self.id = run_id
         self.workspace_id = workspace_id
         self.product_id = uuid.uuid4()
+        # The run carries the work tools' per-run latches between MCP calls (T2b-2).
+        self.payload: dict[str, object] = {}
 
 
 async def test_registry_is_bound_to_the_runs_server_side_worktree(

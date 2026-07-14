@@ -47,6 +47,10 @@ class WorkToolRegistry(Protocol):
 #: production factory resolves run → worktree + sandbox; tests pass a fake.
 RegistryForRun = Callable[[uuid.UUID, ToolContext], Awaitable[WorkToolRegistry]]
 
+#: Writes the registry's per-run latches back onto the run after a call. Injected for the same
+#: reason as the registry factory: this module is a transport, not a store.
+PersistState = Callable[[uuid.UUID, ToolContext, Any], Awaitable[None]]
+
 
 class _WorkInput(BaseModel):
     """Base for every work-tool input.
@@ -147,6 +151,7 @@ def register_work_tools(
     registry_for_run: RegistryForRun,
     record_question: RecordQuestion,
     record_deliverable: RecordDeliverable,
+    persist_state: PersistState,
 ) -> None:
     """Expose the run's ToolRegistry over MCP."""
 
@@ -171,6 +176,10 @@ def register_work_tools(
             arguments = args.model_dump(exclude_none=False)
             logger.info("mcp_work_tool", tool=inner, run_id=str(run_id))
             result = await work.invoke(inner, arguments)
+            # The call may have moved the registry's per-run latches (a declared contract, a
+            # newly grounded path). They live on the RUN — this transport's registry dies with
+            # the request.
+            await persist_state(run_id, ctx, work)
             return {"result": result}
 
         return Tool(

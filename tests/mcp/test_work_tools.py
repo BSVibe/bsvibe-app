@@ -89,6 +89,7 @@ def registry(tmp_path: Path) -> ToolRegistry:
         registry_for_run=_registry_for_run,
         record_question=_unused_effect,
         record_deliverable=_unused_effect,
+        persist_state=_unused_effect,
     )
     reg.built = built  # type: ignore[attr-defined]
     return reg
@@ -205,6 +206,7 @@ async def test_shell_exec_is_refused_when_the_run_has_no_sandbox() -> None:
         registry_for_run=_registry_for_run,
         record_question=_unused_effect,
         record_deliverable=_unused_effect,
+        persist_state=_unused_effect,
     )
 
     with pytest.raises(ToolError, match="sandbox"):
@@ -226,6 +228,7 @@ async def test_file_tools_still_work_without_a_sandbox() -> None:
         registry_for_run=_registry_for_run,
         record_question=_unused_effect,
         record_deliverable=_unused_effect,
+        persist_state=_unused_effect,
     )
 
     out = await reg.call_tool(
