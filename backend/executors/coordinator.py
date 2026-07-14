@@ -66,6 +66,26 @@ from backend.executors.terminal import (
     fail_terminal,
 )
 from backend.executors.verify_handoff import verify_and_finish
+from backend.workflow.application.tool_registry import WORK_TOOL_STATE_KEY
+
+
+async def _written_paths_of(session: Any, run: Any) -> list[str]:
+    """The paths the agent wrote through BSVibe's tools — read FRESH off the run.
+
+    The MCP work tools run in the API process and commit there, so this session's cached copy
+    of the run never learns about them. Select the column rather than refreshing the instance
+    (the caller mutates ``run``).
+    """
+    from sqlalchemy import select  # noqa: PLC0415
+
+    from backend.workflow.infrastructure.db import ExecutionRun  # noqa: PLC0415
+
+    rows = await session.execute(select(ExecutionRun.payload).where(ExecutionRun.id == run.id))
+    payload = rows.scalar_one_or_none() or {}
+    state = payload.get(WORK_TOOL_STATE_KEY) or {}
+    return [str(p) for p in (state.get("written_paths") or [])]
+
+
 from backend.router.accounts.models import ModelAccount
 from backend.workflow.application.agent_loop import LoopResult
 from backend.workflow.application.audit_events import RunStarted
@@ -283,7 +303,11 @@ class ExecutorOrchestrator:
             work_step=work_step,
             attempt=attempt,
             task_id=task.id,
-            artifact_refs=completed.artifact_refs or [],
+            # T3 — the worker's file scrape is deleted, so ``completed.artifact_refs`` is gone.
+            # The paths come from the SAME place the native loop reads them: the run's own
+            # work-tool state, written by the MCP work tools the agent actually called
+            # (``WORK_TOOL_STATE_KEY``). One mechanism, every path.
+            artifact_refs=await _written_paths_of(self._session, run),
             output=completed.output or "",
             workspace_dir=workspace_dir,
         )

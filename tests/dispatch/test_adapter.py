@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import time
 import uuid
 from collections.abc import Iterator
@@ -753,8 +752,6 @@ class TestExecutorAdapterChat:
 
                 assert response.content == "42"
                 assert response.tool_calls == ()
-                # No files shipped → no captured artifact_refs.
-                assert response.artifact_refs == ()
 
     async def test_chat_localizes_the_system_prompt_like_litellm(self) -> None:
         """Abstraction parity — the executor adapter localizes the system prompt
@@ -863,7 +860,7 @@ class TestExecutorAdapterChat:
             calls.append(1)
             if len(calls) == 1:
                 raise ExecutorAdapterUnavailable("task failed: exit 1", retryable=True)
-            return ChatResponse(content="42", tool_calls=(), artifact_refs=())
+            return ChatResponse(content="42", tool_calls=())
 
         monkeypatch.setattr(ExecutorAdapter, "_chat_with_session", _fake)
         response = await adapter.chat(system="x", messages=[{"role": "user", "content": "hi"}])
@@ -902,85 +899,6 @@ class TestExecutorAdapterChat:
         with pytest.raises(ExecutorAdapterUnavailable, match="timed out"):
             await adapter.chat(system="x", messages=[{"role": "user", "content": "hi"}])
         assert len(calls) == 1  # no retry on a non-retryable outcome
-
-    async def test_chat_surfaces_worker_captured_artifact_refs(self, tmp_path: Any) -> None:
-        """A run-bound executor chat surfaces the files the worker captured
-        (persisted on the task row as artifact_refs) on the ChatResponse, so the
-        agent loop can record them as the verified deliverable's artifact_refs.
-        Without this the deliverable came out with empty artifact_refs for every
-        executor run even though the agent changed files in its clone.
-        """
-        import asyncio
-        import base64
-
-        redis = await _make_redis()
-        workspace_id = uuid.uuid4()
-        run_id = uuid.uuid4()
-        settings = get_settings().model_copy(update={"executor_task_timeout_s": 30.0})
-
-        async with shared_file_sessionmaker() as sf:
-            async with sf() as setup:
-                worker = await _seed_worker(
-                    setup, workspace_id=workspace_id, capabilities=["claude_code"]
-                )
-                account = _executor_account(workspace_id, worker.id)
-                setup.add(account)
-                await setup.commit()
-
-            async with sf() as adapter_session:
-                adapter = ExecutorAdapter(
-                    account=account,
-                    workspace_id=workspace_id,
-                    account_id=account.account_id,
-                    model_account_id=account.id,
-                    session=adapter_session,
-                    settings=settings,
-                    redis=redis,
-                    run_id=run_id,
-                )
-
-                async def _simulate_worker() -> None:
-                    stream = dispatch.worker_stream(worker.id)
-                    last_id = "0"
-                    for _ in _poll_deadline():
-                        entries = await redis.xread({stream: last_id}, count=1, block=20)
-                        if not entries:
-                            continue
-                        _name, messages = entries[0]
-                        for msg_id, fields in messages:
-                            last_id = msg_id
-                            task_id = uuid.UUID(fields["task_id"])
-                            async with sf() as ws_session:
-                                await dispatch.record_result(
-                                    ws_session,
-                                    redis,
-                                    task_id=task_id,
-                                    success=True,
-                                    output="done",
-                                    error_message=None,
-                                    files=[
-                                        {
-                                            "path": "backend/common/bytesize.py",
-                                            "content_b64": base64.b64encode(b"x = 1\n").decode(),
-                                            "truncated": False,
-                                        }
-                                    ],
-                                    run_workspace_root=str(tmp_path),
-                                )
-                                await ws_session.commit()
-                            return
-                    raise AssertionError("worker stream never saw the XADD")
-
-                worker_task = asyncio.create_task(_simulate_worker())
-                try:
-                    response = await adapter.chat(
-                        system="be terse",
-                        messages=[{"role": "user", "content": "add bytesize util"}],
-                    )
-                finally:
-                    await worker_task
-
-                assert response.artifact_refs == ("backend/common/bytesize.py",)
 
     async def test_chat_uses_per_caller_timeout_over_settings_default(
         self, monkeypatch: pytest.MonkeyPatch
@@ -1276,418 +1194,33 @@ class TestExecutorAdapterChat:
                     await worker_task
 
 
-class TestExecutorAdapterE30ToolsAndContract:
-    """Lift E30 — when ``tools`` are passed the adapter formats them into
-    a verification-contract guide in the system prompt instead of raising;
-    when the agent's output contains a ``<verification-contract>{…}</…>``
-    block, the adapter synthesizes a ``declare_verification`` tool call so
-    the downstream loop registers the contract through the existing path.
+class TestExecutorToolContractIsReal:
+    """T3 — the E30 "impedance match" is gone.
+
+    It rendered BSVibe's tool schemas into the system prompt as PROSE, told the agent to use
+    its OWN local tools, then parsed a ``<verification-contract>`` block back out of the reply
+    text and FORGED a ``declare_verification`` tool call from it. The agent now has BSVibe's
+    tools for real, over MCP: it declares its contract by CALLING the tool, server-side, and
+    the loop reads that from the run's state.
     """
 
-    def test_augment_system_appends_contract_guide_when_tools_set(self) -> None:
-        from backend.dispatch.adapter import _augment_system_for_executor_tools
+    def test_the_system_prompt_is_not_augmented_with_a_prose_tool_guide(self) -> None:
+        from backend.dispatch import adapter
 
-        out = _augment_system_for_executor_tools(
-            "You are a worker.",
-            [
-                {
-                    "type": "function",
-                    "function": {
-                        "name": "declare_verification",
-                        "description": "Declare how BSVibe verifies your work.",
-                    },
-                },
-                {
-                    "type": "function",
-                    "function": {
-                        "name": "write_file",
-                        "description": "Write a file under the run workspace.",
-                    },
-                },
-            ],
-        )
-        # Original system prompt survives untouched at the head.
-        assert out.startswith("You are a worker.")
-        # The E30 guide is appended (now E34 strengthens its DO-IT framing),
-        # including the contract template AND the named tools the loop
-        # registered.
-        assert "BSVibe coding-agent contract — MANDATORY (Lift E30 / E34 / E37)" in out
-        assert "<verification-contract>" in out
-        assert "declare_verification" in out
-        assert "write_file" in out
+        assert not hasattr(adapter, "_augment_system_for_executor_tools")
+        assert not hasattr(adapter, "_E30_TOOL_GUIDE_HEADER")
 
-    def test_augment_system_no_tools_returns_original(self) -> None:
-        from backend.dispatch.adapter import _augment_system_for_executor_tools
+    def test_no_tool_call_is_synthesized_from_the_reply_text(self) -> None:
+        from backend.dispatch import adapter
 
-        assert _augment_system_for_executor_tools("be terse", None) == "be terse"
-        assert _augment_system_for_executor_tools("be terse", []) == "be terse"
+        assert not hasattr(adapter, "_synthesize_executor_tool_calls")
+        assert not hasattr(adapter, "EXECUTOR_DECLARE_VERIFICATION_ID")
 
-    def test_augment_system_for_chat_adds_completion_directive(self) -> None:
-        """A chat-shaped (tools=None) executor call gets a completion directive so
-        the coding agent answers as a raw LLM (clean, parseable output) instead of
-        agentically — keeping ExecutorAdapter.chat identical to LiteLLMAdapter.chat.
-        The original system leads; the directive is appended."""
-        from backend.dispatch.adapter import _augment_system_for_executor_chat
+    def test_a_chat_response_carries_no_scraped_files(self) -> None:
+        """The worker no longer ships files back, so the response has nowhere to put them."""
+        from backend.dispatch.adapter import ChatResponse
 
-        out = _augment_system_for_executor_chat("Output ONLY a JSON object with a title.")
-        assert out.startswith("Output ONLY a JSON object with a title.")
-        assert "TEXT-COMPLETION endpoint" in out
-        assert "no tool use" in out
-        assert "single JSON object" in out
-
-    def test_guide_documents_optional_knowledge_declaration(self) -> None:
-        """v2 — the guide teaches the agent to record what it LEARNED (a
-        retrospective ``knowledge`` block in the contract) with the shared bar,
-        so verified-work knowledge is agent-authored in the moment."""
-        from backend.dispatch.adapter import _augment_system_for_executor_tools
-        from backend.knowledge.extraction.worth_remembering import WORTH_REMEMBERING_PRINCIPLE
-
-        out = _augment_system_for_executor_tools(
-            "You are a worker.",
-            [
-                {
-                    "type": "function",
-                    "function": {"name": "declare_verification", "description": "d"},
-                }
-            ],
-        )
-        assert '"knowledge"' in out
-        assert "topic" in out and "insight" in out
-        # The shared worth-remembering bar is embedded verbatim.
-        assert WORTH_REMEMBERING_PRINCIPLE in out
-
-    def test_guide_ties_knowledge_topic_to_output_language(self) -> None:
-        """KO-workspace regression: the note BODY localizes (the language directive
-        reaches the executor) but the ``topic`` — a short label — drifts to English
-        because the guide frames it as a 'noun phrase' with no language instruction,
-        and the directive's 'keep identifiers unchanged' clause captures it. The
-        guide must state that BOTH topic and insight are user-facing prose to be
-        written in the SAME language as the rest of the agent's output (the
-        workspace language), NOT forced English."""
-        from backend.dispatch.adapter import _augment_system_for_executor_tools
-
-        out = _augment_system_for_executor_tools(
-            "You are a worker.",
-            [{"type": "function", "function": {"name": "declare_verification"}}],
-        )
-        low = out.lower()
-        assert "same language" in low
-        # It must scope the instruction to the knowledge fields (prose, not a slug).
-        assert "topic" in low and "insight" in low
-
-    def test_synthesize_forwards_declared_knowledge(self) -> None:
-        """v2 — a contract carrying a ``knowledge`` block forwards it verbatim on
-        the synthesized declare_verification args (the handler latches it)."""
-        import json as _json
-
-        from backend.dispatch.adapter import _synthesize_executor_tool_calls
-
-        out = (
-            "done.\n<verification-contract>\n"
-            '{"checks": [{"kind": "command", "command": "pytest"}], '
-            '"knowledge": {"topic": "Idempotent webhooks", "insight": "Dedupe by event id."}}\n'
-            "</verification-contract>"
-        )
-        calls = _synthesize_executor_tool_calls(out)
-        assert len(calls) == 1
-        args = _json.loads(calls[0].arguments_json)
-        assert args["knowledge"] == {
-            "topic": "Idempotent webhooks",
-            "insight": "Dedupe by event id.",
-        }
-        assert args["checks"][0]["command"] == "pytest"
-
-    def test_e37_contract_requirement_is_loud_and_first_in_guide(self) -> None:
-        """Lift E37 — qwen3.6-plus dogfood (session ses_12f1a577d, 2026-06-16)
-        proved the contract requirement buried at step 4 of the guide gets
-        IGNORED by the agent: it edits, commits, ends with a summary text,
-        and emits NO ``<verification-contract>`` block. The fix is structural,
-        not a louder nudge — the requirement must be the FIRST thing the
-        agent sees in the guide section, with explicit failure semantics
-        ("MANDATORY", "no block → human review → no PR") so a model that
-        skims the prompt cannot miss it.
-        """
-        from backend.dispatch.adapter import _augment_system_for_executor_tools
-
-        out = _augment_system_for_executor_tools(
-            "You are a worker.",
-            [{"type": "function", "function": {"name": "declare_verification"}}],
-        )
-        # The original system prompt still survives at the head so chat-shape
-        # preservation isn't disturbed.
-        assert out.startswith("You are a worker.")
-        # The guide block now leads with a MANDATORY / REQUIRED marker on
-        # the contract — well BEFORE any reference to tool flow / "Concretely:".
-        guide_start = out.index("BSVibe coding-agent contract")
-        guide = out[guide_start:]
-        loud_idx = next(
-            (guide.find(marker) for marker in ("MANDATORY", "REQUIRED") if marker in guide),
-            -1,
-        )
-        assert loud_idx >= 0, "guide must contain MANDATORY/REQUIRED marker"
-        # The <verification-contract> template appears before the work flow
-        # description so the agent reads the gate first.
-        contract_template_idx = guide.find("<verification-contract>")
-        concretely_idx = guide.find("Concretely:")
-        assert contract_template_idx >= 0
-        assert contract_template_idx < concretely_idx or concretely_idx < 0, (
-            "contract template must appear before the work-flow steps"
-        )
-        # E37 must also lift the lift-tag so future audits know which
-        # restructuring is in play.
-        assert "Lift E30 / E34 / E37" in guide
-
-    def test_e38_contract_template_uses_canonical_kind_and_command_fields(self) -> None:
-        """Lift E38 — the E37 dogfood proved the agent OBEYS the prompt
-        template verbatim; the template's `kind: "shell"` + `cmd:` choice
-        produced contracts the parser rejected (it accepts `kind: "command"`
-        + `command:`). Align the template with the parser's canonical
-        shape so the wire is end-to-end consistent on the first try.
-        """
-        from backend.dispatch.adapter import _augment_system_for_executor_tools
-
-        out = _augment_system_for_executor_tools(
-            "You are a worker.",
-            [{"type": "function", "function": {"name": "declare_verification"}}],
-        )
-        guide_start = out.index("BSVibe coding-agent contract")
-        guide = out[guide_start:]
-        # The first contract template the agent reads must use
-        # ``kind: "command"`` + ``command:`` so the parser accepts the
-        # naïve copy-paste shape.
-        first_template_idx = guide.index("<verification-contract>")
-        # Look at the FIRST contract template only — later examples may
-        # mention alternative aliases for tolerance, but the primary
-        # example must be the canonical shape.
-        first_template = guide[first_template_idx : first_template_idx + 400]
-        assert '"kind": "command"' in first_template, (
-            f"first template must show canonical kind=command, got: {first_template!r}"
-        )
-        assert '"command":' in first_template, (
-            f"first template must show canonical command field, got: {first_template!r}"
-        )
-        # The wrong-shape pair the E37 dogfood reproduced must NOT appear
-        # in the first template — it's the source of the rejection loop.
-        assert '"cmd"' not in first_template, (
-            "first template must not use the cmd alias which the parser originally rejected"
-        )
-
-    def test_synthesize_tool_call_from_contract_block(self) -> None:
-        from backend.dispatch.adapter import _synthesize_executor_tool_calls
-
-        output = (
-            "I edited tests/api/test_inside_trust.py to inject a fixture clock.\n"
-            "\n"
-            "<verification-contract>\n"
-            '{"checks": [{"kind": "shell", "cmd": "pytest tests/api/test_inside_trust.py::test_product_trust_detail_shape -q"}]}\n'
-            "</verification-contract>\n"
-        )
-        calls = _synthesize_executor_tool_calls(output)
-        assert len(calls) == 1
-        call = calls[0]
-        assert call.name == "declare_verification"
-        payload = json.loads(call.arguments_json)
-        assert payload["checks"][0]["kind"] == "shell"
-        assert "pytest" in payload["checks"][0]["cmd"]
-
-    def test_synthesize_returns_empty_when_no_block(self) -> None:
-        from backend.dispatch.adapter import _synthesize_executor_tool_calls
-
-        assert _synthesize_executor_tool_calls("just text, no contract") == ()
-        assert _synthesize_executor_tool_calls("") == ()
-
-    def test_synthesize_returns_empty_on_malformed_json(self) -> None:
-        from backend.dispatch.adapter import _synthesize_executor_tool_calls
-
-        bad = "<verification-contract>{not valid json}</verification-contract>"
-        assert _synthesize_executor_tool_calls(bad) == ()
-
-    @pytest.mark.asyncio
-    async def test_chat_with_tools_dispatches_with_augmented_system(
-        self,
-    ) -> None:
-        """End-to-end — passing ``tools`` augments the system prompt that
-        lands on the worker's stream entry, and a contract block in the
-        worker's reply synthesizes the ``declare_verification`` tool call."""
-        redis = await _make_redis()
-        workspace_id = uuid.uuid4()
-
-        async with shared_file_sessionmaker() as sf:
-            async with sf() as setup:
-                worker = await _seed_worker(
-                    setup, workspace_id=workspace_id, capabilities=["claude_code"]
-                )
-                account = _executor_account(workspace_id, worker.id)
-                setup.add(account)
-                # T2b-4 — an agentic task acts on a RUN, through a token scoped to it and
-                # issued to the workspace's founder.
-                await _seed_founder(setup, workspace_id)
-                run_id = uuid.uuid4()
-                await setup.commit()
-
-            async with sf() as adapter_session:
-                adapter = ExecutorAdapter(
-                    account=account,
-                    workspace_id=workspace_id,
-                    account_id=account.account_id,
-                    model_account_id=account.id,
-                    session=adapter_session,
-                    settings=get_settings().model_copy(update={"executor_task_timeout_s": 30.0}),
-                    redis=redis,
-                    run_id=run_id,
-                )
-
-                async def _simulate_worker() -> None:
-                    stream = dispatch.worker_stream(worker.id)
-                    last_id = "0"
-                    captured_system: list[str] = []
-                    for _ in _poll_deadline():
-                        entries = await redis.xread({stream: last_id}, count=1, block=20)
-                        if not entries:
-                            continue
-                        _name, messages = entries[0]
-                        for msg_id, fields in messages:
-                            last_id = msg_id
-                            if fields.get("action") != "execute":
-                                continue
-                            captured_system.append(fields.get("system", ""))
-                            task_id = uuid.UUID(fields["task_id"])
-                            async with sf() as ws_session:
-                                await dispatch.record_result(
-                                    ws_session,
-                                    redis,
-                                    task_id=task_id,
-                                    success=True,
-                                    output=(
-                                        "Edited the file. Verification follows.\n"
-                                        "<verification-contract>\n"
-                                        '{"checks": [{"kind": "shell", "cmd": "pytest -q tests/foo.py"}]}\n'
-                                        "</verification-contract>\n"
-                                    ),
-                                    error_message=None,
-                                )
-                                await ws_session.commit()
-                            # Stash for the outer assertion.
-                            self._captured_system = captured_system[0]  # type: ignore[attr-defined]
-                            return
-                    raise AssertionError("worker stream never saw the XADD")
-
-                import asyncio as _asyncio
-
-                worker_task = _asyncio.create_task(_simulate_worker())
-                try:
-                    response = await adapter.chat(
-                        system="ORIGINAL SYSTEM",
-                        messages=[{"role": "user", "content": "fix the flake"}],
-                        tools=[
-                            {
-                                "type": "function",
-                                "function": {
-                                    "name": "declare_verification",
-                                    "description": "Declare contract.",
-                                },
-                            }
-                        ],
-                    )
-                finally:
-                    await worker_task
-
-                # The system prompt the worker received was the augmented one.
-                augmented = getattr(self, "_captured_system", "")
-                assert augmented.startswith("ORIGINAL SYSTEM")
-                assert "verification-contract" in augmented
-
-                # The contract block in the worker's reply became a synthesized
-                # ``declare_verification`` tool call the downstream loop will
-                # register through its existing path.
-                assert len(response.tool_calls) == 1
-                assert response.tool_calls[0].name == "declare_verification"
-
-    @pytest.mark.asyncio
-    async def test_chat_with_run_id_persists_files_under_run(self) -> None:
-        """Lift E31 — when the resolver wired ``run_id`` (agent_loop callers)
-        the dispatched task carries it through to ``ExecutorTaskRow.run_id``
-        so files captured by the worker (B1) get persisted as the run's
-        ``artifact_refs`` via ``record_result``.
-
-        Pre-E31 the chat path hard-coded ``run_id=None`` so the worker's
-        file capture was silently dropped — chat tasks were detached from
-        any run. With E31 the agent_loop's ``act`` caller threads its run
-        id end-to-end so the coding agent's edits land in the vault.
-        """
-        redis = await _make_redis()
-        workspace_id = uuid.uuid4()
-        run_id = uuid.uuid4()
-
-        async with shared_file_sessionmaker() as sf:
-            async with sf() as setup:
-                worker = await _seed_worker(
-                    setup, workspace_id=workspace_id, capabilities=["claude_code"]
-                )
-                account = _executor_account(workspace_id, worker.id)
-                setup.add(account)
-                await setup.commit()
-
-            async with sf() as adapter_session:
-                adapter = ExecutorAdapter(
-                    account=account,
-                    workspace_id=workspace_id,
-                    account_id=account.account_id,
-                    model_account_id=account.id,
-                    session=adapter_session,
-                    settings=get_settings().model_copy(update={"executor_task_timeout_s": 30.0}),
-                    redis=redis,
-                    run_id=run_id,
-                )
-
-                from backend.executors.db import ExecutorTaskRow
-
-                captured_run_ids: list[uuid.UUID | None] = []
-
-                async def _simulate_worker() -> None:
-                    stream = dispatch.worker_stream(worker.id)
-                    last_id = "0"
-                    for _ in _poll_deadline():
-                        entries = await redis.xread({stream: last_id}, count=1, block=20)
-                        if not entries:
-                            continue
-                        _name, messages = entries[0]
-                        for msg_id, fields in messages:
-                            last_id = msg_id
-                            if fields.get("action") != "execute":
-                                continue
-                            task_id = uuid.UUID(fields["task_id"])
-                            # Read the task row to confirm the run_id was
-                            # threaded through ``dispatch.create_task``.
-                            async with sf() as ws_session:
-                                row = await ws_session.get(ExecutorTaskRow, task_id)
-                                captured_run_ids.append(row.run_id if row else None)
-                                await dispatch.record_result(
-                                    ws_session,
-                                    redis,
-                                    task_id=task_id,
-                                    success=True,
-                                    output="ok",
-                                    error_message=None,
-                                )
-                                await ws_session.commit()
-                            return
-                    raise AssertionError("worker stream never saw the XADD")
-
-                import asyncio as _asyncio
-
-                worker_task = _asyncio.create_task(_simulate_worker())
-                try:
-                    await adapter.chat(
-                        system="x",
-                        messages=[{"role": "user", "content": "fix"}],
-                    )
-                finally:
-                    await worker_task
-
-                assert captured_run_ids == [run_id], (
-                    "E31 — ExecutorAdapter.run_id MUST land on ExecutorTaskRow.run_id"
-                )
+        assert not hasattr(ChatResponse(content="x"), "artifact_refs")
 
 
 class TestProtocolConformance:

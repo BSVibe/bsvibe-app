@@ -293,11 +293,13 @@ async def _simulate_worker_done(
     worker_id: uuid.UUID,
     sf: async_sessionmaker[AsyncSession],
     output: str,
-    files: list[dict[str, Any]] | None = None,
-    run_workspace_root: str | None = None,
 ) -> None:
     """The standard simulated-worker coroutine: learn the task from the stream
-    XADD, then report a ``done`` result on a SEPARATE session."""
+    XADD, then report a ``done`` result on a SEPARATE session.
+
+    T3 — the result carries NO files. The agent writes to the run's server-side worktree
+    through BSVibe's tools over MCP; there is nothing for a worker to ship back.
+    """
     task_id = await _await_dispatched_task_id(redis, worker_id=worker_id)
     async with sf() as worker_s:
         await dispatch.record_result(
@@ -307,8 +309,6 @@ async def _simulate_worker_done(
             success=True,
             output=output,
             error_message=None,
-            files=files,
-            run_workspace_root=run_workspace_root,
         )
         await worker_s.commit()
 
@@ -511,116 +511,25 @@ async def test_executor_run_contract_pass_verifies_and_review_ready(
 #     passing judge) so a real verified Deliverable is written — the Deliverable
 #     is gated on a passing VerificationResult, never fake-PROVED.
 # --------------------------------------------------------------------------
-
-
-async def test_executor_run_captures_artifact_and_serves_via_endpoint(
-    sf: async_sessionmaker[AsyncSession],
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    import base64
-
-    import httpx
-
-    from backend.api.deps import get_current_user, get_db_session, get_workspace_id
-    from backend.api.main import create_app
-    from backend.config import get_settings
-
-    from .._support import fake_current_user
-
-    # Point the run workspace root at a tmp dir (where captured files persist +
-    # where the artifact endpoint reads them back from).
-    root = tmp_path / "runs"
-    monkeypatch.setenv("BSVIBE_RUN_WORKSPACE_ROOT", str(root))
-    get_settings.cache_clear()
-
-    workspace_id = uuid.uuid4()
-    redis = await _make_redis()
-    executor_type = "claude_code"
-
-    try:
-        async with sf() as s:
-            worker = await _seed_worker(s, workspace_id=workspace_id, capabilities=[executor_type])
-            account = await _seed_executor_account(
-                s, workspace_id=workspace_id, worker_id=worker.id, executor_type=executor_type
-            )
-            run_id = await _open_run(s, workspace_id=workspace_id, text="ship the feature")
-            await s.commit()
-
-        settings = get_settings().model_copy(update={"executor_task_timeout_s": 30.0})
-
-        async with sf() as orch_s:
-            run = await orch_s.get(ExecutionRun, run_id)
-            assert run is not None
-            # B2b verified-PASS seams: a fake sandbox + canon retriever + a
-            # passing judge → a real PASSED VerificationResult → verified
-            # Deliverable carrying the captured artifact_ref (B1).
-            orchestrator = ExecutorOrchestrator(
-                session=orch_s,
-                redis=redis,
-                account=account,
-                settings=settings,
-                sandbox_manager=_FakeSandboxManager(_FakeBox()),
-                retriever=_StubRetriever(["the change is correct"]),
-                verify_llm=_StubJudge(passed=True),
-            )
-
-            runner = AgentRunner(orch_s)
-            drive_task = asyncio.create_task(
-                runner.drive(run_id=run_id, orchestrator=orchestrator, workspace_dir=tmp_path)
-            )
-            worker_task = asyncio.create_task(
-                _simulate_worker_done(
-                    redis,
-                    worker_id=worker.id,
-                    sf=sf,
-                    output="implemented",
-                    files=[
-                        {
-                            "path": "result.py",
-                            "content_b64": base64.b64encode(b"print('done')\n").decode(),
-                            "truncated": False,
-                        }
-                    ],
-                    run_workspace_root=str(root),
-                )
-            )
-            result = await drive_task
-            await worker_task
-            await orch_s.commit()
-
-        assert result.outcome == "verified"
-        assert result.written_paths == ["result.py"]
-
-        async with sf() as s:
-            deliverable = (await s.execute(select(Deliverable))).scalar_one()
-            deliverable_id = deliverable.id
-            # The KEY delta: artifact_refs is NON-EMPTY (was always [] before B1).
-            assert deliverable.payload.get("artifact_refs") == ["result.py"]
-
-        # The captured file persisted under the run dir.
-        assert (root / str(run_id) / "result.py").read_bytes() == b"print('done')\n"
-
-        # ROUND-TRIP: the EXISTING artifact-read endpoint serves the content
-        # (no endpoint change — persisting real refs is all it took).
-        app = create_app()
-
-        async def _session():
-            async with sf() as s:
-                yield s
-
-        app.dependency_overrides[get_db_session] = _session
-        app.dependency_overrides[get_current_user] = fake_current_user()
-        app.dependency_overrides[get_workspace_id] = lambda: workspace_id
-        transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
-            r = await c.get(f"/api/v1/deliverables/{deliverable_id}/artifacts/result.py")
-            assert r.status_code == 200, r.text
-            assert r.json()["content"] == "print('done')\n"
-    finally:
-        get_settings.cache_clear()
-        await redis.aclose()
-
+# --------------------------------------------------------------------------
+# T3 — the worker's artifact SCRAPE is deleted, so the test that pinned it is too.
+#
+# It asserted: worker ships ``files`` -> _persist_task_files writes them under the run dir ->
+# ``artifact_refs``. That whole channel is gone. The agent now writes into the run's
+# server-side worktree through the MCP work tools, and the loop reads what it wrote back from
+# the run's own state (WORK_TOOL_STATE_KEY) — the SAME accumulator the native LiteLLM path
+# feeds. That mechanism is covered by:
+#
+#   tests/mcp/test_work_tool_state_persists.py   (the registry records + round-trips writes)
+#   tests/workflow/test_loop_sees_remote_tool_work.py  (the loop merges them -> artifact_refs)
+#
+# and was proven live end-to-end (run 96dd7cfc / the T3 re-drive).
+#
+# NOTE: ``ExecutorOrchestrator`` (which the tests above drive) has ZERO production callers —
+# the factory routes executor accounts through ExecutorAdapter + the native loop (see the
+# Lift E3 skips in this file). It reads ``completed.artifact_refs``, which T3 makes
+# permanently empty. It is the next thing to delete.
+# --------------------------------------------------------------------------
 
 # --------------------------------------------------------------------------
 # 2. No worker available → Decision, run stays RUNNING (needs_decision)

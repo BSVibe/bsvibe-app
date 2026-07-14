@@ -95,16 +95,6 @@ class HeartbeatResponse(BaseModel):
     status: str
 
 
-class WorkerResultFile(BaseModel):
-    """One file the worker's CLI produced, shipped back for persistence (B1)."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    path: str = Field(..., min_length=1)
-    content_b64: str = ""
-    truncated: bool = False
-
-
 class WorkerResultBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -112,9 +102,10 @@ class WorkerResultBody(BaseModel):
     success: bool
     output: str = ""
     error_message: str | None = None
-    # Files the CLI produced (executor-pool B1). Persisted under the run
-    # workspace + recorded as the task's artifact_refs by ``record_result``.
-    files: list[WorkerResultFile] = Field(default_factory=list)
+    # T3 — a result carries NO files. The agent writes to the run's SERVER-SIDE worktree
+    # through BSVibe's tools over MCP; there is nothing to ship back. The old ``files`` payload
+    # is what let a truncated >256 KB edit come back as ``raw = b""`` and zero the real file,
+    # and a deletion (``deleted: True``) 422 the entire result under this very ``extra=forbid``.
 
 
 class WorkerResponse(BaseModel):
@@ -343,8 +334,6 @@ async def report_result(
     here (after the row flips terminal) — waking any orchestrator awaiting on it
     promptly instead of letting it block until its timeout.
 
-    The per-run :class:`ArtifactStore` is injected via deps (swap-ready for
-    R2/S3) — the worker's returned files are persisted through it.
     """
     _ = worker  # auth only; the task row carries its own workspace binding
     await dispatch.record_result(
@@ -354,8 +343,6 @@ async def report_result(
         success=body.success,
         output=body.output,
         error_message=body.error_message,
-        files=[f.model_dump() for f in body.files],
-        artifact_store=artifact_store,
     )
     await session.commit()
     return HeartbeatResponse(status="ok")

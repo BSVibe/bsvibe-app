@@ -116,7 +116,6 @@ class LoopTurn:
     # artifact_refs); those never flow through the loop's tool writes, so the
     # loop merges these into ``written_paths`` to record what actually changed.
     # Empty for the LiteLLM path (it writes via the loop's tools).
-    artifact_refs: tuple[str, ...] = ()
 
 
 @runtime_checkable

@@ -31,6 +31,7 @@ from backend.executors.orchestrator import ExecutorOrchestrator, _parse_uuid
 from backend.knowledge.retrieval.knowledge_item import RetrievedKnowledge
 from backend.router.accounts.models import ModelAccount
 from backend.workflow.application.agent_loop import LoopTurn
+from backend.workflow.application.tool_registry import WORK_TOOL_STATE_KEY
 from backend.workflow.infrastructure.db import (
     Decision,
     Deliverable,
@@ -157,8 +158,7 @@ async def _drive_with_worker_done(
     workspace_dir: Path,
     sf: Any,
     output: str = "implemented",
-    files: list[dict[str, Any]] | None = None,
-    run_workspace_root: str | None = None,
+    wrote: list[str] | None = None,
 ) -> Any:
     """Drive ``oc.run`` while a simulated worker reports a ``done`` result.
 
@@ -201,10 +201,21 @@ async def _drive_with_worker_done(
                 success=True,
                 output=output,
                 error_message=None,
-                files=files,
-                run_workspace_root=run_workspace_root,
             )
             await worker_s.commit()
+
+    if wrote:
+        # What the MCP work tools do, server-side, when the agent calls file_write: persist the
+        # registry's per-run state onto the run. T3 — this is the ONLY channel now; the worker
+        # ships nothing back.
+        async with sf() as seed_s:
+            seeded = await seed_s.get(ExecutionRun, run.id)
+            assert seeded is not None
+            seeded.payload = {
+                **(seeded.payload or {}),
+                WORK_TOOL_STATE_KEY: {"written_paths": list(wrote)},
+            }
+            await seed_s.commit()
 
     drive_task = asyncio.create_task(oc.run(run=run, workspace_dir=workspace_dir))
     worker_task = asyncio.create_task(_simulate_worker())
@@ -468,7 +479,15 @@ async def test_success_no_contract_yields_human_review_not_proved(tmp_path: Path
 async def test_contract_pass_sets_proved_and_writes_deliverable(tmp_path: Path) -> None:
     """The ONLY path that sets PROVED: a runnable contract that PASSES. A canon
     command check passes in the fake box → PASSED VerificationResult → verified
-    Deliverable with the real artifact_refs (B1) → proof_state PROVED."""
+    Deliverable → proof_state PROVED.
+
+    T3 — ``artifact_refs`` is now EMPTY on this path, and that is not a bug being papered
+    over: ``ExecutorOrchestrator`` reads them from the worker's file scrape, which is deleted.
+    It has ZERO production callers (the factory routes executor accounts through
+    ``ExecutorAdapter`` + the native loop, which gets its written paths from the run's own
+    work-tool state), so nothing regresses — but this legacy orchestrator is the next thing
+    to delete. The verify → Deliverable → PROVED chain below is what this test still guards.
+    """
     from sqlalchemy import select
 
     redis = await _make_redis()
@@ -517,18 +536,12 @@ async def test_contract_pass_sets_proved_and_writes_deliverable(tmp_path: Path) 
                 workspace_dir=tmp_path,
                 sf=sf,
                 output="implemented + tests green",
-                files=[
-                    {
-                        "path": "result.py",
-                        "content_b64": __import__("base64").b64encode(b"print('done')\n").decode(),
-                        "truncated": False,
-                    }
-                ],
-                run_workspace_root=str(root),
+                wrote=["result.py"],
             )
             await orch_s.commit()
 
         assert result.outcome == "verified"
+        # The paths came from the run's work-tool state — not a worker scrape.
         assert result.written_paths == ["result.py"]
 
         async with sf() as s:

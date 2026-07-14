@@ -460,42 +460,45 @@ async def test_compose_verified_summary_no_verdict_unchanged() -> None:
     assert summary == "Add a cache.\n\nChanged files:\n- a.py"
 
 
-async def test_executor_artifact_refs_flow_into_deliverable(tmp_path: Path) -> None:
-    """Coding-agent executors write files in the worker's clone — captured
-    worker-side as the executor task's ``artifact_refs``, NOT via the loop's
-    ``file_write`` tools. So the loop's ``written_paths`` stayed empty and the
-    verified ``Deliverable.artifact_refs`` came out ``[]`` (live: PR/settle
-    showed no changed-file list even though files shipped in the git branch).
+async def test_executor_work_reaches_the_deliverable_via_the_runs_tool_state(
+    tmp_path: Path,
+) -> None:
+    """T3 — an executor turn returns NO tool calls, and the run's own state carries the work.
 
-    The ExecutorAdapter now surfaces the captured paths on the turn
-    (``LoopTurn.artifact_refs``); the loop merges them into ``written_paths`` so
-    the deliverable records what actually changed.
+    The agent acts through the MCP work tools, which execute in the API process: its calls
+    never pass through this loop. So the loop reads back what the agent DECLARED and WROTE
+    from the run (``WORK_TOOL_STATE_KEY``) — the same accumulator the native LiteLLM path
+    feeds through ``file_write``.
+
+    Two dead mechanisms this replaces:
+      * the worker's file SCRAPE (``LoopTurn.artifact_refs``), and
+      * the E30 SYNTHETIC ``declare_verification`` forged from the reply text, which the loop
+        had to special-case as "terminal" because an executor never returned empty tool_calls.
+
+    Now the turn is simply empty → the loop treats it as done → the synced state proves the
+    work happened and drives verification.
     """
-    declare = LoopToolCall(
-        id="e30-declare-verification",
-        name="declare_verification",
-        arguments={"checks": [{"kind": "command", "command": "true"}]},
-    )
-    llm = ScriptedLlm(
-        [
-            LoopTurn(
-                content="did it in one shot",
-                tool_calls=(declare,),
-                artifact_refs=("backend/common/bytesize.py", "tests/common/test_bytesize.py"),
-            ),
-        ]
-    )
+    from backend.workflow.application.tool_registry import WORK_TOOL_STATE_KEY
+
+    llm = ScriptedLlm([LoopTurn(content="did it in one shot")])
     async with memory_session() as session:
         run = await _make_run(session)
-        # PassingSandboxManager (not Noop): the artifact_refs here are SIMULATED
-        # paths that don't exist on disk, so the L1 mandatory ruff/mypy gates
-        # (added in assemble_contract) would fail running against them on a real
-        # host-exec box. This test is about artifact flow, not lint — so use a
-        # box whose commands pass.
+        # What the MCP work tools committed, server-side, while the agent worked.
+        run.payload = {
+            **(run.payload or {}),
+            WORK_TOOL_STATE_KEY: {
+                "declared_contract": {"checks": [{"kind": "command", "command": "true"}]},
+                "written_paths": ["backend/common/bytesize.py", "tests/common/test_bytesize.py"],
+            },
+        }
+        await session.commit()
+
         orch = RunOrchestrator(session=session, llm=llm, sandbox_manager=PassingSandboxManager())
         result = await orch.run(run=run, workspace_dir=tmp_path)
 
         assert result.outcome == "verified"
+        # The single-shot executor was not re-prompted for work: its one empty turn was
+        # terminal (the later call is the settle/summary turn, not another work cycle).
         assert result.written_paths == [
             "backend/common/bytesize.py",
             "tests/common/test_bytesize.py",
@@ -505,47 +508,13 @@ async def test_executor_artifact_refs_flow_into_deliverable(tmp_path: Path) -> N
             "backend/common/bytesize.py",
             "tests/common/test_bytesize.py",
         ]
+        vr = (await session.execute(select(VerificationResult))).scalar_one()
+        assert vr.outcome is VerificationOutcome.PASSED
 
 
 # --------------------------------------------------------------------------
 # Executor path — the synthesized declare_verification is TERMINAL.
 # --------------------------------------------------------------------------
-
-
-async def test_executor_synthesized_declare_is_terminal_and_verifies(tmp_path: Path) -> None:
-    """A coding-agent executor (claude_code / codex / opencode) is single-shot:
-    it does ALL its work in one turn and ends with a ``<verification-contract>``
-    block, which the ExecutorAdapter turns into a synthesized
-    ``declare_verification`` tool call (id ``e30-declare-verification``) on
-    EVERY turn. The loop only reaches verification when ``tool_calls`` is empty
-    — which the executor never returns — so without treating the synthesized
-    declare as terminal the loop spins to its round cap and never verifies
-    (live dogfood: claude/sonnet emitted the contract reliably every turn → the
-    run round-capped instead of producing a deliverable).
-
-    The fix: once the executor's synthesized declare has registered a contract,
-    THAT turn is terminal → proceed straight to verification. This test scripts
-    a SINGLE such turn with NO trailing empty-tool_calls turn; if the loop still
-    demands one, ScriptedLlm is asked for a second turn and raises.
-    """
-    declare = LoopToolCall(
-        id="e30-declare-verification",
-        name="declare_verification",
-        arguments={"checks": [{"kind": "command", "command": "true"}]},
-    )
-    llm = ScriptedLlm([LoopTurn(content="did the work in one shot", tool_calls=(declare,))])
-    async with memory_session() as session:
-        run = await _make_run(session)
-        orch = RunOrchestrator(session=session, llm=llm, sandbox_manager=NoopSandboxManager())
-        result = await orch.run(run=run, workspace_dir=tmp_path)
-
-        assert result.outcome == "verified"
-        # Exactly ONE work turn — the synthesized declare was terminal, no
-        # wasteful re-prompt of the single-shot executor.
-        assert len(llm.calls) == 1
-
-        vr = (await session.execute(select(VerificationResult))).scalar_one()
-        assert vr.outcome is VerificationOutcome.PASSED
 
 
 # --------------------------------------------------------------------------

@@ -27,21 +27,16 @@ session transaction boundary (these functions ``add`` / ``flush`` but never
 from __future__ import annotations
 
 import asyncio
-import base64
-import binascii
 import json
 import uuid
 from datetime import UTC, datetime
-from pathlib import Path
 from typing import Any, Protocol
 
 import structlog
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.config import get_settings
 from backend.executors.db import ExecutorTaskRow, WorkerRow
-from backend.storage.artifact_store import ArtifactStore, LocalFilesystemArtifactStore
 
 logger = structlog.get_logger(__name__)
 
@@ -408,45 +403,6 @@ async def cancel_task(
     )
 
 
-def _persist_task_files(
-    *,
-    run_id: uuid.UUID,
-    store: ArtifactStore,
-    files: list[dict[str, Any]],
-) -> list[str]:
-    """Persist worker-returned files into ``store`` under the run (B1).
-
-    The traversal guard is now CENTRALIZED in
-    :class:`~backend.storage.artifact_store.LocalFilesystemArtifactStore` (a
-    ``../`` ref raises :class:`ValueError`). Truncation-marker entries
-    (``truncated: True``, empty content) are recorded as refs but written
-    empty. Returns the accepted relative paths (the recorded
-    ``artifact_refs``); a rejected / malformed entry is skipped, never
-    written — same observable behaviour as the pre-lift inline implementation.
-    """
-    accepted: list[str] = []
-    for entry in files:
-        rel = entry.get("path")
-        if not isinstance(rel, str) or not rel:
-            logger.warning("artifact_persist_skipped_no_path", run_id=str(run_id))
-            continue
-        truncated = bool(entry.get("truncated"))
-        try:
-            raw = b"" if truncated else base64.b64decode(entry.get("content_b64") or "")
-        except (binascii.Error, ValueError):
-            logger.warning("artifact_persist_bad_base64", run_id=str(run_id), ref=rel)
-            continue
-        try:
-            store.put(run_id, rel, raw)
-        except ValueError:
-            # Traversal / absolute-path refs are refused by the store's
-            # centralized guard. Skip + log; never written, never recorded.
-            logger.warning("artifact_persist_rejected_traversal", run_id=str(run_id), ref=rel)
-            continue
-        accepted.append(rel)
-    return accepted
-
-
 async def record_result(
     session: AsyncSession,
     redis: _RedisDispatch,
@@ -455,26 +411,20 @@ async def record_result(
     success: bool,
     output: str,
     error_message: str | None,
-    files: list[dict[str, Any]] | None = None,
-    run_workspace_root: str | None = None,
-    artifact_store: ArtifactStore | None = None,
 ) -> ExecutorTaskRow | None:
     """Close a task ``done`` / ``failed`` from a worker result. ``None`` if unknown.
 
-    B1: when the worker ships ``files`` (each ``{path, content_b64, truncated}``)
-    and the task carries a ``run_id``, they are persisted into ``artifact_store``
-    (the per-run :class:`~backend.storage.artifact_store.ArtifactStore` seam) and
-    their accepted relative paths recorded on ``task.artifact_refs`` — so the
-    existing artifact-read endpoint serves them. A task with ``run_id is None``
-    skips persistence (back-compat).
+    T3 — a result carries NO files. The agent writes to the run's server-side worktree through
+    BSVibe's tools; there is nothing for the worker to ship back and nothing for this to
+    persist. What used to be here (``_persist_task_files``) wrote the worker's scraped copies
+    into ``artifact_store.run_dir(run_id)`` — the SAME directory as the live server worktree —
+    so a file over the 256 KB cap came back as ``truncated`` and was written as ``raw = b""``,
+    ZEROING the agent's real work in place. A deletion, meanwhile, 422-ed the whole result
+    (``WorkerResultFile`` is ``extra="forbid"`` and has no ``deleted`` field), losing the run.
 
-    ``artifact_store`` wins when provided (production passes the singleton from
-    deps). For back-compat with existing callers / tests that pass
-    ``run_workspace_root`` as a string, a
-    :class:`~backend.storage.artifact_store.LocalFilesystemArtifactStore` is
-    built on the fly from that root (or ``settings.run_workspace_root`` when
-    nothing is given). The Protocol-level traversal guard (centralized in the
-    store) replaces the inline ``is_relative_to`` check.
+    The run's ``artifact_refs`` now come from the work tools themselves — the registry records
+    what it wrote and the loop reads it back (``WORK_TOOL_STATE_KEY``), which is the same
+    mechanism the native LiteLLM path has always used.
 
     After the DB row flips terminal, PUBLISH the :func:`done_channel` signal on
     ``redis``. This is the **authoritative** completion signal: a remote worker
@@ -491,26 +441,6 @@ async def record_result(
     task.status = "done" if success else "failed"
     task.output = output
     task.error_message = error_message
-
-    # Persist captured files + record real artifact_refs (B1). Skipped when the
-    # task has no run binding (substrate-only / back-compat) or no files shipped.
-    if files and task.run_id is not None:
-        store = artifact_store or LocalFilesystemArtifactStore(
-            Path(run_workspace_root or get_settings().run_workspace_root)
-        )
-        accepted = await asyncio.to_thread(
-            _persist_task_files,
-            run_id=task.run_id,
-            store=store,
-            files=files,
-        )
-        task.artifact_refs = accepted
-        logger.info(
-            "executor_task_artifacts_persisted",
-            task_id=str(task_id),
-            run_id=str(task.run_id),
-            count=len(accepted),
-        )
 
     await session.flush()
     logger.info(

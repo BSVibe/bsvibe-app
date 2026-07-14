@@ -51,7 +51,6 @@ class ResolverLoopLlm:
             tool_calls=_to_loop_tool_calls(response.tool_calls),
             # Carry the executor's worker-captured files through so the loop
             # records them as the verified deliverable's artifact_refs.
-            artifact_refs=tuple(response.artifact_refs),
         )
 
 

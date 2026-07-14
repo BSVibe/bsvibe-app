@@ -31,7 +31,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import re
 import uuid
 from dataclasses import dataclass, field
 from typing import Any, Protocol, runtime_checkable
@@ -40,7 +39,6 @@ import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from backend.config import Settings
-from backend.knowledge.extraction.worth_remembering import WORTH_REMEMBERING_PRINCIPLE
 from backend.router.accounts.models import ModelAccount
 from backend.router.accounts.predicates import is_executor_account
 from backend.router.llm_client import LlmClient, LlmResponse
@@ -48,7 +46,6 @@ from backend.router.llm_client import LlmClient, LlmResponse
 logger = structlog.get_logger(__name__)
 
 __all__ = [
-    "EXECUTOR_DECLARE_VERIFICATION_ID",
     "ChatMessage",
     "ChatResponse",
     "ChatToolCall",
@@ -94,12 +91,6 @@ class ChatResponse:
     usage_prompt_tokens: int = 0
     usage_completion_tokens: int = 0
     raw: Any = None
-    # Relative paths the worker captured for an executor chat that was bound to
-    # a run (the coding agent's edits in its per-task clone). Empty for the
-    # LiteLLM path and for run-less chat-shaped executor calls. The agent loop
-    # merges these into its ``written_paths`` so the verified Deliverable's
-    # ``artifact_refs`` reflect what the agent actually changed.
-    artifact_refs: tuple[str, ...] = ()
 
 
 # ---------------------------------------------------------------------------
@@ -492,20 +483,15 @@ class ExecutorAdapter:
         # identical behaviour across transports.
         system = _system_with_output_language(system)
 
-        # Lift E30 — when ``tools`` is set, give the agent a short reference
-        # of BSVibe's expected verification contract so it can declare one
-        # in its final text. The agent does its actual work using its own
-        # native tools (bash, git, gh, file edit, pytest); BSVibe's tool
-        # registry is here only as a verification-contract template.
-        # tools set → agentic work loop (contract guide); tools None → a
-        # chat-shaped completion (frame / judge / synthesis), so tell the agent
-        # to answer as a raw completion endpoint. Either way ExecutorAdapter.chat
-        # matches LiteLLMAdapter.chat's clean-output contract.
-        effective_system = (
-            _augment_system_for_executor_tools(system, tools)
-            if tools
-            else _augment_system_for_executor_chat(system)
-        )
+        # T3 — the E30 "impedance match" is gone. It rendered BSVibe's tool schemas into the
+        # system prompt as PROSE and told the agent to "use your OWN tools — Read/Edit/Write/
+        # Bash", then parsed a ``<verification-contract>`` block back out of the reply text and
+        # forged a ``declare_verification`` tool call from it. The agent now HAS BSVibe's tools,
+        # for real, over MCP — so it declares its contract by calling the tool.
+        #
+        # A chat turn (tools None) still gets the completion directive: a coding CLI must be
+        # told to answer as a plain completion endpoint.
+        effective_system = system if tools else _augment_system_for_executor_chat(system)
 
         # Lift E19 — when wired with a ``session_factory`` the entire
         # dispatch lifecycle (create_task → dispatch_task → commit →
@@ -734,116 +720,11 @@ class ExecutorAdapter:
             executor_type=executor_type,
             output_chars=len(completed.output or ""),
         )
-        # Lift E30 — when the agent emitted a verification contract block,
-        # synthesize a virtual ``declare_verification`` tool call so the
-        # downstream loop registers the contract and runs verification
-        # exactly as it does for LiteLLM-backed accounts. Absent a contract
-        # block the return shape is the legacy one (``tool_calls=()``) and
-        # the loop nudges the agent on the next cycle.
-        synthesized = _synthesize_executor_tool_calls(completed.output or "")
-        # Surface the worker-captured files (B1 — persisted on the task row when
-        # the chat was bound to a run) so the loop can record them as the
-        # verified Deliverable's artifact_refs. The agent edits files with its
-        # OWN sandbox tools, never the loop's file_write, so without this the
-        # deliverable's artifact_refs comes out empty for every executor run.
-        captured = tuple(completed.artifact_refs or ())
-        return ChatResponse(
-            content=completed.output or "",
-            tool_calls=synthesized,
-            artifact_refs=captured,
-        )
-
-
-# ---------------------------------------------------------------------------
-# Lift E30 — executor-side helpers
-# ---------------------------------------------------------------------------
-
-_E30_TOOL_GUIDE_HEADER = (
-    "## BSVibe coding-agent contract — MANDATORY (Lift E30 / E34 / E37)\n"
-    "\n"
-    "⚠ REQUIRED — your final message MUST end with this exact block:\n"
-    "\n"
-    "<verification-contract>\n"
-    '{"checks": [{"kind": "command", "command": "<shell command BSVibe should re-run to verify>"}]}\n'
-    "</verification-contract>\n"
-    "\n"
-    "Without this block BSVibe ROUTES THE RUN TO HUMAN REVIEW and your "
-    "edits WILL NOT SHIP as a PR. This is the gate to ``verified`` — no "
-    "block, no ship. A trivial pass-through is acceptable when no real "
-    "command makes sense, e.g. "
-    '``{"checks": [{"kind": "command", "command": "test -f <one-of-the-files-you-changed>"}]}``\n'
-    "— but the block ITSELF is non-negotiable.\n"
-    "\n"
-    "OPTIONAL — record what you LEARNED. If, doing this work, you hit a "
-    "non-obvious learning worth remembering, add a ``knowledge`` field to the "
-    "SAME block. ``topic`` is a SHORT human-readable knowledge NAME — a noun "
-    "phrase WITH SPACES (e.g. 'Auth loopback redirect'), NOT a kebab-case or "
-    "snake_case slug, a task sentence, or a file path:\n"
-    "\n"
-    "Both ``topic`` and ``insight`` are user-facing PROSE (the note's title and "
-    "body), NOT identifiers — write BOTH in the SAME language as the rest of your "
-    "user-facing output (the workspace language stated above), never forced "
-    "English. Keep code, symbols, and file paths verbatim.\n"
-    "\n"
-    "<verification-contract>\n"
-    '{"checks": [ ... ], "knowledge": {"topic": "<short knowledge name>", '
-    '"insight": "<what to remember + why, 1-3 sentences>"}}\n'
-    "</verification-contract>\n"
-    "\n"
-    + WORTH_REMEMBERING_PRINCIPLE
-    + " Only YOU — who did the work — can see the tacit knowledge (the "
-    "dead-ends, the constraint you hit mid-work, why you rejected an approach) "
-    "that never lands in the diff, so no post-hoc reader can recover it. OMIT "
-    "the field entirely for routine work — that is the common case.\n"
-    "\n"
-    "---\n"
-    "\n"
-    "You are a coding agent running inside a sandbox that ALREADY has the "
-    "product repo checked out at your current working directory (Lift E32). "
-    "Use your OWN tools — Read / Edit / Write / Bash — to read the files, "
-    "make the actual edits, and run tests. BSVibe does NOT call tools on "
-    "your behalf; the agent_loop will not give you another turn unless you "
-    "explicitly fail to declare the verification contract.\n"
-    "\n"
-    "**Do all the work in this single response.** Concretely:\n"
-    "1. Read the files referenced in the user prompt.\n"
-    "2. Make the edits using your Edit / Write tools.\n"
-    "3. Run the verification commands yourself (Bash tool, e.g. ``pytest`` / "
-    "``ruff check``) to confirm they pass BEFORE declaring the contract.\n"
-    "4. End your final message with the MANDATORY contract block shown "
-    "above. (See top of this guide — the block is REQUIRED; a textual "
-    "summary alone is REJECTED.)\n"
-    "\n"
-    "Each check is a shell command whose exit-code-0 means verified. After "
-    "you emit the contract BSVibe re-runs every check in its own sandbox "
-    "and the run lands ``verified`` if all pass — DO NOT just describe what "
-    "to do, DO IT. Planning without editing is the failure mode the loop "
-    "punishes by re-prompting you until contract is declared.\n"
-    "\n"
-    "Capture (Lift E33 + E36): BSVibe records files that ``git status`` "
-    "reports as changed against your post-clone baseline AND files in any "
-    "commits you made on top of ``FETCH_HEAD``. ``git checkout -b … && git "
-    "commit`` is fine — both committed and working-tree edits surface.\n"
-    "\n"
-    "BSVibe's tool registry (FOR REFERENCE — you do NOT call these; emit "
-    "the contract instead):\n"
-)
-
-_E30_CONTRACT_RE = re.compile(
-    r"<verification-contract>\s*(?P<json>\{.*?\})\s*</verification-contract>",
-    re.DOTALL,
-)
-
-#: Stable id stamped on the synthesized ``declare_verification`` tool call so
-#: the agent loop can recognize it as the SINGLE-SHOT executor's terminal
-#: declaration. Coding-agent executors (claude_code / codex / opencode) do all
-#: their work in one ``--print`` turn and re-emit the ``<verification-contract>``
-#: block EVERY turn, so this synthesized call appears on every turn and
-#: ``tool_calls`` is never empty. The loop reaches verification only on an
-#: empty-tool_calls turn (a LiteLLM model signalling "done"), which the
-#: executor never returns — so the loop treats this id as terminal and verifies
-#: straight away (see ``backend.workflow.application._drive_loop``).
-EXECUTOR_DECLARE_VERIFICATION_ID = "e30-declare-verification"
+        # T3 — no synthesized tool call, and nothing scraped to surface. The agent's real tool
+        # calls went to the MCP work tools (server-side); the loop reads what it declared and
+        # wrote from the run's own state. An executor turn returns plain text, exactly like a
+        # LiteLLM completion does.
+        return ChatResponse(content=completed.output or "")
 
 
 #: Directive that makes a coding-agent executor behave like a raw LLM completion
@@ -871,68 +752,6 @@ def _augment_system_for_executor_chat(system: str) -> str:
     behaviourally identical to ``LiteLLMAdapter.chat`` for chat-shaped callers —
     one ``chat`` contract, same clean output, regardless of transport."""
     return (system.rstrip() if system else "") + _EXECUTOR_COMPLETION_DIRECTIVE
-
-
-def _augment_system_for_executor_tools(system: str, tools: list[dict[str, Any]] | None) -> str:
-    """Lift E30 — append a verification-contract guide + tool reference to
-    the caller's system prompt so a coding-agent executor knows what BSVibe
-    needs from it.
-
-    The agent doesn't call BSVibe tools (its OWN sandbox tools — bash, git,
-    gh, file edit — do the work). The tools list is included only so the
-    agent can phrase its verification contract in the same vocabulary the
-    rest of the system uses.
-    """
-    if not tools:
-        return system
-    lines: list[str] = [system.rstrip() if system else "", "", _E30_TOOL_GUIDE_HEADER]
-    for tool in tools:
-        # OpenAI / Anthropic tool shapes share ``{"type": "function",
-        # "function": {"name": ..., "description": ...}}``. Tolerate both.
-        fn = tool.get("function") if isinstance(tool, dict) else None
-        name = (fn or tool).get("name") if isinstance(fn or tool, dict) else None
-        desc = (fn or tool).get("description") if isinstance(fn or tool, dict) else None
-        if not name:
-            continue
-        first = (desc or "").splitlines()[0][:200] if desc else ""
-        lines.append(f"- ``{name}`` — {first}" if first else f"- ``{name}``")
-    return "\n".join(lines)
-
-
-def _synthesize_executor_tool_calls(output: str) -> tuple[ChatToolCall, ...]:
-    """Lift E30 — extract the agent's ``<verification-contract>{…}</…>``
-    block and turn it into a synthetic ``declare_verification`` tool call so
-    the downstream loop registers the contract through the existing path.
-
-    On a missing or malformed block we return ``()`` so the loop's
-    no-tool-calls branch fires (it will nudge the agent on the next cycle).
-    Best-effort by design — the agent's text is the source of truth, this
-    layer only forwards what was declared.
-    """
-    if not output:
-        return ()
-    match = _E30_CONTRACT_RE.search(output)
-    if match is None:
-        return ()
-    raw_json = match.group("json").strip()
-    try:
-        parsed = json.loads(raw_json)
-    except (TypeError, ValueError):
-        logger.warning("executor_adapter_contract_parse_failed", raw=raw_json[:200])
-        return ()
-    if not isinstance(parsed, dict):
-        return ()
-    # The synthesized call goes through the same ``ToolRegistry`` invoker
-    # as a LiteLLM-emitted ``declare_verification`` call, so the arguments
-    # must be the same JSON the registry's handler accepts. The handler is
-    # tolerant of unknown keys; we forward whatever the agent declared.
-    return (
-        ChatToolCall(
-            id=EXECUTOR_DECLARE_VERIFICATION_ID,
-            name="declare_verification",
-            arguments_json=json.dumps(parsed),
-        ),
-    )
 
 
 # ---------------------------------------------------------------------------
