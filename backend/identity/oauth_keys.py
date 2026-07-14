@@ -47,6 +47,7 @@ import threading
 from dataclasses import dataclass
 from typing import Any
 
+import structlog
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 
@@ -132,6 +133,46 @@ def build_signing_key(pem: str | None) -> SigningKey:
 # Process-wide singleton — built once on first use.
 _lock = threading.Lock()
 _signing_key: SigningKey | None = None
+
+
+logger = structlog.get_logger(__name__)
+
+
+def ensure_signing_key_is_shareable(*, pem: str, environment: str) -> None:
+    """Refuse to run outside dev on an EPHEMERAL signing key.
+
+    ``build_signing_key(None)`` mints a fresh key per process. That is fine on a laptop, where
+    one process both signs and verifies. Anywhere else it is a misconfiguration with two
+    silent, expensive consequences (both measured against prod, 2026-07-14):
+
+    * **Every restart invalidates every token.** Prod had no PEM, so each deploy quietly broke
+      the founder's MCP connection — no error, tokens simply stopped verifying.
+    * **Two processes cannot agree.** A run-scoped task token is minted on the dispatch path
+      (the *worker* container) and verified by the MCP API (the *backend* container). With a
+      per-process key the worker's token can never verify — the ``401 invalid_token`` that
+      blocks the executor redesign.
+
+    A degradation nobody can see is not a degradation; it is a bug waiting to be diagnosed
+    twice. Fail here, at startup, where it is cheap.
+    """
+    if pem.strip():
+        return
+    if environment.lower() in {"dev", "test", "local"}:
+        logger.warning(
+            "oauth_signing_key_ephemeral",
+            note=(
+                "no OAUTH_PRIVATE_KEY_PEM — every restart invalidates every token. Fine for a "
+                "single local process; never for a deployment."
+            ),
+        )
+        return
+    raise RuntimeError(
+        "BSVIBE_OAUTH_PRIVATE_KEY_PEM is not set. Without it every process mints its own "
+        "signing key: tokens die on each restart, and a token minted by the worker can never "
+        "verify at the backend. Generate one "
+        "(openssl ecparam -genkey -name prime256v1 -noout | openssl pkcs8 -topk8 -nocrypt) "
+        "and give the SAME value to every container."
+    )
 
 
 def get_signing_key() -> SigningKey:

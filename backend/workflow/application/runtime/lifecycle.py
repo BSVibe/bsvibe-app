@@ -70,6 +70,20 @@ async def run_workers() -> None:
     Default ``worker_mode="db_polling"`` runs the poll-loop runtime exactly as
     before; ``worker_mode="redis_streams"`` runs the Redis-consumer runtime.
     """
+    # T2b-1 — this process MINTS the run-scoped task token that the backend's MCP API
+    # verifies. With a per-process ephemeral signing key the two can never agree (measured:
+    # 401 invalid_token), and every restart silently invalidates every outstanding token.
+    # Refuse to boot a deployment without a shared PEM rather than mint tokens nobody can
+    # verify.
+    from backend.identity.oauth_keys import (  # noqa: PLC0415
+        ensure_signing_key_is_shareable,
+    )
+
+    _settings = get_settings()
+    ensure_signing_key_is_shareable(
+        pem=_settings.oauth_private_key_pem, environment=_settings.environment
+    )
+
     settings = get_settings()
     register_audit_subscriber()
     engine = create_async_engine(settings.database_url, future=True)

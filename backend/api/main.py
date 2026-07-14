@@ -37,6 +37,7 @@ from backend.connectors.auth.bootstrap import (
     register_configured_providers,
 )
 from backend.extensions.plugin.bootstrap import discover_webhook_parsers
+from backend.identity.oauth_keys import ensure_signing_key_is_shareable
 from backend.mcp.lifespan import mcp_lifespan
 from backend.router.accounts.crypto import CredentialCipher, _key_from_settings
 from backend.shared.core.logging import configure_logging
@@ -47,6 +48,13 @@ logger = structlog.get_logger(__name__)
 
 def create_app() -> FastAPI:
     settings = get_settings()
+    # T2b-1 — refuse to boot a deployment on an EPHEMERAL OAuth signing key. Without a shared
+    # PEM every process mints its own: tokens die on each restart (measured — several deploys
+    # on 2026-07-13/14 silently broke the founder's MCP connection), and a token minted by the
+    # worker can never verify here (the 401 that blocks the executor redesign).
+    ensure_signing_key_is_shareable(
+        pem=settings.oauth_private_key_pem, environment=settings.environment
+    )
     configure_logging(level="INFO", service_name="bsvibe-app")
     register_audit_subscriber()
     # Lift Q3 / R2c — populate the process-wide WebhookParserRegistry so the
