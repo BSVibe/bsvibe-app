@@ -1,0 +1,1134 @@
+[
+  {
+    "top_k": 3,
+    "min_similarity": 0.5,
+    "hit_rate": 0.8,
+    "mean_recall": 0.75,
+    "misses": [
+      "워커는 태스크를 어떻게 받아가?",
+      "샌드박스는 어떻게 추상화했어?"
+    ],
+    "results": [
+      {
+        "q": "웹훅 서명 검증은 플랫폼마다 어떻게 달라?",
+        "kind": "specific",
+        "expected": [
+          "플랫폼별-웹훅-서명-검증"
+        ],
+        "retrieved": [
+          "garden/seedling/플랫폼별-웹훅-서명-검증-방식-비교-discordslacktelegramgithubsentry.md",
+          "concepts/active/signature-verification.md",
+          "garden/seedling/unified-webhook-verification-interface-across-diverse-crypto-schemes.md"
+        ]
+      },
+      {
+        "q": "워커는 태스크를 어떻게 받아가?",
+        "kind": "specific",
+        "expected": [
+          "redis-streams-for-worker-task-polling"
+        ],
+        "retrieved": [
+          "concepts/active/capacity-aware-dispatch.md",
+          "concepts/active/heartbeat.md",
+          "garden/seedling/worker-family-baseworker-shell-protocol-based-substrate.md"
+        ]
+      },
+      {
+        "q": "이벤트 버스에서 구독자가 예외를 던지면 어떻게 돼?",
+        "kind": "specific",
+        "expected": [
+          "eventbus-publish"
+        ],
+        "retrieved": [
+          "concepts/active/pub-sub.md",
+          "garden/seedling/eventbus-publish는-구독자-예외를-삼켜야-한다.md",
+          "garden/seedling/eventbus-subscriber-failure-isolation-via-per-subscriber-tryexcept.md"
+        ]
+      },
+      {
+        "q": "run을 취소하면 pending decision은 정리돼?",
+        "kind": "specific",
+        "expected": [
+          "run-취소만으로는-pending-decision"
+        ],
+        "retrieved": [
+          "garden/seedling/run-취소만으로는-pending-decision-레코드가-정리되지-않음.md",
+          "concepts/active/decision-lifecycle.md",
+          "concepts/active/cascade-cleanup.md"
+        ]
+      },
+      {
+        "q": "비밀번호 재설정할 때 이메일 존재 여부가 노출되나?",
+        "kind": "specific",
+        "expected": [
+          "gotrue-비밀번호-재설정",
+          "인증-조회-실패를-구분-불가능하게"
+        ],
+        "retrieved": [
+          "garden/seedling/gotrue-비밀번호-재설정은-이메일-존재-여부와-무관하게-항상-200-반환.md",
+          "concepts/active/email-enumeration.md",
+          "concepts/active/supabase.md"
+        ]
+      },
+      {
+        "q": "샌드박스는 어떻게 추상화했어?",
+        "kind": "specific",
+        "expected": [
+          "protocol-based-sandbox"
+        ],
+        "retrieved": []
+      },
+      {
+        "q": "LLM이 enum 값을 이상하게 뱉으면 어떻게 처리해?",
+        "kind": "specific",
+        "expected": [
+          "llm-enum-출력은"
+        ],
+        "retrieved": [
+          "garden/seedling/llm-구조화-출력-검증-허용되지-않은-enum-값은-예외-대신-조용히-drop.md",
+          "concepts/active/enum-guard.md",
+          "garden/seedling/llm-enum-출력은-문자열-완전-일치일-때만-신뢰-아니면-버린다.md"
+        ]
+      },
+      {
+        "q": "브랜치에서 그 브랜치만의 변경분을 어떻게 뽑아?",
+        "kind": "specific",
+        "expected": [
+          "git-diff-세-점-연산자"
+        ],
+        "retrieved": [
+          "garden/seedling/git-diff-세-점-연산자로-브랜치-고유-변경분만-정확히-포착.md",
+          "concepts/active/merge-base.md",
+          "concepts/active/parallel-branches.md"
+        ]
+      },
+      {
+        "q": "지식이 노이즈로 쌓이는 건 어떻게 막아?",
+        "kind": "specific",
+        "expected": [
+          "지식-추출의-기본값은-보존-없음"
+        ],
+        "retrieved": [
+          "garden/seedling/지식-추출의-기본값은-보존-없음이어야-노이즈-축적을-막는다.md",
+          "concepts/active/knowledge-management.md",
+          "concepts/active/signal-to-noise.md"
+        ]
+      },
+      {
+        "q": "남의 워크스페이스 리소스에 접근하면 어떤 응답이 나가?",
+        "kind": "specific",
+        "expected": [
+          "비회원-워크스페이스-접근"
+        ],
+        "retrieved": [
+          "garden/seedling/비회원-워크스페이스-접근-시-403-대신-404-반환.md",
+          "garden/seedling/return-404-not-403-for-authorization-failures-to-prevent-id-enumeration.md",
+          "concepts/active/information-leakage.md"
+        ]
+      },
+      {
+        "q": "현 프로젝트 상황 설명해줘",
+        "kind": "broad",
+        "expected": [],
+        "retrieved": [
+          "garden/seedling/executor-어댑터의-anthropic_auth_token-누출-방지-패턴.md",
+          "concepts/merged/background-task.md"
+        ]
+      },
+      {
+        "q": "지금 어디까지 구현됐어?",
+        "kind": "broad",
+        "expected": [],
+        "retrieved": []
+      },
+      {
+        "q": "이 프로젝트 아키텍처를 전체적으로 설명해줘",
+        "kind": "broad",
+        "expected": [],
+        "retrieved": [
+          "concepts/merged/mixin-architecture.md",
+          "concepts/merged/component-architecture.md",
+          "concepts/merged/architecture.md"
+        ]
+      }
+    ]
+  },
+  {
+    "top_k": 8,
+    "min_similarity": 0.5,
+    "hit_rate": 0.8,
+    "mean_recall": 0.8,
+    "misses": [
+      "워커는 태스크를 어떻게 받아가?",
+      "샌드박스는 어떻게 추상화했어?"
+    ],
+    "results": [
+      {
+        "q": "웹훅 서명 검증은 플랫폼마다 어떻게 달라?",
+        "kind": "specific",
+        "expected": [
+          "플랫폼별-웹훅-서명-검증"
+        ],
+        "retrieved": [
+          "garden/seedling/플랫폼별-웹훅-서명-검증-방식-비교-discordslacktelegramgithubsentry.md",
+          "concepts/active/signature-verification.md",
+          "garden/seedling/unified-webhook-verification-interface-across-diverse-crypto-schemes.md",
+          "concepts/active/webhook-integration.md",
+          "garden/seedling/telegram-웹훅은-hmac-서명-없이-공유-시크릿-토큰만-사용.md",
+          "concepts/active/webhook-security.md",
+          "concepts/active/hmac.md",
+          "garden/seedling/벤더별-서명-오류를-단일-webhooksignatureerror로-정규화.md"
+        ]
+      },
+      {
+        "q": "워커는 태스크를 어떻게 받아가?",
+        "kind": "specific",
+        "expected": [
+          "redis-streams-for-worker-task-polling"
+        ],
+        "retrieved": [
+          "concepts/active/capacity-aware-dispatch.md",
+          "concepts/active/heartbeat.md",
+          "garden/seedling/worker-family-baseworker-shell-protocol-based-substrate.md",
+          "garden/seedling/포화된-워커에-작업-디스패치-시-타임아웃-무음-실패-함정.md",
+          "garden/seedling/용량-인지-디스패치-하트비트에-in_flight-카운트-누락-시-600s-타임아웃-폭발.md",
+          "concepts/active/worker-architecture.md",
+          "concepts/active/sweep-worker.md",
+          "concepts/active/orchestration.md"
+        ]
+      },
+      {
+        "q": "이벤트 버스에서 구독자가 예외를 던지면 어떻게 돼?",
+        "kind": "specific",
+        "expected": [
+          "eventbus-publish"
+        ],
+        "retrieved": [
+          "concepts/active/pub-sub.md",
+          "garden/seedling/eventbus-publish는-구독자-예외를-삼켜야-한다.md",
+          "garden/seedling/eventbus-subscriber-failure-isolation-via-per-subscriber-tryexcept.md",
+          "garden/seedling/이벤트-구독자-임베딩-함수는-절대-예외를-던지지-않고-소프트-실패해야-한다.md",
+          "concepts/active/error-isolation.md",
+          "concepts/active/event-subscriber.md",
+          "concepts/active/async-safety.md",
+          "garden/seedling/safe_emit-audit-emission-must-never-break-the-domain-write.md"
+        ]
+      },
+      {
+        "q": "run을 취소하면 pending decision은 정리돼?",
+        "kind": "specific",
+        "expected": [
+          "run-취소만으로는-pending-decision"
+        ],
+        "retrieved": [
+          "garden/seedling/run-취소만으로는-pending-decision-레코드가-정리되지-않음.md",
+          "concepts/active/decision-lifecycle.md",
+          "concepts/active/cascade-cleanup.md",
+          "concepts/active/cooperative-cancel.md",
+          "garden/seedling/승인-대기-중-상태-변화-시-모든-검증을-재실행해야-한다.md",
+          "concepts/active/orm-identity-map.md",
+          "garden/seedling/priority-ordered-first-match-rule-resolution-with-default-fallback.md",
+          "concepts/active/concurrent-sessions.md"
+        ]
+      },
+      {
+        "q": "비밀번호 재설정할 때 이메일 존재 여부가 노출되나?",
+        "kind": "specific",
+        "expected": [
+          "gotrue-비밀번호-재설정",
+          "인증-조회-실패를-구분-불가능하게"
+        ],
+        "retrieved": [
+          "garden/seedling/gotrue-비밀번호-재설정은-이메일-존재-여부와-무관하게-항상-200-반환.md",
+          "concepts/active/email-enumeration.md",
+          "concepts/active/supabase.md",
+          "garden/seedling/인증-조회-실패를-구분-불가능하게-만들어-정보-누출-차단.md",
+          "garden/seedling/커넥터-계정-단일-암호화-시크릿-비밀-아닌-값-extra_credentials-분리.md",
+          "concepts/active/schema-design.md",
+          "concepts/active/security.md",
+          "concepts/active/token-exposure.md"
+        ]
+      },
+      {
+        "q": "샌드박스는 어떻게 추상화했어?",
+        "kind": "specific",
+        "expected": [
+          "protocol-based-sandbox"
+        ],
+        "retrieved": []
+      },
+      {
+        "q": "LLM이 enum 값을 이상하게 뱉으면 어떻게 처리해?",
+        "kind": "specific",
+        "expected": [
+          "llm-enum-출력은"
+        ],
+        "retrieved": [
+          "garden/seedling/llm-구조화-출력-검증-허용되지-않은-enum-값은-예외-대신-조용히-drop.md",
+          "concepts/active/enum-guard.md",
+          "garden/seedling/llm-enum-출력은-문자열-완전-일치일-때만-신뢰-아니면-버린다.md",
+          "concepts/merged/llm-error-handling.md",
+          "concepts/active/enum-safety.md",
+          "garden/seedling/llm-extraction-with-deterministic-graceful-degradation.md",
+          "concepts/active/llm-output-validation.md",
+          "concepts/active/retry-loop.md"
+        ]
+      },
+      {
+        "q": "브랜치에서 그 브랜치만의 변경분을 어떻게 뽑아?",
+        "kind": "specific",
+        "expected": [
+          "git-diff-세-점-연산자"
+        ],
+        "retrieved": [
+          "garden/seedling/git-diff-세-점-연산자로-브랜치-고유-변경분만-정확히-포착.md",
+          "concepts/active/merge-base.md",
+          "concepts/active/parallel-branches.md",
+          "concepts/active/diff.md"
+        ]
+      },
+      {
+        "q": "지식이 노이즈로 쌓이는 건 어떻게 막아?",
+        "kind": "specific",
+        "expected": [
+          "지식-추출의-기본값은-보존-없음"
+        ],
+        "retrieved": [
+          "garden/seedling/지식-추출의-기본값은-보존-없음이어야-노이즈-축적을-막는다.md",
+          "concepts/active/knowledge-management.md",
+          "concepts/active/signal-to-noise.md"
+        ]
+      },
+      {
+        "q": "남의 워크스페이스 리소스에 접근하면 어떤 응답이 나가?",
+        "kind": "specific",
+        "expected": [
+          "비회원-워크스페이스-접근"
+        ],
+        "retrieved": [
+          "garden/seedling/비회원-워크스페이스-접근-시-403-대신-404-반환.md",
+          "garden/seedling/return-404-not-403-for-authorization-failures-to-prevent-id-enumeration.md",
+          "concepts/active/information-leakage.md",
+          "concepts/active/null-response.md",
+          "garden/seedling/다중-테넌트-레포지토리-get은-workspace_id로-범위-제한해-존재-유출-방지.md",
+          "garden/seedling/connector-credential-resolution-hierarchy.md",
+          "concepts/active/credential-resolution.md",
+          "concepts/merged/approval-workflow.md"
+        ]
+      },
+      {
+        "q": "현 프로젝트 상황 설명해줘",
+        "kind": "broad",
+        "expected": [],
+        "retrieved": [
+          "garden/seedling/executor-어댑터의-anthropic_auth_token-누출-방지-패턴.md",
+          "concepts/merged/background-task.md"
+        ]
+      },
+      {
+        "q": "지금 어디까지 구현됐어?",
+        "kind": "broad",
+        "expected": [],
+        "retrieved": []
+      },
+      {
+        "q": "이 프로젝트 아키텍처를 전체적으로 설명해줘",
+        "kind": "broad",
+        "expected": [],
+        "retrieved": [
+          "concepts/merged/mixin-architecture.md",
+          "concepts/merged/component-architecture.md",
+          "concepts/merged/architecture.md",
+          "concepts/merged/mcp-architecture.md",
+          "concepts/merged/information-architecture.md",
+          "concepts/merged/agent-architecture.md"
+        ]
+      }
+    ]
+  },
+  {
+    "top_k": 8,
+    "min_similarity": 0.35,
+    "hit_rate": 0.9,
+    "mean_recall": 0.9,
+    "misses": [
+      "워커는 태스크를 어떻게 받아가?"
+    ],
+    "results": [
+      {
+        "q": "웹훅 서명 검증은 플랫폼마다 어떻게 달라?",
+        "kind": "specific",
+        "expected": [
+          "플랫폼별-웹훅-서명-검증"
+        ],
+        "retrieved": [
+          "garden/seedling/플랫폼별-웹훅-서명-검증-방식-비교-discordslacktelegramgithubsentry.md",
+          "concepts/active/signature-verification.md",
+          "garden/seedling/unified-webhook-verification-interface-across-diverse-crypto-schemes.md",
+          "concepts/active/webhook-integration.md",
+          "garden/seedling/telegram-웹훅은-hmac-서명-없이-공유-시크릿-토큰만-사용.md",
+          "concepts/active/webhook-security.md",
+          "concepts/active/hmac.md",
+          "garden/seedling/벤더별-서명-오류를-단일-webhooksignatureerror로-정규화.md"
+        ]
+      },
+      {
+        "q": "워커는 태스크를 어떻게 받아가?",
+        "kind": "specific",
+        "expected": [
+          "redis-streams-for-worker-task-polling"
+        ],
+        "retrieved": [
+          "concepts/active/capacity-aware-dispatch.md",
+          "concepts/active/heartbeat.md",
+          "garden/seedling/worker-family-baseworker-shell-protocol-based-substrate.md",
+          "garden/seedling/포화된-워커에-작업-디스패치-시-타임아웃-무음-실패-함정.md",
+          "garden/seedling/용량-인지-디스패치-하트비트에-in_flight-카운트-누락-시-600s-타임아웃-폭발.md",
+          "concepts/active/worker-architecture.md",
+          "concepts/active/sweep-worker.md",
+          "concepts/active/orchestration.md"
+        ]
+      },
+      {
+        "q": "이벤트 버스에서 구독자가 예외를 던지면 어떻게 돼?",
+        "kind": "specific",
+        "expected": [
+          "eventbus-publish"
+        ],
+        "retrieved": [
+          "concepts/active/pub-sub.md",
+          "garden/seedling/eventbus-publish는-구독자-예외를-삼켜야-한다.md",
+          "garden/seedling/eventbus-subscriber-failure-isolation-via-per-subscriber-tryexcept.md",
+          "garden/seedling/이벤트-구독자-임베딩-함수는-절대-예외를-던지지-않고-소프트-실패해야-한다.md",
+          "concepts/active/error-isolation.md",
+          "concepts/active/event-subscriber.md",
+          "concepts/active/async-safety.md",
+          "garden/seedling/safe_emit-audit-emission-must-never-break-the-domain-write.md"
+        ]
+      },
+      {
+        "q": "run을 취소하면 pending decision은 정리돼?",
+        "kind": "specific",
+        "expected": [
+          "run-취소만으로는-pending-decision"
+        ],
+        "retrieved": [
+          "garden/seedling/run-취소만으로는-pending-decision-레코드가-정리되지-않음.md",
+          "concepts/active/decision-lifecycle.md",
+          "concepts/active/cascade-cleanup.md",
+          "concepts/active/cooperative-cancel.md",
+          "garden/seedling/승인-대기-중-상태-변화-시-모든-검증을-재실행해야-한다.md",
+          "concepts/active/orm-identity-map.md",
+          "garden/seedling/priority-ordered-first-match-rule-resolution-with-default-fallback.md",
+          "concepts/active/concurrent-sessions.md"
+        ]
+      },
+      {
+        "q": "비밀번호 재설정할 때 이메일 존재 여부가 노출되나?",
+        "kind": "specific",
+        "expected": [
+          "gotrue-비밀번호-재설정",
+          "인증-조회-실패를-구분-불가능하게"
+        ],
+        "retrieved": [
+          "garden/seedling/gotrue-비밀번호-재설정은-이메일-존재-여부와-무관하게-항상-200-반환.md",
+          "concepts/active/email-enumeration.md",
+          "concepts/active/supabase.md",
+          "garden/seedling/인증-조회-실패를-구분-불가능하게-만들어-정보-누출-차단.md",
+          "garden/seedling/커넥터-계정-단일-암호화-시크릿-비밀-아닌-값-extra_credentials-분리.md",
+          "concepts/active/schema-design.md",
+          "concepts/active/security.md",
+          "concepts/active/token-exposure.md"
+        ]
+      },
+      {
+        "q": "샌드박스는 어떻게 추상화했어?",
+        "kind": "specific",
+        "expected": [
+          "protocol-based-sandbox"
+        ],
+        "retrieved": [
+          "concepts/active/sandbox.md",
+          "garden/seedling/per-project-sandbox-with-lazy-acquire-reuse-and-idle-reap.md",
+          "concepts/active/abstraction-pattern.md",
+          "concepts/active/defensive-design.md",
+          "concepts/active/resource-lifecycle.md",
+          "garden/seedling/protocol-based-sandbox-with-dockernoop-dual-implementation.md",
+          "garden/seedling/샌드박스가-활성화-상태에서-구성-실패-시-호스트로-조용히-폴백하지-말고-예외를-발생시켜라.md",
+          "concepts/active/security-invariant.md"
+        ]
+      },
+      {
+        "q": "LLM이 enum 값을 이상하게 뱉으면 어떻게 처리해?",
+        "kind": "specific",
+        "expected": [
+          "llm-enum-출력은"
+        ],
+        "retrieved": [
+          "garden/seedling/llm-구조화-출력-검증-허용되지-않은-enum-값은-예외-대신-조용히-drop.md",
+          "concepts/active/enum-guard.md",
+          "garden/seedling/llm-enum-출력은-문자열-완전-일치일-때만-신뢰-아니면-버린다.md",
+          "concepts/merged/llm-error-handling.md",
+          "concepts/active/enum-safety.md",
+          "garden/seedling/llm-extraction-with-deterministic-graceful-degradation.md",
+          "concepts/active/llm-output-validation.md",
+          "concepts/active/retry-loop.md"
+        ]
+      },
+      {
+        "q": "브랜치에서 그 브랜치만의 변경분을 어떻게 뽑아?",
+        "kind": "specific",
+        "expected": [
+          "git-diff-세-점-연산자"
+        ],
+        "retrieved": [
+          "garden/seedling/git-diff-세-점-연산자로-브랜치-고유-변경분만-정확히-포착.md",
+          "concepts/active/merge-base.md",
+          "concepts/active/parallel-branches.md",
+          "concepts/active/diff.md",
+          "concepts/active/batch-update.md",
+          "concepts/active/unique-constraint.md",
+          "garden/seedling/two-phase-park-and-assign-for-priority-reordering.md",
+          "garden/seedling/upsert-충돌-해소에-unique-constraint-대신-정렬-기반-tiebreak-사용.md"
+        ]
+      },
+      {
+        "q": "지식이 노이즈로 쌓이는 건 어떻게 막아?",
+        "kind": "specific",
+        "expected": [
+          "지식-추출의-기본값은-보존-없음"
+        ],
+        "retrieved": [
+          "garden/seedling/지식-추출의-기본값은-보존-없음이어야-노이즈-축적을-막는다.md",
+          "concepts/active/knowledge-management.md",
+          "concepts/active/signal-to-noise.md",
+          "garden/seedling/fs-as-sot-deterministic-knowledge-graph.md",
+          "concepts/active/exponential-decay.md",
+          "concepts/active/confidence-decay.md",
+          "garden/seedling/지식-충돌-해소-3단계-캐스케이드-컨텍스트-소스-유형-최신성.md",
+          "garden/seedling/위키링크-강제-검증으로-llm-엔티티-환각-구조적-차단.md"
+        ]
+      },
+      {
+        "q": "남의 워크스페이스 리소스에 접근하면 어떤 응답이 나가?",
+        "kind": "specific",
+        "expected": [
+          "비회원-워크스페이스-접근"
+        ],
+        "retrieved": [
+          "garden/seedling/비회원-워크스페이스-접근-시-403-대신-404-반환.md",
+          "garden/seedling/return-404-not-403-for-authorization-failures-to-prevent-id-enumeration.md",
+          "concepts/active/information-leakage.md",
+          "concepts/active/null-response.md",
+          "garden/seedling/다중-테넌트-레포지토리-get은-workspace_id로-범위-제한해-존재-유출-방지.md",
+          "garden/seedling/connector-credential-resolution-hierarchy.md",
+          "concepts/active/credential-resolution.md",
+          "concepts/merged/approval-workflow.md"
+        ]
+      },
+      {
+        "q": "현 프로젝트 상황 설명해줘",
+        "kind": "broad",
+        "expected": [],
+        "retrieved": [
+          "garden/seedling/executor-어댑터의-anthropic_auth_token-누출-방지-패턴.md",
+          "concepts/merged/background-task.md",
+          "concepts/merged/approval-workflow.md",
+          "concepts/merged/bounded-context.md",
+          "concepts/merged/llm-optimization.md",
+          "concepts/active/protocol-contract.md",
+          "concepts/merged/session-scope.md",
+          "concepts/active/sweep-runner.md"
+        ]
+      },
+      {
+        "q": "지금 어디까지 구현됐어?",
+        "kind": "broad",
+        "expected": [],
+        "retrieved": [
+          "garden/seedling/구현-불가-기능은-정직한-원샷one-shot으로-명시적-연기.md",
+          "concepts/active/defense-in-depth.md",
+          "concepts/active/staged-rollout.md",
+          "concepts/merged/backward-compatibility.md",
+          "garden/seedling/settle-add-a-human-readable-byte-size-formatter-to-the-backend.md",
+          "garden/seedling/settle-add-a-tiny-clamp-utility-to-the-backend.md",
+          "concepts/active/temporal-coupling.md",
+          "concepts/active/backwards-compatibility.md"
+        ]
+      },
+      {
+        "q": "이 프로젝트 아키텍처를 전체적으로 설명해줘",
+        "kind": "broad",
+        "expected": [],
+        "retrieved": [
+          "concepts/merged/mixin-architecture.md",
+          "concepts/merged/component-architecture.md",
+          "concepts/merged/architecture.md",
+          "concepts/merged/mcp-architecture.md",
+          "concepts/merged/information-architecture.md",
+          "concepts/merged/agent-architecture.md",
+          "concepts/active/ux-information-architecture.md",
+          "concepts/active/worker-architecture.md"
+        ]
+      }
+    ]
+  },
+  {
+    "top_k": 12,
+    "min_similarity": 0.35,
+    "hit_rate": 0.9,
+    "mean_recall": 0.9,
+    "misses": [
+      "워커는 태스크를 어떻게 받아가?"
+    ],
+    "results": [
+      {
+        "q": "웹훅 서명 검증은 플랫폼마다 어떻게 달라?",
+        "kind": "specific",
+        "expected": [
+          "플랫폼별-웹훅-서명-검증"
+        ],
+        "retrieved": [
+          "garden/seedling/플랫폼별-웹훅-서명-검증-방식-비교-discordslacktelegramgithubsentry.md",
+          "concepts/active/signature-verification.md",
+          "garden/seedling/unified-webhook-verification-interface-across-diverse-crypto-schemes.md",
+          "concepts/active/webhook-integration.md",
+          "garden/seedling/telegram-웹훅은-hmac-서명-없이-공유-시크릿-토큰만-사용.md",
+          "concepts/active/webhook-security.md",
+          "concepts/active/hmac.md",
+          "garden/seedling/벤더별-서명-오류를-단일-webhooksignatureerror로-정규화.md",
+          "garden/seedling/webhook-hmac-verification-with-constant-time-comparison.md",
+          "concepts/active/timing-attack-prevention.md",
+          "concepts/active/multi-connector.md",
+          "concepts/active/exception-hierarchy.md"
+        ]
+      },
+      {
+        "q": "워커는 태스크를 어떻게 받아가?",
+        "kind": "specific",
+        "expected": [
+          "redis-streams-for-worker-task-polling"
+        ],
+        "retrieved": [
+          "concepts/active/capacity-aware-dispatch.md",
+          "concepts/active/heartbeat.md",
+          "garden/seedling/worker-family-baseworker-shell-protocol-based-substrate.md",
+          "garden/seedling/포화된-워커에-작업-디스패치-시-타임아웃-무음-실패-함정.md",
+          "garden/seedling/용량-인지-디스패치-하트비트에-in_flight-카운트-누락-시-600s-타임아웃-폭발.md",
+          "concepts/active/worker-architecture.md",
+          "concepts/active/sweep-worker.md",
+          "concepts/active/orchestration.md",
+          "garden/seedling/배치-스윕-워커-틱당-감사-이벤트-1건-payload에-전체-item_id-목록-포함.md",
+          "garden/seedling/원격-워커-대신-백엔드가-redis-완료-신호-발행.md",
+          "concepts/active/transactional-cleanup.md",
+          "concepts/active/worker-dispatch.md"
+        ]
+      },
+      {
+        "q": "이벤트 버스에서 구독자가 예외를 던지면 어떻게 돼?",
+        "kind": "specific",
+        "expected": [
+          "eventbus-publish"
+        ],
+        "retrieved": [
+          "concepts/active/pub-sub.md",
+          "garden/seedling/eventbus-publish는-구독자-예외를-삼켜야-한다.md",
+          "garden/seedling/eventbus-subscriber-failure-isolation-via-per-subscriber-tryexcept.md",
+          "garden/seedling/이벤트-구독자-임베딩-함수는-절대-예외를-던지지-않고-소프트-실패해야-한다.md",
+          "concepts/active/error-isolation.md",
+          "concepts/active/event-subscriber.md",
+          "concepts/active/async-safety.md",
+          "garden/seedling/safe_emit-audit-emission-must-never-break-the-domain-write.md",
+          "concepts/active/event-bus.md",
+          "garden/entities/eventbus.md",
+          "concepts/active/event-driven.md",
+          "concepts/active/fault-isolation.md"
+        ]
+      },
+      {
+        "q": "run을 취소하면 pending decision은 정리돼?",
+        "kind": "specific",
+        "expected": [
+          "run-취소만으로는-pending-decision"
+        ],
+        "retrieved": [
+          "garden/seedling/run-취소만으로는-pending-decision-레코드가-정리되지-않음.md",
+          "concepts/active/decision-lifecycle.md",
+          "concepts/active/cascade-cleanup.md",
+          "concepts/active/cooperative-cancel.md",
+          "garden/seedling/승인-대기-중-상태-변화-시-모든-검증을-재실행해야-한다.md",
+          "concepts/active/orm-identity-map.md",
+          "garden/seedling/priority-ordered-first-match-rule-resolution-with-default-fallback.md",
+          "concepts/active/concurrent-sessions.md",
+          "garden/seedling/asyncio-취소-시-abort-post에-분리-클라이언트-사용.md",
+          "garden/seedling/비동기-작업-취소-db-상태-전환이-권위-태스크-취소는-기회적.md",
+          "concepts/active/undo-window.md",
+          "concepts/active/time-dependent-correctness.md"
+        ]
+      },
+      {
+        "q": "비밀번호 재설정할 때 이메일 존재 여부가 노출되나?",
+        "kind": "specific",
+        "expected": [
+          "gotrue-비밀번호-재설정",
+          "인증-조회-실패를-구분-불가능하게"
+        ],
+        "retrieved": [
+          "garden/seedling/gotrue-비밀번호-재설정은-이메일-존재-여부와-무관하게-항상-200-반환.md",
+          "concepts/active/email-enumeration.md",
+          "concepts/active/supabase.md",
+          "garden/seedling/인증-조회-실패를-구분-불가능하게-만들어-정보-누출-차단.md",
+          "garden/seedling/커넥터-계정-단일-암호화-시크릿-비밀-아닌-값-extra_credentials-분리.md",
+          "concepts/active/schema-design.md",
+          "concepts/active/security.md",
+          "concepts/active/token-exposure.md",
+          "garden/seedling/dual-secret-credential-injection-via-extra_credentials.md",
+          "concepts/active/browser-security.md",
+          "concepts/active/credentials.md",
+          "concepts/active/email-delivery.md"
+        ]
+      },
+      {
+        "q": "샌드박스는 어떻게 추상화했어?",
+        "kind": "specific",
+        "expected": [
+          "protocol-based-sandbox"
+        ],
+        "retrieved": [
+          "concepts/active/sandbox.md",
+          "garden/seedling/per-project-sandbox-with-lazy-acquire-reuse-and-idle-reap.md",
+          "concepts/active/abstraction-pattern.md",
+          "concepts/active/defensive-design.md",
+          "concepts/active/resource-lifecycle.md",
+          "garden/seedling/protocol-based-sandbox-with-dockernoop-dual-implementation.md",
+          "garden/seedling/샌드박스가-활성화-상태에서-구성-실패-시-호스트로-조용히-폴백하지-말고-예외를-발생시켜라.md",
+          "concepts/active/security-invariant.md",
+          "concepts/active/explicit-failure.md",
+          "concepts/active/mock-boundary.md",
+          "concepts/active/sandbox-isolation.md",
+          "concepts/active/transactional-outbox.md"
+        ]
+      },
+      {
+        "q": "LLM이 enum 값을 이상하게 뱉으면 어떻게 처리해?",
+        "kind": "specific",
+        "expected": [
+          "llm-enum-출력은"
+        ],
+        "retrieved": [
+          "garden/seedling/llm-구조화-출력-검증-허용되지-않은-enum-값은-예외-대신-조용히-drop.md",
+          "concepts/active/enum-guard.md",
+          "garden/seedling/llm-enum-출력은-문자열-완전-일치일-때만-신뢰-아니면-버린다.md",
+          "concepts/merged/llm-error-handling.md",
+          "concepts/active/enum-safety.md",
+          "garden/seedling/llm-extraction-with-deterministic-graceful-degradation.md",
+          "concepts/active/llm-output-validation.md",
+          "concepts/active/retry-loop.md",
+          "concepts/active/tolerant-parsing.md",
+          "garden/seedling/llm-툴-핸들러는-예외를-올리지-말고-읽기-쉬운-오류-문자열을-반환해야-한다.md",
+          "concepts/active/hallucination-prevention.md",
+          "garden/seedling/llm-json-출력의-모든-필드를-화이트리스트로-검증-후-신뢰.md"
+        ]
+      },
+      {
+        "q": "브랜치에서 그 브랜치만의 변경분을 어떻게 뽑아?",
+        "kind": "specific",
+        "expected": [
+          "git-diff-세-점-연산자"
+        ],
+        "retrieved": [
+          "garden/seedling/git-diff-세-점-연산자로-브랜치-고유-변경분만-정확히-포착.md",
+          "concepts/active/merge-base.md",
+          "concepts/active/parallel-branches.md",
+          "concepts/active/diff.md",
+          "concepts/active/batch-update.md",
+          "concepts/active/unique-constraint.md",
+          "garden/seedling/two-phase-park-and-assign-for-priority-reordering.md",
+          "garden/seedling/upsert-충돌-해소에-unique-constraint-대신-정렬-기반-tiebreak-사용.md",
+          "concepts/active/database-design.md",
+          "concepts/active/database-constraints.md",
+          "garden/seedling/git-merge-x-theirs-전략-옵션이며-theirs는-현재-브랜치가-아닌-병합되는-브랜치를-의미.md",
+          "garden/seedling/chatgpt-내보내기-mapping은-그래프-첫-번째-자식-dfs로-정규-브랜치-추출.md"
+        ]
+      },
+      {
+        "q": "지식이 노이즈로 쌓이는 건 어떻게 막아?",
+        "kind": "specific",
+        "expected": [
+          "지식-추출의-기본값은-보존-없음"
+        ],
+        "retrieved": [
+          "garden/seedling/지식-추출의-기본값은-보존-없음이어야-노이즈-축적을-막는다.md",
+          "concepts/active/knowledge-management.md",
+          "concepts/active/signal-to-noise.md",
+          "garden/seedling/fs-as-sot-deterministic-knowledge-graph.md",
+          "concepts/active/exponential-decay.md",
+          "concepts/active/confidence-decay.md",
+          "garden/seedling/지식-충돌-해소-3단계-캐스케이드-컨텍스트-소스-유형-최신성.md",
+          "garden/seedling/위키링크-강제-검증으로-llm-엔티티-환각-구조적-차단.md",
+          "concepts/active/knowledge-capture.md",
+          "concepts/active/reasoning-model.md",
+          "garden/seedling/dynamic-ontology-identity-from-connections-not-fixed-enums.md",
+          "concepts/active/knowledge-graph.md"
+        ]
+      },
+      {
+        "q": "남의 워크스페이스 리소스에 접근하면 어떤 응답이 나가?",
+        "kind": "specific",
+        "expected": [
+          "비회원-워크스페이스-접근"
+        ],
+        "retrieved": [
+          "garden/seedling/비회원-워크스페이스-접근-시-403-대신-404-반환.md",
+          "garden/seedling/return-404-not-403-for-authorization-failures-to-prevent-id-enumeration.md",
+          "concepts/active/information-leakage.md",
+          "concepts/active/null-response.md",
+          "garden/seedling/다중-테넌트-레포지토리-get은-workspace_id로-범위-제한해-존재-유출-방지.md",
+          "garden/seedling/connector-credential-resolution-hierarchy.md",
+          "concepts/active/credential-resolution.md",
+          "concepts/merged/approval-workflow.md",
+          "concepts/active/async-claim.md",
+          "garden/seedling/scoped-repository-queries-prevent-cross-tenant-data-leakage.md",
+          "concepts/active/multi-tenancy.md",
+          "concepts/active/enumeration-prevention.md"
+        ]
+      },
+      {
+        "q": "현 프로젝트 상황 설명해줘",
+        "kind": "broad",
+        "expected": [],
+        "retrieved": [
+          "garden/seedling/executor-어댑터의-anthropic_auth_token-누출-방지-패턴.md",
+          "concepts/merged/background-task.md",
+          "concepts/merged/approval-workflow.md",
+          "concepts/merged/bounded-context.md",
+          "concepts/merged/llm-optimization.md",
+          "concepts/active/protocol-contract.md",
+          "concepts/merged/session-scope.md",
+          "concepts/active/sweep-runner.md",
+          "concepts/merged/llm-context-window.md",
+          "garden/seedling/now_fn-생성자-주입으로-프로토콜-now-파라미터-무시.md",
+          "garden/seedling/settle-add-a-tiny-title-case-helper-to-the-backend.md",
+          "concepts/merged/git-worktree.md"
+        ]
+      },
+      {
+        "q": "지금 어디까지 구현됐어?",
+        "kind": "broad",
+        "expected": [],
+        "retrieved": [
+          "garden/seedling/구현-불가-기능은-정직한-원샷one-shot으로-명시적-연기.md",
+          "concepts/active/defense-in-depth.md",
+          "concepts/active/staged-rollout.md",
+          "concepts/merged/backward-compatibility.md",
+          "garden/seedling/settle-add-a-human-readable-byte-size-formatter-to-the-backend.md",
+          "garden/seedling/settle-add-a-tiny-clamp-utility-to-the-backend.md",
+          "concepts/active/temporal-coupling.md",
+          "concepts/active/backwards-compatibility.md",
+          "concepts/active/intent-recording.md",
+          "concepts/active/pipeline-handoff.md",
+          "concepts/active/app.md",
+          "garden/seedling/executor-어댑터의-anthropic_auth_token-누출-방지-패턴.md"
+        ]
+      },
+      {
+        "q": "이 프로젝트 아키텍처를 전체적으로 설명해줘",
+        "kind": "broad",
+        "expected": [],
+        "retrieved": [
+          "concepts/merged/mixin-architecture.md",
+          "concepts/merged/component-architecture.md",
+          "concepts/merged/architecture.md",
+          "concepts/merged/mcp-architecture.md",
+          "concepts/merged/information-architecture.md",
+          "concepts/merged/agent-architecture.md",
+          "concepts/active/ux-information-architecture.md",
+          "concepts/active/worker-architecture.md",
+          "concepts/active/pipeline-architecture.md",
+          "garden/seedling/settle-add-a-human-readable-byte-size-formatter-to-the-backend.md",
+          "concepts/active/protocol-design.md",
+          "garden/seedling/lazy-source-artifact-streaming-for-llm-ingest.md"
+        ]
+      }
+    ]
+  },
+  {
+    "top_k": 12,
+    "min_similarity": 0.25,
+    "hit_rate": 0.9,
+    "mean_recall": 0.9,
+    "misses": [
+      "워커는 태스크를 어떻게 받아가?"
+    ],
+    "results": [
+      {
+        "q": "웹훅 서명 검증은 플랫폼마다 어떻게 달라?",
+        "kind": "specific",
+        "expected": [
+          "플랫폼별-웹훅-서명-검증"
+        ],
+        "retrieved": [
+          "garden/seedling/플랫폼별-웹훅-서명-검증-방식-비교-discordslacktelegramgithubsentry.md",
+          "concepts/active/signature-verification.md",
+          "garden/seedling/unified-webhook-verification-interface-across-diverse-crypto-schemes.md",
+          "concepts/active/webhook-integration.md",
+          "garden/seedling/telegram-웹훅은-hmac-서명-없이-공유-시크릿-토큰만-사용.md",
+          "concepts/active/webhook-security.md",
+          "concepts/active/hmac.md",
+          "garden/seedling/벤더별-서명-오류를-단일-webhooksignatureerror로-정규화.md",
+          "garden/seedling/webhook-hmac-verification-with-constant-time-comparison.md",
+          "concepts/active/timing-attack-prevention.md",
+          "concepts/active/multi-connector.md",
+          "concepts/active/exception-hierarchy.md"
+        ]
+      },
+      {
+        "q": "워커는 태스크를 어떻게 받아가?",
+        "kind": "specific",
+        "expected": [
+          "redis-streams-for-worker-task-polling"
+        ],
+        "retrieved": [
+          "concepts/active/capacity-aware-dispatch.md",
+          "concepts/active/heartbeat.md",
+          "garden/seedling/worker-family-baseworker-shell-protocol-based-substrate.md",
+          "garden/seedling/포화된-워커에-작업-디스패치-시-타임아웃-무음-실패-함정.md",
+          "garden/seedling/용량-인지-디스패치-하트비트에-in_flight-카운트-누락-시-600s-타임아웃-폭발.md",
+          "concepts/active/worker-architecture.md",
+          "concepts/active/sweep-worker.md",
+          "concepts/active/orchestration.md",
+          "garden/seedling/배치-스윕-워커-틱당-감사-이벤트-1건-payload에-전체-item_id-목록-포함.md",
+          "garden/seedling/원격-워커-대신-백엔드가-redis-완료-신호-발행.md",
+          "concepts/active/transactional-cleanup.md",
+          "concepts/active/worker-dispatch.md"
+        ]
+      },
+      {
+        "q": "이벤트 버스에서 구독자가 예외를 던지면 어떻게 돼?",
+        "kind": "specific",
+        "expected": [
+          "eventbus-publish"
+        ],
+        "retrieved": [
+          "concepts/active/pub-sub.md",
+          "garden/seedling/eventbus-publish는-구독자-예외를-삼켜야-한다.md",
+          "garden/seedling/eventbus-subscriber-failure-isolation-via-per-subscriber-tryexcept.md",
+          "garden/seedling/이벤트-구독자-임베딩-함수는-절대-예외를-던지지-않고-소프트-실패해야-한다.md",
+          "concepts/active/error-isolation.md",
+          "concepts/active/event-subscriber.md",
+          "concepts/active/async-safety.md",
+          "garden/seedling/safe_emit-audit-emission-must-never-break-the-domain-write.md",
+          "concepts/active/event-bus.md",
+          "garden/entities/eventbus.md",
+          "concepts/active/event-driven.md",
+          "concepts/active/fault-isolation.md"
+        ]
+      },
+      {
+        "q": "run을 취소하면 pending decision은 정리돼?",
+        "kind": "specific",
+        "expected": [
+          "run-취소만으로는-pending-decision"
+        ],
+        "retrieved": [
+          "garden/seedling/run-취소만으로는-pending-decision-레코드가-정리되지-않음.md",
+          "concepts/active/decision-lifecycle.md",
+          "concepts/active/cascade-cleanup.md",
+          "concepts/active/cooperative-cancel.md",
+          "garden/seedling/승인-대기-중-상태-변화-시-모든-검증을-재실행해야-한다.md",
+          "concepts/active/orm-identity-map.md",
+          "garden/seedling/priority-ordered-first-match-rule-resolution-with-default-fallback.md",
+          "concepts/active/concurrent-sessions.md",
+          "garden/seedling/asyncio-취소-시-abort-post에-분리-클라이언트-사용.md",
+          "garden/seedling/비동기-작업-취소-db-상태-전환이-권위-태스크-취소는-기회적.md",
+          "concepts/active/undo-window.md",
+          "concepts/active/time-dependent-correctness.md"
+        ]
+      },
+      {
+        "q": "비밀번호 재설정할 때 이메일 존재 여부가 노출되나?",
+        "kind": "specific",
+        "expected": [
+          "gotrue-비밀번호-재설정",
+          "인증-조회-실패를-구분-불가능하게"
+        ],
+        "retrieved": [
+          "garden/seedling/gotrue-비밀번호-재설정은-이메일-존재-여부와-무관하게-항상-200-반환.md",
+          "concepts/active/email-enumeration.md",
+          "concepts/active/supabase.md",
+          "garden/seedling/인증-조회-실패를-구분-불가능하게-만들어-정보-누출-차단.md",
+          "garden/seedling/커넥터-계정-단일-암호화-시크릿-비밀-아닌-값-extra_credentials-분리.md",
+          "concepts/active/schema-design.md",
+          "concepts/active/security.md",
+          "concepts/active/token-exposure.md",
+          "garden/seedling/dual-secret-credential-injection-via-extra_credentials.md",
+          "concepts/active/browser-security.md",
+          "concepts/active/credentials.md",
+          "concepts/active/email-delivery.md"
+        ]
+      },
+      {
+        "q": "샌드박스는 어떻게 추상화했어?",
+        "kind": "specific",
+        "expected": [
+          "protocol-based-sandbox"
+        ],
+        "retrieved": [
+          "concepts/active/sandbox.md",
+          "garden/seedling/per-project-sandbox-with-lazy-acquire-reuse-and-idle-reap.md",
+          "concepts/active/abstraction-pattern.md",
+          "concepts/active/defensive-design.md",
+          "concepts/active/resource-lifecycle.md",
+          "garden/seedling/protocol-based-sandbox-with-dockernoop-dual-implementation.md",
+          "garden/seedling/샌드박스가-활성화-상태에서-구성-실패-시-호스트로-조용히-폴백하지-말고-예외를-발생시켜라.md",
+          "concepts/active/security-invariant.md",
+          "concepts/active/explicit-failure.md",
+          "concepts/active/mock-boundary.md",
+          "concepts/active/sandbox-isolation.md",
+          "concepts/active/transactional-outbox.md"
+        ]
+      },
+      {
+        "q": "LLM이 enum 값을 이상하게 뱉으면 어떻게 처리해?",
+        "kind": "specific",
+        "expected": [
+          "llm-enum-출력은"
+        ],
+        "retrieved": [
+          "garden/seedling/llm-구조화-출력-검증-허용되지-않은-enum-값은-예외-대신-조용히-drop.md",
+          "concepts/active/enum-guard.md",
+          "garden/seedling/llm-enum-출력은-문자열-완전-일치일-때만-신뢰-아니면-버린다.md",
+          "concepts/merged/llm-error-handling.md",
+          "concepts/active/enum-safety.md",
+          "garden/seedling/llm-extraction-with-deterministic-graceful-degradation.md",
+          "concepts/active/llm-output-validation.md",
+          "concepts/active/retry-loop.md",
+          "concepts/active/tolerant-parsing.md",
+          "garden/seedling/llm-툴-핸들러는-예외를-올리지-말고-읽기-쉬운-오류-문자열을-반환해야-한다.md",
+          "concepts/active/hallucination-prevention.md",
+          "garden/seedling/llm-json-출력의-모든-필드를-화이트리스트로-검증-후-신뢰.md"
+        ]
+      },
+      {
+        "q": "브랜치에서 그 브랜치만의 변경분을 어떻게 뽑아?",
+        "kind": "specific",
+        "expected": [
+          "git-diff-세-점-연산자"
+        ],
+        "retrieved": [
+          "garden/seedling/git-diff-세-점-연산자로-브랜치-고유-변경분만-정확히-포착.md",
+          "concepts/active/merge-base.md",
+          "concepts/active/parallel-branches.md",
+          "concepts/active/diff.md",
+          "concepts/active/batch-update.md",
+          "concepts/active/unique-constraint.md",
+          "garden/seedling/two-phase-park-and-assign-for-priority-reordering.md",
+          "garden/seedling/upsert-충돌-해소에-unique-constraint-대신-정렬-기반-tiebreak-사용.md",
+          "concepts/active/database-design.md",
+          "concepts/active/database-constraints.md",
+          "garden/seedling/git-merge-x-theirs-전략-옵션이며-theirs는-현재-브랜치가-아닌-병합되는-브랜치를-의미.md",
+          "garden/seedling/chatgpt-내보내기-mapping은-그래프-첫-번째-자식-dfs로-정규-브랜치-추출.md"
+        ]
+      },
+      {
+        "q": "지식이 노이즈로 쌓이는 건 어떻게 막아?",
+        "kind": "specific",
+        "expected": [
+          "지식-추출의-기본값은-보존-없음"
+        ],
+        "retrieved": [
+          "garden/seedling/지식-추출의-기본값은-보존-없음이어야-노이즈-축적을-막는다.md",
+          "concepts/active/knowledge-management.md",
+          "concepts/active/signal-to-noise.md",
+          "garden/seedling/fs-as-sot-deterministic-knowledge-graph.md",
+          "concepts/active/exponential-decay.md",
+          "concepts/active/confidence-decay.md",
+          "garden/seedling/지식-충돌-해소-3단계-캐스케이드-컨텍스트-소스-유형-최신성.md",
+          "garden/seedling/위키링크-강제-검증으로-llm-엔티티-환각-구조적-차단.md",
+          "concepts/active/knowledge-capture.md",
+          "concepts/active/reasoning-model.md",
+          "garden/seedling/dynamic-ontology-identity-from-connections-not-fixed-enums.md",
+          "concepts/active/knowledge-graph.md"
+        ]
+      },
+      {
+        "q": "남의 워크스페이스 리소스에 접근하면 어떤 응답이 나가?",
+        "kind": "specific",
+        "expected": [
+          "비회원-워크스페이스-접근"
+        ],
+        "retrieved": [
+          "garden/seedling/비회원-워크스페이스-접근-시-403-대신-404-반환.md",
+          "garden/seedling/return-404-not-403-for-authorization-failures-to-prevent-id-enumeration.md",
+          "concepts/active/information-leakage.md",
+          "concepts/active/null-response.md",
+          "garden/seedling/다중-테넌트-레포지토리-get은-workspace_id로-범위-제한해-존재-유출-방지.md",
+          "garden/seedling/connector-credential-resolution-hierarchy.md",
+          "concepts/active/credential-resolution.md",
+          "concepts/merged/approval-workflow.md",
+          "concepts/active/async-claim.md",
+          "garden/seedling/scoped-repository-queries-prevent-cross-tenant-data-leakage.md",
+          "concepts/active/multi-tenancy.md",
+          "concepts/active/enumeration-prevention.md"
+        ]
+      },
+      {
+        "q": "현 프로젝트 상황 설명해줘",
+        "kind": "broad",
+        "expected": [],
+        "retrieved": [
+          "garden/seedling/executor-어댑터의-anthropic_auth_token-누출-방지-패턴.md",
+          "concepts/merged/background-task.md",
+          "concepts/merged/approval-workflow.md",
+          "concepts/merged/bounded-context.md",
+          "concepts/merged/llm-optimization.md",
+          "concepts/active/protocol-contract.md",
+          "concepts/merged/session-scope.md",
+          "concepts/active/sweep-runner.md",
+          "concepts/merged/llm-context-window.md",
+          "garden/seedling/now_fn-생성자-주입으로-프로토콜-now-파라미터-무시.md",
+          "garden/seedling/settle-add-a-tiny-title-case-helper-to-the-backend.md",
+          "concepts/merged/git-worktree.md"
+        ]
+      },
+      {
+        "q": "지금 어디까지 구현됐어?",
+        "kind": "broad",
+        "expected": [],
+        "retrieved": [
+          "garden/seedling/구현-불가-기능은-정직한-원샷one-shot으로-명시적-연기.md",
+          "concepts/active/defense-in-depth.md",
+          "concepts/active/staged-rollout.md",
+          "concepts/merged/backward-compatibility.md",
+          "garden/seedling/settle-add-a-human-readable-byte-size-formatter-to-the-backend.md",
+          "garden/seedling/settle-add-a-tiny-clamp-utility-to-the-backend.md",
+          "concepts/active/temporal-coupling.md",
+          "concepts/active/backwards-compatibility.md",
+          "concepts/active/intent-recording.md",
+          "concepts/active/pipeline-handoff.md",
+          "concepts/active/app.md",
+          "garden/seedling/executor-어댑터의-anthropic_auth_token-누출-방지-패턴.md"
+        ]
+      },
+      {
+        "q": "이 프로젝트 아키텍처를 전체적으로 설명해줘",
+        "kind": "broad",
+        "expected": [],
+        "retrieved": [
+          "concepts/merged/mixin-architecture.md",
+          "concepts/merged/component-architecture.md",
+          "concepts/merged/architecture.md",
+          "concepts/merged/mcp-architecture.md",
+          "concepts/merged/information-architecture.md",
+          "concepts/merged/agent-architecture.md",
+          "concepts/active/ux-information-architecture.md",
+          "concepts/active/worker-architecture.md",
+          "concepts/active/pipeline-architecture.md",
+          "garden/seedling/settle-add-a-human-readable-byte-size-formatter-to-the-backend.md",
+          "concepts/active/protocol-design.md",
+          "garden/seedling/lazy-source-artifact-streaming-for-llm-ingest.md"
+        ]
+      }
+    ]
+  }
+]
