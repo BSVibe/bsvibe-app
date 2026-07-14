@@ -125,6 +125,33 @@ class ToolRegistry:
         self._grounded_paths: set[str] = set()
         self._register_defaults()
 
+    def export_state(self) -> dict[str, Any]:
+        """The per-RUN state this registry accumulated — JSON-safe.
+
+        The in-process loop holds one registry for a whole run, so its latches (the declared
+        verification contract; the paths the agent has grounded itself in via ``file_read``)
+        simply persist in memory. The MCP transport builds a registry PER REQUEST, so without
+        this the agent would declare its contract and then be told, on the very next call, to
+        declare its contract — measured against the live surface, 2026-07-14.
+
+        The state belongs to the run, not to the object: exported after a call, restored before
+        the next.
+        """
+        return {
+            "declared_contract": self.declared_contract,
+            "grounded_paths": sorted(self._grounded_paths),
+        }
+
+    def restore_state(self, state: dict[str, Any] | None) -> None:
+        """Re-apply state from :meth:`export_state`. Absent/empty restores nothing — a fresh
+        registry stays locked, so restoring cannot accidentally unlock the verify-first gate."""
+        if not state:
+            return
+        contract = state.get("declared_contract")
+        if contract:
+            self.declared_contract = contract
+        self._grounded_paths |= {str(p) for p in (state.get("grounded_paths") or [])}
+
     @property
     def sandbox(self) -> SandboxSession | None:
         """The bound sandbox session, or ``None`` — in which case ``shell_exec`` falls back to

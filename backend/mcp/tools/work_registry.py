@@ -30,6 +30,9 @@ from backend.workflow.infrastructure.tools import ToolRegistry
 
 logger = structlog.get_logger(__name__)
 
+#: Where the run carries the work tools' per-run latches between MCP calls.
+WORK_TOOL_STATE_KEY = "work_tool_state"
+
 
 async def _sandbox_for(run: ExecutionRun, workspace_dir: Path) -> Any:
     """The run's sandbox session — the same box the verifier runs in.
@@ -75,7 +78,23 @@ async def build_run_tool_registry(run_id: uuid.UUID, ctx: ToolContext) -> ToolRe
     workspace_dir = run_worktree_path(run_id)
     workspace_dir.mkdir(parents=True, exist_ok=True)
     sandbox = await _sandbox_for(run, workspace_dir)
-    return ToolRegistry(workspace_dir=workspace_dir, sandbox=sandbox)
+    registry = ToolRegistry(workspace_dir=workspace_dir, sandbox=sandbox)
+    # The registry's latches (the declared verification contract; the paths the agent grounded
+    # itself in) belong to the RUN, not to this per-request object. The in-process loop keeps
+    # one registry alive for a whole run; this transport builds a new one per MCP call, so
+    # without rehydrating, an agent would declare its contract and then be told, on the very
+    # next call, to declare its contract (measured on the live surface, 2026-07-14).
+    registry.restore_state(((run.payload or {}).get(WORK_TOOL_STATE_KEY)) or None)
+    return registry
 
 
-__all__ = ["build_run_tool_registry", "load_run"]
+async def persist_tool_state(run_id: uuid.UUID, ctx: ToolContext, registry: ToolRegistry) -> None:
+    """Write the registry's per-run latches back onto the run, after a tool call."""
+    run = await ctx.session.get(ExecutionRun, run_id)
+    if run is None:
+        return
+    run.payload = {**(run.payload or {}), WORK_TOOL_STATE_KEY: registry.export_state()}
+    await ctx.session.flush()
+
+
+__all__ = ["WORK_TOOL_STATE_KEY", "build_run_tool_registry", "load_run", "persist_tool_state"]

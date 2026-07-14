@@ -42,6 +42,10 @@ def _principal(*, run_id: uuid.UUID | None, scopes: tuple[str, ...] = ("mcp:read
     )
 
 
+async def _noop_persist(*_a: Any, **_k: Any) -> None:
+    """Persistence is covered in test_work_tool_state_persists.py."""
+
+
 class _FakeWork:
     sandbox = object()
 
@@ -73,6 +77,7 @@ def registry() -> ToolRegistry:
         registry_for_run=_registry_for_run,
         record_question=_ask,
         record_deliverable=_deliver,
+        persist_state=_noop_persist,
     )
     reg.asked = asked  # type: ignore[attr-defined]
     reg.delivered = delivered  # type: ignore[attr-defined]
