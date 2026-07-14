@@ -66,6 +66,14 @@ services:
       BSVIBE_RUN_WORKSPACE_ROOT: ${BSVIBE_RUN_WORKSPACE_ROOT:-/app/var/runs}
       BSVIBE_AUDIT_RELAY_URL: ${BSVIBE_AUDIT_RELAY_URL:-}
       BSVIBE_OAUTH_ISSUER: ${BSVIBE_OAUTH_ISSUER:-https://api.bsvibe.dev}
+      # T2b-1 — the OAuth signing key. It MUST be the same value in every container: the
+      # worker MINTS the run-scoped task token and the backend VERIFIES it. Without a shared
+      # PEM each process generates its own key at boot, so (a) every restart silently
+      # invalidates every outstanding token — each deploy quietly broke the founder's MCP
+      # connection — and (b) the worker's token can never verify at the backend (measured:
+      # 401 invalid_token). The processes refuse to boot without it outside dev.
+      #   openssl ecparam -genkey -name prime256v1 -noout | openssl pkcs8 -topk8 -nocrypt
+      BSVIBE_OAUTH_PRIVATE_KEY_PEM: ${BSVIBE_OAUTH_PRIVATE_KEY_PEM:?set BSVIBE_OAUTH_PRIVATE_KEY_PEM in .env.prod — see the comment above}
       BSVIBE_PWA_URL: ${BSVIBE_PWA_URL:-https://app.bsvibe.dev}
       # Sandbox: verification/work command checks run in a per-project DinD
       # container (toolchain: pytest/ruff/uv). Enable with the `sandbox`
@@ -84,6 +92,10 @@ services:
     # `docker compose ... up -d --scale worker=1` for the LLM/execution phase.
     # The entrypoint override (in compose.yaml) keeps the worker from migrating.
     environment:
+      # T2b-1 — the SAME signing key the backend uses. The worker mints the run-scoped task
+      # token; the backend's MCP API verifies it. Two ephemeral keys can never agree.
+      BSVIBE_OAUTH_PRIVATE_KEY_PEM: ${BSVIBE_OAUTH_PRIVATE_KEY_PEM:?set BSVIBE_OAUTH_PRIVATE_KEY_PEM in .env.prod}
+      BSVIBE_OAUTH_ISSUER: ${BSVIBE_OAUTH_ISSUER:-https://api.bsvibe.dev}
       BSVIBE_DATABASE_URL: ${BSVIBE_DATABASE_URL:?set BSVIBE_DATABASE_URL}
       BSVIBE_REDIS_URL: ${BSVIBE_REDIS_URL:-redis://redis:6379/0}
       BSVIBE_ENVIRONMENT: ${BSVIBE_ENVIRONMENT:-prod}
