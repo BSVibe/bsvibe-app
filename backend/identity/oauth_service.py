@@ -190,6 +190,63 @@ class IssuedTokenPair:
     scope: list[str]
 
 
+#: How long a dispatched executor task's token lives. Long enough for a coding task on a big
+#: repo; short enough that a leaked one dies on its own. It sits on the founder's machine, in
+#: a CLI subprocess — the blast radius is bounded by (one run) x (this window).
+RUN_TASK_TOKEN_TTL = timedelta(minutes=90)
+
+
+async def issue_run_task_token(
+    session: AsyncSession,
+    *,
+    run_id: uuid.UUID,
+    workspace_id: uuid.UUID,
+    user_id: uuid.UUID,
+    issuer: str,
+    now: datetime | None = None,
+) -> str:
+    """Mint the credential a dispatched executor task carries (T2).
+
+    The executor is the user's LLM CLIENT: it acts on the run by calling BSVibe's tools over
+    MCP, which needs a token. This is the narrowest one that works:
+
+    * bound to ONE run (the ``run_id`` claim → :attr:`McpPrincipal.run_id`), so the work tools
+      reach that run's worktree and nothing else;
+    * short-lived (:data:`RUN_TASK_TOKEN_TTL`);
+    * **no refresh token** — :func:`issue_token_pair` mints one, and a task that could re-mint
+      its own access would be a durable foothold rather than a task credential;
+    * an ordinary ``OAuthAccessTokenRow``, so revocation and expiry work exactly as they do
+      for every other token.
+    """
+    n = now or _utcnow()
+    access_id = uuid.uuid4()
+    scope = ["mcp:read", "mcp:write"]
+    session.add(
+        OAuthAccessTokenRow(
+            id=access_id,
+            workspace_id=workspace_id,
+            user_id=user_id,
+            client_id="bsvibe-worker",
+            scope=scope,
+            issued_at=n,
+            expires_at=n + RUN_TASK_TOKEN_TTL,
+            label=f"executor task (run {run_id})",
+        )
+    )
+    await session.flush()
+    return issue_access_token(
+        user_id=user_id,
+        workspace_id=workspace_id,
+        client_id="bsvibe-worker",
+        scope=scope,
+        jti=access_id,
+        issued_at=int(n.timestamp()),
+        expires_at=int((n + RUN_TASK_TOKEN_TTL).timestamp()),
+        issuer=issuer,
+        run_id=run_id,
+    )
+
+
 async def issue_token_pair(
     session: AsyncSession,
     *,

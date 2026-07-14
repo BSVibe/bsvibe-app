@@ -145,6 +145,28 @@ class ModelAccountAdapter(Protocol):
         """
 
 
+#: Which executor CLIs can be handed BSVibe's OWN tools over MCP (T2).
+#:
+#: The founder's principle: the executor is the user's LLM CLIENT, not an execution
+#: environment. State lives on the server, so an agent must act through BSVibe's tools
+#: (:mod:`backend.mcp.tools.work_tools`), executed server-side — not through the CLI's own
+#: local tools in a temp dir the worker scrapes back. That old shape is what let an agent
+#: invent a codebase in an empty dir and ship it, zero a >256 KB file, and lose an entire
+#: result on a deletion (parity audit, 2026-07-14).
+#:
+#: ``claude_code`` is verified against the real binary: it accepts an HTTP MCP server with
+#: auth headers and restricts the model to exactly the tools we allow. The others are not —
+#: and a CLI's contract is not something to guess (that is how wrappers rot). Until each is
+#: verified, agentic work routed to it is REFUSED rather than quietly run in the old shape:
+#: "which account did I route?" must not change what the product does.
+_REMOTE_TOOL_EXECUTORS: frozenset[str] = frozenset({"claude_code"})
+
+
+def supports_remote_tools(executor_type: str) -> bool:
+    """Can this executor CLI be given BSVibe's tools (and stripped of its own)?"""
+    return executor_type in _REMOTE_TOOL_EXECUTORS
+
+
 class ExecutorAdapterUnavailable(RuntimeError):
     """Raised by :meth:`ExecutorAdapter.chat` when the chat cannot dispatch.
 
@@ -372,6 +394,20 @@ class ExecutorAdapter:
 
         extra = self.account.extra_params or {}
         executor_type = str(extra.get("executor_type") or "")
+
+        # T2 — ``tools`` means the agent will ACT. On this transport that has to happen
+        # through BSVibe's tools, server-side (the executor is the user's LLM client, not an
+        # execution environment). An executor CLI we cannot hand those tools to cannot honour
+        # the contract, so it is refused — never quietly run in the old shape, where it acts
+        # with its OWN tools in a temp dir the worker scrapes back. That shape is what let an
+        # agent invent a codebase in an empty dir and ship it (parity audit #1).
+        #
+        # Chat turns (no tools) are unaffected: every executor still serves those.
+        if tools and executor_type and not supports_remote_tools(executor_type):
+            raise ExecutorAdapterUnavailable(
+                f"executor {executor_type!r} cannot use BSVibe's tools — agentic work cannot "
+                "run on it. Route this work to a claude_code executor or a LiteLLM account."
+            )
         if not executor_type:
             raise ExecutorAdapterUnavailable(
                 f"ExecutorAdapter account {self.model_account_id} has no "
