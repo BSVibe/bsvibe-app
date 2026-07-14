@@ -102,11 +102,58 @@ async def persist_tool_state(run_id: uuid.UUID, ctx: ToolContext, registry: Tool
     here, and a flush-only handler silently does nothing (measured on the live surface,
     2026-07-14: the agent declared its contract and was still refused the write).
     """
-    run = await ctx.session.get(ExecutionRun, run_id)
+    # MERGE under a row lock — never blind-overwrite.
+    #
+    # The CLI issues tool calls in PARALLEL batches. Each request built its registry from its own
+    # snapshot of ``run.payload`` and wrote the WHOLE payload back, so two overlapping calls
+    # read-modify-wrote each other away:
+    #
+    #   declare_verification: reads {} -> writes {contract: X}
+    #   file_list (started before that committed): reads {} -> writes {contract: None}   ← clobbers
+    #
+    # Measured live (run 3e163fc5): the agent declared its contract AND wrote files, yet the run's
+    # state came out empty — so the loop saw no work done, nudged, and re-dispatched the agent in
+    # a loop. ``with_for_update`` serialises the read-modify-write; the merge makes a stale call
+    # additive instead of destructive.
+    run = await ctx.session.get(ExecutionRun, run_id, with_for_update=True)
     if run is None:
         return
-    run.payload = {**(run.payload or {}), WORK_TOOL_STATE_KEY: registry.export_state()}
+    payload = dict(run.payload or {})
+    payload[WORK_TOOL_STATE_KEY] = _merge_work_tool_state(
+        current=payload.get(WORK_TOOL_STATE_KEY) or {},
+        incoming=registry.export_state(),
+    )
+    run.payload = payload
     await ctx.session.commit()
+
+
+def _merge_work_tool_state(*, current: dict[str, Any], incoming: dict[str, Any]) -> dict[str, Any]:
+    """Fold one call's registry state into the run's, additively.
+
+    A call that knows nothing (its registry was built from a stale snapshot) must not erase what
+    a concurrent call already recorded — so every field is "keep what we have unless this call
+    has something", and the path lists are UNIONS.
+    """
+
+    def _union(a: Any, b: Any) -> list[str]:
+        out: list[str] = []
+        for seq in (a or [], b or []):
+            for item in seq:
+                text = str(item)
+                if text not in out:
+                    out.append(text)
+        return out
+
+    return {
+        "declared_contract": incoming.get("declared_contract") or current.get("declared_contract"),
+        "declared_knowledge": (
+            incoming.get("declared_knowledge") or current.get("declared_knowledge")
+        ),
+        "grounded_paths": sorted(
+            set(_union(current.get("grounded_paths"), incoming.get("grounded_paths")))
+        ),
+        "written_paths": _union(current.get("written_paths"), incoming.get("written_paths")),
+    }
 
 
 __all__ = ["WORK_TOOL_STATE_KEY", "build_run_tool_registry", "load_run", "persist_tool_state"]

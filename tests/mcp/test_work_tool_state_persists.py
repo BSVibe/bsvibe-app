@@ -23,6 +23,7 @@ from pathlib import Path
 
 import pytest
 
+from backend.mcp.tools.work_registry import _merge_work_tool_state
 from backend.workflow.infrastructure.tools import ToolRegistry
 
 pytestmark = pytest.mark.asyncio
@@ -173,3 +174,52 @@ async def test_the_declared_knowledge_survives_a_rebuild(tmp_path: Path) -> None
     assert second.declared_knowledge is not None
     assert second.declared_knowledge.topic == "t"
     assert second.declared_knowledge.insight == "i"
+
+
+# ── Concurrent tool calls must not clobber each other's state ─────────────────
+# The CLI issues tool calls in PARALLEL batches. Each MCP request built a registry from its own
+# snapshot of `run.payload`, then wrote the WHOLE payload back — so two overlapping calls
+# read-modify-write each other away:
+#
+#   call A (declare_verification): reads {} -> writes {contract: X}
+#   call B (file_list), started before A committed: reads {} -> writes {contract: None}  ← clobbers A
+#
+# Measured live (run 3e163fc5, 2026-07-15): the agent declared its contract AND wrote files, yet
+# the run's state came out `written_paths: []` with no contract — so the loop saw no work, nudged,
+# and re-dispatched the agent in a loop. The state must MERGE, never overwrite.
+
+
+async def test_persisting_state_never_loses_another_calls_contract(tmp_path: Path) -> None:
+    """A call that knows nothing must not erase what a concurrent call already recorded."""
+    stale = ToolRegistry(workspace_dir=tmp_path)  # built from an EMPTY snapshot
+
+    merged = _merge_work_tool_state(
+        current={"declared_contract": _CONTRACT, "written_paths": ["a.py"]},
+        incoming=stale.export_state(),
+    )
+
+    assert merged["declared_contract"] == _CONTRACT, "a stale call must not erase the contract"
+    assert merged["written_paths"] == ["a.py"], "a stale call must not erase recorded writes"
+
+
+async def test_persisting_state_unions_the_writes(tmp_path: Path) -> None:
+    registry = ToolRegistry(workspace_dir=tmp_path)
+    registry.declared_contract = _CONTRACT
+    await registry.invoke("file_write", {"path": "b.py", "content": "x = 1"})
+
+    merged = _merge_work_tool_state(
+        current={"declared_contract": _CONTRACT, "written_paths": ["a.py"]},
+        incoming=registry.export_state(),
+    )
+
+    assert merged["written_paths"] == ["a.py", "b.py"], "writes accumulate across calls"
+
+
+async def test_persisting_state_keeps_the_newest_contract(tmp_path: Path) -> None:
+    """A real declare still lands — the merge prefers incoming when it HAS something."""
+    registry = ToolRegistry(workspace_dir=tmp_path)
+    registry.declared_contract = _CONTRACT
+
+    merged = _merge_work_tool_state(current={}, incoming=registry.export_state())
+
+    assert merged["declared_contract"] == _CONTRACT
