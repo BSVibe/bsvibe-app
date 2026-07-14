@@ -21,6 +21,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 from backend.mcp.api import McpPrincipal, ToolContext, ToolError, ToolRegistry, ToolScopeDenied
 from backend.mcp.principal import get_request_principal
 from backend.mcp.tools import register_all_tools
+from backend.mcp.tools.work_tools import is_work_tool
 
 logger = structlog.get_logger(__name__)
 
@@ -70,7 +71,16 @@ def build_server(
 
     @server.list_tools()  # type: ignore[no-untyped-call,untyped-decorator]
     async def _list_tools() -> list[McpTool]:
-        return list(reg.list_tools())
+        # A RUN-SCOPED principal is a dispatched executor task: it may act on its run and
+        # nothing else. Offering it the whole surface was two bugs in one (measured against
+        # prod, 2026-07-14): the task token could call `products_list` / `safe_mode_set` /
+        # `workers_revoke`, and the CLI — handed all 86 tools while sanctioned for 9 — failed
+        # the worker's own `system/init` check, so no agentic run could start.
+        principal = get_request_principal()
+        tools = list(reg.list_tools())
+        if principal is not None and principal.run_id is not None:
+            return [t for t in tools if is_work_tool(t.name)]
+        return tools
 
     @server.call_tool()  # type: ignore[untyped-decorator]
     async def _call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
@@ -79,6 +89,11 @@ def build_server(
             # Should not happen in production — the transport returns 401
             # before the dispatcher ever runs. Belt-and-braces guard.
             raise ToolError("unauthenticated")
+        if principal.run_id is not None and not is_work_tool(name):
+            # Hiding a tool from tools/list is cosmetic — the call is what has to be refused.
+            raise ToolScopeDenied(
+                f"{name} is not a work tool: a run-scoped task token may act only on its run"
+            )
         async with session_factory() as session:
             extras: dict[str, Any] = {}
             if delivery_dispatcher is not None:

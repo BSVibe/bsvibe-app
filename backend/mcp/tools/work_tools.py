@@ -36,6 +36,19 @@ from backend.mcp.api import Tool, ToolContext, ToolError, ToolRegistry
 
 logger = structlog.get_logger(__name__)
 
+#: Every work tool carries this prefix, and it is what tells a RUN-SCOPED principal's surface
+#: apart from the workspace-wide one (:func:`backend.mcp.server.build_server`). A task token
+#: sits in a CLI subprocess on the founder's machine for 90 minutes: it may act on its run and
+#: nothing else. It is also what the worker hands the CLI as ``--allowedTools`` and then
+#: verifies the CLI's own ``system/init`` against — so the set the server OFFERS and the set we
+#: SANCTION have to be the same one.
+WORK_TOOL_PREFIX = "bsvibe_work_"
+
+
+def is_work_tool(name: str) -> bool:
+    """Is this the name of a run-scoped work tool?"""
+    return name.startswith(WORK_TOOL_PREFIX)
+
 
 class WorkToolRegistry(Protocol):
     """The workflow ToolRegistry, bound to one run."""
@@ -280,4 +293,10 @@ def register_work_tools(
     )
 
 
-__all__ = ["RegistryForRun", "WorkToolRegistry", "register_work_tools"]
+__all__ = [
+    "WORK_TOOL_PREFIX",
+    "RegistryForRun",
+    "WorkToolRegistry",
+    "is_work_tool",
+    "register_work_tools",
+]
