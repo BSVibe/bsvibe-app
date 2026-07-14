@@ -34,8 +34,13 @@ class _Session:
         self._run = run
         self.committed = False
         self.flushed = False
+        self.locked = False
 
-    async def get(self, _model: Any, _pk: Any) -> Any:
+    async def get(self, _model: Any, _pk: Any, with_for_update: bool = False) -> Any:
+        # The real ``AsyncSession.get`` takes ``with_for_update`` — persist_tool_state ROW-LOCKS
+        # the run so parallel tool calls cannot read-modify-write each other's state away. A
+        # double that does not accept it hides that the production call even happens.
+        self.locked = with_for_update
         return self._run
 
     async def commit(self) -> None:
@@ -74,6 +79,11 @@ async def test_persisting_tool_state_commits() -> None:
     await persist_tool_state(run_id, _Ctx(session, ws), _Registry())  # type: ignore[arg-type]
 
     assert session.committed, "a flush-only write is rolled back when the MCP request ends"
+    assert session.locked, (
+        "the read-modify-write must be ROW-LOCKED: the CLI issues tool calls in parallel, and "
+        "two unlocked calls erase each other's state (live: run 3e163fc5 lost both its declared "
+        "contract and its writes, so the loop nudged and re-dispatched forever)"
+    )
 
 
 async def test_the_state_actually_lands_on_the_run() -> None:
