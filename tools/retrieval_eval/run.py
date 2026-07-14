@@ -28,6 +28,7 @@ from backend.data.session import session_scope
 from backend.knowledge.factory import KnowledgeFactory
 from backend.knowledge.retrieval.embedder_resolution import resolve_knowledge_embedder
 from backend.knowledge.retrieval.semantic_note_retriever import SemanticNoteRetriever
+from backend.knowledge.retrieval.hybrid_search import hybrid_search
 from backend.knowledge.retrieval.storage.pg import PgNoteVectorBackend
 from tools.retrieval_eval.scoring import QuestionResult, summarize
 
@@ -54,6 +55,39 @@ async def _retrieve(
     )
     items = await semantic.retrieve_structured(query)
     return [item.ref or "" for item in items]
+
+
+async def _retrieve_hybrid(workspace_id: uuid.UUID, query: str, *, limit: int) -> list[str]:
+    """The BUILT-BUT-UNWIRED path: BM25 + graph traversal + vector, fused with RRF
+    (``hybrid_search``). It searches graph ENTITIES, not notes — but each entity
+    carries the ``source_path`` of the note that produced it, so a hit maps back to
+    the unit the answer paths actually ground in."""
+    from backend.knowledge.graph.storage import FileSystemStorage  # noqa: PLC0415
+    from backend.knowledge.graph.vault_backend import VaultBackend  # noqa: PLC0415
+
+    settings = get_settings()
+    factory = KnowledgeFactory(
+        region=settings.knowledge_default_region,
+        workspace_id=str(workspace_id),
+        vault_root=Path(settings.knowledge_vault_root),
+    )
+    backend = VaultBackend(FileSystemStorage(factory.vault_path))
+    await backend.initialize()
+
+    embedder = resolve_knowledge_embedder(settings)
+
+    async def _embed(text: str) -> list[float]:
+        return list(await embedder.embed(text))
+
+    hits = await hybrid_search(
+        backend, query, limit=limit, embed_fn=_embed if embedder.enabled else None
+    )
+    refs: list[str] = []
+    for hit in hits:
+        path = getattr(hit.entity, "source_path", "") or ""
+        if path and path not in refs:
+            refs.append(path)
+    return refs
 
 
 async def _run_once(
@@ -85,7 +119,9 @@ def _report(results: list[QuestionResult], *, top_k: int, min_similarity: float)
     print(f"\n=== top_k={top_k} min_similarity={min_similarity} ===")
     for r in results:
         if r.expected:
-            hit = "HIT " if any(any(s in ref for ref in r.retrieved) for s in r.expected) else "MISS"
+            hit = (
+                "HIT " if any(any(s in ref for ref in r.retrieved) for s in r.expected) else "MISS"
+            )
             print(f"  {hit} {r.question[:44]:<46} → {len(r.retrieved)} notes")
             if hit == "MISS":
                 for ref in r.retrieved:
@@ -119,6 +155,9 @@ async def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("workspace_id")
     parser.add_argument("--sweep", action="store_true", help="also try candidate knobs")
+    parser.add_argument(
+        "--hybrid", action="store_true", help="also score the unwired hybrid_search path"
+    )
     parser.add_argument("--out", default="", help="write the baseline JSON here")
     args = parser.parse_args()
 
@@ -130,6 +169,21 @@ async def main() -> None:
     for top_k, min_sim in runs:
         results = await _run_once(ws, questions, top_k=top_k, min_similarity=min_sim)
         baseline.append(_report(results, top_k=top_k, min_similarity=min_sim))
+
+    if args.hybrid:
+        results = []
+        async with session_scope():
+            for q in questions:
+                refs = await _retrieve_hybrid(ws, str(q["question"]), limit=8)
+                results.append(
+                    QuestionResult(
+                        question=str(q["question"]),
+                        kind=str(q.get("kind") or "specific"),
+                        expected=[str(e) for e in (q.get("expected") or [])],
+                        retrieved=refs,
+                    )
+                )
+        baseline.append(_report(results, top_k=8, min_similarity=-1.0))
 
     if args.out:
         Path(args.out).write_text(json.dumps(baseline, ensure_ascii=False, indent=2), "utf-8")
