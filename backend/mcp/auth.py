@@ -81,12 +81,22 @@ async def resolve_principal_from_bearer(
     scopes_raw = claims.get("scope") or ""
     scopes = frozenset(s for s in str(scopes_raw).split() if s)
 
+    # T2 — a dispatched executor task's token names ONE run; the work tools bind to it and
+    # refuse a token without it. A malformed claim is treated as absent (no run scope), never
+    # as a different run.
+    run_raw = claims.get("run_id")
+    try:
+        run_id = uuid.UUID(str(run_raw)) if run_raw else None
+    except (ValueError, AttributeError, TypeError):
+        run_id = None
+
     return McpPrincipal(
         user_id=user_id,
         workspace_id=workspace_id,
         client_id=str(claims.get("client_id", "")),
         scopes=scopes,
         jti=jti,
+        run_id=run_id,
     )
 
 

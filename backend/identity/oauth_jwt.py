@@ -47,11 +47,18 @@ def issue_access_token(
     expires_at: int,
     issuer: str,
     signing_key: SigningKey | None = None,
+    run_id: uuid.UUID | None = None,
 ) -> str:
     """Return a signed ES256 JWT access token.
 
     ``signing_key`` defaults to the process singleton; tests pass an
     explicit key to assert on deterministic kids.
+
+    ``run_id`` (T2) narrows the token to ONE ExecutionRun. It is set only on the short-lived
+    token a dispatched executor task carries, so the agent's remote tools
+    (:mod:`backend.mcp.tools.work_tools`) are bound to that run's worktree and nothing else —
+    a leaked worker token reaches one run. An ordinary token (the founder's editor, the CLI)
+    omits the claim entirely, and the work tools refuse it.
     """
     key = signing_key or get_signing_key()
     payload: dict[str, Any] = {
@@ -65,6 +72,8 @@ def issue_access_token(
         "iat": issued_at,
         "exp": expires_at,
     }
+    if run_id is not None:
+        payload["run_id"] = str(run_id)
     return jwt.encode(
         payload,
         key.private_key,
