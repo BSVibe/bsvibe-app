@@ -274,6 +274,18 @@ def _executor_account(workspace_id: uuid.UUID, worker_id: uuid.UUID) -> ModelAcc
     )
 
 
+async def _seed_founder(session: Any, workspace_id: uuid.UUID) -> uuid.UUID:
+    """An agentic task's token is scoped to a run and issued to the workspace's founder, so the
+    membership has to exist (T2b-4)."""
+    from backend.identity.db import MembershipRow, UserRow
+
+    user_id = uuid.uuid4()
+    session.add(UserRow(id=user_id, supabase_user_id=str(user_id), email=f"{user_id}@x.dev"))
+    session.add(MembershipRow(id=uuid.uuid4(), user_id=user_id, workspace_id=workspace_id))
+    await session.flush()
+    return user_id
+
+
 class TestExecutorAdapterChat:
     async def test_supported_methods_chat_only(self) -> None:
         async with memory_session() as s:
@@ -564,6 +576,10 @@ class TestExecutorAdapterChat:
                     },
                 )
                 setup.add(account)
+                # T2b-4 — an agentic task acts on a RUN, through a token scoped to it and
+                # issued to the workspace's founder. Both have to exist.
+                await _seed_founder(setup, workspace_id)
+                run_id = uuid.uuid4() if tools else None
                 await setup.commit()
 
             async with sf() as adapter_session:
@@ -575,6 +591,7 @@ class TestExecutorAdapterChat:
                     session=adapter_session,
                     settings=get_settings().model_copy(update={"executor_task_timeout_s": 5.0}),
                     redis=redis,
+                    run_id=run_id,
                 )
                 # No worker answers → await_completion times out. The XADD we
                 # inspect already happened.
@@ -1502,6 +1519,10 @@ class TestExecutorAdapterE30ToolsAndContract:
                 )
                 account = _executor_account(workspace_id, worker.id)
                 setup.add(account)
+                # T2b-4 — an agentic task acts on a RUN, through a token scoped to it and
+                # issued to the workspace's founder.
+                await _seed_founder(setup, workspace_id)
+                run_id = uuid.uuid4()
                 await setup.commit()
 
             async with sf() as adapter_session:
@@ -1513,6 +1534,7 @@ class TestExecutorAdapterE30ToolsAndContract:
                     session=adapter_session,
                     settings=get_settings().model_copy(update={"executor_task_timeout_s": 30.0}),
                     redis=redis,
+                    run_id=run_id,
                 )
 
                 async def _simulate_worker() -> None:

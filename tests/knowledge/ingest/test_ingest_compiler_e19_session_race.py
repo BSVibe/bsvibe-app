@@ -236,7 +236,7 @@ async def test_adapter_session_factory_opens_fresh_session_per_chat() -> None:
                 return _FakeTask()
 
             async def _fake_dispatch_task(
-                _redis: Any, *, session: AsyncSession, task: Any, worker_id: Any
+                _redis: Any, *, session: AsyncSession, task: Any, worker_id: Any, mcp=None
             ) -> None:
                 saw_sessions.append(session)
 
@@ -351,7 +351,7 @@ async def test_adapter_without_session_factory_falls_back_to_bound_session() -> 
                 return _FakeTask()
 
             async def _fake_dispatch_task(
-                _redis: Any, *, session: AsyncSession, task: Any, worker_id: Any
+                _redis: Any, *, session: AsyncSession, task: Any, worker_id: Any, mcp=None
             ) -> None:
                 saw_sessions.append(session)
 

@@ -162,6 +162,65 @@ class ModelAccountAdapter(Protocol):
 _REMOTE_TOOL_EXECUTORS: frozenset[str] = frozenset({"claude_code"})
 
 
+#: The tools an executor agent may use — BSVibe's, over MCP. The CLI is given exactly these
+#: names and nothing else, and the worker verifies the CLI's own init event against them: an
+#: enumerated denylist of the vendor's built-ins rots, so the allowlist is what we check.
+WORK_TOOL_NAMES: tuple[str, ...] = (
+    "bsvibe_work_file_read",
+    "bsvibe_work_file_list",
+    "bsvibe_work_file_write",
+    "bsvibe_work_file_edit",
+    "bsvibe_work_shell_exec",
+    "bsvibe_work_declare_verification",
+    "bsvibe_work_knowledge_search",
+    "bsvibe_work_ask_user_question",
+    "bsvibe_work_emit_deliverable",
+)
+
+
+async def _founder_of(session: Any, workspace_id: uuid.UUID) -> uuid.UUID:
+    """The workspace's member — every BSVibe workspace is one founder (v1 product reality)."""
+    from sqlalchemy import select  # noqa: PLC0415
+
+    from backend.identity.db import MembershipRow  # noqa: PLC0415
+
+    row = (
+        (
+            await session.execute(
+                select(MembershipRow).where(MembershipRow.workspace_id == workspace_id).limit(1)
+            )
+        )
+        .scalars()
+        .first()
+    )
+    if row is None:
+        raise ExecutorAdapterUnavailable(
+            f"workspace {workspace_id} has no member — cannot scope a task token to anyone"
+        )
+    return uuid.UUID(str(row.user_id))
+
+
+def build_work_tool_dispatch(*, token: str, issuer: str) -> dict[str, Any]:
+    """The MCP surface a dispatched agentic task carries: BSVibe's tools, a run-scoped token.
+
+    The run is NOT in the URL — it rides in the token's ``run_id`` claim, so an agent cannot
+    redirect its writes by editing an argument (see :mod:`backend.mcp.tools.work_tools`).
+    """
+    config = {
+        "mcpServers": {
+            "bsvibe": {
+                "type": "http",
+                "url": f"{issuer.rstrip('/')}/mcp/",
+                "headers": {"Authorization": f"Bearer {token}"},
+            }
+        }
+    }
+    return {
+        "mcp_config": json.dumps(config),
+        "allowed_tools": [f"mcp__bsvibe__{name}" for name in WORK_TOOL_NAMES],
+    }
+
+
 def supports_remote_tools(executor_type: str) -> bool:
     """Can this executor CLI be given BSVibe's tools (and stripped of its own)?"""
     return executor_type in _REMOTE_TOOL_EXECUTORS
@@ -520,6 +579,32 @@ class ExecutorAdapter:
         # Unreachable — the loop returns or raises on the final attempt.
         raise AssertionError("executor chat retry loop exited without result")
 
+    async def _work_tool_surface(
+        self, session: AsyncSession, *, agentic: bool
+    ) -> dict[str, Any] | None:
+        """Mint the run-scoped token and build the MCP surface for an agentic task.
+
+        ``None`` for a chat turn (no tools, nothing to reach). A run-less agentic task cannot
+        be scoped to anything, so it is refused rather than handed a workspace-wide token.
+        """
+        if not agentic:
+            return None
+        if self.run_id is None:
+            raise ExecutorAdapterUnavailable(
+                "an agentic executor task must belong to a run — there is nothing to scope its "
+                "tools to"
+            )
+        from backend.identity.oauth_service import issue_run_task_token  # noqa: PLC0415
+
+        token = await issue_run_task_token(
+            session,
+            run_id=self.run_id,
+            workspace_id=self.workspace_id,
+            user_id=await _founder_of(session, self.workspace_id),
+            issuer=self.settings.oauth_issuer,
+        )
+        return build_work_tool_dispatch(token=token, issuer=self.settings.oauth_issuer)
+
     async def _chat_with_session(
         self,
         *,
@@ -576,7 +661,14 @@ class ExecutorAdapter:
             # grounding we injected (prod 2026-07-13, "현 프로젝트 상황 설명해줘").
             agentic=agentic,
         )
-        await dispatch.dispatch_task(self.redis, session=session, task=task, worker_id=worker.id)
+        # T2b-4 — an agentic turn acts through BSVibe's tools: hand the worker the MCP
+        # endpoint, a token scoped to THIS run, and the exact tool names it may use. The CLI's
+        # own tools are taken away, so there is no local temp dir to invent code in and nothing
+        # for the worker to scrape back.
+        mcp = await self._work_tool_surface(session, agentic=agentic)
+        await dispatch.dispatch_task(
+            self.redis, session=session, task=task, worker_id=worker.id, mcp=mcp
+        )
         # Commit before awaiting — the worker reports its result on a
         # SEPARATE session over HTTP (/api/v1/workers/result), whose
         # ``record_result`` does ``session.get(ExecutorTaskRow)``. Under
