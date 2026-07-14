@@ -125,6 +125,13 @@ class ToolRegistry:
         self._grounded_paths: set[str] = set()
         self._register_defaults()
 
+    @property
+    def sandbox(self) -> SandboxSession | None:
+        """The bound sandbox session, or ``None`` — in which case ``shell_exec`` falls back to
+        a HOST subprocess. Callers whose host must never run an agent's commands (the MCP
+        transport: its host is the API container) check this and refuse."""
+        return self._sandbox
+
     def schema_for(self, names: list[str]) -> list[dict[str, Any]]:
         """Return OpenAI-style ``tools=[...]`` JSON for the given
         tool names — phase gating decides the slice."""
