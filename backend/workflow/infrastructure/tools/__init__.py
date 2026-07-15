@@ -7,7 +7,8 @@ Handlers:
   - ``file_edit(path, old_string, new_string)`` — surgical exact-string
     replacement; requires the file was ``file_read`` first
   - ``shell_exec(command)`` — run a shell command with cwd=workspace_dir,
-    30s timeout, denylist of destructive/network patterns
+    30s timeout, structural (tokenized) denylist of destructive/network
+    commands (judged on argv, not raw substring — see ``_shell_denylist_reason``)
 
 Every handler refuses to step outside ``workspace_dir`` via path
 traversal (``..``, absolute paths). Per CLAUDE.md "Async everywhere",
@@ -22,6 +23,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import re
 import shlex
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -38,30 +40,68 @@ if TYPE_CHECKING:
 logger = structlog.get_logger(__name__)
 
 
-SHELL_DENYLIST_PATTERNS: tuple[str, ...] = (
-    "rm -rf",
-    "rm -fr",
-    "rm -r ",
-    " rm /",
-    "sudo ",
-    "curl ",
-    "wget ",
-    "ssh ",
-    "scp ",
-    "nc ",
-    "ncat ",
-    "telnet ",
-    ":(){",
-    "mkfs",
-    "dd ",
-    "/dev/sd",
-    " > /dev/",
-    "shutdown",
-    "reboot",
-    "halt",
-    "kill -9 -1",
-    "chmod 777 /",
+# shell_exec denylist — STRUCTURAL, not substring.
+#
+# The old guard matched these patterns as raw substrings of the whole command
+# string, so any ordinary command whose *token* merely contained a pattern was
+# refused: ``git add -A`` (``add `` ends in ``dd ``), ``pytest -k async``
+# (``async `` ends in ``nc ``), ``cargo add serde``. ``git add`` is core to the
+# verify/commit flow — the worst false-positive. This is the same "pattern-match
+# instead of parse" mistake the architecture audit is about (see
+# docs/architecture/INVARIANTS.md INV-7 remaining-queue). We now judge by
+# command STRUCTURE — ``shlex``-tokenized argv per pipeline/compound segment.
+#
+# Threat-model note: the DinD sandbox's ``docker run`` does NOT pass
+# ``--network none`` (see infrastructure/sandbox/docker_manager.py::_create), so
+# the sandbox has egress and this denylist is a genuine (if soft) egress +
+# destruction guard. It is NOT airtight and is not meant to be: a token denylist
+# is trivially defeated (``bash -c``, ``eval``, aliases, ``c""url``). The
+# sandbox is the real boundary; this is convenience defense-in-depth.
+
+# Binaries refused whenever they are the INVOKED command (argv[0] of the command
+# or of any pipeline/compound/substitution segment), matched by basename — never
+# as a substring of another token.
+_DENY_BINARIES: frozenset[str] = frozenset(
+    {
+        "curl",
+        "wget",
+        "nc",
+        "ncat",
+        "telnet",
+        "ssh",
+        "scp",
+        "dd",
+        "shutdown",
+        "reboot",
+        "halt",
+        "sudo",
+    }
 )
+
+# Raw block-device nodes — writing to or reformatting these destroys disks.
+# Checked against EVERY token (redirect targets included) by prefix, so
+# ``/dev/null`` / ``/dev/stdout`` / ``/dev/urandom`` stay allowed.
+_DEVICE_PREFIXES: tuple[str, ...] = (
+    "/dev/sd",
+    "/dev/hd",
+    "/dev/vd",
+    "/dev/nvme",
+    "/dev/disk",
+    "/dev/mem",
+    "/dev/kmem",
+    "/dev/port",
+)
+
+# Operators that begin a NEW command segment (the token after them is a fresh
+# argv[0]). Redirects (``<`` ``>`` ``>>``) are deliberately excluded — their
+# operand is a filename, not a command to invoke.
+_SEGMENT_SEPARATORS: frozenset[str] = frozenset({"|", "||", "&&", ";", "&", "(", ")"})
+
+_FORK_BOMB_RE = re.compile(r":\s*\(\s*\)\s*\{")
+# Command substitutions — analysed recursively so ``$(curl …)`` / ``` `nc …` ```
+# are judged by the binary they invoke, not the outer command.
+_SUBST_RE = re.compile(r"\$\((.*?)\)|`(.*?)`", re.DOTALL)
+
 SHELL_TIMEOUT_S: float = 30.0
 FILE_READ_MAX_BYTES: int = 256 * 1024
 FILE_WRITE_MAX_BYTES: int = 256 * 1024
@@ -650,10 +690,9 @@ class ToolRegistry:
         command = str(args.get("command") or "")
         if not command.strip():
             raise ToolError("shell_exec requires non-empty 'command'")
-        normalized = " " + command.strip() + " "
-        for pattern in SHELL_DENYLIST_PATTERNS:
-            if pattern in normalized:
-                raise ToolError(f"shell_exec: refused by denylist: {pattern.strip()!r}")
+        reason = _shell_denylist_reason(command)
+        if reason is not None:
+            raise ToolError(f"shell_exec: refused by denylist: {reason}")
         if self._sandbox is not None:
             result = await self._sandbox.exec(command, timeout_s=SHELL_TIMEOUT_S, shell=True)
             if result.timed_out:
@@ -687,6 +726,84 @@ class ToolRegistry:
         return f"exit={process.returncode}\n{output[-4000:]}"
 
 
+def _command_segments(tokens: list[str]) -> list[list[str]]:
+    """Split a token stream into command segments on control operators, so the
+    first token of each segment is that command's argv[0]. Redirect operators
+    stay inside their segment (their operand is a filename, not a command)."""
+    segments: list[list[str]] = []
+    current: list[str] = []
+    for tok in tokens:
+        if tok in _SEGMENT_SEPARATORS:
+            if current:
+                segments.append(current)
+            current = []
+        else:
+            current.append(tok)
+    if current:
+        segments.append(current)
+    return segments
+
+
+def _rm_is_dangerous(args: list[str]) -> bool:
+    """``rm`` is refused with a recursive flag (``-r``/``-R``, incl. combined
+    like ``-rf``), a force flag (``-f``), or an absolute-path target (``rm /…``).
+    A plain relative ``rm foo.txt`` — routine cleanup — is allowed."""
+    for tok in args:
+        if tok in ("--recursive", "--force"):
+            return True
+        if tok.startswith("--"):
+            continue
+        if tok.startswith("-"):
+            if any(flag in tok[1:] for flag in "rRf"):
+                return True
+        elif tok.startswith("/"):
+            return True
+    return False
+
+
+def _shell_denylist_reason(command: str) -> str | None:
+    """Structural denylist verdict for a shell command: a human-readable reason
+    to refuse, or ``None`` to allow. Judges by command STRUCTURE (``shlex``
+    argv per segment), never by raw substring — so ``git add``/``cargo add``/
+    ``pytest -k async`` pass while a real ``dd``/``curl``/``nc`` invocation is
+    refused. Unparseable input (unbalanced quotes) fails SAFE → refused."""
+    text = command.strip()
+    if _FORK_BOMB_RE.search(text):
+        return "fork bomb"
+    # Descend into $()/backtick substitutions — the binary they invoke counts.
+    for match in _SUBST_RE.finditer(text):
+        inner = match.group(1) or match.group(2) or ""
+        if inner.strip():
+            nested = _shell_denylist_reason(inner)
+            if nested is not None:
+                return nested
+    try:
+        lexer = shlex.shlex(text, posix=True, punctuation_chars=True)
+        lexer.whitespace_split = True
+        tokens = list(lexer)
+    except ValueError:
+        return "unparseable command (unbalanced quotes) — refused"
+    for tok in tokens:
+        if any(tok.startswith(prefix) for prefix in _DEVICE_PREFIXES):
+            return f"raw device access ({tok})"
+    for argv in _command_segments(tokens):
+        if not argv:
+            continue
+        binary = os.path.basename(argv[0])
+        rest = argv[1:]
+        if binary in _DENY_BINARIES:
+            return f"{binary} (network/destructive command)"
+        if binary == "mkfs" or binary.startswith("mkfs."):
+            return f"{binary} (filesystem format)"
+        if binary == "rm" and _rm_is_dangerous(rest):
+            return "rm with recursive/force flag or absolute target"
+        if binary == "chmod" and "/" in rest:
+            return "chmod on filesystem root"
+        if binary == "kill" and "-1" in rest:
+            return "kill -1 (all processes)"
+    return None
+
+
 def _read_text_capped(path: Path, cap: int) -> str:
     data = path.read_bytes()
     if len(data) > cap:
@@ -702,7 +819,6 @@ def _write_text(path: Path, content: str) -> None:
 __all__ = [
     "FILE_READ_MAX_BYTES",
     "FILE_WRITE_MAX_BYTES",
-    "SHELL_DENYLIST_PATTERNS",
     "SHELL_TIMEOUT_S",
     "ToolDefinition",
     "ToolError",
