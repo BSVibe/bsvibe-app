@@ -27,6 +27,7 @@ from __future__ import annotations
 import asyncio
 import json
 import uuid
+from dataclasses import dataclass
 from typing import Any, Protocol, runtime_checkable
 
 import structlog
@@ -318,6 +319,42 @@ class CanonRetriever(Protocol):
     async def retrieve_structured(self, signals: str) -> list[RetrievedKnowledge]: ...
 
 
+@dataclass(frozen=True)
+class DerivedGateOk:
+    """The deriver produced a trustworthy verdict — it either RAN the repo's own
+    gate commands or legitimately found no runnable gate. ``blob`` is the record
+    persisted under ``result["derived_gate"]`` (``applicable`` / ``commands`` /
+    ``passed``)."""
+
+    blob: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class DerivedGateNotEligible:
+    """This run has no repo-gate concept at all — a non-product / non-worktree
+    (Direct-path) run with no durable diff to gate. NOT fail-closed: there is
+    nothing to verify with a command, so the agent's own attestation stands."""
+
+
+@dataclass(frozen=True)
+class DerivedGateFailed:
+    """INV-2 fail-closed: the deriver could NOT run — a transient LLM failure
+    (bounded-call timeout / provider 5xx / rate-limit) or a reply we cannot parse
+    as the gate JSON. On a repo that HAS a toolchain manifest this is NOT a pass:
+    "게이트를 돌리지 못한 것은 통과가 아니다". Distinct from
+    :class:`DerivedGateNotEligible` (no gate concept) and from a deriver that RAN
+    and found no gate (weak evidence → founder review, not a hard fail)."""
+
+    reason: str
+
+
+#: The 3-state derived-gate result (INV-2 — ``Ok | NotApplicable | Failed``, the
+#: precedent being ``retraction_service.py``'s ``UndoResult`` Literal-union). The
+#: old ``dict | None`` conflated "deriver failed" with "no gate", which let a
+#: transient deriver failure fail OPEN into a silent PROVED.
+DerivedGateOutcome = DerivedGateOk | DerivedGateNotEligible | DerivedGateFailed
+
+
 class VerificationService:
     """Runs one assembled verify contract and persists its result.
 
@@ -537,18 +574,49 @@ class VerificationService:
 
         # I1′ — the repo's OWN gate, DERIVED by an LLM grounded in the repo's
         # manifests (the general replacement for the hardcoded quality bar +
-        # per-stack detectors). When present it is the AUTHORITATIVE command
-        # gate, and the agent's declared command_results become ADVISORY —
-        # recorded for the proof surface but never gating, so an invented
-        # `--extra dev` / `python -m ruff` that fails on the sandbox can no
-        # longer false-fail the run (the F7 retry loop). A deriver hiccup /
-        # non-product / non-applicable repo → None → fall back to the agent +
-        # mandatory command attestation, so nothing regresses while the old
-        # path still stands (removed in a later increment).
-        derived_gate = await self._run_derived_gate(run, box, written_paths)
-        command_gate_pass = (
-            bool(derived_gate["passed"]) if derived_gate is not None else all_cmd_pass
-        )
+        # per-stack detectors). When it RAN it is the AUTHORITATIVE command gate,
+        # and the agent's declared command_results become ADVISORY — recorded for
+        # the proof surface but never gating, so an invented `--extra dev` /
+        # `python -m ruff` that fails on the sandbox can no longer false-fail the
+        # run (the F7 retry loop).
+        #
+        # A 3-state result (INV-2, fail-closed — no more ``dict | None`` that
+        # conflated a deriver FAILURE with "no gate"):
+        #   • DerivedGateOk          — the deriver produced a verdict (ran commands
+        #                              or a trustworthy "no gate"); ``blob`` gates.
+        #   • DerivedGateNotEligible — non-product / non-worktree; no diff to gate,
+        #                              so fall back to the agent's attestation.
+        #   • DerivedGateFailed      — the deriver could NOT run. On a repo that HAS
+        #                              a toolchain manifest this fails CLOSED.
+        gate_outcome = await self._run_derived_gate(run, box, written_paths)
+        derived_gate = gate_outcome.blob if isinstance(gate_outcome, DerivedGateOk) else None
+        deriver_failed = isinstance(gate_outcome, DerivedGateFailed)
+
+        # Was a gate DETERMINISTICALLY expected here? A real toolchain manifest
+        # physically present in the worktree decides — NEVER the LLM's self-declared
+        # ``applicable`` (INV-2 / founder 2026-07-14: "정말 없는 것만 통과, 할 게 있는데
+        # 못 한 것은 실패. 그 구분은 결정론적이어야 한다 — manifest/toolchain 탐지가
+        # applicable을 정한다"). A prose / early-greenfield repo with no manifest is
+        # legitimately gateless and still auto-proceeds.
+        applicable = run.product_id is not None and self._is_real_worktree(run)
+        gate_expected = applicable and self._manifest_present(run)
+
+        if derived_gate is not None:
+            # The deriver RAN — its exit-code verdict is authoritative.
+            command_gate_pass = bool(derived_gate["passed"])
+        elif deriver_failed and gate_expected:
+            # INV-2 fail-CLOSED: the gate was EXPECTED (a manifest exists) but the
+            # deriver could not run. A passing agent-command attestation — including
+            # a vacuous ``all([])`` over zero checks — does NOT rescue it: the run
+            # FAILS rather than reaching PROVED with zero objective gate commands
+            # executed (the exact fail-OPEN sin this closes).
+            command_gate_pass = False
+        else:
+            # No gate concept (non-eligible Direct run) OR a genuinely gateless
+            # greenfield repo (no manifest, even if the deriver hiccuped) — fall
+            # back to the agent's declared command attestation so legit greenfield
+            # work still proceeds (no regression).
+            command_gate_pass = all_cmd_pass
 
         passed = command_gate_pass and judge_pass and demo_pass
         outcome = VerificationOutcome.PASSED if passed else VerificationOutcome.FAILED
@@ -557,10 +625,9 @@ class VerificationService:
         # strength so "verified" is honest about HOW strongly it holds. Recorded
         # for the proof surface + the trust ratchet (D → founder review, L-I3c).
         # ``None`` for a non-product/Direct run — the repo-gate ladder is N/A.
-        applicable = run.product_id is not None and self._is_real_worktree(run)
-        # I4 — the ladder's gate legs now read the LLM-DERIVED gate (grounded in
-        # the repo's own manifests), not the per-stack detector. ``gate_passed``:
-        # the derived gate RAN and a command passed (a real objective leg).
+        # I4 — the ladder's gate legs read the LLM-DERIVED gate (grounded in the
+        # repo's own manifests), not the per-stack detector. ``gate_passed``: the
+        # derived gate RAN and a command passed (a real objective leg).
         # ``gate_discovered``: at least one command was derived (a runnable gate
         # exists) even if all were unavailable (→ grade C). No derived gate → D.
         derived_commands = derived_gate["commands"] if derived_gate is not None else []
@@ -580,12 +647,6 @@ class VerificationService:
             if passed
             else None
         )
-        # Was a gate reasonably EXPECTED here? The deriver decides: a repo with a
-        # real toolchain is ``applicable`` (a project that SHOULD verify with a
-        # command), while pure prose / an early greenfield repo is legitimately
-        # non-applicable. The ratchet uses this to tell a genuine grade-D weakness
-        # ("couldn't verify") from a legitimate skip — see needs_founder_review.
-        gate_expected = applicable and bool(derived_gate is not None and derived_gate["applicable"])
 
         vr = VerificationResult(
             id=uuid.uuid4(),
@@ -602,6 +663,14 @@ class VerificationService:
                 "scope": scope,
                 "honesty_grade": honesty_grade,
                 "gate_expected": gate_expected,
+                # Fail-closed telemetry (INV-2): the deriver could not run. Present
+                # only when it happened, so the proof surface can explain a FAILED
+                # (or reviewed) run whose ``derived_gate`` is therefore ``None``.
+                **(
+                    {"gate_deriver_failed": gate_outcome.reason}
+                    if isinstance(gate_outcome, DerivedGateFailed)
+                    else {}
+                ),
                 # Dedicated retrieval record — the STRUCTURED knowledge the verify
                 # retrieval surfaced (identity carried from the retriever). The
                 # delivery report reads THIS, not the contract's judge criteria.
@@ -646,6 +715,7 @@ class VerificationService:
                     ),
                     "honesty_grade": honesty_grade,
                     "gate_expected": gate_expected,
+                    "gate_deriver_failed": deriver_failed,
                 },
             )
         )
@@ -667,6 +737,23 @@ class VerificationService:
 
         worktree = run_worktree_path(run.id)
         return (worktree / ".git").exists()
+
+    @staticmethod
+    def _manifest_present(run: ExecutionRun) -> bool:
+        """DETERMINISTICALLY decide whether a verification gate is EXPECTED: does a
+        real toolchain manifest physically exist at the root of the run's
+        server-side worktree?
+
+        INV-2 / founder 2026-07-14: THIS decides ``applicable``, never the LLM's
+        self-declared word ("LLM이 applicable:false를 자기 선언하는 것은 신뢰하지
+        않는다"). A manifest present → the repo has a toolchain → a gate is expected,
+        so a deriver that could not run fails CLOSED. No manifest → genuinely
+        greenfield / prose → legitimately gateless, and still auto-proceeds. The
+        name list is the SAME :data:`_MANIFEST_FILES` the deriver grounds on."""
+        from backend.storage.product_workspace import run_worktree_path  # noqa: PLC0415
+
+        worktree = run_worktree_path(run.id)
+        return any((worktree / name).is_file() for name in _MANIFEST_FILES)
 
     @staticmethod
     def _truncate_intent(run: ExecutionRun, *, max_chars: int = 60) -> str:
@@ -727,11 +814,17 @@ class VerificationService:
 
     async def _author_derived_gate(
         self, intent: str, manifests: dict[str, str], written_paths: list[str]
-    ) -> DerivedGate | None:
+    ) -> DerivedGate | DerivedGateFailed:
         """Ask the independent deriver for this repo's verification commands,
-        grounded in its manifests. Bounded — a hung executor CLI must never
-        stall the run; a hiccup → ``None`` → the caller treats it as no gate
-        (best-effort, never a false-fail)."""
+        grounded in its manifests. Bounded — a hung executor CLI must never stall
+        the run.
+
+        3-state, fail-CLOSED (INV-2): a parsed :class:`DerivedGate` on success, or
+        :class:`DerivedGateFailed` when the deriver could NOT run — the bounded
+        call raised (timeout / provider 5xx / rate-limit) or the reply cannot be
+        parsed as the gate JSON. The OLD ``None`` sentinel conflated this failure
+        with "no gate", which let a transient failure fail OPEN into a silent
+        PROVED; the caller now fails closed on a manifest-present repo."""
         try:
             turn = await asyncio.wait_for(
                 self._llm.complete(
@@ -742,16 +835,16 @@ class VerificationService:
                 ),
                 timeout=_VERIFY_LLM_TIMEOUT_S,
             )
-        except Exception:  # noqa: BLE001 — a deriver hiccup must never break the run
-            return None
+        except Exception as exc:  # noqa: BLE001 — any deriver fault fails CLOSED, not open
+            return DerivedGateFailed(reason=f"deriver_error: {type(exc).__name__}")
         raw = _extract_json_object(str(getattr(turn, "content", "") or ""))
         if raw is None:
-            return None
+            return DerivedGateFailed(reason="deriver_unparseable")
         return parse_derived_gate(raw)
 
     async def _run_derived_gate(
         self, run: ExecutionRun, box: SandboxSession, written_paths: list[str]
-    ) -> dict[str, Any] | None:
+    ) -> DerivedGateOutcome:
         """I1′ — the repo's OWN verification gate, DERIVED by an LLM grounded in
         the repo's declarations (not a per-stack detector list nor a hardcoded
         ``uv run ruff`` bar). The derived commands RUN in the sandbox; the verdict
@@ -759,27 +852,34 @@ class VerificationService:
         here (exit 127) is ``unavailable`` — recorded, never a false-fail; a
         command that RAN and failed is a real gate failure.
 
-        Returns ``None`` for a non-product / non-worktree run, or on a deriver
-        hiccup (best-effort). Otherwise a blob: ``origin`` ("derived"),
-        ``applicable`` (does a runnable gate apply — a code change vs pure prose),
-        per-command ``commands`` (status ∈ passed|failed|unavailable), and
-        ``passed`` (no command RAN and failed). An ``applicable`` repo whose
-        commands could not be derived is applicable-but-empty (weak evidence)."""
+        3-state (INV-2, fail-CLOSED):
+        - :class:`DerivedGateNotEligible` — a non-product / non-worktree run (no
+          durable diff to gate).
+        - :class:`DerivedGateFailed` — the deriver could NOT run (transient LLM
+          failure / unparseable reply). The caller fails CLOSED on a
+          manifest-present repo (never a silent pass).
+        - :class:`DerivedGateOk` wrapping the persisted blob: ``origin``
+          ("derived"), ``applicable``, per-command ``commands`` (status ∈
+          passed|failed|unavailable), and ``passed`` (no command RAN and failed).
+          An ``applicable`` repo whose commands could not be derived is
+          applicable-but-empty (weak evidence, graded down — not a fail)."""
         if run.product_id is None or not self._is_real_worktree(run):
-            return None
+            return DerivedGateNotEligible()
         payload = run.payload or {}
         intent = str(payload.get("intent_text") or payload.get("text") or "").strip()
         manifests = await self._read_repo_manifests(box)
         gate = await self._author_derived_gate(intent, manifests, written_paths)
-        if gate is None:
-            return None
+        if isinstance(gate, DerivedGateFailed):
+            return gate
         if not gate.applicable or gate.is_empty:
-            return {
-                "origin": "derived",
-                "applicable": gate.applicable,
-                "commands": [],
-                "passed": True,
-            }
+            return DerivedGateOk(
+                {
+                    "origin": "derived",
+                    "applicable": gate.applicable,
+                    "commands": [],
+                    "passed": True,
+                }
+            )
         venv_ready = await self._ensure_project_venv(box)
         venv_bin = f"{box.workspace_mount}/.venv/bin"
         results: list[dict[str, Any]] = []
@@ -806,12 +906,14 @@ class VerificationService:
                 }
             )
         passed = not any(r["status"] == "failed" for r in results)
-        return {
-            "origin": "derived",
-            "applicable": gate.applicable,
-            "commands": results,
-            "passed": passed,
-        }
+        return DerivedGateOk(
+            {
+                "origin": "derived",
+                "applicable": gate.applicable,
+                "commands": results,
+                "passed": passed,
+            }
+        )
 
     async def _ensure_project_venv(self, box: SandboxSession) -> bool:
         """For a uv-managed worktree, materialize ``.venv`` (incl. extras —
@@ -1063,6 +1165,10 @@ def parse_judge_verdict(raw: str) -> dict[str, Any]:
 __all__ = [
     "VERIFY_TIMEOUT_S",
     "CanonRetriever",
+    "DerivedGateFailed",
+    "DerivedGateNotEligible",
+    "DerivedGateOk",
+    "DerivedGateOutcome",
     "JudgeLlm",
     "VerificationService",
     "parse_judge_verdict",
