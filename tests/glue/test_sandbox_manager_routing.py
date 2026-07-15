@@ -45,7 +45,7 @@ def test_enabled_builds_docker_manager_not_noop(monkeypatch) -> None:
         max_concurrent=1,
     )
     monkeypatch.setattr(
-        "backend.workflow.application.runtime.agent_runtime.build_sandbox_manager",
+        "backend.workflow.application.runtime.agent_runtime.get_sandbox_manager",
         lambda: captured,
     )
     resolved = _resolve_sandbox_manager(None, _Settings(sandbox_enabled=True))
@@ -61,7 +61,7 @@ def test_enabled_but_unbuildable_raises_not_silent_host_fallback(monkeypatch) ->
     """The anti-regression: enabled + build returns None must NOT degrade to a
     NoopSandboxManager (host execution) — it raises so the failure is loud."""
     monkeypatch.setattr(
-        "backend.workflow.application.runtime.agent_runtime.build_sandbox_manager",
+        "backend.workflow.application.runtime.agent_runtime.get_sandbox_manager",
         lambda: None,
     )
     with pytest.raises(RuntimeError, match="sandbox_enabled"):
