@@ -134,6 +134,28 @@ Gate = Ok(...) | NotApplicable(reason) | Failed(reason)
 
 **테스트 규율**: MCP 툴 delegation 테스트의 fake registry를 **진짜 `ToolRegistry`로 교체**한다. 지금은 인자를 기록만 하고 핸들러를 안 불러서 `file_edit`의 인자명 불일치가 통과했다.
 
+#### INV-7 진행 상태 — 2026-07-15 (executor 경로 실제 구동으로 검증)
+
+executor 경로를 **처음으로 실제 코딩 작업으로 구동**해(run `86bb4354` → **shipped**) 이 불변식들을 하나씩 라이브로 검증했다. 실증 결과 `artifact_refs`가 채워지고(이전엔 모든 executor 런에서 조용히 `[]`) 요약이 조립되며 호스트 repo가 바이트 동일. 각 sub-invariant 상태:
+
+| # | 불변식 | 상태 | 근거 |
+|---|---|---|---|
+| 1 | 툴 레지스트리 빌더 하나 | ⚠️ 부분 | `coordinator`와 loop가 이제 **같은 런-상태 채널**을 읽지만(#563), 팩토리 자체는 아직 둘. `knowledge_search`는 여전히 MCP 레지스트리 미등록 → **라이브 `Unknown tool` 재확인** = executor 에이전트 **RAG 그라운딩 0** |
+| 2 | `WORK_TOOL_NAMES` 레지스트리 파생 | ❌ 미완 (최우선) | 손으로 미러링한 스키마 **2개가 프로덕션에서 drift**: `file_edit` old/new (#561 수정), `declare_verification`이 **파라미터 0개 광고**→에이전트가 추측→틀리면 verify-first 게이트가 이후 **모든 쓰기 거부**, 비결정적 (#564 수정). **패치로는 클래스가 안 죽는다 — 파생이 답** |
+| 3 | 상태는 런에 산다 | ✅ 완료 | loop를 런 상태에 배선(#561) + 병렬 MCP 호출의 **lost-update**(read-modify-write가 서로 삭제) row-lock+가산 merge로 수정(#563) |
+| 5 | 시스템 프롬프트 T2 현실 반영 | ✅ 완료 | E30 impedance match(`_E30_TOOL_GUIDE_HEADER` + `_synthesize_executor_tool_calls`) **삭제**(T3/#562) |
+| 7 | 워커 클론 + scrape-back 삭제 | ✅ 완료 | T3(#562), −2532 LOC. `raw = b"" if truncated`(라이브 워크트리 0바이트 덮어쓰기)·`deleted:True`→422·E32 클론·100파일 캡 전부 제거 |
+
+**미완(#4 샌드박스 싱글턴, #6 codex/opencode chat 툴)은 이번에 손대지 않음.**
+
+**새로 발견된 잔여 큐 (전부 실제 구동으로 발견, 경로 차단은 아님):**
+
+* **`shell_exec` 데니리스트 substring 오탐.** `SHELL_DENYLIST_PATTERNS`에 `"nc "`가 있는데 이는 **평범한 단어의 부분문자열**이다 — `async `가 `nc `+공백으로 끝나서 `async`를 언급하는 정상 명령이 netcat으로 거부된다(라이브 run `86bb4354`). 쉘 텍스트를 substring으로 막는 건 **write 추적을 tool 이름으로 하는 것과 같은 "파싱 대신 패턴매칭" 실수** — 토큰화/`shlex`로 판정해야 한다.
+* **`ExecutorOrchestrator` + `coordinator.py` + `verify_handoff.py` 삭제.** 프로덕션 호출자 0(팩토리는 `RunOrchestrator`만 빌드). T3가 이들을 깨뜨렸고(refs를 삭제된 scrape에서 읽음) 런 tool-state를 읽도록 재배선해 살려뒀을 뿐 — **다음 삭제 대상**.
+* **CI flake.** `tests/dispatch/test_adapter.py::TestExecutorAdapterChat`의 timeout 테스트가 타이밍 민감 → 재실행 2회 유발.
+
+**메타 교훈(이 세션):** 위 버그들은 전부 **"검사가 자기가 검사할 것을 못 보는"** 형태였다 — 부재를 못 보는 가드, exit code를 삼키는 파이프 게이트, 시도를 성공으로 읽는 로그(`mcp_work_tool`은 실행 *전에* 찍힘 — 진실은 `mcp_tool_handler_failed`), 인자만 기록하는 fake registry. 유닛테스트·CI green으로는 하나도 못 잡혔고 **실제 구동만이 드러냈다**. [[capability-guard-must-assert-presence]] · [[piped-gate-masks-exit-code]]
+
 ### INV-8. Safe Mode는 아웃바운드만 게이트한다
 
 파운더 확인(2026-07-14): **Safe Mode는 "세상으로 나가는 것"만 막는다.** 내부 지식 정규화(`create-concept` auto-apply)는 genuine risk가 아니므로 자동 적용이 의도대로다.
