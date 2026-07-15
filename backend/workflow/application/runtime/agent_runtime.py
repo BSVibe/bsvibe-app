@@ -58,7 +58,7 @@ from backend.workflow.infrastructure.db import ExecutionRun
 from backend.workflow.infrastructure.sandbox import (
     NoopSandboxManager,
     SandboxManager,
-    build_sandbox_manager,
+    get_sandbox_manager,
 )
 from backend.workflow.infrastructure.workers.agent_worker import AgentExecutionDeps
 
@@ -163,7 +163,7 @@ def _resolve_sandbox_manager(
     if sandbox_manager is not None:
         return sandbox_manager
     if settings.sandbox_enabled:
-        built = build_sandbox_manager()
+        built = get_sandbox_manager()
         if built is None:
             raise RuntimeError(
                 "sandbox_enabled is true but no sandbox manager could be built — "

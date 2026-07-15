@@ -28,7 +28,7 @@ from backend.workflow.application.tool_registry import (
     WORK_TOOL_STATE_KEY as _WORK_TOOL_STATE_KEY,
 )
 from backend.workflow.infrastructure.db import ExecutionRun
-from backend.workflow.infrastructure.sandbox import build_sandbox_manager
+from backend.workflow.infrastructure.sandbox import get_sandbox_manager
 from backend.workflow.infrastructure.tools import ToolRegistry
 
 logger = structlog.get_logger(__name__)
@@ -42,14 +42,18 @@ WORK_TOOL_STATE_KEY = _WORK_TOOL_STATE_KEY
 async def _sandbox_for(run: ExecutionRun, workspace_dir: Path) -> Any:
     """The run's sandbox session — the same box the verifier runs in.
 
-    ``SandboxManager.acquire`` is per-PROJECT and reused across runs, so the API process can
-    attach to the session the worker's loop is already using; no cross-process RPC. A run with
-    no product (substrate-only) gets no sandbox: the tool layer then refuses ``shell_exec``
-    rather than silently running it on the host.
+    Resolved through the process singleton (``get_sandbox_manager``), NOT a fresh build: this
+    transport is invoked once per MCP tool call, and a per-call manager carries an empty
+    container cache, so ``acquire`` would tear down (``docker rm -f``) and recreate the
+    per-project container on EVERY ``file_read`` — the 300s-timeout tax, and it kills the
+    container a parallel run is verifying in. The singleton keeps one cache for the process, so
+    the container is created once and reused across a run's tool calls. A run with no product
+    (substrate-only) gets no sandbox: the tool layer then refuses ``shell_exec`` rather than
+    silently running it on the host.
     """
     if run.product_id is None:
         return None
-    manager = build_sandbox_manager()
+    manager = get_sandbox_manager()
     if manager is None:
         return None
     return await manager.acquire(run.product_id, str(workspace_dir))

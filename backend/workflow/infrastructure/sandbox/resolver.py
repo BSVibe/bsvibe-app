@@ -16,6 +16,12 @@ _resolved = False
 
 
 def build_sandbox_manager() -> SandboxManager | None:
+    """Construct a fresh, UNCACHED manager. Internal to the singleton + unit tests.
+
+    Production code that wants the process sandbox manager MUST call
+    :func:`get_sandbox_manager` instead — a fresh manager carries an empty container cache, so
+    reusing this per request tears down and recreates the per-project container on every call.
+    """
     settings = get_settings()
     if settings.sandbox_enabled:
         return DockerSandboxManager(
