@@ -75,6 +75,13 @@ class OpenCodeExecutor:
     async def execute(self, prompt: str, context: dict[str, Any]) -> AsyncIterator[ExecutionChunk]:
         system = context.get("system") or ""
         model = context.get("model") or None
+        # INV-7 #6 — a chat turn (frame/judge/ingest: no BSVibe tools) must run with the
+        # executor's OWN tools OFF and answer in a single turn. Left agentic, opencode explores
+        # its empty per-task temp dir and answers about IT (verified live, opencode 1.17.3: with
+        # tools present the model ran ``bash: ls`` and replied "the current working directory is
+        # empty"). Absent key → agent run (back-compat: an older backend carries no flag, and a
+        # coding loop must never silently lose its tools).
+        agentic = context.get("agentic", True) is not False
         # Lift E35 — pin every opencode session to the worker's per-task clone
         # (set by ``handle_task`` to ``local_workspace``). Without this opencode
         # binds the session to its OWN cwd, which is inherited from the worker
@@ -102,7 +109,7 @@ class OpenCodeExecutor:
             )
             return
 
-        body = self._build_message_body(prompt, system, model)
+        body = self._build_message_body(prompt, system, model, agentic)
 
         # Mutable holder so the inner helper can publish the session_id back
         # to the cancel handler the moment it is created — without this, a
@@ -178,7 +185,9 @@ class OpenCodeExecutor:
 
     # ── Internals ───────────────────────────────────────────────────────────
 
-    def _build_message_body(self, prompt: str, system: str, model: str | None) -> dict[str, Any]:
+    def _build_message_body(
+        self, prompt: str, system: str, model: str | None, agentic: bool
+    ) -> dict[str, Any]:
         """Assemble the ``POST /session/{id}/message`` body.
 
         ``system`` is a TOP-LEVEL key alongside ``parts`` (dogfood-verified
@@ -189,11 +198,19 @@ class OpenCodeExecutor:
         ``/`` to derive provider + model. An id without a ``/`` can't be split
         (we'd guess wrong and opencode would 400) — omit ``model`` entirely and
         let the daemon's default fire.
+
+        INV-7 #6 — a chat turn (``agentic=False``) sets ``tools: {"*": false}``.
+        opencode's message schema takes a ``tools`` map of tool-name → bool; the
+        ``"*"`` wildcard turns EVERY tool off so the model answers from the prompt
+        instead of exploring its empty temp dir (verified live, opencode 1.17.3).
+        An agent run omits the key and keeps its full tool set.
         """
         body: dict[str, Any] = {
             "parts": [{"type": "text", "text": prompt}],
             "agent": self._settings.opencode_serve_agent,
         }
+        if not agentic:
+            body["tools"] = {"*": False}
         if system:
             body["system"] = system
         if model and "/" in model:

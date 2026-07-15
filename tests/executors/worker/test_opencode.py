@@ -164,6 +164,55 @@ async def test_message_body_uses_system_alongside_parts_not_inside() -> None:
     assert body["model"] == {"providerID": "anthropic", "modelID": "claude"}
 
 
+# ── chat parity: a chat turn disables all of opencode's own tools ────────────
+#
+# INV-7 #6: a chat turn (frame/judge/ingest — no BSVibe tools) must run with the
+# executor's OWN tools OFF, answering in a single turn. Left agentic, opencode
+# explores its empty per-task temp dir and answers about IT — verified live against
+# opencode 1.17.3: with tools present the model ran ``bash: ls`` and replied "The
+# current working directory (/private/tmp/…) is empty"; with ``tools: {"*": false}``
+# on the message NO tool executed. The ``tools`` field (map of tool-name → bool,
+# from the ``/session/{id}/message`` OpenAPI schema) with the ``"*"`` wildcard is the
+# honest tools-off switch, mirroring claude_code's ``--disallowedTools "*"``.
+
+
+async def test_chat_turn_disables_all_tools() -> None:
+    """agentic=False → the message body carries ``tools: {"*": false}`` so the
+    model has NO tools and cannot inspect the empty temp dir."""
+    serve = _FakeServe(text="ok")
+    executor = _executor_with(serve)
+
+    await _drain(executor.execute("p", {"system": "ctx", "agentic": False, "workspace_dir": "."}))
+
+    body = serve.message_requests[0]
+    assert body["tools"] == {"*": False}
+
+
+async def test_agent_run_keeps_its_tools() -> None:
+    """agentic=True → unchanged: no ``tools`` key, so the coding agent keeps its
+    full tool set to act in its sandbox."""
+    serve = _FakeServe(text="ok")
+    executor = _executor_with(serve)
+
+    await _drain(executor.execute("p", {"system": "ctx", "agentic": True, "workspace_dir": "."}))
+
+    body = serve.message_requests[0]
+    assert "tools" not in body
+
+
+async def test_missing_agentic_defaults_to_agent_run() -> None:
+    """Back-compat: a task from an older backend carries no ``agentic`` key.
+    Default to the agent run — a coding loop that silently lost its tools would
+    ship empty diffs."""
+    serve = _FakeServe(text="ok")
+    executor = _executor_with(serve)
+
+    await _drain(executor.execute("p", {"workspace_dir": "."}))
+
+    body = serve.message_requests[0]
+    assert "tools" not in body
+
+
 async def test_message_body_model_splits_opencode_go_vendor_prefix() -> None:
     """E24 — vendor ids like ``opencode-go/qwen3.6-plus`` split at the FIRST
     slash so ``providerID='opencode-go'`` and ``modelID='qwen3.6-plus'``.
