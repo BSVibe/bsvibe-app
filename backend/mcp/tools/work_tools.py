@@ -33,6 +33,10 @@ import structlog
 from pydantic import BaseModel, ConfigDict, Field
 
 from backend.mcp.api import Tool, ToolContext, ToolError, ToolRegistry
+from backend.workflow.application.tool_registry import (
+    RUN_TOOL_FORWARDING,
+    WORK_TOOL_MCP_NAMES,
+)
 
 logger = structlog.get_logger(__name__)
 
@@ -221,6 +225,57 @@ RecordQuestion = Callable[[Any, Any, dict[str, Any]], Awaitable[str]]
 RecordDeliverable = Callable[[Any, Any, dict[str, Any]], Awaitable[str]]
 
 
+#: The per-``inner`` presentation of a forwarding tool: its pydantic input schema (the schema is
+#: DERIVED from — i.e. mirrors — the inner registry's argument contract; that is the whole point
+#: of INV-7's ``file_edit`` old/new and ``declare_verification`` fixes), its description, and
+#: whether it needs the write scope. The tool NAMES and their inner targets are NOT here — they
+#: are the single source of truth in ``tool_registry.RUN_TOOL_FORWARDING``, which the dispatch
+#: adapter also reads to build the CLI allowlist. Keyed by inner name; every inner in
+#: ``RUN_TOOL_FORWARDING`` must have an entry (asserted below at import time).
+_FORWARDING_PRESENTATION: dict[str, tuple[type[BaseModel], str, bool]] = {
+    "file_read": (FileReadInput, "Read a text file from the run's workspace.", False),
+    "file_list": (FileListInput, "List directory entries in the run's workspace.", False),
+    "file_write": (FileWriteInput, "Create or overwrite a file in the run's workspace.", True),
+    "file_edit": (FileEditInput, "Replace an exact string in a file in the run's workspace.", True),
+    "shell_exec": (
+        ShellExecInput,
+        "Run a shell command inside the run's sandbox (cwd = the workspace).",
+        True,
+    ),
+    "declare_verification": (
+        DeclareVerificationInput,
+        (
+            "Declare HOW this work will be verified, as a list of `checks` — REQUIRED "
+            "before you may write any file. A 'command' check is a shell command whose "
+            "exit code is the verdict, run through the project runner and scoped to the "
+            "files you change (e.g. `uv run pytest tests/test_x.py`). Call this FIRST."
+        ),
+        True,
+    ),
+    "knowledge_search": (
+        KnowledgeSearchInput,
+        "Search the workspace's settled knowledge mid-run.",
+        False,
+    ),
+}
+
+#: The run-scoped MCP tools that FORWARD to the run's inner ``ToolRegistry``, assembled from the
+#: SoT name/inner pairs (``RUN_TOOL_FORWARDING``) + the local presentation. :func:`register_work_tools`
+#: builds the MCP ``Tool`` objects from this; the meta-test drives the shared factory to prove
+#: every ``inner`` is actually registered, so an advertised-but-``Unknown tool`` (the
+#: ``knowledge_search`` defect) is impossible by construction (INV-7 #2).
+WORK_TOOL_FORWARDING_SPECS: tuple[dict[str, Any], ...] = tuple(
+    dict(
+        name=mcp_name,
+        inner=inner,
+        input_schema=_FORWARDING_PRESENTATION[inner][0],
+        description=_FORWARDING_PRESENTATION[inner][1],
+        write=_FORWARDING_PRESENTATION[inner][2],
+    )
+    for mcp_name, inner in RUN_TOOL_FORWARDING
+)
+
+
 def register_work_tools(
     registry: ToolRegistry,
     *,
@@ -267,63 +322,8 @@ def register_work_tools(
             required_scopes=("mcp:write",) if write else ("mcp:read",),
         )
 
-    for spec in (
-        dict(
-            name="bsvibe_work_file_read",
-            inner="file_read",
-            description="Read a text file from the run's workspace.",
-            input_schema=FileReadInput,
-            write=False,
-        ),
-        dict(
-            name="bsvibe_work_file_list",
-            inner="file_list",
-            description="List directory entries in the run's workspace.",
-            input_schema=FileListInput,
-            write=False,
-        ),
-        dict(
-            name="bsvibe_work_file_write",
-            inner="file_write",
-            description="Create or overwrite a file in the run's workspace.",
-            input_schema=FileWriteInput,
-            write=True,
-        ),
-        dict(
-            name="bsvibe_work_file_edit",
-            inner="file_edit",
-            description="Replace an exact string in a file in the run's workspace.",
-            input_schema=FileEditInput,
-            write=True,
-        ),
-        dict(
-            name="bsvibe_work_shell_exec",
-            inner="shell_exec",
-            description="Run a shell command inside the run's sandbox (cwd = the workspace).",
-            input_schema=ShellExecInput,
-            write=True,
-        ),
-        dict(
-            name="bsvibe_work_declare_verification",
-            inner="declare_verification",
-            description=(
-                "Declare HOW this work will be verified, as a list of `checks` — REQUIRED "
-                "before you may write any file. A 'command' check is a shell command whose "
-                "exit code is the verdict, run through the project runner and scoped to the "
-                "files you change (e.g. `uv run pytest tests/test_x.py`). Call this FIRST."
-            ),
-            input_schema=DeclareVerificationInput,
-            write=True,
-        ),
-        dict(
-            name="bsvibe_work_knowledge_search",
-            inner="knowledge_search",
-            description="Search the workspace's settled knowledge mid-run.",
-            input_schema=KnowledgeSearchInput,
-            write=False,
-        ),
-    ):
-        registry.register(_tool(**spec))  # type: ignore[arg-type]
+    for spec in WORK_TOOL_FORWARDING_SPECS:
+        registry.register(_tool(**spec))
 
     async def _h_ask(args: BaseModel, ctx: ToolContext) -> dict[str, str]:
         run_id = _run_of(ctx)
@@ -362,6 +362,8 @@ def register_work_tools(
 
 
 __all__ = [
+    "WORK_TOOL_FORWARDING_SPECS",
+    "WORK_TOOL_MCP_NAMES",
     "WORK_TOOL_PREFIX",
     "RegistryForRun",
     "WorkToolRegistry",

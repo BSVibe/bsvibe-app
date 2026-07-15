@@ -154,6 +154,37 @@ async def test_an_unknown_run_is_refused(tmp_path: Path, monkeypatch: pytest.Mon
         )
 
 
+async def test_knowledge_search_is_invokable_through_the_factory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """INV-7 #1 — the live defect. The MCP layer ADVERTISED ``bsvibe_work_knowledge_search`` and
+    forwarded it to inner ``knowledge_search``, but ``build_run_tool_registry`` built a BARE
+    ``ToolRegistry`` that only registers the six base tools — so every call came back
+    ``ToolError: Unknown tool: 'knowledge_search'`` and the executor agent's RAG grounding was 0
+    (measured live). The single factory both transports share must register it, so this can no
+    longer be advertised-but-absent."""
+    from backend.mcp.tools import work_registry
+
+    run_id, ws = uuid.uuid4(), uuid.uuid4()
+    (tmp_path / "runs" / str(run_id)).mkdir(parents=True)
+    monkeypatch.setattr(
+        work_registry, "run_worktree_path", lambda rid: tmp_path / "runs" / str(rid)
+    )
+    monkeypatch.setattr(work_registry, "_sandbox_for", _no_sandbox)
+
+    registry = await work_registry.build_run_tool_registry(
+        run_id,
+        ToolContext(  # type: ignore[arg-type]
+            principal=_principal(run_id=run_id, workspace_id=ws),
+            session=_FakeRuns(_Run(run_id, ws)),
+        ),
+    )
+
+    # Not ``Unknown tool``: it resolves and runs (empty-workspace → graceful "no knowledge").
+    out = await registry.invoke("knowledge_search", {"query": "how do we verify"})
+    assert isinstance(out, str) and out
+
+
 async def _no_sandbox(_run: Any, _workspace_dir: Path) -> None:
     """Tool handlers accept ``sandbox=None`` (host execution is refused at that seam)."""
     return None

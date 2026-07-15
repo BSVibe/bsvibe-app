@@ -140,8 +140,8 @@ executor 경로를 **처음으로 실제 코딩 작업으로 구동**해(run `86
 
 | # | 불변식 | 상태 | 근거 |
 |---|---|---|---|
-| 1 | 툴 레지스트리 빌더 하나 | ⚠️ 부분 | `coordinator`와 loop가 이제 **같은 런-상태 채널**을 읽지만(#563), 팩토리 자체는 아직 둘. `knowledge_search`는 여전히 MCP 레지스트리 미등록 → **라이브 `Unknown tool` 재확인** = executor 에이전트 **RAG 그라운딩 0** |
-| 2 | `WORK_TOOL_NAMES` 레지스트리 파생 | ❌ 미완 (최우선) | 손으로 미러링한 스키마 **2개가 프로덕션에서 drift**: `file_edit` old/new (#561 수정), `declare_verification`이 **파라미터 0개 광고**→에이전트가 추측→틀리면 verify-first 게이트가 이후 **모든 쓰기 거부**, 비결정적 (#564 수정). **패치로는 클래스가 안 죽는다 — 파생이 답** |
+| 1 | 툴 레지스트리 빌더 하나 | ✅ 완료 (base+knowledge_search) | `assemble_run_tool_registry`(clean `tool_registry`) **하나**를 MCP transport(`build_run_tool_registry`)와 loop(`_drive_loop`) 둘 다 호출 → base 6 + `knowledge_search`가 두 경로에서 구조적으로 동일. `knowledge_search`가 MCP 레지스트리에 등록돼 **`Unknown tool` 소멸**(retriever는 `backend.knowledge` — MCP allowlist 내 — 로 API 프로세스에서 자체 materialize). **`invoke_skill`/커넥터 액션은 이 lift 밖**: 등록 코드가 `backend.extensions`/`backend.connectors`(MCP 금지 import)라 composition-root 주입 필요 — worker 경로에선 계속 동작, MCP는 후속 |
+| 2 | `WORK_TOOL_NAMES` 레지스트리 파생 | ✅ 완료 | `WORK_TOOL_NAMES` = `tool_registry.WORK_TOOL_MCP_NAMES`(단일 `RUN_TOOL_FORWARDING`에서 파생). MCP `Tool` 등록·CLI allowlist·inner 레지스트리 셋이 전부 그 한 튜플에서 나옴 → 광고≢등록이 **구조적으로 불가능**. 메타테스트가 **실제 팩토리를 구동**해 forwarding 툴의 inner가 등록됐는지 검증(fake-registry가 못 잡던 `knowledge_search` drift 차단). `file_edit` old/new·`declare_verification` 스키마는 여전히 손으로 미러링이나 real-registry round-trip 테스트로 커버 |
 | 3 | 상태는 런에 산다 | ✅ 완료 | loop를 런 상태에 배선(#561) + 병렬 MCP 호출의 **lost-update**(read-modify-write가 서로 삭제) row-lock+가산 merge로 수정(#563) |
 | 5 | 시스템 프롬프트 T2 현실 반영 | ✅ 완료 | E30 impedance match(`_E30_TOOL_GUIDE_HEADER` + `_synthesize_executor_tool_calls`) **삭제**(T3/#562) |
 | 7 | 워커 클론 + scrape-back 삭제 | ✅ 완료 | T3(#562), −2532 LOC. `raw = b"" if truncated`(라이브 워크트리 0바이트 덮어쓰기)·`deleted:True`→422·E32 클론·100파일 캡 전부 제거 |

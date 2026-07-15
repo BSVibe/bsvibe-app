@@ -47,7 +47,7 @@ from backend.workflow.application._loop_context import (
     design_directive_message,
     design_seed_message,
     knowledge_seed_message,
-    register_knowledge_tools,
+    register_invoke_skill_tool,
     suggested_skill_message,
 )
 from backend.workflow.application.audit_events import (
@@ -247,8 +247,8 @@ class RunOrchestrator:
 
     # -- method delegations (signature stability for any caller) -----------
 
-    def _register_knowledge_tools(self, registry: ToolRegistry) -> list[str]:
-        return register_knowledge_tools(
+    def _register_invoke_skill_tool(self, registry: ToolRegistry) -> list[str]:
+        return register_invoke_skill_tool(
             registry,
             skill_loader=self._skill_loader,
             retriever=self._retriever,

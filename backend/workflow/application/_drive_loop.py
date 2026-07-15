@@ -31,11 +31,12 @@ from backend.workflow.application.audit_events import (
 from backend.workflow.application.tool_registry import (
     ASK_USER_QUESTION_TOOL,
     MAX_NO_WORK_NUDGES,
+    RUN_TOOL_INNER_NAMES,
     WORK_TOOL_STATE_KEY,
-    WORK_TOOLS,
     _assistant_tool_call_message,
     _invoke_tool_safely,
     _sanitize_ask_user_question_options,
+    assemble_run_tool_registry,
 )
 from backend.workflow.domain.emit_deliverable import (
     EMIT_DELIVERABLE_NAME,
@@ -54,7 +55,6 @@ from backend.workflow.infrastructure.db import (
     WorkStep,
 )
 from backend.workflow.infrastructure.sandbox import SandboxSession
-from backend.workflow.infrastructure.tools import ToolRegistry
 
 if TYPE_CHECKING:
     from backend.workflow.application.agent_loop import LoopResult, RunOrchestrator
@@ -138,13 +138,19 @@ async def drive_loop(  # noqa: PLR0911, PLR0912, PLR0915 — preserved cycle bod
     (session, retriever, redis_client, live_event_bus, settings) is
     consistent with the rest of the loop.
     """
-    registry = ToolRegistry(workspace_dir=workspace_dir, sandbox=box)
-    extra_tool_names = orch._register_knowledge_tools(registry)
+    # INV-7 #1 — the SAME factory the MCP transport calls, so the base tools + knowledge_search
+    # cannot drift between the two paths. invoke_skill + connector actions are layered on AFTER:
+    # their registration code lives in backend.extensions / backend.connectors, which the MCP
+    # context is forbidden to import, so they ride the worker path only (see RUN_TOOL_INNER_NAMES).
+    registry = assemble_run_tool_registry(
+        workspace_dir=workspace_dir, sandbox=box, retriever=orch._retriever
+    )
+    extra_tool_names = orch._register_invoke_skill_tool(registry)
     connector_tool_names = await orch._register_connector_action_tools(
         registry, run=run, work_step=work_step
     )
     tools_schema = [
-        *registry.schema_for([*WORK_TOOLS, *extra_tool_names, *connector_tool_names]),
+        *registry.schema_for([*RUN_TOOL_INNER_NAMES, *extra_tool_names, *connector_tool_names]),
         ASK_USER_QUESTION_TOOL,
         # B12a — mid-loop Deliver events: one per external artifact emitted
         # DURING the run, BEFORE the verified terminal.

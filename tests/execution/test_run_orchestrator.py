@@ -1405,8 +1405,11 @@ async def test_knowledge_search_empty_workspace_returns_valid_empty(tmp_path: Pa
 
 
 async def test_loop_without_skill_loader_omits_skill_tools(tmp_path: Path) -> None:
-    """Backward-compat: a run with no skill loader wired (existing callers /
-    tests) surfaces neither new tool — the loop is unchanged."""
+    """Without a skill loader wired, ``invoke_skill`` is omitted (it genuinely
+    needs the loader) but the base ``knowledge_search`` tool remains present —
+    it is always registered and degrades to empty-valid without a retriever.
+    This is the chat≡executor parity invariant: the executor always advertises
+    ``knowledge_search`` in ``WORK_TOOL_NAMES``, so the loop must too."""
     llm = ScriptedLlm([LoopTurn(content="done", tool_calls=())])
     async with memory_session() as session:
         run = await _make_run(session)
@@ -1417,7 +1420,7 @@ async def test_loop_without_skill_loader_omits_skill_tools(tmp_path: Path) -> No
     assert first_tools is not None
     names = _tool_names(first_tools)
     assert INVOKE_SKILL_NAME not in names
-    assert "knowledge_search" not in names
+    assert "knowledge_search" in names
     assert "file_write" in names
 
 

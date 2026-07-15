@@ -21,13 +21,17 @@ from backend.config import Settings
 from backend.extensions.skill.loader import SkillLoader
 from backend.extensions.skill.tool_binding import INVOKE_SKILL_NAME, register_invoke_skill
 from backend.workflow.application.tool_registry import (
-    _KNOWLEDGE_SEARCH_MAX_RESULTS,
     _KNOWLEDGE_SEED_MAX_CHARS_PER_STATEMENT,
     _KNOWLEDGE_SEED_MAX_RESULTS,
-    KNOWLEDGE_SEARCH_NAME,
+    make_knowledge_search_handler,
 )
 from backend.workflow.infrastructure.db import ExecutionRun
-from backend.workflow.infrastructure.tools import ToolDefinition, ToolRegistry
+from backend.workflow.infrastructure.tools import ToolRegistry
+
+# ``make_knowledge_search_handler`` is imported (and re-exported via ``__all__``) from the clean
+# ``tool_registry`` module so the worker's existing callers keep importing it from here while the
+# MCP transport — forbidden from importing this ``backend.extensions``-tainted module — registers
+# the same handler through the shared factory.
 
 logger = structlog.get_logger(__name__)
 
@@ -243,87 +247,38 @@ def suggested_skill_message(
     }
 
 
-def make_knowledge_search_handler(retriever: Any) -> Any:
-    """Build the ``knowledge_search`` tool handler bound to ``retriever``.
-
-    Never raises into the loop. Returns a human-legible string of the top
-    canonical statements for the query, or a valid empty result when there
-    is no knowledge / no retriever / the retrieval fails."""
-
-    async def handler(arguments: dict[str, Any]) -> str:
-        query = str(arguments.get("query") or "").strip()
-        if not query:
-            return "knowledge_search requires a non-empty 'query'."
-        if retriever is None:
-            return "No workspace knowledge is available."
-        try:
-            statements = await retriever.retrieve_for_signals(query)
-        except Exception:  # noqa: BLE001 — read-only consult must never crash the loop
-            logger.warning("knowledge_search_failed", exc_info=True)
-            return "No workspace knowledge is available."
-        statements = [s.strip() for s in statements if s and s.strip()][
-            :_KNOWLEDGE_SEARCH_MAX_RESULTS
-        ]
-        if not statements:
-            return f"No settled knowledge found for: {query}"
-        lines = [f"Relevant workspace knowledge for '{query}':"]
-        lines.extend(f"- {s}" for s in statements)
-        return "\n".join(lines)
-
-    return handler
-
-
-def register_knowledge_tools(
+def register_invoke_skill_tool(
     registry: ToolRegistry,
     *,
     skill_loader: SkillLoader | None,
     retriever: Any,
     completion_fn: Any,
 ) -> list[str]:
-    """Register ``invoke_skill`` + ``knowledge_search`` into ``registry``.
+    """Register ``invoke_skill`` into ``registry`` — the WORKER-ONLY tool.
 
-    Only when a workspace :class:`SkillLoader` is provided (the production
-    worker factory always threads one in). Returns the names added so the
-    caller can fold them into the surfaced tool schema. A missing loader →
-    no extra tools (legacy behaviour, empty list)."""
+    Separate from ``knowledge_search`` (now built by the shared
+    :func:`~backend.workflow.application.tool_registry.assemble_run_tool_registry`) because
+    ``register_invoke_skill`` lives in ``backend.extensions.skill`` — a context the MCP transport
+    is forbidden to import. So the in-process loop adds it here, after the shared factory; the MCP
+    path leaves it out until a follow-up threads a ``SkillLoader`` + completion fn in from the
+    composition root (INV-7 #1, follow-up).
+
+    Only when a workspace :class:`SkillLoader` is provided (the production worker factory always
+    threads one in). Returns the names added so the caller can fold them into the surfaced tool
+    schema. A missing loader → empty list."""
     if skill_loader is None:
         return []
     searcher = _RetrieverSearcher(retriever) if retriever is not None else None
-    # invoke_skill — runs a named workspace skill end-to-end. The skill
-    # runner's completion seam routes through the SAME loop LLM (adapted to
-    # its (system_prompt, user_input) shape); the optional searcher primes
-    # the skill's system prompt with retrieved knowledge.
+    # invoke_skill — runs a named workspace skill end-to-end. The skill runner's completion seam
+    # routes through the SAME loop LLM (adapted to its (system_prompt, user_input) shape); the
+    # optional searcher primes the skill's system prompt with retrieved knowledge.
     register_invoke_skill(
         registry,
         loader=skill_loader,
         completion_fn=completion_fn,
         searcher=searcher,
     )
-    # knowledge_search — read-only, lets the LLM consult canonical knowledge
-    # mid-run. Backed by the retriever; empty/no-knowledge → empty-but-valid.
-    registry.register(
-        ToolDefinition(
-            name=KNOWLEDGE_SEARCH_NAME,
-            description=(
-                "Search this workspace's settled canonical knowledge for guidance "
-                "relevant to your task. Returns the most relevant canonical concept "
-                "statements (may be empty if the workspace has no settled knowledge "
-                "yet). Read-only — consult it before deciding how to do the work."
-            ),
-            parameters_schema={
-                "type": "object",
-                "properties": {
-                    "query": {
-                        "type": "string",
-                        "description": "What you want to know — describe the task or topic.",
-                    },
-                },
-                "required": ["query"],
-            },
-            handler=make_knowledge_search_handler(retriever),
-        )
-    )
-    return [INVOKE_SKILL_NAME, KNOWLEDGE_SEARCH_NAME]
+    return [INVOKE_SKILL_NAME]
 
 
 __all__ = [
@@ -337,6 +292,6 @@ __all__ = [
     "design_seed_message",
     "knowledge_seed_message",
     "make_knowledge_search_handler",
-    "register_knowledge_tools",
+    "register_invoke_skill_tool",
     "suggested_skill_message",
 ]

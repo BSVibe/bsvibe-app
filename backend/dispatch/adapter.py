@@ -42,6 +42,7 @@ from backend.config import Settings
 from backend.router.accounts.models import ModelAccount
 from backend.router.accounts.predicates import is_executor_account
 from backend.router.llm_client import LlmClient, LlmResponse
+from backend.workflow.application.tool_registry import WORK_TOOL_MCP_NAMES
 
 logger = structlog.get_logger(__name__)
 
@@ -156,17 +157,14 @@ _REMOTE_TOOL_EXECUTORS: frozenset[str] = frozenset({"claude_code"})
 #: The tools an executor agent may use — BSVibe's, over MCP. The CLI is given exactly these
 #: names and nothing else, and the worker verifies the CLI's own init event against them: an
 #: enumerated denylist of the vendor's built-ins rots, so the allowlist is what we check.
-WORK_TOOL_NAMES: tuple[str, ...] = (
-    "bsvibe_work_file_read",
-    "bsvibe_work_file_list",
-    "bsvibe_work_file_write",
-    "bsvibe_work_file_edit",
-    "bsvibe_work_shell_exec",
-    "bsvibe_work_declare_verification",
-    "bsvibe_work_knowledge_search",
-    "bsvibe_work_ask_user_question",
-    "bsvibe_work_emit_deliverable",
-)
+#:
+#: DERIVED, never hand-maintained (INV-7 #2): it IS the set of ``bsvibe_work_*`` tools the MCP
+#: server registers (``register_work_tools`` builds those from the SAME
+#: ``WORK_TOOL_FORWARDING_SPECS``). Advertising a tool the server doesn't register — or the
+#: reverse — is therefore impossible by construction, not merely tested-against. This closed the
+#: ``knowledge_search`` / ``declare_verification`` / ``file_edit`` drifts where a hand-kept list
+#: silently disagreed with the real surface.
+WORK_TOOL_NAMES: tuple[str, ...] = WORK_TOOL_MCP_NAMES
 
 
 async def _founder_of(session: Any, workspace_id: uuid.UUID) -> uuid.UUID:

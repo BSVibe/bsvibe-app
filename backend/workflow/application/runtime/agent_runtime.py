@@ -192,7 +192,6 @@ def build_agent_execution_deps(
     settings = settings or get_settings()
     box: SandboxManager = _resolve_sandbox_manager(sandbox_manager, settings)
     skills_root = Path(settings.skills_root)
-    knowledge_vault_root = Path(settings.knowledge_vault_root)
 
     def _skill_loader_for(workspace_id: uuid.UUID) -> SkillLoader:
         loader = SkillLoader(skills_root / str(workspace_id))
@@ -204,34 +203,15 @@ def build_agent_execution_deps(
         workspace_id: uuid.UUID,
     ) -> CanonRetriever:
         """The workspace-scoped BSage canon retriever, with semantic note search
-        folded in when the deployment configures a knowledge embedding model."""
-        from backend.knowledge.factory import (  # noqa: PLC0415 — lazy heavy import
-            KnowledgeFactory,
-        )
-        from backend.knowledge.retrieval.composite_retriever import (  # noqa: PLC0415
-            CompositeCanonRetriever,
-        )
-        from backend.knowledge.retrieval.embedder_resolution import (  # noqa: PLC0415
-            resolve_knowledge_embedder,
-        )
-        from backend.knowledge.retrieval.semantic_note_retriever import (  # noqa: PLC0415
-            SemanticNoteRetriever,
-        )
-        from backend.knowledge.retrieval.storage.pg import PgNoteVectorBackend  # noqa: PLC0415
+        folded in when the deployment configures a knowledge embedding model.
 
-        base = KnowledgeFactory(
-            region=settings.knowledge_default_region,
-            workspace_id=str(workspace_id),
-            vault_root=knowledge_vault_root,
-        ).retriever()
-        embedder = resolve_knowledge_embedder(settings)
-        if not embedder.enabled or embedder.model is None:
-            return base
-        semantic = SemanticNoteRetriever(
-            embedder,
-            PgNoteVectorBackend(session, workspace_id=workspace_id, embedding_model=embedder.model),
+        Delegates to the shared :func:`build_canon_retriever` so the in-process loop and the MCP
+        transport ground the executor's ``knowledge_search`` identically (INV-7 #1)."""
+        from backend.knowledge.retrieval.answer_grounding import (  # noqa: PLC0415
+            build_canon_retriever,
         )
-        return CompositeCanonRetriever([base, semantic])
+
+        return build_canon_retriever(session, settings=settings, workspace_id=workspace_id)
 
     async def _frame_llm_for(session: AsyncSession, workspace_id: uuid.UUID) -> FrameLlm | None:
         """Per-workspace cheap-LLM for the frame stage via the resolver.

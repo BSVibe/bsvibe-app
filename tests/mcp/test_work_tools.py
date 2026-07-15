@@ -308,3 +308,33 @@ async def test_mcp_declare_verification_round_trips_through_the_real_registry(tm
     # …and the verify-first gate is now genuinely unlocked.
     await registry.invoke("file_write", {"path": "x.py", "content": "x = 1"})
     assert registry.written_paths == ["x.py"]
+
+
+# ── Advertised ⇒ invokable, by construction (INV-7 #1 + #2) ───────────────────
+# The class of bug: an MCP work tool ADVERTISES an ``inner`` name (and the CLI is told it may
+# call it) while the run registry the loop/transport builds never registers that inner — so the
+# call is ``Unknown tool``. ``knowledge_search`` was exactly this (advertised, forwarded, never
+# registered on the MCP path → executor RAG grounding 0, measured live). Driving the REAL shared
+# factory closes it: every forwarding work tool's inner MUST be a tool the factory registers.
+
+
+async def test_every_forwarding_work_tool_maps_to_a_factory_registered_inner(tmp_path) -> None:
+    """A pure declaration check: no inner name may be advertised that the factory won't build."""
+    from backend.mcp.tools.work_tools import WORK_TOOL_FORWARDING_SPECS
+    from backend.workflow.application.tool_registry import assemble_run_tool_registry
+
+    registry = assemble_run_tool_registry(workspace_dir=tmp_path, sandbox=None, retriever=None)
+    for spec in WORK_TOOL_FORWARDING_SPECS:
+        assert registry.has(spec["inner"]), (
+            f"{spec['name']} forwards to inner {spec['inner']!r}, but the shared factory does "
+            f"not register it — this is the advertised-but-Unknown-tool class (INV-7)"
+        )
+
+
+async def test_knowledge_search_actually_runs_on_the_factory_registry(tmp_path) -> None:
+    """Not just registered — invokable end to end, degrading gracefully with no retriever."""
+    from backend.workflow.application.tool_registry import assemble_run_tool_registry
+
+    registry = assemble_run_tool_registry(workspace_dir=tmp_path, sandbox=None, retriever=None)
+    out = await registry.invoke("knowledge_search", {"query": "anything"})
+    assert isinstance(out, str) and out
