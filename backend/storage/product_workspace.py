@@ -457,13 +457,16 @@ async def merge_main_into_worktree(product_id: uuid.UUID, run_id: uuid.UUID) -> 
     Detects pre-ship conflicts: if ``main`` has moved since the worktree
     branched (e.g. a parallel run already shipped to main), git tries to
     merge those changes into the agent's branch. Clean → run is now
-    fast-forwardable; conflict → the worktree carries conflict markers
-    and the agent gets another loop round to resolve them.
+    fast-forwardable; conflict → the worktree carries conflict markers.
 
-    Does NOT abort on conflict — leaves the worktree in the mid-merge
-    state so the agent's next round (or the caller's explicit recovery)
-    sees the markers via standard file_read/file_edit tools. This
-    matches the Claude Code-style "agent fixes its own merge" model.
+    Does NOT abort on conflict — it returns a ``status="conflict"``
+    :class:`MergeOutcome` and leaves the worktree mid-merge, delegating
+    recovery to the caller. The production caller is
+    :meth:`VerificationService.verify`, which records a FAILED
+    :class:`VerificationResult` and then calls :func:`abort_merge` so the
+    tree is left CLEAN before the next round — the markers must NOT survive
+    into the next round's ``commit_worktree`` (``git add -A``), or they
+    reach product main via :func:`merge_to_main` / :func:`force_merge_theirs`.
 
     Returns :class:`MergeOutcome` with ``status="clean"`` and empty
     paths on success; ``status="conflict"`` with the unmerged paths on

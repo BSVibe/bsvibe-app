@@ -87,6 +87,24 @@ async def _git(*args: str, cwd) -> str:
     return out.decode().strip()
 
 
+async def _merge_in_progress(worktree: Path) -> bool:
+    """True when the worktree is mid-merge (``MERGE_HEAD`` resolves). Works for
+    a linked worktree (whose ``MERGE_HEAD`` lives under ``.git/worktrees/<n>/``)
+    because ``git rev-parse`` resolves it relative to the worktree's gitdir."""
+    proc = await asyncio.create_subprocess_exec(
+        "git",
+        "rev-parse",
+        "-q",
+        "--verify",
+        "MERGE_HEAD",
+        stdout=asyncio.subprocess.DEVNULL,
+        stderr=asyncio.subprocess.DEVNULL,
+        cwd=str(worktree),
+    )
+    await proc.communicate()
+    return proc.returncode == 0
+
+
 async def _seed_run_with_worktree(
     sf: async_sessionmaker[AsyncSession], *, intent: str = "build the answer"
 ) -> tuple[uuid.UUID, uuid.UUID, uuid.UUID, Path]:
@@ -204,8 +222,8 @@ async def test_verify_surfaces_merge_conflict_as_failed(
     sf: async_sessionmaker[AsyncSession],
 ) -> None:
     """Main moves with a conflicting change → verify FAILS with reason
-    "merge_conflict" + paths. The worktree is left in mid-merge state
-    so the agent's NEXT round can read the markers and resolve."""
+    "merge_conflict" + paths. The conflict paths are surfaced on the result so
+    the founder / next round knows WHICH files collided."""
     run_id, ws_id, product_id, worktree = await _seed_run_with_worktree(sf)
     product_path = product_workspace_path(product_id)
 
@@ -243,9 +261,69 @@ async def test_verify_surfaces_merge_conflict_as_failed(
     assert vr.result["merge_conflict"] is True
     assert "hello.py" in vr.result["conflict_paths"]
 
-    # Worktree has conflict markers — agent's next round will see them.
-    content = (worktree / "hello.py").read_text()
-    assert "<<<<<<<" in content
+
+async def test_verify_merge_conflict_aborts_so_next_commit_is_clean(
+    sf: async_sessionmaker[AsyncSession],
+) -> None:
+    """The corruption path this closes (audit B4): a verify-time merge conflict
+    left the worktree mid-merge (``MERGE_HEAD`` + ``<<<<<<<`` markers on disk).
+    The run's NEXT round then ran ``commit_worktree`` (``git add -A``) which
+    committed the conflict markers onto ``bsvibe/run/<rid>`` — and from there
+    they could reach product ``main`` via merge_to_main / force_merge_theirs.
+
+    ``abort_merge`` is now wired at the conflict branch, so after verify records
+    FAILED the worktree is left CLEAN: no merge in progress, no markers, and a
+    subsequent commit carries no ``<<<<<<<``."""
+    run_id, ws_id, product_id, worktree = await _seed_run_with_worktree(sf)
+    product_path = product_workspace_path(product_id)
+
+    (worktree / "hello.py").write_text("agent's add()\n")
+    (product_path / "hello.py").write_text("MAIN'S version\n")
+    await _git("add", "-A", cwd=product_path)
+    await _git("commit", "-m", "main: conflict", cwd=product_path)
+
+    contract = VerificationContract(checks=())
+    sandbox = NoopSandboxManager()
+
+    async with sf() as s:
+        run = await s.get(ExecutionRun, run_id)
+        work_step = await s.get(WorkStep, ws_id)
+        attempt = (
+            await s.execute(select(RunAttempt).where(RunAttempt.run_id == run_id))
+        ).scalar_one()
+
+        box = await sandbox.acquire(product_id, str(worktree))
+        verifier = VerificationService(session=s, llm=_StubJudgeLlm())
+        vr = await verifier.verify(
+            run=run,
+            work_step=work_step,
+            attempt=attempt,
+            contract=contract,
+            box=box,
+            written_paths=[],
+            final_text="done",
+        )
+        await s.commit()
+
+    # The conflict is still surfaced as FAILED — the fix only cleans the tree,
+    # it does not hide the conflict.
+    assert vr.outcome is VerificationOutcome.FAILED
+    assert vr.result["merge_conflict"] is True
+
+    # (a) The worktree is NOT left mid-merge.
+    assert not await _merge_in_progress(worktree)
+    # ...and no conflict markers linger on disk.
+    assert "<<<<<<<" not in (worktree / "hello.py").read_text()
+
+    # (b) The real safety property: a subsequent round's commit_worktree
+    # (``git add -A``) must not carry ``<<<<<<<`` into a commit that can reach
+    # main. After the abort, HEAD is the agent's clean commit again, so the
+    # branch tip's tree has no markers.
+    from backend.storage.product_workspace import commit_worktree, run_branch_name
+
+    await commit_worktree(product_id, run_id, message="next round")
+    branch_tree = await _git("show", f"{run_branch_name(run_id)}:hello.py", cwd=worktree)
+    assert "<<<<<<<" not in branch_tree
 
 
 # ---------------------------------------------------------------------------

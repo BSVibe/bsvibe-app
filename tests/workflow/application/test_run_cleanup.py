@@ -8,8 +8,10 @@ the canonical primitives the MCP tools + product-delete cascade both call.
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from datetime import UTC, datetime
+from pathlib import Path
 
 import pytest
 import pytest_asyncio
@@ -230,6 +232,92 @@ async def test_discard_unknown_returns_none(sf, workspace_id) -> None:
     async with sf() as s:
         outcome = await discard_run(s, run_id=uuid.uuid4(), workspace_id=workspace_id, reason="mcp")
     assert outcome is None
+
+
+# --- cancel aborts a mid-merge worktree (B4 — no lingering markers) ---------
+
+
+async def _git_ok(*args: str, cwd) -> None:
+    proc = await asyncio.create_subprocess_exec(
+        "git", *args, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, cwd=str(cwd)
+    )
+    _, err = await proc.communicate()
+    assert proc.returncode == 0, f"git {args} failed: {err.decode()}"
+
+
+async def _merge_in_progress(worktree: Path) -> bool:
+    proc = await asyncio.create_subprocess_exec(
+        "git",
+        "rev-parse",
+        "-q",
+        "--verify",
+        "MERGE_HEAD",
+        stdout=asyncio.subprocess.DEVNULL,
+        stderr=asyncio.subprocess.DEVNULL,
+        cwd=str(worktree),
+    )
+    await proc.communicate()
+    return proc.returncode == 0
+
+
+async def test_cancel_aborts_mid_merge_worktree(sf, workspace_id, tmp_path, monkeypatch) -> None:
+    """A run cancelled while a verify-time ``merge main`` is mid-flight must not
+    leave conflict markers behind — ``cancel_run`` aborts the merge. (Unlike
+    ``discard``, ``cancel`` keeps the worktree on disk, so the abort is the only
+    thing that cleans it.)"""
+    from backend.config import get_settings
+    from backend.storage.product_workspace import (
+        add_run_worktree,
+        commit_worktree,
+        init_product_workspace,
+        merge_main_into_worktree,
+        product_workspace_path,
+        run_worktree_path,
+    )
+
+    monkeypatch.setattr(
+        get_settings(), "product_workspace_root", str(tmp_path / "products"), raising=False
+    )
+    monkeypatch.setattr(get_settings(), "run_workspace_root", str(tmp_path / "runs"), raising=False)
+
+    product_id = uuid.uuid4()
+    run_id = uuid.uuid4()
+    await init_product_workspace(product_id)
+    worktree = await add_run_worktree(product_id, run_id)
+
+    # Agent commits, main commits a conflicting change, verify-time merge leaves
+    # the worktree mid-merge with ``<<<<<<<`` markers.
+    (worktree / "hello.py").write_text("agent\n")
+    await commit_worktree(product_id, run_id, message="agent")
+    product_path = product_workspace_path(product_id)
+    (product_path / "hello.py").write_text("main\n")
+    await _git_ok("add", "-A", cwd=product_path)
+    await _git_ok("commit", "-m", "main: conflict", cwd=product_path)
+    outcome_merge = await merge_main_into_worktree(product_id, run_id)
+    assert outcome_merge.status == "conflict"
+    assert await _merge_in_progress(worktree)  # precondition: poisoned tree
+
+    # A RUNNING run is cancelled — the worktree stays, but the merge is aborted.
+    async with sf() as s:
+        run = ExecutionRun(
+            id=run_id,
+            workspace_id=workspace_id,
+            product_id=product_id,
+            status=RunStatus.RUNNING,
+            payload={"text": "build"},
+            created_at=datetime.now(tz=UTC),
+            updated_at=datetime.now(tz=UTC),
+        )
+        s.add(run)
+        await s.flush()
+        outcome = await cancel_run(s, run_id=run_id, workspace_id=workspace_id, reason="mcp")
+        await s.commit()
+
+    assert outcome.cancelled is True
+    # Worktree still exists (cancel does not remove it) but is no longer mid-merge.
+    assert run_worktree_path(run_id).exists()
+    assert not await _merge_in_progress(worktree)
+    assert "<<<<<<<" not in (worktree / "hello.py").read_text()
 
 
 # --- cascade cancel on product delete --------------------------------------
