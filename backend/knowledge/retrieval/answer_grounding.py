@@ -22,11 +22,14 @@ from __future__ import annotations
 
 import uuid
 from pathlib import Path
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
 import structlog
 
 from backend.knowledge.retrieval.knowledge_item import RetrievedKnowledge
+
+if TYPE_CHECKING:
+    from backend.workflow.application.verification_service import CanonRetriever
 
 logger = structlog.get_logger(__name__)
 
@@ -151,7 +154,9 @@ def build_answer_retriever(session: Any, *, settings: Any, workspace_id: uuid.UU
     return AnswerGroundingRetriever(inner, factory.vault(), root=factory.vault_path)
 
 
-def build_canon_retriever(session: Any, *, settings: Any, workspace_id: uuid.UUID) -> Any:
+def build_canon_retriever(
+    session: Any, *, settings: Any, workspace_id: uuid.UUID
+) -> CanonRetriever:
     """The canon retriever a RUN consults: promoted concepts + resolved decisions, with semantic
     note search folded in when a knowledge embedding model is configured.
 
