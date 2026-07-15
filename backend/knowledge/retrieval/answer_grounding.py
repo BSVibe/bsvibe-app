@@ -141,6 +141,27 @@ def build_answer_retriever(session: Any, *, settings: Any, workspace_id: uuid.UU
     grounded in nothing at all).
     """
     from backend.knowledge.factory import KnowledgeFactory  # noqa: PLC0415
+
+    factory = KnowledgeFactory(
+        region=settings.knowledge_default_region,
+        workspace_id=str(workspace_id),
+        vault_root=Path(settings.knowledge_vault_root),
+    )
+    inner = build_canon_retriever(session, settings=settings, workspace_id=workspace_id)
+    return AnswerGroundingRetriever(inner, factory.vault(), root=factory.vault_path)
+
+
+def build_canon_retriever(session: Any, *, settings: Any, workspace_id: uuid.UUID) -> Any:
+    """The canon retriever a RUN consults: promoted concepts + resolved decisions, with semantic
+    note search folded in when a knowledge embedding model is configured.
+
+    The single builder for the ``knowledge_search`` grounding on BOTH transports — the in-process
+    loop (``build_agent_execution_deps._retriever_for``) and the MCP transport
+    (``build_run_tool_registry``). Extracted so those two paths cannot ground the executor's
+    ``knowledge_search`` differently. Unlike :func:`build_answer_retriever`, it does NOT expand
+    note refs to content: mid-run search wants the compact statement wire format, not full notes.
+    """
+    from backend.knowledge.factory import KnowledgeFactory  # noqa: PLC0415
     from backend.knowledge.retrieval.composite_retriever import (  # noqa: PLC0415
         CompositeCanonRetriever,
     )
@@ -152,22 +173,19 @@ def build_answer_retriever(session: Any, *, settings: Any, workspace_id: uuid.UU
     )
     from backend.knowledge.retrieval.storage.pg import PgNoteVectorBackend  # noqa: PLC0415
 
-    factory = KnowledgeFactory(
+    base = KnowledgeFactory(
         region=settings.knowledge_default_region,
         workspace_id=str(workspace_id),
         vault_root=Path(settings.knowledge_vault_root),
-    )
-    base = factory.retriever()
+    ).retriever()
     embedder = resolve_knowledge_embedder(settings)
     if not embedder.enabled or embedder.model is None:
-        inner: Any = base
-    else:
-        semantic = SemanticNoteRetriever(
-            embedder,
-            PgNoteVectorBackend(session, workspace_id=workspace_id, embedding_model=embedder.model),
-        )
-        inner = CompositeCanonRetriever([base, semantic])
-    return AnswerGroundingRetriever(inner, factory.vault(), root=factory.vault_path)
+        return base
+    semantic = SemanticNoteRetriever(
+        embedder,
+        PgNoteVectorBackend(session, workspace_id=workspace_id, embedding_model=embedder.model),
+    )
+    return CompositeCanonRetriever([base, semantic])
 
 
-__all__ = ["AnswerGroundingRetriever", "build_answer_retriever"]
+__all__ = ["AnswerGroundingRetriever", "build_answer_retriever", "build_canon_retriever"]

@@ -22,10 +22,14 @@ from typing import Any
 
 import structlog
 
+from backend.config import get_settings
 from backend.mcp.api import ToolContext, ToolError
 from backend.storage.product_workspace import run_worktree_path
 from backend.workflow.application.tool_registry import (
     WORK_TOOL_STATE_KEY as _WORK_TOOL_STATE_KEY,
+)
+from backend.workflow.application.tool_registry import (
+    assemble_run_tool_registry,
 )
 from backend.workflow.infrastructure.db import ExecutionRun
 from backend.workflow.infrastructure.sandbox import get_sandbox_manager
@@ -80,14 +84,47 @@ async def load_run(run_id: uuid.UUID, ctx: ToolContext) -> ExecutionRun:
     return run
 
 
+async def _retriever_for(run: ExecutionRun, ctx: ToolContext) -> Any:
+    """The run's canon retriever, built IN the API process for ``knowledge_search``.
+
+    INV-7 #1: the executor's ``knowledge_search`` used to be advertised by the MCP layer and
+    forwarded to inner ``knowledge_search`` — which this transport's bare registry never
+    registered, so every call was ``Unknown tool`` and the agent's RAG grounding was 0. The
+    retriever's construction chain (``backend.knowledge``) is inside the MCP context's import
+    allowlist, so the transport can materialise the SAME retriever the in-process loop uses
+    (:func:`backend.knowledge.retrieval.answer_grounding.build_canon_retriever`) without reaching
+    a forbidden context. A build failure degrades to ``None`` (the handler answers "no knowledge")
+    — it must never break the run's whole tool surface.
+    """
+    from backend.knowledge.retrieval.answer_grounding import (  # noqa: PLC0415 — lazy heavy import
+        build_canon_retriever,
+    )
+
+    try:
+        return build_canon_retriever(
+            ctx.session, settings=get_settings(), workspace_id=run.workspace_id
+        )
+    except Exception:  # noqa: BLE001 — a retriever build failure must not sink the tool surface
+        logger.warning("mcp_knowledge_retriever_unavailable", run_id=str(run.id), exc_info=True)
+        return None
+
+
 async def build_run_tool_registry(run_id: uuid.UUID, ctx: ToolContext) -> ToolRegistry:
-    """Bind the workflow ToolRegistry to ``run_id``'s server-side worktree + sandbox."""
+    """Bind the workflow ToolRegistry to ``run_id``'s server-side worktree + sandbox.
+
+    Uses the SAME factory the in-process loop calls
+    (:func:`backend.workflow.application.tool_registry.assemble_run_tool_registry`) so the base
+    tools + ``knowledge_search`` cannot drift between the two transports (INV-7 #1)."""
     run = await load_run(run_id, ctx)
 
     workspace_dir = run_worktree_path(run_id)
     workspace_dir.mkdir(parents=True, exist_ok=True)
     sandbox = await _sandbox_for(run, workspace_dir)
-    registry = ToolRegistry(workspace_dir=workspace_dir, sandbox=sandbox)
+    registry = assemble_run_tool_registry(
+        workspace_dir=workspace_dir,
+        sandbox=sandbox,
+        retriever=await _retriever_for(run, ctx),
+    )
     # The registry's latches (the declared verification contract; the paths the agent grounded
     # itself in) belong to the RUN, not to this per-request object. The in-process loop keeps
     # one registry alive for a whole run; this transport builds a new one per MCP call, so

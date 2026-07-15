@@ -16,9 +16,15 @@ chosen tool calls.
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import Any
 
-from backend.workflow.infrastructure.tools import ToolError, ToolRegistry
+import structlog
+
+from backend.workflow.infrastructure.sandbox import SandboxSession
+from backend.workflow.infrastructure.tools import ToolDefinition, ToolError, ToolRegistry
+
+logger = structlog.get_logger(__name__)
 
 # Tools the work LLM may use during the loop. ``ask_user_question`` is a
 # loop-owned pseudo-tool (not in the shared ToolRegistry) handled inline.
@@ -54,6 +60,129 @@ _KNOWLEDGE_SEED_MAX_CHARS_PER_STATEMENT = 500
 # (``backend.workflow.application.verification_service``) — the canonical home shared by both
 # the native loop and the executor orchestrator.
 MAX_NO_WORK_NUDGES = 2
+
+
+#: (MCP tool name, inner registry tool name) for the run-scoped tools that FORWARD to the inner
+#: ``ToolRegistry``. This is the SINGLE source of truth tying the surface the MCP server exposes
+#: to the tools the shared factory registers to the allowlist the dispatch adapter advertises to
+#: the CLI. It lives HERE — the clean loop-side module — precisely so the MCP transport
+#: (``work_tools``) and the dispatch adapter can both read it WITHOUT importing each other
+#: (importing ``backend.mcp`` from the adapter is a circular import through the whole API graph).
+#: INV-7 #2: advertised ≡ registered because both are derived from this one tuple.
+RUN_TOOL_FORWARDING: tuple[tuple[str, str], ...] = (
+    ("bsvibe_work_file_read", "file_read"),
+    ("bsvibe_work_file_list", "file_list"),
+    ("bsvibe_work_file_write", "file_write"),
+    ("bsvibe_work_file_edit", "file_edit"),
+    ("bsvibe_work_shell_exec", "shell_exec"),
+    ("bsvibe_work_declare_verification", "declare_verification"),
+    ("bsvibe_work_knowledge_search", KNOWLEDGE_SEARCH_NAME),
+)
+
+#: The two LOOP-owned pseudo-tools — the MCP transport handles them directly (create a Decision /
+#: record a mid-run deliverable); they do NOT forward to the inner registry.
+RUN_TOOL_LOOP_OWNED: tuple[str, ...] = (
+    "bsvibe_work_ask_user_question",
+    "bsvibe_work_emit_deliverable",
+)
+
+#: The COMPLETE run-scoped MCP surface a task token may see — what the dispatch adapter advertises
+#: as the CLI ``--allowedTools`` allowlist (``WORK_TOOL_NAMES``) and what the MCP server offers a
+#: run-scoped principal. Derived, never hand-kept.
+WORK_TOOL_MCP_NAMES: tuple[str, ...] = (
+    *(name for name, _ in RUN_TOOL_FORWARDING),
+    *RUN_TOOL_LOOP_OWNED,
+)
+
+#: The inner-registry tools BOTH transports invoke — the forwarding targets. INV-7 #1: this is
+#: what the shared factory (:func:`assemble_run_tool_registry`) must register, so the MCP
+#: transport and the in-process loop cannot drift on it (``knowledge_search`` was advertised by
+#: the MCP layer while its per-request registry never registered it → ``Unknown tool`` on every
+#: call, executor RAG grounding 0, measured live). ``invoke_skill`` and connector actions are NOT
+#: here: their registration code lives in ``backend.extensions`` / ``backend.connectors``, which
+#: the MCP context is forbidden to import, so the worker adds them AFTER this factory (see
+#: ``_drive_loop``). They ride the worker path only until a follow-up threads their deps in from
+#: the composition root.
+RUN_TOOL_INNER_NAMES: tuple[str, ...] = tuple(inner for _, inner in RUN_TOOL_FORWARDING)
+
+
+def make_knowledge_search_handler(retriever: Any) -> Any:
+    """Build the ``knowledge_search`` tool handler bound to ``retriever``.
+
+    Never raises into the loop. Returns a human-legible string of the top canonical statements
+    for the query, or a valid empty result when there is no knowledge / no retriever / the
+    retrieval fails. (Lives here — the clean loop-side module — so the MCP transport can register
+    the same handler; ``_loop_context`` re-exports it for the worker's existing callers.)"""
+
+    async def handler(arguments: dict[str, Any]) -> str:
+        query = str(arguments.get("query") or "").strip()
+        if not query:
+            return "knowledge_search requires a non-empty 'query'."
+        if retriever is None:
+            return "No workspace knowledge is available."
+        try:
+            statements = await retriever.retrieve_for_signals(query)
+        except Exception:  # noqa: BLE001 — read-only consult must never crash the loop
+            logger.warning("knowledge_search_failed", exc_info=True)
+            return "No workspace knowledge is available."
+        statements = [s.strip() for s in statements if s and s.strip()][
+            :_KNOWLEDGE_SEARCH_MAX_RESULTS
+        ]
+        if not statements:
+            return f"No settled knowledge found for: {query}"
+        lines = [f"Relevant workspace knowledge for '{query}':"]
+        lines.extend(f"- {s}" for s in statements)
+        return "\n".join(lines)
+
+    return handler
+
+
+def register_knowledge_search(registry: ToolRegistry, retriever: Any) -> None:
+    """Register the read-only ``knowledge_search`` tool into ``registry``.
+
+    Always safe to register: with no retriever (or a failing one) the handler degrades to
+    "No workspace knowledge is available" — it never gates a write and never raises. Kept
+    separate from ``invoke_skill`` (which needs a ``SkillLoader`` from ``backend.extensions``)
+    so this — the tool with no forbidden-context dependency — can be part of the shared factory
+    both transports call."""
+    registry.register(
+        ToolDefinition(
+            name=KNOWLEDGE_SEARCH_NAME,
+            description=(
+                "Search this workspace's settled canonical knowledge for guidance "
+                "relevant to your task. Returns the most relevant canonical concept "
+                "statements (may be empty if the workspace has no settled knowledge "
+                "yet). Read-only — consult it before deciding how to do the work."
+            ),
+            parameters_schema={
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "What you want to know — describe the task or topic.",
+                    },
+                },
+                "required": ["query"],
+            },
+            handler=make_knowledge_search_handler(retriever),
+        )
+    )
+
+
+def assemble_run_tool_registry(
+    *, workspace_dir: Path, sandbox: SandboxSession | None, retriever: Any = None
+) -> ToolRegistry:
+    """The ONE builder of a run's inner ``ToolRegistry`` (INV-7 #1).
+
+    Both the MCP transport (:func:`backend.mcp.tools.work_registry.build_run_tool_registry`) and
+    the in-process loop (``_drive_loop``) call this, so the run-scoped tool set they invoke can
+    never diverge on the shared tools. It binds the six sandbox tools (registered by the registry
+    itself) plus the ``knowledge_search`` consult, all against the run's SERVER-SIDE worktree +
+    sandbox. Worker-only additions (``invoke_skill``, connector actions) are layered on by the
+    caller AFTER this returns — see ``RUN_TOOL_INNER_NAMES``."""
+    registry = ToolRegistry(workspace_dir=workspace_dir, sandbox=sandbox)
+    register_knowledge_search(registry, retriever)
+    return registry
 
 
 ASK_USER_QUESTION_TOOL: dict[str, Any] = {
@@ -166,11 +295,18 @@ __all__ = [
     "ASK_USER_QUESTION_TOOL",
     "KNOWLEDGE_SEARCH_NAME",
     "MAX_NO_WORK_NUDGES",
+    "RUN_TOOL_FORWARDING",
+    "RUN_TOOL_INNER_NAMES",
+    "RUN_TOOL_LOOP_OWNED",
     "WORK_TOOLS",
+    "WORK_TOOL_MCP_NAMES",
     "_KNOWLEDGE_SEARCH_MAX_RESULTS",
     "_KNOWLEDGE_SEED_MAX_CHARS_PER_STATEMENT",
     "_KNOWLEDGE_SEED_MAX_RESULTS",
     "_assistant_tool_call_message",
     "_invoke_tool_safely",
     "_sanitize_ask_user_question_options",
+    "assemble_run_tool_registry",
+    "make_knowledge_search_handler",
+    "register_knowledge_search",
 ]
