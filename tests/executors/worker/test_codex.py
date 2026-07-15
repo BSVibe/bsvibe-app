@@ -232,6 +232,66 @@ async def test_supported_task_types() -> None:
     assert CodexExecutor().supported_task_types() == ["codex"]
 
 
+# ── chat parity: codex exec has NO tools-off mode → a chat turn is REFUSED ────
+#
+# INV-7 #6: a chat turn (frame/judge/ingest — no BSVibe tools) must run with the
+# executor's OWN tools OFF, answering in a single turn. ``claude_code`` does this
+# (``--disallowedTools "*"``) and ``opencode`` does it (``tools: {"*": false}`` on
+# the message). ``codex exec`` cannot: verified against codex 0.130.0's own binary
+# help, its flags are ``--sandbox {read-only|workspace-write|danger-full-access}``,
+# ``--ask-for-approval``, ``--skip-git-repo-check``, ``--model``, ``--config`` — and
+# NONE disables the shell/exec tool. ``--sandbox read-only`` only blocks writes; the
+# model still runs read commands (``ls``/``cat``) to explore, so it would inspect the
+# empty per-task temp dir and answer "the directory is empty" — the exact agentic bug
+# this invariant kills. With no honest tools-off mode, a chat turn is REFUSED loudly
+# (mirroring the adapter's ``ExecutorAdapterUnavailable`` T2a refusal) rather than
+# silently run agentic.
+
+
+async def test_chat_turn_is_refused_not_run_agentic(monkeypatch: pytest.MonkeyPatch) -> None:
+    """agentic=False → a terminal error chunk, and codex is NEVER spawned."""
+    proc = _FakeProcess(stdout_lines=[_agent_message_line("x")])
+    calls = _patch_subprocess(monkeypatch, proc)
+
+    chunks = await _drain(
+        CodexExecutor().execute("p", {"system": "ctx", "agentic": False, "workspace_dir": "."})
+    )
+
+    # No subprocess: the refusal happens before any exec.
+    assert calls == []
+    # A single terminal error chunk naming the limitation.
+    assert len(chunks) == 1
+    assert chunks[0].done is True
+    assert chunks[0].error is not None
+    assert "codex" in chunks[0].error.lower()
+    assert "tool" in chunks[0].error.lower()
+
+
+async def test_agent_run_still_spawns_agentic(monkeypatch: pytest.MonkeyPatch) -> None:
+    """agentic=True → unchanged: the agentic ``codex exec`` command still runs."""
+    proc = _FakeProcess(stdout_lines=[_agent_message_line("x")])
+    calls = _patch_subprocess(monkeypatch, proc)
+
+    await _drain(CodexExecutor().execute("p", {"agentic": True, "workspace_dir": "."}))
+
+    assert len(calls) == 1
+    assert "exec" in calls[0]
+    assert "--json" in calls[0]
+
+
+async def test_missing_agentic_defaults_to_agent_run(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Back-compat: a task from an older backend carries no ``agentic`` key.
+    Default to the agent run — a coding loop that silently lost its tools would
+    ship empty diffs."""
+    proc = _FakeProcess(stdout_lines=[_agent_message_line("x")])
+    calls = _patch_subprocess(monkeypatch, proc)
+
+    await _drain(CodexExecutor().execute("p", {"workspace_dir": "."}))
+
+    assert len(calls) == 1
+    assert "exec" in calls[0]
+
+
 # ── Sanitized subprocess env (no parent Claude-Code session leakage) ──────────
 
 

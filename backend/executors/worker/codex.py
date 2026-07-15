@@ -72,6 +72,29 @@ class CodexExecutor:
         workspace = context.get("workspace_dir") or "."
         system = context.get("system") or ""
         model = context.get("model") or None
+        # INV-7 #6 — a chat turn (frame/judge/ingest: no BSVibe tools) must run with the
+        # executor's OWN tools OFF and answer in a single turn. ``codex exec`` cannot: its
+        # shell/exec tool is intrinsic and NO flag disables it (verified against codex 0.130.0's
+        # own binary — the knobs are ``--sandbox``, ``--ask-for-approval``, ``--model``,
+        # ``--config``; ``--sandbox read-only`` only blocks WRITES, the model still runs read
+        # commands to explore). Left agentic, it would inspect the empty per-task temp dir and
+        # answer "the directory is empty" — the exact bug this invariant kills. With no honest
+        # tools-off mode, REFUSE loudly (mirroring the adapter's ``ExecutorAdapterUnavailable``
+        # T2a refusal) rather than silently run agentic. Absent key → agent run (back-compat:
+        # a task from an older backend carries no flag, and a coding loop must never silently
+        # lose its tools).
+        agentic = context.get("agentic", True) is not False
+        if not agentic:
+            yield ExecutionChunk(
+                done=True,
+                error=(
+                    "codex cannot serve a chat turn: `codex exec` has no mode that disables its "
+                    "shell/exec tool, so it would inspect its empty workspace instead of "
+                    "answering from the prompt. Route chat-shaped work to an executor that can "
+                    "turn its tools off (claude_code, opencode) or to a LiteLLM account."
+                ),
+            )
+            return
         deadline = asyncio.get_event_loop().time() + self._timeout
 
         sys_path: str | None = _write_system_file(system) if system else None
