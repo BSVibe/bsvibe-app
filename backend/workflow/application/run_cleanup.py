@@ -162,6 +162,11 @@ async def cancel_run(
     if run.status not in _CANCELLABLE:
         return CancelOutcome(found=True, cancelled=False, status=run.status.value)
     await _cancel(session, run, reason=reason)
+    # Cancel leaves the run's worktree on disk (unlike discard, which removes it
+    # entirely). If the run was cancelled while a verify-time ``merge main`` was
+    # mid-flight, the worktree carries ``<<<<<<<`` markers + MERGE_HEAD — abort
+    # so nothing committable lingers. Best-effort no-op when no merge is running.
+    await _abort_merge_best_effort(run)
     return CancelOutcome(found=True, cancelled=True, status=RunStatus.CANCELLED.value)
 
 
@@ -255,7 +260,12 @@ async def cancel_product_runs(
 
 
 async def _remove_worktree_best_effort(run: ExecutionRun) -> None:
-    """Remove a run's git worktree without ever failing the caller."""
+    """Remove a run's git worktree without ever failing the caller.
+
+    ``git worktree remove --force`` deletes the whole worktree directory (and
+    the branch), so any mid-merge markers vanish with it — ``discard`` therefore
+    needs no separate :func:`abort_merge` (that is why only ``cancel``, which
+    keeps the worktree, calls :func:`_abort_merge_best_effort`)."""
     if run.product_id is None:
         return
     try:
@@ -265,6 +275,27 @@ async def _remove_worktree_best_effort(run: ExecutionRun) -> None:
     except Exception:  # noqa: BLE001 — cleanup is best-effort
         logger.warning(
             "run_discard_worktree_cleanup_failed",
+            run_id=str(run.id),
+            product_id=str(run.product_id),
+            exc_info=True,
+        )
+
+
+async def _abort_merge_best_effort(run: ExecutionRun) -> None:
+    """``git merge --abort`` a run's worktree without ever failing the caller.
+
+    Used by ``cancel`` (which leaves the worktree on disk) so a run cancelled
+    mid-merge doesn't leave committable ``<<<<<<<`` markers behind. Idempotent:
+    :func:`abort_merge` is a no-op when no merge is in progress."""
+    if run.product_id is None:
+        return
+    try:
+        from backend.storage.product_workspace import abort_merge  # noqa: PLC0415
+
+        await abort_merge(run.product_id, run.id)
+    except Exception:  # noqa: BLE001 — cleanup is best-effort
+        logger.warning(
+            "run_cancel_abort_merge_failed",
             run_id=str(run.id),
             product_id=str(run.product_id),
             exc_info=True,

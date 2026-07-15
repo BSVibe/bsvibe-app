@@ -442,9 +442,11 @@ class VerificationService:
            means the agent's branch is now a fast-forward of main;
            ``verify`` proceeds to command/judge checks. A conflict means
            the worktree carries conflict markers — verify fails with
-           ``reason="merge_conflict"`` + conflict paths, and the agent's
-           next loop round picks the markers up via standard
-           file_read/file_edit tools (Claude Code-style auto-resolution).
+           ``reason="merge_conflict"`` + conflict paths and ``abort_merge``s
+           the worktree so it is left CLEAN (no MERGE_HEAD / markers). The
+           agent's next round re-attempts the merge from a clean tree — the
+           markers must never survive into the next ``commit_worktree``
+           (``git add -A``), which would carry ``<<<<<<<`` toward main.
 
         Non-product runs skip the merge step entirely — exactly the
         Direct-path test invariant.
@@ -456,6 +458,7 @@ class VerificationService:
         merge_conflict_paths: list[str] = []
         if run.product_id is not None and self._is_real_worktree(run):
             from backend.storage.product_workspace import (  # noqa: PLC0415 — lazy
+                abort_merge,
                 commit_worktree,
                 merge_main_into_worktree,
             )
@@ -465,12 +468,21 @@ class VerificationService:
             merge_outcome = await merge_main_into_worktree(run.product_id, run.id)
             if merge_outcome.status == "conflict":
                 merge_conflict_paths = merge_outcome.conflict_paths
+                # ``merge_main_into_worktree`` leaves the worktree mid-merge on
+                # conflict (MERGE_HEAD + ``<<<<<<<`` markers on disk) and
+                # delegates recovery to us. Abort it NOW so the worktree is left
+                # CLEAN: otherwise the run's NEXT round runs ``commit_worktree``
+                # (``git add -A``) and commits the conflict markers onto
+                # ``bsvibe/run/<rid>`` — from where they can reach product main
+                # via merge_to_main / force_merge_theirs (audit B4). The next
+                # round re-attempts the merge from a clean tree instead.
+                await abort_merge(run.product_id, run.id)
 
         if merge_conflict_paths:
-            # Skip command / judge checks — the worktree is in a
-            # conflict state. Persist a FAILED VerificationResult so
-            # the loop sees verification failed; the next agent round
-            # will read the conflict markers from disk.
+            # Skip command / judge checks — the merge conflicted (and has been
+            # aborted above, leaving a clean tree). Persist a FAILED
+            # VerificationResult so the loop sees verification failed; the next
+            # agent round starts from a clean worktree and re-attempts the merge.
             vr = VerificationResult(
                 id=uuid.uuid4(),
                 run_id=run.id,
