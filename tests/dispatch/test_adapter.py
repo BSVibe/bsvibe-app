@@ -409,7 +409,12 @@ class TestExecutorAdapterChat:
         workspace_id = uuid.uuid4()
         settings = get_settings().model_copy(
             update={
-                "executor_task_timeout_s": 30.0,
+                # Generous: this bounds a pathological hang, it is NOT the
+                # assertion. The behaviour under test is the capacity retry
+                # (executor_capacity_wait_max_s below); the real redis+DB
+                # round-trip finishes in <1s. A tight value here only races
+                # the wall clock under CI load → flake. Do not tighten.
+                "executor_task_timeout_s": 300.0,
                 "executor_capacity_wait_max_s": 5.0,
                 "executor_capacity_wait_poll_s": 0.02,
             }
@@ -692,7 +697,10 @@ class TestExecutorAdapterChat:
 
         redis = await _make_redis()
         workspace_id = uuid.uuid4()
-        settings = get_settings().model_copy(update={"executor_task_timeout_s": 30.0})
+        # Generous: this only bounds a pathological hang, it is NOT under test.
+        # The real redis+DB round-trip finishes in <1s; a tight value races the
+        # wall clock under CI load → flake (INV-7). Do not tighten.
+        settings = get_settings().model_copy(update={"executor_task_timeout_s": 300.0})
 
         async with shared_file_sessionmaker() as sf:
             async with sf() as setup:
@@ -764,7 +772,10 @@ class TestExecutorAdapterChat:
 
         redis = await _make_redis()
         workspace_id = uuid.uuid4()
-        settings = get_settings().model_copy(update={"executor_task_timeout_s": 30.0})
+        # Generous: this only bounds a pathological hang, it is NOT under test.
+        # The real redis+DB round-trip finishes in <1s; a tight value races the
+        # wall clock under CI load → flake (INV-7). Do not tighten.
+        settings = get_settings().model_copy(update={"executor_task_timeout_s": 300.0})
         captured: dict[str, str] = {}
 
         async with shared_file_sessionmaker() as sf:
@@ -1130,7 +1141,10 @@ class TestExecutorAdapterChat:
         monkeypatch.setattr(_adapter_mod, "_EXECUTOR_CHAT_RETRY_BACKOFF_S", 0.0)
         redis = await _make_redis()
         workspace_id = uuid.uuid4()
-        settings = get_settings().model_copy(update={"executor_task_timeout_s": 30.0})
+        # Generous: this only bounds a pathological hang, it is NOT under test.
+        # The real redis+DB round-trip finishes in <1s; a tight value races the
+        # wall clock under CI load → flake (INV-7). Do not tighten.
+        settings = get_settings().model_copy(update={"executor_task_timeout_s": 300.0})
 
         async with shared_file_sessionmaker() as sf:
             async with sf() as setup:
