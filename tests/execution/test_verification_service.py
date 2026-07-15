@@ -29,6 +29,9 @@ from backend.workflow.application.agent_loop import LoopTurn
 from backend.workflow.application.verification_service import (
     _UV_SYNC,
     RETRIEVED_KNOWLEDGE_RATIONALE,
+    DerivedGateFailed,
+    DerivedGateNotEligible,
+    DerivedGateOk,
     VerificationService,
 )
 from backend.workflow.domain.verifier_contract import (
@@ -1422,8 +1425,9 @@ class TestDerivedGate:
             svc = VerificationService(session=session, llm=llm)
             run = await self._seed(session, tmp_path, monkeypatch)
             box = FakeBox()  # default exit 0
-            blob = await svc._run_derived_gate(run, box, ["money.py"])
-            assert blob is not None
+            result = await svc._run_derived_gate(run, box, ["money.py"])
+            assert isinstance(result, DerivedGateOk)
+            blob = result.blob
             assert blob["origin"] == "derived" and blob["passed"] is True
             assert blob["commands"][0]["status"] == "passed"
             assert "uv run ruff check money.py" in box.exec_calls
@@ -1440,8 +1444,9 @@ class TestDerivedGate:
                     )
                 }
             )
-            blob = await svc._run_derived_gate(run, box, ["src/lib.rs"])
-            assert blob is not None
+            result = await svc._run_derived_gate(run, box, ["src/lib.rs"])
+            assert isinstance(result, DerivedGateOk)
+            blob = result.blob
             assert blob["commands"][0]["status"] == "unavailable"
             assert blob["passed"] is True  # 127 = tool absent here, not a real failure
 
@@ -1457,8 +1462,9 @@ class TestDerivedGate:
                     )
                 }
             )
-            blob = await svc._run_derived_gate(run, box, ["money.py"])
-            assert blob is not None
+            result = await svc._run_derived_gate(run, box, ["money.py"])
+            assert isinstance(result, DerivedGateOk)
+            blob = result.blob
             assert blob["commands"][0]["status"] == "failed" and blob["passed"] is False
 
     async def test_grounds_deriver_in_repo_manifests(self, tmp_path, monkeypatch):
@@ -1478,22 +1484,28 @@ class TestDerivedGate:
             svc = VerificationService(session=session, llm=llm)
             run = await self._seed(session, tmp_path, monkeypatch)
             box = FakeBox()
-            blob = await svc._run_derived_gate(run, box, ["design.md"])
-            assert blob is not None
+            result = await svc._run_derived_gate(run, box, ["design.md"])
+            assert isinstance(result, DerivedGateOk)
+            blob = result.blob
             assert blob["applicable"] is False and blob["commands"] == []
             assert blob["passed"] is True and box.exec_calls == []
 
-    async def test_none_when_not_a_product_worktree(self, tmp_path, monkeypatch):
+    async def test_not_eligible_when_not_a_product_worktree(self, tmp_path, monkeypatch):
         async with memory_session() as session:
             svc = VerificationService(session=session, llm=StubLlm([]))
             run = await self._seed(session, tmp_path, monkeypatch, product=False)
-            assert await svc._run_derived_gate(run, FakeBox(), ["x.py"]) is None
+            result = await svc._run_derived_gate(run, FakeBox(), ["x.py"])
+            assert isinstance(result, DerivedGateNotEligible)
 
-    async def test_none_on_deriver_hiccup(self, tmp_path, monkeypatch):
+    async def test_deriver_hiccup_is_failed_not_none(self, tmp_path, monkeypatch):
+        """A deriver that could not run is a 3-state FAILURE (fail-closed), no
+        longer the ``None`` that conflated it with "no gate" and failed OPEN."""
         async with memory_session() as session:
             svc = VerificationService(session=session, llm=StubLlm([]))  # exhausted → raises
             run = await self._seed(session, tmp_path, monkeypatch)
-            assert await svc._run_derived_gate(run, FakeBox(), ["x.py"]) is None
+            result = await svc._run_derived_gate(run, FakeBox(), ["x.py"])
+            assert isinstance(result, DerivedGateFailed)
+            assert result.reason
 
 
 class TestVerdictWiring:
@@ -1604,3 +1616,152 @@ class TestVerdictWiring:
             )
             assert vr.outcome is VerificationOutcome.FAILED  # a real gate failure fails (Q-2)
             assert vr.result["derived_gate"]["passed"] is False
+
+
+# --------------------------------------------------------------------------
+# B1 / INV-2 — the derived gate is fail-CLOSED. A deriver that could NOT run
+# (a transient LLM failure) must never let a run auto-prove on a repo that HAS
+# a toolchain manifest; a genuinely gateless (greenfield) repo still passes.
+# The distinction is DETERMINISTIC (manifest presence), never the LLM's word.
+# --------------------------------------------------------------------------
+
+
+class _DeriverCrashLlm:
+    """Answers the scope / demonstration calls benignly but RAISES on the
+    gate-deriver call — models a transient provider failure (500 / timeout /
+    rate-limit) of the deriver, the exact fault that used to fail OPEN (the
+    ``except Exception: return None`` sentinel → a silent auto-prove)."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def complete(
+        self, *, messages: list[dict[str, Any]], tools: list[dict[str, Any]] | None
+    ) -> LoopTurn:
+        self.calls += 1
+        system = messages[0]["content"] if messages else ""
+        if "verification-gate deriver" in system:
+            raise RuntimeError("deriver provider 500")
+        # scope → clean, demonstration → undemonstrable (both parse this shape).
+        return LoopTurn(content='{"flagged": [], "probes": []}')
+
+
+class TestGateFailClosed:
+    async def _seed(self, session, tmp_path, monkeypatch, *, manifest=None):
+        run = await _make_run(session)
+        run.product_id = uuid.uuid4()
+        wt = tmp_path / str(run.id)
+        wt.mkdir(parents=True)
+        (wt / ".git").write_text("gitdir: /elsewhere\n")
+        if manifest is not None:
+            (wt / manifest).write_text("")  # a real toolchain manifest → gate expected
+        import backend.storage.product_workspace as pw
+
+        # Resolve per-run so several runs in one test each see their own worktree.
+        monkeypatch.setattr(pw, "run_worktree_path", lambda rid: tmp_path / str(rid))
+        monkeypatch.setattr(pw, "commit_worktree", AsyncMock(), raising=False)
+        monkeypatch.setattr(
+            pw,
+            "merge_main_into_worktree",
+            AsyncMock(return_value=SimpleNamespace(status="clean", conflict_paths=[])),
+            raising=False,
+        )
+        return run
+
+    async def test_manifest_present_is_deterministic(self, tmp_path, monkeypatch):
+        """``_manifest_present`` is a real file check on the worktree — a manifest
+        present → True (gate expected), an empty repo → False (greenfield)."""
+        async with memory_session() as session:
+            with_manifest = await self._seed(
+                session, tmp_path, monkeypatch, manifest="pyproject.toml"
+            )
+            without = await self._seed(session, tmp_path, monkeypatch)  # no manifest
+            svc = VerificationService(session=session, llm=StubLlm([]))
+            assert svc._manifest_present(with_manifest) is True
+            assert svc._manifest_present(without) is False
+
+    async def test_deriver_crash_on_manifest_repo_fails_closed(self, tmp_path, monkeypatch):
+        """THE anti-regression for the fail-OPEN sin. A transient deriver failure
+        on a repo WITH a toolchain manifest must FAIL the verification — a passing
+        agent-command attestation must NOT sneak the run to PROVED with ZERO
+        objective gate commands executed."""
+        async with memory_session() as session:
+            run = await self._seed(session, tmp_path, monkeypatch, manifest="pyproject.toml")
+            work_step, attempt = await _make_step_and_attempt(session, run)
+            svc = VerificationService(session=session, llm=_DeriverCrashLlm())
+            # The agent's own command PASSES — it must not rescue the crashed gate.
+            contract = VerificationContract(
+                checks=(VerificationCheck(kind="command", command="true"),)
+            )
+            vr = await svc.verify(
+                run=run,
+                work_step=work_step,
+                attempt=attempt,
+                contract=contract,
+                box=FakeBox(),
+                written_paths=["README.md"],
+                final_text="",
+            )
+            assert vr.outcome is VerificationOutcome.FAILED  # fail-closed, not PROVED
+            assert vr.result["gate_expected"] is True  # deterministic — manifest present
+            assert vr.result.get("gate_deriver_failed")  # telemetry recorded
+            assert vr.result["honesty_grade"] is None  # not graded — it FAILED
+
+    async def test_deriver_crash_on_greenfield_still_passes(self, tmp_path, monkeypatch):
+        """No manifest (early / greenfield / prose) → genuinely gateless. A deriver
+        hiccup here must NOT fail the run — it falls back to the agent's command
+        attestation and PASSES. This is the anti-regression guarding legit
+        greenfield work from the new stricter path."""
+        async with memory_session() as session:
+            run = await self._seed(session, tmp_path, monkeypatch)  # NO manifest
+            work_step, attempt = await _make_step_and_attempt(session, run)
+            svc = VerificationService(session=session, llm=_DeriverCrashLlm())
+            contract = VerificationContract(
+                checks=(VerificationCheck(kind="command", command="true"),)
+            )
+            vr = await svc.verify(
+                run=run,
+                work_step=work_step,
+                attempt=attempt,
+                contract=contract,
+                box=FakeBox(),
+                written_paths=["README.md"],
+                final_text="",
+            )
+            assert vr.outcome is VerificationOutcome.PASSED  # greenfield still proceeds
+            assert vr.result["gate_expected"] is False
+
+    async def test_llm_not_applicable_cannot_override_present_manifest(self, tmp_path, monkeypatch):
+        """INV-2 — the LLM self-declaring ``applicable: false`` does NOT beat a
+        deterministic manifest. A repo WITH a manifest stays gate_expected even
+        when the deriver says "not applicable", so the weak (grade-D) verdict
+        routes to founder review instead of silently auto-proving (the second
+        fail-open door — the deriver unilaterally auto-proving)."""
+        async with memory_session() as session:
+            run = await self._seed(session, tmp_path, monkeypatch, manifest="pyproject.toml")
+            work_step, attempt = await _make_step_and_attempt(session, run)
+            # scope clean, then the deriver self-declares NOT applicable.
+            llm = StubLlm(
+                [
+                    LoopTurn(content='{"flagged": []}'),
+                    LoopTurn(content='{"applicable": false, "commands": []}'),
+                ]
+            )
+            svc = VerificationService(session=session, llm=llm)
+            contract = VerificationContract(
+                checks=(VerificationCheck(kind="command", command="true"),)
+            )
+            vr = await svc.verify(
+                run=run,
+                work_step=work_step,
+                attempt=attempt,
+                contract=contract,
+                box=FakeBox(),
+                written_paths=["README.md"],
+                final_text="",
+            )
+            # The deriver RAN (didn't crash) → PASSED verification, but the manifest
+            # makes it gate_expected + grade D → the ratchet routes it to review.
+            assert vr.outcome is VerificationOutcome.PASSED
+            assert vr.result["gate_expected"] is True  # manifest wins over the LLM's word
+            assert vr.result["honesty_grade"] == "D"
