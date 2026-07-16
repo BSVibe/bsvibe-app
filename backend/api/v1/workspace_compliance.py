@@ -39,6 +39,7 @@ from backend.api.v1._identity_deps import (
     get_membership_repository,
     get_workspace_repository,
 )
+from backend.api.v1.inside import build_inside_index, build_inside_storage
 from backend.identity.db import UserRow
 from backend.identity.domain.repositories import (
     MembershipRepository,
@@ -50,10 +51,9 @@ from backend.identity.workspaces_db import (
     ResourceBindingRow,
     WorkspaceRow,
 )
-from backend.knowledge.domain.repositories import CanonicalAnchorRepository
-from backend.knowledge.infrastructure.repositories import (
-    SqlAlchemyCanonicalAnchorRepository,
-)
+from backend.knowledge.canonicalization.index import InMemoryCanonicalizationIndex
+from backend.knowledge.graph.markdown_utils import body_after_frontmatter
+from backend.knowledge.graph.storage import StorageBackend
 from backend.workflow.domain.repositories import RequestRepository
 from backend.workflow.infrastructure.db import (
     Decision,
@@ -167,10 +167,19 @@ async def _build_export(
     workspace: WorkspaceRow,
     user: UserRow,
     memberships: MembershipRepository,
+    concept_index: InMemoryCanonicalizationIndex,
+    concept_storage: StorageBackend,
 ) -> dict[str, Any]:
     """Materialise the export document. All children are workspace-scoped by
     layer 2; the explicit workspace_id filters here are defense-in-depth and
     make the query intent obvious in the source.
+
+    The founder's canonical knowledge (``knowledge_concepts``) is read from the
+    per-workspace vault — the SAME FS-as-SoT source ``GET /inside/concepts`` and
+    the PWA knowledge graph render — via ``concept_index`` / ``concept_storage``.
+    It is emphatically NOT the ``canonical_anchors`` DB table, which is
+    producer-less: nothing writes it, so reading it under-reported the founder's
+    knowledge as empty for every workspace (a GDPR Art. 15/20 defect).
     """
     ws_id = workspace.id
 
@@ -226,8 +235,30 @@ async def _build_export(
     )
     request_repo: RequestRepository = SqlAlchemyRequestRepository(session)
     requests = await request_repo.list_by_workspace(ws_id)
-    anchor_repo: CanonicalAnchorRepository = SqlAlchemyCanonicalAnchorRepository(session)
-    canon = await anchor_repo.list_by_workspace(ws_id)
+
+    # Canonical knowledge = the workspace's active concepts in the vault
+    # (``concepts/active/<id>.md``), the FS-as-SoT the concept list + graph
+    # read. Newest-settled first (mirrors ``GET /inside/concepts``). Each
+    # concept's body (frontmatter stripped) is carried in full so the export
+    # is portable per Art. 20, not a truncated preview.
+    concepts = await concept_index.list_active_concepts()
+    concepts.sort(key=lambda c: c.updated_at, reverse=True)
+    knowledge_concepts: list[dict[str, Any]] = []
+    for concept in concepts:
+        description = ""
+        if await concept_storage.exists(concept.path):
+            description = body_after_frontmatter(await concept_storage.read(concept.path)).strip()
+        knowledge_concepts.append(
+            {
+                "id": concept.concept_id,
+                "name": concept.display,
+                "type": concept.note_type,
+                "aliases": list(concept.aliases),
+                "description": description,
+                "created_at": concept.created_at.isoformat() if concept.created_at else None,
+                "updated_at": concept.updated_at.isoformat() if concept.updated_at else None,
+            }
+        )
 
     return {
         "exported_at": datetime.now(UTC).isoformat(),
@@ -350,15 +381,7 @@ async def _build_export(
             }
             for dec in decisions
         ],
-        "knowledge_concepts": [
-            {
-                "id": str(c.id),
-                "name": c.name,
-                "description": c.description,
-                "created_at": c.created_at.isoformat() if c.created_at else None,
-            }
-            for c in canon
-        ],
+        "knowledge_concepts": knowledge_concepts,
     }
 
 
@@ -369,16 +392,28 @@ async def export_workspace(
     session: Annotated[AsyncSession, Depends(get_db_session)],
     workspaces: Annotated[WorkspaceRepository, Depends(get_workspace_repository)],
     memberships: Annotated[MembershipRepository, Depends(get_membership_repository)],
+    concept_index: Annotated[InMemoryCanonicalizationIndex, Depends(build_inside_index)],
+    concept_storage: Annotated[StorageBackend, Depends(build_inside_storage)],
 ) -> dict[str, Any]:
     """Return the caller's workspace data as a single JSON document.
 
     Art. 15 (right of access) + Art. 20 (portability). Workspace-scoped via
     the resolved ``workspace_id`` contextvar; defense layers 2/3 also engage.
+    ``concept_index`` / ``concept_storage`` root at the caller's per-workspace
+    vault (same builders ``/inside/concepts`` uses), so the exported knowledge
+    is the founder's real active concepts — never another workspace's.
     """
     workspace = await workspaces.get(workspace_id)
     if workspace is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
-    return await _build_export(session, workspace=workspace, user=user, memberships=memberships)
+    return await _build_export(
+        session,
+        workspace=workspace,
+        user=user,
+        memberships=memberships,
+        concept_index=concept_index,
+        concept_storage=concept_storage,
+    )
 
 
 @router.get("/processing-record")
