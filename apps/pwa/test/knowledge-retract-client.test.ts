@@ -1,12 +1,9 @@
 /**
- * Knowledge retract / correct / undo wire contracts (Lift M3b PWA half of the
- * M3a backend surface). Asserts:
+ * Knowledge retract / undo wire contracts (PWA half of the retraction backend
+ * surface). Asserts:
  *  - retractNode POSTs `/api/v1/inside/nodes/{node_ref}/retract` with the body
  *    `{ correction_id?, reason? }` and parses the `RetractResponse` shape
  *    (`signal`, `created`, `undo_window_seconds`)
- *  - correctNode POSTs `/api/v1/inside/nodes/{node_ref}/correct` with the body
- *    `{ correction_id?, reason?, corrections? }` and parses the same response
- *    shape
  *  - undoCorrection POSTs `/api/v1/inside/corrections/{id}/undo` and parses
  *    the `UndoCorrectionResponse` (`{correction_id, status}`)
  *  - node_ref `/` literals are preserved (the backend mounts via `:path`)
@@ -17,7 +14,7 @@
  */
 
 import { ApiError } from "@/lib/api/client";
-import { correctNode, retractNode, undoCorrection } from "@/lib/api/knowledge";
+import { retractNode, undoCorrection } from "@/lib/api/knowledge";
 import { type Session, clearSession, setSession } from "@/lib/auth/session";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -117,30 +114,6 @@ describe("knowledge retract / correct / undo wire", () => {
       JSON.stringify({
         correction_id: "ddddddd1-dddd-dddd-dddd-dddddddddddd",
         reason: "typo",
-      }),
-    );
-  });
-
-  it("correctNode POSTs to the correct endpoint with corrections + reason", async () => {
-    const fetchMock = okFetch({
-      ...RETRACT_RESPONSE,
-      signal: { ...RETRACT_RESPONSE.signal, action: "correct" },
-    });
-    global.fetch = fetchMock as unknown as typeof fetch;
-
-    const res = await correctNode("garden/seedling/foo.md", {
-      reason: "replace the body",
-      corrections: { body: "the new body" },
-    });
-
-    expect(res.signal.action).toBe("correct");
-    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
-    expect(url).toBe("/api/v1/inside/nodes/garden/seedling/foo.md/correct");
-    expect((init.method ?? "GET").toUpperCase()).toBe("POST");
-    expect(init.body).toBe(
-      JSON.stringify({
-        reason: "replace the body",
-        corrections: { body: "the new body" },
       }),
     );
   });

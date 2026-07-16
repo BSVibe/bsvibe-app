@@ -1,6 +1,7 @@
 /** Knowledge API — REAL backend `/api/v1/inside` (backend/api/v1/inside.py):
- *  the founder's window into what the AI has learned, and (Lift M3a backend +
- *  M3b PWA surface) the founder-issued retract / correct write path.
+ *  the founder's window into what the AI has learned, and the founder-issued
+ *  retract write path. (Correct / in-place field rewrite is not available yet —
+ *  the backend endpoint returns 501, so there is no client for it here.)
  *   GET  /api/v1/inside/concepts                     — canonical anchors,
  *                                                       newest first, `limit`
  *                                                       (default 50, ≤200)
@@ -18,9 +19,6 @@
  *   POST /api/v1/inside/nodes/{node_ref}/retract     — open a retract for a
  *                                                       garden note (queued,
  *                                                       undo-able 30s)
- *   POST /api/v1/inside/nodes/{node_ref}/correct     — open a correct for a
- *                                                       garden note (queued,
- *                                                       undo-able 30s)
  *   POST /api/v1/inside/corrections/{id}/undo        — undo a queued
  *                                                       correction inside the
  *                                                       30s window
@@ -32,7 +30,6 @@ import { apiFetch } from "./client";
 import type {
   Concept,
   ConceptDetail,
-  CorrectRequestBody,
   KnowledgeGraph,
   KnowledgeNote,
   Observation,
@@ -93,19 +90,6 @@ export function retractNode(
   body: RetractRequestBody = {},
 ): Promise<RetractResponse> {
   return apiFetch<RetractResponse>(`/api/v1/inside/nodes/${encodeNodeRef(nodeRef)}/retract`, {
-    method: "POST",
-    body: JSON.stringify(body),
-  });
-}
-
-/** Open a correction for a garden note. Same 30s undo discipline as retract;
- *  `body.corrections` is the whitelisted field → new-value mapping the writer
- *  applies on apply_at. Idempotent on `body.correction_id`. */
-export function correctNode(
-  nodeRef: string,
-  body: CorrectRequestBody = {},
-): Promise<RetractResponse> {
-  return apiFetch<RetractResponse>(`/api/v1/inside/nodes/${encodeNodeRef(nodeRef)}/correct`, {
     method: "POST",
     body: JSON.stringify(body),
   });

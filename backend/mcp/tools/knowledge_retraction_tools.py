@@ -145,9 +145,9 @@ async def _h_retract(args: RetractInput, ctx: ToolContext) -> Any:
 class CorrectInput(BaseModel):
     """Mirror of :class:`CorrectRequest` (REST) + the path arg.
 
-    ``corrections`` is the whitelisted field → new-value mapping the writer
-    applies on apply_at. The PWA's CorrectModal sends ``{body: replacement}``;
-    the same shape rides through MCP. Idempotent on ``correction_id``.
+    Preserved for wire-compatibility, but the tool currently refuses with an
+    "unavailable" :class:`ToolError`: the in-place field-rewrite editor was
+    never built, so confirming a correction would be a false success.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -159,16 +159,10 @@ class CorrectInput(BaseModel):
 
 
 async def _h_correct(args: CorrectInput, ctx: ToolContext) -> Any:
-    # M3a backend records ``corrections`` only on the signal_json column
-    # via the service's standard issue() path; the field-rewrite editor
-    # lands with M3b. Passing-through keeps the wire forward-compatible.
-    return await _issue_with_action(
-        ctx=ctx,
-        node_ref=args.node_ref,
-        action="correct",
-        reason=args.reason,
-        correction_id=args.correction_id,
-    )
+    # The field-rewrite editor was never built. Issuing a correction would
+    # persist a row + later emit a false ``ontology.correction.applied`` audit
+    # for an operation that mutates nothing. Refuse honestly instead.
+    raise ToolError("correction (in-place field rewrite) is not available yet")
 
 
 # ---------------------------------------------------------------------------
@@ -222,11 +216,10 @@ def register_knowledge_retraction_tools(registry: ToolRegistry) -> None:
         Tool(
             name="bsvibe_knowledge_correct",
             description=(
-                "Open a correction for a garden note. Same 30s undo discipline "
-                "as retract; `corrections` is the whitelisted field → new-value "
-                "mapping (M3a accepts {'body': '<replacement>'}; the writer-side "
-                "rewrite lands with M3b). Idempotent on `correction_id`. Mirrors "
-                "the PWA InspectorActions correct modal."
+                "NOT AVAILABLE YET. The in-place field-rewrite editor for garden "
+                "notes was never built, so this tool refuses with an 'unavailable' "
+                "error rather than confirm a correction that changes nothing. Use "
+                "`bsvibe_knowledge_retract` to remove a note from future runs."
             ),
             input_schema=CorrectInput,
             output_schema=_Envelope,

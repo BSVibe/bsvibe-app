@@ -147,23 +147,27 @@ async def test_retract_404_on_missing_node(db, workspace_id, user_id, registry) 
             )
 
 
-async def test_correct_issues_signal(db, workspace_id, user_id, registry, seeded_vault) -> None:
+async def test_correct_tool_is_unavailable(
+    db, workspace_id, user_id, registry, seeded_vault
+) -> None:
+    """``bsvibe_knowledge_correct`` refuses honestly — the field-rewrite editor
+    was never built, so it must not confirm a correction that changes nothing
+    (which would also later emit a false ``ontology.correction.applied``)."""
     async with db() as s:
         ctx = ToolContext(
             principal=_principal(workspace_id=workspace_id, user_id=user_id, scopes=("mcp:write",)),
             session=s,
         )
-        out = await registry.call_tool(
-            "bsvibe_knowledge_correct",
-            {
-                "node_ref": seeded_vault,
-                "corrections": {"body": "New body text."},
-                "reason": "missed nuance",
-            },
-            ctx,
-        )
-    assert out["signal"]["action"] == "correct"
-    assert out["created"] is True
+        with pytest.raises(ToolError, match="not available"):
+            await registry.call_tool(
+                "bsvibe_knowledge_correct",
+                {
+                    "node_ref": seeded_vault,
+                    "corrections": {"body": "New body text."},
+                    "reason": "missed nuance",
+                },
+                ctx,
+            )
 
 
 async def test_undo_returns_undone_inside_window(

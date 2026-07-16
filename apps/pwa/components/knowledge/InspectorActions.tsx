@@ -2,17 +2,21 @@
 
 /**
  * InspectorActions — the founder-facing write surface on the Inside view
- * inspector panel (Lift M3b PWA half of the M3a backend). Renders the
- * Correct + Retract buttons (design §3.1), drives the modals, and owns the
- * 30-second undo toast lifecycle.
+ * inspector panel. Renders the Retract action (design §3.1), drives its modal,
+ * and owns the 30-second undo toast lifecycle.
+ *
+ * The Correct action is rendered as a DISABLED "coming soon" affordance: the
+ * in-place field-rewrite editor was never built (the backend `correct` path
+ * refuses honestly), so we must not offer a control that confirms a correction
+ * — and writes a false "Corrected X" + undo toast — for an operation that
+ * mutates nothing. Retract is the working mutation.
  *
  * The component is the integration point between the read-only inspector
- * panel and the M3a write endpoints (lib/api/knowledge.ts:
- * `retractNode`/`correctNode`/`undoCorrection`). It keeps its own state
- * machine — `idle → modal → toast(countdown) → toast(terminal)` — so the
- * panel host (KnowledgeGraphView) stays read-shaped: it just hands us the
- * node ref/name and an `onAfterApply` hook for cosmetic updates (fading the
- * retracted node, badging the corrected one).
+ * panel and the write endpoints (lib/api/knowledge.ts:
+ * `retractNode`/`undoCorrection`). It keeps its own state machine —
+ * `idle → modal → toast(countdown) → toast(terminal)` — so the panel host
+ * (KnowledgeGraphView) stays read-shaped: it just hands us the node ref/name
+ * and an `onApplied` hook for cosmetic updates (fading the retracted node).
  *
  * Design invariants preserved:
  *  - 30s undo window comes from `signal.apply_at` (server-stamped wall-clock).
@@ -24,25 +28,24 @@
  */
 
 import { ApiError } from "@/lib/api/client";
-import { correctNode, retractNode, undoCorrection } from "@/lib/api/knowledge";
+import { retractNode, undoCorrection } from "@/lib/api/knowledge";
 import type { RetractionSignal } from "@/lib/api/types";
 import { useTranslations } from "next-intl";
 import { useCallback, useState } from "react";
-import CorrectModal from "./CorrectModal";
 import RetractModal from "./RetractModal";
 import UndoToast, { type ToastState } from "./UndoToast";
 
 export type ActionKind = "retract" | "correct";
 
 export interface InspectorActionsProps {
-  /** The vault path / concept id the M3a `nodes/{node_ref}/...` endpoints
+  /** The vault path / concept id the `nodes/{node_ref}/...` endpoints
    *  take. Backend resolves it; we just thread it through unchanged. */
   nodeRef: string;
   /** Display name for modal headings + toast confirmation. */
   nodeName: string;
-  /** Fired once a retract/correct ENTERS the toast countdown — the parent
-   *  uses it to mark the node visually in the current session (retract:
-   *  fade, correct: edited badge). NOT fired on cancel or modal error. */
+  /** Fired once a retract ENTERS the toast countdown — the parent uses it to
+   *  mark the node visually in the current session (retract: fade). NOT fired
+   *  on cancel or modal error. */
   onApplied?: (action: ActionKind) => void;
   /** Fired once the toast hits a terminal state where the parent may want
    *  to refetch the graph (per design Q6a: hide retracted on next load).
@@ -53,7 +56,6 @@ export interface InspectorActionsProps {
 type Phase =
   | { kind: "idle" }
   | { kind: "modal-retract" }
-  | { kind: "modal-correct" }
   | {
       kind: "toast";
       action: ActionKind;
@@ -72,7 +74,6 @@ export default function InspectorActions({
   const [phase, setPhase] = useState<Phase>({ kind: "idle" });
 
   const startRetract = useCallback(() => setPhase({ kind: "modal-retract" }), []);
-  const startCorrect = useCallback(() => setPhase({ kind: "modal-correct" }), []);
   const closeModal = useCallback(() => setPhase({ kind: "idle" }), []);
 
   const enterToastCountdown = useCallback(
@@ -94,18 +95,6 @@ export default function InspectorActions({
       const body = reason.length > 0 ? { reason } : {};
       const res = await retractNode(nodeRef, body);
       enterToastCountdown("retract", res.signal);
-    },
-    [nodeRef, enterToastCountdown],
-  );
-
-  const handleCorrectConfirm = useCallback(
-    async ({ replacement, reason }: { replacement: string; reason: string }) => {
-      const body: { reason?: string; corrections: Record<string, string> } = {
-        corrections: { body: replacement },
-      };
-      if (reason.length > 0) body.reason = reason;
-      const res = await correctNode(nodeRef, body);
-      enterToastCountdown("correct", res.signal);
     },
     [nodeRef, enterToastCountdown],
   );
@@ -161,7 +150,8 @@ export default function InspectorActions({
         <button
           type="button"
           className="ontology-actions__button ontology-actions__button--secondary"
-          onClick={startCorrect}
+          disabled
+          title={t("inspectorActionCorrectUnavailable")}
           data-testid="inspector-action-correct"
         >
           {t("inspectorActionCorrect")}
@@ -180,17 +170,9 @@ export default function InspectorActions({
         <RetractModal nodeName={nodeName} onConfirm={handleRetractConfirm} onCancel={closeModal} />
       ) : null}
 
-      {phase.kind === "modal-correct" ? (
-        <CorrectModal nodeName={nodeName} onConfirm={handleCorrectConfirm} onCancel={closeModal} />
-      ) : null}
-
       {phase.kind === "toast" ? (
         <UndoToast
-          message={
-            phase.action === "retract"
-              ? t("undoToastRetractedMessage", { name: nodeName })
-              : t("undoToastCorrectedMessage", { name: nodeName })
-          }
+          message={t("undoToastRetractedMessage", { name: nodeName })}
           applyAt={phase.applyAt}
           state={phase.state}
           onUndo={() => void handleUndo()}

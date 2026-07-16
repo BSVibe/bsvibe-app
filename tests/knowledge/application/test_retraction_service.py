@@ -25,12 +25,17 @@ from pathlib import Path
 
 import pytest
 import pytest_asyncio
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from backend.knowledge.application.retraction_service import RetractionService
+from backend.knowledge.application.retraction_service import (
+    CorrectionUnavailableError,
+    RetractionService,
+)
 from backend.knowledge.domain.retraction import UNDO_WINDOW_SECONDS
 from backend.knowledge.graph.vault import Vault
 from backend.knowledge.graph.writer import GardenWriter
+from backend.knowledge.infrastructure.ontology_db import OntologyCorrection
 
 from ..._support import db_engine
 
@@ -340,36 +345,99 @@ async def test_restore_clears_tombstone(
     assert "retraction_reason" not in text
 
 
-async def test_correct_action_persists_row_without_tombstone(
+async def test_correct_issue_is_refused_no_row_no_audit(
     sf: async_sessionmaker[AsyncSession],
     vault_root: Path,
     workspace_id: uuid.UUID,
     actor_id: uuid.UUID,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """``correct`` records intent + applies cleanly without writing a tombstone.
-
-    M3a defers the actual frontmatter rewrite to M3b alongside the inline
-    editor; the audit row + signal must still flow end to end so the trail
-    exists when the editor lands.
+    """``correct`` has no in-place field-rewrite implementation, so the service
+    REFUSES it honestly — it must NOT persist a correction row and must NOT
+    emit any audit event. The old behaviour minted a row + emitted a false
+    ``ontology.correction.applied`` for an operation that changed nothing; the
+    honest contract is a hard refusal at intake.
     """
+    emitted: list[str] = []
+
+    async def _spy_emit(event: object, *, session: object, emitter: object = None) -> None:
+        emitted.append(type(event).__name__)
+
+    monkeypatch.setattr(
+        "backend.knowledge.application.retraction_service.safe_emit",
+        _spy_emit,
+    )
+
     rel_path = _seed_note(vault_root)
     async with sf() as session:
         service = RetractionService(session=session, writer=_writer(vault_root))
-        signal, _ = await service.issue(
-            workspace_id=workspace_id,
-            actor_id=actor_id,
-            node_ref=rel_path,
-            action="correct",
-            reason="typo in the answer",
-        )
+        with pytest.raises(CorrectionUnavailableError):
+            await service.issue(
+                workspace_id=workspace_id,
+                actor_id=actor_id,
+                node_ref=rel_path,
+                action="correct",
+                reason="typo in the answer",
+            )
         await session.commit()
+        count = (
+            await session.execute(select(func.count()).select_from(OntologyCorrection))
+        ).scalar_one()
+
+    assert count == 0, "a refused correction must not persist a row"
+    assert emitted == [], "a refused correction must not emit any audit event"
+    # The note is untouched.
+    text = (vault_root / rel_path).read_text(encoding="utf-8")
+    assert "retracted_at" not in text
+
+
+async def test_apply_pending_never_applies_a_correct_row(
+    sf: async_sessionmaker[AsyncSession],
+    vault_root: Path,
+    workspace_id: uuid.UUID,
+    actor_id: uuid.UUID,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Defence in depth: even a legacy ``correct`` row sitting in the table past
+    its deadline must NEVER be marked applied or emit
+    ``ontology.correction.applied`` — that record would claim a vault mutation
+    that never happened."""
+    emitted: list[str] = []
+
+    async def _spy_emit(event: object, *, session: object, emitter: object = None) -> None:
+        emitted.append(type(event).__name__)
+
+    monkeypatch.setattr(
+        "backend.knowledge.application.retraction_service.safe_emit",
+        _spy_emit,
+    )
+
+    rel_path = _seed_note(vault_root)
+    past = datetime(2026, 6, 1, 12, 0, 0, tzinfo=UTC)
+    row = OntologyCorrection(
+        id=uuid.uuid4(),
+        workspace_id=workspace_id,
+        actor_id=actor_id,
+        action="correct",
+        node_ref=rel_path,
+        reason=None,
+        signal_json={},
+        issued_at=past,
+        apply_at=past,
+    )
+    async with sf() as session:
+        session.add(row)
+        await session.commit()
+        service = RetractionService(session=session, writer=_writer(vault_root))
         applied = await service.apply_pending(
             workspace_id=workspace_id,
-            now=signal.apply_at + timedelta(seconds=1),
+            now=past + timedelta(seconds=60),
         )
+        await session.refresh(row)
 
-    assert applied == 1
-    # No tombstone — correct does not retract.
+    assert applied == 0, "a correct row must never be swept into an 'applied' state"
+    assert row.applied_at is None, "a correct row must never be marked applied"
+    assert "OntologyCorrectionApplied" not in emitted, "no false applied audit"
     text = (vault_root / rel_path).read_text(encoding="utf-8")
     assert "retracted_at" not in text
 

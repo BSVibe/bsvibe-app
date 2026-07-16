@@ -247,22 +247,26 @@ async def test_undo_twice_returns_already_undone(
     assert second.json()["status"] == "already_undone"
 
 
-async def test_correct_endpoint_records_intent(
+async def test_correct_endpoint_is_unavailable_501(
     client: httpx.AsyncClient,
     vault_root: Path,
     workspace_id: uuid.UUID,
 ) -> None:
-    """``POST /correct`` issues a correct-action signal without a tombstone."""
+    """``POST /correct`` reports the capability unavailable — no false success.
+
+    The in-place field-rewrite editor was never built. The endpoint returns
+    ``501`` rather than confirming a correction (and later writing a false
+    ``ontology.correction.applied`` audit) for an operation that mutates
+    nothing. The note stays untouched.
+    """
     node_ref = _seed_note(vault_root, workspace_id)
 
     r = await client.post(
         f"/api/v1/inside/nodes/{node_ref}/correct",
         json={"corrections": {"answer": "5 minute TTL — corrected wording"}},
     )
-    assert r.status_code == 200, r.text
-    signal = r.json()["signal"]
-    assert signal["action"] == "correct"
-    # File still on disk; no tombstone applied yet (within window).
+    assert r.status_code == 501, r.text
+    # File untouched — no tombstone, no rewrite.
     note = vault_root / _REGION / str(workspace_id) / node_ref
     assert note.exists()
     assert "retracted_at" not in note.read_text(encoding="utf-8")

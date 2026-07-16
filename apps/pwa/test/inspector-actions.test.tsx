@@ -12,8 +12,9 @@
  *    parent's `onWindowClosed` hook fires
  *  - on the auto-expiry timer (no Undo click), the toast flips to "Undo window
  *    expired." + `onWindowClosed` fires with finalState=applied
- *  - clicking Correct opens the correct modal; confirming POSTs to
- *    /api/v1/inside/nodes/{ref}/correct with the corrections payload
+ *  - the Correct button is DISABLED (the in-place field-rewrite editor was
+ *    never built; the backend refuses it) — clicking it opens no modal, makes
+ *    no network call, and never shows a false "Corrected" toast
  *  - onApplied(action) fires exactly once when the toast countdown starts
  */
 
@@ -217,13 +218,9 @@ describe("InspectorActions", () => {
     expect(onWindowClosed).toHaveBeenCalledWith("retract", "applied");
   });
 
-  it("clicking Correct opens the correct modal; confirming POSTs with corrections payload", async () => {
+  it("the Correct button is disabled — no modal, no POST, no false 'Corrected' toast", async () => {
     const fetchMock = vi.fn(async () =>
-      jsonResponse({
-        signal: makeSignal({ action: "correct" }),
-        created: true,
-        undo_window_seconds: 30,
-      }),
+      jsonResponse({ signal: makeSignal(), created: true, undo_window_seconds: 30 }),
     );
     global.fetch = fetchMock as unknown as typeof fetch;
     const onApplied = vi.fn();
@@ -236,28 +233,16 @@ describe("InspectorActions", () => {
       />,
     );
 
-    fireEvent.click(screen.getByTestId("inspector-action-correct"));
-    fireEvent.change(screen.getByLabelText(/Replacement/i), {
-      target: { value: "new body content" },
-    });
-    fireEvent.change(screen.getByLabelText(/Why\? \(optional\)/i), {
-      target: { value: "fix typo" },
-    });
-    await act(async () => {
-      clickModalConfirm("Save correction");
-    });
+    const correctButton = screen.getByTestId("inspector-action-correct");
+    expect(correctButton).toBeDisabled();
 
-    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
-    expect(url).toBe("/api/v1/inside/nodes/garden/seedling/foo.md/correct");
-    expect((init.method ?? "GET").toUpperCase()).toBe("POST");
-    expect(init.body).toBe(
-      JSON.stringify({
-        corrections: { body: "new body content" },
-        reason: "fix typo",
-      }),
-    );
+    // Clicking a disabled control must do nothing: no modal opens, no network
+    // call fires, no toast appears, onApplied never fires.
+    fireEvent.click(correctButton);
 
-    await waitFor(() => expect(screen.getByTestId("undo-toast")).toBeInTheDocument());
-    expect(onApplied).toHaveBeenCalledWith("correct");
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.queryByTestId("undo-toast")).toBeNull();
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(onApplied).not.toHaveBeenCalled();
   });
 });
