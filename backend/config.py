@@ -39,6 +39,14 @@ class Settings(BaseSettings):
     )
 
     database_url: str = "postgresql+asyncpg://bsvibe:bsvibe@localhost:5442/bsvibe"
+    # Two-role Postgres (B2b) — RLS is a REAL layer-3 backstop only when the
+    # RUNTIME connection is a NON-superuser, NON-BYPASSRLS role. ``database_url``
+    # is that runtime role (least-privilege ``bsvibe_app``). Migrations, which
+    # need DDL + role/policy management, run as the OWNER role via
+    # ``migration_database_url``. Empty (the default) means "single role for
+    # both" — dev / SQLite / any deployment that has not cut over yet keeps
+    # working unchanged: :meth:`migration_url` falls back to ``database_url``.
+    migration_database_url: str = ""
     redis_url: str = "redis://localhost:6387/0"
     environment: Literal["dev", "staging", "prod"] = "dev"
 
@@ -248,6 +256,17 @@ class Settings(BaseSettings):
     @classmethod
     def _parse_cors_allowed_origins(cls, value: str | list[str] | None) -> list[str]:
         return parse_csv_list(value) or list(_DEFAULT_CORS_ORIGINS)
+
+    def migration_url(self) -> str:
+        """The DSN alembic connects with — the OWNER role (B2b).
+
+        Falls back to :attr:`database_url` when ``migration_database_url`` is
+        unset, so a single-role deployment (dev / SQLite / pre-cutover prod)
+        keeps migrating as before. After cutover, ``database_url`` is the
+        least-privilege runtime role and this returns the owner role that can
+        run DDL and manage roles/policies.
+        """
+        return self.migration_database_url or self.database_url
 
 
 @lru_cache(maxsize=1)

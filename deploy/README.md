@@ -69,8 +69,16 @@ $EDITOR deploy/.env.prod
 
 Required (no defaults — compose refuses to start without them):
 
-- `BSVIBE_DB_PASSWORD` — must match the password embedded in `BSVIBE_DATABASE_URL`.
-- `BSVIBE_DATABASE_URL` — `postgresql+asyncpg://bsvibe:<password>@postgres:5432/bsvibe`
+- `BSVIBE_DB_PASSWORD` — the OWNER role (`bsvibe` superuser) password; seeds the
+  postgres container and must match `BSVIBE_MIGRATION_DATABASE_URL`.
+- `BSVIBE_APP_DB_PASSWORD` — the RUNTIME role (`bsvibe_app`) password; the
+  `runtime_role` migration assigns it and it must match `BSVIBE_DATABASE_URL`.
+- `BSVIBE_DATABASE_URL` — RUNTIME DSN the app + worker connect with:
+  `postgresql+asyncpg://bsvibe_app:<app-password>@postgres:5432/bsvibe`. This is a
+  **NON-superuser** role so Postgres RLS is a real layer-3 tenant-isolation
+  backstop (B2b). See `docs/e2e/two-role-rls-checklist.md`.
+- `BSVIBE_MIGRATION_DATABASE_URL` — OWNER DSN alembic runs as (DDL + role/policy
+  management): `postgresql+asyncpg://bsvibe:<db-password>@postgres:5432/bsvibe`.
   (host is the compose service name `postgres`).
 - `BSVIBE_GATEWAY_KMS_KEY_B64` — from step 2.
 - `BSVIBE_SUPABASE_URL`, `BSVIBE_SUPABASE_PUBLISHABLE_KEY` — real Supabase project

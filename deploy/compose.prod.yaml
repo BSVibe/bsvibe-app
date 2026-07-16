@@ -28,7 +28,19 @@ services:
 
   backend:
     environment:
-      BSVIBE_DATABASE_URL: ${BSVIBE_DATABASE_URL:?set BSVIBE_DATABASE_URL}
+      # B2b two-role Postgres. BSVIBE_DATABASE_URL is the RUNTIME role
+      # (least-privilege bsvibe_app, NOSUPERUSER NOBYPASSRLS) so Postgres RLS is
+      # a REAL layer-3 tenant-isolation backstop for the app's own connections.
+      BSVIBE_DATABASE_URL: ${BSVIBE_DATABASE_URL:?set BSVIBE_DATABASE_URL (runtime bsvibe_app role)}
+      # The OWNER role DSN alembic runs as (this service migrates on boot). It
+      # needs DDL + CREATE ROLE to provision bsvibe_app + its grants. Falls back
+      # to BSVIBE_DATABASE_URL inside the app only if unset — but in prod it MUST
+      # be the owner or the runtime_role migration cannot create the role.
+      BSVIBE_MIGRATION_DATABASE_URL: ${BSVIBE_MIGRATION_DATABASE_URL:?set BSVIBE_MIGRATION_DATABASE_URL (owner bsvibe role)}
+      # The password the runtime_role migration assigns to bsvibe_app. Must match
+      # the userinfo in BSVIBE_DATABASE_URL. Only the migrating (backend) service
+      # needs it.
+      BSVIBE_APP_DB_PASSWORD: ${BSVIBE_APP_DB_PASSWORD:?set BSVIBE_APP_DB_PASSWORD (bsvibe_app role password)}
       BSVIBE_REDIS_URL: ${BSVIBE_REDIS_URL:-redis://redis:6379/0}
       BSVIBE_ENVIRONMENT: ${BSVIBE_ENVIRONMENT:-prod}
       BSVIBE_WORKER_MODE: ${BSVIBE_WORKER_MODE:-db_polling}
@@ -96,7 +108,11 @@ services:
       # token; the backend's MCP API verifies it. Two ephemeral keys can never agree.
       BSVIBE_OAUTH_PRIVATE_KEY_PEM: ${BSVIBE_OAUTH_PRIVATE_KEY_PEM:?set BSVIBE_OAUTH_PRIVATE_KEY_PEM in .env.prod}
       BSVIBE_OAUTH_ISSUER: ${BSVIBE_OAUTH_ISSUER:-https://api.bsvibe.dev}
-      BSVIBE_DATABASE_URL: ${BSVIBE_DATABASE_URL:?set BSVIBE_DATABASE_URL}
+      # The worker connects as the RUNTIME role too (least privilege). It does
+      # NOT migrate (entrypoint override), so it needs neither the owner
+      # migration URL nor the app password. It never sets the RLS GUC, so its
+      # reads fail-open across workspaces — exactly what a queue poller needs.
+      BSVIBE_DATABASE_URL: ${BSVIBE_DATABASE_URL:?set BSVIBE_DATABASE_URL (runtime bsvibe_app role)}
       BSVIBE_REDIS_URL: ${BSVIBE_REDIS_URL:-redis://redis:6379/0}
       BSVIBE_ENVIRONMENT: ${BSVIBE_ENVIRONMENT:-prod}
       BSVIBE_WORKER_MODE: ${BSVIBE_WORKER_MODE:-db_polling}

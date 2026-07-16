@@ -25,16 +25,24 @@ import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
 
-from tests._support import can_reach_pg, pg_url
+from tests._support import can_reach_pg, migration_pg_url
 
 pytestmark = pytest.mark.asyncio
 
 
 def _skip_if_no_pg() -> str:
-    """Return the live PG URL, or skip when BSVIBE_DATABASE_URL is unset / unreachable."""
+    """Return the OWNER PG URL for DDL/seeding, or skip when PG is unreachable.
+
+    This test drops + recreates the schema, runs alembic, seeds both workspaces
+    and mints a fresh non-superuser role — all OWNER-role operations. It uses
+    :func:`migration_pg_url` (the ``bsvibe`` owner in the B2b two-role setup); the
+    runtime ``bsvibe_app`` role deliberately cannot do any of them. The RLS
+    assertion itself runs through a role this test mints, so it proves the policy
+    independently of the app runtime role.
+    """
     if not os.environ.get("BSVIBE_DATABASE_URL"):
         pytest.skip("BSVIBE_DATABASE_URL not set — RLS test requires real Postgres")
-    url = pg_url()
+    url = migration_pg_url()
     if not can_reach_pg(url):
         pytest.skip(f"Postgres not reachable at {url}")
     return url
@@ -43,7 +51,9 @@ def _skip_if_no_pg() -> str:
 def _alembic_upgrade(url: str) -> None:
     repo = Path(__file__).parent.parent.parent
     env = os.environ.copy()
-    env["BSVIBE_DATABASE_URL"] = url
+    # Run alembic as the owner: env.py resolves the URL via migration_url(),
+    # which prefers BSVIBE_MIGRATION_DATABASE_URL, then BSVIBE_DATABASE_URL.
+    env["BSVIBE_MIGRATION_DATABASE_URL"] = url
     result = subprocess.run(
         [sys.executable, "-m", "alembic", "upgrade", "head"],
         cwd=repo,

@@ -41,7 +41,16 @@ jobs:
           --health-retries=10
 
     env:
-      BSVIBE_DATABASE_URL: postgresql+asyncpg://bsvibe:bsvibe@localhost:5432/bsvibe
+      # B2b two-role Postgres. The app/tests connect as the RUNTIME role
+      # (bsvibe_app, NOSUPERUSER NOBYPASSRLS) so Postgres RLS actually governs
+      # them — the production-tier RLS test proves layer-3 isolation only when
+      # the connection is NOT a superuser. Migrations (alembic) run as the OWNER
+      # role via BSVIBE_MIGRATION_DATABASE_URL; the `runtime_role` migration
+      # CREATEs bsvibe_app + grants and sets its password from
+      # BSVIBE_APP_DB_PASSWORD.
+      BSVIBE_DATABASE_URL: postgresql+asyncpg://bsvibe_app:bsvibe_app_ci@localhost:5432/bsvibe
+      BSVIBE_MIGRATION_DATABASE_URL: postgresql+asyncpg://bsvibe:bsvibe@localhost:5432/bsvibe
+      BSVIBE_APP_DB_PASSWORD: bsvibe_app_ci
       BSVIBE_REDIS_URL: redis://localhost:6379/0
       BSVIBE_ENVIRONMENT: dev
       BSVIBE_GIT_SHA: ${{ github.sha }}
@@ -77,10 +86,14 @@ jobs:
       - name: mypy --strict (bsvibe_sdk/)
         run: uv run mypy --strict --python-version 3.11 bsvibe_sdk/bsvibe_sdk/
 
-      - name: alembic upgrade head (fresh-PG migration smoke)
+      - name: alembic upgrade head (fresh-PG migration smoke + provision runtime role)
+        # Runs as the OWNER (BSVIBE_MIGRATION_DATABASE_URL). This both smoke-tests
+        # the migration chain on a fresh PG AND provisions the bsvibe_app runtime
+        # role + grants, so the pytest step below can connect as it. MUST run
+        # before pytest — the app engine (BSVIBE_DATABASE_URL) is bsvibe_app.
         run: uv run alembic upgrade head
 
-      - name: pytest with coverage (smoke + unit)
+      - name: pytest with coverage (smoke + unit — app as non-superuser runtime role)
         run: uv run pytest --cov=backend --cov=plugin --cov-fail-under=80 -v
 
       - name: pytest (bsvibe_sdk)
