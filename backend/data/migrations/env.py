@@ -52,8 +52,12 @@ if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
 # Override sqlalchemy.url from environment so prod / dev / CI all
-# read their own DB endpoint.
-config.set_main_option("sqlalchemy.url", get_settings().database_url)
+# read their own DB endpoint. Migrations run as the OWNER role (B2b two-role
+# setup): DDL + CREATE ROLE / policy management need privileges the
+# least-privilege runtime role deliberately lacks. ``migration_url()`` falls
+# back to ``database_url`` when no separate owner DSN is configured, so
+# single-role deployments migrate exactly as before.
+config.set_main_option("sqlalchemy.url", get_settings().migration_url())
 
 
 # One shared metadata now spans every module's tables — the imports

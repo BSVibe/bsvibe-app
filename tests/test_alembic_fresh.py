@@ -36,9 +36,13 @@ from backend.config import get_settings
 
 
 def _pg_url() -> str:
+    # This suite DROPs + recreates the schema and runs alembic — OWNER-role work
+    # (B2b two-role setup). Prefer an explicit fresh-PG URL, then the owner
+    # migration URL, then the settings owner fallback. The runtime ``bsvibe_app``
+    # role cannot do DDL, so never use BSVIBE_DATABASE_URL directly here.
     return os.environ.get(
         "BSVIBE_FRESH_PG_URL",
-        os.environ.get("BSVIBE_DATABASE_URL", get_settings().database_url),
+        os.environ.get("BSVIBE_MIGRATION_DATABASE_URL", get_settings().migration_url()),
     )
 
 
@@ -113,7 +117,7 @@ async def _drop_everything(url: str) -> None:
 
 def test_fresh_pg_upgrade_round_trip():
     url = _skip_if_no_pg()
-    env_extra = {"BSVIBE_DATABASE_URL": url}
+    env_extra = {"BSVIBE_MIGRATION_DATABASE_URL": url}
 
     # Clean slate so the test is idempotent regardless of prior state.
     asyncio.run(_drop_everything(url))
@@ -121,7 +125,7 @@ def test_fresh_pg_upgrade_round_trip():
     # Phase 1 — fresh upgrade.
     _alembic(["upgrade", "head"], env_extra=env_extra)
     stamped = asyncio.run(_stamped_head(url))
-    assert stamped == "executor_task_agentic", f"expected head executor_task_agentic, got {stamped}"
+    assert stamped == "runtime_role", f"expected head runtime_role, got {stamped}"
 
     # Phase 2 — full downgrade. Verifies every revision's downgrade path.
     _alembic(["downgrade", "base"], env_extra=env_extra)
@@ -129,7 +133,7 @@ def test_fresh_pg_upgrade_round_trip():
     # Phase 3 — re-upgrade. Verifies the chain is idempotent.
     _alembic(["upgrade", "head"], env_extra=env_extra)
     stamped = asyncio.run(_stamped_head(url))
-    assert stamped == "executor_task_agentic"
+    assert stamped == "runtime_role"
 
 
 def test_run_routing_source_text_column_round_trips():
@@ -140,7 +144,7 @@ def test_run_routing_source_text_column_round_trips():
     against a fresh PG so the operational rollback path is safe.
     """
     url = _skip_if_no_pg()
-    env_extra = {"BSVIBE_DATABASE_URL": url}
+    env_extra = {"BSVIBE_MIGRATION_DATABASE_URL": url}
 
     asyncio.run(_drop_everything(url))
     _alembic(["upgrade", "head"], env_extra=env_extra)
@@ -183,7 +187,7 @@ def test_model_account_api_key_encrypted_is_nullable_after_upgrade():
     """Lift 5a migration makes ``model_accounts.api_key_encrypted`` NULLABLE so
     executor accounts (which carry no api key) can be inserted with a NULL."""
     url = _skip_if_no_pg()
-    env_extra = {"BSVIBE_DATABASE_URL": url}
+    env_extra = {"BSVIBE_MIGRATION_DATABASE_URL": url}
 
     asyncio.run(_drop_everything(url))
     _alembic(["upgrade", "head"], env_extra=env_extra)
@@ -238,7 +242,7 @@ def test_worker_last_in_flight_column_round_trips():
     so the operational rollback path is safe.
     """
     url = _skip_if_no_pg()
-    env_extra = {"BSVIBE_DATABASE_URL": url}
+    env_extra = {"BSVIBE_MIGRATION_DATABASE_URL": url}
 
     asyncio.run(_drop_everything(url))
     _alembic(["upgrade", "head"], env_extra=env_extra)
@@ -287,7 +291,7 @@ def test_pgvector_extension_installed_after_upgrade():
     unit tests (SQLite path), exploding on first prod insert.
     """
     url = _skip_if_no_pg()
-    env_extra = {"BSVIBE_DATABASE_URL": url}
+    env_extra = {"BSVIBE_MIGRATION_DATABASE_URL": url}
 
     asyncio.run(_drop_everything(url))
     _alembic(["upgrade", "head"], env_extra=env_extra)

@@ -46,8 +46,25 @@ _SQLITE_URL = "sqlite+aiosqlite:///:memory:"
 
 
 def pg_url() -> str:
-    """The configured Postgres URL (``BSVIBE_DATABASE_URL`` or the dev default)."""
+    """The RUNTIME Postgres URL (``BSVIBE_DATABASE_URL`` or the dev default).
+
+    After the B2b two-role cutover this is the least-privilege ``bsvibe_app``
+    role, so glue/api suites that read/write through it exercise RLS exactly as
+    production does. Tests that need DDL / role management use
+    :func:`migration_pg_url` instead.
+    """
     return os.environ.get("BSVIBE_DATABASE_URL", _DEFAULT_PG_URL)
+
+
+def migration_pg_url() -> str:
+    """The OWNER Postgres URL for DDL / migrations (B2b two-role setup).
+
+    ``BSVIBE_MIGRATION_DATABASE_URL`` (the owner ``bsvibe`` role) when set, else
+    falls back to :func:`pg_url` — so a single-role checkout still works. Tests
+    that ``DROP SCHEMA`` / run ``alembic upgrade`` / seed as the table owner must
+    use this: the runtime role deliberately lacks DDL + BYPASSRLS.
+    """
+    return os.environ.get("BSVIBE_MIGRATION_DATABASE_URL") or pg_url()
 
 
 def can_reach_pg(url: str | None = None) -> bool:
@@ -261,6 +278,7 @@ __all__ = [
     "db_engine",
     "fake_current_user",
     "memory_session",
+    "migration_pg_url",
     "pg_url",
     "use_real_pg",
 ]

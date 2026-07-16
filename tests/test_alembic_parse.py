@@ -81,10 +81,12 @@ def test_alembic_head_is_connector_last_import():
     # connector_oauth_tokens_status → workspace_language (#6 output language) →
     # drop_layer2_routing_rules (unified routing Lift 2 — legacy tables dropped) →
     # run_routing_source_text (NL-native routing Lift N5 — NL condition column) →
-    # executor_task_agentic (chat/executor parity — a chat turn runs tool-less).
+    # executor_task_agentic (chat/executor parity — a chat turn runs tool-less) →
+    # runtime_role (B2b — provision the least-privilege bsvibe_app runtime role
+    # so Postgres RLS is a real layer-3 tenant-isolation backstop).
     # Keep the test name (function name is a historical revision id, kept for
     # git-blame stability) and assert the current tip.
-    assert "executor_task_agentic" in result.stdout
+    assert "runtime_role" in result.stdout
 
 
 def test_target_metadata_covers_all_bases():
