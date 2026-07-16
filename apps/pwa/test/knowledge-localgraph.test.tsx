@@ -15,7 +15,6 @@ import Knowledge from "@/components/knowledge/Knowledge";
 import type { ConceptDetail, KnowledgeGraph } from "@/lib/api/types";
 import { type Session, clearSession, setSession } from "@/lib/auth/session";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { forwardRef, useImperativeHandle } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 type StubNode = {
@@ -31,34 +30,57 @@ interface StubProps {
   onNodeClick?: (node: StubNode) => void;
   onBackgroundClick?: (event: MouseEvent) => void;
 }
-vi.mock("react-force-graph-2d", () => ({
-  default: forwardRef<unknown, StubProps>((props, ref) => {
-    props.graphData.nodes.forEach((n, i) => {
-      n.x = i * 100;
-      n.y = 0;
-    });
-    useImperativeHandle(ref, () => ({
-      screen2GraphCoords: (x: number, _y: number) => ({ x, y: 0 }),
-      d3Force: () => undefined,
-    }));
-    return (
-      <div data-testid="force-graph-stub">
-        nodes:{props.graphData.nodes.length}
-        {props.graphData.nodes.map((n) => (
-          <button
-            key={n.id}
-            type="button"
-            data-testid={`graph-node-${n.id}`}
-            data-node-type={n.nodeType ?? ""}
-            onClick={() => props.onNodeClick?.(n)}
-          >
-            {n.name ?? n.label ?? n.id}
-          </button>
-        ))}
-      </div>
-    );
-  }),
-}));
+// `Knowledge` defers `KnowledgeGraphView` behind `next/dynamic({ ssr: false })`
+// — a runtime `import()` that is the ONLY wall-clock-unbounded async in this
+// test (the canvas is already a synchronous DOM stub below, and the fetch is a
+// mocked microtask). Under a saturated parallel suite vite's on-demand transform
+// of the view + its heavy deps (react-markdown/remark-gfm/d3-force) stretches
+// that boundary toward the default 1s findBy window (measured ~209ms isolated →
+// 600ms+ under the full suite; a weak 2-core CI runner crosses 1000ms → flake).
+// #519 only widened the window on the sibling knowledge-page test. Render the
+// view synchronously instead, so the test's async is purely microtask-bound and
+// deterministic regardless of machine load. Scoped to this file: the Knowledge
+// surface is the only `next/dynamic` consumer under test here.
+vi.mock("next/dynamic", async () => {
+  const mod = await import("@/components/knowledge/KnowledgeGraphView");
+  return { default: () => mod.default };
+});
+
+// Self-imports react so it does not depend on the test module's top-level
+// import init order — the `next/dynamic` mock above eagerly evaluates
+// `KnowledgeGraphView` (which imports this) during mock setup, before those
+// bindings initialize.
+vi.mock("react-force-graph-2d", async () => {
+  const { forwardRef, useImperativeHandle } = await import("react");
+  return {
+    default: forwardRef<unknown, StubProps>((props, ref) => {
+      props.graphData.nodes.forEach((n, i) => {
+        n.x = i * 100;
+        n.y = 0;
+      });
+      useImperativeHandle(ref, () => ({
+        screen2GraphCoords: (x: number, _y: number) => ({ x, y: 0 }),
+        d3Force: () => undefined,
+      }));
+      return (
+        <div data-testid="force-graph-stub">
+          nodes:{props.graphData.nodes.length}
+          {props.graphData.nodes.map((n) => (
+            <button
+              key={n.id}
+              type="button"
+              data-testid={`graph-node-${n.id}`}
+              data-node-type={n.nodeType ?? ""}
+              onClick={() => props.onNodeClick?.(n)}
+            >
+              {n.name ?? n.label ?? n.id}
+            </button>
+          ))}
+        </div>
+      );
+    }),
+  };
+});
 
 const SESSION: Session = {
   accessToken: "tok",
