@@ -67,25 +67,13 @@ describe("Settings tab content", () => {
     });
   });
 
-  it("Notifications tab renders the events × channels matrix", async () => {
-    const prefs = {
-      matrix: {
-        needs_you: { in_app: true, email: true, slack: true },
-        triggered: { in_app: true, email: true, slack: false },
-        shipped: { in_app: true, email: true, slack: false },
-        failed: { in_app: true, email: true, slack: false },
-        daily_brief: { in_app: false, email: true, slack: false },
-      },
-      quiet_hours_enabled: false,
-      quiet_hours_start: "22:00",
-      quiet_hours_end: "08:00",
-    };
-    global.fetch = vi.fn(async () => jsonResponse(prefs)) as unknown as typeof fetch;
+  it("Notifications tab renders the honest coming-soon state (delivery not wired)", () => {
     render(<NotificationsTab />);
-    await waitFor(() => {
-      expect(screen.getByRole("heading", { name: /events × channels/i })).toBeInTheDocument();
-    });
-    expect(screen.getByRole("heading", { name: /quiet hours/i })).toBeInTheDocument();
+    // No matrix / quiet-hours surface — a plain "coming soon" note instead.
+    expect(screen.getByRole("heading", { name: /aren.t active yet/i })).toBeInTheDocument();
+    expect(screen.getByText(/nothing is sent/i)).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: /events × channels/i })).toBeNull();
+    expect(screen.queryByRole("heading", { name: /quiet hours/i })).toBeNull();
   });
 
   it("Account tab renders the real Profile / identities / sessions surface (L6 §4 — no Plan)", () => {
