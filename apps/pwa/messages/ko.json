@@ -712,46 +712,10 @@
       }
     },
     "notifications": {
-      "lede": "알림: 언제 어디로 알릴지.",
-      "loading": "알림 설정을 불러오는 중…",
-      "loadError": "지금은 알림 설정을 불러오지 못했어요. 잠시 후 다시 시도해 주세요.",
-      "saveError": "변경 사항을 저장하지 못했어요. 되돌렸어요. 잠시 후 다시 시도해 주세요.",
-      "matrixLabel": "이벤트와 채널",
-      "matrixHeading": "이벤트 × 채널",
-      "eventColumn": "이벤트",
-      "matrixCaption": "채널은 커넥터 설정을 따라가요. 인앱은 항상 동작해요.",
-      "cellLabel": "{event}의 {channel} 전환",
-      "events": {
-        "needs_you": {
-          "short": "확인이 필요해요",
-          "label": "확인이 필요해요: 결정이 대기 중이에요"
-        },
-        "triggered": {
-          "short": "시작됨",
-          "label": "시작됨: 외부에서 작업이 시작됐어요"
-        },
-        "shipped": {
-          "short": "완료됨",
-          "label": "완료됨: 산출물이 검증됐어요"
-        },
-        "failed": {
-          "short": "실패",
-          "label": "실패: 검증에 실패해서 중단했어요"
-        },
-        "daily_brief": {
-          "short": "데일리 요약",
-          "label": "데일리 요약: 매일 아침 보내드려요"
-        }
-      },
-      "channels": {
-        "in_app": "인앱",
-        "email": "이메일",
-        "slack": "Slack"
-      },
-      "quietHours": "방해 금지 시간",
-      "from": "시작",
-      "until": "종료",
-      "quietHoursCaption": "방해 금지 시간에는 “확인이 필요해요”만 인앱으로 전달돼요. 나머지는 아침까지 기다려요."
+      "lede": "알림이 켜지면, 어떤 순간을 어디로 받을지 고를 수 있어요.",
+      "comingSoonBadge": "곧 제공",
+      "comingSoonTitle": "알림은 아직 켜지지 않았어요",
+      "comingSoonBody": "BSVibe는 아직 이메일·Slack·인앱 알림을 보내지 않아요. 전송이 켜지면 어떤 순간을 어떤 채널로 받을지 고르고 방해 금지 시간을 정할 수 있어요. 그때까지는 아무것도 전송되지 않아요."
     },
     "account": {
       "lede": "계정: 프로필과 로그인.",

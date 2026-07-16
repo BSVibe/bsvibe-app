@@ -712,46 +712,10 @@
       }
     },
     "notifications": {
-      "lede": "Notifications: when and where BSVibe pings you.",
-      "loading": "Loading your notification settings…",
-      "loadError": "Couldn’t load your notification settings right now. Try again in a moment.",
-      "saveError": "Couldn’t save that change. It’s been undone. Try again in a moment.",
-      "matrixLabel": "Events and channels",
-      "matrixHeading": "Events × Channels",
-      "eventColumn": "Event",
-      "matrixCaption": "Channels follow your Connectors. In-app always works.",
-      "cellLabel": "toggle {channel} for {event}",
-      "events": {
-        "needs_you": {
-          "short": "Needs you",
-          "label": "Needs you: a decision is waiting"
-        },
-        "triggered": {
-          "short": "Triggered",
-          "label": "Triggered: work woke up from outside"
-        },
-        "shipped": {
-          "short": "Shipped",
-          "label": "Shipped: a deliverable was verified"
-        },
-        "failed": {
-          "short": "Failed",
-          "label": "Failed: verification failed and BSVibe gave up"
-        },
-        "daily_brief": {
-          "short": "Daily Brief",
-          "label": "Daily Brief: summary every morning"
-        }
-      },
-      "channels": {
-        "in_app": "In-app",
-        "email": "Email",
-        "slack": "Slack"
-      },
-      "quietHours": "Quiet hours",
-      "from": "From",
-      "until": "Until",
-      "quietHoursCaption": "During quiet hours, only “Needs you” reaches you in-app. Everything else waits for morning."
+      "lede": "When notifications go live, you’ll choose which moments reach you, and where.",
+      "comingSoonBadge": "Coming soon",
+      "comingSoonTitle": "Notifications aren’t active yet",
+      "comingSoonBody": "BSVibe doesn’t send emails, Slack messages, or in-app pings yet. When delivery is live you’ll choose which moments reach you on which channel, and set quiet hours. Until then, nothing is sent."
     },
     "account": {
       "lede": "Account: your profile and sign-in.",
