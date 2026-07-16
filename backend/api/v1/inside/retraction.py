@@ -75,12 +75,12 @@ class RetractRequest(BaseModel):
 
 
 class CorrectRequest(BaseModel):
-    """Body for ``POST /nodes/{node_ref}/correct`` (M3a placeholder).
+    """Body for ``POST /nodes/{node_ref}/correct``.
 
-    ``corrections`` is a whitelisted field → new-value mapping (the actual
-    field rewrite lands with M3b alongside the PWA inline editor). M3a
-    records the intent + actor in the audit row so the trail exists end
-    to end before M3b wires the writer-side rewrite.
+    Preserved for wire-compatibility, but the endpoint currently returns
+    ``501 Not Implemented``: the in-place field-rewrite editor was never
+    built, so accepting a ``corrections`` payload and confirming success
+    would be dishonest. Retract is the only working ontology mutation.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -222,26 +222,20 @@ async def correct_node(
     node_ref: str,
     body: CorrectRequest,
     workspace_id: Annotated[uuid.UUID, Depends(get_workspace_id)],
-    user: Annotated[UserRow, Depends(get_current_user_row)],
-    session: Annotated[AsyncSession, Depends(get_db_session)],
-    service: Annotated[RetractionService, Depends(build_retraction_service)],
+    _user: Annotated[UserRow, Depends(get_current_user_row)],
 ) -> RetractResponse:
-    """Open a correction for a garden note (M3a: persist + audit only).
+    """Correct (in-place field rewrite) is not available yet — ``501``.
 
-    The actual frontmatter field rewrite lands with M3b alongside the PWA
-    inline editor — M3a records the intent + actor + payload here so the
-    audit trail is end-to-end before the writer-side rewrite ships.
+    The editor that rewrites a note's whitelisted fields was never built.
+    Persisting a correction + confirming success (and later writing an
+    ``ontology.correction.applied`` audit) for an operation that mutates
+    nothing would be a false success + false audit record. Until the editor
+    ships, this endpoint honestly reports the capability as unavailable.
+    Retract (``POST /nodes/{node_ref}/retract``) is the working mutation.
     """
-    await _ensure_node_exists(workspace_id, node_ref)
-    return await _issue_with_action(
-        service=service,
-        session=session,
-        workspace_id=workspace_id,
-        actor_id=user.id,
-        node_ref=node_ref,
-        action="correct",
-        reason=body.reason,
-        correction_id=body.correction_id,
+    raise HTTPException(
+        status_code=status.HTTP_501_NOT_IMPLEMENTED,
+        detail="correction (in-place field rewrite) is not available yet",
     )
 
 

@@ -30,9 +30,17 @@ canon-merge or settle write.
 The retract action lands tombstones on garden notes; canonical-concept
 retract (which the design routes through the existing
 ``deprecate-concept`` canon action) is OUT of scope for M3a — only the
-garden-note tombstone path is wired here. ``correct`` is an in-place
-field rewrite (``question`` / ``answer`` whitelist) with no undo window,
-per design §3.3.
+garden-note tombstone path is wired here.
+
+**``correct`` is not available.** The in-place field-rewrite editor was never
+built: no writer primitive rewrites whitelisted fields, and the ``corrections``
+payload is not carried on the (frozen, ``extra="forbid"``) signal. Rather than
+mint a correction row + emit a ``ontology.correction.applied`` audit for an
+operation that mutates nothing — a false success + false audit record —
+:meth:`issue` REFUSES ``action="correct"`` with
+:class:`CorrectionUnavailableError`. ``apply_pending`` filters to ``retract``
+so a legacy ``correct`` row can never be swept into a false "applied" state,
+and :meth:`_apply_row` guards the same invariant. Retract is unaffected.
 """
 
 from __future__ import annotations
@@ -61,6 +69,18 @@ from plugin.audit.events import AuditActor
 from plugin.audit.service import safe_emit
 
 logger = structlog.get_logger(__name__)
+
+
+class CorrectionUnavailableError(RuntimeError):
+    """Raised when a ``correct`` (in-place field rewrite) is requested.
+
+    The correct editor was never built — there is no writer primitive and the
+    ``corrections`` payload is not carried on the signal. Applying a ``correct``
+    would therefore mutate nothing while claiming success and writing a false
+    ``ontology.correction.applied`` audit record. Refusing at intake keeps the
+    surface honest. Callers (REST / MCP) translate this into an explicit
+    "unavailable" response, never a false success.
+    """
 
 
 UndoResult = Literal["undone", "expired", "already_applied", "already_undone", "not_found"]
@@ -153,6 +173,15 @@ class RetractionService:
         before calling, (2) ``node_ref`` existence check (so a 404 is
         returned instead of an orphan correction row), (3) commit.
         """
+        if action == "correct":
+            # The in-place field-rewrite editor was never built. Persisting a
+            # row + emitting an "applied" audit for it would be a false success
+            # and a false audit record. Refuse at intake — no row, no audit.
+            raise CorrectionUnavailableError(
+                "correction (in-place field rewrite) is not available yet; "
+                "only 'retract' is supported"
+            )
+
         issued_at = (now or datetime.now(tz=UTC)).astimezone(UTC)
         apply_at = issued_at + timedelta(seconds=UNDO_WINDOW_SECONDS)
         cid = correction_id or uuid.uuid4()
@@ -280,6 +309,11 @@ class RetractionService:
             select(OntologyCorrection)
             .where(
                 OntologyCorrection.workspace_id == workspace_id,
+                # Only ``retract`` mutates the vault. A ``correct`` row (a
+                # legacy artifact — ``issue`` refuses new ones) must never be
+                # swept here: applying it would claim a mutation that never
+                # happened + write a false ``applied`` audit.
+                OntologyCorrection.action == "retract",
                 OntologyCorrection.applied_at.is_(None),
                 OntologyCorrection.cancelled_at.is_(None),
                 OntologyCorrection.apply_at <= ts,
@@ -315,32 +349,36 @@ class RetractionService:
         return True
 
     async def _apply_row(self, row: OntologyCorrection, *, now: datetime) -> None:
-        """Write the tombstone (retract) or rewrite fields (correct), then mark applied."""
+        """Write the tombstone for a ``retract`` row, then mark it applied.
+
+        Only ``retract`` is appliable. A non-retract row must never reach here
+        (``issue`` refuses ``correct`` at intake and ``apply_pending`` filters
+        to ``retract``); if one does, we refuse rather than mark it applied +
+        emit a false ``ontology.correction.applied`` audit for a no-op.
+        """
+        if row.action != "retract":
+            raise CorrectionUnavailableError(
+                f"cannot apply action={row.action!r}: only 'retract' mutates the vault"
+            )
         signal = self._signal_from_row(row)
-        if row.action == "retract":
-            try:
-                await self._writer.tombstone_note(
-                    row.node_ref,
-                    retracted_at=now.isoformat(),
-                    retracted_by=str(row.actor_id),
-                    retraction_reason=row.reason,
-                )
-            except FileNotFoundError:
-                # The note was deleted between issue and apply — the retraction
-                # goal (node gone) is already met, so mark the row applied
-                # rather than letting one missing file wedge the whole sweep
-                # (a lazy-resolver read must never 500 on a stale backlog row).
-                logger.warning(
-                    "ontology_correction_apply_note_missing",
-                    correction_id=str(row.id),
-                    workspace_id=str(row.workspace_id),
-                    node_ref=row.node_ref,
-                )
-        # ``correct`` is whitelisted-field rewrite; field-payload is carried
-        # in ``signal_json["corrections"]`` when set by the (future) correct
-        # surface — M3a wires the row + audit + tombstone path; the actual
-        # field-rewrite editor lands with M3b alongside the PWA inline editor.
-        # No-op for now (the audit row still records intent + actor).
+        try:
+            await self._writer.tombstone_note(
+                row.node_ref,
+                retracted_at=now.isoformat(),
+                retracted_by=str(row.actor_id),
+                retraction_reason=row.reason,
+            )
+        except FileNotFoundError:
+            # The note was deleted between issue and apply — the retraction
+            # goal (node gone) is already met, so mark the row applied
+            # rather than letting one missing file wedge the whole sweep
+            # (a lazy-resolver read must never 500 on a stale backlog row).
+            logger.warning(
+                "ontology_correction_apply_note_missing",
+                correction_id=str(row.id),
+                workspace_id=str(row.workspace_id),
+                node_ref=row.node_ref,
+            )
         row.applied_at = now
         await self._session.flush()
         await self._emit_audit(OntologyCorrectionApplied, signal)
@@ -411,6 +449,7 @@ class RetractionService:
 
 
 __all__ = [
+    "CorrectionUnavailableError",
     "IssueOutcome",
     "RetractionService",
     "TombstoneWriter",
