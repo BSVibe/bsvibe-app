@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
-import time
 import uuid
-from collections.abc import Iterator
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from unittest.mock import AsyncMock
@@ -60,23 +59,6 @@ async def _make_redis() -> Any:
     client = fakeredis_aio.FakeRedis(server=fakeredis.FakeServer(), decode_responses=True)
     await client.flushdb()
     return client
-
-
-def _poll_deadline(seconds: float = 30.0) -> Iterator[bool]:
-    """Time-bounded replacement for ``range(N)`` in the worker-stream polls.
-
-    The worker-simulation loops below poll a fakeredis stream for the
-    ExecutorAdapter's XADD. A fixed iteration count gave up after a fixed
-    *number* of polls, which a contended CI event loop (a shared-SQLite
-    lock resolving, xdist CPU pressure delaying the chat coroutine's XADD)
-    could exhaust before the entry landed — the intermittent "worker
-    stream never saw the XADD" flake. A wall-clock deadline waits long
-    enough regardless of how many polls fit in the window, and still
-    returns immediately on the happy path.
-    """
-    deadline = time.monotonic() + seconds
-    while time.monotonic() < deadline:
-        yield True
 
 
 class TestLiteLLMAdapter:
@@ -285,6 +267,47 @@ async def _seed_founder(session: Any, workspace_id: uuid.UUID) -> uuid.UUID:
     return user_id
 
 
+@dataclass(frozen=True, slots=True)
+class _StubCompletedTask:
+    """Deterministic stand-in for the terminal ``ExecutorTaskRow`` that
+    :func:`backend.executors.dispatch.await_completion` returns.
+
+    The executor-chat tests below stub ``dispatch.await_completion`` to hand
+    ``ExecutorAdapter.chat`` a terminal result directly, instead of racing a
+    real fakeredis round-trip against a wall-clock-bounded worker-sim
+    coroutine (the historical ``_poll_deadline`` flake: a contended CI event
+    loop starved the worker sim so it never read the XADD within its window,
+    the result was never recorded, and ``await_completion`` blocked until the
+    task timeout raised ``did not complete within Ns``). Bumping that timeout
+    (PR #569, 30→300 s) could not fix it — the worker sim gave up at its OWN
+    30 s window independently, so the adapter just waited 300 s *after* the sim
+    had already quit. Stubbing the transport removes the race at its root:
+    ``chat`` still runs the REAL dispatch (worker discovery, ``create_task``,
+    ``dispatch_task``, commit), only the awaited terminal result is
+    deterministic. ``_chat_with_session`` reads exactly these three fields.
+    """
+
+    status: str
+    output: str = ""
+    error_message: str | None = None
+
+
+def _stub_await_completion(result: _StubCompletedTask) -> Any:
+    """A drop-in for ``dispatch.await_completion`` that returns ``result`` at
+    once — the terminal row handoff with zero round-trip and zero wall clock.
+
+    ``ExecutorAdapter._chat_with_session`` awaits ``await_completion`` and reads
+    ``.status`` / ``.output`` / ``.error_message`` off the row; the stub honours
+    that exact contract, so ``chat`` exercises its real done/failed branch
+    against a deterministic transport.
+    """
+
+    async def _await(*_args: Any, **_kwargs: Any) -> _StubCompletedTask:
+        return result
+
+    return _await
+
+
 class TestExecutorAdapterChat:
     async def test_supported_methods_chat_only(self) -> None:
         async with memory_session() as s:
@@ -395,26 +418,31 @@ class TestExecutorAdapterChat:
             with pytest.raises(ExecutorAdapterUnavailable, match="no worker capacity"):
                 await adapter.chat(system="x", messages=[{"role": "user", "content": "y"}])
 
-    async def test_chat_waits_for_capacity_then_dispatches(self) -> None:
+    async def test_chat_waits_for_capacity_then_dispatches(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """Lift E16 — adapter retries until capacity frees up, then dispatches.
 
         Mock :func:`find_available_worker` to return None twice, then a
         real worker. The adapter must NOT raise — it must keep
         re-checking on the configured poll interval until the worker
         becomes available, then dispatch + await as usual.
-        """
-        import asyncio
 
+        The behaviour under test is the CAPACITY retry loop; the terminal
+        worker result is supplied deterministically by stubbing
+        ``dispatch.await_completion`` (see :class:`_StubCompletedTask`), so
+        there is no wall-clock-bounded worker-sim coroutine to starve under
+        load. The real dispatch (worker discovery, ``create_task``,
+        ``dispatch_task``, commit) still runs.
+        """
         redis = await _make_redis()
         workspace_id = uuid.uuid4()
         settings = get_settings().model_copy(
             update={
-                # Generous: this bounds a pathological hang, it is NOT the
-                # assertion. The behaviour under test is the capacity retry
-                # (executor_capacity_wait_max_s below); the real redis+DB
-                # round-trip finishes in <1s. A tight value here only races
-                # the wall clock under CI load → flake. Do not tighten.
-                "executor_task_timeout_s": 300.0,
+                # These two bound the capacity retry that IS under test. The
+                # first two find_available_worker calls return None at the
+                # 0.02 s poll cadence, so the third (real) call lands almost
+                # immediately — well inside the 5 s ceiling.
                 "executor_capacity_wait_max_s": 5.0,
                 "executor_capacity_wait_poll_s": 0.02,
             }
@@ -429,12 +457,9 @@ class TestExecutorAdapterChat:
                 setup.add(account)
                 await setup.commit()
 
-            # Monkey-patch the dispatch module's find_available_worker so
-            # the first two calls return None (simulating "every worker at
-            # capacity"), then the real worker is returned on the third.
-            from backend.executors import dispatch as dispatch_mod
-
-            real_find = dispatch_mod.find_available_worker
+            # Return None twice (simulating "every worker at capacity"), then
+            # the real worker on the third call.
+            real_find = dispatch.find_available_worker
             call_count = {"n": 0}
 
             async def _flaky_find(*args: Any, **kwargs: Any) -> WorkerRow | None:
@@ -443,57 +468,33 @@ class TestExecutorAdapterChat:
                     return None
                 return await real_find(*args, **kwargs)
 
-            dispatch_mod.find_available_worker = _flaky_find  # type: ignore[assignment]
-            try:
-                async with sf() as adapter_session:
-                    adapter = ExecutorAdapter(
-                        account=account,
-                        workspace_id=workspace_id,
-                        account_id=account.account_id,
-                        model_account_id=account.id,
-                        session=adapter_session,
-                        settings=settings,
-                        redis=redis,
-                    )
+            monkeypatch.setattr(dispatch, "find_available_worker", _flaky_find)
+            # Deterministic terminal result — no worker-sim coroutine, no
+            # wall-clock window to starve.
+            monkeypatch.setattr(
+                dispatch,
+                "await_completion",
+                _stub_await_completion(_StubCompletedTask(status="done", output="42")),
+            )
 
-                    async def _simulate_worker() -> None:
-                        stream = dispatch.worker_stream(worker.id)
-                        last_id = "0"
-                        for _ in _poll_deadline():
-                            entries = await redis.xread({stream: last_id}, count=1, block=20)
-                            if not entries:
-                                continue
-                            _name, messages = entries[0]
-                            for msg_id, fields in messages:
-                                last_id = msg_id
-                                task_id = uuid.UUID(fields["task_id"])
-                                async with sf() as ws_session:
-                                    await dispatch.record_result(
-                                        ws_session,
-                                        redis,
-                                        task_id=task_id,
-                                        success=True,
-                                        output="42",
-                                        error_message=None,
-                                    )
-                                    await ws_session.commit()
-                                return
-                        raise AssertionError("worker stream never saw the XADD")
+            async with sf() as adapter_session:
+                adapter = ExecutorAdapter(
+                    account=account,
+                    workspace_id=workspace_id,
+                    account_id=account.account_id,
+                    model_account_id=account.id,
+                    session=adapter_session,
+                    settings=settings,
+                    redis=redis,
+                )
+                response = await adapter.chat(
+                    system="be terse",
+                    messages=[{"role": "user", "content": "what is 6 * 7?"}],
+                )
 
-                    worker_task = asyncio.create_task(_simulate_worker())
-                    try:
-                        response = await adapter.chat(
-                            system="be terse",
-                            messages=[{"role": "user", "content": "what is 6 * 7?"}],
-                        )
-                    finally:
-                        await worker_task
-
-                    assert response.content == "42"
-                    # Twice None + once real = at least 3 calls.
-                    assert call_count["n"] >= 3
-            finally:
-                dispatch_mod.find_available_worker = real_find  # type: ignore[assignment]
+                assert response.content == "42"
+                # Twice None + once real = at least 3 calls.
+                assert call_count["n"] >= 3
 
     async def test_chat_passes_account_litellm_model_into_dispatch(self) -> None:
         """E21 — the adapter pulls ``account.litellm_model`` and forwards it as
@@ -691,16 +692,20 @@ class TestExecutorAdapterChat:
                 # Either absent or empty — never the placeholder string.
                 assert execute_entry.get("model", "") == ""
 
-    async def test_chat_happy_path_dispatches_and_returns_output(self) -> None:
-        """Adapter dispatches a chat task and surfaces the worker's output."""
-        import asyncio
+    async def test_chat_happy_path_dispatches_and_returns_output(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Adapter dispatches a chat task and surfaces the worker's output.
 
+        The worker's terminal result is supplied deterministically by stubbing
+        ``dispatch.await_completion`` (see :class:`_StubCompletedTask`) instead
+        of racing a wall-clock-bounded worker-sim coroutine against fakeredis.
+        The real dispatch — worker discovery, ``create_task``,
+        ``dispatch_task``, commit — still runs; only the awaited result is
+        deterministic. That is what ``chat`` must relay as ``response.content``.
+        """
         redis = await _make_redis()
         workspace_id = uuid.uuid4()
-        # Generous: this only bounds a pathological hang, it is NOT under test.
-        # The real redis+DB round-trip finishes in <1s; a tight value races the
-        # wall clock under CI load → flake (INV-7). Do not tighten.
-        settings = get_settings().model_copy(update={"executor_task_timeout_s": 300.0})
 
         async with shared_file_sessionmaker() as sf:
             async with sf() as setup:
@@ -711,6 +716,12 @@ class TestExecutorAdapterChat:
                 setup.add(account)
                 await setup.commit()
 
+            monkeypatch.setattr(
+                dispatch,
+                "await_completion",
+                _stub_await_completion(_StubCompletedTask(status="done", output="42")),
+            )
+
             async with sf() as adapter_session:
                 adapter = ExecutorAdapter(
                     account=account,
@@ -718,65 +729,35 @@ class TestExecutorAdapterChat:
                     account_id=account.account_id,
                     model_account_id=account.id,
                     session=adapter_session,
-                    settings=settings,
+                    settings=get_settings(),
                     redis=redis,
                 )
 
-                # Simulate the worker reporting its result on a SEPARATE session
-                # — the same pattern test_executor_run_e2e.py uses for the
-                # legacy full-run path.
-                async def _simulate_worker() -> None:
-                    stream = dispatch.worker_stream(worker.id)
-                    last_id = "0"
-                    for _ in _poll_deadline():
-                        entries = await redis.xread({stream: last_id}, count=1, block=20)
-                        if not entries:
-                            continue
-                        _name, messages = entries[0]
-                        for msg_id, fields in messages:
-                            last_id = msg_id
-                            task_id = uuid.UUID(fields["task_id"])
-                            async with sf() as ws_session:
-                                await dispatch.record_result(
-                                    ws_session,
-                                    redis,
-                                    task_id=task_id,
-                                    success=True,
-                                    output="42",
-                                    error_message=None,
-                                )
-                                await ws_session.commit()
-                            return
-                    raise AssertionError("worker stream never saw the XADD")
-
-                worker_task = asyncio.create_task(_simulate_worker())
-                try:
-                    response = await adapter.chat(
-                        system="be terse",
-                        messages=[{"role": "user", "content": "what is 6 * 7?"}],
-                    )
-                finally:
-                    await worker_task
+                response = await adapter.chat(
+                    system="be terse",
+                    messages=[{"role": "user", "content": "what is 6 * 7?"}],
+                )
 
                 assert response.content == "42"
                 assert response.tool_calls == ()
 
-    async def test_chat_localizes_the_system_prompt_like_litellm(self) -> None:
+    async def test_chat_localizes_the_system_prompt_like_litellm(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """Abstraction parity — the executor adapter localizes the system prompt
         the SAME way the LiteLLM adapter does (shared helper). A ``ko`` workspace's
         executor-generated prose (verify demonstration, decision questions) then
-        follows the workspace language, not English."""
-        import asyncio
+        follows the workspace language, not English.
 
+        The localized system is asserted from the DISPATCHED stream entry (the
+        real ``create_task`` → ``dispatch_task`` XADD). ``dispatch.await_completion``
+        is stubbed so ``chat`` returns deterministically without a
+        wall-clock-bounded worker-sim coroutine — the XADD we inspect has
+        already happened by the time ``await_completion`` is reached."""
         from backend.identity.output_language import set_output_language
 
         redis = await _make_redis()
         workspace_id = uuid.uuid4()
-        # Generous: this only bounds a pathological hang, it is NOT under test.
-        # The real redis+DB round-trip finishes in <1s; a tight value races the
-        # wall clock under CI load → flake (INV-7). Do not tighten.
-        settings = get_settings().model_copy(update={"executor_task_timeout_s": 300.0})
-        captured: dict[str, str] = {}
 
         async with shared_file_sessionmaker() as sf:
             async with sf() as setup:
@@ -787,6 +768,12 @@ class TestExecutorAdapterChat:
                 setup.add(account)
                 await setup.commit()
 
+            monkeypatch.setattr(
+                dispatch,
+                "await_completion",
+                _stub_await_completion(_StubCompletedTask(status="done", output="ok")),
+            )
+
             async with sf() as adapter_session:
                 adapter = ExecutorAdapter(
                     account=account,
@@ -794,54 +781,32 @@ class TestExecutorAdapterChat:
                     account_id=account.account_id,
                     model_account_id=account.id,
                     session=adapter_session,
-                    settings=settings,
+                    settings=get_settings(),
                     redis=redis,
                 )
 
-                async def _simulate_worker() -> None:
-                    stream = dispatch.worker_stream(worker.id)
-                    last_id = "0"
-                    for _ in _poll_deadline():
-                        entries = await redis.xread({stream: last_id}, count=1, block=20)
-                        if not entries:
-                            continue
-                        _name, msgs = entries[0]
-                        for msg_id, fields in msgs:
-                            last_id = msg_id
-                            # The dispatched task carries the (localized) system.
-                            captured["system"] = fields.get("system", "")
-                            async with sf() as ws_session:
-                                await dispatch.record_result(
-                                    ws_session,
-                                    redis,
-                                    task_id=uuid.UUID(fields["task_id"]),
-                                    success=True,
-                                    output="ok",
-                                    error_message=None,
-                                )
-                                await ws_session.commit()
-                            return
-                    raise AssertionError("worker stream never saw the XADD")
-
                 try:
                     set_output_language("ko")
-                    worker_task = asyncio.create_task(_simulate_worker())
-                    try:
-                        await adapter.chat(
-                            system="be terse", messages=[{"role": "user", "content": "hi"}]
-                        )
-                    finally:
-                        await worker_task
+                    await adapter.chat(
+                        system="be terse", messages=[{"role": "user", "content": "hi"}]
+                    )
                 finally:
                     set_output_language("en")
 
+            # The dispatched task carries the (localized) system prompt.
+            entries = await redis.xrange(dispatch.worker_stream(worker.id))
+            execute_entry = next(
+                fields for _id, fields in entries if fields.get("action") == "execute"
+            )
+            system = execute_entry.get("system", "")
+
         # The dispatched system prompt carries the Korean output-language directive.
-        assert "Korean" in captured["system"]
-        assert "be terse" in captured["system"]
+        assert "Korean" in system
+        assert "be terse" in system
         # v2 — a chat-shaped (tools=None) call also carries the completion
         # directive so the coding agent answers as a raw LLM (clean output),
         # not agentically — ExecutorAdapter.chat matches LiteLLMAdapter.chat.
-        assert "TEXT-COMPLETION endpoint" in captured["system"]
+        assert "TEXT-COMPLETION endpoint" in system
 
     def _retry_adapter(self) -> ExecutorAdapter:
         """A minimal ExecutorAdapter that passes chat()'s redis + executor_type
@@ -916,22 +881,18 @@ class TestExecutorAdapterChat:
     ) -> None:
         """Lift E9 — when constructed with ``timeout_s`` the executor adapter
         passes that value to ``dispatch.await_completion`` instead of the
-        settings default. Spies on the captured timeout_s kwarg."""
-        import asyncio
+        settings default. Spies on the captured timeout_s kwarg.
 
+        This test asserts the value reaches the REAL ``await_completion``, so it
+        keeps it — but records the terminal result inside the spy BEFORE
+        delegating (explicit handoff), so the real function's fast path returns
+        at once. No wall-clock-bounded worker-sim coroutine to starve."""
         redis = await _make_redis()
         workspace_id = uuid.uuid4()
         # Settings default 1800; the per-caller override is 180.
         settings = get_settings().model_copy(update={"executor_task_timeout_s": 1800.0})
 
         captured: dict[str, float] = {}
-        real_await = dispatch.await_completion
-
-        async def _spy_await(*args: Any, **kwargs: Any) -> Any:
-            captured["timeout_s"] = kwargs["timeout_s"]
-            return await real_await(*args, **kwargs)
-
-        monkeypatch.setattr(dispatch, "await_completion", _spy_await)
 
         async with shared_file_sessionmaker() as sf:
             async with sf() as setup:
@@ -941,6 +902,27 @@ class TestExecutorAdapterChat:
                 account = _executor_account(workspace_id, worker.id)
                 setup.add(account)
                 await setup.commit()
+
+            real_await = dispatch.await_completion
+
+            async def _spy_await(*args: Any, **kwargs: Any) -> Any:
+                captured["timeout_s"] = kwargs["timeout_s"]
+                # Explicit handoff — record the terminal row first so the real
+                # await_completion's fast path (_read_terminal) returns it
+                # immediately, deterministically, with no polling race.
+                async with sf() as ws_session:
+                    await dispatch.record_result(
+                        ws_session,
+                        redis,
+                        task_id=kwargs["task_id"],
+                        success=True,
+                        output="ok",
+                        error_message=None,
+                    )
+                    await ws_session.commit()
+                return await real_await(*args, **kwargs)
+
+            monkeypatch.setattr(dispatch, "await_completion", _spy_await)
 
             async with sf() as adapter_session:
                 adapter = ExecutorAdapter(
@@ -954,38 +936,10 @@ class TestExecutorAdapterChat:
                     timeout_s=180.0,
                 )
 
-                async def _simulate_worker() -> None:
-                    stream = dispatch.worker_stream(worker.id)
-                    last_id = "0"
-                    for _ in _poll_deadline():
-                        entries = await redis.xread({stream: last_id}, count=1, block=20)
-                        if not entries:
-                            continue
-                        _name, messages = entries[0]
-                        for msg_id, fields in messages:
-                            last_id = msg_id
-                            task_id = uuid.UUID(fields["task_id"])
-                            async with sf() as ws_session:
-                                await dispatch.record_result(
-                                    ws_session,
-                                    redis,
-                                    task_id=task_id,
-                                    success=True,
-                                    output="ok",
-                                    error_message=None,
-                                )
-                                await ws_session.commit()
-                            return
-                    raise AssertionError("worker stream never saw the XADD")
-
-                worker_task = asyncio.create_task(_simulate_worker())
-                try:
-                    await adapter.chat(
-                        system="x",
-                        messages=[{"role": "user", "content": "y"}],
-                    )
-                finally:
-                    await worker_task
+                await adapter.chat(
+                    system="x",
+                    messages=[{"role": "user", "content": "y"}],
+                )
 
                 assert captured["timeout_s"] == 180.0, (
                     "ExecutorAdapter.chat ignored the per-caller timeout — "
@@ -996,21 +950,17 @@ class TestExecutorAdapterChat:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """``timeout_s=None`` uses ``settings.executor_task_timeout_s`` —
-        ``workflow.agent_loop.act`` keeps the legacy 1800 s default."""
-        import asyncio
+        ``workflow.agent_loop.act`` keeps the legacy 1800 s default.
 
+        Same explicit-handoff spy as the per-caller test: the value is asserted
+        against the REAL ``await_completion``, which resolves at once because the
+        terminal row is recorded before the delegate runs — no worker-sim
+        coroutine, no wall-clock window."""
         redis = await _make_redis()
         workspace_id = uuid.uuid4()
         settings = get_settings().model_copy(update={"executor_task_timeout_s": 1800.0})
 
         captured: dict[str, float] = {}
-        real_await = dispatch.await_completion
-
-        async def _spy_await(*args: Any, **kwargs: Any) -> Any:
-            captured["timeout_s"] = kwargs["timeout_s"]
-            return await real_await(*args, **kwargs)
-
-        monkeypatch.setattr(dispatch, "await_completion", _spy_await)
 
         async with shared_file_sessionmaker() as sf:
             async with sf() as setup:
@@ -1020,6 +970,24 @@ class TestExecutorAdapterChat:
                 account = _executor_account(workspace_id, worker.id)
                 setup.add(account)
                 await setup.commit()
+
+            real_await = dispatch.await_completion
+
+            async def _spy_await(*args: Any, **kwargs: Any) -> Any:
+                captured["timeout_s"] = kwargs["timeout_s"]
+                async with sf() as ws_session:
+                    await dispatch.record_result(
+                        ws_session,
+                        redis,
+                        task_id=kwargs["task_id"],
+                        success=True,
+                        output="ok",
+                        error_message=None,
+                    )
+                    await ws_session.commit()
+                return await real_await(*args, **kwargs)
+
+            monkeypatch.setattr(dispatch, "await_completion", _spy_await)
 
             async with sf() as adapter_session:
                 adapter = ExecutorAdapter(
@@ -1033,38 +1001,10 @@ class TestExecutorAdapterChat:
                     # No timeout_s — falls back to settings.
                 )
 
-                async def _simulate_worker() -> None:
-                    stream = dispatch.worker_stream(worker.id)
-                    last_id = "0"
-                    for _ in _poll_deadline():
-                        entries = await redis.xread({stream: last_id}, count=1, block=20)
-                        if not entries:
-                            continue
-                        _name, messages = entries[0]
-                        for msg_id, fields in messages:
-                            last_id = msg_id
-                            task_id = uuid.UUID(fields["task_id"])
-                            async with sf() as ws_session:
-                                await dispatch.record_result(
-                                    ws_session,
-                                    redis,
-                                    task_id=task_id,
-                                    success=True,
-                                    output="ok",
-                                    error_message=None,
-                                )
-                                await ws_session.commit()
-                            return
-                    raise AssertionError("worker stream never saw the XADD")
-
-                worker_task = asyncio.create_task(_simulate_worker())
-                try:
-                    await adapter.chat(
-                        system="x",
-                        messages=[{"role": "user", "content": "y"}],
-                    )
-                finally:
-                    await worker_task
+                await adapter.chat(
+                    system="x",
+                    messages=[{"role": "user", "content": "y"}],
+                )
 
                 assert captured["timeout_s"] == 1800.0
 
@@ -1126,25 +1066,22 @@ class TestExecutorAdapterChat:
         assert cancel_calls[0]["worker_id"] == worker.id
         assert "task_id" in cancel_calls[0]
 
-    async def test_chat_worker_failure_raises(self, monkeypatch: Any) -> None:
+    async def test_chat_worker_failure_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Worker reports ``success=False`` on every re-dispatch → after the
-        bounded transient retries, the adapter raises with the worker's error."""
-        import asyncio
+        bounded transient retries, the adapter raises with the worker's error.
 
+        The failure is supplied deterministically by stubbing
+        ``dispatch.await_completion`` to return a ``failed`` terminal row on
+        EVERY attempt (see :class:`_StubCompletedTask`), so the real
+        transient-retry loop runs its full bounded set of REAL dispatches
+        (``create_task`` → ``dispatch_task`` → commit, ``_EXECUTOR_CHAT_ATTEMPTS``
+        times) without a wall-clock-bounded worker-sim coroutine. Backoff is
+        zeroed so the loop is fast."""
         from backend.dispatch import adapter as _adapter_mod
 
-        # Pin a single attempt: this test exercises the REAL dispatch →
-        # record_result → raise path; the transient-retry behaviour (3
-        # round-trips) is covered by the fast mocked tests above, and driving 3
-        # real worker round-trips through fakeredis+sqlite is timing-fragile.
-        monkeypatch.setattr(_adapter_mod, "_EXECUTOR_CHAT_ATTEMPTS", 1)
         monkeypatch.setattr(_adapter_mod, "_EXECUTOR_CHAT_RETRY_BACKOFF_S", 0.0)
         redis = await _make_redis()
         workspace_id = uuid.uuid4()
-        # Generous: this only bounds a pathological hang, it is NOT under test.
-        # The real redis+DB round-trip finishes in <1s; a tight value races the
-        # wall clock under CI load → flake (INV-7). Do not tighten.
-        settings = get_settings().model_copy(update={"executor_task_timeout_s": 300.0})
 
         async with shared_file_sessionmaker() as sf:
             async with sf() as setup:
@@ -1155,6 +1092,17 @@ class TestExecutorAdapterChat:
                 setup.add(account)
                 await setup.commit()
 
+            # Every attempt's dispatched task comes back ``failed`` with the
+            # worker's error — a retryable outcome, re-dispatched up to the
+            # bounded attempt count, then surfaced.
+            monkeypatch.setattr(
+                dispatch,
+                "await_completion",
+                _stub_await_completion(
+                    _StubCompletedTask(status="failed", error_message="rate limit exceeded")
+                ),
+            )
+
             async with sf() as adapter_session:
                 adapter = ExecutorAdapter(
                     account=account,
@@ -1162,50 +1110,15 @@ class TestExecutorAdapterChat:
                     account_id=account.account_id,
                     model_account_id=account.id,
                     session=adapter_session,
-                    settings=settings,
+                    settings=get_settings(),
                     redis=redis,
                 )
 
-                async def _simulate_worker_failure() -> None:
-                    # Fail EVERY re-dispatch (the transient-failure retry loop
-                    # creates a fresh task per attempt) until the attempts are
-                    # exhausted, so the adapter raises the worker's error rather
-                    # than timing out waiting for a result that never comes.
-                    stream = dispatch.worker_stream(worker.id)
-                    last_id = "0"
-                    handled = 0
-                    for _ in _poll_deadline():
-                        entries = await redis.xread({stream: last_id}, count=1, block=20)
-                        if not entries:
-                            continue
-                        _name, messages = entries[0]
-                        for msg_id, fields in messages:
-                            last_id = msg_id
-                            task_id = uuid.UUID(fields["task_id"])
-                            handled += 1
-                            async with sf() as ws_session:
-                                await dispatch.record_result(
-                                    ws_session,
-                                    redis,
-                                    task_id=task_id,
-                                    success=False,
-                                    output="",
-                                    error_message="rate limit exceeded",
-                                )
-                                await ws_session.commit()
-                            if handled >= _adapter_mod._EXECUTOR_CHAT_ATTEMPTS:
-                                return
-                    raise AssertionError("worker stream never saw the XADD")
-
-                worker_task = asyncio.create_task(_simulate_worker_failure())
-                try:
-                    with pytest.raises(ExecutorAdapterUnavailable, match="rate limit exceeded"):
-                        await adapter.chat(
-                            system="be terse",
-                            messages=[{"role": "user", "content": "x"}],
-                        )
-                finally:
-                    await worker_task
+                with pytest.raises(ExecutorAdapterUnavailable, match="rate limit exceeded"):
+                    await adapter.chat(
+                        system="be terse",
+                        messages=[{"role": "user", "content": "x"}],
+                    )
 
 
 class TestExecutorToolContractIsReal:
