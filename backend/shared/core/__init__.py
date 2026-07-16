@@ -25,7 +25,7 @@ from backend.shared.core.exceptions import (
     NotFoundError,
     ValidationError,
 )
-from backend.shared.core.http import HttpClientBase, redact_headers
+from backend.shared.core.http import HttpClientBase, redact_headers, redact_url_password
 from backend.shared.core.logging import configure_logging
 from backend.shared.core.settings import (
     BsvibeSettings,
@@ -44,6 +44,7 @@ __all__ = [
     "NotFoundError",
     "HttpClientBase",
     "redact_headers",
+    "redact_url_password",
     "csv_list_field",
     "parse_csv_list",
     "__version__",

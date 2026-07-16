@@ -21,6 +21,7 @@ import structlog
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from backend.config import get_settings
+from backend.shared.core.http import redact_url_password
 from backend.workflow.application.runtime.agent_runtime import build_agent_execution_deps
 from backend.workflow.application.runtime.delivery_runtime import (
     build_delivery_adapter,
@@ -119,7 +120,10 @@ async def run_workers() -> None:
             )
 
             set_live_event_bus_redis(redis_client)
-            logger.info("worker_live_event_bus_redis_bound", redis_url=settings.redis_url)
+            logger.info(
+                "worker_live_event_bus_redis_bound",
+                redis_url=redact_url_password(settings.redis_url),
+            )
 
     # B14 — operator visibility: warn LOUDLY at startup when the executor pool
     # is configured but Redis is not.

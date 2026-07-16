@@ -25,6 +25,21 @@ services:
   redis:
     # Same: keep Redis internal-only.
     ports: !reset []
+    # Defense-in-depth: require a password. Without this, any container that can
+    # reach redis:6379 on the compose network (a compromised service, or — before
+    # the sandbox firewall — a nested sandbox container) had unauthenticated
+    # read/write to the whole keyspace. The password lives ONLY in env (from
+    # .env.prod); the container reads it so both redis-server and the healthcheck
+    # authenticate with the same value (single source: BSVIBE_REDIS_PASSWORD).
+    environment:
+      REDIS_PASSWORD: ${BSVIBE_REDIS_PASSWORD:?set BSVIBE_REDIS_PASSWORD in .env.prod}
+    command: ["sh", "-c", "exec redis-server --requirepass \"$$REDIS_PASSWORD\""]
+    healthcheck:
+      # The base healthcheck (`redis-cli ping`) now returns NOAUTH — authenticate.
+      test: ["CMD-SHELL", "redis-cli -a \"$$REDIS_PASSWORD\" ping | grep -q PONG"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
 
   backend:
     environment:
@@ -41,7 +56,10 @@ services:
       # the userinfo in BSVIBE_DATABASE_URL. Only the migrating (backend) service
       # needs it.
       BSVIBE_APP_DB_PASSWORD: ${BSVIBE_APP_DB_PASSWORD:?set BSVIBE_APP_DB_PASSWORD (bsvibe_app role password)}
-      BSVIBE_REDIS_URL: ${BSVIBE_REDIS_URL:-redis://redis:6379/0}
+      # Carries the Redis password (single source: BSVIBE_REDIS_PASSWORD, same
+      # value redis-server's --requirepass gets). Override BSVIBE_REDIS_URL wholesale
+      # only if you also drop the requirepass.
+      BSVIBE_REDIS_URL: ${BSVIBE_REDIS_URL:-redis://:${BSVIBE_REDIS_PASSWORD}@redis:6379/0}
       BSVIBE_ENVIRONMENT: ${BSVIBE_ENVIRONMENT:-prod}
       BSVIBE_WORKER_MODE: ${BSVIBE_WORKER_MODE:-db_polling}
       BSVIBE_GIT_SHA: ${GIT_SHA:-prod}
@@ -113,7 +131,7 @@ services:
       # migration URL nor the app password. It never sets the RLS GUC, so its
       # reads fail-open across workspaces — exactly what a queue poller needs.
       BSVIBE_DATABASE_URL: ${BSVIBE_DATABASE_URL:?set BSVIBE_DATABASE_URL (runtime bsvibe_app role)}
-      BSVIBE_REDIS_URL: ${BSVIBE_REDIS_URL:-redis://redis:6379/0}
+      BSVIBE_REDIS_URL: ${BSVIBE_REDIS_URL:-redis://:${BSVIBE_REDIS_PASSWORD}@redis:6379/0}
       BSVIBE_ENVIRONMENT: ${BSVIBE_ENVIRONMENT:-prod}
       BSVIBE_WORKER_MODE: ${BSVIBE_WORKER_MODE:-db_polling}
       BSVIBE_GIT_SHA: ${GIT_SHA:-prod}

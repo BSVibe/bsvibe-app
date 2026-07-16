@@ -40,6 +40,7 @@ from backend.extensions.plugin.bootstrap import discover_webhook_parsers
 from backend.identity.oauth_keys import ensure_signing_key_is_shareable
 from backend.mcp.lifespan import mcp_lifespan
 from backend.router.accounts.crypto import CredentialCipher, _key_from_settings
+from backend.shared.core.http import redact_url_password
 from backend.shared.core.logging import configure_logging
 from plugin.audit import register_audit_subscriber
 
@@ -275,4 +276,4 @@ def bind_process_redis(settings: Settings) -> None:
         return
     set_live_event_bus_redis(redis_client)
     set_api_redis(redis_client)
-    logger.info("process_redis_bound", redis_url=settings.redis_url)
+    logger.info("process_redis_bound", redis_url=redact_url_password(settings.redis_url))
