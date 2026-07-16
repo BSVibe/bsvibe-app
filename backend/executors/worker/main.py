@@ -68,6 +68,7 @@ from backend.executors.worker.executors import (
     detect_capabilities,
     select_executor,
 )
+from backend.shared.core.http import redact_url_password
 
 logger = structlog.get_logger(__name__)
 
@@ -678,7 +679,9 @@ def _connect_redis(settings: WorkerSettings) -> _RedisPublisher | None:
         # structurally match the narrow Protocol, so cast at the boundary.
         return cast("_RedisPublisher", _Redis.from_url(settings.redis_url, decode_responses=False))
     except Exception:  # noqa: BLE001 — streaming is optional; degrade gracefully
-        logger.warning("redis_connect_failed", url=settings.redis_url, exc_info=True)
+        logger.warning(
+            "redis_connect_failed", url=redact_url_password(settings.redis_url), exc_info=True
+        )
         return None
 
 

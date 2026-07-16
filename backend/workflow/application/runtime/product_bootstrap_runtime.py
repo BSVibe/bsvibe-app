@@ -52,6 +52,7 @@ from backend.products.application.bootstrap import (
     register_bootstrap_anchors,
     run_repo_bootstrap,
 )
+from backend.shared.core.http import redact_url_password
 from backend.storage.product_workspace import (
     ProductWorkspaceError,
     product_workspace_path,
@@ -930,7 +931,7 @@ def _build_redis_client(settings: Settings) -> Any:
     except Exception:  # noqa: BLE001 — Redis is optional for the LiteLLM path
         logger.warning(
             "bootstrap_redis_connect_failed",
-            redis_url=settings.redis_url,
+            redis_url=redact_url_password(settings.redis_url),
             exc_info=True,
         )
         return None

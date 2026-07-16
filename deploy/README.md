@@ -13,6 +13,8 @@ Files in this directory:
 | `Dockerfile.backend` | Backend + worker image. Entrypoint runs `alembic upgrade head` then the API. |
 | `Dockerfile.pwa` | Optional containerized PWA (Vercel is the primary path). |
 | `Dockerfile.sandbox` | LLM execution sandbox image (built only for the worker/LLM phase). |
+| `Dockerfile.sandbox-dind` | Hardened DinD sidecar = `docker:28-dind` + the nested-egress firewall wrapper. |
+| `sandbox-dind-firewall.sh` | Applied at DinD startup — isolates nested sandboxes from :2375 + internal services. |
 | `entrypoint.sh` | Migrate-on-boot wrapper for the backend (api) service. |
 | `.env.prod.example` | Every required prod env var, documented. Copy → `.env.prod`. |
 
@@ -69,6 +71,9 @@ $EDITOR deploy/.env.prod
 
 Required (no defaults — compose refuses to start without them):
 
+- `BSVIBE_REDIS_PASSWORD` — Redis `--requirepass`; the SINGLE source the
+  healthcheck and the app's `BSVIBE_REDIS_URL` default both derive from. Leave
+  `BSVIBE_REDIS_URL` unset so the password-carrying default wins.
 - `BSVIBE_DB_PASSWORD` — the OWNER role (`bsvibe` superuser) password; seeds the
   postgres container and must match `BSVIBE_MIGRATION_DATABASE_URL`.
 - `BSVIBE_APP_DB_PASSWORD` — the RUNTIME role (`bsvibe_app`) password; the
@@ -140,15 +145,25 @@ BSVIBE_DOCKER_HOST=tcp://sandbox-dind:2375   # the dind sidecar, internal networ
 BSVIBE_SANDBOX_USER=0:0                       # match the worker's root-owned worktrees
 ```
 
+The dind sidecar is a **hardened** image (`deploy/Dockerfile.sandbox-dind`):
+stock `docker:28-dind` plus a firewall wrapper that blocks nested `bsvibe-sbx-*`
+containers from the daemon's `:2375` control socket, postgres, redis, and the
+backend, while leaving the public internet open (PyPI/npm still work). The
+`:2375` socket itself is on a dedicated `sandboxnet` reachable only by
+backend + worker. `up --profile sandbox` builds this image automatically when it
+is absent. **After bringing the sandbox up, verify the isolation against the
+live host with `docs/e2e/sandbox-network-isolation-checklist.md`.**
+
 Bring up the stack WITH the `sandbox` profile (starts the dind sidecar), then
 build + **load the sandbox image into the dind daemon** — a plain host
 `docker build` is invisible to the nested daemon, so it must be transferred:
 
 ```sh
-# 1. Bring the stack up including the dind sidecar.
+# 1. Bring the stack up including the dind sidecar (builds the hardened dind
+#    image on first run).
 docker compose -p bsvibe-prod --profile sandbox \
   -f deploy/compose.yaml -f deploy/compose.prod.yaml \
-  --env-file deploy/.env.prod up -d --scale worker=1
+  --env-file deploy/.env.prod up -d --build --scale worker=1
 
 # 2. Build the toolchain image on the host AND load it into the dind daemon.
 #    (build-sandbox-image.sh does `docker save | docker exec -i <dind> docker load`)

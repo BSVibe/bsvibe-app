@@ -1,0 +1,22 @@
+# bsvibe-sandbox-dind — hardened Docker-in-Docker sidecar.
+#
+# Stock `docker:28-dind` PLUS a firewall wrapper that isolates nested
+# `bsvibe-sbx-*` sandbox containers from internal/private destinations (the
+# daemon's own :2375 control socket + postgres/redis/backend), while leaving
+# the PUBLIC internet open. See deploy/sandbox-dind-firewall.sh for the rules
+# and docs/e2e/sandbox-network-isolation-checklist.md for verification.
+#
+# Built by the compose `sandbox-dind` service (build context = deploy/).
+FROM docker:28-dind
+
+# The wrapper waits for dockerd to create docker0 + DOCKER-USER, applies the
+# nested-egress iptables rules, then execs the stock dind entrypoint. iproute2
+# (`ip`) and iptables already ship in the docker:dind image (dockerd needs
+# them), so no extra packages are required.
+COPY sandbox-dind-firewall.sh /usr/local/bin/sandbox-dind-firewall.sh
+RUN chmod +x /usr/local/bin/sandbox-dind-firewall.sh
+
+# Wrap — do NOT replace — the dind entrypoint. The wrapper execs
+# `dockerd-entrypoint.sh "$@"`, so the compose `command:` (the dockerd flags)
+# still reaches the real daemon unchanged.
+ENTRYPOINT ["/usr/local/bin/sandbox-dind-firewall.sh"]

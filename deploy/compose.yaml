@@ -57,6 +57,10 @@ services:
         condition: service_healthy
     ports:
       - "8700:8000"
+    # `default` for postgres/redis/pwa comms; `sandboxnet` for sandbox-dind:2375.
+    networks:
+      - default
+      - sandboxnet
 
   worker:
     # The production worker daemon — runs every DB-polling worker with real
@@ -83,6 +87,10 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+    # Same as backend: reaches postgres/redis (default) + sandbox-dind:2375.
+    networks:
+      - default
+      - sandboxnet
 
   pwa:
     build:
@@ -113,20 +121,46 @@ services:
   # plain local `up` does not run a privileged daemon. Enable it in prod
   # alongside BSVIBE_SANDBOX_ENABLED=true (see deploy/README.md §5 Stage B).
   sandbox-dind:
-    image: docker:28-dind
+    # Hardened DinD: stock docker:28-dind + a firewall wrapper that isolates
+    # nested bsvibe-sbx-* containers from internal/private destinations (the
+    # daemon's own :2375 + postgres/redis/backend) while leaving the public
+    # internet open. See deploy/Dockerfile.sandbox-dind +
+    # deploy/sandbox-dind-firewall.sh.
+    build:
+      context: .
+      dockerfile: Dockerfile.sandbox-dind
+    image: bsvibe-sandbox-dind:latest
     profiles: ["sandbox"]
     container_name: bsvibe-sandbox-dind
     privileged: true
     restart: unless-stopped
+    # NETWORK SEGMENTATION (:2375 hardening, part 2). sandbox-dind joins ONLY
+    # `sandboxnet` — shared with backend + worker, NOT postgres/redis/pwa. So
+    # the plaintext-unauth :2375 socket is reachable ONLY from the two services
+    # that legitimately manage sandboxes; nothing else on the app network can
+    # reach it. (Complements the in-daemon firewall, which blocks the NESTED
+    # containers.)
+    networks:
+      - sandboxnet
     environment:
-      # Listen on plaintext tcp/2375 (no TLS) — reachable ONLY on the internal
-      # compose network, never published to the host.
+      # Listen on plaintext tcp/2375 (no TLS) — reachable ONLY on sandboxnet
+      # (backend/worker), never published to the host, and blocked from nested
+      # containers by the firewall wrapper.
       DOCKER_TLS_CERTDIR: ""
     command:
       ["dockerd", "--host=tcp://0.0.0.0:2375", "--host=unix:///var/run/docker.sock"]
     volumes:
       - appdata:/app/var
       - dind-storage:/var/lib/docker
+
+# Two networks so the sandbox daemon's control plane is not on the same broadcast
+# domain as postgres/redis. Services WITHOUT a `networks:` key (postgres, redis,
+# pwa) stay on the auto-created `default` network. Only backend + worker straddle
+# both, since only they must reach BOTH the data services (default) and
+# sandbox-dind (sandboxnet).
+networks:
+  sandboxnet:
+    driver: bridge
 
 volumes:
   pgdata:

@@ -21,6 +21,7 @@ import time
 from collections.abc import Mapping
 from types import TracebackType
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 import structlog
@@ -29,6 +30,33 @@ logger = structlog.get_logger(__name__)
 
 _REDACTED_HEADER_NAMES: frozenset[str] = frozenset({"authorization", "x-service-token"})
 _REDACTED_PLACEHOLDER = "<redacted>"
+
+
+def redact_url_password(url: str) -> str:
+    """Return ``url`` with the userinfo password masked.
+
+    Connection URLs (Redis ``redis://:pw@host``, Postgres DSNs) carry their
+    secret in the userinfo component. Once Redis runs with ``requirepass`` the
+    app's ``redis_url`` embeds that password, so any log site that echoes the
+    URL would leak it. This masks the password (``:pw@`` → ``:<redacted>@``)
+    while leaving scheme / user / host / port / path intact for diagnostics.
+
+    Never raises: malformed input is returned unchanged so logging cannot blow
+    up on a bad URL.
+    """
+
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        return url
+    if parts.password is None:
+        return url
+    # Rebuild the netloc with the password replaced. ``parts.hostname`` lowercases
+    # and strips brackets, so reconstruct from the raw netloc to preserve it.
+    userinfo, _, hostinfo = parts.netloc.rpartition("@")
+    user, _, _pw = userinfo.partition(":")
+    new_netloc = f"{user}:{_REDACTED_PLACEHOLDER}@{hostinfo}"
+    return urlunsplit((parts.scheme, new_netloc, parts.path, parts.query, parts.fragment))
 
 
 def redact_headers(headers: Mapping[str, str]) -> dict[str, str]:
@@ -262,4 +290,4 @@ class HttpClientBase:
         return await self.request("DELETE", path, **kw)
 
 
-__all__ = ["HttpClientBase", "redact_headers"]
+__all__ = ["HttpClientBase", "redact_headers", "redact_url_password"]
