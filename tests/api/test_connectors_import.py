@@ -262,7 +262,7 @@ async def test_import_rejects_push_only_inbound(
     cipher: CredentialCipher,
     workspace_id: uuid.UUID,
 ) -> None:
-    """Slack is kind="both" but its inbound is webhook-driven (no bulk import).
+    """Slack is outbound + webhook_trigger but not importable (webhook-driven inbound, no bulk import).
 
     The route 422s with a clear "no bulk-import action" message rather than
     silently 200ing on a no-op dispatch.

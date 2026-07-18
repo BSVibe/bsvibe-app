@@ -73,7 +73,12 @@ afterEach(() => {
 
 async function availableCard(name: string): Promise<HTMLElement> {
   const available = await screen.findByRole("list", { name: /available/i });
-  return within(available).getByText(name).closest("li") as HTMLElement;
+  // The AVAILABLE <ul> renders immediately (empty) while the catalog fetch is
+  // still in flight, so findByRole resolves before the cards exist. findByText
+  // retries until the async catalog populates the card — a plain getByText here
+  // races the fetch and flakes under slower (CI) scheduling.
+  const label = await within(available).findByText(name);
+  return label.closest("li") as HTMLElement;
 }
 
 describe("OAuth 1-click connect", () => {
