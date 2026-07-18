@@ -47,11 +47,12 @@ class RequestRepository(Protocol):
         locking concern stays inside the concrete impl).
         """
 
-    async def add(self, request: RequestRow) -> None:
-        """Stage a new request for INSERT on the next flush.
+    async def enqueue(self, request: RequestRow, *, producer_id: str) -> None:
+        """Emit a new request onto the ``requests`` channel (INV-1).
 
-        The repository does NOT flush or commit; the caller owns the
-        transaction boundary (v8 D45).
+        The write goes through ``REQUESTS.emit``, which asserts ``producer_id``
+        is a declared producer before staging the row. The repository does NOT
+        flush or commit; the caller owns the transaction boundary (v8 D45).
         """
 
 

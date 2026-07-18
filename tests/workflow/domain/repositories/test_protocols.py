@@ -93,7 +93,7 @@ def test_request_repository_protocol_surface() -> None:
         "get",
         "list_by_workspace",
         "list_open_for_claim",
-        "add",
+        "enqueue",
     ):
         method = getattr(RequestRepository, name, None)
         assert method is not None, f"RequestRepository missing {name}"

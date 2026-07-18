@@ -46,7 +46,7 @@ async def test_add_and_get_request_roundtrip() -> None:
             status=RequestStatus.OPEN,
             payload={"text": "hi"},
         )
-        await repo.add(request)
+        await repo.enqueue(request, producer_id="worker:intake_worker")
         await session.flush()
 
         loaded = await repo.get(request.id)
@@ -77,7 +77,7 @@ async def test_list_by_workspace_scoped_and_ordered() -> None:
         for i in range(3):
             r_id = uuid.uuid4()
             ids.append(r_id)
-            await repo.add(
+            await repo.enqueue(
                 RequestRow(
                     id=r_id,
                     workspace_id=workspace_id,
@@ -86,17 +86,19 @@ async def test_list_by_workspace_scoped_and_ordered() -> None:
                     payload={},
                     created_at=now - timedelta(minutes=2 - i),
                     updated_at=now,
-                )
+                ),
+                producer_id="worker:intake_worker",
             )
         # sibling-workspace request should not appear
-        await repo.add(
+        await repo.enqueue(
             RequestRow(
                 id=uuid.uuid4(),
                 workspace_id=sibling,
                 trigger_event_id=trig_b,
                 status=RequestStatus.OPEN,
                 payload={},
-            )
+            ),
+            producer_id="worker:intake_worker",
         )
         await session.flush()
 
@@ -117,7 +119,7 @@ async def test_list_open_for_claim_filters_status_and_orders_oldest_first() -> N
         for i in range(3):
             r_id = uuid.uuid4()
             open_ids.append(r_id)
-            await repo.add(
+            await repo.enqueue(
                 RequestRow(
                     id=r_id,
                     workspace_id=workspace_id,
@@ -126,10 +128,11 @@ async def test_list_open_for_claim_filters_status_and_orders_oldest_first() -> N
                     payload={},
                     created_at=now - timedelta(minutes=3 - i),
                     updated_at=now,
-                )
+                ),
+                producer_id="worker:intake_worker",
             )
         # non-OPEN row should not appear
-        await repo.add(
+        await repo.enqueue(
             RequestRow(
                 id=uuid.uuid4(),
                 workspace_id=workspace_id,
@@ -138,7 +141,8 @@ async def test_list_open_for_claim_filters_status_and_orders_oldest_first() -> N
                 payload={},
                 created_at=now - timedelta(minutes=10),
                 updated_at=now,
-            )
+            ),
+            producer_id="worker:intake_worker",
         )
         await session.flush()
 
@@ -157,14 +161,15 @@ async def test_list_open_for_claim_respects_limit() -> None:
 
         repo = SqlAlchemyRequestRepository(session)
         for _ in range(5):
-            await repo.add(
+            await repo.enqueue(
                 RequestRow(
                     id=uuid.uuid4(),
                     workspace_id=workspace_id,
                     trigger_event_id=trig,
                     status=RequestStatus.OPEN,
                     payload={},
-                )
+                ),
+                producer_id="worker:intake_worker",
             )
         await session.flush()
 

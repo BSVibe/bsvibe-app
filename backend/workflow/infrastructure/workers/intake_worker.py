@@ -127,7 +127,7 @@ class IntakeWorker(BaseWorker):
                 # The Request row carries it forward so AgentRunner can mint
                 # the ExecutionRun with the same binding — no more NULL run.
                 request_repo = SqlAlchemyRequestRepository(session)
-                await request_repo.add(
+                await request_repo.enqueue(
                     RequestRow(
                         id=uuid.uuid4(),
                         workspace_id=trig.workspace_id,
@@ -137,7 +137,8 @@ class IntakeWorker(BaseWorker):
                         payload=dict(outcome.request_payload),
                         created_at=now,
                         updated_at=now,
-                    )
+                    ),
+                    producer_id="worker:intake_worker",
                 )
                 logger.info(
                     "intake_worker_request_created",
