@@ -44,6 +44,7 @@ import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from backend.workflow.application.safe_mode_queue import SafeModeQueue
+from backend.workflow.channels import SAFE_MODE_QUEUE_ITEMS
 from plugin.audit.store import OutboxStore
 
 logger = structlog.get_logger(__name__)
@@ -140,7 +141,10 @@ class SafeModeExpirySweepRunner:
         cross-reference handle, and that's enough.)
         """
         queue = SafeModeQueue(session)
-        due = await queue.list_due_expired(now=cutoff)
+        due = await SAFE_MODE_QUEUE_ITEMS.consume(
+            consumer_id="worker:safe_mode_expiry_sweep",
+            claim=lambda: queue.list_due_expired(now=cutoff),
+        )
         expired: list[uuid.UUID] = []
         for row in due:
             ok = await queue.mark_expired(workspace_id=row.workspace_id, item_id=row.id)

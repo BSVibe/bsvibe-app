@@ -20,11 +20,25 @@ sole producer (each drained TriggerEvent mints one ``RequestRow`` with status
 its sole consumer (it claims OPEN requests off the head of the queue to drive
 each run). A Request is machine-minted, so ``human_origin=False`` and there is
 no authoring surface.
+
+``safe_mode_queue_items`` is the founder approval gate for outbound deliveries
+(Workflow §10.5). The
+:class:`~backend.workflow.infrastructure.workers.delivery_worker.DeliveryWorker`
+is its sole producer — when the output-mode gate says HOLD it enqueues a
+``pending`` item (via the :class:`~backend.workflow.application.safe_mode_queue.SafeModeQueue`
+service) instead of dispatching. Its sole worker-claim consumer is the
+:class:`~backend.workflow.application.safe_mode_expiry.SafeModeExpirySweepRunner`,
+which claims every ``PENDING``/``EXTENDED`` row past ``expires_at`` (across all
+workspaces) to sweep it to ``EXPIRED``. The founder-facing REST/MCP reads
+(``get`` / ``list_pending_*`` / ``list_resolved_*``) are API reads, not
+worker-claims, so they stay off the channel. A held item is machine-enqueued,
+so ``human_origin=False`` and there is no authoring surface.
 """
 
 from __future__ import annotations
 
 from backend.channels import Channel
+from backend.workflow.infrastructure.delivery.db import SafeModeQueueItemRow
 from backend.workflow.infrastructure.intake.db import RequestRow, TriggerEventRow
 
 TRIGGER_EVENTS: Channel[TriggerEventRow] = Channel(
@@ -47,4 +61,12 @@ REQUESTS: Channel[RequestRow] = Channel(
     human_origin=False,
 )
 
-__all__ = ["REQUESTS", "TRIGGER_EVENTS"]
+SAFE_MODE_QUEUE_ITEMS: Channel[SafeModeQueueItemRow] = Channel(
+    name="safe_mode_queue_items",
+    row=SafeModeQueueItemRow,
+    producers=("worker:delivery_worker",),
+    consumers=("worker:safe_mode_expiry_sweep",),
+    human_origin=False,
+)
+
+__all__ = ["REQUESTS", "SAFE_MODE_QUEUE_ITEMS", "TRIGGER_EVENTS"]
