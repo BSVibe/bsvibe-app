@@ -21,13 +21,17 @@ each derived from a declaration site:
 A connector may set any combination (slack is outbound + webhook_trigger; notion
 is outbound + importable; obsidian is importable-only).
 
-This PR is ADDITIVE: ``kinds.py`` and the PWA mirror still exist; a later PR
-deletes them once the catalog is proven lossless against them.
+INV-1 cutover — this module is now the SOLE source of truth. The hardcoded
+``backend/connectors/kinds.py`` maps are deleted; the REST validator, the
+import-action resolution, and the founder-facing capability flags all read
+:func:`get_connector_catalog`.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import lru_cache
+from pathlib import Path
 
 from backend.extensions.plugin.base import PluginMeta
 from backend.extensions.plugin.webhook_registry import WebhookParserRegistry
@@ -84,8 +88,63 @@ def build_connector_catalog(
     return catalog
 
 
+# --------------------------------------------------------------------------- #
+# Process-wide cached accessor.                                                #
+#                                                                              #
+# The catalog is derived from the repo-root ``plugin/`` tree, which is static  #
+# for a running process, so it is built ONCE and cached. Every caller (the     #
+# REST create-validator, the ``/connectors/catalog`` endpoint, the import gate,#
+# the MCP tools) reads through :func:`get_connector_catalog` — nobody          #
+# re-derives it. The accessor builds a FRESH webhook registry alongside the    #
+# plugin registry so the ``webhook_trigger`` flag is self-contained and does   #
+# not depend on when the process-wide default registry was populated.          #
+#                                                                              #
+# Tests that need a pristine build call :func:`reset_connector_catalog`.       #
+# --------------------------------------------------------------------------- #
+
+# ``backend/connectors/catalog.py`` → parents[2] is the repo root.
+_PLUGINS_DIR = Path(__file__).resolve().parents[2] / "plugin"
+
+
+@lru_cache(maxsize=1)
+def get_connector_catalog() -> dict[str, ConnectorInfo]:
+    """Return the cached, process-wide derived catalog (built on first use)."""
+    # Local import keeps the loader dependency lazy (mirrors the other
+    # request-time loader touch-points) and avoids an import cycle.
+    from backend.extensions.plugin.loader import PluginLoader  # noqa: PLC0415
+
+    webhook_registry = WebhookParserRegistry()
+    loader = PluginLoader(_PLUGINS_DIR, webhook_registry=webhook_registry)
+    registry = loader.load_all_sync()
+    return build_connector_catalog(registry, webhook_registry)
+
+
+def reset_connector_catalog() -> None:
+    """Drop the cached catalog so the next access rebuilds it. Test-only."""
+    get_connector_catalog.cache_clear()
+
+
+def legacy_kind(info: ConnectorInfo) -> str:
+    """Derive the retired inbound/outbound/both ``kind`` from capability flags.
+
+    Backward-compat for the pre-catalog PWA (which reads ``connector.kind`` on
+    the connector ROW to decide whether to show the "Import now" button);
+    removed once PR-8 migrates the connector-row UI to the capability flags
+    (INV-1 expand/contract). Derived from the flags — the deleted ``kinds.py``
+    map is NOT reintroduced.
+    """
+    if info.importable and info.outbound:
+        return "both"
+    if info.importable:
+        return "inbound"
+    return "outbound"
+
+
 __all__ = [
     "HIDDEN_CONNECTORS",
     "ConnectorInfo",
     "build_connector_catalog",
+    "get_connector_catalog",
+    "legacy_kind",
+    "reset_connector_catalog",
 ]

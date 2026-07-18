@@ -1,10 +1,9 @@
 """INV-1 — connector catalog derived from ``PluginMeta`` (the single SoT).
 
-The connector identity is historically declared in three places
+The connector identity was historically declared in three places
 (``@p.outbound`` / ``backend/connectors/kinds.py`` / the PWA mirror). INV-1
-collapses that onto ``PluginMeta``. This PR is ADDITIVE: it builds the derived
-catalog and proves it is lossless against the still-present hardcoded maps, so
-a later PR can delete them safely.
+collapses that onto ``PluginMeta`` and DELETES the hardcoded maps — the derived
+catalog is now the sole source of truth (this PR's cutover).
 
 The catalog replaces the inbound/outbound/both ``kind`` enum with three
 orthogonal capability flags (``outbound`` / ``importable`` / ``webhook_trigger``)
@@ -23,11 +22,27 @@ from backend.connectors.catalog import (
     HIDDEN_CONNECTORS,
     ConnectorInfo,
     build_connector_catalog,
+    get_connector_catalog,
+    reset_connector_catalog,
 )
-from backend.connectors.kinds import CONNECTOR_KINDS, INBOUND_IMPORT_ACTIONS
 from backend.extensions.plugin.loader import PluginLoader
 from backend.extensions.plugin.webhook_registry import WebhookParserRegistry
+from backend.workflow.application.delivery.connector_dispatch import OUTBOUND_EVENT_BUILDERS
 from plugin.notion import plugin as notion_module
+
+# The connector whose outbound delivery is the git-ops special case
+# (``connector_dispatch._github``) rather than a simple event builder.
+_GITHUB_OUTBOUND_SPECIAL_CASE = "github"
+
+# Post-deletion invariant: the import-trigger action each importable connector
+# declares on its plugin (``PluginMeta.import_action_name``). Replaces the old
+# hardcoded ``INBOUND_IMPORT_ACTIONS`` map (deleted in the INV-1 cutover).
+_EXPECTED_IMPORT_ACTIONS = {
+    "obsidian": "import_vault",
+    "claude": "import_conversations",
+    "gpt": "import_conversations",
+    "notion": "import_pages",
+}
 
 pytestmark = pytest.mark.asyncio
 
@@ -76,14 +91,8 @@ async def test_connector_info_is_frozen(catalog: dict[str, ConnectorInfo]) -> No
 
 
 # --------------------------------------------------------------------------- #
-# Lossless-vs-hardcoded — safety proof for the future deletion of kinds.py.    #
+# Sole-SoT invariants (post-deletion of kinds.py).                             #
 # --------------------------------------------------------------------------- #
-
-
-async def test_every_kind_map_key_resolves(catalog: dict[str, ConnectorInfo]) -> None:
-    """Every ``CONNECTOR_KINDS`` key resolves to a catalog entry (no loss)."""
-    for name in CONNECTOR_KINDS:
-        assert name in catalog, f"kind-map connector {name!r} missing from catalog"
 
 
 async def test_every_outbound_plugin_flagged(catalog: dict[str, ConnectorInfo]) -> None:
@@ -94,16 +103,33 @@ async def test_every_outbound_plugin_flagged(catalog: dict[str, ConnectorInfo]) 
             assert catalog[name].outbound is True, f"{name} has @p.outbound but outbound=False"
 
 
-async def test_import_actions_lossless(catalog: dict[str, ConnectorInfo]) -> None:
-    """Every ``INBOUND_IMPORT_ACTIONS`` entry → importable + matching action name."""
-    for name, action_name in INBOUND_IMPORT_ACTIONS.items():
+async def test_declared_outbound_has_a_delivery_path(catalog: dict[str, ConnectorInfo]) -> None:
+    """Every ``outbound=True`` connector actually delivers.
+
+    Guards the exact regression the sentry bug was — a connector declared
+    outbound with NO builder delivers nothing silently. An outbound connector
+    must have an ``OUTBOUND_EVENT_BUILDER`` OR be the github git-ops special
+    case (``connector_dispatch._github``).
+    """
+    for name, info in catalog.items():
+        if info.outbound:
+            assert name in OUTBOUND_EVENT_BUILDERS or name == _GITHUB_OUTBOUND_SPECIAL_CASE, (
+                f"{name} declares outbound=True but has no delivery builder — "
+                "it would silently deliver nothing"
+            )
+
+
+async def test_import_actions_resolve(catalog: dict[str, ConnectorInfo]) -> None:
+    """Each importable connector exposes its expected import action (no loss)."""
+    for name, action_name in _EXPECTED_IMPORT_ACTIONS.items():
         info = catalog[name]
-        assert info.importable is True, (
-            f"{name} listed in INBOUND_IMPORT_ACTIONS but not importable"
-        )
+        assert info.importable is True, f"{name} expected importable"
         assert info.import_action == action_name, (
-            f"{name} import_action {info.import_action!r} != hardcoded {action_name!r}"
+            f"{name} import_action {info.import_action!r} != expected {action_name!r}"
         )
+    # No OTHER connector claims to be importable.
+    importable = {n for n, i in catalog.items() if i.importable}
+    assert importable == set(_EXPECTED_IMPORT_ACTIONS), f"unexpected importable set {importable}"
 
 
 async def test_artifact_types_sorted_deduped(catalog: dict[str, ConnectorInfo]) -> None:
@@ -161,3 +187,28 @@ async def test_no_kind_enum_field(catalog: dict[str, ConnectorInfo]) -> None:
     field_names = {f.name for f in dataclasses.fields(next(iter(catalog.values())))}
     assert "kind" not in field_names
     assert {"outbound", "importable", "webhook_trigger"} <= field_names
+
+
+# --------------------------------------------------------------------------- #
+# Cached module-level accessor — the single entry every reader consults.       #
+# --------------------------------------------------------------------------- #
+
+
+async def test_get_connector_catalog_matches_built(
+    catalog: dict[str, ConnectorInfo],
+) -> None:
+    """The process-wide accessor derives the SAME catalog as an explicit build."""
+    reset_connector_catalog()
+    accessed = get_connector_catalog()
+    assert set(accessed) == set(catalog)
+    for name, info in catalog.items():
+        assert accessed[name] == info
+
+
+async def test_get_connector_catalog_is_cached() -> None:
+    """Repeated calls return the identical cached object (built once)."""
+    reset_connector_catalog()
+    first = get_connector_catalog()
+    assert get_connector_catalog() is first
+    reset_connector_catalog()
+    assert get_connector_catalog() is not first

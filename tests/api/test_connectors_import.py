@@ -12,9 +12,8 @@ Proves the founder UI's "Import now" button has a real backend:
   surface, mirroring the public ingress;
 * 422 — outbound-only connector (github) rejects with a clear reason;
 * 422 — connector whose inbound is push-only (slack) rejects with a clear
-  reason — the kind is ``both`` but
-  :data:`backend.connectors.kinds.INBOUND_IMPORT_ACTIONS` has no entry,
-  so the route 422s before reaching the dispatcher.
+  reason — slack has a webhook_trigger but is NOT importable (no import
+  action), so the route 422s before reaching the dispatcher.
 
 Auth + workspace + cipher are injected via dependency overrides exactly
 like ``tests/api/test_connectors.py``. The :class:`ImportDispatcher` is a
@@ -179,9 +178,9 @@ async def test_import_happy_path(
         delivery_config = {"vault_path": "/tmp/vault"} if connector == "obsidian" else {"x": "y"}
         created = await _create(c, connector, delivery_config=delivery_config)
         connector_id = created["id"]
-        # The create response includes the new ``kind`` field — wired through
-        # for both inbound-only (obsidian) and "both" (notion) connectors.
-        assert created["kind"] in ("inbound", "both")
+        # The create response surfaces the capability flags — every importable
+        # connector (obsidian / claude / gpt / notion) reports importable=True.
+        assert created["importable"] is True
 
         r = await c.post(f"/api/v1/connectors/{connector_id}/import", json={})
         assert r.status_code == 200, r.text
@@ -203,7 +202,7 @@ async def test_import_happy_path(
         item = listed.json()[0]
         assert item["last_import_count"] == expected_count
         assert item["last_import_at"]
-        assert item["kind"] in ("inbound", "both")
+        assert item["importable"] is True
 
 
 # ── 404 / 422 / 502 paths ─────────────────────────────────────────────────
@@ -248,11 +247,13 @@ async def test_import_rejects_outbound_only(
     app = create_app()
     async with _make_client(app, sf, cipher, workspace_id, dispatcher) as c:
         created = await _create(c, "github")
-        # The kind surfaces as "outbound" already in the create response.
-        assert created["kind"] == "outbound"
+        # The capability flags surface already in the create response: github
+        # is outbound + webhook_trigger, but not importable.
+        assert created["outbound"] is True
+        assert created["importable"] is False
         r = await c.post(f"/api/v1/connectors/{created['id']}/import", json={})
         assert r.status_code == 422, r.text
-        assert "outbound-only" in r.json()["detail"]
+        assert "no bulk-import action" in r.json()["detail"]
         assert dispatcher.calls == []
 
 
@@ -305,8 +306,9 @@ async def test_create_accepts_new_inbound_connectors(
     """Lift B widens the validator to accept the inbound-only connectors.
 
     These have NEITHER an inbound webhook parser NOR an outbound delivery
-    builder — they were unknown to the legacy validator. The kind map now
-    declares them, so the create succeeds.
+    builder — they were unknown to the legacy validator. The derived catalog
+    now surfaces them (their plugin declares an import action), so the create
+    succeeds.
     """
     app = create_app()
     async with _make_client(app, sf, cipher, workspace_id) as c:
@@ -315,7 +317,7 @@ async def test_create_accepts_new_inbound_connectors(
             json={"connector": name, "signing_secret": "x"},
         )
         assert r.status_code == 201, r.text
-        assert r.json()["kind"] == "inbound"
+        assert r.json()["importable"] is True
 
 
 # ── workspace isolation for import ────────────────────────────────────────
