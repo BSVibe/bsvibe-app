@@ -17,7 +17,11 @@ Hard invariants (the additive contract):
   ``worker_mode != "redis_streams"`` or no client is supplied — so the default
   DB-polling deployment behaves exactly as before.
 
-Stream names are stable identifiers shared by producer + consumer:
+Stream names are stable identifiers shared by producer + consumer. They are
+declared ONCE as typed :class:`~backend.workers.stream_keys.StreamKey` bindings
+(key ↔ producer ↔ consumer ↔ backing DB Channel) in
+:mod:`backend.workers.stream_keys` — the single source of truth — and merely
+re-exported here so existing producers keep importing them from ``emit``:
 
 * :data:`STREAM_INTAKE` — a TriggerEvent landed (intake produces a Request).
 * :data:`STREAM_AGENT` — a Request is OPEN (the agent worker drives it).
@@ -31,15 +35,17 @@ from typing import TYPE_CHECKING, Any, Final, Protocol, cast
 
 import structlog
 
+from backend.workers.stream_keys import (
+    STREAM_AGENT,
+    STREAM_DELIVER,
+    STREAM_INTAKE,
+    STREAM_SETTLE,
+)
+
 if TYPE_CHECKING:
     from backend.config import Settings
 
 logger = structlog.get_logger(__name__)
-
-STREAM_INTAKE = "intake"
-STREAM_AGENT = "agent"
-STREAM_DELIVER = "deliver"
-STREAM_SETTLE = "settle"
 
 
 class _RedisXadd(Protocol):

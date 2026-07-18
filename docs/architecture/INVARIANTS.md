@@ -51,6 +51,7 @@ WORKSPACE_SCHEDULES = Channel(
 **적용 범위 (파운더 결정, 2026-07-14 — 최대 범위):**
 1. **워커가 소비하는 DB 큐/테이블** — `trigger_events`, `requests`, `delivery_events`, `execution_run_activities`, `audit_outbox`, `safe_mode_queue_items`, `workspace_schedules`, notification outbox
 2. **이벤트버스 prefix + Redis 스트림 키** — `InProcessEventBus.publish`가 임의 문자열을 받는 것과, **구독자 예외를 삼키는 것**(`bus.py:49`)을 함께 해결한다. *구독자가 없는 것*과 *구독자가 매번 던지는 것*이 런타임에서 구분 불가능한 현 상태는 그 자체로 결함이다
+   - **상태: DONE.** 이벤트버스는 `EventChannel`로 타입화(prefix 선언 + swallow 노출) 완료. Redis 스트림 4키(`intake`/`agent`/`deliver`/`settle`)는 `StreamKey` 타입 선언(`backend/workers/stream_keys.py`)으로 승격 — `emit.py` 상수와 `worker_runtime` 소비맵이 한 선언에서 파생되고, drift 메타테스트(`tests/architecture/test_stream_key_registry.py`)가 두 문자열맵의 조용한 불일치를 빌드 실패로 만든다. 각 키는 backing DB Channel에 바인딩되고 `settle`은 위 경계 노트대로 out-of-Channel-scope 예외로 명시 주석됨. transport(XADD/XREADGROUP)는 declare-only로 불변.
 3. **커넥터 / `artifact_type` 레지스트리** — 현재 커넥터 정체성이 **3곳**에 중복 선언돼 있다: 플러그인 데코레이터(`@p.outbound`) / `backend/connectors/kinds.py`(하드코딩 맵) / `apps/pwa/lib/api/types.ts`(*"Mirror of backend.connectors.kinds"*). **SoT는 `PluginMeta` 하나다.** `kinds.py`의 하드코딩 맵과 PWA 미러를 **삭제**한다. (`kinds.py:12`의 *"we intentionally do NOT derive it from the plugin registry"* 는 폐기된 결정이다)
 
 > 이것이 `linear`/`trello`가 완성돼 있는데 UI에서 못 만들고, `sentry` outbound가 "Connected"를 표시하면서 아무것도 전달하지 않고, `sentry_issue_update`/`issue_comment`가 `ArtifactType` Literal에 없어 도달 불가인 이유다. **레지스트리 단일화로 이 세 결함이 동시에, 구조적으로 사라진다.**

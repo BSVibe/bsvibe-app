@@ -44,8 +44,8 @@ from backend.schedule.infrastructure.workers.schedule_worker import (
     ScheduleWorkerConfig,
 )
 from backend.workers.base import BaseWorker
-from backend.workers.emit import STREAM_AGENT, STREAM_DELIVER, STREAM_INTAKE, STREAM_SETTLE
 from backend.workers.relays import build_relay
+from backend.workers.stream_keys import STREAM_KEY_BY_CONSUMER
 from backend.workers.streams import RedisStreamConsumer, StreamHandler
 from backend.workflow.application.runtime.settle_runtime import (
     build_concept_framer,
@@ -306,19 +306,19 @@ def build_stream_consumers(workers: list[Any]) -> list[StreamConsumerBinding]:
 
     The relay_worker is intentionally OMITTED — it drains the audit outbox on
     its own cadence, not in response to a producer event, so it has no stream.
-    A worker whose name is not in the mapping is skipped (not crashed)."""
-    stream_by_name: dict[str, str] = {
-        "intake_worker": STREAM_INTAKE,
-        "agent_worker": STREAM_AGENT,
-        "delivery_worker": STREAM_DELIVER,
-        "settle_worker": STREAM_SETTLE,
-    }
+    A worker whose name is not in the mapping is skipped (not crashed).
+
+    The worker→stream map is DERIVED from the single
+    :data:`~backend.workers.stream_keys.STREAM_KEY_BY_CONSUMER` declaration, so
+    this consumer side can no longer drift from the producer-side constants in
+    :mod:`backend.workers.emit` (both resolve to the same typed
+    :class:`~backend.workers.stream_keys.StreamKey` bindings)."""
     bindings: list[StreamConsumerBinding] = []
     for worker in workers:
         name = getattr(worker, "_name", None)
         if not isinstance(name, str):
             continue
-        stream = stream_by_name.get(name)
+        stream = STREAM_KEY_BY_CONSUMER.get(name)
         if stream is None:
             continue
         # agent_worker advances through claim + drive in one tick (``_tick``);
