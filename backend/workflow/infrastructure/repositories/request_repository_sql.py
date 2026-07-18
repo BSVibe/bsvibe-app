@@ -12,6 +12,7 @@ import uuid
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.workflow.channels import REQUESTS
 from backend.workflow.infrastructure.intake.db import RequestRow, RequestStatus
 
 
@@ -44,8 +45,8 @@ class SqlAlchemyRequestRepository:
         result = await self._session.execute(stmt)
         return list(result.scalars().all())
 
-    async def add(self, request: RequestRow) -> None:
-        self._session.add(request)
+    async def enqueue(self, request: RequestRow, *, producer_id: str) -> None:
+        REQUESTS.emit(self._session, request, producer_id=producer_id)
 
 
 __all__ = ["SqlAlchemyRequestRepository"]

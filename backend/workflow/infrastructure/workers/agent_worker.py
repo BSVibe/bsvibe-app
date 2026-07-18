@@ -65,6 +65,7 @@ from backend.workflow.application.stages.frame import (
     FrameStage,
     FrameUnclassifiedError,
 )
+from backend.workflow.channels import REQUESTS
 from backend.workflow.infrastructure.db import ExecutionRun, RunStatus
 from backend.workflow.infrastructure.intake.db import RequestRow, RequestStatus
 from backend.workflow.infrastructure.repositories import SqlAlchemyRequestRepository
@@ -342,7 +343,10 @@ class AgentWorker(BaseWorker):
     async def _claim_batch(self, session: AsyncSession) -> AsyncIterator[RequestRow]:
         """Yield up to ``batch_size`` OPEN requests within ``session``."""
         repo = SqlAlchemyRequestRepository(session)
-        rows = await repo.list_open_for_claim(limit=self._cfg.batch_size)
+        rows = await REQUESTS.consume(
+            consumer_id="worker:agent_worker",
+            claim=lambda: repo.list_open_for_claim(limit=self._cfg.batch_size),
+        )
         for r in rows:
             yield r
 

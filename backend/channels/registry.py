@@ -13,8 +13,8 @@ from __future__ import annotations
 from typing import Any
 
 from backend.channels._core import Channel
-from backend.workflow.channels import TRIGGER_EVENTS
+from backend.workflow.channels import REQUESTS, TRIGGER_EVENTS
 
-ALL_CHANNELS: tuple[Channel[Any], ...] = (TRIGGER_EVENTS,)
+ALL_CHANNELS: tuple[Channel[Any], ...] = (TRIGGER_EVENTS, REQUESTS)
 
 __all__ = ["ALL_CHANNELS"]
