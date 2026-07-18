@@ -97,6 +97,11 @@ class ActionCapability:
     name: str
     mcp_exposed: bool = False
     input_schema: dict[str, Any] | None = None
+    # True when invoking this action ingests knowledge into the workspace
+    # (the connector's bulk-import trigger). Makes "which action imports"
+    # machine-derivable from PluginMeta instead of a hardcoded backend map.
+    # A plugin declares AT MOST ONE import-trigger action.
+    import_trigger: bool = False
 
 
 # --------------------------------------------------------------------------- #
@@ -127,6 +132,23 @@ class PluginMeta:
     compensates: list[CompensateCapability] = field(default_factory=list)
     actions: dict[str, ActionCapability] = field(default_factory=dict)
     setup_fn: Callable[..., Awaitable[Any]] | None = None
+
+    @property
+    def import_action_name(self) -> str | None:
+        """Name of the action marked ``import_trigger=True``, or ``None``.
+
+        The single source of truth for a connector's bulk-import capability
+        (replaces the hardcoded ``INBOUND_IMPORT_ACTIONS`` map). A plugin
+        declares AT MOST ONE import-trigger action; more than one is a
+        contract violation.
+        """
+        marked = [cap.name for cap in self.actions.values() if cap.import_trigger]
+        if len(marked) > 1:
+            raise PluginRegistrationError(
+                f"Plugin {self.name!r}: at most one import_trigger action allowed, "
+                f"found {sorted(marked)}"
+            )
+        return marked[0] if marked else None
 
 
 @runtime_checkable
@@ -267,6 +289,7 @@ class PluginBuilder:
         name: str,
         mcp_exposed: bool = False,
         input_schema: dict[str, Any] | None = None,
+        import_trigger: bool = False,
     ) -> Callable[[Callable[..., Awaitable[Any]]], Callable[..., Awaitable[Any]]]:
         if not name:
             raise PluginRegistrationError(
@@ -281,7 +304,11 @@ class PluginBuilder:
             fn: Callable[..., Awaitable[Any]],
         ) -> Callable[..., Awaitable[Any]]:
             self.meta.actions[name] = ActionCapability(
-                fn=fn, name=name, mcp_exposed=mcp_exposed, input_schema=input_schema
+                fn=fn,
+                name=name,
+                mcp_exposed=mcp_exposed,
+                input_schema=input_schema,
+                import_trigger=import_trigger,
             )
             return fn
 
