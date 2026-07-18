@@ -190,8 +190,9 @@ class SafeModeExpirySweepRunner:
                 "item_ids": [str(i) for i in expired_ids],
             },
         }
-        await self._outbox.insert(
+        await self._outbox.enqueue(
             session,
+            producer_id="worker:safe_mode_expiry_sweep",
             event_id=str(event_id),
             event_type=SAFE_MODE_EXPIRED_EVENT_TYPE,
             occurred_at=now,

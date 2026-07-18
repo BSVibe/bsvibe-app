@@ -220,8 +220,9 @@ class AuditRetentionSweepRunner:
                 "deleted_count": deleted_count,
             },
         }
-        await self._outbox.insert(
+        await self._outbox.enqueue(
             session,
+            producer_id="worker:audit_retention_sweep",
             event_id=str(event_id),
             event_type=AUDIT_RETENTION_SWEPT_EVENT_TYPE,
             occurred_at=now,

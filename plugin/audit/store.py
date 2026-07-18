@@ -13,6 +13,7 @@ from typing import Any
 from sqlalchemy import Select, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from plugin.audit.channels import AUDIT_OUTBOX
 from plugin.audit.models import AuditOutboxRecord
 
 
@@ -28,10 +29,11 @@ def _backoff_delta(retry_count: int) -> timedelta:
 class OutboxStore:
     """CRUD over :class:`AuditOutboxRecord`. Never commits — caller decides."""
 
-    async def insert(
+    async def enqueue(
         self,
         session: AsyncSession,
         *,
+        producer_id: str,
         event_id: str,
         event_type: str,
         occurred_at: datetime,
@@ -43,7 +45,7 @@ class OutboxStore:
             occurred_at=occurred_at,
             payload=payload,
         )
-        session.add(record)
+        AUDIT_OUTBOX.emit(session, record, producer_id=producer_id)
         await session.flush()
         return record
 
@@ -83,10 +85,10 @@ class OutboxStore:
         *,
         batch_size: int,
         now: datetime | None = None,
-    ) -> Sequence[AuditOutboxRecord]:
+    ) -> list[AuditOutboxRecord]:
         stmt = self.build_select_undelivered_stmt(batch_size=batch_size, now=now)
         result = await session.execute(stmt)
-        return result.scalars().all()
+        return list(result.scalars().all())
 
     async def mark_delivered(
         self,

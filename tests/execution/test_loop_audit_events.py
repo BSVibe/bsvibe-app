@@ -195,7 +195,7 @@ async def test_ask_user_question_emits_decision_pending_and_terminal(
 async def test_audit_emit_failure_does_not_break_run(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """If the outbox insert raises, the run must still drive to verified
+    """If the outbox enqueue raises, the run must still drive to verified
     (the audit layer's soft-fail contract — exactly like chat completions)."""
     from backend.workflow.application import agent_loop as orch_mod
     from plugin.audit.store import OutboxStore
@@ -203,7 +203,7 @@ async def test_audit_emit_failure_does_not_break_run(
     async def _boom(*args: Any, **kwargs: Any) -> None:
         raise RuntimeError("outbox on fire")
 
-    monkeypatch.setattr(OutboxStore, "insert", _boom)
+    monkeypatch.setattr(OutboxStore, "enqueue", _boom)
 
     llm = ScriptedLlm(
         [
