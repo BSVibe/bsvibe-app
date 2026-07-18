@@ -2,7 +2,7 @@
 
 v8 D44/D45. The :class:`SafeModeQueue` application service constructs one
 of these per its session. The Repository is the raw persistence seam
-(``get`` / ``list_*`` / ``add`` / ``mark_expired_bulk``); the service owns
+(``get`` / ``list_*`` / ``enqueue`` / ``mark_expired_bulk``); the service owns
 the rich lifecycle transitions on the returned rows.
 """
 
@@ -14,6 +14,7 @@ from datetime import UTC, datetime
 from sqlalchemy import or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.workflow.channels import SAFE_MODE_QUEUE_ITEMS
 from backend.workflow.infrastructure.db import ExecutionRun, RunStatus
 from backend.workflow.infrastructure.delivery.db import (
     SafeModeQueueItemRow,
@@ -127,8 +128,8 @@ class SqlAlchemySafeModeQueueRepository:
         await self._session.flush()
         return len(ids)
 
-    async def add(self, item: SafeModeQueueItemRow) -> None:
-        self._session.add(item)
+    async def enqueue(self, item: SafeModeQueueItemRow, *, producer_id: str) -> None:
+        SAFE_MODE_QUEUE_ITEMS.emit(self._session, item, producer_id=producer_id)
 
 
 __all__ = ["SqlAlchemySafeModeQueueRepository"]

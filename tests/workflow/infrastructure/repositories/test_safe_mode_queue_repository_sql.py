@@ -46,7 +46,7 @@ async def test_add_and_get_roundtrip() -> None:
         workspace_id = uuid.uuid4()
         repo = SqlAlchemySafeModeQueueRepository(session)
         item = _make_item(workspace_id=workspace_id)
-        await repo.add(item)
+        await repo.enqueue(item, producer_id="worker:delivery_worker")
         await session.flush()
 
         loaded = await repo.get(item.id)
@@ -77,11 +77,14 @@ async def test_list_pending_by_workspace_newest_first_and_scoped() -> None:
                 created_at=now - timedelta(minutes=2 - i),
             )
             ids.append(item.id)
-            await repo.add(item)
+            await repo.enqueue(item, producer_id="worker:delivery_worker")
         # Other workspace
-        await repo.add(_make_item(workspace_id=sibling))
+        await repo.enqueue(_make_item(workspace_id=sibling), producer_id="worker:delivery_worker")
         # Decided rows should not appear in pending list
-        await repo.add(_make_item(workspace_id=workspace_id, status=SafeModeStatus.APPROVED))
+        await repo.enqueue(
+            _make_item(workspace_id=workspace_id, status=SafeModeStatus.APPROVED),
+            producer_id="worker:delivery_worker",
+        )
         await session.flush()
 
         rows = await repo.list_pending_by_workspace(workspace_id)
@@ -108,8 +111,10 @@ async def test_list_pending_for_run_oldest_first() -> None:
                 created_at=now + timedelta(minutes=i),
             )
             ids.append(item.id)
-            await repo.add(item)
-        await repo.add(_make_item(workspace_id=workspace_id))  # no run_id
+            await repo.enqueue(item, producer_id="worker:delivery_worker")
+        await repo.enqueue(
+            _make_item(workspace_id=workspace_id), producer_id="worker:delivery_worker"
+        )  # no run_id
         await session.flush()
 
         rows = await repo.list_pending_for_run(workspace_id=workspace_id, run_id=run_id)
@@ -136,7 +141,7 @@ async def test_list_resolved_by_workspace_decided_first() -> None:
         # Pending should not appear
         pending = _make_item(workspace_id=workspace_id)
         for it in (approved, denied, pending):
-            await repo.add(it)
+            await repo.enqueue(it, producer_id="worker:delivery_worker")
         await session.flush()
 
         rows = await repo.list_resolved_by_workspace(workspace_id)
@@ -167,8 +172,8 @@ async def test_list_due_expired_cross_workspace() -> None:
             extension_count=0,
             created_at=now,
         )
-        await repo.add(past)
-        await repo.add(future)
+        await repo.enqueue(past, producer_id="worker:delivery_worker")
+        await repo.enqueue(future, producer_id="worker:delivery_worker")
         await session.flush()
 
         rows = await repo.list_due_expired(now=now)
@@ -185,7 +190,7 @@ async def test_mark_expired_bulk_workspace_scoped() -> None:
 
         # 2 expired in target workspace
         for _ in range(2):
-            await repo.add(
+            await repo.enqueue(
                 SafeModeQueueItemRow(
                     id=uuid.uuid4(),
                     workspace_id=workspace_id,
@@ -194,7 +199,8 @@ async def test_mark_expired_bulk_workspace_scoped() -> None:
                     expires_at=now - timedelta(days=1),
                     extension_count=0,
                     created_at=now - timedelta(days=2),
-                )
+                ),
+                producer_id="worker:delivery_worker",
             )
         # 1 expired in other workspace — must not be touched
         other_item = SafeModeQueueItemRow(
@@ -206,7 +212,7 @@ async def test_mark_expired_bulk_workspace_scoped() -> None:
             extension_count=0,
             created_at=now - timedelta(days=2),
         )
-        await repo.add(other_item)
+        await repo.enqueue(other_item, producer_id="worker:delivery_worker")
         await session.flush()
 
         count = await repo.mark_expired_bulk(workspace_id=workspace_id, now=now)

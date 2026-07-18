@@ -76,7 +76,7 @@ class SafeModeQueue:
             extension_count=0,
             created_at=now,
         )
-        await self._repo.add(row)
+        await self._repo.enqueue(row, producer_id="worker:delivery_worker")
         await self._session.flush()
         logger.info(
             "safe_mode_enqueued",

@@ -8,7 +8,7 @@ for outbound deliveries. The lifecycle has rich domain semantics
 already owns those transitions.
 
 This Protocol is the **persistence seam beneath** that service: it captures
-the raw read/write surface (``get``, ``list_*``, ``add``, ``mark_expired_bulk``)
+the raw read/write surface (``get``, ``list_*``, ``enqueue``, ``mark_expired_bulk``)
 so the service no longer issues raw ``select(SafeModeQueueItemRow)`` /
 ``session.get(SafeModeQueueItemRow, ...)`` queries. Lifecycle methods
 (``approve``/``deny``/``mark_delivered``/``extend``/etc.) stay on the
@@ -75,11 +75,13 @@ class SafeModeQueueRepository(Protocol):
         per-row :meth:`SafeModeQueue.mark_expired` for glass-box auditing.
         """
 
-    async def add(self, item: SafeModeQueueItemRow) -> None:
-        """Stage a new queue item for INSERT on the next flush.
+    async def enqueue(self, item: SafeModeQueueItemRow, *, producer_id: str) -> None:
+        """Emit a held delivery onto the ``safe_mode_queue_items`` channel (INV-1).
 
-        The repository does NOT flush or commit; the caller owns the
-        transaction boundary (v8 D45).
+        The write goes through ``SAFE_MODE_QUEUE_ITEMS.emit``, which asserts
+        ``producer_id`` is a declared producer before staging the row. The
+        repository does NOT flush or commit; the caller owns the transaction
+        boundary (v8 D45).
         """
 
 
