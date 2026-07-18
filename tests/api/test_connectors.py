@@ -260,6 +260,76 @@ async def test_create_rejects_extra_fields(client: httpx.AsyncClient) -> None:
     assert r.status_code == 422, r.text
 
 
+@pytest.mark.parametrize("suppressed", ["linear", "trello"])
+async def test_create_rejects_suppressed_connectors(
+    client: httpx.AsyncClient, suppressed: str
+) -> None:
+    """INV-1 — linear/trello build outbound but are NOT user-connectable.
+
+    Their outbound builders keep delivering existing bindings, but they are a
+    product-suppression decision — the create front door rejects them as if
+    unknown (422), same shape as a genuinely unknown connector.
+    """
+    r = await client.post(
+        "/api/v1/connectors",
+        json={"connector": suppressed, "signing_secret": "x"},
+    )
+    assert r.status_code == 422, r.text
+
+
+async def test_create_still_accepts_connectable(client: httpx.AsyncClient) -> None:
+    """A user-connectable connector (slack) is still creatable after the cutover."""
+    r = await client.post(
+        "/api/v1/connectors",
+        json={"connector": "slack", "signing_secret": "x"},
+    )
+    assert r.status_code == 201, r.text
+    body = r.json()
+    assert body["outbound"] is True
+    assert body["webhook_trigger"] is True
+
+
+# --------------------------------------------------------------------------
+# catalog
+# --------------------------------------------------------------------------
+
+
+async def test_catalog_lists_user_connectable_with_flags(client: httpx.AsyncClient) -> None:
+    """GET /connectors/catalog returns the founder-visible catalog with flags."""
+    r = await client.get("/api/v1/connectors/catalog")
+    assert r.status_code == 200, r.text
+    entries = r.json()["connectors"]
+    by_name = {e["name"]: e for e in entries}
+
+    # Suppressed connectors are naturally absent.
+    assert "linear" not in by_name
+    assert "trello" not in by_name
+
+    # Representative capability shapes.
+    assert by_name["slack"]["outbound"] is True
+    assert by_name["slack"]["webhook_trigger"] is True
+    assert by_name["slack"]["importable"] is False
+
+    assert by_name["obsidian"]["importable"] is True
+    assert by_name["obsidian"]["import_action"] == "import_vault"
+    assert by_name["obsidian"]["outbound"] is False
+
+    assert by_name["notion"]["outbound"] is True
+    assert by_name["notion"]["importable"] is True
+    assert by_name["notion"]["artifact_types"] == ["page", "page_image"]
+
+    # Every entry carries the full flag set (extra=forbid enforces exactness).
+    for e in entries:
+        assert set(e) == {
+            "name",
+            "outbound",
+            "importable",
+            "webhook_trigger",
+            "artifact_types",
+            "import_action",
+        }
+
+
 # --------------------------------------------------------------------------
 # list
 # --------------------------------------------------------------------------

@@ -56,7 +56,14 @@ class PluginLoader:
         """Engine-side webhook parser registry (populated during plugin load)."""
         return self._webhook_registry
 
-    async def load_all(self) -> dict[str, PluginMeta]:
+    def load_all_sync(self) -> dict[str, PluginMeta]:
+        """Scan the plugins dir and import every ``<name>/plugin.py``.
+
+        Importing a plugin module is pure CPU + filesystem work (no awaiting),
+        so the core is synchronous — callable from an app-startup factory or a
+        request-time validator without an event loop. :meth:`load_all` remains
+        an ``async`` wrapper for the existing ``await``-based callers.
+        """
         self._registry.clear()
 
         if not self._plugins_dir.is_dir():
@@ -70,8 +77,12 @@ class PluginLoader:
             if not plugin_py.exists():
                 logger.warning("plugin_missing_file", path=str(entry))
                 continue
-            await self._load_one(plugin_py)
+            self._load_one(plugin_py)
         return self._registry
+
+    async def load_all(self) -> dict[str, PluginMeta]:
+        """Async wrapper over :meth:`load_all_sync` for ``await``-based callers."""
+        return self.load_all_sync()
 
     async def scan_new(self) -> dict[str, PluginMeta]:
         """Load only entries not already present in the registry."""
@@ -87,7 +98,7 @@ class PluginLoader:
                 continue
             if entry.name in self._registry:
                 continue
-            meta = await self._load_one(plugin_py)
+            meta = self._load_one(plugin_py)
             if meta is not None and meta.name not in new_entries:
                 new_entries[meta.name] = meta
         return new_entries
@@ -111,7 +122,7 @@ class PluginLoader:
             raise PluginLoadError(f"Plugin {name!r} not found in registry")
         return self._registry[name]
 
-    async def _load_one(self, plugin_py: Path) -> PluginMeta | None:
+    def _load_one(self, plugin_py: Path) -> PluginMeta | None:
         try:
             meta = self._import_plugin(plugin_py)
         except Exception as exc:

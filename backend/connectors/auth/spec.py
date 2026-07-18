@@ -8,10 +8,12 @@ auth methods, with ``webhook_secret`` an orthogonal axis (any connector that
 * ``bearer_token``— telegram (bot_token) / email-sender (Resend api_key)
 * ``local_path``  — obsidian / claude / gpt → no credential, just a path
 
-This is the auth counterpart to :data:`backend.connectors.kinds.CONNECTOR_KINDS`
-(which classifies *direction*: inbound / outbound / both). The two maps MUST
-cover the same connector set — every UI-visible connector needs both a kind
-and an auth spec. A test asserts ``set(CONNECTOR_AUTH) == set(CONNECTOR_KINDS)``.
+This is the auth counterpart to the derived connector catalog
+(:func:`backend.connectors.catalog.get_connector_catalog`, which classifies
+*capability*: outbound / importable / webhook_trigger). Both MUST cover the
+same founder-visible connector set — every user-connectable connector needs an
+auth spec. A test asserts ``set(CONNECTOR_AUTH)`` equals the user-connectable
+catalog entries.
 
 Backend is the source of truth; the PWA mirrors this into its descriptor
 system so the form renders the right control (Connect button / token field /

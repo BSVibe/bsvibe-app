@@ -17,17 +17,12 @@ is a follow-up (not in this chunk).
 
 from __future__ import annotations
 
-from backend.connectors.db import ConnectorAccountRow
-from backend.connectors.kinds import (
-    CONNECTOR_KINDS,
-    INBOUND_IMPORT_ACTIONS,
-    ConnectorKind,
-    connector_kind,
-    import_action_for,
-    is_inbound,
-    is_known_connector,
-    is_outbound,
+from backend.connectors.catalog import (
+    ConnectorInfo,
+    build_connector_catalog,
+    get_connector_catalog,
 )
+from backend.connectors.db import ConnectorAccountRow
 from backend.connectors.resolver import (
     ConnectorDispatchResult,
     ConnectorInboundResolver,
@@ -35,16 +30,11 @@ from backend.connectors.resolver import (
 )
 
 __all__ = [
-    "CONNECTOR_KINDS",
-    "INBOUND_IMPORT_ACTIONS",
     "ConnectorAccountRow",
     "ConnectorDispatchResult",
     "ConnectorInboundResolver",
-    "ConnectorKind",
+    "ConnectorInfo",
     "UnknownConnectorError",
-    "connector_kind",
-    "import_action_for",
-    "is_inbound",
-    "is_known_connector",
-    "is_outbound",
+    "build_connector_catalog",
+    "get_connector_catalog",
 ]

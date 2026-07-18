@@ -98,7 +98,8 @@ async def test_create_lists_show_revoke_round_trip(
             ctx,
         )
     assert created["connector"] == "github"
-    assert created["kind"] == "outbound"
+    assert created["outbound"] is True
+    assert created["importable"] is False
     # The full token + URL are returned ONLY here.
     assert created["webhook_token"] and len(created["webhook_token"]) > 10
     assert created["webhook_url"].startswith("/api/webhooks/github/")
@@ -304,7 +305,7 @@ async def test_import_now_rejects_outbound_only(
             session=s,
             extras={"import_dispatcher": fake},
         )
-        with pytest.raises(ToolError, match="outbound-only"):
+        with pytest.raises(ToolError, match="no bulk-import action"):
             await registry.call_tool(
                 "bsvibe_connectors_import_now", {"connector_id": str(row_id)}, ctx
             )

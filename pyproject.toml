@@ -299,17 +299,10 @@ ignore_imports = [
     # write follows the same active-set semantics as the REST PATCH.
     "backend.mcp.tools.workspace_tools -> backend.router.infrastructure.repositories",
     "backend.mcp.tools.connectors_tools -> backend.api.v1.connectors",
+    "backend.mcp.tools.connectors_tools -> backend.connectors.catalog",
     "backend.mcp.tools.connectors_tools -> backend.connectors.db",
-    "backend.mcp.tools.connectors_tools -> backend.connectors.kinds",
     "backend.mcp.tools.connectors_tools -> backend.extensions.plugin.base",
-    "backend.mcp.tools.connectors_tools -> backend.extensions.plugin.webhook_registry",
     "backend.mcp.tools.connectors_tools -> backend.router.accounts.crypto",
-    # Transitive chain head — connector_dispatch pulls in router.accounts /
-    # connectors.db / extensions.plugin internally. The single MCP touch-point
-    # is the OUTBOUND_EVENT_BUILDERS map (the same registerable-connector gate
-    # the REST surface uses); the contract still bounds every other backend.mcp
-    # module from those subtrees.
-    "backend.mcp.tools.connectors_tools -> backend.workflow.application.delivery.connector_dispatch",
     # Lift D3b — UI-parity workflow tools (bindings / decisions / routing
     # rules). Same pattern as D3a: each new tool module calls the SAME repo /
     # service primitives the REST surface uses so MCP and PWA paths stay one

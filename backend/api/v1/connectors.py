@@ -19,21 +19,22 @@ never-return-secret pattern):
   expose a masked hint (last 4 chars) — never the full token, which is itself
   a capability (it is half of the ingress auth).
 
-The allowed connector set is the set of built-in inbound parsers; it is read
-from the engine's process-wide
-:func:`backend.extensions.plugin.webhook_registry.get_default_registry` so
-the CRUD and the ingress agree on exactly which connectors exist (the same
-registry the :class:`ConnectorInboundResolver` dispatches through).
+The allowed connector set is the derived connector catalog
+(:func:`backend.connectors.catalog.get_connector_catalog`, INV-1 single source
+of truth). A connector is creatable when it appears in the catalog AND is
+``user_connectable`` — so suppressed connectors (linear / trello) are rejected
+at the front door even though their outbound builders still deliver existing
+bindings.
 
 Lift B — inbound import surface. Connectors whose import path is a *pull*
 (scan an Obsidian vault, parse a Claude/GPT conversations.json export,
 walk a Notion workspace) get a third entry point:
 :func:`POST /api/v1/connectors/{id}/import`. The route resolves the bound
-connector, looks up its plugin's import action via
-:data:`backend.connectors.kinds.INBOUND_IMPORT_ACTIONS`, and dispatches
-through :class:`PluginRunner` with the bound ``delivery_config`` injected
-into the action's :class:`SkillContext.config` — so the founder UI can
-trigger a bulk import without re-typing the binding's config every time.
+connector, looks up its plugin's import action via the catalog's
+``import_action``, and dispatches through :class:`PluginRunner` with the bound
+``delivery_config`` injected into the action's :class:`SkillContext.config` —
+so the founder UI can trigger a bulk import without re-typing the binding's
+config every time.
 """
 
 from __future__ import annotations
@@ -58,20 +59,12 @@ from backend.api.deps import get_db_session, get_workspace_id
 from backend.api.webhooks import get_credential_cipher
 from backend.connectors.auth.db import ConnectorOAuthTokenRow
 from backend.connectors.auth.resolve import resolve_connector_credentials
+from backend.connectors.catalog import ConnectorInfo, get_connector_catalog
 from backend.connectors.db import ConnectorAccountRow
-from backend.connectors.kinds import (
-    ConnectorKind,
-    connector_kind,
-    import_action_for,
-    is_inbound,
-    is_known_connector,
-)
 from backend.extensions.plugin.base import PluginMeta, PluginRunError
 from backend.extensions.plugin.context import SkillContext
 from backend.extensions.plugin.runner import PluginRunner
-from backend.extensions.plugin.webhook_registry import get_default_registry
 from backend.router.accounts.crypto import CredentialCipher
-from backend.workflow.application.delivery.connector_dispatch import OUTBOUND_EVENT_BUILDERS
 
 logger = structlog.get_logger(__name__)
 
@@ -113,18 +106,13 @@ class ConnectorCreate(BaseModel):
     @field_validator("connector")
     @classmethod
     def _known_connector(cls, v: str) -> str:
-        # A connector is registerable when it appears in the static kind map
-        # (inbound / outbound / both) OR has an inbound webhook parser (the
-        # process-wide registry the public ingress dispatches through) OR an
-        # outbound delivery builder. Lift B adds the kind-map branch so the
-        # founder-visible inbound connectors (obsidian / claude / gpt) — which
-        # have NEITHER a webhook parser NOR an outbound builder — are
-        # registerable through this front door.
-        if (
-            not is_known_connector(v)
-            and not get_default_registry().is_known(v)
-            and v not in OUTBOUND_EVENT_BUILDERS
-        ):
+        # A connector is creatable when it is in the derived catalog AND is
+        # user-connectable (INV-1). Suppressed connectors (linear / trello)
+        # are IN the catalog — their outbound builders keep delivering
+        # existing bindings — but are NOT creatable via this front door,
+        # so they read as "unknown" to the founder API (product decision).
+        info = get_connector_catalog().get(v)
+        if info is None or not info.user_connectable:
             raise ValueError(f"unknown connector {v!r}")
         return v
 
@@ -142,9 +130,13 @@ class ConnectorCreated(BaseModel):
     delivery_config: dict[str, Any]
     webhook_token: str
     webhook_url: str
-    # Lift B — surface the connector kind so the PWA can branch its form +
-    # show / hide the Import-now action without re-asking the backend.
-    kind: ConnectorKind | None
+    # INV-1 — the three orthogonal capability flags (derived from the catalog)
+    # so the PWA can branch its create form + show / hide the Import-now action
+    # without re-asking the backend. Replaces the retired inbound/outbound/both
+    # ``kind`` enum.
+    outbound: bool
+    importable: bool
+    webhook_trigger: bool
 
 
 class ConnectorOut(BaseModel):
@@ -159,9 +151,12 @@ class ConnectorOut(BaseModel):
     created_at: datetime
     delivery_config: dict[str, Any]
     token_hint: str
-    # Lift B — kind so the row UI can branch on inbound/both, and the
-    # last-import telemetry the import endpoint stamps after each run.
-    kind: ConnectorKind | None
+    # INV-1 — capability flags (derived from the catalog) so the row UI can
+    # branch on outbound / importable / webhook_trigger, plus the last-import
+    # telemetry the import endpoint stamps after each run.
+    outbound: bool
+    importable: bool
+    webhook_trigger: bool
     last_import_at: datetime | None
     last_import_count: int | None
     # Lift 1 — for oauth2 connectors (github, …): the connected account's
@@ -196,9 +191,40 @@ class ConnectorImportResult(BaseModel):
     detail: dict[str, Any]
 
 
+class CatalogEntry(BaseModel):
+    """One founder-visible connector in the derived catalog (INV-1).
+
+    Carries the capability flags the PWA branches on when rendering the
+    create form + the "Import now" button, plus the artifact types an
+    outbound connector delivers and the import action an importable one runs.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str
+    outbound: bool
+    importable: bool
+    webhook_trigger: bool
+    artifact_types: list[str]
+    import_action: str | None
+
+
+class ConnectorCatalog(BaseModel):
+    """The founder-visible connector catalog (user-connectable entries only)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    connectors: list[CatalogEntry]
+
+
 def _token_hint(webhook_token: str) -> str:
     """Last 4 chars only — enough to recognise, not enough to use."""
     return f"...{webhook_token[-4:]}"
+
+
+def _capabilities(connector: str) -> ConnectorInfo | None:
+    """The derived capability flags for ``connector`` (``None`` if unknown)."""
+    return get_connector_catalog().get(connector)
 
 
 def _row_to_out(
@@ -207,6 +233,7 @@ def _row_to_out(
     oauth_account_label: str | None = None,
     needs_reauth: bool = False,
 ) -> ConnectorOut:
+    info = _capabilities(row.connector)
     return ConnectorOut(
         id=row.id,
         connector=row.connector,
@@ -215,7 +242,9 @@ def _row_to_out(
         created_at=row.created_at,
         delivery_config=row.delivery_config,
         token_hint=_token_hint(row.webhook_token),
-        kind=connector_kind(row.connector),
+        outbound=bool(info and info.outbound),
+        importable=bool(info and info.importable),
+        webhook_trigger=bool(info and info.webhook_trigger),
         last_import_at=row.last_import_at,
         last_import_count=row.last_import_count,
         oauth_account_label=oauth_account_label,
@@ -267,6 +296,31 @@ async def list_connectors(
     ]
 
 
+@router.get("/catalog")
+async def get_catalog() -> ConnectorCatalog:
+    """The founder-visible connector catalog (INV-1, derived from PluginMeta).
+
+    Returns only ``user_connectable`` entries — suppressed connectors
+    (linear / trello) are naturally absent — each carrying its capability
+    flags so the PWA can branch the create form (outbound target config vs
+    import binding) and show / hide the "Import now" button without a second
+    hardcoded map.
+    """
+    entries = [
+        CatalogEntry(
+            name=info.name,
+            outbound=info.outbound,
+            importable=info.importable,
+            webhook_trigger=info.webhook_trigger,
+            artifact_types=list(info.artifact_types),
+            import_action=info.import_action,
+        )
+        for info in sorted(get_connector_catalog().values(), key=lambda i: i.name)
+        if info.user_connectable
+    ]
+    return ConnectorCatalog(connectors=entries)
+
+
 @router.post("", status_code=status.HTTP_201_CREATED)
 async def create_connector(
     payload: ConnectorCreate,
@@ -287,6 +341,7 @@ async def create_connector(
     )
     session.add(row)
     await session.commit()
+    info = _capabilities(row.connector)
     return ConnectorCreated(
         id=row.id,
         connector=row.connector,
@@ -296,7 +351,9 @@ async def create_connector(
         delivery_config=row.delivery_config,
         webhook_token=webhook_token,
         webhook_url=_webhook_url(row.connector, webhook_token),
-        kind=connector_kind(row.connector),
+        outbound=bool(info and info.outbound),
+        importable=bool(info and info.importable),
+        webhook_trigger=bool(info and info.webhook_trigger),
     )
 
 
@@ -354,9 +411,12 @@ class ImportDispatcher:
         meta = self._plugins_by_name.get(row.connector)
         if meta is None:
             raise PluginRunError(f"import: plugin {row.connector!r} not loaded")
-        action_name = import_action_for(row.connector)
+        # The import-trigger action is declared on the plugin itself (PR-5,
+        # ``PluginMeta.import_action_name``) — the same value the catalog's
+        # ``import_action`` surfaces. The importable gate rejects earlier;
+        # this is a defensive guard.
+        action_name = meta.import_action_name
         if action_name is None:
-            # The kind gate should reject this earlier; defensive guard.
             raise PluginRunError(f"import: no bulk-import action for connector {row.connector!r}")
 
         # The API credential carried under the ``token`` slot the connector-
@@ -464,22 +524,23 @@ async def trigger_import(
     session: Annotated[AsyncSession, Depends(get_db_session)],
     dispatcher: Annotated[ImportDispatcher, Depends(get_import_dispatcher)],
 ) -> ConnectorImportResult:
-    """Trigger an inbound bulk import for an inbound/both connector.
+    """Trigger an inbound bulk import for an importable connector.
 
     Resolves the binding (workspace-scoped) → looks up its plugin's
-    import-trigger ``@p.action`` via
-    :data:`backend.connectors.kinds.INBOUND_IMPORT_ACTIONS` → dispatches
-    through :class:`PluginRunner` with the binding's ``delivery_config``
-    injected into the action's :class:`SkillContext.config`. Synchronous
-    v1: the import runs to completion within the request and the
-    response carries the count + timestamp. Async / streamed import is
-    a follow-up (deferred per the lift's "out of scope").
+    import-trigger ``@p.action`` via the catalog's ``import_action`` →
+    dispatches through :class:`PluginRunner` with the binding's
+    ``delivery_config`` injected into the action's
+    :class:`SkillContext.config`. Synchronous v1: the import runs to
+    completion within the request and the response carries the count +
+    timestamp. Async / streamed import is a follow-up (deferred per the
+    lift's "out of scope").
 
     Failure modes:
 
     * 404 — connector not found in this workspace
-    * 422 — connector is outbound-only OR has no bulk-import action (e.g.
-      ``slack``, whose inbound path is push-only / webhook-driven)
+    * 422 — connector is not importable: either outbound-only OR its inbound
+      path is push-only / webhook-driven (e.g. ``slack``) so there is no
+      bulk-import action
     * 502 — the plugin import action raised (PluginRunError)
 
     Emits ``audit.connector.import_triggered`` + ``…import_completed``
@@ -499,19 +560,16 @@ async def trigger_import(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"connector {connector_id} not found",
         )
-    if not is_inbound(row.connector):
+    info = _capabilities(row.connector)
+    if info is None or not info.importable:
+        # Not importable — no bulk-import action. (Outbound delivery and
+        # webhook ingress are separate capabilities; the retired kind enum's
+        # "outbound-only" vs "push-only" split was hand-assigned and is not
+        # derivable from the capability flags — slack / github / telegram are
+        # all outbound + webhook_trigger but not importable.)
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=(f"connector {row.connector!r} is outbound-only — no bulk import available"),
-        )
-    if import_action_for(row.connector) is None:
-        # ``slack`` lands here — kind="both" but inbound is push-only.
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=(
-                f"connector {row.connector!r} has no bulk-import action — "
-                f"its inbound path is webhook-driven (push-only)"
-            ),
+            detail=f"connector {row.connector!r} has no bulk-import action available",
         )
 
     logger.info(
@@ -558,12 +616,15 @@ async def trigger_import(
 
 
 __all__ = [
+    "CatalogEntry",
+    "ConnectorCatalog",
     "ConnectorCreate",
     "ConnectorCreated",
     "ConnectorImportResult",
     "ConnectorOut",
     "ImportDispatcher",
     "create_connector",
+    "get_catalog",
     "get_import_dispatcher",
     "list_connectors",
     "revoke_connector",

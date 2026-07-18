@@ -33,18 +33,11 @@ from sqlalchemy import select
 
 from backend.api.v1.connectors import get_import_dispatcher
 from backend.connectors.auth import service as oauth_service
+from backend.connectors.catalog import get_connector_catalog
 from backend.connectors.db import ConnectorAccountRow
-from backend.connectors.kinds import (
-    connector_kind,
-    import_action_for,
-    is_inbound,
-    is_known_connector,
-)
 from backend.extensions.plugin.base import PluginRunError
-from backend.extensions.plugin.webhook_registry import get_default_registry
 from backend.mcp.api import Tool, ToolContext, ToolError, ToolRegistry
 from backend.router.accounts.crypto import CredentialCipher, _key_from_settings
-from backend.workflow.application.delivery.connector_dispatch import OUTBOUND_EVENT_BUILDERS
 
 _TOKEN_BYTES = 32
 _IMPORTED_COUNT_KEYS = (
@@ -68,6 +61,7 @@ def _token_hint(webhook_token: str) -> str:
 
 
 def _row_to_dict(row: ConnectorAccountRow) -> dict[str, Any]:
+    info = get_connector_catalog().get(row.connector)
     return {
         "id": str(row.id),
         "workspace_id": str(row.workspace_id),
@@ -76,7 +70,9 @@ def _row_to_dict(row: ConnectorAccountRow) -> dict[str, Any]:
         "is_active": row.is_active,
         "delivery_config": row.delivery_config,
         "token_hint": _token_hint(row.webhook_token),
-        "kind": connector_kind(row.connector),
+        "outbound": bool(info and info.outbound),
+        "importable": bool(info and info.importable),
+        "webhook_trigger": bool(info and info.webhook_trigger),
         "last_import_at": row.last_import_at.isoformat() if row.last_import_at else None,
         "last_import_count": row.last_import_count,
         "created_at": row.created_at.isoformat() if row.created_at else None,
@@ -84,12 +80,9 @@ def _row_to_dict(row: ConnectorAccountRow) -> dict[str, Any]:
 
 
 def _is_registerable_connector(name: str) -> bool:
-    """Same gate the REST :class:`ConnectorCreate` validator applies."""
-    return (
-        is_known_connector(name)
-        or get_default_registry().is_known(name)
-        or name in OUTBOUND_EVENT_BUILDERS
-    )
+    """Same gate the REST :class:`ConnectorCreate` validator applies (INV-1)."""
+    info = get_connector_catalog().get(name)
+    return info is not None and info.user_connectable
 
 
 def _webhook_url(connector: str, webhook_token: str) -> str:
@@ -147,6 +140,31 @@ async def _h_show(args: ConnectorsShowInput, ctx: ToolContext) -> Any:
 
 
 # ---------------------------------------------------------------------------
+# bsvibe_connectors_catalog — founder-visible connector catalog (INV-1)
+# ---------------------------------------------------------------------------
+class ConnectorsCatalogInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+async def _h_catalog(_args: ConnectorsCatalogInput, _ctx: ToolContext) -> Any:
+    """The user-connectable connector catalog, mirroring GET /connectors/catalog."""
+    return _Envelope(
+        [
+            {
+                "name": info.name,
+                "outbound": info.outbound,
+                "importable": info.importable,
+                "webhook_trigger": info.webhook_trigger,
+                "artifact_types": list(info.artifact_types),
+                "import_action": info.import_action,
+            }
+            for info in sorted(get_connector_catalog().values(), key=lambda i: i.name)
+            if info.user_connectable
+        ]
+    )
+
+
+# ---------------------------------------------------------------------------
 # bsvibe_connectors_create
 # ---------------------------------------------------------------------------
 class ConnectorsCreateInput(BaseModel):
@@ -175,7 +193,9 @@ class ConnectorsCreateOutput(BaseModel):
     delivery_config: dict[str, Any]
     webhook_token: str
     webhook_url: str
-    kind: str | None
+    outbound: bool
+    importable: bool
+    webhook_trigger: bool
     created_at: str | None
 
 
@@ -196,6 +216,7 @@ async def _h_create(args: ConnectorsCreateInput, ctx: ToolContext) -> Any:
     )
     ctx.session.add(row)
     await ctx.session.commit()
+    info = get_connector_catalog().get(row.connector)
     return ConnectorsCreateOutput(
         id=str(row.id),
         connector=row.connector,
@@ -204,7 +225,9 @@ async def _h_create(args: ConnectorsCreateInput, ctx: ToolContext) -> Any:
         delivery_config=row.delivery_config,
         webhook_token=webhook_token,
         webhook_url=_webhook_url(row.connector, webhook_token),
-        kind=connector_kind(row.connector),
+        outbound=bool(info and info.outbound),
+        importable=bool(info and info.importable),
+        webhook_trigger=bool(info and info.webhook_trigger),
         created_at=row.created_at.isoformat() if row.created_at else None,
     )
 
@@ -263,13 +286,9 @@ async def _h_import_now(args: ConnectorsImportNowInput, ctx: ToolContext) -> Any
     row = await _resolve_connector(ctx, args.connector_id)
     if not row.is_active:
         raise ToolError(f"connector not found: {args.connector_id}")
-    if not is_inbound(row.connector):
-        raise ToolError(f"connector {row.connector!r} is outbound-only — no bulk import available")
-    if import_action_for(row.connector) is None:
-        raise ToolError(
-            f"connector {row.connector!r} has no bulk-import action — "
-            f"its inbound path is webhook-driven (push-only)"
-        )
+    info = get_connector_catalog().get(row.connector)
+    if info is None or not info.importable:
+        raise ToolError(f"connector {row.connector!r} has no bulk-import action available")
     dispatcher = await _build_dispatcher(ctx)
     try:
         detail = await dispatcher.import_for(row=row, workspace_id=ctx.principal.workspace_id)
@@ -478,6 +497,21 @@ def register_connectors_tools(registry: ToolRegistry) -> None:
             input_schema=ConnectorsShowInput,
             output_schema=_Envelope,
             handler=_h_show,
+            required_scopes=("mcp:read",),
+        )
+    )
+    registry.register(
+        Tool(
+            name="bsvibe_connectors_catalog",
+            description=(
+                "List the founder-visible connector catalog (INV-1) — the "
+                "user-connectable connectors with their capability flags "
+                "(outbound / importable / webhook_trigger), artifact_types, and "
+                "import_action. Mirrors GET /api/v1/connectors/catalog."
+            ),
+            input_schema=ConnectorsCatalogInput,
+            output_schema=_Envelope,
+            handler=_h_catalog,
             required_scopes=("mcp:read",),
         )
     )

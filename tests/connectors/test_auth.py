@@ -9,7 +9,8 @@ Covers the common skeleton's foundation:
   (GitHub App installation token, Sentry JWT) is the optional ``service_token``.
 * :data:`CONNECTOR_AUTH` — the static classification of every founder-visible
   connector into ``oauth2`` / ``bearer_token`` / ``local_path`` (design §3.1),
-  keyed identically to :data:`backend.connectors.kinds.CONNECTOR_KINDS`.
+  keyed identically to the user-connectable entries of the derived catalog
+  (:func:`backend.connectors.catalog.get_connector_catalog`, INV-1).
 """
 
 from __future__ import annotations
@@ -33,7 +34,7 @@ from backend.connectors.auth.spec import (
     oauth_connectors,
 )
 from backend.connectors.auth.tokenset import TokenSet
-from backend.connectors.kinds import CONNECTOR_KINDS
+from backend.connectors.catalog import get_connector_catalog
 
 # ── TokenSet ──────────────────────────────────────────────────────────
 
@@ -146,9 +147,13 @@ def test_registry_unknown_returns_none() -> None:
 
 
 def test_every_known_connector_is_classified() -> None:
-    # The auth classification must cover exactly the same connector set the
-    # kind map does — no connector visible in the UI without an auth spec.
-    assert set(CONNECTOR_AUTH) == set(CONNECTOR_KINDS)
+    # The auth classification must cover exactly the founder-visible connector
+    # set — every user-connectable catalog entry needs an auth spec, and no
+    # spec exists for a connector the catalog doesn't surface.
+    user_connectable = {
+        name for name, info in get_connector_catalog().items() if info.user_connectable
+    }
+    assert set(CONNECTOR_AUTH) == user_connectable
 
 
 def test_oauth_connectors_match_design() -> None:
