@@ -17,6 +17,7 @@ import structlog
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.workflow.channels import TRIGGER_EVENTS
 from backend.workflow.infrastructure.intake.db import TriggerEventRow
 
 logger = structlog.get_logger(__name__)
@@ -43,13 +44,15 @@ async def record(
     session: AsyncSession,
     *,
     row: TriggerEventRow,
+    producer_id: str,
 ) -> None:
-    """Add ``row`` to the session. Caller flushes/commits the transaction.
+    """Write ``row`` through the ``trigger_events`` channel, then flush.
 
-    Conflicts surface as :class:`sqlalchemy.exc.IntegrityError` at flush
-    time — callers should catch and treat as duplicate.
+    The channel guards the add behind ``producer_id`` (INV-1); the flush
+    surfaces conflicts as :class:`sqlalchemy.exc.IntegrityError` so callers
+    can catch and treat as duplicate. The caller still owns commit/rollback.
     """
-    session.add(row)
+    TRIGGER_EVENTS.emit(session, row, producer_id=producer_id)
     await session.flush()
     logger.debug(
         "idempotency_recorded",

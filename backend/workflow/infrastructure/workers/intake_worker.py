@@ -33,6 +33,7 @@ from backend.workflow.application.stages.intake import (
     filtered_out_record,
     receive,
 )
+from backend.workflow.channels import TRIGGER_EVENTS
 from backend.workflow.infrastructure.intake.db import RequestRow, RequestStatus, TriggerEventRow
 from backend.workflow.infrastructure.repositories import (
     SqlAlchemyIdempotencyRepository,
@@ -172,7 +173,10 @@ class IntakeWorker(BaseWorker):
         for a small batch.
         """
         repo = SqlAlchemyIdempotencyRepository(session)
-        rows = await repo.list_undrained(limit=self._cfg.batch_size)
+        rows = await TRIGGER_EVENTS.consume(
+            consumer_id="worker:intake_worker",
+            claim=lambda: repo.list_undrained(limit=self._cfg.batch_size),
+        )
         for r in rows:
             if (r.payload or {}).get(RECEIVE_FILTERED_KEY) is not None:
                 continue
