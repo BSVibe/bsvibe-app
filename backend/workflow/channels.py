@@ -33,12 +33,28 @@ workspaces) to sweep it to ``EXPIRED``. The founder-facing REST/MCP reads
 (``get`` / ``list_pending_*`` / ``list_resolved_*``) are API reads, not
 worker-claims, so they stay off the channel. A held item is machine-enqueued,
 so ``human_origin=False`` and there is no authoring surface.
+
+``delivery_events`` is the outbound-dispatch queue (Workflow §12.5 #8 — Bundle
+G). It has three machine producers, all in
+:mod:`~backend.workflow.domain.verified_deliverable` — the single source of
+truth for the artifact-write contract:
+:func:`~backend.workflow.domain.verified_deliverable.write_verified_deliverable`
+(the verified terminal, shared by the native agent loop and the external CLI
+executor), :func:`~backend.workflow.domain.verified_deliverable.write_partial_deliverable`
+(each mid-loop ``emit_deliverable`` tool call), and
+:func:`~backend.workflow.domain.verified_deliverable.write_answer_deliverable`
+(a knowledge-only answer). Its sole consumer is the
+:class:`~backend.workflow.infrastructure.workers.delivery_worker.DeliveryWorker`,
+which claims a batch under ``FOR UPDATE SKIP LOCKED`` and dispatches (or holds
+via Safe Mode) each row before deleting it. There are no API reads of this row
+— it is a pure internal queue. Deliver events are machine-emitted, so
+``human_origin=False`` and there is no authoring surface.
 """
 
 from __future__ import annotations
 
 from backend.channels import Channel
-from backend.workflow.infrastructure.delivery.db import SafeModeQueueItemRow
+from backend.workflow.infrastructure.delivery.db import DeliveryEventRow, SafeModeQueueItemRow
 from backend.workflow.infrastructure.intake.db import RequestRow, TriggerEventRow
 
 TRIGGER_EVENTS: Channel[TriggerEventRow] = Channel(
@@ -69,4 +85,16 @@ SAFE_MODE_QUEUE_ITEMS: Channel[SafeModeQueueItemRow] = Channel(
     human_origin=False,
 )
 
-__all__ = ["REQUESTS", "SAFE_MODE_QUEUE_ITEMS", "TRIGGER_EVENTS"]
+DELIVERY_EVENTS: Channel[DeliveryEventRow] = Channel(
+    name="delivery_events",
+    row=DeliveryEventRow,
+    producers=(
+        "workflow:verified_deliverable",
+        "workflow:partial_deliverable",
+        "workflow:answer_deliverable",
+    ),
+    consumers=("worker:delivery_worker",),
+    human_origin=False,
+)
+
+__all__ = ["DELIVERY_EVENTS", "REQUESTS", "SAFE_MODE_QUEUE_ITEMS", "TRIGGER_EVENTS"]

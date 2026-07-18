@@ -13,8 +13,18 @@ from __future__ import annotations
 from typing import Any
 
 from backend.channels._core import Channel
-from backend.workflow.channels import REQUESTS, SAFE_MODE_QUEUE_ITEMS, TRIGGER_EVENTS
+from backend.workflow.channels import (
+    DELIVERY_EVENTS,
+    REQUESTS,
+    SAFE_MODE_QUEUE_ITEMS,
+    TRIGGER_EVENTS,
+)
 
-ALL_CHANNELS: tuple[Channel[Any], ...] = (TRIGGER_EVENTS, REQUESTS, SAFE_MODE_QUEUE_ITEMS)
+ALL_CHANNELS: tuple[Channel[Any], ...] = (
+    TRIGGER_EVENTS,
+    REQUESTS,
+    SAFE_MODE_QUEUE_ITEMS,
+    DELIVERY_EVENTS,
+)
 
 __all__ = ["ALL_CHANNELS"]

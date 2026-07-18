@@ -145,11 +145,13 @@ async def write_verified_deliverable(
     # as transactional container): the DeliveryWorker threads it onto the
     # SafeModeQueueItemRow so the founder can approve every queued item of a
     # run together.
+    from backend.workflow.channels import DELIVERY_EVENTS  # noqa: PLC0415 — cross-domain, local
     from backend.workflow.infrastructure.delivery.db import (
         DeliveryEventRow,  # noqa: PLC0415 — cross-domain, local
     )
 
-    session.add(
+    DELIVERY_EVENTS.emit(
+        session,
         DeliveryEventRow(
             id=uuid.uuid4(),
             workspace_id=run.workspace_id,
@@ -157,7 +159,8 @@ async def write_verified_deliverable(
             deliverable_id=deliverable.id,
             artifact_type=DeliverableType.CODE.value,
             payload={"artifact_refs": artifact_refs, "summary": summary[:_SETTLE_SUMMARY_CAP]},
-        )
+        ),
+        producer_id="workflow:verified_deliverable",
     )
 
     # Settle observation — the run-trace/observation side channel (§1).
@@ -286,11 +289,13 @@ async def write_partial_deliverable(
     session.add(deliverable)
     await session.flush()
 
+    from backend.workflow.channels import DELIVERY_EVENTS  # noqa: PLC0415 — cross-domain, local
     from backend.workflow.infrastructure.delivery.db import (
         DeliveryEventRow,  # noqa: PLC0415 — cross-domain, local
     )
 
-    session.add(
+    DELIVERY_EVENTS.emit(
+        session,
         DeliveryEventRow(
             id=uuid.uuid4(),
             workspace_id=run.workspace_id,
@@ -298,7 +303,8 @@ async def write_partial_deliverable(
             deliverable_id=deliverable.id,
             artifact_type=artifact_type,
             payload=dict(payload),
-        )
+        ),
+        producer_id="workflow:partial_deliverable",
     )
     await session.flush()
     logger.info(
@@ -362,11 +368,13 @@ async def write_answer_deliverable(
     session.add(deliverable)
     await session.flush()
 
+    from backend.workflow.channels import DELIVERY_EVENTS  # noqa: PLC0415 — cross-domain, local
     from backend.workflow.infrastructure.delivery.db import (
         DeliveryEventRow,  # noqa: PLC0415 — cross-domain, local
     )
 
-    session.add(
+    DELIVERY_EVENTS.emit(
+        session,
         DeliveryEventRow(
             id=uuid.uuid4(),
             workspace_id=run.workspace_id,
@@ -377,7 +385,8 @@ async def write_answer_deliverable(
                 "kind": ANSWER_DELIVERABLE_KIND,
                 "answer": answer[:_SETTLE_SUMMARY_CAP],
             },
-        )
+        ),
+        producer_id="workflow:answer_deliverable",
     )
 
     settle_payload: dict[str, Any] = {
