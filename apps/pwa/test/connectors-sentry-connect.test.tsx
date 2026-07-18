@@ -17,6 +17,18 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/api/connectors", () => ({
   listConnectors: vi.fn(async () => []),
+  getConnectorCatalog: vi.fn(async () => ({
+    connectors: ["github", "slack", "telegram", "discord", "notion", "sentry", "obsidian"].map(
+      (name) => ({
+        name,
+        outbound: true,
+        importable: ["obsidian", "claude", "gpt", "notion"].includes(name),
+        webhook_trigger: false,
+        artifact_types: [],
+        import_action: null,
+      }),
+    ),
+  })),
   createConnector: vi.fn(),
   revokeConnector: vi.fn(),
   triggerImport: vi.fn(),

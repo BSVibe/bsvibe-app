@@ -16,11 +16,27 @@
  *  omitted entirely when blank rather than sent as an empty string. */
 
 import { apiFetch } from "./client";
-import type { Connector, ConnectorCreate, ConnectorCreated, ConnectorImportResult } from "./types";
+import type {
+  Connector,
+  ConnectorCatalog,
+  ConnectorCreate,
+  ConnectorCreated,
+  ConnectorImportResult,
+} from "./types";
 
 /** Registered connectors for the active workspace (newest first). */
 export function listConnectors(): Promise<Connector[]> {
   return apiFetch<Connector[]>("/api/v1/connectors");
+}
+
+/** The founder-visible connector catalog (INV-1 single source of truth,
+ *  backend derives it from PluginMeta). Drives the create-form picker and the
+ *  AVAILABLE cards — only `user_connectable` connectors are returned, so
+ *  suppressed ones (linear / trello) are naturally absent. Each entry carries
+ *  the capability flags the UI branches on (outbound / importable /
+ *  webhook_trigger). */
+export function getConnectorCatalog(): Promise<ConnectorCatalog> {
+  return apiFetch<ConnectorCatalog>("/api/v1/connectors/catalog");
 }
 
 /** Register a connector. The 201 response carries the one-time `webhook_token`

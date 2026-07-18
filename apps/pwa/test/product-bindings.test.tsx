@@ -51,6 +51,9 @@ function connector(over: Partial<Connector> = {}): Connector {
     created_at: "2026-05-26T00:00:00Z",
     delivery_config: {},
     token_hint: "...abcd",
+    outbound: true,
+    importable: false,
+    webhook_trigger: true,
     ...over,
   };
 }
