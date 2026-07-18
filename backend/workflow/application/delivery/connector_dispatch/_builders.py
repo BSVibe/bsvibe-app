@@ -13,8 +13,8 @@ Content (title/body) is sourced from the deliverable; routing / system fields
 The :data:`OUTBOUND_EVENT_BUILDERS` map IS the extensible seam: a connector with
 no entry here has no v1 outbound event-shaping and is skipped (logged), not
 errored. v1 ships notion + slack + email-sender + telegram + discord + linear
-+ trello. github is a special case (needs git-ops, not a simple event dict) —
-see :mod:`._github`.
++ trello + sentry. github is a special case (needs git-ops, not a simple event
+dict) — see :mod:`._github`.
 """
 
 from __future__ import annotations
@@ -305,11 +305,38 @@ def build_trello_event(content: dict[str, Any], delivery_config: dict[str, Any])
     )
 
 
+def build_sentry_event(content: dict[str, Any], delivery_config: dict[str, Any]) -> ShapedEvent:
+    """Shape a Deliverable into sentry's ``deliver_resolve`` event.
+
+    * ``issue_id`` — routing / target, from the stable ``delivery_config``
+      (never derived from the work text). A missing / empty ``issue_id`` is a
+      misconfigured delivery target → ``ValueError`` (mirrors notion raising on
+      a missing ``parent_page_id``).
+
+    Sentry's ``@p.outbound`` (``deliver_resolve``) resolves an issue by id — it
+    accepts ONLY ``issue_id`` (no title / body), so the deliverable ``content``
+    is not mapped onto any event field (mapping it would invent fields the
+    sentry outbound does not support).
+
+    ``artifact_type`` is ``sentry_issue_update`` (what sentry's ``@p.outbound``
+    declares); the decrypted account secret is injected as ``auth_token`` (the
+    slot the sentry plugin's ``_client`` reads).
+    """
+    issue_id = delivery_config.get("issue_id")
+    if not issue_id:
+        raise ValueError("sentry delivery_config missing required 'issue_id'")
+    return ShapedEvent(
+        artifact_type="sentry_issue_update",
+        event={"issue_id": str(issue_id)},
+        credential_key="auth_token",
+    )
+
+
 # The extensible seam: a connector with no entry here has no v1 outbound
 # event-shaping and is skipped (logged). This ships notion + slack +
-# email-sender + telegram + discord + linear + trello; github (needs a git-ops
-# layer) and sentry follow the SAME (content, config) -> ShapedEvent shape when
-# their mappers land. Keys MUST match the plugin ``name=`` (and the
+# email-sender + telegram + discord + linear + trello + sentry; github (needs a
+# git-ops layer, not a simple event dict) is the special case that follows the
+# ``_github`` path instead. Keys MUST match the plugin ``name=`` (and the
 # ``connector_accounts.connector`` value) so binding resolution lines up — note
 # the email connector's name is ``email-sender``, not ``email``.
 OUTBOUND_EVENT_BUILDERS: dict[str, OutboundEventBuilder] = {
@@ -320,6 +347,7 @@ OUTBOUND_EVENT_BUILDERS: dict[str, OutboundEventBuilder] = {
     "discord": build_discord_event,
     "linear": build_linear_event,
     "trello": build_trello_event,
+    "sentry": build_sentry_event,
 }
 
 
@@ -333,6 +361,7 @@ __all__ = [
     "build_email_event",
     "build_linear_event",
     "build_notion_event",
+    "build_sentry_event",
     "build_slack_event",
     "build_telegram_event",
     "build_trello_event",

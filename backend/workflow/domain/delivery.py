@@ -30,6 +30,7 @@ ArtifactType = Literal[
     "discord_message",
     "issue",
     "card",
+    "sentry_issue_update",
 ]
 """Workflow §3.1 — the canonical artifact-type tags downstream
 plugins understand.
@@ -38,7 +39,8 @@ The first five mirror :class:`~backend.workflow.infrastructure.db.DeliverableTyp
 *deliverable's own* type). The rest are connector-outbound dispatch tags: a
 connector's ``@p.outbound`` declares the artifact_type it accepts (slack →
 ``slack_message``, email-sender → ``email``, telegram → ``telegram_message``,
-discord → ``discord_message``, linear → ``issue``, trello → ``card``), and the
+discord → ``discord_message``, linear → ``issue``, trello → ``card``, sentry →
+``sentry_issue_update``), and the
 connector event-builders in :mod:`backend.workflow.application.delivery.connector_dispatch` dispatch
 the shaped event under that tag so the dispatcher's
 ``artifact_type in cap.artifact_types`` match selects the right outbound."""

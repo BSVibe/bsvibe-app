@@ -25,6 +25,7 @@ from backend.workflow.application.delivery.connector_dispatch import (
     build_email_event,
     build_linear_event,
     build_notion_event,
+    build_sentry_event,
     build_slack_event,
     build_telegram_event,
     build_trello_event,
@@ -339,6 +340,32 @@ class TestTrelloEventBuilder:
             build_trello_event({"summary": "S"}, {"list_id": "L1"})
 
 
+class TestSentryEventBuilder:
+    def test_issue_id_from_config_artifact_type_and_credential(self) -> None:
+        shaped = build_sentry_event(
+            {"summary": "Resolve the crash"},
+            {"issue_id": "ISSUE-42"},
+        )
+        assert shaped.artifact_type == "sentry_issue_update"
+        # Sentry's outbound resolves an issue by id — auth_token is the secret
+        # slot its ``_client`` reads.
+        assert shaped.credential_key == "auth_token"
+        # Resolve-by-id accepts ONLY issue_id (no title/body mapped from content).
+        assert shaped.event == {"issue_id": "ISSUE-42"}
+
+    def test_routing_comes_from_config_not_content(self) -> None:
+        # Even if content carried an issue_id (it must not), config is the source.
+        shaped = build_sentry_event(
+            {"summary": "S", "issue_id": "FROM_CONTENT"},
+            {"issue_id": "FROM_CONFIG"},
+        )
+        assert shaped.event["issue_id"] == "FROM_CONFIG"
+
+    def test_missing_issue_id_raises(self) -> None:
+        with pytest.raises(ValueError, match="missing required 'issue_id'"):
+            build_sentry_event({"summary": "S"}, {})
+
+
 class TestSplitSummary:
     def test_skips_leading_blank_lines(self) -> None:
         title, body = _split_summary("\n\n  Real Title  \nrest")
@@ -349,9 +376,9 @@ class TestSplitSummary:
 class TestSeam:
     def test_v1_registered_builders(self) -> None:
         # Ships notion + slack + email-sender + telegram + discord + linear +
-        # trello. Connectors with no entry (github, sentry) are skipped at
-        # resolution time. The email connector's key is the plugin name
-        # ``email-sender`` (not ``email``) so binding lines up.
+        # trello + sentry. github (needs git-ops, not a simple event dict) has no
+        # entry and is skipped at resolution time. The email connector's key is
+        # the plugin name ``email-sender`` (not ``email``) so binding lines up.
         assert set(OUTBOUND_EVENT_BUILDERS) == {
             "notion",
             "slack",
@@ -360,6 +387,7 @@ class TestSeam:
             "discord",
             "linear",
             "trello",
+            "sentry",
         }
 
 
@@ -484,6 +512,19 @@ class TestResolution:
         assert len(bindings) == 1
         assert bindings[0].account.connector == "trello"
         assert bindings[0].builder is build_trello_event
+
+    async def test_resolves_sentry_binding(self) -> None:
+        ws = uuid.uuid4()
+        async with memory_session() as s:
+            await _seed(s, workspace_id=ws, connector="sentry", delivery_config={"issue_id": "I1"})
+            bindings = await _resolve_bindings(
+                s,
+                workspace_id=ws,
+                plugins_by_name={"sentry": _meta("sentry", with_outbound=True)},
+            )
+        assert len(bindings) == 1
+        assert bindings[0].account.connector == "sentry"
+        assert bindings[0].builder is build_sentry_event
 
 
 class TestNoLlmGuard:
