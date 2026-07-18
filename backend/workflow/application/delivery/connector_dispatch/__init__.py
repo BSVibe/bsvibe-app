@@ -21,11 +21,10 @@ This package supplies the missing two halves:
    connector name to a builder that turns ``{deliverable content} +
    {delivery_config}`` into the bespoke event keys the connector's outbound
    expects, plus the ``artifact_type`` to dispatch under. v1 ships notion +
-   slack + email-sender + telegram + discord + linear + trello (the
-   pattern-setter — no git-ops, unlike github PRs); github is the special case
-   that needs git-ops (see :mod:`._github`); sentry follows when its mapper
-   lands — a connector with no builder is a deliberate seam (skipped, no
-   error).
+   slack + email-sender + telegram + discord + linear + trello + sentry (the
+   pattern-setters — no git-ops, unlike github PRs); github is the special case
+   that needs git-ops (see :mod:`._github`) — a connector with no builder is a
+   deliberate seam (skipped, no error).
 
 :class:`ConnectorDeliveryAdapter` implements the worker's
 :class:`~backend.workflow.infrastructure.workers.delivery_worker.PluginDispatchAdapter` Protocol: it
@@ -80,6 +79,7 @@ from ._builders import (
     build_email_event,
     build_linear_event,
     build_notion_event,
+    build_sentry_event,
     build_slack_event,
     build_telegram_event,
     build_trello_event,
@@ -325,6 +325,7 @@ __all__ = [
     "build_github_workspace_provisioner",
     "build_linear_event",
     "build_notion_event",
+    "build_sentry_event",
     "build_slack_event",
     "build_telegram_event",
     "build_trello_event",
