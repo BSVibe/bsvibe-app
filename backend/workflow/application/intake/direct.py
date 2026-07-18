@@ -92,7 +92,7 @@ class DirectTrigger:
             received_at=now,
         )
         try:
-            await self._idempotency.record(row)
+            await self._idempotency.record(row, producer_id="workflow:direct_trigger")
         except IntegrityError:
             await self._session.rollback()
             return WebhookOutcome(event=event, duplicate=True)

@@ -40,13 +40,15 @@ class IdempotencyRepository(Protocol):
         :class:`sqlalchemy.exc.IntegrityError`).
         """
 
-    async def record(self, row: TriggerEventRow) -> None:
-        """Stage the trigger row for INSERT + flush.
+    async def record(self, row: TriggerEventRow, *, producer_id: str) -> None:
+        """Write the trigger row through the ``trigger_events`` channel + flush.
 
-        Unlike the other Workflow Repositories' ``add`` (which only stages),
-        ``record`` flushes — the caller wants the ``IntegrityError`` surface
-        synchronously so the race-loser can rollback + treat as duplicate.
-        Does NOT commit; the caller owns the transaction boundary (v8 D45).
+        The write is guarded by ``producer_id`` (INV-1 — the only legal write
+        path is ``Channel.emit``). Unlike the other Workflow Repositories'
+        ``add`` (which only stages), ``record`` flushes — the caller wants the
+        ``IntegrityError`` surface synchronously so the race-loser can rollback
+        + treat as duplicate. Does NOT commit; the caller owns the transaction
+        boundary (v8 D45).
         """
 
     async def list_undrained(self, *, limit: int = 50) -> list[TriggerEventRow]:

@@ -53,7 +53,7 @@ async def test_record_and_is_duplicate_true() -> None:
         workspace_id = uuid.uuid4()
         repo = SqlAlchemyIdempotencyRepository(session)
         row = _trigger(workspace_id=workspace_id, source="github", key="abc")
-        await repo.record(row)
+        await repo.record(row, producer_id="workflow:webhook_receiver")
         await session.flush()
 
         assert (
@@ -70,7 +70,10 @@ async def test_is_duplicate_scoped_by_workspace_and_source() -> None:
         ws_a = uuid.uuid4()
         ws_b = uuid.uuid4()
         repo = SqlAlchemyIdempotencyRepository(session)
-        await repo.record(_trigger(workspace_id=ws_a, source="github", key="k"))
+        await repo.record(
+            _trigger(workspace_id=ws_a, source="github", key="k"),
+            producer_id="workflow:webhook_receiver",
+        )
         await session.flush()
 
         # Different workspace → not a dup.
@@ -96,8 +99,8 @@ async def test_list_undrained_excludes_triggers_with_request() -> None:
         repo = SqlAlchemyIdempotencyRepository(session)
         drained = _trigger(workspace_id=ws, source="github", key="drained")
         undrained = _trigger(workspace_id=ws, source="github", key="undrained")
-        await repo.record(drained)
-        await repo.record(undrained)
+        await repo.record(drained, producer_id="workflow:webhook_receiver")
+        await repo.record(undrained, producer_id="workflow:webhook_receiver")
         session.add(
             RequestRow(
                 id=uuid.uuid4(),
@@ -128,7 +131,7 @@ async def test_list_undrained_respects_limit_and_ordering() -> None:
             row = _trigger(workspace_id=ws, source="github", key=f"k{i}")
             row.received_at = base - timedelta(minutes=4 - i)
             keys.append(row.id)
-            await repo.record(row)
+            await repo.record(row, producer_id="workflow:webhook_receiver")
         await session.flush()
 
         rows = await repo.list_undrained(limit=2)

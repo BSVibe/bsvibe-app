@@ -16,6 +16,7 @@ import structlog
 from sqlalchemy import exists, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.workflow.channels import TRIGGER_EVENTS
 from backend.workflow.infrastructure.intake.db import RequestRow, TriggerEventRow
 
 logger = structlog.get_logger(__name__)
@@ -42,8 +43,8 @@ class SqlAlchemyIdempotencyRepository:
         result = await self._session.execute(stmt)
         return result.scalar_one_or_none() is not None
 
-    async def record(self, row: TriggerEventRow) -> None:
-        self._session.add(row)
+    async def record(self, row: TriggerEventRow, *, producer_id: str) -> None:
+        TRIGGER_EVENTS.emit(self._session, row, producer_id=producer_id)
         await self._session.flush()
         logger.debug(
             "idempotency_recorded",

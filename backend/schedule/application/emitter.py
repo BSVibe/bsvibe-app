@@ -102,7 +102,7 @@ class ScheduleTrigger:
             received_at=now,
         )
         try:
-            await record(self._session, row=row)
+            await record(self._session, row=row, producer_id="schedule:schedule_trigger")
         except IntegrityError:
             await self._session.rollback()
             return WebhookOutcome(event=event, duplicate=True)

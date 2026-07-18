@@ -129,7 +129,7 @@ class WebhookReceiver:
             received_at=now,
         )
         try:
-            await self._idempotency.record(row)
+            await self._idempotency.record(row, producer_id="workflow:webhook_receiver")
         except IntegrityError:
             # Race: another writer landed the same key between the
             # is_duplicate check and the INSERT. Surface as duplicate.
