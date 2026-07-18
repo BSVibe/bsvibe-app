@@ -37,12 +37,31 @@ it is the single declared consumer.
 
 An audit row is machine-emitted (a subscriber hook or a system sweep), so
 ``human_origin=False`` and there is no authoring surface.
+
+This module ALSO declares the ``audit.emit`` :class:`~backend.channels.EventChannel`
+— the in-process bus topic that fronts the outbox row. ``safe_emit`` (the sole
+publisher) publishes an :class:`~bsvibe_sdk.Event` of kind ``audit.emit``; the
+:class:`~plugin.audit.subscriber.AuditEventSubscriber` (the sole subscriber,
+id ``audit:outbox_subscriber``) receives it and stages the ``audit_outbox``
+row inside the producer's session. The bus is prefix-routed and best-effort:
+the subscriber registers under the ``audit.`` family prefix (so future
+``audit.*`` variants fan into the same sink) and a sink failure never rolls
+back the producer's domain write — the :data:`~backend.channels.PublishOutcome`
+returned by :meth:`~backend.channels.EventChannel.publish` is what makes that
+best-effort delivery observable instead of silent. The canonical ``audit.emit``
+kind + ``audit.`` prefix are defined here (the topic declaration) and
+re-exported by :mod:`plugin.audit.subscriber` for the runtime guard.
 """
 
 from __future__ import annotations
 
-from backend.channels import Channel
+from backend.channels import Channel, EventChannel
+from bsvibe_sdk import Event
 from plugin.audit.models import AuditOutboxRecord
+
+# Canonical bus identifiers for the audit topic (single source of truth).
+AUDIT_EMIT_KIND = "audit.emit"
+AUDIT_KIND_PREFIX = "audit."
 
 AUDIT_OUTBOX: Channel[AuditOutboxRecord] = Channel(
     name="audit_outbox",
@@ -56,4 +75,12 @@ AUDIT_OUTBOX: Channel[AuditOutboxRecord] = Channel(
     human_origin=False,
 )
 
-__all__ = ["AUDIT_OUTBOX"]
+AUDIT_EMIT: EventChannel[Event] = EventChannel(
+    kind=AUDIT_EMIT_KIND,
+    event_type=Event,
+    publishers=("audit:safe_emit",),
+    subscribers=("audit:outbox_subscriber",),
+    subscribe_prefix=AUDIT_KIND_PREFIX,
+)
+
+__all__ = ["AUDIT_EMIT", "AUDIT_EMIT_KIND", "AUDIT_KIND_PREFIX", "AUDIT_OUTBOX"]

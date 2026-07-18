@@ -19,6 +19,7 @@ from collections.abc import Awaitable, Callable
 
 import structlog
 
+from backend.channels import Delivered, NoSubscriber, PublishOutcome, SubscriberRaised
 from bsvibe_sdk import Event, EventBusSubscriber
 
 logger = structlog.get_logger(__name__)
@@ -28,8 +29,10 @@ class InProcessEventBus:
     """Synchronous in-process EventBus.
 
     ``publish`` awaits every matching subscriber in registration order.
-    Subscriber failures are logged but never re-raised so a misbehaving
-    sink can't break the producer's domain write.
+    Subscriber failures are caught — never re-raised, so a misbehaving sink
+    can't break the producer's domain write — but they are no longer silently
+    swallowed: ``publish`` returns a typed :data:`PublishOutcome` so the caller
+    can tell ``Delivered`` from ``NoSubscriber`` from ``SubscriberRaised``.
     """
 
     def __init__(self) -> None:
@@ -37,23 +40,33 @@ class InProcessEventBus:
         self._subscribers: list[tuple[str, EventBusSubscriber]] = []
         self._lock = asyncio.Lock()
 
-    async def publish(self, event: Event) -> None:
+    async def publish(self, event: Event) -> PublishOutcome:
         # Snapshot the subscriber list to avoid mutation-during-iteration
         # races if a subscriber registers another subscriber.
         snapshot = list(self._subscribers)
+        matched = 0
+        errors: list[Exception] = []
         for prefix, sub in snapshot:
             if not event.kind.startswith(prefix):
                 continue
+            matched += 1
             try:
                 await sub.on_event(event)
-            except Exception:  # noqa: BLE001 — sink failures never propagate
-                logger.warning(
+            except Exception as exc:  # noqa: BLE001 — sink failures never propagate
+                errors.append(exc)
+                logger.error(
                     "event_bus_subscriber_failed",
                     kind=event.kind,
                     prefix=prefix,
                     subscriber=type(sub).__name__,
                     exc_info=True,
                 )
+        if errors:
+            return SubscriberRaised(errors=tuple(errors))
+        if matched == 0:
+            logger.error("event_bus_no_subscriber", kind=event.kind)
+            return NoSubscriber()
+        return Delivered(count=matched)
 
     def subscribe(
         self,

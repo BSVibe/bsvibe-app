@@ -19,11 +19,12 @@ from __future__ import annotations
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.channels import NoSubscriber, PublishOutcome, SubscriberRaised
 from backend.extensions.eventbus import get_event_bus
 from bsvibe_sdk import Event
+from plugin.audit.channels import AUDIT_EMIT, AUDIT_EMIT_KIND
 from plugin.audit.emitter import AuditEmitter
 from plugin.audit.events import ActorType, AuditActor, AuditEventBase
-from plugin.audit.subscriber import AUDIT_EMIT_KIND
 
 logger = structlog.get_logger(__name__)
 
@@ -85,15 +86,44 @@ async def safe_emit(
         return
     try:
         bus = get_event_bus()
-        await bus.publish(
+        outcome = await AUDIT_EMIT.publish(
+            bus,
             Event(
                 kind=AUDIT_EMIT_KIND,
                 payload={"event": event, "session": session},
-            )
+            ),
+            publisher_id="audit:safe_emit",
         )
     except BaseException:  # noqa: BLE001 — last-resort guard, never propagate
-        logger.warning(
+        logger.error(
             "supervisor_audit_publish_failed",
+            audit_delivery="publish_error",
             event_type=getattr(event, "event_type", None),
             exc_info=True,
+        )
+        return
+    _log_publish_outcome(outcome, event)
+
+
+def _log_publish_outcome(outcome: PublishOutcome, event: AuditEventBase) -> None:
+    """Surface the bus outcome without ever raising into the caller.
+
+    Best-effort delivery is preserved — the domain write already committed
+    (or will) regardless of this outcome. We only make the swallow observable:
+    ``audit_delivery`` is a structured field a metric can key on, and the
+    non-delivered states log at ERROR.
+    """
+    event_type = getattr(event, "event_type", None)
+    if isinstance(outcome, SubscriberRaised):
+        logger.error(
+            "supervisor_audit_subscriber_raised",
+            audit_delivery="subscriber_raised",
+            event_type=event_type,
+            error_count=len(outcome.errors),
+        )
+    elif isinstance(outcome, NoSubscriber):
+        logger.error(
+            "supervisor_audit_no_subscriber",
+            audit_delivery="no_subscriber",
+            event_type=event_type,
         )

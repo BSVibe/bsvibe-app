@@ -20,15 +20,15 @@ import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from bsvibe_sdk import Event
+from plugin.audit.channels import AUDIT_EMIT_KIND, AUDIT_KIND_PREFIX
 from plugin.audit.emitter import AuditEmitter
 from plugin.audit.events import AuditEventBase
 
 logger = structlog.get_logger(__name__)
 
-# Conventional event kinds the producer publishes onto the bus. Audit owns
-# everything under ``audit.``.
-AUDIT_KIND_PREFIX = "audit."
-AUDIT_EMIT_KIND = "audit.emit"
+# ``AUDIT_EMIT_KIND`` / ``AUDIT_KIND_PREFIX`` are declared canonically on the
+# ``AUDIT_EMIT`` channel (:mod:`plugin.audit.channels`) and re-exported here
+# for the runtime prefix guard below + existing importers.
 
 
 class AuditEventSubscriber:

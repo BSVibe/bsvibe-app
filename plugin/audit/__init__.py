@@ -30,6 +30,7 @@ is the seam.
 from __future__ import annotations
 
 from backend.extensions.eventbus import get_event_bus
+from plugin.audit.channels import AUDIT_EMIT
 from plugin.audit.emitter import AuditEmitter
 from plugin.audit.events import (
     ActorType,
@@ -64,12 +65,12 @@ def register_audit_subscriber() -> AuditEventSubscriber:
     """
     global _SUBSCRIBER  # noqa: PLW0603 — process-wide singleton wiring
     bus = get_event_bus()
-    if AUDIT_KIND_PREFIX in bus.registered_prefixes():
+    if AUDIT_EMIT.subscribe_prefix in bus.registered_prefixes():
         if _SUBSCRIBER is None:
             _SUBSCRIBER = AuditEventSubscriber()
         return _SUBSCRIBER
     _SUBSCRIBER = AuditEventSubscriber()
-    bus.subscribe(AUDIT_KIND_PREFIX, _SUBSCRIBER)
+    AUDIT_EMIT.subscribe(bus, _SUBSCRIBER, subscriber_id="audit:outbox_subscriber")
     return _SUBSCRIBER
 
 
