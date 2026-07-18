@@ -124,10 +124,27 @@ def reset_connector_catalog() -> None:
     get_connector_catalog.cache_clear()
 
 
+def legacy_kind(info: ConnectorInfo) -> str:
+    """Derive the retired inbound/outbound/both ``kind`` from capability flags.
+
+    Backward-compat for the pre-catalog PWA (which reads ``connector.kind`` on
+    the connector ROW to decide whether to show the "Import now" button);
+    removed once PR-8 migrates the connector-row UI to the capability flags
+    (INV-1 expand/contract). Derived from the flags — the deleted ``kinds.py``
+    map is NOT reintroduced.
+    """
+    if info.importable and info.outbound:
+        return "both"
+    if info.importable:
+        return "inbound"
+    return "outbound"
+
+
 __all__ = [
     "HIDDEN_CONNECTORS",
     "ConnectorInfo",
     "build_connector_catalog",
     "get_connector_catalog",
+    "legacy_kind",
     "reset_connector_catalog",
 ]

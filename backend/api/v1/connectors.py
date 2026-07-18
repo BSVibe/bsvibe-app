@@ -59,7 +59,7 @@ from backend.api.deps import get_db_session, get_workspace_id
 from backend.api.webhooks import get_credential_cipher
 from backend.connectors.auth.db import ConnectorOAuthTokenRow
 from backend.connectors.auth.resolve import resolve_connector_credentials
-from backend.connectors.catalog import ConnectorInfo, get_connector_catalog
+from backend.connectors.catalog import ConnectorInfo, get_connector_catalog, legacy_kind
 from backend.connectors.db import ConnectorAccountRow
 from backend.extensions.plugin.base import PluginMeta, PluginRunError
 from backend.extensions.plugin.context import SkillContext
@@ -137,6 +137,10 @@ class ConnectorCreated(BaseModel):
     outbound: bool
     importable: bool
     webhook_trigger: bool
+    # Backward-compat for the pre-catalog PWA (reads ``connector.kind`` to
+    # decide whether to show "Import now"); derived from the flags, removed
+    # once PR-8 migrates the connector-row UI to them (INV-1 expand/contract).
+    kind: str | None
 
 
 class ConnectorOut(BaseModel):
@@ -157,6 +161,10 @@ class ConnectorOut(BaseModel):
     outbound: bool
     importable: bool
     webhook_trigger: bool
+    # Backward-compat for the pre-catalog PWA (reads ``connector.kind`` to
+    # decide whether to show "Import now"); derived from the flags, removed
+    # once PR-8 migrates the connector-row UI to them (INV-1 expand/contract).
+    kind: str | None
     last_import_at: datetime | None
     last_import_count: int | None
     # Lift 1 — for oauth2 connectors (github, …): the connected account's
@@ -245,6 +253,7 @@ def _row_to_out(
         outbound=bool(info and info.outbound),
         importable=bool(info and info.importable),
         webhook_trigger=bool(info and info.webhook_trigger),
+        kind=legacy_kind(info) if info else None,
         last_import_at=row.last_import_at,
         last_import_count=row.last_import_count,
         oauth_account_label=oauth_account_label,
@@ -354,6 +363,7 @@ async def create_connector(
         outbound=bool(info and info.outbound),
         importable=bool(info and info.importable),
         webhook_trigger=bool(info and info.webhook_trigger),
+        kind=legacy_kind(info) if info else None,
     )
 
 

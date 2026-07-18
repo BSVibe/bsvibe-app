@@ -289,6 +289,38 @@ async def test_create_still_accepts_connectable(client: httpx.AsyncClient) -> No
     assert body["webhook_trigger"] is True
 
 
+@pytest.mark.parametrize(
+    ("connector", "expected_kind"),
+    [
+        ("notion", "both"),  # importable + outbound
+        ("obsidian", "inbound"),  # importable, not outbound
+        ("slack", "outbound"),  # not importable
+    ],
+)
+async def test_create_and_list_keep_derived_legacy_kind(
+    client: httpx.AsyncClient, connector: str, expected_kind: str
+) -> None:
+    """Backward-compat: ConnectorCreated + ConnectorOut still expose ``kind``.
+
+    Derived from the capability flags (INV-1 expand/contract) so the
+    pre-catalog PWA's "Import now" gate keeps working until PR-8 migrates the
+    connector-row UI to the flags. The flags stay alongside it.
+    """
+    created = await client.post(
+        "/api/v1/connectors",
+        json={"connector": connector, "signing_secret": "x"},
+    )
+    assert created.status_code == 201, created.text
+    assert created.json()["kind"] == expected_kind
+
+    listed = await client.get("/api/v1/connectors")
+    assert listed.status_code == 200
+    item = listed.json()[0]
+    assert item["kind"] == expected_kind
+    # Flags remain present alongside the legacy field.
+    assert {"outbound", "importable", "webhook_trigger"} <= set(item)
+
+
 # --------------------------------------------------------------------------
 # catalog
 # --------------------------------------------------------------------------
