@@ -245,6 +245,7 @@ def _count_blocks(blocks: list[dict[str, Any]]) -> int:
 @p.action(
     name="import_pages",
     mcp_exposed=True,
+    import_trigger=True,
     input_schema={
         "type": "object",
         "required": [],

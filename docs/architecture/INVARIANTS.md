@@ -55,6 +55,8 @@ WORKSPACE_SCHEDULES = Channel(
 
 > 이것이 `linear`/`trello`가 완성돼 있는데 UI에서 못 만들고, `sentry` outbound가 "Connected"를 표시하면서 아무것도 전달하지 않고, `sentry_issue_update`/`issue_comment`가 `ArtifactType` Literal에 없어 도달 불가인 이유다. **레지스트리 단일화로 이 세 결함이 동시에, 구조적으로 사라진다.**
 
+**경계 노트 — `execution_run_activities`는 의도적으로 Channel 범위 밖이다.** 위 목록 1이 워커 소비 테이블로 열거하지만, 이 테이블은 단일 목적 큐가 아니라 **혼합 glass-box 활동 LOG**다: 그 안의 `settle` 서브스트림만 워커가 소비하고, 나머지 행 유형(`verify`/`routing_decision`/`tool_call`/`error`)은 소비되지 않는 로그 append다. row-type로 스코프한 Channel을 강제하면 (a) 모든 로그 append가 `emit`을 거쳐야 하고 (b) consumer를 오선언하게 된다(로그의 대부분은 consumer가 없다). Channel은 단일 목적 큐를 모델링한다. settle 커플링은 INV-1이 아니라 기존 `SettleDrainRow` dedupe가 강제한다.
+
 ### INV-2. 안전 경로는 fail-closed다 (3-state, not `| None`)
 
 **`None`이 "N/A"와 "체크가 실패했다"를 동시에 의미하면 안 된다.**

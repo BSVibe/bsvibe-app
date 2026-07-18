@@ -50,6 +50,7 @@ p = plugin(
 @p.action(
     name="import_vault",
     mcp_exposed=True,
+    import_trigger=True,
     input_schema={
         "type": "object",
         "required": [],

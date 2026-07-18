@@ -61,6 +61,7 @@ def _resolve_export_file(export_path: str) -> Path:
 @p.action(
     name="import_conversations",
     mcp_exposed=True,
+    import_trigger=True,
     input_schema={
         "type": "object",
         "required": [],
