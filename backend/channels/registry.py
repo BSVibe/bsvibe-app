@@ -13,13 +13,14 @@ from __future__ import annotations
 from typing import Any
 
 from backend.channels._core import Channel
+from backend.channels._events import EventChannel
 from backend.workflow.channels import (
     DELIVERY_EVENTS,
     REQUESTS,
     SAFE_MODE_QUEUE_ITEMS,
     TRIGGER_EVENTS,
 )
-from plugin.audit.channels import AUDIT_OUTBOX
+from plugin.audit.channels import AUDIT_EMIT, AUDIT_OUTBOX
 
 ALL_CHANNELS: tuple[Channel[Any], ...] = (
     TRIGGER_EVENTS,
@@ -29,4 +30,8 @@ ALL_CHANNELS: tuple[Channel[Any], ...] = (
     AUDIT_OUTBOX,
 )
 
-__all__ = ["ALL_CHANNELS"]
+# EventChannels are a SIBLING type (in-process bus topics), enumerated
+# separately from the durable-row ``ALL_CHANNELS`` above.
+ALL_EVENT_CHANNELS: tuple[EventChannel[Any], ...] = (AUDIT_EMIT,)
+
+__all__ = ["ALL_CHANNELS", "ALL_EVENT_CHANNELS"]

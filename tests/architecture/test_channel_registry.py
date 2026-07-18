@@ -22,7 +22,13 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
-from backend.channels.registry import ALL_CHANNELS
+import pytest
+
+from backend.channels import UndeclaredSubscriberError
+from backend.channels.registry import ALL_CHANNELS, ALL_EVENT_CHANNELS
+from backend.extensions.eventbus import get_event_bus, reset_event_bus_for_testing
+from plugin.audit import register_audit_subscriber
+from plugin.audit.channels import AUDIT_EMIT
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 BACKEND = REPO_ROOT / "backend"
@@ -53,6 +59,34 @@ def test_all_channels_declare_producers_and_consumers() -> None:
             assert ch.authoring_surface, (
                 f"channel {ch.name!r} is human-origin but declares no authoring_surface"
             )
+
+
+def test_all_event_channels_declare_publishers_and_subscribers() -> None:
+    assert ALL_EVENT_CHANNELS, "ALL_EVENT_CHANNELS is empty — declare at least one event channel"
+    for ch in ALL_EVENT_CHANNELS:
+        assert ch.publishers, f"event channel {ch.kind!r} declares no publishers (un-mergeable)"
+        assert ch.subscribers, f"event channel {ch.kind!r} declares no subscribers (un-mergeable)"
+        assert ch.kind.startswith(ch.subscribe_prefix), (
+            f"event channel {ch.kind!r} has subscribe_prefix {ch.subscribe_prefix!r} "
+            "that does not cover its kind"
+        )
+
+
+def test_register_audit_subscriber_routes_through_channel_declaration() -> None:
+    """Declaration ↔ wiring agree: after registration the bus carries the
+    exact prefix the ``AUDIT_EMIT`` channel declares, and the channel's
+    subscribe guard rejects any id the channel does not name."""
+    reset_event_bus_for_testing()
+    try:
+        register_audit_subscriber()
+        bus = get_event_bus()
+        assert AUDIT_EMIT.subscribe_prefix in bus.registered_prefixes()
+    finally:
+        reset_event_bus_for_testing()
+
+    assert "audit:outbox_subscriber" in AUDIT_EMIT.subscribers
+    with pytest.raises(UndeclaredSubscriberError):
+        AUDIT_EMIT.assert_subscriber("audit:intruder")
 
 
 def _forbidden_bound_names(

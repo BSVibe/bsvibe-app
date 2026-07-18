@@ -5,7 +5,10 @@ from __future__ import annotations
 from unittest.mock import AsyncMock
 
 from sqlalchemy import select
+from structlog.testing import capture_logs
 
+from backend.extensions.eventbus import get_event_bus, reset_event_bus_for_testing
+from bsvibe_sdk import Event
 from plugin.audit.emitter import AuditEmitter
 from plugin.audit.events import AuditActor, AuditEventBase
 from plugin.audit.models import AuditOutboxRecord
@@ -61,5 +64,53 @@ class TestSafeEmitSwallowsErrors:
         await safe_emit(_Event(actor=_actor()), session=session, emitter=bad_emitter)
         await session.commit()
 
+        rows = (await session.execute(select(AuditOutboxRecord))).scalars().all()
+        assert rows == []
+
+
+class TestSafeEmitSurfacesBusOutcome:
+    """The bus path (no ``emitter``) is best-effort but observable: a raising
+    sink or a missing subscriber is logged at ERROR with an ``audit_delivery``
+    field a metric can key on — and never propagates."""
+
+    async def test_subscriber_raised_is_logged_and_row_still_written(self, session):
+        bus = get_event_bus()  # audit subscriber already registered (conftest)
+
+        class _Boom:
+            async def on_event(self, event: Event) -> None:
+                raise RuntimeError("boom")
+
+        unsubscribe = bus.subscribe("audit.", _Boom())
+        try:
+            with capture_logs() as logs:
+                # No exception into the caller despite the raising sink.
+                await safe_emit(_Event(actor=_actor()), session=session)
+            await session.commit()
+        finally:
+            await unsubscribe()
+
+        assert any(
+            log.get("audit_delivery") == "subscriber_raised" and log["log_level"] == "error"
+            for log in logs
+        )
+        # The audit subscriber still persisted the row (best-effort preserved).
+        rows = (await session.execute(select(AuditOutboxRecord))).scalars().all()
+        assert len(rows) == 1
+
+    async def test_no_subscriber_is_logged_and_does_not_raise(self, session):
+        # Drop the autouse-registered subscriber so nothing matches.
+        reset_event_bus_for_testing()
+        try:
+            with capture_logs() as logs:
+                await safe_emit(_Event(actor=_actor()), session=session)
+        finally:
+            reset_event_bus_for_testing()
+
+        assert any(
+            log.get("audit_delivery") == "no_subscriber" and log["log_level"] == "error"
+            for log in logs
+        )
+        # Nothing was written — but the caller never saw an error.
+        await session.commit()
         rows = (await session.execute(select(AuditOutboxRecord))).scalars().all()
         assert rows == []

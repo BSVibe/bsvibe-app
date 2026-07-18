@@ -31,6 +31,7 @@ from typing import Any, Protocol, runtime_checkable
 # Re-export the plugin-author-facing Protocols from the external SDK.
 # Identity equality is preserved — ``backend.extensions.domain.protocols.Plugin``
 # IS the same class as ``bsvibe_sdk.Plugin``.
+from backend.channels import PublishOutcome
 from bsvibe_sdk import (
     Action,
     Event,
@@ -133,7 +134,7 @@ class SettlementSubscriber(Protocol):
 class EventBus(Protocol):
     """In-process event bus surface."""
 
-    async def publish(self, event: Event) -> None: ...
+    async def publish(self, event: Event) -> PublishOutcome: ...
 
     def subscribe(
         self,
