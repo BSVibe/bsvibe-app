@@ -23,9 +23,9 @@
  *    the same `delivery_config` JSON server-side so the wire shape stays
  *    uniform.
  *
- *  Slack is kind="both" but its inbound is webhook-driven (no bulk-import
- *  action) — so the form treats it like an outbound connector for binding
- *  purposes; no inbound fields show.
+ *  Slack is outbound + webhook_trigger but not importable (its inbound is
+ *  webhook-driven, no bulk-import action) — so the form treats it like an
+ *  outbound connector for binding purposes; no inbound fields show.
  *
  * The form reads the descriptor for the active connector and renders the
  * declared inputs in order. `pack(values)` builds the `ConnectorCreate`

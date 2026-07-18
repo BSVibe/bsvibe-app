@@ -1029,12 +1029,6 @@ export interface ConnectorCreated {
   delivery_config: Record<string, unknown>;
   webhook_token: string;
   webhook_url: string;
-  /** Backward-compat wire field: the backend still sends the retired
-   *  inbound / outbound / both `kind` string, but the PWA no longer reads it
-   *  (INV-1 migrated the UI to the catalog's capability flags). Optional +
-   *  untyped here only to document the wire until the backend cleanup drops
-   *  it. */
-  kind?: string | null;
 }
 
 /** `GET /api/v1/connectors` element (backend ConnectorOut). Never the secret,
@@ -1054,11 +1048,6 @@ export interface Connector {
   outbound: boolean;
   importable: boolean;
   webhook_trigger: boolean;
-  /** Backward-compat wire field: the backend still sends the retired
-   *  inbound / outbound / both `kind` string, but the PWA no longer reads it
-   *  (INV-1 migrated the row UI to `importable`). Optional + untyped here only
-   *  to document the wire until the backend cleanup drops it. */
-  kind?: string | null;
   /** ISO timestamp of the last successful import, or `null` if the
    *  binding has never been imported. Surfaced as "Last imported …" in
    *  the row's detail line. */
