@@ -23,6 +23,7 @@ import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from backend.workers.base import BaseWorker
+from plugin.audit.channels import AUDIT_OUTBOX
 from plugin.audit.models import AuditOutboxRecord
 from plugin.audit.store import OutboxStore
 
@@ -73,7 +74,12 @@ class RelayWorker(BaseWorker):
         Useful for tests + the periodic loop's body.
         """
         async with self._session_factory() as session:
-            rows = await self._store.select_undelivered(session, batch_size=self._cfg.batch_size)
+            rows = await AUDIT_OUTBOX.consume(
+                consumer_id="worker:relay_worker",
+                claim=lambda: self._store.select_undelivered(
+                    session, batch_size=self._cfg.batch_size
+                ),
+            )
             if not rows:
                 return 0
 

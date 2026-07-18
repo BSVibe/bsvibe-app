@@ -31,8 +31,9 @@ class AuditEmitter:
                 event.trace_id = ambient
 
         payload = event.model_dump(mode="json")
-        await self._store.insert(
+        await self._store.enqueue(
             session,
+            producer_id="audit:emitter",
             event_id=str(event.event_id),
             event_type=event.event_type,
             occurred_at=event.occurred_at,

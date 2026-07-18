@@ -41,8 +41,8 @@ class TestSafeEmitHappyPath:
 class TestSafeEmitSwallowsErrors:
     async def test_returns_none_when_emitter_raises(self, session, caplog):
         bad_emitter = AuditEmitter()
-        # Force the underlying store.insert to blow up.
-        bad_emitter._store.insert = AsyncMock(  # type: ignore[method-assign]
+        # Force the underlying store.enqueue to blow up.
+        bad_emitter._store.enqueue = AsyncMock(  # type: ignore[method-assign]
             side_effect=RuntimeError("disk on fire")
         )
 
@@ -55,7 +55,7 @@ class TestSafeEmitSwallowsErrors:
         from plugin.audit.models import AuditOutboxRecord
 
         bad_emitter = AuditEmitter()
-        bad_emitter._store.insert = AsyncMock(  # type: ignore[method-assign]
+        bad_emitter._store.enqueue = AsyncMock(  # type: ignore[method-assign]
             side_effect=RuntimeError("bang")
         )
         await safe_emit(_Event(actor=_actor()), session=session, emitter=bad_emitter)

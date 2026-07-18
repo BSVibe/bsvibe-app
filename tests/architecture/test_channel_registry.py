@@ -26,6 +26,13 @@ from backend.channels.registry import ALL_CHANNELS
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 BACKEND = REPO_ROOT / "backend"
+PLUGIN = REPO_ROOT / "plugin"
+
+# Production roots the producer guard walks. ``backend`` holds no inline
+# tests (they live under top-level ``tests/``); ``plugin`` co-locates its
+# tests under ``plugin/*/tests/``, which the walk skips so the guard scans
+# only production code — a test fixture may legitimately ``.add`` a row.
+_GUARD_ROOTS = (BACKEND, PLUGIN)
 
 # Paths where a ``.add`` of a channel row legitimately lives — the channel
 # core wraps the write in ``emit`` (``repo.add(row)``). Everything else must
@@ -113,13 +120,14 @@ def test_no_bare_add_of_channel_row_outside_allowlist() -> None:
     assert forbidden, "no channel rows to guard"
 
     offenders: list[str] = []
-    for path in BACKEND.rglob("*.py"):
-        if path in _ADD_ALLOWLIST or "migrations" in path.parts:
-            continue
-        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-        guard = _AddGuard(forbidden)
-        guard.visit(tree)
-        offenders.extend(f"{path.relative_to(REPO_ROOT)}:{line}" for line in guard.violations)
+    for root in _GUARD_ROOTS:
+        for path in root.rglob("*.py"):
+            if path in _ADD_ALLOWLIST or "migrations" in path.parts or "tests" in path.parts:
+                continue
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            guard = _AddGuard(forbidden)
+            guard.visit(tree)
+            offenders.extend(f"{path.relative_to(REPO_ROOT)}:{line}" for line in guard.violations)
 
     assert not offenders, (
         "INV-1: channel rows may only be written via CHANNEL.emit(...). "

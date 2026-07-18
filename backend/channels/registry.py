@@ -19,12 +19,14 @@ from backend.workflow.channels import (
     SAFE_MODE_QUEUE_ITEMS,
     TRIGGER_EVENTS,
 )
+from plugin.audit.channels import AUDIT_OUTBOX
 
 ALL_CHANNELS: tuple[Channel[Any], ...] = (
     TRIGGER_EVENTS,
     REQUESTS,
     SAFE_MODE_QUEUE_ITEMS,
     DELIVERY_EVENTS,
+    AUDIT_OUTBOX,
 )
 
 __all__ = ["ALL_CHANNELS"]

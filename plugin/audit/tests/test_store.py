@@ -15,8 +15,9 @@ def _now() -> datetime:
 
 
 async def _insert(store: OutboxStore, session, *, event_id: str) -> AuditOutboxRecord:
-    return await store.insert(
+    return await store.enqueue(
         session,
+        producer_id="audit:emitter",
         event_id=event_id,
         event_type="t.x",
         occurred_at=_now(),
