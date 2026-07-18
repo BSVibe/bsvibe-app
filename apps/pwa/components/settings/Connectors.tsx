@@ -4,6 +4,7 @@ import {
   type UnclaimedInstall,
   claimInstall,
   createConnector,
+  getConnectorCatalog,
   getSentryInstallUrl,
   listConnectors,
   listUnclaimedInstalls,
@@ -11,8 +12,7 @@ import {
   startConnectorOAuth,
   triggerImport,
 } from "@/lib/api/connectors";
-import type { Connector, ConnectorName } from "@/lib/api/types";
-import { KNOWN_CONNECTORS } from "@/lib/api/types";
+import type { Connector, ConnectorCatalogEntry, ConnectorName } from "@/lib/api/types";
 import { useTranslations } from "next-intl";
 import { useEffect, useRef, useState } from "react";
 import AddConnector from "./AddConnector";
@@ -28,10 +28,13 @@ import { isInstallConnector, isOAuthConnector, isPasteCredsConnector } from "./c
  *                 (filtered `is_active`). Each card carries a real, confirm-gated
  *                 Revoke (DELETE) and a present-but-disabled Configure (there is
  *                 no backend update endpoint yet → coming-soon).
- *  - AVAILABLE  — the catalog. The supported KNOWN_CONNECTORS not yet connected
- *                 render as REAL "Connect" cards (Connect opens the create panel
- *                 pre-selected to that service). Only real, usable connectors are
- *                 listed — no aspirational / coming-soon cards.
+ *  - AVAILABLE  — the catalog. The founder-visible connectors (fetched from
+ *                 GET /api/v1/connectors/catalog, INV-1 single source of truth)
+ *                 not yet connected render as REAL "Connect" cards (Connect
+ *                 opens the create panel pre-selected to that service). Only
+ *                 real, usable connectors are listed — no aspirational /
+ *                 coming-soon cards. Suppressed connectors (linear / trello) are
+ *                 absent from the catalog response, so they never appear.
  *  - CUSTOM     — "Add a custom Connector" (point at your own MCP server / BSage
  *                 plugin SDK). Present per the design but DISABLED — there is no
  *                 custom-MCP backend yet.
@@ -48,6 +51,9 @@ type ListState = { data: Connector[]; failed: boolean } | null;
 
 export default function Connectors() {
   const [list, setList] = useState<ListState>(null);
+  // The founder-visible connector catalog (INV-1). `null` while loading; a
+  // failed read degrades to an empty AVAILABLE section rather than a blank page.
+  const [catalog, setCatalog] = useState<ConnectorCatalogEntry[]>([]);
   const t = useTranslations("settings.connectors");
   // The connector the founder is mid-creating, if any → renders the create panel
   // pre-selected. `null` = no panel open.
@@ -171,14 +177,22 @@ export default function Connectors() {
 
   useEffect(() => {
     let active = true;
-    // Load sequentially (list, then pending installs) so the request order is
-    // deterministic and the pending-installs section settles after the catalog.
+    // Load sequentially (list, then catalog, then pending installs) so the
+    // request order is deterministic and each section settles in turn.
     (async () => {
       try {
         const data = await listConnectors();
         if (active) setList({ data, failed: false });
       } catch {
         if (active) setList({ data: [], failed: true });
+      }
+      try {
+        const res = await getConnectorCatalog();
+        if (active) setCatalog(res?.connectors ?? []);
+      } catch {
+        // Best-effort — a failed catalog read just empties the AVAILABLE
+        // section (no Connect cards); the CONNECTED list is unaffected.
+        if (active) setCatalog([]);
       }
       try {
         const res = await listUnclaimedInstalls();
@@ -194,8 +208,8 @@ export default function Connectors() {
 
   const connected = list && !list.failed ? list.data.filter((c) => c.is_active) : [];
   const connectedNames = new Set(connected.map((c) => c.connector));
-  // Supported connectors not yet connected → real Connect cards.
-  const available = KNOWN_CONNECTORS.filter((name) => !connectedNames.has(name));
+  // Catalog connectors not yet connected → real Connect cards.
+  const available = catalog.filter((entry) => !connectedNames.has(entry.name));
 
   return (
     <section className="connectors" aria-label={t("sectionLabel")}>
@@ -270,7 +284,7 @@ export default function Connectors() {
       <div className="connectors__section">
         <h3 className="connectors__section-label">{t("available")}</h3>
         <ul className="connectors__grid" aria-label={t("availableServices")}>
-          {available.map((name) => (
+          {available.map(({ name }) => (
             <li key={name} className="connector-card connector-card--available">
               <div className="connector-card__body">
                 <span className="connector-card__name">{t(`labels.${name}`)}</span>
@@ -330,6 +344,7 @@ export default function Connectors() {
               {t("connectTitle", { service: t(`labels.${connecting}`) })}
             </p>
             <AddConnector
+              catalog={catalog}
               initialConnector={connecting}
               onCancel={() => setConnecting(null)}
               onCreated={load}

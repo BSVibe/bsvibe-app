@@ -1,7 +1,11 @@
 "use client";
 
-import type { ConnectorCreate, ConnectorCreated, ConnectorName } from "@/lib/api/types";
-import { KNOWN_CONNECTORS } from "@/lib/api/types";
+import type {
+  ConnectorCatalogEntry,
+  ConnectorCreate,
+  ConnectorCreated,
+  ConnectorName,
+} from "@/lib/api/types";
 import { useTranslations } from "next-intl";
 import { useId, useMemo, useState } from "react";
 import { ConnectorOAuthButton } from "./ConnectorOAuthButton";
@@ -37,6 +41,12 @@ type FormState = "idle" | "submitting" | "error";
  * surface is unit-testable against a mocked fetch without monkey-patching
  * the module.
  *
+ * `catalog` (INV-1) is the founder-visible connector list fetched from
+ * `GET /api/v1/connectors/catalog` by the parent — it drives the picker
+ * options (single source of truth, no hardcoded mirror). Suppressed
+ * connectors (linear / trello) are absent from the response, so they never
+ * appear here.
+ *
  * Additive props for the catalog Connect flow: `initialConnector`
  * pre-selects the picker (so "Connect" on a card opens this panel already
  * pointed at that service — the founder can still change it), and
@@ -45,18 +55,20 @@ type FormState = "idle" | "submitting" | "error";
  * form's prior behaviour.
  */
 export default function AddConnector({
+  catalog,
   onCreated,
   createConnector,
   initialConnector,
   onCancel,
 }: {
+  catalog: ConnectorCatalogEntry[];
   onCreated: () => void;
   createConnector: (input: ConnectorCreate) => Promise<ConnectorCreated>;
   initialConnector?: ConnectorName;
   onCancel?: () => void;
 }) {
   const [connector, setConnector] = useState<ConnectorName>(
-    initialConnector ?? KNOWN_CONNECTORS[0],
+    initialConnector ?? catalog[0]?.name ?? "",
   );
   const [externalRef, setExternalRef] = useState("");
   const [deliveryConfig, setDeliveryConfig] = useState("");
@@ -173,9 +185,9 @@ export default function AddConnector({
             disabled={state === "submitting"}
             onChange={(e) => changeConnector(e.target.value as ConnectorName)}
           >
-            {KNOWN_CONNECTORS.map((name) => (
-              <option key={name} value={name}>
-                {name}
+            {catalog.map((entry) => (
+              <option key={entry.name} value={entry.name}>
+                {entry.name}
               </option>
             ))}
           </select>

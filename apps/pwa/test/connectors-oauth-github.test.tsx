@@ -17,7 +17,7 @@
 import AddConnector from "@/components/settings/AddConnector";
 import ConnectorRow from "@/components/settings/ConnectorRow";
 import { descriptorFor, isOAuthConnector } from "@/components/settings/connector-fields";
-import { CONNECTOR_KINDS, type Connector } from "@/lib/api/types";
+import type { Connector, ConnectorCatalogEntry } from "@/lib/api/types";
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
@@ -25,6 +25,17 @@ vi.mock("@/lib/api/connectors", async (orig) => ({
   ...(await orig<typeof import("@/lib/api/connectors")>()),
   startConnectorOAuth: vi.fn(),
 }));
+
+const CATALOG: ConnectorCatalogEntry[] = [
+  {
+    name: "github",
+    outbound: true,
+    importable: false,
+    webhook_trigger: true,
+    artifact_types: ["pull_request"],
+    import_action: null,
+  },
+];
 
 function makeConnector(over: Partial<Connector> & { connector: string }): Connector {
   return {
@@ -34,7 +45,9 @@ function makeConnector(over: Partial<Connector> & { connector: string }): Connec
     created_at: "2026-06-03T00:00:00Z",
     delivery_config: {},
     token_hint: "...wxyz",
-    kind: CONNECTOR_KINDS[over.connector as keyof typeof CONNECTOR_KINDS] ?? null,
+    outbound: true,
+    importable: ["obsidian", "claude", "gpt", "notion"].includes(over.connector),
+    webhook_trigger: false,
     last_import_at: null,
     last_import_count: null,
     ...over,
@@ -70,7 +83,12 @@ describe("Lift 1 — github oauth descriptor", () => {
 describe("Lift 1 — AddConnector github form", () => {
   it("renders Connect with GitHub, not a signing-secret input", () => {
     render(
-      <AddConnector onCreated={() => {}} createConnector={vi.fn()} initialConnector="github" />,
+      <AddConnector
+        catalog={CATALOG}
+        onCreated={() => {}}
+        createConnector={vi.fn()}
+        initialConnector="github"
+      />,
     );
     expect(screen.getByRole("button", { name: /connect with github/i })).toBeInTheDocument();
     expect(screen.queryByLabelText(/Signing secret/i)).not.toBeInTheDocument();

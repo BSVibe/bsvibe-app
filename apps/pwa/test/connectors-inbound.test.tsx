@@ -1,15 +1,15 @@
 /**
- * Lift B — inbound connector UI proofs.
+ * Lift B — inbound connector UI proofs (INV-1: catalog-driven).
  *
- *   - AddConnector renders different fields per connector kind
- *     (obsidian → vault_path; claude/gpt → export_path; notion → secret +
+ *   - AddConnector renders different fields per connector
+ *     (obsidian → vault_path; claude/gpt → export_path; notion → OAuth +
  *     optional inbound block).
  *   - Selecting an inbound connector and submitting packs the per-connector
  *     fields into `delivery_config` on the wire — the legacy JSON textarea
  *     is suppressed for inbound-only connectors.
- *   - ConnectorRow shows "Import now" ONLY when the connector is inbound /
- *     both AND has a bulk-import action (`isImportableConnector`). Outbound
- *     connectors (github) and push-only-inbound (slack) do NOT show it.
+ *   - ConnectorRow shows "Import now" ONLY when the row's `importable` flag
+ *     (from the catalog) is true. Outbound connectors (github) and
+ *     push-only-inbound (slack) do NOT show it.
  *   - Clicking "Import now" calls the injected `triggerImport`, surfaces the
  *     last-imported summary, and re-reads the list.
  *   - The connectors client `triggerImport` wraps the response correctly and
@@ -19,15 +19,12 @@
 import AddConnector from "@/components/settings/AddConnector";
 import ConnectorRow from "@/components/settings/ConnectorRow";
 import { triggerImport } from "@/lib/api/connectors";
-import {
-  CONNECTORS_WITH_IMPORT,
-  CONNECTOR_KINDS,
-  type Connector,
-  type ConnectorCreate,
-  type ConnectorCreated,
-  type ConnectorImportResult,
-  KNOWN_CONNECTORS,
-  isImportableConnector,
+import type {
+  Connector,
+  ConnectorCatalogEntry,
+  ConnectorCreate,
+  ConnectorCreated,
+  ConnectorImportResult,
 } from "@/lib/api/types";
 import { type Session, clearSession, setSession } from "@/lib/auth/session";
 import { render, screen, waitFor } from "@testing-library/react";
@@ -42,6 +39,33 @@ const SESSION: Session = {
   expiresAt: Date.now() + 3_600_000,
 };
 
+const IMPORTABLE = new Set(["obsidian", "claude", "gpt", "notion"]);
+const INBOUND = new Set(["obsidian", "claude", "gpt"]);
+
+function entry(name: string): ConnectorCatalogEntry {
+  return {
+    name,
+    outbound: !INBOUND.has(name),
+    importable: IMPORTABLE.has(name),
+    webhook_trigger: false,
+    artifact_types: [],
+    import_action: IMPORTABLE.has(name) ? "import_action" : null,
+  };
+}
+
+const CATALOG: ConnectorCatalogEntry[] = [
+  "github",
+  "slack",
+  "telegram",
+  "discord",
+  "sentry",
+  "notion",
+  "email-sender",
+  "obsidian",
+  "claude",
+  "gpt",
+].map(entry);
+
 function makeCreated(connector: string): ConnectorCreated {
   return {
     id: "11111111-1111-1111-1111-111111111111",
@@ -52,7 +76,6 @@ function makeCreated(connector: string): ConnectorCreated {
     delivery_config: {},
     webhook_token: "tok",
     webhook_url: `/api/webhooks/${connector}/tok`,
-    kind: CONNECTOR_KINDS[connector as keyof typeof CONNECTOR_KINDS] ?? null,
   };
 }
 
@@ -64,42 +87,24 @@ function makeConnector(over: Partial<Connector> & { connector: string }): Connec
     created_at: "2026-06-03T00:00:00Z",
     delivery_config: {},
     token_hint: "...wxyz",
-    kind: CONNECTOR_KINDS[over.connector as keyof typeof CONNECTOR_KINDS] ?? null,
+    outbound: !INBOUND.has(over.connector),
+    importable: IMPORTABLE.has(over.connector),
+    webhook_trigger: false,
     last_import_at: null,
     last_import_count: null,
     ...over,
   };
 }
 
-describe("Lift B — types + import allow-list", () => {
-  it("CONNECTOR_KINDS classifies the new inbound connectors", () => {
-    expect(CONNECTOR_KINDS.obsidian).toBe("inbound");
-    expect(CONNECTOR_KINDS.claude).toBe("inbound");
-    expect(CONNECTOR_KINDS.gpt).toBe("inbound");
-    expect(CONNECTOR_KINDS.notion).toBe("both");
-    expect(CONNECTOR_KINDS.slack).toBe("both");
-    expect(CONNECTOR_KINDS.github).toBe("outbound");
-  });
-
-  it("KNOWN_CONNECTORS now includes obsidian / claude / gpt", () => {
-    expect(KNOWN_CONNECTORS).toContain("obsidian");
-    expect(KNOWN_CONNECTORS).toContain("claude");
-    expect(KNOWN_CONNECTORS).toContain("gpt");
-  });
-
-  it("isImportableConnector covers the four inbound connectors and excludes slack", () => {
-    expect(CONNECTORS_WITH_IMPORT).toEqual(["obsidian", "claude", "gpt", "notion"]);
-    expect(isImportableConnector("obsidian")).toBe(true);
-    expect(isImportableConnector("notion")).toBe(true);
-    expect(isImportableConnector("slack")).toBe(false);
-    expect(isImportableConnector("github")).toBe(false);
-  });
-});
-
 describe("AddConnector — per-connector field branching", () => {
   it("renders obsidian fields (vault path, exclude patterns, region) and hides the JSON delivery_config", async () => {
     render(
-      <AddConnector onCreated={() => {}} createConnector={vi.fn()} initialConnector="obsidian" />,
+      <AddConnector
+        catalog={CATALOG}
+        onCreated={() => {}}
+        createConnector={vi.fn()}
+        initialConnector="obsidian"
+      />,
     );
 
     expect(screen.getByLabelText(/Vault path/i)).toBeInTheDocument();
@@ -114,13 +119,23 @@ describe("AddConnector — per-connector field branching", () => {
 
   it("renders claude / gpt with an export path field, no signing secret", () => {
     const { rerender } = render(
-      <AddConnector onCreated={() => {}} createConnector={vi.fn()} initialConnector="claude" />,
+      <AddConnector
+        catalog={CATALOG}
+        onCreated={() => {}}
+        createConnector={vi.fn()}
+        initialConnector="claude"
+      />,
     );
     expect(screen.getByLabelText(/Export path/i)).toBeInTheDocument();
     expect(screen.queryByLabelText(/Signing secret/i)).not.toBeInTheDocument();
 
     rerender(
-      <AddConnector onCreated={() => {}} createConnector={vi.fn()} initialConnector="gpt" />,
+      <AddConnector
+        catalog={CATALOG}
+        onCreated={() => {}}
+        createConnector={vi.fn()}
+        initialConnector="gpt"
+      />,
     );
     expect(screen.getByLabelText(/Export path/i)).toBeInTheDocument();
   });
@@ -129,7 +144,12 @@ describe("AddConnector — per-connector field branching", () => {
     // Lift 3 — notion flipped to "Connect with Notion"; OAuth provides the
     // token, so the signing-secret + api_token password fields are gone.
     render(
-      <AddConnector onCreated={() => {}} createConnector={vi.fn()} initialConnector="notion" />,
+      <AddConnector
+        catalog={CATALOG}
+        onCreated={() => {}}
+        createConnector={vi.fn()}
+        initialConnector="notion"
+      />,
     );
     expect(screen.getByRole("button", { name: /connect with notion/i })).toBeInTheDocument();
     expect(screen.queryByLabelText(/Signing secret/i)).not.toBeInTheDocument();
@@ -141,7 +161,12 @@ describe("AddConnector — per-connector field branching", () => {
   it("renders github as an OAuth Connect (no signing secret) + JSON delivery_config", () => {
     // Lift 1 — github flipped from a pasted PAT/secret to "Connect with GitHub".
     render(
-      <AddConnector onCreated={() => {}} createConnector={vi.fn()} initialConnector="github" />,
+      <AddConnector
+        catalog={CATALOG}
+        onCreated={() => {}}
+        createConnector={vi.fn()}
+        initialConnector="github"
+      />,
     );
     expect(screen.getByRole("button", { name: /connect with github/i })).toBeInTheDocument();
     expect(screen.queryByLabelText(/Signing secret/i)).not.toBeInTheDocument();
@@ -157,6 +182,7 @@ describe("AddConnector — per-connector field branching", () => {
 
     render(
       <AddConnector
+        catalog={CATALOG}
         onCreated={() => {}}
         createConnector={createConnector}
         initialConnector="obsidian"
@@ -186,6 +212,7 @@ describe("AddConnector — per-connector field branching", () => {
 
     render(
       <AddConnector
+        catalog={CATALOG}
         onCreated={() => {}}
         createConnector={createConnector}
         initialConnector="claude"
@@ -221,7 +248,7 @@ describe("ConnectorRow — Import now affordance", () => {
     expect(screen.queryByRole("button", { name: /Import now/i })).toBeNull();
   });
 
-  it("does NOT render Import now for slack (kind=both but push-only inbound)", () => {
+  it("does NOT render Import now for slack (webhook-driven inbound, not importable)", () => {
     render(
       <ConnectorRow
         connector={makeConnector({ connector: "slack" })}
@@ -234,7 +261,7 @@ describe("ConnectorRow — Import now affordance", () => {
   });
 
   it.each(["obsidian", "claude", "gpt", "notion"])(
-    "renders Import now for the %s connector",
+    "renders Import now for the %s connector (importable flag)",
     (name) => {
       render(
         <ConnectorRow

@@ -301,7 +301,10 @@ const DESCRIPTORS: Record<ConnectorName, ConnectorFormDescriptor> = {
 };
 
 export function descriptorFor(connector: ConnectorName): ConnectorFormDescriptor {
-  return DESCRIPTORS[connector];
+  // The picker only offers catalog names, which all have a descriptor. The
+  // outbound default is a safe fallback for any name the catalog adds before a
+  // bespoke descriptor lands (a plain signing_secret + delivery_config form).
+  return DESCRIPTORS[connector] ?? OUTBOUND_DEFAULT;
 }
 
 export { INBOUND_SECRET_PLACEHOLDER };

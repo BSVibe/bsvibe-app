@@ -6,23 +6,24 @@
  *  - empty CONNECTED state when no connectors exist (calm note, no cards)
  *  - CONNECTED renders a card per active connector (name, ref, masked hint,
  *    "Connected" pill) with a real Revoke and a disabled (coming-soon) Configure
- *  - AVAILABLE renders the not-yet-connected supported connectors as ENABLED
+ *  - AVAILABLE renders the not-yet-connected catalog connectors as ENABLED
  *    "Connect" cards, and the custom-MCP card as a DISABLED "coming soon"
- *    control. The catalog shows ONLY real connectors — no aspirational
- *    (Figma/Linear/…) coming-soon cards (L6 3c).
+ *    control. The catalog is fetched from GET /api/v1/connectors/catalog (INV-1
+ *    single source of truth) — no hardcoded mirror, and suppressed connectors
+ *    (linear / trello) are absent from the response so they never appear.
  *  - Connect → opens the create panel pre-selected → POST fires with the form
  *    body → the one-time webhook_url + token are shown with a "won't see again"
  *    note → a re-read fires
  *  - Revoke: confirm → DELETE fires → re-read fires
  *  - calm inline error states (create + revoke) never crash the surface
  *
- * Determinism note: the connector list loads asynchronously on mount, so every
- * assertion that depends on it is gated behind `findBy*`/`waitFor` — we never
- * read a synchronous `getByText` immediately after `render`. This removes the
- * race that made the previous (row-list) version of this test flaky.
+ * Determinism note: the connector list + catalog load asynchronously on mount,
+ * so every assertion that depends on them is gated behind `findBy*`/`waitFor` —
+ * we never read a synchronous `getByText` immediately after `render`.
  */
 
 import Connectors from "@/components/settings/Connectors";
+import type { ConnectorCatalogEntry } from "@/lib/api/types";
 import { type Session, clearSession, setSession } from "@/lib/auth/session";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -41,6 +42,103 @@ function jsonResponse(body: unknown, status = 200) {
     status,
     headers: { "Content-Type": "application/json" },
   });
+}
+
+/** The founder-visible connector catalog the backend derives from PluginMeta
+ *  (GET /api/v1/connectors/catalog). Only `importable` is load-bearing for the
+ *  UI here; the other flags are plausible parity values. */
+const CATALOG: ConnectorCatalogEntry[] = [
+  {
+    name: "github",
+    outbound: true,
+    importable: false,
+    webhook_trigger: true,
+    artifact_types: ["pull_request"],
+    import_action: null,
+  },
+  {
+    name: "slack",
+    outbound: true,
+    importable: false,
+    webhook_trigger: true,
+    artifact_types: ["message"],
+    import_action: null,
+  },
+  {
+    name: "telegram",
+    outbound: true,
+    importable: false,
+    webhook_trigger: true,
+    artifact_types: ["message"],
+    import_action: null,
+  },
+  {
+    name: "discord",
+    outbound: true,
+    importable: false,
+    webhook_trigger: true,
+    artifact_types: ["message"],
+    import_action: null,
+  },
+  {
+    name: "sentry",
+    outbound: true,
+    importable: false,
+    webhook_trigger: true,
+    artifact_types: ["issue"],
+    import_action: null,
+  },
+  {
+    name: "notion",
+    outbound: true,
+    importable: true,
+    webhook_trigger: false,
+    artifact_types: ["page"],
+    import_action: "import_pages",
+  },
+  {
+    name: "email-sender",
+    outbound: true,
+    importable: false,
+    webhook_trigger: false,
+    artifact_types: ["email"],
+    import_action: null,
+  },
+  {
+    name: "obsidian",
+    outbound: false,
+    importable: true,
+    webhook_trigger: false,
+    artifact_types: [],
+    import_action: "import_vault",
+  },
+  {
+    name: "claude",
+    outbound: false,
+    importable: true,
+    webhook_trigger: false,
+    artifact_types: [],
+    import_action: "import_conversations",
+  },
+  {
+    name: "gpt",
+    outbound: false,
+    importable: true,
+    webhook_trigger: false,
+    artifact_types: [],
+    import_action: "import_conversations",
+  },
+];
+
+/** A fetch that routes by URL so the mount-time list / catalog / pending-installs
+ *  reads each get the right shape regardless of call order. */
+function routedFetch(over?: { list?: () => Response }) {
+  return vi.fn(async (url: string | URL) => {
+    const u = String(url);
+    if (u.includes("/connectors/catalog")) return jsonResponse({ connectors: CATALOG });
+    if (u.includes("/oauth/unclaimed")) return jsonResponse({ unclaimed: [] });
+    return over?.list ? over.list() : jsonResponse([]);
+  }) as unknown as typeof fetch;
 }
 
 const GITHUB_ROW = {
@@ -64,7 +162,7 @@ describe("Connectors catalog surface", () => {
   });
 
   it("keeps the Connectors heading so the tab host can find it", async () => {
-    global.fetch = vi.fn(async () => jsonResponse([])) as unknown as typeof fetch;
+    global.fetch = routedFetch();
     render(<Connectors />);
     expect(screen.getByRole("heading", { name: /connectors/i })).toBeInTheDocument();
     // Settle the async load so the test doesn't leak an unawaited state update.
@@ -72,7 +170,7 @@ describe("Connectors catalog surface", () => {
   });
 
   it("shows a calm empty CONNECTED state when there are no connectors", async () => {
-    global.fetch = vi.fn(async () => jsonResponse([])) as unknown as typeof fetch;
+    global.fetch = routedFetch();
 
     render(<Connectors />);
 
@@ -84,7 +182,7 @@ describe("Connectors catalog surface", () => {
     // hint. OAuth connectors (github, …) drop that line — the webhook hint is
     // meaningless for them — covered in connectors-oauth-github.test.tsx.
     const telegramRow = { ...GITHUB_ROW, connector: "telegram", external_ref: "ops" };
-    global.fetch = vi.fn(async () => jsonResponse([telegramRow])) as unknown as typeof fetch;
+    global.fetch = routedFetch({ list: () => jsonResponse([telegramRow]) });
 
     render(<Connectors />);
 
@@ -99,7 +197,7 @@ describe("Connectors catalog surface", () => {
 
   it("does NOT render a 'delivers out' label even when delivery_config has keys (L6 3a)", async () => {
     const rowWithDelivery = { ...GITHUB_ROW, delivery_config: { repo: "acme/widgets" } };
-    global.fetch = vi.fn(async () => jsonResponse([rowWithDelivery])) as unknown as typeof fetch;
+    global.fetch = routedFetch({ list: () => jsonResponse([rowWithDelivery]) });
 
     render(<Connectors />);
 
@@ -109,7 +207,7 @@ describe("Connectors catalog surface", () => {
   });
 
   it("disables Configure on a connected card (no update API yet)", async () => {
-    global.fetch = vi.fn(async () => jsonResponse([GITHUB_ROW])) as unknown as typeof fetch;
+    global.fetch = routedFetch({ list: () => jsonResponse([GITHUB_ROW]) });
 
     render(<Connectors />);
 
@@ -119,33 +217,35 @@ describe("Connectors catalog surface", () => {
     expect(configure).toHaveAttribute("title");
   });
 
-  it("renders not-yet-connected supported connectors as enabled Connect cards", async () => {
-    // github is connected; the rest of KNOWN_CONNECTORS are available.
-    global.fetch = vi.fn(async () => jsonResponse([GITHUB_ROW])) as unknown as typeof fetch;
+  it("renders not-yet-connected catalog connectors as enabled Connect cards", async () => {
+    // github is connected; the rest of the catalog is available.
+    global.fetch = routedFetch({ list: () => jsonResponse([GITHUB_ROW]) });
 
     render(<Connectors />);
 
     const available = await screen.findByRole("list", { name: /available/i });
-    // notion is supported and not connected → an enabled Connect card.
-    const notionCard = within(available).getByText("Notion").closest("li") as HTMLElement;
+    // notion is in the catalog and not connected → an enabled Connect card.
+    const notionCard = (await within(available).findByText("Notion")).closest("li") as HTMLElement;
     expect(within(notionCard).getByRole("button", { name: /^Connect$/i })).toBeEnabled();
     // github is connected → it must NOT appear in Available as a Connect card.
     expect(within(available).queryByText("github")).not.toBeInTheDocument();
   });
 
   it("does NOT render aspirational coming-soon cards (L6 3c — catalog shows only real connectors)", async () => {
-    global.fetch = vi.fn(async () => jsonResponse([])) as unknown as typeof fetch;
+    global.fetch = routedFetch();
 
     render(<Connectors />);
 
     const available = await screen.findByRole("list", { name: /available/i });
+    // Wait for the catalog to populate before asserting absence.
+    await within(available).findByText("Notion");
     for (const name of ["Figma", "Linear", "Google Drive", "PowerPoint", "Postgres"]) {
       expect(within(available).queryByText(name)).not.toBeInTheDocument();
     }
   });
 
   it("renders the custom-MCP card with a disabled coming-soon Add custom button", async () => {
-    global.fetch = vi.fn(async () => jsonResponse([])) as unknown as typeof fetch;
+    global.fetch = routedFetch();
 
     render(<Connectors />);
 
@@ -173,6 +273,8 @@ describe("Connectors catalog surface", () => {
       .fn()
       // initial list (empty)
       .mockResolvedValueOnce(jsonResponse([]))
+      // catalog fetch on mount (INV-1)
+      .mockResolvedValueOnce(jsonResponse({ connectors: CATALOG }))
       // pending-installs fetch on mount (Sentry claim-later)
       .mockResolvedValueOnce(jsonResponse({ unclaimed: [] }))
       // create
@@ -184,8 +286,7 @@ describe("Connectors catalog surface", () => {
     render(<Connectors />);
 
     // Open the create panel from telegram's Connect card.
-    const available = await screen.findByRole("list", { name: /available/i });
-    const telegramCard = within(available).getByText("Telegram").closest("li") as HTMLElement;
+    const telegramCard = (await screen.findByText("Telegram")).closest("li") as HTMLElement;
     await userEvent.click(within(telegramCard).getByRole("button", { name: /^Connect$/i }));
 
     // The panel is pre-selected to telegram.
@@ -209,8 +310,8 @@ describe("Connectors catalog surface", () => {
     expect(screen.getByText(/won.t see (this|it) again/i)).toBeInTheDocument();
 
     // Assert the create POST carried the form body. (calls: [0] list, [1]
-    // pending-installs, [2] create POST, [3] re-read.)
-    const createCall = fetchMock.mock.calls[2] as unknown as [string, RequestInit];
+    // catalog, [2] pending-installs, [3] create POST, [4] re-read.)
+    const createCall = fetchMock.mock.calls[3] as unknown as [string, RequestInit];
     expect(createCall[0]).toBe("/api/v1/connectors");
     expect(createCall[1].method).toBe("POST");
     expect(JSON.parse(createCall[1].body as string)).toEqual({
@@ -220,21 +321,21 @@ describe("Connectors catalog surface", () => {
       delivery_config: { chat_id: "123" },
     });
 
-    // A re-read fired (list, pending-installs, create, re-read).
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(4));
+    // A re-read fired (list, catalog, pending-installs, create, re-read).
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(5));
   });
 
   it("rejects an invalid delivery_config JSON before firing the request", async () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(jsonResponse([]))
+      .mockResolvedValueOnce(jsonResponse({ connectors: CATALOG }))
       .mockResolvedValueOnce(jsonResponse({ unclaimed: [] }));
     global.fetch = fetchMock as unknown as typeof fetch;
 
     render(<Connectors />);
 
-    const available = await screen.findByRole("list", { name: /available/i });
-    const telegramCard = within(available).getByText("Telegram").closest("li") as HTMLElement;
+    const telegramCard = (await screen.findByText("Telegram")).closest("li") as HTMLElement;
     await userEvent.click(within(telegramCard).getByRole("button", { name: /^Connect$/i }));
 
     await userEvent.type(screen.getByLabelText(/Signing secret/i), "shh");
@@ -244,22 +345,22 @@ describe("Connectors catalog surface", () => {
     await userEvent.click(screen.getByRole("button", { name: /^Add connector$/i }));
 
     expect(await screen.findByText(/not valid JSON/i)).toBeInTheDocument();
-    // No POST fired — only the initial list GET + pending-installs fetch on mount.
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    // No POST fired — only the initial list GET + catalog + pending-installs on mount.
+    expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 
   it("shows a calm inline error when create fails and keeps the form usable", async () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(jsonResponse([]))
+      .mockResolvedValueOnce(jsonResponse({ connectors: CATALOG }))
       .mockResolvedValueOnce(jsonResponse({ unclaimed: [] }))
       .mockResolvedValueOnce(jsonResponse("bad", 422));
     global.fetch = fetchMock as unknown as typeof fetch;
 
     render(<Connectors />);
 
-    const available = await screen.findByRole("list", { name: /available/i });
-    const telegramCard = within(available).getByText("Telegram").closest("li") as HTMLElement;
+    const telegramCard = (await screen.findByText("Telegram")).closest("li") as HTMLElement;
     await userEvent.click(within(telegramCard).getByRole("button", { name: /^Connect$/i }));
 
     await userEvent.type(screen.getByLabelText(/Signing secret/i), "shh");
@@ -273,6 +374,7 @@ describe("Connectors catalog surface", () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(jsonResponse([GITHUB_ROW]))
+      .mockResolvedValueOnce(jsonResponse({ connectors: CATALOG }))
       .mockResolvedValueOnce(jsonResponse({ unclaimed: [] }))
       .mockResolvedValueOnce(jsonResponse(null, 204))
       .mockResolvedValueOnce(jsonResponse([{ ...GITHUB_ROW, is_active: false }]));
@@ -288,20 +390,21 @@ describe("Connectors catalog surface", () => {
     const confirm = await within(card).findByRole("button", { name: /^Confirm revoke$/i });
     await userEvent.click(confirm);
 
-    // calls: [0] list, [1] pending-installs, [2] DELETE, [3] re-read.
+    // calls: [0] list, [1] catalog, [2] pending-installs, [3] DELETE, [4] re-read.
     await waitFor(() => {
-      const deleteCall = fetchMock.mock.calls[2] as unknown as [string, RequestInit];
+      const deleteCall = fetchMock.mock.calls[3] as unknown as [string, RequestInit];
       expect(deleteCall[0]).toBe(`/api/v1/connectors/${GITHUB_ROW.id}`);
       expect(deleteCall[1].method).toBe("DELETE");
     });
     // A re-read fired after the revoke.
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(4));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(5));
   });
 
   it("shows a calm inline error when revoke fails — card stays actionable", async () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(jsonResponse([GITHUB_ROW]))
+      .mockResolvedValueOnce(jsonResponse({ connectors: CATALOG }))
       .mockResolvedValueOnce(jsonResponse({ unclaimed: [] }))
       .mockResolvedValueOnce(jsonResponse("boom", 500));
     global.fetch = fetchMock as unknown as typeof fetch;
@@ -317,9 +420,7 @@ describe("Connectors catalog surface", () => {
   });
 
   it("surfaces a calm note when the list read fails", async () => {
-    global.fetch = vi.fn(
-      async () => new Response("boom", { status: 500 }),
-    ) as unknown as typeof fetch;
+    global.fetch = routedFetch({ list: () => new Response("boom", { status: 500 }) });
 
     render(<Connectors />);
 

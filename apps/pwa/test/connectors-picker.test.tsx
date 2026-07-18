@@ -1,36 +1,47 @@
 /**
- * Connector picker — the KNOWN_CONNECTORS allow-list + the AddConnector select.
+ * Connector picker — the AddConnector <select>, now driven by the fetched
+ * connector catalog (GET /api/v1/connectors/catalog, INV-1 single source of
+ * truth) rather than a hardcoded mirror.
  *
- * PR #45 built KNOWN_CONNECTORS before the email-sender backend builder landed,
- * so it was excluded. email-sender is now a valid OUTBOUND connector
- * (backend/workflow/application/delivery/connector_dispatch.py OUTBOUND_EVENT_BUILDERS), and the
- * create validator (backend/api/v1/connectors.py) accepts it via the outbound
- * branch. This test pins that:
- *
- *  - email-sender is in KNOWN_CONNECTORS (and the name is email-sender, NOT email)
- *  - the AddConnector picker offers it as an <option>
- *  - selecting it sends connector: "email-sender" on the create POST
+ * email-sender is a valid OUTBOUND connector
+ * (backend/workflow/application/delivery/connector_dispatch.py OUTBOUND_EVENT_BUILDERS)
+ * that the create validator accepts via the outbound branch. This pins that the
+ * picker offers whatever the catalog returns (including email-sender, and NOT a
+ * bare "email"), and that selecting it sends `connector: "email-sender"`.
  */
 
 import AddConnector from "@/components/settings/AddConnector";
-import { KNOWN_CONNECTORS } from "@/lib/api/types";
-import type { ConnectorCreate, ConnectorCreated } from "@/lib/api/types";
+import type { ConnectorCatalogEntry, ConnectorCreate, ConnectorCreated } from "@/lib/api/types";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
-describe("connector picker — email-sender", () => {
-  it("includes email-sender in KNOWN_CONNECTORS (and not a bare 'email')", () => {
-    expect(KNOWN_CONNECTORS).toContain("email-sender");
-    expect(KNOWN_CONNECTORS).not.toContain("email");
-  });
+function entry(name: string, over: Partial<ConnectorCatalogEntry> = {}): ConnectorCatalogEntry {
+  return {
+    name,
+    outbound: true,
+    importable: false,
+    webhook_trigger: false,
+    artifact_types: [],
+    import_action: null,
+    ...over,
+  };
+}
 
-  it("offers email-sender as an option in the AddConnector picker", () => {
-    render(<AddConnector onCreated={() => {}} createConnector={vi.fn()} />);
+const CATALOG: ConnectorCatalogEntry[] = [
+  entry("github"),
+  entry("telegram"),
+  entry("email-sender"),
+];
+
+describe("connector picker — email-sender", () => {
+  it("offers the catalog connectors as options (email-sender, not a bare 'email')", () => {
+    render(<AddConnector catalog={CATALOG} onCreated={() => {}} createConnector={vi.fn()} />);
 
     const select = screen.getByLabelText("Connector") as HTMLSelectElement;
     const optionValues = Array.from(select.options).map((o) => o.value);
     expect(optionValues).toContain("email-sender");
+    expect(optionValues).not.toContain("email");
   });
 
   it("sends connector: 'email-sender' when it is selected and submitted", async () => {
@@ -48,7 +59,9 @@ describe("connector picker — email-sender", () => {
       async (_input: ConnectorCreate): Promise<ConnectorCreated> => created,
     );
 
-    render(<AddConnector onCreated={() => {}} createConnector={createConnector} />);
+    render(
+      <AddConnector catalog={CATALOG} onCreated={() => {}} createConnector={createConnector} />,
+    );
 
     await userEvent.selectOptions(screen.getByLabelText("Connector"), "email-sender");
     await userEvent.type(screen.getByLabelText(/Signing secret/i), "shh");

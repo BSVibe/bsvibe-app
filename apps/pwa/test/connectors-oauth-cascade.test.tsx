@@ -7,7 +7,7 @@
 
 import ConnectorRow from "@/components/settings/ConnectorRow";
 import { descriptorFor, isOAuthConnector } from "@/components/settings/connector-fields";
-import { CONNECTOR_KINDS, type Connector } from "@/lib/api/types";
+import type { Connector } from "@/lib/api/types";
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
@@ -23,7 +23,9 @@ function makeConnector(over: Partial<Connector> & { connector: string }): Connec
     created_at: "2026-06-03T00:00:00Z",
     delivery_config: {},
     token_hint: "...wxyz",
-    kind: CONNECTOR_KINDS[over.connector as keyof typeof CONNECTOR_KINDS] ?? null,
+    outbound: true,
+    importable: ["obsidian", "claude", "gpt", "notion"].includes(over.connector),
+    webhook_trigger: false,
     last_import_at: null,
     last_import_count: null,
     ...over,

@@ -1,7 +1,6 @@
 "use client";
 
-import type { Connector, ConnectorImportResult, ConnectorName } from "@/lib/api/types";
-import { isImportableConnector } from "@/lib/api/types";
+import type { Connector, ConnectorImportResult } from "@/lib/api/types";
 import { useTranslations } from "next-intl";
 import { useState } from "react";
 import { ConnectorOAuthButton } from "./ConnectorOAuthButton";
@@ -16,9 +15,9 @@ type RowState = "idle" | "confirming" | "revoking" | "importing" | "import-error
  * never the full capability), and a "Connected" status pill.
  *
  * Three actions:
- *  - Import now (Lift B) — REAL, but ONLY when the connector is inbound or
- *    both AND has a bulk-import action (isImportableConnector). Fires
- *    `POST /api/v1/connectors/{id}/import`. Shows inline status (importing /
+ *  - Import now (Lift B) — REAL, but ONLY when the connector exposes a
+ *    bulk-import action (the catalog's `importable` flag, carried on the row).
+ *    Fires `POST /api/v1/connectors/{id}/import`. Shows inline status (importing /
  *    done / error). On success, surfaces the imported count + last-imported
  *    timestamp and re-reads the list so the row reflects the new state.
  *  - Configure → present per the catalog design but DISABLED (there is NO
@@ -51,10 +50,7 @@ export default function ConnectorRow({
   const t = useTranslations("settings.connectors.row");
   const tConnectors = useTranslations("settings.connectors");
 
-  const showImport =
-    connector.is_active &&
-    triggerImport !== undefined &&
-    isImportableConnector(connector.connector);
+  const showImport = connector.is_active && triggerImport !== undefined && connector.importable;
 
   async function confirmRevoke() {
     if (state === "revoking") return;
@@ -121,7 +117,7 @@ export default function ConnectorRow({
             without first revoking. Previously this only appeared on the
             backend-driven needs_reauth state, leaving healthy rotation and
             PAT→OAuth migration with no UI path. */}
-        {isOAuthConnector(connector.connector as ConnectorName) && connector.is_active ? (
+        {isOAuthConnector(connector.connector) && connector.is_active ? (
           <div className="connector-card__oauth">
             {connector.connector === "github" ? (
               <GithubAppSetup
@@ -144,7 +140,7 @@ export default function ConnectorRow({
             external ref. An outbound OAuth connector (github, …) has no inbound
             webhook, so the hint is meaningless and the repo ref is redundant on
             a connected card — drop the whole line for oauth connectors. */}
-        {isOAuthConnector(connector.connector as ConnectorName) ? null : (
+        {isOAuthConnector(connector.connector) ? null : (
           <p className="connector-card__detail">
             {connector.external_ref ? (
               <span className="connector-card__ref">{connector.external_ref}</span>

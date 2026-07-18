@@ -974,80 +974,36 @@ export interface CorrectRequestBody {
 
 // ── Connectors (REAL endpoint /api/v1/connectors) ─────────────────────────
 
-/** The connector names the backend's `ConnectorCreate.connector` validator
- *  accepts today (backend/api/v1/connectors.py): a name is registerable iff it
- *  has an inbound parser (ConnectorInboundResolver._PARSERS — github / slack /
- *  telegram / discord / sentry) OR an outbound delivery builder
- *  (OUTBOUND_EVENT_BUILDERS — notion / slack / email-sender). Anything else
- *  422s. We mirror that exact validated set so the picker never offers a
- *  connector the server rejects.
- *
- *  Note: the email connector's backend name is `email-sender` (NOT `email`) —
- *  it is an outbound-only delivery builder (backend/workflow/application/delivery/connector_dispatch
- *  .py OUTBOUND_EVENT_BUILDERS), so it has no inbound parser but is registerable
- *  via the outbound branch of the validator.
- *
- *  Note: linear / trello are named in the Workflow as eventual connectors but
- *  have NEITHER an inbound parser NOR an outbound builder wired yet, so the
- *  create validator rejects them — they are intentionally absent here until the
- *  backend lands their mappers (see PR description gap note). */
-export const KNOWN_CONNECTORS = [
-  "github",
-  "slack",
-  "telegram",
-  "discord",
-  "sentry",
-  "notion",
-  "email-sender",
-  // Lift B — inbound knowledge-import connectors. These have NEITHER an
-  // inbound webhook parser NOR an outbound delivery builder; the backend
-  // validator recognises them via the kind map
-  // (`backend.connectors.kinds.CONNECTOR_KINDS`). Their binding's
-  // `delivery_config` carries the import-time config (vault_path /
-  // export_path / api_token + page_id) rather than outbound routing.
-  "obsidian",
-  "claude",
-  "gpt",
-] as const;
+/** A connector name — an opaque identifier owned by the backend catalog
+ *  (`GET /api/v1/connectors/catalog`, INV-1 single source of truth). The PWA
+ *  no longer hardcodes the set: the picker is driven by the fetched catalog and
+ *  the backend validator is the authority on what is registerable. */
+export type ConnectorName = string;
 
-export type ConnectorName = (typeof KNOWN_CONNECTORS)[number];
+/** One founder-visible connector from `GET /api/v1/connectors/catalog`
+ *  (backend `CatalogEntry`, INV-1). The catalog is the single source of truth
+ *  for which connectors exist and what each can do — the create form and the
+ *  row's "Import now" button branch off these capability flags instead of a
+ *  hand-maintained mirror. Only `user_connectable` connectors are returned, so
+ *  suppressed ones (linear / trello) are simply absent. */
+export interface ConnectorCatalogEntry {
+  /** The connector identifier sent as `ConnectorCreate.connector`. */
+  name: string;
+  /** Has an outbound delivery builder (delivers a verified Deliverable OUT). */
+  outbound: boolean;
+  /** Exposes a bulk-import action via `POST /connectors/{id}/import`. */
+  importable: boolean;
+  /** Accepts an inbound webhook (`POST /api/webhooks/{connector}/{token}`). */
+  webhook_trigger: boolean;
+  /** Artifact types an outbound connector delivers (empty when not outbound). */
+  artifact_types: string[];
+  /** The plugin action an importable connector runs, else `null`. */
+  import_action: string | null;
+}
 
-/** Mirror of `backend.connectors.kinds.CONNECTOR_KINDS` — the founder UI
- *  branches the create form (inbound config fields vs outbound delivery
- *  JSON) and the connector row's "Import now" button on this map.
- *
- *  Keep in sync with the backend; a mismatch causes the form to render
- *  the wrong fields (and the import endpoint to 422 the founder's tap). */
-export type ConnectorKind = "inbound" | "outbound" | "both";
-
-export const CONNECTOR_KINDS: Record<ConnectorName, ConnectorKind> = {
-  github: "outbound",
-  slack: "both",
-  telegram: "outbound",
-  discord: "outbound",
-  sentry: "outbound",
-  "email-sender": "outbound",
-  obsidian: "inbound",
-  claude: "inbound",
-  gpt: "inbound",
-  notion: "both",
-};
-
-/** Connectors that expose a bulk-import action via
- *  `POST /api/v1/connectors/{id}/import`. Mirrors the backend's
- *  `INBOUND_IMPORT_ACTIONS` keys. Used by `ConnectorRow` to decide
- *  whether to show "Import now" — `slack` is kind="both" but its inbound
- *  is webhook-driven, so it's NOT in this set (the backend would 422 on
- *  it). */
-export const CONNECTORS_WITH_IMPORT: readonly ConnectorName[] = [
-  "obsidian",
-  "claude",
-  "gpt",
-  "notion",
-] as const;
-
-export function isImportableConnector(name: string): boolean {
-  return (CONNECTORS_WITH_IMPORT as readonly string[]).includes(name);
+/** `GET /api/v1/connectors/catalog` response (backend `ConnectorCatalog`). */
+export interface ConnectorCatalog {
+  connectors: ConnectorCatalogEntry[];
 }
 
 /** `POST /api/v1/connectors` body (backend ConnectorCreate, extra=forbid).
@@ -1073,12 +1029,12 @@ export interface ConnectorCreated {
   delivery_config: Record<string, unknown>;
   webhook_token: string;
   webhook_url: string;
-  /** Lift B — the connector's classification (inbound / outbound / both).
-   *  `null` for an unrecognised connector — the validator would normally
-   *  reject it before reaching here, so callers can treat this as
-   *  effectively always present for a known connector. Optional on the
-   *  wire so legacy clients (and pre-Lift-B fixtures) keep validating. */
-  kind?: ConnectorKind | null;
+  /** Backward-compat wire field: the backend still sends the retired
+   *  inbound / outbound / both `kind` string, but the PWA no longer reads it
+   *  (INV-1 migrated the UI to the catalog's capability flags). Optional +
+   *  untyped here only to document the wire until the backend cleanup drops
+   *  it. */
+  kind?: string | null;
 }
 
 /** `GET /api/v1/connectors` element (backend ConnectorOut). Never the secret,
@@ -1091,11 +1047,18 @@ export interface Connector {
   created_at: string;
   delivery_config: Record<string, unknown>;
   token_hint: string;
-  /** Lift B — connector kind so the row UI can branch (Import-now button
-   *  for inbound/both, hidden otherwise). `null` for an unrecognised
-   *  connector (defensive). Optional on the wire so legacy fixtures
-   *  (pre-Lift-B) keep validating. */
-  kind?: ConnectorKind | null;
+  /** INV-1 — capability flags derived from the catalog (backend `ConnectorOut`),
+   *  so the row UI branches without a second hardcoded map. `importable` gates
+   *  the "Import now" button; `outbound` / `webhook_trigger` are carried for
+   *  parity with the catalog entry. */
+  outbound: boolean;
+  importable: boolean;
+  webhook_trigger: boolean;
+  /** Backward-compat wire field: the backend still sends the retired
+   *  inbound / outbound / both `kind` string, but the PWA no longer reads it
+   *  (INV-1 migrated the row UI to `importable`). Optional + untyped here only
+   *  to document the wire until the backend cleanup drops it. */
+  kind?: string | null;
   /** ISO timestamp of the last successful import, or `null` if the
    *  binding has never been imported. Surfaced as "Last imported …" in
    *  the row's detail line. */
