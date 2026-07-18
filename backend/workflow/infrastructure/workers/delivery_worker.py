@@ -66,6 +66,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from backend.identity.workspaces_db import WorkspaceRow
 from backend.workers.base import BaseWorker
 from backend.workflow.application.safe_mode_queue import SafeModeQueue
+from backend.workflow.channels import DELIVERY_EVENTS
 from backend.workflow.domain.delivery import ActionResult, DeliveryResult
 from backend.workflow.infrastructure.db import Deliverable
 from backend.workflow.infrastructure.delivery.db import DeliveryEventRow
@@ -322,7 +323,14 @@ class DeliveryWorker(BaseWorker):
         """
         async with self._session_factory() as session:
             stmt = build_delivery_claim_stmt(batch_size=self._cfg.batch_size)
-            rows = (await session.execute(stmt)).scalars().all()
+
+            async def _claim() -> list[DeliveryEventRow]:
+                return list((await session.execute(stmt)).scalars().all())
+
+            rows = await DELIVERY_EVENTS.consume(
+                consumer_id="worker:delivery_worker",
+                claim=_claim,
+            )
             if not rows:
                 return 0
             queue = SafeModeQueue(session)
