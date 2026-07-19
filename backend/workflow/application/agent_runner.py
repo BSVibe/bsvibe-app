@@ -42,6 +42,7 @@ import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.config import Settings, get_settings
+from backend.notifications.emit import emit_notification
 from backend.router.domain.repositories import RunRoutingRuleRepository
 from backend.router.infrastructure.repositories import SqlAlchemyRunRoutingRuleRepository
 from backend.workflow.application.agent_loop import LoopResult, RunCompute
@@ -85,6 +86,10 @@ def _with_credits_hint(reason: str) -> str:
     if not reason or _CREDITS_HINT in reason or not _AUTH_FAILURE_RE.search(reason):
         return reason
     return reason + _CREDITS_HINT
+
+
+#: Deterministic (no-LLM) founder-facing text for the ``failed`` notification.
+_RUN_FAILED_TITLE = "A run failed"
 
 
 def _is_linked_worktree(worktree: Path) -> bool:
@@ -290,6 +295,13 @@ class AgentRunner:
             to_status=to_status.value,
         )
 
+        # Notifier N3 — the SINGLE run-terminal-FAILED funnel (both production
+        # FAILED writes route through this transition). Queue a ``failed``
+        # notification in THIS transaction; the ``run.status is to_status``
+        # guard above already no-ops a repeat, so the founder is told once.
+        if to_status is RunStatus.FAILED:
+            await self._emit_run_failed(run, reason)
+
         # W2 — auto-ship on REVIEW_READY for product-bound runs that
         # actually have a git worktree on disk. Glue tests that bypass
         # the workspace provisioner (no worktree) skip auto-ship and
@@ -309,6 +321,26 @@ class AgentRunner:
         if to_status is RunStatus.REVIEW_READY:
             await self._maybe_spawn_impl_run(run)
         return True
+
+    async def _emit_run_failed(self, run: ExecutionRun, reason: str | None) -> None:
+        """Queue the ``failed`` notification for a run that reached its FAILED
+        terminal. Deterministic content — the body carries the transition
+        ``reason`` (the honest "why", e.g. a frame-unclassified or system error),
+        deep-linked to the run. Deduped on ``failed:<run_id>``."""
+        body = (reason or "").strip() or "A run reached its failed terminal."
+        await emit_notification(
+            self._session,
+            workspace_id=run.workspace_id,
+            event="failed",
+            dedupe_key=f"failed:{run.id}",
+            payload={
+                "title": _RUN_FAILED_TITLE,
+                "body": body,
+                "link": f"/runs/{run.id}",
+                "run_id": str(run.id),
+            },
+            producer_id="workflow:run_failed",
+        )
 
     async def _auto_ship_product_run(self, run: ExecutionRun) -> None:
         """Fast-forward main onto the run branch and transition to SHIPPED.

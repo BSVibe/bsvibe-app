@@ -43,6 +43,23 @@ logger = structlog.get_logger(__name__)
 
 _SETTLE_SUMMARY_CAP = 500
 
+#: Deterministic (no-LLM) founder-facing text for the ``shipped`` notification.
+#: The title is stable; the body's first line is the deliverable summary's title
+#: line (already the founder-intent title, not raw LLM narration — see
+#: ``_compose_verified_summary``), so the notification says WHAT shipped.
+_SHIPPED_TITLE = "A verified deliverable shipped"
+
+
+def _shipped_body(summary: str) -> str:
+    """The ``shipped`` notification body — the deliverable summary's first line.
+
+    ``summary`` is ``"<title>\\n\\n<body>"`` from ``_compose_verified_summary``;
+    the first line is the founder-intent title. Deterministic, no LLM.
+    """
+    first_line = next((ln.strip() for ln in (summary or "").splitlines() if ln.strip()), "")
+    return first_line or "A verified deliverable is ready."
+
+
 # Cap for the captured unified diff stored on the deliverable payload. A typical
 # deliverable diff is a few KB; this guards a runaway diff (a large generated/
 # vendored file) from bloating the row. Past it, the leading bytes are kept and
@@ -190,6 +207,28 @@ async def write_verified_deliverable(
         )
     )
     await session.flush()
+
+    # Notifier N3 — the verified terminal is the "shipped to the world" moment, so
+    # queue a ``shipped`` notification in THIS transaction (confirmed iff the
+    # deliverable commits). Deterministic content, deep-linked to the deliverable.
+    # Mid-loop partials + knowledge answers are NOT verified ships → no notify.
+    from backend.notifications.emit import emit_notification  # noqa: PLC0415 — leaf, local
+
+    await emit_notification(
+        session,
+        workspace_id=run.workspace_id,
+        event="shipped",
+        dedupe_key=f"shipped:{deliverable.id}",
+        payload={
+            "title": _SHIPPED_TITLE,
+            "body": _shipped_body(summary),
+            "link": f"/deliverables/{deliverable.id}",
+            "run_id": str(run.id),
+            "deliverable_id": str(deliverable.id),
+        },
+        producer_id="workflow:verified_deliverable",
+    )
+
     logger.info(
         "verified_deliverable_written",
         run_id=str(run.id),

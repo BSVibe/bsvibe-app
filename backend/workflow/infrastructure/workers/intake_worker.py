@@ -26,6 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm.attributes import flag_modified
 
 from backend.config import Settings, get_settings
+from backend.notifications.emit import emit_notification
 from backend.workers.base import BaseWorker
 from backend.workers.emit import STREAM_AGENT, emit_stream_notification
 from backend.workflow.application.stages.intake import (
@@ -34,13 +35,32 @@ from backend.workflow.application.stages.intake import (
     receive,
 )
 from backend.workflow.channels import TRIGGER_EVENTS
-from backend.workflow.infrastructure.intake.db import RequestRow, RequestStatus, TriggerEventRow
+from backend.workflow.infrastructure.intake.db import (
+    RequestRow,
+    RequestStatus,
+    TriggerEventRow,
+    TriggerKind,
+)
 from backend.workflow.infrastructure.repositories import (
     SqlAlchemyIdempotencyRepository,
     SqlAlchemyRequestRepository,
 )
 
 logger = structlog.get_logger(__name__)
+
+# Notifier N3 — ``triggered`` fires only for AUTONOMOUS / external-origin triggers
+# ("밖에서 뭔가 들어와서 일이 시작됨"): a WEBHOOK (an outside system pushed work in) or
+# a SCHEDULE tick (BSVibe started work on its own). A DIRECT trigger is
+# founder-initiated (they started it — no need to tell them), and a
+# DECISION_RESOLUTION is a founder resuming an existing run, not a new arrival —
+# both are deliberately excluded.
+_TRIGGERED_KINDS: frozenset[TriggerKind] = frozenset({TriggerKind.WEBHOOK, TriggerKind.SCHEDULE})
+
+#: Deterministic (no-LLM) founder-facing text for the ``triggered`` notification.
+_TRIGGERED_TITLE = "New work came in"
+#: The founder lands on the Brief (there is no run yet at intake time — the
+#: Request is minted here; the AgentWorker opens the run downstream).
+_TRIGGERED_LINK = "/brief"
 
 
 @dataclass(slots=True)
@@ -126,10 +146,11 @@ class IntakeWorker(BaseWorker):
                 # the direct path resolving the founder's selected product).
                 # The Request row carries it forward so AgentRunner can mint
                 # the ExecutionRun with the same binding — no more NULL run.
+                request_id = uuid.uuid4()
                 request_repo = SqlAlchemyRequestRepository(session)
                 await request_repo.enqueue(
                     RequestRow(
-                        id=uuid.uuid4(),
+                        id=request_id,
                         workspace_id=trig.workspace_id,
                         trigger_event_id=trig.id,
                         product_id=outcome.product_id,
@@ -140,6 +161,23 @@ class IntakeWorker(BaseWorker):
                     ),
                     producer_id="worker:intake_worker",
                 )
+                # Notifier N3 — an autonomous/external trigger just started work.
+                # Queue a ``triggered`` notification in THIS transaction (confirmed
+                # iff the Request commits); a founder-direct run is excluded.
+                if trig.trigger_kind in _TRIGGERED_KINDS:
+                    await emit_notification(
+                        session,
+                        workspace_id=trig.workspace_id,
+                        event="triggered",
+                        dedupe_key=f"triggered:{request_id}",
+                        payload={
+                            "title": _TRIGGERED_TITLE,
+                            "body": f"A {trig.source} trigger started new work.",
+                            "link": _TRIGGERED_LINK,
+                            "run_id": None,
+                        },
+                        producer_id="worker:intake_worker",
+                    )
                 logger.info(
                     "intake_worker_request_created",
                     trigger_event_id=str(trig.id),
