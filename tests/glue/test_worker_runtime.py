@@ -563,12 +563,20 @@ async def test_build_worker_runtime_constructs_all_workers(
         settings=get_settings(), sandbox_manager=NoopSandboxManager()
     )
     adapter = await runtime.build_delivery_adapter(session_factory=sf)
-    rt = runtime.build_worker_runtime(session_factory=sf, execution=deps, delivery_adapter=adapter)
+    # NotifyWorker only stores the sender; a stub satisfies the constructor.
+    rt = runtime.build_worker_runtime(
+        session_factory=sf,
+        execution=deps,
+        delivery_adapter=adapter,
+        notify_sender=SimpleNamespace(),  # type: ignore[arg-type]
+    )
     names = {w._name for w in rt.workers}
     assert names == {
         "intake_worker",
         "agent_worker",
         "delivery_worker",
+        # Notifier N2 — drains notification_outbox, delivers needs_you pushes.
+        "notify_worker",
         "settle_worker",
         "relay_worker",
         # M1 — schedule runner now ships in the production worker set.

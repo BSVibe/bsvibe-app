@@ -63,6 +63,7 @@ from backend.workflow.infrastructure.workers.delivery_worker import (
     PluginDispatchAdapter,
 )
 from backend.workflow.infrastructure.workers.intake_worker import IntakeWorker
+from backend.workflow.infrastructure.workers.notify_worker import NotifySender, NotifyWorker
 from backend.workflow.infrastructure.workers.relay_worker import RelayWorker
 from plugin.audit.retention_sweep import AuditRetentionSweepRunner
 
@@ -158,6 +159,7 @@ def build_worker_runtime(
     session_factory: async_sessionmaker[AsyncSession],
     execution: AgentExecutionDeps,
     delivery_adapter: PluginDispatchAdapter,
+    notify_sender: NotifySender,
     settings: Settings | None = None,
     redis_client: Any = None,
 ) -> WorkerRuntime:
@@ -166,8 +168,8 @@ def build_worker_runtime(
     ``redis_client`` is wired into the producer-side workers (the IntakeWorker
     emits an ``agent`` notification per minted Request) ONLY in
     ``worker_mode="redis_streams"``; ``None`` (the default) keeps the pure
-    DB-polling behaviour. Emission is gated + soft-fail inside the worker, so
-    passing a client in db_polling mode is also a harmless no-op."""
+    DB-polling behaviour (emission is gated + soft-fail). ``notify_sender`` is
+    the Notifier-N2 push port the NotifyWorker drains the outbox through."""
     settings = settings or get_settings()
     workers: list[BaseWorker] = [
         IntakeWorker(
@@ -177,6 +179,7 @@ def build_worker_runtime(
         ),
         AgentWorker(session_factory=session_factory, execution=execution),
         DeliveryWorker(session_factory=session_factory, dispatcher=delivery_adapter),
+        NotifyWorker(session_factory=session_factory, sender=notify_sender),
         SettleWorker(
             session_factory=session_factory,
             sink=KnowledgeSettleSink(

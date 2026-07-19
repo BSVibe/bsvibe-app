@@ -203,19 +203,23 @@ def test_build_worker_runtime_constructs_expected_workers() -> None:
     session_factory = MagicMock()
     execution = MagicMock()
     delivery_adapter = MagicMock()
+    notify_sender = MagicMock()
 
     runtime = build_worker_runtime(
         session_factory=session_factory,
         execution=execution,
         delivery_adapter=delivery_adapter,
+        notify_sender=notify_sender,
     )
     assert isinstance(runtime, WorkerRuntime)
-    assert len(runtime.workers) == 8
+    assert len(runtime.workers) == 9
     names = {getattr(w, "_name", None) for w in runtime.workers}
     expected = {
         "intake_worker",
         "agent_worker",
         "delivery_worker",
+        # Notifier N2 — drains notification_outbox, delivers needs_you pushes.
+        "notify_worker",
         "settle_worker",
         "relay_worker",
         "schedule_worker",

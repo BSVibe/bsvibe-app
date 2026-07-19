@@ -452,11 +452,13 @@ async def test_build_worker_runtime_wires_redis_client_into_intake_in_redis_mode
     settings = Settings(worker_mode="redis_streams")
     execution = SimpleNamespace()  # AgentWorker only stores it; no method called here.
     delivery = SimpleNamespace()  # DeliveryWorker only stores the dispatcher.
+    notify = SimpleNamespace()  # NotifyWorker only stores the sender.
 
     rt = runtime.build_worker_runtime(
         session_factory=sf,
         execution=execution,  # type: ignore[arg-type]
         delivery_adapter=delivery,  # type: ignore[arg-type]
+        notify_sender=notify,  # type: ignore[arg-type]
         settings=settings,
         redis_client=redis_client,
     )
@@ -469,6 +471,7 @@ async def test_build_worker_runtime_wires_redis_client_into_intake_in_redis_mode
         session_factory=sf,
         execution=execution,  # type: ignore[arg-type]
         delivery_adapter=delivery,  # type: ignore[arg-type]
+        notify_sender=notify,  # type: ignore[arg-type]
         settings=Settings(),
     )
     intake_db = next(w for w in rt_db.workers if isinstance(w, IntakeWorker))

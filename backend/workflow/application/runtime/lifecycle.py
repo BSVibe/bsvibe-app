@@ -27,6 +27,7 @@ from backend.workflow.application.runtime.delivery_runtime import (
     build_delivery_adapter,
     load_connector_plugins,
 )
+from backend.workflow.application.runtime.notify_runtime import build_notify_sender
 from backend.workflow.application.runtime.worker_runtime import (
     build_worker_runtime,
     check_executor_dispatch_health,
@@ -142,10 +143,23 @@ async def run_workers() -> None:
         connector_plugins=connector_plugins,
     )
     delivery_adapter = await build_delivery_adapter(session_factory=session_factory)
+    # Notifier N2 — the founder-notification push sender reuses the SAME loaded
+    # plugin registry + settings cipher as delivery (no second plugin load, no
+    # second key source).
+    from backend.router.accounts.crypto import (  # noqa: PLC0415 — lazy, matches oauth bootstrap
+        CredentialCipher,
+        _key_from_settings,
+    )
+
+    notify_sender = build_notify_sender(
+        plugins=list(connector_plugins.values()),
+        cipher=CredentialCipher(_key_from_settings()),
+    )
     runtime = build_worker_runtime(
         session_factory=session_factory,
         execution=execution,
         delivery_adapter=delivery_adapter,
+        notify_sender=notify_sender,
         settings=settings,
         redis_client=redis_client,
     )

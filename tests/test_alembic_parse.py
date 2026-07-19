@@ -67,6 +67,7 @@ def test_alembic_history_loads():
         "runtime_role",
         "notification_channel_keys",
         "workspace_timezone",
+        "notification_outbox",
     ):
         assert rev in result.stdout, f"missing revision {rev} in:\n{result.stdout}"
 
@@ -90,10 +91,12 @@ def test_alembic_head_is_connector_last_import():
     # notification_channel_keys (Notifier N1a — rename the matrix ``email`` key
     # to the ``email-sender`` connector name so channels derive from bindings) →
     # workspace_timezone (Notifier N1b — promote the founder's IANA time zone
-    # to a server column so the NotifyWorker can evaluate quiet hours).
+    # to a server column so the NotifyWorker can evaluate quiet hours) →
+    # notification_outbox (Notifier N2 — the durable founder-notification
+    # outbox the NotifyWorker drains to deliver needs_you pushes).
     # Keep the test name (function name is a historical revision id, kept for
     # git-blame stability) and assert the current tip.
-    assert "workspace_timezone" in result.stdout
+    assert "notification_outbox" in result.stdout
 
 
 def test_target_metadata_covers_all_bases():

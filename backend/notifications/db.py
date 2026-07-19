@@ -27,8 +27,10 @@ from __future__ import annotations
 import copy
 import uuid
 from datetime import UTC, datetime
+from enum import StrEnum
 
-from sqlalchemy import JSON, Boolean, DateTime, String, UniqueConstraint
+from sqlalchemy import JSON, Boolean, DateTime, Index, Integer, String, UniqueConstraint
+from sqlalchemy import Enum as SAEnum
 from sqlalchemy.orm import Mapped, mapped_column
 
 from backend.data import Base
@@ -103,11 +105,76 @@ class NotificationPrefsRow(NotificationsBase):
     )
 
 
+class NotificationStatus(StrEnum):
+    """Lifecycle of one outbox notification (Notifier N2).
+
+    ``pending`` — queued in the caller's transaction, not yet drained.
+    ``sent`` — the NotifyWorker completed the push fan-out (at least one channel
+    delivered, OR there were no push channels to send — e.g. quiet hours / an
+    in-app-only workspace — which is still a completed, non-error outcome).
+    ``failed`` — every attempted push channel raised across the retry budget.
+    """
+
+    PENDING = "pending"
+    SENT = "sent"
+    FAILED = "failed"
+
+
+class NotificationEventRow(NotificationsBase):
+    """Durable notification outbox — one row per notification moment (Notifier N2).
+
+    The transactional-outbox row behind the ``notification_outbox``
+    :class:`~backend.channels.Channel`. A producer (today: ``create_decision``,
+    for the ``needs_you`` event) stages one row in its OWN transaction via
+    ``NOTIFICATION_OUTBOX.emit`` — so the notification is confirmed iff the
+    triggering write commits (a rolled-back Decision leaves no ghost
+    notification), and a crash after commit still leaves the row for the
+    :class:`NotifyWorker` to drain (no lost notification). Mirrors the
+    :class:`~backend.workflow.infrastructure.delivery.db.DeliveryEventRow` /
+    :class:`~plugin.audit.models.AuditOutboxRecord` outbox idiom.
+
+    ``dedupe_key`` is UNIQUE: a double-emit for the same moment (a retried
+    ``create_decision``) is a DB-level no-op (``IntegrityError`` → already
+    queued), so the founder is notified exactly once per Decision. ``payload``
+    carries the channel-agnostic ``{title, body, link, run_id?, decision_id?}``
+    the per-connector notify builders shape into each channel's send payload.
+    """
+
+    __tablename__ = "notification_events"
+    __table_args__ = (
+        UniqueConstraint("dedupe_key", name="uq_notification_events_dedupe_key"),
+        Index("ix_notification_events_status_created", "status", "created_at"),
+        Index("ix_notification_events_workspace", "workspace_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    workspace_id: Mapped[uuid.UUID] = mapped_column(nullable=False)
+    event: Mapped[str] = mapped_column(String(32), nullable=False)
+    dedupe_key: Mapped[str] = mapped_column(String(128), nullable=False)
+    payload: Mapped[dict[str, object]] = mapped_column(JSON, nullable=False, default=dict)
+    status: Mapped[NotificationStatus] = mapped_column(
+        SAEnum(
+            NotificationStatus,
+            name="notification_status_enum",
+            values_callable=lambda ec: [m.value for m in ec],
+        ),
+        nullable=False,
+        default=NotificationStatus.PENDING,
+    )
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_utcnow
+    )
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
 __all__ = [
     "DEFAULT_EVENTS",
     "DEFAULT_MATRIX",
     "DEFAULT_QUIET_HOURS_END",
     "DEFAULT_QUIET_HOURS_START",
+    "NotificationEventRow",
+    "NotificationStatus",
     "NotificationPrefsRow",
     "NotificationsBase",
     "default_matrix",

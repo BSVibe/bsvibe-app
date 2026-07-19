@@ -21,6 +21,7 @@ from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any
 
 import structlog
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 if TYPE_CHECKING:
@@ -28,6 +29,8 @@ if TYPE_CHECKING:
     from backend.workflow.application.agent_loop import LoopResult
 
 from backend.config import Settings
+from backend.notifications.channels import NOTIFICATION_OUTBOX
+from backend.notifications.db import NotificationEventRow
 from backend.workflow.application.audit_events import LoopTerminal
 from backend.workflow.domain.verified_deliverable import write_verified_deliverable
 from backend.workflow.infrastructure.db import (
@@ -209,8 +212,67 @@ async def create_decision(
     )
     session.add(decision)
     await session.flush()
+    # Every path a run stops on a Decision passes through here — so this is the
+    # ONE place the founder is called (Notifier §D4). Stage the ``needs_you``
+    # notification in the SAME transaction that creates the Decision: it is
+    # confirmed iff the Decision commits (a rolled-back Decision leaves no ghost
+    # notification), and a crash after commit still leaves the outbox row for the
+    # NotifyWorker to drain (no lost notification). Direct SEND stays with the
+    # worker — never inside this write path (Notifier §D3).
+    await _emit_needs_you(session, run, decision)
     logger.info("run_orchestrator_needs_decision", run_id=str(run.id), kind=kind)
     return decision
+
+
+#: The founder-facing text of the ``needs_you`` notification. Deterministic (no
+#: LLM) — the per-channel notify builders shape this into each channel's send
+#: payload. The title is stable; the body carries the blocking question (or the
+#: Decision rationale) so the notification says WHY the run stopped.
+_NEEDS_YOU_TITLE = "A run needs your decision"
+#: Deep link into the PWA Decisions surface (the founder resolves the pending
+#: Decision there, resuming the run). Relative — each channel renders it as it
+#: sees fit.
+_NEEDS_YOU_LINK = "/decisions"
+
+
+async def _emit_needs_you(session: AsyncSession, run: ExecutionRun, decision: Decision) -> None:
+    """Stage the ``needs_you`` outbox row for a just-created Decision.
+
+    Written through ``NOTIFICATION_OUTBOX.emit`` (the only legal producer path —
+    a bare ``session.add`` is forbidden by the INV-1 guard). The UNIQUE
+    ``dedupe_key`` (``needs_you:<decision_id>``) makes a re-emit of the same
+    Decision's notification a DB-level no-op: the emit + flush runs in a
+    SAVEPOINT so an :class:`IntegrityError` from a duplicate rolls back only the
+    outbox insert, leaving the (already-flushed) Decision intact and the founder
+    notified exactly once.
+    """
+    payload_in = decision.payload or {}
+    question = str(payload_in.get("question") or "").strip()
+    body = (
+        question or (decision.rationale or "").strip() or "A run has paused and needs your input."
+    )
+    row = NotificationEventRow(
+        workspace_id=run.workspace_id,
+        event="needs_you",
+        dedupe_key=f"needs_you:{decision.id}",
+        payload={
+            "title": _NEEDS_YOU_TITLE,
+            "body": body,
+            "link": _NEEDS_YOU_LINK,
+            "run_id": str(run.id),
+            "decision_id": str(decision.id),
+        },
+    )
+    try:
+        async with session.begin_nested():
+            NOTIFICATION_OUTBOX.emit(session, row, producer_id="workflow:create_decision")
+            await session.flush()
+    except IntegrityError:
+        logger.info(
+            "notification_outbox_duplicate_skipped",
+            decision_id=str(decision.id),
+            run_id=str(run.id),
+        )
 
 
 def decision_result(
