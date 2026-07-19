@@ -125,7 +125,9 @@ def test_fresh_pg_upgrade_round_trip():
     # Phase 1 — fresh upgrade.
     _alembic(["upgrade", "head"], env_extra=env_extra)
     stamped = asyncio.run(_stamped_head(url))
-    assert stamped == "notification_outbox", f"expected head notification_outbox, got {stamped}"
+    assert stamped == "workspace_schedules_instruction", (
+        f"expected head workspace_schedules_instruction, got {stamped}"
+    )
 
     # Phase 2 — full downgrade. Verifies every revision's downgrade path.
     _alembic(["downgrade", "base"], env_extra=env_extra)
@@ -133,7 +135,7 @@ def test_fresh_pg_upgrade_round_trip():
     # Phase 3 — re-upgrade. Verifies the chain is idempotent.
     _alembic(["upgrade", "head"], env_extra=env_extra)
     stamped = asyncio.run(_stamped_head(url))
-    assert stamped == "notification_outbox"
+    assert stamped == "workspace_schedules_instruction"
 
 
 def test_notification_channel_keys_renames_email_to_email_sender():
@@ -407,6 +409,90 @@ def test_worker_last_in_flight_column_round_trips():
     assert asyncio.run(_column_exists()), (
         "executor_workers.last_in_flight column missing after re-upgrade"
     )
+
+
+def test_workspace_schedules_instruction_columns_round_trip():
+    """S1 — ``workspace_schedules`` gains kind/payload/title, plugin_name goes
+    NULLable, and the old unique constraint is dropped. Both directions must run
+    against a fresh PG so the operational rollback path is safe, and an
+    ``instruction`` row (NULL plugin_name) must insert after the upgrade."""
+    url = _skip_if_no_pg()
+    env_extra = {"BSVIBE_MIGRATION_DATABASE_URL": url}
+
+    asyncio.run(_drop_everything(url))
+    _alembic(["upgrade", "head"], env_extra=env_extra)
+
+    async def _columns() -> set[str]:
+        engine = create_async_engine(url, future=True)
+        try:
+            async with engine.connect() as conn:
+                rows = (
+                    await conn.execute(
+                        text(
+                            "SELECT column_name FROM information_schema.columns "
+                            "WHERE table_name='workspace_schedules'"
+                        )
+                    )
+                ).all()
+                return {r[0] for r in rows}
+        finally:
+            await engine.dispose()
+
+    async def _plugin_name_nullable() -> bool:
+        engine = create_async_engine(url, future=True)
+        try:
+            async with engine.connect() as conn:
+                row = (
+                    await conn.execute(
+                        text(
+                            "SELECT is_nullable FROM information_schema.columns "
+                            "WHERE table_name='workspace_schedules' "
+                            "AND column_name='plugin_name'"
+                        )
+                    )
+                ).first()
+                return row is not None and row[0] == "YES"
+        finally:
+            await engine.dispose()
+
+    async def _insert_instruction_row() -> bool:
+        import uuid as _uuid
+        from datetime import UTC, datetime
+
+        engine = create_async_engine(url, future=True)
+        try:
+            async with engine.begin() as conn:
+                await conn.execute(
+                    text(
+                        "INSERT INTO workspace_schedules "
+                        "(id, workspace_id, product_id, kind, payload, title, "
+                        " plugin_name, cron_expr, next_run_at, last_fired_at, "
+                        " enabled, created_at, updated_at) "
+                        "VALUES (:id, :ws, NULL, 'instruction', CAST('{\"text\": \"do it\"}' AS JSON), "
+                        " NULL, NULL, '0 9 * * 1', :now, NULL, true, :now, :now)"
+                    ),
+                    {"id": _uuid.uuid4(), "ws": _uuid.uuid4(), "now": datetime.now(UTC)},
+                )
+            return True
+        finally:
+            await engine.dispose()
+
+    cols = asyncio.run(_columns())
+    assert {"kind", "payload", "title"} <= cols, f"missing S1 columns; got {cols}"
+    assert asyncio.run(_plugin_name_nullable()), "plugin_name should be NULLable after upgrade"
+    assert asyncio.run(_insert_instruction_row()), "could not insert an NL instruction row"
+
+    # Downgrade to the parent restores NOT NULL plugin_name + the unique
+    # constraint and drops the new columns.
+    _alembic(["downgrade", "notification_outbox"], env_extra=env_extra)
+    cols_after = asyncio.run(_columns())
+    assert not ({"kind", "payload", "title"} & cols_after), (
+        f"S1 columns survived downgrade; got {cols_after}"
+    )
+
+    # Re-upgrade restores them.
+    _alembic(["upgrade", "head"], env_extra=env_extra)
+    assert {"kind", "payload", "title"} <= asyncio.run(_columns())
 
 
 def test_pgvector_extension_installed_after_upgrade():

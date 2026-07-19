@@ -18,6 +18,8 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from typing import Protocol
 
+from backend.schedule.domain.cron import next_cron_time
+
 
 class ScheduleAdvancer(Protocol):
     """Compute the *next* fire time after a successful fire.
@@ -82,7 +84,26 @@ class FixedIntervalScheduleAdvancer:
         return after + self._interval
 
 
+class CronScheduleAdvancer:
+    """Advance ``next_run_at`` to the next match of the row's cron expression.
+
+    The real recurrence impl (S1): drops into the :class:`ScheduleAdvancer`
+    Protocol with zero changes to the runner. Computes the first fire time
+    strictly after ``after`` via the dependency-free
+    :func:`~backend.schedule.domain.cron.next_cron_time` evaluator (standard 5
+    fields, UTC — matching how :class:`OneShotScheduleAdvancer` treats the
+    clock). This is what the production
+    :class:`~backend.schedule.infrastructure.db_poll_runner.DbPollScheduleRunner`
+    wires, so a row with ``cron_expr='0 9 * * 1'`` recurs every Monday 09:00
+    instead of firing once.
+    """
+
+    def next_after(self, *, cron_expr: str, after: datetime) -> datetime:
+        return next_cron_time(cron_expr, after)
+
+
 __all__ = [
+    "CronScheduleAdvancer",
     "FixedIntervalScheduleAdvancer",
     "OneShotScheduleAdvancer",
     "ScheduleAdvancer",

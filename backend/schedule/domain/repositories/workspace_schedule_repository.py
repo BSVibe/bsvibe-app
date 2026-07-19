@@ -28,6 +28,7 @@ Concrete impl:
 
 from __future__ import annotations
 
+import uuid
 from datetime import datetime
 from typing import Protocol, runtime_checkable
 
@@ -38,12 +39,37 @@ from backend.schedule.infrastructure.schedule_db import WorkspaceScheduleRow
 class WorkspaceScheduleRepository(Protocol):
     """Persistence seam for ``workspace_schedules`` rows.
 
-    The Protocol is intentionally tick-shaped (claim a batch, advance one
-    row at a time). The runner owns the transaction; the repository
-    never calls ``commit`` and never opens a new transaction. Mutations
-    are flushed so the in-memory row carries the post-update state to
-    the caller (matches the Workflow / Identity Repository conventions).
+    Two method families: the tick-shaped consumer side (``claim_due`` /
+    ``advance``, used by the runner) and the authoring side (``create`` /
+    ``list_for_workspace`` / ``get`` / ``delete`` / ``set_enabled``, used by the
+    REST service). The caller owns the transaction; the repository never calls
+    ``commit`` and never opens a new transaction. Mutations are flushed so the
+    in-memory row carries the post-update state to the caller (matches the
+    Workflow / Identity Repository conventions).
+
+    ``create`` routes the insert through the INV-1
+    :data:`~backend.schedule.channels.WORKSPACE_SCHEDULES` channel, NOT a bare
+    ``session.add`` — the ``emit`` seam is the only legal producer path.
     """
+
+    async def create(self, row: WorkspaceScheduleRow, *, producer_id: str) -> None:
+        """Stage one authored schedule row through the channel producer seam."""
+
+    async def list_for_workspace(self, *, workspace_id: uuid.UUID) -> list[WorkspaceScheduleRow]:
+        """List every schedule for a workspace, newest first."""
+
+    async def get(
+        self, *, schedule_id: uuid.UUID, workspace_id: uuid.UUID
+    ) -> WorkspaceScheduleRow | None:
+        """Fetch one workspace-scoped schedule by id (None if absent/foreign)."""
+
+    async def delete(self, *, schedule_id: uuid.UUID, workspace_id: uuid.UUID) -> bool:
+        """Delete one workspace-scoped schedule. Returns whether a row matched."""
+
+    async def set_enabled(
+        self, *, schedule_id: uuid.UUID, workspace_id: uuid.UUID, enabled: bool
+    ) -> WorkspaceScheduleRow | None:
+        """Flip ``enabled`` on one workspace-scoped row (None if absent/foreign)."""
 
     async def claim_due(self, *, now: datetime) -> list[WorkspaceScheduleRow]:
         """Return every due, enabled schedule for this polling tick.

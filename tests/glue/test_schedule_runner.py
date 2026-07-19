@@ -473,9 +473,12 @@ async def test_schedule_trigger_stamps_audit_tag_in_payload(
         trig = ScheduleTrigger(s)
         outcome = await trig.fire(
             workspace_id=workspace_id,
-            plugin_name="direct-call",
+            schedule_id=uuid.uuid4(),
+            kind="instruction",
+            schedule_payload={"text": "direct-call instruction"},
             cron_expr="*/5 * * * *",
             fired_at=now,
         )
         await s.commit()
     assert outcome.event.payload.get("trigger") == "schedule"
+    assert outcome.event.payload.get("text") == "direct-call instruction"

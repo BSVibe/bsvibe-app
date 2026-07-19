@@ -32,30 +32,33 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
+from typing import Any
 
-from sqlalchemy import Boolean, DateTime, Index, String, UniqueConstraint
+from sqlalchemy import JSON, Boolean, DateTime, Index, String, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from backend.data import Base
+
+# The default (and, in S1, only) schedule kind: a natural-language
+# ``instruction`` whose ``payload["text"]`` IS the run task. Other kinds
+# (skill / product_tick / plugin_action) are deferred to S4.
+SCHEDULE_KIND_INSTRUCTION = "instruction"
 
 
 class WorkspaceScheduleRow(Base):
     """Durable schedule the schedule runner polls.
 
-    A workspace may carry many rows (one per scheduled plugin × cron expr),
-    each independently enabled. The ``(workspace_id, plugin_name, cron_expr)``
-    unique constraint blocks accidentally registering the same trigger
-    twice; a deliberately *different* cron expr is a different row.
+    A workspace may carry many rows, each independently enabled. In S1 a row
+    is a natural-language ``instruction`` (``kind='instruction'``) whose
+    ``payload["text"]`` is the task the scheduled run frames + executes. The
+    surrogate ``id`` is the sole identity — there is no
+    ``(workspace_id, plugin_name, cron_expr)`` uniqueness (two NL rows may
+    legitimately share a cron expr, and ``plugin_name`` is NULL for the
+    ``instruction`` kind).
     """
 
     __tablename__ = "workspace_schedules"
     __table_args__ = (
-        UniqueConstraint(
-            "workspace_id",
-            "plugin_name",
-            "cron_expr",
-            name="uq_workspace_schedules_ws_plugin_cron",
-        ),
         Index(
             "ix_workspace_schedules_due",
             "enabled",
@@ -66,7 +69,27 @@ class WorkspaceScheduleRow(Base):
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
     workspace_id: Mapped[uuid.UUID] = mapped_column(nullable=False, index=True)
     product_id: Mapped[uuid.UUID | None] = mapped_column(nullable=True, index=True)
-    plugin_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    # What the schedule fires. ``instruction`` (S1) reads ``payload["text"]``;
+    # skill / product_tick / plugin_action kinds arrive in S4.
+    kind: Mapped[str] = mapped_column(
+        String(32),
+        nullable=False,
+        default=SCHEDULE_KIND_INSTRUCTION,
+        server_default=SCHEDULE_KIND_INSTRUCTION,
+    )
+    # The instruction envelope the emitter merges into the TriggerEvent
+    # payload. For ``instruction`` this holds ``{"text": "<what to do>"}``;
+    # the run framer reads ``text`` so a scheduled run frames the founder's
+    # instruction (not "Untitled run").
+    payload: Mapped[dict[str, Any]] = mapped_column(
+        JSON, nullable=False, default=dict, server_default=text("'{}'")
+    )
+    # Short human label for the list surface. Optional — the instruction text
+    # is the fallback title.
+    title: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    # NULL for the ``instruction`` kind (there is no plugin). A future
+    # plugin_action kind (S4) populates it.
+    plugin_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     cron_expr: Mapped[str] = mapped_column(String(255), nullable=False)
     # The next time the runner should fire this schedule. The runner
     # selects rows with ``enabled=True AND next_run_at <= now``, fires the
@@ -90,4 +113,4 @@ class WorkspaceScheduleRow(Base):
     )
 
 
-__all__ = ["WorkspaceScheduleRow"]
+__all__ = ["SCHEDULE_KIND_INSTRUCTION", "WorkspaceScheduleRow"]

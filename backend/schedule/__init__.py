@@ -19,11 +19,15 @@ in. It is intentionally small — three concerns:
 
 * :mod:`backend.schedule.domain` — the published Protocols
   (:class:`ScheduleRunnerProtocol` — the wake-up substrate seam;
-  :class:`ScheduleAdvancer` — the cron-algebra seam) and their no-cron
-  v1 implementations (:class:`OneShotScheduleAdvancer`,
-  :class:`FixedIntervalScheduleAdvancer`).
+  :class:`ScheduleAdvancer` — the cron-algebra seam) and their
+  implementations: the real :class:`CronScheduleAdvancer` (the S1
+  production default — recurs on a standard 5-field cron expr) plus the
+  :class:`OneShotScheduleAdvancer` / :class:`FixedIntervalScheduleAdvancer`
+  test/alternate seams.
 * :mod:`backend.schedule.application` — :class:`ScheduleTrigger`, the
-  emitter that turns a *fire time* into a Workflow-side TriggerEvent.
+  emitter that turns a *fire time* into a Workflow-side TriggerEvent, and
+  :class:`ScheduleService`, the authoring producer behind
+  ``POST /api/v1/schedules``.
 * :mod:`backend.schedule.infrastructure` — the persistence row
   (:class:`WorkspaceScheduleRow`), the v1 DB-polling runner
   (:class:`DbPollScheduleRunner`), and the worker shell
