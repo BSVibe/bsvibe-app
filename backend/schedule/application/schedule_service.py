@@ -35,7 +35,10 @@ from backend.schedule.infrastructure.schedule_db import (
     WorkspaceScheduleRow,
 )
 
-_PRODUCER_ID = "api:schedules_create"
+#: Default producer id — the REST authoring surface (S1). The MCP parity surface
+#: (S2) passes ``mcp:schedules_create`` through ``create`` so the emit carries the
+#: caller's declared producer id (both are declared on ``WORKSPACE_SCHEDULES``).
+_API_PRODUCER_ID = "api:schedules_create"
 
 
 class ScheduleValidationError(ValueError):
@@ -60,9 +63,14 @@ class ScheduleService:
         product_id: uuid.UUID | None = None,
         title: str | None = None,
         now: datetime | None = None,
+        producer_id: str = _API_PRODUCER_ID,
     ) -> WorkspaceScheduleRow:
         """Author one schedule. Raises :class:`ScheduleValidationError` on a bad
-        kind or cron expression (the REST layer maps that to a 400)."""
+        kind or cron expression (the REST layer maps that to a 400).
+
+        ``producer_id`` names the INV-1 channel producer the emit carries — it
+        defaults to the REST surface and is overridden to ``mcp:schedules_create``
+        when this same service is invoked through the MCP parity tools (S2)."""
         if kind != SCHEDULE_KIND_INSTRUCTION:
             raise ScheduleValidationError(
                 f"unsupported schedule kind {kind!r} (S1 supports only "
@@ -91,7 +99,7 @@ class ScheduleService:
             last_fired_at=None,
             enabled=True,
         )
-        await self._repo.create(row, producer_id=_PRODUCER_ID)
+        await self._repo.create(row, producer_id=producer_id)
         return row
 
     async def list(self, *, workspace_id: uuid.UUID) -> list[WorkspaceScheduleRow]:

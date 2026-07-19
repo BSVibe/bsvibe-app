@@ -8,9 +8,11 @@ Imports only the schedule-context row + the generic
 ``workspace_schedules`` is the FIRST ``human_origin=True`` channel: unlike
 ``trigger_events`` / ``requests`` / ``notification_outbox`` (all machine-minted
 side effects), a schedule row is AUTHORED by the founder — it is BSVibe's own
-"start work on your own" input. The producer is the REST authoring surface
-(``api:schedules_create`` → ``POST /api/v1/schedules``); the sole worker-claim
-consumer is the
+"start work on your own" input. The producers are the two authoring surfaces
+that share one canonical :class:`~backend.schedule.application.schedule_service.ScheduleService`
+path: the REST surface (``api:schedules_create`` → ``POST /api/v1/schedules``)
+and its MCP parity tools (``mcp:schedules_create`` → ``bsvibe_schedules_create``,
+S2). The sole worker-claim consumer is the
 :class:`~backend.schedule.infrastructure.workers.schedule_worker.ScheduleWorker`
 (``worker:schedule_worker``), which DB-polls ``enabled AND next_run_at <= now``
 rows and fires each through the emitter.
@@ -32,7 +34,7 @@ from backend.schedule.infrastructure.schedule_db import WorkspaceScheduleRow
 WORKSPACE_SCHEDULES: Channel[WorkspaceScheduleRow] = Channel(
     name="workspace_schedules",
     row=WorkspaceScheduleRow,
-    producers=("api:schedules_create",),
+    producers=("api:schedules_create", "mcp:schedules_create"),
     consumers=("worker:schedule_worker",),
     human_origin=True,
     authoring_surface="POST /api/v1/schedules",

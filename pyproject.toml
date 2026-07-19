@@ -388,5 +388,17 @@ ignore_imports = [
     # already carry. Cutting this one mcp-boundary edge removes the whole
     # notifications-bindings subtree (and its connectors reach) from MCP's graph.
     "backend.mcp.tools.notifications_tools -> backend.notifications.bindings",
+    # Slice S2 — UI-parity for the schedule authoring surface. The schedule
+    # tools call the SAME ``backend.schedule.application.schedule_service`` the
+    # REST surface (S1) uses so MCP and PWA (S3) land on one canonical producer
+    # path — no second copy of the cron validation, the next_run_at advance, or
+    # the INV-1 ``WORKSPACE_SCHEDULES`` producer emit. Same one-canonical-service
+    # pattern as the D3a/D3b tool edges above; cutting this one mcp-boundary edge
+    # removes the whole schedule-application subtree from MCP's graph. The
+    # schedule_db edge is the same shared row + kind constant the REST router
+    # imports (``SCHEDULE_KIND_INSTRUCTION`` default + ``WorkspaceScheduleRow``
+    # view mapping) — one source of truth for the schedule shape, not a copy.
+    "backend.mcp.tools.schedule_tools -> backend.schedule.application.schedule_service",
+    "backend.mcp.tools.schedule_tools -> backend.schedule.infrastructure.schedule_db",
 ]
 
