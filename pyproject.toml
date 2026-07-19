@@ -400,5 +400,21 @@ ignore_imports = [
     # view mapping) — one source of truth for the schedule shape, not a copy.
     "backend.mcp.tools.schedule_tools -> backend.schedule.application.schedule_service",
     "backend.mcp.tools.schedule_tools -> backend.schedule.infrastructure.schedule_db",
+    # Slice C2 — UI-parity for the checkpoint (run-blocking Decision) resolution
+    # surface. The checkpoint tools call the SAME
+    # ``backend.workflow.application.checkpoint_resolution.resolve_checkpoint``
+    # C1 service the REST ``/api/v1/checkpoints`` router uses so MCP and PWA land
+    # on one canonical resolve path — no second copy of the record-answer /
+    # fold-into-run-payload / settle / audit / resume logic. That service
+    # lazy-imports the heavy ``AgentRunner`` engine (→ agent_loop →
+    # connector_actions → ``backend.connectors.db``; → ``backend.router``) and
+    # emits via ``plugin.audit.service`` (→ subscriber → ``backend.api.v1.live_events``;
+    # → ``backend.extensions.eventbus``) — the SAME transitive chains the
+    # ``knowledge_retraction_tools`` (plugin.audit) and ``workflow_tools`` (router
+    # via runtime) edges above already carry. Cutting this one mcp-boundary edge
+    # removes the whole resolve subtree from MCP's graph; the shared presentation
+    # helpers (``_checkpoint_shared``) and the decision repo stay pure and in the
+    # allowlist, so they need no exemption.
+    "backend.mcp.tools.checkpoint_tools -> backend.workflow.application.checkpoint_resolution",
 ]
 

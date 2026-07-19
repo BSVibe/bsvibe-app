@@ -5,6 +5,7 @@ from __future__ import annotations
 from backend.mcp.api import ToolRegistry
 from backend.mcp.tools.account_tools import register_account_tools
 from backend.mcp.tools.bindings_tools import register_bindings_tools
+from backend.mcp.tools.checkpoint_tools import register_checkpoint_tools
 from backend.mcp.tools.connectors_tools import register_connectors_tools
 from backend.mcp.tools.decisions_tools import register_decisions_tools
 from backend.mcp.tools.direct_tools import register_direct_tools
@@ -48,7 +49,8 @@ def register_all_tools(
     knowledge-retraction (3 — D3c), skills (4 — D3c), workspace (2 — D3c),
     inside-trust (2 — D3d), account (2 — D3d),
     run-routing-rules (3 — E7), intents (3 — NL-native routing N2),
-    schedules (4 — S2: create / list / delete / set_enabled).
+    schedules (4 — S2: create / list / delete / set_enabled),
+    checkpoints (2 — C2: list_pending / resolve; ship is PWA-only).
     """
     register_knowledge_tools(registry)
     # T1 — the agent's REMOTE hands on a run (file/shell/declare/knowledge), bound to the
@@ -79,6 +81,9 @@ def register_all_tools(
     register_intents_tools(registry)
     # Schedule authoring parity (S2) — mirror POST/GET/DELETE/PATCH /api/v1/schedules.
     register_schedule_tools(registry)
+    # Checkpoint resolution parity (C2) — mirror GET/POST /api/v1/checkpoints so
+    # an away founder unblocks a paused run from an MCP client (ship is PWA-only).
+    register_checkpoint_tools(registry)
     register_knowledge_retraction_tools(registry)
     register_skills_tools(registry)
     register_workspace_tools(registry)
@@ -93,6 +98,7 @@ __all__ = [
     "register_account_tools",
     "register_all_tools",
     "register_bindings_tools",
+    "register_checkpoint_tools",
     "register_connectors_tools",
     "register_decisions_tools",
     "register_direct_tools",
