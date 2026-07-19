@@ -6,12 +6,14 @@ import {
   renameWorkspace,
   setWorkspaceLanguage,
   setWorkspaceSafeMode,
+  setWorkspaceTimezone,
 } from "@/lib/api/workspace";
 import { useSession } from "@/lib/auth/session";
 import { type Locale, resolveLocale } from "@/lib/i18n/config";
 import { setLocaleCookie } from "@/lib/i18n/locale";
 import {
   DATE_FORMAT_OPTIONS,
+  DEFAULT_TIMEZONE,
   LANGUAGE_OPTIONS,
   TIMEZONE_OPTIONS,
 } from "@/lib/preferences/preferences";
@@ -32,8 +34,10 @@ import { type FormEvent, useEffect, useState } from "react";
  *    chrome (founder decision 2026-07). Choosing a language PATCHes the workspace
  *    FIRST, then mirrors the `bsvibe.locale` cookie + refreshes so the catalog
  *    applies live; a failed PATCH surfaces an error instead of desyncing the two.
- *  - Time zone / Date format: LOCAL-only preferences (no backend yet — server
- *    sync is a follow-up).
+ *  - Time zone: `workspaces.timezone` is the source of truth (N1b) — the
+ *    server-side NotifyWorker reads it to evaluate quiet hours, so choosing one
+ *    PATCHes the workspace (optimistic, reverting on failure). Date format is a
+ *    LOCAL-only display preference (localStorage).
  *  - Workspace name / Workspace ID: DISPLAY-only. The id is the ACTUAL
  *    workspace id from GET /api/v1/workspace (not the personal account id),
  *    falling back to the session account id only while the workspace loads.
@@ -84,6 +88,11 @@ export default function GeneralTab() {
   const [safeModeSaving, setSafeModeSaving] = useState(false);
   const [langError, setLangError] = useState(false);
 
+  // N1b — the workspace's IANA time zone. `null` while loading; the select is
+  // disabled until the real value arrives so we never show the wrong zone.
+  const [timezone, setTimezone] = useState<string | null>(null);
+  const [tzSaving, setTzSaving] = useState(false);
+
   const workspaceId =
     ws.kind === "loaded" ? ws.id : (session?.personalAccountId ?? t("workspaceIdFallback"));
 
@@ -94,6 +103,7 @@ export default function GeneralTab() {
         if (!active) return;
         setWs({ kind: "loaded", name: w.name, id: w.id });
         setSafeMode(w.safe_mode ?? true);
+        setTimezone(w.timezone ?? DEFAULT_TIMEZONE);
       })
       .catch(() => {
         if (active) setWs({ kind: "failed" });
@@ -112,6 +122,20 @@ export default function GeneralTab() {
       .then((w) => setSafeMode(w.safe_mode ?? next))
       .catch(() => setSafeMode(previous)) // revert on failure
       .finally(() => setSafeModeSaving(false));
+  }
+
+  function chooseTimezone(next: string) {
+    // `workspaces.timezone` is the source of truth — the server-side NotifyWorker
+    // evaluates quiet hours against it (N1b). Optimistically reflect the choice,
+    // PATCH the workspace, reconcile from the response, and revert on failure.
+    if (timezone === next || tzSaving) return;
+    const previous = timezone;
+    setTimezone(next);
+    setTzSaving(true);
+    setWorkspaceTimezone(next)
+      .then((w) => setTimezone(w.timezone ?? next))
+      .catch(() => setTimezone(previous)) // revert on failure
+      .finally(() => setTzSaving(false));
   }
 
   function beginEdit() {
@@ -314,8 +338,9 @@ export default function GeneralTab() {
           id="pref-timezone"
           aria-label={t("timezone")}
           className="settings-field__select"
-          value={prefs.timezone}
-          onChange={(e) => updatePref("timezone", e.target.value)}
+          value={timezone ?? DEFAULT_TIMEZONE}
+          disabled={timezone === null || tzSaving}
+          onChange={(e) => chooseTimezone(e.target.value)}
         >
           {TIMEZONE_OPTIONS.map((o) => (
             <option key={o.value} value={o.value}>

@@ -85,6 +85,11 @@ async def test_get_returns_workspace_fields(db, workspace_id, user_id, registry,
     assert out["region"] == "us-1"
     assert out["safe_mode"] is True
     assert out["audit_retention_days"] is None
+    # #528 read-parity gap closed — language is now readable via MCP.
+    assert out["language"] == "en"
+    # N1b — the IANA time zone the server-side quiet-hours gate reads; the
+    # seeded row carries the "UTC" column default.
+    assert out["timezone"] == "UTC"
 
 
 async def test_get_requires_read_scope(db, workspace_id, user_id, registry, seeded) -> None:

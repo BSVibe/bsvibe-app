@@ -88,6 +88,9 @@ async def test_get_workspace_returns_id_and_name(client_with_ws) -> None:
         # ``None`` until the founder picks one via PATCH or MCP.
         "default_account_id": None,
         "language": "en",
+        # N1b — the IANA time zone the server-side quiet-hours gate reads;
+        # default ``"UTC"`` (the multi-tenant global default).
+        "timezone": "UTC",
         # L3 (#5) — Safe Mode surfaces here; seeded ``True`` (the default).
         "safe_mode": True,
     }
@@ -103,6 +106,7 @@ async def test_patch_workspace_renames_and_persists(client_with_ws) -> None:
         "audit_retention_days": None,
         "default_account_id": None,
         "language": "en",
+        "timezone": "UTC",
         "safe_mode": True,
     }
 
@@ -126,6 +130,7 @@ async def test_patch_workspace_sets_audit_retention_days(client_with_ws) -> None
         "audit_retention_days": 30,
         "default_account_id": None,
         "language": "en",
+        "timezone": "UTC",
         "safe_mode": True,
     }
     async with db() as s:
@@ -151,6 +156,33 @@ async def test_patch_workspace_sets_language(client_with_ws) -> None:
     # An unsupported tag is rejected (422), never silently stored.
     bad = await c.patch("/api/v1/workspace", json={"language": "fr"})
     assert bad.status_code == 422
+
+
+async def test_patch_workspace_sets_timezone(client_with_ws) -> None:
+    """N1b — the founder sets the workspace's IANA time zone; it persists so the
+    server-side NotifyWorker can evaluate quiet hours. Default is 'UTC'; an
+    invalid IANA zone is rejected (422), never silently stored."""
+    c, workspace_id, db = client_with_ws
+    r = await c.patch("/api/v1/workspace", json={"timezone": "Asia/Seoul"})
+    assert r.status_code == 200, r.text
+    assert r.json()["timezone"] == "Asia/Seoul"
+    async with db() as s:
+        row = (
+            await s.execute(select(WorkspaceRow).where(WorkspaceRow.id == workspace_id))
+        ).scalar_one()
+        assert row.timezone == "Asia/Seoul"
+    # A name-only PATCH must not disturb the time zone.
+    r = await c.patch("/api/v1/workspace", json={"name": "Renamed"})
+    assert r.status_code == 200, r.text
+    assert r.json()["timezone"] == "Asia/Seoul"
+    # A non-existent IANA zone is rejected, never silently stored.
+    bad = await c.patch("/api/v1/workspace", json={"timezone": "Mars/Phobos"})
+    assert bad.status_code == 422
+    async with db() as s:
+        row = (
+            await s.execute(select(WorkspaceRow).where(WorkspaceRow.id == workspace_id))
+        ).scalar_one()
+        assert row.timezone == "Asia/Seoul"  # unchanged by the rejected PATCH
 
 
 async def test_patch_workspace_sets_safe_mode(client_with_ws) -> None:

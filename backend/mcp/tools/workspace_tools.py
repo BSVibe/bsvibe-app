@@ -60,6 +60,14 @@ class WorkspaceGetOutput(BaseModel):
     # :class:`backend.dispatch.resolver.ModelAccountResolver` fallback.
     # ``None`` = the founder has not picked one yet.
     default_account_id: str | None = None
+    # The workspace's LLM output language ("en" / "ko"). Read parity for the
+    # REST ``WorkspaceOut.language`` — closes the #528 gap where the column +
+    # REST field existed but MCP could not read it.
+    language: str = "en"
+    # The workspace's IANA time zone ("Asia/Seoul" / "UTC"). The server-side
+    # NotifyWorker (Notifier N2) reads it to evaluate quiet hours; surfaced
+    # here so an MCP client can inspect the value the gate uses.
+    timezone: str = "UTC"
 
 
 async def _h_get(_args: WorkspaceGetInput, ctx: ToolContext) -> Any:
@@ -73,6 +81,8 @@ async def _h_get(_args: WorkspaceGetInput, ctx: ToolContext) -> Any:
         region=row.region,
         safe_mode=row.safe_mode,
         audit_retention_days=row.audit_retention_days,
+        language=row.language,
+        timezone=row.timezone,
         default_account_id=(
             str(row.default_account_id) if row.default_account_id is not None else None
         ),
@@ -110,6 +120,8 @@ async def _h_rename(args: WorkspaceRenameInput, ctx: ToolContext) -> Any:
         region=row.region,
         safe_mode=row.safe_mode,
         audit_retention_days=row.audit_retention_days,
+        language=row.language,
+        timezone=row.timezone,
         default_account_id=(
             str(row.default_account_id) if row.default_account_id is not None else None
         ),
@@ -159,6 +171,8 @@ async def _h_set_default_account(args: WorkspaceSetDefaultAccountInput, ctx: Too
         region=row.region,
         safe_mode=row.safe_mode,
         audit_retention_days=row.audit_retention_days,
+        language=row.language,
+        timezone=row.timezone,
         default_account_id=(
             str(row.default_account_id) if row.default_account_id is not None else None
         ),
