@@ -5106,6 +5106,136 @@ main.login {
   color: var(--ink-2);
 }
 
+/* Notifications matrix (N2b) — events × channels grid, quiet hours, empty state.
+   Uses the shared light/dark tokens so it adapts to dark mode automatically. */
+
+.notifications-matrix,
+.notifications-quiet,
+.notifications-empty {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 18px;
+}
+
+.notifications-matrix__scroll {
+  overflow-x: auto;
+}
+
+.notifications-grid {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 0.86rem;
+}
+
+.notifications-grid th,
+.notifications-grid td {
+  border-bottom: 1px solid var(--hair);
+  padding: 10px 12px;
+  text-align: center;
+}
+
+.notifications-grid__event-head,
+.notifications-grid__event {
+  text-align: left;
+  font-weight: 600;
+  color: var(--ink);
+  white-space: nowrap;
+}
+
+.notifications-grid__channel-head {
+  color: var(--ink-2);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.notifications-grid__always {
+  display: block;
+  font-size: 0.66rem;
+  font-weight: 500;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+
+.notifications-grid__dot {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 9px;
+  border-radius: 999px;
+  background: var(--green-pill-bg);
+  color: var(--green-ink);
+  font-size: 0.72rem;
+  font-weight: 600;
+}
+
+.notifications-grid__dot--off {
+  background: var(--accent-bg);
+  color: var(--ink-3);
+}
+
+.notifications-grid__toggle {
+  width: 18px;
+  height: 18px;
+  cursor: pointer;
+}
+
+.notifications-grid__toggle:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.notifications-grid__row--pending .notifications-grid__event {
+  color: var(--ink-2);
+}
+
+.notifications-grid__pending-note {
+  display: block;
+  font-size: 0.66rem;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+
+.notifications-quiet__enable {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.88rem;
+  color: var(--ink);
+}
+
+.notifications-quiet__range {
+  display: flex;
+  gap: 18px;
+  flex-wrap: wrap;
+}
+
+.notifications-quiet__time {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.notifications-empty__cta {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  padding: 7px 14px;
+  border-radius: var(--radius);
+  border: 1px solid var(--hair-strong);
+  background: var(--surface);
+  color: var(--ink);
+  font-size: 0.84rem;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.notifications-empty__cta:hover {
+  background: var(--accent-bg);
+}
+
 /* Connectors catalog (Settings -> Connectors reframe, lift: connectors-catalog).
    Appended at the END to minimise merge friction with a parallel CSS-appending
    lift. Uses the shared light/dark tokens (ink, surface, hair, accent-bg, green)
