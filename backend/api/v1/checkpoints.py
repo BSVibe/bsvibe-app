@@ -14,6 +14,14 @@ DB terminal). This router is the founder's re-entry point:
   resolved answer into the loop's initial messages so the work continues with
   the founder's decision in context.
 
+The resolve logic itself lives in
+:mod:`backend.workflow.application.checkpoint_resolution` — a shared service so
+the MCP checkpoint tools can reuse it (``backend.api`` is forbidden to
+``backend.mcp``). This router is a thin caller: it validates the request body,
+delegates to the service, and maps the service's domain exceptions to HTTP
+status codes. The list endpoints reuse the same kind → question / options /
+actions helpers from :mod:`backend.workflow.application._checkpoint_shared`.
+
 v1 resumes the run *inline* here (not via the event-driven
 :class:`~backend.workflow.application.intake.decision_resolution.DecisionResolutionTrigger`, which
 remains a future option). This is simpler — no phantom Request, the paused run
@@ -23,13 +31,11 @@ is resumed directly.
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, datetime
-from typing import Annotated, Any
+from datetime import datetime
+from typing import Annotated
 
-import structlog
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, ConfigDict
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.api.deps import (
@@ -38,81 +44,30 @@ from backend.api.deps import (
     get_output_language,
     get_workspace_id,
 )
-from backend.api.v1._workflow_deps import (
-    get_decision_repository,
-    get_deliverable_repository,
-    get_run_repository,
-)
+from backend.api.v1._workflow_deps import get_decision_repository
 from backend.api.v1.decisions import _vault_root
 from backend.identity.db import UserRow
 from backend.knowledge.graph.storage import FileSystemStorage
 from backend.knowledge.retrieval.resolved_decisions_retriever import ResolvedDecisionsRetriever
-from backend.workflow.application.agent_runner import AgentRunner
-from backend.workflow.application.audit_events import DecisionResolved
-from backend.workflow.domain.repositories import (
-    DecisionRepository,
-    DeliverableRepository,
-    RunRepository,
+from backend.workflow.application._checkpoint_shared import (
+    DecisionAction,
+    _decision_actions,
+    _decision_options,
+    _question_text,
 )
-from backend.workflow.domain.verified_deliverable import settle_run_context
-from backend.workflow.infrastructure.db import (
-    Decision,
-    DecisionStatus,
-    Deliverable,
-    DeliverableType,
-    ExecutionRun,
-    ExecutionRunActivity,
-    ProofState,
-    RunStatus,
-    WorkStep,
-    WorkStepStatus,
+from backend.workflow.application.checkpoint_resolution import (
+    CheckpointNotFound,
+    InvalidAction,
+    ProductWorkspaceBusy,
+    ProductWorkspaceMergeFailed,
 )
-from plugin.audit.events import AuditActor, AuditResource
-from plugin.audit.service import safe_emit
-
-#: Payload ``kind`` on the settle activity emitted by the resolve endpoint
-#: (B11b). The :class:`~backend.knowledge.infrastructure.workers.settle_worker.SettleWorker` drains the
-#: row into the workspace's BSage vault — turning the answered Decision into
-#: reusable knowledge so a future run with similar signals doesn't re-ask the
-#: same question. The kind is stable wire shape; downstream consumers
-#: (retriever, audit) key off it.
-DECISION_RESOLUTION_SETTLE_KIND = "decision_resolution"
-
-#: Payload ``kind`` on the *negative-pattern* settle activity the resolve
-#: endpoint emits when the founder DISCARDS a deliverable with a reason (G1).
-#: The same settle pipeline absorbs it into the vault as a ``negative_pattern``
-#: garden note; the
-#: :class:`~backend.knowledge.retrieval.negative_pattern_retriever.NegativePatternRetriever`
-#: surfaces it as "avoid this" guidance for a future run with similar signals —
-#: so a rejected approach is not silently repeated. Additive to (never replaces)
-#: the ``decision_resolution`` row.
-NEGATIVE_PATTERN_SETTLE_KIND = "negative_pattern"
-
-#: Cap on the settle-activity ``summary`` text — keeps the absorbed garden
-#: note's body proportionate to the question + answer (mirrors
-#: :data:`~backend.workflow.domain.verified_deliverable._SETTLE_SUMMARY_CAP`).
-_SUMMARY_CAP = 500
-
-logger = structlog.get_logger(__name__)
+from backend.workflow.application.checkpoint_resolution import (
+    resolve_checkpoint as resolve_checkpoint_service,
+)
+from backend.workflow.domain.repositories import DecisionRepository
+from backend.workflow.infrastructure.db import DecisionStatus, RunStatus
 
 router = APIRouter()
-
-
-class DecisionAction(BaseModel):
-    """L-D2: a one-click action available on an executor B2b Decision.
-
-    The founder clicks the action (PWA renders a dedicated button) instead of
-    typing a free-text resolution; the resolve endpoint dispatches on ``key``
-    to a side-effecting handler (e.g. ``ship`` promotes the run to shipped +
-    creates the deliverable; ``discard`` abandons it). Labels are sent for
-    every supported locale so the PWA renders them client-side without a
-    per-product i18n lookup."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    key: str
-    label_en: str
-    label_ko: str
 
 
 class CheckpointResponse(BaseModel):
@@ -182,101 +137,6 @@ class ResolveResponse(BaseModel):
     resolution: str
     resolved_at: datetime
     run_status: RunStatus
-
-
-# B4: executor B2b Decisions (raised when an executor run does NOT verify) record
-# ``payload.reason`` instead of ``payload.question`` — they are an honest "this
-# needs you" surfaced as a Decision, not a work-LLM question. Map the kind →
-# a calm, human-readable line so the founder never sees a blank question on a
-# genuinely actionable needs-you item.
-# Per-language so a ko workspace's founder reads the needs-you line in Korean.
-# These are FIXED system strings (no work-LLM question), so they can't ride the
-# generation adapter's language_directive — they're localized here by the
-# workspace output language, mirroring DecisionAction's label_en / label_ko.
-_EXECUTOR_DECISION_QUESTIONS: dict[str, dict[str, str]] = {
-    "verification_failed": {
-        "en": "BSVibe couldn't verify this work — review it before it ships?",
-        "ko": "BSVibe가 이 작업을 검증하지 못했어요 — 출시 전에 검토할까요?",
-    },
-    "human_review_required": {
-        "en": "This work needs your review before BSVibe can call it verified.",
-        "ko": "이 작업은 검증됨으로 표시하기 전에 검토가 필요해요.",
-    },
-}
-
-
-# L-D2: per-kind action specs surfaced on every executor B2b Decision the
-# founder can act on with one click. Labels ship for every supported locale
-# so the PWA can render them without an extra round-trip. Action ``key``s
-# are stable wire identifiers — handlers dispatch on them in
-# :func:`resolve_checkpoint`. Adding a new action = one entry here + one
-# handler. New Decision kinds may opt in by adding themselves to this map.
-ACTION_SHIP = "ship"
-ACTION_DISCARD = "discard"
-# L2 (#9): re-open the paused run for another attempt instead of shipping a
-# possibly-broken result or abandoning it. ``retry`` carries NO dedicated
-# handler — it falls through to the resume branch in :func:`resolve_checkpoint`
-# (RUNNING → OPEN), so ``AgentWorker.drive_once`` re-picks the run and drives a
-# fresh attempt. A failed run is recoverable, not a dead-end.
-ACTION_RETRY = "retry"
-
-_EXECUTOR_DECISION_ACTIONS: dict[str, list[DecisionAction]] = {
-    "verification_failed": [
-        DecisionAction(key=ACTION_SHIP, label_en="Approve & ship", label_ko="승인하고 출시"),
-        DecisionAction(key=ACTION_RETRY, label_en="Retry", label_ko="다시 시도"),
-        DecisionAction(key=ACTION_DISCARD, label_en="Discard", label_ko="폐기"),
-    ],
-    "human_review_required": [
-        DecisionAction(key=ACTION_SHIP, label_en="Approve & ship", label_ko="승인하고 출시"),
-        DecisionAction(key=ACTION_RETRY, label_en="Retry", label_ko="다시 시도"),
-        DecisionAction(key=ACTION_DISCARD, label_en="Discard", label_ko="폐기"),
-    ],
-    # W1: the ship_or_discard kind from L-P2 is retired. Verified runs no
-    # longer need a founder-approval gate; W2 wires the actual auto-merge.
-}
-
-
-def _decision_actions(decision: Decision) -> list[DecisionAction] | None:
-    """The structured one-click actions for ``decision``, or ``None`` if the
-    kind doesn't carry any (a vanilla ask_user_question Decision)."""
-    return _EXECUTOR_DECISION_ACTIONS.get(decision.decision)
-
-
-def _question_text(decision: Decision, language: str = "en") -> str:
-    """The founder-facing question for a paused-run Decision, in ``language``.
-
-    Prefers the work LLM's recorded ``payload.question`` (the ``ask_user_question``
-    path) — already in the founder's language (generated via the localized
-    adapter), so ``language`` never overrides it. For an executor B2b Decision —
-    which records ``payload.reason``, not a question — fall back to a calm
-    kind-derived line in ``language`` so the needs-you item is never blank. A
-    wholly unrecognised reason-only Decision degrades to an empty string."""
-    payload = decision.payload or {}
-    if isinstance(payload, dict):
-        value = payload.get("question")
-        if isinstance(value, str) and value.strip():
-            return value
-    variants = _EXECUTOR_DECISION_QUESTIONS.get(decision.decision)
-    if variants is None:
-        return ""
-    return variants.get(language) or variants.get("en") or ""
-
-
-def _decision_options(decision: Decision) -> list[str] | None:
-    """The structured options offered for this paused-run Decision, if any.
-
-    B11a: the work LLM's ``ask_user_question`` may carry an ``options`` array on
-    the Decision payload. Only return a clean list of non-empty strings; any
-    other shape degrades to ``None`` so the PWA falls back to free-text and the
-    resolve endpoint skips the membership check (existing behaviour)."""
-    payload = decision.payload or {}
-    if not isinstance(payload, dict):
-        return None
-    raw = payload.get("options")
-    if not isinstance(raw, list):
-        return None
-    cleaned = [item for item in raw if isinstance(item, str) and item.strip()]
-    return cleaned or None
 
 
 def build_decisions_retriever(
@@ -353,386 +213,49 @@ async def resolve_checkpoint(
     workspace_id: Annotated[uuid.UUID, Depends(get_workspace_id)],
     user_row: Annotated[UserRow, Depends(get_current_user_row)],
     session: Annotated[AsyncSession, Depends(get_db_session)],
-    decisions: Annotated[DecisionRepository, Depends(get_decision_repository)],
-    runs: Annotated[RunRepository, Depends(get_run_repository)],
-    deliverables: Annotated[DeliverableRepository, Depends(get_deliverable_repository)],
     language: Annotated[str, Depends(get_output_language)],
 ) -> ResolveResponse:
     """Resolve a pending Decision with the founder's answer and resume the run.
 
-    404 when the Decision is not in the caller's workspace or is not pending.
-    On success: record the answer on the Decision, append it to the run's
-    ``payload["resolved_decisions"]``, and transition the run RUNNING → OPEN so
-    the worker re-picks it (the loop then sees the answer in its messages).
+    Thin caller over
+    :func:`backend.workflow.application.checkpoint_resolution.resolve_checkpoint`:
+    delegates the record-answer / fold-into-run-payload / settle / audit /
+    dispatch logic to the shared service and maps its domain exceptions to the
+    HTTP contract — 404 (not a pending checkpoint), 400 (invalid action/answer),
+    503 (product workspace busy), 500 (ship force-merge failed). The service
+    owns no transaction, so this handler commits on success.
     """
-    decision = await decisions.get(checkpoint_id)
-    if (
-        decision is None
-        or decision.workspace_id != workspace_id
-        or decision.status is not DecisionStatus.PENDING
-    ):
+    try:
+        outcome = await resolve_checkpoint_service(
+            session,
+            workspace_id=workspace_id,
+            checkpoint_id=checkpoint_id,
+            answer=body.answer,
+            action_key=body.action_key,
+            reason=body.reason,
+            actor_id=user_row.id,
+            language=language,
+        )
+    except CheckpointNotFound as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except InvalidAction as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except ProductWorkspaceBusy as exc:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Pending checkpoint {checkpoint_id} not found",
-        )
-
-    # L-D2: validate ``action_key`` against the Decision kind's allowlist BEFORE
-    # any side effects. An unknown key → 400 (the Decision stays pending). An
-    # action key on a Decision that has no actions → 400.
-    available_actions = _decision_actions(decision)
-    action_key = body.action_key
-    if action_key is not None:
-        if available_actions is None:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Decision kind {decision.decision!r} has no one-click actions",
-            )
-        if action_key not in {a.key for a in available_actions}:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"action_key {action_key!r} is not allowed for {decision.decision!r}",
-            )
-    elif not body.answer.strip():
-        # Free-text path requires a non-empty answer (was previously enforced
-        # via Pydantic min_length=1; relaxed because action-only resolves
-        # skip ``answer``).
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)
+        ) from exc
+    except ProductWorkspaceMergeFailed as exc:
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="answer must be non-empty when no action_key is given",
-        )
-
-    # L-D1: the work LLM's ``options`` are **suggestions**, not a closed
-    # set. The founder may pick one of the offered strings (PWA single-
-    # select) OR type their own answer ("Other" free-text) — mirrors the
-    # AskUserQuestion UX where users can always fall back to free input.
-    # The off-list answer is recorded verbatim as the resolution; the
-    # downstream loop sees the founder's exact words, not a coerced match.
-    now = datetime.now(tz=UTC)
-    # L-D2: when an action_key is used, the recorded resolution is the action
-    # key itself (a stable wire identifier) — not the localized label and not
-    # the empty answer string. The settle activity and audit events reference
-    # the key so downstream knowledge / analytics stays locale-independent.
-    resolution_text = action_key if action_key is not None else body.answer
-    decision.status = DecisionStatus.RESOLVED
-    decision.resolution = resolution_text
-    decision.resolved_at = now
-    decision.resolved_by = user_row.id
-
-    run = await runs.get(decision.run_id)
-    if run is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Run {decision.run_id} for checkpoint not found",
-        )
-
-    # Fold the resolution into the run payload so the loop seeds it as context.
-    # Re-assign payload (not in-place mutate) so SQLAlchemy detects the change
-    # on a JSON column.
-    payload: dict[str, Any] = dict(run.payload or {})
-    resolved = list(payload.get("resolved_decisions") or [])
-    resolved.append(
-        {
-            "decision_id": str(decision.id),
-            "question": _question_text(decision, language),
-            "answer": resolution_text,
-        }
-    )
-    payload["resolved_decisions"] = resolved
-    run.payload = payload
-
-    await session.flush()
-
-    # B11b — Knowledge-ize the resolution. Emit a ``settle`` ExecutionRunActivity
-    # carrying the decision-resolution payload + the run's stable clustering
-    # context (intent/product). The :class:`~backend.knowledge.infrastructure.workers.settle_worker.SettleWorker`
-    # drains this row into the workspace's BSage vault, exactly like a
-    # verified-work observation — so a future run with similar signals can
-    # surface the prior decision via the retriever (the SAME seam B3 verify
-    # and B6 seed inject). ``verified`` is False — the resolution is an honest
-    # answer, NOT verified-as-code (B4 trust integrity).
-    settle_payload: dict[str, Any] = {
-        "kind": DECISION_RESOLUTION_SETTLE_KIND,
-        "decision_id": str(decision.id),
-        "question": _question_text(decision, language),
-        "answer": resolution_text,
-        "options": _decision_options(decision),
-        "action_key": action_key,
-        "resolved_by": str(user_row.id),
-        "resolved_at": now.isoformat(),
-        "verified": False,
-        # A human-legible summary the settle sink uses as the garden note body /
-        # title. Capped so a long answer can't blow up the note size.
-        "summary": (
-            f"Decision resolved — Q: {_question_text(decision, language)} A: {resolution_text}"
-        )[:_SUMMARY_CAP],
-        **await settle_run_context(session, run),
-    }
-    session.add(
-        ExecutionRunActivity(
-            id=uuid.uuid4(),
-            run_id=run.id,
-            workspace_id=run.workspace_id,
-            activity_type="settle",
-            payload=settle_payload,
-        )
-    )
-
-    # G1 — when the founder DISCARDS with a reason, capture that rejection as
-    # reusable negative knowledge. Emit a SECOND settle activity (additive to the
-    # decision_resolution row above) carrying ``kind = negative_pattern`` + the
-    # reason + the run's stable clustering context. The same SettleWorker drains
-    # it into the vault; the NegativePatternRetriever then surfaces it as "avoid
-    # this" guidance for a future run with overlapping signals — so the rejected
-    # approach is not repeated. Gated on a non-empty reason: a reasonless discard
-    # teaches nothing, so it writes no negative-pattern row.
-    reason = body.reason.strip()
-    if action_key == ACTION_DISCARD and reason:
-        negative_payload: dict[str, Any] = {
-            "kind": NEGATIVE_PATTERN_SETTLE_KIND,
-            "decision_id": str(decision.id),
-            "question": _question_text(decision, language),
-            "reason": reason,
-            "resolved_by": str(user_row.id),
-            "resolved_at": now.isoformat(),
-            # A rejection is an honest founder signal, NEVER verified-as-code.
-            "verified": False,
-            "summary": (f"Rejected approach — {reason}")[:_SUMMARY_CAP],
-            **await settle_run_context(session, run),
-        }
-        session.add(
-            ExecutionRunActivity(
-                id=uuid.uuid4(),
-                run_id=run.id,
-                workspace_id=run.workspace_id,
-                activity_type="settle",
-                payload=negative_payload,
-            )
-        )
-
-    await session.flush()
-
-    # L-D2: action-driven resolutions dispatch to side-effecting handlers
-    # (``ship`` → promote run to shipped + create deliverable; ``discard`` →
-    # abandon run). Free-text resolutions keep the prior resume-loop semantics
-    # (RUNNING → OPEN). The dispatch table is keyed solely on ``action_key`` —
-    # the same handler serves every Decision kind that opts into that action.
-    runner = AgentRunner(session)
-    if action_key == ACTION_SHIP:
-        await _ship_decision_run(
-            session, runner, run=run, decision=decision, deliverables=deliverables
-        )
-    elif action_key == ACTION_DISCARD:
-        await _discard_decision_run(runner, run=run, decision=decision)
-    else:
-        # Resume: RUNNING → OPEN so AgentWorker.drive_once (scans OPEN runs)
-        # re-picks it. AgentRunner.transition no-ops if the run is not RUNNING
-        # (e.g. already OPEN), harmless — the answer is recorded + folded in.
-        await runner.transition(
-            run_id=run.id,
-            to_status=RunStatus.OPEN,
-            reason=f"resumed: decision {decision.id} resolved",
-        )
-
-    # B15 — emit ``DecisionResolved`` onto the audit outbox so the supervisor
-    # audit stream sees the founder's resolution (alongside the settle activity
-    # row above). Soft-fail via :func:`safe_emit`. The actor is the founder
-    # (``type="user"`` — this is a human action, NOT a system event like the
-    # loop-side ``DecisionPending``).
-    await safe_emit(
-        DecisionResolved(
-            actor=AuditActor(type="user", id=str(user_row.id)),
-            workspace_id=str(workspace_id),
-            resource=AuditResource(type="execution_run", id=str(run.id)),
-            data={
-                "run_id": str(run.id),
-                "decision_id": str(decision.id),
-                "kind": decision.decision,
-                "answer": resolution_text[:500],
-                "action_key": action_key,
-            },
-        ),
-        session=session,
-    )
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)
+        ) from exc
 
     await session.commit()
 
     return ResolveResponse(
-        id=decision.id,
-        run_id=run.id,
-        status=decision.status,
-        resolution=resolution_text,
-        resolved_at=now,
-        run_status=run.status,
+        id=outcome.decision_id,
+        run_id=outcome.run_id,
+        status=outcome.status,
+        resolution=outcome.resolution,
+        resolved_at=outcome.resolved_at,
+        run_status=outcome.run_status,
     )
-
-
-async def _ship_decision_run(
-    session: AsyncSession,
-    runner: AgentRunner,
-    *,
-    run: ExecutionRun,
-    decision: Decision,
-    deliverables: DeliverableRepository,
-) -> None:
-    """L-D2 ``ship`` handler — founder overrides verification.
-
-    1. Take the run's latest :class:`WorkStep` and mark it
-       ``VERIFIED`` / ``ProofState.VERIFIED`` — a founder override,
-       distinct from a real-passing verifier (the audit row records the
-       human resolution; B4 trust integrity is preserved because the
-       Decision carries the kind = "verification_failed" or
-       "human_review_required" the founder consciously approved past).
-    2. Create a code :class:`Deliverable` from the artifact_refs recorded
-       on the Decision payload at mint time (if any). ``payload.shipped_by_founder``
-       carries the override flag for the downstream delivery dispatcher.
-    3. Transition the run RUNNING → REVIEW_READY → SHIPPED in two hops
-       (state-machine valid path; the worker would have made the first
-       hop on a verifier PASS, the founder makes both here in one click).
-    """
-    payload = decision.payload if isinstance(decision.payload, dict) else {}
-    artifact_refs_raw = payload.get("artifact_refs")
-    artifact_refs: list[str] = (
-        [r for r in artifact_refs_raw if isinstance(r, str)]
-        if isinstance(artifact_refs_raw, list)
-        else []
-    )
-
-    work_step = (
-        (
-            await session.execute(
-                select(WorkStep)
-                .where(WorkStep.run_id == run.id)
-                .order_by(WorkStep.created_at.desc())
-            )
-        )
-        .scalars()
-        .first()
-    )
-    if work_step is not None:
-        work_step.status = WorkStepStatus.VERIFIED
-        # DB-level ProofState enum is {UNTESTED, PROVED, REFUTED} — PROVED is
-        # the success terminal (not "VERIFIED", which is a WorkStepStatus). A
-        # founder ship promotes the proof to PROVED with the Decision audit
-        # row recording the override (B4 trust integrity).
-        work_step.proof_state = ProofState.PROVED
-
-    # L-P2: ship_or_discard Decisions are minted on REVIEW_READY runs that
-    # ALREADY have a Deliverable from the verifier's PASS path. Don't mint
-    # a duplicate — the existing row already carries the verified artifact
-    # refs. For verification_failed / human_review_required Decisions there
-    # is no prior Deliverable, so the mint below is the first one.
-    existing_deliverable = await deliverables.find_first_by_run(run.id)
-    if existing_deliverable is None:
-        await deliverables.add(
-            Deliverable(
-                id=uuid.uuid4(),
-                run_id=run.id,
-                workspace_id=run.workspace_id,
-                deliverable_type=DeliverableType.CODE,
-                payload={
-                    "shipped_by_founder": True,
-                    "decision_id": str(decision.id),
-                    "artifact_refs": artifact_refs,
-                },
-            )
-        )
-
-    # W2 — when the run is bound to a product workspace, ship_anyway means
-    # "force the run's version onto main" (the founder explicitly accepted
-    # the work even though verify failed). git -X theirs is the strategy
-    # that says "on conflict, take the merging-in branch's content"; the
-    # branch being merged in is the run branch, so the run wins.
-    if run.product_id is not None:
-        from backend.storage.product_workspace import (  # noqa: PLC0415
-            ProductWorkspaceBusy,
-            ProductWorkspaceError,
-            commit_worktree,
-            force_merge_theirs,
-            product_workspace_lock,
-            remove_run_worktree,
-        )
-
-        try:
-            # The agent may not have committed its uncommitted work yet
-            # (verification failed before the verify hook called
-            # commit_worktree). Force a commit now so force_merge_theirs
-            # has a branch to merge from.
-            await commit_worktree(
-                run.product_id,
-                run.id,
-                message=f"ship_anyway: decision {decision.id}",
-            )
-            async with product_workspace_lock(session, run.product_id):
-                await force_merge_theirs(run.product_id, run.id)
-            try:
-                await remove_run_worktree(run.product_id, run.id)
-            except ProductWorkspaceError:
-                logger.warning(
-                    "ship_anyway_worktree_cleanup_failed",
-                    run_id=str(run.id),
-                    exc_info=True,
-                )
-        except ProductWorkspaceBusy:
-            logger.warning("ship_anyway_lock_busy", run_id=str(run.id))
-            # Surface as HTTP 503-ish via existing exception path — let
-            # the founder retry. v1 keeps it simple.
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail="product workspace busy; retry in a moment",
-            ) from None
-        except ProductWorkspaceError as exc:
-            logger.warning("ship_anyway_merge_failed", run_id=str(run.id), exc_info=True)
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"ship_anyway merge failed: {exc}",
-            ) from exc
-
-    await runner.transition(
-        run_id=run.id,
-        to_status=RunStatus.REVIEW_READY,
-        reason=f"founder approve+ship via decision {decision.id}",
-    )
-    await runner.transition(
-        run_id=run.id,
-        to_status=RunStatus.SHIPPED,
-        reason=f"founder approve+ship via decision {decision.id}",
-    )
-
-
-async def _discard_decision_run(
-    runner: AgentRunner,
-    *,
-    run: ExecutionRun,
-    decision: Decision,
-) -> None:
-    """L-D2 ``discard`` handler — founder abandons the run.
-
-    No deliverable is created and no proof override happens. The run goes
-    straight to ABANDONED; any WorkStep already in a non-terminal state is
-    moot since the abandonment is the terminal signal for the whole run.
-
-    W2 — when the run is bound to a product workspace, also clean up the
-    worktree + branch so the founder doesn't see a "ghost" branch in
-    ``git branch`` later.
-    """
-    # RunStatus enum has no ABANDONED — CANCELLED is the discard terminal.
-    await runner.transition(
-        run_id=run.id,
-        to_status=RunStatus.CANCELLED,
-        reason=f"founder discard via decision {decision.id}",
-    )
-
-    if run.product_id is not None:
-        from backend.storage.product_workspace import (  # noqa: PLC0415
-            ProductWorkspaceError,
-            remove_run_worktree,
-        )
-
-        try:
-            await remove_run_worktree(run.product_id, run.id)
-        except ProductWorkspaceError:
-            logger.warning(
-                "discard_worktree_cleanup_failed",
-                run_id=str(run.id),
-                exc_info=True,
-            )
