@@ -423,6 +423,7 @@
       "models": "모델",
       "connectors": "커넥터",
       "notifications": "알림",
+      "schedules": "예약",
       "account": "계정",
       "sectionsLabel": "설정 섹션",
       "developer": "개발자"
@@ -746,6 +747,33 @@
         "discord": "Discord",
         "email_sender": "이메일"
       }
+    },
+    "schedules": {
+      "lede": "BSVibe가 스스로 반복 실행할 작업을 예약해요. 지시문이 곧 예약 실행이 수행할 작업이에요.",
+      "createTitle": "새 예약",
+      "instructionLabel": "지시문",
+      "instructionPlaceholder": "예: 매주 월요일 시장조사 요약해줘",
+      "recurrenceLabel": "반복 주기",
+      "cronLabel": "Cron 표현식",
+      "cronCaption": "고급: 5필드 cron 표현식이며 워크스페이스 시간대 기준으로 평가돼요. 위 프리셋을 누르면 자동으로 채워져요.",
+      "titleLabel": "제목 (선택)",
+      "titlePlaceholder": "이 예약의 짧은 이름",
+      "create": "예약 추가",
+      "creating": "추가하는 중…",
+      "createError": "예약을 만들지 못했어요. cron 표현식을 확인하고 다시 시도해 주세요.",
+      "preset": {
+        "daily9": "매일 09:00",
+        "weeklyMon9": "매주 월요일 09:00",
+        "hourly": "매시간"
+      },
+      "listTitle": "예약 목록",
+      "loading": "예약을 불러오는 중…",
+      "loadError": "예약을 불러오지 못했어요. 새로고침해서 다시 시도해 주세요.",
+      "emptyTitle": "예약된 작업이 없습니다",
+      "emptyHint": "위에 지시문과 반복 주기를 추가하면 BSVibe가 스스로 작업을 시작해요.",
+      "nextRun": "다음 실행: {when}",
+      "enabledLabel": "사용",
+      "delete": "삭제"
     },
     "account": {
       "lede": "계정: 프로필과 로그인.",
