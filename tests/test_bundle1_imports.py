@@ -38,18 +38,35 @@ def test_no_circular_imports_between_modules():
     in a later bundle, but Bundle 1 keeps them disjoint."""
     import sys
 
-    # Clear and reimport in isolation to surface any cross-module loop.
-    for mod in [m for m in list(sys.modules) if m.startswith("backend.")]:
-        del sys.modules[mod]
+    # Snapshot every already-imported backend.* module so we can put them back
+    # verbatim afterwards. Re-importing modules in isolation (below) rebinds the
+    # SQLAlchemy model classes (a fresh ``ExecutionRun`` on a new mapper); if we
+    # left those fresh duplicates — or the holes from the ``del`` — in
+    # sys.modules, a downstream test that lazily re-imports one module would end
+    # up with two versions of a model class. The session identity map is keyed
+    # on (class, pk), so the two versions never share an instance, and an
+    # in-place attribute mutation on one is invisible on the other. Restoring
+    # the snapshot keeps the interpreter consistent for every later test.
+    saved = {m: sys.modules[m] for m in list(sys.modules) if m.startswith("backend.")}
+    try:
+        # Clear and reimport in isolation to surface any cross-module loop.
+        for mod in saved:
+            del sys.modules[mod]
 
-    import backend.extensions.plugin  # noqa: F401
+        import backend.extensions.plugin  # noqa: F401
 
-    plugin_modules = {m for m in sys.modules if m.startswith("backend.extensions.plugin")}
-    forbidden = {
-        m
-        for m in sys.modules
-        if m.startswith("backend.router.")
-        or m.startswith("backend.workflow.infrastructure.sandbox")
-    }
-    assert not forbidden, f"backend.extensions.plugin pulled in: {forbidden}"
-    assert plugin_modules
+        plugin_modules = {m for m in sys.modules if m.startswith("backend.extensions.plugin")}
+        forbidden = {
+            m
+            for m in sys.modules
+            if m.startswith("backend.router.")
+            or m.startswith("backend.workflow.infrastructure.sandbox")
+        }
+        assert not forbidden, f"backend.extensions.plugin pulled in: {forbidden}"
+        assert plugin_modules
+    finally:
+        # Drop everything imported during the isolated probe, then restore the
+        # originals so no fresh duplicate class objects linger in sys.modules.
+        for mod in [m for m in list(sys.modules) if m.startswith("backend.")]:
+            del sys.modules[mod]
+        sys.modules.update(saved)

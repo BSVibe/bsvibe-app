@@ -67,7 +67,10 @@ def test_audit_plugin_registers_subscriber_on_import() -> None:
 
 _BACKEND_PRODUCER_SITES = (
     "backend/api/v1/chat.py",
-    "backend/api/v1/checkpoints.py",
+    # C1 extracted the checkpoint-resolve audit producer out of
+    # backend/api/v1/checkpoints.py (now a thin caller) into the shared
+    # resolve service so the MCP checkpoint tools can reuse it.
+    "backend/workflow/application/checkpoint_resolution.py",
     # Lift H2a decomposed the native loop's audit producer out of
     # backend/execution/orchestrator.py (now a thin re-export shim) into
     # backend/workflow/application/run_persistence.py — the canonical home
