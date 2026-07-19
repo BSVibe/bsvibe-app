@@ -1,10 +1,11 @@
 /**
  * Settings tab IA — the top tab bar that fronts the 6-tab Settings surface.
  *
- * This is the serialization point: the nav MUST enumerate all six tabs
- * (General / Models / Connectors / Notifications / Developer / Account) in
- * order, as real shareable links under /settings/*, so later lifts only fill
- * content and never touch the nav. The active tab is marked `aria-current="page"`.
+ * This is the serialization point: the nav MUST enumerate all tabs
+ * (General / Models / Connectors / Notifications / Schedules / Developer /
+ * Account) in order, as real shareable links under /settings/*, so later lifts
+ * only fill content and never touch the nav. The active tab is marked
+ * `aria-current="page"`.
  */
 
 import SettingsTabs from "@/components/settings/SettingsTabs";
@@ -16,12 +17,13 @@ const LABELS = [
   "Models",
   "Connectors",
   "Notifications",
+  "Schedules",
   "Developer",
   "Account",
 ] as const;
 
 describe("Settings tab nav", () => {
-  it("renders all six tabs in order as links", () => {
+  it("renders all tabs in order as links", () => {
     render(<SettingsTabs active="general" />);
     const links = screen.getAllByRole("link");
     const names = links.map((l) => l.textContent?.trim());
@@ -46,6 +48,10 @@ describe("Settings tab nav", () => {
       "href",
       "/settings/notifications",
     );
+    expect(screen.getByRole("link", { name: "Schedules" })).toHaveAttribute(
+      "href",
+      "/settings/schedules",
+    );
     expect(screen.getByRole("link", { name: "Developer" })).toHaveAttribute(
       "href",
       "/settings/developer",
@@ -63,8 +69,8 @@ describe("Settings tab nav", () => {
     expect(screen.getByRole("link", { name: "General" })).not.toHaveAttribute("aria-current");
   });
 
-  it("renders the row on the scrollable nav class and keeps all six tabs (incl. the active last tab) when narrow", () => {
-    // At 390px the row can't fit all six tabs; the `.settings-tabs` class is
+  it("renders the row on the scrollable nav class and keeps all tabs (incl. the active last tab) when narrow", () => {
+    // At 390px the row can't fit every tab; the `.settings-tabs` class is
     // the horizontal-scroll container, so every tab — including the active last
     // one (Account) — stays present and reachable rather than being clipped.
     const { container } = render(<SettingsTabs active="account" />);

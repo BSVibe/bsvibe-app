@@ -20,6 +20,7 @@ export type SettingsTabSlug =
   | "models"
   | "connectors"
   | "notifications"
+  | "schedules"
   | "developer"
   | "account";
 
@@ -28,6 +29,7 @@ export const TABS: SettingsTabSlug[] = [
   "models",
   "connectors",
   "notifications",
+  "schedules",
   "developer",
   "account",
 ];

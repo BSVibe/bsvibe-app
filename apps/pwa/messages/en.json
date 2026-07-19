@@ -423,6 +423,7 @@
       "models": "Models",
       "connectors": "Connectors",
       "notifications": "Notifications",
+      "schedules": "Schedules",
       "account": "Account",
       "sectionsLabel": "Settings sections",
       "developer": "Developer"
@@ -746,6 +747,33 @@
         "discord": "Discord",
         "email_sender": "Email"
       }
+    },
+    "schedules": {
+      "lede": "Schedule instructions for BSVibe to run on its own, on a recurring cadence. The instruction is the task the scheduled run works on.",
+      "createTitle": "New schedule",
+      "instructionLabel": "Instruction",
+      "instructionPlaceholder": "e.g. Summarize this week's market research every Monday",
+      "recurrenceLabel": "Recurrence",
+      "cronLabel": "Cron expression",
+      "cronCaption": "Advanced: a 5-field cron expression, evaluated in your workspace time zone. Pick a preset above to fill this in.",
+      "titleLabel": "Title (optional)",
+      "titlePlaceholder": "A short name for this schedule",
+      "create": "Add schedule",
+      "creating": "Adding…",
+      "createError": "Couldn't create the schedule. Check the cron expression and try again.",
+      "preset": {
+        "daily9": "Every day at 09:00",
+        "weeklyMon9": "Every Monday at 09:00",
+        "hourly": "Every hour"
+      },
+      "listTitle": "Your schedules",
+      "loading": "Loading your schedules…",
+      "loadError": "Couldn't load your schedules. Refresh to try again.",
+      "emptyTitle": "No scheduled tasks yet",
+      "emptyHint": "Add an instruction above and a recurrence to have BSVibe start work on its own.",
+      "nextRun": "Next run: {when}",
+      "enabledLabel": "Enabled",
+      "delete": "Delete"
     },
     "account": {
       "lede": "Account: your profile and sign-in.",

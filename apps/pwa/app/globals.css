@@ -9947,3 +9947,176 @@ main.login {
   z-index: 1;
 }
 /* ── END card-tap ──────────────────────────────────────────────────────── */
+
+/* ── Schedules (Settings → Schedules, S3) ──────────────────────────────────
+   The PWA producer for workspace_schedules: a create form (instruction +
+   cron recurrence presets) and the list of authored schedules. Appended at
+   the END to minimise merge friction; uses the shared light/dark tokens. */
+
+.schedules-form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 16px;
+  border: 1px solid var(--hair);
+  border-radius: var(--radius);
+  background: var(--surface);
+  margin-bottom: 24px;
+}
+
+.schedules-form__instruction {
+  resize: vertical;
+  min-height: 64px;
+  font: inherit;
+}
+
+.schedules-form__recurrence {
+  border: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.schedules-form__presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.schedules-form__preset {
+  padding: 6px 12px;
+  border-radius: var(--radius);
+  border: 1px solid var(--hair-strong);
+  background: var(--surface);
+  color: var(--ink);
+  font-size: 0.82rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.schedules-form__preset:hover {
+  background: var(--accent-bg);
+}
+
+.schedules-form__preset[aria-pressed="true"] {
+  border-color: var(--ink);
+  background: var(--accent-bg);
+}
+
+.schedules-form__submit {
+  align-self: flex-start;
+  padding: 8px 16px;
+  border-radius: var(--radius);
+  border: 1px solid var(--hair-strong);
+  background: var(--ink);
+  color: var(--surface);
+  font-size: 0.86rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.schedules-form__submit:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.schedules-form__error {
+  color: var(--danger, #b42318);
+  font-size: 0.84rem;
+  margin: 0;
+}
+
+.schedules-list__items {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.schedule-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+  padding: 14px 16px;
+  border: 1px solid var(--hair);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.schedule-row__title {
+  margin: 0 0 4px;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.schedule-row__text {
+  margin: 0 0 6px;
+  font-size: 0.86rem;
+  color: var(--muted, #667085);
+}
+
+.schedule-row__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+  margin: 0;
+  font-size: 0.8rem;
+  color: var(--muted, #667085);
+}
+
+.schedule-row__cron {
+  font-family: var(--mono, monospace);
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: var(--accent-bg);
+}
+
+.schedule-row__actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-shrink: 0;
+}
+
+.schedule-row__toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.82rem;
+  color: var(--ink);
+}
+
+.schedule-row__delete {
+  padding: 5px 10px;
+  border-radius: var(--radius);
+  border: 1px solid var(--hair-strong);
+  background: var(--surface);
+  color: var(--danger, #b42318);
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.schedule-row__delete:hover {
+  background: var(--accent-bg);
+}
+
+.schedules-empty {
+  padding: 20px 16px;
+  border: 1px dashed var(--hair-strong);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.schedules-empty__title {
+  margin: 0 0 6px;
+  font-weight: 600;
+  color: var(--ink);
+}
+/* ── END Schedules ─────────────────────────────────────────────────────── */
