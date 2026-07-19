@@ -66,6 +66,7 @@ def test_alembic_history_loads():
         "run_routing_source_text",
         "runtime_role",
         "notification_channel_keys",
+        "workspace_timezone",
     ):
         assert rev in result.stdout, f"missing revision {rev} in:\n{result.stdout}"
 
@@ -87,10 +88,12 @@ def test_alembic_head_is_connector_last_import():
     # runtime_role (B2b — provision the least-privilege bsvibe_app runtime role
     # so Postgres RLS is a real layer-3 tenant-isolation backstop) →
     # notification_channel_keys (Notifier N1a — rename the matrix ``email`` key
-    # to the ``email-sender`` connector name so channels derive from bindings).
+    # to the ``email-sender`` connector name so channels derive from bindings) →
+    # workspace_timezone (Notifier N1b — promote the founder's IANA time zone
+    # to a server column so the NotifyWorker can evaluate quiet hours).
     # Keep the test name (function name is a historical revision id, kept for
     # git-blame stability) and assert the current tip.
-    assert "notification_channel_keys" in result.stdout
+    assert "workspace_timezone" in result.stdout
 
 
 def test_target_metadata_covers_all_bases():

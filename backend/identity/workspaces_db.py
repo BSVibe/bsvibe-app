@@ -95,6 +95,15 @@ class WorkspaceRow(WorkspacesBase):
     language: Mapped[str] = mapped_column(
         String(8), nullable=False, default="en", server_default="en"
     )
+    # The IANA time zone the server evaluates quiet hours against (Notifier N2's
+    # NotifyWorker suppresses notifications inside the workspace's local-time
+    # quiet-hours window). An IANA zone name ("Asia/Seoul" / "UTC"); the founder
+    # sets it via Settings → Time zone. Default "UTC" — the multi-tenant global
+    # default. Promoted from PWA localStorage (where the server could never read
+    # it) so the server-side quiet-hours gate can.
+    timezone: Mapped[str] = mapped_column(
+        String(64), nullable=False, default="UTC", server_default="UTC"
+    )
     # Lift E1 — workspace-default ModelAccount fallback for the new
     # :class:`backend.dispatch.resolver.ModelAccountResolver`. The founder
     # picks this through Settings → Models or the MCP tool

@@ -120,15 +120,6 @@ describe("General tab — display preferences", () => {
     );
   });
 
-  it("persists the selected time zone", async () => {
-    const user = userEvent.setup();
-    render(<GeneralTab />);
-
-    await user.selectOptions(screen.getByLabelText(/time zone/i), "UTC");
-
-    expect(JSON.parse(window.localStorage.getItem(PREF_STORAGE_KEY) ?? "{}").timezone).toBe("UTC");
-  });
-
   it("persists the selected date format", async () => {
     const user = userEvent.setup();
     render(<GeneralTab />);
@@ -165,6 +156,62 @@ describe("General tab — display preferences", () => {
     await waitFor(() => expect(screen.getByRole("alert")).toBeInTheDocument());
     expect(document.cookie).not.toContain(`${LOCALE_COOKIE}=ko`);
     expect(refresh).not.toHaveBeenCalled();
+  });
+});
+
+// N1b — the time zone is now a server value (workspaces.timezone), read on load
+// and written via PATCH, so the server-side NotifyWorker can evaluate quiet hours.
+describe("General tab — time zone (N1b)", () => {
+  function mockWorkspace(initialTz: string) {
+    return vi.fn(async (url: string, init?: RequestInit) => {
+      const method = init?.method ?? "GET";
+      if (typeof url === "string" && url.includes("/api/v1/workspace")) {
+        const body =
+          method === "PATCH" ? (JSON.parse(init?.body as string) as { timezone?: string }) : {};
+        const value = body.timezone ?? initialTz;
+        return new Response(
+          JSON.stringify({
+            id: "ws-1",
+            name: "Acme",
+            language: "en",
+            timezone: value,
+            safe_mode: true,
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+      return new Response("{}", { status: 200, headers: { "Content-Type": "application/json" } });
+    });
+  }
+
+  it("switching the time zone PATCHes workspaces.timezone and never writes localStorage", async () => {
+    const fetchMock = mockWorkspace("Asia/Seoul");
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<GeneralTab />);
+
+    // The select is disabled until the workspace loads, so the reflected value
+    // is always the server's — never an optimistic guess.
+    const select = await screen.findByLabelText(/time zone/i);
+    await waitFor(() => expect(select).not.toBeDisabled());
+    await userEvent.selectOptions(select, "UTC");
+
+    await waitFor(() => {
+      const patch = fetchMock.mock.calls.find(
+        (c) =>
+          typeof c[0] === "string" &&
+          (c[0] as string).includes("/api/v1/workspace") &&
+          (c[1] as RequestInit)?.method === "PATCH",
+      );
+      expect(patch).toBeTruthy();
+      const [, init] = patch as unknown as [string, RequestInit];
+      expect(JSON.parse(init.body as string)).toEqual({ timezone: "UTC" });
+    });
+
+    // No localStorage timezone remnant — the value lives on the workspace now.
+    expect(
+      JSON.parse(window.localStorage.getItem(PREF_STORAGE_KEY) ?? "{}").timezone,
+    ).toBeUndefined();
   });
 });
 

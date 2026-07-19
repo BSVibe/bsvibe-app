@@ -23,9 +23,10 @@ from __future__ import annotations
 
 import uuid
 from typing import Annotated, Literal
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.api.deps import get_db_session, get_workspace_id
@@ -55,6 +56,10 @@ class WorkspaceOut(BaseModel):
     # The language LLM-generated user-facing prose is written in (knowledge
     # notes, decision questions, framing). A short locale tag; "en" default.
     language: str = "en"
+    # The IANA time zone the server-side NotifyWorker (Notifier N2) evaluates
+    # quiet hours against. An IANA zone name ("Asia/Seoul" / "UTC"); "UTC"
+    # default (the multi-tenant global default).
+    timezone: str = "UTC"
     # L3 (#5) — Safe Mode. ``True`` (Safe): every shipped deliverable is held
     # in the Safe Mode queue for founder approval. ``False`` (Auto): deliverables
     # auto-dispatch — the delivery gate is bypassed (the Claude-Code
@@ -97,10 +102,30 @@ class WorkspaceUpdate(BaseModel):
     # ("en" / "ko") to set. The PWA Language control sends this alongside the
     # client locale so the UI and the generated prose share one language.
     language: Literal["en", "ko"] | None = Field(default=None)
+    # The IANA time zone the server-side quiet-hours gate (Notifier N2)
+    # evaluates against. Omit to leave unchanged; any valid IANA zone name
+    # ("Asia/Seoul" / "UTC" / …) to set. An unknown zone is a 422 (validated
+    # below) so an invalid value can never be silently stored where the
+    # NotifyWorker would later fail to resolve it.
+    timezone: str | None = Field(default=None)
     # L3 (#5) — Safe Mode toggle. Omit to leave unchanged; ``True`` (Safe) holds
     # deliverables for approval, ``False`` (Auto) auto-dispatches. The founder
     # flips it from Settings → General (or the MCP set-safe-mode tool).
     safe_mode: bool | None = Field(default=None)
+
+    @field_validator("timezone")
+    @classmethod
+    def _validate_timezone(cls, value: str | None) -> str | None:
+        """Reject anything ``zoneinfo`` can't resolve to a real IANA zone. A
+        bad value raises ``ValueError`` → FastAPI returns 422, so the column
+        only ever holds a zone the NotifyWorker can load."""
+        if value is None:
+            return None
+        try:
+            ZoneInfo(value)
+        except (ZoneInfoNotFoundError, ValueError) as exc:
+            raise ValueError(f"invalid IANA timezone: {value!r}") from exc
+        return value
 
 
 @router.get("", response_model=WorkspaceOut)
@@ -118,6 +143,7 @@ async def get_workspace(
         audit_retention_days=workspace.audit_retention_days,
         default_account_id=workspace.default_account_id,
         language=workspace.language,
+        timezone=workspace.timezone,
         safe_mode=workspace.safe_mode,
     )
 
@@ -161,6 +187,8 @@ async def update_workspace(
         workspace.default_account_id = payload.default_account_id
     if "language" in sent and payload.language is not None:
         workspace.language = payload.language
+    if "timezone" in sent and payload.timezone is not None:
+        workspace.timezone = payload.timezone
     if "safe_mode" in sent and payload.safe_mode is not None:
         workspace.safe_mode = payload.safe_mode
     await session.commit()
@@ -170,6 +198,7 @@ async def update_workspace(
         audit_retention_days=workspace.audit_retention_days,
         default_account_id=workspace.default_account_id,
         language=workspace.language,
+        timezone=workspace.timezone,
         safe_mode=workspace.safe_mode,
     )
 

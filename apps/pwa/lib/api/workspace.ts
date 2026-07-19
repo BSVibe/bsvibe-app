@@ -28,6 +28,10 @@ export interface WorkspaceInfo {
    *  (knowledge notes, decision questions, framing). The Settings Language
    *  control sets this alongside the client locale. Defaults "en". */
   language?: string;
+  /** N1b — the IANA time zone the server-side NotifyWorker evaluates quiet
+   *  hours against. Promoted from localStorage so the server can read it. The
+   *  Settings → Time zone control sets it. Defaults "UTC". */
+  timezone?: string;
   /** L3 (#5) — Safe Mode. `true` (Safe): every deliverable is held for
    *  founder approval. `false` (Auto): deliverables auto-dispatch. The
    *  Settings → General Safe / Auto control sets this. Defaults `true`. */
@@ -66,6 +70,17 @@ export function setWorkspaceLanguage(language: string): Promise<WorkspaceInfo> {
   return apiFetch<WorkspaceInfo>("/api/v1/workspace", {
     method: "PATCH",
     body: JSON.stringify({ language }),
+  });
+}
+
+/** N1b — PATCH the workspace's IANA time zone ("Asia/Seoul" / "UTC" / …), so the
+ *  server-side NotifyWorker can evaluate quiet hours against the founder's local
+ *  time. Promoted from localStorage (where the server could never read it). Set
+ *  by the Settings → Time zone control. The backend 422s an invalid IANA zone. */
+export function setWorkspaceTimezone(timezone: string): Promise<WorkspaceInfo> {
+  return apiFetch<WorkspaceInfo>("/api/v1/workspace", {
+    method: "PATCH",
+    body: JSON.stringify({ timezone }),
   });
 }
 

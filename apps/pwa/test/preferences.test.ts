@@ -1,7 +1,8 @@
 /**
- * Client display preferences (language / time zone / date format) — local-only,
- * persisted to localStorage. No backend sync yet (documented follow-up). These
- * assert the round-trip and the sane defaults.
+ * Client display preferences (language / date format) — persisted to
+ * localStorage. `timezone` was promoted OFF localStorage to `workspaces.timezone`
+ * (N1b) so the server-side NotifyWorker can read it; TIMEZONE_OPTIONS stays here
+ * only as the select's option list. These assert the round-trip + sane defaults.
  */
 
 import {
@@ -22,7 +23,6 @@ describe("display preferences", () => {
   it("provides sane defaults when nothing is stored", () => {
     const prefs = getPreferences();
     expect(prefs.language).toBe("en");
-    expect(prefs.timezone).toBe("Asia/Seoul");
     expect(prefs.dateFormat).toBe("iso");
   });
 
@@ -32,7 +32,9 @@ describe("display preferences", () => {
     expect(values).toContain("ko");
   });
 
-  it("offers Asia/Seoul and UTC time zones", () => {
+  it("offers Asia/Seoul and UTC time zones (select option list only)", () => {
+    // TIMEZONE_OPTIONS is the select's option list; the CHOSEN value now lives
+    // on the workspace row (N1b), not in these localStorage preferences.
     const values = TIMEZONE_OPTIONS.map((o) => o.value);
     expect(values).toContain("Asia/Seoul");
     expect(values).toContain("UTC");
@@ -49,10 +51,8 @@ describe("display preferences", () => {
   });
 
   it("merges partial updates without dropping other fields", () => {
-    setPreference("timezone", "UTC");
     setPreference("dateFormat", "us");
     const prefs = getPreferences();
-    expect(prefs.timezone).toBe("UTC");
     expect(prefs.dateFormat).toBe("us");
     expect(prefs.language).toBe("en"); // untouched -> default
   });
