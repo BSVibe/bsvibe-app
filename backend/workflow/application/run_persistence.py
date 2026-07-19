@@ -21,7 +21,6 @@ from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any
 
 import structlog
-from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 if TYPE_CHECKING:
@@ -29,8 +28,7 @@ if TYPE_CHECKING:
     from backend.workflow.application.agent_loop import LoopResult
 
 from backend.config import Settings
-from backend.notifications.channels import NOTIFICATION_OUTBOX
-from backend.notifications.db import NotificationEventRow
+from backend.notifications.emit import emit_notification
 from backend.workflow.application.audit_events import LoopTerminal
 from backend.workflow.domain.verified_deliverable import write_verified_deliverable
 from backend.workflow.infrastructure.db import (
@@ -238,20 +236,19 @@ _NEEDS_YOU_LINK = "/decisions"
 async def _emit_needs_you(session: AsyncSession, run: ExecutionRun, decision: Decision) -> None:
     """Stage the ``needs_you`` outbox row for a just-created Decision.
 
-    Written through ``NOTIFICATION_OUTBOX.emit`` (the only legal producer path —
-    a bare ``session.add`` is forbidden by the INV-1 guard). The UNIQUE
-    ``dedupe_key`` (``needs_you:<decision_id>``) makes a re-emit of the same
-    Decision's notification a DB-level no-op: the emit + flush runs in a
-    SAVEPOINT so an :class:`IntegrityError` from a duplicate rolls back only the
-    outbox insert, leaving the (already-flushed) Decision intact and the founder
-    notified exactly once.
+    Delegates to the shared :func:`~backend.notifications.emit.emit_notification`
+    seam (savepoint + dedupe). The UNIQUE ``dedupe_key`` (``needs_you:<decision_id>``)
+    makes a re-emit of the same Decision's notification a DB-level no-op, so the
+    founder is called exactly once per Decision even under a retried
+    ``create_decision``.
     """
     payload_in = decision.payload or {}
     question = str(payload_in.get("question") or "").strip()
     body = (
         question or (decision.rationale or "").strip() or "A run has paused and needs your input."
     )
-    row = NotificationEventRow(
+    await emit_notification(
+        session,
         workspace_id=run.workspace_id,
         event="needs_you",
         dedupe_key=f"needs_you:{decision.id}",
@@ -262,17 +259,8 @@ async def _emit_needs_you(session: AsyncSession, run: ExecutionRun, decision: De
             "run_id": str(run.id),
             "decision_id": str(decision.id),
         },
+        producer_id="workflow:create_decision",
     )
-    try:
-        async with session.begin_nested():
-            NOTIFICATION_OUTBOX.emit(session, row, producer_id="workflow:create_decision")
-            await session.flush()
-    except IntegrityError:
-        logger.info(
-            "notification_outbox_duplicate_skipped",
-            decision_id=str(decision.id),
-            run_id=str(run.id),
-        )
 
 
 def decision_result(

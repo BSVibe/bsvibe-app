@@ -8,12 +8,25 @@ leaf (the import-linter "common leaves do not import bounded contexts"
 contract) while still declaring its coupling as a typed object.
 
 ``notification_outbox`` is the founder-notification transactional-outbox queue
-(Notifier N2). Its sole producer is
-:func:`~backend.workflow.application.run_persistence.create_decision` (id
-``workflow:create_decision``): every path a run stops on a Decision flows
-through it, and it stages one ``needs_you`` :class:`NotificationEventRow`
-inside the SAME transaction that creates the Decision — so the notification is
-confirmed iff the Decision commits. Its sole worker-claim consumer is the
+(Notifier N2/N3). Its four producers each stage one :class:`NotificationEventRow`
+inside the SAME transaction as the terminal write it notifies about (via the
+shared :func:`~backend.notifications.emit.emit_notification` seam), so every
+notification is confirmed iff its triggering write commits:
+
+* :func:`~backend.workflow.application.run_persistence.create_decision`
+  (``workflow:create_decision``) → ``needs_you`` — every path a run stops on a
+  Decision flows through it.
+* :class:`~backend.workflow.infrastructure.workers.intake_worker.IntakeWorker`
+  (``worker:intake_worker``) → ``triggered`` — an external/autonomous trigger
+  (webhook / schedule tick) minting a Request; a founder-initiated DIRECT run
+  does NOT notify (the founder started it).
+* :func:`~backend.workflow.domain.verified_deliverable.write_verified_deliverable`
+  (``workflow:verified_deliverable``) → ``shipped`` — the verified terminal ships.
+* :meth:`~backend.workflow.application.agent_runner.AgentRunner.transition`
+  (``workflow:run_failed``) → ``failed`` — a run reaches its FAILED terminal.
+
+(``daily_brief`` is deferred — it needs the Schedule input track.) Its sole
+worker-claim consumer is the
 :class:`~backend.workflow.infrastructure.workers.notify_worker.NotifyWorker`
 (id ``worker:notify_worker``), which claims a batch under ``FOR UPDATE SKIP
 LOCKED``, evaluates the workspace's notification-prefs matrix + quiet hours,
@@ -22,7 +35,7 @@ bindings — directly, NOT through Safe Mode / ``DeliveryEventRow`` (a
 notification to the founder is not an outbound-to-the-world delivery, so it is
 not genuine Safe-Mode risk; §D2 of the Notifier handoff).
 
-The row is machine-emitted (a Decision-creation side effect), so
+The row is machine-emitted (a terminal-write side effect), so
 ``human_origin=False`` and there is no authoring surface. Registering the
 channel in :mod:`backend.channels.registry` arms the INV-1 producer guard,
 which forbids a bare ``session.add(NotificationEventRow(...))`` anywhere in
@@ -38,7 +51,12 @@ from backend.notifications.db import NotificationEventRow
 NOTIFICATION_OUTBOX: Channel[NotificationEventRow] = Channel(
     name="notification_outbox",
     row=NotificationEventRow,
-    producers=("workflow:create_decision",),
+    producers=(
+        "workflow:create_decision",
+        "worker:intake_worker",
+        "workflow:verified_deliverable",
+        "workflow:run_failed",
+    ),
     consumers=("worker:notify_worker",),
     human_origin=False,
 )
