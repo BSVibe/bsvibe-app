@@ -125,7 +125,9 @@ def test_fresh_pg_upgrade_round_trip():
     # Phase 1 — fresh upgrade.
     _alembic(["upgrade", "head"], env_extra=env_extra)
     stamped = asyncio.run(_stamped_head(url))
-    assert stamped == "runtime_role", f"expected head runtime_role, got {stamped}"
+    assert stamped == "notification_channel_keys", (
+        f"expected head notification_channel_keys, got {stamped}"
+    )
 
     # Phase 2 — full downgrade. Verifies every revision's downgrade path.
     _alembic(["downgrade", "base"], env_extra=env_extra)
@@ -133,7 +135,92 @@ def test_fresh_pg_upgrade_round_trip():
     # Phase 3 — re-upgrade. Verifies the chain is idempotent.
     _alembic(["upgrade", "head"], env_extra=env_extra)
     stamped = asyncio.run(_stamped_head(url))
-    assert stamped == "runtime_role"
+    assert stamped == "notification_channel_keys"
+
+
+def test_notification_channel_keys_renames_email_to_email_sender():
+    """Notifier N1a — the matrix ``email`` key is renamed to ``email-sender``.
+
+    Seed a ``notification_prefs`` row carrying a legacy ``"email"`` channel key
+    (the pre-N1a hardcoded grid), run the migration, and assert the key is now
+    ``"email-sender"`` (the email connector's name) with its value preserved,
+    while ``"in_app"`` / ``"slack"`` are untouched. Downgrade restores ``email``.
+    """
+    import uuid as _uuid
+    from datetime import UTC, datetime
+
+    url = _skip_if_no_pg()
+    env_extra = {"BSVIBE_MIGRATION_DATABASE_URL": url}
+
+    asyncio.run(_drop_everything(url))
+    # Upgrade to the PARENT so we can seed a pre-N1a-shaped row, then step up.
+    _alembic(["upgrade", "runtime_role"], env_extra=env_extra)
+
+    row_id = _uuid.uuid4()
+    legacy_matrix = {
+        "needs_you": {"in_app": True, "email": True, "slack": False},
+        "triggered": {"in_app": True, "email": False, "slack": True},
+        "shipped": {"in_app": True, "email": True, "slack": False},
+        "failed": {"in_app": True, "email": False, "slack": False},
+        "daily_brief": {"in_app": False, "email": True, "slack": False},
+    }
+
+    async def _seed() -> None:
+        import json as _json
+
+        engine = create_async_engine(url, future=True)
+        try:
+            async with engine.begin() as conn:
+                await conn.execute(
+                    text(
+                        "INSERT INTO notification_prefs "
+                        "(id, workspace_id, matrix, quiet_hours_enabled, "
+                        " quiet_hours_start, quiet_hours_end, created_at, updated_at) "
+                        "VALUES (:id, :ws, CAST(:m AS JSON), false, "
+                        " '22:00', '08:00', :now, :now)"
+                    ),
+                    {
+                        "id": row_id,
+                        "ws": _uuid.uuid4(),
+                        "m": _json.dumps(legacy_matrix),
+                        "now": datetime.now(UTC),
+                    },
+                )
+        finally:
+            await engine.dispose()
+
+    async def _read_matrix() -> dict:
+        engine = create_async_engine(url, future=True)
+        try:
+            async with engine.connect() as conn:
+                row = (
+                    await conn.execute(
+                        text("SELECT matrix FROM notification_prefs WHERE id = :id"),
+                        {"id": row_id},
+                    )
+                ).first()
+                return row[0]
+        finally:
+            await engine.dispose()
+
+    asyncio.run(_seed())
+
+    # Step up over the N1a migration.
+    _alembic(["upgrade", "head"], env_extra=env_extra)
+    after = asyncio.run(_read_matrix())
+    for event, channels in after.items():
+        assert "email" not in channels, f"{event} still carries legacy 'email' key"
+    assert after["needs_you"]["email-sender"] is True
+    assert after["triggered"]["email-sender"] is False
+    # Untouched keys survive verbatim.
+    assert after["triggered"]["slack"] is True
+    assert after["needs_you"]["in_app"] is True
+
+    # Downgrade restores the legacy key.
+    _alembic(["downgrade", "runtime_role"], env_extra=env_extra)
+    restored = asyncio.run(_read_matrix())
+    assert restored["needs_you"]["email"] is True
+    assert all("email-sender" not in ch for ch in restored.values())
 
 
 def test_run_routing_source_text_column_round_trips():

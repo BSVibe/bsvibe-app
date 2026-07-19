@@ -377,5 +377,16 @@ ignore_imports = [
     # (the account intents are scoped to) to persist category intent defs, the
     # same account_service touch-point account_tools + intents_tools already use.
     "backend.mcp.tools.run_routing_rules_tools -> backend.router.accounts.account_service",
+    # Notifier N1a — UI-parity for notification prefs. The get/update tools now
+    # surface ``available_channels`` (the workspace's notify channels, derived
+    # from connector bindings) via the SAME
+    # ``backend.notifications.bindings.available_channels`` the REST GET uses, so
+    # MCP and PWA read one canonical channel-derivation (no second copy of the
+    # binding-selection rule). That helper resolves ``connector_accounts`` rows,
+    # so the tool module transitively reaches ``backend.connectors.db`` — the
+    # same connectors touch-point ``connectors_tools`` / ``bindings_tools``
+    # already carry. Cutting this one mcp-boundary edge removes the whole
+    # notifications-bindings subtree (and its connectors reach) from MCP's graph.
+    "backend.mcp.tools.notifications_tools -> backend.notifications.bindings",
 ]
 

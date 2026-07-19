@@ -9,9 +9,11 @@ import pytest
 import pytest_asyncio
 
 # Imported for table registration on the shared Base.metadata.
+import backend.connectors.db  # noqa: F401
 import backend.identity.workspaces_db  # noqa: F401
 import backend.notifications.db  # noqa: F401
 from backend.config import get_settings
+from backend.connectors.db import ConnectorAccountRow
 from backend.identity.workspaces_db import WorkspaceRow
 from backend.mcp.api import McpPrincipal, ToolContext, ToolRegistry
 from backend.mcp.tools import register_all_tools
@@ -80,6 +82,33 @@ async def test_get_returns_defaults_on_fresh_workspace(
     assert out["quiet_hours_enabled"] is False
     assert out["quiet_hours_start"] == "22:00"
     assert out["quiet_hours_end"] == "08:00"
+    # No connectors bound → only the in_app inbox is an available channel.
+    assert out["available_channels"] == ["in_app"]
+
+
+async def test_get_available_channels_derived_from_telegram_binding(
+    db, workspace_id, user_id, registry, seeded
+) -> None:
+    """[C] MCP mirror — a telegram binding surfaces as an available channel."""
+    async with db() as s:
+        s.add(
+            ConnectorAccountRow(
+                workspace_id=workspace_id,
+                connector="telegram",
+                webhook_token=uuid.uuid4().hex,
+                signing_secret_ciphertext="ciphertext",
+                delivery_config={"chat_id": "42"},
+                is_active=True,
+            )
+        )
+        await s.commit()
+    async with db() as s:
+        ctx = ToolContext(
+            principal=_principal(workspace_id=workspace_id, user_id=user_id, scopes=("mcp:read",)),
+            session=s,
+        )
+        out = await registry.call_tool("bsvibe_notification_prefs_get", {}, ctx)
+    assert out["available_channels"] == ["in_app", "telegram"]
 
 
 async def test_update_replaces_matrix_wholesale(

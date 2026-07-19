@@ -33,14 +33,16 @@ from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 
+from backend.connectors.hidden import HIDDEN_CONNECTORS
 from backend.extensions.plugin.base import PluginMeta
 from backend.extensions.plugin.webhook_registry import WebhookParserRegistry
 
-# Connectors that are fully built (builders + validator accept them) but are
-# deliberately NOT surfaced to users yet — a product suppression decision
-# (founder, 2026-07-18), not a capability gap. To expose one, remove its name
-# here; nothing else changes because the catalog derives everything else.
-HIDDEN_CONNECTORS: frozenset[str] = frozenset({"linear", "trello"})
+# ``HIDDEN_CONNECTORS`` (the connectors fully built but deliberately not
+# surfaced to users yet — a product suppression decision, founder 2026-07-18)
+# lives in the pure-data leaf :mod:`backend.connectors.hidden` so leaf contexts
+# can honour the same suppression without importing this plugin-loader-backed
+# module. It is re-exported here (and in ``__all__``) as the catalog's public
+# name; ``ConnectorInfo.user_connectable`` below is exactly ``name not in`` it.
 
 
 @dataclass(frozen=True, slots=True)

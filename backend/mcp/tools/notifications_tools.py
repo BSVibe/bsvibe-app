@@ -26,8 +26,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.mcp.api import Tool, ToolContext, ToolRegistry
+from backend.notifications.bindings import available_channels
 from backend.notifications.db import (
-    DEFAULT_CHANNELS,
     DEFAULT_EVENTS,
     DEFAULT_QUIET_HOURS_END,
     DEFAULT_QUIET_HOURS_START,
@@ -37,20 +37,22 @@ from backend.notifications.db import (
 
 _HHMM = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
 _EVENT_SET = frozenset(DEFAULT_EVENTS)
-_CHANNEL_SET = frozenset(DEFAULT_CHANNELS)
 
 
 def _validate_matrix(matrix: dict[str, dict[str, bool]]) -> dict[str, dict[str, bool]]:
-    """Same validator the REST surface applies — reject unknown event/channel ids."""
+    """Same validator the REST surface applies — exactly the known events; any
+    channel keys tolerated (channels are derived per workspace from connector
+    bindings, not a fixed set). Values must be booleans."""
     if set(matrix.keys()) != _EVENT_SET:
         raise ValueError(
             f"matrix events must be exactly {sorted(_EVENT_SET)}; got {sorted(matrix.keys())}"
         )
     for event_id, channels in matrix.items():
-        if set(channels.keys()) != _CHANNEL_SET:
-            raise ValueError(
-                f"matrix[{event_id!r}] channels must be exactly {sorted(_CHANNEL_SET)}"
-            )
+        for channel_id, enabled in channels.items():
+            if not isinstance(enabled, bool):
+                raise ValueError(
+                    f"matrix[{event_id!r}][{channel_id!r}] must be a bool; got {enabled!r}"
+                )
     return matrix
 
 
@@ -77,6 +79,16 @@ class _PrefsBody(BaseModel):
         return v
 
 
+class _PrefsView(_PrefsBody):
+    """Get/update output — the stored prefs plus the derived channel columns.
+
+    Mirrors REST ``PrefsView`` 1:1: ``available_channels`` is the workspace's
+    live notification channels (``in_app`` + every bound notify-channel
+    connector), recomputed at read time. Response-only (not a settable input)."""
+
+    available_channels: list[str]
+
+
 async def _get_or_create(session: AsyncSession, workspace_id: uuid.UUID) -> NotificationPrefsRow:
     row = (
         await session.execute(
@@ -98,12 +110,13 @@ async def _get_or_create(session: AsyncSession, workspace_id: uuid.UUID) -> Noti
     return row
 
 
-def _row_to_body(row: NotificationPrefsRow) -> _PrefsBody:
-    return _PrefsBody(
+def _row_to_view(row: NotificationPrefsRow, channels: list[str]) -> _PrefsView:
+    return _PrefsView(
         matrix=row.matrix,
         quiet_hours_enabled=row.quiet_hours_enabled,
         quiet_hours_start=row.quiet_hours_start,
         quiet_hours_end=row.quiet_hours_end,
+        available_channels=channels,
     )
 
 
@@ -116,7 +129,8 @@ class NotificationPrefsGetInput(BaseModel):
 
 async def _h_get(_args: NotificationPrefsGetInput, ctx: ToolContext) -> Any:
     row = await _get_or_create(ctx.session, ctx.principal.workspace_id)
-    return _row_to_body(row)
+    channels = await available_channels(ctx.session, workspace_id=ctx.principal.workspace_id)
+    return _row_to_view(row, channels)
 
 
 # ---------------------------------------------------------------------------
@@ -153,7 +167,8 @@ async def _h_update(args: NotificationPrefsUpdateInput, ctx: ToolContext) -> Any
     row.quiet_hours_end = args.quiet_hours_end
     await ctx.session.commit()
     await ctx.session.refresh(row)
-    return _row_to_body(row)
+    channels = await available_channels(ctx.session, workspace_id=ctx.principal.workspace_id)
+    return _row_to_view(row, channels)
 
 
 # ---------------------------------------------------------------------------
@@ -169,7 +184,7 @@ def register_notifications_tools(registry: ToolRegistry) -> None:
                 "workspace reads sensible defaults, which are then persisted."
             ),
             input_schema=NotificationPrefsGetInput,
-            output_schema=_PrefsBody,
+            output_schema=_PrefsView,
             handler=_h_get,
             required_scopes=("mcp:read",),
         )
@@ -180,10 +195,11 @@ def register_notifications_tools(registry: ToolRegistry) -> None:
             description=(
                 "Replace the notification matrix + quiet hours wholesale for "
                 "the active workspace. The matrix must list exactly the known "
-                "events and channels."
+                "events; channel columns are derived per workspace from its "
+                "connector bindings (see available_channels on the get output)."
             ),
             input_schema=NotificationPrefsUpdateInput,
-            output_schema=_PrefsBody,
+            output_schema=_PrefsView,
             handler=_h_update,
             required_scopes=("mcp:write",),
             audit_event="bsvibe.mcp.notification_prefs_update.invoked",
