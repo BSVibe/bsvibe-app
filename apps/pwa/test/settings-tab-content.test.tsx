@@ -67,13 +67,28 @@ describe("Settings tab content", () => {
     });
   });
 
-  it("Notifications tab renders the honest coming-soon state (delivery not wired)", () => {
+  it("Notifications tab renders the real events × channels matrix (delivery is wired)", async () => {
+    // Delivery is live (N2a/N3), so the tab fetches prefs and renders the grid.
+    // Stub a prefs response with a bound telegram push channel.
+    global.fetch = vi.fn(async () =>
+      jsonResponse({
+        matrix: {
+          needs_you: { in_app: true },
+          triggered: { in_app: true },
+          shipped: { in_app: true },
+          failed: { in_app: true },
+          daily_brief: { in_app: false },
+        },
+        quiet_hours_enabled: false,
+        quiet_hours_start: "22:00",
+        quiet_hours_end: "08:00",
+        available_channels: ["in_app", "telegram"],
+      }),
+    ) as unknown as typeof fetch;
     render(<NotificationsTab />);
-    // No matrix / quiet-hours surface — a plain "coming soon" note instead.
-    expect(screen.getByRole("heading", { name: /aren.t active yet/i })).toBeInTheDocument();
-    expect(screen.getByText(/nothing is sent/i)).toBeInTheDocument();
-    expect(screen.queryByRole("heading", { name: /events × channels/i })).toBeNull();
-    expect(screen.queryByRole("heading", { name: /quiet hours/i })).toBeNull();
+    // Async: the grid appears only after the on-mount fetch resolves (findBy*).
+    expect(await screen.findByRole("heading", { name: /events × channels/i })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: /quiet hours/i })).toBeInTheDocument();
   });
 
   it("Account tab renders the real Profile / identities / sessions surface (L6 §4 — no Plan)", () => {

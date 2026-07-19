@@ -712,10 +712,40 @@
       }
     },
     "notifications": {
-      "lede": "알림이 켜지면, 어떤 순간을 어디로 받을지 고를 수 있어요.",
-      "comingSoonBadge": "곧 제공",
-      "comingSoonTitle": "알림은 아직 켜지지 않았어요",
-      "comingSoonBody": "BSVibe는 아직 이메일·Slack·인앱 알림을 보내지 않아요. 전송이 켜지면 어떤 순간을 어떤 채널로 받을지 고르고 방해 금지 시간을 정할 수 있어요. 그때까지는 아무것도 전송되지 않아요."
+      "lede": "어떤 순간을 어떤 채널로 받을지 고르세요. 인앱 인박스는 항상 켜져 있고, 푸시 채널은 연결한 커넥터예요.",
+      "loading": "알림 설정을 불러오는 중이에요…",
+      "loadError": "알림 설정을 불러오지 못했어요. 새로고침해서 다시 시도하세요.",
+      "matrixTitle": "이벤트 × 채널",
+      "matrixCaption": "각 순간마다 받을 푸시 채널을 고르세요. 인앱 인박스는 항상 켜져 있어요.",
+      "eventColumn": "순간",
+      "inAppAlways": "항상 켜짐",
+      "inAppOn": "켜짐",
+      "inAppOff": "—",
+      "inAppTooltip": "인앱 인박스는 항상 켜져 있어요 — 이 그리드와 무관하게 Decision은 Brief와 실시간 인박스에 나타나요.",
+      "inAppCaption": "인앱은 안내용이에요. 항상 켜진 인박스라 여기서 끌 수 없어요. 토글은 푸시 채널만 제어해요.",
+      "dailyBriefPending": "예약 실행 연동 후 제공",
+      "emptyTitle": "알림 채널을 연결하세요",
+      "emptyBody": "아직 푸시 채널이 없어서 알림은 인앱 인박스에만 쌓여요. Telegram·Slack·Discord·이메일을 연결하면 앱 밖에서도 받을 수 있어요.",
+      "emptyCta": "커넥터로 이동",
+      "quietTitle": "방해 금지 시간",
+      "quietEnable": "방해 금지 시간 켜기",
+      "quietStart": "시작",
+      "quietEnd": "종료",
+      "quietCaption": "방해 금지 시간에는 해당 구간의 푸시 채널이 억제돼요(워크스페이스 시간대 기준). 인앱 인박스에는 needs-you를 포함해 모두 그대로 쌓여요.",
+      "event": {
+        "needs_you": "확인이 필요해요",
+        "triggered": "외부에서 시작됨",
+        "shipped": "출시됨",
+        "failed": "실패함",
+        "daily_brief": "일일 요약"
+      },
+      "channel": {
+        "in_app": "인앱 인박스",
+        "telegram": "Telegram",
+        "slack": "Slack",
+        "discord": "Discord",
+        "email_sender": "이메일"
+      }
     },
     "account": {
       "lede": "계정: 프로필과 로그인.",

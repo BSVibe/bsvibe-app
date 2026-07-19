@@ -1400,21 +1400,31 @@ export interface BriefView {
 
 // ── Notifications (REAL endpoint /api/v1/notifications/prefs) ──────────────
 
-/** Workspace notification preferences (backend PrefsBody, extra=forbid).
+/** PUT body for `/api/v1/notifications/prefs` (backend `PrefsBody`, extra=forbid).
  *
  *  `matrix` is the events × channels enable grid keyed
- *  `event_id -> channel_id -> enabled`. The known event ids are
- *  needs_you / triggered / shipped / failed / daily_brief; the known channel
- *  ids are in_app / email / slack — the backend validator (and this surface)
- *  require exactly that grid. Quiet hours are `"HH:MM"` strings (the same shape
- *  the PWA <input type="time"> emits). v1 stores PREFERENCES only — real
- *  email/Slack send is a later phase, and per-product overrides from the design
- *  are intentionally omitted. */
+ *  `event_id -> channel_id -> enabled`. The event ids are the fixed needs_you /
+ *  triggered / shipped / failed / daily_brief (`DEFAULT_EVENTS`); the channel ids
+ *  are NOT fixed — `in_app` is always present and the push columns are the
+ *  workspace's bound notify connectors (telegram / slack / discord /
+ *  email_sender), derived per workspace from connector bindings. Quiet hours are
+ *  `"HH:MM"` strings (the shape `<input type="time">` emits). This is the WRITE
+ *  shape only — `available_channels` is response-only (see
+ *  {@link NotificationPrefsView}) and must NOT be echoed back on PUT. */
 export interface NotificationPrefs {
   matrix: Record<string, Record<string, boolean>>;
   quiet_hours_enabled: boolean;
   quiet_hours_start: string;
   quiet_hours_end: string;
+}
+
+/** GET/PUT response for `/api/v1/notifications/prefs` (backend `PrefsView`). The
+ *  stored prefs plus `available_channels` — the workspace's live notification
+ *  channels (`in_app` + every bound notify-channel connector), recomputed at read
+ *  time from connector bindings. Response-only: the PWA renders the matrix columns
+ *  from it, and it is never sent on a PUT (backend `extra=forbid` rejects it). */
+export interface NotificationPrefsView extends NotificationPrefs {
+  available_channels: string[];
 }
 
 // ── Skills (REAL endpoint /api/v1/skills) ──────────────────────────────────

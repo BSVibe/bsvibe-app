@@ -8,22 +8,33 @@
  *   PUT  /api/v1/notifications/prefs  — replace the matrix + quiet hours
  *                                       wholesale
  *
- *  The PUT body mirrors the backend `PrefsBody` (extra=forbid) 1:1 — the full
- *  matrix + the quiet-hours fields. v1 stores PREFERENCES only; real email/Slack
- *  send is a later phase. */
+ *  Both return the `PrefsView` shape ({@link NotificationPrefsView}): the stored
+ *  prefs PLUS `available_channels` (the workspace's live notify channels, derived
+ *  per read from connector bindings). The PUT BODY is the narrower `PrefsBody`
+ *  ({@link NotificationPrefs}) — matrix + quiet hours ONLY. `available_channels`
+ *  is response-only, so `updateNotificationPrefs` sends just the body fields (the
+ *  backend `extra=forbid` rejects an echoed `available_channels`). */
 
 import { apiFetch } from "./client";
-import type { NotificationPrefs } from "./types";
+import type { NotificationPrefs, NotificationPrefsView } from "./types";
 
 /** Notification preferences for the active workspace (get-or-create). */
-export function getNotificationPrefs(): Promise<NotificationPrefs> {
-  return apiFetch<NotificationPrefs>("/api/v1/notifications/prefs");
+export function getNotificationPrefs(): Promise<NotificationPrefsView> {
+  return apiFetch<NotificationPrefsView>("/api/v1/notifications/prefs");
 }
 
-/** Replace the matrix + quiet hours wholesale. Returns the persisted prefs. */
-export function updateNotificationPrefs(prefs: NotificationPrefs): Promise<NotificationPrefs> {
-  return apiFetch<NotificationPrefs>("/api/v1/notifications/prefs", {
+/** Replace the matrix + quiet hours wholesale. Sends only the writable
+ *  `PrefsBody` fields (never `available_channels`) and returns the persisted
+ *  prefs with the freshly-derived channels. */
+export function updateNotificationPrefs(prefs: NotificationPrefs): Promise<NotificationPrefsView> {
+  const body: NotificationPrefs = {
+    matrix: prefs.matrix,
+    quiet_hours_enabled: prefs.quiet_hours_enabled,
+    quiet_hours_start: prefs.quiet_hours_start,
+    quiet_hours_end: prefs.quiet_hours_end,
+  };
+  return apiFetch<NotificationPrefsView>("/api/v1/notifications/prefs", {
     method: "PUT",
-    body: JSON.stringify(prefs),
+    body: JSON.stringify(body),
   });
 }

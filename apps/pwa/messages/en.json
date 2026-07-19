@@ -712,10 +712,40 @@
       }
     },
     "notifications": {
-      "lede": "When notifications go live, you’ll choose which moments reach you, and where.",
-      "comingSoonBadge": "Coming soon",
-      "comingSoonTitle": "Notifications aren’t active yet",
-      "comingSoonBody": "BSVibe doesn’t send emails, Slack messages, or in-app pings yet. When delivery is live you’ll choose which moments reach you on which channel, and set quiet hours. Until then, nothing is sent."
+      "lede": "Choose which moments reach you, and on which channel. In-app always keeps your inbox; the push channels are the connectors you've bound.",
+      "loading": "Loading your notification preferences…",
+      "loadError": "Couldn't load your notification preferences. Refresh to try again.",
+      "matrixTitle": "Events × channels",
+      "matrixCaption": "Pick a push channel for each moment. The in-app inbox is always on.",
+      "eventColumn": "Moment",
+      "inAppAlways": "always on",
+      "inAppOn": "On",
+      "inAppOff": "—",
+      "inAppTooltip": "The in-app inbox is always on — a Decision surfaces in your Brief and the live inbox regardless of this grid.",
+      "inAppCaption": "In-app is informational: it's the always-on inbox and can't be turned off here. Toggles control the push channels only.",
+      "dailyBriefPending": "requires scheduled runs",
+      "emptyTitle": "Connect a notification channel",
+      "emptyBody": "You have no push channels yet, so notifications only land in the in-app inbox. Connect Telegram, Slack, Discord, or email to be reached off-app.",
+      "emptyCta": "Go to Connectors",
+      "quietTitle": "Quiet hours",
+      "quietEnable": "Enable quiet hours",
+      "quietStart": "From",
+      "quietEnd": "To",
+      "quietCaption": "Quiet hours suppress push channels during the window (evaluated in your workspace time zone). The in-app inbox still keeps everything, including needs-you.",
+      "event": {
+        "needs_you": "Needs you",
+        "triggered": "Triggered",
+        "shipped": "Shipped",
+        "failed": "Failed",
+        "daily_brief": "Daily digest"
+      },
+      "channel": {
+        "in_app": "In-app inbox",
+        "telegram": "Telegram",
+        "slack": "Slack",
+        "discord": "Discord",
+        "email_sender": "Email"
+      }
     },
     "account": {
       "lede": "Account: your profile and sign-in.",
