@@ -14,6 +14,7 @@ from typing import Any
 
 from backend.channels._core import Channel
 from backend.channels._events import EventChannel
+from backend.notifications.channels import NOTIFICATION_OUTBOX
 from backend.workflow.channels import (
     DELIVERY_EVENTS,
     REQUESTS,
@@ -28,6 +29,7 @@ ALL_CHANNELS: tuple[Channel[Any], ...] = (
     SAFE_MODE_QUEUE_ITEMS,
     DELIVERY_EVENTS,
     AUDIT_OUTBOX,
+    NOTIFICATION_OUTBOX,
 )
 
 # EventChannels are a SIBLING type (in-process bus topics), enumerated
