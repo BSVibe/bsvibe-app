@@ -6,10 +6,15 @@ There is exactly one row per ``workspace_id`` (resolution is get-or-create:
 a workspace with no row reads :data:`DEFAULT_MATRIX` + the default quiet hours,
 which are then persisted).
 
-The matrix is stored as a JSON column keyed ``event_id -> channel_id -> bool``
-(a small, fixed grid — five events x three channels in v1). Quiet hours are
-stored as ``"HH:MM"`` strings, the same shape the PWA time inputs emit, so no
-minutes-since-midnight conversion is needed on either side.
+The matrix is stored as a JSON column keyed ``event_id -> channel_id -> bool``.
+The event ids (matrix rows) are the fixed :data:`DEFAULT_EVENTS`; the channel
+ids (columns) are NOT fixed — they are DERIVED per workspace from its connector
+bindings (:func:`backend.notifications.bindings.available_channels`) plus the
+always-present ``in_app`` inbox. The matrix read is deliberately tolerant: a
+stale channel key (a since-removed connector) is harmless (ignored at send
+time), and a newly-bound connector needs no matrix write to become selectable.
+Quiet hours are stored as ``"HH:MM"`` strings, the same shape the PWA time
+inputs emit, so no minutes-since-midnight conversion is needed on either side.
 
 Follows the model/Base style of :mod:`backend.connectors.db` /
 :mod:`backend.router.accounts.account_models`: a single-table declarative model on the
@@ -30,8 +35,9 @@ from backend.data import Base
 
 NotificationsBase = Base
 
-# The five notification moments (matrix rows) and three channels (columns).
-# These ids are the STABLE keys the matrix is keyed on — the PWA labels them.
+# The five notification moments (matrix rows). These ids are the STABLE keys the
+# matrix is keyed on — the PWA labels them. The channel COLUMNS are not fixed
+# here; they are derived per workspace from connector bindings + ``in_app``.
 DEFAULT_EVENTS: tuple[str, ...] = (
     "needs_you",
     "triggered",
@@ -39,17 +45,20 @@ DEFAULT_EVENTS: tuple[str, ...] = (
     "failed",
     "daily_brief",
 )
-DEFAULT_CHANNELS: tuple[str, ...] = ("in_app", "email", "slack")
 
-# Sensible defaults: a decision waiting on you is loud (every channel); the
-# from-outside trigger and a verified ship are in-app + email; a give-up is
-# in-app + email; the daily brief is a calm email-only digest.
+# The seed matrix a fresh workspace reads: only the always-present ``in_app``
+# inbox is expressed, since a fresh workspace has no connector channels yet.
+# A decision waiting on you / an outside trigger / a verified ship / a give-up
+# all land in the inbox; the daily brief is a calm digest, off in-app by
+# default. Connector channels (slack/telegram/discord/email-sender) appear as
+# columns the moment they are bound — the PWA renders them from
+# ``available_channels`` and a PUT persists the founder's choice for them.
 DEFAULT_MATRIX: dict[str, dict[str, bool]] = {
-    "needs_you": {"in_app": True, "email": True, "slack": True},
-    "triggered": {"in_app": True, "email": True, "slack": False},
-    "shipped": {"in_app": True, "email": True, "slack": False},
-    "failed": {"in_app": True, "email": True, "slack": False},
-    "daily_brief": {"in_app": False, "email": True, "slack": False},
+    "needs_you": {"in_app": True},
+    "triggered": {"in_app": True},
+    "shipped": {"in_app": True},
+    "failed": {"in_app": True},
+    "daily_brief": {"in_app": False},
 }
 
 DEFAULT_QUIET_HOURS_START = "22:00"
@@ -95,7 +104,6 @@ class NotificationPrefsRow(NotificationsBase):
 
 
 __all__ = [
-    "DEFAULT_CHANNELS",
     "DEFAULT_EVENTS",
     "DEFAULT_MATRIX",
     "DEFAULT_QUIET_HOURS_END",

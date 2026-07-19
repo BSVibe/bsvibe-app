@@ -30,8 +30,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.api.deps import get_db_session, get_workspace_id
+from backend.notifications.bindings import available_channels
 from backend.notifications.db import (
-    DEFAULT_CHANNELS,
     DEFAULT_EVENTS,
     DEFAULT_QUIET_HOURS_END,
     DEFAULT_QUIET_HOURS_START,
@@ -43,20 +43,27 @@ router = APIRouter()
 
 _HHMM = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
 _EVENT_SET = frozenset(DEFAULT_EVENTS)
-_CHANNEL_SET = frozenset(DEFAULT_CHANNELS)
 
 
 def _validate_matrix(matrix: dict[str, dict[str, bool]]) -> dict[str, dict[str, bool]]:
-    """Reject unknown event/channel ids; require the full known grid."""
+    """Validate the matrix: exactly the known events; any channel keys tolerated.
+
+    Events are still the fixed :data:`DEFAULT_EVENTS`. Channels are NOT fixed —
+    they are derived per workspace from connector bindings, so the validator
+    accepts any subset of channel keys (a stale key for a since-removed connector
+    is harmless — ignored at send time — rather than rejected). Values must be
+    booleans.
+    """
     if set(matrix.keys()) != _EVENT_SET:
         raise ValueError(
             f"matrix events must be exactly {sorted(_EVENT_SET)}; got {sorted(matrix.keys())}"
         )
     for event_id, channels in matrix.items():
-        if set(channels.keys()) != _CHANNEL_SET:
-            raise ValueError(
-                f"matrix[{event_id!r}] channels must be exactly {sorted(_CHANNEL_SET)}"
-            )
+        for channel_id, enabled in channels.items():
+            if not isinstance(enabled, bool):
+                raise ValueError(
+                    f"matrix[{event_id!r}][{channel_id!r}] must be a bool; got {enabled!r}"
+                )
     return matrix
 
 
@@ -83,12 +90,26 @@ class PrefsBody(BaseModel):
         return v
 
 
-def _to_body(row: NotificationPrefsRow) -> PrefsBody:
-    return PrefsBody(
+class PrefsView(PrefsBody):
+    """GET/PUT response — the stored prefs plus the derived channel columns.
+
+    ``available_channels`` is the workspace's live notification channels
+    (``in_app`` + every bound notify-channel connector), recomputed at read time
+    from connector bindings. It is response-only: the PWA renders the matrix
+    columns from it, and it is not settable (a PUT that echoes it back is
+    rejected by ``extra=forbid`` on :class:`PrefsBody`).
+    """
+
+    available_channels: list[str]
+
+
+def _to_view(row: NotificationPrefsRow, channels: list[str]) -> PrefsView:
+    return PrefsView(
         matrix=row.matrix,
         quiet_hours_enabled=row.quiet_hours_enabled,
         quiet_hours_start=row.quiet_hours_start,
         quiet_hours_end=row.quiet_hours_end,
+        available_channels=channels,
     )
 
 
@@ -117,10 +138,11 @@ async def _get_or_create(session: AsyncSession, workspace_id: uuid.UUID) -> Noti
 async def get_prefs(
     workspace_id: Annotated[uuid.UUID, Depends(get_workspace_id)],
     session: Annotated[AsyncSession, Depends(get_db_session)],
-) -> PrefsBody:
+) -> PrefsView:
     """Get-or-create the active workspace's notification preferences."""
     row = await _get_or_create(session, workspace_id)
-    return _to_body(row)
+    channels = await available_channels(session, workspace_id=workspace_id)
+    return _to_view(row, channels)
 
 
 @router.put("/prefs")
@@ -128,7 +150,7 @@ async def put_prefs(
     payload: PrefsBody,
     workspace_id: Annotated[uuid.UUID, Depends(get_workspace_id)],
     session: Annotated[AsyncSession, Depends(get_db_session)],
-) -> PrefsBody:
+) -> PrefsView:
     """Replace the matrix + quiet hours wholesale (single row per workspace)."""
     row = await _get_or_create(session, workspace_id)
     row.matrix = payload.matrix
@@ -137,7 +159,8 @@ async def put_prefs(
     row.quiet_hours_end = payload.quiet_hours_end
     await session.commit()
     await session.refresh(row)
-    return _to_body(row)
+    channels = await available_channels(session, workspace_id=workspace_id)
+    return _to_view(row, channels)
 
 
-__all__ = ["PrefsBody", "get_prefs", "put_prefs", "router"]
+__all__ = ["PrefsBody", "PrefsView", "get_prefs", "put_prefs", "router"]

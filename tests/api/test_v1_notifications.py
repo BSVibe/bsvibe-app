@@ -5,9 +5,15 @@ quiet-hours window. There is exactly one row per workspace; the GET is
 get-or-create (a workspace with no row yet reads the sensible defaults, which
 are then persisted). The PUT replaces the matrix + quiet hours wholesale.
 
-These tests deliberately do NOT override the prefs resolution — they exercise
-the real get-or-create against an in-memory SQLite (or real PG when
-``BSVIBE_DATABASE_URL`` is set), mirroring ``test_v1_account.py``.
+Since Notifier N1a the channel COLUMNS are no longer a fixed set — they are
+derived per workspace from its connector bindings (``available_channels`` on the
+GET response) plus the always-present ``in_app`` inbox. The matrix validator
+therefore fixes the EVENT rows but tolerates any channel keys.
+
+These tests deliberately do NOT override the prefs / channel resolution — they
+exercise the real get-or-create + real binding resolution against an in-memory
+SQLite (or real PG when ``BSVIBE_DATABASE_URL`` is set), mirroring
+``test_v1_account.py``.
 """
 
 from __future__ import annotations
@@ -24,15 +30,20 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 from backend.api.deps import get_current_user, get_db_session, get_workspace_id
 from backend.api.main import create_app
 from backend.config import get_settings
-from backend.notifications.db import (
-    DEFAULT_CHANNELS,
-    DEFAULT_EVENTS,
-    NotificationPrefsRow,
-)
+from backend.connectors.db import ConnectorAccountRow
+from backend.notifications.db import DEFAULT_EVENTS, NotificationPrefsRow
 
 from .._support import db_engine, fake_current_user
 
 pytestmark = pytest.mark.asyncio
+
+# The seed channel set for a fresh workspace (no connectors) is the inbox only.
+_SEED_CHANNELS = ("in_app",)
+
+
+def _full_grid(value: bool, channels: tuple[str, ...] = _SEED_CHANNELS) -> dict:
+    """A matrix covering exactly the known events, each with ``channels`` set."""
+    return {event: {ch: value for ch in channels} for event in DEFAULT_EVENTS}
 
 
 @pytest_asyncio.fixture
@@ -75,20 +86,48 @@ async def test_get_prefs_returns_defaults_when_none_exist(client) -> None:
     assert r.status_code == 200, r.text
     body = r.json()
 
-    # The full events x channels matrix is present.
+    # Every event row is present; the seed expresses only the in_app inbox.
     assert set(body["matrix"].keys()) == set(DEFAULT_EVENTS)
     for event_id in DEFAULT_EVENTS:
-        assert set(body["matrix"][event_id].keys()) == set(DEFAULT_CHANNELS)
+        assert set(body["matrix"][event_id].keys()) == {"in_app"}
 
-    # Sensible defaults: "needs you" is on for every channel.
-    assert body["matrix"]["needs_you"] == {"in_app": True, "email": True, "slack": True}
-    # Daily brief defaults to email-only.
-    assert body["matrix"]["daily_brief"]["email"] is True
+    # Sensible defaults: "needs you" lands in the inbox; daily brief is calm.
+    assert body["matrix"]["needs_you"] == {"in_app": True}
+    assert body["matrix"]["daily_brief"] == {"in_app": False}
+
+    # No connectors bound → only the inbox is an available channel.
+    assert body["available_channels"] == ["in_app"]
 
     # Quiet hours default off, with a sane window.
     assert body["quiet_hours_enabled"] is False
     assert body["quiet_hours_start"] == "22:00"
     assert body["quiet_hours_end"] == "08:00"
+
+
+async def test_available_channels_derived_from_telegram_binding(client, db, workspace_id) -> None:
+    """[C] Attach ONLY a telegram connector → channels become in_app + telegram.
+
+    This FAILS on pre-N1a code (no ``available_channels`` field; channels frozen
+    to the hardcoded 3-col grid that can't express telegram). Real binding
+    resolution runs against the same DB — nothing about the channel derivation
+    is overridden or pre-seeded beyond the connector row itself.
+    """
+    async with db() as s:
+        s.add(
+            ConnectorAccountRow(
+                workspace_id=workspace_id,
+                connector="telegram",
+                webhook_token=uuid.uuid4().hex,
+                signing_secret_ciphertext="ciphertext",
+                delivery_config={"chat_id": "42"},
+                is_active=True,
+            )
+        )
+        await s.commit()
+
+    r = await client.get("/api/v1/notifications/prefs")
+    assert r.status_code == 200, r.text
+    assert r.json()["available_channels"] == ["in_app", "telegram"]
 
 
 async def test_get_prefs_persists_single_row(client, db) -> None:
@@ -105,11 +144,8 @@ async def test_get_prefs_persists_single_row(client, db) -> None:
 
 async def test_put_then_get_round_trips_matrix_and_quiet_hours(client, workspace_id) -> None:
     """PUT replaces the matrix + quiet hours; the next GET reflects it."""
-    # Flip every cell off, then turn one back on, and set quiet hours.
-    new_matrix = {
-        event: {channel: False for channel in DEFAULT_CHANNELS} for event in DEFAULT_EVENTS
-    }
-    new_matrix["shipped"]["email"] = True
+    new_matrix = _full_grid(False)
+    new_matrix["shipped"]["in_app"] = True
     payload = {
         "matrix": new_matrix,
         "quiet_hours_enabled": True,
@@ -118,17 +154,34 @@ async def test_put_then_get_round_trips_matrix_and_quiet_hours(client, workspace
     }
     put = await client.put("/api/v1/notifications/prefs", json=payload)
     assert put.status_code == 200, put.text
-    assert put.json()["matrix"]["shipped"]["email"] is True
+    assert put.json()["matrix"]["shipped"]["in_app"] is True
     assert put.json()["matrix"]["needs_you"]["in_app"] is False
+    # PUT response also carries the derived channels.
+    assert put.json()["available_channels"] == ["in_app"]
 
     got = await client.get("/api/v1/notifications/prefs")
     assert got.status_code == 200
     body = got.json()
-    assert body["matrix"]["shipped"]["email"] is True
+    assert body["matrix"]["shipped"]["in_app"] is True
     assert body["matrix"]["needs_you"]["in_app"] is False
     assert body["quiet_hours_enabled"] is True
     assert body["quiet_hours_start"] == "23:30"
     assert body["quiet_hours_end"] == "07:15"
+
+
+async def test_put_tolerates_a_connector_channel_key(client) -> None:
+    """Channel columns are derived, so any channel key (e.g. telegram) is
+    accepted — the pre-N1a exact-grid validator would have rejected it."""
+    matrix = {event: {"in_app": True, "telegram": True} for event in DEFAULT_EVENTS}
+    payload = {
+        "matrix": matrix,
+        "quiet_hours_enabled": False,
+        "quiet_hours_start": "22:00",
+        "quiet_hours_end": "08:00",
+    }
+    r = await client.put("/api/v1/notifications/prefs", json=payload)
+    assert r.status_code == 200, r.text
+    assert r.json()["matrix"]["needs_you"]["telegram"] is True
 
 
 async def test_put_is_scoped_to_a_single_row_per_workspace(client, db) -> None:
@@ -137,7 +190,7 @@ async def test_put_is_scoped_to_a_single_row_per_workspace(client, db) -> None:
     await client.put(
         "/api/v1/notifications/prefs",
         json={
-            "matrix": {e: {c: True for c in DEFAULT_CHANNELS} for e in DEFAULT_EVENTS},
+            "matrix": _full_grid(True),
             "quiet_hours_enabled": False,
             "quiet_hours_start": "22:00",
             "quiet_hours_end": "08:00",
@@ -149,9 +202,9 @@ async def test_put_is_scoped_to_a_single_row_per_workspace(client, db) -> None:
 
 
 async def test_put_rejects_unknown_event_key(client) -> None:
-    """An unknown event id in the matrix is a 422 (the matrix is validated)."""
+    """An unknown event id in the matrix is a 422 (events are still fixed)."""
     payload = {
-        "matrix": {"not_an_event": {c: True for c in DEFAULT_CHANNELS}},
+        "matrix": {"not_an_event": {"in_app": True}},
         "quiet_hours_enabled": False,
         "quiet_hours_start": "22:00",
         "quiet_hours_end": "08:00",
@@ -160,9 +213,10 @@ async def test_put_rejects_unknown_event_key(client) -> None:
     assert r.status_code == 422, r.text
 
 
-async def test_put_rejects_unknown_channel_key(client) -> None:
+async def test_put_rejects_non_bool_channel_value(client) -> None:
+    """Channel keys are open, but their values must be booleans."""
     payload = {
-        "matrix": {e: {"carrier_pigeon": True} for e in DEFAULT_EVENTS},
+        "matrix": {e: {"in_app": ["not", "a", "bool"]} for e in DEFAULT_EVENTS},
         "quiet_hours_enabled": False,
         "quiet_hours_start": "22:00",
         "quiet_hours_end": "08:00",
@@ -173,7 +227,7 @@ async def test_put_rejects_unknown_channel_key(client) -> None:
 
 async def test_put_rejects_malformed_quiet_hours_time(client) -> None:
     payload = {
-        "matrix": {e: {c: True for c in DEFAULT_CHANNELS} for e in DEFAULT_EVENTS},
+        "matrix": _full_grid(True),
         "quiet_hours_enabled": True,
         "quiet_hours_start": "25:99",
         "quiet_hours_end": "08:00",
@@ -183,13 +237,13 @@ async def test_put_rejects_malformed_quiet_hours_time(client) -> None:
 
 
 async def test_put_rejects_extra_field(client) -> None:
-    """extra=forbid on the request schema."""
+    """extra=forbid on the request schema (available_channels is not settable)."""
     payload = {
-        "matrix": {e: {c: True for c in DEFAULT_CHANNELS} for e in DEFAULT_EVENTS},
+        "matrix": _full_grid(True),
         "quiet_hours_enabled": False,
         "quiet_hours_start": "22:00",
         "quiet_hours_end": "08:00",
-        "surprise": "nope",
+        "available_channels": ["in_app", "telegram"],
     }
     r = await client.put("/api/v1/notifications/prefs", json=payload)
     assert r.status_code == 422, r.text
