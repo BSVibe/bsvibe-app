@@ -68,6 +68,7 @@ def test_alembic_history_loads():
         "notification_channel_keys",
         "workspace_timezone",
         "notification_outbox",
+        "workspace_schedules_instruction",
     ):
         assert rev in result.stdout, f"missing revision {rev} in:\n{result.stdout}"
 
@@ -93,10 +94,14 @@ def test_alembic_head_is_connector_last_import():
     # workspace_timezone (Notifier N1b — promote the founder's IANA time zone
     # to a server column so the NotifyWorker can evaluate quiet hours) →
     # notification_outbox (Notifier N2 — the durable founder-notification
-    # outbox the NotifyWorker drains to deliver needs_you pushes).
+    # outbox the NotifyWorker drains to deliver needs_you pushes) →
+    # workspace_schedules_instruction (Schedule S1 — natural-language
+    # ``instruction`` schedules: adds kind/payload/title, makes plugin_name
+    # NULLable, drops the old unique constraint, so the authoring surface can
+    # produce rows the ScheduleWorker fires).
     # Keep the test name (function name is a historical revision id, kept for
     # git-blame stability) and assert the current tip.
-    assert "notification_outbox" in result.stdout
+    assert "workspace_schedules_instruction" in result.stdout
 
 
 def test_target_metadata_covers_all_bases():

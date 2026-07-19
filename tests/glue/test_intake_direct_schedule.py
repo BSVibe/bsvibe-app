@@ -66,21 +66,41 @@ async def test_schedule_fire_persists(session: AsyncSession) -> None:
     fired_at = datetime(2026, 5, 21, 9, 0, 0, tzinfo=UTC)
     outcome = await trigger.fire(
         workspace_id=ws,
-        plugin_name="cron-summary",
-        cron_expr="0 9 * * MON",
+        schedule_id=uuid.uuid4(),
+        kind="instruction",
+        schedule_payload={"text": "post the weekly summary"},
+        cron_expr="0 9 * * 1",
         fired_at=fired_at,
     )
     await session.commit()
     assert outcome.duplicate is False
-    assert outcome.event.payload["cron_expr"] == "0 9 * * MON"
+    assert outcome.event.payload["cron_expr"] == "0 9 * * 1"
+    # The instruction reaches the framer via the ``text`` key.
+    assert outcome.event.payload["text"] == "post the weekly summary"
 
 
 async def test_schedule_dedup_same_tick(session: AsyncSession) -> None:
     trigger = ScheduleTrigger(session)
     ws = uuid.uuid4()
+    sched_id = uuid.uuid4()
     fired_at = datetime(2026, 5, 21, 9, 0, 0, tzinfo=UTC)
-    a = await trigger.fire(workspace_id=ws, plugin_name="cron", cron_expr="*", fired_at=fired_at)
+    a = await trigger.fire(
+        workspace_id=ws,
+        schedule_id=sched_id,
+        kind="instruction",
+        schedule_payload={"text": "x"},
+        cron_expr="* * * * *",
+        fired_at=fired_at,
+    )
     await session.commit()
-    b = await trigger.fire(workspace_id=ws, plugin_name="cron", cron_expr="*", fired_at=fired_at)
+    # Same schedule + same window ⇒ duplicate (idempotency keyed on schedule_id).
+    b = await trigger.fire(
+        workspace_id=ws,
+        schedule_id=sched_id,
+        kind="instruction",
+        schedule_payload={"text": "x"},
+        cron_expr="* * * * *",
+        fired_at=fired_at,
+    )
     assert a.duplicate is False
     assert b.duplicate is True

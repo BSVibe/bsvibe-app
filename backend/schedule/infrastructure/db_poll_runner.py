@@ -37,7 +37,8 @@ import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from backend.schedule.application.emitter import ScheduleTrigger
-from backend.schedule.domain.advancer import OneShotScheduleAdvancer, ScheduleAdvancer
+from backend.schedule.channels import WORKSPACE_SCHEDULES
+from backend.schedule.domain.advancer import CronScheduleAdvancer, ScheduleAdvancer
 from backend.schedule.domain.repositories.workspace_schedule_repository import (
     WorkspaceScheduleRepository,
 )
@@ -96,7 +97,14 @@ class DbPollScheduleRunner:
         effective_now = self._now_fn()
         async with session_factory() as session:
             repo = self._repository_factory(session)
-            rows = await repo.claim_due(now=effective_now)
+            # Route the claim through the INV-1 channel so the consumer id is
+            # asserted (mirrors the intake/agent workers). The channel gates the
+            # read behind ``worker:schedule_worker``; the repository owns the
+            # claim SQL (``FOR UPDATE SKIP LOCKED``).
+            rows = await WORKSPACE_SCHEDULES.consume(
+                consumer_id="worker:schedule_worker",
+                claim=lambda: repo.claim_due(now=effective_now),
+            )
             fired = 0
             for sched in rows:
                 if await self._fire_one(session, repo, sched, effective_now):
@@ -123,6 +131,9 @@ class DbPollScheduleRunner:
         trigger = ScheduleTrigger(session)
         outcome = await trigger.fire(
             workspace_id=sched.workspace_id,
+            schedule_id=sched.id,
+            kind=sched.kind,
+            schedule_payload=sched.payload,
             plugin_name=sched.plugin_name,
             cron_expr=sched.cron_expr,
             fired_at=sched.next_run_at,
@@ -157,13 +168,14 @@ def build_db_poll_schedule_runner(
 ) -> DbPollScheduleRunner:
     """Production :class:`DbPollScheduleRunner` factory.
 
-    Defaults to :class:`OneShotScheduleAdvancer` — the honest M1 deferral
-    (Status §5 calls Redis Streams a Phase-1 honest defer; the same
-    applies to the cron parser here). A future implementation lift can
-    swap in a real cron-expression advancer without touching this
-    factory's callers.
+    Defaults to :class:`CronScheduleAdvancer` — the real recurrence impl (S1):
+    after each fire it advances ``next_run_at`` to the next match of the row's
+    cron expression (UTC), so a ``'0 9 * * 1'`` schedule recurs every Monday
+    09:00 instead of firing once. The advancer sits behind the
+    :class:`ScheduleAdvancer` Protocol, so a future Redis-Streams runner or an
+    alternate cron impl swaps in without touching this factory's callers.
     """
-    return DbPollScheduleRunner(advancer=advancer or OneShotScheduleAdvancer())
+    return DbPollScheduleRunner(advancer=advancer or CronScheduleAdvancer())
 
 
 __all__ = [

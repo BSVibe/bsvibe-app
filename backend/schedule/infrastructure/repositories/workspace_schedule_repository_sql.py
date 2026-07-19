@@ -9,11 +9,13 @@ the runner sees only the Protocol.
 
 from __future__ import annotations
 
+import uuid
 from datetime import datetime
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.schedule.channels import WORKSPACE_SCHEDULES
 from backend.schedule.infrastructure.schedule_db import WorkspaceScheduleRow
 
 
@@ -27,6 +29,49 @@ class SqlAlchemyWorkspaceScheduleRepository:
 
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
+
+    async def create(self, row: WorkspaceScheduleRow, *, producer_id: str) -> None:
+        # The INV-1 producer seam — a bare ``session.add(WorkspaceScheduleRow)``
+        # is forbidden by the channel guard; ``emit`` is the only legal write.
+        WORKSPACE_SCHEDULES.emit(self._session, row, producer_id=producer_id)
+        await self._session.flush()
+
+    async def list_for_workspace(self, *, workspace_id: uuid.UUID) -> list[WorkspaceScheduleRow]:
+        stmt = (
+            select(WorkspaceScheduleRow)
+            .where(WorkspaceScheduleRow.workspace_id == workspace_id)
+            .order_by(WorkspaceScheduleRow.created_at.desc())
+        )
+        result = await self._session.execute(stmt)
+        return list(result.scalars().all())
+
+    async def get(
+        self, *, schedule_id: uuid.UUID, workspace_id: uuid.UUID
+    ) -> WorkspaceScheduleRow | None:
+        stmt = select(WorkspaceScheduleRow).where(
+            WorkspaceScheduleRow.id == schedule_id,
+            WorkspaceScheduleRow.workspace_id == workspace_id,
+        )
+        result = await self._session.execute(stmt)
+        return result.scalar_one_or_none()
+
+    async def delete(self, *, schedule_id: uuid.UUID, workspace_id: uuid.UUID) -> bool:
+        row = await self.get(schedule_id=schedule_id, workspace_id=workspace_id)
+        if row is None:
+            return False
+        await self._session.delete(row)
+        await self._session.flush()
+        return True
+
+    async def set_enabled(
+        self, *, schedule_id: uuid.UUID, workspace_id: uuid.UUID, enabled: bool
+    ) -> WorkspaceScheduleRow | None:
+        row = await self.get(schedule_id=schedule_id, workspace_id=workspace_id)
+        if row is None:
+            return None
+        row.enabled = enabled
+        await self._session.flush()
+        return row
 
     async def claim_due(self, *, now: datetime) -> list[WorkspaceScheduleRow]:
         """Select every due, enabled schedule for this tick.

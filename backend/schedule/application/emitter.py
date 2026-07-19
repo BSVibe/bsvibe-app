@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime
+from typing import Any
 
 import structlog
 from sqlalchemy.exc import IntegrityError
@@ -36,6 +37,13 @@ from backend.workflow.infrastructure.intake.db import TriggerEventRow, TriggerKi
 
 logger = structlog.get_logger(__name__)
 
+# The constant ``source`` for every schedule-fired TriggerEvent. The
+# idempotency window is keyed by the schedule row's surrogate ``id`` (moved
+# OFF ``plugin_name``, which is NULL for the S1 ``instruction`` kind), so a
+# fixed source keeps the ``(workspace_id, source, idempotency_key)`` unique
+# constraint one-per-(schedule, window).
+_SCHEDULE_SOURCE = "schedule"
+
 
 class ScheduleTrigger:
     """Turn a scheduler firing into a :class:`TriggerEvent`."""
@@ -47,46 +55,65 @@ class ScheduleTrigger:
         self,
         *,
         workspace_id: uuid.UUID,
-        plugin_name: str,
+        schedule_id: uuid.UUID,
+        kind: str,
+        schedule_payload: dict[str, Any] | None,
         cron_expr: str,
+        plugin_name: str | None = None,
         fired_at: datetime | None = None,
         product_id: uuid.UUID | None = None,
     ) -> WebhookOutcome:
-        """Produce + persist a TriggerEvent for a fired cron tick."""
+        """Produce + persist a TriggerEvent for a fired schedule window.
+
+        The instruction (``schedule_payload["text"]``) is merged into the
+        TriggerEvent payload under ``text`` — the key the run framer reads
+        (``_request_intent_text``). Without this the run had no instruction to
+        act on and framed as literally "Untitled run" (the invisible half of
+        the dead channel). The idempotency key is
+        ``<schedule_id>:<window_iso>`` so two ticks in the SAME window collapse
+        to one Request at the unique constraint (window = the row's own
+        ``next_run_at``, passed as ``fired_at`` by the runner).
+        """
         now = fired_at or datetime.now(tz=UTC)
-        idem = f"{plugin_name}:{now.isoformat()}"
+        idem = f"{schedule_id}:{now.isoformat()}"
+        instruction = ""
+        if isinstance(schedule_payload, dict):
+            text_value = schedule_payload.get("text")
+            if isinstance(text_value, str):
+                instruction = text_value
+        # ``trigger=schedule`` is the glass-box marker (Brief/Run provenance);
+        # ``text`` is the instruction the framer acts on. Stamped here at the
+        # emitter site so EVERY caller (the ``ScheduleWorker`` or a future
+        # direct-CLI ``schedule fire``) gets both for free.
+        payload: dict[str, Any] = {
+            "text": instruction,
+            "trigger": "schedule",
+            "kind": kind,
+            "schedule_id": str(schedule_id),
+            "cron_expr": cron_expr,
+            "fired_at": now.isoformat(),
+        }
+        if plugin_name is not None:
+            payload["plugin"] = plugin_name
         event = TriggerEvent(
             workspace_id=workspace_id,
-            source=plugin_name,
+            source=_SCHEDULE_SOURCE,
             trigger_kind="schedule",
             idempotency_key=idem,
-            # ``trigger=schedule`` is the M1 glass-box marker — IntakeWorker
-            # copies the trigger payload onto ``RequestRow.payload`` via
-            # :func:`backend.workflow.application.stages.intake.receive`, so
-            # the Brief / Run views can tell the run came from a schedule
-            # (not a Direct ask, a connector inbound, or a decision
-            # resolution). Stamped here at the emitter site so EVERY caller
-            # (the M1 ``ScheduleWorker`` or a future direct-CLI ``schedule
-            # fire`` invocation) gets it for free.
-            payload={
-                "plugin": plugin_name,
-                "cron_expr": cron_expr,
-                "fired_at": now.isoformat(),
-                "trigger": "schedule",
-            },
+            payload=payload,
             product_id=product_id,
             received_at=now,
         )
         if await is_duplicate(
             self._session,
             workspace_id=workspace_id,
-            source=plugin_name,
+            source=_SCHEDULE_SOURCE,
             idempotency_key=idem,
         ):
             logger.info(
                 "schedule_duplicate",
                 workspace_id=str(workspace_id),
-                plugin_name=plugin_name,
+                schedule_id=str(schedule_id),
                 fired_at=now.isoformat(),
             )
             return WebhookOutcome(event=event, duplicate=True)
@@ -95,7 +122,7 @@ class ScheduleTrigger:
             id=uuid.uuid4(),
             workspace_id=workspace_id,
             product_id=product_id,
-            source=plugin_name,
+            source=_SCHEDULE_SOURCE,
             trigger_kind=TriggerKind.SCHEDULE,
             idempotency_key=idem,
             payload=event.payload,
@@ -109,7 +136,7 @@ class ScheduleTrigger:
         logger.info(
             "schedule_fired",
             workspace_id=str(workspace_id),
-            plugin_name=plugin_name,
+            schedule_id=str(schedule_id),
             fired_at=now.isoformat(),
             trigger_event_id=str(row.id),
         )

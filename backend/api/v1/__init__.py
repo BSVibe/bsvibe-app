@@ -22,6 +22,7 @@ from backend.api.v1 import (
     run_routing,
     runs,
     safemode,
+    schedules,
     skills,
     workers,
     workspace,
@@ -65,6 +66,9 @@ router.include_router(decisions.router, prefix="/decisions", tags=["decisions"])
 router.include_router(checkpoints.router, prefix="/checkpoints", tags=["checkpoints"])
 router.include_router(api_settings.router, prefix="/settings", tags=["settings"])
 router.include_router(runs.router, prefix="/runs", tags=["runs"])
+# Schedule authoring — the producer of the workspace_schedules channel (S1),
+# letting BSVibe start work on its own on a cron.
+router.include_router(schedules.router, prefix="/schedules", tags=["schedules"])
 router.include_router(deliverables.router, prefix="/deliverables", tags=["deliverables"])
 router.include_router(messages.router, prefix="/messages", tags=["messages"])
 router.include_router(safemode.router, prefix="/safemode", tags=["safemode"])
