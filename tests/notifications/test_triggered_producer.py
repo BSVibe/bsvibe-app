@@ -22,8 +22,10 @@ import pytest_asyncio
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
+import backend.identity.workspaces_db  # noqa: F401 — register table on the shared Base
 import backend.notifications.db  # noqa: F401 — register table on the shared Base
 import backend.workflow.infrastructure.db  # noqa: F401
+from backend.identity.workspaces_db import WorkspaceRow
 from backend.notifications.db import NotificationEventRow
 from backend.workflow.infrastructure.intake.db import (
     RequestRow,
@@ -57,6 +59,12 @@ async def _seed_trigger(
                 payload={"hello": "world"},
             )
         )
+        await s.commit()
+
+
+async def _seed_workspace(sm: async_sessionmaker, *, ws: uuid.UUID, language: str) -> None:
+    async with sm() as s:
+        s.add(WorkspaceRow(id=ws, name="WS", language=language))
         await s.commit()
 
 
@@ -111,6 +119,28 @@ async def test_schedule_trigger_emits_triggered(sessionmaker) -> None:
 
     rows = await _triggered_rows(sessionmaker, ws)
     assert len(rows) == 1
+
+
+async def test_triggered_title_localizes_to_workspace_language(sessionmaker) -> None:
+    """A KO workspace gets a KO ``triggered`` title; the trigger source stays
+    verbatim in the localized body. An EN workspace gets the English title."""
+    ko_ws = uuid.uuid4()
+    await _seed_workspace(sessionmaker, ws=ko_ws, language="ko")
+    await _seed_trigger(sessionmaker, kind=TriggerKind.WEBHOOK, source="sentry", ws=ko_ws)
+    en_ws = uuid.uuid4()
+    await _seed_workspace(sessionmaker, ws=en_ws, language="en")
+    await _seed_trigger(sessionmaker, kind=TriggerKind.WEBHOOK, source="github", ws=en_ws)
+
+    worker = IntakeWorker(session_factory=sessionmaker)
+    assert await worker.drain_once() == 2
+
+    ko_row = (await _triggered_rows(sessionmaker, ko_ws))[0]
+    assert ko_row.payload["title"] == "새 작업이 들어왔어요"
+    assert "sentry" in ko_row.payload["body"]
+
+    en_row = (await _triggered_rows(sessionmaker, en_ws))[0]
+    assert en_row.payload["title"] == "New work came in"
+    assert en_row.payload["body"] == "A github trigger started new work."
 
 
 async def test_direct_trigger_does_not_emit_triggered(sessionmaker) -> None:

@@ -77,10 +77,11 @@ async def _seed_workspace(
     *,
     ws: uuid.UUID,
     timezone: str = "UTC",
+    language: str = "en",
     matrix: dict[str, dict[str, bool]] | None = None,
 ) -> None:
     async with sf() as s:
-        s.add(WorkspaceRow(id=ws, name="Test WS", timezone=timezone))
+        s.add(WorkspaceRow(id=ws, name="Test WS", timezone=timezone, language=language))
         if matrix is not None:
             s.add(NotificationPrefsRow(workspace_id=ws, matrix=matrix))
         await s.commit()
@@ -168,6 +169,32 @@ async def test_morning_tick_emits_one_daily_brief_with_counts(
     assert "2 shipped" in body
     assert "1 failed" in body
     assert "3 decision" in body
+
+
+async def test_daily_brief_localizes_to_workspace_language(
+    sf: async_sessionmaker[AsyncSession],
+) -> None:
+    """A KO workspace's brief renders a KO title + KO counts line; an EN workspace
+    renders the English copy. The counts are the same deterministic digest."""
+    ko = uuid.uuid4()
+    en = uuid.uuid4()
+    await _seed_workspace(sf, ws=ko, timezone="UTC", language="ko", matrix=_daily_brief_on())
+    await _seed_workspace(sf, ws=en, timezone="UTC", language="en", matrix=_daily_brief_on())
+    recent = _UTC_MORNING - timedelta(hours=1)
+    for ws in (ko, en):
+        await _seed_run(sf, ws=ws, status=RunStatus.SHIPPED, updated_at=recent)
+        await _seed_run(sf, ws=ws, status=RunStatus.FAILED, updated_at=recent)
+
+    worker = DailyBriefWorker(session_factory=sf, clock=lambda: _UTC_MORNING)
+    assert await worker.run_once() == 2
+
+    ko_row = (await _rows(sf, ko))[0]
+    assert ko_row.payload["title"] == "오늘의 요약"
+    assert ko_row.payload["body"] == "배포 1 · 실패 1 · 대기 결정 0"
+
+    en_row = (await _rows(sf, en))[0]
+    assert en_row.payload["title"] == "Your daily brief"
+    assert en_row.payload["body"] == "1 shipped · 1 failed · 0 decisions awaiting you"
 
 
 async def test_off_window_tick_emits_nothing(

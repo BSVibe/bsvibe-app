@@ -47,6 +47,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from backend.identity.workspaces_db import WorkspaceRow
+from backend.notifications.copy import DAILY_BRIEF_LINK, notification_copy
 from backend.notifications.db import DEFAULT_MATRIX, NotificationPrefsRow
 from backend.notifications.emit import emit_notification
 from backend.workers.base import BaseWorker
@@ -62,14 +63,6 @@ logger = structlog.get_logger(__name__)
 #: The channel this worker declares itself as when emitting (must be listed in
 #: ``NOTIFICATION_OUTBOX.producers`` — the INV-1 producer guard enforces it).
 PRODUCER_ID = "worker:daily_brief"
-
-#: Deterministic (no-LLM) founder-facing copy. Matches the sibling producers
-#: (needs_you / triggered / shipped / failed), which also use fixed English
-#: strings — notifications are not routed through the LLM language directive.
-_BRIEF_TITLE = "Your daily brief"
-#: The founder lands on the Brief (their digest home; decisions + activity live
-#: one tap away).
-_BRIEF_LINK = "/brief"
 
 #: The rolling window the shipped/failed counts summarise.
 _DIGEST_WINDOW = timedelta(hours=24)
@@ -104,11 +97,6 @@ def _daily_brief_enabled(matrix: dict[str, dict[str, bool]]) -> bool:
     inbox even with no push channel bound.
     """
     return any(bool(on) for on in matrix.get("daily_brief", {}).values())
-
-
-def _digest_body(*, shipped: int, failed: int, pending: int) -> str:
-    """The short deterministic one-line summary the founder reads."""
-    return f"Today: {shipped} shipped · {failed} failed · {pending} decisions awaiting you"
 
 
 class DailyBriefWorker(BaseWorker):
@@ -160,15 +148,26 @@ class DailyBriefWorker(BaseWorker):
             return False
 
         shipped, failed, pending = await self._digest(session, workspace.id, now_utc)
+        # The digest title/body are localized to the workspace's own
+        # ``workspaces.language`` (KO/EN) by the copy catalog — the counts are
+        # deterministic (no LLM). The workspace row is already loaded here, so the
+        # language is read straight off it (no extra query).
+        copy = notification_copy(
+            "daily_brief",
+            workspace.language,
+            shipped=shipped,
+            failed=failed,
+            pending=pending,
+        )
         await emit_notification(
             session,
             workspace_id=workspace.id,
             event="daily_brief",
             dedupe_key=f"daily_brief:{workspace.id}:{local_now.date().isoformat()}",
             payload={
-                "title": _BRIEF_TITLE,
-                "body": _digest_body(shipped=shipped, failed=failed, pending=pending),
-                "link": _BRIEF_LINK,
+                "title": copy.title,
+                "body": copy.body,
+                "link": DAILY_BRIEF_LINK,
             },
             producer_id=PRODUCER_ID,
         )
