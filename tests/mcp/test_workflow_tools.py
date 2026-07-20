@@ -358,3 +358,87 @@ async def test_deliverables_list_filters_by_run(
     assert len(all_d) == 2
     assert len(filtered) == 1
     assert filtered[0]["run_id"] == str(run_id)
+
+
+async def test_products_set_metadata_replaces_and_show_reflects(
+    db, workspace_id, user_id, registry, seeded
+) -> None:
+    """MCP parity — ``bsvibe_products_set_metadata`` REPLACES the free-form
+    metadata dict; ``bsvibe_products_show`` reflects it and the row actually
+    carries it (producer existence, name-clash-free ``product_metadata`` attr)."""
+    pid = uuid.uuid4()
+    async with db() as s:
+        s.add(ProductRow(id=pid, workspace_id=workspace_id, name="A", slug="a"))
+        await s.commit()
+
+    # A freshly seeded product shows an empty metadata object.
+    async with db() as s:
+        ctx = ToolContext(
+            principal=_principal(workspace_id=workspace_id, user_id=user_id, scopes=("mcp:read",)),
+            session=s,
+        )
+        shown = await registry.call_tool("bsvibe_products_show", {"slug_or_id": "a"}, ctx)
+    assert shown["metadata"] == {}
+
+    # Set it (write scope).
+    async with db() as s:
+        ctx = ToolContext(
+            principal=_principal(
+                workspace_id=workspace_id, user_id=user_id, scopes=("mcp:read", "mcp:write")
+            ),
+            session=s,
+        )
+        out = await registry.call_tool(
+            "bsvibe_products_set_metadata",
+            {"slug_or_id": "a", "metadata": {"stage": "beta"}},
+            ctx,
+        )
+    assert out["metadata"] == {"stage": "beta"}
+
+    # show reflects the new value.
+    async with db() as s:
+        ctx = ToolContext(
+            principal=_principal(workspace_id=workspace_id, user_id=user_id, scopes=("mcp:read",)),
+            session=s,
+        )
+        shown = await registry.call_tool("bsvibe_products_show", {"slug_or_id": "a"}, ctx)
+    assert shown["metadata"] == {"stage": "beta"}
+
+    # The row genuinely carries it under the SQLAlchemy-safe attribute name.
+    async with db() as s:
+        row = await s.get(ProductRow, pid)
+        assert row.product_metadata == {"stage": "beta"}
+
+    # REPLACE semantics — a second call overwrites the whole dict.
+    async with db() as s:
+        ctx = ToolContext(
+            principal=_principal(
+                workspace_id=workspace_id, user_id=user_id, scopes=("mcp:read", "mcp:write")
+            ),
+            session=s,
+        )
+        out = await registry.call_tool(
+            "bsvibe_products_set_metadata",
+            {"slug_or_id": "a", "metadata": {"owner": "founder"}},
+            ctx,
+        )
+    assert out["metadata"] == {"owner": "founder"}
+
+
+async def test_products_set_metadata_requires_write_scope(
+    db, workspace_id, user_id, registry, seeded
+) -> None:
+    async with db() as s:
+        s.add(ProductRow(workspace_id=workspace_id, name="A", slug="a"))
+        await s.commit()
+    async with db() as s:
+        ctx = ToolContext(
+            principal=_principal(workspace_id=workspace_id, user_id=user_id, scopes=("mcp:read",)),
+            session=s,
+        )
+        with pytest.raises(Exception, match="requires scope"):
+            await registry.call_tool(
+                "bsvibe_products_set_metadata",
+                {"slug_or_id": "a", "metadata": {"x": 1}},
+                ctx,
+            )

@@ -29,6 +29,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     Uuid,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -171,6 +172,21 @@ class ProductRow(WorkspacesBase):
     # contention). Founder UI treats ``None`` as "fall back to status
     # pill", so legacy rows render exactly as before.
     bootstrap_progress: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    # Free-form product metadata (no lifecycle enum). The founder deliberately
+    # did NOT model a rigid product-lifecycle ENUM — a product's lifecycle
+    # differs per product and is captured in the knowledge graph — so each
+    # product carries its own open ``metadata`` object: lifecycle stage, custom
+    # attributes, or any context that agents + schedules + the founder read and
+    # write. ``NOT NULL`` with a ``'{}'`` server default so every row (legacy
+    # and new) always exposes an object, never ``NULL``.
+    #
+    # ⚠️ The Python attribute is ``product_metadata`` — NOT ``metadata`` — because
+    # SQLAlchemy's declarative base reserves the ``metadata`` attribute for its
+    # :class:`~sqlalchemy.MetaData`. The DB column + the REST/MCP wire field are
+    # named ``metadata``; only the ORM attribute is disambiguated.
+    product_metadata: Mapped[dict[str, Any]] = mapped_column(
+        "metadata", JSON, nullable=False, default=dict, server_default=text("'{}'")
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=lambda: datetime.now()
     )
