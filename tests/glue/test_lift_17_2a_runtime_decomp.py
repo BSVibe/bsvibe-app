@@ -212,7 +212,7 @@ def test_build_worker_runtime_constructs_expected_workers() -> None:
         notify_sender=notify_sender,
     )
     assert isinstance(runtime, WorkerRuntime)
-    assert len(runtime.workers) == 9
+    assert len(runtime.workers) == 10
     names = {getattr(w, "_name", None) for w in runtime.workers}
     expected = {
         "intake_worker",
@@ -220,6 +220,8 @@ def test_build_worker_runtime_constructs_expected_workers() -> None:
         "delivery_worker",
         # Notifier N2 — drains notification_outbox, delivers needs_you pushes.
         "notify_worker",
+        # Notifier daily_brief — per-workspace once-a-day digest producer.
+        "daily_brief_worker",
         "settle_worker",
         "relay_worker",
         "schedule_worker",

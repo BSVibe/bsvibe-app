@@ -8,10 +8,12 @@ leaf (the import-linter "common leaves do not import bounded contexts"
 contract) while still declaring its coupling as a typed object.
 
 ``notification_outbox`` is the founder-notification transactional-outbox queue
-(Notifier N2/N3). Its four producers each stage one :class:`NotificationEventRow`
-inside the SAME transaction as the terminal write it notifies about (via the
-shared :func:`~backend.notifications.emit.emit_notification` seam), so every
-notification is confirmed iff its triggering write commits:
+(Notifier N2/N3). Its producers each stage one :class:`NotificationEventRow`
+via the shared :func:`~backend.notifications.emit.emit_notification` seam. The
+four terminal-write producers stage their row inside the SAME transaction as
+the write they notify about, so the notification is confirmed iff its
+triggering write commits; the fifth (``daily_brief``) is a standalone digest
+job with no triggering write (its own commit is the only gate):
 
 * :func:`~backend.workflow.application.run_persistence.create_decision`
   (``workflow:create_decision``) → ``needs_you`` — every path a run stops on a
@@ -24,9 +26,14 @@ notification is confirmed iff its triggering write commits:
   (``workflow:verified_deliverable``) → ``shipped`` — the verified terminal ships.
 * :meth:`~backend.workflow.application.agent_runner.AgentRunner.transition`
   (``workflow:run_failed``) → ``failed`` — a run reaches its FAILED terminal.
+* :class:`~backend.workflow.infrastructure.workers.daily_brief_worker.DailyBriefWorker`
+  (``worker:daily_brief``) → ``daily_brief`` — a per-workspace once-a-day digest
+  (counts of the last 24h's shipped/failed runs + currently-pending decisions),
+  emitted at the workspace's local morning. Unlike the four above it has no
+  single triggering write — it is a dedicated digest job (a poll-loop worker),
+  deduped on ``daily_brief:<workspace_id>:<local_date>`` for exactly-once-per-day.
 
-(``daily_brief`` is deferred — it needs the Schedule input track.) Its sole
-worker-claim consumer is the
+Its sole worker-claim consumer is the
 :class:`~backend.workflow.infrastructure.workers.notify_worker.NotifyWorker`
 (id ``worker:notify_worker``), which claims a batch under ``FOR UPDATE SKIP
 LOCKED``, evaluates the workspace's notification-prefs matrix + quiet hours,
@@ -56,6 +63,7 @@ NOTIFICATION_OUTBOX: Channel[NotificationEventRow] = Channel(
         "worker:intake_worker",
         "workflow:verified_deliverable",
         "workflow:run_failed",
+        "worker:daily_brief",
     ),
     consumers=("worker:notify_worker",),
     human_origin=False,

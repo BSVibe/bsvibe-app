@@ -58,6 +58,7 @@ from backend.workflow.infrastructure.workers.agent_worker import (
     AgentExecutionDeps,
     AgentWorker,
 )
+from backend.workflow.infrastructure.workers.daily_brief_worker import DailyBriefWorker
 from backend.workflow.infrastructure.workers.delivery_worker import (
     DeliveryWorker,
     PluginDispatchAdapter,
@@ -180,6 +181,8 @@ def build_worker_runtime(
         AgentWorker(session_factory=session_factory, execution=execution),
         DeliveryWorker(session_factory=session_factory, dispatcher=delivery_adapter),
         NotifyWorker(session_factory=session_factory, sender=notify_sender),
+        # Notifier daily_brief — per-workspace once-a-day digest producer.
+        DailyBriefWorker(session_factory=session_factory),
         SettleWorker(
             session_factory=session_factory,
             sink=KnowledgeSettleSink(
@@ -231,9 +234,8 @@ def build_worker_runtime(
         # D3a — Safe Mode expiry sweep. A SECOND ScheduleWorker against the
         # SAME ScheduleRunnerProtocol seam but a different runner: the
         # :class:`SafeModeExpirySweepRunner` selects every PENDING/EXTENDED
-        # safe_mode_queue_items row past ``expires_at`` (across ALL
-        # workspaces), transitions each via
-        # :meth:`SafeModeQueue.mark_expired`, and emits ONE
+        # safe_mode_queue_items row past ``expires_at`` (across ALL workspaces),
+        # transitions each via :meth:`SafeModeQueue.mark_expired`, and emits ONE
         # ``safe_mode.expired`` AuditOutboxRecord per non-empty batch
         # tagged ``trigger=schedule, source=system.safe_mode_expiry``.
         ScheduleWorker(
@@ -246,16 +248,14 @@ def build_worker_runtime(
             config=ScheduleWorkerConfig(poll_interval_s=3600.0),
         ),
         # Lift Q1 — per-workspace audit_outbox retention sweep. A THIRD
-        # :class:`ScheduleWorker` against the SAME
-        # :class:`ScheduleRunnerProtocol` seam but a different runner:
-        # :class:`AuditRetentionSweepRunner` iterates every workspace with
-        # a non-NULL ``audit_retention_days`` (NULL = forever, the
-        # default), DELETEs ``audit_outbox`` rows past
+        # :class:`ScheduleWorker` against the SAME :class:`ScheduleRunnerProtocol`
+        # seam but a different runner: :class:`AuditRetentionSweepRunner` iterates
+        # every workspace with a non-NULL ``audit_retention_days`` (NULL = forever,
+        # the default), DELETEs ``audit_outbox`` rows past
         # ``occurred_at < now - retention_days * 1d``, and emits ONE
-        # ``audit.retention.swept`` row per workspace per non-empty
-        # batch tagged ``trigger=schedule, source=system.audit_retention``.
-        # Daily poll — retention is day-grained; a row drifting a few
-        # ticks past cutoff before deletion is no founder impact.
+        # ``audit.retention.swept`` row per workspace per non-empty batch tagged
+        # ``trigger=schedule, source=system.audit_retention``. Daily poll —
+        # retention is day-grained; a row drifting past cutoff has no impact.
         ScheduleWorker(
             session_factory=session_factory,
             runner=AuditRetentionSweepRunner(),
