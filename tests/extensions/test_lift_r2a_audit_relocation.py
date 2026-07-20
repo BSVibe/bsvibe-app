@@ -76,7 +76,6 @@ _BACKEND_PRODUCER_SITES = (
     # backend/workflow/application/run_persistence.py — the canonical home
     # for the loop's DB + audit side effects.
     "backend/workflow/application/run_persistence.py",
-    "backend/executors/terminal.py",
 )
 
 

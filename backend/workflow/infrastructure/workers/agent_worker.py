@@ -91,10 +91,9 @@ class AgentExecutionDeps:
       loader — otherwise every workspace would frame against a single
       root-level skill set (a multi-tenancy scoping gap).
     * ``orchestrator_factory`` — builds a :class:`RunCompute` (the native
-      :class:`~backend.workflow.application.agent_loop.RunOrchestrator` for api-llm
-      accounts, or the
-      :class:`~backend.executors.orchestrator.ExecutorOrchestrator` for
-      ``provider='executor'`` accounts) bound to the *same* session the run is
+      :class:`~backend.workflow.application.agent_loop.RunOrchestrator`, which
+      drives ``provider='executor'`` accounts one CLI chat turn at a time via
+      :class:`~backend.dispatch.adapter.ExecutorAdapter`) bound to the *same* session the run is
       driven in (so compute + transactional lifecycle share one transaction)
       AND to the *specific* run, so the factory can resolve the run's
       per-workspace work-LLM identity (the

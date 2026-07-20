@@ -94,8 +94,7 @@ class ExecutorTaskRow(Base):
     workspace_id: Mapped[uuid.UUID] = mapped_column(nullable=False, index=True)
     # The ExecutionRun this task belongs to (executor-pool Lift 5b / B1). Nullable
     # for back-compat with substrate-only tasks created without a run binding; set
-    # by the ExecutorOrchestrator so the result path can resolve the run workspace
-    # (``run_workspace_root/<run_id>/``) to persist the files the CLI produced.
+    # by the ExecutorAdapter so the result path can resolve the run workspace.
     run_id: Mapped[uuid.UUID | None] = mapped_column(nullable=True, index=True)
     # Nullable until dispatched; indexed so a worker can scan its own queue and
     # find_available_worker / the dispatch worker can join by assignment.

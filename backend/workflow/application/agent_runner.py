@@ -208,9 +208,9 @@ class AgentRunner:
 
         ``orchestrator`` is any :class:`RunCompute` — the native
         :class:`~backend.workflow.application.agent_loop.RunOrchestrator`
-        (api-llm) or the
-        :class:`~backend.executors.orchestrator.ExecutorOrchestrator`
-        (CLI-worker dispatch). Both have the same ``run(...) -> LoopResult``
+        or the
+        :class:`~backend.workflow.application.knowledge_orchestrator.KnowledgeAnswerOrchestrator`.
+        Both have the same ``run(...) -> LoopResult``
         shape, so the outcome mapping below is backend-agnostic.
 
         Transitions ``open → running`` before the loop, then maps the

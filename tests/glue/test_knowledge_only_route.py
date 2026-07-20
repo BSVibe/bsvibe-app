@@ -27,7 +27,6 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from backend.config import get_settings
-from backend.executors.orchestrator import ExecutorOrchestrator
 from backend.router.accounts.schemas import ModelAccountCreate
 from backend.router.accounts.service import ModelAccountService
 from backend.router.llm_client import LlmClient
@@ -355,7 +354,6 @@ async def test_factory_routes_executor_account_even_when_knowledge_only(
         # Lift E3 — knowledge_only short-circuits before any orchestrator
         # specialization, so an executor account routes here too.
         assert isinstance(orch, KnowledgeAnswerOrchestrator)
-        assert not isinstance(orch, ExecutorOrchestrator)
 
 
 async def test_knowledge_only_without_llm_falls_back_to_loop(
