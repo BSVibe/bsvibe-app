@@ -577,6 +577,9 @@ async def test_build_worker_runtime_constructs_all_workers(
         "delivery_worker",
         # Notifier N2 — drains notification_outbox, delivers needs_you pushes.
         "notify_worker",
+        # Notifier daily_brief — the fifth notification moment: a per-workspace
+        # once-a-day digest PRODUCER emitted at the workspace's local morning.
+        "daily_brief_worker",
         "settle_worker",
         "relay_worker",
         # M1 — schedule runner now ships in the production worker set.
