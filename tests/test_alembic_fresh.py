@@ -125,9 +125,7 @@ def test_fresh_pg_upgrade_round_trip():
     # Phase 1 — fresh upgrade.
     _alembic(["upgrade", "head"], env_extra=env_extra)
     stamped = asyncio.run(_stamped_head(url))
-    assert stamped == "workspace_schedules_instruction", (
-        f"expected head workspace_schedules_instruction, got {stamped}"
-    )
+    assert stamped == "product_metadata", f"expected head product_metadata, got {stamped}"
 
     # Phase 2 — full downgrade. Verifies every revision's downgrade path.
     _alembic(["downgrade", "base"], env_extra=env_extra)
@@ -135,7 +133,7 @@ def test_fresh_pg_upgrade_round_trip():
     # Phase 3 — re-upgrade. Verifies the chain is idempotent.
     _alembic(["upgrade", "head"], env_extra=env_extra)
     stamped = asyncio.run(_stamped_head(url))
-    assert stamped == "workspace_schedules_instruction"
+    assert stamped == "product_metadata"
 
 
 def test_notification_channel_keys_renames_email_to_email_sender():
@@ -262,6 +260,47 @@ def test_workspace_timezone_column_round_trips():
     # Re-upgrade restores it.
     _alembic(["upgrade", "head"], env_extra=env_extra)
     assert asyncio.run(_column_exists()), "workspaces.timezone column missing after re-upgrade"
+
+
+def test_products_metadata_column_round_trips():
+    """Product metadata — the ``products.metadata`` column adds + drops cleanly.
+
+    Up migration adds a JSONB NOT NULL column with a ``'{}'`` server default (so
+    existing rows backfill in one statement); down migration removes it. Both
+    must run without error against a fresh PG so the operational rollback path
+    is safe.
+    """
+    url = _skip_if_no_pg()
+    env_extra = {"BSVIBE_MIGRATION_DATABASE_URL": url}
+
+    asyncio.run(_drop_everything(url))
+    _alembic(["upgrade", "head"], env_extra=env_extra)
+
+    async def _column_exists() -> bool:
+        engine = create_async_engine(url, future=True)
+        try:
+            async with engine.connect() as conn:
+                row = (
+                    await conn.execute(
+                        text(
+                            "SELECT 1 FROM information_schema.columns "
+                            "WHERE table_name='products' AND column_name='metadata'"
+                        )
+                    )
+                ).first()
+                return row is not None
+        finally:
+            await engine.dispose()
+
+    assert asyncio.run(_column_exists()), "products.metadata column missing after upgrade"
+
+    # Downgrade to the parent revision; column must be gone.
+    _alembic(["downgrade", "workspace_schedules_instruction"], env_extra=env_extra)
+    assert not asyncio.run(_column_exists()), "products.metadata column survived downgrade"
+
+    # Re-upgrade restores it.
+    _alembic(["upgrade", "head"], env_extra=env_extra)
+    assert asyncio.run(_column_exists()), "products.metadata column missing after re-upgrade"
 
 
 def test_run_routing_source_text_column_round_trips():

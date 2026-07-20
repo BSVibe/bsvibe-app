@@ -49,6 +49,10 @@ def _product_to_dict(row: ProductRow) -> dict[str, Any]:
         # finished; founder UI / MCP caller treats ``None`` as "no
         # incremental signal, fall back to bootstrap_status".
         "bootstrap_progress": row.bootstrap_progress,
+        # Free-form product metadata (no lifecycle enum). Always an object,
+        # never null. ORM attr is ``product_metadata`` (``metadata`` is
+        # reserved by SQLAlchemy); the wire field is ``metadata``.
+        "metadata": row.product_metadata,
         "created_at": row.created_at.isoformat() if row.created_at else None,
         "updated_at": row.updated_at.isoformat() if row.updated_at else None,
     }
@@ -416,6 +420,34 @@ async def _h_products_bootstrap_retry(args: ProductsBootstrapRetryInput, ctx: To
 
 
 # ---------------------------------------------------------------------------
+# bsvibe_products_set_metadata — mirror the REST PATCH metadata path
+#
+# Products have no generic MCP update tool, so this is the write surface for
+# the free-form ``metadata`` slot (MCP-UI parity with the REST PATCH). REPLACE
+# semantics: the supplied object overwrites the stored dict wholesale (no
+# shallow merge), matching the REST contract.
+# ---------------------------------------------------------------------------
+class ProductsSetMetadataInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    slug_or_id: str = Field(..., min_length=1, max_length=64)
+    metadata: dict[str, Any] = Field(
+        default_factory=dict,
+        description=(
+            "Free-form JSON object stored verbatim on the product. REPLACES the "
+            "product's existing metadata wholesale (no shallow merge)."
+        ),
+    )
+
+
+async def _h_products_set_metadata(args: ProductsSetMetadataInput, ctx: ToolContext) -> Any:
+    row = await _resolve_product(ctx, args.slug_or_id)
+    row.product_metadata = args.metadata
+    await ctx.session.commit()
+    await ctx.session.refresh(row)
+    return _Envelope(_product_to_dict(row))
+
+
+# ---------------------------------------------------------------------------
 # bsvibe_runs_list
 # ---------------------------------------------------------------------------
 class RunsListInput(BaseModel):
@@ -623,6 +655,24 @@ def register_workflow_tools(registry: ToolRegistry) -> None:
             handler=_h_products_bootstrap_retry,
             required_scopes=("mcp:write",),
             audit_event="bsvibe.mcp.products_bootstrap_retry.invoked",
+        )
+    )
+    registry.register(
+        Tool(
+            name="bsvibe_products_set_metadata",
+            description=(
+                "Set the free-form `metadata` JSON object on a product (by slug "
+                "or UUID). REPLACES the stored metadata wholesale — send the full "
+                "object you want persisted (no shallow merge). The founder's "
+                "deliberate alternative to a rigid lifecycle enum: stash the "
+                "product's stage / custom attributes / context that agents + "
+                "schedules read and write."
+            ),
+            input_schema=ProductsSetMetadataInput,
+            output_schema=_Envelope,
+            handler=_h_products_set_metadata,
+            required_scopes=("mcp:write",),
+            audit_event="bsvibe.mcp.products_set_metadata.invoked",
         )
     )
     registry.register(

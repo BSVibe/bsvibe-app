@@ -46,6 +46,10 @@ class ProductUpdate(BaseModel):
 
     name: str | None = Field(default=None, min_length=1, max_length=255)
     repo_url: str | None = Field(default=None, max_length=512)
+    # Free-form product metadata (no lifecycle enum). When present, REPLACES
+    # the stored dict wholesale (no shallow merge) — send the full object you
+    # want persisted; omit the key (``None``) to leave it untouched.
+    metadata: dict[str, Any] | None = Field(default=None)
 
 
 class ProductResponse(BaseModel):
@@ -68,6 +72,11 @@ class ProductResponse(BaseModel):
     # or on every legacy row — founder UI treats ``None`` as "fall back
     # to status pill".
     bootstrap_progress: dict[str, Any] | None = None
+    # Free-form product metadata (no lifecycle enum) — always an object, never
+    # ``None``. Read from the ORM's ``product_metadata`` attribute (the
+    # ``metadata`` attribute name is reserved by SQLAlchemy's declarative base)
+    # and surfaced on the wire as ``metadata``.
+    metadata: dict[str, Any] = Field(default_factory=dict, validation_alias="product_metadata")
     created_at: datetime
     updated_at: datetime
 

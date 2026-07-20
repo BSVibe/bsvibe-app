@@ -351,3 +351,50 @@ async def test_product_workspace_isolation(db) -> None:
         assert r.json() == []
         r = await c.get(f"/api/v1/products/{product_id}")
         assert r.status_code == 404
+
+
+async def test_product_metadata_patch_replace_and_get(client_with_ws) -> None:
+    """Free-form product ``metadata``: PATCH REPLACES the whole dict; GET returns it.
+
+    The free-form slot is the founder's deliberate alternative to a rigid
+    lifecycle enum — each product carries its own stage / attributes.
+    """
+    c, _ = client_with_ws
+    r = await c.post("/api/v1/products", json={"name": "Meta", "slug": "meta"})
+    assert r.status_code == 201, r.text
+    pid = r.json()["id"]
+    # A fresh product carries an empty metadata object (server_default '{}').
+    assert r.json()["metadata"] == {}
+
+    # Set metadata via PATCH.
+    r = await c.patch(
+        f"/api/v1/products/{pid}",
+        json={"metadata": {"stage": "beta", "owner": "founder"}},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["metadata"] == {"stage": "beta", "owner": "founder"}
+
+    # GET reflects it.
+    r = await c.get(f"/api/v1/products/{pid}")
+    assert r.json()["metadata"] == {"stage": "beta", "owner": "founder"}
+
+    # REPLACE semantics — a second PATCH overwrites the whole dict (no merge).
+    r = await c.patch(f"/api/v1/products/{pid}", json={"metadata": {"stage": "ga"}})
+    assert r.status_code == 200
+    assert r.json()["metadata"] == {"stage": "ga"}
+
+    # Omitting metadata (None) leaves the stored dict untouched.
+    r = await c.patch(f"/api/v1/products/{pid}", json={"name": "Meta2"})
+    assert r.status_code == 200
+    assert r.json()["name"] == "Meta2"
+    assert r.json()["metadata"] == {"stage": "ga"}
+
+
+async def test_product_patch_rejects_unknown_top_level_field(client_with_ws) -> None:
+    """``extra='forbid'`` on the PATCH body rejects unknown top-level fields."""
+    c, _ = client_with_ws
+    r = await c.post("/api/v1/products", json={"name": "F", "slug": "f"})
+    assert r.status_code == 201, r.text
+    pid = r.json()["id"]
+    r = await c.patch(f"/api/v1/products/{pid}", json={"bogus": 1})
+    assert r.status_code == 422

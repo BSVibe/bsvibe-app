@@ -219,6 +219,11 @@ async def update_product(
         value = getattr(payload, field)
         if value is not None:
             setattr(row, field, value)
+    # Free-form metadata — REPLACE the whole dict when present (no merge). The
+    # ORM attribute is ``product_metadata`` (``metadata`` is reserved by
+    # SQLAlchemy's declarative base); the wire field is ``metadata``.
+    if payload.metadata is not None:
+        row.product_metadata = payload.metadata
     await session.commit()
     return ProductResponse.model_validate(row)
 

@@ -98,10 +98,13 @@ def test_alembic_head_is_connector_last_import():
     # workspace_schedules_instruction (Schedule S1 — natural-language
     # ``instruction`` schedules: adds kind/payload/title, makes plugin_name
     # NULLable, drops the old unique constraint, so the authoring surface can
-    # produce rows the ScheduleWorker fires).
+    # produce rows the ScheduleWorker fires) →
+    # product_metadata (free-form ``products.metadata`` JSON slot — the
+    # founder's deliberate alternative to a rigid lifecycle enum; each product
+    # carries its own stage / attributes / context for agents + schedules).
     # Keep the test name (function name is a historical revision id, kept for
     # git-blame stability) and assert the current tip.
-    assert "workspace_schedules_instruction" in result.stdout
+    assert "product_metadata" in result.stdout
 
 
 def test_target_metadata_covers_all_bases():
