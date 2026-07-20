@@ -24,8 +24,10 @@ import pytest_asyncio
 from sqlalchemy import select
 
 # Register the tables these tests touch on the shared Base.metadata.
+import backend.identity.workspaces_db  # noqa: F401
 import backend.notifications.db  # noqa: F401
 import backend.workflow.infrastructure.db  # noqa: F401
+from backend.identity.workspaces_db import WorkspaceRow
 from backend.mcp.api import McpPrincipal, ToolContext
 from backend.notifications.db import NotificationEventRow, NotificationStatus
 from backend.workflow.application import mcp_work_effects
@@ -59,6 +61,58 @@ async def _make_run(session, workspace_id: uuid.UUID) -> ExecutionRun:
     session.add(run)
     await session.commit()
     return run
+
+
+async def _make_workspace(session, *, language: str) -> uuid.UUID:
+    ws = uuid.uuid4()
+    session.add(WorkspaceRow(id=ws, name="WS", language=language))
+    await session.commit()
+    return ws
+
+
+async def test_needs_you_title_localizes_to_workspace_language(session) -> None:
+    """A KO workspace gets a KO ``needs_you`` title; the founder's question stays
+    verbatim. An EN workspace gets the English title."""
+    ko_ws = await _make_workspace(session, language="ko")
+    ko_run = await _make_run(session, ko_ws)
+    await create_decision(
+        session,
+        ko_run,
+        None,
+        kind="ask_user_question",
+        payload={"question": "Postgres 인가요 SQLite 인가요?"},
+        rationale="r",
+    )
+    await session.commit()
+
+    ko_row = (
+        await session.execute(
+            select(NotificationEventRow).where(NotificationEventRow.workspace_id == ko_ws)
+        )
+    ).scalar_one()
+    assert ko_row.payload["title"] == "결정이 필요한 작업이 있어요"
+    # The founder's actual question is preserved verbatim.
+    assert ko_row.payload["body"] == "Postgres 인가요 SQLite 인가요?"
+
+    en_ws = await _make_workspace(session, language="en")
+    en_run = await _make_run(session, en_ws)
+    await create_decision(
+        session,
+        en_run,
+        None,
+        kind="ask_user_question",
+        payload={"question": "Postgres or SQLite?"},
+        rationale="r",
+    )
+    await session.commit()
+
+    en_row = (
+        await session.execute(
+            select(NotificationEventRow).where(NotificationEventRow.workspace_id == en_ws)
+        )
+    ).scalar_one()
+    assert en_row.payload["title"] == "A run needs your decision"
+    assert en_row.payload["body"] == "Postgres or SQLite?"
 
 
 async def test_asking_the_founder_queues_a_needs_you_notification(session) -> None:

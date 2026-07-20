@@ -42,6 +42,8 @@ import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.config import Settings, get_settings
+from backend.identity.workspaces_db import load_workspace_language
+from backend.notifications.copy import notification_copy
 from backend.notifications.emit import emit_notification
 from backend.router.domain.repositories import RunRoutingRuleRepository
 from backend.router.infrastructure.repositories import SqlAlchemyRunRoutingRuleRepository
@@ -86,10 +88,6 @@ def _with_credits_hint(reason: str) -> str:
     if not reason or _CREDITS_HINT in reason or not _AUTH_FAILURE_RE.search(reason):
         return reason
     return reason + _CREDITS_HINT
-
-
-#: Deterministic (no-LLM) founder-facing text for the ``failed`` notification.
-_RUN_FAILED_TITLE = "A run failed"
 
 
 def _is_linked_worktree(worktree: Path) -> bool:
@@ -324,18 +322,21 @@ class AgentRunner:
 
     async def _emit_run_failed(self, run: ExecutionRun, reason: str | None) -> None:
         """Queue the ``failed`` notification for a run that reached its FAILED
-        terminal. Deterministic content — the body carries the transition
-        ``reason`` (the honest "why", e.g. a frame-unclassified or system error),
-        deep-linked to the run. Deduped on ``failed:<run_id>``."""
-        body = (reason or "").strip() or "A run reached its failed terminal."
+        terminal. The push ``title``/``body`` are rendered by the localized copy
+        catalog in the workspace's ``workspaces.language`` (KO/EN) — the honest
+        transition ``reason`` (e.g. a frame-unclassified or system error) rides
+        through as the verbatim ``detail``, deep-linked to the run. Deduped on
+        ``failed:<run_id>``."""
+        language = await load_workspace_language(self._session, run.workspace_id)
+        copy = notification_copy("failed", language, detail=(reason or "").strip())
         await emit_notification(
             self._session,
             workspace_id=run.workspace_id,
             event="failed",
             dedupe_key=f"failed:{run.id}",
             payload={
-                "title": _RUN_FAILED_TITLE,
-                "body": body,
+                "title": copy.title,
+                "body": copy.body,
                 "link": f"/runs/{run.id}",
                 "run_id": str(run.id),
             },

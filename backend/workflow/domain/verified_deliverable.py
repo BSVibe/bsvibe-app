@@ -43,21 +43,16 @@ logger = structlog.get_logger(__name__)
 
 _SETTLE_SUMMARY_CAP = 500
 
-#: Deterministic (no-LLM) founder-facing text for the ``shipped`` notification.
-#: The title is stable; the body's first line is the deliverable summary's title
-#: line (already the founder-intent title, not raw LLM narration — see
-#: ``_compose_verified_summary``), so the notification says WHAT shipped.
-_SHIPPED_TITLE = "A verified deliverable shipped"
 
+def _shipped_detail(summary: str) -> str:
+    """The deliverable summary's first line — the founder-intent title of what
+    shipped (from ``_compose_verified_summary``: ``"<title>\\n\\n<body>"``).
 
-def _shipped_body(summary: str) -> str:
-    """The ``shipped`` notification body — the deliverable summary's first line.
-
-    ``summary`` is ``"<title>\\n\\n<body>"`` from ``_compose_verified_summary``;
-    the first line is the founder-intent title. Deterministic, no LLM.
+    Passed verbatim as the ``shipped`` notification body ``detail``; the copy
+    catalog supplies a localized fallback when there is no title. Deterministic,
+    no LLM.
     """
-    first_line = next((ln.strip() for ln in (summary or "").splitlines() if ln.strip()), "")
-    return first_line or "A verified deliverable is ready."
+    return next((ln.strip() for ln in (summary or "").splitlines() if ln.strip()), "")
 
 
 # Cap for the captured unified diff stored on the deliverable payload. A typical
@@ -210,18 +205,27 @@ async def write_verified_deliverable(
 
     # Notifier N3 — the verified terminal is the "shipped to the world" moment, so
     # queue a ``shipped`` notification in THIS transaction (confirmed iff the
-    # deliverable commits). Deterministic content, deep-linked to the deliverable.
-    # Mid-loop partials + knowledge answers are NOT verified ships → no notify.
+    # deliverable commits). The push title/body are localized to the workspace's
+    # ``workspaces.language`` (KO/EN) by the copy catalog — the deliverable's own
+    # title line rides through as the verbatim ``detail``. Deep-linked to the
+    # deliverable. Mid-loop partials + knowledge answers are NOT verified ships →
+    # no notify.
+    from backend.identity.workspaces_db import (  # noqa: PLC0415 — leaf, local
+        load_workspace_language,
+    )
+    from backend.notifications.copy import notification_copy  # noqa: PLC0415 — leaf, local
     from backend.notifications.emit import emit_notification  # noqa: PLC0415 — leaf, local
 
+    language = await load_workspace_language(session, run.workspace_id)
+    copy = notification_copy("shipped", language, detail=_shipped_detail(summary))
     await emit_notification(
         session,
         workspace_id=run.workspace_id,
         event="shipped",
         dedupe_key=f"shipped:{deliverable.id}",
         payload={
-            "title": _SHIPPED_TITLE,
-            "body": _shipped_body(summary),
+            "title": copy.title,
+            "body": copy.body,
             "link": f"/deliverables/{deliverable.id}",
             "run_id": str(run.id),
             "deliverable_id": str(deliverable.id),

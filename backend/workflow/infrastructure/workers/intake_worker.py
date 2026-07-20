@@ -26,6 +26,8 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm.attributes import flag_modified
 
 from backend.config import Settings, get_settings
+from backend.identity.workspaces_db import load_workspace_language
+from backend.notifications.copy import TRIGGERED_LINK, notification_copy
 from backend.notifications.emit import emit_notification
 from backend.workers.base import BaseWorker
 from backend.workers.emit import STREAM_AGENT, emit_stream_notification
@@ -55,12 +57,6 @@ logger = structlog.get_logger(__name__)
 # DECISION_RESOLUTION is a founder resuming an existing run, not a new arrival —
 # both are deliberately excluded.
 _TRIGGERED_KINDS: frozenset[TriggerKind] = frozenset({TriggerKind.WEBHOOK, TriggerKind.SCHEDULE})
-
-#: Deterministic (no-LLM) founder-facing text for the ``triggered`` notification.
-_TRIGGERED_TITLE = "New work came in"
-#: The founder lands on the Brief (there is no run yet at intake time — the
-#: Request is minted here; the AgentWorker opens the run downstream).
-_TRIGGERED_LINK = "/brief"
 
 
 @dataclass(slots=True)
@@ -163,17 +159,22 @@ class IntakeWorker(BaseWorker):
                 )
                 # Notifier N3 — an autonomous/external trigger just started work.
                 # Queue a ``triggered`` notification in THIS transaction (confirmed
-                # iff the Request commits); a founder-direct run is excluded.
+                # iff the Request commits); a founder-direct run is excluded. The
+                # push title/body are localized to the workspace's
+                # ``workspaces.language`` (KO/EN) by the copy catalog; the trigger
+                # ``source`` rides through the localized sentence verbatim.
                 if trig.trigger_kind in _TRIGGERED_KINDS:
+                    language = await load_workspace_language(session, trig.workspace_id)
+                    copy = notification_copy("triggered", language, source=trig.source)
                     await emit_notification(
                         session,
                         workspace_id=trig.workspace_id,
                         event="triggered",
                         dedupe_key=f"triggered:{request_id}",
                         payload={
-                            "title": _TRIGGERED_TITLE,
-                            "body": f"A {trig.source} trigger started new work.",
-                            "link": _TRIGGERED_LINK,
+                            "title": copy.title,
+                            "body": copy.body,
+                            "link": TRIGGERED_LINK,
                             "run_id": None,
                         },
                         producer_id="worker:intake_worker",

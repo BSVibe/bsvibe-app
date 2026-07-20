@@ -28,6 +28,8 @@ if TYPE_CHECKING:
     from backend.workflow.application.agent_loop import LoopResult
 
 from backend.config import Settings
+from backend.identity.workspaces_db import load_workspace_language
+from backend.notifications.copy import NEEDS_YOU_LINK, notification_copy
 from backend.notifications.emit import emit_notification
 from backend.workflow.application.audit_events import LoopTerminal
 from backend.workflow.domain.verified_deliverable import write_verified_deliverable
@@ -222,40 +224,31 @@ async def create_decision(
     return decision
 
 
-#: The founder-facing text of the ``needs_you`` notification. Deterministic (no
-#: LLM) — the per-channel notify builders shape this into each channel's send
-#: payload. The title is stable; the body carries the blocking question (or the
-#: Decision rationale) so the notification says WHY the run stopped.
-_NEEDS_YOU_TITLE = "A run needs your decision"
-#: Deep link into the PWA Decisions surface (the founder resolves the pending
-#: Decision there, resuming the run). Relative — each channel renders it as it
-#: sees fit.
-_NEEDS_YOU_LINK = "/decisions"
-
-
 async def _emit_needs_you(session: AsyncSession, run: ExecutionRun, decision: Decision) -> None:
     """Stage the ``needs_you`` outbox row for a just-created Decision.
 
-    Delegates to the shared :func:`~backend.notifications.emit.emit_notification`
-    seam (savepoint + dedupe). The UNIQUE ``dedupe_key`` (``needs_you:<decision_id>``)
-    makes a re-emit of the same Decision's notification a DB-level no-op, so the
-    founder is called exactly once per Decision even under a retried
-    ``create_decision``.
+    The push ``title``/``body`` are rendered by the localized notification-copy
+    catalog in the workspace's ``workspaces.language`` (KO/EN) — the founder's own
+    blocking question (or the Decision rationale) rides through as the verbatim
+    ``detail``; only the framing localizes. Delegates to the shared
+    :func:`~backend.notifications.emit.emit_notification` seam (savepoint +
+    dedupe): the UNIQUE ``dedupe_key`` (``needs_you:<decision_id>``) makes a
+    re-emit of the same Decision's notification a DB-level no-op, so the founder
+    is called exactly once per Decision even under a retried ``create_decision``.
     """
     payload_in = decision.payload or {}
-    question = str(payload_in.get("question") or "").strip()
-    body = (
-        question or (decision.rationale or "").strip() or "A run has paused and needs your input."
-    )
+    detail = str(payload_in.get("question") or "").strip() or (decision.rationale or "").strip()
+    language = await load_workspace_language(session, run.workspace_id)
+    copy = notification_copy("needs_you", language, detail=detail)
     await emit_notification(
         session,
         workspace_id=run.workspace_id,
         event="needs_you",
         dedupe_key=f"needs_you:{decision.id}",
         payload={
-            "title": _NEEDS_YOU_TITLE,
-            "body": body,
-            "link": _NEEDS_YOU_LINK,
+            "title": copy.title,
+            "body": copy.body,
+            "link": NEEDS_YOU_LINK,
             "run_id": str(run.id),
             "decision_id": str(decision.id),
         },

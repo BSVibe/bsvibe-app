@@ -14,7 +14,9 @@ import uuid
 import pytest
 from sqlalchemy import select
 
+import backend.identity.workspaces_db  # noqa: F401 — register table on the shared Base
 import backend.notifications.db  # noqa: F401 — register table on the shared Base
+from backend.identity.workspaces_db import WorkspaceRow
 from backend.notifications.db import NotificationEventRow, NotificationStatus
 from backend.workflow.domain.verified_deliverable import (
     write_answer_deliverable,
@@ -27,10 +29,12 @@ from .._support import memory_session
 pytestmark = pytest.mark.asyncio
 
 
-async def _seed_run(s, *, intent: str = "ship it") -> ExecutionRun:
+async def _seed_run(
+    s, *, intent: str = "ship it", workspace_id: uuid.UUID | None = None
+) -> ExecutionRun:
     run = ExecutionRun(
         id=uuid.uuid4(),
-        workspace_id=uuid.uuid4(),
+        workspace_id=workspace_id or uuid.uuid4(),
         product_id=None,
         request_id=uuid.uuid4(),
         status=RunStatus.RUNNING,
@@ -39,6 +43,13 @@ async def _seed_run(s, *, intent: str = "ship it") -> ExecutionRun:
     s.add(run)
     await s.flush()
     return run
+
+
+async def _seed_workspace(s, *, language: str) -> uuid.UUID:
+    ws = uuid.uuid4()
+    s.add(WorkspaceRow(id=ws, name="WS", language=language))
+    await s.flush()
+    return ws
 
 
 async def test_verified_deliverable_emits_shipped() -> None:
@@ -66,6 +77,46 @@ async def test_verified_deliverable_emits_shipped() -> None:
         assert row.payload["run_id"] == str(run.id)
         assert row.payload["link"] == f"/deliverables/{deliverable.id}"
         assert row.payload["title"]
+
+
+async def test_shipped_title_localizes_to_workspace_language() -> None:
+    """A KO workspace gets a KO ``shipped`` title; the deliverable's title line
+    stays verbatim as the body. An EN workspace gets the English title."""
+    async with memory_session() as s:
+        ko_ws = await _seed_workspace(s, language="ko")
+        ko_run = await _seed_run(s, workspace_id=ko_ws)
+        await write_verified_deliverable(
+            s,
+            ko_run,
+            attempt_id=uuid.uuid4(),
+            artifact_refs=["src/foo.py"],
+            summary="dedup 유틸 추가\n\nChanged files:\n- src/foo.py",
+        )
+        en_ws = await _seed_workspace(s, language="en")
+        en_run = await _seed_run(s, workspace_id=en_ws)
+        await write_verified_deliverable(
+            s,
+            en_run,
+            attempt_id=uuid.uuid4(),
+            artifact_refs=["src/foo.py"],
+            summary="Add dedup util\n\nChanged files:\n- src/foo.py",
+        )
+        await s.commit()
+
+        ko_row = (
+            await s.execute(
+                select(NotificationEventRow).where(NotificationEventRow.workspace_id == ko_ws)
+            )
+        ).scalar_one()
+        assert ko_row.payload["title"] == "검증된 산출물이 배포됐어요"
+        assert ko_row.payload["body"] == "dedup 유틸 추가"
+
+        en_row = (
+            await s.execute(
+                select(NotificationEventRow).where(NotificationEventRow.workspace_id == en_ws)
+            )
+        ).scalar_one()
+        assert en_row.payload["title"] == "A verified deliverable shipped"
 
 
 async def test_answer_deliverable_does_not_emit_shipped() -> None:

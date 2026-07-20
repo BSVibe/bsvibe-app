@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
-from typing import Any, Literal, get_args
+from typing import TYPE_CHECKING, Any, Literal, get_args
 
 from sqlalchemy import (
     JSON,
@@ -35,6 +35,9 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from backend.data import Base
 
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
+
 # Kept as an alias for back-compat with old call-sites that imported
 # ``WorkspacesBase`` from the legacy ``backend.workspaces.db`` path. Points at
 # the same :class:`backend.data.Base` the rest of the schema uses.
@@ -48,6 +51,28 @@ WorkspacesBase = Base
 # gymnastics in the migration (same shape as ``resource_bindings.output_mode``).
 LegalBasis = Literal["contract", "consent"]
 _LEGAL_BASIS_VALUES: frozenset[str] = frozenset(get_args(LegalBasis))
+
+
+async def load_workspace_language(session: AsyncSession, workspace_id: uuid.UUID) -> str:
+    """The workspace's OUTPUT language tag (``workspaces.language``; ``en`` default).
+
+    Shared by the notification producers (``needs_you`` / ``triggered`` /
+    ``shipped`` / ``failed``) that hold a ``workspace_id`` but not the loaded row,
+    so their push copy can be rendered in the founder's language. Best-effort: a
+    missing row / read hiccup degrades to ``en`` — a localization lookup must
+    never break the producer's terminal write.
+    """
+    from sqlalchemy import select  # noqa: PLC0415 — local, keeps the schema module import-light
+
+    try:
+        lang = (
+            await session.execute(
+                select(WorkspaceRow.language).where(WorkspaceRow.id == workspace_id)
+            )
+        ).scalar_one_or_none()
+    except Exception:  # noqa: BLE001 — language is best-effort; never break the producer
+        return "en"
+    return (lang or "en").strip() or "en"
 
 
 def validate_legal_basis(value: str) -> LegalBasis:
