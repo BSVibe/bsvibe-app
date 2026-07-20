@@ -4,8 +4,8 @@ This file is the cross-cutting regression net the audit (RC-5) demanded:
 post-state-only assertions (run reached REVIEW_READY, Deliverable row exists)
 silently accepted the hollow executor for months. The defense is two-layered:
 
-1. **Runtime invariant.** Drive both production orchestrator paths (native
-   :class:`RunOrchestrator` and :class:`ExecutorOrchestrator`) and, regardless
+1. **Runtime invariant.** Drive the production orchestrator path (native
+   :class:`RunOrchestrator`) and, regardless
    of path, assert the cross-cutting truth: a verified ``Deliverable`` exists
    IFF (a) a ``VerificationResult`` exists for the SAME ``run_id`` whose
    outcome is :data:`VerificationOutcome.PASSED`, AND (b) the run's
@@ -346,13 +346,9 @@ def test_known_call_sites_are_in_expected_modules() -> None:
         p.relative_to(_backend_root()).as_posix()
         for p in _find_callers_of("write_verified_deliverable")
     }
-    # The two known terminals (native + executor). If this set changes, a
+    # The single known terminal (native path). If this set changes, a
     # human should look at the new caller and confirm the verify gate is in
     # place — and then update the expected set here.
-    #
-    # Lift D split executors/orchestrator.py into 4 files (§17.8). The
-    # verified-write call now lives in the verification-handoff sub-module
-    # (executors/verify_handoff.py) — same one terminal, just moved.
     #
     # Lift H2a decomposed execution/orchestrator.py into the Workflow context
     # (§17.1). The native terminal moved with ``finish_verified`` into
@@ -360,7 +356,6 @@ def test_known_call_sites_are_in_expected_modules() -> None:
     # relocated to its new bounded context.
     assert callers == {
         "workflow/application/run_persistence.py",
-        "executors/verify_handoff.py",
     }, f"unexpected caller surface for write_verified_deliverable: {callers}"
 
 

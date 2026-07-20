@@ -15,9 +15,7 @@ Two concrete adapters live in this module:
   — Lift E3 wires it to the existing CLI subprocess executor by enqueueing
   a single-shot chat task onto the worker's Redis stream and awaiting the
   worker's POSTed result. The worker runs ``claude --print`` /
-  ``codex -p`` / ``opencode -p`` exactly as it does for the legacy
-  :class:`~backend.executors.coordinator.ExecutorOrchestrator` full-run
-  path — same ``execute(prompt, context)`` streamers (claude_code.py /
+  ``codex -p`` / ``opencode -p`` — same ``execute(prompt, context)`` streamers (claude_code.py /
   codex.py / opencode.py), same ``sanitized_subprocess_env``, same
   per-line deadline + rate-limit retry semantics — but for a single chat
   turn instead of a whole run. The CLI's response text becomes
@@ -658,8 +656,7 @@ class ExecutorAdapter:
         # ``record_result`` does ``session.get(ExecutorTaskRow)``. Under
         # PG READ COMMITTED an uncommitted row is invisible to the
         # worker's session, so the worker can never flip it terminal and
-        # we'd block the full timeout. Same invariant the
-        # :class:`ExecutorOrchestrator` carries.
+        # we'd block the full timeout.
         await session.commit()
 
         # Lift E9 — per-caller chat timeout. ``self.timeout_s`` is set

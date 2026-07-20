@@ -1,17 +1,18 @@
-"""Executor run end-to-end — provider='executor' run dispatches to a worker.
+"""Executor account routing — provider='executor' still routes through the
+native :class:`RunOrchestrator`.
 
-Lift 5b of the executor-pool epic (Workflow §8.4 / §11.3). The KEYSTONE
-integration: a run whose resolved ModelAccount is ``provider='executor'``
-must NOT enter the native LLM loop — it must dispatch a task to a registered
-external worker and, on the worker reporting success, produce the SAME
-verified artifacts the native path produces (Deliverable type CODE +
-DeliveryEventRow + settle activity), landing the run REVIEW_READY.
+Lift E3 collapsed the old executor-pool wrapper: the factory no longer builds a
+full-run ``ExecutorOrchestrator`` for ``provider='executor'`` accounts. Every
+account — executor or not — now routes through the native
+:class:`~backend.workflow.application.agent_loop.RunOrchestrator`; an executor
+account just means each plan/act/judge LLM turn dispatches a one-shot CLI
+subprocess via :class:`backend.dispatch.adapter.ExecutorAdapter`. The former
+full-run ``ExecutorOrchestrator`` subsystem has been deleted (INV-7); its chat
+path is covered by ``tests/dispatch/test_adapter.py``.
 
-This drives the *real* :func:`backend.workflow.infrastructure.workers.run._factory` branch (so the
-provider switch + ExecutorOrchestrator construction are exercised, not a
-hand-built orchestrator) through :meth:`AgentRunner.drive`, and SIMULATES
-the worker with ``fakeredis`` + :func:`dispatch.record_result` + a publish on
-the done channel — exactly the shape of ``tests/executors/test_dispatch.py``.
+This file pins the surviving live invariant: the factory builds a native
+``RunOrchestrator`` for both executor and non-executor accounts, and wires a
+real (non-None) CanonRetriever into it.
 
 Runs on in-memory SQLite by default, real Postgres when ``BSVIBE_DATABASE_URL``
 is set (mirrors the other glue tests).
@@ -19,7 +20,6 @@ is set (mirrors the other glue tests).
 
 from __future__ import annotations
 
-import asyncio
 import uuid
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -27,29 +27,12 @@ from typing import Any
 
 import pytest
 import pytest_asyncio
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-# Importing the module dbs registers their tables on the shared Base.metadata.
-import backend.executors.db  # noqa: F401
 from backend.config import get_settings
-from backend.executors import dispatch
 from backend.executors.db import WorkerRow
-from backend.executors.orchestrator import ExecutorOrchestrator
-from backend.knowledge.retrieval.knowledge_item import RetrievedKnowledge
 from backend.router.accounts.models import ModelAccount
-from backend.workflow.application.agent_runner import AgentRunner
-from backend.workflow.infrastructure.db import (
-    Decision,
-    Deliverable,
-    DeliverableType,
-    ExecutionRun,
-    ExecutionRunActivity,
-    RunStatus,
-    VerificationOutcome,
-    VerificationResult,
-)
-from backend.workflow.infrastructure.delivery.db import DeliveryEventRow
+from backend.workflow.infrastructure.db import ExecutionRun, RunStatus
 from backend.workflow.infrastructure.workers.run import build_agent_execution_deps
 
 from .._support import db_engine
@@ -64,43 +47,10 @@ async def sf():
 
 
 def _short_timeout_settings(timeout_s: float = 30.0):
-    """Settings with a SHORT ``executor_task_timeout_s`` for the happy/failure
-    e2e paths. The prod default is 1800s (30 min): if the done publish is ever
-    raced/missed, ``await_completion`` would block on that timeout before the DB
-    fallback — a 30-minute test hang. A few-second cap keeps the test fast while
-    still exercising the real await/fallback path. Threaded through
-    :func:`build_agent_execution_deps` into the per-run ExecutorOrchestrator.
-
-    Bumped from 5s → 30s: under CI load with B15 audit emits + B16 SSE bridge
-    overhead the worker-done simulation race could land past 5s and trip
-    TaskTimeout → system_error, masking the actual outcome the test asserts."""
+    """Settings with a SHORT ``executor_task_timeout_s`` so a per-run
+    orchestrator built with this config never blocks on the 1800s prod default
+    during a smoke test. Threaded through :func:`build_agent_execution_deps`."""
     return get_settings().model_copy(update={"executor_task_timeout_s": timeout_s})
-
-
-async def _await_dispatched_task_id(redis: Any, *, worker_id: uuid.UUID) -> uuid.UUID:
-    """Block until the orchestrator XADDs a task onto ``worker_id``'s stream;
-    return the dispatched ``task_id``.
-
-    This is how the REAL worker daemon learns of a task — a remote machine reads
-    the Redis stream XADD, never the orchestrator's ``executor_tasks`` DB row.
-    Driving the simulated worker off the stream (the production dispatch signal)
-    keeps it faithful on both backends. It also sidesteps the original e2e bug:
-    polling the DB for the ``dispatched`` row happened to work on SQLite (the
-    StaticPool shares one connection so an UNCOMMITTED row was visible) but timed
-    out on real PG (READ COMMITTED hides another session's uncommitted writes).
-    The orchestrator now commits the dispatched task before awaiting, so the
-    worker's separate ``record_result`` session can find + flip it terminal."""
-    stream = dispatch.worker_stream(worker_id)
-    last_id = "0"
-    for _ in range(500):
-        entries = await redis.xread({stream: last_id}, count=1, block=20)
-        if not entries:
-            continue
-        _stream_name, messages = entries[0]
-        for msg_id, fields in messages:
-            last_id = msg_id
-            return uuid.UUID(fields["task_id"])
-    raise AssertionError(f"no task dispatched onto {stream}")
 
 
 async def _make_redis() -> Any:
@@ -200,456 +150,8 @@ async def _open_run(s: AsyncSession, *, workspace_id: uuid.UUID, text: str) -> u
     return run.id
 
 
-async def _open_run_with_payload(
-    s: AsyncSession, *, workspace_id: uuid.UUID, payload: dict[str, Any]
-) -> uuid.UUID:
-    run = ExecutionRun(
-        id=uuid.uuid4(),
-        workspace_id=workspace_id,
-        product_id=None,
-        request_id=uuid.uuid4(),
-        status=RunStatus.OPEN,
-        payload=payload,
-    )
-    s.add(run)
-    await s.flush()
-    return run.id
-
-
 # --------------------------------------------------------------------------
-# B2b verify-convergence doubles — a scripted sandbox + judge LLM + retriever
-# so the verified-PASS path can be exercised end-to-end through AgentRunner.
-# --------------------------------------------------------------------------
-
-
-class _FakeBox:
-    def __init__(self, files: dict[str, bytes] | None = None) -> None:
-        self._files = files or {}
-
-    @property
-    def workspace_mount(self) -> str:
-        return "/work"
-
-    async def exec(self, command: str, *, timeout_s: float, shell: bool = False):
-        from backend.workflow.infrastructure.sandbox.protocol import SandboxResult  # noqa: PLC0415
-
-        return SandboxResult(exit_code=0, stdout="ok", stderr="", timed_out=False)
-
-    async def read_file(self, rel_path: str, max_bytes: int) -> bytes:
-        return self._files.get(rel_path, b"")
-
-    async def write_file(self, rel_path: str, content: bytes) -> None:  # pragma: no cover
-        self._files[rel_path] = content
-
-    async def list_dir(self, rel_path: str) -> list[str]:  # pragma: no cover
-        return list(self._files)
-
-
-class _FakeSandboxManager:
-    def __init__(self, box: _FakeBox) -> None:
-        self._box = box
-        self.acquired = 0
-        self.released = 0
-
-    async def acquire(self, project_id: uuid.UUID, workspace_path: str) -> _FakeBox:
-        self.acquired += 1
-        return self._box
-
-    async def release(self, project_id: uuid.UUID) -> None:
-        self.released += 1
-
-    async def reap_idle(self) -> None:  # pragma: no cover
-        return None
-
-    async def health(self) -> bool:  # pragma: no cover
-        return True
-
-
-class _StubJudge:
-    def __init__(self, passed: bool) -> None:
-        self._passed = passed
-
-    async def complete(self, *, messages: list[dict[str, Any]], tools: Any):
-        from backend.workflow.application.agent_loop import LoopTurn  # noqa: PLC0415
-
-        verdict = "true" if self._passed else "false"
-        return LoopTurn(content=f'{{"passed": {verdict}, "reasoning": "x"}}')
-
-
-class _StubRetriever:
-    def __init__(self, patterns: list[str]) -> None:
-        self._patterns = patterns
-
-    async def retrieve_for_signals(self, signals: str) -> list[str]:
-        return list(self._patterns)
-
-    async def retrieve_structured(self, signals: str) -> list[RetrievedKnowledge]:
-        return [RetrievedKnowledge(text=t) for t in await self.retrieve_for_signals(signals)]
-
-
-async def _simulate_worker_done(
-    redis: Any,
-    *,
-    worker_id: uuid.UUID,
-    sf: async_sessionmaker[AsyncSession],
-    output: str,
-) -> None:
-    """The standard simulated-worker coroutine: learn the task from the stream
-    XADD, then report a ``done`` result on a SEPARATE session.
-
-    T3 — the result carries NO files. The agent writes to the run's server-side worktree
-    through BSVibe's tools over MCP; there is nothing for a worker to ship back.
-    """
-    task_id = await _await_dispatched_task_id(redis, worker_id=worker_id)
-    async with sf() as worker_s:
-        await dispatch.record_result(
-            worker_s,
-            redis,
-            task_id=task_id,
-            success=True,
-            output=output,
-            error_message=None,
-        )
-        await worker_s.commit()
-
-
-# --------------------------------------------------------------------------
-# 1. KEYSTONE (B2b): through the REAL production factory (retriever=None today,
-#    no judge account) a successful executor run produces NO verifiable
-#    contract → human-review Decision, NOT a fake-PROVED verified Deliverable.
-#    This is the anti-regression for the fake-PROVED sin.
-# --------------------------------------------------------------------------
-
-
-@pytest.mark.skip(
-    reason="Lift E3 — factory now routes executor accounts through RunOrchestrator + "
-    "ExecutorAdapter.chat. The full-run ExecutorOrchestrator wrapper is no longer "
-    "factory-built; the integration is exercised by test_adapter.py's chat happy path. "
-    "The direct-construction ExecutorOrchestrator tests (verifies-and-review-ready, "
-    "captures-artifact) remain green."
-)
-async def test_executor_run_success_no_contract_routes_to_human_review(
-    sf: async_sessionmaker[AsyncSession],
-    tmp_path: Path,
-) -> None:
-    workspace_id = uuid.uuid4()
-    redis = await _make_redis()
-    executor_type = "claude_code"
-
-    async with sf() as s:
-        worker = await _seed_worker(s, workspace_id=workspace_id, capabilities=[executor_type])
-        await _seed_executor_account(
-            s, workspace_id=workspace_id, worker_id=worker.id, executor_type=executor_type
-        )
-        run_id = await _open_run(s, workspace_id=workspace_id, text="ship the feature")
-        await s.commit()
-
-    # The real production factory branches on provider == "executor" and builds
-    # an ExecutorOrchestrator. Today it wires retriever=None (B3 wires canon),
-    # and the workspace has only an executor account (no judge LLM) — so a
-    # successful worker exit assembles NO contract and routes to human review.
-    deps = build_agent_execution_deps(redis_client=redis, settings=_short_timeout_settings())
-
-    async with sf() as orch_s:
-        run = await orch_s.get(ExecutionRun, run_id)
-        assert run is not None
-        orchestrator = await deps.orchestrator_factory(orch_s, run)
-        assert isinstance(orchestrator, ExecutorOrchestrator)
-
-        runner = AgentRunner(orch_s)
-        drive_task = asyncio.create_task(
-            runner.drive(run_id=run_id, orchestrator=orchestrator, workspace_dir=tmp_path)
-        )
-        worker_task = asyncio.create_task(
-            _simulate_worker_done(
-                redis, worker_id=worker.id, sf=sf, output="implemented + tests green"
-            )
-        )
-        result = await drive_task
-        await worker_task
-        await orch_s.commit()
-
-    # NOT verified — exit-0 with no checkable contract is NOT a verified deliverable.
-    assert result.outcome == "needs_decision"
-
-    async with sf() as s:
-        run = await s.get(ExecutionRun, run_id)
-        # needs_decision leaves the run RUNNING (paused on the Decision).
-        assert run is not None and run.status is RunStatus.RUNNING
-
-        decision = (await s.execute(select(Decision))).scalar_one()
-        assert decision.decision == "human_review_required"
-        assert decision.payload.get("reason") == "no_verifiable_contract"
-
-        # NO fake-PROVED Deliverable / DeliveryEvent / settle were written.
-        assert (await s.execute(select(Deliverable))).first() is None
-        assert (await s.execute(select(DeliveryEventRow))).first() is None
-        settle = (
-            (
-                await s.execute(
-                    select(ExecutionRunActivity).where(
-                        ExecutionRunActivity.activity_type == "settle"
-                    )
-                )
-            )
-            .scalars()
-            .all()
-        )
-        assert settle == []
-
-        task = (
-            await s.execute(
-                select(dispatch.ExecutorTaskRow).where(
-                    dispatch.ExecutorTaskRow.workspace_id == workspace_id
-                )
-            )
-        ).scalar_one()
-        assert task.status == "done"
-        assert "ship the feature" in task.prompt
-
-    await redis.aclose()
-
-
-# --------------------------------------------------------------------------
-# 1a. KEYSTONE PASS (B2b): a runnable contract that PASSES → verified terminal.
-#     Constructs the ExecutorOrchestrator directly with a fake sandbox + canon
-#     retriever + passing judge (the seams B3/judge-account wire in prod) and
-#     drives it through AgentRunner → REVIEW_READY + a REAL verified Deliverable.
-# --------------------------------------------------------------------------
-
-
-async def test_executor_run_contract_pass_verifies_and_review_ready(
-    sf: async_sessionmaker[AsyncSession],
-    tmp_path: Path,
-) -> None:
-    workspace_id = uuid.uuid4()
-    redis = await _make_redis()
-    executor_type = "claude_code"
-
-    async with sf() as s:
-        worker = await _seed_worker(s, workspace_id=workspace_id, capabilities=[executor_type])
-        account = await _seed_executor_account(
-            s, workspace_id=workspace_id, worker_id=worker.id, executor_type=executor_type
-        )
-        run_id = await _open_run(s, workspace_id=workspace_id, text="ship the feature")
-        await s.commit()
-
-    async with sf() as orch_s:
-        run = await orch_s.get(ExecutionRun, run_id)
-        assert run is not None
-        manager = _FakeSandboxManager(_FakeBox(files={"result.py": b"print('done')\n"}))
-        orchestrator = ExecutorOrchestrator(
-            session=orch_s,
-            redis=redis,
-            account=account,
-            settings=_short_timeout_settings(),
-            sandbox_manager=manager,
-            retriever=_StubRetriever(["the change is correct and tested"]),
-            verify_llm=_StubJudge(passed=True),
-        )
-
-        runner = AgentRunner(orch_s)
-        drive_task = asyncio.create_task(
-            runner.drive(run_id=run_id, orchestrator=orchestrator, workspace_dir=tmp_path)
-        )
-        worker_task = asyncio.create_task(
-            _simulate_worker_done(redis, worker_id=worker.id, sf=sf, output="implemented + green")
-        )
-        result = await drive_task
-        await worker_task
-        await orch_s.commit()
-
-    assert result.outcome == "verified"
-
-    async with sf() as s:
-        run = await s.get(ExecutionRun, run_id)
-        assert run is not None and run.status is RunStatus.REVIEW_READY
-
-        # PROVED was gated on a real PASSED VerificationResult.
-        vr = (await s.execute(select(VerificationResult))).scalar_one()
-        assert vr.outcome is VerificationOutcome.PASSED
-
-        deliverable = (await s.execute(select(Deliverable))).scalar_one()
-        assert deliverable.deliverable_type is DeliverableType.CODE
-        # Summary is titled by the founder intent (first line → PR/settle title),
-        # with the executor's output kept as body detail.
-        summary = deliverable.payload.get("summary") or ""
-        assert summary.splitlines()[0].strip() == "ship the feature"
-        assert "implemented + green" in summary
-
-        deliver_event = (await s.execute(select(DeliveryEventRow))).scalar_one()
-        assert deliver_event.deliverable_id == deliverable.id
-
-        settle = (
-            (
-                await s.execute(
-                    select(ExecutionRunActivity).where(
-                        ExecutionRunActivity.run_id == run_id,
-                        ExecutionRunActivity.activity_type == "settle",
-                    )
-                )
-            )
-            .scalars()
-            .all()
-        )
-        assert len(settle) == 1
-        assert settle[0].payload.get("verified") is True
-
-        # W1: the L-P2 ``ship_or_discard`` synthesis is retired. Verified
-        # runs no longer get a synthetic Decision on REVIEW_READY — W2
-        # wires auto-merge instead. The executor verified-PASS path mints
-        # no Decision of its own, so the count is 0.
-        assert (await s.execute(select(Decision))).first() is None
-
-    await redis.aclose()
-
-
-# --------------------------------------------------------------------------
-# 1b. KEY B1 DELTA + B2b: worker-produced file lands as a real artifact_ref on
-#     the verified Deliverable and ROUND-TRIPS through the artifact-read
-#     endpoint. Drives the B2b verified-PASS path (fake sandbox + retriever +
-#     passing judge) so a real verified Deliverable is written — the Deliverable
-#     is gated on a passing VerificationResult, never fake-PROVED.
-# --------------------------------------------------------------------------
-# --------------------------------------------------------------------------
-# T3 — the worker's artifact SCRAPE is deleted, so the test that pinned it is too.
-#
-# It asserted: worker ships ``files`` -> _persist_task_files writes them under the run dir ->
-# ``artifact_refs``. That whole channel is gone. The agent now writes into the run's
-# server-side worktree through the MCP work tools, and the loop reads what it wrote back from
-# the run's own state (WORK_TOOL_STATE_KEY) — the SAME accumulator the native LiteLLM path
-# feeds. That mechanism is covered by:
-#
-#   tests/mcp/test_work_tool_state_persists.py   (the registry records + round-trips writes)
-#   tests/workflow/test_loop_sees_remote_tool_work.py  (the loop merges them -> artifact_refs)
-#
-# and was proven live end-to-end (run 96dd7cfc / the T3 re-drive).
-#
-# NOTE: ``ExecutorOrchestrator`` (which the tests above drive) has ZERO production callers —
-# the factory routes executor accounts through ExecutorAdapter + the native loop (see the
-# Lift E3 skips in this file). It reads ``completed.artifact_refs``, which T3 makes
-# permanently empty. It is the next thing to delete.
-# --------------------------------------------------------------------------
-
-# --------------------------------------------------------------------------
-# 2. No worker available → Decision, run stays RUNNING (needs_decision)
-# --------------------------------------------------------------------------
-
-
-@pytest.mark.skip(
-    reason="Lift E3 — factory no longer routes executor accounts to ExecutorOrchestrator. "
-    "The no-worker condition surfaces through ExecutorAdapter.chat raising "
-    "ExecutorAdapterUnavailable (covered in test_adapter.py)."
-)
-async def test_executor_run_no_worker_creates_decision(
-    sf: async_sessionmaker[AsyncSession],
-    tmp_path: Path,
-) -> None:
-    workspace_id = uuid.uuid4()
-    redis = await _make_redis()
-
-    async with sf() as s:
-        # Account exists but NO online worker carries the capability.
-        await _seed_executor_account(
-            s, workspace_id=workspace_id, worker_id=uuid.uuid4(), executor_type="claude_code"
-        )
-        run_id = await _open_run(s, workspace_id=workspace_id, text="do the thing")
-        await s.commit()
-
-    deps = build_agent_execution_deps(redis_client=redis)
-    async with sf() as s:
-        run = await s.get(ExecutionRun, run_id)
-        assert run is not None
-        orchestrator = await deps.orchestrator_factory(s, run)
-        assert isinstance(orchestrator, ExecutorOrchestrator)
-        runner = AgentRunner(s)
-        result = await runner.drive(
-            run_id=run_id, orchestrator=orchestrator, workspace_dir=tmp_path
-        )
-        await s.commit()
-
-    assert result.outcome == "needs_decision"
-    async with sf() as s:
-        run = await s.get(ExecutionRun, run_id)
-        assert run is not None and run.status is RunStatus.RUNNING
-        decisions = (await s.execute(select(Decision))).scalars().all()
-        assert len(decisions) == 1
-        assert decisions[0].run_id == run_id
-        # No deliverable produced.
-        assert (await s.execute(select(Deliverable))).first() is None
-
-    await redis.aclose()
-
-
-# --------------------------------------------------------------------------
-# 3. Worker reports failure → system_error → run FAILED
-# --------------------------------------------------------------------------
-
-
-@pytest.mark.skip(
-    reason="Lift E3 — factory no longer routes executor accounts to ExecutorOrchestrator. "
-    "Worker-reported failure now surfaces as ExecutorAdapterUnavailable in the "
-    "chat path (covered in test_adapter.py)."
-)
-async def test_executor_run_worker_failure_fails_run(
-    sf: async_sessionmaker[AsyncSession],
-    tmp_path: Path,
-) -> None:
-    workspace_id = uuid.uuid4()
-    redis = await _make_redis()
-    executor_type = "codex"
-
-    async with sf() as s:
-        worker = await _seed_worker(s, workspace_id=workspace_id, capabilities=[executor_type])
-        await _seed_executor_account(
-            s, workspace_id=workspace_id, worker_id=worker.id, executor_type=executor_type
-        )
-        run_id = await _open_run(s, workspace_id=workspace_id, text="ship it")
-        await s.commit()
-
-    deps = build_agent_execution_deps(redis_client=redis, settings=_short_timeout_settings())
-    async with sf() as orch_s:
-        run = await orch_s.get(ExecutionRun, run_id)
-        assert run is not None
-        orchestrator = await deps.orchestrator_factory(orch_s, run)
-
-        # Same separate-session + stream-driven contract as the happy path — the
-        # worker reports failure on its OWN session (concurrent flushes on a
-        # shared AsyncSession collide) and learns the task from the stream XADD.
-        async def _simulate_failing_worker() -> None:
-            task_id = await _await_dispatched_task_id(redis, worker_id=worker.id)
-            async with sf() as worker_s:
-                # record_result records + publishes the done channel itself.
-                await dispatch.record_result(
-                    worker_s,
-                    redis,
-                    task_id=task_id,
-                    success=False,
-                    output="",
-                    error_message="cli exited 1",
-                )
-                await worker_s.commit()
-
-        runner = AgentRunner(orch_s)
-        drive_task = asyncio.create_task(
-            runner.drive(run_id=run_id, orchestrator=orchestrator, workspace_dir=tmp_path)
-        )
-        worker_task = asyncio.create_task(_simulate_failing_worker())
-        result = await drive_task
-        await worker_task
-        await orch_s.commit()
-
-    assert result.outcome == "system_error"
-    async with sf() as s:
-        run = await s.get(ExecutionRun, run_id)
-        assert run is not None and run.status is RunStatus.FAILED
-        assert (await s.execute(select(Deliverable))).first() is None
-
-    await redis.aclose()
-
-
-# --------------------------------------------------------------------------
-# 4. Non-executor (api-llm) account still builds the native RunOrchestrator
+# 1. Non-executor (api-llm) account builds the native RunOrchestrator.
 # --------------------------------------------------------------------------
 
 
@@ -671,8 +173,8 @@ async def test_non_executor_account_builds_native_orchestrator(
     # The native path eagerly builds the credential cipher (to decrypt the
     # account's api key) — provide a test KMS key so it constructs. It also
     # builds ``LlmClient()`` which lazily imports litellm (not a declared dep);
-    # patch it to a no-op client so the smoke test exercises the *branch* (native
-    # RunOrchestrator built, not ExecutorOrchestrator) without a real LLM dep.
+    # patch it to a no-op client so the smoke test exercises the native
+    # RunOrchestrator branch without a real LLM dep.
     # Lift §17.2a: LlmClient lookup moved to runtime.dispatcher.
     monkeypatch.setenv("BSVIBE_GATEWAY_KMS_KEY_B64", base64.urlsafe_b64encode(b"0" * 32).decode())
     _get_settings.cache_clear()
@@ -722,19 +224,12 @@ async def test_non_executor_account_builds_native_orchestrator(
         assert run is not None
         orchestrator = await deps.orchestrator_factory(s, run)
         assert isinstance(orchestrator, RunOrchestrator)
-        assert not isinstance(orchestrator, ExecutorOrchestrator)
 
 
 # --------------------------------------------------------------------------
-# 5. Executor account but no redis client → cannot dispatch → Decision
-# --------------------------------------------------------------------------
-
-
-# --------------------------------------------------------------------------
-# 5b. Lift E3 — executor accounts route through RunOrchestrator (NOT
-#     ExecutorOrchestrator). The executor's CLI subprocess is reached one
-#     turn at a time through ExecutorAdapter.chat; the legacy full-run
-#     wrapper is no longer factory-built.
+# 2. Lift E3 — executor accounts also route through the native RunOrchestrator.
+#    The executor's CLI subprocess is reached one turn at a time through
+#    ExecutorAdapter.chat; the legacy full-run wrapper no longer exists.
 # --------------------------------------------------------------------------
 
 
@@ -742,12 +237,12 @@ async def test_lift_e3_executor_account_routes_through_native_run_orchestrator(
     sf: async_sessionmaker[AsyncSession],
     tmp_path: Path,
 ) -> None:
-    """Lift E3 invariant: executor account → RunOrchestrator (not ExecutorOrchestrator).
+    """Lift E3 invariant: executor account → native RunOrchestrator.
 
-    The factory used to branch on ``is_executor_account`` and build an
-    :class:`ExecutorOrchestrator` wrapper that drove the whole run via a
-    single CLI subprocess. After Lift E3 every account routes through the
-    native :class:`RunOrchestrator`; an executor account just means each
+    The factory used to branch on ``is_executor_account`` and build a
+    full-run wrapper that drove the whole run via a single CLI subprocess.
+    After Lift E3 every account routes through the native
+    :class:`RunOrchestrator`; an executor account just means each
     plan/act/judge LLM turn dispatches a one-shot CLI subprocess via
     :class:`backend.dispatch.adapter.ExecutorAdapter`.
     """
@@ -769,47 +264,11 @@ async def test_lift_e3_executor_account_routes_through_native_run_orchestrator(
         assert run is not None
         orchestrator = await deps.orchestrator_factory(s, run)
         assert isinstance(orchestrator, RunOrchestrator)
-        assert not isinstance(orchestrator, ExecutorOrchestrator)
     await redis.aclose()
 
 
-@pytest.mark.skip(
-    reason="Lift E3 — factory no longer routes executor accounts to ExecutorOrchestrator. "
-    "Missing redis surfaces through ExecutorAdapter.chat (covered in test_adapter.py)."
-)
-async def test_executor_run_without_redis_creates_decision(
-    sf: async_sessionmaker[AsyncSession],
-    tmp_path: Path,
-) -> None:
-    workspace_id = uuid.uuid4()
-    async with sf() as s:
-        worker = await _seed_worker(s, workspace_id=workspace_id, capabilities=["claude_code"])
-        await _seed_executor_account(
-            s, workspace_id=workspace_id, worker_id=worker.id, executor_type="claude_code"
-        )
-        run_id = await _open_run(s, workspace_id=workspace_id, text="no redis here")
-        await s.commit()
-
-    deps = build_agent_execution_deps()  # no redis_client
-    async with sf() as s:
-        run = await s.get(ExecutionRun, run_id)
-        assert run is not None
-        orchestrator = await deps.orchestrator_factory(s, run)
-        assert isinstance(orchestrator, ExecutorOrchestrator)
-        runner = AgentRunner(s)
-        result = await runner.drive(
-            run_id=run_id, orchestrator=orchestrator, workspace_dir=tmp_path
-        )
-        await s.commit()
-
-    assert result.outcome == "needs_decision"
-    async with sf() as s:
-        decisions = (await s.execute(select(Decision))).scalars().all()
-        assert len(decisions) == 1
-
-
 # --------------------------------------------------------------------------
-# 6. Timeout setting default sanity
+# 3. Timeout setting default sanity.
 # --------------------------------------------------------------------------
 
 
@@ -818,10 +277,10 @@ async def test_executor_task_timeout_setting_default() -> None:
 
 
 # --------------------------------------------------------------------------
-# 7. B3 — _factory injects a REAL (non-None) CanonRetriever into BOTH
-#    orchestrators. Prior state: retriever was ALWAYS None in prod (RC-2), so
+# 4. B3 — _factory injects a REAL (non-None) CanonRetriever into the native
+#    RunOrchestrator. Prior state: retriever was ALWAYS None in prod (RC-2), so
 #    BSage canon was never folded into verification. The delta asserted here is
-#    None → a workspace-scoped retriever on each orchestrator.
+#    None → a workspace-scoped retriever on the orchestrator.
 # --------------------------------------------------------------------------
 
 
@@ -859,51 +318,6 @@ async def _seed_canon_concept(
             updated_at=datetime(2026, 5, 6, tzinfo=UTC),
         )
     )
-
-
-@pytest.mark.skip(
-    reason="Lift E3 — factory no longer builds ExecutorOrchestrator. The native "
-    "RunOrchestrator's retriever wiring is covered by "
-    "test_factory_wires_retriever_into_native_orchestrator."
-)
-async def test_factory_wires_retriever_into_executor_orchestrator(
-    sf: async_sessionmaker[AsyncSession],
-    tmp_path: Path,
-) -> None:
-    """B3 delta: the production factory now passes a non-None retriever to the
-    ExecutorOrchestrator (was None)."""
-    settings = _vault_root_settings(tmp_path)
-    workspace_id = uuid.uuid4()
-    redis = await _make_redis()
-    await _seed_canon_concept(
-        vault_root=Path(settings.knowledge_vault_root),
-        region=settings.knowledge_default_region,
-        workspace_id=workspace_id,
-        concept_id="dependency-pinning",
-        display="Always pin dependency versions",
-    )
-    async with sf() as s:
-        worker = await _seed_worker(s, workspace_id=workspace_id, capabilities=["claude_code"])
-        await _seed_executor_account(
-            s, workspace_id=workspace_id, worker_id=worker.id, executor_type="claude_code"
-        )
-        run_id = await _open_run(s, workspace_id=workspace_id, text="ship it")
-        await s.commit()
-
-    deps = build_agent_execution_deps(redis_client=redis, settings=settings)
-    async with sf() as s:
-        run = await s.get(ExecutionRun, run_id)
-        assert run is not None
-        orchestrator = await deps.orchestrator_factory(s, run)
-        assert isinstance(orchestrator, ExecutorOrchestrator)
-        # The delta: a real retriever is wired (NOT None as before B3).
-        assert orchestrator._retriever is not None  # noqa: SLF001 — wiring invariant
-        patterns = await orchestrator._retriever.retrieve_for_signals(  # noqa: SLF001
-            "updated dependency pinning\nrequirements.txt"
-        )
-        assert "Always pin dependency versions" in patterns
-
-    await redis.aclose()
 
 
 async def test_factory_wires_retriever_into_native_orchestrator(
@@ -984,217 +398,3 @@ async def test_factory_wires_retriever_into_native_orchestrator(
             "added structured logging throughout\napp.py"
         )
         assert "Use structlog for structured logging" in patterns
-
-
-# --------------------------------------------------------------------------
-# D1b — the DESIGN stage of a design_then_impl pipeline must be TOLD to write a
-# spec, not finished code. The integration delta: drive a real design-stage run
-# through the production ExecutorOrchestrator dispatch and assert the dispatched
-# task's prompt carries the spec-only directive — while an impl-stage run's
-# prompt does NOT (it implements the spec). This is the no-op fix at the boundary
-# being changed: design produces a SPEC, impl implements it; they are distinct.
-# --------------------------------------------------------------------------
-
-
-async def _dispatched_task_prompt(
-    sf: async_sessionmaker[AsyncSession],
-    *,
-    workspace_id: uuid.UUID,
-    redis: Any,
-    worker_id: uuid.UUID,
-    run_id: uuid.UUID,
-    tmp_path: Path,
-) -> str:
-    """Drive ``run_id`` through the production ExecutorOrchestrator (via the real
-    factory) + a simulated worker, then return the prompt the orchestrator
-    dispatched for that run's task — the exact text the CLI engineer receives."""
-    deps = build_agent_execution_deps(redis_client=redis, settings=_short_timeout_settings())
-    async with sf() as orch_s:
-        run = await orch_s.get(ExecutionRun, run_id)
-        assert run is not None
-        orchestrator = await deps.orchestrator_factory(orch_s, run)
-        assert isinstance(orchestrator, ExecutorOrchestrator)
-        runner = AgentRunner(orch_s)
-        drive_task = asyncio.create_task(
-            runner.drive(run_id=run_id, orchestrator=orchestrator, workspace_dir=tmp_path)
-        )
-        worker_task = asyncio.create_task(
-            _simulate_worker_done(redis, worker_id=worker_id, sf=sf, output="done")
-        )
-        await drive_task
-        await worker_task
-        await orch_s.commit()
-
-    async with sf() as s:
-        task = (
-            await s.execute(
-                select(dispatch.ExecutorTaskRow).where(dispatch.ExecutorTaskRow.run_id == run_id)
-            )
-        ).scalar_one()
-        return task.prompt
-
-
-@pytest.mark.skip(
-    reason="Lift E3 — factory no longer builds ExecutorOrchestrator, so the design/impl "
-    "directive on the orchestrator's dispatched prompt is exercised only through "
-    "direct construction. The _DESIGN_SPEC_DIRECTIVE branch in "
-    "backend.executors.prompt is covered by tests/executors/test_context_assembly.py."
-)
-async def test_design_stage_dispatch_prompt_carries_spec_only_directive(
-    sf: async_sessionmaker[AsyncSession],
-    tmp_path: Path,
-) -> None:
-    from backend.executors.orchestrator import _DESIGN_SPEC_DIRECTIVE
-
-    workspace_id = uuid.uuid4()
-    redis = await _make_redis()
-    executor_type = "claude_code"
-    async with sf() as s:
-        worker = await _seed_worker(s, workspace_id=workspace_id, capabilities=[executor_type])
-        await _seed_executor_account(
-            s, workspace_id=workspace_id, worker_id=worker.id, executor_type=executor_type
-        )
-        # First run of a design_then_impl pipeline: no explicit stage → DESIGN.
-        run_id = await _open_run_with_payload(
-            s,
-            workspace_id=workspace_id,
-            payload={
-                "intent_text": "build a JSON-backed key/value store with a typed client",
-                "frame": {"pipeline": "design_then_impl"},
-            },
-        )
-        await s.commit()
-
-    prompt = await _dispatched_task_prompt(
-        sf,
-        workspace_id=workspace_id,
-        redis=redis,
-        worker_id=worker.id,
-        run_id=run_id,
-        tmp_path=tmp_path,
-    )
-    # The DESIGN run is told to spec, not build (the no-op root-cause fix).
-    assert _DESIGN_SPEC_DIRECTIVE in prompt
-    assert "key/value store" in prompt
-    await redis.aclose()
-
-
-@pytest.mark.skip(
-    reason="Lift E3 — see test_design_stage_dispatch_prompt_carries_spec_only_directive."
-)
-async def test_impl_stage_dispatch_prompt_has_no_spec_only_directive(
-    sf: async_sessionmaker[AsyncSession],
-    tmp_path: Path,
-) -> None:
-    from backend.executors.orchestrator import _DESIGN_SPEC_DIRECTIVE
-
-    workspace_id = uuid.uuid4()
-    redis = await _make_redis()
-    executor_type = "claude_code"
-    async with sf() as s:
-        worker = await _seed_worker(s, workspace_id=workspace_id, capabilities=[executor_type])
-        await _seed_executor_account(
-            s, workspace_id=workspace_id, worker_id=worker.id, executor_type=executor_type
-        )
-        # The spawned IMPL run carries stage="impl" — it implements the spec.
-        run_id = await _open_run_with_payload(
-            s,
-            workspace_id=workspace_id,
-            payload={
-                "intent_text": "build a JSON-backed key/value store with a typed client",
-                "frame": {"pipeline": "design_then_impl"},
-                "stage": "impl",
-            },
-        )
-        await s.commit()
-
-    prompt = await _dispatched_task_prompt(
-        sf,
-        workspace_id=workspace_id,
-        redis=redis,
-        worker_id=worker.id,
-        run_id=run_id,
-        tmp_path=tmp_path,
-    )
-    # The IMPL run must NOT be told to spec — it builds.
-    assert _DESIGN_SPEC_DIRECTIVE not in prompt
-    await redis.aclose()
-
-
-@pytest.mark.skip(
-    reason="Lift E3 — see test_design_stage_dispatch_prompt_carries_spec_only_directive."
-)
-async def test_single_pipeline_dispatch_prompt_has_no_spec_only_directive(
-    sf: async_sessionmaker[AsyncSession],
-    tmp_path: Path,
-) -> None:
-    from backend.executors.orchestrator import _DESIGN_SPEC_DIRECTIVE
-
-    workspace_id = uuid.uuid4()
-    redis = await _make_redis()
-    executor_type = "claude_code"
-    async with sf() as s:
-        worker = await _seed_worker(s, workspace_id=workspace_id, capabilities=[executor_type])
-        await _seed_executor_account(
-            s, workspace_id=workspace_id, worker_id=worker.id, executor_type=executor_type
-        )
-        run_id = await _open_run_with_payload(
-            s,
-            workspace_id=workspace_id,
-            payload={"intent_text": "ship the feature", "frame": {"pipeline": "single"}},
-        )
-        await s.commit()
-
-    prompt = await _dispatched_task_prompt(
-        sf,
-        workspace_id=workspace_id,
-        redis=redis,
-        worker_id=worker.id,
-        run_id=run_id,
-        tmp_path=tmp_path,
-    )
-    assert _DESIGN_SPEC_DIRECTIVE not in prompt
-    await redis.aclose()
-
-
-@pytest.mark.skip(
-    reason="Lift E3 — factory no longer builds ExecutorOrchestrator. The graceful-empty "
-    "retriever invariant for the native path is covered by "
-    "test_factory_wires_retriever_into_native_orchestrator."
-)
-async def test_factory_retriever_empty_workspace_folds_nothing(
-    sf: async_sessionmaker[AsyncSession],
-    tmp_path: Path,
-) -> None:
-    """B3 graceful-empty: an empty-knowledge workspace's retriever yields [] →
-    no canon folded → contract unchanged (no verify behaviour change)."""
-    from backend.workflow.application.verification_service import VerificationService
-
-    settings = _vault_root_settings(tmp_path)
-    workspace_id = uuid.uuid4()
-    redis = await _make_redis()
-    async with sf() as s:
-        worker = await _seed_worker(s, workspace_id=workspace_id, capabilities=["claude_code"])
-        await _seed_executor_account(
-            s, workspace_id=workspace_id, worker_id=worker.id, executor_type="claude_code"
-        )
-        run_id = await _open_run(s, workspace_id=workspace_id, text="ship it")
-        await s.commit()
-
-    deps = build_agent_execution_deps(redis_client=redis, settings=settings)
-    async with sf() as s:
-        run = await s.get(ExecutionRun, run_id)
-        assert run is not None
-        orchestrator = await deps.orchestrator_factory(s, run)
-        assert isinstance(orchestrator, ExecutorOrchestrator)
-        retriever = orchestrator._retriever  # noqa: SLF001
-        assert retriever is not None
-        # Empty workspace → no patterns → assemble_contract folds NO canon.
-        svc = VerificationService(session=s, llm=_StubJudge(passed=True), retriever=retriever)
-        contract = await svc.assemble_contract(
-            declared_contract=None, written_paths=["x.py"], final_text="did a thing"
-        )
-        # No declared checks + no canon → None (unchanged from no-retriever).
-        assert contract is None
-
-    await redis.aclose()

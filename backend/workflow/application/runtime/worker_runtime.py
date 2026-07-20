@@ -105,9 +105,9 @@ async def check_executor_dispatch_health(
 ) -> dict[str, Any]:
     """B14 — operator liveness probe for executor dispatch readiness.
 
-    The :class:`backend.executors.orchestrator.ExecutorOrchestrator` dispatches
-    a run to a CLI worker by XADDing onto a Redis Stream. When ``settings.redis_url``
-    is empty the orchestrator raises a ``no_executor_dispatch_transport``
+    The :class:`~backend.dispatch.adapter.ExecutorAdapter` dispatches a chat
+    task to a CLI worker by XADDing onto a Redis Stream. When ``settings.redis_url``
+    is empty the adapter raises a ``no_executor_dispatch_transport``
     :class:`Decision` at run time — a correct, non-silent failure mode, but one
     that only surfaces AFTER an executor run has been minted. An operator that
     has configured executor workers (one or more active

@@ -9,8 +9,7 @@ loop entirely — "one LLM call total, real cost saver".
 
 It satisfies the :class:`~backend.execution.orchestrator.RunCompute` Protocol
 (``run(*, run, workspace_dir) -> LoopResult``), so the worker-runtime factory can
-return it wherever it returns the native :class:`RunOrchestrator` /
-:class:`~backend.executors.orchestrator.ExecutorOrchestrator`, and
+return it wherever it returns the native :class:`RunOrchestrator`, and
 :class:`~backend.workflow.application.agent_runner.AgentRunner.drive` maps its outcome
 identically — ``verified → REVIEW_READY``.
 

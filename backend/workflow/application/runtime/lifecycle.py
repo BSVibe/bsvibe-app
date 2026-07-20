@@ -96,9 +96,10 @@ async def run_workers() -> None:
     await _bootstrap_db_oauth_providers(session_factory)
 
     # The Redis client is needed by (a) redis_streams mode's producer-side
-    # wake-up emission and (b) executor-pool dispatch (Lift 5b) — the
-    # ExecutorOrchestrator XADDs a task onto the worker's stream + awaits the
-    # done channel, even in the default db_polling mode. So it is built
+    # wake-up emission and (b) executor-pool dispatch — the
+    # :class:`~backend.dispatch.adapter.ExecutorAdapter` XADDs a chat task onto
+    # the worker's stream + awaits the done channel, even in the default
+    # db_polling mode. So it is built
     # whenever a Redis URL is configured (the default is set), and threaded
     # through the orchestrator factory. ``decode_responses=True`` matches the
     # dispatch substrate's flat-string contract.

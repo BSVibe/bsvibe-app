@@ -13,10 +13,8 @@ bootstrap) flows through
 After Lift E3 the executor-account bypass is GONE — every account, whether
 LiteLLM or executor, routes through :class:`RunOrchestrator` (the native
 BSVibe agent loop), and the executor's CLI subprocess is reached via
-:class:`backend.dispatch.adapter.ExecutorAdapter.chat` instead of the legacy
-:class:`backend.executors.coordinator.ExecutorOrchestrator` full-run wrapper.
-``ExecutorOrchestrator`` is still importable for the integration tests that
-construct it directly, but the runtime factory no longer reaches for it.
+:class:`backend.dispatch.adapter.ExecutorAdapter.chat` — one chat turn at a
+time — rather than any full-run wrapper.
 """
 
 from __future__ import annotations
@@ -244,10 +242,8 @@ def build_agent_execution_deps(
         :class:`~backend.dispatch.adapter.ExecutorAdapter`, so each
         plan/act/judge turn becomes a single-shot CLI subprocess call
         through the worker; the agent loop, tool set, and verification
-        contract are BSVibe's. The legacy
-        :class:`~backend.executors.coordinator.ExecutorOrchestrator`
-        full-run wrapper is no longer reached from this factory (the
-        bypass is gone — per design ``BSVibe_Dispatch_Redesign_2026-06-05.md``
+        contract are BSVibe's. There is no full-run executor wrapper — the
+        bypass is gone (per design ``BSVibe_Dispatch_Redesign_2026-06-05.md``
         §2.1 and Lift E3 invariant in :mod:`backend.dispatch.adapter`).
 
         On no-match writes the historical ``DECISION_NO_MODEL_ACCOUNT``

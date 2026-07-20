@@ -2,13 +2,12 @@
 
 Workflow §1 (verified terminal) / §11.3. When a run reaches ``verified`` the
 backend must land a stable, well-known artifact contract regardless of HOW the
-work was produced:
+work was produced — the native agent loop
+(:class:`~backend.execution.orchestrator.RunOrchestrator`), whether it drives an
+api-llm account directly or an executor account one CLI chat turn at a time via
+:class:`~backend.dispatch.adapter.ExecutorAdapter`.
 
-* the native agent loop (:class:`~backend.execution.orchestrator.RunOrchestrator`),
-* or an external CLI worker (:class:`~backend.executors.orchestrator.ExecutorOrchestrator`,
-  Lift 5b of the executor-pool epic).
-
-Both paths call :func:`write_verified_deliverable` so the
+The verified terminal calls :func:`write_verified_deliverable` so the
 ``Deliverable`` / ``DeliveryEventRow`` / settle-activity shape has a single
 definition — diverging the artifact shape across compute backends would silently
 break every downstream consumer (DeliveryWorker, SettleWorker, the PWA Brief).

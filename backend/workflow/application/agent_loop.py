@@ -166,10 +166,10 @@ class RunCompute(Protocol):
     """The single compute seam :class:`~backend.workflow.application.agent_runner.AgentRunner`
     drives.
 
-    Both the native :class:`RunOrchestrator` (api-llm path) and the
-    :class:`~backend.executors.orchestrator.ExecutorOrchestrator` (CLI-worker
-    path, Lift 5b) satisfy it structurally, so the worker-runtime factory can
-    return either without the runner depending on a Union of concretes (per the
+    The native :class:`RunOrchestrator` and the
+    :class:`~backend.workflow.application.knowledge_orchestrator.KnowledgeAnswerOrchestrator`
+    satisfy it structurally, so the worker-runtime factory can return either
+    without the runner depending on a Union of concretes (per the
     ``bsvibe-llm-wrapper-not-raw-litellm`` rule: one Protocol, never a Union).
     """
 
