@@ -7,7 +7,6 @@
 
 import LeftRail from "@/components/shell/LeftRail";
 import { type Session, clearSession, setSession } from "@/lib/auth/session";
-import { setPendingDecisionsCount } from "@/lib/decisions/pending-count";
 import { render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -28,7 +27,6 @@ describe("Settings nav wiring", () => {
   beforeEach(() => {
     clearSession();
     setSession(SESSION);
-    setPendingDecisionsCount(0);
   });
 
   afterEach(() => {
@@ -44,8 +42,7 @@ describe("Settings nav wiring", () => {
     expect(screen.queryByRole("button", { name: "Settings" })).not.toBeInTheDocument();
   });
 
-  it("Settings carries no pending-count badge", () => {
-    setPendingDecisionsCount(3);
+  it("Settings carries no numeric pending-count badge", () => {
     render(<LeftRail />);
 
     const link = screen.getByRole("link", { name: /Settings/ });

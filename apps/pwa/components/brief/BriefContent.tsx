@@ -13,18 +13,17 @@ import WorkingNow from "./WorkingNow";
  * column (the app shell/rail stays), top to bottom:
  *
  *  1. Header — "Brief" title + filter chips ("All" / "Needs you N" / "Working" /
- *     "Shipped"). The chips are the new home for what used to be the separate
+ *     "Shipped"). The chips are the home for what used to be the separate
  *     Decisions tab; they narrow the visible sections client-side.
  *  2. Needs you (hero) — the pending decisions resolved INLINE with context via
- *     the EXISTING DeliveryRow / CheckpointRow (both action shapes work in
- *     place). Resolving re-reads the Brief.
+ *     the EXISTING DeliveryRow / CheckpointRow / ProposalCard (all three action
+ *     shapes work in place). Resolving re-reads the Brief.
  *  3. Working — the in-flight runs (WorkingNow).
  *  4. Shipped — COLLAPSED to a count + the most-recent few + a "View all"
  *     affordance, so endless shipped history never floods the page.
  *
- * This supersedes L7 (#6), which had removed the needs-you block from the Brief
- * because it duplicated a separate Decisions tab. Decisions now LIVE here; the
- * /decisions route remains a focused view but is no longer the ONLY place.
+ * The Brief is the SINGLE home for pending decisions (all three kinds); there is
+ * no separate /decisions route.
  *
  * `onNeedsYouResolved` is the container's re-read hook; it defaults to a no-op so
  * the component stays trivially testable with a ready `BriefView`.

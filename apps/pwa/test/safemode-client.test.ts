@@ -5,12 +5,7 @@
  */
 
 import { ApiError } from "@/lib/api/client";
-import {
-  approveSafeModeItem,
-  approveSafeModeRun,
-  denySafeModeItem,
-  listSafeModeQueueByRun,
-} from "@/lib/api/safemode";
+import { approveSafeModeItem, denySafeModeItem } from "@/lib/api/safemode";
 import { type Session, clearSession, setSession } from "@/lib/auth/session";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -95,71 +90,5 @@ describe("safemode client (approve / deny)", () => {
     ) as unknown as typeof fetch;
 
     await expect(approveSafeModeItem("sm-1")).rejects.toBeInstanceOf(ApiError);
-  });
-
-  // ─────────────────────────────────────────────────────────────────────
-  // B12a — per-Run grouping + bulk approve
-  // ─────────────────────────────────────────────────────────────────────
-
-  it("listSafeModeQueueByRun GETs /api/v1/safemode/queue/by-run", async () => {
-    const GROUPS = [
-      {
-        run_id: "run-9",
-        items: [
-          {
-            id: "sm-1",
-            workspace_id: "ws-1",
-            deliverable_id: "del-1",
-            run_id: "run-9",
-            status: "pending",
-            compensation_tier: null,
-            expires_at: "2026-05-24T00:00:00Z",
-            extension_count: 0,
-            created_at: "2026-05-23T12:00:00Z",
-          },
-        ],
-      },
-    ];
-    const fetchMock = vi.fn(
-      async () =>
-        new Response(JSON.stringify(GROUPS), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        }),
-    );
-    global.fetch = fetchMock as unknown as typeof fetch;
-
-    const res = await listSafeModeQueueByRun();
-    expect(res).toEqual(GROUPS);
-    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit?];
-    expect(url).toBe("/api/v1/safemode/queue/by-run");
-    expect(init?.method ?? "GET").toBe("GET");
-  });
-
-  it("approveSafeModeRun POSTs /api/v1/safemode/runs/{runId}/approve with no body", async () => {
-    const APPROVED_RUN = { run_id: "run-9", approved_count: 3, dispatched_count: 3 };
-    const fetchMock = vi.fn(
-      async () =>
-        new Response(JSON.stringify(APPROVED_RUN), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        }),
-    );
-    global.fetch = fetchMock as unknown as typeof fetch;
-
-    const res = await approveSafeModeRun("run-9");
-    expect(res).toEqual(APPROVED_RUN);
-    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
-    expect(url).toBe("/api/v1/safemode/runs/run-9/approve");
-    expect(init.method).toBe("POST");
-    expect(init.body).toBeUndefined();
-  });
-
-  it("approveSafeModeRun surfaces an ApiError on 404", async () => {
-    global.fetch = vi.fn(
-      async () => new Response("not found", { status: 404 }),
-    ) as unknown as typeof fetch;
-
-    await expect(approveSafeModeRun("run-x")).rejects.toBeInstanceOf(ApiError);
   });
 });

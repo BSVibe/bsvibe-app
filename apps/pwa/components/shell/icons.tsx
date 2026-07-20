@@ -29,15 +29,6 @@ export function BriefIcon(props: SVGProps<SVGSVGElement>) {
   );
 }
 
-export function DecisionsIcon(props: SVGProps<SVGSVGElement>) {
-  return (
-    <Svg {...props}>
-      <path d="M5 7h14M5 12h14M5 17h9" />
-      <circle cx="18" cy="17" r="1.6" />
-    </Svg>
-  );
-}
-
 export function KnowledgeIcon(props: SVGProps<SVGSVGElement>) {
   return (
     <Svg {...props}>

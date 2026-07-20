@@ -1,19 +1,16 @@
 /**
- * Unified pending-decisions aggregator.
- *
- * The Decisions surface is the SINGLE place for everything that genuinely needs
- * the founder's judgment. Rather than read one queue, it folds three EXISTING
- * backend queues into one calm list (no new backend, no change to any endpoint's
- * behaviour — see backend/api/v1/{safemode,checkpoints,decisions}.py):
+ * Unified pending-decisions aggregator — the data behind the Brief's "Needs
+ * you" hero, the SINGLE place for everything that genuinely needs the founder's
+ * judgment. Rather than read one queue, it folds three EXISTING backend queues
+ * into one calm list (no new backend, no change to any endpoint's behaviour —
+ * see backend/api/v1/{safemode,checkpoints,decisions}.py):
  *
  *   - "delivery"  ← GET /api/v1/safemode/queue   (held outbound deliveries)
  *   - "decision"  ← GET /api/v1/checkpoints       (paused-run questions)
  *   - "knowledge" ← GET /api/v1/decisions?status_filter=pending  (canon proposals)
  *
- * The Decisions surface is the SINGLE place these three queues are shown — the
- * Brief no longer duplicates the Safe-Mode "Needs you" strip; its work-stream
- * review_ready rows deep-link here instead. All three pending kinds (deliveries
- * + checkpoints + proposals) live in this one list.
+ * All three pending kinds (deliveries + checkpoints + proposals) are judged
+ * inline in the Brief — there is no separate Decisions tab.
  *
  * Each list degrades to empty on its own per-surface 4xx / network blip so one
  * failing queue never blanks the whole surface (same calm-fallback rule the
@@ -41,7 +38,7 @@ import type {
 const _RUN_WINDOW = 50;
 
 /** Swallow a per-surface ApiError / network blip into an empty list so one
- *  failing queue does not blank the whole Decisions surface. */
+ *  failing queue does not blank the whole "Needs you" surface. */
 function emptyOnApiError<T>(error: unknown): T[] {
   if (error instanceof ApiError || error instanceof TypeError) return [];
   throw error;
@@ -64,8 +61,6 @@ export function toPendingDecisions(
       kind: "delivery",
       id: `delivery-${d.id}`,
       itemId: d.id,
-      // B12a — thread the run_id so the Decisions surface can group
-      // delivery rows by run and offer a per-run "Approve all" shortcut.
       runId: d.run_id ?? null,
       deliverableId: d.deliverable_id,
       title: ctx?.title ?? null,

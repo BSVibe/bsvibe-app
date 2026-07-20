@@ -598,29 +598,15 @@ export interface RejectResponse {
   reason: string | null;
 }
 
-/** `GET /api/v1/decisions/log` element (backend DecisionResponse). One resolved
- *  decision-memory note — the founder-approval audit trail. `decision_kind` is
- *  the directional decision recorded (e.g. `must-link` / `cannot-link`);
- *  `proposal_id` links back to the proposal it resolved (when known). */
-export interface DecisionLogEntry {
-  id: string;
-  proposal_id: string | null;
-  decision_kind: string;
-  actor_id: string | null;
-  created_at: string;
-}
-
-// ── Unified Decisions queue (frontend aggregation of three real queues) ────
-// The Decisions surface is the SINGLE place for everything needing the
+// ── Unified pending-decisions queue (frontend aggregation of three real queues) ─
+// The Brief's "Needs you" hero is the SINGLE place for everything needing the
 // founder's judgment. It aggregates three EXISTING backend queues client-side
-// into one calm list, each item tagged by `kind` so the row renders the right
-// resolve affordance wired to its OWN endpoint:
+// into one calm list (lib/api/pending.ts), each item tagged by `kind` so the
+// row renders the right resolve affordance wired to its OWN endpoint:
 //   - "delivery"  → Safe Mode held delivery  (/api/v1/safemode/{id}/approve|deny)
 //   - "decision"  → paused-run checkpoint     (/api/v1/checkpoints/{id}/resolve)
 //   - "knowledge" → canon proposal            (/api/v1/decisions/{path}/accept|reject)
-// This is the SAME set the Brief "Needs you" strip surfaces for the overlapping
-// kinds (deliveries + proposals); the Decisions surface additionally folds in
-// paused-run checkpoints, which the Brief does not yet show.
+// All three kinds are judged inline in the Brief; there is no separate Decisions tab.
 export type PendingKind = "delivery" | "decision" | "knowledge";
 
 /** A Safe Mode held delivery awaiting Approve / Deny. */
@@ -630,10 +616,8 @@ export interface PendingDelivery {
   id: string;
   /** Raw Safe-Mode item id for /api/v1/safemode/{itemId}/{approve,deny}. */
   itemId: string;
-  /** B12a — per-Run grouping key (Workflow §1.2). When multiple delivery rows
-   *  share the same runId, the Decisions surface offers an "Approve all (N)"
-   *  shortcut that hits POST /api/v1/safemode/runs/{runId}/approve. ``null``
-   *  for legacy items emitted before the run_id column existed. */
+  /** Per-Run grouping key (Workflow §1.2). ``null`` for legacy items emitted
+   *  before the run_id column existed. */
   runId: string | null;
   /** Review context (joined from runs/deliverables/products by the aggregator)
    *  so the founder sees WHAT is being shipped, concisely, and can open the
@@ -680,7 +664,7 @@ export interface PendingCheckpoint {
 }
 
 /** A canonicalization proposal awaiting Accept / Reject. Carries the raw
- *  `Proposal` so the existing detail panel keeps working unchanged. */
+ *  `Proposal` so the Brief's ProposalCard can render it inline. */
 export interface PendingProposal {
   kind: "knowledge";
   /** Stable list key — `proposal-<proposal id/path>`. */
@@ -693,102 +677,19 @@ export interface PendingProposal {
  *  kinds the founder must judge. */
 export type PendingDecision = PendingDelivery | PendingCheckpoint | PendingProposal;
 
-// ── Unified Resolved list (frontend aggregation, mirror of Pending) ────────
-// The Decisions "Resolved" tab is the history side of the same three queues: a
-// resolved canon decision (the audit-log note), a decided Safe-Mode delivery
-// (approved/denied/expired), and an answered paused-run checkpoint. Folded
-// client-side exactly like the Pending list, newest-resolved first.
-
-/** A resolved canon decision (the audit-trail note). */
-export interface ResolvedKnowledge {
-  kind: "knowledge";
-  /** Stable list key — `decision-<path>`. */
-  id: string;
-  /** Directional decision recorded (e.g. `must-link` / `cannot-link`). */
-  decisionKind: string;
-  resolvedAt: string;
-}
-
-/** A decided Safe-Mode delivery (approved / denied / expired). */
-export interface ResolvedDelivery {
-  kind: "delivery";
-  /** Stable list key — `delivery-<safemode item id>`. */
-  id: string;
-  itemId: string;
-  /** Terminal outcome: `approved` | `denied` | `expired`. */
-  status: string;
-  /** Review context (joined from runs/deliverables/products by the aggregator)
-   *  so the resolved row says WHAT was decided + links to the proof — mirroring
-   *  the PENDING delivery row, instead of a blind generic "delivery approved". */
-  title?: string | null;
-  productSlug?: string;
-  detailHref?: string | null;
-  resolvedAt: string;
-}
-
-/** An answered paused-run checkpoint — the question + the founder's answer. */
-export interface ResolvedCheckpointDecision {
-  kind: "decision";
-  /** Stable list key — `checkpoint-<checkpoint id>`. */
-  id: string;
-  checkpointId: string;
-  question: string;
-  resolution: string | null;
-  resolvedAt: string;
-}
-
-/** One row in the unified Resolved list — a discriminated union mirroring
- *  {@link PendingDecision}. */
-export type ResolvedDecision = ResolvedKnowledge | ResolvedDelivery | ResolvedCheckpointDecision;
-
-/** `GET /api/v1/safemode/resolved` element (backend SafeModeResolvedResponse).
- *  A decided Safe-Mode delivery; `decided_at` is when it was settled. */
-export interface SafeModeResolvedItem {
-  id: string;
-  deliverable_id: string;
-  status: string;
-  decided_at: string | null;
-  created_at: string;
-}
-
-/** `GET /api/v1/checkpoints/resolved` element (backend
- *  ResolvedCheckpointResponse). An answered paused-run checkpoint. */
-export interface ResolvedCheckpointItem {
-  id: string;
-  run_id: string;
-  question: string;
-  resolution: string | null;
-  resolved_at: string | null;
-}
-
 /** `GET /api/v1/safemode/queue` element (backend SafeModeItemResponse). */
 export interface SafeModeItem {
   id: string;
   workspace_id: string;
   deliverable_id: string;
-  /** B12a — per-Run grouping key (Workflow §1.2). Nullable for legacy items
-   *  that pre-date the run_id column. */
+  /** Per-Run grouping key (Workflow §1.2). Nullable for legacy items that
+   *  pre-date the run_id column. */
   run_id: string | null;
   status: string;
   compensation_tier: string | null;
   expires_at: string;
   extension_count: number;
   created_at: string;
-}
-
-/** `GET /api/v1/safemode/queue/by-run` element (backend SafeModeRunGroupResponse).
- *  B12a — pending Safe Mode items grouped by Run. */
-export interface SafeModeRunGroup {
-  run_id: string | null;
-  items: SafeModeItem[];
-}
-
-/** `POST /api/v1/safemode/runs/{run_id}/approve` → backend
- *  SafeModeRunApproveResponse. B12a — per-Run bulk approve result. */
-export interface SafeModeRunApproveResponse {
-  run_id: string;
-  approved_count: number;
-  dispatched_count: number;
 }
 
 /** `POST /api/v1/safemode/{id}/{approve,deny}` → backend SafeModeActionResponse.
