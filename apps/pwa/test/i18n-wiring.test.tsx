@@ -35,7 +35,7 @@ function NavLabels() {
   return (
     <ul>
       <li>{t("brief")}</li>
-      <li>{t("decisions")}</li>
+      <li>{t("knowledge")}</li>
       <li>{t("settings")}</li>
     </ul>
   );
@@ -49,7 +49,7 @@ describe("i18n wiring", () => {
       </NextIntlClientProvider>,
     );
     expect(screen.getByText("요약")).toBeInTheDocument();
-    expect(screen.getByText("결정")).toBeInTheDocument();
+    expect(screen.getByText("지식")).toBeInTheDocument();
     expect(screen.getByText("설정")).toBeInTheDocument();
   });
 
@@ -60,7 +60,7 @@ describe("i18n wiring", () => {
       </NextIntlClientProvider>,
     );
     expect(screen.getByText("Brief")).toBeInTheDocument();
-    expect(screen.getByText("Decisions")).toBeInTheDocument();
+    expect(screen.getByText("Knowledge")).toBeInTheDocument();
     expect(screen.getByText("Settings")).toBeInTheDocument();
   });
 

@@ -7,7 +7,6 @@
 import LeftRail from "@/components/shell/LeftRail";
 import { MobileNav } from "@/components/shell/MobileChrome";
 import { type Session, clearSession, setSession } from "@/lib/auth/session";
-import { setPendingDecisionsCount } from "@/lib/decisions/pending-count";
 import { render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -28,7 +27,6 @@ describe("Skills nav wiring", () => {
   beforeEach(() => {
     clearSession();
     setSession(SESSION);
-    setPendingDecisionsCount(0);
   });
 
   afterEach(() => {
@@ -51,8 +49,7 @@ describe("Skills nav wiring", () => {
     expect(link).toHaveAttribute("href", "/skills");
   });
 
-  it("Skills carries no pending-count badge even when decisions are pending", () => {
-    setPendingDecisionsCount(3);
+  it("Skills carries no numeric pending-count badge", () => {
     render(<LeftRail />);
 
     const link = screen.getByRole("link", { name: /Skills/ });

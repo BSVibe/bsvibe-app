@@ -13,13 +13,11 @@
 import ShippedSection from "@/components/brief/ShippedSection";
 import CheckpointRow from "@/components/decisions/CheckpointRow";
 import DeliveryRow from "@/components/decisions/DeliveryRow";
-import ResolvedRow from "@/components/decisions/ResolvedRow";
 import ProductShipped from "@/components/products/ProductShipped";
 import type {
   CheckpointAction,
   PendingCheckpoint,
   PendingDelivery,
-  ResolvedDecision,
   ShippedItem,
   WorkStreamItem,
 } from "@/lib/api/types";
@@ -66,17 +64,6 @@ const CHECKPOINT: PendingCheckpoint = {
   detailHref: "/deliverables/del-2",
   priorDecisions: [],
   createdAt: "2026-05-27T10:00:00Z",
-};
-
-const RESOLVED: ResolvedDecision = {
-  kind: "delivery",
-  id: "resolved-1",
-  itemId: "33333333-3333-3333-3333-333333333333",
-  title: "Ship the onboarding email copy.",
-  status: "approved",
-  productSlug: "acme-corp",
-  detailHref: "/deliverables/del-3",
-  resolvedAt: "2026-05-24T09:00:00Z",
 };
 
 const SHIPPED_ARTIFACT: ShippedItem = {
@@ -197,20 +184,6 @@ describe("card tap → report (stretched link)", () => {
       await waitFor(() => expect(onResolved).toHaveBeenCalledTimes(1));
       const url = String(fetchMock.mock.calls[0][0]);
       expect(url).toContain(`/checkpoints/${CHECKPOINT.checkpointId}/resolve`);
-    });
-  });
-
-  describe("ResolvedRow (card with NO actions)", () => {
-    it("makes the row itself the link to the report", () => {
-      const { container } = render(<ResolvedRow item={RESOLVED} />);
-      const card = container.querySelector("li.decisions-row--resolved") as HTMLElement;
-
-      const link = soleLink(card);
-      expect(link).toHaveAccessibleName("Ship the onboarding email copy.");
-      expect(link).toHaveAttribute("href", "/deliverables/del-3");
-      expect(screen.queryByText("View report")).not.toBeInTheDocument();
-      // The outcome stays as the subtitle.
-      expect(screen.getByText("Delivery approved")).toBeInTheDocument();
     });
   });
 

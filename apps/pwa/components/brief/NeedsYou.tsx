@@ -18,8 +18,8 @@ import ProposalCard from "./ProposalCard";
  * This is the core of the Brief/Decisions unification: a decision is an inline
  * STATE of a work-stream, resolved HERE — not on a divorced inbox tab. ALL three
  * pending kinds (held deliveries, paused-run checkpoints, AND canon proposals
- * that arise while doing the work) are judged here; the Decisions tab is gone.
- * Resolving a card calls its existing resolve endpoint and then `onResolved`,
+ * that arise while doing the work) are judged here; there is no separate
+ * Decisions tab. Resolving a card calls its existing resolve endpoint and then `onResolved`,
  * which re-reads the Brief so the item leaves the list. Multiple concurrent
  * items stack as separate cards.
  */

@@ -1,8 +1,8 @@
 /**
- * Decisions nav removal (R8) — Decisions was folded into the Brief ("Needs
- * you"), so it is no longer a primary-nav tab in either the desktop left rail
- * or the mobile tab bar. The /decisions route still exists (reachable by URL),
- * but it is not advertised in the nav.
+ * Nav after the Decisions fold (C3) — Decisions was folded into the Brief
+ * ("Needs you") and the /decisions route removed entirely, so the primary nav
+ * is EXACTLY Brief / Knowledge / Skills in both the desktop left rail and the
+ * mobile tab bar. There is no Decisions tab anywhere.
  */
 
 import LeftRail from "@/components/shell/LeftRail";
@@ -34,14 +34,15 @@ describe("Decisions nav removal", () => {
     vi.restoreAllMocks();
   });
 
-  it("does not show a Decisions tab in the left rail", () => {
+  it("shows EXACTLY Brief / Knowledge / Skills in the left rail (no Decisions)", () => {
     render(<LeftRail />);
 
     expect(screen.queryByRole("link", { name: /Decisions/ })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Decisions/ })).not.toBeInTheDocument();
-    // The remaining primary surfaces are still present.
+    // The three canonical primary surfaces are present.
     expect(screen.getByRole("link", { name: /Brief/ })).toHaveAttribute("href", "/brief");
     expect(screen.getByRole("link", { name: /Knowledge/ })).toHaveAttribute("href", "/knowledge");
+    expect(screen.getByRole("link", { name: /Skills/ })).toHaveAttribute("href", "/skills");
   });
 
   it("does not show a Decisions tab in the mobile tab bar", () => {

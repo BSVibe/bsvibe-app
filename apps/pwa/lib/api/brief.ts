@@ -4,21 +4,20 @@
  * This is the single "what needs me + what is BSVibe doing + what has it done"
  * surface. It folds:
  *  - needsYou  ← the pending Safe-Mode held deliveries (/api/v1/safemode/queue)
- *               + paused-run checkpoints (/api/v1/checkpoints), joined to their
- *               run/deliverable for a concise title + proof link. Resolved
- *               inline in the Brief (DeliveryRow / CheckpointRow).
+ *               + paused-run checkpoints (/api/v1/checkpoints) + canon proposals
+ *               (/api/v1/decisions), joined to their run/deliverable for a
+ *               concise title + proof link. Resolved inline in the Brief
+ *               (DeliveryRow / CheckpointRow / ProposalCard).
  *  - working   ← /api/v1/runs in an in-flight status (open / running)
  *  - stream    ← /api/v1/runs (ALL, newest first) joined to /api/v1/deliverables
  *               by run_id (the chronological work history)
  *
- * R4 — decisions are UNIFIED back into the Brief: a decision is an inline STATE
- * of a work-stream, resolved HERE with context. This REVERSES L7 (#6), which had
- * removed the needs-you block to avoid duplicating a separate Decisions tab —
- * decisions now LIVE in the Brief. The needs-you list reuses the SAME pending
- * aggregation the Decisions tab uses (listPendingDecisions → review-context
- * join), filtered to the two INLINE-resolvable kinds (delivery + checkpoint);
- * knowledge proposals (which open a focused detail panel) stay on the Decisions
- * tab.
+ * Decisions are UNIFIED into the Brief: a decision is an inline STATE of a
+ * work-stream, resolved HERE with context — there is no separate Decisions tab.
+ * The needs-you list is the SAME pending aggregation (listPendingDecisions →
+ * review-context join) covering ALL three inline-resolvable kinds — held
+ * deliveries, paused-run checkpoints, AND canon/knowledge proposals — each
+ * judged inline via DeliveryRow / CheckpointRow / ProposalCard.
  *
  * Every surface is live, so a successful read — even an empty workspace — is
  * never `placeholder`; that flips true ONLY on a hard non-401 failure, so the

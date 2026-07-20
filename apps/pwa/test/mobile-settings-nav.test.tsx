@@ -16,10 +16,6 @@ vi.mock("next/navigation", () => ({
   usePathname: () => pathname,
 }));
 
-vi.mock("@/lib/decisions/pending-count", () => ({
-  usePendingDecisionsCount: () => 0,
-}));
-
 describe("Mobile top bar", () => {
   beforeEach(() => {
     pathname = "/brief";
