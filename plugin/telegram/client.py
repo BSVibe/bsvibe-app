@@ -19,6 +19,9 @@ from __future__ import annotations
 from typing import Any
 
 import httpx
+import structlog
+
+logger = structlog.get_logger(__name__)
 
 DEFAULT_BASE_URL = "https://api.telegram.org"
 
@@ -50,6 +53,26 @@ class TelegramClient:
         self._base_url = base_url.rstrip("/")
         self._client = client
         self._timeout = timeout
+
+    def _ack_result(self, method: str, resp: httpx.Response) -> dict[str, Any]:
+        """Best-effort UI-ack result: NEVER raise. Telegram returns HTTP 400 (not
+        200+``ok:false``) for a benign ack failure ("query is too old" / "message
+        is not modified" / "message to edit not found") — raising there would 500
+        the webhook AFTER the state change already committed. Log a SCRUBBED
+        warning (status + description only, never the token-bearing URL) and
+        return the parsed body."""
+        try:
+            body: dict[str, Any] = resp.json()
+        except ValueError:
+            body = {}
+        if resp.status_code >= 400 or body.get("ok") is False:
+            logger.warning(
+                "telegram_ack_best_effort_failed",
+                method=method,
+                status=resp.status_code,
+                description=body.get("description"),
+            )
+        return body
 
     async def _post(self, method: str, json_body: dict[str, Any]) -> httpx.Response:
         url = f"{self._base_url}/bot{self._token}/{method}"
@@ -102,9 +125,7 @@ class TelegramClient:
         if text is not None:
             payload["text"] = text
         resp = await self._post("answerCallbackQuery", payload)
-        resp.raise_for_status()
-        body: dict[str, Any] = resp.json()
-        return body
+        return self._ack_result("answerCallbackQuery", resp)
 
     async def edit_message_text(
         self,
@@ -128,9 +149,7 @@ class TelegramClient:
         if reply_markup is not None:
             payload["reply_markup"] = reply_markup
         resp = await self._post("editMessageText", payload)
-        resp.raise_for_status()
-        body: dict[str, Any] = resp.json()
-        return body
+        return self._ack_result("editMessageText", resp)
 
     async def delete_message(self, chat_id: str | int, message_id: int) -> str | None:
         """Delete a message. Returns ``None`` on success, or the Telegram error
