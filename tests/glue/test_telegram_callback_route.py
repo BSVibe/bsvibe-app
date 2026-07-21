@@ -146,3 +146,71 @@ async def test_forged_secret_is_401_before_handler(
 
     assert resp.status_code == 401, resp.text
     mock.assert_not_awaited()  # secret gate runs BEFORE the callback handler
+
+
+# A telegram connector's ``signing_secret_ciphertext`` holds the BOT TOKEN (used
+# for outbound Bot-API calls). A bot token contains a ``:`` which Telegram's
+# ``secret_token`` scheme forbids, so it can't double as the inbound webhook
+# secret. The founder-set ``delivery_config["webhook_secret"]`` is the inbound
+# verification secret when present (trello-style second auth value → config, no
+# schema change); the bot token is NOT accepted as the secret.
+BOT_TOKEN = "8931778628:AAEsl9lDpPNQfGo0FH2pAMxXDg6s6hLfkZs"  # noqa: S105 — test fixture
+WEBHOOK_SECRET = "wh-secret-token-abc123"  # noqa: S105 — test fixture, valid secret_token chars
+
+
+@pytest_asyncio.fixture
+async def seeded_token_wh(sf: async_sessionmaker[AsyncSession], cipher: CredentialCipher) -> str:
+    token = "wht_" + base64.urlsafe_b64encode(os.urandom(24)).decode().rstrip("=")
+    async with sf() as s:
+        s.add(
+            ConnectorAccountRow(
+                id=uuid.uuid4(),
+                workspace_id=uuid.uuid4(),
+                connector="telegram",
+                webhook_token=token,
+                signing_secret_ciphertext=cipher.encrypt(BOT_TOKEN),
+                delivery_config={"chat_id": "42", "webhook_secret": WEBHOOK_SECRET},
+                is_active=True,
+            )
+        )
+        await s.commit()
+    return token
+
+
+async def test_webhook_secret_from_delivery_config_is_the_verify_secret(
+    client: httpx.AsyncClient,
+    sf: async_sessionmaker[AsyncSession],
+    seeded_token_wh: str,
+    monkeypatch,
+) -> None:
+    mock = AsyncMock(return_value=True)
+    monkeypatch.setattr("backend.connectors.telegram_callback.process_telegram_callback", mock)
+
+    resp = await client.post(
+        f"/api/webhooks/telegram/{seeded_token_wh}",
+        content=_callback_body(),
+        headers=_headers(WEBHOOK_SECRET),
+    )
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json().get("callback") is True
+    mock.assert_awaited_once()
+    assert await _trigger_count(sf) == 0
+
+
+async def test_bot_token_is_not_accepted_as_secret_when_webhook_secret_set(
+    client: httpx.AsyncClient,
+    seeded_token_wh: str,
+    monkeypatch,
+) -> None:
+    mock = AsyncMock(return_value=True)
+    monkeypatch.setattr("backend.connectors.telegram_callback.process_telegram_callback", mock)
+
+    resp = await client.post(
+        f"/api/webhooks/telegram/{seeded_token_wh}",
+        content=_callback_body(),
+        headers=_headers(BOT_TOKEN),
+    )
+
+    assert resp.status_code == 401, resp.text
+    mock.assert_not_awaited()
