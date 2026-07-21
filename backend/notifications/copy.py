@@ -51,7 +51,7 @@ class NotificationCopy:
 _TITLES: dict[str, dict[str, str]] = {
     "needs_you": {"en": "A run needs your decision", "ko": "결정이 필요한 작업이 있어요"},
     "triggered": {"en": "New work came in", "ko": "새 작업이 들어왔어요"},
-    "shipped": {"en": "A verified deliverable shipped", "ko": "검증된 산출물이 배포됐어요"},
+    "shipped": {"en": "Done", "ko": "작업 완료"},
     "failed": {"en": "A run failed", "ko": "작업이 실패했어요"},
     "daily_brief": {"en": "Your daily brief", "ko": "오늘의 요약"},
 }
@@ -83,24 +83,23 @@ _FALLBACK_BODY: dict[str, dict[str, str]] = {
 #: reason resolves to the generic ``needs_you`` fallback body above.
 _NEEDS_YOU_REASON_BODY: dict[str, dict[str, str]] = {
     "weak_evidence_no_gate": {
-        "en": (
-            "The work is done, but I couldn't strongly verify the result — "
-            "please check whether it's OK to ship as-is."
-        ),
-        "ko": (
-            "작업을 마쳤는데, 결과가 제대로 검증됐다고 확신하기 어려워요. "
-            "그대로 내보내도 될지 봐주세요."
-        ),
+        "en": "The work is done, but the evidence is weak — please review.",
+        "ko": "작업을 마쳤지만 검증 근거가 약해요. 확인해주세요.",
     },
 }
 
 #: Localized CTA framing for the trailing deep-link line of a push. ``needs_you``
-#: asks the founder to ANSWER; every other event asks them to REVIEW. The absolute
-#: URL is appended after " → " so chat channels render a tappable link.
+#: asks the founder to ANSWER; ``shipped`` points at its deliverable REPORT; every
+#: other event asks them to REVIEW the Brief. The absolute URL is appended after
+#: " → " so chat channels render a tappable link.
 _CTA_PREFIX: dict[str, dict[str, str]] = {
     "answer": {"en": "Answer it in your Brief", "ko": "요약에서 답해주세요"},
     "review": {"en": "Review it in your Brief", "ko": "요약에서 확인해주세요"},
+    "report": {"en": "View report", "ko": "보고서 보기"},
 }
+
+#: Which CTA prefix each event uses. Unlisted events fall back to ``review``.
+_CTA_KIND: dict[str, str] = {"needs_you": "answer", "shipped": "report"}
 
 
 def _resolve_language(language: str | None) -> str:
@@ -178,11 +177,12 @@ def notification_cta(event: str, language: str | None, base_url: str, path: str)
     Turns a bare relative deep-link ``path`` (``/brief``, ``/deliverables/<id>``,
     …) into ``"<localized call-to-action> → <base_url><path>"`` so Telegram / Slack
     render an absolute clickable URL instead of a bare ``/decisions`` fragment.
-    ``needs_you`` asks the founder to ANSWER; every other event asks them to
-    REVIEW. An unknown / missing ``language`` falls back to English.
+    ``needs_you`` asks the founder to ANSWER; ``shipped`` links to its deliverable
+    REPORT; every other event asks them to REVIEW. An unknown / missing
+    ``language`` falls back to English.
     """
     lang = _resolve_language(language)
-    kind = "answer" if event == "needs_you" else "review"
+    kind = _CTA_KIND.get(event, "review")
     url = f"{base_url.rstrip('/')}{path}"
     return f"{_CTA_PREFIX[kind][lang]} → {url}"
 

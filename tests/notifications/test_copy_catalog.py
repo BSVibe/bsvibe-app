@@ -66,11 +66,13 @@ def test_triggered_en() -> None:
 
 
 def test_shipped_ko_and_en() -> None:
+    # Compact-card status label — terse, not a sentence (founder feedback: the old
+    # "검증된 산출물이 배포됐어요" was over-long; "작업 완료" 정도면 충분).
     ko = notification_copy("shipped", "ko", detail="dedup 유틸 추가")
-    assert ko.title == "검증된 산출물이 배포됐어요"
+    assert ko.title == "작업 완료"
     assert ko.body == "dedup 유틸 추가"
     en = notification_copy("shipped", "en", detail="Add dedup util")
-    assert en.title == "A verified deliverable shipped"
+    assert en.title == "Done"
     assert en.body == "Add dedup util"
 
 
@@ -101,11 +103,9 @@ def test_needs_you_reason_weak_evidence_is_friendly_ko() -> None:
     """A system-minted verify-gate decision (reason=weak_evidence_no_gate, no
     ``question``) maps to a warm KO sentence — never the raw English
     honesty-grade rationale."""
+    # Terse card-style verify line — no long apology (founder feedback).
     body = needs_you_reason_body("weak_evidence_no_gate", "ko")
-    assert body == (
-        "작업을 마쳤는데, 결과가 제대로 검증됐다고 확신하기 어려워요. "
-        "그대로 내보내도 될지 봐주세요."
-    )
+    assert body == "작업을 마쳤지만 검증 근거가 약해요. 확인해주세요."
     # No leaked English jargon.
     for jargon in ("grade", "gate", "weak evidence", "verified"):
         assert jargon not in body
@@ -113,10 +113,7 @@ def test_needs_you_reason_weak_evidence_is_friendly_ko() -> None:
 
 def test_needs_you_reason_weak_evidence_en() -> None:
     body = needs_you_reason_body("weak_evidence_no_gate", "en")
-    assert body == (
-        "The work is done, but I couldn't strongly verify the result — "
-        "please check whether it's OK to ship as-is."
-    )
+    assert body == "The work is done, but the evidence is weak — please review."
 
 
 def test_needs_you_unknown_reason_falls_back_generic_localized() -> None:
@@ -146,17 +143,23 @@ def test_cta_needs_you_en() -> None:
     assert cta == "Answer it in your Brief → https://app.example/brief"
 
 
-def test_cta_shipped_ko_uses_review_phrasing_and_absolute_url() -> None:
+def test_cta_shipped_ko_uses_report_phrasing_and_absolute_url() -> None:
+    # shipped links to its deliverable report — "보고서 보기 → <url>", not "요약에서…".
     cta = notification_cta("shipped", "ko", "https://app.example", "/deliverables/abc")
-    assert cta == "요약에서 확인해주세요 → https://app.example/deliverables/abc"
+    assert cta == "보고서 보기 → https://app.example/deliverables/abc"
+
+
+def test_cta_shipped_en_uses_report_phrasing() -> None:
+    cta = notification_cta("shipped", "en", "https://app.example", "/deliverables/abc")
+    assert cta == "View report → https://app.example/deliverables/abc"
 
 
 def test_cta_review_en_for_non_decision_events() -> None:
-    for event in ("triggered", "shipped", "failed", "daily_brief"):
+    for event in ("triggered", "failed", "daily_brief"):
         cta = notification_cta(event, "en", "https://app.example", "/brief")
         assert cta == "Review it in your Brief → https://app.example/brief"
 
 
 def test_cta_strips_trailing_slash_on_base_url() -> None:
-    cta = notification_cta("shipped", "en", "https://app.example/", "/brief")
+    cta = notification_cta("triggered", "en", "https://app.example/", "/brief")
     assert cta == "Review it in your Brief → https://app.example/brief"

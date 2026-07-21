@@ -108,7 +108,7 @@ async def test_shipped_title_localizes_to_workspace_language() -> None:
                 select(NotificationEventRow).where(NotificationEventRow.workspace_id == ko_ws)
             )
         ).scalar_one()
-        assert ko_row.payload["title"] == "검증된 산출물이 배포됐어요"
+        assert ko_row.payload["title"] == "작업 완료"
         assert ko_row.payload["body"] == "dedup 유틸 추가"
 
         en_row = (
@@ -116,7 +116,38 @@ async def test_shipped_title_localizes_to_workspace_language() -> None:
                 select(NotificationEventRow).where(NotificationEventRow.workspace_id == en_ws)
             )
         ).scalar_one()
-        assert en_row.payload["title"] == "A verified deliverable shipped"
+        assert en_row.payload["title"] == "Done"
+
+
+async def test_shipped_body_is_compact_card_work_line_plus_verify_line() -> None:
+    """The shipped body is a compact two-line card: the work-summary title line +
+    the verify line, extracted from the already-localized deliverable summary. The
+    full changed-files list stays in the report, NOT in the chat card."""
+    async with memory_session() as s:
+        ko_ws = await _seed_workspace(s, language="ko")
+        run = await _seed_run(s, workspace_id=ko_ws)
+        summary = (
+            "「Toolkit」 새 문자열 유틸 함수 추가\n\n"
+            "바뀐 파일 2개:\n- src/a.py\n- src/b.py\n\n"
+            "검증: 2개 확인 통과."
+        )
+        await write_verified_deliverable(
+            s, run, attempt_id=uuid.uuid4(), artifact_refs=["src/a.py"], summary=summary
+        )
+        await s.commit()
+
+        row = (
+            await s.execute(
+                select(NotificationEventRow).where(NotificationEventRow.workspace_id == ko_ws)
+            )
+        ).scalar_one()
+        body = row.payload["body"]
+        assert "「Toolkit」 새 문자열 유틸 함수 추가" in body
+        assert "검증:" in body
+        # The compact card does NOT dump the changed-files list — that lives in the report.
+        assert "바뀐 파일" not in body
+        assert "- src/a.py" not in body
+        assert body == "「Toolkit」 새 문자열 유틸 함수 추가\n검증: 2개 확인 통과."
 
 
 async def test_answer_deliverable_does_not_emit_shipped() -> None:

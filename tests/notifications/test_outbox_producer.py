@@ -199,10 +199,7 @@ async def test_verify_gate_needs_you_maps_reason_to_friendly_copy(session) -> No
             )
         )
     ).scalar_one()
-    assert row.payload["body"] == (
-        "작업을 마쳤는데, 결과가 제대로 검증됐다고 확신하기 어려워요. "
-        "그대로 내보내도 될지 봐주세요."
-    )
+    assert row.payload["body"] == "작업을 마쳤지만 검증 근거가 약해요. 확인해주세요."
     for jargon in ("grade", "gate", "weak evidence", "declares no"):
         assert jargon not in row.payload["body"]
 
