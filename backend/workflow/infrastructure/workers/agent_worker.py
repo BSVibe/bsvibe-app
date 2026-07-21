@@ -226,7 +226,12 @@ class AgentWorker(BaseWorker):
     ) -> None:
         """Frame the run's Request, fold the hints + intent text into the run
         payload, then drive the agent loop to a terminal outcome."""
-        if run.request_id is not None:
+        # Skip framing on a resumed run: drive_once re-enters here every time a
+        # paused run is re-picked (RUNNING → OPEN after a resolved Decision).
+        # An already-framed run's ``payload["frame"]`` + ``intent_text`` are
+        # reused — re-framing would waste an executor LLM round-trip and
+        # reintroduce the re-frame-timeout failure mode observed in prod.
+        if run.request_id is not None and "frame" not in (run.payload or {}):
             request_repo = SqlAlchemyRequestRepository(session)
             request = await request_repo.get(run.request_id)
             if request is not None:

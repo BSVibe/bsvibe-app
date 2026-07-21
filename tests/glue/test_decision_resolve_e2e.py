@@ -21,6 +21,7 @@ BSVIBE_DATABASE_URL is set (mirrors the other glue tests).
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
@@ -39,8 +40,14 @@ from backend.api.deps import (
     get_workspace_id,
 )
 from backend.api.main import create_app
+from backend.connectors.db import ConnectorAccountRow
 from backend.extensions.skill.loader import SkillLoader
+from backend.router.accounts.crypto import CredentialCipher
 from backend.workflow.application.agent_loop import LoopToolCall, LoopTurn, RunOrchestrator
+from backend.workflow.application.checkpoint_resolution import resolve_checkpoint
+from backend.workflow.application.delivery.connector_dispatch import (
+    build_github_workspace_provisioner,
+)
 from backend.workflow.infrastructure.db import Decision, DecisionStatus, ExecutionRun, RunStatus
 from backend.workflow.infrastructure.intake.db import (
     RequestRow,
@@ -52,6 +59,8 @@ from backend.workflow.infrastructure.sandbox import NoopSandboxManager
 from backend.workflow.infrastructure.workers.agent_worker import AgentExecutionDeps, AgentWorker
 
 from .._support import BuildFrameLlm, db_engine, fake_current_user
+
+_GH_KEY = b"0123456789abcdef0123456789abcdef"
 
 pytestmark = pytest.mark.asyncio
 
@@ -308,6 +317,159 @@ async def test_pause_resolve_resume_to_review_ready(
     assert "Use Postgres" in seeded
     # The artifact actually landed in the run's workspace.
     assert (tmp_path / str(run_id) / "answer.txt").read_text() == "postgres\n"
+
+
+# --------------------------------------------------------------------------
+# Regression: the resume path exercised through the GITHUB provisioner.
+#
+# The direct-path resume test above injects NO workspace_provisioner, so it
+# never re-runs the one-time github clone on the SECOND drive — which is exactly
+# the gap that let the prod re-clone stall ship. This test wires the real github
+# provisioner against a LOCAL bare repo: the first drive clones the checkout,
+# the run pauses on a Decision, the founder resolves it, and the SECOND drive
+# must REUSE the existing checkout (not re-clone, which git refuses on a
+# non-empty dir → GitError → tick rollback → run stalled OPEN forever).
+# --------------------------------------------------------------------------
+
+
+async def _git(*args: str, cwd: Path | None = None) -> str:
+    proc = await asyncio.create_subprocess_exec(
+        "git",
+        *args,
+        cwd=str(cwd) if cwd else None,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    out, err = await proc.communicate()
+    assert proc.returncode == 0, err.decode()
+    return out.decode().strip()
+
+
+async def _make_bare_remote(tmp_path: Path) -> Path:
+    """A bare repo seeded with an initial commit on ``main`` — stands in for
+    github.com so the provisioner's clone is real but offline."""
+    bare = tmp_path / "remote.git"
+    await _git("init", "--bare", "-b", "main", str(bare))
+    seed = tmp_path / "seed"
+    await _git("clone", str(bare), str(seed))
+    await _git("config", "user.email", "t@bsvibe.dev", cwd=seed)
+    await _git("config", "user.name", "Test", cwd=seed)
+    (seed / "README.md").write_text("seed\n")
+    await _git("add", "-A", cwd=seed)
+    await _git("commit", "-m", "initial", cwd=seed)
+    await _git("push", "origin", "main", cwd=seed)
+    return bare
+
+
+async def _seed_github_connector(
+    session: AsyncSession, cipher: CredentialCipher, workspace_id: uuid.UUID
+) -> None:
+    session.add(
+        ConnectorAccountRow(
+            id=uuid.uuid4(),
+            workspace_id=workspace_id,
+            connector="github",
+            webhook_token=uuid.uuid4().hex,
+            signing_secret_ciphertext=cipher.encrypt("ghp_test_token"),
+            delivery_config={"repo": "owner/name", "base_branch": "main"},
+            is_active=True,
+        )
+    )
+    await session.commit()
+
+
+def _github_execution_deps(
+    workspace_root: Path, cipher: CredentialCipher, bare: Path, holder: _LlmHolder
+) -> AgentExecutionDeps:
+    def _skill_loader_for(ws_id: uuid.UUID) -> SkillLoader:
+        loader = SkillLoader(workspace_root / "skills" / str(ws_id))
+        loader.load_all()
+        return loader
+
+    provisioner = build_github_workspace_provisioner(
+        cipher=cipher, remote_url_for=lambda _repo: bare.as_uri()
+    )
+    return AgentExecutionDeps(
+        skill_loader_for=_skill_loader_for,
+        orchestrator_factory=lambda session, _run: RunOrchestrator(
+            session=session, llm=holder, sandbox_manager=NoopSandboxManager()
+        ),
+        workspace_root=workspace_root,
+        workspace_provisioner=provisioner,
+        frame_llm=BuildFrameLlm(),
+    )
+
+
+async def test_pause_resolve_resume_github_run_reuses_checkout(
+    sf: async_sessionmaker[AsyncSession],
+    workspace_id: uuid.UUID,
+    founder_id: uuid.UUID,
+    tmp_path: Path,
+) -> None:
+    """Producer-existence proof: a github-bound run framed + provisioned on the
+    first drive, paused on a Decision, then resolved, must RESUME without the
+    provisioner re-cloning the existing checkout. Before the fix the second
+    ``drive_once`` raises ``GitError`` (re-clone of a non-empty dir) and the run
+    stalls OPEN; after the fix it reuses the checkout and reaches REVIEW_READY —
+    i.e. ``runner.drive`` fires (the continuation producer exists)."""
+    cipher = CredentialCipher(_GH_KEY)
+    bare = await _make_bare_remote(tmp_path)
+    workspace_root = tmp_path / "runs"
+
+    async with sf() as s:
+        await _seed_github_connector(s, cipher, workspace_id)
+
+    holder = _LlmHolder()
+    deps = _github_execution_deps(workspace_root, cipher, bare, holder)
+    agent = AgentWorker(session_factory=sf, execution=deps)
+
+    # 1. Seed + claim a Request → ExecutionRun (OPEN).
+    await _seed_open_request(sf, workspace_id)
+    assert await agent.claim_once() == 1
+
+    # 2. First drive: provisioner clones the bare repo → the checkout exists,
+    #    then the work LLM blocks on a founder question → run RUNNING (paused).
+    holder.current = _ask_script()
+    assert await agent.drive_once() == 1
+
+    async with sf() as s:
+        run = (await s.execute(select(ExecutionRun))).scalar_one()
+        run_id = run.id
+        assert run.status is RunStatus.RUNNING
+        decision = (await s.execute(select(Decision))).scalar_one()
+        decision_id = decision.id
+
+    # The provisioner cloned a real checkout into the run workspace.
+    checkout = workspace_root / str(run_id)
+    assert (checkout / ".git").exists()
+
+    # 3. Resolve the Decision → run RUNNING → OPEN (re-picked by drive_once).
+    async with sf() as s:
+        await resolve_checkpoint(
+            s,
+            workspace_id=workspace_id,
+            checkpoint_id=decision_id,
+            answer="Use Postgres",
+            actor_id=founder_id,
+        )
+        await s.commit()
+
+    async with sf() as s:
+        run = await s.get(ExecutionRun, run_id)
+        assert run is not None and run.status is RunStatus.OPEN
+
+    # 4. Second drive: the provisioner re-enters with the SAME (non-empty)
+    #    checkout. It MUST reuse it (no re-clone → no GitError → no stall); the
+    #    loop then completes → REVIEW_READY.
+    holder.current = _complete_script()
+    assert await agent.drive_once() == 1
+
+    async with sf() as s:
+        run = await s.get(ExecutionRun, run_id)
+        assert run is not None
+        assert run.status is RunStatus.REVIEW_READY
+    # The checkout was preserved across the resume (not wiped by a fresh clone).
+    assert (checkout / ".git").exists()
 
 
 async def test_resolve_cross_workspace_checkpoint_404(

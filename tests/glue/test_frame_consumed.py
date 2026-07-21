@@ -182,6 +182,115 @@ async def test_frame_skill_hint_reaches_loop_initial_context(
     assert "Draft a product requirements document" in blob
 
 
+class _CountingFrameLlm:
+    """A ``FrameLlm`` that counts how many times the frame stage invoked it."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def complete_text(self, *, system: str, user: str) -> str:
+        self.calls += 1
+        return json.dumps(
+            {
+                "framed_intent": "build a thing",
+                "skill_match": None,
+                "artifact_type_hint": "code",
+                "path_classification": "agent_loop",
+                "pipeline": "single",
+            }
+        )
+
+
+def _plain_deps(
+    tmp_path: Path, frame_llm: _CountingFrameLlm, recording_llm: _RecordingLlm
+) -> AgentExecutionDeps:
+    def _skill_loader_for(ws_id: uuid.UUID) -> SkillLoader:
+        loader = SkillLoader(tmp_path / "skills" / str(ws_id))
+        loader.load_all()
+        return loader
+
+    def _orchestrator_factory(session: AsyncSession, run: ExecutionRun) -> RunOrchestrator:
+        return RunOrchestrator(
+            session=session, llm=recording_llm, sandbox_manager=NoopSandboxManager()
+        )
+
+    return AgentExecutionDeps(
+        skill_loader_for=_skill_loader_for,
+        orchestrator_factory=_orchestrator_factory,
+        workspace_root=tmp_path / "runs",
+        frame_llm=frame_llm,
+    )
+
+
+async def test_already_framed_run_is_not_reframed(
+    sf: async_sessionmaker[AsyncSession], tmp_path: Path
+) -> None:
+    """A resumed run (its ``payload`` already carries a ``frame``) MUST skip the
+    frame stage on the next drive — re-framing wastes an executor LLM round-trip
+    and reintroduces the re-frame-timeout failure mode. The existing frame is
+    reused and the loop still drives."""
+    workspace_id = uuid.uuid4()
+    async with sf() as session:
+        run_id = await _seed_request_and_run(
+            session, workspace_id=workspace_id, text="build a thing"
+        )
+        run = await session.get(ExecutionRun, run_id)
+        assert run is not None
+        run.payload = {
+            "intent_text": "build a thing",
+            "frame": {
+                "skill_match": None,
+                "artifact_type_hint": "code",
+                "framed_intent": "already framed",
+                "summary_title": "Build a thing",
+                "path_classification": "agent_loop",
+                "pipeline": "single",
+            },
+        }
+        await session.commit()
+
+    frame_llm = _CountingFrameLlm()
+    recording_llm = _RecordingLlm()
+    deps = _plain_deps(tmp_path, frame_llm, recording_llm)
+    agent = AgentWorker(session_factory=sf, execution=deps)
+    assert await agent.drive_once() == 1
+
+    # The frame stage was NOT re-invoked, but the loop still drove.
+    assert frame_llm.calls == 0
+    assert recording_llm.calls != []
+
+    # The pre-existing frame is preserved verbatim (not overwritten).
+    async with sf() as session:
+        run = await session.get(ExecutionRun, run_id)
+        assert run is not None
+        assert run.payload["frame"]["framed_intent"] == "already framed"
+
+
+async def test_unframed_run_frames_exactly_once(
+    sf: async_sessionmaker[AsyncSession], tmp_path: Path
+) -> None:
+    """A fresh (unframed) run frames exactly once — the guard must not suppress
+    the first, legitimate framing."""
+    workspace_id = uuid.uuid4()
+    async with sf() as session:
+        run_id = await _seed_request_and_run(
+            session, workspace_id=workspace_id, text="build a thing"
+        )
+        await session.commit()
+
+    frame_llm = _CountingFrameLlm()
+    recording_llm = _RecordingLlm()
+    deps = _plain_deps(tmp_path, frame_llm, recording_llm)
+    agent = AgentWorker(session_factory=sf, execution=deps)
+    assert await agent.drive_once() == 1
+
+    assert frame_llm.calls == 1
+    async with sf() as session:
+        run = await session.get(ExecutionRun, run_id)
+        assert run is not None
+        assert "frame" in (run.payload or {})
+
+
 async def test_no_frame_llm_never_drives_the_loop(
     sf: async_sessionmaker[AsyncSession], tmp_path: Path
 ) -> None:
