@@ -30,6 +30,9 @@ import structlog
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.identity.workspaces_db import load_workspace_language
+from backend.schedule.domain.product_tick import product_tick_instruction
+from backend.schedule.infrastructure.schedule_db import SCHEDULE_KIND_PRODUCT_TICK
 from backend.workflow.application.intake.webhook import WebhookOutcome
 from backend.workflow.domain.incoming import TriggerEvent
 from backend.workflow.infrastructure.idempotency import is_duplicate, record
@@ -76,11 +79,20 @@ class ScheduleTrigger:
         """
         now = fired_at or datetime.now(tz=UTC)
         idem = f"{schedule_id}:{now.isoformat()}"
-        instruction = ""
-        if isinstance(schedule_payload, dict):
-            text_value = schedule_payload.get("text")
-            if isinstance(text_value, str):
-                instruction = text_value
+        if kind == SCHEDULE_KIND_PRODUCT_TICK:
+            # The founder set only the cadence; BSVibe decides WHAT to do. Seed a
+            # localized meta-instruction (workspaces.language) so the run frames a
+            # real "decide + do the next action for THIS product" task instead of
+            # the (unused) schedule text — the agent loop reads knowledge/history
+            # and acts, or asks via ask_user_question.
+            language = await load_workspace_language(self._session, workspace_id)
+            instruction = product_tick_instruction(language)
+        else:
+            instruction = ""
+            if isinstance(schedule_payload, dict):
+                text_value = schedule_payload.get("text")
+                if isinstance(text_value, str):
+                    instruction = text_value
         # ``trigger=schedule`` is the glass-box marker (Brief/Run provenance);
         # ``text`` is the instruction the framer acts on. Stamped here at the
         # emitter site so EVERY caller (the ``ScheduleWorker`` or a future

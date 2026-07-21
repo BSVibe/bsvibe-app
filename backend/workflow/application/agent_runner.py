@@ -161,6 +161,12 @@ class AgentRunner:
         binding_id = req_payload.get("binding_id")
         if isinstance(binding_id, str) and binding_id:
             run_payload["binding_id"] = binding_id
+        # PT3: propagate the trigger ``kind`` (e.g. ``product_tick``) onto the run
+        # payload via the SAME seam as ``binding_id`` — the DeliveryWorker reads
+        # it to force Safe Mode for autonomous tick-origin deliverables.
+        kind = req_payload.get("kind")
+        if isinstance(kind, str) and kind:
+            run_payload["kind"] = kind
 
         run = ExecutionRun(
             id=uuid.uuid4(),

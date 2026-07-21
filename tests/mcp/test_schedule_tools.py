@@ -263,6 +263,40 @@ async def test_kind_defaults_to_instruction(db, workspace_id, user_id, registry)
     assert out["kind"] == "instruction"
 
 
+async def test_create_product_tick_with_product_id(db, workspace_id, user_id, registry) -> None:
+    product_id = str(uuid.uuid4())
+    out = await _create(
+        registry,
+        db,
+        workspace_id,
+        user_id,
+        kind="product_tick",
+        text="",
+        product_id=product_id,
+    )
+    assert out["kind"] == "product_tick"
+    assert out["product_id"] == product_id
+    assert out["enabled"] is True
+
+
+async def test_create_product_tick_without_product_id_is_tool_error(
+    db, workspace_id, user_id, registry
+) -> None:
+    async with db() as s:
+        ctx = ToolContext(
+            principal=_principal(
+                workspace_id=workspace_id, user_id=user_id, scopes=("mcp:read", "mcp:write")
+            ),
+            session=s,
+        )
+        with pytest.raises(Exception, match="product"):
+            await registry.call_tool(
+                "bsvibe_schedules_create",
+                {"kind": "product_tick", "cron_expr": "0 9 * * *"},
+                ctx,
+            )
+
+
 async def test_mcp_schemas_match_rest_models() -> None:
     """Parity — the MCP input/output shapes mirror the REST models field-for-field."""
     from backend.api.v1 import schedules as rest

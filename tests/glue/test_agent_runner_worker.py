@@ -136,6 +136,48 @@ async def test_open_run_propagates_product_id_from_request(session_factory) -> N
         assert run.product_id == product_id
 
 
+async def test_open_run_propagates_tick_origin_kind_from_request(session_factory) -> None:
+    """PT3: a product_tick-origin marker (``payload["kind"]``) rides from the
+    Request onto the ExecutionRun payload — the same propagation seam that
+    carries ``binding_id`` — so the DeliveryWorker can force Safe Mode for
+    autonomous tick deliverables."""
+    ws = uuid.uuid4()
+    async with session_factory() as s:
+        trig = TriggerEventRow(
+            id=uuid.uuid4(),
+            workspace_id=ws,
+            source="schedule",
+            trigger_kind=TriggerKind.SCHEDULE,
+            idempotency_key=f"k-{uuid.uuid4()}",
+            payload={},
+            received_at=datetime.now(tz=UTC),
+        )
+        s.add(trig)
+        await s.flush()
+        req = RequestRow(
+            id=uuid.uuid4(),
+            workspace_id=ws,
+            trigger_event_id=trig.id,
+            status=RequestStatus.OPEN,
+            payload={"text": "decide + do", "kind": "product_tick"},
+            created_at=datetime.now(tz=UTC),
+            updated_at=datetime.now(tz=UTC),
+        )
+        s.add(req)
+        await s.commit()
+
+    async with session_factory() as s:
+        runner = AgentRunner(s)
+        run_id = await runner.open_run(request=req)
+        await s.commit()
+
+    async with session_factory() as s:
+        run = await s.get(ExecutionRun, run_id)
+        assert run is not None
+        assert isinstance(run.payload, dict)
+        assert run.payload.get("kind") == "product_tick"
+
+
 async def test_open_run_is_idempotent(session_factory) -> None:
     req = await _seed_request(session_factory)
     async with session_factory() as s:
