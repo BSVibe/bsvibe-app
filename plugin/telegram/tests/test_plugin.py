@@ -257,6 +257,74 @@ class TestActions:
             )
 
 
+# ── callback capabilities (inbound approve/reject) ─────────────────────────
+
+
+class TestCallbackCapabilities:
+    def test_callback_actions_are_not_mcp_exposed(self):
+        # Internal capabilities — never surfaced as MCP/agent tools.
+        for name in ("parse_callback", "answer_callback_query", "edit_message_text"):
+            assert name in P.meta.actions
+            assert P.meta.actions[name].mcp_exposed is False
+
+    async def test_parse_callback_action_returns_structured_fields(self):
+        body = {
+            "update_id": 1,
+            "callback_query": {
+                "id": "cbq",
+                "from": {"id": 7},
+                "message": {"message_id": 3, "chat": {"id": 9, "type": "private"}},
+                "data": "apv:D1",
+            },
+        }
+        parsed = await _runner().dispatch_action(
+            P.meta,
+            action_name="parse_callback",
+            context=_Ctx(),
+            kwargs={"body": body},
+        )
+        assert parsed["verb"] == "apv"
+        assert parsed["deliverable_id"] == "D1"
+        assert parsed["from_id"] == 7
+        assert parsed["chat_type"] == "private"
+
+    @respx.mock
+    async def test_answer_callback_query_action(self):
+        route = respx.post(f"{BOT}/answerCallbackQuery").mock(
+            return_value=httpx.Response(200, json={"ok": True, "result": True})
+        )
+        await _runner().dispatch_action(
+            P.meta,
+            action_name="answer_callback_query",
+            context=_Ctx(),
+            kwargs={"callback_query_id": "cbq", "text": "권한이 없어요"},
+        )
+        assert route.called
+        body = json.loads(route.calls.last.request.content)
+        assert body["callback_query_id"] == "cbq"
+        assert body["text"] == "권한이 없어요"
+
+    @respx.mock
+    async def test_edit_message_text_action(self):
+        route = respx.post(f"{BOT}/editMessageText").mock(
+            return_value=httpx.Response(200, json={"ok": True, "result": {}})
+        )
+        await _runner().dispatch_action(
+            P.meta,
+            action_name="edit_message_text",
+            context=_Ctx(),
+            kwargs={
+                "chat_id": 9,
+                "message_id": 3,
+                "text": "✅ 승인됨",
+                "reply_markup": {"inline_keyboard": []},
+            },
+        )
+        body = json.loads(route.calls.last.request.content)
+        assert body["text"] == "✅ 승인됨"
+        assert body["reply_markup"] == {"inline_keyboard": []}
+
+
 # ── setup ──────────────────────────────────────────────────────────────────
 
 

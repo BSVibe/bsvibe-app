@@ -69,13 +69,68 @@ class TelegramClient:
 
     # ── messages ───────────────────────────────────────────────────────────
 
-    async def send_message(self, chat_id: str | int, text: str) -> dict[str, Any]:
+    async def send_message(
+        self,
+        chat_id: str | int,
+        text: str,
+        reply_markup: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         """Send a text message. Returns the ``result`` object (the sent
-        ``Message``) from a successful response."""
-        resp = await self._post("sendMessage", {"chat_id": chat_id, "text": text})
+        ``Message``) from a successful response.
+
+        ``reply_markup`` (e.g. an ``inline_keyboard``) is included in the POST
+        body only when provided, so a plain notification stays a plain message.
+        """
+        payload: dict[str, Any] = {"chat_id": chat_id, "text": text}
+        if reply_markup is not None:
+            payload["reply_markup"] = reply_markup
+        resp = await self._post("sendMessage", payload)
         body = self._ok(resp)
         result: dict[str, Any] = body["result"]
         return result
+
+    async def answer_callback_query(
+        self, callback_query_id: str, text: str | None = None
+    ) -> dict[str, Any]:
+        """Acknowledge an inline-button tap (clears Telegram's loading spinner).
+
+        Best-effort UI ack: a logical failure (``ok:false`` — e.g. "query is too
+        old") is NOT raised, because the state change the tap triggered has
+        already happened; the ack is cosmetic. Returns the raw response body.
+        """
+        payload: dict[str, Any] = {"callback_query_id": callback_query_id}
+        if text is not None:
+            payload["text"] = text
+        resp = await self._post("answerCallbackQuery", payload)
+        resp.raise_for_status()
+        body: dict[str, Any] = resp.json()
+        return body
+
+    async def edit_message_text(
+        self,
+        chat_id: str | int,
+        message_id: int,
+        text: str,
+        reply_markup: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Edit an existing message's text (and optionally its keyboard).
+
+        Used to close the approval loop visually — replace the card's buttons
+        with a result line. Best-effort: a benign ``ok:false`` ("message is not
+        modified" / "message to edit not found") is NOT raised. Pass
+        ``reply_markup={"inline_keyboard": []}`` to drop the buttons.
+        """
+        payload: dict[str, Any] = {
+            "chat_id": chat_id,
+            "message_id": message_id,
+            "text": text,
+        }
+        if reply_markup is not None:
+            payload["reply_markup"] = reply_markup
+        resp = await self._post("editMessageText", payload)
+        resp.raise_for_status()
+        body: dict[str, Any] = resp.json()
+        return body
 
     async def delete_message(self, chat_id: str | int, message_id: int) -> str | None:
         """Delete a message. Returns ``None`` on success, or the Telegram error

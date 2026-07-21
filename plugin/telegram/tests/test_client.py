@@ -6,6 +6,8 @@ logical failure, so the client must NOT treat a 200 as unconditional success."""
 
 from __future__ import annotations
 
+import json
+
 import httpx
 import pytest
 import respx
@@ -100,6 +102,99 @@ class TestDeleteMessage:
         )
         with pytest.raises(TelegramApiError, match="blocked"):
             await client.delete_message(99, 42)
+
+
+class TestSendMessageReplyMarkup:
+    @respx.mock
+    async def test_send_message_includes_reply_markup_when_set(self, client):
+        route = respx.post(f"{BOT}/sendMessage").mock(
+            return_value=httpx.Response(
+                200, json={"ok": True, "result": {"message_id": 1, "chat": {"id": 1}}}
+            )
+        )
+        markup = {"inline_keyboard": [[{"text": "승인", "callback_data": "apv:x"}]]}
+        await client.send_message(1, "hi", reply_markup=markup)
+        body = json.loads(route.calls.last.request.content)
+        assert body["reply_markup"] == markup
+
+    @respx.mock
+    async def test_send_message_omits_reply_markup_when_none(self, client):
+        route = respx.post(f"{BOT}/sendMessage").mock(
+            return_value=httpx.Response(
+                200, json={"ok": True, "result": {"message_id": 1, "chat": {"id": 1}}}
+            )
+        )
+        await client.send_message(1, "hi")
+        body = json.loads(route.calls.last.request.content)
+        assert "reply_markup" not in body
+
+
+class TestAnswerCallbackQuery:
+    @respx.mock
+    async def test_posts_endpoint_and_body(self, client):
+        route = respx.post(f"{BOT}/answerCallbackQuery").mock(
+            return_value=httpx.Response(200, json={"ok": True, "result": True})
+        )
+        await client.answer_callback_query("cbid", text="권한이 없어요")
+        assert route.called
+        body = json.loads(route.calls.last.request.content)
+        assert body["callback_query_id"] == "cbid"
+        assert body["text"] == "권한이 없어요"
+        assert TOKEN in str(route.calls.last.request.url)
+
+    @respx.mock
+    async def test_omits_text_when_none(self, client):
+        route = respx.post(f"{BOT}/answerCallbackQuery").mock(
+            return_value=httpx.Response(200, json={"ok": True, "result": True})
+        )
+        await client.answer_callback_query("cbid")
+        body = json.loads(route.calls.last.request.content)
+        assert "text" not in body
+
+    @respx.mock
+    async def test_tolerates_ok_false_without_raising(self, client):
+        # Answering an expired callback query id ("query is too old") is a benign,
+        # best-effort UI ack — it must NOT raise (the approve already happened).
+        respx.post(f"{BOT}/answerCallbackQuery").mock(
+            return_value=httpx.Response(
+                200, json={"ok": False, "description": "Bad Request: query is too old"}
+            )
+        )
+        # no exception
+        await client.answer_callback_query("cbid")
+
+
+class TestEditMessageText:
+    @respx.mock
+    async def test_posts_endpoint_and_body(self, client):
+        route = respx.post(f"{BOT}/editMessageText").mock(
+            return_value=httpx.Response(200, json={"ok": True, "result": {}})
+        )
+        markup = {"inline_keyboard": []}
+        await client.edit_message_text(99, 42, "✅ 승인됨", reply_markup=markup)
+        body = json.loads(route.calls.last.request.content)
+        assert body["chat_id"] == 99
+        assert body["message_id"] == 42
+        assert body["text"] == "✅ 승인됨"
+        assert body["reply_markup"] == markup
+
+    @respx.mock
+    async def test_omits_reply_markup_when_none(self, client):
+        route = respx.post(f"{BOT}/editMessageText").mock(
+            return_value=httpx.Response(200, json={"ok": True, "result": {}})
+        )
+        await client.edit_message_text(99, 42, "hi")
+        body = json.loads(route.calls.last.request.content)
+        assert "reply_markup" not in body
+
+    @respx.mock
+    async def test_tolerates_ok_false_without_raising(self, client):
+        respx.post(f"{BOT}/editMessageText").mock(
+            return_value=httpx.Response(
+                200, json={"ok": False, "description": "Bad Request: message is not modified"}
+            )
+        )
+        await client.edit_message_text(99, 42, "hi")
 
 
 class TestInjectedClient:

@@ -21,7 +21,7 @@ from backend.extensions.plugin.context import SkillContext
 from backend.workflow.domain.incoming import TriggerEvent
 from bsvibe_sdk import plugin
 from plugin.telegram.client import DEFAULT_BASE_URL, TelegramClient
-from plugin.telegram.webhook import parse_update
+from plugin.telegram.webhook import parse_callback_query, parse_update
 
 p = plugin(
     name="telegram",
@@ -103,7 +103,7 @@ async def deliver_message(context: SkillContext, event: dict[str, Any]) -> dict[
     Slack's deletable-message tier)."""
     chat_id = event["chat_id"]
     client = _client(context)
-    data = await client.send_message(chat_id, event["text"])
+    data = await client.send_message(chat_id, event["text"], reply_markup=event.get("reply_markup"))
     message_id = int(data["message_id"])
     out_chat = (data.get("chat") or {}).get("id", chat_id)
     return {
@@ -175,6 +175,48 @@ async def send_message(
         "chat_id": out_chat,
         "external_ref": f"telegram://{out_chat}/{message_id}",
     }
+
+
+# ── callback capabilities (inbound approve/reject) ──────────────────────────────
+#
+# These are the seam the backend inbound callback handler dispatches through, so
+# the founder-auth + Safe-Mode approve orchestration lives in the backend while
+# ALL telegram-specific parsing + Bot-API calls stay in the plugin (dispatched
+# via PluginRunner, never imported into ``backend.api``). ``mcp_exposed=False`` —
+# they are internal capabilities, not agent-loop / MCP tools.
+
+
+@p.action(name="parse_callback")
+async def parse_callback(context: SkillContext, body: dict[str, Any]) -> dict[str, Any] | None:
+    """Pure parse of a callback_query update body into founder-auth + action
+    fields (see :func:`plugin.telegram.webhook.parse_callback_query`). No creds
+    needed — the request was already gated by the webhook_token + secret."""
+    del context
+    return parse_callback_query(body)
+
+
+@p.action(name="answer_callback_query")
+async def answer_callback_query(
+    context: SkillContext,
+    callback_query_id: str,
+    text: str | None = None,
+) -> dict[str, Any]:
+    """Acknowledge the tap (clears Telegram's spinner). Best-effort UI ack."""
+    client = _client(context)
+    return await client.answer_callback_query(callback_query_id, text=text)
+
+
+@p.action(name="edit_message_text")
+async def edit_message_text(
+    context: SkillContext,
+    chat_id: str | int,
+    message_id: int,
+    text: str,
+    reply_markup: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Replace the card's text/keyboard with the approve/reject result line."""
+    client = _client(context)
+    return await client.edit_message_text(chat_id, message_id, text, reply_markup=reply_markup)
 
 
 # ── setup ────────────────────────────────────────────────────────────────────

@@ -119,7 +119,7 @@ def get_webhook_parser_registry() -> WebhookParserRegistry:
 
 
 @router.post("/webhooks/{connector}/{webhook_token}")
-async def receive_connector_webhook(
+async def receive_connector_webhook(  # noqa: PLR0911 — 404/401/handshake/callback/skip/accept branches
     request: Request,
     connector: Annotated[str, Path(max_length=64)],
     webhook_token: Annotated[str, Path(max_length=128)],
@@ -165,9 +165,29 @@ async def receive_connector_webhook(
 
     event = result.event
 
-    # Signature verified but no TriggerEvent: either a handshake that needs a
-    # specific body (Slack url_verification / Discord PING) or a benign skip.
+    # Signature verified but no TriggerEvent: either a telegram inline-button
+    # (callback_query) approve tap, a handshake that needs a specific body
+    # (Slack url_verification / Discord PING), or a benign skip.
     if event is None:
+        # A telegram callback_query is a SYNCHRONOUS approve/reject action, NOT a
+        # new run — it stays OUT of intake. The secret-token header was already
+        # verified by ``resolver.dispatch`` above (parse_update verifies then
+        # skips a callback_query → event is None here). Delegated to the callback
+        # handler via a lazy import so this module keeps zero plugin edges (R2c).
+        if connector == "telegram":
+            from backend.connectors.telegram_callback import (  # noqa: PLC0415
+                process_telegram_callback,
+            )
+
+            handled = await process_telegram_callback(
+                raw_body=raw_body, account=account, session=session, cipher=cipher
+            )
+            if handled:
+                await session.commit()
+                return JSONResponse(
+                    status_code=status.HTTP_200_OK,
+                    content={"accepted": True, "callback": True},
+                )
         reply = handshake_response(connector, raw_body)
         if reply is not None:
             return JSONResponse(status_code=status.HTTP_200_OK, content=reply)

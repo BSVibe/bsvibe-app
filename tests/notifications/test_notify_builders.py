@@ -124,3 +124,78 @@ def test_notification_content_carries_event_title_body_link() -> None:
     assert content.title == "Decision"
     assert content.body == "A run is waiting"
     assert content.link == "/decisions"
+
+
+def test_notification_content_deliverable_id_and_language_default() -> None:
+    content = NotificationContent(event="shipped", title="t", body="b")
+    assert content.deliverable_id is None
+    assert content.language == "en"
+
+
+def _shipped_content(*, deliverable_id: str | None, language: str) -> NotificationContent:
+    return NotificationContent(
+        event="shipped",
+        title="작업 완료",
+        body="검증까지 끝났어요.",
+        link="/deliverables/x",
+        deliverable_id=deliverable_id,
+        language=language,
+    )
+
+
+def test_telegram_shipped_ko_carries_approve_reject_inline_keyboard() -> None:
+    shaped = NOTIFY_EVENT_BUILDERS["telegram"](
+        _shipped_content(deliverable_id="DELIV-1", language="ko"), {"chat_id": 42}
+    )
+    markup = shaped.payload["reply_markup"]
+    row = markup["inline_keyboard"][0]
+    assert row[0]["text"] == "승인"
+    assert row[0]["callback_data"] == "apv:DELIV-1"
+    assert row[1]["text"] == "거절"
+    assert row[1]["callback_data"] == "rej:DELIV-1"
+
+
+def test_telegram_shipped_en_labels() -> None:
+    shaped = NOTIFY_EVENT_BUILDERS["telegram"](
+        _shipped_content(deliverable_id="DELIV-2", language="en"), {"chat_id": 42}
+    )
+    row = shaped.payload["reply_markup"]["inline_keyboard"][0]
+    assert row[0]["text"] == "Approve"
+    assert row[1]["text"] == "Reject"
+
+
+def test_telegram_shipped_without_deliverable_id_has_no_buttons() -> None:
+    shaped = NOTIFY_EVENT_BUILDERS["telegram"](
+        _shipped_content(deliverable_id=None, language="ko"), {"chat_id": 42}
+    )
+    assert "reply_markup" not in shaped.payload
+
+
+def test_telegram_non_shipped_event_has_no_buttons_even_with_deliverable_id() -> None:
+    content = NotificationContent(
+        event="needs_you",
+        title="Decision",
+        body="waiting",
+        link="/decisions",
+        deliverable_id="DELIV-3",
+        language="ko",
+    )
+    shaped = NOTIFY_EVENT_BUILDERS["telegram"](content, {"chat_id": 42})
+    assert "reply_markup" not in shaped.payload
+
+
+def test_slack_shipped_with_deliverable_id_has_no_reply_markup() -> None:
+    # Buttons are a telegram-only affordance; other channels stay unchanged.
+    shaped = NOTIFY_EVENT_BUILDERS["slack"](
+        _shipped_content(deliverable_id="DELIV-4", language="ko"), {"channel": "C1"}
+    )
+    assert "reply_markup" not in shaped.payload
+
+
+def test_callback_data_fits_telegram_64_byte_cap() -> None:
+    deliverable_id = "123e4567-e89b-12d3-a456-426614174000"
+    shaped = NOTIFY_EVENT_BUILDERS["telegram"](
+        _shipped_content(deliverable_id=deliverable_id, language="en"), {"chat_id": 42}
+    )
+    for btn in shaped.payload["reply_markup"]["inline_keyboard"][0]:
+        assert len(btn["callback_data"].encode("utf-8")) <= 64
