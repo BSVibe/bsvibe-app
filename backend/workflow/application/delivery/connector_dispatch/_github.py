@@ -8,8 +8,7 @@ event builder. Two pieces live here:
    ``bsvibe/run-<id>`` branch, so the agent's file edits operate on a real
    checkout a PR diff can be built from.
 2. :func:`deliver_github` — the per-deliverable handler: commit_all → push →
-   open the github plugin's ``open_pr`` action. No diff → clean no-op success
-   (so a non-code run in a github workspace doesn't open an empty PR).
+   open the github plugin's ``open_pr`` action.
 """
 
 from __future__ import annotations
@@ -105,11 +104,10 @@ def build_github_workspace_provisioner(
     Direct-path tests, which inject no provisioner at all, are unaffected).
 
     ``cipher`` may be a :class:`CredentialCipher` or a zero-arg factory returning
-    one — the factory is called LAZILY only when a github binding is actually
-    present, so a run with no github target never forces the KMS key (no
-    credential is decrypted). The clone is token-authed with the decrypted
-    github secret (never logged). ``remote_url_for`` overrides the clone URL
-    (tests point it at a LOCAL bare repo); it defaults to github.com HTTPS.
+    one — called LAZILY only when a github binding is present, so a run with no
+    github target never forces the KMS key. The clone is token-authed with the
+    decrypted github secret (never logged). ``remote_url_for`` overrides the
+    clone URL (tests point it at a LOCAL bare repo); defaults to github.com HTTPS.
     """
     ops = git_ops or GitOps()
     url_for = remote_url_for or github_remote_url
@@ -121,16 +119,27 @@ def build_github_workspace_provisioner(
         binding = await resolve_github_binding(session, workspace_id=run.workspace_id)
         if binding is None:
             return
-        # OAuth token (if the workspace connected via "Connect with GitHub")
-        # takes precedence over the legacy signing secret — both clone, push,
-        # and PR creation must use the SAME resolved credential.
+        # Idempotency under drive_once re-entry: a resumed run (RUNNING → OPEN
+        # after a resolved Decision) re-enters here with the SAME workspace_dir,
+        # already holding the prior drive's checkout. git clone refuses a
+        # non-empty dir, so re-cloning would raise → tick rollback → run stalled
+        # OPEN forever. REUSE it — also semantically correct: a fresh clone would
+        # discard the agent's pre-pause work and drop the run branch.
+        if (workspace_dir / ".git").exists():  # noqa: ASYNC240
+            logger.info(
+                "github_run_workspace_reused",
+                workspace_id=str(run.workspace_id),
+                run_id=str(run.id),
+            )
+            return
+        # OAuth token (Connect with GitHub) takes precedence over the legacy
+        # signing secret — clone, push, and PR creation share the SAME credential.
         creds = await resolve_connector_credentials(
             session, account=binding.account, cipher=_resolve_cipher()
         )
         token = creds["token"]
-        # The provisioner is handed a freshly-created (empty) workspace_dir; git
-        # clone refuses a non-empty target, so remove the empty dir and let
-        # clone create it. (Local FS calls — the run setup is not hot-path I/O.)
+        # git clone refuses a non-empty target, so remove the freshly-created
+        # empty workspace_dir and let clone create it. (Local FS — not hot path.)
         if workspace_dir.exists() and not any(workspace_dir.iterdir()):  # noqa: ASYNC240
             workspace_dir.rmdir()  # noqa: ASYNC240
         await ops.clone(url_for(binding.repo), workspace_dir, token=token, depth=1)
@@ -161,9 +170,8 @@ class GithubDeliveryDeps:
     git_ops: GitOps
     remote_url_for: Callable[[str], str]
     runner: PluginRunner
-    # Opens a fresh session to resolve the github API credential (OAuth token
-    # else legacy secret) at delivery time — the binding was resolved in an
-    # already-closed session, so credential resolution needs its own.
+    # Opens a fresh session to resolve the github API credential at delivery
+    # time — the binding was resolved in an already-closed session.
     session_factory: async_sessionmaker[AsyncSession]
 
 
@@ -178,17 +186,12 @@ async def deliver_github(
 ) -> list[ActionResult]:
     """Commit the run's checkout → push the branch → open a PR.
 
-    github is the one delivery target that needs a real DIFF, so it is a
-    special case (NOT a simple event builder): the run already WORKED inside
-    a clone of the target repo (the run-setup provisioner cloned it onto a
-    ``bsvibe/run-<id>`` branch). Here we ``commit_all`` the agent's edits,
-    ``push`` that branch, then call the github plugin's ``open_pr`` action.
-
-    **No changes in the checkout → no PR, clean no-op success** (so a
-    non-code run in a github workspace does not open an empty PR). A missing
-    ``workspace_root`` / checkout dir / run id is a misconfigured target →
-    soft-fails into a failed action (the queue never wedges), mirroring the
-    builder ValueError path.
+    The run already WORKED inside a clone of the target repo (the provisioner
+    cloned it onto a ``bsvibe/run-<id>`` branch); here we ``commit_all`` the
+    agent's edits, ``push`` that branch, then call the github plugin's
+    ``open_pr`` action. **No changes → no PR, clean no-op success.** A missing
+    ``workspace_root`` / checkout dir / run id soft-fails into a failed action
+    (the queue never wedges), mirroring the builder ValueError path.
     """
     action_prefix = "github:outbound:pr"
     if deps.workspace_root is None or run_id is None:
@@ -224,12 +227,10 @@ async def deliver_github(
     summary = str(content.get("summary") or "")
     title, body = _split_summary(summary)
 
-    # 1. Commit the agent's file edits. No new working-tree changes is OK —
-    # the verifier's W2 ``commit_worktree`` step (run.product_id != None +
-    # real worktree) may have already committed every agent edit on top of
-    # the base branch. Lift E41 — only treat the run as a clean no-op when
-    # ``commit_all`` made no new commit AND the branch is NOT ahead of base.
-    # Otherwise still push + open the PR (the W2 commit IS the deliverable).
+    # 1. Commit the agent's file edits. No new working-tree changes is OK — the
+    # verifier's W2 ``commit_worktree`` step may have already committed them.
+    # Lift E41 — only a clean no-op when ``commit_all`` made no new commit AND
+    # the branch is NOT ahead of base; otherwise push + open the PR.
     committed = await deps.git_ops.commit_all(checkout, title)
     if not committed:
         ahead = await deps.git_ops.is_ahead_of_base(checkout, binding.base_branch)
