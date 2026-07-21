@@ -460,6 +460,81 @@ async def test_compose_verified_summary_no_verdict_unchanged() -> None:
     assert summary == "Add a cache.\n\nChanged files:\n- a.py"
 
 
+async def test_compose_verified_summary_localizes_chrome_for_ko() -> None:
+    """NC2 — for a KO workspace the fixed chrome is localized: the changed-file
+    header and the verification sentence read in Korean, never the English
+    'Changed files:' / 'Verified:' jargon a KO founder saw in prod."""
+    from types import SimpleNamespace
+
+    from backend.workflow.application.run_persistence import _compose_verified_summary
+
+    run = SimpleNamespace(payload={"frame": {"summary_title": "문자열 유틸 추가"}})
+    verdict = SimpleNamespace(
+        result={
+            "command_results": [
+                {"command": "uv run pytest -q", "passed": True},
+                {"command": "uv run ruff check backend/", "passed": True},
+            ],
+            "judge": {},
+        },
+    )
+    summary = _compose_verified_summary(
+        run,
+        "raw narration",
+        ["src/strx.py", "tests/test_strx.py"],
+        verdict,  # type: ignore[arg-type]
+        language="ko",
+    )
+    assert "바뀐 파일 2개:" in summary
+    assert "검증: 2개 확인 통과" in summary
+    # No English chrome leaks for a KO founder.
+    assert "Changed files" not in summary
+    assert "Verified:" not in summary
+    # The file list appears exactly ONCE.
+    assert summary.count("src/strx.py") == 1
+
+
+async def test_compose_verified_summary_ko_acceptance_case() -> None:
+    """NC2 — the acceptance-judge sentence is localized ('검증 통과') for KO."""
+    from types import SimpleNamespace
+
+    from backend.workflow.application.run_persistence import _compose_verified_summary
+
+    run = SimpleNamespace(payload={"frame": {"summary_title": "리팩터"}})
+    verdict = SimpleNamespace(result={"command_results": [], "judge": {"passed": True}})
+    summary = _compose_verified_summary(
+        run,
+        "n",
+        ["a.py"],
+        verdict,
+        language="ko",  # type: ignore[arg-type]
+    )
+    assert "검증 통과" in summary
+    assert "Acceptance check passed" not in summary
+
+
+async def test_compose_verified_summary_en_parity_unchanged() -> None:
+    """NC2 — EN keeps the current English chrome (parity)."""
+    from types import SimpleNamespace
+
+    from backend.workflow.application.run_persistence import _compose_verified_summary
+
+    run = SimpleNamespace(payload={"intent_text": "Add a cache."})
+    verdict = SimpleNamespace(
+        result={"command_results": [{"command": "pytest", "passed": True}], "judge": {}},
+    )
+    summary = _compose_verified_summary(
+        run,
+        "n",
+        ["a.py"],
+        verdict,
+        language="en",  # type: ignore[arg-type]
+    )
+    assert "Changed files:" in summary
+    assert "Verified: 1 check passed" in summary
+    assert "바뀐 파일" not in summary
+
+
 async def test_executor_work_reaches_the_deliverable_via_the_runs_tool_state(
     tmp_path: Path,
 ) -> None:

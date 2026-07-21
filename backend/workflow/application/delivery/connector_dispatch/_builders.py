@@ -74,22 +74,18 @@ def _split_summary(summary: str) -> tuple[str, str]:
     return title, summary.strip()
 
 
-def _summary_with_refs(content: dict[str, Any]) -> tuple[str, str]:
-    """``(title, body)`` from the deliverable summary, with ``artifact_refs``
-    appended to the body as a trailing reference list.
+def _summary_only(content: dict[str, Any]) -> tuple[str, str]:
+    """``(title, body)`` from the deliverable summary alone.
 
     Shared by the message-style builders (telegram/discord) and the
     issue/card-style builders (linear/trello): the title is the first non-empty
-    summary line, the body is the whole summary plus a linked artifact list so no
-    produced artifact is dropped from the delivered content.
+    summary line, the body is the whole summary. The verified deliverable's
+    summary ALREADY lists the changed files (``바뀐 파일`` / ``Changed files``), so
+    the produced ``artifact_refs`` are NOT re-appended as a second "Artifacts:"
+    block — that duplicate list is exactly the doubled file dump a KO founder saw
+    in prod Telegram.
     """
-    summary = str(content.get("summary") or "")
-    title, body = _split_summary(summary)
-    artifact_refs = content.get("artifact_refs") or []
-    if artifact_refs:
-        refs = "\n".join(f"- {ref}" for ref in artifact_refs)
-        body = f"{body}\n\nArtifacts:\n{refs}" if body else f"Artifacts:\n{refs}"
-    return title, body
+    return _split_summary(str(content.get("summary") or ""))
 
 
 def build_notion_event(content: dict[str, Any], delivery_config: dict[str, Any]) -> ShapedEvent:
@@ -97,16 +93,9 @@ def build_notion_event(content: dict[str, Any], delivery_config: dict[str, Any])
 
     * ``parent_page_id`` — routing, from the stable ``delivery_config``.
     * ``title`` — first line of the deliverable summary.
-    * ``body`` — the deliverable summary, with any ``artifact_refs`` appended
-      as a trailing reference list (so the delivered page links the produced
-      artifacts).
+    * ``body`` — the deliverable summary (which already lists any changed files).
     """
-    summary = str(content.get("summary") or "")
-    title, body = _split_summary(summary)
-    artifact_refs = content.get("artifact_refs") or []
-    if artifact_refs:
-        refs = "\n".join(f"- {ref}" for ref in artifact_refs)
-        body = f"{body}\n\nArtifacts:\n{refs}" if body else f"Artifacts:\n{refs}"
+    title, body = _summary_only(content)
     return ShapedEvent(
         artifact_type="page",
         event={
@@ -125,8 +114,7 @@ def build_slack_event(content: dict[str, Any], delivery_config: dict[str, Any]) 
       delivery target → ``ValueError`` (mirrors notion raising on a missing
       ``parent_page_id``), surfaced as a failed action rather than posting to a
       wrong / default channel.
-    * ``text`` — the deliverable summary, with any ``artifact_refs`` appended as
-      a trailing reference list so the message links the produced artifacts.
+    * ``text`` — the deliverable summary (which already lists any changed files).
 
     ``artifact_type`` is ``slack_message`` (what slack's ``@p.outbound``
     declares); the decrypted account secret is injected as ``bot_token``.
@@ -134,12 +122,7 @@ def build_slack_event(content: dict[str, Any], delivery_config: dict[str, Any]) 
     channel = delivery_config.get("channel")
     if not channel:
         raise ValueError("slack delivery_config missing required 'channel'")
-    summary = str(content.get("summary") or "")
-    _title, text = _split_summary(summary)
-    artifact_refs = content.get("artifact_refs") or []
-    if artifact_refs:
-        refs = "\n".join(f"- {ref}" for ref in artifact_refs)
-        text = f"{text}\n\nArtifacts:\n{refs}" if text else f"Artifacts:\n{refs}"
+    _title, text = _summary_only(content)
     return ShapedEvent(
         artifact_type="slack_message",
         event={"channel": str(channel), "text": text},
@@ -158,8 +141,8 @@ def build_email_event(content: dict[str, Any], delivery_config: dict[str, Any]) 
       omitted when unset so the email-sender plugin falls back to its own
       ``email_from`` config / ``from`` credential.
     * ``subject`` — first non-empty line of the deliverable summary.
-    * ``body`` — the deliverable summary (sent as plain text via ``as_text``),
-      with any ``artifact_refs`` appended as a trailing reference list.
+    * ``body`` — the deliverable summary (sent as plain text via ``as_text``;
+      it already lists any changed files).
 
     ``artifact_type`` is ``email`` (what email-sender's ``@p.outbound``
     declares); the decrypted account secret is injected as ``api_key``.
@@ -167,12 +150,7 @@ def build_email_event(content: dict[str, Any], delivery_config: dict[str, Any]) 
     to = delivery_config.get("to")
     if not to:
         raise ValueError("email delivery_config missing required 'to'")
-    summary = str(content.get("summary") or "")
-    subject, body = _split_summary(summary)
-    artifact_refs = content.get("artifact_refs") or []
-    if artifact_refs:
-        refs = "\n".join(f"- {ref}" for ref in artifact_refs)
-        body = f"{body}\n\nArtifacts:\n{refs}" if body else f"Artifacts:\n{refs}"
+    subject, body = _summary_only(content)
     event: dict[str, Any] = {
         "to": str(to),
         "subject": subject,
@@ -196,8 +174,7 @@ def build_telegram_event(content: dict[str, Any], delivery_config: dict[str, Any
       from the work text). A missing / empty ``chat_id`` is a misconfigured
       delivery target → ``ValueError`` (mirrors notion raising on a missing
       ``parent_page_id``).
-    * ``text`` — the deliverable summary, with any ``artifact_refs`` appended as
-      a trailing reference list.
+    * ``text`` — the deliverable summary (which already lists any changed files).
 
     ``artifact_type`` is ``telegram_message`` (what telegram's ``@p.outbound``
     declares); the decrypted account secret is injected as ``bot_token``.
@@ -205,7 +182,7 @@ def build_telegram_event(content: dict[str, Any], delivery_config: dict[str, Any
     chat_id = delivery_config.get("chat_id")
     if not chat_id:
         raise ValueError("telegram delivery_config missing required 'chat_id'")
-    _title, text = _summary_with_refs(content)
+    _title, text = _summary_only(content)
     return ShapedEvent(
         artifact_type="telegram_message",
         event={"chat_id": str(chat_id), "text": text},
@@ -220,8 +197,7 @@ def build_discord_event(content: dict[str, Any], delivery_config: dict[str, Any]
       derived from the work text). A missing / empty ``channel_id`` is a
       misconfigured delivery target → ``ValueError`` (mirrors notion raising on
       a missing ``parent_page_id``).
-    * ``content`` — the deliverable summary, with any ``artifact_refs`` appended
-      as a trailing reference list.
+    * ``content`` — the deliverable summary (which already lists any changed files).
 
     ``artifact_type`` is ``discord_message`` (what discord's ``@p.outbound``
     declares); the decrypted account secret is injected as ``bot_token``.
@@ -229,7 +205,7 @@ def build_discord_event(content: dict[str, Any], delivery_config: dict[str, Any]
     channel_id = delivery_config.get("channel_id")
     if not channel_id:
         raise ValueError("discord delivery_config missing required 'channel_id'")
-    _title, body = _summary_with_refs(content)
+    _title, body = _summary_only(content)
     return ShapedEvent(
         artifact_type="discord_message",
         event={"channel_id": str(channel_id), "content": body},
@@ -247,8 +223,7 @@ def build_linear_event(content: dict[str, Any], delivery_config: dict[str, Any])
       ``config['linear_team_id']``, but the builder explicitly sets the event
       ``team_id`` so the routing source is unambiguous and config-driven.
     * ``title`` — first non-empty line of the deliverable summary.
-    * ``description`` — the deliverable summary, with any ``artifact_refs``
-      appended as a trailing reference list.
+    * ``description`` — the deliverable summary (which already lists any changed files).
 
     ``artifact_type`` is ``issue`` (what linear's ``@p.outbound`` declares); the
     decrypted account secret is injected as ``api_key``.
@@ -256,7 +231,7 @@ def build_linear_event(content: dict[str, Any], delivery_config: dict[str, Any])
     team_id = delivery_config.get("team_id")
     if not team_id:
         raise ValueError("linear delivery_config missing required 'team_id'")
-    title, description = _summary_with_refs(content)
+    title, description = _summary_only(content)
     return ShapedEvent(
         artifact_type="issue",
         event={"team_id": str(team_id), "title": title, "description": description},
@@ -273,8 +248,7 @@ def build_trello_event(content: dict[str, Any], delivery_config: dict[str, Any])
       ``parent_page_id``).
     * ``title`` — first non-empty line of the deliverable summary (the trello
       plugin maps the event ``title`` to the card ``name``).
-    * ``desc`` — the deliverable summary, with any ``artifact_refs`` appended as
-      a trailing reference list.
+    * ``desc`` — the deliverable summary (which already lists any changed files).
 
     **Dual-secret caveat.** Trello authenticates with TWO query-param values:
     a ``key`` (its API key — an app-level, non-user-secret identifier) and a
@@ -296,7 +270,7 @@ def build_trello_event(content: dict[str, Any], delivery_config: dict[str, Any])
     api_key = delivery_config.get("api_key")
     if not api_key:
         raise ValueError("trello delivery_config missing required 'api_key'")
-    title, desc = _summary_with_refs(content)
+    title, desc = _summary_only(content)
     return ShapedEvent(
         artifact_type="card",
         event={"list_id": str(list_id), "title": title, "desc": desc},
@@ -356,7 +330,7 @@ __all__ = [
     "OutboundEventBuilder",
     "ShapedEvent",
     "_split_summary",
-    "_summary_with_refs",
+    "_summary_only",
     "build_discord_event",
     "build_email_event",
     "build_linear_event",

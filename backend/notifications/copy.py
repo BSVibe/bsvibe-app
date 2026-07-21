@@ -30,7 +30,10 @@ _SUPPORTED: frozenset[str] = frozenset({"en", "ko"})
 
 #: Static deep-link targets. ``shipped`` (``/deliverables/<id>``) and ``failed``
 #: (``/runs/<id>``) link to a per-row id, so those are built at the producer.
-NEEDS_YOU_LINK = "/decisions"
+#: ``needs_you`` points at the Brief (``/brief``) — the standalone decisions tab
+#: was removed and folded into the Brief, so a bare ``/decisions`` is now a dead
+#: target.
+NEEDS_YOU_LINK = "/brief"
 TRIGGERED_LINK = "/brief"
 DAILY_BRIEF_LINK = "/brief"
 
@@ -69,6 +72,34 @@ _FALLBACK_BODY: dict[str, dict[str, str]] = {
         "en": "A run reached its failed terminal.",
         "ko": "작업이 실패 상태로 종료됐어요.",
     },
+}
+
+
+#: Friendly, founder-facing BODY for a SYSTEM-minted ``needs_you`` Decision that
+#: carries NO founder question (verify-gate / ``human_review_required``). Keyed
+#: by the Decision ``payload["reason"]`` → localized copy, so the raw English
+#: honesty-gate ``decision.rationale`` ("verified but the target declares no gate
+#: to run — weak evidence (grade D)") never rides out to a KO founder. An unknown
+#: reason resolves to the generic ``needs_you`` fallback body above.
+_NEEDS_YOU_REASON_BODY: dict[str, dict[str, str]] = {
+    "weak_evidence_no_gate": {
+        "en": (
+            "The work is done, but I couldn't strongly verify the result — "
+            "please check whether it's OK to ship as-is."
+        ),
+        "ko": (
+            "작업을 마쳤는데, 결과가 제대로 검증됐다고 확신하기 어려워요. "
+            "그대로 내보내도 될지 봐주세요."
+        ),
+    },
+}
+
+#: Localized CTA framing for the trailing deep-link line of a push. ``needs_you``
+#: asks the founder to ANSWER; every other event asks them to REVIEW. The absolute
+#: URL is appended after " → " so chat channels render a tappable link.
+_CTA_PREFIX: dict[str, dict[str, str]] = {
+    "answer": {"en": "Answer it in your Brief", "ko": "요약에서 답해주세요"},
+    "review": {"en": "Review it in your Brief", "ko": "요약에서 확인해주세요"},
 }
 
 
@@ -124,10 +155,44 @@ def _render_body(event: str, lang: str, params: dict[str, object]) -> str:
     return detail or _FALLBACK_BODY[event][lang]
 
 
+def needs_you_reason_body(reason: str, language: str | None) -> str:
+    """Localized ``needs_you`` body for a SYSTEM-minted Decision (no founder question).
+
+    A ``human_review_required`` / verify-gate Decision has no founder question, so
+    its ``needs_you`` body is derived from the machine ``reason`` (not the English
+    ``decision.rationale``). A KNOWN reason maps to warm, founder-facing localized
+    copy; any UNKNOWN reason resolves to the generic ``needs_you`` fallback body —
+    so no raw English honesty-gate jargon ever reaches the founder. An unknown /
+    missing ``language`` falls back to English.
+    """
+    lang = _resolve_language(language)
+    mapping = _NEEDS_YOU_REASON_BODY.get(reason or "")
+    if mapping is not None:
+        return mapping[lang]
+    return _FALLBACK_BODY["needs_you"][lang]
+
+
+def notification_cta(event: str, language: str | None, base_url: str, path: str) -> str:
+    """Render the trailing deep-link line as a localized, tappable CTA.
+
+    Turns a bare relative deep-link ``path`` (``/brief``, ``/deliverables/<id>``,
+    …) into ``"<localized call-to-action> → <base_url><path>"`` so Telegram / Slack
+    render an absolute clickable URL instead of a bare ``/decisions`` fragment.
+    ``needs_you`` asks the founder to ANSWER; every other event asks them to
+    REVIEW. An unknown / missing ``language`` falls back to English.
+    """
+    lang = _resolve_language(language)
+    kind = "answer" if event == "needs_you" else "review"
+    url = f"{base_url.rstrip('/')}{path}"
+    return f"{_CTA_PREFIX[kind][lang]} → {url}"
+
+
 __all__ = [
     "DAILY_BRIEF_LINK",
     "NEEDS_YOU_LINK",
     "TRIGGERED_LINK",
     "NotificationCopy",
+    "needs_you_reason_body",
     "notification_copy",
+    "notification_cta",
 ]

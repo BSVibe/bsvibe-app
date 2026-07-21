@@ -139,11 +139,17 @@ async def test_asking_the_founder_queues_a_needs_you_notification(session) -> No
     assert row.payload["decision_id"] == decision_id
     assert row.payload["run_id"] == str(run.id)
     assert "Postgres or SQLite?" in row.payload["body"]
-    assert row.payload["link"] == "/decisions"
+    # The decisions tab was removed (unified into the Brief) — needs_you deep-links there.
+    assert row.payload["link"] == "/brief"
 
 
 async def test_every_decision_kind_queues_needs_you(session) -> None:
-    """create_decision is the SOLE live path — any Decision kind calls the founder."""
+    """create_decision is the SOLE live path — any Decision kind calls the founder.
+
+    NC1: a system-minted Decision with NO ``question`` must NOT leak the English
+    ``decision.rationale`` into the founder-facing body — an unknown reason maps
+    to the generic localized fallback instead.
+    """
     ws = uuid.uuid4()
     run = await _make_run(session, ws)
 
@@ -165,8 +171,65 @@ async def test_every_decision_kind_queues_needs_you(session) -> None:
         )
     ).scalar_one()
     assert row.event == "needs_you"
-    # No question in the payload → the body falls back to the Decision rationale.
-    assert "cannot dispatch" in row.payload["body"]
+    # No question → generic localized fallback, NEVER the English rationale.
+    assert "cannot dispatch" not in row.payload["body"]
+    assert row.payload["body"] == "A run has paused and needs your input."
+
+
+async def test_verify_gate_needs_you_maps_reason_to_friendly_copy(session) -> None:
+    """NC1 — a verify-gate Decision (reason=weak_evidence_no_gate, no question)
+    renders the warm localized sentence, not the raw English honesty-grade
+    rationale the KO founder saw in prod."""
+    ws = await _make_workspace(session, language="ko")
+    run = await _make_run(session, ws)
+    decision = await create_decision(
+        session,
+        run,
+        None,
+        kind="human_review_required",
+        payload={"reason": "weak_evidence_no_gate", "honesty_grade": "D"},
+        rationale="verified but the target declares no gate to run — weak evidence (grade D)",
+    )
+    await session.commit()
+
+    row = (
+        await session.execute(
+            select(NotificationEventRow).where(
+                NotificationEventRow.dedupe_key == f"needs_you:{decision.id}"
+            )
+        )
+    ).scalar_one()
+    assert row.payload["body"] == (
+        "작업을 마쳤는데, 결과가 제대로 검증됐다고 확신하기 어려워요. "
+        "그대로 내보내도 될지 봐주세요."
+    )
+    for jargon in ("grade", "gate", "weak evidence", "declares no"):
+        assert jargon not in row.payload["body"]
+
+
+async def test_ask_user_question_body_is_the_question_verbatim(session) -> None:
+    """NC1 — the ask_user_question path (payload HAS a question) is UNCHANGED:
+    the agent's own localized question rides through verbatim."""
+    ws = await _make_workspace(session, language="ko")
+    run = await _make_run(session, ws)
+    decision = await create_decision(
+        session,
+        run,
+        None,
+        kind="ask_user_question",
+        payload={"question": "어느 리전에 배포할까요?"},
+        rationale="ignored English rationale",
+    )
+    await session.commit()
+
+    row = (
+        await session.execute(
+            select(NotificationEventRow).where(
+                NotificationEventRow.dedupe_key == f"needs_you:{decision.id}"
+            )
+        )
+    ).scalar_one()
+    assert row.payload["body"] == "어느 리전에 배포할까요?"
 
 
 async def test_re_emitting_the_same_decision_is_deduped_to_one_row(session) -> None:

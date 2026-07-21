@@ -12,7 +12,13 @@ The five notification producers render their push ``{title, body}`` through
 
 from __future__ import annotations
 
-from backend.notifications.copy import NotificationCopy, notification_copy
+from backend.notifications.copy import (
+    NEEDS_YOU_LINK,
+    NotificationCopy,
+    needs_you_reason_body,
+    notification_copy,
+    notification_cta,
+)
 
 
 def test_needs_you_ko_localizes_title_keeps_question_verbatim() -> None:
@@ -86,3 +92,71 @@ def test_daily_brief_counts_both_languages() -> None:
     ko = notification_copy("daily_brief", "ko", shipped=2, failed=1, pending=3)
     assert ko.title == "오늘의 요약"
     assert ko.body == "배포 2 · 실패 1 · 대기 결정 3"
+
+
+# ── NC1: verify-gate needs_you must not leak English honesty-gate jargon ───────
+
+
+def test_needs_you_reason_weak_evidence_is_friendly_ko() -> None:
+    """A system-minted verify-gate decision (reason=weak_evidence_no_gate, no
+    ``question``) maps to a warm KO sentence — never the raw English
+    honesty-grade rationale."""
+    body = needs_you_reason_body("weak_evidence_no_gate", "ko")
+    assert body == (
+        "작업을 마쳤는데, 결과가 제대로 검증됐다고 확신하기 어려워요. "
+        "그대로 내보내도 될지 봐주세요."
+    )
+    # No leaked English jargon.
+    for jargon in ("grade", "gate", "weak evidence", "verified"):
+        assert jargon not in body
+
+
+def test_needs_you_reason_weak_evidence_en() -> None:
+    body = needs_you_reason_body("weak_evidence_no_gate", "en")
+    assert body == (
+        "The work is done, but I couldn't strongly verify the result — "
+        "please check whether it's OK to ship as-is."
+    )
+
+
+def test_needs_you_unknown_reason_falls_back_generic_localized() -> None:
+    """Any OTHER system reason gets the generic localized fallback — the English
+    ``decision.rationale`` is NEVER leaked through."""
+    ko = needs_you_reason_body("no_executor_dispatch_transport", "ko")
+    assert ko == "작업이 멈췄고 결정을 기다리고 있어요."
+    en = needs_you_reason_body("", "en")
+    assert en == "A run has paused and needs your input."
+
+
+# ── NC3: absolute clickable link + localized CTA ──────────────────────────────
+
+
+def test_needs_you_link_targets_the_brief_not_decisions() -> None:
+    # The decisions tab was removed (unified into the Brief) — needs_you links there.
+    assert NEEDS_YOU_LINK == "/brief"
+
+
+def test_cta_needs_you_ko_is_absolute_and_localized() -> None:
+    cta = notification_cta("needs_you", "ko", "https://app.example", "/brief")
+    assert cta == "요약에서 답해주세요 → https://app.example/brief"
+
+
+def test_cta_needs_you_en() -> None:
+    cta = notification_cta("needs_you", "en", "https://app.example", "/brief")
+    assert cta == "Answer it in your Brief → https://app.example/brief"
+
+
+def test_cta_shipped_ko_uses_review_phrasing_and_absolute_url() -> None:
+    cta = notification_cta("shipped", "ko", "https://app.example", "/deliverables/abc")
+    assert cta == "요약에서 확인해주세요 → https://app.example/deliverables/abc"
+
+
+def test_cta_review_en_for_non_decision_events() -> None:
+    for event in ("triggered", "shipped", "failed", "daily_brief"):
+        cta = notification_cta(event, "en", "https://app.example", "/brief")
+        assert cta == "Review it in your Brief → https://app.example/brief"
+
+
+def test_cta_strips_trailing_slash_on_base_url() -> None:
+    cta = notification_cta("shipped", "en", "https://app.example/", "/brief")
+    assert cta == "Review it in your Brief → https://app.example/brief"
