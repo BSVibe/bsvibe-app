@@ -101,6 +101,7 @@ async def _seed(
     timezone: str = "UTC",
     language: str = "en",
     link: str = "/decisions",
+    event: str = "needs_you",
 ) -> uuid.UUID:
     """Seed a workspace + its connector bindings + prefs + a pending outbox row.
 
@@ -122,8 +123,8 @@ async def _seed(
             )
         row = NotificationEventRow(
             workspace_id=ws,
-            event="needs_you",
-            dedupe_key=f"needs_you:{uuid.uuid4()}",
+            event=event,
+            dedupe_key=f"{event}:{uuid.uuid4()}",
             payload={
                 "title": "A run needs your decision",
                 "body": "Postgres or SQLite?",
@@ -284,6 +285,30 @@ async def test_push_link_is_rendered_as_absolute_localized_cta(
 
     assert sender.sent == ["telegram"]
     assert sender.contents[0].link == "요약에서 답해주세요 → https://app.example/brief"
+
+
+async def test_shipped_link_is_rendered_as_report_cta(
+    sf: async_sessionmaker[AsyncSession],
+) -> None:
+    """A ``shipped`` deliverable's trailing line is a 'View report' CTA to the
+    deliverable, not the generic Brief-review phrasing."""
+    ws = uuid.uuid4()
+    await _seed(
+        sf,
+        ws=ws,
+        connectors=[("telegram", {"chat_id": "42"})],
+        matrix={"shipped": {"in_app": True, "telegram": True}},
+        language="ko",
+        link="/deliverables/abc",
+        event="shipped",
+    )
+    sender = _RecordingSender()
+    worker = NotifyWorker(session_factory=sf, sender=sender, pwa_url="https://app.example")
+
+    await worker.drain_once()
+
+    assert sender.sent == ["telegram"]
+    assert sender.contents[0].link == "보고서 보기 → https://app.example/deliverables/abc"
 
 
 async def test_drain_is_a_noop_when_the_outbox_is_empty(

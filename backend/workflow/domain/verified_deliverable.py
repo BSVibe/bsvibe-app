@@ -43,15 +43,31 @@ logger = structlog.get_logger(__name__)
 _SETTLE_SUMMARY_CAP = 500
 
 
-def _shipped_detail(summary: str) -> str:
-    """The deliverable summary's first line — the founder-intent title of what
-    shipped (from ``_compose_verified_summary``: ``"<title>\\n\\n<body>"``).
+#: Prefixes that mark the deterministic verification line in a composed summary
+#: (``_verification_sentence`` — KO "검증…", EN "Verified…" / "Acceptance…"). Used
+#: to lift that one line into the compact card without the changed-files list.
+_VERIFY_LINE_PREFIXES = ("검증", "Verified", "Acceptance")
 
-    Passed verbatim as the ``shipped`` notification body ``detail``; the copy
-    catalog supplies a localized fallback when there is no title. Deterministic,
-    no LLM.
+
+def _shipped_detail(summary: str) -> str:
+    """The compact shipped-card body — the work-summary title line + the verify
+    line, extracted from the already-localized ``_compose_verified_summary`` output
+    (``"<title>\\n\\n바뀐 파일 N개:\\n- …\\n\\n검증: N개 확인 통과."``).
+
+    Deliberately drops the changed-files list — the compact chat card shows only
+    *what* shipped and *that it verified*; the full file list lives in the report.
+    Passed as the ``shipped`` notification body ``detail``; the copy catalog
+    supplies a localized fallback when there is no title. Deterministic, no LLM.
     """
-    return next((ln.strip() for ln in (summary or "").splitlines() if ln.strip()), "")
+    lines = [ln.strip() for ln in (summary or "").splitlines() if ln.strip()]
+    if not lines:
+        return ""
+    title = lines[0]
+    verify = next(
+        (ln for ln in lines[1:] if ln.startswith(_VERIFY_LINE_PREFIXES)),
+        "",
+    )
+    return f"{title}\n{verify}" if verify else title
 
 
 # Cap for the captured unified diff stored on the deliverable payload. A typical
