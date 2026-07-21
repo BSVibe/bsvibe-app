@@ -73,6 +73,14 @@ from backend.workflow.infrastructure.delivery.db import DeliveryEventRow
 
 logger = structlog.get_logger(__name__)
 
+# PT3 — run ``payload["kind"]`` values that mark an AUTONOMOUS-origin run (BSVibe
+# decided + did the work with no founder instruction). Such deliverables ALWAYS
+# route through Safe Mode so the founder's approval is the sole output control,
+# regardless of the workspace flag or the binding output_mode. The value mirrors
+# ``backend.schedule.infrastructure.schedule_db.SCHEDULE_KIND_PRODUCT_TICK`` — a
+# wire contract carried on the payload (workflow must not import schedule).
+_AUTONOMOUS_ORIGIN_KINDS: frozenset[str] = frozenset({"product_tick"})
+
 
 class PluginDispatchAdapter(Protocol):
     """Adapter the worker calls to actually deliver."""
@@ -101,7 +109,12 @@ async def _workspace_safe_mode(session: AsyncSession, workspace_id: uuid.UUID) -
     return bool(row.safe_mode) if row is not None else False
 
 
-def resolve_output_mode_gate(*, workspace_safe_mode: bool, output_mode: str | None) -> bool:
+def resolve_output_mode_gate(
+    *,
+    workspace_safe_mode: bool,
+    output_mode: str | None,
+    autonomous_origin: bool = False,
+) -> bool:
     """Decide whether a delivery must be QUEUED (``True``) or delivered (``False``).
 
     D3 / Synthesis §11 / Workflow §10.5 — the Safe Mode decision is keyed to the
@@ -109,13 +122,18 @@ def resolve_output_mode_gate(*, workspace_safe_mode: bool, output_mode: str | No
     flag as a global override. Precedence:
 
     1. ``workspace_safe_mode`` (global override) — when on, ALWAYS queue.
-    2. else the Resource's ``output_mode``: ``"safe"`` → queue, ``"direct"`` →
+    2. ``autonomous_origin`` (PT3) — an autonomous tick-origin run ALWAYS queues:
+       BSVibe decided + did the work, so the founder's Safe Mode approval is the
+       sole output control (independent of the flag or the binding output_mode).
+    3. else the Resource's ``output_mode``: ``"safe"`` → queue, ``"direct"`` →
        deliver.
-    3. else (no resolved ``output_mode`` — e.g. a founder-direct run with no
+    4. else (no resolved ``output_mode`` — e.g. a founder-direct run with no
        binding) → deliver. With the override off this matches today's behavior,
        so a Resource with no explicit ``output_mode`` does not regress.
     """
     if workspace_safe_mode:
+        return True
+    if autonomous_origin:
         return True
     if output_mode == "safe":
         return True
@@ -155,6 +173,27 @@ async def _run_output_mode(session: AsyncSession, run_id: uuid.UUID | None) -> s
     if binding is None:
         return None
     return binding.output_mode
+
+
+async def _run_autonomous_origin(session: AsyncSession, run_id: uuid.UUID | None) -> bool:
+    """PT3 — is this Run an AUTONOMOUS-origin run (e.g. a ``product_tick`` tick)?
+
+    ``AgentRunner.open_run`` propagates the trigger ``kind`` from the Request onto
+    ``ExecutionRun.payload["kind"]`` (the same seam as ``binding_id``). A run
+    whose ``kind`` is in :data:`_AUTONOMOUS_ORIGIN_KINDS` must always route its
+    deliverable through Safe Mode. Every degraded case (no run_id, missing run,
+    non-dict payload, absent/unknown kind) returns ``False`` — no regression for
+    founder-driven runs.
+    """
+    if run_id is None:
+        return False
+    from backend.workflow.infrastructure.db import ExecutionRun  # noqa: PLC0415
+
+    run = await session.get(ExecutionRun, run_id)
+    if run is None:
+        return False
+    payload = run.payload if isinstance(run.payload, dict) else {}
+    return payload.get("kind") in _AUTONOMOUS_ORIGIN_KINDS
 
 
 def extract_compensation_handles(
@@ -339,8 +378,11 @@ class DeliveryWorker(BaseWorker):
                 try:
                     workspace_safe_mode = await _workspace_safe_mode(session, row.workspace_id)
                     output_mode = await _run_output_mode(session, row.run_id)
+                    autonomous_origin = await _run_autonomous_origin(session, row.run_id)
                     if resolve_output_mode_gate(
-                        workspace_safe_mode=workspace_safe_mode, output_mode=output_mode
+                        workspace_safe_mode=workspace_safe_mode,
+                        output_mode=output_mode,
+                        autonomous_origin=autonomous_origin,
                     ):
                         # Gate says QUEUE — hold for founder approval instead of
                         # dispatching (D3: per-Run output_mode == "safe", OR the

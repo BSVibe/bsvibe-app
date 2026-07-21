@@ -32,7 +32,15 @@ from backend.schedule.infrastructure.repositories.workspace_schedule_repository_
 )
 from backend.schedule.infrastructure.schedule_db import (
     SCHEDULE_KIND_INSTRUCTION,
+    SCHEDULE_KIND_PRODUCT_TICK,
     WorkspaceScheduleRow,
+)
+
+#: The schedule kinds the authoring surface accepts. ``instruction`` carries the
+#: founder's ``text``; ``product_tick`` carries only the cadence + ``product_id``
+#: (BSVibe decides the action at fire time). Other kinds remain deferred.
+_SUPPORTED_KINDS: frozenset[str] = frozenset(
+    {SCHEDULE_KIND_INSTRUCTION, SCHEDULE_KIND_PRODUCT_TICK}
 )
 
 #: Default producer id — the REST authoring surface (S1). The MCP parity surface
@@ -71,12 +79,18 @@ class ScheduleService:
         ``producer_id`` names the INV-1 channel producer the emit carries — it
         defaults to the REST surface and is overridden to ``mcp:schedules_create``
         when this same service is invoked through the MCP parity tools (S2)."""
-        if kind != SCHEDULE_KIND_INSTRUCTION:
+        if kind not in _SUPPORTED_KINDS:
             raise ScheduleValidationError(
-                f"unsupported schedule kind {kind!r} (S1 supports only "
-                f"{SCHEDULE_KIND_INSTRUCTION!r})"
+                f"unsupported schedule kind {kind!r} (supported: "
+                f"{', '.join(sorted(_SUPPORTED_KINDS))})"
             )
-        if not text.strip():
+        if kind == SCHEDULE_KIND_PRODUCT_TICK:
+            # The founder sets only the cadence + which product; BSVibe decides
+            # WHAT to do at fire time, so ``product_id`` is required and ``text``
+            # is unused (the emitter seeds the meta-instruction).
+            if product_id is None:
+                raise ScheduleValidationError("product_tick schedule requires a product_id")
+        elif not text.strip():
             raise ScheduleValidationError("instruction text must not be empty")
         try:
             parse_cron(cron_expr)
@@ -85,7 +99,9 @@ class ScheduleService:
 
         after = now or datetime.now(tz=UTC)
         next_run_at = self._advancer.next_after(cron_expr=cron_expr, after=after)
-        payload: dict[str, Any] = {"text": text}
+        # ``product_tick`` stores no ``text`` (unused); ``instruction`` stores the
+        # founder's task text the framer reads.
+        payload: dict[str, Any] = {} if kind == SCHEDULE_KIND_PRODUCT_TICK else {"text": text}
         row = WorkspaceScheduleRow(
             id=uuid.uuid4(),
             workspace_id=workspace_id,

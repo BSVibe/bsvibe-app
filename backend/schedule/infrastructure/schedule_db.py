@@ -39,10 +39,13 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from backend.data import Base
 
-# The default (and, in S1, only) schedule kind: a natural-language
-# ``instruction`` whose ``payload["text"]`` IS the run task. Other kinds
-# (skill / product_tick / plugin_action) are deferred to S4.
+# The default schedule kind: a natural-language ``instruction`` whose
+# ``payload["text"]`` IS the run task.
 SCHEDULE_KIND_INSTRUCTION = "instruction"
+# ``product_tick`` — the founder sets only the cadence (WHEN) per product;
+# BSVibe decides the next action (WHAT) at fire time. Requires ``product_id``;
+# ``payload["text"]`` is unused (the emitter seeds a localized meta-instruction).
+SCHEDULE_KIND_PRODUCT_TICK = "product_tick"
 
 
 class WorkspaceScheduleRow(Base):
@@ -113,4 +116,8 @@ class WorkspaceScheduleRow(Base):
     )
 
 
-__all__ = ["SCHEDULE_KIND_INSTRUCTION", "WorkspaceScheduleRow"]
+__all__ = [
+    "SCHEDULE_KIND_INSTRUCTION",
+    "SCHEDULE_KIND_PRODUCT_TICK",
+    "WorkspaceScheduleRow",
+]

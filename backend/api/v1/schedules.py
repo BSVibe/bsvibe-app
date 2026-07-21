@@ -47,7 +47,10 @@ class ScheduleCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     kind: str = Field(default=SCHEDULE_KIND_INSTRUCTION)
-    text: str = Field(min_length=1, max_length=4000)
+    # Optional at the schema level: the ``instruction`` kind needs non-empty text
+    # (enforced by ScheduleService → 400) while ``product_tick`` ignores it, so a
+    # single schema serves both kinds.
+    text: str = Field(default="", max_length=4000)
     cron_expr: str = Field(min_length=1, max_length=255)
     product_id: uuid.UUID | None = None
     title: str | None = Field(default=None, max_length=500)

@@ -120,11 +120,37 @@ async def test_extra_field_is_rejected(client) -> None:
 
 
 async def test_empty_text_is_rejected(client) -> None:
+    # Empty text is invalid for the instruction kind — the kind rules live in
+    # ScheduleService (so product_tick can share the same schema with no text),
+    # so the rejection surfaces as a 400, not a schema-level 422.
     resp = await client.post(
         "/api/v1/schedules",
         json={"text": "", "cron_expr": "* * * * *"},
     )
-    assert resp.status_code == 422, resp.text
+    assert resp.status_code == 400, resp.text
+    assert "text" in resp.json()["detail"].lower()
+
+
+async def test_create_product_tick_requires_product_id_400(client) -> None:
+    resp = await client.post(
+        "/api/v1/schedules",
+        json={"kind": "product_tick", "cron_expr": "0 9 * * *"},
+    )
+    assert resp.status_code == 400, resp.text
+    assert "product" in resp.json()["detail"].lower()
+
+
+async def test_create_product_tick_with_product_id(client, db, workspace_id) -> None:
+    product_id = str(uuid.uuid4())
+    resp = await client.post(
+        "/api/v1/schedules",
+        json={"kind": "product_tick", "cron_expr": "0 9 * * *", "product_id": product_id},
+    )
+    assert resp.status_code == 201, resp.text
+    body = resp.json()
+    assert body["kind"] == "product_tick"
+    assert body["product_id"] == product_id
+    assert body["enabled"] is True
 
 
 async def test_patch_toggles_enabled(client) -> None:

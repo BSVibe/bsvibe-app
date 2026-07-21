@@ -87,6 +87,7 @@ async def _seed_run(
     workspace_id: uuid.UUID,
     safe_mode: bool,
     output_mode: str | None,
+    origin_kind: str | None = None,
 ) -> tuple[uuid.UUID, uuid.UUID]:
     """Seed a workspace + (optional) binding + run + deliverable + delivery event.
 
@@ -100,6 +101,10 @@ async def _seed_run(
     run_id = uuid.uuid4()
     deliverable_id = uuid.uuid4()
     run_payload: dict[str, Any] = {"intent_text": "ship release"}
+    if origin_kind is not None:
+        # PT3 — a tick-origin run carries the ``kind`` marker on its payload
+        # exactly as open_run propagates it from the Request.
+        run_payload["kind"] = origin_kind
     async with sf_() as s:
         s.add(WorkspaceRow(id=workspace_id, name="acme", safe_mode=safe_mode))
         await s.flush()
@@ -187,6 +192,40 @@ async def test_gate_decision_precedence() -> None:
     assert resolve_output_mode_gate(workspace_safe_mode=False, output_mode=None) is False
 
 
+async def test_gate_decision_autonomous_origin() -> None:
+    """PT3 — an autonomous (tick-origin) run ALWAYS queues, independent of the
+    workspace flag and the binding output_mode. Precedence:
+    workspace_safe_mode OR autonomous_origin OR output_mode=="safe" → queue."""
+    # Autonomous origin forces a queue even with the flag OFF + no safe binding.
+    assert (
+        resolve_output_mode_gate(
+            workspace_safe_mode=False, output_mode="direct", autonomous_origin=True
+        )
+        is True
+    )
+    assert (
+        resolve_output_mode_gate(
+            workspace_safe_mode=False, output_mode=None, autonomous_origin=True
+        )
+        is True
+    )
+    # Not autonomous → unchanged from the base precedence (no regression).
+    assert (
+        resolve_output_mode_gate(
+            workspace_safe_mode=False, output_mode="direct", autonomous_origin=False
+        )
+        is False
+    )
+    assert (
+        resolve_output_mode_gate(
+            workspace_safe_mode=False, output_mode=None, autonomous_origin=False
+        )
+        is False
+    )
+    # Default (omitted) autonomous_origin keeps today's behavior.
+    assert resolve_output_mode_gate(workspace_safe_mode=False, output_mode="direct") is False
+
+
 # ---------------------------------------------------------------------------
 # Delta 1 — per-Run divergence with the workspace flag OFF.
 # ---------------------------------------------------------------------------
@@ -216,6 +255,56 @@ async def test_per_run_direct_output_mode_delivers_when_workspace_flag_off(
     sink = _SinkDispatcher()
     assert await _worker(sf, sink).drain_once() == 1
     # Delivered directly — no queue item.
+    assert len(sink.dispatched) == 1
+    assert sink.dispatched[0]["deliverable_id"] == deliverable_id
+    async with sf() as s:
+        items = (await s.execute(select(SafeModeQueueItemRow))).scalars().all()
+        assert items == []
+
+
+# ---------------------------------------------------------------------------
+# PT3 — tick-origin runs always queue (autonomous work needs founder approval).
+# ---------------------------------------------------------------------------
+
+
+async def test_tick_origin_run_queues_even_with_flag_off_and_no_safe_binding(
+    sf: async_sessionmaker[AsyncSession],
+) -> None:
+    ws = uuid.uuid4()
+    run_id, _ = await _seed_run(
+        sf,
+        workspace_id=ws,
+        safe_mode=False,
+        output_mode=None,
+        origin_kind="product_tick",
+    )
+    sink = _SinkDispatcher()
+    assert await _worker(sf, sink).drain_once() == 1
+    # Queued, NOT dispatched — the tick origin forces Safe Mode even with the
+    # workspace flag OFF and no "safe" binding.
+    assert sink.dispatched == []
+    async with sf() as s:
+        items = (await s.execute(select(SafeModeQueueItemRow))).scalars().all()
+        assert len(items) == 1
+        assert items[0].run_id == run_id
+        assert items[0].status is SafeModeStatus.PENDING
+
+
+async def test_non_tick_run_still_delivers_with_flag_off(
+    sf: async_sessionmaker[AsyncSession],
+) -> None:
+    """No regression — a run with a non-tick origin kind still delivers directly
+    (only ``product_tick`` forces the queue)."""
+    ws = uuid.uuid4()
+    _, deliverable_id = await _seed_run(
+        sf,
+        workspace_id=ws,
+        safe_mode=False,
+        output_mode=None,
+        origin_kind="instruction",
+    )
+    sink = _SinkDispatcher()
+    assert await _worker(sf, sink).drain_once() == 1
     assert len(sink.dispatched) == 1
     assert sink.dispatched[0]["deliverable_id"] == deliverable_id
     async with sf() as s:

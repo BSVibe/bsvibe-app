@@ -78,6 +78,59 @@ async def test_create_rejects_empty_text() -> None:
             )
 
 
+async def test_create_accepts_product_tick_with_product_id() -> None:
+    async with memory_session() as session:
+        service = ScheduleService(session)
+        ws = uuid.uuid4()
+        product_id = uuid.uuid4()
+        now = datetime(2026, 7, 22, 10, 0, tzinfo=UTC)  # Wednesday
+        # ``text`` is unused for product_tick — BSVibe decides WHAT, the founder
+        # only sets WHEN (the cadence) + which product.
+        row = await service.create(
+            workspace_id=ws,
+            kind="product_tick",
+            text="",
+            cron_expr="0 9 * * *",
+            product_id=product_id,
+            now=now,
+        )
+        await session.commit()
+
+        assert row.kind == "product_tick"
+        assert row.product_id == product_id
+        assert row.plugin_name is None
+        assert row.enabled is True
+        # First next_run_at is tomorrow 09:00 UTC (the next daily 09:00 boundary).
+        assert row.next_run_at == datetime(2026, 7, 23, 9, 0, tzinfo=UTC)
+
+
+async def test_create_rejects_product_tick_without_product_id() -> None:
+    async with memory_session() as session:
+        service = ScheduleService(session)
+        with pytest.raises(ScheduleValidationError):
+            await service.create(
+                workspace_id=uuid.uuid4(),
+                kind="product_tick",
+                text="",
+                cron_expr="0 9 * * *",
+                product_id=None,
+            )
+
+
+async def test_create_still_rejects_unknown_kind_with_product_id() -> None:
+    """A product_id does not make an unknown kind valid."""
+    async with memory_session() as session:
+        service = ScheduleService(session)
+        with pytest.raises(ScheduleValidationError):
+            await service.create(
+                workspace_id=uuid.uuid4(),
+                kind="plugin_action",
+                text="do a thing",
+                cron_expr="0 9 * * 1",
+                product_id=uuid.uuid4(),
+            )
+
+
 async def test_delete_and_set_enabled_are_workspace_scoped() -> None:
     async with memory_session() as session:
         service = ScheduleService(session)

@@ -46,7 +46,10 @@ class ScheduleCreateInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     kind: str = Field(default=SCHEDULE_KIND_INSTRUCTION)
-    text: str = Field(min_length=1, max_length=4000)
+    # Optional at the schema level: the ``instruction`` kind needs non-empty text
+    # (enforced by ScheduleService) while ``product_tick`` ignores it — one schema
+    # for both kinds, mirroring REST ``ScheduleCreate``.
+    text: str = Field(default="", max_length=4000)
     cron_expr: str = Field(min_length=1, max_length=255)
     product_id: uuid.UUID | None = None
     title: str | None = Field(default=None, max_length=500)
@@ -174,8 +177,11 @@ def register_schedule_tools(registry: ToolRegistry) -> None:
             description=(
                 "Author a schedule that lets BSVibe start a run on its own on a "
                 "cron cadence. The `instruction` kind carries natural-language "
-                "`text` that becomes the scheduled run's task. 400-equivalent "
-                "error on an invalid cron expression."
+                "`text` that becomes the scheduled run's task. The `product_tick` "
+                "kind sets only the cadence for a product (`product_id` required, "
+                "`text` unused) — BSVibe decides the next action at fire time. "
+                "400-equivalent error on an invalid cron expression or a "
+                "product_tick with no product_id."
             ),
             input_schema=ScheduleCreateInput,
             output_schema=ScheduleView,
