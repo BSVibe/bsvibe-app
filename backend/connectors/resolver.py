@@ -110,7 +110,20 @@ class ConnectorInboundResolver:
         if parser is None:
             raise UnknownConnectorError(connector)
 
-        secret = self._cipher.decrypt(account.signing_secret_ciphertext)
+        # The inbound verification secret is the founder-set
+        # ``delivery_config["webhook_secret"]`` when present, else the decrypted
+        # per-account signing secret. Telegram's ``signing_secret_ciphertext``
+        # holds the BOT TOKEN (its outbound Bot-API credential), which contains a
+        # ``:`` and so cannot double as Telegram's ``secret_token`` — its distinct
+        # webhook secret lives in ``delivery_config`` (trello-style second auth
+        # value → config, no schema change). Other connectors set no
+        # ``webhook_secret`` and fall back to the decrypted signing secret.
+        configured_secret = account.delivery_config.get("webhook_secret")
+        secret = (
+            configured_secret
+            if isinstance(configured_secret, str) and configured_secret
+            else self._cipher.decrypt(account.signing_secret_ciphertext)
+        )
         event = parser(
             workspace_id=account.workspace_id,
             headers=headers,
