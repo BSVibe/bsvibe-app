@@ -163,6 +163,19 @@ class TestAnswerCallbackQuery:
         # no exception
         await client.answer_callback_query("cbid")
 
+    @respx.mock
+    async def test_tolerates_http_400_without_raising(self, client):
+        # Telegram returns HTTP 400 (not 200+ok:false) for an expired/invalid
+        # query id. This best-effort UI ack must NOT raise — the state change the
+        # tap triggered already committed; a 400 here must not 500 the webhook.
+        respx.post(f"{BOT}/answerCallbackQuery").mock(
+            return_value=httpx.Response(
+                400, json={"ok": False, "description": "Bad Request: query is too old"}
+            )
+        )
+        # no exception
+        await client.answer_callback_query("cbid")
+
 
 class TestEditMessageText:
     @respx.mock
@@ -194,6 +207,16 @@ class TestEditMessageText:
                 200, json={"ok": False, "description": "Bad Request: message is not modified"}
             )
         )
+        await client.edit_message_text(99, 42, "hi")
+
+    @respx.mock
+    async def test_tolerates_http_400_without_raising(self, client):
+        respx.post(f"{BOT}/editMessageText").mock(
+            return_value=httpx.Response(
+                400, json={"ok": False, "description": "Bad Request: message to edit not found"}
+            )
+        )
+        # no exception
         await client.edit_message_text(99, 42, "hi")
 
 

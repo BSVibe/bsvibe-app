@@ -275,12 +275,17 @@ async def _answer(
 ) -> None:
     if callback_query_id is None:  # pragma: no cover - always present on a real tap
         return
-    await runner.dispatch_action(
-        telegram,
-        action_name="answer_callback_query",
-        context=context,
-        kwargs={"callback_query_id": callback_query_id, "text": text},
-    )
+    # Best-effort: the approve/deny already committed, so a failed UI ack must
+    # NEVER propagate (it would 500 the webhook → Telegram retries the callback).
+    try:
+        await runner.dispatch_action(
+            telegram,
+            action_name="answer_callback_query",
+            context=context,
+            kwargs={"callback_query_id": callback_query_id, "text": text},
+        )
+    except Exception:  # noqa: BLE001 — cosmetic ack; never fail the settled callback
+        logger.warning("telegram_callback_answer_failed", exc_info=True)
 
 
 async def _edit(
@@ -297,17 +302,21 @@ async def _edit(
     message_id = parsed.get("message_id")
     if chat_id is None or message_id is None:  # pragma: no cover
         return
-    await runner.dispatch_action(
-        telegram,
-        action_name="edit_message_text",
-        context=context,
-        kwargs={
-            "chat_id": chat_id,
-            "message_id": message_id,
-            "text": text,
-            "reply_markup": _NO_KEYBOARD,
-        },
-    )
+    # Best-effort (see _answer): a failed edit must not fail the settled callback.
+    try:
+        await runner.dispatch_action(
+            telegram,
+            action_name="edit_message_text",
+            context=context,
+            kwargs={
+                "chat_id": chat_id,
+                "message_id": message_id,
+                "text": text,
+                "reply_markup": _NO_KEYBOARD,
+            },
+        )
+    except Exception:  # noqa: BLE001 — cosmetic edit; never fail the settled callback
+        logger.warning("telegram_callback_edit_failed", exc_info=True)
 
 
 def _load_json(raw_body: bytes) -> Any:

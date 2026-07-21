@@ -260,6 +260,39 @@ async def test_valid_founder_approve_dispatches_and_edits() -> None:
 
 
 @respx.mock
+async def test_ack_http_400_does_not_fail_the_settled_callback() -> None:
+    # Prod repro: after approve COMMITS, Telegram returns HTTP 400 on the UI ack
+    # (expired query id / uneditable message). The callback must STILL settle
+    # (handled=True, item APPROVED, dispatch fired) — NOT propagate a 500, which
+    # would make Telegram retry the callback.
+    respx.post(f"{BOT}/answerCallbackQuery").mock(
+        return_value=httpx.Response(
+            400, json={"ok": False, "description": "Bad Request: query is too old"}
+        )
+    )
+    respx.post(f"{BOT}/editMessageText").mock(
+        return_value=httpx.Response(
+            400, json={"ok": False, "description": "Bad Request: message to edit not found"}
+        )
+    )
+    dispatcher = _FakeDispatcher()
+    async with memory_session() as session:
+        ws = uuid.uuid4()
+        item_id, deliverable_id = await _seed(session, ws=ws)
+        handled = await handle_telegram_callback(
+            raw_body=_callback_raw(verb="apv", deliverable_id=str(deliverable_id)),
+            account=_account(ws),
+            session=session,
+            telegram=TELEGRAM,
+            cipher=_FakeCipher(),
+            dispatcher=dispatcher,
+        )
+        assert handled is True
+        assert await _status(session, item_id) is SafeModeStatus.APPROVED
+    assert len(dispatcher.calls) == 1  # approve still dispatched despite the ack 400
+
+
+@respx.mock
 async def test_valid_founder_reject_denies_and_edits() -> None:
     respx.post(f"{BOT}/answerCallbackQuery").mock(
         return_value=httpx.Response(200, json={"ok": True, "result": True})
