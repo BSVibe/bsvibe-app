@@ -14,9 +14,68 @@ from plugin.telegram.webhook import (
     SECRET_TOKEN_HEADER,
     WebhookError,
     WebhookSignatureError,
+    parse_callback_query,
     parse_update,
     verify_secret_token,
 )
+
+
+def _callback_body(
+    *,
+    data: str = "apv:DELIV-1",
+    from_id: int = 5,
+    chat_type: str = "private",
+) -> dict:
+    return {
+        "update_id": 500,
+        "callback_query": {
+            "id": "cbq-1",
+            "from": {"id": from_id, "is_bot": False},
+            "message": {
+                "message_id": 77,
+                "chat": {"id": 99, "type": chat_type},
+            },
+            "data": data,
+        },
+    }
+
+
+class TestParseCallbackQuery:
+    def test_extracts_all_fields_and_verb(self) -> None:
+        parsed = parse_callback_query(_callback_body())
+        assert parsed is not None
+        assert parsed["callback_query_id"] == "cbq-1"
+        assert parsed["from_id"] == 5
+        assert parsed["chat_type"] == "private"
+        assert parsed["chat_id"] == 99
+        assert parsed["message_id"] == 77
+        assert parsed["verb"] == "apv"
+        assert parsed["deliverable_id"] == "DELIV-1"
+        assert parsed["malformed"] is False
+
+    def test_reject_verb(self) -> None:
+        parsed = parse_callback_query(_callback_body(data="rej:DELIV-9"))
+        assert parsed is not None
+        assert parsed["verb"] == "rej"
+        assert parsed["deliverable_id"] == "DELIV-9"
+
+    def test_unknown_verb_is_malformed(self) -> None:
+        parsed = parse_callback_query(_callback_body(data="del:DELIV-1"))
+        assert parsed is not None
+        assert parsed["malformed"] is True
+        assert parsed["verb"] is None
+        assert parsed["deliverable_id"] is None
+
+    def test_missing_data_is_malformed(self) -> None:
+        body = _callback_body()
+        del body["callback_query"]["data"]
+        parsed = parse_callback_query(body)
+        assert parsed is not None
+        assert parsed["malformed"] is True
+
+    def test_no_callback_query_returns_none(self) -> None:
+        assert parse_callback_query({"update_id": 1, "message": {}}) is None
+
 
 WORKSPACE = uuid.uuid4()
 SECRET = "shhh-secret-token"

@@ -274,6 +274,12 @@ class NotifyWorker(BaseWorker):
             title=str(payload.get("title") or ""),
             body=str(payload.get("body") or ""),
             link=(str(payload["link"]) if payload.get("link") else None),
+            # ``shipped`` rows carry the verified deliverable id (see
+            # write_verified_deliverable); channels use it to render inline
+            # Approve/Reject actions. Absent on other events.
+            deliverable_id=(
+                str(payload["deliverable_id"]) if payload.get("deliverable_id") else None
+            ),
         )
 
     async def _localized_content(
@@ -288,9 +294,13 @@ class NotifyWorker(BaseWorker):
         language. A row with no link is returned unchanged.
         """
         content = self._content(row)
+        # Resolve the workspace language always (not just when there's a link),
+        # so channels can localize inline-action labels on a link-carrying
+        # ``shipped`` card. Best-effort — degrades to "en".
+        language = await load_workspace_language(session, row.workspace_id)
+        content = replace(content, language=language)
         if not content.link:
             return content
-        language = await load_workspace_language(session, row.workspace_id)
         cta = notification_cta(row.event, language, self._pwa_url, content.link)
         return replace(content, link=cta)
 

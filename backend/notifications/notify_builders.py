@@ -48,6 +48,15 @@ class NotificationContent:
     title: str
     body: str
     link: str | None = None
+    # The verified Deliverable this notification is about (``shipped`` events
+    # only). When set on a ``shipped`` event, chat channels that support inline
+    # actions (telegram) render Approve/Reject buttons carrying it in the
+    # ``callback_data`` so the founder can settle the held delivery in place.
+    deliverable_id: str | None = None
+    # The workspace's output language ("ko" / "en"), resolved by the NotifyWorker
+    # push-render boundary — so a channel can localize button labels / result
+    # lines. Defaults to "en" (the workspace-language fallback).
+    language: str = "en"
 
 
 @dataclass(frozen=True, slots=True)
@@ -108,6 +117,41 @@ def build_slack_notification(
     )
 
 
+# Inline-button callback_data verbs (kept ≤64 bytes with a uuid — Telegram's cap).
+CALLBACK_APPROVE = "apv"
+CALLBACK_REJECT = "rej"
+
+
+def _approval_keyboard(content: NotificationContent) -> dict[str, Any] | None:
+    """The Approve/Reject inline keyboard for a ``shipped`` notification.
+
+    Returns ``None`` for any event other than ``shipped`` or a shipped event
+    without a ``deliverable_id`` — those stay plain messages (no buttons). The
+    ``callback_data`` is ``"<verb>:<deliverable_id>"`` (verb ∈ {apv, rej}); the
+    inbound callback handler parses it to settle the held Safe-Mode item. Labels
+    are localized to the workspace language ("ko" → 승인/거절, else Approve/Reject).
+    """
+    if content.event != "shipped" or not content.deliverable_id:
+        return None
+    ko = content.language == "ko"
+    approve = "승인" if ko else "Approve"
+    reject = "거절" if ko else "Reject"
+    return {
+        "inline_keyboard": [
+            [
+                {
+                    "text": approve,
+                    "callback_data": f"{CALLBACK_APPROVE}:{content.deliverable_id}",
+                },
+                {
+                    "text": reject,
+                    "callback_data": f"{CALLBACK_REJECT}:{content.deliverable_id}",
+                },
+            ]
+        ]
+    }
+
+
 def build_telegram_notification(
     content: NotificationContent, delivery_config: dict[str, Any]
 ) -> ShapedNotification:
@@ -115,14 +159,20 @@ def build_telegram_notification(
 
     ``chat_id`` is routing from the stable ``delivery_config``; a missing one is
     a misconfigured channel → ``ValueError``. The decrypted account secret is
-    injected as ``bot_token``.
+    injected as ``bot_token``. A ``shipped`` event carrying a ``deliverable_id``
+    additionally gets an Approve/Reject ``reply_markup`` so the founder can settle
+    the held delivery straight from Telegram (other events stay plain).
     """
     chat_id = delivery_config.get("chat_id")
     if not chat_id:
         raise ValueError("telegram notify delivery_config missing required 'chat_id'")
+    payload: dict[str, Any] = {"chat_id": str(chat_id), "text": _message_text(content)}
+    keyboard = _approval_keyboard(content)
+    if keyboard is not None:
+        payload["reply_markup"] = keyboard
     return ShapedNotification(
         artifact_type="telegram_message",
-        payload={"chat_id": str(chat_id), "text": _message_text(content)},
+        payload=payload,
         credential_key="bot_token",
     )
 
@@ -196,6 +246,8 @@ NOTIFY_EVENT_BUILDERS: dict[str, NotifyBuilder] = {
 
 
 __all__ = [
+    "CALLBACK_APPROVE",
+    "CALLBACK_REJECT",
     "NOTIFY_EVENT_BUILDERS",
     "NotificationContent",
     "NotifyBuilder",

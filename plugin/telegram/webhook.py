@@ -130,11 +130,52 @@ def parse_update(
     )
 
 
+# callback_data verbs an approve/reject tap can carry (mirror
+# ``backend.notifications.notify_builders`` CALLBACK_APPROVE / CALLBACK_REJECT).
+_CALLBACK_VERBS = frozenset({"apv", "rej"})
+
+
+def parse_callback_query(body: dict[str, Any]) -> dict[str, Any] | None:
+    """Extract the fields a callback_query approve/reject tap carries.
+
+    Pure (no I/O, no secret check — the webhook_token + secret-token header
+    already gated the request via :func:`parse_update`). Returns ``None`` when
+    the update is not a ``callback_query``. Otherwise returns the founder-auth +
+    action fields the inbound callback handler needs::
+
+        {callback_query_id, from_id, chat_type, chat_id, message_id,
+         verb, deliverable_id, malformed}
+
+    ``verb`` / ``deliverable_id`` are ``None`` and ``malformed`` is ``True`` when
+    the ``data`` is absent or not a recognised ``"<verb>:<deliverable_id>"`` with
+    ``verb`` ∈ {apv, rej} — the handler answers a friendly error rather than
+    acting on a garbage payload.
+    """
+    cq = body.get("callback_query")
+    if not isinstance(cq, dict):
+        return None
+    message = cq.get("message") or {}
+    chat = message.get("chat") or {}
+    verb, _, deliverable_id = str(cq.get("data") or "").partition(":")
+    malformed = verb not in _CALLBACK_VERBS or not deliverable_id
+    return {
+        "callback_query_id": cq.get("id"),
+        "from_id": (cq.get("from") or {}).get("id"),
+        "chat_type": chat.get("type"),
+        "chat_id": chat.get("id"),
+        "message_id": message.get("message_id"),
+        "verb": None if malformed else verb,
+        "deliverable_id": None if malformed else deliverable_id,
+        "malformed": malformed,
+    }
+
+
 __all__ = [
     "SECRET_TOKEN_HEADER",
     "SUPPORTED_UPDATE_KEYS",
     "WebhookError",
     "WebhookSignatureError",
+    "parse_callback_query",
     "parse_update",
     "verify_secret_token",
 ]
