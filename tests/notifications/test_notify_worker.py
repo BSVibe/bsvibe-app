@@ -99,13 +99,15 @@ async def _seed(
     matrix: dict[str, dict[str, bool]] | None = None,
     quiet: tuple[str, str] | None = None,
     timezone: str = "UTC",
+    language: str = "en",
+    link: str = "/decisions",
 ) -> uuid.UUID:
     """Seed a workspace + its connector bindings + prefs + a pending outbox row.
 
     Returns the pending :class:`NotificationEventRow` id.
     """
     async with sf() as s:
-        s.add(WorkspaceRow(id=ws, name="Test WS", timezone=timezone))
+        s.add(WorkspaceRow(id=ws, name="Test WS", timezone=timezone, language=language))
         for connector, cfg in connectors:
             s.add(_account(ws, connector, cfg))
         if matrix is not None or quiet is not None:
@@ -125,7 +127,7 @@ async def _seed(
             payload={
                 "title": "A run needs your decision",
                 "body": "Postgres or SQLite?",
-                "link": "/decisions",
+                "link": link,
             },
             status=NotificationStatus.PENDING,
         )
@@ -258,6 +260,30 @@ async def test_no_push_channels_still_settles_sent(
     assert processed == 1
     assert sender.sent == []
     assert (await _row(sf, row_id)).status is NotificationStatus.SENT
+
+
+async def test_push_link_is_rendered_as_absolute_localized_cta(
+    sf: async_sessionmaker[AsyncSession],
+) -> None:
+    """NC3 — the bare relative deep-link path is rendered into a friendly, absolute
+    clickable CTA in the workspace's language before the push is sent, so Telegram
+    shows '요약에서 답해주세요 → https://app.example/brief', not a bare '/decisions'."""
+    ws = uuid.uuid4()
+    await _seed(
+        sf,
+        ws=ws,
+        connectors=[("telegram", {"chat_id": "42"})],
+        matrix={"needs_you": {"in_app": True, "telegram": True}},
+        language="ko",
+        link="/brief",
+    )
+    sender = _RecordingSender()
+    worker = NotifyWorker(session_factory=sf, sender=sender, pwa_url="https://app.example")
+
+    await worker.drain_once()
+
+    assert sender.sent == ["telegram"]
+    assert sender.contents[0].link == "요약에서 답해주세요 → https://app.example/brief"
 
 
 async def test_drain_is_a_noop_when_the_outbox_is_empty(

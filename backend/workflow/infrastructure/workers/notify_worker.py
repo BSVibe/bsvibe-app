@@ -37,7 +37,7 @@ permanently-misconfigured channel does not spin forever.
 from __future__ import annotations
 
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, time, tzinfo
 from typing import Protocol
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -47,9 +47,11 @@ from sqlalchemy import Select, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from backend.channels import Channel
-from backend.identity.workspaces_db import WorkspaceRow
+from backend.config import get_settings
+from backend.identity.workspaces_db import WorkspaceRow, load_workspace_language
 from backend.notifications.bindings import IN_APP_CHANNEL, resolve_notify_bindings
 from backend.notifications.channels import NOTIFICATION_OUTBOX
+from backend.notifications.copy import notification_cta
 from backend.notifications.db import (
     DEFAULT_MATRIX,
     NotificationEventRow,
@@ -152,11 +154,15 @@ class NotifyWorker(BaseWorker):
         session_factory: async_sessionmaker[AsyncSession],
         sender: NotifySender,
         config: NotifyWorkerConfig | None = None,
+        pwa_url: str | None = None,
     ) -> None:
         self._cfg = config or NotifyWorkerConfig()
         super().__init__(name="notify_worker", poll_interval_s=self._cfg.poll_interval_s)
         self._session_factory = session_factory
         self._sender = sender
+        # Base URL the trailing deep-link CTA is made absolute against, so Telegram
+        # renders a tappable ``https://…/brief`` instead of a bare ``/decisions``.
+        self._pwa_url = pwa_url or get_settings().pwa_url
 
     async def _tick(self) -> int:
         return await self.drain_once()
@@ -209,7 +215,7 @@ class NotifyWorker(BaseWorker):
         binding_by_connector = {b.connector: b for b in bindings}
         targets = [c for c in enabled if c in binding_by_connector]
 
-        content = self._content(row)
+        content = await self._localized_content(session, row)
         succeeded = 0
         for connector in targets:
             binding = binding_by_connector[connector]
@@ -269,6 +275,24 @@ class NotifyWorker(BaseWorker):
             body=str(payload.get("body") or ""),
             link=(str(payload["link"]) if payload.get("link") else None),
         )
+
+    async def _localized_content(
+        self, session: AsyncSession, row: NotificationEventRow
+    ) -> NotificationContent:
+        """The row's content with its bare relative deep-link rendered as a
+        friendly, absolute, localized CTA (``요약에서 답해주세요 → https://…/brief``).
+
+        The producer stores a SEMANTIC relative path (``/brief`` /
+        ``/deliverables/<id>``); the push-render boundary turns it into a tappable
+        absolute URL framed by a localized call-to-action in the workspace's
+        language. A row with no link is returned unchanged.
+        """
+        content = self._content(row)
+        if not content.link:
+            return content
+        language = await load_workspace_language(session, row.workspace_id)
+        cta = notification_cta(row.event, language, self._pwa_url, content.link)
+        return replace(content, link=cta)
 
     @staticmethod
     async def _matrix(session: AsyncSession, workspace_id: uuid.UUID) -> dict[str, dict[str, bool]]:

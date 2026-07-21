@@ -99,14 +99,16 @@ class TestNotionEventBuilder:
         assert shaped.event["title"] == "Quarterly Spec"
         assert "body line two" in shaped.event["body"]
 
-    def test_artifact_refs_appended_to_body(self) -> None:
+    def test_artifact_refs_not_re_appended_as_duplicate_block(self) -> None:
+        # NC2 de-dupe: the deliverable summary already lists the changed files
+        # ("바뀐 파일" / "Changed files"), so the builder no longer re-appends the
+        # same paths under a duplicate "Artifacts:" block.
         shaped = build_notion_event(
             {"summary": "Spec", "artifact_refs": ["a.md", "b.md"]},
             {"parent_page_id": "P"},
         )
-        assert "Artifacts:" in shaped.event["body"]
-        assert "- a.md" in shaped.event["body"]
-        assert "- b.md" in shaped.event["body"]
+        assert "Artifacts:" not in shaped.event["body"]
+        assert shaped.event["body"] == "Spec"
 
     def test_empty_summary_gets_placeholder_title(self) -> None:
         shaped = build_notion_event({"summary": "", "artifact_refs": []}, {"parent_page_id": "P"})
@@ -134,14 +136,13 @@ class TestSlackEventBuilder:
         assert "Ship note" in shaped.event["text"]
         assert "body line two" in shaped.event["text"]
 
-    def test_artifact_refs_appended_to_text(self) -> None:
+    def test_artifact_refs_not_re_appended_as_duplicate_block(self) -> None:
         shaped = build_slack_event(
             {"summary": "Spec", "artifact_refs": ["a.md", "b.md"]},
             {"channel": "C1"},
         )
-        assert "Artifacts:" in shaped.event["text"]
-        assert "- a.md" in shaped.event["text"]
-        assert "- b.md" in shaped.event["text"]
+        assert "Artifacts:" not in shaped.event["text"]
+        assert shaped.event["text"] == "Spec"
 
     def test_routing_comes_from_config_not_content(self) -> None:
         # Even if content carried a channel (it must not), config is the source.
@@ -181,13 +182,13 @@ class TestEmailEventBuilder:
         shaped = build_email_event({"summary": "S"}, {"to": "x@y.dev"})
         assert "from" not in shaped.event
 
-    def test_artifact_refs_appended_to_body(self) -> None:
+    def test_artifact_refs_not_re_appended_as_duplicate_block(self) -> None:
         shaped = build_email_event(
             {"summary": "Spec", "artifact_refs": ["a.md"]},
             {"to": "x@y.dev"},
         )
-        assert "Artifacts:" in shaped.event["body"]
-        assert "- a.md" in shaped.event["body"]
+        assert "Artifacts:" not in shaped.event["body"]
+        assert shaped.event["body"] == "Spec"
 
     def test_routing_comes_from_config_not_content(self) -> None:
         shaped = build_email_event(
@@ -213,14 +214,18 @@ class TestTelegramEventBuilder:
         assert "Ship note" in shaped.event["text"]
         assert "body line two" in shaped.event["text"]
 
-    def test_artifact_refs_appended_to_text(self) -> None:
+    def test_artifact_refs_not_re_appended_as_duplicate_block(self) -> None:
+        # NC2 — the prod telegram screenshot showed the file list twice
+        # ("Changed files" in the summary + a duplicate "Artifacts:" block). The
+        # builder no longer re-appends the refs; the summary already lists them.
         shaped = build_telegram_event(
-            {"summary": "Spec", "artifact_refs": ["a.md", "b.md"]},
+            {"summary": "바뀐 파일 2개:\n- a.md\n- b.md", "artifact_refs": ["a.md", "b.md"]},
             {"chat_id": "C1"},
         )
-        assert "Artifacts:" in shaped.event["text"]
-        assert "- a.md" in shaped.event["text"]
-        assert "- b.md" in shaped.event["text"]
+        assert "Artifacts:" not in shaped.event["text"]
+        # Each file appears exactly ONCE (from the summary, not re-appended).
+        assert shaped.event["text"].count("a.md") == 1
+        assert shaped.event["text"].count("b.md") == 1
 
     def test_routing_comes_from_config_not_content(self) -> None:
         shaped = build_telegram_event(
@@ -246,13 +251,13 @@ class TestDiscordEventBuilder:
         assert "Ship note" in shaped.event["content"]
         assert "body line two" in shaped.event["content"]
 
-    def test_artifact_refs_appended_to_content(self) -> None:
+    def test_artifact_refs_not_re_appended_as_duplicate_block(self) -> None:
         shaped = build_discord_event(
             {"summary": "Spec", "artifact_refs": ["a.md"]},
             {"channel_id": "C1"},
         )
-        assert "Artifacts:" in shaped.event["content"]
-        assert "- a.md" in shaped.event["content"]
+        assert "Artifacts:" not in shaped.event["content"]
+        assert shaped.event["content"] == "Spec"
 
     def test_routing_comes_from_config_not_content(self) -> None:
         shaped = build_discord_event(
@@ -278,13 +283,13 @@ class TestLinearEventBuilder:
         assert shaped.event["title"] == "Fix the bug"
         assert "the description body" in shaped.event["description"]
 
-    def test_artifact_refs_appended_to_description(self) -> None:
+    def test_artifact_refs_not_re_appended_as_duplicate_block(self) -> None:
         shaped = build_linear_event(
             {"summary": "Spec", "artifact_refs": ["a.md"]},
             {"team_id": "T1"},
         )
-        assert "Artifacts:" in shaped.event["description"]
-        assert "- a.md" in shaped.event["description"]
+        assert "Artifacts:" not in shaped.event["description"]
+        assert shaped.event["description"] == "Spec"
 
     def test_routing_comes_from_config_not_content(self) -> None:
         shaped = build_linear_event(
@@ -313,13 +318,13 @@ class TestTrelloEventBuilder:
         assert shaped.event["title"] == "Card title"
         assert "the card body" in shaped.event["desc"]
 
-    def test_artifact_refs_appended_to_desc(self) -> None:
+    def test_artifact_refs_not_re_appended_as_duplicate_block(self) -> None:
         shaped = build_trello_event(
             {"summary": "Spec", "artifact_refs": ["a.md"]},
             {"list_id": "L1", "api_key": "k"},
         )
-        assert "Artifacts:" in shaped.event["desc"]
-        assert "- a.md" in shaped.event["desc"]
+        assert "Artifacts:" not in shaped.event["desc"]
+        assert shaped.event["desc"] == "Spec"
 
     def test_routing_comes_from_config_not_content(self) -> None:
         shaped = build_trello_event(
