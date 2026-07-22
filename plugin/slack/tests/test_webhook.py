@@ -8,6 +8,7 @@ import hashlib
 import hmac
 import json
 import time
+import urllib.parse
 import uuid
 
 import pytest
@@ -16,7 +17,9 @@ from backend.workflow.domain.incoming import TriggerEvent
 from plugin.slack.webhook import (
     WebhookError,
     WebhookSignatureError,
+    decode_interaction_payload,
     parse_event,
+    parse_interaction,
     verify_signature,
 )
 
@@ -243,3 +246,71 @@ class TestParseEvent:
                 raw_body=b"{not json",
                 secret=None,
             )
+
+
+def _block_actions_body(*, verb: str = "apv", deliverable_id: str = "D1") -> bytes:
+    """A slack interactivity POST body: form-encoded ``payload=<json>``."""
+    payload = {
+        "type": "block_actions",
+        "user": {"id": "U1", "team_id": "T1"},
+        "team": {"id": "T1"},
+        "channel": {"id": "C1"},
+        "message": {
+            "ts": "1700000000.000100",
+            "blocks": [{"type": "section"}, {"type": "actions"}],
+        },
+        "response_url": "https://hooks.slack.com/actions/T1/1/x",
+        "actions": [{"value": f"{verb}:{deliverable_id}", "action_id": f"{verb}:{deliverable_id}"}],
+    }
+    return urllib.parse.urlencode({"payload": json.dumps(payload)}).encode()
+
+
+class TestInteractionDecoding:
+    def test_decode_interaction_payload_returns_block_actions_dict(self):
+        data = decode_interaction_payload(_block_actions_body(verb="rej", deliverable_id="D7"))
+        assert data is not None
+        assert data["type"] == "block_actions"
+        assert data["actions"][0]["value"] == "rej:D7"
+
+    def test_decode_interaction_payload_none_for_raw_json_event(self):
+        body = json.dumps({"type": "event_callback", "event_id": "Ev1"}).encode()
+        assert decode_interaction_payload(body) is None
+
+    def test_decode_interaction_payload_none_for_non_block_actions(self):
+        body = urllib.parse.urlencode({"payload": json.dumps({"type": "shortcut"})}).encode()
+        assert decode_interaction_payload(body) is None
+
+    def test_parse_event_returns_none_for_interactivity_post(self):
+        # A form-encoded block_actions POST must be skipped so the route's
+        # ``event is None`` interaction branch fires — signature still verified.
+        body = _block_actions_body()
+        ts = str(int(time.time()))
+        headers = {
+            "X-Slack-Request-Timestamp": ts,
+            "X-Slack-Signature": _sign(SECRET, ts, body),
+        }
+        evt = parse_event(workspace_id=WORKSPACE, headers=headers, raw_body=body, secret=SECRET)
+        assert evt is None
+
+    def test_parse_event_interactivity_still_verifies_signature(self):
+        body = _block_actions_body()
+        ts = str(int(time.time()))
+        headers = {
+            "X-Slack-Request-Timestamp": ts,
+            "X-Slack-Signature": _sign("wrong", ts, body),
+        }
+        with pytest.raises(WebhookSignatureError):
+            parse_event(workspace_id=WORKSPACE, headers=headers, raw_body=body, secret=SECRET)
+
+    def test_parse_interaction_normalizes_fields(self):
+        data = decode_interaction_payload(_block_actions_body(verb="apv", deliverable_id="D9"))
+        parsed = parse_interaction(data)
+        assert parsed["verb"] == "apv"
+        assert parsed["deliverable_id"] == "D9"
+        assert parsed["user_id"] == "U1"
+        assert parsed["team_id"] == "T1"
+        assert parsed["channel_id"] == "C1"
+        assert parsed["message_ts"] == "1700000000.000100"
+        assert parsed["message_blocks"] == [{"type": "section"}, {"type": "actions"}]
+        assert parsed["response_url"] == "https://hooks.slack.com/actions/T1/1/x"
+        assert parsed["malformed"] is False

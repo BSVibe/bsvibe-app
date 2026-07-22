@@ -21,7 +21,7 @@ from backend.extensions.plugin.context import SkillContext
 from backend.workflow.domain.incoming import TriggerEvent
 from bsvibe_sdk import plugin
 from plugin.slack.client import DEFAULT_BASE_URL, SlackClient
-from plugin.slack.webhook import parse_event
+from plugin.slack.webhook import parse_event, parse_interaction
 
 p = plugin(
     name="slack",
@@ -95,7 +95,12 @@ async def deliver_message(context: SkillContext, event: dict[str, Any]) -> dict[
     but deletion leaves an audit trail in Slack → tier ``t2_trail``."""
     channel = event["channel"]
     client = _client(context)
-    data = await client.post_message(channel, event["text"], thread_ts=event.get("thread_ts"))
+    data = await client.post_message(
+        channel,
+        event["text"],
+        thread_ts=event.get("thread_ts"),
+        blocks=event.get("blocks"),
+    )
     ts = str(data["ts"])
     out_channel = str(data.get("channel", channel))
     return {
@@ -154,9 +159,10 @@ async def post_message(
     channel: str,
     text: str,
     thread_ts: str | None = None,
+    blocks: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     client = _client(context)
-    data = await client.post_message(channel, text, thread_ts=thread_ts)
+    data = await client.post_message(channel, text, thread_ts=thread_ts, blocks=blocks)
     ts = str(data["ts"])
     out_channel = str(data.get("channel", channel))
     return {
@@ -164,6 +170,59 @@ async def post_message(
         "channel": out_channel,
         "external_ref": f"slack://{out_channel}/{ts}",
     }
+
+
+# ── callback capabilities (inbound approve/reject) ──────────────────────────────
+#
+# The seam the backend inbound callback handler dispatches through: the founder-
+# auth + Safe-Mode approve orchestration lives in the backend while ALL slack-
+# specific parsing + Web-API calls stay here (dispatched via PluginRunner, never
+# imported into ``backend.api``). ``mcp_exposed=False`` — internal capabilities.
+
+
+@p.action(name="parse_slack_interaction")
+async def parse_slack_interaction(
+    context: SkillContext, body: dict[str, Any]
+) -> dict[str, Any] | None:
+    """Pure parse of a ``block_actions`` payload into founder-auth + action fields
+    (see :func:`plugin.slack.webhook.parse_interaction`). No creds needed — the
+    request was already gated by the webhook_token + signature. Returns ``None``
+    when the body is not a block_actions interaction."""
+    del context
+    if not isinstance(body, dict) or body.get("type") != "block_actions":
+        return None
+    return parse_interaction(body)
+
+
+@p.action(name="respond_ephemeral")
+async def respond_ephemeral(
+    context: SkillContext,
+    response_url: str,
+    text: str,
+) -> dict[str, Any]:
+    """Post an EPHEMERAL note to the tapper via the interactivity ``response_url``.
+
+    Slack has no separate spinner-ack (HTTP 200 to the POST is the ack); this is
+    how an unauthorized tapper is told "권한이 없어요" and how the acting founder gets
+    a private confirmation — without editing the shared card. Best-effort UI ack."""
+    client = _client(context)
+    await client.respond(response_url, text)
+    return {"ok": True}
+
+
+@p.action(name="update_message")
+async def update_message(
+    context: SkillContext,
+    channel: str,
+    ts: str,
+    text: str,
+    blocks: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Edit the card in place (``chat.update``) — keep the original non-button
+    blocks, append the approve/reject status block, and drop the buttons. ``text``
+    is the accessibility / notification fallback."""
+    client = _client(context)
+    return await client.update_message(channel, ts, text, blocks=blocks)
 
 
 # ── setup ────────────────────────────────────────────────────────────────────

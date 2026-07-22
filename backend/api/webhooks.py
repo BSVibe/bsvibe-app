@@ -89,10 +89,30 @@ async def _telegram_interaction_callback(
     )
 
 
+async def _slack_interaction_callback(
+    *,
+    raw_body: bytes,
+    account: Any,
+    session: AsyncSession,
+    cipher: CredentialCipher,
+) -> bool:
+    """Delegate a slack block_actions tap to its handler. The import is LAZY
+    (inside the call) so ``backend.api.webhooks`` keeps ZERO static ``plugin.*``
+    edges (R2c) and tests can monkeypatch the handler at call time."""
+    from backend.connectors.slack_callback import (  # noqa: PLC0415
+        process_slack_callback,
+    )
+
+    return await process_slack_callback(
+        raw_body=raw_body, account=account, session=session, cipher=cipher
+    )
+
+
 # connector -> its interactive-approval entrypoint. Adding slack / discord is a
 # one-line registration (each keeps its own lazy import, per R2c).
 _INTERACTION_CALLBACKS: dict[str, _InteractionCallback] = {
     "telegram": _telegram_interaction_callback,
+    "slack": _slack_interaction_callback,
 }
 
 

@@ -21,6 +21,7 @@ import hashlib
 import hmac
 import json
 import time
+import urllib.parse
 import uuid
 from typing import Any
 
@@ -108,6 +109,15 @@ def parse_event(
             h.get("x-slack-request-timestamp"),
         )
 
+    # Interactivity POSTs (a founder tapping 승인 / 거절 on a Block Kit card) arrive
+    # form-encoded as ``payload=<url-encoded JSON>`` (NOT raw JSON) with the SAME
+    # signature scheme (verified above, verbatim over the raw body). They are a
+    # SYNCHRONOUS approve/reject action, NOT a new run, so they stay OUT of intake:
+    # return None here (mirroring the telegram callback_query skip) so the webhook
+    # route's ``event is None`` branch hands off to the interaction callback.
+    if decode_interaction_payload(raw_body) is not None:
+        return None
+
     try:
         body: dict[str, Any] = json.loads(raw_body)
     except (ValueError, TypeError) as exc:
@@ -156,11 +166,81 @@ def parse_event(
     )
 
 
+# block_actions button verbs an approve/reject tap can carry (mirror
+# ``backend.notifications.notify_builders`` CALLBACK_APPROVE / CALLBACK_REJECT).
+_INTERACTION_VERBS = frozenset({"apv", "rej"})
+
+
+def decode_interaction_payload(raw_body: bytes) -> dict[str, Any] | None:
+    """Decode a Slack interactivity POST body → its ``block_actions`` payload dict.
+
+    Slack POSTs interactions form-encoded as ``payload=<url-encoded JSON>``. Return
+    the decoded payload dict when it is a ``block_actions`` interaction, else
+    ``None`` (a normal Events-API delivery is raw JSON with no ``payload`` field,
+    an unparseable / non-block_actions interaction is not ours to handle). Pure —
+    no signature check (the caller already verified the raw body)."""
+    try:
+        text = raw_body.decode("utf-8") if isinstance(raw_body, bytes) else str(raw_body)
+    except UnicodeDecodeError:
+        return None
+    fields = urllib.parse.parse_qs(text)
+    payloads = fields.get("payload")
+    if not payloads:
+        return None
+    try:
+        data: Any = json.loads(payloads[0])
+    except (ValueError, TypeError):
+        return None
+    if not isinstance(data, dict) or data.get("type") != "block_actions":
+        return None
+    return data
+
+
+def parse_interaction(payload: dict[str, Any]) -> dict[str, Any]:
+    """Normalize a ``block_actions`` payload into founder-auth + action fields.
+
+    Pure (no I/O — the request was already gated by the webhook_token + signature).
+    Returns the fields the inbound callback handler needs::
+
+        {verb, deliverable_id, user_id, team_id, channel_id, message_ts,
+         message_blocks, response_url, malformed}
+
+    ``verb`` / ``deliverable_id`` are parsed from ``actions[0].value`` (falling
+    back to ``action_id``) as ``"<verb>:<deliverable_id>"``; they are ``None`` and
+    ``malformed`` is ``True`` when the verb is not in {apv, rej} or the id is
+    absent. ``message_blocks`` is the ORIGINAL card's blocks — needed to keep the
+    body when the handler edits the message on settle."""
+    actions = payload.get("actions") or []
+    action = actions[0] if actions and isinstance(actions[0], dict) else {}
+    raw = str(action.get("value") or action.get("action_id") or "")
+    verb, _, deliverable_id = raw.partition(":")
+    malformed = verb not in _INTERACTION_VERBS or not deliverable_id
+    user = payload.get("user") or {}
+    team = payload.get("team") or {}
+    channel = payload.get("channel") or {}
+    message = payload.get("message") or {}
+    return {
+        "verb": None if malformed else verb,
+        "deliverable_id": None if malformed else deliverable_id,
+        "user_id": user.get("id"),
+        # A block_actions payload carries the team at ``team.id``; fall back to the
+        # user's ``team_id`` (present on some interaction shapes).
+        "team_id": team.get("id") or user.get("team_id"),
+        "channel_id": channel.get("id"),
+        "message_ts": message.get("ts"),
+        "message_blocks": message.get("blocks"),
+        "response_url": payload.get("response_url"),
+        "malformed": malformed,
+    }
+
+
 __all__ = [
     "MAX_TIMESTAMP_SKEW",
     "SUPPORTED_EVENTS",
     "WebhookError",
     "WebhookSignatureError",
+    "decode_interaction_payload",
     "parse_event",
+    "parse_interaction",
     "verify_signature",
 ]

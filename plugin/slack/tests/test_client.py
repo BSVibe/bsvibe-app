@@ -62,6 +62,44 @@ class TestPostMessage:
             await client.post_message("C1", "hello")
 
 
+class TestBlocks:
+    @respx.mock
+    async def test_post_message_includes_blocks_only_when_set(self, client):
+        route = respx.post(f"{API}/chat.postMessage").mock(
+            return_value=httpx.Response(200, json={"ok": True, "channel": "C1", "ts": "1.1"})
+        )
+        await client.post_message("C1", "no blocks here")
+        assert b'"blocks"' not in route.calls.last.request.content
+        blocks = [{"type": "section", "text": {"type": "mrkdwn", "text": "hi"}}]
+        await client.post_message("C1", "fallback", blocks=blocks)
+        sent = route.calls.last.request.content
+        assert b'"blocks"' in sent
+        assert b"fallback" in sent  # text fallback still sent alongside blocks
+
+    @respx.mock
+    async def test_update_message_includes_blocks_only_when_set(self, client):
+        route = respx.post(f"{API}/chat.update").mock(
+            return_value=httpx.Response(200, json={"ok": True, "channel": "C1", "ts": "1.1"})
+        )
+        await client.update_message("C1", "1.1", "plain")
+        assert b'"blocks"' not in route.calls.last.request.content
+        await client.update_message("C1", "1.1", "done", blocks=[{"type": "context"}])
+        assert b'"blocks"' in route.calls.last.request.content
+
+    @respx.mock
+    async def test_respond_posts_ephemeral_to_response_url(self, client):
+        url = "https://hooks.slack.com/actions/T1/1/x"
+        route = respx.post(url).mock(return_value=httpx.Response(200, text="ok"))
+        await client.respond(url, "권한이 없어요.")
+        assert route.called
+        import json as _json
+
+        body = _json.loads(route.calls.last.request.content)
+        assert body["response_type"] == "ephemeral"
+        assert body["replace_original"] is False
+        assert body["text"] == "권한이 없어요."
+
+
 class TestUpdateMessage:
     @respx.mock
     async def test_update_message(self, client):
