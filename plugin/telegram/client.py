@@ -139,13 +139,20 @@ class TelegramClient:
         message_id: int,
         text: str,
         reply_markup: dict[str, Any] | None = None,
+        entities: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         """Edit an existing message's text (and optionally its keyboard).
 
-        Used to close the approval loop visually — replace the card's buttons
-        with a result line. Best-effort: a benign ``ok:false`` ("message is not
-        modified" / "message to edit not found") is NOT raised. Pass
-        ``reply_markup={"inline_keyboard": []}`` to drop the buttons.
+        Used to close the approval loop visually — append a result line to the
+        card body and drop the card's buttons. Best-effort: a benign ``ok:false``
+        ("message is not modified" / "message to edit not found") is NOT raised.
+        Pass ``reply_markup={"inline_keyboard": []}`` to drop the buttons.
+
+        ``entities`` is a pre-computed Telegram entity list (Bot API's
+        alternative to ``parse_mode``) — included in the POST body only when set,
+        so re-sending the original card's entities keeps its ``text_link``
+        (the "보고서 보기" hyperlink) intact. When ``entities`` is used, ``parse_mode``
+        is deliberately NOT sent (they are mutually exclusive per the Bot API).
         """
         payload: dict[str, Any] = {
             "chat_id": chat_id,
@@ -154,6 +161,8 @@ class TelegramClient:
         }
         if reply_markup is not None:
             payload["reply_markup"] = reply_markup
+        if entities is not None:
+            payload["entities"] = entities
         resp = await self._post("editMessageText", payload)
         return self._ack_result("editMessageText", resp)
 

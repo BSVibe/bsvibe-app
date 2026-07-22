@@ -216,6 +216,28 @@ class TestEditMessageText:
         assert "reply_markup" not in body
 
     @respx.mock
+    async def test_includes_entities_when_set(self, client):
+        route = respx.post(f"{BOT}/editMessageText").mock(
+            return_value=httpx.Response(200, json={"ok": True, "result": {}})
+        )
+        entities = [{"type": "text_link", "offset": 0, "length": 4, "url": "https://x/1"}]
+        await client.edit_message_text(99, 42, "보고서 보기\n✅ 승인됨", entities=entities)
+        body = json.loads(route.calls.last.request.content)
+        assert body["entities"] == entities
+        # entities is the alternative to parse_mode — never send both.
+        assert "parse_mode" not in body
+
+    @respx.mock
+    async def test_omits_entities_and_parse_mode_when_none(self, client):
+        route = respx.post(f"{BOT}/editMessageText").mock(
+            return_value=httpx.Response(200, json={"ok": True, "result": {}})
+        )
+        await client.edit_message_text(99, 42, "hi")
+        body = json.loads(route.calls.last.request.content)
+        assert "entities" not in body
+        assert "parse_mode" not in body
+
+    @respx.mock
     async def test_tolerates_ok_false_without_raising(self, client):
         respx.post(f"{BOT}/editMessageText").mock(
             return_value=httpx.Response(

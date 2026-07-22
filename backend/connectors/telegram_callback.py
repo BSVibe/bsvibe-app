@@ -59,7 +59,6 @@ _STRINGS: dict[str, dict[str, str]] = {
     "declined_answer": {"ko": "거절했어요.", "en": "Declined."},
     "approved_result": {"ko": "✅ 승인됨 — 내보냈어요.", "en": "✅ Approved — sent."},
     "declined_result": {"ko": "❌ 거절했어요.", "en": "❌ Declined."},
-    "already_result": {"ko": "이미 처리됐어요.", "en": "Already handled."},
 }
 
 # editMessageText payload that DROPS the card's inline buttons (empty keyboard).
@@ -131,14 +130,11 @@ async def handle_telegram_callback(  # noqa: PLR0911 — each return is one secu
     # (idempotent double-tap lands here too).
     item_id = await _pending_item_for(session, deliverable_id, account.workspace_id)
     if item_id is None:
+        # Already-handled (idempotent double-tap, or a cross-workspace id that
+        # resolves to nothing): the card was already edited on the FIRST tap, so
+        # only answer the toast — re-editing would stack a second status line onto
+        # an already-appended card.
         await _answer(runner, telegram, context, callback_query_id, _t("already", language))
-        await _edit(
-            runner,
-            telegram,
-            context,
-            parsed,
-            text=_t("already_result", language),
-        )
         return True
 
     # 4) Actor for the audit trail = the workspace owner.
@@ -152,7 +148,7 @@ async def handle_telegram_callback(  # noqa: PLR0911 — each return is one secu
     if verb == "apv":
         await _approve(session, queue, account, item_id, deliverable_id, actor_id, dispatcher)
         await _answer(runner, telegram, context, callback_query_id, _t("approved_answer", language))
-        await _edit(runner, telegram, context, parsed, text=_t("approved_result", language))
+        await _edit(runner, telegram, context, parsed, status=_t("approved_result", language))
     else:  # "rej"
         await queue.deny(
             workspace_id=account.workspace_id,
@@ -162,7 +158,7 @@ async def handle_telegram_callback(  # noqa: PLR0911 — each return is one secu
         )
         await session.commit()
         await _answer(runner, telegram, context, callback_query_id, _t("declined_answer", language))
-        await _edit(runner, telegram, context, parsed, text=_t("declined_result", language))
+        await _edit(runner, telegram, context, parsed, status=_t("declined_result", language))
     return True
 
 
@@ -294,26 +290,42 @@ async def _edit(
     context: Any,
     parsed: dict[str, Any],
     *,
-    text: str,
+    status: str,
 ) -> None:
-    """Replace the card's text with the result line and DROP the buttons, closing
-    the loop visually. Missing chat/message ids → no-op (nothing to edit)."""
+    """Edit the card to read like HISTORY: KEEP the original body, APPEND the
+    approve/reject ``status`` line after it, and DROP the buttons. The original
+    ``entities`` are re-sent unchanged — appending at the END keeps every original
+    offset valid, so the "보고서 보기" ``text_link`` hyperlink is preserved.
+
+    Falls back to the ``status`` line alone (no entities) when the callback
+    carries no message text (shouldn't happen for a real card). Missing
+    chat/message ids → no-op (nothing to edit)."""
     chat_id = parsed.get("chat_id")
     message_id = parsed.get("message_id")
     if chat_id is None or message_id is None:  # pragma: no cover
         return
+    original_text = parsed.get("message_text")
+    if original_text:
+        text = f"{original_text}\n\n{status}"
+        entities = parsed.get("message_entities")
+    else:
+        text = status
+        entities = None
+    kwargs: dict[str, Any] = {
+        "chat_id": chat_id,
+        "message_id": message_id,
+        "text": text,
+        "reply_markup": _NO_KEYBOARD,
+    }
+    if entities is not None:
+        kwargs["entities"] = entities
     # Best-effort (see _answer): a failed edit must not fail the settled callback.
     try:
         await runner.dispatch_action(
             telegram,
             action_name="edit_message_text",
             context=context,
-            kwargs={
-                "chat_id": chat_id,
-                "message_id": message_id,
-                "text": text,
-                "reply_markup": _NO_KEYBOARD,
-            },
+            kwargs=kwargs,
         )
     except Exception:  # noqa: BLE001 — cosmetic edit; never fail the settled callback
         logger.warning("telegram_callback_edit_failed", exc_info=True)

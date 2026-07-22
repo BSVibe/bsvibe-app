@@ -360,6 +360,28 @@ class TestCallbackCapabilities:
         assert body["text"] == "✅ 승인됨"
         assert body["reply_markup"] == {"inline_keyboard": []}
 
+    @respx.mock
+    async def test_edit_message_text_action_threads_entities(self):
+        route = respx.post(f"{BOT}/editMessageText").mock(
+            return_value=httpx.Response(200, json={"ok": True, "result": {}})
+        )
+        entities = [{"type": "text_link", "offset": 0, "length": 6, "url": "https://x/1"}]
+        await _runner().dispatch_action(
+            P.meta,
+            action_name="edit_message_text",
+            context=_Ctx(),
+            kwargs={
+                "chat_id": 9,
+                "message_id": 3,
+                "text": "보고서 보기\n\n✅ 승인됨",
+                "reply_markup": {"inline_keyboard": []},
+                "entities": entities,
+            },
+        )
+        body = json.loads(route.calls.last.request.content)
+        assert body["entities"] == entities
+        assert "parse_mode" not in body
+
 
 # ── setup ──────────────────────────────────────────────────────────────────
 
