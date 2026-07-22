@@ -112,3 +112,69 @@ class TestInjectedClient:
 
     def test_default_base_url(self):
         assert DEFAULT_BASE_URL == "https://discord.com/api/v10"
+
+
+APP = "APP123"
+ITOKEN = "itoken-xyz"
+
+
+class TestCreateMessageComponents:
+    @respx.mock
+    async def test_components_included_only_when_set(self, client):
+        route = respx.post(f"{API}/channels/{CHANNEL}/messages").mock(
+            return_value=httpx.Response(200, json={"id": "1", "channel_id": CHANNEL})
+        )
+        await client.create_message(CHANNEL, "hi")
+        assert b"components" not in route.calls.last.request.content
+
+        rows = [{"type": 1, "components": [{"type": 2, "style": 3, "label": "승인"}]}]
+        await client.create_message(CHANNEL, "hi", components=rows)
+        assert b"components" in route.calls.last.request.content
+
+
+class TestInteractionWebhook:
+    @respx.mock
+    async def test_followup_posts_to_interaction_webhook(self, client):
+        route = respx.post(f"{API}/webhooks/{APP}/{ITOKEN}").mock(
+            return_value=httpx.Response(200, json={"id": "fu1"})
+        )
+        data = await client.create_interaction_followup(APP, ITOKEN, "권한이 없어요.", flags=64)
+        assert data["id"] == "fu1"
+        assert route.called
+        import json as _json
+
+        payload = _json.loads(route.calls.last.request.content)
+        assert payload["content"] == "권한이 없어요."
+        assert payload["flags"] == 64
+
+    @respx.mock
+    async def test_followup_omits_flags_when_unset(self, client):
+        route = respx.post(f"{API}/webhooks/{APP}/{ITOKEN}").mock(
+            return_value=httpx.Response(200, json={"id": "fu2"})
+        )
+        await client.create_interaction_followup(APP, ITOKEN, "hi")
+        assert b"flags" not in route.calls.last.request.content
+
+    @respx.mock
+    async def test_edit_patches_original_interaction_response(self, client):
+        route = respx.patch(f"{API}/webhooks/{APP}/{ITOKEN}/messages/@original").mock(
+            return_value=httpx.Response(200, json={"id": "M1", "content": "done"})
+        )
+        data = await client.edit_interaction_response(
+            APP, ITOKEN, "작업 완료\n\n✅ 승인됨", components=[]
+        )
+        assert data["id"] == "M1"
+        assert route.called
+        import json as _json
+
+        payload = _json.loads(route.calls.last.request.content)
+        assert payload["content"] == "작업 완료\n\n✅ 승인됨"
+        assert payload["components"] == []
+
+    @respx.mock
+    async def test_edit_error_raises(self, client):
+        respx.patch(f"{API}/webhooks/{APP}/{ITOKEN}/messages/@original").mock(
+            return_value=httpx.Response(500, json={"message": "boom"})
+        )
+        with pytest.raises(DiscordApiError, match="boom"):
+            await client.edit_interaction_response(APP, ITOKEN, "x")

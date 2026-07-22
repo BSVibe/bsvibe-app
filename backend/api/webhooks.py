@@ -43,7 +43,7 @@ from typing import Annotated, Any
 
 import structlog
 from fastapi import APIRouter, Depends, Path, Request, status
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -66,8 +66,12 @@ logger = structlog.get_logger(__name__)
 router = APIRouter()
 
 # A connector's interactive-approval route entrypoint: settle a held Safe-Mode
-# item from an inline tap. Signature mirrors ``process_telegram_callback``.
-_InteractionCallback = Callable[..., Awaitable[bool]]
+# item from an inline tap. Returns ``True`` when it handled the tap (the route
+# replies its default callback 200), ``False`` to fall through to the
+# handshake/skip path, or its OWN :class:`Response` when the connector must reply
+# a connector-specific body (Discord returns a DEFERRED ``{"type": 6}`` response
+# carrying the background approval task — see ``process_discord_callback``).
+_InteractionCallback = Callable[..., Awaitable[bool | Response]]
 
 
 async def _telegram_interaction_callback(
@@ -108,11 +112,33 @@ async def _slack_interaction_callback(
     )
 
 
-# connector -> its interactive-approval entrypoint. Adding slack / discord is a
+async def _discord_interaction_callback(
+    *,
+    raw_body: bytes,
+    account: Any,
+    session: AsyncSession,
+    cipher: CredentialCipher,
+) -> bool | Response:
+    """Delegate a discord component tap to its handler. The import is LAZY (inside
+    the call) so ``backend.api.webhooks`` keeps ZERO static ``plugin.*`` edges (R2c)
+    and tests can monkeypatch the handler at call time. Returns a DEFERRED
+    ``{"type": 6}`` :class:`Response` (with the approval scheduled on a background
+    task) for a real tap, or ``False`` to fall through to the PING/skip path."""
+    from backend.connectors.discord_callback import (  # noqa: PLC0415
+        process_discord_callback,
+    )
+
+    return await process_discord_callback(
+        raw_body=raw_body, account=account, session=session, cipher=cipher
+    )
+
+
+# connector -> its interactive-approval entrypoint. Adding a connector is a
 # one-line registration (each keeps its own lazy import, per R2c).
 _INTERACTION_CALLBACKS: dict[str, _InteractionCallback] = {
     "telegram": _telegram_interaction_callback,
     "slack": _slack_interaction_callback,
+    "discord": _discord_interaction_callback,
 }
 
 
@@ -231,6 +257,12 @@ async def receive_connector_webhook(  # noqa: PLR0911 — 404/401/handshake/call
             handled = await callback(
                 raw_body=raw_body, account=account, session=session, cipher=cipher
             )
+            # A connector may reply with its OWN response (+ background task) instead
+            # of the default callback 200 — e.g. Discord's DEFERRED ``{"type": 6}``
+            # with the slow approval scheduled on a background task (its own fresh DB
+            # session), so we do NOT commit the request session here.
+            if isinstance(handled, Response):
+                return handled
             if handled:
                 await session.commit()
                 return JSONResponse(

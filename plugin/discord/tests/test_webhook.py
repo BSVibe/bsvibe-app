@@ -254,3 +254,117 @@ def test_public_key_helper_roundtrips():
     raw = private.public_key().public_bytes_raw()
     assert len(raw) == 32
     assert Ed25519PublicKey.from_public_bytes(raw) is not None
+
+
+# ── component approve/reject taps: parsed for the callback, kept OUT of intake ──
+
+
+def _component(
+    *,
+    verb: str = "apv",
+    deliverable_id: str = "DELIV-1",
+    user_id: str = "U_FOUNDER",
+    guild_id: str | None = "G1",
+    with_content: bool = True,
+) -> bytes:
+    message: dict = {"id": "M1"}
+    if with_content:
+        message["content"] = "작업 완료\n\n[보고서 보기](https://x/d/1)"
+    body: dict = {
+        "id": "int-9",
+        "application_id": "APP1",
+        "type": 3,
+        "token": "itoken-9",
+        "channel_id": "555",
+        "member": {"user": {"id": user_id, "bot": False}},
+        "message": message,
+        "data": {"custom_id": f"{verb}:{deliverable_id}", "component_type": 2},
+    }
+    if guild_id is not None:
+        body["guild_id"] = guild_id
+    return json.dumps(body).encode()
+
+
+class TestApprovalComponentSkipsIntake:
+    def test_apv_component_tap_returns_none(self):
+        # An approve component tap is a SYNCHRONOUS approval, NOT a run — the parser
+        # returns None so the route's event-is-None branch hands off to the callback.
+        evt = parse_interaction(
+            workspace_id=WORKSPACE, headers={}, raw_body=_component(verb="apv"), public_key=None
+        )
+        assert evt is None
+
+    def test_rej_component_tap_returns_none(self):
+        evt = parse_interaction(
+            workspace_id=WORKSPACE, headers={}, raw_body=_component(verb="rej"), public_key=None
+        )
+        assert evt is None
+
+    def test_non_approval_component_still_becomes_trigger_event(self):
+        # A type-3 component that is NOT an apv/rej tap keeps its intake behavior.
+        body = json.dumps(
+            {
+                "id": "int-x",
+                "type": 3,
+                "channel_id": "555",
+                "member": {"user": {"id": "5", "bot": False}},
+                "data": {"custom_id": "other:thing", "component_type": 2},
+            }
+        ).encode()
+        evt = parse_interaction(workspace_id=WORKSPACE, headers={}, raw_body=body, public_key=None)
+        assert isinstance(evt, TriggerEvent)
+
+    def test_approval_component_still_verifies_signature(self):
+        # Even an approve tap must pass Ed25519 verify — a forged one is rejected.
+        _, public_hex = _keypair()
+        other_private, _ = _keypair()
+        body = _component(verb="apv")
+        bad_sig = _sign(other_private, TIMESTAMP, body)
+        with pytest.raises(WebhookSignatureError, match="mismatch"):
+            parse_interaction(
+                workspace_id=WORKSPACE,
+                headers=_headers(signature=bad_sig),
+                raw_body=body,
+                public_key=public_hex,
+            )
+
+
+class TestParseComponentInteraction:
+    def test_extracts_all_fields(self):
+        from plugin.discord.webhook import parse_component_interaction
+
+        body = json.loads(_component(verb="apv", deliverable_id="D42"))
+        parsed = parse_component_interaction(body)
+        assert parsed["verb"] == "apv"
+        assert parsed["deliverable_id"] == "D42"
+        assert parsed["user_id"] == "U_FOUNDER"
+        assert parsed["guild_id"] == "G1"
+        assert parsed["application_id"] == "APP1"
+        assert parsed["interaction_token"] == "itoken-9"
+        assert parsed["message_content"] == "작업 완료\n\n[보고서 보기](https://x/d/1)"
+        assert parsed["malformed"] is False
+
+    def test_dm_user_id_from_body_user(self):
+        from plugin.discord.webhook import parse_component_interaction
+
+        body = {
+            "id": "int-dm",
+            "application_id": "APP1",
+            "type": 3,
+            "token": "tok",
+            "user": {"id": "DM_USER", "bot": False},
+            "message": {"id": "M", "content": "x"},
+            "data": {"custom_id": "apv:D1"},
+        }
+        parsed = parse_component_interaction(body)
+        assert parsed["user_id"] == "DM_USER"
+        assert parsed["guild_id"] is None
+
+    def test_malformed_custom_id_flags_malformed(self):
+        from plugin.discord.webhook import parse_component_interaction
+
+        body = json.loads(_component(verb="bogus", deliverable_id="D1"))
+        parsed = parse_component_interaction(body)
+        assert parsed["malformed"] is True
+        assert parsed["verb"] is None
+        assert parsed["deliverable_id"] is None

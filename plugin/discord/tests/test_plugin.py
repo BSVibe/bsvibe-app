@@ -311,3 +311,103 @@ class TestLoaderDiscovery:
         meta = registry["discord"]
         assert any("discord_message" in c.artifact_types for c in meta.outbounds)
         assert meta.compensates  # has compensate handlers
+
+
+# ── components on outbound + interaction-webhook callback actions ───────────────
+
+
+class TestOutboundComponents:
+    @respx.mock
+    async def test_deliver_message_forwards_components(self):
+        route = respx.post(f"{API}/channels/{CHANNEL}/messages").mock(
+            return_value=httpx.Response(200, json={"id": "42", "channel_id": CHANNEL})
+        )
+        rows = [{"type": 1, "components": [{"type": 2, "style": 3, "label": "승인"}]}]
+        await _runner().dispatch_outbound(
+            P.meta,
+            artifact_type="discord_message",
+            context=_Ctx(),
+            event={"channel_id": CHANNEL, "content": "hi", "components": rows},
+        )
+        assert b"components" in route.calls.last.request.content
+
+    @respx.mock
+    async def test_deliver_message_omits_components_when_absent(self):
+        route = respx.post(f"{API}/channels/{CHANNEL}/messages").mock(
+            return_value=httpx.Response(200, json={"id": "42", "channel_id": CHANNEL})
+        )
+        await _runner().dispatch_outbound(
+            P.meta,
+            artifact_type="discord_message",
+            context=_Ctx(),
+            event={"channel_id": CHANNEL, "content": "hi"},
+        )
+        assert b"components" not in route.calls.last.request.content
+
+
+class TestCallbackActions:
+    async def test_parse_discord_interaction_returns_fields(self):
+        body = {
+            "id": "int-1",
+            "application_id": "APP1",
+            "type": 3,
+            "token": "tok",
+            "guild_id": "G1",
+            "member": {"user": {"id": "U1", "bot": False}},
+            "message": {"id": "M1", "content": "작업 완료"},
+            "data": {"custom_id": "apv:D1"},
+        }
+        parsed = await _runner().dispatch_action(
+            P.meta, action_name="parse_discord_interaction", context=_Ctx(), kwargs={"body": body}
+        )
+        assert parsed["verb"] == "apv"
+        assert parsed["deliverable_id"] == "D1"
+        assert parsed["application_id"] == "APP1"
+        assert parsed["interaction_token"] == "tok"
+
+    async def test_parse_discord_interaction_none_for_non_component(self):
+        parsed = await _runner().dispatch_action(
+            P.meta,
+            action_name="parse_discord_interaction",
+            context=_Ctx(),
+            kwargs={"body": {"type": 1}},
+        )
+        assert parsed is None
+
+    @respx.mock
+    async def test_discord_followup_posts_ephemeral(self):
+        route = respx.post(f"{API}/webhooks/APP1/tok").mock(
+            return_value=httpx.Response(200, json={"id": "fu1"})
+        )
+        await _runner().dispatch_action(
+            P.meta,
+            action_name="discord_followup",
+            context=_Ctx(),
+            kwargs={
+                "application_id": "APP1",
+                "interaction_token": "tok",
+                "content": "권한이 없어요.",
+                "flags": 64,
+            },
+        )
+        assert route.called
+        assert b'"flags"' in route.calls.last.request.content
+
+    @respx.mock
+    async def test_discord_edit_original_patches_and_drops_components(self):
+        route = respx.patch(f"{API}/webhooks/APP1/tok/messages/@original").mock(
+            return_value=httpx.Response(200, json={"id": "M1"})
+        )
+        await _runner().dispatch_action(
+            P.meta,
+            action_name="discord_edit_original",
+            context=_Ctx(),
+            kwargs={
+                "application_id": "APP1",
+                "interaction_token": "tok",
+                "content": "작업 완료\n\n✅ 승인됨",
+                "components": [],
+            },
+        )
+        assert route.called
+        assert b'"components"' in route.calls.last.request.content
