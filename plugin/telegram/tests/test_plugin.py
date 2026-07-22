@@ -157,6 +157,42 @@ class TestOutbound:
         }
 
     @respx.mock
+    async def test_deliver_message_threads_parse_mode_into_the_send(self):
+        route = respx.post(f"{BOT}/sendMessage").mock(
+            return_value=httpx.Response(
+                200, json={"ok": True, "result": {"message_id": 7, "chat": {"id": 99}}}
+            )
+        )
+        await _runner().dispatch_outbound(
+            P.meta,
+            artifact_type="telegram_message",
+            context=_Ctx(),
+            event={
+                "chat_id": 99,
+                "text": '<a href="https://x/deliverables/1">보고서 보기</a>',
+                "parse_mode": "HTML",
+            },
+        )
+        body = json.loads(route.calls.last.request.content)
+        assert body["parse_mode"] == "HTML"
+        assert body["text"] == '<a href="https://x/deliverables/1">보고서 보기</a>'
+
+    @respx.mock
+    async def test_deliver_message_without_parse_mode_stays_plain(self):
+        route = respx.post(f"{BOT}/sendMessage").mock(
+            return_value=httpx.Response(
+                200, json={"ok": True, "result": {"message_id": 7, "chat": {"id": 99}}}
+            )
+        )
+        await _runner().dispatch_outbound(
+            P.meta,
+            artifact_type="telegram_message",
+            context=_Ctx(),
+            event={"chat_id": 99, "text": "plain"},
+        )
+        assert b"parse_mode" not in route.calls.last.request.content
+
+    @respx.mock
     async def test_deliver_message_ok_false_raises(self):
         respx.post(f"{BOT}/sendMessage").mock(
             return_value=httpx.Response(

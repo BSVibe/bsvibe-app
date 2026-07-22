@@ -171,6 +171,23 @@ def needs_you_reason_body(reason: str, language: str | None) -> str:
     return _FALLBACK_BODY["needs_you"][lang]
 
 
+def notification_cta_parts(
+    event: str, language: str | None, base_url: str, path: str
+) -> tuple[str, str]:
+    """The localized CTA as its ``(label, absolute_url)`` parts.
+
+    The single source of truth for both the plain ``"label → url"`` line (via
+    :func:`notification_cta`) and the telegram HTML anchor (``<a href="url">label
+    </a>``), so both stay in lockstep. ``needs_you`` asks the founder to ANSWER;
+    ``shipped`` links to its deliverable REPORT; every other event asks them to
+    REVIEW. An unknown / missing ``language`` falls back to English.
+    """
+    lang = _resolve_language(language)
+    kind = _CTA_KIND.get(event, "review")
+    url = f"{base_url.rstrip('/')}{path}"
+    return _CTA_PREFIX[kind][lang], url
+
+
 def notification_cta(event: str, language: str | None, base_url: str, path: str) -> str:
     """Render the trailing deep-link line as a localized, tappable CTA.
 
@@ -181,10 +198,8 @@ def notification_cta(event: str, language: str | None, base_url: str, path: str)
     REPORT; every other event asks them to REVIEW. An unknown / missing
     ``language`` falls back to English.
     """
-    lang = _resolve_language(language)
-    kind = _CTA_KIND.get(event, "review")
-    url = f"{base_url.rstrip('/')}{path}"
-    return f"{_CTA_PREFIX[kind][lang]} → {url}"
+    label, url = notification_cta_parts(event, language, base_url, path)
+    return f"{label} → {url}"
 
 
 __all__ = [
@@ -195,4 +210,5 @@ __all__ = [
     "needs_you_reason_body",
     "notification_copy",
     "notification_cta",
+    "notification_cta_parts",
 ]

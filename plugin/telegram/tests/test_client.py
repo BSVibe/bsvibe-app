@@ -43,6 +43,21 @@ class TestSendMessage:
         assert b"hello" in sent.content
 
     @respx.mock
+    async def test_send_message_parse_mode_included_only_when_set(self, client):
+        route = respx.post(f"{BOT}/sendMessage").mock(
+            return_value=httpx.Response(
+                200, json={"ok": True, "result": {"message_id": 1, "chat": {"id": 1}}}
+            )
+        )
+        # Absent by default — a plain send stays plain text.
+        await client.send_message(99, "hello")
+        assert b"parse_mode" not in route.calls.last.request.content
+        # Included verbatim when passed — the HTML notification card path.
+        await client.send_message(99, '<a href="u">link</a>', parse_mode="HTML")
+        body = json.loads(route.calls.last.request.content)
+        assert body["parse_mode"] == "HTML"
+
+    @respx.mock
     async def test_send_message_string_chat_id(self, client):
         route = respx.post(f"{BOT}/sendMessage").mock(
             return_value=httpx.Response(

@@ -14,6 +14,7 @@ import pytest
 
 from backend.connectors.db import ConnectorAccountRow
 from backend.extensions.plugin.base import OutboundCapability, PluginMeta
+from backend.identity.workspaces_db import ProductRow, ResourceBindingRow, WorkspaceRow
 from backend.workflow.application.delivery.connector_dispatch import (
     OUTBOUND_EVENT_BUILDERS,
     ConnectorDeliveryAdapter,
@@ -73,10 +74,11 @@ def _meta(name: str, *, with_outbound: bool) -> PluginMeta:
     )
 
 
-async def _seed(session, **kw) -> None:
+async def _seed(session, **kw) -> uuid.UUID:
+    account_id = uuid.uuid4()
     session.add(
         ConnectorAccountRow(
-            id=uuid.uuid4(),
+            id=account_id,
             workspace_id=kw["workspace_id"],
             connector=kw["connector"],
             webhook_token=uuid.uuid4().hex,
@@ -85,7 +87,44 @@ async def _seed(session, **kw) -> None:
             is_active=kw.get("is_active", True),
         )
     )
+    # A connector is a deliverable-delivery target ONLY when the founder
+    # explicitly bound it (a resource_bindings row). Bind by default so the
+    # resolution tests exercise their OWN condition; pass ``bind=False`` to seed
+    # a notification-only connector (delivery_config but no explicit binding).
+    if kw.get("bind", True):
+        await _bind_resource(session, workspace_id=kw["workspace_id"], account_id=account_id)
     await session.commit()
+    return account_id
+
+
+async def _bind_resource(session, *, workspace_id: uuid.UUID, account_id: uuid.UUID) -> None:
+    """Add an explicit ResourceBinding making ``account_id`` a delivery target.
+
+    ``ResourceBindingRow`` FKs to workspaces + products; seed those parents in FK
+    order first (correct-by-construction — this tier is SQLite with FK off, but a
+    future PG switch would enforce them)."""
+    if await session.get(WorkspaceRow, workspace_id) is None:
+        session.add(WorkspaceRow(id=workspace_id, name="delivery-test-ws", safe_mode=False))
+        await session.flush()
+    product_id = uuid.uuid4()
+    session.add(
+        ProductRow(
+            id=product_id,
+            workspace_id=workspace_id,
+            name="delivery-test-product",
+            slug=uuid.uuid4().hex[:12],
+        )
+    )
+    await session.flush()
+    session.add(
+        ResourceBindingRow(
+            id=uuid.uuid4(),
+            workspace_id=workspace_id,
+            product_id=product_id,
+            connector_account_id=account_id,
+            resource_id="r1",
+        )
+    )
 
 
 class TestNotionEventBuilder:
@@ -425,6 +464,70 @@ class TestResolution:
                 s, workspace_id=ws, plugins_by_name={"github": _meta("github", with_outbound=True)}
             )
         assert bindings == []
+
+    async def test_delivery_config_without_resource_binding_is_not_a_target(self) -> None:
+        # FB3 — the telegram-dump repro. A telegram NOTIFICATION connector carries
+        # a delivery_config (its {chat_id}) but the founder never bound it as a
+        # delivery target → it must NOT receive deliverables (no implicit routing).
+        ws = uuid.uuid4()
+        async with memory_session() as s:
+            await _seed(
+                s,
+                workspace_id=ws,
+                connector="telegram",
+                delivery_config={"chat_id": "555"},
+                bind=False,  # notification-only: NO explicit resource_binding
+            )
+            bindings = await _resolve_bindings(
+                s,
+                workspace_id=ws,
+                plugins_by_name={"telegram": _meta("telegram", with_outbound=True)},
+            )
+        assert bindings == []
+
+    async def test_same_connector_with_resource_binding_is_a_target(self) -> None:
+        # FB3 — the SAME connector, once the founder EXPLICITLY binds it, IS a
+        # delivery target. Explicit choice is what enables delivery.
+        ws = uuid.uuid4()
+        async with memory_session() as s:
+            await _seed(
+                s,
+                workspace_id=ws,
+                connector="telegram",
+                delivery_config={"chat_id": "555"},
+                bind=True,  # explicit resource_binding
+            )
+            bindings = await _resolve_bindings(
+                s,
+                workspace_id=ws,
+                plugins_by_name={"telegram": _meta("telegram", with_outbound=True)},
+            )
+        assert len(bindings) == 1
+        assert bindings[0].account.connector == "telegram"
+
+    async def test_resource_binding_for_a_different_account_does_not_leak(self) -> None:
+        # A binding on account A must not make an UNBOUND account B a target.
+        ws = uuid.uuid4()
+        async with memory_session() as s:
+            await _seed(
+                s, workspace_id=ws, connector="notion", delivery_config={"parent_page_id": "P"}
+            )  # bound
+            await _seed(
+                s,
+                workspace_id=ws,
+                connector="telegram",
+                delivery_config={"chat_id": "555"},
+                bind=False,  # unbound notification connector
+            )
+            bindings = await _resolve_bindings(
+                s,
+                workspace_id=ws,
+                plugins_by_name={
+                    "notion": _meta("notion", with_outbound=True),
+                    "telegram": _meta("telegram", with_outbound=True),
+                },
+            )
+        assert {b.account.connector for b in bindings} == {"notion"}
 
     async def test_resolves_notion_binding(self) -> None:
         ws = uuid.uuid4()

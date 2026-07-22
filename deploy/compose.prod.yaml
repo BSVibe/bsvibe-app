@@ -151,6 +151,9 @@ services:
       BSVIBE_SKILLS_ROOT: ${BSVIBE_SKILLS_ROOT:-/app/var/skills}
       BSVIBE_RUN_WORKSPACE_ROOT: ${BSVIBE_RUN_WORKSPACE_ROOT:-/app/var/runs}
       BSVIBE_AUDIT_RELAY_URL: ${BSVIBE_AUDIT_RELAY_URL:-}
+      # The worker builds notification CTAs (보고서 보기 → <pwa_url>/…) so it needs
+      # the PUBLIC PWA origin, not the localhost default. Mirrors backend.
+      BSVIBE_PWA_URL: ${BSVIBE_PWA_URL:-https://app.bsvibe.dev}
       BSVIBE_SANDBOX_ENABLED: ${BSVIBE_SANDBOX_ENABLED:-false}
       BSVIBE_SANDBOX_IMAGE: ${BSVIBE_SANDBOX_IMAGE:-bsvibe-sandbox:latest}
       BSVIBE_DOCKER_HOST: ${BSVIBE_DOCKER_HOST:-}

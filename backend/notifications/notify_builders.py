@@ -30,6 +30,7 @@ the worker, never wedging the queue).
 
 from __future__ import annotations
 
+import html
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
@@ -57,6 +58,14 @@ class NotificationContent:
     # push-render boundary — so a channel can localize button labels / result
     # lines. Defaults to "en" (the workspace-language fallback).
     language: str = "en"
+    # The trailing CTA split into its (localized label, absolute url) parts, set
+    # by the push-render boundary alongside the flattened ``link``. Chat channels
+    # that render rich text (telegram HTML) build a tappable anchor
+    # ``<a href="{cta_url}">{cta_label}</a>`` from these instead of showing the
+    # bare URL; plain-text channels keep using ``link`` ("label → url"). Both
+    # ``None`` when the notification carries no link.
+    cta_label: str | None = None
+    cta_url: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -152,21 +161,54 @@ def _approval_keyboard(content: NotificationContent) -> dict[str, Any] | None:
     }
 
 
+def _telegram_html_text(content: NotificationContent) -> str:
+    """Render the telegram card as an ``parse_mode=HTML`` message body.
+
+    The founder-facing dynamic text (title, body) is HTML-ESCAPED so a ``<`` /
+    ``>`` / ``&`` in a deliverable title can't break Telegram's HTML parse; the
+    ONLY literal markup is the trailing CTA anchor. When the CTA parts are
+    present the last line is a tappable ``<a href="{url}">{label}</a>`` (the
+    words are the link — the raw URL is NOT shown); a link-less notification
+    drops the anchor line, and a pre-flattened ``link`` (no split parts) falls
+    back to an escaped plain line.
+    """
+    parts: list[str] = []
+    if content.title.strip():
+        parts.append(html.escape(content.title.strip()))
+    if content.body.strip():
+        parts.append(html.escape(content.body.strip()))
+    if content.cta_label and content.cta_url:
+        parts.append(
+            f'<a href="{html.escape(content.cta_url, quote=True)}">'
+            f"{html.escape(content.cta_label)}</a>"
+        )
+    elif content.link:
+        parts.append(html.escape(content.link.strip()))
+    return "\n\n".join(parts)
+
+
 def build_telegram_notification(
     content: NotificationContent, delivery_config: dict[str, Any]
 ) -> ShapedNotification:
-    """Shape a notification into telegram's ``deliver_message`` payload (``{chat_id, text}``).
+    """Shape a notification into telegram's ``deliver_message`` payload.
 
-    ``chat_id`` is routing from the stable ``delivery_config``; a missing one is
-    a misconfigured channel → ``ValueError``. The decrypted account secret is
-    injected as ``bot_token``. A ``shipped`` event carrying a ``deliverable_id``
-    additionally gets an Approve/Reject ``reply_markup`` so the founder can settle
-    the held delivery straight from Telegram (other events stay plain).
+    The telegram card is sent as ``parse_mode=HTML`` so the CTA renders as a
+    tappable ``보고서 보기`` / ``View report`` hyperlink (an ``<a>`` anchor) rather
+    than a bare URL; the dynamic title/body are HTML-escaped (only the anchor is
+    literal markup). ``chat_id`` is routing from the stable ``delivery_config``;
+    a missing one is a misconfigured channel → ``ValueError``. The decrypted
+    account secret is injected as ``bot_token``. A ``shipped`` event carrying a
+    ``deliverable_id`` additionally gets an Approve/Reject ``reply_markup`` so
+    the founder can settle the held delivery straight from Telegram.
     """
     chat_id = delivery_config.get("chat_id")
     if not chat_id:
         raise ValueError("telegram notify delivery_config missing required 'chat_id'")
-    payload: dict[str, Any] = {"chat_id": str(chat_id), "text": _message_text(content)}
+    payload: dict[str, Any] = {
+        "chat_id": str(chat_id),
+        "text": _telegram_html_text(content),
+        "parse_mode": "HTML",
+    }
     keyboard = _approval_keyboard(content)
     if keyboard is not None:
         payload["reply_markup"] = keyboard

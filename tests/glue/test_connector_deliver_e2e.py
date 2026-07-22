@@ -34,6 +34,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from backend.connectors.db import ConnectorAccountRow
 from backend.extensions.plugin.loader import PluginLoader
+from backend.identity.workspaces_db import ProductRow, ResourceBindingRow, WorkspaceRow
 from backend.router.accounts.crypto import CredentialCipher
 from backend.workflow.application.delivery.connector_dispatch import (
     build_connector_delivery_adapter,
@@ -102,14 +103,54 @@ async def _seed_verified_deliverable(session: AsyncSession, workspace_id: uuid.U
     return deliverable.id
 
 
+async def _bind_delivery_target(
+    session: AsyncSession, *, workspace_id: uuid.UUID, account_id: uuid.UUID
+) -> None:
+    """Add the EXPLICIT resource_binding that makes ``account_id`` a delivery
+    target (FB3 — without it a delivery_config connector is not swept in).
+
+    ``ResourceBindingRow`` has FKs to ``workspaces``, ``products`` and
+    ``connector_accounts`` (the last already seeded). Real Postgres (the CI glue
+    tier) enforces them — SQLite does not — so seed the workspace + product
+    parents IN FK ORDER first, with matching ids, before the child binding.
+    """
+    if await session.get(WorkspaceRow, workspace_id) is None:
+        # safe_mode=False — these are Direct-path delivery tests (the WorkspaceRow
+        # default is Safe Mode ON, which would hold the delivery in the queue
+        # instead of delivering out, so an explicit False is required here).
+        session.add(WorkspaceRow(id=workspace_id, name="delivery-test-ws", safe_mode=False))
+        await session.flush()
+    product_id = uuid.uuid4()
+    session.add(
+        ProductRow(
+            id=product_id,
+            workspace_id=workspace_id,
+            name="delivery-test-product",
+            slug=uuid.uuid4().hex[:12],
+        )
+    )
+    await session.flush()
+    session.add(
+        ResourceBindingRow(
+            id=uuid.uuid4(),
+            workspace_id=workspace_id,
+            product_id=product_id,
+            connector_account_id=account_id,
+            resource_id="r1",
+        )
+    )
+    await session.commit()
+
+
 async def _seed_notion_connector(
     session: AsyncSession,
     cipher: CredentialCipher,
     workspace_id: uuid.UUID,
 ) -> None:
+    account_id = uuid.uuid4()
     session.add(
         ConnectorAccountRow(
-            id=uuid.uuid4(),
+            id=account_id,
             workspace_id=workspace_id,
             connector="notion",
             webhook_token=uuid.uuid4().hex,
@@ -122,6 +163,7 @@ async def _seed_notion_connector(
         )
     )
     await session.commit()
+    await _bind_delivery_target(session, workspace_id=workspace_id, account_id=account_id)
 
 
 async def _plugins():
@@ -247,9 +289,10 @@ async def _seed_slack_connector(
     cipher: CredentialCipher,
     workspace_id: uuid.UUID,
 ) -> None:
+    account_id = uuid.uuid4()
     session.add(
         ConnectorAccountRow(
-            id=uuid.uuid4(),
+            id=account_id,
             workspace_id=workspace_id,
             connector="slack",
             webhook_token=uuid.uuid4().hex,
@@ -259,6 +302,7 @@ async def _seed_slack_connector(
         )
     )
     await session.commit()
+    await _bind_delivery_target(session, workspace_id=workspace_id, account_id=account_id)
 
 
 @respx.mock
@@ -312,9 +356,10 @@ async def test_slack_missing_channel_soft_fails_no_call_no_wedge(
     route = respx.post(f"{SLACK_API}/chat.postMessage")
 
     async with sf() as s:
+        account_id = uuid.uuid4()
         s.add(
             ConnectorAccountRow(
-                id=uuid.uuid4(),
+                id=account_id,
                 workspace_id=workspace_id,
                 connector="slack",
                 webhook_token=uuid.uuid4().hex,
@@ -324,6 +369,10 @@ async def test_slack_missing_channel_soft_fails_no_call_no_wedge(
             )
         )
         await s.commit()
+        # Explicitly bound as a delivery target so the connector reaches the
+        # builder — the intent here is the builder ValueError soft-fail, not the
+        # unbound-connector skip.
+        await _bind_delivery_target(s, workspace_id=workspace_id, account_id=account_id)
         await _seed_verified_deliverable(s, workspace_id)
 
     registry = await _plugins()
@@ -353,9 +402,10 @@ async def _seed_email_connector(
     cipher: CredentialCipher,
     workspace_id: uuid.UUID,
 ) -> None:
+    account_id = uuid.uuid4()
     session.add(
         ConnectorAccountRow(
-            id=uuid.uuid4(),
+            id=account_id,
             workspace_id=workspace_id,
             connector="email-sender",
             webhook_token=uuid.uuid4().hex,
@@ -369,6 +419,7 @@ async def _seed_email_connector(
         )
     )
     await session.commit()
+    await _bind_delivery_target(session, workspace_id=workspace_id, account_id=account_id)
 
 
 @respx.mock
@@ -421,9 +472,10 @@ async def _seed_telegram_connector(
     cipher: CredentialCipher,
     workspace_id: uuid.UUID,
 ) -> None:
+    account_id = uuid.uuid4()
     session.add(
         ConnectorAccountRow(
-            id=uuid.uuid4(),
+            id=account_id,
             workspace_id=workspace_id,
             connector="telegram",
             webhook_token=uuid.uuid4().hex,
@@ -433,6 +485,7 @@ async def _seed_telegram_connector(
         )
     )
     await session.commit()
+    await _bind_delivery_target(session, workspace_id=workspace_id, account_id=account_id)
 
 
 @respx.mock
@@ -485,9 +538,10 @@ async def test_telegram_missing_chat_id_soft_fails_no_call_no_wedge(
     route = respx.post(url__regex=rf"{TELEGRAM_API}/bot.*")
 
     async with sf() as s:
+        account_id = uuid.uuid4()
         s.add(
             ConnectorAccountRow(
-                id=uuid.uuid4(),
+                id=account_id,
                 workspace_id=workspace_id,
                 connector="telegram",
                 webhook_token=uuid.uuid4().hex,
@@ -497,6 +551,9 @@ async def test_telegram_missing_chat_id_soft_fails_no_call_no_wedge(
             )
         )
         await s.commit()
+        # Bound as a delivery target so the connector reaches the builder — the
+        # intent is the builder ValueError soft-fail, not the unbound skip.
+        await _bind_delivery_target(s, workspace_id=workspace_id, account_id=account_id)
         await _seed_verified_deliverable(s, workspace_id)
 
     registry = await _plugins()
@@ -526,9 +583,10 @@ async def _seed_discord_connector(
     cipher: CredentialCipher,
     workspace_id: uuid.UUID,
 ) -> None:
+    account_id = uuid.uuid4()
     session.add(
         ConnectorAccountRow(
-            id=uuid.uuid4(),
+            id=account_id,
             workspace_id=workspace_id,
             connector="discord",
             webhook_token=uuid.uuid4().hex,
@@ -538,6 +596,7 @@ async def _seed_discord_connector(
         )
     )
     await session.commit()
+    await _bind_delivery_target(session, workspace_id=workspace_id, account_id=account_id)
 
 
 @respx.mock
@@ -587,9 +646,10 @@ async def _seed_linear_connector(
     cipher: CredentialCipher,
     workspace_id: uuid.UUID,
 ) -> None:
+    account_id = uuid.uuid4()
     session.add(
         ConnectorAccountRow(
-            id=uuid.uuid4(),
+            id=account_id,
             workspace_id=workspace_id,
             connector="linear",
             webhook_token=uuid.uuid4().hex,
@@ -599,6 +659,7 @@ async def _seed_linear_connector(
         )
     )
     await session.commit()
+    await _bind_delivery_target(session, workspace_id=workspace_id, account_id=account_id)
 
 
 @respx.mock
@@ -666,9 +727,10 @@ async def _seed_trello_connector(
 ) -> None:
     # Dual-secret: the connector_account stores ONLY the secret token; the
     # non-secret api_key rides in the founder-set delivery_config.
+    account_id = uuid.uuid4()
     session.add(
         ConnectorAccountRow(
-            id=uuid.uuid4(),
+            id=account_id,
             workspace_id=workspace_id,
             connector="trello",
             webhook_token=uuid.uuid4().hex,
@@ -682,6 +744,7 @@ async def _seed_trello_connector(
         )
     )
     await session.commit()
+    await _bind_delivery_target(session, workspace_id=workspace_id, account_id=account_id)
 
 
 @respx.mock
@@ -737,9 +800,10 @@ async def test_trello_missing_api_key_soft_fails_no_call_no_wedge(
     route = respx.post(f"{TRELLO_API}/1/cards")
 
     async with sf() as s:
+        account_id = uuid.uuid4()
         s.add(
             ConnectorAccountRow(
-                id=uuid.uuid4(),
+                id=account_id,
                 workspace_id=workspace_id,
                 connector="trello",
                 webhook_token=uuid.uuid4().hex,
@@ -749,6 +813,9 @@ async def test_trello_missing_api_key_soft_fails_no_call_no_wedge(
             )
         )
         await s.commit()
+        # Bound as a delivery target so the connector reaches the builder — the
+        # intent is the builder ValueError soft-fail, not the unbound skip.
+        await _bind_delivery_target(s, workspace_id=workspace_id, account_id=account_id)
         await _seed_verified_deliverable(s, workspace_id)
 
     registry = await _plugins()

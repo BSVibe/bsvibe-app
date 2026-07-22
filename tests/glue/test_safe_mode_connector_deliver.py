@@ -55,7 +55,7 @@ from backend.api.v1.safemode import get_delivery_dispatcher
 from backend.config import get_settings
 from backend.connectors.db import ConnectorAccountRow
 from backend.extensions.plugin.loader import PluginLoader
-from backend.identity.workspaces_db import WorkspaceRow
+from backend.identity.workspaces_db import ProductRow, ResourceBindingRow, WorkspaceRow
 from backend.router.accounts.crypto import CredentialCipher
 from backend.workflow.application.delivery.connector_dispatch import (
     ConnectorDeliveryAdapter,
@@ -155,9 +155,20 @@ async def client(
         yield c
 
 
+async def _ensure_workspace(session: AsyncSession, workspace_id: uuid.UUID) -> None:
+    """Get-or-create the Safe-Mode ON WorkspaceRow.
+
+    Both the connector seed (for its resource_binding FK) and the deliverable
+    seed need the workspace row; whichever runs first creates it. Guarded so the
+    second caller does not duplicate the PK (real Postgres enforces it)."""
+    if await session.get(WorkspaceRow, workspace_id) is None:
+        session.add(WorkspaceRow(id=workspace_id, name="acme", safe_mode=True))
+        await session.flush()
+
+
 async def _seed_verified_deliverable(session: AsyncSession, workspace_id: uuid.UUID) -> uuid.UUID:
     """Seed a Safe-Mode ON workspace + a verified Deliverable + its DeliveryEvent."""
-    session.add(WorkspaceRow(id=workspace_id, name="acme", safe_mode=True))
+    await _ensure_workspace(session, workspace_id)
     run = ExecutionRun(
         id=uuid.uuid4(),
         workspace_id=workspace_id,
@@ -193,15 +204,40 @@ async def _seed_verified_deliverable(session: AsyncSession, workspace_id: uuid.U
 async def _seed_notion_connector(
     session: AsyncSession, cipher: CredentialCipher, workspace_id: uuid.UUID
 ) -> None:
+    account_id = uuid.uuid4()
     session.add(
         ConnectorAccountRow(
-            id=uuid.uuid4(),
+            id=account_id,
             workspace_id=workspace_id,
             connector="notion",
             webhook_token=uuid.uuid4().hex,
             signing_secret_ciphertext=cipher.encrypt("secret_notion_token"),
             delivery_config={"parent_page_id": "P", "notion_api_url": NOTION_API},
             is_active=True,
+        )
+    )
+    # FB3 — an explicit resource_binding makes it a delivery target (a
+    # delivery_config alone no longer qualifies — no implicit routing). The
+    # binding FKs to workspaces + products (Postgres enforces both), so seed
+    # those parents IN FK ORDER first with matching ids.
+    await _ensure_workspace(session, workspace_id)
+    product_id = uuid.uuid4()
+    session.add(
+        ProductRow(
+            id=product_id,
+            workspace_id=workspace_id,
+            name="delivery-test-product",
+            slug=uuid.uuid4().hex[:12],
+        )
+    )
+    await session.flush()
+    session.add(
+        ResourceBindingRow(
+            id=uuid.uuid4(),
+            workspace_id=workspace_id,
+            product_id=product_id,
+            connector_account_id=account_id,
+            resource_id="r1",
         )
     )
     await session.commit()

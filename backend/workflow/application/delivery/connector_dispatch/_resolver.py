@@ -2,10 +2,15 @@
 
 Two resolvers:
 
-* :func:`_resolve_bindings` — every active ``connector_accounts`` row whose
-  connector has a v1 event builder AND a non-empty ``delivery_config``. These
-  are the simple-event-builder bindings (notion / slack / email-sender /
-  telegram / discord / linear / trello).
+* :func:`_resolve_bindings` — an active ``connector_accounts`` row is a
+  deliverable-delivery target ONLY when the founder EXPLICITLY bound it as one
+  (a ``resource_bindings`` row), on top of it having a v1 event builder + an
+  ``@p.outbound`` + a non-empty ``delivery_config``. Delivery is the founder's
+  explicit choice — a connector is NOT swept in just because it carries a
+  ``delivery_config`` (that config also configures NOTIFICATION channels, e.g. a
+  telegram bot's ``{chat_id}``; without the explicit-binding gate the founder's
+  telegram *notification* connector received a raw duplicate of every
+  deliverable — implicit routing, which the product forbids).
 * :func:`resolve_github_binding` — the github special case (NOT a simple event
   builder — it needs git-ops, not just an event dict). Used by both the
   delivery adapter AND the run-setup workspace provisioner that clones the
@@ -23,6 +28,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.connectors.db import ConnectorAccountRow
 from backend.extensions.plugin.base import PluginMeta
+from backend.identity.workspaces_db import ResourceBindingRow
 
 from ._builders import OUTBOUND_EVENT_BUILDERS, OutboundEventBuilder
 
@@ -46,9 +52,16 @@ async def _resolve_bindings(
 
     A row qualifies when ALL hold: it is ``is_active``, its ``delivery_config``
     is non-empty, its ``connector`` has a loaded plugin that declares at least
-    one ``@p.outbound``, AND a v1 event-builder exists for that connector. Rows
-    failing any condition are skipped (the others without a builder are the
-    deliberate seam for connectors not yet wired).
+    one ``@p.outbound``, a v1 event-builder exists for that connector, AND the
+    founder EXPLICITLY bound the account as a delivery target — i.e. it has at
+    least one :class:`ResourceBindingRow`. The explicit-binding gate is the
+    guard against IMPLICIT ROUTING: a ``delivery_config`` alone does NOT make a
+    connector a delivery target, because that same config configures a
+    NOTIFICATION channel (e.g. a telegram bot's ``{chat_id, webhook_secret}``);
+    without this gate the founder's telegram notification connector was swept in
+    and got a raw duplicate of every deliverable. Rows failing any condition are
+    skipped (a builder-less connector is the deliberate not-yet-wired seam; a
+    binding-less one is simply not a delivery target the founder chose).
     """
     rows = (
         (
@@ -56,6 +69,19 @@ async def _resolve_bindings(
                 select(ConnectorAccountRow).where(
                     ConnectorAccountRow.workspace_id == workspace_id,
                     ConnectorAccountRow.is_active.is_(True),
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    # The connector_accounts the founder EXPLICITLY bound as delivery targets
+    # (a resource_bindings row). Only these are swept into deliverable delivery.
+    bound_account_ids: set[uuid.UUID] = set(
+        (
+            await session.execute(
+                select(ResourceBindingRow.connector_account_id).where(
+                    ResourceBindingRow.workspace_id == workspace_id
                 )
             )
         )
@@ -73,6 +99,16 @@ async def _resolve_bindings(
         if builder is None:
             logger.info(
                 "connector_delivery_no_builder_skipped",
+                connector=row.connector,
+                workspace_id=str(workspace_id),
+            )
+            continue
+        if row.id not in bound_account_ids:
+            # No explicit resource_binding → the founder never chose this
+            # connector as a delivery target (it may be a notification-only
+            # channel). Skipping it is what stops the implicit deliverable dump.
+            logger.info(
+                "connector_delivery_no_resource_binding_skipped",
                 connector=row.connector,
                 workspace_id=str(workspace_id),
             )

@@ -97,16 +97,22 @@ class TelegramClient:
         chat_id: str | int,
         text: str,
         reply_markup: dict[str, Any] | None = None,
+        parse_mode: str | None = None,
     ) -> dict[str, Any]:
         """Send a text message. Returns the ``result`` object (the sent
         ``Message``) from a successful response.
 
         ``reply_markup`` (e.g. an ``inline_keyboard``) is included in the POST
         body only when provided, so a plain notification stays a plain message.
+        ``parse_mode`` (e.g. ``"HTML"``) is likewise included only when set, so a
+        notification card can render a tappable ``<a>`` CTA while plain sends stay
+        plain text (Telegram treats an absent ``parse_mode`` as no formatting).
         """
         payload: dict[str, Any] = {"chat_id": chat_id, "text": text}
         if reply_markup is not None:
             payload["reply_markup"] = reply_markup
+        if parse_mode is not None:
+            payload["parse_mode"] = parse_mode
         resp = await self._post("sendMessage", payload)
         body = self._ok(resp)
         result: dict[str, Any] = body["result"]

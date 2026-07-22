@@ -10,12 +10,18 @@ verified deliverable was never actually delivered OUT through a connector.
 
 This package supplies the missing two halves:
 
-1. **Delivery target binding = connector_account config.** A workspace's
-   active :class:`~backend.connectors.db.ConnectorAccountRow` rows that carry a
-   non-empty ``delivery_config`` AND whose ``connector`` exposes an
-   ``@p.outbound`` are the delivery targets. The routing / system fields
-   (e.g. notion's ``parent_page_id``) come from this STABLE founder-set config
-   — never from LLM / work output (no-LLM-output-for-system-fields rule).
+1. **Delivery target binding = an EXPLICIT founder choice.** A workspace's
+   active :class:`~backend.connectors.db.ConnectorAccountRow` is a delivery
+   target only when the founder EXPLICITLY bound it as one — a
+   :class:`~backend.identity.workspaces_db.ResourceBindingRow` — on top of it
+   carrying a non-empty ``delivery_config`` AND exposing an ``@p.outbound``. A
+   ``delivery_config`` ALONE does not qualify: that same config configures
+   NOTIFICATION channels too (a telegram bot's ``{chat_id}``), and sweeping in
+   every ``delivery_config`` connector was implicit routing that dumped a raw
+   duplicate of every deliverable to the founder's notification channel. The
+   routing / system fields (e.g. notion's ``parent_page_id``) come from this
+   STABLE founder-set config — never from LLM / work output
+   (no-LLM-output-for-system-fields rule).
 
 2. **Per-connector event shaping.** :data:`OUTBOUND_EVENT_BUILDERS` maps a
    connector name to a builder that turns ``{deliverable content} +
