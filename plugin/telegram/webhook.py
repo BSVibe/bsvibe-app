@@ -144,7 +144,7 @@ def parse_callback_query(body: dict[str, Any]) -> dict[str, Any] | None:
     action fields the inbound callback handler needs::
 
         {callback_query_id, from_id, chat_type, chat_id, message_id,
-         verb, deliverable_id, malformed}
+         message_text, message_entities, verb, deliverable_id, malformed}
 
     ``verb`` / ``deliverable_id`` are ``None`` and ``malformed`` is ``True`` when
     the ``data`` is absent or not a recognised ``"<verb>:<deliverable_id>"`` with
@@ -164,6 +164,13 @@ def parse_callback_query(body: dict[str, Any]) -> dict[str, Any] | None:
         "chat_type": chat.get("type"),
         "chat_id": chat.get("id"),
         "message_id": message.get("message_id"),
+        # The card body + its entities (the "보고서 보기" hyperlink is a text_link
+        # entity, since the card was sent with parse_mode="HTML"). The inbound
+        # callback handler appends the approve/reject status to this body — so the
+        # settled message reads like history — and re-sends these entities
+        # unchanged (appending at the end keeps every original offset valid).
+        "message_text": message.get("text"),
+        "message_entities": message.get("entities"),
         "verb": None if malformed else verb,
         "deliverable_id": None if malformed else deliverable_id,
         "malformed": malformed,

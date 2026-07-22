@@ -39,6 +39,13 @@ TELEGRAM = telegram_module.p.meta
 
 FOUNDER_ID = 424242
 
+# The card body a "작업 완료" deliverable card was sent with — its "보고서 보기"
+# CTA is stored as a text_link ENTITY on the message (parse_mode=HTML at send).
+CARD_TEXT = "작업 완료\n요약: 리포트를 만들었어요.\n검증: 통과\n보고서 보기"
+CARD_ENTITIES = [
+    {"type": "text_link", "offset": 24, "length": 6, "url": "https://x/deliverables/1"}
+]
+
 
 class _FakeCipher:
     """Duck-typed CredentialCipher — decrypts any ciphertext to the bot token."""
@@ -89,17 +96,22 @@ def _callback_raw(
     deliverable_id: str,
     from_id: int = FOUNDER_ID,
     chat_type: str = "private",
+    with_card_body: bool = True,
 ) -> bytes:
+    message: dict[str, Any] = {
+        "message_id": 555,
+        "chat": {"id": FOUNDER_ID, "type": chat_type},
+    }
+    if with_card_body:
+        message["text"] = CARD_TEXT
+        message["entities"] = CARD_ENTITIES
     return json.dumps(
         {
             "update_id": 999,
             "callback_query": {
                 "id": "cbq-77",
                 "from": {"id": from_id, "is_bot": False},
-                "message": {
-                    "message_id": 555,
-                    "chat": {"id": FOUNDER_ID, "type": chat_type},
-                },
+                "message": message,
                 "data": f"{verb}:{deliverable_id}",
             },
         }
@@ -254,9 +266,16 @@ async def test_valid_founder_approve_dispatches_and_edits() -> None:
     assert len(dispatcher.calls) == 1
     assert dispatcher.calls[0]["deliverable_id"] == deliverable_id
     assert answer.called
-    assert "✅" in _last_body(edit)["text"]
+    edit_body = _last_body(edit)
+    # HISTORY: the ORIGINAL card body is KEPT, the status is APPENDED after it.
+    assert CARD_TEXT in edit_body["text"]
+    assert edit_body["text"] == f"{CARD_TEXT}\n\n✅ 승인됨 — 내보냈어요."
+    # The original entities are forwarded unchanged → "보고서 보기" hyperlink preserved.
+    assert edit_body["entities"] == CARD_ENTITIES
+    # No parse_mode when using a pre-computed entity list.
+    assert "parse_mode" not in edit_body
     # buttons dropped
-    assert _last_body(edit)["reply_markup"] == {"inline_keyboard": []}
+    assert edit_body["reply_markup"] == {"inline_keyboard": []}
 
 
 @respx.mock
@@ -315,7 +334,43 @@ async def test_valid_founder_reject_denies_and_edits() -> None:
         assert handled is True
         assert await _status(session, item_id) is SafeModeStatus.DENIED
     assert dispatcher.calls == []  # deny never dispatches
-    assert "❌" in _last_body(edit)["text"]
+    edit_body = _last_body(edit)
+    # HISTORY: body kept, reject status appended, hyperlink entities preserved.
+    assert CARD_TEXT in edit_body["text"]
+    assert edit_body["text"] == f"{CARD_TEXT}\n\n❌ 거절했어요."
+    assert edit_body["entities"] == CARD_ENTITIES
+    assert "parse_mode" not in edit_body
+    assert edit_body["reply_markup"] == {"inline_keyboard": []}
+
+
+@respx.mock
+async def test_approve_without_message_text_falls_back_to_result_line() -> None:
+    """A callback whose message has NO text (shouldn't happen for a real card) →
+    the edit falls back to the result line alone, no entities, no crash."""
+    respx.post(f"{BOT}/answerCallbackQuery").mock(
+        return_value=httpx.Response(200, json={"ok": True, "result": True})
+    )
+    edit = respx.post(f"{BOT}/editMessageText").mock(
+        return_value=httpx.Response(200, json={"ok": True, "result": {}})
+    )
+    dispatcher = _FakeDispatcher()
+    async with memory_session() as session:
+        ws = uuid.uuid4()
+        item_id, deliverable_id = await _seed(session, ws=ws)
+        handled = await handle_telegram_callback(
+            raw_body=_callback_raw(deliverable_id=str(deliverable_id), with_card_body=False),
+            account=_account(ws),
+            session=session,
+            telegram=TELEGRAM,
+            cipher=_FakeCipher(),
+            dispatcher=dispatcher,
+        )
+        assert handled is True
+        assert await _status(session, item_id) is SafeModeStatus.APPROVED
+    edit_body = _last_body(edit)
+    assert edit_body["text"] == "✅ 승인됨 — 내보냈어요."
+    assert "entities" not in edit_body
+    assert edit_body["reply_markup"] == {"inline_keyboard": []}
 
 
 @respx.mock
@@ -325,7 +380,7 @@ async def test_double_tap_already_resolved_is_idempotent() -> None:
     answer = respx.post(f"{BOT}/answerCallbackQuery").mock(
         return_value=httpx.Response(200, json={"ok": True, "result": True})
     )
-    respx.post(f"{BOT}/editMessageText").mock(
+    edit = respx.post(f"{BOT}/editMessageText").mock(
         return_value=httpx.Response(200, json={"ok": True, "result": {}})
     )
     dispatcher = _FakeDispatcher()
@@ -349,6 +404,9 @@ async def test_double_tap_already_resolved_is_idempotent() -> None:
         assert await _status(session, item_id) is SafeModeStatus.APPROVED
     assert dispatcher.calls == []
     assert "이미" in _last_body(answer)["text"]
+    # Already edited on the FIRST tap — a double-tap must NOT re-edit (no stacking
+    # of "이미 처리됐어요" onto an already-appended card).
+    assert not edit.called
 
 
 # ── routing discriminator ──────────────────────────────────────────────────────

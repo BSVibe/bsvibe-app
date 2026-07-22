@@ -218,10 +218,15 @@ async def edit_message_text(
     message_id: int,
     text: str,
     reply_markup: dict[str, Any] | None = None,
+    entities: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    """Replace the card's text/keyboard with the approve/reject result line."""
+    """Edit the card in place — append the approve/reject result line to its body
+    and drop the buttons. ``entities`` re-sends the original card's entity list so
+    its "보고서 보기" hyperlink is preserved (see :meth:`TelegramClient.edit_message_text`)."""
     client = _client(context)
-    return await client.edit_message_text(chat_id, message_id, text, reply_markup=reply_markup)
+    return await client.edit_message_text(
+        chat_id, message_id, text, reply_markup=reply_markup, entities=entities
+    )
 
 
 # ── setup ────────────────────────────────────────────────────────────────────

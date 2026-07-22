@@ -19,22 +19,32 @@ from plugin.telegram.webhook import (
     verify_secret_token,
 )
 
+_CARD_TEXT = "작업 완료\n요약: 리포트를 만들었어요.\n검증: 통과\n보고서 보기"
+_CARD_ENTITIES = [
+    {"type": "text_link", "offset": 24, "length": 6, "url": "https://x/deliverables/1"}
+]
+
 
 def _callback_body(
     *,
     data: str = "apv:DELIV-1",
     from_id: int = 5,
     chat_type: str = "private",
+    with_message_text: bool = False,
 ) -> dict:
+    message: dict = {
+        "message_id": 77,
+        "chat": {"id": 99, "type": chat_type},
+    }
+    if with_message_text:
+        message["text"] = _CARD_TEXT
+        message["entities"] = _CARD_ENTITIES
     return {
         "update_id": 500,
         "callback_query": {
             "id": "cbq-1",
             "from": {"id": from_id, "is_bot": False},
-            "message": {
-                "message_id": 77,
-                "chat": {"id": 99, "type": chat_type},
-            },
+            "message": message,
             "data": data,
         },
     }
@@ -75,6 +85,18 @@ class TestParseCallbackQuery:
 
     def test_no_callback_query_returns_none(self) -> None:
         assert parse_callback_query({"update_id": 1, "message": {}}) is None
+
+    def test_surfaces_message_text_and_entities(self) -> None:
+        parsed = parse_callback_query(_callback_body(with_message_text=True))
+        assert parsed is not None
+        assert parsed["message_text"] == _CARD_TEXT
+        assert parsed["message_entities"] == _CARD_ENTITIES
+
+    def test_message_text_and_entities_none_when_absent(self) -> None:
+        parsed = parse_callback_query(_callback_body())
+        assert parsed is not None
+        assert parsed["message_text"] is None
+        assert parsed["message_entities"] is None
 
 
 WORKSPACE = uuid.uuid4()
