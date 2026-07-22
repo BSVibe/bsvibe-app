@@ -51,7 +51,7 @@ from backend.config import get_settings
 from backend.identity.workspaces_db import WorkspaceRow, load_workspace_language
 from backend.notifications.bindings import IN_APP_CHANNEL, resolve_notify_bindings
 from backend.notifications.channels import NOTIFICATION_OUTBOX
-from backend.notifications.copy import notification_cta
+from backend.notifications.copy import notification_cta_parts
 from backend.notifications.db import (
     DEFAULT_MATRIX,
     NotificationEventRow,
@@ -301,8 +301,11 @@ class NotifyWorker(BaseWorker):
         content = replace(content, language=language)
         if not content.link:
             return content
-        cta = notification_cta(row.event, language, self._pwa_url, content.link)
-        return replace(content, link=cta)
+        # Carry BOTH the flattened "label → url" line (for plain-text channels)
+        # AND its split parts (so the telegram HTML builder can make the label a
+        # tappable anchor instead of showing the raw URL).
+        label, url = notification_cta_parts(row.event, language, self._pwa_url, content.link)
+        return replace(content, link=f"{label} → {url}", cta_label=label, cta_url=url)
 
     @staticmethod
     async def _matrix(session: AsyncSession, workspace_id: uuid.UUID) -> dict[str, dict[str, bool]]:

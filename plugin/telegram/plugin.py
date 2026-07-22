@@ -103,7 +103,12 @@ async def deliver_message(context: SkillContext, event: dict[str, Any]) -> dict[
     Slack's deletable-message tier)."""
     chat_id = event["chat_id"]
     client = _client(context)
-    data = await client.send_message(chat_id, event["text"], reply_markup=event.get("reply_markup"))
+    data = await client.send_message(
+        chat_id,
+        event["text"],
+        reply_markup=event.get("reply_markup"),
+        parse_mode=event.get("parse_mode"),
+    )
     message_id = int(data["message_id"])
     out_chat = (data.get("chat") or {}).get("id", chat_id)
     return {

@@ -199,3 +199,91 @@ def test_callback_data_fits_telegram_64_byte_cap() -> None:
     )
     for btn in shaped.payload["reply_markup"]["inline_keyboard"][0]:
         assert len(btn["callback_data"].encode("utf-8")) <= 64
+
+
+# ── FB2: telegram card is HTML with a tappable "보고서 보기" anchor CTA ────────────
+
+
+def _shipped_with_cta(
+    *, title: str, cta_label: str = "보고서 보기", url: str
+) -> NotificationContent:
+    return NotificationContent(
+        event="shipped",
+        title=title,
+        body="검증까지 끝났어요.",
+        # ``link`` still carries the flattened form (plain-text channels use it);
+        # the telegram builder prefers the split cta parts to build the anchor.
+        link=f"{cta_label} → {url}",
+        cta_label=cta_label,
+        cta_url=url,
+        language="ko",
+    )
+
+
+def test_telegram_notification_uses_html_parse_mode() -> None:
+    shaped = NOTIFY_EVENT_BUILDERS["telegram"](
+        _shipped_with_cta(title="작업 완료", url="https://app.bsvibe.dev/deliverables/D9"),
+        {"chat_id": 42},
+    )
+    assert shaped.payload["parse_mode"] == "HTML"
+
+
+def test_telegram_cta_is_a_tappable_anchor_not_a_raw_url() -> None:
+    url = "https://app.bsvibe.dev/deliverables/D9"
+    shaped = NOTIFY_EVENT_BUILDERS["telegram"](
+        _shipped_with_cta(title="작업 완료", url=url), {"chat_id": 42}
+    )
+    text = shaped.payload["text"]
+    # The WORDS are the link — an <a> anchor around the localized label.
+    assert f'<a href="{url}">보고서 보기</a>' in text
+    # The bare "label → url" trailing form is NOT shown (the founder taps words).
+    assert "→ https://" not in text
+
+
+def test_telegram_html_escapes_dynamic_title_so_it_cannot_break_the_parse() -> None:
+    # A deliverable title with <, > or & must be escaped — only the anchor is
+    # literal markup, so an angle-bracket in the title can't break Telegram's HTML.
+    shaped = NOTIFY_EVENT_BUILDERS["telegram"](
+        _shipped_with_cta(
+            title="Fix <script> & <b>bold</b>", url="https://app.bsvibe.dev/deliverables/D9"
+        ),
+        {"chat_id": 42},
+    )
+    text = shaped.payload["text"]
+    assert "&lt;script&gt; &amp; &lt;b&gt;bold&lt;/b&gt;" in text
+    # The raw unescaped title tag never rides through into the HTML body.
+    assert "<script>" not in text
+
+
+def test_telegram_without_cta_parts_falls_back_to_escaped_plain_link() -> None:
+    # A link-carrying content with NO split cta parts (e.g. a non-shipped push
+    # rendered by an older path) still HTML-escapes the flat link line.
+    content = NotificationContent(
+        event="needs_you",
+        title="A run needs your decision",
+        body="a & b < c",
+        link="Answer it → https://app.bsvibe.dev/brief",
+    )
+    shaped = NOTIFY_EVENT_BUILDERS["telegram"](content, {"chat_id": 42})
+    assert shaped.payload["parse_mode"] == "HTML"
+    assert "a &amp; b &lt; c" in shaped.payload["text"]
+
+
+def test_slack_notification_stays_plain_text_no_html_no_anchor() -> None:
+    # Other channels are unchanged: no parse_mode, plain "label → url" CTA text.
+    shaped = NOTIFY_EVENT_BUILDERS["slack"](
+        _shipped_with_cta(title="작업 완료", url="https://app.bsvibe.dev/deliverables/D9"),
+        {"channel": "C1"},
+    )
+    assert "parse_mode" not in shaped.payload
+    assert "<a href" not in shaped.payload["text"]
+    assert "보고서 보기 → https://app.bsvibe.dev/deliverables/D9" in shaped.payload["text"]
+
+
+def test_email_notification_stays_plain_text_no_html() -> None:
+    shaped = build_email_notification(
+        _shipped_with_cta(title="작업 완료", url="https://app.bsvibe.dev/deliverables/D9"),
+        {"to": "founder@example.com"},
+    )
+    assert "parse_mode" not in shaped.payload
+    assert "<a href" not in shaped.payload["body"]

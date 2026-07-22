@@ -18,6 +18,7 @@ from backend.notifications.copy import (
     needs_you_reason_body,
     notification_copy,
     notification_cta,
+    notification_cta_parts,
 )
 
 
@@ -163,3 +164,21 @@ def test_cta_review_en_for_non_decision_events() -> None:
 def test_cta_strips_trailing_slash_on_base_url() -> None:
     cta = notification_cta("triggered", "en", "https://app.example/", "/brief")
     assert cta == "Review it in your Brief → https://app.example/brief"
+
+
+# ── CTA parts (label + url) for the telegram HTML anchor ───────────────────────
+
+
+def test_cta_parts_shipped_ko_returns_label_and_absolute_url() -> None:
+    # The telegram HTML builder needs the label and url SEPARATELY so it can make
+    # the words tappable — <a href="url">보고서 보기</a> — not the flat "label → url".
+    label, url = notification_cta_parts("shipped", "ko", "https://app.example", "/deliverables/abc")
+    assert label == "보고서 보기"
+    assert url == "https://app.example/deliverables/abc"
+
+
+def test_cta_parts_and_flat_cta_stay_in_lockstep() -> None:
+    label, url = notification_cta_parts("shipped", "en", "https://app.example", "/deliverables/xyz")
+    assert f"{label} → {url}" == notification_cta(
+        "shipped", "en", "https://app.example", "/deliverables/xyz"
+    )
