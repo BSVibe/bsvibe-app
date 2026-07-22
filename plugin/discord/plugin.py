@@ -21,7 +21,11 @@ from backend.extensions.plugin.context import SkillContext
 from backend.workflow.domain.incoming import TriggerEvent
 from bsvibe_sdk import plugin
 from plugin.discord.client import DEFAULT_BASE_URL, DiscordClient
-from plugin.discord.webhook import parse_interaction
+from plugin.discord.webhook import (
+    INTERACTION_COMPONENT,
+    parse_component_interaction,
+    parse_interaction,
+)
 
 p = plugin(
     name="discord",
@@ -105,7 +109,9 @@ async def deliver_message(context: SkillContext, event: dict[str, Any]) -> dict[
     deletable-message tier)."""
     channel_id = str(event["channel_id"])
     client = _client(context)
-    data = await client.create_message(channel_id, event["content"])
+    data = await client.create_message(
+        channel_id, event["content"], components=event.get("components")
+    )
     message_id = str(data["id"])
     out_channel = str(data.get("channel_id", channel_id))
     return {
@@ -174,6 +180,64 @@ async def send_message(
         "channel_id": out_channel,
         "external_ref": f"discord://{out_channel}/{message_id}",
     }
+
+
+# ── callback capabilities (inbound approve/reject) ──────────────────────────────
+#
+# The seam the backend inbound callback handler dispatches through: the founder-
+# auth + Safe-Mode approve orchestration lives in the backend while ALL discord-
+# specific parsing + interaction-webhook calls stay here (dispatched via
+# PluginRunner, never imported into ``backend.api``). ``mcp_exposed=False`` (the
+# default) — internal capabilities, not agent-loop / MCP tools.
+
+
+@p.action(name="parse_discord_interaction")
+async def parse_discord_interaction(
+    context: SkillContext, body: dict[str, Any]
+) -> dict[str, Any] | None:
+    """Pure parse of a message-component interaction into founder-auth + action
+    fields (see :func:`plugin.discord.webhook.parse_component_interaction`). No
+    creds needed — the request was already gated by the webhook_token + Ed25519
+    signature. Returns ``None`` when the body is not a component (type 3)
+    interaction."""
+    del context
+    if not isinstance(body, dict) or body.get("type") != INTERACTION_COMPONENT:
+        return None
+    return parse_component_interaction(body)
+
+
+@p.action(name="discord_followup")
+async def discord_followup(
+    context: SkillContext,
+    application_id: str,
+    interaction_token: str,
+    content: str,
+    flags: int | None = None,
+) -> dict[str, Any]:
+    """POST an interaction follow-up via the interaction webhook (``flags=64`` →
+    EPHEMERAL). This is how an unauthorized tapper is told "권한이 없어요" and how the
+    acting founder gets a private confirmation — without editing the shared card.
+    Best-effort UI ack."""
+    client = _client(context)
+    return await client.create_interaction_followup(
+        application_id, interaction_token, content, flags=flags
+    )
+
+
+@p.action(name="discord_edit_original")
+async def discord_edit_original(
+    context: SkillContext,
+    application_id: str,
+    interaction_token: str,
+    content: str,
+    components: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """PATCH the original interaction response (``@original``) — keep the card body,
+    append the approve/reject result line, and drop the buttons (``components=[]``)."""
+    client = _client(context)
+    return await client.edit_interaction_response(
+        application_id, interaction_token, content, components=components
+    )
 
 
 # ── setup ────────────────────────────────────────────────────────────────────

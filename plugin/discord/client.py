@@ -86,10 +86,67 @@ class DiscordClient:
 
     # ── messages ───────────────────────────────────────────────────────────
 
-    async def create_message(self, channel_id: str, content: str) -> dict[str, Any]:
-        """Post a text message to a channel. Returns the created Message object."""
+    async def create_message(
+        self,
+        channel_id: str,
+        content: str,
+        *,
+        components: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        """Post a text message to a channel. Returns the created Message object.
+
+        ``components`` (action rows with buttons) are included ONLY when set — a
+        content-only notification sends no ``components`` key."""
+        body: dict[str, Any] = {"content": content}
+        if components is not None:
+            body["components"] = components
+        resp = await self._request("POST", f"/channels/{channel_id}/messages", json_body=body)
+        return self._json(resp)
+
+    # ── interaction webhook (follow-ups + @original edit) ─────────────────────
+    #
+    # Interaction responses use the INTERACTION WEBHOOK — ``application_id`` +
+    # ``interaction_token`` in the URL — which is valid ~15 min and self-authenticated
+    # by the token (no bot token needed). We reach it on the same host, so the bot
+    # ``Authorization`` header rides along harmlessly.
+
+    async def create_interaction_followup(
+        self,
+        application_id: str,
+        interaction_token: str,
+        content: str,
+        *,
+        flags: int | None = None,
+    ) -> dict[str, Any]:
+        """POST a follow-up message to an interaction (``flags=64`` → EPHEMERAL, only
+        the tapper sees it). This is how an unauthorized tapper is told "권한이 없어요"
+        without touching the public card. Returns the created message object."""
+        body: dict[str, Any] = {"content": content}
+        if flags is not None:
+            body["flags"] = flags
         resp = await self._request(
-            "POST", f"/channels/{channel_id}/messages", json_body={"content": content}
+            "POST", f"/webhooks/{application_id}/{interaction_token}", json_body=body
+        )
+        return self._json(resp)
+
+    async def edit_interaction_response(
+        self,
+        application_id: str,
+        interaction_token: str,
+        content: str,
+        *,
+        components: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        """PATCH the ORIGINAL interaction response (``@original``) — used to close the
+        approval loop: keep the card body, append the result line, and drop the
+        buttons by passing ``components=[]``. Returns the edited message object."""
+        body: dict[str, Any] = {"content": content}
+        if components is not None:
+            body["components"] = components
+        resp = await self._request(
+            "PATCH",
+            f"/webhooks/{application_id}/{interaction_token}/messages/@original",
+            json_body=body,
         )
         return self._json(resp)
 

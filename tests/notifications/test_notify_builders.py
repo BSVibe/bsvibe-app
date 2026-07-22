@@ -349,3 +349,77 @@ def test_email_notification_stays_plain_text_no_html() -> None:
     )
     assert "parse_mode" not in shaped.payload
     assert "<a href" not in shaped.payload["body"]
+
+
+# ── discord: shipped card gains message-component 승인/거절 buttons + md link ────────
+
+
+def test_discord_shipped_ko_carries_approve_reject_components() -> None:
+    shaped = NOTIFY_EVENT_BUILDERS["discord"](
+        _shipped_content(deliverable_id="DELIV-9", language="ko"), {"channel_id": "C1"}
+    )
+    components = shaped.payload["components"]
+    # One action row (type 1) with two buttons (type 2).
+    assert len(components) == 1
+    row = components[0]
+    assert row["type"] == 1
+    approve, reject = row["components"]
+    assert approve["type"] == 2
+    assert approve["style"] == 3  # success
+    assert approve["label"] == "승인"
+    assert approve["custom_id"] == "apv:DELIV-9"
+    assert reject["style"] == 4  # danger
+    assert reject["label"] == "거절"
+    assert reject["custom_id"] == "rej:DELIV-9"
+
+
+def test_discord_shipped_en_button_labels() -> None:
+    shaped = NOTIFY_EVENT_BUILDERS["discord"](
+        _shipped_content(deliverable_id="DELIV-10", language="en"), {"channel_id": "C1"}
+    )
+    labels = [b["label"] for b in shaped.payload["components"][0]["components"]]
+    assert labels == ["Approve", "Reject"]
+
+
+def test_discord_custom_id_within_100_char_cap() -> None:
+    deliverable_id = "123e4567-e89b-12d3-a456-426614174000"
+    shaped = NOTIFY_EVENT_BUILDERS["discord"](
+        _shipped_content(deliverable_id=deliverable_id, language="en"), {"channel_id": "C1"}
+    )
+    for btn in shaped.payload["components"][0]["components"]:
+        assert len(btn["custom_id"]) <= 100
+
+
+def test_discord_cta_is_markdown_link_in_content() -> None:
+    content = NotificationContent(
+        event="shipped",
+        title="작업 완료",
+        body="검증까지 끝났어요.",
+        link="보고서 보기 → https://app.bsvibe.dev/deliverables/D9",
+        cta_label="보고서 보기",
+        cta_url="https://app.bsvibe.dev/deliverables/D9",
+        deliverable_id="DELIV-11",
+        language="ko",
+    )
+    shaped = NOTIFY_EVENT_BUILDERS["discord"](content, {"channel_id": "C1"})
+    assert "[보고서 보기](https://app.bsvibe.dev/deliverables/D9)" in shaped.payload["content"]
+
+
+def test_discord_non_shipped_event_has_no_components() -> None:
+    content = NotificationContent(
+        event="needs_you",
+        title="Decision",
+        body="waiting",
+        link="/d",
+        deliverable_id="DELIV-12",
+        language="ko",
+    )
+    shaped = NOTIFY_EVENT_BUILDERS["discord"](content, {"channel_id": "C1"})
+    assert "components" not in shaped.payload
+
+
+def test_discord_shipped_without_deliverable_id_has_no_components() -> None:
+    shaped = NOTIFY_EVENT_BUILDERS["discord"](
+        _shipped_content(deliverable_id=None, language="ko"), {"channel_id": "C1"}
+    )
+    assert "components" not in shaped.payload

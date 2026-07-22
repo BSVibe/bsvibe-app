@@ -50,10 +50,62 @@ TIMESTAMP_HEADER = "x-signature-timestamp"
 
 # Discord interaction types (subset). PING is answered by the HTTP route.
 INTERACTION_PING = 1
+# MESSAGE_COMPONENT — a button / select tap on an existing message.
+INTERACTION_COMPONENT = 3
 # Interaction types this connector turns into TriggerEvents. PING (1) is the
 # registration handshake (skip → None); the rest are real user-driven
 # interactions (slash commands, components, modal submits, autocomplete).
 SUPPORTED_INTERACTION_TYPES = frozenset({2, 3, 4, 5})
+
+# Component ``custom_id`` verbs an approve/reject tap can carry (mirror
+# ``backend.notifications.notify_builders`` CALLBACK_APPROVE / CALLBACK_REJECT).
+_INTERACTION_VERBS = frozenset({"apv", "rej"})
+
+
+def _is_approval_component(body: dict[str, Any]) -> bool:
+    """True iff ``body`` is a message-component tap (type 3) whose ``custom_id`` is
+    an approve/reject verb (``apv:<id>`` / ``rej:<id>``). Such a tap is a
+    SYNCHRONOUS approval action, NOT a new run — the parser returns None for it so
+    the webhook route hands off to the discord interaction callback."""
+    if body.get("type") != INTERACTION_COMPONENT:
+        return False
+    data = body.get("data") or {}
+    verb, _, _ = str(data.get("custom_id") or "").partition(":")
+    return verb in _INTERACTION_VERBS
+
+
+def parse_component_interaction(body: dict[str, Any]) -> dict[str, Any]:
+    """Normalize a component-interaction payload into founder-auth + action fields.
+
+    Pure (no I/O — the request was already gated by the webhook_token + Ed25519
+    signature). Returns the fields the inbound callback handler needs::
+
+        {verb, deliverable_id, user_id, guild_id, application_id,
+         interaction_token, message_content, malformed}
+
+    ``verb`` / ``deliverable_id`` are parsed from ``data.custom_id`` as
+    ``"<verb>:<deliverable_id>"``; they are ``None`` and ``malformed`` is ``True``
+    when the verb is not in {apv, rej} or the id is absent. ``user_id`` comes from
+    ``member.user.id`` (guild context) else ``user.id`` (DM). ``message_content``
+    is the ORIGINAL message content — needed to keep the body when the handler edits
+    the card on settle. ``interaction_token`` is the top-level ``token`` (the
+    interaction-webhook capability used for the ack / edit)."""
+    data = body.get("data") or {}
+    verb, _, deliverable_id = str(data.get("custom_id") or "").partition(":")
+    malformed = verb not in _INTERACTION_VERBS or not deliverable_id
+    member = body.get("member") or {}
+    user = member.get("user") or body.get("user") or {}
+    message = body.get("message") or {}
+    return {
+        "verb": None if malformed else verb,
+        "deliverable_id": None if malformed else deliverable_id,
+        "user_id": user.get("id"),
+        "guild_id": body.get("guild_id"),
+        "application_id": body.get("application_id"),
+        "interaction_token": body.get("token"),
+        "message_content": message.get("content"),
+        "malformed": malformed,
+    }
 
 
 class WebhookError(_SdkWebhookError):
@@ -140,6 +192,12 @@ def parse_interaction(
     # here (it must still have passed verify_signature above).
     if interaction_type == INTERACTION_PING:
         return None
+    # An approve/reject component tap is a SYNCHRONOUS approval action, NOT a new
+    # run — it stays OUT of intake. Return None (mirroring telegram/slack) so the
+    # webhook route's event-is-None branch hands off to the discord interaction
+    # callback. Non-approval components keep their normal TriggerEvent behavior.
+    if _is_approval_component(body):
+        return None
     if interaction_type not in SUPPORTED_INTERACTION_TYPES:
         logger.debug("discord_interaction_skip_type", interaction_type=interaction_type)
         return None
@@ -176,12 +234,14 @@ def parse_interaction(
 
 
 __all__ = [
+    "INTERACTION_COMPONENT",
     "INTERACTION_PING",
     "SIGNATURE_HEADER",
     "SUPPORTED_INTERACTION_TYPES",
     "TIMESTAMP_HEADER",
     "WebhookError",
     "WebhookSignatureError",
+    "parse_component_interaction",
     "parse_interaction",
     "verify_signature",
 ]
