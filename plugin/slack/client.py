@@ -72,17 +72,52 @@ class SlackClient:
     # ── chat ──────────────────────────────────────────────────────────────
 
     async def post_message(
-        self, channel: str, text: str, *, thread_ts: str | None = None
+        self,
+        channel: str,
+        text: str,
+        *,
+        thread_ts: str | None = None,
+        blocks: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         payload: dict[str, Any] = {"channel": channel, "text": text}
         if thread_ts is not None:
             payload["thread_ts"] = thread_ts
+        # ``blocks`` render the rich card; ``text`` is kept as the required
+        # accessibility / notification fallback (Slack's guidance for block msgs).
+        if blocks is not None:
+            payload["blocks"] = blocks
         resp = await self._post("chat.postMessage", payload)
         return self._ok(resp)
 
-    async def update_message(self, channel: str, ts: str, text: str) -> dict[str, Any]:
-        resp = await self._post("chat.update", {"channel": channel, "ts": ts, "text": text})
+    async def update_message(
+        self,
+        channel: str,
+        ts: str,
+        text: str,
+        *,
+        blocks: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {"channel": channel, "ts": ts, "text": text}
+        if blocks is not None:
+            payload["blocks"] = blocks
+        resp = await self._post("chat.update", payload)
         return self._ok(resp)
+
+    async def respond(
+        self, response_url: str, text: str, *, response_type: str = "ephemeral"
+    ) -> None:
+        """POST an ephemeral (default) reply to an interactivity ``response_url``.
+
+        Slack's ``response_url`` is a pre-signed, self-authenticated endpoint (no
+        bearer token needed); ``response_type='ephemeral'`` + ``replace_original:
+        false`` shows a private note to the tapper without touching the shared
+        card. Best-effort — the caller treats a failure as cosmetic."""
+        body = {"text": text, "response_type": response_type, "replace_original": False}
+        if self._client is not None:
+            await self._client.post(response_url, json=body)
+            return
+        async with httpx.AsyncClient(timeout=self._timeout) as client:
+            await client.post(response_url, json=body)
 
     async def delete_message(self, channel: str, ts: str) -> str | None:
         """Delete a message. Returns ``None`` on success, or the Slack error

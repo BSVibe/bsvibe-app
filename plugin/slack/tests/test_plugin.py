@@ -256,6 +256,109 @@ class TestActions:
             )
 
 
+# ── callback actions (inbound approve/reject) ──────────────────────────────
+
+
+def _block_actions_payload(*, verb: str = "apv", deliverable_id: str = "D1") -> dict[str, Any]:
+    return {
+        "type": "block_actions",
+        "user": {"id": "U1", "team_id": "T1"},
+        "team": {"id": "T1"},
+        "channel": {"id": "C1"},
+        "message": {
+            "ts": "1700000000.000100",
+            "blocks": [{"type": "section"}, {"type": "actions"}],
+        },
+        "response_url": "https://hooks.slack.com/actions/T1/1/x",
+        "actions": [{"value": f"{verb}:{deliverable_id}", "action_id": f"{verb}:{deliverable_id}"}],
+    }
+
+
+class TestCallbackActions:
+    async def test_parse_slack_interaction_normalizes_block_actions(self):
+        result = await _runner().dispatch_action(
+            P.meta,
+            action_name="parse_slack_interaction",
+            context=_Ctx(),
+            kwargs={"body": _block_actions_payload(verb="apv", deliverable_id="D9")},
+        )
+        assert result["verb"] == "apv"
+        assert result["deliverable_id"] == "D9"
+        assert result["user_id"] == "U1"
+        assert result["team_id"] == "T1"
+        assert result["channel_id"] == "C1"
+        assert result["message_ts"] == "1700000000.000100"
+        assert result["message_blocks"] == [{"type": "section"}, {"type": "actions"}]
+        assert result["malformed"] is False
+
+    async def test_parse_slack_interaction_non_block_actions_returns_none(self):
+        result = await _runner().dispatch_action(
+            P.meta,
+            action_name="parse_slack_interaction",
+            context=_Ctx(),
+            kwargs={"body": {"type": "event_callback"}},
+        )
+        assert result is None
+
+    async def test_parse_slack_interaction_bad_verb_is_malformed(self):
+        result = await _runner().dispatch_action(
+            P.meta,
+            action_name="parse_slack_interaction",
+            context=_Ctx(),
+            kwargs={"body": _block_actions_payload(verb="zzz", deliverable_id="D1")},
+        )
+        assert result["malformed"] is True
+        assert result["verb"] is None
+        assert result["deliverable_id"] is None
+
+    @respx.mock
+    async def test_respond_ephemeral_posts_to_response_url(self):
+        url = "https://hooks.slack.com/actions/T1/1/x"
+        route = respx.post(url).mock(return_value=httpx.Response(200, text="ok"))
+        await _runner().dispatch_action(
+            P.meta,
+            action_name="respond_ephemeral",
+            context=_Ctx(),
+            kwargs={"response_url": url, "text": "권한이 없어요."},
+        )
+        assert route.called
+        body = json.loads(route.calls.last.request.content)
+        assert body["response_type"] == "ephemeral"
+        assert body["text"] == "권한이 없어요."
+
+    @respx.mock
+    async def test_update_message_sends_blocks_and_text(self):
+        route = respx.post(f"{API}/chat.update").mock(
+            return_value=httpx.Response(200, json={"ok": True, "channel": "C1", "ts": "1.1"})
+        )
+        blocks = [{"type": "section"}, {"type": "context"}]
+        await _runner().dispatch_action(
+            P.meta,
+            action_name="update_message",
+            context=_Ctx(),
+            kwargs={"channel": "C1", "ts": "1.1", "text": "done", "blocks": blocks},
+        )
+        sent = json.loads(route.calls.last.request.content)
+        assert sent["blocks"] == blocks
+        assert sent["text"] == "done"
+
+    @respx.mock
+    async def test_deliver_message_forwards_blocks_when_set(self):
+        route = respx.post(f"{API}/chat.postMessage").mock(
+            return_value=httpx.Response(200, json={"ok": True, "channel": "C1", "ts": "1.1"})
+        )
+        blocks = [{"type": "section", "text": {"type": "mrkdwn", "text": "hi"}}]
+        await _runner().dispatch_outbound(
+            P.meta,
+            artifact_type="slack_message",
+            context=_Ctx(),
+            event={"channel": "C1", "text": "fallback", "blocks": blocks},
+        )
+        sent = json.loads(route.calls.last.request.content)
+        assert sent["blocks"] == blocks
+        assert sent["text"] == "fallback"
+
+
 # ── setup ──────────────────────────────────────────────────────────────────
 
 

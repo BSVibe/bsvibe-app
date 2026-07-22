@@ -107,28 +107,95 @@ def _message_text(content: NotificationContent) -> str:
     return "\n\n".join(p for p in parts if p)
 
 
+# Inline-button verbs (kept ≤64 bytes with a uuid — Telegram's callback_data cap;
+# reused verbatim as the Slack button ``value``). The inbound callback handlers of
+# both connectors act on this shared ``"<verb>:<deliverable_id>"`` vocabulary.
+CALLBACK_APPROVE = "apv"
+CALLBACK_REJECT = "rej"
+
+
+def _callback_value(verb: str, deliverable_id: str) -> str:
+    """The ``"<verb>:<deliverable_id>"`` string every chat channel's approve/reject
+    button carries (telegram ``callback_data`` / slack button ``value``). The
+    inbound callback handler parses it back to settle the held Safe-Mode item."""
+    return f"{verb}:{deliverable_id}"
+
+
+def _slack_section_text(content: NotificationContent) -> str:
+    """The Block Kit ``section`` mrkdwn body: title, body, and the CTA rendered as
+    a Slack mrkdwn link ``<url|label>`` (matching the telegram hyperlink) rather
+    than a bare URL. Falls back to the flattened ``link`` when no split CTA parts."""
+    parts = [content.title.strip(), content.body.strip()]
+    if content.cta_label and content.cta_url:
+        parts.append(f"<{content.cta_url}|{content.cta_label}>")
+    elif content.link:
+        parts.append(content.link.strip())
+    return "\n\n".join(p for p in parts if p)
+
+
+def _slack_approval_blocks(content: NotificationContent) -> list[dict[str, Any]] | None:
+    """Block Kit blocks for a ``shipped`` card that carries a ``deliverable_id``:
+    a ``section`` with the card body (mrkdwn, ``<url|보고서 보기>`` link) + an
+    ``actions`` block with 승인 / 거절 buttons whose ``action_id`` and ``value`` are
+    ``"<verb>:<deliverable_id>"`` (verb ∈ {apv, rej}). Labels localize to the
+    workspace language ("ko" → 승인/거절, else Approve/Reject).
+
+    Returns ``None`` for any non-``shipped`` event or a shipped event without a
+    ``deliverable_id`` — those stay plain text (no blocks)."""
+    if content.event != "shipped" or not content.deliverable_id:
+        return None
+    ko = content.language == "ko"
+    approve = "승인" if ko else "Approve"
+    reject = "거절" if ko else "Reject"
+    did = content.deliverable_id
+    return [
+        {"type": "section", "text": {"type": "mrkdwn", "text": _slack_section_text(content)}},
+        {
+            "type": "actions",
+            "elements": [
+                {
+                    "type": "button",
+                    "text": {"type": "plain_text", "text": approve},
+                    "action_id": _callback_value(CALLBACK_APPROVE, did),
+                    "value": _callback_value(CALLBACK_APPROVE, did),
+                },
+                {
+                    "type": "button",
+                    "text": {"type": "plain_text", "text": reject},
+                    "action_id": _callback_value(CALLBACK_REJECT, did),
+                    "value": _callback_value(CALLBACK_REJECT, did),
+                    "style": "danger",
+                },
+            ],
+        },
+    ]
+
+
 def build_slack_notification(
     content: NotificationContent, delivery_config: dict[str, Any]
 ) -> ShapedNotification:
-    """Shape a notification into slack's ``deliver_message`` payload (``{channel, text}``).
+    """Shape a notification into slack's ``deliver_message`` payload.
 
     ``channel`` is routing from the stable ``delivery_config``; a missing one is
     a misconfigured channel → ``ValueError``. The decrypted account secret is
     injected as ``bot_token`` (the slot slack's ``_client`` reads).
-    """
+
+    A ``shipped`` event carrying a ``deliverable_id`` additionally gets Block Kit
+    ``blocks`` with 승인/거절 buttons so the founder can settle the held delivery
+    straight from Slack; the flattened ``text`` is kept alongside as the required
+    accessibility / notification fallback. All other events stay text-only."""
     channel = delivery_config.get("channel")
     if not channel:
         raise ValueError("slack notify delivery_config missing required 'channel'")
+    payload: dict[str, Any] = {"channel": str(channel), "text": _message_text(content)}
+    blocks = _slack_approval_blocks(content)
+    if blocks is not None:
+        payload["blocks"] = blocks
     return ShapedNotification(
         artifact_type="slack_message",
-        payload={"channel": str(channel), "text": _message_text(content)},
+        payload=payload,
         credential_key="bot_token",
     )
-
-
-# Inline-button callback_data verbs (kept ≤64 bytes with a uuid — Telegram's cap).
-CALLBACK_APPROVE = "apv"
-CALLBACK_REJECT = "rej"
 
 
 def _approval_keyboard(content: NotificationContent) -> dict[str, Any] | None:
@@ -150,11 +217,11 @@ def _approval_keyboard(content: NotificationContent) -> dict[str, Any] | None:
             [
                 {
                     "text": approve,
-                    "callback_data": f"{CALLBACK_APPROVE}:{content.deliverable_id}",
+                    "callback_data": _callback_value(CALLBACK_APPROVE, content.deliverable_id),
                 },
                 {
                     "text": reject,
-                    "callback_data": f"{CALLBACK_REJECT}:{content.deliverable_id}",
+                    "callback_data": _callback_value(CALLBACK_REJECT, content.deliverable_id),
                 },
             ]
         ]

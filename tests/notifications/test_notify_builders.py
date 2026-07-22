@@ -185,11 +185,73 @@ def test_telegram_non_shipped_event_has_no_buttons_even_with_deliverable_id() ->
 
 
 def test_slack_shipped_with_deliverable_id_has_no_reply_markup() -> None:
-    # Buttons are a telegram-only affordance; other channels stay unchanged.
+    # reply_markup is a telegram-only key; slack uses Block Kit ``blocks`` instead.
     shaped = NOTIFY_EVENT_BUILDERS["slack"](
         _shipped_content(deliverable_id="DELIV-4", language="ko"), {"channel": "C1"}
     )
     assert "reply_markup" not in shaped.payload
+
+
+def test_slack_shipped_with_deliverable_id_carries_block_kit_buttons() -> None:
+    shaped = NOTIFY_EVENT_BUILDERS["slack"](
+        _shipped_content(deliverable_id="DELIV-9", language="ko"), {"channel": "C1"}
+    )
+    blocks = shaped.payload["blocks"]
+    # A text fallback is kept alongside the blocks (accessibility / notifications).
+    assert shaped.payload["text"]
+    section = next(b for b in blocks if b["type"] == "section")
+    assert section["text"]["type"] == "mrkdwn"
+    actions = next(b for b in blocks if b["type"] == "actions")
+    approve, reject = actions["elements"]
+    assert approve["text"]["text"] == "승인"
+    assert approve["value"] == "apv:DELIV-9"
+    assert reject["text"]["text"] == "거절"
+    assert reject["value"] == "rej:DELIV-9"
+
+
+def test_slack_shipped_en_button_labels() -> None:
+    shaped = NOTIFY_EVENT_BUILDERS["slack"](
+        _shipped_content(deliverable_id="DELIV-10", language="en"), {"channel": "C1"}
+    )
+    actions = next(b for b in shaped.payload["blocks"] if b["type"] == "actions")
+    labels = [e["text"]["text"] for e in actions["elements"]]
+    assert labels == ["Approve", "Reject"]
+
+
+def test_slack_cta_is_mrkdwn_link_in_section_block() -> None:
+    content = NotificationContent(
+        event="shipped",
+        title="작업 완료",
+        body="검증까지 끝났어요.",
+        link="보고서 보기 → https://app.bsvibe.dev/deliverables/D9",
+        cta_label="보고서 보기",
+        cta_url="https://app.bsvibe.dev/deliverables/D9",
+        deliverable_id="DELIV-11",
+        language="ko",
+    )
+    shaped = NOTIFY_EVENT_BUILDERS["slack"](content, {"channel": "C1"})
+    section = next(b for b in shaped.payload["blocks"] if b["type"] == "section")
+    assert "<https://app.bsvibe.dev/deliverables/D9|보고서 보기>" in section["text"]["text"]
+
+
+def test_slack_non_shipped_event_has_no_blocks() -> None:
+    content = NotificationContent(
+        event="needs_you",
+        title="Decision",
+        body="waiting",
+        link="/d",
+        deliverable_id="DELIV-12",
+        language="ko",
+    )
+    shaped = NOTIFY_EVENT_BUILDERS["slack"](content, {"channel": "C1"})
+    assert "blocks" not in shaped.payload
+
+
+def test_slack_shipped_without_deliverable_id_has_no_blocks() -> None:
+    shaped = NOTIFY_EVENT_BUILDERS["slack"](
+        _shipped_content(deliverable_id=None, language="ko"), {"channel": "C1"}
+    )
+    assert "blocks" not in shaped.payload
 
 
 def test_callback_data_fits_telegram_64_byte_cap() -> None:
