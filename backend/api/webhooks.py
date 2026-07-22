@@ -38,6 +38,7 @@ Response contract:
 from __future__ import annotations
 
 import uuid
+from collections.abc import Awaitable, Callable
 from typing import Annotated, Any
 
 import structlog
@@ -63,6 +64,36 @@ from bsvibe_sdk import WebhookSignatureError
 logger = structlog.get_logger(__name__)
 
 router = APIRouter()
+
+# A connector's interactive-approval route entrypoint: settle a held Safe-Mode
+# item from an inline tap. Signature mirrors ``process_telegram_callback``.
+_InteractionCallback = Callable[..., Awaitable[bool]]
+
+
+async def _telegram_interaction_callback(
+    *,
+    raw_body: bytes,
+    account: Any,
+    session: AsyncSession,
+    cipher: CredentialCipher,
+) -> bool:
+    """Delegate a telegram callback_query tap to its handler. The import is LAZY
+    (inside the call) so ``backend.api.webhooks`` keeps ZERO static ``plugin.*``
+    edges (R2c) and tests can monkeypatch the handler at call time."""
+    from backend.connectors.telegram_callback import (  # noqa: PLC0415
+        process_telegram_callback,
+    )
+
+    return await process_telegram_callback(
+        raw_body=raw_body, account=account, session=session, cipher=cipher
+    )
+
+
+# connector -> its interactive-approval entrypoint. Adding slack / discord is a
+# one-line registration (each keeps its own lazy import, per R2c).
+_INTERACTION_CALLBACKS: dict[str, _InteractionCallback] = {
+    "telegram": _telegram_interaction_callback,
+}
 
 
 def _repo_slug(repo: str) -> str:
@@ -169,17 +200,15 @@ async def receive_connector_webhook(  # noqa: PLR0911 — 404/401/handshake/call
     # (callback_query) approve tap, a handshake that needs a specific body
     # (Slack url_verification / Discord PING), or a benign skip.
     if event is None:
-        # A telegram callback_query is a SYNCHRONOUS approve/reject action, NOT a
-        # new run — it stays OUT of intake. The secret-token header was already
-        # verified by ``resolver.dispatch`` above (parse_update verifies then
-        # skips a callback_query → event is None here). Delegated to the callback
-        # handler via a lazy import so this module keeps zero plugin edges (R2c).
-        if connector == "telegram":
-            from backend.connectors.telegram_callback import (  # noqa: PLC0415
-                process_telegram_callback,
-            )
-
-            handled = await process_telegram_callback(
+        # An interactive approve/reject tap (telegram callback_query today; slack /
+        # discord next) is a SYNCHRONOUS action, NOT a new run — it stays OUT of
+        # intake. The connector signature was already verified by
+        # ``resolver.dispatch`` above (the parser verifies then yields event=None
+        # for an interaction). Dispatched by connector via a lazy import so this
+        # module keeps zero plugin edges (R2c).
+        callback = _INTERACTION_CALLBACKS.get(connector)
+        if callback is not None:
+            handled = await callback(
                 raw_body=raw_body, account=account, session=session, cipher=cipher
             )
             if handled:
