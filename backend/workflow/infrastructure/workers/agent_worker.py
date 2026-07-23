@@ -48,10 +48,19 @@ import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import structlog
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+if TYPE_CHECKING:
+    # Annotation-only: the planner imports account_resolution, which reaches
+    # back into worker deps, so a RUNTIME import here would cycle. The string
+    # annotation (``from __future__ import annotations`` is active) keeps mypy
+    # happy without the import edge — the planner is constructed by the injected
+    # ``tick_planner_for`` factory, never by this module.
+    from backend.workflow.application.product_tick_planner import ProductTickPlanner
 
 from backend.extensions.skill.loader import SkillLoader
 from backend.storage.artifact_store import ArtifactStore, LocalFilesystemArtifactStore
@@ -141,6 +150,18 @@ class AgentExecutionDeps:
         | Callable[[AsyncSession, uuid.UUID], FrameLlm | None | Awaitable[FrameLlm | None]]
         | None
     ) = None
+    #: Per-run planner factory for autonomous product ticks (mirrors
+    #: ``frame_llm``): a factory ``(session) -> ProductTickPlanner`` BOUND to the
+    #: worker's active framing session. Critically, the injected planner must
+    #: resolve ``CALLER_FRAME`` with the SAME dispatch redis the frame LLM uses —
+    #: an executor-account frame route needs redis for its worker-stream XADD, so
+    #: a ``redis=None`` planner would silently fail on such a workspace and the
+    #: tick would degrade to the static meta-instruction while every test stayed
+    #: green. ``None`` (the default — no planner wired) makes a ``product_tick``
+    #: run fall back to the static localized meta-instruction the schedule emitter
+    #: seeded. Production injects a closure threading settings + the dispatch
+    #: ``redis_client`` (``build_agent_execution_deps``).
+    tick_planner_for: Callable[[AsyncSession], ProductTickPlanner] | None = None
     #: Optional hook to PROVISION the run's ``workspace_dir`` before the loop
     #: drives. ``None`` (the default) keeps the existing behaviour: the run
     #: drives in an EMPTY scratch dir (``workspace_root/<run_id>``) — exactly as
@@ -242,7 +263,7 @@ class AgentWorker(BaseWorker):
                 # the real task) and stash the plan as glass-box provenance. A
                 # None plan changes nothing: the static meta-instruction the
                 # emitter seeded remains the fallback.
-                await self._plan_product_tick(session, run, request)
+                await self._plan_product_tick(session, run, request, execution)
                 # Per-workspace skill scoping: frame against the loader rooted
                 # at THIS run's ``<skills_root>/<workspace_id>/`` (Workflow §6 #5),
                 # not a single shared root-level set.
@@ -353,31 +374,35 @@ class AgentWorker(BaseWorker):
         )
 
     async def _plan_product_tick(
-        self, session: AsyncSession, run: ExecutionRun, request: RequestRow
+        self,
+        session: AsyncSession,
+        run: ExecutionRun,
+        request: RequestRow,
+        execution: AgentExecutionDeps,
     ) -> None:
         """For an autonomous ``product_tick`` run bound to a product, ask the
-        dedicated :class:`ProductTickPlanner` for a concrete next action.
+        injected :class:`ProductTickPlanner` for a concrete next action.
+
+        The planner is built by ``execution.tick_planner_for`` (DI, mirroring
+        ``frame_llm``) so it resolves ``CALLER_FRAME`` with the SAME dispatch
+        redis the frame stage uses — an executor-account frame route needs redis,
+        and a ``redis=None`` planner would silently degrade to the static
+        fallback on such a workspace (a live no-op that stays test-green).
 
         On a plan: OVERRIDE the framing intent (``request.payload["intent_text"]``
         — the highest-precedence field both :func:`_request_intent_text` and the
         frame stage's ``_extract_text`` read, so framing classifies the concrete
         task) and stash glass-box provenance on ``run.payload["tick_plan"]`` (it
         survives the framing payload rebuild, which spreads the existing payload).
-        On ``None`` (not a tick, no product, or the planner declined): change
-        NOTHING — the static ``product_tick_instruction`` already in the payload
-        remains the fallback. The planner never raises, so this path can't break
-        the tick."""
+        On ``None`` (not a tick, no product, no planner wired, or the planner
+        declined): change NOTHING — the static ``product_tick_instruction``
+        already in the payload remains the fallback. The planner never raises, so
+        this path can't break the tick."""
         if (run.payload or {}).get("kind") != "product_tick" or run.product_id is None:
             return
-        # Local import: the planner imports account_resolution, which reaches
-        # back into worker deps — a module-level import cycles (same reason the
-        # FrameModelUnresolvedError handler imports it lazily).
-        from backend.config import get_settings  # noqa: PLC0415
-        from backend.workflow.application.product_tick_planner import (  # noqa: PLC0415
-            ProductTickPlanner,
-        )
-
-        planner = ProductTickPlanner(session, settings=get_settings())
+        if execution.tick_planner_for is None:
+            return
+        planner = execution.tick_planner_for(session)
         plan = await planner.plan(workspace_id=run.workspace_id, product_id=run.product_id)
         if plan is None:
             return

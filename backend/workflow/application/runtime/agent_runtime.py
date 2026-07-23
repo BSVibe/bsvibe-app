@@ -22,7 +22,10 @@ from __future__ import annotations
 import uuid
 from collections.abc import Awaitable, Callable
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from backend.workflow.application.product_tick_planner import ProductTickPlanner
 
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -233,6 +236,25 @@ def build_agent_execution_deps(
             return None
         return _ResolverFrameLlm(adapter=resolved.adapter)
 
+    def _tick_planner_for(session: AsyncSession) -> ProductTickPlanner:
+        """Per-run product-tick planner bound to the framing session.
+
+        Threads ``redis_client`` EXACTLY like :func:`_frame_llm_for` so the
+        planner resolves ``CALLER_FRAME`` identically to the frame stage. An
+        executor-account frame route needs the redis transport for its
+        worker-stream XADD; a ``redis=None`` planner would silently fail on such
+        a workspace and the tick would degrade to the static meta-instruction
+        while every test stayed green (unit-green ≠ prod-works)."""
+        # Imported inside the closure: the planner imports account_resolution,
+        # which lives in this ``runtime`` package — a module-level import here
+        # cycles through ``runtime/__init__`` (mirrors the other lazy imports in
+        # this factory, e.g. resolve_workspace_model_account / build_canon_retriever).
+        from backend.workflow.application.product_tick_planner import (  # noqa: PLC0415
+            ProductTickPlanner,
+        )
+
+        return ProductTickPlanner(session, settings=settings, redis=redis_client)
+
     async def _factory(session: AsyncSession, run: ExecutionRun) -> RunCompute | None:
         """Per-run orchestrator factory — Lift E3 unifies the path.
 
@@ -364,6 +386,7 @@ def build_agent_execution_deps(
         workspace_root=Path(settings.run_workspace_root),
         workspace_provisioner=provisioner,
         frame_llm=_frame_llm_for,
+        tick_planner_for=_tick_planner_for,
     )
 
 
