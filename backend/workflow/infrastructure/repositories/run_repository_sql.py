@@ -43,6 +43,19 @@ class SqlAlchemyRunRepository:
         result = await self._session.execute(stmt)
         return list(result.scalars().all())
 
+    async def list_by_product(
+        self, workspace_id: uuid.UUID, product_id: uuid.UUID, *, limit: int = 10
+    ) -> list[ExecutionRun]:
+        stmt = (
+            select(ExecutionRun)
+            .where(ExecutionRun.workspace_id == workspace_id)
+            .where(ExecutionRun.product_id == product_id)
+            .order_by(ExecutionRun.created_at.desc())
+            .limit(limit)
+        )
+        result = await self._session.execute(stmt)
+        return list(result.scalars().all())
+
     async def find_by_request_id(self, request_id: uuid.UUID) -> ExecutionRun | None:
         stmt = select(ExecutionRun).where(ExecutionRun.request_id == request_id).limit(1)
         result = await self._session.execute(stmt)
