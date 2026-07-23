@@ -3,9 +3,16 @@
 import type { Connector, ConnectorImportResult } from "@/lib/api/types";
 import { useTranslations } from "next-intl";
 import { useState } from "react";
+import { ApproversEditor } from "./ApproversEditor";
 import { ConnectorOAuthButton } from "./ConnectorOAuthButton";
 import { GithubAppSetup } from "./GithubAppSetup";
 import { isOAuthConnector } from "./connector-fields";
+
+/** Connectors whose interactive Approve/Reject cards authorize the tapping user
+ *  against `delivery_config.authorized_user_ids` — so they get the inline
+ *  approvers editor. Telegram authorizes by `chat_id` (not a user list), so it
+ *  is deliberately excluded. */
+const APPROVER_LIST_CONNECTORS = new Set(["slack", "discord"]);
 
 type RowState = "idle" | "confirming" | "revoking" | "importing" | "import-error" | "error";
 
@@ -36,14 +43,21 @@ export default function ConnectorRow({
   connector,
   onRevoked,
   onImported,
+  onUpdated,
   revoke,
   triggerImport,
+  updateConnector,
 }: {
   connector: Connector;
   onRevoked: () => void;
   onImported?: () => void;
+  onUpdated?: () => void;
   revoke: (id: string) => Promise<void>;
   triggerImport?: (id: string) => Promise<ConnectorImportResult>;
+  updateConnector?: (
+    id: string,
+    patch: { delivery_config: Record<string, unknown> },
+  ) => Promise<Connector>;
 }) {
   const [state, setState] = useState<RowState>("idle");
   const [lastImport, setLastImport] = useState<ConnectorImportResult | null>(null);
@@ -51,6 +65,9 @@ export default function ConnectorRow({
   const tConnectors = useTranslations("settings.connectors");
 
   const showImport = connector.is_active && triggerImport !== undefined && connector.importable;
+  // slack/discord interactive-approval cards authorize the tapping user against
+  // `authorized_user_ids` — render the inline editor for those (never telegram).
+  const showApprovers = connector.is_active && APPROVER_LIST_CONNECTORS.has(connector.connector);
 
   async function confirmRevoke() {
     if (state === "revoking") return;
@@ -158,6 +175,13 @@ export default function ConnectorRow({
             })}
           </p>
         ) : null}
+        {showApprovers ? (
+          <ApproversEditor
+            connector={connector}
+            onSaved={onUpdated}
+            updateConnector={updateConnector}
+          />
+        ) : null}
       </div>
 
       <div className="connector-card__actions">
@@ -203,14 +227,18 @@ export default function ConnectorRow({
                 {state === "importing" ? t("importing") : t("importNow")}
               </button>
             ) : null}
-            <button
-              type="button"
-              className="connector-card__ghost"
-              disabled
-              title={t("configureTitle")}
-            >
-              {t("configure")}
-            </button>
+            {/* slack/discord surface a real approvers editor above, so the
+                "coming soon" Configure stub would be misleading — hide it. */}
+            {showApprovers ? null : (
+              <button
+                type="button"
+                className="connector-card__ghost"
+                disabled
+                title={t("configureTitle")}
+              >
+                {t("configure")}
+              </button>
+            )}
             {connector.is_active ? (
               <button
                 type="button"

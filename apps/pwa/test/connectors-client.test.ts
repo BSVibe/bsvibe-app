@@ -9,7 +9,12 @@
  */
 
 import { ApiError } from "@/lib/api/client";
-import { createConnector, listConnectors, revokeConnector } from "@/lib/api/connectors";
+import {
+  createConnector,
+  listConnectors,
+  revokeConnector,
+  updateConnector,
+} from "@/lib/api/connectors";
 import { type Session, clearSession, setSession } from "@/lib/auth/session";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -119,6 +124,35 @@ describe("connectors client", () => {
     const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
     expect(url).toBe("/api/v1/connectors/33333333-3333-3333-3333-333333333333");
     expect(init.method).toBe("DELETE");
+  });
+
+  it("updateConnector PATCHes /api/v1/connectors/{id} with the partial delivery_config", async () => {
+    const updated = {
+      id: "44444444-4444-4444-4444-444444444444",
+      connector: "slack",
+      external_ref: null,
+      is_active: true,
+      created_at: "2026-05-23T00:00:00Z",
+      delivery_config: { authorized_user_ids: ["U1", "U2"], team_id: "T1" },
+      token_hint: "...wxyz",
+      outbound: true,
+      importable: false,
+      webhook_trigger: true,
+    };
+    const fetchMock = okFetch(updated);
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    const res = await updateConnector("44444444-4444-4444-4444-444444444444", {
+      delivery_config: { authorized_user_ids: ["U1", "U2"], team_id: "T1" },
+    });
+
+    expect(res).toEqual(updated);
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe("/api/v1/connectors/44444444-4444-4444-4444-444444444444");
+    expect(init.method).toBe("PATCH");
+    expect(JSON.parse(init.body as string)).toEqual({
+      delivery_config: { authorized_user_ids: ["U1", "U2"], team_id: "T1" },
+    });
   });
 
   it("surfaces an ApiError on a non-ok list read", async () => {

@@ -918,6 +918,15 @@ export interface ConnectorCreate {
   delivery_config?: Record<string, unknown>;
 }
 
+/** `PATCH /api/v1/connectors/{id}` body (backend `ConnectorUpdate`,
+ *  extra=forbid). A PARTIAL `delivery_config` the backend shallow-merges into
+ *  the stored config: keys sent here override, stored keys not present are kept.
+ *  The authorized-approvers editor sends only the keys it edits
+ *  (`authorized_user_ids` + optional `team_id` / `guild_id`) — never secrets. */
+export interface ConnectorUpdate {
+  delivery_config: Record<string, unknown>;
+}
+
 /** `POST /api/v1/connectors` → 201 (backend ConnectorCreated). The ONLY place
  *  the `webhook_token` + full `webhook_url` are ever returned — like an API
  *  key, shown once. Mirrors the backend model field-for-field. */
