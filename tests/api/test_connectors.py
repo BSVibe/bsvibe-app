@@ -399,6 +399,156 @@ async def test_list_never_leaks_secret_or_full_token(client: httpx.AsyncClient) 
 
 
 # --------------------------------------------------------------------------
+# patch delivery_config (authorized approvers editor) + secret redaction
+# --------------------------------------------------------------------------
+
+
+async def _seed_connector(
+    sf: async_sessionmaker[AsyncSession],
+    *,
+    workspace_id: uuid.UUID,
+    connector: str = "slack",
+    delivery_config: dict | None = None,
+) -> uuid.UUID:
+    """Seed a connector row directly (mirrors the create endpoint's row shape).
+
+    Used by the PATCH/redaction tests so a starting ``delivery_config`` that
+    carries an inbound ``webhook_secret`` (never sent by the create API) can be
+    planted to prove the merge preserves it while the response redacts it.
+    """
+    account_id = uuid.uuid4()
+    async with sf() as s:
+        s.add(
+            ConnectorAccountRow(
+                id=account_id,
+                workspace_id=workspace_id,
+                connector=connector,
+                webhook_token="wt-" + uuid.uuid4().hex,
+                # VARCHAR(1024) column — must be a str (like cipher.encrypt()'s
+                # base64 output). SQLite tolerates bytes here; PostgreSQL/asyncpg
+                # rejects them, so keep this a str literal.
+                signing_secret_ciphertext="ct",
+                external_ref=None,
+                delivery_config=delivery_config or {},
+                is_active=True,
+            )
+        )
+        await s.commit()
+    return account_id
+
+
+async def test_patch_merges_delivery_config_preserving_stored_keys(
+    client: httpx.AsyncClient,
+    sf: async_sessionmaker[AsyncSession],
+    workspace_id: uuid.UUID,
+) -> None:
+    """PATCH merges authorized_user_ids WITHOUT dropping chat_id/webhook_secret.
+
+    The stored row keeps every pre-existing key (partial merge); the patch only
+    overrides the keys it carries. Proves the founder can set the approver
+    allowlist without clobbering routing/secret config it never sees.
+    """
+    account_id = await _seed_connector(
+        sf,
+        workspace_id=workspace_id,
+        connector="slack",
+        delivery_config={"chat_id": "C9", "webhook_secret": "shh-inbound", "team_id": "T-old"},
+    )
+
+    r = await client.patch(
+        f"/api/v1/connectors/{account_id}",
+        json={"delivery_config": {"authorized_user_ids": ["U1", "U2"], "team_id": "T-new"}},
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["id"] == str(account_id)
+    # Response reflects the merge: new + preserved keys, minus the redacted secret.
+    assert body["delivery_config"]["authorized_user_ids"] == ["U1", "U2"]
+    assert body["delivery_config"]["team_id"] == "T-new"
+    assert body["delivery_config"]["chat_id"] == "C9"
+    assert "webhook_secret" not in body["delivery_config"]
+
+    # STORED row keeps the full merged config INCLUDING the secret.
+    async with sf() as s:
+        row = await s.get(ConnectorAccountRow, account_id)
+        assert row is not None
+        assert row.delivery_config == {
+            "chat_id": "C9",
+            "webhook_secret": "shh-inbound",
+            "team_id": "T-new",
+            "authorized_user_ids": ["U1", "U2"],
+        }
+
+
+async def test_patch_other_workspace_is_404(
+    sf: async_sessionmaker[AsyncSession], cipher: CredentialCipher
+) -> None:
+    """Workspace B cannot PATCH workspace A's connector — resolves as not-found."""
+    ws_a = uuid.uuid4()
+    ws_b = uuid.uuid4()
+    account_id = await _seed_connector(sf, workspace_id=ws_a, connector="slack")
+
+    app_b = create_app()
+    async with _make_client(app_b, sf, cipher, ws_b) as cb:
+        r = await cb.patch(
+            f"/api/v1/connectors/{account_id}",
+            json={"delivery_config": {"authorized_user_ids": ["U1"]}},
+        )
+        assert r.status_code == 404, r.text
+
+    # The row is untouched.
+    async with sf() as s:
+        row = await s.get(ConnectorAccountRow, account_id)
+        assert row is not None
+        assert row.delivery_config == {}
+
+
+async def test_patch_unknown_id_is_404(client: httpx.AsyncClient) -> None:
+    r = await client.patch(
+        f"/api/v1/connectors/{uuid.uuid4()}",
+        json={"delivery_config": {"authorized_user_ids": ["U1"]}},
+    )
+    assert r.status_code == 404, r.text
+
+
+async def test_list_and_patch_response_redact_webhook_secret(
+    client: httpx.AsyncClient,
+    sf: async_sessionmaker[AsyncSession],
+    workspace_id: uuid.UUID,
+) -> None:
+    """The connector responses NEVER echo webhook_secret, but it stays STORED."""
+    account_id = await _seed_connector(
+        sf,
+        workspace_id=workspace_id,
+        connector="slack",
+        delivery_config={"webhook_secret": "leak-me", "chat_id": "C9"},
+    )
+
+    # list response redacts the secret …
+    listed = await client.get("/api/v1/connectors")
+    assert listed.status_code == 200, listed.text
+    item = next(x for x in listed.json() if x["id"] == str(account_id))
+    assert "webhook_secret" not in item["delivery_config"]
+    assert item["delivery_config"]["chat_id"] == "C9"
+    assert "leak-me" not in json.dumps(item)
+
+    # … and so does the PATCH response …
+    patched = await client.patch(
+        f"/api/v1/connectors/{account_id}",
+        json={"delivery_config": {"authorized_user_ids": ["U1"]}},
+    )
+    assert patched.status_code == 200, patched.text
+    assert "webhook_secret" not in patched.json()["delivery_config"]
+    assert "leak-me" not in json.dumps(patched.json())
+
+    # … but the row on disk still HAS the secret (only the response is redacted).
+    async with sf() as s:
+        row = await s.get(ConnectorAccountRow, account_id)
+        assert row is not None
+        assert row.delivery_config["webhook_secret"] == "leak-me"
+
+
+# --------------------------------------------------------------------------
 # create → ingress round-trip + revoke
 # --------------------------------------------------------------------------
 

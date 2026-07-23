@@ -586,6 +586,18 @@
         "importError": "Import failed. Check the connector config and try again.",
         "lastImported": "Last imported {count} · {at}"
       },
+      "approvers": {
+        "heading": "Authorized approvers",
+        "hint": "Only these user IDs can approve or reject a deliverable (one per line).",
+        "placeholder": "U01ABCDEF\nU02GHIJKL",
+        "teamLabel": "Slack team ID (optional)",
+        "guildLabel": "Discord guild ID (optional)",
+        "scopePlaceholder": "Leave blank to allow any workspace",
+        "save": "Save approvers",
+        "saving": "Saving…",
+        "saved": "Saved",
+        "error": "Couldn’t save that. Please try again."
+      },
       "form": {
         "credentialsLabel": "New connector credentials",
         "createdTitle": "Connector added. Here’s its webhook. Copy it now.",

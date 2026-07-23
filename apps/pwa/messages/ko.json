@@ -586,6 +586,18 @@
         "importError": "가져오기에 실패했어요. 커넥터 설정을 확인하고 다시 시도해 주세요.",
         "lastImported": "마지막 가져오기 {count}건 · {at}"
       },
+      "approvers": {
+        "heading": "승인 허용 유저",
+        "hint": "이 유저 ID만 딜리버러블을 승인/거절할 수 있어요 (한 줄에 하나).",
+        "placeholder": "U01ABCDEF\nU02GHIJKL",
+        "teamLabel": "Slack 팀 ID (선택)",
+        "guildLabel": "Discord 길드 ID (선택)",
+        "scopePlaceholder": "비워 두면 모든 워크스페이스를 허용해요",
+        "save": "승인 유저 저장",
+        "saving": "저장 중…",
+        "saved": "저장됨",
+        "error": "저장하지 못했어요. 다시 시도해 주세요."
+      },
       "form": {
         "credentialsLabel": "새 커넥터 자격 증명",
         "createdTitle": "커넥터가 추가됐어요. 웹훅을 지금 복사하세요.",

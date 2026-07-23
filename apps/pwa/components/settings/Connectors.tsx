@@ -11,6 +11,7 @@ import {
   revokeConnector,
   startConnectorOAuth,
   triggerImport,
+  updateConnector,
 } from "@/lib/api/connectors";
 import type { Connector, ConnectorCatalogEntry, ConnectorName } from "@/lib/api/types";
 import { useTranslations } from "next-intl";
@@ -242,8 +243,10 @@ export default function Connectors() {
                 connector={c}
                 onRevoked={load}
                 onImported={load}
+                onUpdated={load}
                 revoke={revokeConnector}
                 triggerImport={triggerImport}
+                updateConnector={updateConnector}
               />
             ))}
           </ul>

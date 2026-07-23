@@ -13,6 +13,10 @@ import { describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/api/connectors", () => ({
   startConnectorOAuth: vi.fn(),
+  // A connected slack/discord row now renders the approvers editor, which
+  // defaults its `updateConnector` to this client export — the mock must
+  // expose it so the module-eval default resolves.
+  updateConnector: vi.fn(),
 }));
 
 function makeConnector(over: Partial<Connector> & { connector: string }): Connector {

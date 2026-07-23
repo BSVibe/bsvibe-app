@@ -22,6 +22,7 @@ import type {
   ConnectorCreate,
   ConnectorCreated,
   ConnectorImportResult,
+  ConnectorUpdate,
 } from "./types";
 
 /** Registered connectors for the active workspace (newest first). */
@@ -55,6 +56,20 @@ export function createConnector(input: ConnectorCreate): Promise<ConnectorCreate
   return apiFetch<ConnectorCreated>("/api/v1/connectors", {
     method: "POST",
     body: JSON.stringify(body),
+  });
+}
+
+/** Merge a PARTIAL `delivery_config` into an existing connector
+ *  (`PATCH /api/v1/connectors/{id}`). The backend shallow-merges: only the keys
+ *  sent here override, every stored key not in the patch is preserved — so the
+ *  approver-allowlist editor sends ONLY `{ authorized_user_ids, team_id? }` and
+ *  never the inbound `webhook_secret` (which stays put server-side and is
+ *  redacted out of the response). Returns the updated `Connector` (list shape,
+ *  webhook_secret already stripped). */
+export function updateConnector(connectorId: string, patch: ConnectorUpdate): Promise<Connector> {
+  return apiFetch<Connector>(`/api/v1/connectors/${encodeURIComponent(connectorId)}`, {
+    method: "PATCH",
+    body: JSON.stringify(patch),
   });
 }
 

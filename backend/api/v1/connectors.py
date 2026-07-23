@@ -117,6 +117,21 @@ class ConnectorCreate(BaseModel):
         return v
 
 
+class ConnectorUpdate(BaseModel):
+    """PATCH body — a PARTIAL ``delivery_config`` shallow-merged into the row.
+
+    Only the keys present here override the stored config; every stored key NOT
+    in the patch is preserved (so patching ``authorized_user_ids`` never drops
+    ``chat_id`` / ``webhook_secret``). The founder UI sends only the keys it
+    edits (the approver allowlist + optional ``team_id`` / ``guild_id``) and
+    never sends the inbound secret — which stays put via the merge.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    delivery_config: dict[str, Any] = Field(default_factory=dict)
+
+
 class ConnectorCreated(BaseModel):
     """Create response — the ONLY place the webhook_token + URL are shown."""
 
@@ -217,6 +232,20 @@ class ConnectorCatalog(BaseModel):
     connectors: list[CatalogEntry]
 
 
+# delivery_config keys that carry a SECRET and must never be returned over the
+# API. The inbound ``webhook_secret`` is the signing secret the founder pastes
+# from the external provider's console — it authenticates the provider TO us, so
+# echoing it into a list/create/patch response would leak a live credential to
+# the PWA (and anyone who reads that JSON). Redaction is response-side ONLY: the
+# STORED row keeps the key so the ingress can still verify signatures.
+_SECRET_DELIVERY_KEYS = frozenset({"webhook_secret", "signing_secret", "client_secret"})
+
+
+def _public_delivery_config(cfg: dict[str, Any]) -> dict[str, Any]:
+    """A copy of ``cfg`` with secret-bearing keys dropped (response-side only)."""
+    return {k: v for k, v in cfg.items() if k not in _SECRET_DELIVERY_KEYS}
+
+
 def _token_hint(webhook_token: str) -> str:
     """Last 4 chars only — enough to recognise, not enough to use."""
     return f"...{webhook_token[-4:]}"
@@ -240,7 +269,7 @@ def _row_to_out(
         external_ref=row.external_ref,
         is_active=row.is_active,
         created_at=row.created_at,
-        delivery_config=row.delivery_config,
+        delivery_config=_public_delivery_config(row.delivery_config),
         token_hint=_token_hint(row.webhook_token),
         outbound=bool(info and info.outbound),
         importable=bool(info and info.importable),
@@ -348,7 +377,7 @@ async def create_connector(
         external_ref=row.external_ref,
         is_active=row.is_active,
         created_at=row.created_at,
-        delivery_config=row.delivery_config,
+        delivery_config=_public_delivery_config(row.delivery_config),
         webhook_token=webhook_token,
         webhook_url=_webhook_url(row.connector, webhook_token),
         outbound=bool(info and info.outbound),
@@ -372,6 +401,37 @@ async def revoke_connector(
         )
     row.is_active = False
     await session.commit()
+
+
+@router.patch("/{connector_id}")
+async def update_connector(
+    connector_id: uuid.UUID,
+    payload: ConnectorUpdate,
+    workspace_id: Annotated[uuid.UUID, Depends(get_workspace_id)],
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+) -> ConnectorOut:
+    """Shallow-merge a partial ``delivery_config`` into the bound connector.
+
+    Workspace-scoped: the row is resolved by ``(id, workspace_id)`` and a miss
+    (unknown id OR another workspace's connector) is a 404. The provided keys
+    override; every stored key NOT in the patch is preserved — so the founder's
+    approver-allowlist editor can set ``authorized_user_ids`` (+ optional
+    ``team_id`` / ``guild_id``) without clobbering ``chat_id`` or the inbound
+    ``webhook_secret`` it never sees. The response redacts secret keys like any
+    other connector response; only the STORED config keeps them.
+    """
+    row = await session.get(ConnectorAccountRow, connector_id)
+    if row is None or row.workspace_id != workspace_id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"connector {connector_id} not found",
+        )
+    # Shallow merge: start from the stored config, overlay the patch. Reassign a
+    # fresh dict (not in-place mutate) so SQLAlchemy's JSON column reliably
+    # detects the change and flushes it.
+    row.delivery_config = {**(row.delivery_config or {}), **payload.delivery_config}
+    await session.commit()
+    return _row_to_out(row)
 
 
 # ── inbound import (Lift B) ─────────────────────────────────────────────────
@@ -622,6 +682,7 @@ __all__ = [
     "ConnectorCreated",
     "ConnectorImportResult",
     "ConnectorOut",
+    "ConnectorUpdate",
     "ImportDispatcher",
     "create_connector",
     "get_catalog",
@@ -630,4 +691,5 @@ __all__ = [
     "revoke_connector",
     "router",
     "trigger_import",
+    "update_connector",
 ]
