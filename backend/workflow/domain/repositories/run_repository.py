@@ -33,6 +33,16 @@ class RunRepository(Protocol):
     ) -> list[ExecutionRun]:
         """Return recent runs in this workspace, newest-first (created_at desc)."""
 
+    async def list_by_product(
+        self, workspace_id: uuid.UUID, product_id: uuid.UUID, *, limit: int = 10
+    ) -> list[ExecutionRun]:
+        """Return recent runs for one product, newest-first (created_at desc).
+
+        Workspace-scoped for tenancy + to engage the composite
+        ``ix_execution_runs_ws_product`` index. Consumed by the product-tick
+        planner to summarize what has already been attempted for the product.
+        """
+
     async def find_by_request_id(self, request_id: uuid.UUID) -> ExecutionRun | None:
         """Return the (single) run wired to this Request, or ``None``.
 

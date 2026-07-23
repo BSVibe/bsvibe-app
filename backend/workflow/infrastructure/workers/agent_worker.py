@@ -235,6 +235,14 @@ class AgentWorker(BaseWorker):
             request_repo = SqlAlchemyRequestRepository(session)
             request = await request_repo.get(run.request_id)
             if request is not None:
+                # PT-Planner — an autonomous product tick with a product gets a
+                # DEDICATED planner that reads product state + knowledge + run
+                # history and produces a CONCRETE next-action instruction. When
+                # it does, we OVERRIDE the framing intent (so framing classifies
+                # the real task) and stash the plan as glass-box provenance. A
+                # None plan changes nothing: the static meta-instruction the
+                # emitter seeded remains the fallback.
+                await self._plan_product_tick(session, run, request)
                 # Per-workspace skill scoping: frame against the loader rooted
                 # at THIS run's ``<skills_root>/<workspace_id>/`` (Workflow §6 #5),
                 # not a single shared root-level set.
@@ -342,6 +350,48 @@ class AgentWorker(BaseWorker):
             "agent_worker_driven",
             run_id=str(run.id),
             outcome=result.outcome,
+        )
+
+    async def _plan_product_tick(
+        self, session: AsyncSession, run: ExecutionRun, request: RequestRow
+    ) -> None:
+        """For an autonomous ``product_tick`` run bound to a product, ask the
+        dedicated :class:`ProductTickPlanner` for a concrete next action.
+
+        On a plan: OVERRIDE the framing intent (``request.payload["intent_text"]``
+        — the highest-precedence field both :func:`_request_intent_text` and the
+        frame stage's ``_extract_text`` read, so framing classifies the concrete
+        task) and stash glass-box provenance on ``run.payload["tick_plan"]`` (it
+        survives the framing payload rebuild, which spreads the existing payload).
+        On ``None`` (not a tick, no product, or the planner declined): change
+        NOTHING — the static ``product_tick_instruction`` already in the payload
+        remains the fallback. The planner never raises, so this path can't break
+        the tick."""
+        if (run.payload or {}).get("kind") != "product_tick" or run.product_id is None:
+            return
+        # Local import: the planner imports account_resolution, which reaches
+        # back into worker deps — a module-level import cycles (same reason the
+        # FrameModelUnresolvedError handler imports it lazily).
+        from backend.config import get_settings  # noqa: PLC0415
+        from backend.workflow.application.product_tick_planner import (  # noqa: PLC0415
+            ProductTickPlanner,
+        )
+
+        planner = ProductTickPlanner(session, settings=get_settings())
+        plan = await planner.plan(workspace_id=run.workspace_id, product_id=run.product_id)
+        if plan is None:
+            return
+        payload = request.payload if isinstance(request.payload, dict) else {}
+        payload["intent_text"] = plan.instruction
+        request.payload = payload
+        run.payload = {
+            **(run.payload or {}),
+            "tick_plan": {"instruction": plan.instruction, "rationale": plan.rationale},
+        }
+        logger.info(
+            "product_tick_planned",
+            run_id=str(run.id),
+            product_id=str(run.product_id),
         )
 
     async def _claim_batch(self, session: AsyncSession) -> AsyncIterator[RequestRow]:
