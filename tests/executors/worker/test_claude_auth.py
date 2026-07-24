@@ -8,13 +8,43 @@ refreshes the access token before expiry, injecting it as ANTHROPIC_AUTH_TOKEN.
 from __future__ import annotations
 
 import json
+import urllib.error
 from pathlib import Path
 from typing import Any
 
-from backend.executors.worker.claude_auth import ensure_claude_bearer
+from backend.executors.worker.claude_auth import (
+    _cli_fallback_bearer,
+    default_cli_credentials_path,
+    ensure_claude_bearer,
+)
 
 _NOW = 1_700_000_000_000  # fixed "now" in ms
 _HOUR = 3600 * 1000
+
+
+def _write_cli(path: Path, *, access: str, refresh: str, expires_at: int) -> None:
+    """The interactive CLI's ``{"claudeAiOauth": {...}}`` credential shape (ms)."""
+    path.write_text(
+        json.dumps(
+            {
+                "claudeAiOauth": {
+                    "accessToken": access,
+                    "refreshToken": refresh,
+                    "expiresAt": expires_at,
+                }
+            }
+        )
+    )
+
+
+def _invalid_grant(_rt: str) -> dict[str, Any]:
+    raise urllib.error.HTTPError(
+        "https://example/oauth/token",
+        400,
+        "Bad Request",
+        {},
+        None,  # type: ignore[arg-type]
+    )
 
 
 def _write(path: Path, *, access: str, refresh: str, expires_at: int) -> None:
@@ -74,8 +104,11 @@ def test_refresh_failure_soft_falls_back(tmp_path) -> None:
         raise OSError("network down")
 
     # Soft-fail: returns the (stale) access token rather than crashing; the file
-    # is left untouched so the refresh token is not lost.
-    out = ensure_claude_bearer(p, now_ms=_NOW, refresher=_refresher)
+    # is left untouched so the refresh token is not lost. Point the CLI fallback
+    # at a nonexistent path so this exercises the pure soft-fail path.
+    out = ensure_claude_bearer(
+        p, now_ms=_NOW, refresher=_refresher, cli_path=tmp_path / "no_cli.json"
+    )
     assert out == "stale"
     saved = json.loads(p.read_text())
     assert saved["refresh_token"] == "r0"  # not consumed/clobbered
@@ -83,7 +116,13 @@ def test_refresh_failure_soft_falls_back(tmp_path) -> None:
 
 def test_missing_file_returns_none(tmp_path) -> None:
     assert (
-        ensure_claude_bearer(tmp_path / "nope.json", now_ms=_NOW, refresher=lambda _r: {}) is None
+        ensure_claude_bearer(
+            tmp_path / "nope.json",
+            now_ms=_NOW,
+            refresher=lambda _r: {},
+            cli_path=tmp_path / "no_cli.json",
+        )
+        is None
     )
 
 
@@ -103,3 +142,95 @@ def test_tolerates_claude_cli_wrapper_shape(tmp_path) -> None:
         )
     )
     assert ensure_claude_bearer(p, now_ms=_NOW, refresher=lambda _r: {}) == "live"
+
+
+# ── CLI-credential fallback (self-heal a burned worker refresh token) ─────────
+
+
+def test_valid_worker_token_never_reads_cli(tmp_path) -> None:
+    """Primary path: a valid worker token returns immediately; the CLI file is
+    NEVER read (would be a valid fallback but must not be consulted)."""
+    p = tmp_path / "oauth.json"
+    _write(p, access="worker-live", refresh="r0", expires_at=_NOW + 8 * _HOUR)
+    cli = tmp_path / "cli.json"
+    _write_cli(cli, access="cli-live", refresh="cr0", expires_at=_NOW + 8 * _HOUR)
+
+    out = ensure_claude_bearer(p, now_ms=_NOW, refresher=lambda _r: {}, cli_path=cli)
+    assert out == "worker-live"
+
+
+def test_refresh_success_does_not_read_cli(tmp_path) -> None:
+    """Near-expiry refresh SUCCEEDS → returns the refreshed worker token; the CLI
+    file (also valid) is not consulted (no regression on the happy refresh)."""
+    p = tmp_path / "oauth.json"
+    _write(p, access="stale", refresh="r0", expires_at=_NOW + 60_000)
+    cli = tmp_path / "cli.json"
+    _write_cli(cli, access="cli-live", refresh="cr0", expires_at=_NOW + 8 * _HOUR)
+
+    def _refresher(rt: str) -> dict[str, Any]:
+        return {"access_token": "fresh", "refresh_token": "r1", "expires_in": 28800}
+
+    out = ensure_claude_bearer(p, now_ms=_NOW, refresher=_refresher, cli_path=cli)
+    assert out == "fresh"
+    assert json.loads(p.read_text())["access_token"] == "fresh"
+
+
+def test_burned_refresh_self_heals_from_cli_non_destructively(tmp_path) -> None:
+    """The outage case: worker token expired + refresh raises invalid_grant (burned
+    single-use token) + CLI has a VALID token → return the CLI's ACCESS token,
+    and leave the worker file BYTE-IDENTICAL (never adopt the CLI's refresh
+    token, never persist)."""
+    p = tmp_path / "oauth.json"
+    _write(p, access="worker-stale", refresh="r0-burned", expires_at=_NOW - _HOUR)
+    before = p.read_bytes()
+    cli = tmp_path / "cli.json"
+    _write_cli(cli, access="cli-live", refresh="cli-refresh", expires_at=_NOW + 8 * _HOUR)
+
+    out = ensure_claude_bearer(p, now_ms=_NOW, refresher=_invalid_grant, cli_path=cli)
+    assert out == "cli-live"
+    # Non-destructive: the worker file is untouched — no CLI refresh token adopted.
+    assert p.read_bytes() == before
+    saved = json.loads(p.read_text())
+    assert saved["refresh_token"] == "r0-burned"
+
+
+def test_worker_missing_falls_back_to_cli(tmp_path) -> None:
+    cli = tmp_path / "cli.json"
+    _write_cli(cli, access="cli-live", refresh="cr0", expires_at=_NOW + 8 * _HOUR)
+    out = ensure_claude_bearer(
+        tmp_path / "nope.json", now_ms=_NOW, refresher=lambda _r: {}, cli_path=cli
+    )
+    assert out == "cli-live"
+
+
+def test_burned_refresh_and_cli_also_expired_returns_stale_not_cli(tmp_path) -> None:
+    """Refresh fails AND the CLI token is itself expired → do NOT return a CLI
+    token; fall back to the pre-existing stale worker access (or None)."""
+    p = tmp_path / "oauth.json"
+    _write(p, access="worker-stale", refresh="r0", expires_at=_NOW - _HOUR)
+    cli = tmp_path / "cli.json"
+    _write_cli(cli, access="cli-old", refresh="cr0", expires_at=_NOW - _HOUR)
+
+    out = ensure_claude_bearer(p, now_ms=_NOW, refresher=_invalid_grant, cli_path=cli)
+    assert out == "worker-stale"  # NOT "cli-old"
+
+
+def test_cli_fallback_bearer_rejects_near_expiry(tmp_path) -> None:
+    cli = tmp_path / "cli.json"
+    # within the refresh buffer → treated as not currently usable
+    _write_cli(cli, access="cli", refresh="cr0", expires_at=_NOW + 60_000)
+    assert _cli_fallback_bearer(cli, now_ms=_NOW) is None
+
+
+def test_cli_fallback_bearer_reads_wrapper_shape(tmp_path) -> None:
+    cli = tmp_path / "cli.json"
+    _write_cli(cli, access="cli-live", refresh="cr0", expires_at=_NOW + 8 * _HOUR)
+    assert _cli_fallback_bearer(cli, now_ms=_NOW) == "cli-live"
+
+
+def test_cli_fallback_bearer_missing_file(tmp_path) -> None:
+    assert _cli_fallback_bearer(tmp_path / "nope.json", now_ms=_NOW) is None
+
+
+def test_default_cli_credentials_path_default() -> None:
+    assert default_cli_credentials_path().name == ".credentials.json"

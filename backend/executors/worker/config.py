@@ -105,6 +105,14 @@ class WorkerSettings(BaseSettings):
     # stale on-disk token. Blank → ``~/.bsvibe/claude_oauth.json``.
     claude_oauth_path: str = ""
 
+    # The interactive ``claude`` CLI's OWN credential file (env:
+    # ``BSVIBE_WORKER_CLAUDE_CLI_CREDENTIALS_PATH``), which the CLI keeps fresh
+    # and auto-refreshes. Used ONLY as a last-resort, read-only fallback when the
+    # worker's own refresh token is burned — the worker borrows the CLI's live
+    # access token per call, never adopting its (single-use) refresh token so the
+    # CLI's own login is not clobbered. Blank → ``~/.claude/.credentials.json``.
+    claude_cli_credentials_path: str = ""
+
 
 @lru_cache(maxsize=1)
 def get_worker_settings() -> WorkerSettings:
