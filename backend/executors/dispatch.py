@@ -112,6 +112,83 @@ def done_channel(task_id: uuid.UUID) -> str:
 # ── worker selection ──────────────────────────────────────────────────────────
 
 
+async def _eligible_workers(
+    session: AsyncSession,
+    *,
+    workspace_id: uuid.UUID,
+    executor_type: str,
+) -> list[WorkerRow]:
+    """The single source of eligibility truth for the dispatch scan.
+
+    Returns every worker in ``workspace_id`` that is active + ``status="online"``
+    + heart-beat within :data:`HEARTBEAT_FRESHNESS_S` + carries ``executor_type``
+    in its ``capabilities`` — ordered by ``last_heartbeat asc`` (the cheap
+    round-robin :func:`find_available_worker` has always used). Capability is
+    filtered in Python so the query stays portable across SQLite (tests) and
+    Postgres (no JSON operator).
+
+    Both :func:`find_available_worker` (which then layers on the pin acceptance +
+    capacity gate) and :func:`has_live_worker` (which asks only "does ANY live
+    worker exist") derive from this ONE helper, so eligibility is never
+    duplicated. Keeping them in sync is what lets the capacity-wait fast-fail
+    tell "no live worker (futile to wait)" apart from "saturated (wait)".
+    """
+    cutoff = datetime.now(UTC).timestamp() - HEARTBEAT_FRESHNESS_S
+    rows = (
+        (
+            await session.execute(
+                select(WorkerRow)
+                .where(
+                    WorkerRow.workspace_id == workspace_id,
+                    WorkerRow.is_active.is_(True),
+                    WorkerRow.status == "online",
+                    WorkerRow.last_heartbeat.is_not(None),
+                )
+                .order_by(WorkerRow.last_heartbeat.asc())
+            )
+        )
+        .scalars()
+        .all()
+    )
+    eligible: list[WorkerRow] = []
+    for row in rows:
+        if row.last_heartbeat is None:
+            continue
+        # JSON ``capabilities`` is best-matched in Python — keeps the query
+        # portable across SQLite (tests) and Postgres without a JSON operator.
+        if executor_type not in (row.capabilities or []):
+            continue
+        last = row.last_heartbeat
+        # SQLite returns naive datetimes; treat them as UTC for the comparison.
+        if last.tzinfo is None:
+            last = last.replace(tzinfo=UTC)
+        if last.timestamp() < cutoff:
+            continue
+        eligible.append(row)
+    return eligible
+
+
+async def has_live_worker(
+    session: AsyncSession,
+    *,
+    workspace_id: uuid.UUID,
+    executor_type: str,
+) -> bool:
+    """Whether ANY eligible (active + online + fresh + capability) worker exists.
+
+    Ignores capacity AND the pin on purpose — it answers only "is there a live
+    worker at all". This distinguishes 'no live worker (futile to wait)' from
+    'saturated (wait)' for the capacity-wait fast-fail in
+    :func:`~backend.dispatch.adapter._await_worker_with_capacity`: when
+    :func:`find_available_worker` returns ``None`` the adapter asks this to
+    decide whether waiting could ever succeed. Derives from
+    :func:`_eligible_workers` so it never duplicates eligibility logic.
+    """
+    return bool(
+        await _eligible_workers(session, workspace_id=workspace_id, executor_type=executor_type)
+    )
+
+
 async def find_available_worker(
     session: AsyncSession,
     *,
@@ -173,39 +250,15 @@ async def find_available_worker(
         ):
             return pinned
 
-    cutoff = datetime.now(UTC).timestamp() - HEARTBEAT_FRESHNESS_S
-    rows = (
-        (
-            await session.execute(
-                select(WorkerRow)
-                .where(
-                    WorkerRow.workspace_id == workspace_id,
-                    WorkerRow.is_active.is_(True),
-                    WorkerRow.status == "online",
-                    WorkerRow.last_heartbeat.is_not(None),
-                )
-                .order_by(WorkerRow.last_heartbeat.asc())
-            )
-        )
-        .scalars()
-        .all()
+    # Eligibility (active + online + fresh + capability, ordered by heartbeat)
+    # lives in ONE shared helper so :func:`has_live_worker` derives from the
+    # same scan — no duplicated eligibility logic to drift.
+    eligible = await _eligible_workers(
+        session, workspace_id=workspace_id, executor_type=executor_type
     )
-    total_eligible = 0
+    total_eligible = len(eligible)
     saturated = 0
-    for row in rows:
-        if row.last_heartbeat is None:
-            continue
-        # JSON ``capabilities`` is best-matched in Python — keeps the query
-        # portable across SQLite (tests) and Postgres without a JSON operator.
-        if executor_type not in (row.capabilities or []):
-            continue
-        last = row.last_heartbeat
-        # SQLite returns naive datetimes; treat them as UTC for the comparison.
-        if last.tzinfo is None:
-            last = last.replace(tzinfo=UTC)
-        if last.timestamp() < cutoff:
-            continue
-        total_eligible += 1
+    for row in eligible:
         # Lift E16 capacity gate. A NULL count is "no signal — let it
         # through" (pre-E16 worker that never reported); a positive count
         # at-or-over the cap excludes the row.
@@ -579,6 +632,7 @@ __all__ = [
     "dispatch_task",
     "done_channel",
     "find_available_worker",
+    "has_live_worker",
     "is_heartbeat_fresh",
     "mark_pending",
     "record_result",

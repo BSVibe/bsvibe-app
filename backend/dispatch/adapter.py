@@ -875,6 +875,31 @@ async def _await_worker_with_capacity(
         )
         if worker is not None:
             return worker
+        # No available worker. Two very different conditions produce this None:
+        #   (A) live workers exist but are all at capacity → waiting is
+        #       legitimate; a slot may free up. Fall through to the bounded wait.
+        #   (B) NO online, capability-matching, fresh-heartbeat worker exists at
+        #       all (a dead/offline pin, none live) → waiting is FUTILE; no
+        #       amount of waiting conjures capacity. Fail fast so the shared
+        #       AgentWorker is not wedged for up to executor_capacity_wait_max_s
+        #       (30 min default) starving every other workspace's runs.
+        # Checked on EVERY iteration (a worker can go offline mid-wait), before
+        # the deadline/sleep logic. This is the slow path (worker unavailable),
+        # so the extra query cost is irrelevant.
+        if not await dispatch.has_live_worker(
+            session, workspace_id=workspace_id, executor_type=executor_type
+        ):
+            logger.info(
+                "executor_adapter_no_live_worker",
+                workspace_id=str(workspace_id),
+                account_id=str(account_id),
+                executor_type=executor_type,
+                attempt=attempt,
+            )
+            raise ExecutorAdapterUnavailable(
+                f"no live {executor_type!r} worker in workspace {workspace_id} "
+                f"— failing fast instead of waiting {settings.executor_capacity_wait_max_s}s"
+            )
         now = asyncio.get_event_loop().time()
         elapsed = settings.executor_capacity_wait_max_s - (deadline - now)
         if now >= deadline:
