@@ -50,6 +50,7 @@ __all__ = [
     "ChatToolCall",
     "ExecutorAdapter",
     "ExecutorAdapterUnavailable",
+    "ExecutorCapacitySaturated",
     "LiteLLMAdapter",
     "ModelAccountAdapter",
     "adapter_for",
@@ -239,6 +240,19 @@ class ExecutorAdapterUnavailable(RuntimeError):
         self.retryable = retryable
 
 
+class ExecutorCapacitySaturated(ExecutorAdapterUnavailable):
+    """Raised instead of blocking when a ``yield_on_saturation`` caller finds
+    all live workers saturated; the run-drive caller catches it to yield-back
+    (leave the run open, retry next poll).
+
+    A SUBCLASS of :class:`ExecutorAdapterUnavailable` so every existing
+    ``except ExecutorAdapterUnavailable`` still catches it — the planner's broad
+    handler, the chat retry loop, the orchestrator's account-resolution guards.
+    Only call sites that want to DISTINGUISH the yield-back (the AgentWorker's
+    per-run loop, the product-tick planner's re-raise) name it explicitly.
+    """
+
+
 # ---------------------------------------------------------------------------
 # Output-language — applied UNIFORMLY by every adapter.
 # ---------------------------------------------------------------------------
@@ -376,6 +390,15 @@ class ExecutorAdapter:
     # callers like ``knowledge.ingest`` that finish in 10-60 s when
     # the worker is healthy).
     timeout_s: float | None = None
+    # Yield-back on saturation — set from :attr:`CallerSpec.yield_on_saturation`
+    # by :func:`adapter_for`. When ``True`` and all live workers are at
+    # capacity, :func:`_await_worker_with_capacity` raises
+    # :class:`ExecutorCapacitySaturated` IMMEDIATELY instead of blocking up to
+    # ``settings.executor_capacity_wait_max_s``. Run-drive callers (frame /
+    # agent-loop) set it True — the AgentWorker re-polls their run, so leaving
+    # it open beats holding the shared worker slot. Batch callers keep it
+    # ``False`` and retain the bounded wait.
+    yield_on_saturation: bool = False
     # Lift E19 — optional ``session_factory`` so each ``chat`` call can
     # open its OWN ``AsyncSession`` for the dispatch lifecycle
     # (create_task → dispatch_task → commit → await_completion). When
@@ -612,6 +635,7 @@ class ExecutorAdapter:
             pinned_worker_id=pinned_worker_id,
             settings=self.settings,
             account_id=self.model_account_id,
+            yield_on_saturation=self.yield_on_saturation,
         )
 
         # Lift E21 — forward the underlying LLM model id from the
@@ -763,6 +787,7 @@ def adapter_for(
     llm: LlmClient | None = None,
     redis: Any = None,
     timeout_s: float | None = None,
+    yield_on_saturation: bool = False,
     session_factory: async_sessionmaker[AsyncSession] | None = None,
     run_id: uuid.UUID | None = None,
     repo_url: str | None = None,
@@ -790,6 +815,13 @@ def adapter_for(
     closes over the value at construction so :meth:`chat` does not
     re-walk the caller registry per call.
 
+    ``yield_on_saturation`` — taken from :attr:`CallerSpec.yield_on_saturation`
+    by the resolver, threaded onto the :class:`ExecutorAdapter` the SAME way as
+    ``timeout_s``. ``True`` for run-drive callers whose run the AgentWorker
+    re-polls: on saturation the adapter raises :class:`ExecutorCapacitySaturated`
+    immediately (yield-back) rather than blocking the shared worker. Ignored on
+    the LiteLLM path (no worker capacity to saturate).
+
     ``session_factory`` (Lift E19) — optional ``async_sessionmaker`` the
     :class:`ExecutorAdapter` uses to open a fresh ``AsyncSession`` per
     ``chat`` call. When set, parallel chat calls (the
@@ -807,6 +839,9 @@ def adapter_for(
             settings=settings,
             redis=redis,
             timeout_s=timeout_s,
+            # Yield-back on saturation for run-drive callers — threaded from
+            # ``CallerSpec.yield_on_saturation`` alongside ``timeout_s``.
+            yield_on_saturation=yield_on_saturation,
             # Lift E19 — when the resolver was wired with an
             # ``async_sessionmaker`` the adapter opens a fresh session
             # per ``chat`` call so parallel chunks don't race on
@@ -843,6 +878,7 @@ async def _await_worker_with_capacity(
     pinned_worker_id: uuid.UUID | None,
     settings: Settings,
     account_id: uuid.UUID,
+    yield_on_saturation: bool = False,
 ) -> Any:
     """Lift E16 — block until a worker with free capacity is available.
 
@@ -899,6 +935,29 @@ async def _await_worker_with_capacity(
             raise ExecutorAdapterUnavailable(
                 f"no live {executor_type!r} worker in workspace {workspace_id} "
                 f"— failing fast instead of waiting {settings.executor_capacity_wait_max_s}s"
+            )
+        # Live workers exist but all are at capacity (genuine saturation).
+        #   * Run-drive caller (yield_on_saturation) → do NOT block: the shared
+        #     AgentWorker re-polls this OPEN run, so raising ExecutorCapacitySaturated
+        #     now (yield-back) lets the run retry next poll while the worker
+        #     serves other workspaces. Blocking up to executor_capacity_wait_max_s
+        #     (30 min) would hold the worker slot + the run's DB lock and starve
+        #     EVERY other workspace's runs.
+        #   * Batch caller (default) → fall through to the bounded wait: an
+        #     ingest/canonicalization fan-out (asyncio.gather) cannot yield to a
+        #     poll loop, so waiting for a slot is its only legitimate option.
+        if yield_on_saturation:
+            logger.info(
+                "executor_adapter_yield_saturated",
+                workspace_id=str(workspace_id),
+                account_id=str(account_id),
+                executor_type=executor_type,
+                attempt=attempt,
+            )
+            raise ExecutorCapacitySaturated(
+                f"live {executor_type!r} worker(s) in workspace {workspace_id} are all "
+                "at capacity — yielding back so the AgentWorker re-polls this run "
+                "instead of blocking the shared worker"
             )
         now = asyncio.get_event_loop().time()
         elapsed = settings.executor_capacity_wait_max_s - (deadline - now)

@@ -294,3 +294,92 @@ async def test_agent_worker_batch_size_respects_limit(session_factory) -> None:
     assert await worker.claim_once() == 2
     assert await worker.claim_once() == 1
     assert await worker.claim_once() == 0
+
+
+def _minimal_execution_deps() -> object:
+    """A truthy AgentExecutionDeps so ``drive_once`` reaches ``_frame_and_drive``.
+
+    ``_frame_and_drive`` is patched in the yield-back test, so the deps' own
+    factories are never invoked — they just have to satisfy the constructor.
+    """
+    import tempfile
+    from pathlib import Path
+
+    from backend.workflow.infrastructure.workers.agent_worker import AgentExecutionDeps
+
+    return AgentExecutionDeps(
+        skill_loader_for=lambda _ws: None,  # type: ignore[arg-type,return-value]
+        orchestrator_factory=lambda _s, _r: None,  # type: ignore[arg-type,return-value]
+        workspace_root=Path(tempfile.mkdtemp(prefix="bsvibe-yieldback-")),
+    )
+
+
+async def _seed_open_run(sm: async_sessionmaker[AsyncSession]) -> ExecutionRun:
+    async with sm() as s:
+        run = ExecutionRun(
+            id=uuid.uuid4(),
+            workspace_id=uuid.uuid4(),
+            status=RunStatus.OPEN,
+            payload={"frame": {"skill_match": None}},  # pre-framed → skip framing
+            created_at=datetime.now(tz=UTC),
+            updated_at=datetime.now(tz=UTC),
+        )
+        s.add(run)
+        await s.commit()
+        return run
+
+
+async def test_drive_once_yields_saturated_run_open_and_continues(session_factory) -> None:
+    """A saturated run-drive executor call raises ``ExecutorCapacitySaturated``
+    out of ``_frame_and_drive``. ``drive_once`` catches it at the per-run call
+    site, leaves that run OPEN (NOT failed, no partial decision state), and
+    continues to the next run — so the next tick re-picks the saturated one."""
+    from backend.dispatch.adapter import ExecutorCapacitySaturated
+
+    # Two OPEN runs. The FIRST (oldest) saturates; the SECOND processes.
+    run1 = await _seed_open_run(session_factory)
+    # Ensure a deterministic created_at ordering (drive_once orders by asc).
+    import asyncio
+
+    await asyncio.sleep(0.01)
+    run2 = await _seed_open_run(session_factory)
+
+    worker = AgentWorker(
+        session_factory=session_factory,
+        config=AgentWorkerConfig(batch_size=10, poll_interval_s=0.01),
+        execution=_minimal_execution_deps(),
+    )
+
+    processed: list[uuid.UUID] = []
+
+    async def _fake_frame_and_drive(session, run, execution) -> None:  # type: ignore[no-untyped-def]
+        if run.id == run1.id:
+            raise ExecutorCapacitySaturated("all live workers at capacity")
+        processed.append(run.id)
+
+    worker._frame_and_drive = _fake_frame_and_drive  # type: ignore[method-assign]
+
+    driven = await worker.drive_once()
+
+    # The saturated run did NOT abort the batch: the second run still processed.
+    assert run2.id in processed
+    assert run1.id not in processed
+    # drive_once counted both runs (it did not crash on the saturated one).
+    assert driven == 2
+
+    # The saturated run is left OPEN — NOT failed, no decision state — so the
+    # next drive_once re-picks it.
+    async with session_factory() as s:
+        fresh1 = await s.get(ExecutionRun, run1.id)
+        assert fresh1.status is RunStatus.OPEN
+        # No failure history row was written for the yielded run.
+        hist = (
+            (
+                await s.execute(
+                    select(ExecutionRunHistory).where(ExecutionRunHistory.run_id == run1.id)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        assert all(h.to_status is not RunStatus.FAILED for h in hist)

@@ -20,6 +20,7 @@ from backend.dispatch.adapter import (
     ChatResponse,
     ExecutorAdapter,
     ExecutorAdapterUnavailable,
+    ExecutorCapacitySaturated,
     LiteLLMAdapter,
     ModelAccountAdapter,
     _await_worker_with_capacity,
@@ -1278,6 +1279,155 @@ class TestAwaitWorkerWithCapacity:
         )
         assert result is sentinel
         has_live.assert_not_awaited()
+
+    async def test_yield_on_saturation_raises_immediately_without_sleeping(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """yield_on_saturation=True + saturated (live worker, no capacity) ⇒
+        raise :class:`ExecutorCapacitySaturated` on attempt 1, no sleep.
+
+        A run-drive caller (framing / agent-loop) whose run the AgentWorker
+        re-polls must NOT block the shared worker for up to 30 min: it yields
+        back so the run stays OPEN and is retried next poll.
+        """
+        from backend.executors import dispatch  # noqa: PLC0415
+
+        monkeypatch.setattr(dispatch, "find_available_worker", AsyncMock(return_value=None))
+        has_live = AsyncMock(return_value=True)
+        monkeypatch.setattr(dispatch, "has_live_worker", has_live)
+        sleep_mock = AsyncMock()
+        monkeypatch.setattr(asyncio, "sleep", sleep_mock)
+
+        with pytest.raises(ExecutorCapacitySaturated):
+            await _await_worker_with_capacity(
+                session=AsyncMock(),
+                workspace_id=uuid.uuid4(),
+                executor_type="claude_code",
+                pinned_worker_id=None,
+                settings=self._settings(max_wait_s=1800.0),
+                account_id=uuid.uuid4(),
+                yield_on_saturation=True,
+            )
+        sleep_mock.assert_not_awaited()
+        has_live.assert_awaited_once()
+
+    async def test_no_yield_on_saturation_keeps_bounded_wait(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """yield_on_saturation=False + saturated ⇒ do NOT yield; enter the
+        bounded poll (``asyncio.sleep`` IS awaited) and raise the EXISTING
+        capacity-exhausted error. Preserves the batch/ingest wait behaviour."""
+        from backend.executors import dispatch  # noqa: PLC0415
+
+        monkeypatch.setattr(dispatch, "find_available_worker", AsyncMock(return_value=None))
+        monkeypatch.setattr(dispatch, "has_live_worker", AsyncMock(return_value=True))
+        sleep_mock = AsyncMock()
+        monkeypatch.setattr(asyncio, "sleep", sleep_mock)
+
+        with pytest.raises(ExecutorAdapterUnavailable, match="no worker capacity") as exc_info:
+            await _await_worker_with_capacity(
+                session=AsyncMock(),
+                workspace_id=uuid.uuid4(),
+                executor_type="claude_code",
+                pinned_worker_id=None,
+                settings=self._settings(max_wait_s=0.05),
+                account_id=uuid.uuid4(),
+                yield_on_saturation=False,
+            )
+        # The bounded-wait path was taken (NOT the yield path).
+        assert not isinstance(exc_info.value, ExecutorCapacitySaturated)
+        assert sleep_mock.await_count >= 1
+
+    async def test_no_live_worker_fast_fails_even_when_yield_flag_set(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """has_live_worker→False ⇒ still the #622 no-live fast-fail, regardless
+        of the yield flag. No-live is FUTILE, so it raises the plain
+        ExecutorAdapterUnavailable (not the saturation variant)."""
+        from backend.executors import dispatch  # noqa: PLC0415
+
+        monkeypatch.setattr(dispatch, "find_available_worker", AsyncMock(return_value=None))
+        monkeypatch.setattr(dispatch, "has_live_worker", AsyncMock(return_value=False))
+        sleep_mock = AsyncMock()
+        monkeypatch.setattr(asyncio, "sleep", sleep_mock)
+
+        with pytest.raises(ExecutorAdapterUnavailable, match="no live") as exc_info:
+            await _await_worker_with_capacity(
+                session=AsyncMock(),
+                workspace_id=uuid.uuid4(),
+                executor_type="claude_code",
+                pinned_worker_id=None,
+                settings=self._settings(max_wait_s=1800.0),
+                account_id=uuid.uuid4(),
+                yield_on_saturation=True,
+            )
+        assert not isinstance(exc_info.value, ExecutorCapacitySaturated)
+        sleep_mock.assert_not_awaited()
+
+
+class TestExecutorCapacitySaturated:
+    def test_is_subclass_of_executor_adapter_unavailable(self) -> None:
+        """Every existing ``except ExecutorAdapterUnavailable`` (the planner's
+        broad handler, the chat retry loop, …) must still catch the saturation
+        signal — so it MUST subclass ExecutorAdapterUnavailable."""
+        assert issubclass(ExecutorCapacitySaturated, ExecutorAdapterUnavailable)
+
+
+class TestYieldOnSaturationPlumbing:
+    """``yield_on_saturation`` flows CallerSpec → resolver → adapter_for →
+    ExecutorAdapter, exactly like ``default_timeout_s`` (Lift E9) does."""
+
+    async def test_adapter_for_threads_yield_flag_onto_executor_adapter(self) -> None:
+        from backend.dispatch.adapter import adapter_for
+
+        account = _stub_account(provider="executor", extra_params={"executor_type": "claude_code"})
+        async with memory_session() as session:
+            adapter = adapter_for(
+                account,
+                session=session,
+                settings=get_settings(),
+                api_key="",
+                redis=await _make_redis(),
+                yield_on_saturation=True,
+            )
+        assert isinstance(adapter, ExecutorAdapter)
+        assert adapter.yield_on_saturation is True
+
+    async def test_adapter_for_defaults_yield_flag_false(self) -> None:
+        from backend.dispatch.adapter import adapter_for
+
+        account = _stub_account(provider="executor", extra_params={"executor_type": "claude_code"})
+        async with memory_session() as session:
+            adapter = adapter_for(
+                account,
+                session=session,
+                settings=get_settings(),
+                api_key="",
+                redis=await _make_redis(),
+            )
+        assert isinstance(adapter, ExecutorAdapter)
+        assert adapter.yield_on_saturation is False
+
+    async def test_frame_caller_adapter_yields_on_saturation(self) -> None:
+        """The ExecutorAdapter the resolver builds for CALLER_FRAME (a
+        run-drive caller) carries yield_on_saturation=True end-to-end."""
+        from backend.dispatch.adapter import adapter_for
+        from backend.dispatch.caller_registry import CALLER_FRAME, get_caller_spec
+
+        spec = get_caller_spec(CALLER_FRAME)
+        account = _stub_account(provider="executor", extra_params={"executor_type": "claude_code"})
+        async with memory_session() as session:
+            adapter = adapter_for(
+                account,
+                session=session,
+                settings=get_settings(),
+                api_key="",
+                redis=await _make_redis(),
+                timeout_s=spec.default_timeout_s,
+                yield_on_saturation=spec.yield_on_saturation,
+            )
+        assert isinstance(adapter, ExecutorAdapter)
+        assert adapter.yield_on_saturation is True
 
 
 def test_from_llm_response_normalizes_tool_calls() -> None:

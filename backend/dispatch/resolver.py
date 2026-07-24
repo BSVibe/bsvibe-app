@@ -257,6 +257,11 @@ class ModelAccountResolver:
             # Lift E9 — close the per-caller timeout into the adapter so
             # ``chat`` doesn't re-walk the registry per call.
             timeout_s=spec.default_timeout_s,
+            # Yield-back on saturation — run-drive callers (frame / agent-loop)
+            # raise ExecutorCapacitySaturated instead of blocking the shared
+            # worker; batch callers keep the bounded wait. Threaded from the
+            # CallerSpec the same way as ``default_timeout_s``.
+            yield_on_saturation=spec.yield_on_saturation,
             # Lift E19 — when the runtime wired a sessionmaker, the
             # ExecutorAdapter uses it to open a fresh session per chat
             # call so parallel chunks don't race on flush().
