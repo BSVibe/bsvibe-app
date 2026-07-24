@@ -63,6 +63,22 @@ def default_oauth_path() -> Path:
     return Path.home() / ".bsvibe" / "claude_oauth.json"
 
 
+def default_cli_credentials_path() -> Path:
+    """The interactive ``claude`` CLI's own credential file
+    (``BSVIBE_WORKER_CLAUDE_CLI_CREDENTIALS_PATH`` via :class:`WorkerSettings`,
+    else ``~/.claude/.credentials.json``).
+
+    This file is owned/refreshed by the CLI itself; the worker only ever READS
+    it, as a last-resort fallback, and borrows its access token — it never adopts
+    the CLI's single-use refresh token (that would let the worker's next refresh
+    rotate and burn the CLI's own login — the exact mutual-burn the separate-file
+    design avoids)."""
+    configured = get_worker_settings().claude_cli_credentials_path
+    if configured:
+        return Path(configured).expanduser()
+    return Path.home() / ".claude" / ".credentials.json"
+
+
 def _read_oauth(path: Path) -> dict[str, Any] | None:
     try:
         data = json.loads(path.read_text())
@@ -131,35 +147,97 @@ def _persist(path: Path, access: str, refresh: str, expires_at_ms: int) -> None:
     os.replace(tmp, path)
 
 
+def _cli_fallback_bearer(cli_path: Path, *, now_ms: int) -> str | None:
+    """Last-resort, READ-ONLY borrow of the interactive CLI's live access token.
+
+    Reads ``cli_path`` via :func:`_read_oauth` (which unwraps the CLI's
+    ``{"claudeAiOauth": {...}}`` shape) and returns its access token ONLY IF that
+    token is present and NOT within :data:`_REFRESH_BUFFER_S` of expiry (i.e.
+    currently valid). Otherwise ``None``.
+
+    Deliberately returns the ACCESS token only — the caller must never persist it
+    into the worker file nor adopt the CLI's single-use refresh token, or the
+    worker's next refresh would rotate and BURN the CLI's own login.
+    """
+    oauth = _read_oauth(cli_path)
+    if oauth is None:
+        return None
+    access = _access_token(oauth)
+    if not access:
+        return None
+    if now_ms < _expires_at_ms(oauth) - _REFRESH_BUFFER_S * 1000:
+        return access
+    return None
+
+
+def _resolve_fallback(cli_path: Path, *, now_ms: int, stale: str | None) -> str | None:
+    """Try the CLI fallback; on success return it (borrowed live access token),
+    else return ``stale`` (the pre-existing behaviour: stale worker token or
+    ``None``). Emits a distinct log for each outcome so a future outage is
+    diagnosable in one grep."""
+    borrowed = _cli_fallback_bearer(cli_path, now_ms=now_ms)
+    if borrowed is not None:
+        logger.info("claude_oauth_cli_fallback_used")
+        return borrowed
+    logger.info("claude_oauth_cli_fallback_unavailable")
+    return stale
+
+
+def _is_invalid_grant(exc: BaseException) -> bool:
+    """Best-effort detection of an OAuth ``invalid_grant`` (burned single-use
+    refresh token) — an HTTP 400 whose body mentions ``invalid_grant``."""
+    if not isinstance(exc, urllib.error.HTTPError) or exc.code != 400:
+        return False
+    try:
+        return "invalid_grant" in exc.read().decode(errors="replace")
+    except Exception:  # noqa: BLE001 — diagnostics only, never raise
+        return False
+
+
 def ensure_claude_bearer(
     path: Path | None = None,
     *,
     now_ms: int | None = None,
     refresher: Refresher | None = None,
+    cli_path: Path | None = None,
 ) -> str | None:
     """Return a currently-valid Claude OAuth access token, refreshing if needed.
 
     Reads the worker credential file; if the access token is missing or within
     :data:`_REFRESH_BUFFER_S` of expiry, refreshes via ``refresher`` (default
     :func:`_http_refresh`) under an ``flock`` and persists the rotated pair.
-    Returns ``None`` on any failure (no file, malformed, refresh error) so the
-    caller falls back to the CLI's own auth. Safe to call per invocation — it
-    only hits the network when the token is actually near expiry.
+
+    On ANY failure of that primary path — missing/malformed worker file, expiry
+    with no refresh token, or a failed refresh (e.g. a burned single-use refresh
+    token returning ``invalid_grant``) — it falls back, as a LAST RESORT, to the
+    interactive CLI's fresh credential (``cli_path``, default
+    :func:`default_cli_credentials_path`) via :func:`_cli_fallback_bearer`. That
+    fallback is strictly READ-ONLY: it borrows the CLI's live access token per
+    call and NEVER writes the worker file nor adopts the CLI's single-use refresh
+    token (which would mutually-burn the CLI's own login). This self-heals a
+    burned worker refresh token instead of silently downing the executor.
+
+    Everything is soft-fail — any error returns a token or ``None``, never raises.
+    Safe to call per invocation; it only hits the network when actually near
+    expiry.
     """
     path = path or default_oauth_path()
     now = now_ms if now_ms is not None else int(time.time() * 1000)
     refresher = refresher or _http_refresh
+    cli_path = cli_path or default_cli_credentials_path()
 
     oauth = _read_oauth(path)
     if oauth is None:
-        return None
+        # Worker file missing/malformed — borrow the CLI's live token if any.
+        return _resolve_fallback(cli_path, now_ms=now, stale=None)
     access = _access_token(oauth)
     if access and now < _expires_at_ms(oauth) - _REFRESH_BUFFER_S * 1000:
-        return access  # still valid — no refresh, no network.
+        return access  # still valid — no refresh, no network, CLI not read.
 
     refresh = _refresh_token(oauth)
     if not refresh:
-        return access or None
+        # Expired/near-expiry with no refresh token — cannot self-refresh.
+        return _resolve_fallback(cli_path, now_ms=now, stale=access or None)
 
     # Serialise the whole refresh across processes: single-use refresh tokens mean
     # two concurrent refreshers would have one fail with invalid_grant.
@@ -182,9 +260,14 @@ def ensure_claude_bearer(
             _persist(path, new_access, new_refresh, new_expires_at)
             logger.info("claude_oauth_refreshed", expires_in=expires_in)
             return new_access
-    except (urllib.error.HTTPError, urllib.error.URLError, OSError, ValueError, KeyError):
+    except (urllib.error.HTTPError, urllib.error.URLError, OSError, ValueError, KeyError) as exc:
+        if _is_invalid_grant(exc):
+            # The refresh token was burned (rotated server-side, our copy stale).
+            logger.warning("claude_oauth_refresh_invalid_grant")
         logger.warning("claude_oauth_refresh_failed", exc_info=True)
-        return access or None
+        # Worker file untouched (refresh token not consumed); borrow the CLI's
+        # live token as a last resort before returning the stale worker access.
+        return _resolve_fallback(cli_path, now_ms=now, stale=access or None)
 
 
-__all__ = ["default_oauth_path", "ensure_claude_bearer"]
+__all__ = ["default_cli_credentials_path", "default_oauth_path", "ensure_claude_bearer"]
