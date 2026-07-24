@@ -75,12 +75,25 @@ class CallerSpec:
     fail fast when the worker dies mid-task. Without this, one global
     1800 s default hammered every caller and stalled bsvibe-app's ~50-chunk
     bootstrap for a wall-clock day on a single hung chunk.
+
+    ``yield_on_saturation`` marks run-drive callers whose run the
+    :class:`~backend.workflow.infrastructure.workers.agent_worker.AgentWorker`
+    re-polls: on saturation (live workers exist but all are at capacity) the
+    adapter raises :class:`~backend.dispatch.adapter.ExecutorCapacitySaturated`
+    IMMEDIATELY (yield-back) instead of blocking the SHARED worker for up to
+    ``settings.executor_capacity_wait_max_s`` (30 min) — leaving the run open
+    and retrying on the next poll is strictly better than holding the worker
+    slot + the run's DB lock and starving every other workspace's runs. Batch
+    callers (``knowledge.ingest`` / ``knowledge.canonicalization``) that fan out
+    via ``asyncio.gather`` CANNOT yield to a poll loop, so they keep the bounded
+    capacity-wait (default ``False``).
     """
 
     caller_id: str
     required_methods: frozenset[str] = field(default_factory=lambda: frozenset({"chat"}))
     description: str = ""
     default_timeout_s: float | None = None
+    yield_on_saturation: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -167,6 +180,10 @@ KNOWN_CALLERS: dict[str, CallerSpec] = {
         # path is the same one knowledge.ingest uses, so give it the same
         # safety margin against worker queue contention.
         default_timeout_s=300.0,
+        # Run-drive caller — the AgentWorker re-polls this run, so on
+        # saturation the adapter yields back (raises immediately) instead of
+        # blocking the shared worker for up to 30 min.
+        yield_on_saturation=True,
     ),
     CALLER_AGENT_LOOP_PLAN: CallerSpec(
         caller_id=CALLER_AGENT_LOOP_PLAN,
@@ -178,6 +195,8 @@ KNOWN_CALLERS: dict[str, CallerSpec] = {
         # 10 min (Lift E14) — planning over a big repo pulls lots of
         # context. The 5 min ceiling (E9) was tight for non-trivial repos.
         default_timeout_s=600.0,
+        # Run-drive caller — yields back on saturation (see CALLER_FRAME).
+        yield_on_saturation=True,
     ),
     CALLER_AGENT_LOOP_ACT: CallerSpec(
         caller_id=CALLER_AGENT_LOOP_ACT,
@@ -190,6 +209,8 @@ KNOWN_CALLERS: dict[str, CallerSpec] = {
         # `codex -p` / `opencode -p` on a real coding task. Leave at None
         # so it picks up the settings default of 1800 s.
         default_timeout_s=None,
+        # Run-drive caller — yields back on saturation (see CALLER_FRAME).
+        yield_on_saturation=True,
     ),
     CALLER_JUDGE: CallerSpec(
         caller_id=CALLER_JUDGE,

@@ -35,6 +35,7 @@ import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.config import Settings
+from backend.dispatch.adapter import ExecutorCapacitySaturated
 from backend.dispatch.caller_registry import CALLER_FRAME
 from backend.identity.output_language import language_directive
 from backend.identity.workspaces_db import ProductRow, load_workspace_language
@@ -106,6 +107,13 @@ class ProductTickPlanner:
         meta-instruction. NEVER raises — any failure degrades to ``None``."""
         try:
             return await self._plan(workspace_id=workspace_id, product_id=product_id)
+        except ExecutorCapacitySaturated:
+            # Saturation is NOT a planner hiccup to swallow: the shared worker is
+            # busy, so this tick must YIELD BACK (leave the run OPEN, retry next
+            # poll) rather than fall through to ``None`` → a static-instruction
+            # framing attempt that would hit the SAME saturated worker. Re-raise
+            # so the AgentWorker's per-run loop catches it and continues.
+            raise
         except Exception:  # noqa: BLE001 — a planner hiccup must never break the tick
             logger.warning(
                 "product_tick_planner_failed",

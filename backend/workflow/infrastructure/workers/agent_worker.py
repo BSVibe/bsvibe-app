@@ -62,6 +62,7 @@ if TYPE_CHECKING:
     # ``tick_planner_for`` factory, never by this module.
     from backend.workflow.application.product_tick_planner import ProductTickPlanner
 
+from backend.dispatch.adapter import ExecutorCapacitySaturated
 from backend.extensions.skill.loader import SkillLoader
 from backend.storage.artifact_store import ArtifactStore, LocalFilesystemArtifactStore
 from backend.workers.base import BaseWorker
@@ -237,8 +238,23 @@ class AgentWorker(BaseWorker):
             )
             runs = (await session.execute(stmt)).scalars().all()
             for run in runs:
-                await self._frame_and_drive(session, run, execution)
-                count += 1
+                try:
+                    await self._frame_and_drive(session, run, execution)
+                except ExecutorCapacitySaturated:
+                    # Saturation yield-back (framing OR the act-stage drive):
+                    # all live workers are at capacity. Leave THIS run OPEN
+                    # (do NOT transition it to failed — no partial failed /
+                    # decision state) so the next ``drive_once`` re-picks it,
+                    # and continue to the next run so one saturated workspace
+                    # doesn't stall the whole batch. The shared worker slot is
+                    # freed instead of blocked for up to 30 min.
+                    logger.info(
+                        "agent_worker_yielded_on_capacity",
+                        run_id=str(run.id),
+                    )
+                    continue
+                finally:
+                    count += 1
             await session.commit()
         return count
 
@@ -396,8 +412,13 @@ class AgentWorker(BaseWorker):
         survives the framing payload rebuild, which spreads the existing payload).
         On ``None`` (not a tick, no product, no planner wired, or the planner
         declined): change NOTHING — the static ``product_tick_instruction``
-        already in the payload remains the fallback. The planner never raises, so
-        this path can't break the tick."""
+        already in the payload remains the fallback. The planner swallows every
+        hiccup to ``None`` EXCEPT :class:`ExecutorCapacitySaturated`, which it
+        re-raises so a saturated tick yields back (propagates to ``drive_once``,
+        which leaves the run OPEN) instead of falling through to a static-
+        instruction framing attempt against the same saturated worker. The
+        yield-back happens BEFORE any payload override below, so no partial
+        state is written."""
         if (run.payload or {}).get("kind") != "product_tick" or run.product_id is None:
             return
         if execution.tick_planner_for is None:

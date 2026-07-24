@@ -237,3 +237,27 @@ async def test_plan_never_raises_on_llm_failure(monkeypatch: pytest.MonkeyPatch)
         planner = ProductTickPlanner(session, settings=SimpleNamespace())
         plan = await planner.plan(workspace_id=workspace_id, product_id=product_id)
     assert plan is None  # swallowed → static fallback
+
+
+async def test_plan_reraises_capacity_saturated(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A saturated executor (yield_on_saturation run-drive caller) surfaces
+    :class:`ExecutorCapacitySaturated` out of the LLM call. The planner must
+    RE-RAISE it — NOT swallow it to ``None`` — so the tick yields back instead
+    of falling through to a static-instruction framing attempt that would also
+    saturate the shared worker."""
+    from backend.dispatch.adapter import ExecutorCapacitySaturated
+
+    workspace_id = uuid.uuid4()
+    product_id = uuid.uuid4()
+
+    class _SaturatedAdapter:
+        async def chat(self, **_kwargs: Any) -> Any:
+            raise ExecutorCapacitySaturated("all live workers at capacity")
+
+    _patch_resolver(monkeypatch, _SaturatedAdapter())
+    _patch_retriever(monkeypatch, _FakeRetriever([]))
+    async with memory_session() as session:
+        await _seed_product(session, workspace_id=workspace_id, product_id=product_id)
+        planner = ProductTickPlanner(session, settings=SimpleNamespace())
+        with pytest.raises(ExecutorCapacitySaturated):
+            await planner.plan(workspace_id=workspace_id, product_id=product_id)

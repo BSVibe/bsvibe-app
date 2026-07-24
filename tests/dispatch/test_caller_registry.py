@@ -127,6 +127,43 @@ class TestPerCallerTimeout:
         assert spec.default_timeout_s is None
 
 
+class TestYieldOnSaturation:
+    """Run-drive callers yield-back on saturation; batch callers keep the wait.
+
+    A saturated run-drive executor call (framing / agent-loop) must NOT block
+    the shared ``AgentWorker`` — the worker re-polls OPEN runs, so leaving the
+    run open and retrying is strictly better than holding the worker slot + DB
+    lock for up to 30 min. The ingest / canonicalization fan-out CANNOT yield
+    to a poll loop, so its bounded capacity-wait stays.
+    """
+
+    def test_default_is_false(self) -> None:
+        """A spec authored without the flag never yields — the safe default."""
+        spec = CallerSpec(caller_id="custom")
+        assert spec.yield_on_saturation is False
+
+    def test_frame_yields_on_saturation(self) -> None:
+        assert KNOWN_CALLERS[CALLER_FRAME].yield_on_saturation is True
+
+    def test_agent_loop_plan_yields_on_saturation(self) -> None:
+        assert KNOWN_CALLERS[CALLER_AGENT_LOOP_PLAN].yield_on_saturation is True
+
+    def test_agent_loop_act_yields_on_saturation(self) -> None:
+        assert KNOWN_CALLERS[CALLER_AGENT_LOOP_ACT].yield_on_saturation is True
+
+    def test_knowledge_ingest_does_not_yield(self) -> None:
+        """The batch fan-out legitimately waits for a slot — must NOT yield."""
+        assert KNOWN_CALLERS[CALLER_KNOWLEDGE_INGEST].yield_on_saturation is False
+
+    def test_knowledge_canonicalization_does_not_yield(self) -> None:
+        assert KNOWN_CALLERS[CALLER_KNOWLEDGE_CANONICALIZATION].yield_on_saturation is False
+
+    def test_only_run_drive_callers_yield(self) -> None:
+        """Exactly the three run-drive callers carry the flag; nothing else."""
+        yielders = {spec.caller_id for spec in KNOWN_CALLERS.values() if spec.yield_on_saturation}
+        assert yielders == {CALLER_FRAME, CALLER_AGENT_LOOP_PLAN, CALLER_AGENT_LOOP_ACT}
+
+
 class TestListAllCallers:
     def test_list_static_only(self) -> None:
         items = list_all_callers()
