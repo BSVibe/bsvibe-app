@@ -25,7 +25,12 @@ import backend.executors.db  # noqa: F401
 from backend.executors import dispatch, service
 from backend.executors.db import ExecutorTaskRow, WorkerRow
 
-from .._support import memory_session, shared_file_sessionmaker
+from .._support import (
+    db_engine,
+    memory_session,
+    shared_file_sessionmaker,
+    use_real_pg,
+)
 
 pytestmark = pytest.mark.asyncio
 
@@ -687,6 +692,178 @@ async def test_find_available_worker_stale_heartbeat_excluded_with_busy_count() 
             max_parallel_per_worker=3,
         )
         assert found is None
+
+
+# ── has_live_worker (no-live-worker vs saturation fast-fail) ─────────────────
+
+
+async def test_has_live_worker_true_when_eligible_worker_exists() -> None:
+    """An active + online + fresh + capability-matching worker → True.
+
+    This is the "saturated (waiting is legitimate)" signal source: a live
+    worker exists, so the capacity-wait may genuinely free up.
+    """
+    workspace_id = uuid.uuid4()
+    async with memory_session() as s:
+        await _seed_worker(
+            s, workspace_id=workspace_id, capabilities=["claude_code"], heartbeat_age_s=5
+        )
+        await s.commit()
+        assert (
+            await dispatch.has_live_worker(
+                s, workspace_id=workspace_id, executor_type="claude_code"
+            )
+            is True
+        )
+
+
+async def test_has_live_worker_true_even_when_saturated() -> None:
+    """Capacity is irrelevant to liveness — a saturated but live worker is True.
+
+    ``has_live_worker`` ignores the parallel cap on purpose: a saturated
+    worker means "wait", not "futile", so it must NOT be treated as absence.
+    """
+    workspace_id = uuid.uuid4()
+    async with memory_session() as s:
+        await _seed_worker(
+            s,
+            workspace_id=workspace_id,
+            capabilities=["opencode"],
+            heartbeat_age_s=5,
+            last_in_flight=99,
+        )
+        await s.commit()
+        assert (
+            await dispatch.has_live_worker(s, workspace_id=workspace_id, executor_type="opencode")
+            is True
+        )
+
+
+async def test_has_live_worker_false_when_no_rows() -> None:
+    workspace_id = uuid.uuid4()
+    async with memory_session() as s:
+        assert (
+            await dispatch.has_live_worker(
+                s, workspace_id=workspace_id, executor_type="claude_code"
+            )
+            is False
+        )
+
+
+async def test_has_live_worker_false_when_offline() -> None:
+    workspace_id = uuid.uuid4()
+    async with memory_session() as s:
+        await _seed_worker(
+            s,
+            workspace_id=workspace_id,
+            capabilities=["claude_code"],
+            status="offline",
+            heartbeat_age_s=5,
+        )
+        await s.commit()
+        assert (
+            await dispatch.has_live_worker(
+                s, workspace_id=workspace_id, executor_type="claude_code"
+            )
+            is False
+        )
+
+
+async def test_has_live_worker_false_when_heartbeat_stale() -> None:
+    """A dead/offline pin whose heartbeat aged past the freshness window → False.
+
+    This is the exact live-incident condition: the model account pinned a
+    worker that stopped heart-beating. No live worker carries the capability,
+    so waiting is futile and the adapter must fail fast.
+    """
+    workspace_id = uuid.uuid4()
+    async with memory_session() as s:
+        await _seed_worker(
+            s,
+            workspace_id=workspace_id,
+            capabilities=["claude_code"],
+            heartbeat_age_s=dispatch.HEARTBEAT_FRESHNESS_S + 60,
+        )
+        await s.commit()
+        assert (
+            await dispatch.has_live_worker(
+                s, workspace_id=workspace_id, executor_type="claude_code"
+            )
+            is False
+        )
+
+
+async def test_has_live_worker_false_when_wrong_capability() -> None:
+    workspace_id = uuid.uuid4()
+    async with memory_session() as s:
+        await _seed_worker(s, workspace_id=workspace_id, capabilities=["codex"], heartbeat_age_s=5)
+        await s.commit()
+        assert (
+            await dispatch.has_live_worker(
+                s, workspace_id=workspace_id, executor_type="claude_code"
+            )
+            is False
+        )
+
+
+async def test_eligibility_on_real_postgres() -> None:
+    """Eligibility scan validated against the REAL Postgres container.
+
+    SQLite lies about column types / JSON semantics; CI runs on Postgres.
+    Seeds ``executor_workers`` rows directly (no FK parent on ``workspace_id``)
+    and asserts ``_eligible_workers`` / ``has_live_worker`` agree with
+    ``find_available_worker``: a fresh, online, capability-matching worker is
+    "live" (even when saturated) while a stale-heartbeat pin is not.
+    """
+    if not use_real_pg():
+        pytest.skip(
+            "eligibility must be validated on real PostgreSQL (citest-pg @ "
+            "localhost:5442). Set BSVIBE_DATABASE_URL and start the container."
+        )
+
+    from sqlalchemy.ext.asyncio import async_sessionmaker  # noqa: PLC0415
+
+    async with db_engine() as (engine, is_pg):
+        assert is_pg, "this test only runs against PostgreSQL"
+        maker = async_sessionmaker(engine, expire_on_commit=False)
+
+        ws_live = uuid.uuid4()
+        ws_dead = uuid.uuid4()
+        async with maker() as s:
+            live = await _seed_worker(
+                s,
+                workspace_id=ws_live,
+                capabilities=["claude_code"],
+                heartbeat_age_s=5,
+                last_in_flight=99,  # saturated but still LIVE
+            )
+            await _seed_worker(
+                s,
+                workspace_id=ws_dead,
+                capabilities=["claude_code"],
+                heartbeat_age_s=dispatch.HEARTBEAT_FRESHNESS_S + 300,  # stale/dead pin
+            )
+            await s.commit()
+
+            eligible = await dispatch._eligible_workers(
+                s, workspace_id=ws_live, executor_type="claude_code"
+            )
+            assert [w.id for w in eligible] == [live.id]
+
+            # Live workspace: a live worker exists (saturation != absence).
+            assert (
+                await dispatch.has_live_worker(s, workspace_id=ws_live, executor_type="claude_code")
+                is True
+            )
+            # Dead-pin workspace: no live worker at all → futile to wait.
+            assert (
+                await dispatch.has_live_worker(s, workspace_id=ws_dead, executor_type="claude_code")
+                is False
+            )
+            assert (
+                await dispatch.has_live_worker(s, workspace_id=ws_live, executor_type="codex")
+                is False
+            )
 
 
 async def test_mark_pending_resets_task() -> None:

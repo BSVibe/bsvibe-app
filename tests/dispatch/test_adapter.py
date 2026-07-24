@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -21,6 +22,7 @@ from backend.dispatch.adapter import (
     ExecutorAdapterUnavailable,
     LiteLLMAdapter,
     ModelAccountAdapter,
+    _await_worker_with_capacity,
     _from_llm_response,
     _render_prompt,
 )
@@ -381,24 +383,25 @@ class TestExecutorAdapterChat:
             with pytest.raises(ExecutorAdapterUnavailable, match="executor_type"):
                 await adapter.chat(system="x", messages=[{"role": "user", "content": "y"}])
 
-    async def test_chat_no_worker_waits_then_raises_capacity_timeout(self) -> None:
-        """Lift E16 — no available worker means *wait*, not immediate raise.
+    async def test_chat_no_live_worker_fails_fast_without_waiting(self) -> None:
+        """No live worker at all (dead/offline pin) → fail fast, do NOT wait.
 
-        Pre-E16 the adapter raised ``no online worker`` instantly when
-        :func:`find_available_worker` returned None — that made sense
-        because pre-E16 "no worker" only meant "no row at all". Post-E16
-        the same return value can also mean "every worker temporarily at
-        capacity" (the worker's poll loop skips polling at-cap), so the
-        adapter waits with bounded retry. After the bounded wait it
-        raises a distinct "no worker capacity within" message so the
-        caller sees the difference between misconfig and saturation.
+        The live-incident condition: the model account pins a worker that is
+        now offline/dead and no other online worker carries the capability.
+        Pre-fix the adapter treated this like saturation and looped for up to
+        ``executor_capacity_wait_max_s`` (30 min default) — wedging the shared
+        AgentWorker. With no live worker, waiting is futile; the adapter must
+        raise the distinct "no live" ``ExecutorAdapterUnavailable`` at once.
+
+        A generous wait budget is configured on purpose: if the adapter were
+        still waiting, this test would hang for 30 s rather than return fast.
         """
         redis = await _make_redis()
         workspace_id = uuid.uuid4()
-        # Tiny wait budget so the test is fast — the real default is 30 min.
         settings = get_settings().model_copy(
             update={
-                "executor_capacity_wait_max_s": 0.1,
+                # Deliberately LARGE — a fast-fail must ignore it entirely.
+                "executor_capacity_wait_max_s": 30.0,
                 "executor_capacity_wait_poll_s": 0.02,
             }
         )
@@ -415,8 +418,12 @@ class TestExecutorAdapterChat:
                 settings=settings,
                 redis=redis,
             )
-            with pytest.raises(ExecutorAdapterUnavailable, match="no worker capacity"):
+            loop = asyncio.get_event_loop()
+            started = loop.time()
+            with pytest.raises(ExecutorAdapterUnavailable, match="no live"):
                 await adapter.chat(system="x", messages=[{"role": "user", "content": "y"}])
+            # It must NOT have burned the wait budget.
+            assert loop.time() - started < 5.0
 
     async def test_chat_waits_for_capacity_then_dispatches(
         self, monkeypatch: pytest.MonkeyPatch
@@ -1175,6 +1182,102 @@ class TestProtocolConformance:
                 settings=get_settings(),
             )
             assert isinstance(adapter, ModelAccountAdapter)
+
+
+class TestAwaitWorkerWithCapacity:
+    """Direct branch tests for the capacity-wait helper.
+
+    Mocks ``dispatch.find_available_worker`` + ``dispatch.has_live_worker`` to
+    drive the two conditions the fix distinguishes — genuine saturation (wait)
+    vs. no live worker at all (fail fast) — without a DB.
+    """
+
+    def _settings(self, *, max_wait_s: float) -> Any:
+        return get_settings().model_copy(
+            update={
+                "executor_capacity_wait_max_s": max_wait_s,
+                "executor_capacity_wait_poll_s": 0.01,
+            }
+        )
+
+    async def test_no_live_worker_raises_immediately_without_sleeping(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """find_available_worker→None + has_live_worker→False ⇒ raise on attempt 1.
+
+        Proves it never enters the poll/sleep loop: ``asyncio.sleep`` is a mock
+        that must NEVER be awaited even though the wait budget is the 30-min
+        production default.
+        """
+        from backend.executors import dispatch  # noqa: PLC0415
+
+        monkeypatch.setattr(dispatch, "find_available_worker", AsyncMock(return_value=None))
+        has_live = AsyncMock(return_value=False)
+        monkeypatch.setattr(dispatch, "has_live_worker", has_live)
+        sleep_mock = AsyncMock()
+        monkeypatch.setattr(asyncio, "sleep", sleep_mock)
+
+        with pytest.raises(ExecutorAdapterUnavailable, match="no live"):
+            await _await_worker_with_capacity(
+                session=AsyncMock(),
+                workspace_id=uuid.uuid4(),
+                executor_type="claude_code",
+                pinned_worker_id=None,
+                settings=self._settings(max_wait_s=1800.0),
+                account_id=uuid.uuid4(),
+            )
+        sleep_mock.assert_not_awaited()
+        has_live.assert_awaited_once()
+
+    async def test_saturation_enters_bounded_wait_then_capacity_exhausted(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """find_available_worker→None + has_live_worker→True ⇒ do NOT fast-fail.
+
+        A live-but-saturated worker means waiting is legitimate: the helper
+        enters the bounded poll (``asyncio.sleep`` IS awaited) and, on continued
+        None, raises the EXISTING capacity-exhausted error (not the no-live one).
+        A tiny wait budget keeps the test fast.
+        """
+        from backend.executors import dispatch  # noqa: PLC0415
+
+        monkeypatch.setattr(dispatch, "find_available_worker", AsyncMock(return_value=None))
+        monkeypatch.setattr(dispatch, "has_live_worker", AsyncMock(return_value=True))
+        sleep_mock = AsyncMock()
+        monkeypatch.setattr(asyncio, "sleep", sleep_mock)
+
+        with pytest.raises(ExecutorAdapterUnavailable, match="no worker capacity"):
+            await _await_worker_with_capacity(
+                session=AsyncMock(),
+                workspace_id=uuid.uuid4(),
+                executor_type="claude_code",
+                pinned_worker_id=None,
+                settings=self._settings(max_wait_s=0.05),
+                account_id=uuid.uuid4(),
+            )
+        assert sleep_mock.await_count >= 1
+
+    async def test_worker_available_returns_immediately(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """find_available_worker→worker ⇒ return it; has_live_worker not consulted."""
+        from backend.executors import dispatch  # noqa: PLC0415
+
+        sentinel = object()
+        monkeypatch.setattr(dispatch, "find_available_worker", AsyncMock(return_value=sentinel))
+        has_live = AsyncMock(return_value=False)
+        monkeypatch.setattr(dispatch, "has_live_worker", has_live)
+
+        result = await _await_worker_with_capacity(
+            session=AsyncMock(),
+            workspace_id=uuid.uuid4(),
+            executor_type="claude_code",
+            pinned_worker_id=None,
+            settings=self._settings(max_wait_s=1800.0),
+            account_id=uuid.uuid4(),
+        )
+        assert result is sentinel
+        has_live.assert_not_awaited()
 
 
 def test_from_llm_response_normalizes_tool_calls() -> None:
