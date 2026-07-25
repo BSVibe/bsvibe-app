@@ -91,7 +91,7 @@ async def test_product_context_is_injected_when_product_id_given(tmp_path, monke
     adapter = _capturing_adapter(captured)
     monkeypatch.setattr(
         da,
-        "_resolve_via_caller",
+        "resolve_via_caller",
         lambda *_a, **_k: _async(
             SimpleNamespace(account=SimpleNamespace(provider="litellm"), adapter=adapter)
         ),
@@ -138,7 +138,7 @@ async def test_product_context_titles_are_single_line(tmp_path, monkeypatch) -> 
     adapter = _capturing_adapter(captured)
     monkeypatch.setattr(
         da,
-        "_resolve_via_caller",
+        "resolve_via_caller",
         lambda *_a, **_k: _async(
             SimpleNamespace(account=SimpleNamespace(provider="litellm"), adapter=adapter)
         ),
@@ -173,7 +173,7 @@ async def test_product_in_another_workspace_is_not_injected(tmp_path, monkeypatc
     adapter = _capturing_adapter(captured)
     monkeypatch.setattr(
         da,
-        "_resolve_via_caller",
+        "resolve_via_caller",
         lambda *_a, **_k: _async(
             SimpleNamespace(account=SimpleNamespace(provider="litellm"), adapter=adapter)
         ),
@@ -232,7 +232,7 @@ async def test_executor_chat_account_answers_inline(tmp_path, monkeypatch) -> No
         captured.update(kw)
         return resolved
 
-    monkeypatch.setattr(da, "_resolve_via_caller", _fake_resolve)
+    monkeypatch.setattr(da, "resolve_via_caller", _fake_resolve)
 
     out = await _service(tmp_path, redis="REDIS").answer(
         workspace_id=uuid.uuid4(), text="What is X?"
@@ -261,7 +261,7 @@ async def test_executor_failure_degrades_to_none(tmp_path, monkeypatch) -> None:
     async def _fake_resolve(*_a: Any, **_k: Any) -> Any:
         return resolved
 
-    monkeypatch.setattr(da, "_resolve_via_caller", _fake_resolve)
+    monkeypatch.setattr(da, "resolve_via_caller", _fake_resolve)
 
     out = await _service(tmp_path).answer(workspace_id=uuid.uuid4(), text="What is X?")
     assert out is None
@@ -284,7 +284,7 @@ async def test_llm_failure_degrades_to_none_not_500(tmp_path, monkeypatch) -> No
     async def _fake_resolve(*_a: Any, **_k: Any) -> Any:
         return resolved
 
-    monkeypatch.setattr(da, "_resolve_via_caller", _fake_resolve)
+    monkeypatch.setattr(da, "resolve_via_caller", _fake_resolve)
 
     out = await _service(tmp_path).answer(workspace_id=uuid.uuid4(), text="What is X?")
     assert out is None
@@ -304,7 +304,7 @@ async def test_native_chat_account_answers(tmp_path, monkeypatch) -> None:
     async def _fake_resolve(*_a: Any, **_k: Any) -> Any:
         return resolved
 
-    monkeypatch.setattr(da, "_resolve_via_caller", _fake_resolve)
+    monkeypatch.setattr(da, "resolve_via_caller", _fake_resolve)
 
     out = await _service(tmp_path).answer(workspace_id=uuid.uuid4(), text="What is X?")
     assert out == "X is a thing."
@@ -316,7 +316,7 @@ async def test_no_chat_account_returns_none(tmp_path, monkeypatch) -> None:
     async def _fake_resolve(*_a: Any, **_k: Any) -> Any:
         return None
 
-    monkeypatch.setattr(da, "_resolve_via_caller", _fake_resolve)
+    monkeypatch.setattr(da, "resolve_via_caller", _fake_resolve)
 
     out = await _service(tmp_path).answer(workspace_id=uuid.uuid4(), text="What is X?")
     assert out is None
@@ -344,7 +344,7 @@ async def test_work_verdict_declines_to_answer(tmp_path, monkeypatch, reply: str
     resolved = SimpleNamespace(
         account=SimpleNamespace(provider="litellm"), adapter=_adapter_replying(reply)
     )
-    monkeypatch.setattr(da, "_resolve_via_caller", lambda *_a, **_k: _async(resolved))
+    monkeypatch.setattr(da, "resolve_via_caller", lambda *_a, **_k: _async(resolved))
 
     out = await _service(tmp_path).answer(
         workspace_id=uuid.uuid4(), text="backend 에 mean 함수 추가해줘"
@@ -363,7 +363,7 @@ async def test_answer_quoting_the_sentinel_is_still_an_answer(tmp_path, monkeypa
     resolved = SimpleNamespace(
         account=SimpleNamespace(provider="litellm"), adapter=_adapter_replying(reply)
     )
-    monkeypatch.setattr(da, "_resolve_via_caller", lambda *_a, **_k: _async(resolved))
+    monkeypatch.setattr(da, "resolve_via_caller", lambda *_a, **_k: _async(resolved))
 
     out = await _service(tmp_path).answer(
         workspace_id=uuid.uuid4(), text="inline ask 경로가 작업을 어떻게 구분해?"
@@ -378,7 +378,7 @@ async def test_ask_vs_produce_rubric_is_sent_to_the_model(tmp_path, monkeypatch)
     adapter = _capturing_adapter(captured)
     monkeypatch.setattr(
         da,
-        "_resolve_via_caller",
+        "resolve_via_caller",
         lambda *_a, **_k: _async(
             SimpleNamespace(account=SimpleNamespace(provider="litellm"), adapter=adapter)
         ),

@@ -530,7 +530,7 @@ async def _resolve_compile_llm(
     resolver built without it raises ``ExecutorAdapterUnavailable`` on EVERY
     compile — the bug that made this feature dead on arrival in production. The
     workflow runtime always threaded it (see
-    :func:`backend.workflow.application.runtime.account_resolution._resolve_via_caller`);
+    :func:`backend.workflow.application.runtime.account_resolution.resolve_via_caller`);
     the API layer did not.
 
     ``None`` (no Redis configured — unit tests, dev without Redis) is a clean

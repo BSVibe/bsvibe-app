@@ -64,6 +64,7 @@ if TYPE_CHECKING:
 
 from backend.dispatch.adapter import ExecutorCapacitySaturated
 from backend.extensions.skill.loader import SkillLoader
+from backend.shared.wire_kinds import SCHEDULE_KIND_PRODUCT_TICK
 from backend.storage.artifact_store import ArtifactStore, LocalFilesystemArtifactStore
 from backend.workers.base import BaseWorker
 from backend.workflow.application.agent_loop import RunCompute
@@ -247,14 +248,17 @@ class AgentWorker(BaseWorker):
                     # decision state) so the next ``drive_once`` re-picks it,
                     # and continue to the next run so one saturated workspace
                     # doesn't stall the whole batch. The shared worker slot is
-                    # freed instead of blocked for up to 30 min.
+                    # freed instead of blocked for up to 30 min. A YIELDED run
+                    # was NOT driven — it must not be counted (``count`` is the
+                    # "runs driven" return), so the increment stays out of the
+                    # ``continue`` path.
                     logger.info(
                         "agent_worker_yielded_on_capacity",
                         run_id=str(run.id),
                     )
                     continue
-                finally:
-                    count += 1
+                # Only a genuinely-driven run counts.
+                count += 1
             await session.commit()
         return count
 
@@ -419,7 +423,7 @@ class AgentWorker(BaseWorker):
         instruction framing attempt against the same saturated worker. The
         yield-back happens BEFORE any payload override below, so no partial
         state is written."""
-        if (run.payload or {}).get("kind") != "product_tick" or run.product_id is None:
+        if (run.payload or {}).get("kind") != SCHEDULE_KIND_PRODUCT_TICK or run.product_id is None:
             return
         if execution.tick_planner_for is None:
             return

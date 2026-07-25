@@ -46,7 +46,7 @@ from backend.dispatch.caller_registry import CALLER_FRAME
 from backend.identity.workspaces_db import ProductRow
 from backend.workflow.application.knowledge_orchestrator import _ANSWER_SYSTEM_PROMPT
 from backend.workflow.application.loop_llm import ResolverLoopLlm
-from backend.workflow.application.runtime.account_resolution import _resolve_via_caller
+from backend.workflow.application.runtime.account_resolution import resolve_via_caller
 from backend.workflow.application.stages.frame import ASK_VS_PRODUCE_RUBRIC
 from backend.workflow.infrastructure.db import Deliverable, ExecutionRun, RunStatus
 
@@ -131,7 +131,7 @@ class DirectAnswerService:
         from real state — not from whatever empty sandbox the chat account runs
         in (the pre-grounding symptom was an executor reporting its own empty
         working directory)."""
-        chat = await _resolve_via_caller(
+        chat = await resolve_via_caller(
             self._session,
             caller_id=CALLER_FRAME,
             workspace_id=workspace_id,

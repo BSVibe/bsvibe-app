@@ -35,7 +35,7 @@ from backend.knowledge.infrastructure.workers.settle_worker import (
     ReconcileHook,
     Settlement,
 )
-from backend.workflow.application.runtime.account_resolution import _resolve_via_caller
+from backend.workflow.application.runtime.account_resolution import resolve_via_caller
 from backend.workflow.application.runtime.dispatcher import (
     _ResolverCompileLlm,
     _ResolverFrameLlm,
@@ -77,7 +77,7 @@ def build_settle_entity_extractor_factory(
         from backend.knowledge.ingest.ingest_compiler import IngestCompiler  # noqa: PLC0415
 
         async with session_factory() as session:
-            resolved = await _resolve_via_caller(
+            resolved = await resolve_via_caller(
                 session,
                 caller_id=CALLER_SETTLE_EXTRACT,
                 workspace_id=workspace_id,
@@ -188,7 +188,7 @@ def build_concept_framer(
 
     async def _factory(*, region: str, workspace_id: uuid.UUID) -> ConceptFramer | None:
         async with session_factory() as session:
-            resolved = await _resolve_via_caller(
+            resolved = await resolve_via_caller(
                 session,
                 caller_id=CALLER_KNOWLEDGE_CANONICALIZATION,
                 workspace_id=workspace_id,

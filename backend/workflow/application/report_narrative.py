@@ -20,7 +20,7 @@ from backend.config import Settings
 from backend.dispatch.caller_registry import CALLER_FRAME
 from backend.identity.output_language import language_directive
 from backend.workflow.application.loop_llm import ResolverLoopLlm
-from backend.workflow.application.runtime.account_resolution import _resolve_via_caller
+from backend.workflow.application.runtime.account_resolution import resolve_via_caller
 
 logger = structlog.get_logger(__name__)
 
@@ -51,7 +51,7 @@ class ReportNarrativeService:
         self._redis = redis
 
     async def _resolve_chat(self, workspace_id: uuid.UUID) -> ResolverLoopLlm | None:
-        resolved = await _resolve_via_caller(
+        resolved = await resolve_via_caller(
             self._session,
             caller_id=CALLER_FRAME,
             workspace_id=workspace_id,

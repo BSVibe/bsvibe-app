@@ -41,7 +41,7 @@ from backend.identity.output_language import language_directive
 from backend.identity.workspaces_db import ProductRow, load_workspace_language
 from backend.knowledge.retrieval.answer_grounding import build_canon_retriever
 from backend.workflow.application.loop_llm import ResolverLoopLlm
-from backend.workflow.application.runtime.account_resolution import _resolve_via_caller
+from backend.workflow.application.runtime.account_resolution import resolve_via_caller
 from backend.workflow.infrastructure.repositories import SqlAlchemyRunRepository
 
 logger = structlog.get_logger(__name__)
@@ -56,6 +56,8 @@ _SNIPPET_MAX_CHARS = 600
 _INTENT_MAX_CHARS = 160
 #: Backstop on the composed instruction (the prompt asks for 1-2 sentences).
 _INSTRUCTION_MAX_CHARS = 600
+#: Tighter backstop on the rationale (the prompt asks for a "one-line why").
+_RATIONALE_MAX_CHARS = 200
 
 #: Free-form metadata keys we treat as the product's "goal" for the retrieval
 #: signals. Order = precedence. Absent → the metadata contributes only its name.
@@ -133,7 +135,7 @@ class ProductTickPlanner:
             )
             return None
 
-        resolved = await _resolve_via_caller(
+        resolved = await resolve_via_caller(
             self._session,
             caller_id=CALLER_FRAME,
             workspace_id=workspace_id,
@@ -261,7 +263,7 @@ def _parse_plan(raw: str | None) -> TickPlan | None:
     rationale_text = rationale.strip() if isinstance(rationale, str) and rationale.strip() else ""
     return TickPlan(
         instruction=instruction.strip()[:_INSTRUCTION_MAX_CHARS],
-        rationale=rationale_text[:_INSTRUCTION_MAX_CHARS],
+        rationale=rationale_text[:_RATIONALE_MAX_CHARS],
     )
 
 

@@ -57,7 +57,7 @@ from backend.storage.product_workspace import (
     ProductWorkspaceError,
     product_workspace_path,
 )
-from backend.workflow.application.runtime.account_resolution import _resolve_via_caller
+from backend.workflow.application.runtime.account_resolution import resolve_via_caller
 from backend.workflow.application.runtime.dispatcher import _ResolverCompileLlm
 from backend.workflow.domain.gate_scaffold import scaffold_gate
 from backend.workflow.infrastructure.delivery.git_ops import GitError, GitOps
@@ -445,7 +445,7 @@ def _build_bootstrap_knowledge_inner(
         # Without it, ExecutorAdapter.chat raises ExecutorAdapterUnavailable
         # on the first chunk and the IngestCompiler silently drops every
         # chunk into the chunk_failures counter.
-        resolved = await _resolve_via_caller(
+        resolved = await resolve_via_caller(
             session,
             caller_id=CALLER_KNOWLEDGE_INGEST,
             workspace_id=workspace_id,

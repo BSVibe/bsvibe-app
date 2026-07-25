@@ -12,7 +12,7 @@ client through, because an **executor** account's adapter
 stream via Redis and raises
 :class:`~backend.dispatch.adapter.ExecutorAdapterUnavailable` without one. The
 workflow runtime does thread it (see
-:func:`backend.workflow.application.runtime.account_resolution._resolve_via_caller`);
+:func:`backend.workflow.application.runtime.account_resolution.resolve_via_caller`);
 the API layer did not. Every NL routing compile (``/api/v1/run-routing/compile``,
 ``/compile/apply``, the ``source_text`` compile on rule create/update) and the
 external ``/api/v1/chat/completions`` gateway therefore failed on any workspace
