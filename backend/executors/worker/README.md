@@ -101,7 +101,7 @@ backend/executors/worker/
 ├── __init__.py
 ├── __main__.py        # `python -m backend.executors.worker`
 ├── config.py          # WorkerSettings (pydantic-settings, BSVIBE_WORKER_ prefix)
-├── executors.py       # ExecutorProtocol, ExecutionChunk/Result, collect(),
+├── executors.py       # ExecutorProtocol, ExecutionChunk,
 │                       # detect_capabilities(), select_executor()
 ├── claude_code.py     # ClaudeCodeExecutor — the claude_code subprocess streamer
 ├── main.py            # register / handle_task / run_once / poll_and_execute + entrypoint

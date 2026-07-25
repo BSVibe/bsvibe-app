@@ -19,8 +19,8 @@ import shutil
 import signal
 import sys
 from collections.abc import AsyncIterator, Mapping
-from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Literal, Protocol, runtime_checkable
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 import structlog
 
@@ -37,25 +37,12 @@ class ExecutionChunk:
     """One incremental message from a streaming executor.
 
     ``delta`` carries new text to append to the running output; ``done`` marks
-    terminal end-of-stream (with optional ``error``). ``raw`` keeps the parsed
-    source event for debugging / future structured forwarding.
+    terminal end-of-stream (with optional ``error``).
     """
 
     delta: str = ""
     done: bool = False
     error: str | None = None
-    raw: dict[str, Any] | None = None
-
-
-@dataclass
-class ExecutionResult:
-    """Aggregated terminal result, built by :func:`collect` from chunks."""
-
-    success: bool
-    stdout: str = ""
-    error_message: str | None = None
-    error_category: Literal["environment", "tool", ""] = ""
-    chunks: list[ExecutionChunk] = field(default_factory=list)
 
 
 @runtime_checkable
@@ -63,44 +50,6 @@ class ExecutorProtocol(Protocol):
     """A streaming CLI executor."""
 
     def execute(self, prompt: str, context: dict[str, Any]) -> AsyncIterator[ExecutionChunk]: ...
-
-    def supported_task_types(self) -> list[str]: ...
-
-
-async def collect(stream: AsyncIterator[ExecutionChunk]) -> ExecutionResult:
-    """Drain a chunk stream into an :class:`ExecutionResult`.
-
-    Always closes the underlying async generator in a ``finally`` so subprocess
-    cleanup / tempfile unlink runs synchronously before returning.
-    """
-    parts: list[str] = []
-    chunks: list[ExecutionChunk] = []
-    error: str | None = None
-    success = True
-    try:
-        async for chunk in stream:
-            chunks.append(chunk)
-            if chunk.delta:
-                parts.append(chunk.delta)
-            if chunk.error:
-                error = chunk.error
-                success = False
-            if chunk.done:
-                break
-    finally:
-        aclose = getattr(stream, "aclose", None)
-        if aclose is not None:
-            try:
-                await aclose()
-            except Exception:  # noqa: BLE001, S110 — cleanup best-effort
-                pass
-    return ExecutionResult(
-        success=success,
-        stdout="".join(parts),
-        error_message=error,
-        error_category="" if success else "tool",
-        chunks=chunks,
-    )
 
 
 # ── Subprocess env sanitization ─────────────────────────────────────────────
@@ -246,10 +195,8 @@ def _kill_process_group(process: asyncio.subprocess.Process) -> None:
 
 __all__ = [
     "ExecutionChunk",
-    "ExecutionResult",
     "ExecutorProtocol",
     "_kill_process_group",
-    "collect",
     "detect_capabilities",
     "sanitized_subprocess_env",
     "select_executor",

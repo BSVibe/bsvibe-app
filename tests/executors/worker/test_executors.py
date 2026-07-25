@@ -22,6 +22,7 @@ from backend.executors.worker.executors import (
     select_executor,
 )
 from backend.executors.worker.opencode import OpenCodeExecutor
+from tests.executors.worker._drain import drain
 
 
 def _patch_which(monkeypatch: pytest.MonkeyPatch, present: set[str]) -> None:
@@ -82,12 +83,12 @@ def test_protocol_runtime_checkable() -> None:
     assert not isinstance(object(), ExecutorProtocol)
 
 
-async def test_collect_marks_failure_on_error_chunk() -> None:
+async def test_drain_marks_failure_on_error_chunk() -> None:
     async def _stream() -> Any:
         yield exmod.ExecutionChunk(delta="partial")
         yield exmod.ExecutionChunk(done=True, error="kaboom")
 
-    result = await exmod.collect(_stream())
+    result = await drain(_stream())
     assert result.success is False
     assert result.stdout == "partial"
     assert result.error_message == "kaboom"

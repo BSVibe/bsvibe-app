@@ -22,8 +22,9 @@ import httpx
 import pytest
 
 from backend.executors.worker import opencode_server
-from backend.executors.worker.executors import ExecutionChunk, collect
+from backend.executors.worker.executors import ExecutionChunk
 from backend.executors.worker.opencode import OpenCodeExecutor
+from tests.executors.worker._drain import drain
 
 pytestmark = pytest.mark.asyncio
 
@@ -128,7 +129,7 @@ async def test_collect_aggregates_output() -> None:
     serve = _FakeServe(text="abcdef")
     executor = _executor_with(serve)
 
-    result = await collect(executor.execute("p", {}))
+    result = await drain(executor.execute("p", {}))
     assert result.success is True
     assert result.stdout == "abcdef"
     assert result.error_message is None
@@ -337,10 +338,6 @@ async def test_missing_serve_url_singleton_yields_clear_error() -> None:
     assert chunks[-1].done is True
     assert chunks[-1].error is not None
     assert "opencode serve" in chunks[-1].error.lower()
-
-
-async def test_supported_task_types() -> None:
-    assert OpenCodeExecutor().supported_task_types() == ["opencode"]
 
 
 # ── Cancel propagation: must abort the session server-side ──────────────────

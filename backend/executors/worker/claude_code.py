@@ -248,9 +248,6 @@ class ClaudeCodeExecutor:
                 return resolved
         return "claude"
 
-    def supported_task_types(self) -> list[str]:
-        return ["coding", "refactor", "bugfix", "test"]
-
     async def execute(self, prompt: str, context: dict[str, Any]) -> AsyncIterator[ExecutionChunk]:
         workspace = context.get("workspace_dir") or "."
         system = context.get("system") or ""
@@ -446,7 +443,7 @@ class ClaudeCodeExecutor:
                         rate_status = status
                     delta = _claude_extract_delta(parsed)
                     if delta:
-                        yield ExecutionChunk(delta=delta, raw=parsed)
+                        yield ExecutionChunk(delta=delta)
             except asyncio.CancelledError:
                 # Lift E15 — kill the process GROUP before the inner
                 # ``finally``'s ``process.wait()`` blocks for the full

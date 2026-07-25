@@ -866,28 +866,6 @@ async def test_eligibility_on_real_postgres() -> None:
             )
 
 
-async def test_mark_pending_resets_task() -> None:
-    workspace_id = uuid.uuid4()
-    async with memory_session() as s:
-        worker = await _seed_worker(
-            s, workspace_id=workspace_id, capabilities=["claude_code"], heartbeat_age_s=5
-        )
-        task = await dispatch.create_task(
-            s, workspace_id=workspace_id, executor_type="claude_code", prompt="p"
-        )
-        await s.commit()
-        # Pretend it was dispatched, then reset.
-        task.status = "dispatched"
-        task.worker_id = worker.id
-        await s.flush()
-        await dispatch.mark_pending(s, task_id=task.id)
-        await s.commit()
-        refreshed = await s.get(ExecutorTaskRow, task.id)
-        assert refreshed is not None
-        assert refreshed.status == "pending"
-        assert refreshed.worker_id is None
-
-
 # ── dispatch_task ────────────────────────────────────────────────────────────
 
 
@@ -1216,7 +1194,6 @@ async def test_await_completion_times_out_cleanly() -> None:
 
 # B14: ``ExecutorDispatchWorker`` + ``claim_pending_task`` were deleted as dead
 # code — the orphan alt-dispatch design was never wired into
-# :func:`build_worker_runtime`; real executor dispatch lives inline in
-# :class:`backend.executors.orchestrator.ExecutorOrchestrator`. The
-# corresponding tests are removed (see ``tests/glue/test_b14_cleanup_liveness.py``
-# for the deletion assertions).
+# :func:`build_worker_runtime`; real executor dispatch runs inline in the run
+# state machine. The corresponding tests are removed (see
+# ``tests/glue/test_b14_cleanup_liveness.py`` for the deletion assertions).

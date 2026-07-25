@@ -28,7 +28,7 @@ from typing import Any
 import pytest
 
 from backend.executors.worker.claude_code import ClaudeCodeExecutor
-from backend.executors.worker.executors import collect
+from tests.executors.worker._drain import drain
 
 pytestmark = pytest.mark.asyncio
 
@@ -111,7 +111,7 @@ async def test_the_cli_is_given_bsvibes_tools_and_stripped_of_its_own(
 ) -> None:
     calls = _patch(monkeypatch, _Proc([_init_line(_TOOLS), _assistant_line("done")]))
 
-    await collect(ClaudeCodeExecutor().execute("build it", _ctx()))
+    await drain(ClaudeCodeExecutor().execute("build it", _ctx()))
 
     argv = calls[0]
     # BSVibe's tools, over MCP, with a run-scoped token in the config.
@@ -149,7 +149,7 @@ async def test_a_leaked_native_tool_aborts_the_task(monkeypatch: pytest.MonkeyPa
     # than useless.
     monkeypatch.setattr(cc, "_kill_process_group", lambda p: killed.append(p))
 
-    result = await collect(ClaudeCodeExecutor().execute("build it", _ctx()))
+    result = await drain(ClaudeCodeExecutor().execute("build it", _ctx()))
 
     assert result.success is False
     assert "Bash" in (result.error_message or "")
@@ -159,7 +159,7 @@ async def test_a_leaked_native_tool_aborts_the_task(monkeypatch: pytest.MonkeyPa
 async def test_exactly_our_tools_is_fine(monkeypatch: pytest.MonkeyPatch) -> None:
     _patch(monkeypatch, _Proc([_init_line(_TOOLS), _assistant_line("ok")]))
 
-    result = await collect(ClaudeCodeExecutor().execute("build it", _ctx()))
+    result = await drain(ClaudeCodeExecutor().execute("build it", _ctx()))
 
     assert result.success is True
 
@@ -168,7 +168,7 @@ async def test_no_tools_at_all_is_fine(monkeypatch: pytest.MonkeyPatch) -> None:
     """A chat turn exposes nothing — the empty set is a subset of ours."""
     _patch(monkeypatch, _Proc([_init_line([]), _assistant_line("42")]))
 
-    result = await collect(
+    result = await drain(
         ClaudeCodeExecutor().execute("what is 6*7?", {"agentic": False, "system": "s"})
     )
 
@@ -181,7 +181,7 @@ async def test_no_tools_at_all_is_fine(monkeypatch: pytest.MonkeyPatch) -> None:
 async def test_a_chat_turn_gets_no_mcp_and_no_tools(monkeypatch: pytest.MonkeyPatch) -> None:
     calls = _patch(monkeypatch, _Proc([_init_line([]), _assistant_line("42")]))
 
-    await collect(ClaudeCodeExecutor().execute("q", {"agentic": False, "system": "ctx"}))
+    await drain(ClaudeCodeExecutor().execute("q", {"agentic": False, "system": "ctx"}))
 
     argv = calls[0]
     assert argv[argv.index("--disallowedTools") + 1] == "*"  # chat: the wildcard IS usable

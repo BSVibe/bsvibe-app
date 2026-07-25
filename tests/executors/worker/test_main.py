@@ -28,9 +28,6 @@ class _StubExecutor:
     def __init__(self, *, fail: bool = False) -> None:
         self._fail = fail
 
-    def supported_task_types(self) -> list[str]:
-        return ["coding"]
-
     async def execute(self, prompt: str, context: dict[str, Any]) -> AsyncIterator[ExecutionChunk]:
         yield ExecutionChunk(delta=f"ran:{prompt}")
         if self._fail:
@@ -47,9 +44,6 @@ class _WorkspaceCapturingExecutor:
         self.seen_workspace: str | None = None
         self.workspace_existed: bool | None = None
 
-    def supported_task_types(self) -> list[str]:
-        return ["coding"]
-
     async def execute(self, prompt: str, context: dict[str, Any]) -> AsyncIterator[ExecutionChunk]:
         self.seen_workspace = context.get("workspace_dir")
         self.workspace_existed = bool(self.seen_workspace and os.path.isdir(self.seen_workspace))
@@ -64,9 +58,6 @@ class _FileWritingExecutor:
 
     def __init__(self, files: dict[str, bytes]) -> None:
         self._files = files
-
-    def supported_task_types(self) -> list[str]:
-        return ["coding"]
 
     async def execute(self, prompt: str, context: dict[str, Any]) -> AsyncIterator[ExecutionChunk]:
         work_dir = context["workspace_dir"]
@@ -684,9 +675,6 @@ class _BlockingExecutor:
         self.entered = False
         self.cancelled = False
         self.closed = False
-
-    def supported_task_types(self) -> list[str]:
-        return ["claude_code"]
 
     async def execute(self, prompt: str, context: dict[str, Any]) -> AsyncIterator[ExecutionChunk]:
         import asyncio
