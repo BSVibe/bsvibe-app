@@ -22,10 +22,9 @@ delegates to the service, and maps the service's domain exceptions to HTTP
 status codes. The list endpoints reuse the same kind → question / options /
 actions helpers from :mod:`backend.workflow.application._checkpoint_shared`.
 
-v1 resumes the run *inline* here (not via the event-driven
-:class:`~backend.workflow.application.intake.decision_resolution.DecisionResolutionTrigger`, which
-remains a future option). This is simpler — no phantom Request, the paused run
-is resumed directly.
+v1 resumes the run *inline* here (rather than via an event-driven trigger that
+would emit a TriggerEvent — a future option). This is simpler — no phantom
+Request, the paused run is resumed directly.
 """
 
 from __future__ import annotations

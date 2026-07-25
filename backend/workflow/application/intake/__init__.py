@@ -7,7 +7,6 @@ up at :mod:`backend.workflow.application.stages.intake`.
 
 * :class:`DirectTrigger` — founder-typed text submission.
 * :class:`WebhookReceiver` — connector-inbound delivery.
-* :class:`DecisionResolutionTrigger` — re-dispatch on resolved decision.
 """
 
 from __future__ import annotations

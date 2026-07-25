@@ -7,9 +7,9 @@ machine (``workflow_sm.py`` + ``schema.py``), the Frame stage
 
 The legacy 4-stage state machine and the ``SafeModeBoundary`` stub have since
 been deleted outright — the v8 ``WorkflowState`` machine
-(:mod:`backend.workflow.domain.state` + :mod:`backend.workflow.domain.transitions`
-+ :mod:`backend.workflow.application.state_machine_driver`) fully supersedes
-them. What remains worth guarding here are the *structural* invariants:
+(:mod:`backend.workflow.domain.state` + :mod:`backend.workflow.domain.transitions`)
+fully supersedes them. What remains worth guarding here are the *structural*
+invariants:
 
 1. The legacy ``backend.orchestrator.{workflow_sm,schema,frame,safe_mode}``
    modules stay removed (regression tripwire).
