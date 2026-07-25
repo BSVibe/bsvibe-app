@@ -374,6 +374,14 @@ class DeliveryWorker(BaseWorker):
                 return 0
             queue = SafeModeQueue(session)
             processed = 0
+            # At-least-once (module docstring): only rows whose enqueue/dispatch
+            # actually SUCCEEDED go in the delete set. A row that raised is left
+            # OUT so the final DELETE leaves it in place and the next tick retries
+            # it — never silently dropped. Poison-pill trade-off: a permanently
+            # failing row is re-claimed every tick forever. That is the correct
+            # at-least-once behavior (retry beats silent loss); a retry cap is
+            # deliberately out of scope for this fix.
+            delivered_ids: list[uuid.UUID] = []
             for row in rows:
                 try:
                     workspace_safe_mode = await _workspace_safe_mode(session, row.workspace_id)
@@ -413,16 +421,25 @@ class DeliveryWorker(BaseWorker):
                             session_factory=self._session_factory,
                         )
                 except Exception:  # noqa: BLE001 — record + move on
+                    # Failure path: row.id NOT added to delivered_ids, so the
+                    # DELETE below leaves this event in place for the next tick.
                     logger.exception(
                         "delivery_worker_dispatch_failed",
                         event_id=str(row.id),
                         deliverable_id=str(row.deliverable_id),
                     )
                     continue
+                delivered_ids.append(row.id)
                 processed += 1
-            await session.execute(
-                delete(DeliveryEventRow).where(DeliveryEventRow.id.in_([r.id for r in rows]))
-            )
+            # Scope the DELETE to ONLY the successfully-drained rows — failed rows
+            # survive for retry (at-least-once). If zero succeeded, skip the DELETE
+            # entirely (no rows to remove; the whole batch is left for the next
+            # tick). The DELETE + commit stay one transaction with the FOR UPDATE
+            # claim: succeeded rows are removed, failed rows remain committed as-is.
+            if delivered_ids:
+                await session.execute(
+                    delete(DeliveryEventRow).where(DeliveryEventRow.id.in_(delivered_ids))
+                )
             await session.commit()
             return processed
 
