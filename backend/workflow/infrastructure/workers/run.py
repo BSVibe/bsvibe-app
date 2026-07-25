@@ -13,7 +13,6 @@ from backend.workflow.application.runtime.account_resolution import (
     _list_active_workspace_accounts,
     _resolve_judge_llm,
     _resolve_via_caller,
-    _single_native_account,
     resolve_workspace_model_account,
 )
 from backend.workflow.application.runtime.agent_runtime import (
@@ -74,7 +73,6 @@ __all__ = [
     "_relative_note_path",
     "_resolve_judge_llm",
     "_resolve_via_caller",
-    "_single_native_account",
     "_tick_handler",
     "build_agent_execution_deps",
     "build_concept_framer",

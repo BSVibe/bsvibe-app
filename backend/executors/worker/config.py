@@ -40,8 +40,6 @@ class WorkerSettings(BaseSettings):
 
     # Polling cadence + batching.
     poll_interval_seconds: float = 5.0
-    # Short sleep when already at max_parallel_tasks, waiting for a slot.
-    capacity_wait_seconds: float = 1.0
     # Max tasks to request per poll call, regardless of free slots.
     poll_batch_max: int = 5
 

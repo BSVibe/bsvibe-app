@@ -33,14 +33,12 @@ if TYPE_CHECKING:
     from backend.router.routing.run_routing.intent_classifier import IntentClassifier
 
 from backend.config import Settings
-from backend.dispatch.adapter import ModelAccountAdapter
 from backend.dispatch.resolver import (
     ModelAccountResolver,
     NoMatchingRouteError,
     ResolvedAccount,
 )
 from backend.router.accounts.models import ModelAccount
-from backend.router.accounts.predicates import is_executor_account
 from backend.workflow.application.loop_llm import ResolverLoopLlm
 from backend.workflow.infrastructure.db import Decision, ExecutionRun
 
@@ -202,15 +200,6 @@ async def resolve_workspace_model_account(
     return None
 
 
-def _single_native_account(accounts: list[ModelAccount]) -> ModelAccount | None:
-    """The lone active NON-executor account (kept for the legacy soft-fallback
-    paths that don't have a caller_id yet — settle / bootstrap callers route
-    through :func:`_resolve_via_caller` first, then optionally degrade here).
-    """
-    native = [a for a in accounts if not is_executor_account(a)]
-    return native[0] if len(native) == 1 else None
-
-
 async def _resolve_judge_llm(
     session: AsyncSession,
     run: ExecutionRun,
@@ -242,18 +231,11 @@ async def _resolve_judge_llm(
     return ResolverLoopLlm(adapter=resolved.adapter)
 
 
-def _judge_loop_for_adapter(adapter: ModelAccountAdapter) -> ResolverLoopLlm:
-    """Wrap a pre-resolved adapter into a :class:`ResolverLoopLlm` for the judge."""
-    return ResolverLoopLlm(adapter=adapter)
-
-
 __all__ = [
     "DECISION_AMBIGUOUS_MODEL_ACCOUNT",
     "DECISION_NO_MODEL_ACCOUNT",
-    "_judge_loop_for_adapter",
     "_list_active_workspace_accounts",
     "_resolve_judge_llm",
     "_resolve_via_caller",
-    "_single_native_account",
     "resolve_workspace_model_account",
 ]

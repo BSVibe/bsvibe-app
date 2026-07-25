@@ -34,6 +34,10 @@ from backend.workflow.application.delivery.connector_dispatch import (
     resolve_github_binding,
     run_branch_name,
 )
+from backend.workflow.application.delivery.connector_dispatch._github import (
+    GithubDeliveryDeps,
+    deliver_github,
+)
 
 from .._support import memory_session
 
@@ -700,18 +704,31 @@ class TestGithubDeliveryDefensiveBranches:
     """The github delivery handler soft-fails (never wedges) on a misconfigured
     target — mirroring the builder ValueError path the other connectors use."""
 
-    def _adapter(self, **kw: object) -> ConnectorDeliveryAdapter:
-        return ConnectorDeliveryAdapter(
-            session_factory=None,  # type: ignore[arg-type]  # unused in _deliver_github
+    def _deps(self, **kw: object) -> GithubDeliveryDeps:
+        # Build via the adapter so git_ops / runner / remote_url_for get their
+        # production defaults, then forward the adapter's fields as the explicit
+        # deps bundle (production dispatch does the same).
+        adapter = ConnectorDeliveryAdapter(
+            session_factory=None,  # type: ignore[arg-type]  # unused in these soft-fail branches
             plugins_by_name={},
             cipher=_FakeCipher(),
             **kw,  # type: ignore[arg-type]
         )
+        return GithubDeliveryDeps(
+            cipher=adapter.cipher,
+            plugins_by_name=adapter.plugins_by_name,
+            workspace_root=adapter.workspace_root,
+            git_ops=adapter.git_ops,
+            remote_url_for=adapter.remote_url_for,
+            runner=adapter.runner,
+            session_factory=adapter.session_factory,
+        )
 
     async def test_no_workspace_root_soft_fails(self) -> None:
-        adapter = self._adapter()  # workspace_root defaults None
+        deps = self._deps()  # workspace_root defaults None
         binding = GithubBinding(account=_account(), repo="owner/name", base_branch="main")
-        actions = await adapter._deliver_github(
+        actions = await deliver_github(
+            deps=deps,
             binding=binding,
             workspace_id=uuid.uuid4(),
             deliverable_id=uuid.uuid4(),
@@ -722,9 +739,10 @@ class TestGithubDeliveryDefensiveBranches:
         assert "workspace_root" in (actions[0].error or "")
 
     async def test_missing_checkout_soft_fails(self, tmp_path) -> None:  # type: ignore[no-untyped-def]
-        adapter = self._adapter(workspace_root=tmp_path)
+        deps = self._deps(workspace_root=tmp_path)
         binding = GithubBinding(account=_account(), repo="owner/name", base_branch="main")
-        actions = await adapter._deliver_github(
+        actions = await deliver_github(
+            deps=deps,
             binding=binding,
             workspace_id=uuid.uuid4(),
             deliverable_id=uuid.uuid4(),

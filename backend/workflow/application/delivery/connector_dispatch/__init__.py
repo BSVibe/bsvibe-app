@@ -249,40 +249,6 @@ class ConnectorDeliveryAdapter:
             error=None if any(a.succeeded for a in actions) or not actions else actions[-1].error,
         )
 
-    async def _deliver_github(
-        self,
-        *,
-        binding: GithubBinding,
-        workspace_id: uuid.UUID,
-        deliverable_id: uuid.UUID,
-        run_id: uuid.UUID | None,
-        content: dict[str, Any],
-    ) -> list[ActionResult]:
-        """Back-compat shim — delegates to :func:`_github.deliver_github`.
-
-        Kept on the adapter so existing defensive-branch tests that exercise the
-        github special case directly (without going through the full
-        ``dispatch`` path) still work post-Lift §17.7. New callers should use
-        :func:`._github.deliver_github` with an explicit
-        :class:`GithubDeliveryDeps`.
-        """
-        return await deliver_github(
-            deps=GithubDeliveryDeps(
-                cipher=self.cipher,
-                plugins_by_name=self.plugins_by_name,
-                workspace_root=self.workspace_root,
-                git_ops=self.git_ops,
-                remote_url_for=self.remote_url_for,
-                runner=self.runner,
-                session_factory=self.session_factory,
-            ),
-            binding=binding,
-            workspace_id=workspace_id,
-            deliverable_id=deliverable_id,
-            run_id=run_id,
-            content=content,
-        )
-
 
 def build_connector_delivery_adapter(
     *,

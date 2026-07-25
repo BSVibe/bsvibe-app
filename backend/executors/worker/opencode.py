@@ -69,9 +69,6 @@ class OpenCodeExecutor:
         self._transport = http_transport
         self._settings = get_worker_settings()
 
-    def supported_task_types(self) -> list[str]:
-        return ["opencode"]
-
     async def execute(self, prompt: str, context: dict[str, Any]) -> AsyncIterator[ExecutionChunk]:
         system = context.get("system") or ""
         model = context.get("model") or None
@@ -177,11 +174,8 @@ class OpenCodeExecutor:
 
         text = _extract_text(resp)
         if text:
-            yield ExecutionChunk(delta=text, raw=resp)
-        yield ExecutionChunk(
-            done=True,
-            raw={"info": resp.get("info")},
-        )
+            yield ExecutionChunk(delta=text)
+        yield ExecutionChunk(done=True)
 
     # ── Internals ───────────────────────────────────────────────────────────
 

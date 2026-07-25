@@ -67,8 +67,6 @@ from backend.workflow.infrastructure.sandbox import SandboxError, SandboxSession
 logger = structlog.get_logger(__name__)
 
 # Per-command verify timeout + the byte cap on each file fed to the judge.
-# These are the canonical home (shared by both orchestrators); the native
-# orchestrator re-imports them for back-compat.
 VERIFY_TIMEOUT_S = 60.0
 _JUDGE_FILE_CONTEXT_BYTES = 8 * 1024
 

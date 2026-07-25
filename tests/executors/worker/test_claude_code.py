@@ -18,7 +18,8 @@ from typing import Any
 import pytest
 
 from backend.executors.worker.claude_code import ClaudeCodeExecutor
-from backend.executors.worker.executors import ExecutionChunk, collect
+from backend.executors.worker.executors import ExecutionChunk
+from tests.executors.worker._drain import drain
 
 pytestmark = pytest.mark.asyncio
 
@@ -133,11 +134,11 @@ async def test_streams_assistant_deltas_then_done(monkeypatch: pytest.MonkeyPatc
     assert chunks[-1].error is None
 
 
-async def test_collect_aggregates_output(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_drain_aggregates_output(monkeypatch: pytest.MonkeyPatch) -> None:
     proc = _FakeProcess(stdout_lines=[_assistant_line("abc"), _assistant_line("def")])
     _patch_subprocess(monkeypatch, proc)
 
-    result = await collect(ClaudeCodeExecutor().execute("p", {}))
+    result = await drain(ClaudeCodeExecutor().execute("p", {}))
 
     assert result.success is True
     assert result.stdout == "abcdef"
@@ -155,7 +156,7 @@ async def test_blocking_rate_limit_event_then_exit_is_rate_limited(
     _patch_subprocess(monkeypatch, proc)
 
     # retries=0 so the test asserts the classification without sleeping.
-    result = await collect(ClaudeCodeExecutor(rate_limit_retries=0).execute("p", {}))
+    result = await drain(ClaudeCodeExecutor(rate_limit_retries=0).execute("p", {}))
 
     assert result.success is False
     assert "rate limit" in (result.error_message or "").lower()
@@ -169,7 +170,7 @@ async def test_allowed_rate_limit_event_with_exit_is_plain_failure(
     proc = _FakeProcess(stdout_lines=[_rate_limit_line("allowed")], returncode=1)
     _patch_subprocess(monkeypatch, proc)
 
-    result = await collect(ClaudeCodeExecutor(rate_limit_retries=0).execute("p", {}))
+    result = await drain(ClaudeCodeExecutor(rate_limit_retries=0).execute("p", {}))
 
     assert result.success is False
     assert "rate limit" not in (result.error_message or "").lower()
@@ -415,10 +416,6 @@ async def test_rate_limit_exhausted_surfaces_terminal_error(
 
     assert chunks[-1].done is True
     assert chunks[-1].error is not None
-
-
-async def test_supported_task_types() -> None:
-    assert "coding" in ClaudeCodeExecutor().supported_task_types()
 
 
 # ── Sanitized subprocess env (no parent Claude-Code session leakage) ──────────

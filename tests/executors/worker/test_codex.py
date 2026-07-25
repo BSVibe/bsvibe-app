@@ -18,7 +18,8 @@ from typing import Any
 import pytest
 
 from backend.executors.worker.codex import CodexExecutor
-from backend.executors.worker.executors import ExecutionChunk, collect
+from backend.executors.worker.executors import ExecutionChunk
+from tests.executors.worker._drain import drain
 
 pytestmark = pytest.mark.asyncio
 
@@ -135,7 +136,7 @@ async def test_collect_aggregates_output(monkeypatch: pytest.MonkeyPatch) -> Non
     )
     _patch_subprocess(monkeypatch, proc)
 
-    result = await collect(CodexExecutor().execute("p", {}))
+    result = await drain(CodexExecutor().execute("p", {}))
 
     assert result.success is True
     assert result.stdout == "abcdef"
@@ -226,10 +227,6 @@ async def test_timeout_yields_explicit_timeout_message(monkeypatch: pytest.Monke
     assert chunks[-1].done is True
     assert chunks[-1].error is not None
     assert "timed out" in chunks[-1].error.lower()
-
-
-async def test_supported_task_types() -> None:
-    assert CodexExecutor().supported_task_types() == ["codex"]
 
 
 # ── chat parity: codex exec has NO tools-off mode → a chat turn is REFUSED ────

@@ -33,7 +33,7 @@ from datetime import UTC, datetime
 from typing import Any, Protocol
 
 import structlog
-from sqlalchemy import select, update
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.executors.db import ExecutorTaskRow, WorkerRow
@@ -613,16 +613,6 @@ async def _poll_until_terminal(
     return await _read_terminal(session, task_id)
 
 
-async def mark_pending(session: AsyncSession, *, task_id: uuid.UUID) -> None:
-    """Reset a task to ``pending`` (e.g. dispatch rolled back). Idempotent."""
-    await session.execute(
-        update(ExecutorTaskRow)
-        .where(ExecutorTaskRow.id == task_id)
-        .values(status="pending", worker_id=None)
-    )
-    await session.flush()
-
-
 __all__ = [
     "HEARTBEAT_FRESHNESS_S",
     "TaskTimeout",
@@ -634,7 +624,6 @@ __all__ = [
     "find_available_worker",
     "has_live_worker",
     "is_heartbeat_fresh",
-    "mark_pending",
     "record_result",
     "stream_channel",
     "worker_stream",
