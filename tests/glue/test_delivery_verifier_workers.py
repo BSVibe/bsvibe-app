@@ -94,6 +94,154 @@ async def test_delivery_worker_empty_queue(sf) -> None:
     assert dispatcher.calls == []
 
 
+class _SelectiveDispatcher:
+    """Dispatcher that raises for a chosen set of deliverable_ids, succeeds otherwise.
+
+    Lets a single drain batch mix succeeded + failed rows so the at-least-once
+    DELETE-scoping contract (§ module docstring) can be exercised: a transient
+    dispatch failure must LEAVE the row in place for the next tick, never delete it.
+    """
+
+    def __init__(self, fail_ids: set[uuid.UUID]) -> None:
+        self.fail_ids = fail_ids
+        self.calls: list[uuid.UUID] = []
+
+    async def dispatch(self, **kwargs: Any) -> DeliveryResult:
+        did = kwargs["deliverable_id"]
+        self.calls.append(did)
+        if did in self.fail_ids:
+            raise RuntimeError("transient dispatch failure")
+        return DeliveryResult(
+            workspace_id=kwargs["workspace_id"],
+            deliverable_id=did,
+            artifact_type=kwargs["artifact_type"],
+            actions=[ActionResult(action="noop", succeeded=True)],
+            delivered_at=datetime.now(tz=UTC),
+        )
+
+
+async def _seed_delivery_events(sf, *, ws: uuid.UUID, count: int) -> list[uuid.UUID]:
+    """Seed ``count`` pending delivery events, returning their event-row ids."""
+    event_ids = [uuid.uuid4() for _ in range(count)]
+    async with sf() as s:
+        for eid in event_ids:
+            s.add(
+                DeliveryEventRow(
+                    id=eid,
+                    workspace_id=ws,
+                    deliverable_id=uuid.uuid4(),
+                    artifact_type="pr",
+                    payload={},
+                    created_at=datetime.now(tz=UTC),
+                )
+            )
+        await s.commit()
+    return event_ids
+
+
+async def test_delivery_worker_partial_failure_leaves_failed_row_for_retry(sf) -> None:
+    """RED — one dispatch fails in a batch: only the SUCCEEDED rows are deleted.
+
+    Honors the module's at-least-once contract: a transiently-failed delivery
+    event survives so the next tick retries it, instead of being silently
+    deleted (at-most-once data loss).
+    """
+    ws = uuid.uuid4()
+    event_ids = await _seed_delivery_events(sf, ws=ws, count=3)
+    # Read back the deliverable_ids per event so we can pick one to fail.
+    async with sf() as s:
+        rows = (await s.execute(select(DeliveryEventRow))).scalars().all()
+        by_event = {r.id: r.deliverable_id for r in rows}
+    failing_event = event_ids[1]
+    dispatcher = _SelectiveDispatcher(fail_ids={by_event[failing_event]})
+
+    worker = DeliveryWorker(
+        session_factory=sf,
+        dispatcher=dispatcher,
+        config=DeliveryWorkerConfig(batch_size=10, poll_interval_s=0.01),
+    )
+    processed = await worker.drain_once()
+
+    assert processed == 2  # two succeeded, one failed
+    async with sf() as s:
+        remaining = (await s.execute(select(DeliveryEventRow))).scalars().all()
+        remaining_ids = {r.id for r in remaining}
+    # The failed row survives for retry; the two succeeded rows are deleted.
+    assert remaining_ids == {failing_event}
+
+
+async def test_delivery_worker_all_success_deletes_all(sf) -> None:
+    """No regression — every dispatch succeeds: every row deleted, processed == len."""
+    ws = uuid.uuid4()
+    event_ids = await _seed_delivery_events(sf, ws=ws, count=3)
+    dispatcher = _SelectiveDispatcher(fail_ids=set())
+
+    worker = DeliveryWorker(
+        session_factory=sf,
+        dispatcher=dispatcher,
+        config=DeliveryWorkerConfig(batch_size=10, poll_interval_s=0.01),
+    )
+    processed = await worker.drain_once()
+
+    assert processed == len(event_ids)
+    async with sf() as s:
+        remaining = (await s.execute(select(DeliveryEventRow))).scalars().all()
+        assert remaining == []
+
+
+async def test_delivery_worker_all_fail_deletes_nothing(sf) -> None:
+    """Every dispatch fails: NO row deleted (all survive), processed == 0."""
+    ws = uuid.uuid4()
+    event_ids = await _seed_delivery_events(sf, ws=ws, count=3)
+    async with sf() as s:
+        rows = (await s.execute(select(DeliveryEventRow))).scalars().all()
+        all_deliv_ids = {r.deliverable_id for r in rows}
+    dispatcher = _SelectiveDispatcher(fail_ids=all_deliv_ids)
+
+    worker = DeliveryWorker(
+        session_factory=sf,
+        dispatcher=dispatcher,
+        config=DeliveryWorkerConfig(batch_size=10, poll_interval_s=0.01),
+    )
+    processed = await worker.drain_once()
+
+    assert processed == 0
+    async with sf() as s:
+        remaining = (await s.execute(select(DeliveryEventRow))).scalars().all()
+        assert {r.id for r in remaining} == set(event_ids)
+
+
+async def test_delivery_worker_failed_row_retries_on_next_tick(sf) -> None:
+    """End-to-end retry: a row that failed one tick succeeds + is drained the next."""
+    ws = uuid.uuid4()
+    event_ids = await _seed_delivery_events(sf, ws=ws, count=2)
+    async with sf() as s:
+        rows = (await s.execute(select(DeliveryEventRow))).scalars().all()
+        by_event = {r.id: r.deliverable_id for r in rows}
+    failing_event = event_ids[0]
+    failing_deliverable = by_event[failing_event]
+    dispatcher = _SelectiveDispatcher(fail_ids={failing_deliverable})
+
+    worker = DeliveryWorker(
+        session_factory=sf,
+        dispatcher=dispatcher,
+        config=DeliveryWorkerConfig(batch_size=10, poll_interval_s=0.01),
+    )
+    # First tick: one fails and survives.
+    assert await worker.drain_once() == 1
+    async with sf() as s:
+        remaining = (await s.execute(select(DeliveryEventRow))).scalars().all()
+        assert {r.id for r in remaining} == {failing_event}
+
+    # The transient failure clears; the previously-failed row now succeeds.
+    dispatcher.fail_ids = set()
+    assert await worker.drain_once() == 1
+    async with sf() as s:
+        remaining = (await s.execute(select(DeliveryEventRow))).scalars().all()
+        assert remaining == []
+    assert failing_deliverable in dispatcher.calls
+
+
 class _FakeVerifier:
     def __init__(self, outcome: VerificationOutcome) -> None:
         self.outcome = outcome
