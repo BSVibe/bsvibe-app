@@ -6,8 +6,7 @@ Contract (Lift N-Coverage pattern #8):
   machine, advisory-lock + lease serialization, agent loop execution,
   verification, safe-mode queueing, and deliverable emission.
 * **Facade**: ``backend.workflow.application`` is the public surface
-  (D36 invariant); ``state_machine_driver`` + the stage services are
-  the entry seams.
+  (D36 invariant); the stage services are the entry seams.
 * **Not exposed**: ``domain/`` enums + transitions and ``infrastructure/``
   adapters (advisory lock, lease, repositories, workers) are private —
   only ``application/__init__.py`` exports are public.

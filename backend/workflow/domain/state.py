@@ -8,10 +8,9 @@ today's per-domain enums (v3 Q11). The per-domain enums in
 the v8 ``WorkflowState`` is the coarse stage that REST / SSE / UI
 surfaces consume.
 
-H1 establishes the enum surface + the documented projection. H2's
-transition handlers (``backend.workflow.application._handlers``) will
-read/write the per-domain enums and emit the v8 stage transitions via
-the matrix in :mod:`backend.workflow.domain.transitions`.
+H1 establishes the enum surface + the documented projection. The
+stage services read/write the per-domain enums and emit the v8 stage
+transitions per the matrix in :mod:`backend.workflow.domain.transitions`.
 
 The projection is **total** over each input enum — no value of
 ``RequestStatus`` / ``WorkStepStatus`` / ``ProofState`` may be left

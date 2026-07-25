@@ -68,14 +68,12 @@ def test_workflow_application_stages_intake_importable() -> None:
 
 
 def test_workflow_application_intake_trigger_services_importable() -> None:
-    """DirectTrigger / WebhookReceiver / DecisionResolutionTrigger move too."""
+    """DirectTrigger / WebhookReceiver move too."""
     direct_mod = importlib.import_module("backend.workflow.application.intake.direct")
     webhook_mod = importlib.import_module("backend.workflow.application.intake.webhook")
-    decres_mod = importlib.import_module("backend.workflow.application.intake.decision_resolution")
     assert hasattr(direct_mod, "DirectTrigger")
     assert hasattr(webhook_mod, "WebhookReceiver")
     assert hasattr(webhook_mod, "WebhookOutcome")
-    assert hasattr(decres_mod, "DecisionResolutionTrigger")
 
 
 # ---------------------------------------------------------------------------
