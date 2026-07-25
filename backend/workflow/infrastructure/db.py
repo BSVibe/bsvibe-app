@@ -17,7 +17,7 @@ from datetime import datetime
 from enum import StrEnum
 from typing import Any
 
-from sqlalchemy import JSON, DateTime, ForeignKey, Index, Integer, String, Text
+from sqlalchemy import JSON, DateTime, ForeignKey, Index, String, Text
 from sqlalchemy import Enum as SAEnum
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -170,42 +170,6 @@ class ExecutionRunActivity(ExecutionBase):
     )
     workspace_id: Mapped[uuid.UUID] = mapped_column(nullable=False, index=True)
     activity_type: Mapped[str] = mapped_column(String(64), nullable=False)
-    payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, default=lambda: datetime.now()
-    )
-
-
-class CompositionSnapshot(ExecutionBase):
-    """Frozen prompt-template + fragment composition per run / step."""
-
-    __tablename__ = "composition_snapshots"
-    __table_args__ = (Index("ix_composition_snapshots_run", "run_id"),)
-
-    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
-    run_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("execution_runs.id", ondelete="CASCADE"), nullable=False
-    )
-    workspace_id: Mapped[uuid.UUID] = mapped_column(nullable=False, index=True)
-    composition: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, default=lambda: datetime.now()
-    )
-
-
-class DecomposerStep(ExecutionBase):
-    """One row per CoT decomposer-emitted step."""
-
-    __tablename__ = "decomposer_steps"
-    __table_args__ = (Index("ix_decomposer_steps_run_order", "run_id", "order_idx"),)
-
-    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
-    run_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("execution_runs.id", ondelete="CASCADE"), nullable=False
-    )
-    workspace_id: Mapped[uuid.UUID] = mapped_column(nullable=False, index=True)
-    order_idx: Mapped[int] = mapped_column(Integer, nullable=False)
-    description: Mapped[str] = mapped_column(Text, nullable=False)
     payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=lambda: datetime.now()

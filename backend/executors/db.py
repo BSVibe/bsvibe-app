@@ -134,12 +134,6 @@ class ExecutorTaskRow(Base):
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending", index=True)
     output: Mapped[str] = mapped_column(Text, nullable=False, default="")
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
-    # Relative paths (within the run workspace) of the files the worker produced
-    # and the backend persisted (B1). NULL until a result with files is recorded;
-    # surfaced as the Deliverable's ``artifact_refs`` by the orchestrator. JSON
-    # (not JSONB) for SQLite test-tier portability, matching the other executor
-    # tables' JSON columns.
-    artifact_refs: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=_utcnow
     )

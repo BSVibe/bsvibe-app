@@ -101,10 +101,13 @@ def test_alembic_head_is_connector_last_import():
     # produce rows the ScheduleWorker fires) →
     # product_metadata (free-form ``products.metadata`` JSON slot — the
     # founder's deliberate alternative to a rigid lifecycle enum; each product
-    # carries its own stage / attributes / context for agents + schedules).
+    # carries its own stage / attributes / context for agents + schedules) →
+    # drop_dead_execution_tables (schema cleanup — drop the dead
+    # composition_snapshots + decomposer_steps tables and the orphaned
+    # executor_tasks.artifact_refs column, all zero-producer/zero-consumer).
     # Keep the test name (function name is a historical revision id, kept for
     # git-blame stability) and assert the current tip.
-    assert "product_metadata" in result.stdout
+    assert "drop_dead_execution_tables" in result.stdout
 
 
 def test_target_metadata_covers_all_bases():
@@ -152,8 +155,6 @@ def test_target_metadata_covers_all_bases():
         "execution_runs",
         "execution_run_history",
         "execution_run_activities",
-        "composition_snapshots",
-        "decomposer_steps",
         "work_steps",
         "run_attempts",
         "deliverables",
