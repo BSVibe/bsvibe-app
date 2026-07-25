@@ -171,12 +171,6 @@ def test_verified_deliverable_imports_resolve() -> None:
     assert mod is not None
 
 
-def test_workflow_application_safe_mode_imports_resolve() -> None:
-    """The consumer of SafeModeQueue inside Workflow context."""
-    mod = importlib.import_module("backend.workflow.application.safe_mode")
-    assert mod is not None
-
-
 # ---------------------------------------------------------------------------
 # Delta 5: REST endpoint does not reference moved old paths
 # ---------------------------------------------------------------------------

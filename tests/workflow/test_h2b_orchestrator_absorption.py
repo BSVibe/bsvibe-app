@@ -1,30 +1,27 @@
-"""Lift H2b — smoke tests for the legacy ``backend.orchestrator`` absorption.
+"""Lift H2b — regression tripwires for the legacy ``backend.orchestrator`` teardown.
 
 v8 §13 / Class Architecture Design v8 §13 Lift H2b: the legacy 4-stage state
 machine (``workflow_sm.py`` + ``schema.py``), the Frame stage
-(``frame.py``), and the Safe Mode boundary (``safe_mode.py``) move out of
+(``frame.py``), and the Safe Mode boundary (``safe_mode.py``) moved out of
 ``backend/orchestrator/`` into the Workflow bounded context.
 
-This module locks the 6 deltas the lift must prove:
+The legacy 4-stage state machine and the ``SafeModeBoundary`` stub have since
+been deleted outright — the v8 ``WorkflowState`` machine
+(:mod:`backend.workflow.domain.state` + :mod:`backend.workflow.domain.transitions`
++ :mod:`backend.workflow.application.state_machine_driver`) fully supersedes
+them. What remains worth guarding here are the *structural* invariants:
 
-1. Legacy modules removed.
-2. Absorbed content reachable at the new locations.
-3. No remaining importers of the moved-out submodules.
-4. Legacy-projection helper ``to_legacy_stage`` maps the v8 enum to the old
-   4-stage Literal.
-5. The dataclass ``LegacyWorkflowState`` + ``LegacyWorkflowStateMachine``
-   preserve the transition table the old module enforced.
-6. The ``FrameStage`` / ``SafeModeBoundary`` classes are unchanged at the
-   new locations.
-
-``agent_runner.py`` stays in ``backend/orchestrator/`` for H2c — that is
-the *only* legitimate remaining submodule.
+1. The legacy ``backend.orchestrator.{workflow_sm,schema,frame,safe_mode}``
+   modules stay removed (regression tripwire).
+2. The v8 enum surface + the absorbed ``FrameStage`` stay reachable at their
+   new homes.
+3. No file re-introduces an import of the moved-out submodules.
+4. The whole ``backend/orchestrator/`` directory stays collapsed (H2c).
 """
 
 from __future__ import annotations
 
 import importlib
-import uuid
 from pathlib import Path
 
 import pytest
@@ -52,21 +49,12 @@ def test_legacy_safe_mode_module_removed() -> None:
         importlib.import_module("backend.orchestrator.safe_mode")
 
 
-# ─────────────────────── Delta 2 — content reachable at new homes ────────────
+# ─────────────────────── Delta 2 — v8 surface reachable at new homes ─────────
 
 
-def test_workflow_state_module_carries_legacy_state_machine() -> None:
+def test_workflow_state_module_carries_v8_surface() -> None:
     mod = importlib.import_module("backend.workflow.domain.state")
-    for name in (
-        "LegacyStage",
-        "LegacyWorkflowState",
-        "LegacyWorkflowStateMachine",
-        "InvalidLegacyTransitionError",
-        "to_legacy_stage",
-        # the v8 surface is preserved
-        "WorkflowState",
-        "WorkflowEvent",
-    ):
+    for name in ("WorkflowState", "WorkflowEvent"):
         assert hasattr(mod, name), f"workflow.domain.state missing {name}"
 
 
@@ -81,11 +69,6 @@ def test_workflow_application_stages_frame_present() -> None:
         "PipelineKind",
     ):
         assert hasattr(mod, name), f"stages.frame missing {name}"
-
-
-def test_workflow_application_safe_mode_present() -> None:
-    mod = importlib.import_module("backend.workflow.application.safe_mode")
-    assert hasattr(mod, "SafeModeBoundary"), "safe_mode missing SafeModeBoundary"
 
 
 # ─────────────────────── Delta 3 — no stragglers in source tree ──────────────
@@ -120,106 +103,13 @@ def test_no_legacy_orchestrator_submodule_imports_remain() -> None:
     assert not offenders, "legacy orchestrator imports still present:\n" + "\n".join(offenders)
 
 
-# ─────────────────────── Delta 4 — to_legacy_stage projection ────────────────
-
-
-def test_to_legacy_stage_received_to_receive() -> None:
-    from backend.workflow.domain.state import WorkflowState, to_legacy_stage
-
-    assert to_legacy_stage(WorkflowState.received) == "receive"
-
-
-def test_to_legacy_stage_framed_to_frame() -> None:
-    from backend.workflow.domain.state import WorkflowState, to_legacy_stage
-
-    assert to_legacy_stage(WorkflowState.framed) == "frame"
-
-
-def test_to_legacy_stage_run_states_to_agent_loop() -> None:
-    from backend.workflow.domain.state import WorkflowState, to_legacy_stage
-
-    for state in (
-        WorkflowState.routed,
-        WorkflowState.dispatched,
-        WorkflowState.needs_decision,
-        WorkflowState.verifying,
-        WorkflowState.verified,
-        WorkflowState.shipped,
-    ):
-        assert to_legacy_stage(state) == "agent_loop", state
-
-
-def test_to_legacy_stage_terminal_states_to_epsilon() -> None:
-    from backend.workflow.domain.state import WorkflowState, to_legacy_stage
-
-    for state in (
-        WorkflowState.settled,
-        WorkflowState.delivered,
-        WorkflowState.failed,
-        WorkflowState.abandoned,
-        WorkflowState.expired,
-    ):
-        assert to_legacy_stage(state) == "epsilon", state
-
-
-# ─────────────────────── Delta 5 — legacy SM transitions preserved ───────────
-
-
-@pytest.mark.asyncio
-async def test_legacy_sm_receive_to_frame() -> None:
-    from backend.workflow.domain.state import (
-        LegacyWorkflowState,
-        LegacyWorkflowStateMachine,
-    )
-
-    sm = LegacyWorkflowStateMachine()
-    state = LegacyWorkflowState(stage="receive", request_id=uuid.uuid4(), run_id=None)
-    nxt = await sm.transition(state=state, event="framed")
-    assert nxt.stage == "frame"
-
-
-@pytest.mark.asyncio
-async def test_legacy_sm_run_id_preserved() -> None:
-    from backend.workflow.domain.state import (
-        LegacyWorkflowState,
-        LegacyWorkflowStateMachine,
-    )
-
-    sm = LegacyWorkflowStateMachine()
-    rid = uuid.uuid4()
-    state = LegacyWorkflowState(stage="agent_loop", request_id=uuid.uuid4(), run_id=rid)
-    nxt = await sm.transition(state=state, event="settled")
-    assert nxt.run_id == rid
-    assert nxt.stage == "epsilon"
-
-
-@pytest.mark.asyncio
-async def test_legacy_sm_illegal_transition_raises() -> None:
-    from backend.workflow.domain.state import (
-        InvalidLegacyTransitionError,
-        LegacyWorkflowState,
-        LegacyWorkflowStateMachine,
-    )
-
-    sm = LegacyWorkflowStateMachine()
-    state = LegacyWorkflowState(stage="receive", request_id=uuid.uuid4(), run_id=None)
-    with pytest.raises(InvalidLegacyTransitionError):
-        await sm.transition(state=state, event="settled")
-
-
-# ─────────────────────── Delta 6 — FrameStage / SafeMode classes intact ──────
+# ─────────────────────── Delta 6 — FrameStage class intact ───────────────────
 
 
 def test_frame_stage_is_class_with_frame_method() -> None:
     from backend.workflow.application.stages.frame import FrameStage
 
     assert hasattr(FrameStage, "frame")
-
-
-def test_safe_mode_boundary_is_class_with_gate_method() -> None:
-    from backend.workflow.application.safe_mode import SafeModeBoundary
-
-    assert hasattr(SafeModeBoundary, "gate")
 
 
 # ─────────────────────── Bonus: orchestrator/ collapsed by H2c ───────────────
