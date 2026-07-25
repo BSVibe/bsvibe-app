@@ -6,7 +6,7 @@ next-action instruction (the run's glass-box intent). Any failure — no route,
 missing product, workspace mismatch, unparseable LLM output — degrades to
 ``None`` so the tick still runs on the static meta-instruction fallback.
 
-The LLM is ALWAYS mocked (never a real API): ``_resolve_via_caller`` is patched
+The LLM is ALWAYS mocked (never a real API): ``resolve_via_caller`` is patched
 to hand back a fake adapter whose ``chat`` records the composed messages and
 returns scripted content. ``build_canon_retriever`` is patched to a fake
 retriever. Product + run rows are real (in-memory SQLite).
@@ -64,7 +64,7 @@ def _patch_resolver(monkeypatch: pytest.MonkeyPatch, adapter: Any) -> None:
             return None
         return SimpleNamespace(adapter=adapter)
 
-    monkeypatch.setattr(planner_mod, "_resolve_via_caller", _fake_resolve)
+    monkeypatch.setattr(planner_mod, "resolve_via_caller", _fake_resolve)
 
 
 def _patch_retriever(monkeypatch: pytest.MonkeyPatch, retriever: Any) -> None:
@@ -157,7 +157,7 @@ async def test_plan_happy_path_returns_tickplan_and_composes_context(
 async def test_plan_returns_none_when_no_route(monkeypatch: pytest.MonkeyPatch) -> None:
     workspace_id = uuid.uuid4()
     product_id = uuid.uuid4()
-    _patch_resolver(monkeypatch, None)  # _resolve_via_caller → None
+    _patch_resolver(monkeypatch, None)  # resolve_via_caller → None
     _patch_retriever(monkeypatch, _FakeRetriever([]))
 
     async with memory_session() as session:

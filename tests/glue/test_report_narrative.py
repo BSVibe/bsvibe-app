@@ -104,7 +104,7 @@ async def test_resolve_chat_threads_redis_into_the_resolver(monkeypatch) -> None
         return None
 
     monkeypatch.setattr(
-        "backend.workflow.application.report_narrative._resolve_via_caller", _fake_resolve
+        "backend.workflow.application.report_narrative.resolve_via_caller", _fake_resolve
     )
     sentinel = object()
     svc = ReportNarrativeService.__new__(ReportNarrativeService)

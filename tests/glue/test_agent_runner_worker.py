@@ -364,8 +364,9 @@ async def test_drive_once_yields_saturated_run_open_and_continues(session_factor
     # The saturated run did NOT abort the batch: the second run still processed.
     assert run2.id in processed
     assert run1.id not in processed
-    # drive_once counted both runs (it did not crash on the saturated one).
-    assert driven == 2
+    # ``count`` is "runs driven": the yielded (saturated) run was NOT driven, so
+    # only the one genuinely-driven run is counted.
+    assert driven == 1
 
     # The saturated run is left OPEN — NOT failed, no decision state — so the
     # next drive_once re-picks it.

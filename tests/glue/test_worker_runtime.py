@@ -675,7 +675,7 @@ async def test_settle_extractor_factory_threads_redis_for_executor_dispatch(
         captured["redis"] = redis
         return None  # short-circuit — the factory returns None (no extractor)
 
-    monkeypatch.setattr(settle_runtime, "_resolve_via_caller", _fake_resolve)
+    monkeypatch.setattr(settle_runtime, "resolve_via_caller", _fake_resolve)
 
     sentinel = object()
     factory = runtime.build_settle_entity_extractor_factory(
@@ -739,7 +739,7 @@ async def test_concept_framer_factory_routes_via_canonicalization_caller(
         captured["redis"] = redis
         return None  # short-circuit — routing miss
 
-    monkeypatch.setattr(settle_runtime, "_resolve_via_caller", _fake_resolve)
+    monkeypatch.setattr(settle_runtime, "resolve_via_caller", _fake_resolve)
 
     sentinel = object()
     factory = runtime.build_concept_framer(

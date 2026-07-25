@@ -3,14 +3,14 @@
 Three thin helpers shared across the agent / settle / product-bootstrap
 runtimes:
 
-* :func:`_list_active_workspace_accounts` — workspace-scoped active
+* :func:`list_active_workspace_accounts` — workspace-scoped active
   account fetch.
-* :func:`_resolve_via_caller` — pull an adapter for one caller_id via
+* :func:`resolve_via_caller` — pull an adapter for one caller_id via
   :class:`backend.dispatch.resolver.ModelAccountResolver`, returning
   ``None`` on :class:`NoMatchingRouteError` (the runtime branches on
   ``None``: a Decision row in the run worker, a soft-skip in the
   ingest/extract pipeline).
-* :func:`_resolve_judge_llm` — judge LLM for the executor verification
+* :func:`resolve_judge_llm` — judge LLM for the executor verification
   path, resolved via caller_id ``workflow.judge``.
 
 Lift E2 also keeps the historical Decision-marking helper
@@ -49,7 +49,7 @@ DECISION_NO_MODEL_ACCOUNT = "no_model_account"
 DECISION_AMBIGUOUS_MODEL_ACCOUNT = "ambiguous_model_account"
 
 
-async def _list_active_workspace_accounts(
+async def list_active_workspace_accounts(
     session: AsyncSession, workspace_id: uuid.UUID
 ) -> list[ModelAccount]:
     """All ``is_active`` ModelAccounts for ``workspace_id``."""
@@ -62,7 +62,7 @@ async def _list_active_workspace_accounts(
     return list(rows)
 
 
-async def _resolve_via_caller(
+async def resolve_via_caller(
     session: AsyncSession,
     *,
     caller_id: str,
@@ -153,7 +153,7 @@ async def resolve_workspace_model_account(
     from backend.dispatch.caller_registry import CALLER_AGENT_LOOP_ACT  # noqa: PLC0415
 
     settings = get_settings()
-    resolved = await _resolve_via_caller(
+    resolved = await resolve_via_caller(
         session,
         caller_id=CALLER_AGENT_LOOP_ACT,
         workspace_id=run.workspace_id,
@@ -164,7 +164,7 @@ async def resolve_workspace_model_account(
 
     # Fallback: legacy exactly-one-active heuristic, identical to v1
     # behaviour so existing single-account workspaces are unaffected.
-    accounts = await _list_active_workspace_accounts(session, run.workspace_id)
+    accounts = await list_active_workspace_accounts(session, run.workspace_id)
     if len(accounts) == 1:
         return accounts[0]
 
@@ -200,7 +200,7 @@ async def resolve_workspace_model_account(
     return None
 
 
-async def _resolve_judge_llm(
+async def resolve_judge_llm(
     session: AsyncSession,
     run: ExecutionRun,
     settings: Settings,
@@ -214,7 +214,7 @@ async def _resolve_judge_llm(
     """
     from backend.dispatch.caller_registry import CALLER_JUDGE  # noqa: PLC0415
 
-    resolved = await _resolve_via_caller(
+    resolved = await resolve_via_caller(
         session,
         caller_id=CALLER_JUDGE,
         workspace_id=run.workspace_id,
@@ -234,8 +234,8 @@ async def _resolve_judge_llm(
 __all__ = [
     "DECISION_AMBIGUOUS_MODEL_ACCOUNT",
     "DECISION_NO_MODEL_ACCOUNT",
-    "_list_active_workspace_accounts",
-    "_resolve_judge_llm",
-    "_resolve_via_caller",
+    "list_active_workspace_accounts",
+    "resolve_judge_llm",
+    "resolve_via_caller",
     "resolve_workspace_model_account",
 ]

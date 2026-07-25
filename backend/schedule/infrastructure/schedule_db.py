@@ -39,13 +39,14 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from backend.data import Base
 
+# ``product_tick`` is a cross-context wire contract (the workflow workers read
+# it off run payloads too), so its single definition lives in the shared kernel
+# and is re-exported here for schedule-side consumers.
+from backend.shared.wire_kinds import SCHEDULE_KIND_PRODUCT_TICK
+
 # The default schedule kind: a natural-language ``instruction`` whose
 # ``payload["text"]`` IS the run task.
 SCHEDULE_KIND_INSTRUCTION = "instruction"
-# ``product_tick`` — the founder sets only the cadence (WHEN) per product;
-# BSVibe decides the next action (WHAT) at fire time. Requires ``product_id``;
-# ``payload["text"]`` is unused (the emitter seeds a localized meta-instruction).
-SCHEDULE_KIND_PRODUCT_TICK = "product_tick"
 
 
 class WorkspaceScheduleRow(Base):

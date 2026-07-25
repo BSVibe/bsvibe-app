@@ -2,7 +2,7 @@
 
 Two regressions surfaced together by the qazasa123 dogfood:
 
-* **Bug 1** — ``_resolve_via_caller`` was being called WITHOUT a redis client
+* **Bug 1** — ``resolve_via_caller`` was being called WITHOUT a redis client
   from inside ``build_bootstrap_knowledge._ingest_callable``. An executor
   account returned by the resolver then raised ``ExecutorAdapterUnavailable``
   on its first chat call, the IngestCompiler chunk loop caught and counted
@@ -13,7 +13,7 @@ Two regressions surfaced together by the qazasa123 dogfood:
   the founder UI said "all good" with an empty knowledge graph.
 
 The fix passes redis through ``build_bootstrap_knowledge`` ->
-``_resolve_via_caller`` and decides terminal status from the ingest's
+``resolve_via_caller`` and decides terminal status from the ingest's
 ``notes_written`` + ``chunk_failures`` signal instead of from artifacts_count.
 """
 
@@ -208,11 +208,11 @@ async def test_bootstrap_runtime_threads_redis_into_resolver(
     session_factory, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Bug 1 — ``_ingest_callable`` MUST forward a redis client to
-    ``_resolve_via_caller`` so an executor adapter can dispatch onto the
+    ``resolve_via_caller`` so an executor adapter can dispatch onto the
     worker stream. Pre-fix, the closure called the resolver with the default
     ``redis=None`` and every chunk silently dropped.
 
-    The test spies on ``_resolve_via_caller`` from inside the runtime module
+    The test spies on ``resolve_via_caller`` from inside the runtime module
     and asserts the ``redis`` kwarg the bootstrap path supplies is the SAME
     redis client the caller passed into ``run_product_bootstrap_job``.
     """
@@ -234,7 +234,7 @@ async def test_bootstrap_runtime_threads_redis_into_resolver(
 
     spy: dict[str, object] = {}
 
-    real_resolver = runtime_mod._resolve_via_caller
+    real_resolver = runtime_mod.resolve_via_caller
 
     async def _spy_resolver(*args, **kwargs):
         # Capture the FIRST call (the bootstrap _ingest_callable path).
@@ -244,7 +244,7 @@ async def test_bootstrap_runtime_threads_redis_into_resolver(
         spy.setdefault("caller_id", kwargs.get("caller_id"))
         return await real_resolver(*args, **kwargs)
 
-    monkeypatch.setattr(runtime_mod, "_resolve_via_caller", _spy_resolver)
+    monkeypatch.setattr(runtime_mod, "resolve_via_caller", _spy_resolver)
 
     # Use the real ``build_bootstrap_knowledge`` so the _ingest_callable
     # actually runs and triggers the resolver call we are spying on. The
@@ -266,7 +266,7 @@ async def test_bootstrap_runtime_threads_redis_into_resolver(
         f"'knowledge.ingest', got: {spy.get('caller_id')!r}"
     )
     assert spy.get("redis") is sentinel_redis, (
-        "Bug 1 regressed: ``_resolve_via_caller`` got redis=None instead of "
+        "Bug 1 regressed: ``resolve_via_caller`` got redis=None instead of "
         "the client the runtime was supplied with. Without it, an executor "
         "adapter will raise ExecutorAdapterUnavailable on every chunk."
     )

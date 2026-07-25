@@ -64,6 +64,7 @@ from sqlalchemy import Select, delete, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from backend.identity.workspaces_db import WorkspaceRow
+from backend.shared.wire_kinds import SCHEDULE_KIND_PRODUCT_TICK
 from backend.workers.base import BaseWorker
 from backend.workflow.application.safe_mode_queue import SafeModeQueue
 from backend.workflow.channels import DELIVERY_EVENTS
@@ -76,10 +77,11 @@ logger = structlog.get_logger(__name__)
 # PT3 — run ``payload["kind"]`` values that mark an AUTONOMOUS-origin run (BSVibe
 # decided + did the work with no founder instruction). Such deliverables ALWAYS
 # route through Safe Mode so the founder's approval is the sole output control,
-# regardless of the workspace flag or the binding output_mode. The value mirrors
-# ``backend.schedule.infrastructure.schedule_db.SCHEDULE_KIND_PRODUCT_TICK`` — a
-# wire contract carried on the payload (workflow must not import schedule).
-_AUTONOMOUS_ORIGIN_KINDS: frozenset[str] = frozenset({"product_tick"})
+# regardless of the workspace flag or the binding output_mode. The kind is the
+# schedule wire contract carried on the payload — single source of truth is
+# ``backend.shared.wire_kinds.SCHEDULE_KIND_PRODUCT_TICK`` (a neutral leaf both
+# Schedule and Workflow import, so neither context depends on the other).
+_AUTONOMOUS_ORIGIN_KINDS: frozenset[str] = frozenset({SCHEDULE_KIND_PRODUCT_TICK})
 
 
 class PluginDispatchAdapter(Protocol):

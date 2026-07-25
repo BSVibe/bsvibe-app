@@ -50,7 +50,7 @@ from backend.workflow.application.delivery.connector_dispatch import (
 from backend.workflow.application.knowledge_orchestrator import KnowledgeAnswerOrchestrator
 from backend.workflow.application.loop_llm import ResolverLoopLlm
 from backend.workflow.application.runtime.account_resolution import (
-    _resolve_via_caller,
+    resolve_via_caller,
 )
 from backend.workflow.application.runtime.dispatcher import _ResolverFrameLlm
 from backend.workflow.application.stages.frame import FrameLlm
@@ -69,7 +69,7 @@ logger = structlog.get_logger(__name__)
 async def _product_repo_url(session: AsyncSession, product_id: uuid.UUID) -> str | None:
     """Lift E32 — return the product's git URL for worker-side cloning.
 
-    The agent_loop passes this through ``_resolve_via_caller`` so the
+    The agent_loop passes this through ``resolve_via_caller`` so the
     ExecutorAdapter the resolver hands back tells the worker to clone
     the repo into the per-task workspace. Soft-fails (returns ``None``)
     on a missing product or an empty ``repo_url`` so a substrate-only
@@ -220,7 +220,7 @@ def build_agent_execution_deps(
         ``None`` (no rule + no workspace default) → keyword-fallback in
         the frame stage.
         """
-        resolved = await _resolve_via_caller(
+        resolved = await resolve_via_caller(
             session,
             caller_id=CALLER_FRAME,
             workspace_id=workspace_id,
@@ -292,7 +292,7 @@ def build_agent_execution_deps(
         # Resolve the chat account BEFORE the act account so a question never
         # touches the executor.
         if _is_knowledge_only(run):
-            chat = await _resolve_via_caller(
+            chat = await resolve_via_caller(
                 session,
                 caller_id=CALLER_FRAME,
                 workspace_id=run.workspace_id,
@@ -318,7 +318,7 @@ def build_agent_execution_deps(
                 ),
             )
 
-        resolved = await _resolve_via_caller(
+        resolved = await resolve_via_caller(
             session,
             caller_id=CALLER_AGENT_LOOP_ACT,
             workspace_id=run.workspace_id,
