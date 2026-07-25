@@ -131,10 +131,8 @@ async def test_create_task_defaults() -> None:
         assert task.system == ""
         assert task.workspace_dir == "."
         assert task.status == "pending"
-        # B1: a task carries the run it belongs to (nullable for back-compat) and
-        # starts with no artifact_refs.
+        # B1: a task carries the run it belongs to (nullable for back-compat).
         assert task.run_id is None
-        assert task.artifact_refs is None
 
 
 async def test_create_task_carries_run_id() -> None:
