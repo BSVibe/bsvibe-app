@@ -47,11 +47,12 @@ import inspect
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 import structlog
-from sqlalchemy import select
+from sqlalchemy import exists, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 if TYPE_CHECKING:
@@ -62,6 +63,7 @@ if TYPE_CHECKING:
     # ``tick_planner_for`` factory, never by this module.
     from backend.workflow.application.product_tick_planner import ProductTickPlanner
 
+from backend.config import Settings, get_settings
 from backend.dispatch.adapter import ExecutorCapacitySaturated
 from backend.extensions.skill.loader import SkillLoader
 from backend.shared.wire_kinds import SCHEDULE_KIND_PRODUCT_TICK
@@ -77,7 +79,12 @@ from backend.workflow.application.stages.frame import (
     FrameUnclassifiedError,
 )
 from backend.workflow.channels import REQUESTS
-from backend.workflow.infrastructure.db import ExecutionRun, RunStatus
+from backend.workflow.infrastructure.db import (
+    Decision,
+    DecisionStatus,
+    ExecutionRun,
+    RunStatus,
+)
 from backend.workflow.infrastructure.intake.db import RequestRow, RequestStatus
 from backend.workflow.infrastructure.repositories import SqlAlchemyRequestRepository
 
@@ -189,12 +196,29 @@ class AgentWorker(BaseWorker):
         session_factory: async_sessionmaker[AsyncSession],
         config: AgentWorkerConfig | None = None,
         execution: AgentExecutionDeps | None = None,
+        settings: Settings | None = None,
     ) -> None:
         self._cfg = config or AgentWorkerConfig()
         super().__init__(name="agent_worker", poll_interval_s=self._cfg.poll_interval_s)
         self._session_factory = session_factory
         self._execution = execution
         self._frame_stage = FrameStage()
+        self._settings = settings or get_settings()
+        # Stable identity for this worker process's claims (``claimed_by``). Two
+        # AgentWorker instances never share it, so a stale-claim reaper / audit
+        # can attribute a claim to the worker that made it.
+        self._worker_id = uuid.uuid4()
+
+    @property
+    def _stale_claim_lease_s(self) -> float:
+        """How long a claim may go un-refreshed before it is reaped back to OPEN.
+
+        ``2 × executor_task_timeout_s`` — a SINGLE executor turn can legitimately
+        run up to ``executor_task_timeout_s`` (~30 min), and ``_drive_loop``
+        refreshes ``claimed_at`` at every turn boundary, so doubling the timeout
+        guarantees a healthy in-flight run (even one parked in a max-length turn)
+        is never mistaken for the claim of a crashed worker."""
+        return 2.0 * self._settings.executor_task_timeout_s
 
     async def _tick(self) -> int:
         claimed = await self.claim_once()
@@ -220,47 +244,172 @@ class AgentWorker(BaseWorker):
         return count
 
     async def drive_once(self) -> int:
-        """Frame + drive each ExecutionRun still OPEN. Returns count driven.
+        """Reap stale claims, atomically claim a batch of OPEN runs, then drive
+        each one in short committed transactions. Returns count driven.
 
         No-op (returns 0) when no :class:`AgentExecutionDeps` were injected —
         the worker can only stage runs without an execution backend.
+
+        Drive-session-release: the run is no longer driven inside ONE open
+        transaction holding a ``FOR UPDATE`` row-lock (and a pooled DB
+        connection) for the whole — up to 30-minute — executor turn. Instead:
+
+        1. **Reap** stale claims (a crashed worker's RUNNING runs) back to OPEN.
+        2. **Claim** a batch atomically (``UPDATE ... WHERE id IN (SELECT ...
+           FOR UPDATE SKIP LOCKED) RETURNING`` — committed immediately, so the
+           lock releases at once but SKIP LOCKED still gives exact multi-worker
+           safety).
+        3. **Drive** each claimed run in its OWN short-txn session; ``_drive_loop``
+           commits at every turn boundary so NO connection is held across the
+           executor await. ``claimed_at`` is cleared on every drive exit.
         """
         execution = self._execution
         if execution is None:
             return 0
+        await self._reap_stale_claims()
+        claimed_ids = await self._claim_runs_for_drive()
         count = 0
-        async with self._session_factory() as session:
-            stmt = (
-                select(ExecutionRun)
-                .where(ExecutionRun.status == RunStatus.OPEN)
-                .order_by(ExecutionRun.created_at.asc())
-                .limit(self._cfg.batch_size)
-                .with_for_update(skip_locked=True)
-            )
-            runs = (await session.execute(stmt)).scalars().all()
-            for run in runs:
-                try:
-                    await self._frame_and_drive(session, run, execution)
-                except ExecutorCapacitySaturated:
-                    # Saturation yield-back (framing OR the act-stage drive):
-                    # all live workers are at capacity. Leave THIS run OPEN
-                    # (do NOT transition it to failed — no partial failed /
-                    # decision state) so the next ``drive_once`` re-picks it,
-                    # and continue to the next run so one saturated workspace
-                    # doesn't stall the whole batch. The shared worker slot is
-                    # freed instead of blocked for up to 30 min. A YIELDED run
-                    # was NOT driven — it must not be counted (``count`` is the
-                    # "runs driven" return), so the increment stays out of the
-                    # ``continue`` path.
-                    logger.info(
-                        "agent_worker_yielded_on_capacity",
-                        run_id=str(run.id),
-                    )
-                    continue
-                # Only a genuinely-driven run counts.
-                count += 1
-            await session.commit()
+        for run_id in claimed_ids:
+            try:
+                await self._frame_and_drive_run(run_id, execution)
+            except ExecutorCapacitySaturated:
+                # Saturation yield-back (framing OR the act-stage drive): all
+                # live workers are at capacity. The run is already committed
+                # RUNNING (the atomic claim above), so we cannot merely leave it
+                # OPEN as the pre-refactor FOR-UPDATE path did — reset it
+                # RUNNING → OPEN and clear ``claimed_at`` so the next
+                # ``drive_once`` re-picks it (the scan is on OPEN). Do NOT fail
+                # it (no partial failed / decision state); do NOT count it (a
+                # yielded run was not driven).
+                await self._release_claim_to_open(run_id)
+                logger.info("agent_worker_yielded_on_capacity", run_id=str(run_id))
+                continue
+            # A genuinely-driven run — terminal, or paused on a Decision. Either
+            # way the drive is done: clear the claim (a paused run keeps
+            # ``claimed_at`` NULL + a pending Decision, so the reaper never
+            # touches it and the OPEN scan never re-picks it).
+            await self._clear_claim(run_id)
+            count += 1
         return count
+
+    async def _reap_stale_claims(self) -> int:
+        """Reset RUNNING runs whose claim went stale (past the lease with no
+        pending Decision) back to OPEN so a crashed worker's run is re-driven.
+
+        Double-guarded against re-opening a run that is legitimately paused on a
+        founder Decision: such a run has ``claimed_at`` NULL (cleared on the
+        pause exit) AND a pending Decision — so BOTH the ``claimed_at IS NOT
+        NULL`` predicate and the ``NOT EXISTS pending Decision`` predicate
+        exclude it. A healthy in-flight run is excluded by the lease (its
+        ``claimed_at`` heartbeat is refreshed each turn boundary). One committed
+        short transaction; returns the number of runs reaped."""
+        cutoff = datetime.now(UTC) - timedelta(seconds=self._stale_claim_lease_s)
+        pending_decision = exists().where(
+            Decision.run_id == ExecutionRun.id,
+            Decision.status == DecisionStatus.PENDING,
+        )
+        stmt = (
+            update(ExecutionRun)
+            .where(
+                ExecutionRun.status == RunStatus.RUNNING,
+                ExecutionRun.claimed_at.is_not(None),
+                ExecutionRun.claimed_at < cutoff,
+                ~pending_decision,
+            )
+            .values(status=RunStatus.OPEN, claimed_at=None, claimed_by=None)
+            .returning(ExecutionRun.id)
+        )
+        async with self._session_factory() as session:
+            reaped = [row[0] for row in (await session.execute(stmt)).all()]
+            await session.commit()
+        if reaped:
+            logger.info("agent_worker_reaped_stale_claims", count=len(reaped))
+        return len(reaped)
+
+    async def _claim_runs_for_drive(self) -> list[uuid.UUID]:
+        """Atomically claim a batch of OPEN runs → RUNNING + stamp the claim.
+
+        ``UPDATE execution_runs SET status='running', claimed_at=now(),
+        claimed_by=:worker WHERE id IN (SELECT id FROM execution_runs WHERE
+        status='open' ORDER BY created_at ASC LIMIT :batch FOR UPDATE SKIP
+        LOCKED) RETURNING id`` — the canonical safe multi-worker claim. The inner
+        ``FOR UPDATE SKIP LOCKED`` guarantees two workers never claim the same
+        run; the row-lock is released on the immediate commit, so (unlike the
+        pre-refactor path) it never spans the drive. Returns the claimed ids."""
+        subq = (
+            select(ExecutionRun.id)
+            .where(ExecutionRun.status == RunStatus.OPEN)
+            .order_by(ExecutionRun.created_at.asc())
+            .limit(self._cfg.batch_size)
+            .with_for_update(skip_locked=True)
+        )
+        stmt = (
+            update(ExecutionRun)
+            .where(ExecutionRun.id.in_(subq))
+            .values(
+                status=RunStatus.RUNNING,
+                claimed_at=datetime.now(UTC),
+                claimed_by=self._worker_id,
+            )
+            .returning(ExecutionRun.id)
+        )
+        async with self._session_factory() as session:
+            ids = [row[0] for row in (await session.execute(stmt)).all()]
+            await session.commit()
+        for run_id in ids:
+            logger.info("agent_worker_claimed_for_drive", run_id=str(run_id))
+        return ids
+
+    async def _frame_and_drive_run(self, run_id: uuid.UUID, execution: AgentExecutionDeps) -> None:
+        """Frame + drive one claimed run in its OWN session.
+
+        The session is held for the drive, but ``_drive_loop`` commits at every
+        turn boundary (change B) so NO pooled connection is held across the
+        executor ``complete()`` await. Committing here persists the terminal
+        transition (and any early pause-on-decision return in
+        :meth:`_frame_and_drive`) that only ``flush``ed."""
+        async with self._session_factory() as session:
+            run = await session.get(ExecutionRun, run_id)
+            if run is None:
+                return
+            await self._frame_and_drive(session, run, execution)
+            await session.commit()
+
+    async def _clear_claim(self, run_id: uuid.UUID) -> None:
+        """Clear ``claimed_at`` / ``claimed_by`` without touching status.
+
+        Called on every NON-saturation drive exit (terminal or pause-on-decision).
+        A paused run stays RUNNING with ``claimed_at`` NULL + a pending Decision,
+        so the reaper never reaps it and the OPEN scan never re-picks it."""
+        async with self._session_factory() as session:
+            await session.execute(
+                update(ExecutionRun)
+                .where(ExecutionRun.id == run_id)
+                .values(claimed_at=None, claimed_by=None)
+            )
+            await session.commit()
+
+    async def _release_claim_to_open(self, run_id: uuid.UUID) -> None:
+        """Saturation yield-back: reset a claimed RUNNING run to OPEN + clear the
+        claim so the next ``drive_once`` re-picks it (the scan is on OPEN).
+
+        Only resets a run still in RUNNING (defensive — a mid-drive terminal /
+        pause would have moved it, and we must not clobber that). Uses
+        :class:`AgentRunner.transition` so a history row records the yield-back."""
+        async with self._session_factory() as session:
+            run = await session.get(ExecutionRun, run_id)
+            if run is not None and run.status is RunStatus.RUNNING:
+                await AgentRunner(session).transition(
+                    run_id=run_id,
+                    to_status=RunStatus.OPEN,
+                    reason="yielded back on executor capacity saturation",
+                )
+            await session.execute(
+                update(ExecutionRun)
+                .where(ExecutionRun.id == run_id)
+                .values(claimed_at=None, claimed_by=None)
+            )
+            await session.commit()
 
     async def _frame_and_drive(
         self, session: AsyncSession, run: ExecutionRun, execution: AgentExecutionDeps

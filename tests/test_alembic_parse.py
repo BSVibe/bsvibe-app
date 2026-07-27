@@ -104,10 +104,14 @@ def test_alembic_head_is_connector_last_import():
     # carries its own stage / attributes / context for agents + schedules) →
     # drop_dead_execution_tables (schema cleanup — drop the dead
     # composition_snapshots + decomposer_steps tables and the orphaned
-    # executor_tasks.artifact_refs column, all zero-producer/zero-consumer).
+    # executor_tasks.artifact_refs column, all zero-producer/zero-consumer) →
+    # run_claim_columns (drive-session-release — ``execution_runs.claimed_at`` +
+    # ``claimed_by`` for the committed atomic claim + stale-claim reaper that
+    # replace the held FOR UPDATE row-lock, so the DB connection is released
+    # across the multi-minute executor turn).
     # Keep the test name (function name is a historical revision id, kept for
     # git-blame stability) and assert the current tip.
-    assert "drop_dead_execution_tables" in result.stdout
+    assert "run_claim_columns" in result.stdout
 
 
 def test_target_metadata_covers_all_bases():

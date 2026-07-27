@@ -247,7 +247,12 @@ async def test_adapter_session_factory_opens_fresh_session_per_chat() -> None:
                 error_message = None
 
             async def _fake_await_completion(
-                _redis: Any, *, session: AsyncSession, task_id: Any, timeout_s: Any
+                _redis: Any,
+                *,
+                session: AsyncSession,
+                task_id: Any,
+                timeout_s: Any,
+                session_factory: Any = None,
             ) -> Any:
                 saw_sessions.append(session)
                 return _Completed()
@@ -362,7 +367,12 @@ async def test_adapter_without_session_factory_falls_back_to_bound_session() -> 
                 error_message = None
 
             async def _fake_await_completion(
-                _redis: Any, *, session: AsyncSession, task_id: Any, timeout_s: Any
+                _redis: Any,
+                *,
+                session: AsyncSession,
+                task_id: Any,
+                timeout_s: Any,
+                session_factory: Any = None,
             ) -> Any:
                 saw_sessions.append(session)
                 return _Completed()

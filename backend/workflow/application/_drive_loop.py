@@ -13,6 +13,7 @@ audit delegations exactly as before.
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -193,6 +194,20 @@ async def drive_loop(  # noqa: PLR0911, PLR0912, PLR0915 — preserved cycle bod
         if await orch._run_cancelled(run):
             await orch._audit(run, attempt, LoopTerminal, {"outcome": "cancelled", "cycle": _cycle})
             return orch._cancelled_result(run, work_step, attempt, written_paths, final_text)
+        # Drive-session-release (B) — release the pooled DB connection for the
+        # duration of the (up to 30-minute) executor turn. Committing at the turn
+        # boundary ends the orchestrator session's open transaction, so NO
+        # connection is held idle-in-transaction across the ``complete()`` await
+        # — the pool-exhaustion outage this refactor fixes. The engine uses
+        # ``expire_on_commit=False`` (see runtime/lifecycle.py) so every loaded
+        # ORM attribute survives the commit; post-turn writes autobegin a fresh
+        # short transaction. Nothing between this commit and ``complete()``
+        # touches the DB. ``claimed_at`` is refreshed here as a heartbeat so a
+        # legitimately long multi-turn drive is never mistaken for a stale claim
+        # and reaped by ``AgentWorker`` (the lease is 2× the executor timeout, so
+        # a single turn is always safe; the heartbeat covers many turns).
+        run.claimed_at = datetime.now(UTC)
+        await orch._session.commit()
         turn = await orch._llm.complete(messages=messages, tools=tools_schema)
         final_text = turn.content or final_text
         # An EXECUTOR agent acts through the MCP work tools, which run in the API process —

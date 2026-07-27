@@ -34,7 +34,7 @@ from typing import Any, Protocol
 
 import structlog
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from backend.executors.db import ExecutorTaskRow, WorkerRow
 
@@ -509,7 +509,14 @@ async def record_result(
 
 
 async def _read_terminal(session: AsyncSession, task_id: uuid.UUID) -> ExecutorTaskRow | None:
-    """Re-read ``task_id`` and return it iff it is in a terminal state."""
+    """Re-read ``task_id`` and return it iff it is in a terminal state.
+
+    Detaches (``expunge``) the returned row so the caller can read its columns
+    after the session closes — the connection-free poll (below) opens a SHORT
+    session per read and closes it immediately, and a still-attached instance
+    would expire on close and lazily reload (re-checking out a connection) the
+    moment the caller touched ``.status`` / ``.output``.
+    """
     # ``session.get`` would serve a stale identity-map copy when the writer used
     # a different session; a fresh SELECT reflects the committed terminal row.
     row = (
@@ -518,8 +525,32 @@ async def _read_terminal(session: AsyncSession, task_id: uuid.UUID) -> ExecutorT
     if row is not None:
         await session.refresh(row)
     if row is not None and row.status in _TERMINAL_STATUSES:
+        # All columns are loaded by the SELECT + refresh; expunge to hand back a
+        # detached-but-fully-populated instance safe to read after close.
+        session.expunge(row)
         return row
     return None
+
+
+async def _read_terminal_isolated(
+    task_id: uuid.UUID,
+    *,
+    session: AsyncSession,
+    session_factory: async_sessionmaker[AsyncSession] | None,
+) -> ExecutorTaskRow | None:
+    """One terminal-state read that holds NO DB connection past its return.
+
+    Drive-session-release: when a ``session_factory`` is wired the read runs in
+    its OWN short session (opened + closed here), so between polls — across the
+    ``asyncio.sleep`` / pub/sub wait — the awaiter checks out ZERO pooled
+    connections. Holding a connection idle across the (potentially 30-minute)
+    executor turn is exactly what exhausted the pool in the live outage. Without
+    a factory (legacy callers) it falls back to the bound ``session``.
+    """
+    if session_factory is not None:
+        async with session_factory() as short:
+            return await _read_terminal(short, task_id)
+    return await _read_terminal(session, task_id)
 
 
 async def await_completion(
@@ -528,6 +559,7 @@ async def await_completion(
     session: AsyncSession,
     task_id: uuid.UUID,
     timeout_s: float,
+    session_factory: async_sessionmaker[AsyncSession] | None = None,
 ) -> ExecutorTaskRow:
     """Wait for ``task:{id}:done``, with a periodic DB poll as a safety net.
 
@@ -539,9 +571,17 @@ async def await_completion(
     ``timeout_s``. Either path returns the row once it is terminal. Raises
     :class:`TaskTimeout` only if the row never becomes terminal within
     ``timeout_s``.
+
+    ``session_factory`` (drive-session-release) — when wired, each DB read opens
+    a SHORT session that is closed before the next ``asyncio.sleep`` / pub/sub
+    wait, so NO pooled connection is held across the executor turn. The Redis
+    pub/sub connection is unaffected (it is not a DB-pool connection). ``None``
+    keeps the legacy behaviour (the bound ``session`` is used, and its
+    connection is held across the wait — acceptable only for callers that do not
+    park on a long turn).
     """
     # Fast path: the result may already be terminal (worker beat the awaiter).
-    early = await _read_terminal(session, task_id)
+    early = await _read_terminal_isolated(task_id, session=session, session_factory=session_factory)
     if early is not None:
         return early
 
@@ -568,13 +608,17 @@ async def await_completion(
             # Whether or not a signal arrived, re-read the row: the signal is the
             # fast path; the periodic read is the safety net for a missed publish.
             _ = msg
-            row = await _read_terminal(session, task_id)
+            row = await _read_terminal_isolated(
+                task_id, session=session, session_factory=session_factory
+            )
             if row is not None:
                 return row
     except Exception:  # noqa: BLE001 — a pub/sub hiccup degrades to the DB poll
         logger.warning("executor_await_pubsub_failed", task_id=str(task_id), exc_info=True)
         # Degrade to a pure DB poll for the remaining budget.
-        row = await _poll_until_terminal(session, task_id, timeout_s=timeout_s)
+        row = await _poll_until_terminal(
+            session, task_id, timeout_s=timeout_s, session_factory=session_factory
+        )
         if row is not None:
             return row
     finally:
@@ -586,31 +630,38 @@ async def await_completion(
 
     # Final read in case the row turned terminal between the last poll and the
     # deadline / a pub/sub teardown.
-    row = await _read_terminal(session, task_id)
+    row = await _read_terminal_isolated(task_id, session=session, session_factory=session_factory)
     if row is not None:
         return row
     raise TaskTimeout(f"executor task {task_id} did not complete within {timeout_s}s")
 
 
 async def _poll_until_terminal(
-    session: AsyncSession, task_id: uuid.UUID, *, timeout_s: float
+    session: AsyncSession,
+    task_id: uuid.UUID,
+    *,
+    timeout_s: float,
+    session_factory: async_sessionmaker[AsyncSession] | None = None,
 ) -> ExecutorTaskRow | None:
     """Pure DB poll fallback used when pub/sub is unavailable.
 
     Re-reads the row every :data:`_AWAIT_POLL_INTERVAL_S` until terminal or the
     deadline passes. Returns the terminal row, or ``None`` on timeout (the caller
-    raises :class:`TaskTimeout`).
+    raises :class:`TaskTimeout`). Each read is connection-free when a
+    ``session_factory`` is wired (see :func:`_read_terminal_isolated`).
     """
     deadline = asyncio.get_event_loop().time() + timeout_s
     while asyncio.get_event_loop().time() < deadline:
-        row = await _read_terminal(session, task_id)
+        row = await _read_terminal_isolated(
+            task_id, session=session, session_factory=session_factory
+        )
         if row is not None:
             return row
         remaining = deadline - asyncio.get_event_loop().time()
         if remaining <= 0:
             break
         await asyncio.sleep(min(_AWAIT_POLL_INTERVAL_S, remaining))
-    return await _read_terminal(session, task_id)
+    return await _read_terminal_isolated(task_id, session=session, session_factory=session_factory)
 
 
 __all__ = [

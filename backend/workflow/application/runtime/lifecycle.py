@@ -142,6 +142,11 @@ async def run_workers() -> None:
         settings=settings,
         redis_client=redis_client,
         connector_plugins=connector_plugins,
+        # Drive-session-release — the act ExecutorAdapter opens its own short
+        # session per chat turn (fresh, connection-free polling) from this
+        # factory rather than running on the bound worker session and holding a
+        # pooled connection idle across the executor turn.
+        session_factory=session_factory,
     )
     delivery_adapter = await build_delivery_adapter(session_factory=session_factory)
     # Notifier N2 — the founder-notification push sender reuses the SAME loaded
