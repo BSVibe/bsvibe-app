@@ -18,9 +18,10 @@ from typing import Any
 
 import redis.asyncio as redis_aio
 import structlog
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from backend.config import get_settings
+from backend.data.engine import create_app_engine
 from backend.shared.core.http import redact_url_password
 from backend.workflow.application.runtime.agent_runtime import build_agent_execution_deps
 from backend.workflow.application.runtime.delivery_runtime import (
@@ -88,7 +89,8 @@ async def run_workers() -> None:
 
     settings = get_settings()
     register_audit_subscriber()
-    engine = create_async_engine(settings.database_url, future=True)
+    # Single factory — carries the idle_in_transaction_session_timeout guard.
+    engine = create_app_engine(settings.database_url)
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
 
     # #362 — register DB-stored connector OAuth providers so the worker can

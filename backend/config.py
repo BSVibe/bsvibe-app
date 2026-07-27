@@ -47,6 +47,19 @@ class Settings(BaseSettings):
     # both" — dev / SQLite / any deployment that has not cut over yet keeps
     # working unchanged: :meth:`migration_url` falls back to ``database_url``.
     migration_database_url: str = ""
+
+    # DB connection safety-net (backend.data.engine). Postgres kills any session
+    # left ``idle in transaction`` longer than this many milliseconds — the
+    # ``idle_in_transaction_session_timeout`` GUC, applied via asyncpg
+    # server_settings on EVERY app connection. A prod incident: leaked held-open
+    # transactions (~15) exhausted the connection pool → every DB endpoint hung
+    # → full outage needing a manual restart. Post-#632 the drive loop uses SHORT
+    # transactions, so no legit app op holds a transaction idle more than a few
+    # seconds; this only ever catches a LEAK and lets the pool self-heal. Default
+    # 120s — comfortably longer than any legit short transaction, short enough to
+    # auto-heal a leak fast. ``0`` DISABLES the guard.
+    idle_in_transaction_session_timeout_ms: int = 120000
+
     redis_url: str = "redis://localhost:6387/0"
     environment: Literal["dev", "staging", "prod"] = "dev"
 
