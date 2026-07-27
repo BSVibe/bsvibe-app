@@ -214,10 +214,14 @@ class AgentWorker(BaseWorker):
         """How long a claim may go un-refreshed before it is reaped back to OPEN.
 
         ``2 × executor_task_timeout_s`` — a SINGLE executor turn can legitimately
-        run up to ``executor_task_timeout_s`` (~30 min), and ``_drive_loop``
-        refreshes ``claimed_at`` at every turn boundary, so doubling the timeout
-        guarantees a healthy in-flight run (even one parked in a max-length turn)
-        is never mistaken for the claim of a crashed worker."""
+        run up to ``executor_task_timeout_s`` (1 h) and ``_drive_loop`` refreshes
+        ``claimed_at`` only at each turn BOUNDARY, NOT mid-turn, so a single long
+        turn running a full test suite goes the WHOLE turn without refreshing its
+        claim. Doubling the timeout keeps the lease strictly GREATER than that
+        single-turn cap, so a healthy in-flight run (even one parked in a
+        max-length turn) is never mistaken for the claim of a crashed worker.
+        The invariant ``lease > turn cap`` holds automatically because both scale
+        from this one settings knob."""
         return 2.0 * self._settings.executor_task_timeout_s
 
     async def _tick(self) -> int:

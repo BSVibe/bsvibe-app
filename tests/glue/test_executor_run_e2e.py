@@ -273,7 +273,10 @@ async def test_lift_e3_executor_account_routes_through_native_run_orchestrator(
 
 
 async def test_executor_task_timeout_setting_default() -> None:
-    assert get_settings().executor_task_timeout_s == 1800.0
+    # 1 h — a legitimate act turn can run a cold ``uv sync`` + a large repo's
+    # full pytest suite inline before reporting (safe post-#632/#633; reaper
+    # lease follows at 2×).
+    assert get_settings().executor_task_timeout_s == 3600.0
 
 
 # --------------------------------------------------------------------------

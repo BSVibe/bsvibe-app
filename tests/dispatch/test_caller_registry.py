@@ -121,10 +121,17 @@ class TestPerCallerTimeout:
         assert spec.default_timeout_s == 600.0
 
     def test_agent_loop_act_uses_settings_default(self) -> None:
-        """Tool-emitting agent turn genuinely runs `claude --print` —
-        keeps the 1800 s legacy default by leaving the override None."""
+        """Tool-emitting agent turn genuinely runs `claude --print` — leaves the
+        override None so it inherits ``settings.executor_task_timeout_s`` (raised
+        to 3600 s / 1 h so a cold ``uv sync`` + full pytest suite completes inline;
+        the reaper lease follows at 2×). Every OTHER caller pins an explicit,
+        shorter timeout above, so raising the settings default only lengthens ACT.
+        """
+        from backend.config import get_settings
+
         spec = KNOWN_CALLERS[CALLER_AGENT_LOOP_ACT]
         assert spec.default_timeout_s is None
+        assert get_settings().executor_task_timeout_s == 3600.0
 
 
 class TestYieldOnSaturation:

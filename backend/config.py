@@ -235,9 +235,17 @@ class Settings(BaseSettings):
     # ModelAccount is ``provider='executor'`` dispatches a task to an external
     # CLI worker instead of running the native LLM loop; this is how long the
     # orchestrator waits for the worker to report a terminal result before
-    # giving up (→ system_error). Default 30 min — a CLI coding agent run is
-    # long-lived. Operator-tunable per deployment.
-    executor_task_timeout_s: float = 1800.0
+    # giving up (→ system_error). Default 1 h — a CLI coding agent turn can
+    # legitimately run a cold ``uv sync`` + a large repo's FULL pytest suite
+    # inline before reporting, which routinely exceeds 30 min. Long turns are
+    # SAFE post-#632 (the drive loop holds no DB connection across the turn) /
+    # #633 (idle-tx self-heal recovers any leak); the stale-claim reaper still
+    # bounds a genuinely-crashed run at 2× this value. Operator-tunable per
+    # deployment. NOTE: this is the ONLY knob the ``workflow.agent_loop.act``
+    # caller (default_timeout_s=None) and the reaper lease derive from — every
+    # other caller pins an explicit, shorter timeout, so raising this only
+    # lengthens the act turn cap and widens the reaper lease with it.
+    executor_task_timeout_s: float = 3600.0
 
     # Capacity-aware dispatch (Lift E16). Backend must NOT dispatch onto a
     # worker stream when the worker is already at its in-flight cap — the
