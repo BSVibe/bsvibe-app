@@ -332,6 +332,65 @@ async def test_reaper_resets_stale_claims_but_never_paused_on_decision(sf, monke
 
 
 # --------------------------------------------------------------------------
+# (c.2) Turn-cap ↔ reaper-lease coupling — a single max-length turn (which does
+# NOT refresh claimed_at mid-turn) can never be reaped, because the reaper lease
+# (2× the turn cap) stays strictly greater than the single-turn cap. Long
+# in-flight test-suite verification is SAFE post-#632 (no DB conn across the turn)
+# / #633 (idle-tx self-heal); the cap is raised to 1 h so a cold ``uv sync`` +
+# full pytest suite completes inline.
+# --------------------------------------------------------------------------
+
+
+async def test_executor_turn_cap_default_is_one_hour() -> None:
+    """The executor act-turn cap default is 3600 s (1 h) so a legitimate inline
+    verification run (cold ``uv sync`` + a large repo's full pytest suite) is not
+    killed at 30 min."""
+    settings = get_settings()
+    assert settings.executor_task_timeout_s == 3600.0
+
+
+async def test_reaper_lease_is_double_the_turn_cap(sf) -> None:
+    """The stale-claim reaper lease is exactly 2× the turn cap — both scale from
+    the single settings knob, so raising the cap widens the lease with it."""
+    settings = get_settings()
+    worker = AgentWorker(session_factory=sf, settings=settings)
+    assert worker._stale_claim_lease_s == 2.0 * settings.executor_task_timeout_s
+    assert worker._stale_claim_lease_s == 7200.0
+
+
+async def test_reaper_lease_strictly_exceeds_single_turn_cap(sf) -> None:
+    """The key invariant: the reaper lease must be strictly GREATER than a single
+    max-length turn cap. ``claimed_at`` is refreshed only at each TURN BOUNDARY
+    (not mid-turn), so a single long turn running the whole suite goes the entire
+    turn WITHOUT refreshing its claim — if the lease were ≤ the cap, the reaper
+    could steal a healthy in-flight run mid-turn. 2× guarantees it never can."""
+    settings = get_settings()
+    worker = AgentWorker(session_factory=sf, settings=settings)
+    assert worker._stale_claim_lease_s > settings.executor_task_timeout_s
+
+
+async def test_run_claimed_within_lease_at_max_turn_length_is_not_reaped(sf) -> None:
+    """A healthy in-flight run whose ``claimed_at`` is a full single-turn-cap old
+    (a max-length turn that has not yet hit a turn boundary to refresh its claim)
+    is NOT reaped, because that age is still inside the 2× lease window."""
+    settings = get_settings()
+    worker = AgentWorker(session_factory=sf, settings=settings)
+    ws_id = uuid.uuid4()
+    await _seed_workspace(sf, ws_id)
+
+    # Claimed a full turn-cap ago — the oldest a claim can get without the turn
+    # crossing a boundary. Still < lease (2× cap), so it must survive.
+    claimed = datetime.now(tz=UTC) - timedelta(seconds=settings.executor_task_timeout_s)
+    run_id = await _seed_run(sf, ws_id=ws_id, status=RunStatus.RUNNING, claimed_at=claimed)
+
+    reaped = await worker._reap_stale_claims()
+    assert reaped == 0
+
+    async with sf() as s:
+        assert (await s.get(ExecutionRun, run_id)).status is RunStatus.RUNNING
+
+
+# --------------------------------------------------------------------------
 # (d) Resume — a pre-framed (re-opened) run drives to terminal, framing skipped.
 # --------------------------------------------------------------------------
 

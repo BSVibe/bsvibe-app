@@ -206,8 +206,10 @@ KNOWN_CALLERS: dict[str, CallerSpec] = {
             "include tool_calls the workflow then dispatches."
         ),
         # Genuinely long — a tool-emitting turn runs `claude --print` /
-        # `codex -p` / `opencode -p` on a real coding task. Leave at None
-        # so it picks up the settings default of 1800 s.
+        # `codex -p` / `opencode -p` on a real coding task that can include a
+        # cold `uv sync` + a large repo's full pytest suite inline. Leave at
+        # None so it picks up the settings default (3600 s / 1 h); the reaper
+        # lease follows at 2×.
         default_timeout_s=None,
         # Run-drive caller — yields back on saturation (see CALLER_FRAME).
         yield_on_saturation=True,
