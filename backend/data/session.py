@@ -9,15 +9,14 @@ from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
     async_sessionmaker,
-    create_async_engine,
 )
 
-from backend.config import get_settings
+from backend.data.engine import create_app_engine
 
 
 def make_engine(url: str | None = None) -> AsyncEngine:
-    settings = get_settings()
-    return create_async_engine(url or settings.database_url, future=True)
+    # Single factory — carries the idle_in_transaction_session_timeout guard.
+    return create_app_engine(url)
 
 
 @asynccontextmanager

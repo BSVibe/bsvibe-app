@@ -24,10 +24,10 @@ from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
     async_sessionmaker,
-    create_async_engine,
 )
 
 # Importing scoping installs the do_orm_execute auto-filter listener.
+from backend.data.engine import create_app_engine
 from backend.data.rls import set_workspace_guc
 from backend.data.scoping import set_current_workspace_id
 from backend.identity.db import MembershipRow, UserRow
@@ -76,7 +76,8 @@ def _get_session_factory() -> async_sessionmaker[AsyncSession]:
     from backend.config import get_settings  # noqa: PLC0415
 
     settings = get_settings()
-    _async_engine = create_async_engine(settings.database_url, future=True)
+    # Single factory — carries the idle_in_transaction_session_timeout guard.
+    _async_engine = create_app_engine(settings.database_url)
     _session_factory = async_sessionmaker(_async_engine, expire_on_commit=False)
     return _session_factory
 
