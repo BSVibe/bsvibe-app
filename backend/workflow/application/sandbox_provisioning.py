@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import structlog
 
+from backend.config import get_settings
 from backend.workflow.infrastructure.sandbox import SandboxError, SandboxSession
 
 logger = structlog.get_logger(__name__)
@@ -38,6 +39,10 @@ logger = structlog.get_logger(__name__)
 # do not lower it below a real dependency build.
 _UV_SYNC = "uv sync --frozen --all-extras"
 VENV_SYNC_TIMEOUT_S = 600.0
+# Ceiling for the optional test-DB setup command (``sandbox_test_db_setup_cmd``,
+# e.g. ``uv run alembic upgrade head``). Same scale as the venv sync — a real
+# migration chain against a fresh PG is not a short op.
+TEST_DB_SETUP_TIMEOUT_S = 600.0
 
 
 async def ensure_sandbox_ready(box: SandboxSession) -> bool:
@@ -55,4 +60,21 @@ async def ensure_sandbox_ready(box: SandboxSession) -> bool:
     if not lock:
         return False
     sync = await box.exec(_UV_SYNC, timeout_s=VENV_SYNC_TIMEOUT_S, shell=True)
-    return sync.exit_code == 0 and not sync.timed_out
+    if sync.exit_code != 0 or sync.timed_out:
+        return False
+    # Optional test-DB provisioning (e.g. ``uv run alembic upgrade head``) after
+    # the venv is ready — the injected BSVIBE_MIGRATION_DATABASE_URL is visible
+    # to ``docker exec`` since it lives on the sandbox container. Best-effort +
+    # logged: a setup failure returns degraded (False) rather than crashing the
+    # run — same honesty contract as the venv sync.
+    setup_cmd = get_settings().sandbox_test_db_setup_cmd
+    if setup_cmd:
+        setup = await box.exec(setup_cmd, timeout_s=TEST_DB_SETUP_TIMEOUT_S, shell=True)
+        if setup.exit_code != 0 or setup.timed_out:
+            logger.warning(
+                "sandbox_test_db_setup_failed",
+                exit_code=setup.exit_code,
+                timed_out=setup.timed_out,
+            )
+            return False
+    return True

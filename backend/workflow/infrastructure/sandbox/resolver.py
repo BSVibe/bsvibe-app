@@ -30,6 +30,13 @@ def build_sandbox_manager() -> SandboxManager | None:
             idle_reap_seconds=settings.sandbox_idle_reap_seconds,
             max_concurrent=settings.sandbox_max_concurrent,
             sandbox_user=settings.sandbox_user,
+            test_db_enabled=settings.sandbox_test_db_enabled,
+            test_db_image=settings.sandbox_test_db_image,
+            test_db_superuser=settings.sandbox_test_db_superuser,
+            test_db_password=settings.sandbox_test_db_password,
+            test_db_name=settings.sandbox_test_db_name,
+            test_db_env=settings.sandbox_test_db_env,
+            test_db_ready_timeout_s=settings.sandbox_test_db_ready_timeout_s,
         )
     return None
 

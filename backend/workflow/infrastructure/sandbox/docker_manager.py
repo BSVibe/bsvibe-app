@@ -23,14 +23,28 @@ from backend.workflow.infrastructure.sandbox.protocol import SandboxResult
 logger = structlog.get_logger(__name__)
 
 _CONTAINER_PREFIX = "bsvibe-sbx-"
+_SIDECAR_PREFIX = "bsvibe-sbx-pg-"
+_NETWORK_PREFIX = "sbxnet-"
 _WORK_MOUNT = "/work"
 _DIND_STARTUP_TIMEOUT_S = 30.0
 _DOCKER_OP_TIMEOUT_S = 60.0
 _SANDBOX_MEMORY = "4g"
+_SIDECAR_MEMORY = "1g"
+# Poll interval while waiting for the test-PG sidecar's ``pg_isready`` — module
+# constant so unit tests can shrink it (no real sleeping against a mock).
+_PG_READY_POLL_S = 1.0
 
 
 def _container_name(project_id: uuid.UUID) -> str:
     return f"{_CONTAINER_PREFIX}{project_id}"
+
+
+def _sidecar_name(project_id: uuid.UUID) -> str:
+    return f"{_SIDECAR_PREFIX}{project_id}"
+
+
+def _network_name(project_id: uuid.UUID) -> str:
+    return f"{_NETWORK_PREFIX}{project_id}"
 
 
 def _safe_rel(rel_path: str) -> str:
@@ -44,6 +58,10 @@ def _safe_rel(rel_path: str) -> str:
 class _Entry:
     name: str
     last_used: float
+    # Test-PG sidecar container + its dedicated user-defined network, tracked so
+    # teardown reaps them with the sandbox. ``None`` when the test-db gate is off.
+    sidecar: str | None = None
+    network: str | None = None
 
 
 class DockerSandboxSession:
@@ -135,6 +153,13 @@ class DockerSandboxManager:
         idle_reap_seconds: int,
         max_concurrent: int,
         sandbox_user: str = "",
+        test_db_enabled: bool = False,
+        test_db_image: str = "pgvector/pgvector:pg16",
+        test_db_superuser: str = "bsvibe",
+        test_db_password: str = "bsvibe",  # noqa: S107 — blank-PG default, not a secret
+        test_db_name: str = "bsvibe",
+        test_db_env: dict[str, str] | None = None,
+        test_db_ready_timeout_s: float = 60.0,
     ) -> None:
         self._docker_host = docker_host
         self._image = sandbox_image
@@ -144,6 +169,15 @@ class DockerSandboxManager:
         # worker's uid; empty leaves the image default (no ``--user``) — never a
         # silent uid coercion.
         self._user = sandbox_user
+        # Per-product test-PG sidecar gate (default OFF). Off ⇒ the sandbox
+        # ``docker run`` is byte-identical to no-sidecar: no network, no env.
+        self._test_db_enabled = test_db_enabled
+        self._test_db_image = test_db_image
+        self._test_db_superuser = test_db_superuser
+        self._test_db_password = test_db_password
+        self._test_db_name = test_db_name
+        self._test_db_env = dict(test_db_env or {})
+        self._test_db_ready_timeout_s = test_db_ready_timeout_s
         self._idle_reap_seconds = idle_reap_seconds
         self._semaphore = asyncio.Semaphore(max_concurrent)
         self._locks: dict[uuid.UUID, asyncio.Lock] = {}
@@ -214,13 +248,101 @@ class DockerSandboxManager:
                 await self._teardown(project_id)
             return await self._create(project_id, workspace_path)
 
+    async def _ensure_network(self, network: str) -> None:
+        """Idempotently create the sandbox's user-defined bridge network.
+
+        The user-defined network is the DinD firewall escape: the DROP rule
+        that blocks private-range traffic is scoped to the DEFAULT bridge
+        (``-i docker0``), so a dedicated network reaches the sidecar. Tolerate
+        the "already exists" race (a reused sidecar's network survives)."""
+        code, _out, err = await self._docker(
+            ["network", "create", network], timeout_s=_DOCKER_OP_TIMEOUT_S
+        )
+        if code == 0:
+            return
+        text = err.decode("utf-8", errors="replace")
+        if "already exists" in text:
+            return
+        raise SandboxError(f"sandbox network create failed: {text.strip()}")
+
+    async def _ensure_sidecar(self, network: str, sidecar: str) -> None:
+        """Start the blank test-PG sidecar on ``network`` (reuse if running).
+
+        The sidecar is a BLANK ``pgvector`` with a single superuser/owner role;
+        the product's OWN migration chain creates any runtime role — no product
+        role model is hardcoded here."""
+        if await self._is_running(sidecar):
+            return
+        await self._docker(["rm", "-f", sidecar], timeout_s=_DOCKER_OP_TIMEOUT_S)
+        code, _out, err = await self._docker(
+            [
+                "run",
+                "-d",
+                "--name",
+                sidecar,
+                "--network",
+                network,
+                "--memory",
+                _SIDECAR_MEMORY,
+                "-e",
+                f"POSTGRES_USER={self._test_db_superuser}",
+                "-e",
+                f"POSTGRES_PASSWORD={self._test_db_password}",
+                "-e",
+                f"POSTGRES_DB={self._test_db_name}",
+                self._test_db_image,
+            ],
+            timeout_s=_DOCKER_OP_TIMEOUT_S,
+        )
+        if code != 0:
+            raise SandboxError(
+                f"sandbox test-db create failed: {err.decode('utf-8', errors='replace').strip()}"
+            )
+
+    async def _await_pg_ready(self, sidecar: str) -> None:
+        """Poll ``pg_isready`` until rc==0 or the ready-timeout — fail honestly.
+
+        A timeout raises rather than handing the agent a half-up DB."""
+        deadline = time.monotonic() + self._test_db_ready_timeout_s
+        while True:
+            code, _out, _err = await self._docker(
+                ["exec", sidecar, "pg_isready", "-U", self._test_db_superuser],
+                timeout_s=_DOCKER_OP_TIMEOUT_S,
+            )
+            if code == 0:
+                return
+            if time.monotonic() >= deadline:
+                raise SandboxError(
+                    f"sandbox test-db {sidecar} not ready after {self._test_db_ready_timeout_s}s"
+                )
+            await asyncio.sleep(_PG_READY_POLL_S)
+
+    def _test_db_env_flags(self, host: str) -> list[str]:
+        """``-e KEY=VALUE`` flags for the sandbox, ``{host}`` → sidecar DNS name."""
+        flags: list[str] = []
+        for key, value in self._test_db_env.items():
+            flags.extend(["-e", f"{key}={value.replace('{host}', host)}"])
+        return flags
+
     async def _create(self, project_id: uuid.UUID, workspace_path: str) -> DockerSandboxSession:
         await self._await_dind()
         name = _container_name(project_id)
         await self._docker(["rm", "-f", name], timeout_s=_DOCKER_OP_TIMEOUT_S)
         await self._semaphore.acquire()
-        user_flag = ["--user", self._user] if self._user else []
+        sidecar: str | None = None
+        network: str | None = None
+        net_flag: list[str] = []
+        env_flags: list[str] = []
         try:
+            if self._test_db_enabled:
+                network = _network_name(project_id)
+                sidecar = _sidecar_name(project_id)
+                await self._ensure_network(network)
+                await self._ensure_sidecar(network, sidecar)
+                await self._await_pg_ready(sidecar)
+                net_flag = ["--network", network]
+                env_flags = self._test_db_env_flags(sidecar)
+            user_flag = ["--user", self._user] if self._user else []
             code, _out, err = await self._docker(
                 [
                     "run",
@@ -231,6 +353,8 @@ class DockerSandboxManager:
                     _SANDBOX_MEMORY,
                     "--memory-swap",
                     _SANDBOX_MEMORY,
+                    *net_flag,
+                    *env_flags,
                     *user_flag,
                     "-v",
                     f"{workspace_path}:{_WORK_MOUNT}",
@@ -250,7 +374,9 @@ class DockerSandboxManager:
             raise SandboxError(
                 f"sandbox create failed: {err.decode('utf-8', errors='replace').strip()}"
             )
-        self._containers[project_id] = _Entry(name=name, last_used=time.monotonic())
+        self._containers[project_id] = _Entry(
+            name=name, last_used=time.monotonic(), sidecar=sidecar, network=network
+        )
         self._held.add(project_id)
         logger.info("sandbox_created", project_id=str(project_id), container=name)
         return DockerSandboxSession(container=name, docker=self)
@@ -259,6 +385,12 @@ class DockerSandboxManager:
         entry = self._containers.pop(project_id, None)
         if entry is not None:
             await self._docker(["rm", "-f", entry.name], timeout_s=_DOCKER_OP_TIMEOUT_S)
+            # Reap the test-PG sidecar + its network with the sandbox (tolerate
+            # absent — best-effort ``rm``/``network rm`` ignore rc).
+            if entry.sidecar is not None:
+                await self._docker(["rm", "-f", entry.sidecar], timeout_s=_DOCKER_OP_TIMEOUT_S)
+            if entry.network is not None:
+                await self._docker(["network", "rm", entry.network], timeout_s=_DOCKER_OP_TIMEOUT_S)
             logger.info("sandbox_removed", project_id=str(project_id), container=entry.name)
         if project_id in self._held:
             self._held.discard(project_id)

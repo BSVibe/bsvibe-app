@@ -9,8 +9,12 @@ lockfile read (a real sandbox's "no such file") is swallowed to not-ready.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
+from backend.workflow.application import sandbox_provisioning
 from backend.workflow.application.sandbox_provisioning import (
     _UV_SYNC,
+    TEST_DB_SETUP_TIMEOUT_S,
     VENV_SYNC_TIMEOUT_S,
     ensure_sandbox_ready,
 )
@@ -115,3 +119,83 @@ async def test_idempotent_warm_resync_still_ready() -> None:
     assert await ensure_sandbox_ready(box) is True
     assert await ensure_sandbox_ready(box) is True
     assert box.exec_calls == [(_UV_SYNC, VENV_SYNC_TIMEOUT_S)] * 2
+
+
+# --- Optional test-DB setup command (sandbox_test_db_setup_cmd) -------------
+
+
+@dataclass
+class _FakeSettings:
+    sandbox_test_db_setup_cmd: str = ""
+
+
+class _MultiCmdBox:
+    """SandboxSession double returning per-command exec results (uv.lock present)."""
+
+    def __init__(self, results: dict[str, SandboxResult]) -> None:
+        self._results = results
+        self.exec_calls: list[tuple[str, float]] = []
+
+    @property
+    def workspace_mount(self) -> str:
+        return "/work"
+
+    async def exec(self, command: str, *, timeout_s: float, shell: bool = False) -> SandboxResult:
+        self.exec_calls.append((command, timeout_s))
+        return self._results.get(
+            command, SandboxResult(exit_code=0, stdout="", stderr="", timed_out=False)
+        )
+
+    async def read_file(self, rel_path: str, max_bytes: int) -> bytes:
+        return b"# lockfile"
+
+    async def write_file(self, rel_path: str, content: bytes) -> None:  # pragma: no cover
+        return None
+
+    async def list_dir(self, rel_path: str) -> list[str]:  # pragma: no cover
+        return []
+
+
+def _patch_setup_cmd(monkeypatch, cmd: str) -> None:
+    monkeypatch.setattr(
+        sandbox_provisioning, "get_settings", lambda: _FakeSettings(sandbox_test_db_setup_cmd=cmd)
+    )
+
+
+async def test_setup_cmd_runs_after_venv_sync(monkeypatch) -> None:
+    """A non-empty ``sandbox_test_db_setup_cmd`` runs in the box after uv sync."""
+    _patch_setup_cmd(monkeypatch, "uv run alembic upgrade head")
+    box = _MultiCmdBox({})
+    ready = await ensure_sandbox_ready(box)
+    assert ready is True
+    assert box.exec_calls == [
+        (_UV_SYNC, VENV_SYNC_TIMEOUT_S),
+        ("uv run alembic upgrade head", TEST_DB_SETUP_TIMEOUT_S),
+    ]
+
+
+async def test_empty_setup_cmd_does_not_run(monkeypatch) -> None:
+    """Empty setup cmd (the default) → only the venv sync runs."""
+    _patch_setup_cmd(monkeypatch, "")
+    box = _MultiCmdBox({})
+    ready = await ensure_sandbox_ready(box)
+    assert ready is True
+    assert box.exec_calls == [(_UV_SYNC, VENV_SYNC_TIMEOUT_S)]
+
+
+async def test_setup_cmd_failure_is_degraded_not_raised(monkeypatch) -> None:
+    """A setup failure returns False (degraded) rather than crashing the run."""
+    _patch_setup_cmd(monkeypatch, "uv run alembic upgrade head")
+    box = _MultiCmdBox(
+        {
+            "uv run alembic upgrade head": SandboxResult(
+                exit_code=1, stdout="", stderr="migration boom", timed_out=False
+            )
+        }
+    )
+    ready = await ensure_sandbox_ready(box)
+    assert ready is False  # did not raise
+    assert box.exec_calls == [
+        (_UV_SYNC, VENV_SYNC_TIMEOUT_S),
+        ("uv run alembic upgrade head", TEST_DB_SETUP_TIMEOUT_S),
+    ]

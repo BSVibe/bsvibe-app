@@ -36,6 +36,8 @@ class SettingsResponse(BaseModel):
     sandbox_image: str
     sandbox_idle_reap_seconds: int
     sandbox_max_concurrent: int
+    sandbox_test_db_enabled: bool
+    sandbox_test_db_image: str
 
 
 @router.get("")
@@ -52,4 +54,6 @@ async def get_settings_view() -> SettingsResponse:
         sandbox_image=s.sandbox_image,
         sandbox_idle_reap_seconds=s.sandbox_idle_reap_seconds,
         sandbox_max_concurrent=s.sandbox_max_concurrent,
+        sandbox_test_db_enabled=s.sandbox_test_db_enabled,
+        sandbox_test_db_image=s.sandbox_test_db_image,
     )
