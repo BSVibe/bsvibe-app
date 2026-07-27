@@ -153,6 +153,12 @@ ignore = [
     "UP037",
     "UP041",
 ]
+"backend/workflow/application/sandbox_provisioning.py" = [
+    # ``box.exec(..., shell=True)`` runs INSIDE the isolated sandbox, not on the
+    # host — the shell-injection surface S604 guards is the sandbox itself. The
+    # sibling verify path carries the same ignore.
+    "S604",
+]
 "backend/workflow/application/loop_llm.py" = [
     "F821",
     "PLC0415",

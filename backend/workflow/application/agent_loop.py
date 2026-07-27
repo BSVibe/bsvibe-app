@@ -64,6 +64,7 @@ from backend.workflow.application.run_persistence import (
     finish_verified,
     record_activity,
 )
+from backend.workflow.application.sandbox_provisioning import ensure_sandbox_ready
 from backend.workflow.application.tool_registry import (
     ASK_USER_QUESTION_TOOL,
     WORK_TOOLS,
@@ -335,6 +336,27 @@ class RunOrchestrator:
                 work_step_id=work_step.id,
                 run_attempt_id=attempt.id,
                 summary=f"sandbox unavailable: {exc}",
+            )
+
+        # Provision the project venv ONCE, at acquire — so the INLINE
+        # shell_exec path (the agent running ``uv run pytest`` mid-turn) sees a
+        # ready ``.venv`` before the drive loop, not just the later verify
+        # stage. Idempotent + best-effort: a failed/slow sync is logged and the
+        # run continues (the agent can still work; tests just won't resolve
+        # project deps — same as before this hoist). It must NOT become a
+        # system_error, so it lives OUTSIDE the acquire try/except above.
+        try:
+            venv_ready = await ensure_sandbox_ready(box)
+            logger.info(
+                "run_orchestrator_sandbox_provisioned",
+                run_id=str(run.id),
+                venv_ready=venv_ready,
+            )
+        except Exception as exc:  # noqa: BLE001 — provisioning must never crash the run
+            logger.warning(
+                "run_orchestrator_sandbox_provision_failed",
+                run_id=str(run.id),
+                error=str(exc),
             )
 
         try:

@@ -26,8 +26,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 import backend.workflow.application.verification_service as verification_service
 from backend.knowledge.retrieval.knowledge_item import RetrievedKnowledge
 from backend.workflow.application.agent_loop import LoopTurn
+from backend.workflow.application.sandbox_provisioning import _UV_SYNC
 from backend.workflow.application.verification_service import (
-    _UV_SYNC,
     RETRIEVED_KNOWLEDGE_RATIONALE,
     DerivedGateFailed,
     DerivedGateNotEligible,

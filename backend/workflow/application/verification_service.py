@@ -35,6 +35,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.config import get_settings
 from backend.knowledge.retrieval.knowledge_item import RetrievedKnowledge
+from backend.workflow.application.sandbox_provisioning import ensure_sandbox_ready
 from backend.workflow.domain.gate_derivation import (
     DerivedGate,
     derivation_planner_messages,
@@ -87,12 +88,9 @@ _VERIFY_LLM_TIMEOUT_S = 180.0
 # NOT the project's dependency tree, so a plain ``python -m pytest`` cannot
 # import ``<project>.*`` (its conftest pulls the deps). For a uv-managed
 # worktree we materialize the project venv (incl. extras, where pytest lives)
-# once, then run each command check with that venv on PATH — so the natural
-# command the agent declares resolves the full deps regardless of phrasing.
-_UV_SYNC = "uv sync --frozen --all-extras"
-# The cold sync downloads the dep tree (can be minutes) — its own generous
-# budget, NOT the per-command VERIFY_TIMEOUT_S.
-VENV_SYNC_TIMEOUT_S = 600.0
+# once, then run each command check with that venv on PATH. The sync command +
+# timeout + the materialization itself now live in ``sandbox_provisioning`` —
+# one source of truth, shared with the acquire-time hoist in ``agent_loop``.
 
 #: Rationale stamped on the judge check that folds retrieved BSage knowledge
 #: (canon patterns / prior decisions / prior rejections) into the verify
@@ -941,25 +939,13 @@ class VerificationService:
         )
 
     async def _ensure_project_venv(self, box: SandboxSession) -> bool:
-        """For a uv-managed worktree, materialize ``.venv`` (incl. extras —
-        pytest/ruff live there) so command checks resolve the project's full
-        dependency tree regardless of how the agent phrased them (issue #361).
-
-        Detection is by ``uv.lock`` presence (read, not exec — a missing lock
-        raises :class:`SandboxError` on a real sandbox and returns empty on the
-        host double, so a non-uv worktree never triggers a sync). Not a uv
-        project → ``False`` so non-uv command checks (``npm test``, ``go
-        test``, …) run unchanged. Best-effort: a sync failure also returns
-        ``False`` — the command then runs bare and fails honestly rather than
-        passing against a half-built environment."""
-        try:
-            lock = await box.read_file("uv.lock", 64)
-        except SandboxError:
-            return False
-        if not lock:
-            return False
-        sync = await box.exec(_UV_SYNC, timeout_s=VENV_SYNC_TIMEOUT_S, shell=True)
-        return sync.exit_code == 0 and not sync.timed_out
+        """Thin wrapper over the shared
+        :func:`~backend.workflow.application.sandbox_provisioning.ensure_sandbox_ready`
+        (single source of truth). Returns venv-readiness so command
+        checks / gate / demonstration probes prepend the venv to ``PATH``
+        only when the sync succeeded. Kept as a method so the existing call
+        sites and their ``bool`` contract are unchanged."""
+        return await ensure_sandbox_ready(box)
 
     async def _run_outcome_demonstration(
         self,
