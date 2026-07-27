@@ -123,6 +123,34 @@ class Settings(BaseSettings):
     sentry_client_id: str = ""
     sentry_client_secret: str = ""
 
+    # Agent shell_exec timeout (backend.workflow.infrastructure.tools). The
+    # executor's ``shell_exec`` tool runs a command in the per-product DinD
+    # sandbox and hard-kills it at this many seconds. It was a hardcoded 30s,
+    # which killed a legit ``uv run pytest`` / ``uv sync`` on a real repo
+    # mid-run — the agent then retried inside its turn until the whole-turn cap
+    # (~30 min): the "30-minute flail". 900s (15 min) comfortably covers a test
+    # suite / build while still bounding a hang. This is NOT a restriction on
+    # WHAT the agent runs — long runs are already safe (per-turn drive-session
+    # release holds no DB connection across the turn; the whole-turn cap still
+    # bounds a runaway). An agent may request a LONGER per-call ``timeout_s`` for
+    # a big suite, clamped to ``shell_exec_timeout_max_s`` so it can neither be
+    # starved nor request infinity.
+    shell_exec_timeout_s: float = 900.0
+    # Hard ceiling on a per-call ``shell_exec(timeout_s=...)`` override — a
+    # runaway cannot request more than this. 3600s (1h) matches the executor
+    # task timeout ceiling.
+    shell_exec_timeout_max_s: float = 3600.0
+
+    # Verify-phase command timeouts (backend.workflow.application.verification_service).
+    # A verify command check runs in the sandbox and is killed at
+    # ``verify_command_timeout_s``; a DERIVED-gate command (the repo's own
+    # test/quality command, e.g. ``uv run pytest``) at
+    # ``verify_gate_command_timeout_s``. Both were hardcoded (60s / 300s), which
+    # truncated a real test-suite gate. Raised + tunable so a slow but legit
+    # suite runs to completion instead of a false timeout-fail.
+    verify_command_timeout_s: float = 300.0
+    verify_gate_command_timeout_s: float = 900.0
+
     # Sandbox settings (backend.workflow.infrastructure.sandbox)
     sandbox_enabled: bool = False
     docker_host: str = ""

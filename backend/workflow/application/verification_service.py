@@ -33,6 +33,7 @@ from typing import Any, Protocol, runtime_checkable
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.config import get_settings
 from backend.knowledge.retrieval.knowledge_item import RetrievedKnowledge
 from backend.workflow.domain.gate_derivation import (
     DerivedGate,
@@ -67,7 +68,10 @@ from backend.workflow.infrastructure.sandbox import SandboxError, SandboxSession
 logger = structlog.get_logger(__name__)
 
 # Per-command verify timeout + the byte cap on each file fed to the judge.
-VERIFY_TIMEOUT_S = 60.0
+# Legacy module-level default. The ACTIVE per-command verify timeout is resolved
+# from ``settings.verify_command_timeout_s`` (default 300s) at call time — the
+# old hardcoded 60s truncated a real test-suite check. Kept for importers.
+VERIFY_TIMEOUT_S = 300.0
 _JUDGE_FILE_CONTEXT_BYTES = 8 * 1024
 
 # Hard ceiling on a verify-phase LLM call (the L2 acceptance author + the
@@ -105,8 +109,11 @@ LEGACY_RETRIEVED_KNOWLEDGE_RATIONALE = "BSage canonical patterns retrieved for t
 
 #: Per-command timeout for a DERIVED-gate check in the isolated sandbox — the
 #: repo's own quality/test command (``uv run ruff …`` / ``cargo clippy`` / …),
-#: which can be slower than the per-file VERIFY_TIMEOUT_S.
-GATE_CMD_TIMEOUT_S = 300.0
+#: which can be slower than the per-file VERIFY_TIMEOUT_S. Legacy module-level
+#: default; the ACTIVE value is resolved from
+#: ``settings.verify_gate_command_timeout_s`` (default 900s) at call time — a
+#: derived gate that runs the repo's whole test suite legitimately takes minutes.
+GATE_CMD_TIMEOUT_S = 900.0
 
 #: Bytes of each changed source file fed to the demonstration planner (enough
 #: for a utility/module; the planner needs the API, not the whole repo).
@@ -791,7 +798,11 @@ class VerificationService:
         for check in contract.command_checks:
             command = check.command or ""
             run_command = f'export PATH="{venv_bin}:$PATH"; {command}' if venv_ready else command
-            res = await box.exec(run_command, timeout_s=VERIFY_TIMEOUT_S, shell=True)
+            res = await box.exec(
+                run_command,
+                timeout_s=get_settings().verify_command_timeout_s,
+                shell=True,
+            )
             output = "\n".join(c for c in (res.stdout, res.stderr) if c)[-2000:]
             results.append(
                 {
@@ -897,7 +908,11 @@ class VerificationService:
             run_command = (
                 f'export PATH="{venv_bin}:$PATH"; {c.command}' if venv_ready else c.command
             )
-            res = await box.exec(run_command, timeout_s=GATE_CMD_TIMEOUT_S, shell=True)
+            res = await box.exec(
+                run_command,
+                timeout_s=get_settings().verify_gate_command_timeout_s,
+                shell=True,
+            )
             output = "\n".join(o for o in (res.stdout, res.stderr) if o)[-2000:]
             if res.exit_code == 0 and not res.timed_out:
                 status = "passed"
@@ -1005,11 +1020,19 @@ class VerificationService:
         for setup_cmd in plan.setup:
             # Best-effort prep (build / install). A failed setup is not asserted
             # — it just makes the dependent probes unavailable, which downgrades.
-            await box.exec(_wrap(setup_cmd), timeout_s=GATE_CMD_TIMEOUT_S, shell=True)
+            await box.exec(
+                _wrap(setup_cmd),
+                timeout_s=get_settings().verify_gate_command_timeout_s,
+                shell=True,
+            )
 
         results: list[ProbeResult] = []
         for probe in plan.probes:
-            res = await box.exec(_wrap(probe.command), timeout_s=VERIFY_TIMEOUT_S, shell=True)
+            res = await box.exec(
+                _wrap(probe.command),
+                timeout_s=get_settings().verify_command_timeout_s,
+                shell=True,
+            )
             obs = Observation(
                 exit_code=res.exit_code,
                 stdout=res.stdout,

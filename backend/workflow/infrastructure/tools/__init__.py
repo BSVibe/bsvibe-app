@@ -6,8 +6,10 @@ Handlers:
   - ``file_write(path, content)`` — create/overwrite file under workspace_dir
   - ``file_edit(path, old_string, new_string)`` — surgical exact-string
     replacement; requires the file was ``file_read`` first
-  - ``shell_exec(command)`` — run a shell command with cwd=workspace_dir,
-    30s timeout, structural (tokenized) denylist of destructive/network
+  - ``shell_exec(command, timeout_s=None)`` — run a shell command with
+    cwd=workspace_dir, a CONFIGURABLE timeout (``settings.shell_exec_timeout_s``,
+    default 900s; optional per-call ``timeout_s`` clamped to
+    ``settings.shell_exec_timeout_max_s``), structural (tokenized) denylist of destructive/network
     commands (judged on argv, not raw substring — see ``_shell_denylist_reason``)
 
 Every handler refuses to step outside ``workspace_dir`` via path
@@ -32,6 +34,7 @@ from typing import TYPE_CHECKING, Any
 
 import structlog
 
+from backend.config import get_settings
 from backend.workflow.infrastructure.sandbox import SandboxError, SandboxSession
 
 if TYPE_CHECKING:
@@ -102,7 +105,12 @@ _FORK_BOMB_RE = re.compile(r":\s*\(\s*\)\s*\{")
 # are judged by the binary they invoke, not the outer command.
 _SUBST_RE = re.compile(r"\$\((.*?)\)|`(.*?)`", re.DOTALL)
 
-SHELL_TIMEOUT_S: float = 30.0
+# Legacy module-level default. The ACTIVE timeout is resolved from
+# ``settings.shell_exec_timeout_s`` (default 900s) at call time in
+# :meth:`ToolRegistry._resolve_shell_timeout`, with an optional per-call
+# ``timeout_s`` override clamped to ``settings.shell_exec_timeout_max_s``.
+# Kept for importers; NOT the value actually applied.
+SHELL_TIMEOUT_S: float = 900.0
 FILE_READ_MAX_BYTES: int = 256 * 1024
 FILE_WRITE_MAX_BYTES: int = 256 * 1024
 
@@ -382,7 +390,11 @@ class ToolRegistry:
         self._tools["shell_exec"] = ToolDefinition(
             name="shell_exec",
             description=(
-                "Run a shell command with cwd=workspace_root, 30s timeout. Destructive / network commands are refused."
+                "Run a shell command with cwd=workspace_root. Long-running commands "
+                "(a full test suite, a build, dependency install) are fine — the default "
+                "timeout is generous. For an exceptionally long suite you MAY pass "
+                "'timeout_s' to request more time (bounded by a hard ceiling). "
+                "Destructive / network commands are refused."
             ),
             parameters_schema={
                 "type": "object",
@@ -390,6 +402,14 @@ class ToolRegistry:
                     "command": {
                         "type": "string",
                         "description": "Shell command line.",
+                    },
+                    "timeout_s": {
+                        "type": "number",
+                        "description": (
+                            "OPTIONAL — seconds before the command is killed. Omit to use "
+                            "the generous default. Raise it for a big test suite / build; "
+                            "values above the hard ceiling are clamped."
+                        ),
                     },
                 },
                 "required": ["command"],
@@ -686,6 +706,28 @@ class ToolRegistry:
             f"{n_judge} judge check(s). Now write the tests, then implement."
         )
 
+    @staticmethod
+    def _resolve_shell_timeout(requested: Any) -> float:
+        """The seconds ``shell_exec`` should allow this command.
+
+        Default from ``settings.shell_exec_timeout_s`` (raised from the old
+        hardcoded 30s that killed real test suites mid-run). An OPTIONAL,
+        agent-supplied ``timeout_s`` lets a big suite ask for more, CLAMPED to
+        ``settings.shell_exec_timeout_max_s`` so a runaway cannot request
+        infinity. A missing / non-positive / unparseable request falls back to
+        the default rather than failing the call."""
+        settings = get_settings()
+        default = float(settings.shell_exec_timeout_s)
+        if requested is None:
+            return default
+        try:
+            value = float(requested)
+        except (TypeError, ValueError):
+            return default
+        if value <= 0:
+            return default
+        return min(value, float(settings.shell_exec_timeout_max_s))
+
     async def _shell_exec(self, args: dict[str, Any]) -> str:
         command = str(args.get("command") or "")
         if not command.strip():
@@ -693,10 +735,11 @@ class ToolRegistry:
         reason = _shell_denylist_reason(command)
         if reason is not None:
             raise ToolError(f"shell_exec: refused by denylist: {reason}")
+        timeout_s = self._resolve_shell_timeout(args.get("timeout_s"))
         if self._sandbox is not None:
-            result = await self._sandbox.exec(command, timeout_s=SHELL_TIMEOUT_S, shell=True)
+            result = await self._sandbox.exec(command, timeout_s=timeout_s, shell=True)
             if result.timed_out:
-                raise ToolError(f"shell_exec: timed out after {SHELL_TIMEOUT_S}s")
+                raise ToolError(f"shell_exec: timed out after {timeout_s}s")
             output = "\n".join(chunk for chunk in (result.stdout, result.stderr) if chunk)
             return f"exit={result.exit_code}\n{output[-4000:]}"
         try:
@@ -715,11 +758,11 @@ class ToolRegistry:
         except FileNotFoundError as exc:
             return f"command not found: {exc}"
         try:
-            stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=SHELL_TIMEOUT_S)
+            stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=timeout_s)
         except TimeoutError:
             process.kill()
             await process.communicate()
-            raise ToolError(f"shell_exec: timed out after {SHELL_TIMEOUT_S}s") from None
+            raise ToolError(f"shell_exec: timed out after {timeout_s}s") from None
         output = "\n".join(
             chunk.decode("utf-8", errors="replace") for chunk in (stdout, stderr) if chunk
         )
