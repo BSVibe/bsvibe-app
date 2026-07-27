@@ -636,6 +636,10 @@ class ExecutorAdapter:
             settings=self.settings,
             account_id=self.model_account_id,
             yield_on_saturation=self.yield_on_saturation,
+            # Drive-session-release — connection-free capacity wait: each
+            # worker-availability check runs in its own short session so no
+            # pooled connection is held across the bounded-wait sleep.
+            session_factory=self.session_factory,
         )
 
         # Lift E21 — forward the underlying LLM model id from the
@@ -697,6 +701,12 @@ class ExecutorAdapter:
                 session=session,
                 task_id=task.id,
                 timeout_s=effective_timeout_s,
+                # Drive-session-release — the awaited executor turn can run for
+                # many minutes. With a ``session_factory`` wired, each DB poll
+                # runs in a short session that is closed before the next wait, so
+                # NO pooled connection is held idle-in-transaction across the
+                # turn. This is the fix for the pool-exhaustion outage.
+                session_factory=self.session_factory,
             )
         except dispatch.TaskTimeout as exc:
             # Lift E14 — signal the worker so it stops running the
@@ -879,6 +889,7 @@ async def _await_worker_with_capacity(
     settings: Settings,
     account_id: uuid.UUID,
     yield_on_saturation: bool = False,
+    session_factory: async_sessionmaker[AsyncSession] | None = None,
 ) -> Any:
     """Lift E16 — block until a worker with free capacity is available.
 
@@ -897,18 +908,41 @@ async def _await_worker_with_capacity(
     """
     from backend.executors import dispatch  # noqa: PLC0415
 
-    deadline = asyncio.get_event_loop().time() + settings.executor_capacity_wait_max_s
-    poll_interval = max(settings.executor_capacity_wait_poll_s, 0.0)
-    attempt = 0
-    while True:
-        attempt += 1
-        worker = await dispatch.find_available_worker(
+    async def _find_available() -> Any:
+        """One availability scan holding no connection past its return."""
+        if session_factory is not None:
+            async with session_factory() as short:
+                return await dispatch.find_available_worker(
+                    short,
+                    workspace_id=workspace_id,
+                    executor_type=executor_type,
+                    pinned_worker_id=pinned_worker_id,
+                    max_parallel_per_worker=settings.max_parallel_tasks_per_worker,
+                )
+        return await dispatch.find_available_worker(
             session,
             workspace_id=workspace_id,
             executor_type=executor_type,
             pinned_worker_id=pinned_worker_id,
             max_parallel_per_worker=settings.max_parallel_tasks_per_worker,
         )
+
+    async def _has_live() -> bool:
+        if session_factory is not None:
+            async with session_factory() as short:
+                return await dispatch.has_live_worker(
+                    short, workspace_id=workspace_id, executor_type=executor_type
+                )
+        return await dispatch.has_live_worker(
+            session, workspace_id=workspace_id, executor_type=executor_type
+        )
+
+    deadline = asyncio.get_event_loop().time() + settings.executor_capacity_wait_max_s
+    poll_interval = max(settings.executor_capacity_wait_poll_s, 0.0)
+    attempt = 0
+    while True:
+        attempt += 1
+        worker = await _find_available()
         if worker is not None:
             return worker
         # No available worker. Two very different conditions produce this None:
@@ -922,9 +956,7 @@ async def _await_worker_with_capacity(
         # Checked on EVERY iteration (a worker can go offline mid-wait), before
         # the deadline/sleep logic. This is the slow path (worker unavailable),
         # so the extra query cost is irrelevant.
-        if not await dispatch.has_live_worker(
-            session, workspace_id=workspace_id, executor_type=executor_type
-        ):
+        if not await _has_live():
             logger.info(
                 "executor_adapter_no_live_worker",
                 workspace_id=str(workspace_id),

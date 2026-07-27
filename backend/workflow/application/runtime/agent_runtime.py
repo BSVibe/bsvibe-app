@@ -28,7 +28,7 @@ if TYPE_CHECKING:
     from backend.workflow.application.product_tick_planner import ProductTickPlanner
 
 import structlog
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from backend.config import Settings, get_settings
 from backend.dispatch.caller_registry import (
@@ -180,6 +180,7 @@ def build_agent_execution_deps(
     sandbox_manager: SandboxManager | None = None,
     redis_client: Any = None,
     connector_plugins: dict[str, PluginMeta] | None = None,
+    session_factory: async_sessionmaker[AsyncSession] | None = None,
 ) -> AgentExecutionDeps:
     """The production execution backend for :class:`AgentWorker`.
 
@@ -189,6 +190,7 @@ def build_agent_execution_deps(
       ``workflow.frame``. ``None`` (no rule + no workspace default) →
       keyword-fallback frame.
     * sandbox / skill_loader / provisioner / redis wiring unchanged.
+    * ``session_factory`` → the act ExecutorAdapter's own connection-free session.
     """
     settings = settings or get_settings()
     box: SandboxManager = _resolve_sandbox_manager(sandbox_manager, settings)
@@ -277,20 +279,18 @@ def build_agent_execution_deps(
         )
 
         # Lift E32 — look up the product's repo URL so the worker can
-        # clone it into the per-task workspace before invoking the
-        # executor. Without it the coding agent gets an empty tempdir
-        # and the E31 dogfood symptom returns: 0 file edits, NULL
-        # artifact_refs. ``None`` keeps the pre-E32 empty-tempdir path
-        # for runs without a product (substrate-only tasks).
+        # clone it into the per-task workspace before invoking the executor.
+        # Without it the coding agent gets an empty tempdir and the E31 dogfood
+        # symptom returns: 0 file edits, NULL artifact_refs. ``None`` keeps the
+        # pre-E32 empty-tempdir path for runs without a product.
         repo_url = await _product_repo_url(session, run.product_id) if run.product_id else None
 
         # L10 (#5) — Knowledge-only short-circuit (B9b): a frame-classified
         # ``knowledge_only`` ask is a CHAT answer, no engineering work. It MUST
         # use a chat model (``CALLER_FRAME``), NOT the act-stage executor — a
-        # coding-agent CLI fails on a chat prompt with "executor chat task …
-        # failed: exit 1" (prod symptom, [[bsvibe-executor-subprocess-too-heavy]]).
-        # Resolve the chat account BEFORE the act account so a question never
-        # touches the executor.
+        # coding-agent CLI fails a chat prompt ("executor chat task … exit 1",
+        # [[bsvibe-executor-subprocess-too-heavy]]). Resolve chat BEFORE act so a
+        # question never touches the executor.
         if _is_knowledge_only(run):
             chat = await resolve_via_caller(
                 session,
@@ -324,6 +324,7 @@ def build_agent_execution_deps(
             workspace_id=run.workspace_id,
             settings=settings,
             redis=redis_client,
+            session_factory=session_factory,  # drive-session-release: own short session
             # Lift E31 — thread the run id so the ExecutorAdapter binds
             # its dispatched task to the run for artifact persistence
             # (files captured by the worker → run's ``artifact_refs``).

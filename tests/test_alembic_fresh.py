@@ -125,9 +125,7 @@ def test_fresh_pg_upgrade_round_trip():
     # Phase 1 — fresh upgrade.
     _alembic(["upgrade", "head"], env_extra=env_extra)
     stamped = asyncio.run(_stamped_head(url))
-    assert stamped == "drop_dead_execution_tables", (
-        f"expected head drop_dead_execution_tables, got {stamped}"
-    )
+    assert stamped == "run_claim_columns", f"expected head run_claim_columns, got {stamped}"
 
     # Phase 2 — full downgrade. Verifies every revision's downgrade path.
     _alembic(["downgrade", "base"], env_extra=env_extra)
@@ -135,7 +133,7 @@ def test_fresh_pg_upgrade_round_trip():
     # Phase 3 — re-upgrade. Verifies the chain is idempotent.
     _alembic(["upgrade", "head"], env_extra=env_extra)
     stamped = asyncio.run(_stamped_head(url))
-    assert stamped == "drop_dead_execution_tables"
+    assert stamped == "run_claim_columns"
 
 
 def test_notification_channel_keys_renames_email_to_email_sender():
@@ -564,3 +562,45 @@ def test_pgvector_extension_installed_after_upgrade():
         "pgvector extension not installed after `alembic upgrade head` — "
         "is the CI service container using pgvector/pgvector:pg16?"
     )
+
+
+def test_run_claim_columns_round_trip():
+    """Drive-session-release — ``execution_runs`` gains ``claimed_at`` +
+    ``claimed_by`` (both nullable); the down migration drops them. Both
+    directions must run against a fresh PG so the operational rollback path is
+    safe, and a row with both columns NULL must insert after the upgrade."""
+    url = _skip_if_no_pg()
+    env_extra = {"BSVIBE_MIGRATION_DATABASE_URL": url}
+
+    asyncio.run(_drop_everything(url))
+    _alembic(["upgrade", "head"], env_extra=env_extra)
+
+    async def _columns() -> set[str]:
+        engine = create_async_engine(url, future=True)
+        try:
+            async with engine.connect() as conn:
+                rows = (
+                    await conn.execute(
+                        text(
+                            "SELECT column_name FROM information_schema.columns "
+                            "WHERE table_name='execution_runs'"
+                        )
+                    )
+                ).all()
+                return {r[0] for r in rows}
+        finally:
+            await engine.dispose()
+
+    cols = asyncio.run(_columns())
+    assert {"claimed_at", "claimed_by"} <= cols, f"missing claim columns; got {cols}"
+
+    # Downgrade to the parent drops both columns.
+    _alembic(["downgrade", "drop_dead_execution_tables"], env_extra=env_extra)
+    cols_after = asyncio.run(_columns())
+    assert not ({"claimed_at", "claimed_by"} & cols_after), (
+        f"claim columns survived downgrade; got {cols_after}"
+    )
+
+    # Re-upgrade restores them.
+    _alembic(["upgrade", "head"], env_extra=env_extra)
+    assert {"claimed_at", "claimed_by"} <= asyncio.run(_columns())

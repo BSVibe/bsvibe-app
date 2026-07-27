@@ -112,6 +112,17 @@ class ExecutionRun(ExecutionBase):
         default=RunStatus.OPEN,
     )
     payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    # Atomic-claim coordination (drive-session-release refactor). ``claimed_at``
+    # is stamped when a worker atomically claims this run to drive it (OPEN →
+    # RUNNING in a committed short txn), refreshed at every turn-boundary commit
+    # (a heartbeat), and cleared on EVERY drive exit (terminal, pause-on-decision,
+    # or saturation yield-back). ``claimed_by`` records the driving worker id.
+    # A stale claim (``claimed_at`` older than the lease, no pending Decision) is
+    # reaped back to OPEN so a crashed worker's run is re-driven. Both NULL means
+    # "not currently being driven" — the normal resting state for OPEN runs and
+    # for RUNNING runs paused on a Decision.
+    claimed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    claimed_by: Mapped[uuid.UUID | None] = mapped_column(nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=lambda: datetime.now()
     )
