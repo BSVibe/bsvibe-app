@@ -112,6 +112,15 @@ class FileEditInput(_WorkInput):
 
 class ShellExecInput(_WorkInput):
     command: str = Field(..., min_length=1, description="Runs in the run's sandbox.")
+    timeout_s: float | None = Field(
+        None,
+        gt=0,
+        description=(
+            "OPTIONAL — seconds before the command is killed. Omit for the generous "
+            "default; raise it for a big test suite / build. Values above the hard "
+            "ceiling are clamped server-side."
+        ),
+    )
 
 
 class VerificationCheck(BaseModel):
@@ -239,7 +248,11 @@ _FORWARDING_PRESENTATION: dict[str, tuple[type[BaseModel], str, bool]] = {
     "file_edit": (FileEditInput, "Replace an exact string in a file in the run's workspace.", True),
     "shell_exec": (
         ShellExecInput,
-        "Run a shell command inside the run's sandbox (cwd = the workspace).",
+        (
+            "Run a shell command inside the run's sandbox (cwd = the workspace). "
+            "Long commands (full test suite, build, dependency install) are fine; "
+            "pass 'timeout_s' to request more time for an exceptionally long one."
+        ),
         True,
     ),
     "declare_verification": (

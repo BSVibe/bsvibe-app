@@ -134,7 +134,12 @@ async def test_tool_delegates_to_the_run_bound_registry(
     out = await registry.call_tool(tool, args, _ctx(_principal(run_id=run_id)))
 
     work = registry.built[run_id]  # type: ignore[attr-defined]
-    assert work.calls == [(inner, args)]
+    # shell_exec carries an OPTIONAL ``timeout_s`` — omitted by the agent here, so the
+    # transport forwards it as None (the registry resolves None to the configured default).
+    expected = dict(args)
+    if inner == "shell_exec":
+        expected.setdefault("timeout_s", None)
+    assert work.calls == [(inner, expected)]
     assert str(run_id) in out["result"]
 
 
