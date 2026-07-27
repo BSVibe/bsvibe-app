@@ -163,6 +163,36 @@ class Settings(BaseSettings):
     # Empty leaves the image default (no ``--user``); never a silent coercion.
     sandbox_user: str = ""
 
+    # Per-product test-Postgres sidecar (GATED, default OFF). When enabled, each
+    # sandbox is stood up alongside a blank ``pgvector/pgvector:pg16`` sidecar on
+    # a DEDICATED user-defined bridge network ``sbxnet-<product>`` so the sandbox
+    # reaches it by container-name DNS, and the ``sandbox_test_db_env`` vars are
+    # injected into the sandbox. The user-defined network is the escape hatch:
+    # the DinD firewall DROPs private-range traffic only on the DEFAULT bridge
+    # (``-i docker0``), so a dedicated network is NOT subject to that rule. OFF
+    # (the default) is byte-identical to no-sidecar: no network, no env, no
+    # sidecar. The sidecar is a BLANK PG with a single superuser/owner role; the
+    # PRODUCT's own migration chain CREATEs any runtime role — the platform does
+    # NOT hardcode a product's role model. Defaults mirror bsvibe-app CI so the
+    # dogfood target works out of the box; other products override or stay off.
+    sandbox_test_db_enabled: bool = False
+    sandbox_test_db_image: str = "pgvector/pgvector:pg16"
+    sandbox_test_db_superuser: str = "bsvibe"
+    sandbox_test_db_password: str = "bsvibe"  # noqa: S105 — blank-PG default, not a secret
+    sandbox_test_db_name: str = "bsvibe"
+    # Env vars injected into the SANDBOX container. ``{host}`` is substituted with
+    # the sidecar's container-DNS name at create time. Env override form is JSON.
+    sandbox_test_db_env: dict[str, str] = {
+        "BSVIBE_DATABASE_URL": "postgresql+asyncpg://bsvibe_app:bsvibe_app_ci@{host}:5432/bsvibe",
+        "BSVIBE_MIGRATION_DATABASE_URL": "postgresql+asyncpg://bsvibe:bsvibe@{host}:5432/bsvibe",
+        "BSVIBE_APP_DB_PASSWORD": "bsvibe_app_ci",
+    }
+    # Command run INSIDE the sandbox (after venv sync) to migrate/provision the
+    # test DB before tests. Empty = skip (the generic default). Dogfood sets e.g.
+    # ``uv run alembic upgrade head`` (uses BSVIBE_MIGRATION_DATABASE_URL, above).
+    sandbox_test_db_setup_cmd: str = ""
+    sandbox_test_db_ready_timeout_s: float = 60.0
+
     # Gateway settings (backend.router)
     # 32-byte AES-256-GCM key, base64-url-encoded. Generate with:
     # `python -c "import os,base64; print(base64.urlsafe_b64encode(os.urandom(32)).decode())"`.
