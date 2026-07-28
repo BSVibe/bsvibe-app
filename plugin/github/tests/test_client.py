@@ -7,7 +7,7 @@ import httpx
 import pytest
 import respx
 
-from plugin.github.client import GithubClient
+from plugin.github.client import GithubClient, MergeResult
 
 API = "https://api.github.com"
 
@@ -66,6 +66,92 @@ class TestUpdateAndGetPr:
         )
         await client.close_pr("o", "r", 15)
         assert b'"closed"' in route.calls.last.request.content
+
+
+class TestMergePr:
+    @respx.mock
+    async def test_merge_pr_200_returns_merged(self, client):
+        route = respx.put(f"{API}/repos/o/r/pulls/15/merge").mock(
+            return_value=httpx.Response(200, json={"sha": "abc123", "merged": True})
+        )
+        result = await client.merge_pr("o", "r", 15)
+        assert result == MergeResult(status="merged", merged=True, sha="abc123")
+        assert route.called
+        sent = route.calls.last.request
+        assert sent.method == "PUT"
+        assert b'"merge_method"' in sent.content
+        assert b'"squash"' in sent.content
+
+    @respx.mock
+    async def test_merge_pr_honours_method(self, client):
+        route = respx.put(f"{API}/repos/o/r/pulls/15/merge").mock(
+            return_value=httpx.Response(200, json={"sha": "def456"})
+        )
+        result = await client.merge_pr("o", "r", 15, method="rebase")
+        assert result.merged is True
+        assert b'"rebase"' in route.calls.last.request.content
+
+    @respx.mock
+    async def test_merge_pr_405_not_mergeable_no_raise(self, client):
+        respx.put(f"{API}/repos/o/r/pulls/15/merge").mock(
+            return_value=httpx.Response(405, json={"message": "not mergeable"})
+        )
+        result = await client.merge_pr("o", "r", 15)
+        assert result == MergeResult(status="not_mergeable", merged=False, sha=None)
+
+    @respx.mock
+    async def test_merge_pr_409_head_changed_no_raise(self, client):
+        respx.put(f"{API}/repos/o/r/pulls/15/merge").mock(
+            return_value=httpx.Response(409, json={"message": "head changed"})
+        )
+        result = await client.merge_pr("o", "r", 15)
+        assert result == MergeResult(status="head_changed", merged=False, sha=None)
+
+    @respx.mock
+    async def test_merge_pr_500_raises(self, client):
+        respx.put(f"{API}/repos/o/r/pulls/15/merge").mock(
+            return_value=httpx.Response(500, json={"message": "boom"})
+        )
+        with pytest.raises(httpx.HTTPStatusError):
+            await client.merge_pr("o", "r", 15)
+
+
+class TestGetCheckRuns:
+    @respx.mock
+    async def test_get_check_runs_parses_list(self, client):
+        respx.get(f"{API}/repos/o/r/commits/deadbeef/check-runs").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "total_count": 2,
+                    "check_runs": [
+                        {"name": "build", "status": "completed", "conclusion": "success"},
+                        {"name": "test", "status": "in_progress", "conclusion": None},
+                    ],
+                },
+            )
+        )
+        runs = await client.get_check_runs("o", "r", "deadbeef")
+        assert len(runs) == 2
+        assert runs[0]["name"] == "build"
+        assert runs[0]["conclusion"] == "success"
+        assert runs[1]["status"] == "in_progress"
+
+    @respx.mock
+    async def test_get_check_runs_missing_key_returns_empty(self, client):
+        respx.get(f"{API}/repos/o/r/commits/deadbeef/check-runs").mock(
+            return_value=httpx.Response(200, json={"total_count": 0})
+        )
+        runs = await client.get_check_runs("o", "r", "deadbeef")
+        assert runs == []
+
+    @respx.mock
+    async def test_get_check_runs_raises_on_error(self, client):
+        respx.get(f"{API}/repos/o/r/commits/deadbeef/check-runs").mock(
+            return_value=httpx.Response(404, json={"message": "no ref"})
+        )
+        with pytest.raises(httpx.HTTPStatusError):
+            await client.get_check_runs("o", "r", "deadbeef")
 
 
 class TestComments:
