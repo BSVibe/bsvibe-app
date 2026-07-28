@@ -109,9 +109,12 @@ def test_alembic_head_is_connector_last_import():
     # ``claimed_by`` for the committed atomic claim + stale-claim reaper that
     # replace the held FOR UPDATE row-lock, so the DB connection is released
     # across the multi-minute executor turn).
+    # run_claim_columns → github_merge_watch (PR3 — the durable
+    # ``github_merge_watch`` auto-merge poll queue; additive table + enum, no
+    # worker consuming it yet).
     # Keep the test name (function name is a historical revision id, kept for
     # git-blame stability) and assert the current tip.
-    assert "run_claim_columns" in result.stdout
+    assert "github_merge_watch" in result.stdout
 
 
 def test_target_metadata_covers_all_bases():
