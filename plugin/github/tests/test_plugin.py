@@ -67,6 +67,10 @@ class TestPluginMeta:
         # M2 — new read-only @p.action exposed mid-run.
         assert P.meta.actions["list_issues"].mcp_exposed is True
 
+    def test_merge_pr_action_not_mcp_exposed(self):
+        # merge_pr is an internal delivery/merge-worker action — NOT an MCP tool.
+        assert P.meta.actions["merge_pr"].mcp_exposed is False
+
     def test_has_setup(self):
         assert P.meta.setup_fn is not None
 
@@ -381,6 +385,61 @@ class TestActions:
         # The request URL must carry per_page=50 (the capped limit).
         called_url = str(route.calls[0].request.url)
         assert "per_page=50" in called_url
+
+    # PR1 — internal merge_pr action (not mcp_exposed)
+    @respx.mock
+    async def test_merge_pr_action_dispatches_and_returns_result(self):
+        route = respx.put(f"{API}/repos/o/r/pulls/15/merge").mock(
+            return_value=httpx.Response(200, json={"sha": "abc123", "merged": True})
+        )
+        result = await _runner().dispatch_action(
+            P.meta,
+            action_name="merge_pr",
+            context=_Ctx(),
+            kwargs={"repo": "o/r", "number": 15, "method": "squash"},
+        )
+        assert route.called
+        assert b'"squash"' in route.calls.last.request.content
+        assert result["status"] == "merged"
+        assert result["merged"] is True
+        assert result["sha"] == "abc123"
+
+    @respx.mock
+    async def test_merge_pr_action_defaults_to_squash(self):
+        route = respx.put(f"{API}/repos/o/r/pulls/9/merge").mock(
+            return_value=httpx.Response(200, json={"sha": "s"})
+        )
+        result = await _runner().dispatch_action(
+            P.meta,
+            action_name="merge_pr",
+            context=_Ctx(),
+            kwargs={"repo": "o/r", "number": 9},
+        )
+        assert b'"squash"' in route.calls.last.request.content
+        assert result["merged"] is True
+
+    @respx.mock
+    async def test_merge_pr_action_not_mergeable_no_raise(self):
+        respx.put(f"{API}/repos/o/r/pulls/15/merge").mock(
+            return_value=httpx.Response(405, json={"message": "not mergeable"})
+        )
+        result = await _runner().dispatch_action(
+            P.meta,
+            action_name="merge_pr",
+            context=_Ctx(),
+            kwargs={"repo": "o/r", "number": 15},
+        )
+        assert result["status"] == "not_mergeable"
+        assert result["merged"] is False
+
+    async def test_merge_pr_action_rejects_bad_schema(self):
+        with pytest.raises(PluginRunError, match="schema"):
+            await _runner().dispatch_action(
+                P.meta,
+                action_name="merge_pr",
+                context=_Ctx(),
+                kwargs={"repo": "o/r"},  # missing required number
+            )
 
 
 # ── setup ──────────────────────────────────────────────────────────────────

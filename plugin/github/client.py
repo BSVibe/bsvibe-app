@@ -11,12 +11,29 @@ Tests mock httpx at the transport layer (respx), so no real network I/O.
 
 from __future__ import annotations
 
-from typing import Any
+from dataclasses import dataclass
+from typing import Any, Literal
 
 import httpx
 
 DEFAULT_BASE_URL = "https://api.github.com"
 _API_VERSION = "2022-11-28"
+
+
+@dataclass(frozen=True)
+class MergeResult:
+    """Outcome of a PR merge attempt.
+
+    ``merged`` mirrors ``status == "merged"`` for callers that only want the
+    boolean. ``not_mergeable`` (405) and ``head_changed`` (409) are NON-error
+    outcomes — the caller (a later CI-green merge worker) decides whether to
+    wait/re-poll or re-read the head — so ``merge_pr`` returns them instead of
+    raising.
+    """
+
+    status: Literal["merged", "not_mergeable", "head_changed"]
+    merged: bool
+    sha: str | None = None
 
 
 class GithubClient:
@@ -90,6 +107,59 @@ class GithubClient:
         )
         return self._json(resp)
 
+    async def merge_pr(
+        self, owner: str, repo: str, number: int, *, method: str = "squash"
+    ) -> MergeResult:
+        """Merge a PR via ``PUT /repos/{owner}/{repo}/pulls/{number}/merge``.
+
+        Does NOT use ``_json`` (which raises). The two "not yet" outcomes are
+        returned as data, not exceptions, because a CI-green merge worker treats
+        them as retryable states:
+
+        * ``200`` → :class:`MergeResult` ``merged`` (carries the merge ``sha``).
+        * ``405`` (Method Not Allowed — PR not mergeable, or already merged) →
+          ``not_mergeable`` (re-poll later).
+        * ``409`` (Conflict — head moved since the client last read it) →
+          ``head_changed`` (re-read the head, retry).
+        * any other non-2xx → raises via ``raise_for_status``.
+        """
+        resp = await self._request(
+            "PUT",
+            f"/repos/{owner}/{repo}/pulls/{number}/merge",
+            json_body={"merge_method": method},
+        )
+        if resp.status_code == 200:
+            body: dict[str, Any] = resp.json()
+            return MergeResult(status="merged", merged=True, sha=body.get("sha"))
+        if resp.status_code == 405:
+            return MergeResult(status="not_mergeable", merged=False)
+        if resp.status_code == 409:
+            return MergeResult(status="head_changed", merged=False)
+        resp.raise_for_status()
+        # Unreachable for any documented non-2xx, but keeps mypy's return
+        # analysis total: a 2xx other than 200 is unexpected here.
+        raise httpx.HTTPStatusError(
+            f"github: unexpected merge status {resp.status_code}",
+            request=resp.request,
+            response=resp,
+        )
+
+    async def get_check_runs(self, owner: str, repo: str, ref: str) -> list[dict[str, Any]]:
+        """List check-runs for a commit ``ref``.
+
+        Mirrors ``GET /repos/{owner}/{repo}/commits/{ref}/check-runs``. Returns
+        the raw ``check_runs`` list (each entry carries at least ``name``,
+        ``status``, ``conclusion``) — the caller (a later PR) interprets the
+        conclusions. A failed GET is a real error, so this uses the raising path.
+        """
+        resp = await self._request("GET", f"/repos/{owner}/{repo}/commits/{ref}/check-runs")
+        resp.raise_for_status()
+        body: dict[str, Any] = resp.json()
+        runs = body.get("check_runs", [])
+        if not isinstance(runs, list):
+            return []
+        return runs
+
     # ── issue comments ───────────────────────────────────────────────────────
 
     async def post_comment(
@@ -136,4 +206,4 @@ class GithubClient:
         return body
 
 
-__all__ = ["DEFAULT_BASE_URL", "GithubClient"]
+__all__ = ["DEFAULT_BASE_URL", "GithubClient", "MergeResult"]

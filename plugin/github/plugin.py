@@ -321,6 +321,45 @@ async def list_issues(
     return {"repo": f"{owner}/{name}", "state": state, "count": len(issues), "issues": issues}
 
 
+# PR1 — internal merge action for the (later) CI-green auto-merge worker.
+# NOT mcp_exposed: merging a PR is a delivery/merge-worker side effect, not an
+# agent-loop tool. Non-2xx "not yet" outcomes (not_mergeable / head_changed)
+# come back as data so the caller can wait/re-poll — see GithubClient.merge_pr.
+@p.action(
+    name="merge_pr",
+    mcp_exposed=False,
+    input_schema={
+        "type": "object",
+        "required": ["repo", "number"],
+        "properties": {
+            "repo": {"type": "string", "description": "owner/repo"},
+            "number": {"type": "integer", "description": "PR number"},
+            "method": {
+                "type": "string",
+                "enum": ["merge", "squash", "rebase"],
+                "description": "Merge method; defaults to 'squash'.",
+            },
+        },
+        "additionalProperties": False,
+    },
+)
+async def merge_pr(
+    context: SkillContext,
+    repo: str,
+    number: int,
+    method: str = "squash",
+) -> dict[str, Any]:
+    """Merge a PR (internal delivery/merge-worker action, not an MCP tool).
+
+    Returns the :class:`~.client.MergeResult` fields as a plain dict:
+    ``{"status", "merged", "sha"}``. ``status`` is ``merged`` / ``not_mergeable``
+    / ``head_changed`` — the latter two are non-error retryable states."""
+    owner, name = _split_repo(repo)
+    client = _client(context)
+    result = await client.merge_pr(owner, name, int(number), method=method)
+    return {"status": result.status, "merged": result.merged, "sha": result.sha}
+
+
 # ── setup ────────────────────────────────────────────────────────────────────
 
 
