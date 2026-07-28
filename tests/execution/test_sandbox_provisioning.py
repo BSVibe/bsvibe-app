@@ -11,6 +11,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from structlog.testing import capture_logs
+
 from backend.workflow.application import sandbox_provisioning
 from backend.workflow.application.sandbox_provisioning import (
     _UV_SYNC,
@@ -81,6 +83,16 @@ async def test_non_uv_project_does_not_sync() -> None:
     assert box.exec_calls == []
 
 
+async def test_empty_lock_logs_no_lockfile_with_empty_reason() -> None:
+    """An empty lockfile read → logged with a reason distinguishing it from the
+    SandboxError case."""
+    box = _ProvisionBox(lock=b"")
+    with capture_logs() as logs:
+        await ensure_sandbox_ready(box)
+    event = next(log for log in logs if log["event"] == "sandbox_venv_no_lockfile")
+    assert event["reason"] == "empty"
+
+
 async def test_missing_lock_read_error_is_not_ready() -> None:
     """A real sandbox raises SandboxError on a missing lockfile → swallowed to
     not-ready, no sync attempted."""
@@ -88,6 +100,16 @@ async def test_missing_lock_read_error_is_not_ready() -> None:
     ready = await ensure_sandbox_ready(box)
     assert ready is False
     assert box.exec_calls == []
+
+
+async def test_read_error_logs_no_lockfile_with_error_reason() -> None:
+    """A SandboxError on the lockfile read → logged with a reason distinct from
+    the empty-read case."""
+    box = _ProvisionBox(lock_raises=True)
+    with capture_logs() as logs:
+        await ensure_sandbox_ready(box)
+    event = next(log for log in logs if log["event"] == "sandbox_venv_no_lockfile")
+    assert event["reason"] == "read_error"
 
 
 async def test_sync_failure_reports_not_ready() -> None:
@@ -102,6 +124,22 @@ async def test_sync_failure_reports_not_ready() -> None:
     assert box.exec_calls == [(_UV_SYNC, VENV_SYNC_TIMEOUT_S)]  # attempted
 
 
+async def test_sync_failure_logs_exit_code_and_stderr_tail() -> None:
+    """A failed sync logs a warning with the exit code and a stderr tail so the
+    failure is diagnosable (not a silent False)."""
+    box = _ProvisionBox(
+        lock=b"# lockfile",
+        sync=SandboxResult(exit_code=1, stdout="", stderr="boom", timed_out=False),
+    )
+    with capture_logs() as logs:
+        await ensure_sandbox_ready(box)
+    event = next(log for log in logs if log["event"] == "sandbox_venv_sync_failed")
+    assert event["log_level"] == "warning"
+    assert event["exit_code"] == 1
+    assert event["timed_out"] is False
+    assert "boom" in event["stderr_tail"]
+
+
 async def test_sync_timeout_reports_not_ready() -> None:
     """A sync that timed out (exit_code None) → not-ready."""
     box = _ProvisionBox(
@@ -110,6 +148,27 @@ async def test_sync_timeout_reports_not_ready() -> None:
     )
     ready = await ensure_sandbox_ready(box)
     assert ready is False
+
+
+async def test_sync_timeout_logs_timed_out() -> None:
+    """A timed-out sync logs the warning with ``timed_out=True``."""
+    box = _ProvisionBox(
+        lock=b"# lockfile",
+        sync=SandboxResult(exit_code=None, stdout="", stderr="", timed_out=True),
+    )
+    with capture_logs() as logs:
+        await ensure_sandbox_ready(box)
+    event = next(log for log in logs if log["event"] == "sandbox_venv_sync_failed")
+    assert event["timed_out"] is True
+
+
+async def test_successful_sync_is_logged() -> None:
+    """A healthy sync emits ``sandbox_venv_synced`` so a good pre-warm is
+    visible in the logs, not only failures."""
+    box = _ProvisionBox(lock=b"# lockfile")
+    with capture_logs() as logs:
+        await ensure_sandbox_ready(box)
+    assert any(log["event"] == "sandbox_venv_synced" for log in logs)
 
 
 async def test_idempotent_warm_resync_still_ready() -> None:
@@ -183,8 +242,11 @@ async def test_empty_setup_cmd_does_not_run(monkeypatch) -> None:
     assert box.exec_calls == [(_UV_SYNC, VENV_SYNC_TIMEOUT_S)]
 
 
-async def test_setup_cmd_failure_is_degraded_not_raised(monkeypatch) -> None:
-    """A setup failure returns False (degraded) rather than crashing the run."""
+async def test_setup_cmd_failure_does_not_change_venv_readiness(monkeypatch) -> None:
+    """The core regression guard: venv-readiness is decoupled from the DB setup.
+
+    A setup_cmd (DB migration) failure must NOT flip the return value — the venv
+    synced fine, so the box IS ready. The failure is logged, not returned."""
     _patch_setup_cmd(monkeypatch, "uv run alembic upgrade head")
     box = _MultiCmdBox(
         {
@@ -193,9 +255,44 @@ async def test_setup_cmd_failure_is_degraded_not_raised(monkeypatch) -> None:
             )
         }
     )
-    ready = await ensure_sandbox_ready(box)
-    assert ready is False  # did not raise
+    with capture_logs() as logs:
+        ready = await ensure_sandbox_ready(box)
+    assert ready is True  # venv is ready even though the migration failed
     assert box.exec_calls == [
         (_UV_SYNC, VENV_SYNC_TIMEOUT_S),
         ("uv run alembic upgrade head", TEST_DB_SETUP_TIMEOUT_S),
     ]
+    event = next(log for log in logs if log["event"] == "sandbox_test_db_setup_failed")
+    assert event["log_level"] == "warning"
+    assert event["exit_code"] == 1
+
+
+async def test_setup_cmd_success_is_logged(monkeypatch) -> None:
+    """A successful setup_cmd emits ``sandbox_test_db_setup_ok``."""
+    _patch_setup_cmd(monkeypatch, "uv run alembic upgrade head")
+    box = _MultiCmdBox({})
+    with capture_logs() as logs:
+        ready = await ensure_sandbox_ready(box)
+    assert ready is True
+    assert any(log["event"] == "sandbox_test_db_setup_ok" for log in logs)
+
+
+async def test_setup_cmd_stderr_password_is_scrubbed(monkeypatch) -> None:
+    """A DB URL with a password in the setup stderr is masked before logging —
+    the raw password must never reach the logs."""
+    _patch_setup_cmd(monkeypatch, "uv run alembic upgrade head")
+    box = _MultiCmdBox(
+        {
+            "uv run alembic upgrade head": SandboxResult(
+                exit_code=1,
+                stdout="",
+                stderr="could not connect: postgresql+asyncpg://bsvibe:secret@host:5432/db",
+                timed_out=False,
+            )
+        }
+    )
+    with capture_logs() as logs:
+        await ensure_sandbox_ready(box)
+    event = next(log for log in logs if log["event"] == "sandbox_test_db_setup_failed")
+    assert "secret" not in event["stderr_tail"]
+    assert "://***@" in event["stderr_tail"]

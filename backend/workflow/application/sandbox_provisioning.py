@@ -25,12 +25,25 @@ environment.
 
 from __future__ import annotations
 
+import re
+
 import structlog
 
 from backend.config import get_settings
 from backend.workflow.infrastructure.sandbox import SandboxError, SandboxSession
 
 logger = structlog.get_logger(__name__)
+
+# Mask ``://<user>:<pass>@`` credentials in a URL to ``://***@`` before logging —
+# alembic/asyncpg stderr routinely echoes the DB URL (password and all). Never
+# log a raw password.
+_CRED_RE = re.compile(r"://[^/@\s:]+:[^/@\s]+@")
+
+
+def _scrub(text: str) -> str:
+    """Replace URL userinfo credentials with ``***`` so passwords never log."""
+    return _CRED_RE.sub("://***@", text)
+
 
 # The one sync command + its timeout, shared by acquire and verify. ``uv sync
 # --frozen`` respects the lockfile exactly (no resolution); ``--all-extras``
@@ -46,27 +59,48 @@ TEST_DB_SETUP_TIMEOUT_S = 600.0
 
 
 async def ensure_sandbox_ready(box: SandboxSession) -> bool:
-    """Materialize ``/work/.venv`` for a uv worktree and report readiness.
+    """Materialize ``/work/.venv`` for a uv worktree and report VENV readiness.
 
-    Returns ``True`` when the box is a uv project and the sync succeeded (the
-    caller may then prepend ``{workspace_mount}/.venv/bin`` to ``PATH``);
+    Returns ``True`` when the box is a uv project and the ``uv sync`` succeeded
+    (the caller may then prepend ``{workspace_mount}/.venv/bin`` to ``PATH``);
     ``False`` for a non-uv worktree (no ``uv.lock``) or a sync that failed /
     timed out. Never raises for the ordinary "no lockfile" case.
+
+    The return value reflects VENV-readiness ONLY. The optional test-DB setup
+    command (``sandbox_test_db_setup_cmd``) is run for its side effect and
+    logged, but its outcome does NOT change the return value: venv-ready and
+    db-migration-ready are orthogonal, and a migration failure must not
+    misreport a working venv as unusable. DB-setup readiness is observable in
+    the logs (``sandbox_test_db_setup_ok`` / ``sandbox_test_db_setup_failed``),
+    not in this bool.
+
+    Every outcome is logged so a ``False`` (or a degraded DB setup) is always
+    diagnosable — which step failed, its exit code, and a scrubbed stderr tail.
     """
     try:
         lock = await box.read_file("uv.lock", 64)
     except SandboxError:
+        logger.info("sandbox_venv_no_lockfile", reason="read_error")
         return False
     if not lock:
+        logger.info("sandbox_venv_no_lockfile", reason="empty")
         return False
     sync = await box.exec(_UV_SYNC, timeout_s=VENV_SYNC_TIMEOUT_S, shell=True)
     if sync.exit_code != 0 or sync.timed_out:
+        logger.warning(
+            "sandbox_venv_sync_failed",
+            exit_code=sync.exit_code,
+            timed_out=sync.timed_out,
+            stderr_tail=_scrub(sync.stderr)[-500:],
+        )
         return False
+    logger.info("sandbox_venv_synced")
     # Optional test-DB provisioning (e.g. ``uv run alembic upgrade head``) after
     # the venv is ready — the injected BSVIBE_MIGRATION_DATABASE_URL is visible
     # to ``docker exec`` since it lives on the sandbox container. Best-effort +
-    # logged: a setup failure returns degraded (False) rather than crashing the
-    # run — same honesty contract as the venv sync.
+    # logged: a setup failure is recorded but does NOT flip venv-readiness (the
+    # venv IS ready), so the caller no longer misreads a migration failure as an
+    # unusable environment.
     setup_cmd = get_settings().sandbox_test_db_setup_cmd
     if setup_cmd:
         setup = await box.exec(setup_cmd, timeout_s=TEST_DB_SETUP_TIMEOUT_S, shell=True)
@@ -75,6 +109,8 @@ async def ensure_sandbox_ready(box: SandboxSession) -> bool:
                 "sandbox_test_db_setup_failed",
                 exit_code=setup.exit_code,
                 timed_out=setup.timed_out,
+                stderr_tail=_scrub(setup.stderr)[-500:],
             )
-            return False
+        else:
+            logger.info("sandbox_test_db_setup_ok")
     return True
