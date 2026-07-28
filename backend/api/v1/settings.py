@@ -39,6 +39,9 @@ class SettingsResponse(BaseModel):
     sandbox_test_db_enabled: bool
     sandbox_test_db_image: str
 
+    # GitHub CI-green auto-merge (opt-in; default OFF)
+    github_auto_merge_enabled: bool
+
 
 @router.get("")
 async def get_settings_view() -> SettingsResponse:
@@ -56,4 +59,5 @@ async def get_settings_view() -> SettingsResponse:
         sandbox_max_concurrent=s.sandbox_max_concurrent,
         sandbox_test_db_enabled=s.sandbox_test_db_enabled,
         sandbox_test_db_image=s.sandbox_test_db_image,
+        github_auto_merge_enabled=s.github_auto_merge_enabled,
     )

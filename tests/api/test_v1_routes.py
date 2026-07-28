@@ -57,6 +57,7 @@ def test_settings_response_mirrors_test_db_gate() -> None:
     fields = SettingsResponse.model_fields
     assert "sandbox_test_db_enabled" in fields
     assert "sandbox_test_db_image" in fields
+    assert "github_auto_merge_enabled" in fields
 
 
 def test_intents_list_requires_auth() -> None:

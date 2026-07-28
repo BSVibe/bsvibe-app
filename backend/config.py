@@ -242,6 +242,12 @@ class Settings(BaseSettings):
     # Per-run worktrees branch from this and merge back on ship.
     product_workspace_root: str = "var/products"
 
+    # GitHub CI-green auto-merge (backend.workflow ... MergeWatchWorker). When on,
+    # a PR opened by github delivery is watched and squash-merged once its CI is
+    # green + mergeable, with per-repo serialization + conflict recovery. OFF keeps
+    # the existing "open PR, human merges" behavior — nothing is auto-merged.
+    github_auto_merge_enabled: bool = False
+
     # Audit relay sink (backend.workers.relays) — the RelayWorker drains
     # ``audit_outbox`` into this HTTP endpoint when set. Empty (the default)
     # selects the no-sink ``LoggingRelay`` (drain + ack, no remote delivery).
