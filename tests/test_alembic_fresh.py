@@ -125,7 +125,7 @@ def test_fresh_pg_upgrade_round_trip():
     # Phase 1 — fresh upgrade.
     _alembic(["upgrade", "head"], env_extra=env_extra)
     stamped = asyncio.run(_stamped_head(url))
-    assert stamped == "run_claim_columns", f"expected head run_claim_columns, got {stamped}"
+    assert stamped == "github_merge_watch", f"expected head github_merge_watch, got {stamped}"
 
     # Phase 2 — full downgrade. Verifies every revision's downgrade path.
     _alembic(["downgrade", "base"], env_extra=env_extra)
@@ -133,7 +133,7 @@ def test_fresh_pg_upgrade_round_trip():
     # Phase 3 — re-upgrade. Verifies the chain is idempotent.
     _alembic(["upgrade", "head"], env_extra=env_extra)
     stamped = asyncio.run(_stamped_head(url))
-    assert stamped == "run_claim_columns"
+    assert stamped == "github_merge_watch"
 
 
 def test_notification_channel_keys_renames_email_to_email_sender():
