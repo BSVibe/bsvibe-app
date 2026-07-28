@@ -57,6 +57,33 @@ def test_login_writes_credentials(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
     assert payload["issuer"] == "https://auth.test"
 
 
+def test_login_manual_routes_to_manual_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cred_path = tmp_path / "creds.json"
+    monkeypatch.setattr(cli_mod, "default_credentials_path", lambda: cred_path, raising=False)
+    calls: dict[str, Any] = {}
+
+    def _fake_run_login_manual(*, issuer: str) -> LoginResult:
+        calls["manual_issuer"] = issuer
+        creds = HostCredentials(
+            access_token="M", refresh_token=None, expires_at=None, issuer=issuer
+        )
+        return LoginResult(credentials=creds)
+
+    def _fake_run_login(*, issuer: str) -> LoginResult:  # noqa: ARG001
+        calls["loopback_called"] = True
+        raise AssertionError("loopback path must not run when --manual is set")
+
+    monkeypatch.setattr(cli_mod, "run_login_manual", _fake_run_login_manual)
+    monkeypatch.setattr(cli_mod, "run_login", _fake_run_login)
+
+    rc = cli_mod.run_bsvibe_cli(["login", "--manual", "--issuer", "https://auth.test"])
+    assert rc == 0
+    assert calls["manual_issuer"] == "https://auth.test"
+    assert "loopback_called" not in calls
+
+
 def test_login_returns_nonzero_on_failure(monkeypatch: pytest.MonkeyPatch) -> None:
     from backend.executors.worker.login import LoginError
 
