@@ -111,6 +111,19 @@ class WorkerSettings(BaseSettings):
     # CLI's own login is not clobbered. Blank → ``~/.claude/.credentials.json``.
     claude_cli_credentials_path: str = ""
 
+    # Cadence (seconds) of the background Claude OAuth keep-alive loop (env:
+    # ``BSVIBE_WORKER_CLAUDE_AUTH_REFRESH_INTERVAL_S``). A ``claude_code``-capable
+    # worker calls ``ensure_claude_bearer`` on this tick REGARDLESS of task
+    # activity so its OWN OAuth token is always refreshed before expiry and the
+    # rotated single-use refresh token never goes stale from disuse. Without this,
+    # an idle worker never refreshes → the refresh token eventually expires
+    # server-side (``invalid_grant`` — burned) → the executor falls back to the
+    # interactive CLI's credential, which itself goes stale once the founder stops
+    # using Claude Code → full executor outage. 5 min is comfortably below the
+    # access-token lifetime, and the network refresh only actually fires when
+    # within the ~600s buffer, so the tick is cheap.
+    claude_auth_refresh_interval_s: float = 300.0
+
 
 @lru_cache(maxsize=1)
 def get_worker_settings() -> WorkerSettings:

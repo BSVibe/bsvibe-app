@@ -48,6 +48,7 @@ import shutil
 import signal
 import sys
 import tempfile
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Protocol, cast
 
@@ -55,6 +56,7 @@ import httpx
 import structlog
 
 from backend.executors.worker import opencode_server
+from backend.executors.worker.claude_auth import ensure_claude_bearer
 from backend.executors.worker.config import WorkerSettings, get_worker_settings
 from backend.executors.worker.credentials import (
     CredentialsNotFound,
@@ -580,6 +582,15 @@ async def poll_and_execute(
 
     opencode_daemon = await _maybe_start_opencode_serve(settings, executors)
 
+    # Proactive Claude OAuth keep-alive — only for a claude_code-capable worker.
+    # A codex/opencode-only worker never authenticates with Claude, so it does
+    # not need (and should not spend a thread on) the refresh tick.
+    keepalive_task: asyncio.Task[None] | None = None
+    if "claude_code" in executors:
+        keepalive_task = asyncio.create_task(
+            _claude_auth_keepalive_loop(settings=settings, stop=stop)
+        )
+
     try:
         while not stop.is_set():
             try:
@@ -606,6 +617,12 @@ async def poll_and_execute(
             task.cancel()
         if in_flight:
             await asyncio.gather(*in_flight, return_exceptions=True)
+        # Cancel the Claude OAuth keep-alive alongside the in-flight tasks so its
+        # lifetime is bounded by the worker process's (return_exceptions
+        # suppresses the CancelledError).
+        if keepalive_task is not None:
+            keepalive_task.cancel()
+            await asyncio.gather(keepalive_task, return_exceptions=True)
         # Lift E17 — group-kill the ``opencode serve`` daemon so its child
         # processes (Bun runtime, helper workers) die alongside the worker.
         # Prefer the singleton's CURRENT handle: SQLite-corruption recovery may
@@ -617,6 +634,50 @@ async def poll_and_execute(
             await opencode_server.stop_opencode_serve(live_daemon)
             opencode_server.set_serve_daemon(None)
             opencode_server.clear_serve_url()
+
+
+async def _claude_auth_keepalive_loop(
+    *,
+    settings: WorkerSettings,
+    stop: asyncio.Event,
+    refresh: Callable[[], str | None] | None = None,
+) -> None:
+    """Proactively refresh the worker's OWN Claude OAuth token on a cadence.
+
+    ``ensure_claude_bearer`` only refreshes when it is CALLED and the token is
+    within ~600s of expiry, then persists the rotated single-use refresh token.
+    Today it is only called per ``claude_code`` invocation
+    (:func:`claude_code._subprocess_env_with_bearer`). So a worker that runs no
+    claude tasks for a long stretch never refreshes → the refresh token
+    eventually expires server-side (``invalid_grant`` — burned) → the executor
+    falls back to the interactive CLI's credential, which itself goes stale once
+    the founder stops using Claude Code → full executor outage.
+
+    This loop breaks that dependency: it calls the refresh on
+    ``settings.claude_auth_refresh_interval_s`` REGARDLESS of task activity, so
+    the OAuth token is always refreshed before expiry and the rotated refresh
+    token stays alive as long as the worker process runs. It only ever runs for a
+    ``claude_code``-capable worker (started conditionally in :func:`poll_and_execute`).
+
+    ``refresh`` is injectable for tests; the default wraps the SYNC
+    :func:`ensure_claude_bearer` (file IO + a possible network refresh under an
+    flock) in :func:`asyncio.to_thread` so it never blocks the event loop — the
+    same pattern :func:`claude_code._subprocess_env_with_bearer` uses. Soft-fail:
+    any unexpected error is logged and the loop continues, never crashing the
+    worker.
+    """
+    refresh = refresh or ensure_claude_bearer
+    while not stop.is_set():
+        try:
+            token = await asyncio.to_thread(refresh)
+            if token:
+                logger.debug("claude_auth_keepalive_ok")
+            else:
+                # Early-warning: auth is failing NOW, before a task hits it.
+                logger.warning("claude_auth_keepalive_degraded")
+        except Exception:  # noqa: BLE001 — never let the keep-alive die / crash the worker
+            logger.warning("claude_auth_keepalive_error", exc_info=True)
+        await _interruptible_sleep(settings.claude_auth_refresh_interval_s, stop)
 
 
 async def _interruptible_sleep(seconds: float, stop: asyncio.Event) -> None:

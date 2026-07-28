@@ -959,6 +959,189 @@ async def test_cancel_all_running_tasks_cancels_pending_handlers(tmp_path: Any) 
     assert executor.closed is True
 
 
+# ── Claude OAuth keep-alive loop (proactive refresh so the token never burns) ──
+
+
+class _CapturingLogger:
+    """Records the event name of every log call, level-agnostic.
+
+    We capture the module ``logger`` directly rather than via
+    ``structlog.testing.capture_logs`` because the keep-alive's success log is at
+    DEBUG level — and a prior test in the full suite can globally configure
+    structlog with an INFO filtering bound logger, which drops ``logger.debug``
+    to a no-op BEFORE it reaches any capture processor. Capturing the logger
+    object sidesteps that global-config ordering fragility entirely.
+    """
+
+    def __init__(self) -> None:
+        self.events: list[str] = []
+
+    def _record(self, event: str, **_kw: Any) -> None:
+        self.events.append(event)
+
+    debug = _record
+    info = _record
+    warning = _record
+    error = _record
+    exception = _record
+
+
+async def test_claude_auth_keepalive_calls_refresh_and_logs_ok(monkeypatch: Any) -> None:
+    """The loop calls the injected ``refresh`` at least once, logs
+    ``claude_auth_keepalive_ok`` on a truthy return, and stops promptly once
+    ``stop`` is set (it does NOT run forever)."""
+    import asyncio
+
+    cap = _CapturingLogger()
+    monkeypatch.setattr(worker_main, "logger", cap)
+    stop = asyncio.Event()
+    calls = {"n": 0}
+
+    def _refresh() -> str | None:
+        calls["n"] += 1
+        stop.set()  # stop after the first iteration so the loop ends
+        return "FRESH-ACCESS-TOKEN"
+
+    await asyncio.wait_for(
+        worker_main._claude_auth_keepalive_loop(
+            settings=_settings(claude_auth_refresh_interval_s=0),
+            stop=stop,
+            refresh=_refresh,
+        ),
+        timeout=5,
+    )
+
+    assert calls["n"] >= 1
+    assert "claude_auth_keepalive_ok" in cap.events
+
+
+async def test_claude_auth_keepalive_logs_degraded_on_none(monkeypatch: Any) -> None:
+    """A ``None`` return (auth failing) logs the ``claude_auth_keepalive_degraded``
+    warning — the early-warning signal that auth is broken BEFORE a task hits it."""
+    import asyncio
+
+    cap = _CapturingLogger()
+    monkeypatch.setattr(worker_main, "logger", cap)
+    stop = asyncio.Event()
+
+    def _refresh() -> str | None:
+        stop.set()
+        return None
+
+    await asyncio.wait_for(
+        worker_main._claude_auth_keepalive_loop(
+            settings=_settings(claude_auth_refresh_interval_s=0),
+            stop=stop,
+            refresh=_refresh,
+        ),
+        timeout=5,
+    )
+
+    assert "claude_auth_keepalive_degraded" in cap.events
+
+
+async def test_claude_auth_keepalive_survives_refresh_exception(monkeypatch: Any) -> None:
+    """A raising ``refresh`` is soft-failed: ``claude_auth_keepalive_error`` is
+    logged and the loop CONTINUES (the exception never propagates, the worker
+    never crashes). Proven by a second iteration running after the first raised."""
+    import asyncio
+
+    cap = _CapturingLogger()
+    monkeypatch.setattr(worker_main, "logger", cap)
+    stop = asyncio.Event()
+    calls = {"n": 0}
+
+    def _refresh() -> str | None:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("token endpoint down")
+        stop.set()  # second iteration proves the loop continued past the error
+        return "FRESH"
+
+    await asyncio.wait_for(
+        worker_main._claude_auth_keepalive_loop(
+            settings=_settings(claude_auth_refresh_interval_s=0),
+            stop=stop,
+            refresh=_refresh,
+        ),
+        timeout=5,
+    )
+
+    assert calls["n"] == 2, "loop must continue past a refresh exception"
+    assert "claude_auth_keepalive_error" in cap.events
+    assert "claude_auth_keepalive_ok" in cap.events
+
+
+def test_claude_auth_refresh_interval_default_is_300() -> None:
+    assert WorkerSettings().claude_auth_refresh_interval_s == 300.0
+
+
+async def test_poll_and_execute_starts_keepalive_when_claude_code(monkeypatch: Any) -> None:
+    """A worker whose executors include ``claude_code`` starts the background
+    keep-alive loop before the poll loop begins (so the OAuth token is refreshed
+    even while the worker sits idle) and cancels it on shutdown."""
+    import asyncio
+
+    settings = _settings(token="WORKER-TOKEN")
+    stop = asyncio.Event()
+    started: list[str] = []
+
+    monkeypatch.setattr(worker_main, "detect_capabilities", lambda: ["claude_code"])
+    monkeypatch.setattr(worker_main, "select_executor", lambda _t: _StubExecutor())
+
+    async def _fake_keepalive(*, settings: Any, stop: asyncio.Event) -> None:
+        started.append("yes")
+        await stop.wait()
+
+    monkeypatch.setattr(worker_main, "_claude_auth_keepalive_loop", _fake_keepalive)
+
+    async def _one_tick(**kwargs: Any) -> set[Any]:
+        # Yield once so the just-created keep-alive task gets to run its first
+        # line before we tear the loop down.
+        await asyncio.sleep(0)
+        stop.set()
+        return set()
+
+    monkeypatch.setattr(worker_main, "run_once", _one_tick)
+
+    state: dict[str, Any] = {"poll_queue": []}
+    async with _client(state) as client:
+        await worker_main.poll_and_execute(settings=settings, client=client, redis=None, stop=stop)
+
+    assert started == ["yes"], "keep-alive must start for a claude_code-capable worker"
+
+
+async def test_poll_and_execute_skips_keepalive_without_claude_code(monkeypatch: Any) -> None:
+    """A codex/opencode-only worker does NOT need Claude OAuth, so the keep-alive
+    loop is NOT started."""
+    import asyncio
+
+    settings = _settings(token="WORKER-TOKEN")
+    stop = asyncio.Event()
+    started: list[str] = []
+
+    monkeypatch.setattr(worker_main, "detect_capabilities", lambda: ["codex"])
+    monkeypatch.setattr(worker_main, "select_executor", lambda _t: _StubExecutor())
+
+    async def _fake_keepalive(*, settings: Any, stop: asyncio.Event) -> None:
+        started.append("yes")  # pragma: no cover — must never run
+        await stop.wait()
+
+    monkeypatch.setattr(worker_main, "_claude_auth_keepalive_loop", _fake_keepalive)
+
+    async def _one_tick(**kwargs: Any) -> set[Any]:
+        stop.set()
+        return set()
+
+    monkeypatch.setattr(worker_main, "run_once", _one_tick)
+
+    state: dict[str, Any] = {"poll_queue": []}
+    async with _client(state) as client:
+        await worker_main.poll_and_execute(settings=settings, client=client, redis=None, stop=stop)
+
+    assert started == [], "keep-alive must NOT start without the claude_code capability"
+
+
 def _patched(obj: Any, name: str, value: Any) -> Any:
     """Tiny context manager to swap an attribute (avoids monkeypatch in helpers)."""
     import contextlib
