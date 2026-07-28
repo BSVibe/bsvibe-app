@@ -50,7 +50,7 @@ from backend.executors.worker.credentials import (
     save_worker_token,
 )
 from backend.executors.worker.executors import detect_capabilities
-from backend.executors.worker.login import LoginError, run_login
+from backend.executors.worker.login import LoginError, run_login, run_login_manual
 from backend.executors.worker.main import _amain, register
 
 logger = structlog.get_logger(__name__)
@@ -63,9 +63,16 @@ _DEFAULT_ISSUER = "https://api.bsvibe.dev"
 # ---------------------------------------------------------------------------
 def _cmd_login(args: argparse.Namespace) -> int:
     issuer = args.issuer or _DEFAULT_ISSUER
-    print(f"Opening browser for sign-in at {issuer} …", file=sys.stderr)
+    manual = bool(getattr(args, "manual", False))
     try:
-        result = run_login(issuer=issuer)
+        if manual:
+            # Remote/headless host: no loopback server. The authorize URL +
+            # paste-back instructions are emitted to stderr by the flow itself.
+            print(f"Manual (out-of-band) sign-in at {issuer} …", file=sys.stderr)
+            result = run_login_manual(issuer=issuer)
+        else:
+            print(f"Opening browser for sign-in at {issuer} …", file=sys.stderr)
+            result = run_login(issuer=issuer)
     except LoginError as exc:
         print(f"login failed: {exc}", file=sys.stderr)
         return 1
@@ -114,6 +121,14 @@ def build_bsvibe_parser() -> argparse.ArgumentParser:
         "--issuer",
         default=None,
         help=f"OAuth issuer base URL (default: {_DEFAULT_ISSUER}).",
+    )
+    p_login.add_argument(
+        "--manual",
+        action="store_true",
+        help=(
+            "Out-of-band sign-in for remote/headless hosts: print the authorize "
+            "URL and paste the redirect URL (or code) back — no loopback server."
+        ),
     )
     p_login.set_defaults(func=_cmd_login)
 

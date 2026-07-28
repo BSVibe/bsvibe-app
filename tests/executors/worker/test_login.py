@@ -16,7 +16,9 @@ import pytest
 from backend.executors.worker.login import (
     LoginError,
     make_pkce_pair,
+    parse_callback_input,
     perform_login,
+    perform_login_manual,
 )
 
 
@@ -220,5 +222,131 @@ def test_perform_login_dcr_body_requests_full_mcp_scope_set() -> None:
         body = client._captured["dcr_body"]  # type: ignore[attr-defined]
         assert "scope" in body, "DCR body must carry the requested scope set"
         assert body["scope"] == "mcp:read mcp:write mcp:admin"
+    finally:
+        client.close()
+
+
+# ---------------------------------------------------------------------------
+# parse_callback_input — the out-of-band paste-back parser
+# ---------------------------------------------------------------------------
+def test_parse_callback_input_full_redirect_url() -> None:
+    parsed = parse_callback_input("http://127.0.0.1:41234/?code=CODE-XYZ&state=STATE-ABC")
+    assert parsed == {"code": "CODE-XYZ", "state": "STATE-ABC"}
+
+
+def test_parse_callback_input_bare_code() -> None:
+    parsed = parse_callback_input("  CODE-ONLY-123  ")
+    assert parsed == {"code": "CODE-ONLY-123", "state": None}
+
+
+def test_parse_callback_input_ignores_extra_query_params() -> None:
+    parsed = parse_callback_input(
+        "http://127.0.0.1:41234/?iss=https://a.test&code=C1&state=S1&session_state=zz"
+    )
+    assert parsed == {"code": "C1", "state": "S1"}
+
+
+def test_parse_callback_input_url_without_state() -> None:
+    parsed = parse_callback_input("http://127.0.0.1:41234/?code=NOSTATE")
+    assert parsed == {"code": "NOSTATE", "state": None}
+
+
+def test_parse_callback_input_empty_raises() -> None:
+    with pytest.raises(LoginError):
+        parse_callback_input("   ")
+
+
+def test_parse_callback_input_url_missing_code_raises() -> None:
+    with pytest.raises(LoginError, match="code"):
+        parse_callback_input("http://127.0.0.1:41234/?state=only")
+
+
+# ---------------------------------------------------------------------------
+# perform_login_manual — the loopback-server-free paste-back flow
+# ---------------------------------------------------------------------------
+def test_perform_login_manual_happy_path_with_full_url() -> None:
+    emitted: list[str] = []
+    holder: dict[str, str] = {}
+
+    def _emit(msg: str) -> None:
+        # The authorize URL is emitted — capture the generated state from it,
+        # mirroring how the loopback tests read state off the opened URL.
+        emitted.append(msg)
+        from urllib.parse import parse_qs, urlparse
+
+        for line in msg.splitlines():
+            tok = line.strip()
+            if "/api/oauth/authorize" in tok:
+                holder["state"] = parse_qs(urlparse(tok).query)["state"][0]
+
+    def _read_input() -> str:
+        return f"http://127.0.0.1:41234/?code=CODE-RECEIVED&state={holder['state']}"
+
+    client = _fake_httpx_client()
+    try:
+        result = perform_login_manual(
+            issuer="https://auth.test",
+            read_input=_read_input,
+            emit=_emit,
+            httpx_client=client,
+            pick_port=lambda: 41234,
+        )
+    finally:
+        client.close()
+
+    assert result.credentials.access_token == "ACCESS-LIVE"
+    assert result.credentials.refresh_token == "REFRESH-LIVE"
+    assert result.credentials.issuer == "https://auth.test"
+    # The authorize URL must have been emitted for the user to open.
+    assert any("/api/oauth/authorize" in m for m in emitted)
+    # The token exchange used the loopback redirect_uri even though no server ran.
+    calls = client._captured["calls"]  # type: ignore[attr-defined]
+    assert ("POST", "/api/oauth/token") in calls
+
+
+def test_perform_login_manual_bare_code_skips_state_check() -> None:
+    def _emit(msg: str) -> None:  # noqa: ARG001
+        return None
+
+    def _read_input() -> str:
+        return "BARE-CODE-999"
+
+    client = _fake_httpx_client()
+    try:
+        result = perform_login_manual(
+            issuer="https://auth.test",
+            read_input=_read_input,
+            emit=_emit,
+            httpx_client=client,
+            pick_port=lambda: 41234,
+        )
+    finally:
+        client.close()
+
+    assert result.credentials.access_token == "ACCESS-LIVE"
+    calls = client._captured["calls"]  # type: ignore[attr-defined]
+    assert ("POST", "/api/oauth/token") in calls
+
+
+def test_perform_login_manual_rejects_state_mismatch_without_exchange() -> None:
+    def _emit(msg: str) -> None:  # noqa: ARG001
+        return None
+
+    def _read_input() -> str:
+        return "http://127.0.0.1:41234/?code=CODE&state=WRONG-STATE"
+
+    client = _fake_httpx_client()
+    try:
+        with pytest.raises(LoginError, match="state mismatch"):
+            perform_login_manual(
+                issuer="https://auth.test",
+                read_input=_read_input,
+                emit=_emit,
+                httpx_client=client,
+                pick_port=lambda: 41234,
+            )
+        # No token exchange must have happened on a CSRF mismatch.
+        calls = client._captured["calls"]  # type: ignore[attr-defined]
+        assert ("POST", "/api/oauth/token") not in calls
     finally:
         client.close()

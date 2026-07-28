@@ -34,6 +34,7 @@ import hashlib
 import http.server
 import secrets
 import socket
+import sys
 import threading
 import time
 import urllib.parse
@@ -201,6 +202,115 @@ def _exchange_code(
     return payload  # type: ignore[no-any-return]
 
 
+@dataclass(frozen=True)
+class _LoginContext:
+    """Shared PKCE + DCR + authorize-URL setup for both login variants.
+
+    Both the loopback (:func:`perform_login`) and the out-of-band manual
+    (:func:`perform_login_manual`) flows perform the identical preparation —
+    pick a loopback port, register an anonymous DCR client bound to that
+    exact ``redirect_uri``, generate the PKCE pair + CSRF ``state``, and build
+    the authorize URL. The manual flow simply never binds an HTTP server to
+    the port; the ``redirect_uri`` string still MUST match at token exchange.
+    """
+
+    client_id: str
+    redirect_uri: str
+    verifier: str
+    state: str
+    authorize_url: str
+    port: int
+
+
+def _prepare_login(
+    *, issuer: str, client: httpx.Client, pick_port: Callable[[], int]
+) -> _LoginContext:
+    """Run the shared setup and return the :class:`_LoginContext`."""
+    port = pick_port()
+    redirect_uri = f"http://{_LOOPBACK_HOST}:{port}/"
+    client_id = _register_dcr_client(issuer=issuer, redirect_uri=redirect_uri, client=client)
+    verifier, challenge = make_pkce_pair()
+    state = secrets.token_urlsafe(16)
+    authorize_url = _build_authorize_url(
+        issuer=issuer,
+        client_id=client_id,
+        redirect_uri=redirect_uri,
+        challenge=challenge,
+        state=state,
+    )
+    return _LoginContext(
+        client_id=client_id,
+        redirect_uri=redirect_uri,
+        verifier=verifier,
+        state=state,
+        authorize_url=authorize_url,
+        port=port,
+    )
+
+
+def _result_from_payload(payload: dict[str, Any], *, issuer: str) -> LoginResult:
+    """Build a :class:`LoginResult` from a token-endpoint payload."""
+    expires_in = int(payload.get("expires_in") or 0)
+    expires_at = int(time.time()) + expires_in if expires_in else None
+    creds = HostCredentials(
+        access_token=payload["access_token"],
+        refresh_token=payload.get("refresh_token"),
+        expires_at=expires_at,
+        issuer=issuer,
+    )
+    return LoginResult(credentials=creds)
+
+
+def parse_callback_input(text: str) -> dict[str, str | None]:
+    """Parse a pasted OAuth callback into ``{"code": ..., "state": ...}``.
+
+    Accepts either the FULL redirect URL the founder copied out of their
+    browser's address bar (e.g. ``http://127.0.0.1:41234/?code=X&state=Y``),
+    or a bare ``code`` value. When only a bare code is pasted, ``state`` is
+    ``None`` and the caller must skip the CSRF check. Empty or malformed
+    input raises :class:`LoginError`.
+    """
+    stripped = text.strip()
+    if not stripped:
+        raise LoginError("no callback input provided — paste the redirect URL or the code")
+
+    looks_like_url = "?" in stripped or stripped.lower().startswith(("http://", "https://"))
+    if looks_like_url:
+        qs = parse_qs(urlparse(stripped).query)
+        codes = qs.get("code")
+        if not codes or not codes[0]:
+            raise LoginError("pasted redirect URL has no `code` parameter")
+        states = qs.get("state")
+        state = states[0] if states and states[0] else None
+        return {"code": codes[0], "state": state}
+
+    # Bare code: reject anything with embedded whitespace (a malformed paste).
+    if any(ch.isspace() for ch in stripped):
+        raise LoginError("could not parse callback input — paste the full redirect URL or the code")
+    return {"code": stripped, "state": None}
+
+
+def _manual_instructions(authorize_url: str) -> str:
+    """Render the operator-facing instructions for the manual paste-back flow."""
+    return (
+        "Remote sign-in (manual paste-back) — no loopback server is used.\n"
+        "\n"
+        "1. Open this URL on ANY device with a browser, and sign in:\n"
+        "\n"
+        f"   {authorize_url}\n"
+        "\n"
+        "2. After you approve, the browser will try to open a\n"
+        "   http://127.0.0.1:<port>/?code=...&state=... address that FAILS to\n"
+        "   load — that is expected (nothing is listening here).\n"
+        "3. Copy the FULL address from the browser's URL bar (or just the\n"
+        "   `code` value) and paste it below, then press Enter:\n"
+    )
+
+
+def _default_emit(msg: str) -> None:
+    print(msg, file=sys.stderr)
+
+
 def perform_login(
     *,
     issuer: str,
@@ -223,45 +333,72 @@ def perform_login(
     own_client = httpx_client is None
     client = httpx_client if httpx_client is not None else httpx.Client()
     try:
-        port = pick_port_fn()
-        redirect_uri = f"http://{_LOOPBACK_HOST}:{port}/"
-        client_id = _register_dcr_client(issuer=issuer, redirect_uri=redirect_uri, client=client)
-        verifier, challenge = make_pkce_pair()
-        state = secrets.token_urlsafe(16)
-        authorize_url = _build_authorize_url(
-            issuer=issuer,
-            client_id=client_id,
-            redirect_uri=redirect_uri,
-            challenge=challenge,
-            state=state,
-        )
-        opened = open_fn(authorize_url)
+        ctx = _prepare_login(issuer=issuer, client=client, pick_port=pick_port_fn)
+        opened = open_fn(ctx.authorize_url)
         if not opened:
-            logger.warning("login_browser_open_failed", url=authorize_url)
-        captured = wait_fn(port, timeout_s)
-        if captured.get("state") != state:
+            logger.warning("login_browser_open_failed", url=ctx.authorize_url)
+        captured = wait_fn(ctx.port, timeout_s)
+        if captured.get("state") != ctx.state:
             raise LoginError("state mismatch — possible CSRF; aborting")
         payload = _exchange_code(
             issuer=issuer,
-            client_id=client_id,
+            client_id=ctx.client_id,
             code=captured["code"],
-            redirect_uri=redirect_uri,
-            verifier=verifier,
+            redirect_uri=ctx.redirect_uri,
+            verifier=ctx.verifier,
             client=client,
         )
     finally:
         if own_client:
             client.close()
 
-    expires_in = int(payload.get("expires_in") or 0)
-    expires_at = int(time.time()) + expires_in if expires_in else None
-    creds = HostCredentials(
-        access_token=payload["access_token"],
-        refresh_token=payload.get("refresh_token"),
-        expires_at=expires_at,
-        issuer=issuer,
-    )
-    return LoginResult(credentials=creds)
+    return _result_from_payload(payload, issuer=issuer)
+
+
+def perform_login_manual(
+    *,
+    issuer: str,
+    read_input: Callable[[], str] = input,
+    emit: Callable[[str], None] = _default_emit,
+    httpx_client: httpx.Client | None = None,
+    pick_port: Callable[[], int] | None = None,
+) -> LoginResult:
+    """Run the PKCE flow WITHOUT a loopback HTTP server (remote-host safe).
+
+    Identical PKCE + DCR + authorize-URL setup as :func:`perform_login`, but
+    instead of binding a loopback server it emits the authorize URL +
+    instructions via ``emit`` and reads the pasted redirect URL (or bare
+    code) via ``read_input``. Both are injectable so tests never touch real
+    stdin/stdout. The ``redirect_uri`` remains the loopback form — it must
+    match what was registered/authorized at token exchange even though no
+    server ever listens on it.
+    """
+    pick_port_fn = pick_port or _pick_loopback_port
+
+    own_client = httpx_client is None
+    client = httpx_client if httpx_client is not None else httpx.Client()
+    try:
+        ctx = _prepare_login(issuer=issuer, client=client, pick_port=pick_port_fn)
+        emit(_manual_instructions(ctx.authorize_url))
+        parsed = parse_callback_input(read_input())
+        code = parsed["code"]
+        if code is None:  # pragma: no cover — parse_callback_input guarantees a code
+            raise LoginError("no `code` in pasted callback input")
+        if parsed["state"] is not None and parsed["state"] != ctx.state:
+            raise LoginError("state mismatch — possible CSRF; aborting")
+        payload = _exchange_code(
+            issuer=issuer,
+            client_id=ctx.client_id,
+            code=code,
+            redirect_uri=ctx.redirect_uri,
+            verifier=ctx.verifier,
+            client=client,
+        )
+    finally:
+        if own_client:
+            client.close()
+
+    return _result_from_payload(payload, issuer=issuer)
 
 
 def run_login(*, issuer: str) -> LoginResult:
@@ -271,10 +408,20 @@ def run_login(*, issuer: str) -> LoginResult:
     return result
 
 
+def run_login_manual(*, issuer: str) -> LoginResult:
+    """Top-level entry point for manual login + persist credentials."""
+    result = perform_login_manual(issuer=issuer)
+    save_host_credentials(result.credentials)
+    return result
+
+
 __all__ = [
     "LoginError",
     "LoginResult",
     "make_pkce_pair",
+    "parse_callback_input",
     "perform_login",
+    "perform_login_manual",
     "run_login",
+    "run_login_manual",
 ]
