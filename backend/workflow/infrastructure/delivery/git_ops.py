@@ -24,7 +24,9 @@ Tested against a LOCAL bare repo (``git init --bare`` in a tmp dir) as the
 from __future__ import annotations
 
 import asyncio
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Literal
 
 import structlog
 
@@ -77,6 +79,22 @@ def _strip_https_userinfo(url: str) -> str:
 
 class GitError(RuntimeError):
     """A ``git`` subprocess exited non-zero. The message is token-scrubbed."""
+
+
+@dataclass(frozen=True)
+class GitMergeResult:
+    """Result of a :meth:`GitOps.merge_ref` attempt.
+
+    ``status`` is ``"clean"`` when git completed the merge without conflicts
+    (HEAD now points at the merged state) and ``"conflict"`` when at least one
+    path conflicts (the working tree is left mid-merge with conflict markers —
+    the caller decides whether to abort or resolve). Intentionally a parallel
+    local type to ``backend.storage.product_workspace.MergeOutcome``: the
+    infrastructure/delivery layer stays decoupled from the storage layer.
+    """
+
+    status: Literal["clean", "conflict"]
+    conflict_paths: list[str] = field(default_factory=list)
 
 
 class GitOps:
@@ -256,5 +274,98 @@ class GitOps:
             if token:
                 await self.scrub_origin_token(dest)
 
+    async def is_shallow(self, dest: Path) -> bool:
+        """True iff ``dest`` is a shallow clone (``git rev-parse
+        --is-shallow-repository`` → ``"true"``).
 
-__all__ = ["GitError", "GitOps", "scrub_token"]
+        A ``--depth 1`` clone (the provisioner's fast-setup default) is shallow;
+        an unshallowed / full clone is not. Used to guard ``--unshallow`` so a
+        caller can always pass ``unshallow=True`` safely — git errors
+        "--unshallow on a complete repository does not make sense", so we only
+        pass the flag when the repo is actually shallow.
+        """
+        code, out, _err = await self._run("rev-parse", "--is-shallow-repository", cwd=dest)
+        return code == 0 and out.strip() == "true"
+
+    async def fetch(
+        self,
+        dest: Path,
+        remote: str,
+        ref: str,
+        *,
+        token: str | None = None,
+        unshallow: bool = False,
+    ) -> None:
+        """``git fetch [--unshallow] <remote> <ref>`` inside ``dest``.
+
+        ``remote`` is typically ``"origin"`` (already token-embedded at clone
+        time via :meth:`authed_url`), ``ref`` the base branch (e.g. ``"main"``).
+
+        THE SHALLOW MERGE-BASE PROBLEM — a ``--depth 1`` clone can fetch
+        ``main``'s tip but lacks the common ancestor, so a later
+        :meth:`merge_ref` fails with "refusing to merge unrelated histories"
+        (no merge base). ``unshallow=True`` fixes this by fetching the full
+        history. To keep a caller able to ALWAYS pass ``unshallow=True`` safely,
+        we only add ``--unshallow`` when :meth:`is_shallow` is True — on an
+        already-complete clone it is a plain no-op fetch (git would otherwise
+        error "--unshallow on a complete repository does not make sense").
+
+        Token handling mirrors :meth:`push`/:meth:`clone`: the origin URL is
+        usually already token-embedded so a plain ``git fetch origin <ref>``
+        needs no token, but an explicit ``token`` re-authenticates ``origin``
+        for THIS fetch only and is scrubbed back afterward. A failed fetch is a
+        real error (``_run_checked``). The token NEVER reaches a log line.
+        """
+        if token:
+            origin = await self._run_checked("remote", "get-url", "origin", cwd=dest)
+            authed = self.authed_url(origin.strip(), token=token)
+            await self._run_checked("remote", "set-url", "origin", authed, cwd=dest, token=token)
+        try:
+            args = ["fetch"]
+            if unshallow and await self.is_shallow(dest):
+                args.append("--unshallow")
+            args += [remote, ref]
+            await self._run_checked(*args, cwd=dest, token=token)
+        finally:
+            # SECURITY — mirror push: an explicit token was re-embedded into
+            # ``origin`` for this fetch; scrub it back so no live credential
+            # persists in ``.git/config``. ``finally`` so a failed fetch still
+            # scrubs (the token was embedded before the fetch ran).
+            if token:
+                await self.scrub_origin_token(dest)
+
+    async def merge_ref(self, dest: Path, ref: str) -> GitMergeResult:
+        """``git merge --no-ff --no-edit <ref>`` inside ``dest``, reporting conflicts.
+
+        ``ref`` is the fetched remote ref, e.g. ``"origin/main"`` (PR6 will
+        :meth:`fetch` with ``unshallow=True`` then ``merge_ref(clone,
+        "origin/main")``). Mirrors
+        ``backend.storage.product_workspace.merge_main_into_worktree``.
+
+        Exit 0 → :class:`GitMergeResult` ``"clean"`` (HEAD now merged). Exit 1
+        (conflicts) → parse the unmerged paths via ``git diff --name-only
+        --diff-filter=U`` and return ``"conflict"`` with those paths, leaving the
+        tree mid-merge (the caller — PR6 — decides whether to abort). Any OTHER
+        exit code (e.g. 128 "refusing to merge unrelated histories" on a shallow
+        clone with no merge base) is NOT a merge result and raises.
+        """
+        # ``--no-ff`` forces a merge commit even when the ref hasn't moved,
+        # keeping the run-branch history honest with an explicit merge anchor.
+        code, _out, err = await self._run("merge", "--no-ff", "--no-edit", ref, cwd=dest)
+        if code == 0:
+            return GitMergeResult(status="clean")
+        if code == 1:
+            # git exits 1 on conflicts — capture the unmerged paths.
+            unmerged_code, unmerged_out, _uerr = await self._run(
+                "diff", "--name-only", "--diff-filter=U", cwd=dest
+            )
+            if unmerged_code == 0:
+                paths = [p for p in unmerged_out.splitlines() if p.strip()]
+                logger.info("merge_ref_conflict", ref=ref, conflict_paths=paths)
+                return GitMergeResult(status="conflict", conflict_paths=paths)
+        # Any other exit code (e.g. 128 on no merge base / FS errors) is not a
+        # merge result — surface it as an error.
+        raise GitError(f"git merge {ref} exited {code}: {err.strip()}")
+
+
+__all__ = ["GitError", "GitMergeResult", "GitOps", "scrub_token"]

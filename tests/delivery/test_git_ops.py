@@ -13,8 +13,11 @@ import asyncio
 import contextlib
 from pathlib import Path
 
+import pytest
+
 from backend.workflow.infrastructure.delivery.git_ops import (
     GitError,
+    GitMergeResult,
     GitOps,
     _strip_https_userinfo,
     scrub_token,
@@ -48,6 +51,18 @@ async def _make_bare_remote(tmp_path: Path) -> Path:
     await _run("commit", "-m", "initial", cwd=seed)
     await _run("push", "origin", "main", cwd=seed)
     return bare
+
+
+async def _advance_main(bare: Path, tmp_path: Path, *, path: str, content: str, msg: str) -> None:
+    """Push a new commit onto ``main`` in the bare remote via a throwaway clone."""
+    work = tmp_path / f"advance-{msg.replace(' ', '_')}"
+    await _run("clone", str(bare), str(work))
+    await _run("config", "user.email", "t@bsvibe.dev", cwd=work)
+    await _run("config", "user.name", "Test", cwd=work)
+    (work / path).write_text(content)
+    await _run("add", "-A", cwd=work)
+    await _run("commit", "-m", msg, cwd=work)
+    await _run("push", "origin", "main", cwd=work)
 
 
 async def test_clone_branch_commit_push_roundtrip(tmp_path: Path) -> None:
@@ -334,3 +349,120 @@ async def test_scrub_origin_token_noop_for_clean_origin(tmp_path: Path) -> None:
     before = await _run("remote", "get-url", "origin", cwd=dest)
     await ops.scrub_origin_token(dest)
     assert await _run("remote", "get-url", "origin", cwd=dest) == before
+
+
+# --- PR5: fetch (+ unshallow) + merge_ref ---------------------------------
+
+
+async def test_merge_ref_clean_merges_non_overlapping_base_change(tmp_path: Path) -> None:
+    """PR5 — a run branch B forked from main; main then advances on a
+    NON-overlapping file. ``fetch(unshallow=True)`` + ``merge_ref(origin/main)``
+    → ``GitMergeResult("clean")`` and HEAD carries BOTH changes."""
+    bare = await _make_bare_remote(tmp_path)
+    ops = GitOps()
+    dest = tmp_path / "checkout"
+    await ops.clone(bare.as_uri(), dest, token=None, depth=1)
+    await ops.checkout_new_branch(dest, "bsvibe/run-clean-merge")
+    (dest / "branch.txt").write_text("from branch\n")
+    await ops.commit_all(dest, "feat: branch change")
+
+    # main advances on a different file after the branch forked.
+    await _advance_main(bare, tmp_path, path="base.txt", content="from base\n", msg="base advance")
+
+    await ops.fetch(dest, "origin", "main", unshallow=True)
+    result = await ops.merge_ref(dest, "origin/main")
+
+    assert result == GitMergeResult(status="clean")
+    assert result.conflict_paths == []
+    # HEAD now contains both the branch change and the merged-in base change.
+    files = await _run("ls-tree", "-r", "--name-only", "HEAD", cwd=dest)
+    assert "branch.txt" in files
+    assert "base.txt" in files
+
+
+async def test_merge_ref_conflict_reports_overlapping_path(tmp_path: Path) -> None:
+    """PR5 — main advances the SAME lines the branch changed →
+    ``GitMergeResult("conflict", [path])``; the tree is left mid-merge (PR6
+    decides abort — PR5 only reports)."""
+    bare = await _make_bare_remote(tmp_path)
+    ops = GitOps()
+    dest = tmp_path / "checkout"
+    await ops.clone(bare.as_uri(), dest, token=None, depth=1)
+    await ops.checkout_new_branch(dest, "bsvibe/run-conflict")
+    (dest / "shared.txt").write_text("branch version\n")
+    await ops.commit_all(dest, "feat: branch edits shared")
+
+    # main advances the SAME file → the merge cannot auto-reconcile.
+    await _advance_main(
+        bare, tmp_path, path="shared.txt", content="base version\n", msg="base edits shared"
+    )
+
+    await ops.fetch(dest, "origin", "main", unshallow=True)
+    result = await ops.merge_ref(dest, "origin/main")
+
+    assert result.status == "conflict"
+    assert result.conflict_paths == ["shared.txt"]
+    # The working tree is left in a merge state (MERGE_HEAD present).
+    assert (dest / ".git" / "MERGE_HEAD").exists()
+
+
+async def test_fetch_unshallow_enables_merge_base_on_shallow_clone(tmp_path: Path) -> None:
+    """PR5 — a ``depth=1`` clone whose ``origin/main`` was updated by a
+    depth-maintaining shallow fetch has NO merge base with the run branch, so
+    ``merge_ref`` raises ("refusing to merge unrelated histories"). After
+    ``fetch(unshallow=True)`` the full history is present and ``merge_ref``
+    succeeds.
+
+    The disconnected pre-state is set up with an explicit ``git fetch --depth 1``
+    — that is what the network transport does when it maintains the clone's
+    shallow depth (over the local ``file://`` transport a plain fetch would
+    auto-connect down to the boundary, masking the production hazard PR6 must
+    guard against; the ``--depth 1`` fetch reproduces it deterministically).
+    """
+    bare = await _make_bare_remote(tmp_path)
+    ops = GitOps()
+    dest = tmp_path / "checkout"
+    await ops.clone(bare.as_uri(), dest, token=None, depth=1)
+    assert await ops.is_shallow(dest) is True
+
+    await ops.checkout_new_branch(dest, "bsvibe/run-shallow")
+    (dest / "branch.txt").write_text("from branch\n")
+    await ops.commit_all(dest, "feat: branch change")
+
+    # main advances by several commits after the branch forked.
+    for n in (1, 2, 3):
+        await _advance_main(
+            bare, tmp_path, path="base.txt", content=f"base line {n}\n", msg=f"base advance {n}"
+        )
+
+    # A depth-maintaining shallow fetch leaves origin/main as a disconnected
+    # graft — no common ancestor with the branch → merge base missing.
+    await _run("fetch", "--depth", "1", "origin", "main", cwd=dest)
+    assert await ops.is_shallow(dest) is True
+    with pytest.raises(GitError):
+        await ops.merge_ref(dest, "origin/main")
+    # "unrelated histories" is refused BEFORE any merge state is created, so
+    # there is nothing to abort — the tree is already clean for the retry.
+    assert not (dest / ".git" / "MERGE_HEAD").exists()
+
+    # Unshallowing fetches the full history → the merge base now exists.
+    await ops.fetch(dest, "origin", "main", unshallow=True)
+    assert await ops.is_shallow(dest) is False
+    result = await ops.merge_ref(dest, "origin/main")
+    assert result.status == "clean"
+
+
+async def test_fetch_unshallow_is_noop_on_already_full_clone(tmp_path: Path) -> None:
+    """PR5 — ``fetch(unshallow=True)`` on an ALREADY-complete clone is a safe
+    no-op (git would error "--unshallow on a complete repository does not make
+    sense"; we only pass the flag when the repo is shallow)."""
+    bare = await _make_bare_remote(tmp_path)
+    ops = GitOps()
+    dest = tmp_path / "checkout"
+    # depth=0 → a full (non-shallow) clone.
+    await ops.clone(bare.as_uri(), dest, token=None, depth=0)
+    assert await ops.is_shallow(dest) is False
+
+    # Must not raise despite unshallow=True on a complete repo.
+    await ops.fetch(dest, "origin", "main", unshallow=True)
+    assert await ops.is_shallow(dest) is False
