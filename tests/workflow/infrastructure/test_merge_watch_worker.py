@@ -33,6 +33,7 @@ from backend.workflow.application.delivery.connector_dispatch._merge_watch impor
     enqueue_merge_watch,
 )
 from backend.workflow.application.delivery.connector_dispatch._resolver import GithubBinding
+from backend.workflow.infrastructure.db import ExecutionRun, RunStatus
 from backend.workflow.infrastructure.delivery.git_ops import GitError, GitOps
 from backend.workflow.infrastructure.github.db import GithubMergeWatchRow, MergeWatchStatus
 from backend.workflow.infrastructure.workers.merge_watch_worker import (
@@ -67,6 +68,7 @@ class _FakeClient:
         )
         self.get_pr_calls: list[tuple[str, str, int]] = []
         self.merge_calls: list[tuple[str, str, int, str]] = []
+        self.close_calls: list[tuple[str, str, int]] = []
 
     async def get_pr(self, owner: str, repo: str, number: int) -> dict[str, Any]:
         self.get_pr_calls.append((owner, repo, number))
@@ -77,6 +79,10 @@ class _FakeClient:
     ) -> MergeResult:
         self.merge_calls.append((owner, repo, number, method))
         return self._merge_result
+
+    async def close_pr(self, owner: str, repo: str, number: int) -> dict[str, Any]:
+        self.close_calls.append((owner, repo, number))
+        return {"state": "closed"}
 
 
 def _resolver_for(client: Any):  # noqa: ANN202
@@ -719,6 +725,150 @@ async def test_freshness_no_target_marks_failed(tmp_path: Path) -> None:
         assert fetched.status is MergeWatchStatus.FAILED
         assert fetched.last_error == "github_binding_unavailable"
         assert redispatch.calls == []
+
+
+# ---------------------------------------------------------------------------
+# PR7 — the conflict-resolution loop CLOSES: a resolved PR re-enters the merge
+# flow; an unresolved one waits without infinite re-dispatch; a discarded run's
+# orphaned PR is closed.
+# ---------------------------------------------------------------------------
+
+
+async def test_needs_resolution_now_clean_proceeds_to_merge() -> None:
+    """The agent resolved + re-pushed → the PR is NOW clean → it merges (the
+    clean branch of the state machine handles a needs_resolution re-poll)."""
+    async with db_engine(Base) as (engine, _pg):
+        sf = async_sessionmaker(engine, expire_on_commit=False)
+        row = _row(status=MergeWatchStatus.NEEDS_RESOLUTION)
+        row.conflict_dispatched = True
+        row.conflict_head_sha = "oldsha"
+        await _seed(sf, row)
+        client = _FakeClient(
+            pr={
+                "state": "open",
+                "merged": False,
+                "mergeable_state": "clean",
+                "head": {"sha": "newsha"},
+            }
+        )
+        assert await _worker(sf, client).drain_once() == 1
+        fetched = await _fetch(sf, row.id)
+        assert fetched.status is MergeWatchStatus.MERGED
+        assert client.merge_calls == [("octocat", "hello-world", 7, "squash")]
+
+
+async def test_needs_resolution_still_dirty_same_head_waits_no_redispatch(tmp_path: Path) -> None:
+    """STILL conflicting on the SAME head (agent hasn't re-pushed) → keep waiting;
+    the guard holds, no second dispatch, no freshness work attempted."""
+    async with db_engine(Base) as (engine, _pg):
+        sf = async_sessionmaker(engine, expire_on_commit=False)
+        run_root = tmp_path / "runs"
+        row = _row(repo="acme/still-same", status=MergeWatchStatus.NEEDS_RESOLUTION)
+        row.conflict_dispatched = True
+        row.conflict_head_sha = "samehead"
+        await _seed(sf, row)
+
+        client = _FakeClient(
+            pr={
+                "state": "open",
+                "merged": False,
+                "mergeable_state": "dirty",
+                "head": {"sha": "samehead"},  # unchanged since dispatch
+            }
+        )
+        redispatch = _RecordingRedispatch()
+        # target=None + no repo work: the guard short-circuits before any git.
+        worker = _freshness_worker(
+            sf, client, target=None, redispatch=redispatch, run_root=run_root
+        )
+        assert await worker.drain_once() == 1
+
+        fetched = await _fetch(sf, row.id)
+        assert fetched.status is MergeWatchStatus.NEEDS_RESOLUTION
+        assert fetched.last_error == "awaiting_conflict_resolution"
+        assert fetched.conflict_head_sha == "samehead"  # unchanged
+        assert redispatch.calls == []  # loop guard — no second dispatch
+        assert client.merge_calls == []
+
+
+async def test_needs_resolution_changed_head_still_conflict_redispatches_once(
+    tmp_path: Path,
+) -> None:
+    """The agent re-pushed (head advanced) but produced a NEW conflicting state →
+    the freshness merge re-runs, the guard resets, and the agent is re-dispatched
+    once for the new head (which is recorded)."""
+    async with db_engine(Base) as (engine, _pg):
+        sf = async_sessionmaker(engine, expire_on_commit=False)
+        run_root = tmp_path / "runs"
+        row = _row(repo="acme/changed-head", pr_number=13, status=MergeWatchStatus.NEEDS_RESOLUTION)
+        row.conflict_dispatched = True
+        row.conflict_head_sha = "oldhead"  # last dispatched on this head
+        await _seed(sf, row)
+
+        bare = await _seed_bare(tmp_path, "changed")
+        clone = run_root / str(row.run_id)
+        await _push_run_branch(bare, clone, row.branch, overlap=True)
+        await _advance_main(tmp_path, bare, overlap=True)  # same-file → still conflicts
+
+        client = _FakeClient(
+            pr={
+                "state": "open",
+                "merged": False,
+                "mergeable_state": "dirty",
+                "head": {"sha": "newhead"},  # advanced since dispatch
+            }
+        )
+        redispatch = _RecordingRedispatch()
+        target = FreshnessTarget(
+            repo=row.repo, base_branch="main", token=None, remote_url=bare.as_uri()
+        )
+        worker = _freshness_worker(
+            sf, client, target=target, redispatch=redispatch, run_root=run_root
+        )
+        assert await worker.drain_once() == 1
+
+        fetched = await _fetch(sf, row.id)
+        assert fetched.status is MergeWatchStatus.NEEDS_RESOLUTION
+        assert fetched.conflict_dispatched is True
+        assert fetched.conflict_head_sha == "newhead"  # pinned to the new head
+        assert fetched.last_error == "merge_conflict"
+        # Re-dispatched exactly once more for the NEW conflicting state.
+        assert len(redispatch.calls) == 1
+        assert redispatch.calls[0][0] == row.run_id
+        assert redispatch.calls[0][3] == 13
+
+
+async def test_cancelled_run_closes_orphaned_pr_and_abandons() -> None:
+    """Founder discarded the resolving run (→ CANCELLED): the worker closes the
+    now-orphaned PR and stops watching — the loop closes without a merge."""
+    async with db_engine(Base) as (engine, _pg):
+        sf = async_sessionmaker(engine, expire_on_commit=False)
+        row = _row(repo="acme/discarded", pr_number=21, status=MergeWatchStatus.NEEDS_RESOLUTION)
+        row.conflict_dispatched = True
+        await _seed(sf, row)
+        # The originating run was cancelled by the founder's discard.
+        async with sf() as s:
+            s.add(
+                ExecutionRun(
+                    id=row.run_id,
+                    workspace_id=row.workspace_id,
+                    status=RunStatus.CANCELLED,
+                    payload={},
+                    created_at=_FIXED_NOW,
+                )
+            )
+            await s.commit()
+
+        client = _FakeClient(
+            pr={"state": "open", "merged": False, "mergeable_state": "dirty", "head": {"sha": "h"}}
+        )
+        assert await _worker(sf, client).drain_once() == 1
+
+        fetched = await _fetch(sf, row.id)
+        assert fetched.status is MergeWatchStatus.ABANDONED
+        assert fetched.last_error == "run_cancelled"
+        assert client.close_calls == [("acme", "discarded", 21)]
+        assert client.merge_calls == []  # a cancelled run's PR is never merged
 
 
 async def test_enqueue_is_noop_when_settings_absent() -> None:

@@ -58,10 +58,12 @@ from pathlib import Path
 from typing import Any, Protocol
 
 import structlog
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from backend.storage.github_repo_lock import GithubRepoBusy, github_repo_lock
 from backend.workers.base import BaseWorker
+from backend.workflow.infrastructure.db import ExecutionRun, RunStatus
 from backend.workflow.infrastructure.delivery.git_ops import GitError, GitOps
 from backend.workflow.infrastructure.github.db import GithubMergeWatchRow, MergeWatchStatus
 from backend.workflow.infrastructure.github.repository import GithubMergeWatchRepository
@@ -83,6 +85,8 @@ class MergeWatchClient(Protocol):
     async def merge_pr(
         self, owner: str, repo: str, number: int, *, method: str = "squash"
     ) -> MergeResult: ...
+
+    async def close_pr(self, owner: str, repo: str, number: int) -> dict[str, Any]: ...
 
 
 #: Resolve a per-row GitHub client (token + base_url from the workspace's github
@@ -150,6 +154,33 @@ def _split_repo(repo: str) -> tuple[str, str]:
     return owner, name
 
 
+def _head_sha(pr: dict[str, Any]) -> str | None:
+    """The PR's current head commit SHA from a ``get_pr`` payload, or ``None``.
+
+    Tolerant of a missing/oddly-shaped ``head`` (the github REST shape is
+    ``{"head": {"sha": "..."}}``) — a ``None`` head just means the loop can't
+    detect a head advance this poll (it waits, never mis-dispatches)."""
+    head = pr.get("head")
+    if not isinstance(head, dict):
+        return None
+    sha = head.get("sha")
+    return str(sha) if isinstance(sha, str) and sha else None
+
+
+def _head_advanced(current: str | None, dispatched: str | None) -> bool:
+    """PR7 — has the PR head moved since a conflict was last dispatched?
+
+    ``current is None`` (head undetectable this poll) → ``False`` (wait, never
+    mis-dispatch). ``dispatched is None`` (a legacy row from before the head SHA
+    was tracked) → ``True`` so it can recover rather than wait forever. Otherwise
+    a plain SHA inequality: a changed head means the agent re-pushed."""
+    if current is None:
+        return False
+    if dispatched is None:
+        return True
+    return current != dispatched
+
+
 @dataclass(slots=True)
 class _WatchSnapshot:
     """The fields of a claimed row the per-row processing needs, captured before
@@ -166,6 +197,7 @@ class _WatchSnapshot:
     attempts: int
     deadline_at: datetime
     conflict_dispatched: bool
+    conflict_head_sha: str | None
 
     @classmethod
     def of(cls, row: GithubMergeWatchRow) -> _WatchSnapshot:
@@ -181,6 +213,7 @@ class _WatchSnapshot:
             attempts=row.attempts,
             deadline_at=row.deadline_at,
             conflict_dispatched=row.conflict_dispatched,
+            conflict_head_sha=row.conflict_head_sha,
         )
 
 
@@ -280,7 +313,7 @@ class MergeWatchWorker(BaseWorker):
             processed += 1
         return processed
 
-    async def _process(self, snap: _WatchSnapshot, now: datetime) -> None:
+    async def _process(self, snap: _WatchSnapshot, now: datetime) -> None:  # noqa: PLR0911 — one early return per PR state (merged/closed/clean/behind/deadline/pending)
         """Run the state machine for one watched PR in its own transaction."""
         owner, name = _split_repo(snap.repo)
         async with self._session_factory() as session:
@@ -303,10 +336,23 @@ class MergeWatchWorker(BaseWorker):
                 )
                 return
 
+            # PR7 — the founder DISCARDED the resolving run (or it was otherwise
+            # cancelled): the PR is now orphaned. Close it (best-effort) and stop
+            # watching. Checked before the merge state machine so a cancelled run
+            # never gets its conflicted PR merged or re-dispatched.
+            if await self._run_cancelled(session, snap.run_id):
+                await self._close_orphaned_pr(client, owner, name, snap)
+                await repo.mark_status(
+                    snap.id, MergeWatchStatus.ABANDONED, last_error="run_cancelled"
+                )
+                await session.commit()
+                return
+
             pr = await client.get_pr(owner, name, snap.pr_number)
             merged = pr.get("merged")
             state = pr.get("state")
             mergeable_state = pr.get("mergeable_state")
+            head_sha = _head_sha(pr)
 
             # 1. Idempotent terminals — the PR already resolved out from under us.
             if merged is True:
@@ -333,7 +379,7 @@ class MergeWatchWorker(BaseWorker):
                 # GitHub's behind/dirty label, do the merge under the per-repo
                 # lock to decide clean-vs-conflict for real (serialized with the
                 # merge step so PR#2 always freshens against PR#1's merged main).
-                await self._freshness_step(session, repo, snap, now)
+                await self._freshness_step(session, repo, snap, now, head_sha=head_sha)
                 await session.commit()
                 return
 
@@ -421,16 +467,25 @@ class MergeWatchWorker(BaseWorker):
         repo: GithubMergeWatchRepository,
         snap: _WatchSnapshot,
         now: datetime,
+        *,
+        head_sha: str | None,
     ) -> None:
-        """behind/dirty → an authoritative LOCAL freshness merge (PR6).
+        """behind/dirty → an authoritative LOCAL freshness merge (PR6/PR7).
 
         Merge ``origin/<base_branch>`` INTO the PR branch locally to decide, for
         real, whether the branch is cleanly freshenable or genuinely conflicts:
 
         * clean  → push the freshened branch (CI re-runs on the new head; a later
           clean poll merges) → back to ``pending_ci`` (backoff).
-        * conflict → hand the run off to the agent: re-dispatch (once) + park the
-          row in ``needs_resolution`` until the agent re-pushes a resolved head.
+        * conflict → hand the run off to the agent: re-dispatch (once per head) +
+          park the row in ``needs_resolution`` until the agent re-pushes a
+          resolved head, recording the dispatched head SHA.
+
+        PR7 loop close — once a conflict has been dispatched, a re-poll only
+        re-runs the merge when the PR head has ADVANCED since the dispatch (the
+        agent re-pushed). An unchanged head just waits (no re-dispatch); a changed
+        head that STILL conflicts is a NEW conflicting state → the guard is reset
+        and the agent is re-dispatched once more for it.
 
         Runs under the per-repo :func:`github_repo_lock` (serialized WITH the
         merge step). A lost lock raises :class:`GithubRepoBusy` — propagated to
@@ -450,10 +505,10 @@ class MergeWatchWorker(BaseWorker):
             )
             return
 
-        # Loop guard — a conflict was already handed to the agent. Do NOT re-merge
-        # / re-dispatch: wait (backoff) for the agent's re-push to move the head (a
-        # later clean poll merges it). At most one dispatch per detected conflict.
-        if snap.conflict_dispatched:
+        # Loop guard (PR7) — a conflict was already handed to the agent. Only
+        # re-attempt when the agent has re-pushed (head SHA advanced since the
+        # dispatch); otherwise wait (backoff), at most one dispatch per head.
+        if snap.conflict_dispatched and not _head_advanced(head_sha, snap.conflict_head_sha):
             await repo.mark_status(
                 snap.id,
                 MergeWatchStatus.NEEDS_RESOLUTION,
@@ -567,6 +622,46 @@ class MergeWatchWorker(BaseWorker):
                 last_error="merge_conflict",
                 increment_attempt=True,
                 conflict_dispatched=True,
+                # PR7 — pin the head this conflict was dispatched on so a later
+                # re-poll only re-acts once the agent has re-pushed (head moves).
+                conflict_head_sha=head_sha or "unknown",
+            )
+
+    async def _run_cancelled(self, session: AsyncSession, run_id: uuid.UUID) -> bool:
+        """PR7 — is the PR's originating run terminally CANCELLED (founder discard)?
+
+        A column-level scalar read (bypasses any identity-map staleness). Missing
+        run (no ExecutionRow — e.g. a unit fixture that seeds only the watch row)
+        → ``False``: treat as still-live and run the normal state machine."""
+        status = await session.scalar(select(ExecutionRun.status).where(ExecutionRun.id == run_id))
+        return status is RunStatus.CANCELLED
+
+    async def _close_orphaned_pr(
+        self, client: MergeWatchClient, owner: str, name: str, snap: _WatchSnapshot
+    ) -> None:
+        """Best-effort close of a PR whose resolving run was cancelled/discarded.
+
+        Never raises into the poll: a transient GitHub error just leaves the PR
+        open (the row is marked ABANDONED regardless, so we won't retry) — the
+        founder discarded the work, so an orphaned-open PR is a cosmetic
+        follow-up, not a correctness bug. Skips an already-closed/merged PR."""
+        try:
+            pr = await client.get_pr(owner, name, snap.pr_number)
+            if pr.get("state") == "closed" or pr.get("merged") is True:
+                return
+            await client.close_pr(owner, name, snap.pr_number)
+            logger.info(
+                "merge_watch_closed_orphaned_pr",
+                repo=snap.repo,
+                pr_number=snap.pr_number,
+                run_id=str(snap.run_id),
+            )
+        except Exception:  # noqa: BLE001 — closing the PR must never crash the poll
+            logger.warning(
+                "merge_watch_close_orphaned_pr_failed",
+                repo=snap.repo,
+                pr_number=snap.pr_number,
+                exc_info=True,
             )
 
     async def _ensure_clone(

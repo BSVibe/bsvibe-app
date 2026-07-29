@@ -22,14 +22,35 @@ from backend.workflow.application.run_persistence import create_decision
 from backend.workflow.domain.emit_deliverable import handle_emit_deliverable
 
 
+def _ask_decision_kind(run: Any) -> str:
+    """The Decision kind for an agent-raised blocking question.
+
+    PR7 — when the run is resolving a re-dispatched merge conflict (the drive
+    loop set ``payload["merge_conflict_resolving"]`` after surfacing the
+    conflict), an ``ask_user_question`` the agent raises IS the founder's
+    clear-vs-ambiguous merge decision. Mint it as ``merge_conflict_review`` so
+    the checkpoint surface offers the retry/discard one-click actions (and the
+    calm merge-conflict copy) instead of a vanilla free-text ask. Otherwise the
+    kind is the plain ``ask_user_question`` (unchanged)."""
+    payload = run.payload if isinstance(run.payload, dict) else {}
+    if payload.get("merge_conflict_resolving"):
+        return "merge_conflict_review"
+    return "ask_user_question"
+
+
 async def record_question(run_id: uuid.UUID, ctx: ToolContext, payload: dict[str, Any]) -> str:
-    """Create the ``ask_user_question`` Decision the run pauses on."""
+    """Create the Decision the run pauses on when the agent asks the founder.
+
+    Normally an ``ask_user_question`` Decision; a question raised while the run
+    is resolving a re-dispatched merge conflict becomes a ``merge_conflict_review``
+    (PR7) so the founder gets the retry/discard actions."""
     run = await load_run(run_id, ctx)
+    kind = _ask_decision_kind(run)
     decision = await create_decision(
         ctx.session,
         run,
         None,  # work_step is unused by the Decision row
-        kind="ask_user_question",
+        kind=kind,
         payload=payload,
         rationale="the working agent asked the founder a blocking question",
     )
@@ -45,4 +66,4 @@ async def record_deliverable(run_id: uuid.UUID, ctx: ToolContext, arguments: dic
     return result
 
 
-__all__ = ["record_deliverable", "record_question"]
+__all__ = ["_ask_decision_kind", "record_deliverable", "record_question"]

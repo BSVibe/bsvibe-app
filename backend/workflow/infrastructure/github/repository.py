@@ -75,8 +75,14 @@ class GithubMergeWatchRepository:
         last_error: str | None = None,
         increment_attempt: bool = False,
         conflict_dispatched: bool | None = None,
+        conflict_head_sha: str | None = None,
     ) -> None:
-        """Transition one row's status (+ optional backoff / attempt / flags)."""
+        """Transition one row's status (+ optional backoff / attempt / flags).
+
+        ``conflict_head_sha`` (PR7) records the PR head SHA a conflict was
+        re-dispatched on — passed only when (re-)dispatching so a later re-poll
+        can detect whether the agent has since re-pushed.
+        """
         values: dict[str, Any] = {"status": status}
         if next_poll_at is not None:
             values["next_poll_at"] = next_poll_at
@@ -84,6 +90,8 @@ class GithubMergeWatchRepository:
             values["last_error"] = last_error
         if conflict_dispatched is not None:
             values["conflict_dispatched"] = conflict_dispatched
+        if conflict_head_sha is not None:
+            values["conflict_head_sha"] = conflict_head_sha
         if increment_attempt:
             values["attempts"] = GithubMergeWatchRow.attempts + 1
         stmt = update(GithubMergeWatchRow).where(GithubMergeWatchRow.id == row_id).values(**values)
