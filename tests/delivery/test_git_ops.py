@@ -466,3 +466,27 @@ async def test_fetch_unshallow_is_noop_on_already_full_clone(tmp_path: Path) -> 
     # Must not raise despite unshallow=True on a complete repo.
     await ops.fetch(dest, "origin", "main", unshallow=True)
     assert await ops.is_shallow(dest) is False
+
+
+async def test_checkout_existing_remote_branch_after_full_reclone(tmp_path: Path) -> None:
+    """PR6 — the freshness re-clone path: a run branch pushed to the remote is
+    checked out on a FRESH full clone via git DWIM tracking (``git checkout
+    <branch>`` creates a local tracking branch off ``origin/<branch>``)."""
+    bare = await _make_bare_remote(tmp_path)
+    ops = GitOps()
+    # Push a run branch to the remote via a throwaway clone.
+    seed = tmp_path / "seed-branch"
+    await ops.clone(bare.as_uri(), seed, token=None, depth=0)
+    await ops.checkout_new_branch(seed, "bsvibe/run-reclone")
+    (seed / "runfile.txt").write_text("from run\n")
+    await ops.commit_all(seed, "feat: run change")
+    await ops.push(seed, "bsvibe/run-reclone", token=None)
+
+    # A brand-new full clone lands on main; checkout switches HEAD to the branch.
+    dest = tmp_path / "reclone"
+    await ops.clone(bare.as_uri(), dest, token=None, depth=0)
+    assert not (dest / "runfile.txt").exists()  # main has no run change
+    await ops.checkout(dest, "bsvibe/run-reclone")
+    assert (dest / "runfile.txt").read_text() == "from run\n"
+    branch = await _run("rev-parse", "--abbrev-ref", "HEAD", cwd=dest)
+    assert branch == "bsvibe/run-reclone"

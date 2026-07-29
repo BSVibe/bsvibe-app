@@ -204,6 +204,17 @@ class GitOps:
         """Create + switch to a new ``branch`` in the ``dest`` checkout."""
         await self._run_checked("checkout", "-b", branch, cwd=dest)
 
+    async def checkout(self, dest: Path, branch: str) -> None:
+        """Switch to an EXISTING ``branch`` in ``dest`` (git DWIM tracking).
+
+        On a FULL clone every remote branch is present as ``origin/<branch>``, so
+        ``git checkout <branch>`` auto-creates a local tracking branch off it.
+        Used by the freshness re-clone path (PR6): after re-cloning a reaped run
+        workspace full-depth, HEAD sits on the default base branch — this moves it
+        onto the PR's ``bsvibe/run-<id>`` branch so the base can be merged into it.
+        """
+        await self._run_checked("checkout", branch, cwd=dest)
+
     async def commit_all(self, dest: Path, message: str) -> bool:
         """``git add -A`` + commit. Returns ``False`` when nothing changed.
 

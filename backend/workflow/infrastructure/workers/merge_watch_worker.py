@@ -54,6 +54,7 @@ import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import Any, Protocol
 
 import structlog
@@ -61,6 +62,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from backend.storage.github_repo_lock import GithubRepoBusy, github_repo_lock
 from backend.workers.base import BaseWorker
+from backend.workflow.infrastructure.delivery.git_ops import GitError, GitOps
 from backend.workflow.infrastructure.github.db import GithubMergeWatchRow, MergeWatchStatus
 from backend.workflow.infrastructure.github.repository import GithubMergeWatchRepository
 from plugin.github.client import MergeResult
@@ -89,6 +91,51 @@ class MergeWatchClient(Protocol):
 #: worker (infrastructure) never imports the application-layer binding resolver.
 MergeClientResolver = Callable[[AsyncSession, uuid.UUID], Awaitable[MergeWatchClient | None]]
 
+
+@dataclass(slots=True, frozen=True)
+class FreshnessTarget:
+    """The git-side facts the freshness merge needs, resolved from the
+    workspace's github binding: the ``repo`` (``owner/name``), its ``base_branch``,
+    the decrypted push/fetch ``token`` (``None`` for a local ``file://`` remote in
+    tests), and the ``remote_url`` used to RE-CLONE a reaped run workspace.
+
+    Resolved in the APPLICATION layer (binding + token decryption is an
+    application concern) and injected, so the infrastructure worker never imports
+    the binding resolver / cipher.
+    """
+
+    repo: str
+    base_branch: str
+    token: str | None
+    remote_url: str
+
+
+#: Resolve the git-side freshness target for a workspace (binding + decrypted
+#: token + clone URL). ``None`` when the workspace has no resolvable github
+#: delivery target. Injected — the worker never decrypts a credential itself.
+FreshnessResolver = Callable[[AsyncSession, uuid.UUID], Awaitable["FreshnessTarget | None"]]
+
+
+class ConflictRedispatch(Protocol):
+    """Re-dispatch a run to the agent to resolve a merge conflict (PR7's side).
+
+    Implemented in the APPLICATION layer (``merge_watch_runtime``): it writes
+    ``run.payload["merge_conflict"]`` and transitions the run RUNNING → OPEN via
+    ``AgentRunner.transition`` — both application concerns — so the infrastructure
+    worker just calls it. Injected as a callable so the worker never imports the
+    AgentRunner / run repositories.
+    """
+
+    async def __call__(
+        self,
+        run_id: uuid.UUID,
+        *,
+        conflict_paths: list[str],
+        base_branch: str,
+        pr_number: int,
+    ) -> None: ...
+
+
 #: A clock — injected so tests pin ``now`` (deadline / backoff are time-driven).
 Clock = Callable[[], datetime]
 
@@ -114,8 +161,11 @@ class _WatchSnapshot:
     deliverable_id: uuid.UUID
     repo: str
     pr_number: int
+    branch: str
+    base_branch: str
     attempts: int
     deadline_at: datetime
+    conflict_dispatched: bool
 
     @classmethod
     def of(cls, row: GithubMergeWatchRow) -> _WatchSnapshot:
@@ -126,8 +176,11 @@ class _WatchSnapshot:
             deliverable_id=row.deliverable_id,
             repo=row.repo,
             pr_number=row.pr_number,
+            branch=row.branch,
+            base_branch=row.base_branch,
             attempts=row.attempts,
             deadline_at=row.deadline_at,
+            conflict_dispatched=row.conflict_dispatched,
         )
 
 
@@ -149,6 +202,10 @@ class MergeWatchWorker(BaseWorker):
         *,
         session_factory: async_sessionmaker[AsyncSession],
         client_resolver: MergeClientResolver,
+        freshness_resolver: FreshnessResolver | None = None,
+        redispatch_conflict: ConflictRedispatch | None = None,
+        git_ops: GitOps | None = None,
+        run_workspace_root: Path | None = None,
         config: MergeWatchWorkerConfig | None = None,
         now: Clock | None = None,
     ) -> None:
@@ -156,7 +213,23 @@ class MergeWatchWorker(BaseWorker):
         super().__init__(name="merge_watch_worker", poll_interval_s=self._cfg.poll_interval_s)
         self._session_factory = session_factory
         self._resolve_client = client_resolver
+        # PR6 — the behind/dirty freshness merge deps. All three are wired
+        # together by the runtime; when any is absent (e.g. a PR4-era worker
+        # construction) the behind/dirty branch falls back to the old "wait"
+        # behavior rather than attempting a merge it cannot complete.
+        self._resolve_freshness = freshness_resolver
+        self._redispatch_conflict = redispatch_conflict
+        self._git = git_ops or GitOps()
+        self._run_workspace_root = run_workspace_root
         self._now = now or _utcnow
+
+    @property
+    def _freshness_wired(self) -> bool:
+        return (
+            self._resolve_freshness is not None
+            and self._redispatch_conflict is not None
+            and self._run_workspace_root is not None
+        )
 
     async def _tick(self) -> int:
         return await self.drain_once()
@@ -256,15 +329,11 @@ class MergeWatchWorker(BaseWorker):
                 return
 
             if mergeable_state in ("behind", "dirty"):
-                # PR6 territory (freshness / conflict recovery) — do NOT merge a
-                # behind/dirty PR in PR4. Just wait.
-                await repo.mark_status(
-                    snap.id,
-                    MergeWatchStatus.PENDING_CI,
-                    next_poll_at=self._backoff(snap.attempts, now),
-                    last_error="awaiting_freshness (pr6)",
-                    increment_attempt=True,
-                )
+                # PR6 — an AUTHORITATIVE local freshness merge: don't trust
+                # GitHub's behind/dirty label, do the merge under the per-repo
+                # lock to decide clean-vs-conflict for real (serialized with the
+                # merge step so PR#2 always freshens against PR#1's merged main).
+                await self._freshness_step(session, repo, snap, now)
                 await session.commit()
                 return
 
@@ -346,9 +415,191 @@ class MergeWatchWorker(BaseWorker):
                 increment_attempt=True,
             )
 
+    async def _freshness_step(
+        self,
+        session: AsyncSession,
+        repo: GithubMergeWatchRepository,
+        snap: _WatchSnapshot,
+        now: datetime,
+    ) -> None:
+        """behind/dirty → an authoritative LOCAL freshness merge (PR6).
+
+        Merge ``origin/<base_branch>`` INTO the PR branch locally to decide, for
+        real, whether the branch is cleanly freshenable or genuinely conflicts:
+
+        * clean  → push the freshened branch (CI re-runs on the new head; a later
+          clean poll merges) → back to ``pending_ci`` (backoff).
+        * conflict → hand the run off to the agent: re-dispatch (once) + park the
+          row in ``needs_resolution`` until the agent re-pushes a resolved head.
+
+        Runs under the per-repo :func:`github_repo_lock` (serialized WITH the
+        merge step). A lost lock raises :class:`GithubRepoBusy` — propagated to
+        :meth:`drain_once` (retried next tick) with NO partial state. A git
+        failure never crashes the worker: it logs + backs off to ``pending_ci``.
+        """
+        # Un-wired (PR4-era construction) — the freshness merge deps aren't
+        # injected, so we cannot make progress on a behind/dirty PR. Preserve the
+        # old "wait" behavior rather than half-attempt a merge.
+        if not self._freshness_wired:
+            await repo.mark_status(
+                snap.id,
+                MergeWatchStatus.PENDING_CI,
+                next_poll_at=self._backoff(snap.attempts, now),
+                last_error="awaiting_freshness_unwired",
+                increment_attempt=True,
+            )
+            return
+
+        # Loop guard — a conflict was already handed to the agent. Do NOT re-merge
+        # / re-dispatch: wait (backoff) for the agent's re-push to move the head (a
+        # later clean poll merges it). At most one dispatch per detected conflict.
+        if snap.conflict_dispatched:
+            await repo.mark_status(
+                snap.id,
+                MergeWatchStatus.NEEDS_RESOLUTION,
+                next_poll_at=self._backoff(snap.attempts, now),
+                last_error="awaiting_conflict_resolution",
+                increment_attempt=True,
+            )
+            return
+
+        # narrow Optionals for mypy (guarded by ``_freshness_wired`` above).
+        assert self._resolve_freshness is not None  # noqa: S101
+        assert self._redispatch_conflict is not None  # noqa: S101
+        assert self._run_workspace_root is not None  # noqa: S101
+
+        async with github_repo_lock(session, snap.repo):
+            target = await self._resolve_freshness(session, snap.workspace_id)
+            if target is None:
+                # No resolvable github target (connector removed) — can't freshen.
+                await repo.mark_status(
+                    snap.id,
+                    MergeWatchStatus.FAILED,
+                    last_error="github_binding_unavailable",
+                )
+                logger.warning(
+                    "merge_watch_freshen_no_target",
+                    repo=snap.repo,
+                    pr_number=snap.pr_number,
+                    workspace_id=str(snap.workspace_id),
+                )
+                return
+
+            clone = self._run_workspace_root / str(snap.run_id)
+            try:
+                await self._ensure_clone(clone, snap, target)
+                await self._git.fetch(
+                    clone, "origin", target.base_branch, token=target.token, unshallow=True
+                )
+                result = await self._git.merge_ref(clone, f"origin/{target.base_branch}")
+            except GitError:
+                logger.warning(
+                    "merge_watch_freshen_failed",
+                    repo=snap.repo,
+                    pr_number=snap.pr_number,
+                    run_id=str(snap.run_id),
+                    exc_info=True,
+                )
+                await repo.mark_status(
+                    snap.id,
+                    MergeWatchStatus.PENDING_CI,
+                    next_poll_at=self._backoff(snap.attempts, now),
+                    last_error="freshen_failed",
+                    increment_attempt=True,
+                )
+                return
+
+            if result.status == "clean":
+                try:
+                    await self._git.push(clone, snap.branch, token=target.token)
+                except GitError:
+                    logger.warning(
+                        "merge_watch_freshen_failed",
+                        repo=snap.repo,
+                        pr_number=snap.pr_number,
+                        run_id=str(snap.run_id),
+                        exc_info=True,
+                    )
+                    await repo.mark_status(
+                        snap.id,
+                        MergeWatchStatus.PENDING_CI,
+                        next_poll_at=self._backoff(snap.attempts, now),
+                        last_error="freshen_failed",
+                        increment_attempt=True,
+                    )
+                    return
+                await repo.mark_status(
+                    snap.id,
+                    MergeWatchStatus.PENDING_CI,
+                    next_poll_at=self._backoff(snap.attempts, now),
+                    last_error="freshened",
+                    increment_attempt=True,
+                )
+                logger.info(
+                    "merge_watch_freshened",
+                    repo=snap.repo,
+                    pr_number=snap.pr_number,
+                    run_id=str(snap.run_id),
+                    branch=snap.branch,
+                )
+                return
+
+            # Conflict — hand the run off to the agent to resolve. Re-dispatch
+            # exactly once (guarded above by ``conflict_dispatched``), then park
+            # the row in ``needs_resolution`` awaiting the agent's re-push.
+            await self._redispatch_conflict(
+                snap.run_id,
+                conflict_paths=list(result.conflict_paths),
+                base_branch=target.base_branch,
+                pr_number=snap.pr_number,
+            )
+            logger.info(
+                "merge_watch_conflict_dispatched",
+                repo=snap.repo,
+                pr_number=snap.pr_number,
+                run_id=str(snap.run_id),
+                conflict_paths=result.conflict_paths,
+            )
+            await repo.mark_status(
+                snap.id,
+                MergeWatchStatus.NEEDS_RESOLUTION,
+                next_poll_at=self._backoff(snap.attempts, now),
+                last_error="merge_conflict",
+                increment_attempt=True,
+                conflict_dispatched=True,
+            )
+
+    async def _ensure_clone(
+        self, clone: Path, snap: _WatchSnapshot, target: FreshnessTarget
+    ) -> None:
+        """Ensure the run's clone exists at ``clone`` on the PR branch.
+
+        Present (``.git`` dir) → reuse it (a shallow clone is fine — the caller
+        unshallows in the fetch step). MISSING (run cleanup reaped the workspace
+        after the PR opened) → RE-CLONE fresh at FULL depth (so a merge base with
+        ``base_branch`` exists) and check out the PR branch tracking
+        ``origin/<branch>``.
+        """
+        if (clone / ".git").exists():
+            return
+        logger.info(
+            "merge_watch_reclone",
+            repo=snap.repo,
+            pr_number=snap.pr_number,
+            run_id=str(snap.run_id),
+            branch=snap.branch,
+        )
+        clone.parent.mkdir(parents=True, exist_ok=True)
+        # depth=0 → a FULL clone: a shallow re-clone would lack the merge base.
+        await self._git.clone(target.remote_url, clone, token=target.token, depth=0)
+        await self._git.checkout(clone, snap.branch)
+
 
 __all__ = [
     "Clock",
+    "ConflictRedispatch",
+    "FreshnessResolver",
+    "FreshnessTarget",
     "MergeClientResolver",
     "MergeWatchClient",
     "MergeWatchWorker",

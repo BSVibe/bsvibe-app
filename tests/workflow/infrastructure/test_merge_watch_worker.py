@@ -16,8 +16,10 @@ the GitHub client is a fake and the clock is injected fixed.
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -31,9 +33,10 @@ from backend.workflow.application.delivery.connector_dispatch._merge_watch impor
     enqueue_merge_watch,
 )
 from backend.workflow.application.delivery.connector_dispatch._resolver import GithubBinding
-from backend.workflow.infrastructure.delivery.git_ops import GitOps
+from backend.workflow.infrastructure.delivery.git_ops import GitError, GitOps
 from backend.workflow.infrastructure.github.db import GithubMergeWatchRow, MergeWatchStatus
 from backend.workflow.infrastructure.workers.merge_watch_worker import (
+    FreshnessTarget,
     MergeWatchWorker,
     MergeWatchWorkerConfig,
 )
@@ -178,7 +181,7 @@ async def test_unstable_pr_not_merged() -> None:
 
 
 @pytest.mark.parametrize("mergeable_state", ["behind", "dirty"])
-async def test_behind_or_dirty_pr_is_not_merged_in_pr4(mergeable_state: str) -> None:
+async def test_behind_or_dirty_pr_waits_when_freshness_unwired(mergeable_state: str) -> None:
     async with db_engine(Base) as (engine, _pg):
         sf = async_sessionmaker(engine, expire_on_commit=False)
         row = _row()
@@ -186,11 +189,12 @@ async def test_behind_or_dirty_pr_is_not_merged_in_pr4(mergeable_state: str) -> 
         client = _FakeClient(
             pr={"state": "open", "merged": False, "mergeable_state": mergeable_state}
         )
+        # ``_worker`` injects NO freshness deps → the freshness merge cannot run;
+        # the behind/dirty branch falls back to the old "wait" behavior.
         await _worker(sf, client).drain_once()
         fetched = await _fetch(sf, row.id)
-        # PR4 defers freshness/conflict recovery to PR6 — the row waits, unmerged.
         assert fetched.status is MergeWatchStatus.PENDING_CI
-        assert fetched.last_error == "awaiting_freshness (pr6)"
+        assert fetched.last_error == "awaiting_freshness_unwired"
         assert client.merge_calls == []
 
 
@@ -374,6 +378,347 @@ async def test_enqueue_is_noop_when_flag_off() -> None:
 
             rows = (await session.execute(select(GithubMergeWatchRow))).scalars().all()
         assert rows == []
+
+
+# ---------------------------------------------------------------------------
+# PR6 — behind/dirty freshness merge (REAL local git via a bare repo).
+# ---------------------------------------------------------------------------
+#
+# The github REST client is faked (returns mergeable_state="behind"/"dirty"), but
+# the freshness merge runs against a REAL local bare repo standing in for github
+# — like tests/delivery/test_git_ops.py — so the clean-vs-conflict decision is
+# authoritative, not mocked. The re-dispatch callback is a recording fake.
+
+
+async def _run_git(*args: str, cwd: Path | None = None) -> str:
+    proc = await asyncio.create_subprocess_exec(
+        "git",
+        *args,
+        cwd=str(cwd) if cwd else None,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    out, err = await proc.communicate()
+    assert proc.returncode == 0, err.decode()
+    return out.decode().strip()
+
+
+async def _seed_bare(tmp_path: Path, name: str) -> Path:
+    """A bare repo seeded on ``main`` with ``shared.txt`` + ``README.md``."""
+    bare = tmp_path / f"{name}.git"
+    await _run_git("init", "--bare", "-b", "main", str(bare))
+    seed = tmp_path / f"{name}-seed"
+    ops = GitOps()
+    await ops.clone(bare.as_uri(), seed, token=None, depth=0)
+    (seed / "shared.txt").write_text("base line\n")
+    (seed / "README.md").write_text("seed\n")
+    await ops.commit_all(seed, "initial")
+    await ops.push(seed, "main", token=None)
+    return bare
+
+
+async def _push_run_branch(bare: Path, dest: Path, branch: str, *, overlap: bool) -> None:
+    """Create ``branch`` off main in ``dest`` (a shallow clone), commit a change,
+    and push it. ``overlap`` edits ``shared.txt`` (→ conflict with a same-file
+    base advance); else adds a new ``branch.txt`` (→ clean merge)."""
+    ops = GitOps()
+    await ops.clone(bare.as_uri(), dest, token=None, depth=1)
+    await ops.checkout_new_branch(dest, branch)
+    if overlap:
+        (dest / "shared.txt").write_text("branch version\n")
+    else:
+        (dest / "branch.txt").write_text("from branch\n")
+    await ops.commit_all(dest, "feat: branch change")
+    await ops.push(dest, branch, token=None)
+
+
+async def _advance_main(tmp_path: Path, bare: Path, *, overlap: bool) -> None:
+    """Advance ``main`` after the branch forked. ``overlap`` edits the SAME
+    ``shared.txt`` line (→ conflict); else adds ``base.txt`` (→ clean)."""
+    ops = GitOps()
+    work = tmp_path / f"advance-{uuid.uuid4().hex[:6]}"
+    await ops.clone(bare.as_uri(), work, token=None, depth=0)
+    if overlap:
+        (work / "shared.txt").write_text("base advanced\n")
+    else:
+        (work / "base.txt").write_text("from base\n")
+    await ops.commit_all(work, "base advance")
+    await ops.push(work, "main", token=None)
+
+
+class _RecordingRedispatch:
+    """Records each conflict re-dispatch call (asserts it fires exactly once)."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[uuid.UUID, list[str], str, int]] = []
+
+    async def __call__(
+        self,
+        run_id: uuid.UUID,
+        *,
+        conflict_paths: list[str],
+        base_branch: str,
+        pr_number: int,
+    ) -> None:
+        self.calls.append((run_id, conflict_paths, base_branch, pr_number))
+
+
+def _freshness_for(target: FreshnessTarget | None):  # noqa: ANN202
+    async def _resolve(_session: AsyncSession, _workspace_id: uuid.UUID) -> FreshnessTarget | None:
+        return target
+
+    return _resolve
+
+
+def _freshness_worker(
+    sf: async_sessionmaker[AsyncSession],
+    client: Any,
+    *,
+    target: FreshnessTarget | None,
+    redispatch: Any,
+    run_root: Path,
+    git_ops: GitOps | None = None,
+    now: datetime = _FIXED_NOW,
+) -> MergeWatchWorker:
+    return MergeWatchWorker(
+        session_factory=sf,
+        client_resolver=_resolver_for(client),
+        freshness_resolver=_freshness_for(target),
+        redispatch_conflict=redispatch,
+        git_ops=git_ops or GitOps(),
+        run_workspace_root=run_root,
+        config=MergeWatchWorkerConfig(poll_interval_s=30.0),
+        now=lambda: now,
+    )
+
+
+async def test_behind_pr_clean_freshness_merge_pushes_and_waits(tmp_path: Path) -> None:
+    async with db_engine(Base) as (engine, _pg):
+        sf = async_sessionmaker(engine, expire_on_commit=False)
+        run_root = tmp_path / "runs"
+        row = _row(repo="acme/fresh-clean")
+        await _seed(sf, row)
+
+        bare = await _seed_bare(tmp_path, "clean")
+        clone = run_root / str(row.run_id)
+        await _push_run_branch(bare, clone, row.branch, overlap=False)
+        await _advance_main(tmp_path, bare, overlap=False)  # non-overlapping base change
+
+        client = _FakeClient(pr={"state": "open", "merged": False, "mergeable_state": "behind"})
+        redispatch = _RecordingRedispatch()
+        target = FreshnessTarget(
+            repo=row.repo, base_branch="main", token=None, remote_url=bare.as_uri()
+        )
+        worker = _freshness_worker(
+            sf, client, target=target, redispatch=redispatch, run_root=run_root
+        )
+        assert await worker.drain_once() == 1
+
+        fetched = await _fetch(sf, row.id)
+        assert fetched.status is MergeWatchStatus.PENDING_CI  # re-CI on the fresh head
+        assert fetched.last_error == "freshened"
+        assert redispatch.calls == []  # clean → no hand-off
+        assert client.merge_calls == []  # freshness NEVER squash-merges the PR
+        # The freshened branch was PUSHED — the remote branch now carries the
+        # merged-in base change alongside the branch change.
+        files = await _run_git("ls-tree", "-r", "--name-only", row.branch, cwd=bare)
+        assert "branch.txt" in files
+        assert "base.txt" in files
+
+
+async def test_dirty_pr_conflict_marks_needs_resolution_and_redispatches_once(
+    tmp_path: Path,
+) -> None:
+    async with db_engine(Base) as (engine, _pg):
+        sf = async_sessionmaker(engine, expire_on_commit=False)
+        run_root = tmp_path / "runs"
+        row = _row(repo="acme/fresh-conflict", pr_number=11)
+        await _seed(sf, row)
+
+        bare = await _seed_bare(tmp_path, "conflict")
+        clone = run_root / str(row.run_id)
+        await _push_run_branch(bare, clone, row.branch, overlap=True)
+        await _advance_main(tmp_path, bare, overlap=True)  # same-file base change → conflict
+
+        client = _FakeClient(pr={"state": "open", "merged": False, "mergeable_state": "dirty"})
+        redispatch = _RecordingRedispatch()
+        target = FreshnessTarget(
+            repo=row.repo, base_branch="main", token=None, remote_url=bare.as_uri()
+        )
+        worker = _freshness_worker(
+            sf, client, target=target, redispatch=redispatch, run_root=run_root
+        )
+        assert await worker.drain_once() == 1
+
+        fetched = await _fetch(sf, row.id)
+        assert fetched.status is MergeWatchStatus.NEEDS_RESOLUTION
+        assert fetched.conflict_dispatched is True
+        assert fetched.last_error == "merge_conflict"
+        assert client.merge_calls == []
+        # Re-dispatched EXACTLY once with the conflict path / base / pr.
+        assert len(redispatch.calls) == 1
+        run_id, paths, base, pr = redispatch.calls[0]
+        assert run_id == row.run_id
+        assert paths == ["shared.txt"]
+        assert base == "main"
+        assert pr == 11
+
+
+async def test_conflict_already_dispatched_does_not_redispatch_again(tmp_path: Path) -> None:
+    async with db_engine(Base) as (engine, _pg):
+        sf = async_sessionmaker(engine, expire_on_commit=False)
+        run_root = tmp_path / "runs"
+        # A row that already handed a conflict to the agent (loop guard set).
+        row = _row(repo="acme/fresh-guard")
+        row.conflict_dispatched = True
+        row.status = MergeWatchStatus.NEEDS_RESOLUTION
+        await _seed(sf, row)
+
+        client = _FakeClient(pr={"state": "open", "merged": False, "mergeable_state": "dirty"})
+        redispatch = _RecordingRedispatch()
+        # No repo needed — the guard short-circuits BEFORE any git/resolver work.
+        worker = _freshness_worker(
+            sf, client, target=None, redispatch=redispatch, run_root=run_root
+        )
+        assert await worker.drain_once() == 1
+
+        fetched = await _fetch(sf, row.id)
+        assert fetched.status is MergeWatchStatus.NEEDS_RESOLUTION
+        assert fetched.last_error == "awaiting_conflict_resolution"
+        assert redispatch.calls == []  # loop guard — no second dispatch
+
+
+async def test_missing_clone_is_recloned_then_freshness_merge_runs(tmp_path: Path) -> None:
+    async with db_engine(Base) as (engine, _pg):
+        sf = async_sessionmaker(engine, expire_on_commit=False)
+        run_root = tmp_path / "runs"
+        row = _row(repo="acme/fresh-reclone")
+        await _seed(sf, row)
+
+        bare = await _seed_bare(tmp_path, "reclone")
+        # Push the run branch to the remote via a THROWAWAY clone (elsewhere) — the
+        # run workspace at run_root/<run_id> is deliberately absent (reaped).
+        await _push_run_branch(bare, tmp_path / "throwaway", row.branch, overlap=False)
+        await _advance_main(tmp_path, bare, overlap=False)
+        clone = run_root / str(row.run_id)
+        assert not clone.exists()
+
+        client = _FakeClient(pr={"state": "open", "merged": False, "mergeable_state": "behind"})
+        redispatch = _RecordingRedispatch()
+        target = FreshnessTarget(
+            repo=row.repo, base_branch="main", token=None, remote_url=bare.as_uri()
+        )
+        worker = _freshness_worker(
+            sf, client, target=target, redispatch=redispatch, run_root=run_root
+        )
+        assert await worker.drain_once() == 1
+
+        fetched = await _fetch(sf, row.id)
+        assert fetched.status is MergeWatchStatus.PENDING_CI
+        assert fetched.last_error == "freshened"
+        assert (clone / ".git").exists()  # re-cloned into place
+        files = await _run_git("ls-tree", "-r", "--name-only", row.branch, cwd=bare)
+        assert "branch.txt" in files
+        assert "base.txt" in files
+
+
+async def test_freshness_repo_busy_propagates_and_leaves_no_partial_state(
+    tmp_path: Path,
+) -> None:
+    async with db_engine(Base) as (engine, _pg):
+        sf = async_sessionmaker(engine, expire_on_commit=False)
+        run_root = tmp_path / "runs"
+        row = _row(repo="acme/fresh-busy")
+        await _seed(sf, row)
+
+        bare = await _seed_bare(tmp_path, "busy")
+        clone = run_root / str(row.run_id)
+        await _push_run_branch(bare, clone, row.branch, overlap=False)
+        await _advance_main(tmp_path, bare, overlap=False)
+
+        client = _FakeClient(pr={"state": "open", "merged": False, "mergeable_state": "behind"})
+        redispatch = _RecordingRedispatch()
+        target = FreshnessTarget(
+            repo=row.repo, base_branch="main", token=None, remote_url=bare.as_uri()
+        )
+        worker = _freshness_worker(
+            sf, client, target=target, redispatch=redispatch, run_root=run_root
+        )
+        # Hold the per-repo lock on a separate session so the freshness step loses
+        # it (GithubRepoBusy) — the row is retried next tick, no partial state.
+        async with sf() as holder, github_repo_lock(holder, "acme/fresh-busy"):
+            processed = await worker.drain_once()
+
+        assert processed == 1
+        fetched = await _fetch(sf, row.id)
+        assert fetched.status is MergeWatchStatus.PENDING_CI  # unchanged (reserved)
+        assert redispatch.calls == []
+        # The branch was NOT freshened/pushed (base.txt never merged into it).
+        files = await _run_git("ls-tree", "-r", "--name-only", row.branch, cwd=bare)
+        assert "base.txt" not in files
+
+
+class _PushFailsGitOps(GitOps):
+    """A GitOps whose ``push`` always fails — to exercise the git-failure path."""
+
+    async def push(self, dest: Path, branch: str, *, token: str | None) -> None:
+        raise GitError("simulated push rejection")
+
+
+async def test_freshness_git_failure_backs_off_to_pending_ci(tmp_path: Path) -> None:
+    async with db_engine(Base) as (engine, _pg):
+        sf = async_sessionmaker(engine, expire_on_commit=False)
+        run_root = tmp_path / "runs"
+        row = _row(repo="acme/fresh-gitfail")
+        await _seed(sf, row)
+
+        bare = await _seed_bare(tmp_path, "gitfail")
+        clone = run_root / str(row.run_id)
+        await _push_run_branch(bare, clone, row.branch, overlap=False)
+        await _advance_main(tmp_path, bare, overlap=False)
+
+        client = _FakeClient(pr={"state": "open", "merged": False, "mergeable_state": "behind"})
+        redispatch = _RecordingRedispatch()
+        target = FreshnessTarget(
+            repo=row.repo, base_branch="main", token=None, remote_url=bare.as_uri()
+        )
+        # The merge is clean but the PUSH fails → back off, don't crash.
+        worker = _freshness_worker(
+            sf,
+            client,
+            target=target,
+            redispatch=redispatch,
+            run_root=run_root,
+            git_ops=_PushFailsGitOps(),
+        )
+        assert await worker.drain_once() == 1
+
+        fetched = await _fetch(sf, row.id)
+        assert fetched.status is MergeWatchStatus.PENDING_CI
+        assert fetched.last_error == "freshen_failed"
+        assert fetched.next_poll_at > _FIXED_NOW  # backed off
+        assert redispatch.calls == []
+
+
+async def test_freshness_no_target_marks_failed(tmp_path: Path) -> None:
+    async with db_engine(Base) as (engine, _pg):
+        sf = async_sessionmaker(engine, expire_on_commit=False)
+        run_root = tmp_path / "runs"
+        row = _row(repo="acme/fresh-notarget")
+        await _seed(sf, row)
+
+        client = _FakeClient(pr={"state": "open", "merged": False, "mergeable_state": "behind"})
+        redispatch = _RecordingRedispatch()
+        # Resolver returns None (connector removed) → the row can never freshen.
+        worker = _freshness_worker(
+            sf, client, target=None, redispatch=redispatch, run_root=run_root
+        )
+        assert await worker.drain_once() == 1
+
+        fetched = await _fetch(sf, row.id)
+        assert fetched.status is MergeWatchStatus.FAILED
+        assert fetched.last_error == "github_binding_unavailable"
+        assert redispatch.calls == []
 
 
 async def test_enqueue_is_noop_when_settings_absent() -> None:
