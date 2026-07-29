@@ -53,6 +53,13 @@ _EXECUTOR_DECISION_QUESTIONS: dict[str, dict[str, str]] = {
         "en": "This work needs your review before BSVibe can call it verified.",
         "ko": "이 작업은 검증됨으로 표시하기 전에 검토가 필요해요.",
     },
+    # PR7 — the agent hit a merge conflict it judged AMBIGUOUS (two changes
+    # touched the SAME logic) and raised it rather than guessing. Calm one-liner
+    # for the checkpoint list when the agent recorded no verbatim question.
+    "merge_conflict_review": {
+        "en": "Two changes touched the same logic and BSVibe can't safely merge them — how should it resolve?",
+        "ko": "두 변경이 같은 로직을 건드려 BSVibe가 안전하게 병합할 수 없어요 — 어떻게 처리할까요?",
+    },
 }
 
 
@@ -81,6 +88,16 @@ _EXECUTOR_DECISION_ACTIONS: dict[str, list[DecisionAction]] = {
     "human_review_required": [
         DecisionAction(key=ACTION_SHIP, label_en="Approve & ship", label_ko="승인하고 출시"),
         DecisionAction(key=ACTION_RETRY, label_en="Retry", label_ko="다시 시도"),
+        DecisionAction(key=ACTION_DISCARD, label_en="Discard", label_ko="폐기"),
+    ],
+    # PR7 — the AMBIGUOUS-merge-conflict Decision. NO ``ship``: an unmerged
+    # conflict has no verified artifact to ship past. ``retry`` re-opens the run
+    # with the founder's guidance (RUNNING → OPEN, the agent re-resolves); the
+    # merge-watch loop re-freshens the re-pushed head and merges. ``discard``
+    # abandons the run → CANCELLED, and the merge-watch worker closes the now-
+    # orphaned PR on its next poll (it observes the cancelled originating run).
+    "merge_conflict_review": [
+        DecisionAction(key=ACTION_RETRY, label_en="Guide & retry", label_ko="지침 주고 다시 시도"),
         DecisionAction(key=ACTION_DISCARD, label_en="Discard", label_ko="폐기"),
     ],
     # W1: the ship_or_discard kind from L-P2 is retired. Verified runs no

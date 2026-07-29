@@ -93,6 +93,14 @@ class GithubMergeWatchRow(GithubMergeWatchBase):
     next_poll_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     deadline_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     conflict_dispatched: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    #: PR7 — the PR head SHA captured when a conflict was last re-dispatched to
+    #: the agent. On a ``needs_resolution`` re-poll the worker compares it to the
+    #: live head: an UNCHANGED head means the agent hasn't re-pushed yet (keep
+    #: waiting, no re-dispatch); a CHANGED head means the agent produced a new
+    #: state, so the freshness merge re-runs (clean → merge; still-conflict →
+    #: reset the guard + re-dispatch once for the new head). Nullable — only set
+    #: once a conflict has been dispatched.
+    conflict_head_sha: Mapped[str | None] = mapped_column(String(64), nullable=True, default=None)
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=datetime.now

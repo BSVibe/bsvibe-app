@@ -116,6 +116,58 @@ async def _sync_remote_tool_state(
             written_paths.append(path)
 
 
+def _merge_conflict_directive(run: ExecutionRun) -> dict[str, Any] | None:
+    """PR7 — the conflict-resolution instruction for a RE-DISPATCHED conflict.
+
+    When the ``github_merge_watch`` worker's authoritative freshness merge finds
+    the run's PR branch genuinely conflicts with the base, it writes
+    ``run.payload["merge_conflict"] = {conflict_paths, base_branch, pr_number}``
+    and re-opens the run (RUNNING → OPEN). This turns that payload into a clear
+    turn-context message telling the agent to resolve the conflict — and to
+    raise the founder Decision (``ask_user_question``) ONLY when the merge is
+    genuinely AMBIGUOUS, not for a mechanical resolution. ``None`` when the run
+    carries no re-dispatched conflict (the loop is unchanged)."""
+    payload = run.payload if isinstance(run.payload, dict) else {}
+    conflict = payload.get("merge_conflict")
+    if not isinstance(conflict, dict):
+        return None
+    raw_paths = conflict.get("conflict_paths")
+    paths = [str(p) for p in raw_paths] if isinstance(raw_paths, list) else []
+    base = str(conflict.get("base_branch") or "the base branch")
+    paths_str = ", ".join(paths) if paths else "(the conflicting files)"
+    return {
+        "role": "user",
+        "content": (
+            f"A concurrent change merged to `{base}` and your branch now conflicts "
+            f"in: {paths_str}. Pull the latest base, RESOLVE the conflicts, and "
+            "commit. If the correct resolution is MECHANICAL/clear (imports, "
+            "adjacent non-overlapping edits, formatting), just resolve it and "
+            "re-trigger verification. If it is AMBIGUOUS — two changes touched the "
+            "SAME logic and picking the right merge needs a human judgment call — "
+            "do NOT guess: call ask_user_question to raise the decision for the "
+            "founder. Never paste raw conflict markers to the founder."
+        ),
+    }
+
+
+def _consume_merge_conflict(run: ExecutionRun) -> None:
+    """Clear the one-shot ``merge_conflict`` payload key after injecting it once.
+
+    Removes the key so a later resume (RUNNING → OPEN → drive_loop again) does
+    NOT re-inject the stale instruction, and leaves a persistent
+    ``merge_conflict_resolving`` marker so the ask path (``mcp_work_effects.
+    record_question``) classifies a question raised in this window as the
+    founder-actionable ``merge_conflict_review`` Decision kind, not a vanilla
+    ask. Re-assigns ``payload`` (not in-place mutate) so SQLAlchemy detects the
+    change on the JSON column."""
+    payload = dict(run.payload or {})
+    if "merge_conflict" not in payload:
+        return
+    payload.pop("merge_conflict", None)
+    payload["merge_conflict_resolving"] = True
+    run.payload = payload
+
+
 async def drive_loop(  # noqa: PLR0911, PLR0912, PLR0915 — preserved cycle body
     orch: RunOrchestrator,
     *,
@@ -179,6 +231,14 @@ async def drive_loop(  # noqa: PLR0911, PLR0912, PLR0915 — preserved cycle bod
         messages.append(skill_hint)
     # Resumption context (founder-resolved prior questions).
     messages.extend(_resumption_messages(run))
+    # PR7 — a re-dispatched merge conflict: surface the conflict to the agent
+    # BEFORE its turn, then consume the one-shot key so a later resume does not
+    # re-inject it (a persistent marker classifies any ask raised now as a
+    # merge_conflict_review Decision).
+    conflict_directive = _merge_conflict_directive(run)
+    if conflict_directive is not None:
+        messages.append(conflict_directive)
+        _consume_merge_conflict(run)
     attempt.phase = RunAttemptPhase.WORKING
     await orch._session.flush()
 
@@ -514,4 +574,4 @@ async def drive_loop(  # noqa: PLR0911, PLR0912, PLR0915 — preserved cycle bod
     return orch._decision_result(run, work_step, attempt, decision, written_paths, final_text)
 
 
-__all__ = ["drive_loop"]
+__all__ = ["_consume_merge_conflict", "_merge_conflict_directive", "drive_loop"]
