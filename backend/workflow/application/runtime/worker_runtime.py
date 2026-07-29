@@ -47,6 +47,7 @@ from backend.workers.base import BaseWorker
 from backend.workers.relays import build_relay
 from backend.workers.stream_keys import STREAM_KEY_BY_CONSUMER
 from backend.workers.streams import RedisStreamConsumer, StreamHandler
+from backend.workflow.application.runtime.merge_watch_runtime import build_merge_watch_workers
 from backend.workflow.application.runtime.settle_runtime import (
     build_concept_framer,
     build_note_embed_hook,
@@ -236,8 +237,7 @@ def build_worker_runtime(
         # :class:`SafeModeExpirySweepRunner` selects every PENDING/EXTENDED
         # safe_mode_queue_items row past ``expires_at`` (across ALL workspaces),
         # transitions each via :meth:`SafeModeQueue.mark_expired`, and emits ONE
-        # ``safe_mode.expired`` AuditOutboxRecord per non-empty batch
-        # tagged ``trigger=schedule, source=system.safe_mode_expiry``.
+        # ``safe_mode.expired`` AuditOutboxRecord per non-empty batch.
         ScheduleWorker(
             session_factory=session_factory,
             runner=SafeModeExpirySweepRunner(),
@@ -248,20 +248,20 @@ def build_worker_runtime(
             config=ScheduleWorkerConfig(poll_interval_s=3600.0),
         ),
         # Lift Q1 — per-workspace audit_outbox retention sweep. A THIRD
-        # :class:`ScheduleWorker` against the SAME :class:`ScheduleRunnerProtocol`
-        # seam but a different runner: :class:`AuditRetentionSweepRunner` iterates
-        # every workspace with a non-NULL ``audit_retention_days`` (NULL = forever,
-        # the default), DELETEs ``audit_outbox`` rows past
-        # ``occurred_at < now - retention_days * 1d``, and emits ONE
-        # ``audit.retention.swept`` row per workspace per non-empty batch tagged
-        # ``trigger=schedule, source=system.audit_retention``. Daily poll —
-        # retention is day-grained; a row drifting past cutoff has no impact.
+        # :class:`ScheduleWorker` on the SAME :class:`ScheduleRunnerProtocol` seam
+        # with :class:`AuditRetentionSweepRunner`: per workspace with a non-NULL
+        # ``audit_retention_days`` (NULL = forever, the default) it DELETEs
+        # ``audit_outbox`` rows past ``occurred_at < now - retention_days * 1d`` and
+        # emits ONE ``audit.retention.swept`` row per non-empty batch. Daily poll.
         ScheduleWorker(
             session_factory=session_factory,
             runner=AuditRetentionSweepRunner(),
             name="audit_retention_sweep_worker",
             config=ScheduleWorkerConfig(poll_interval_s=86400.0),
         ),
+        # PR4 — CI-green auto-merge poller, gated on github_auto_merge_enabled
+        # (delivery_runtime.build_merge_watch_workers; flag off ⇒ empty ⇒ absent).
+        *build_merge_watch_workers(session_factory=session_factory, settings=settings),
     ]
     return WorkerRuntime(workers=workers, _stop=asyncio.Event())
 

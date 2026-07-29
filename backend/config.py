@@ -248,6 +248,14 @@ class Settings(BaseSettings):
     # the existing "open PR, human merges" behavior — nothing is auto-merged.
     github_auto_merge_enabled: bool = False
 
+    # CI-green auto-merge poll cadence + CI deadline (used only when
+    # ``github_auto_merge_enabled``). ``ci_deadline_s`` bounds how long a watched
+    # PR may sit waiting for its checks to go green before the watch row is
+    # FAILED (default 1h); ``poll_interval_s`` is the MergeWatchWorker's idle
+    # loop cadence between claim passes (default 30s).
+    github_auto_merge_ci_deadline_s: float = 3600.0
+    github_auto_merge_poll_interval_s: float = 30.0
+
     # Audit relay sink (backend.workers.relays) — the RelayWorker drains
     # ``audit_outbox`` into this HTTP endpoint when set. Empty (the default)
     # selects the no-sink ``LoggingRelay`` (drain + ack, no remote delivery).

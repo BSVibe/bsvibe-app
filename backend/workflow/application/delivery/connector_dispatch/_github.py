@@ -3,10 +3,9 @@
 github is the one delivery target that needs a real DIFF, so it is NOT a simple
 event builder. Two pieces live here:
 
-1. :func:`build_github_workspace_provisioner` — the run-setup hook that clones
-   the workspace's github target into the run's workspace dir on a fresh
-   ``bsvibe/run-<id>`` branch, so the agent's file edits operate on a real
-   checkout a PR diff can be built from.
+1. :func:`build_github_workspace_provisioner` — run-setup hook that clones the
+   workspace's github target into the run's workspace dir on a fresh
+   ``bsvibe/run-<id>`` branch, so the agent's edits build a PR diff.
 2. :func:`deliver_github` — the per-deliverable handler: commit_all → push →
    open the github plugin's ``open_pr`` action.
 """
@@ -22,6 +21,7 @@ from typing import Any
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from backend.config import Settings
 from backend.connectors.auth.resolve import resolve_connector_credentials
 from backend.extensions.plugin.base import PluginMeta
 from backend.extensions.plugin.runner import PluginRunner
@@ -33,6 +33,7 @@ from backend.workflow.infrastructure.intake.db import RequestRow, TriggerEventRo
 
 from ._builders import _split_summary
 from ._context import _build_context
+from ._merge_watch import enqueue_merge_watch
 from ._resolver import GithubBinding, resolve_github_binding
 
 logger = structlog.get_logger(__name__)
@@ -98,16 +99,12 @@ def build_github_workspace_provisioner(
 
     The returned coroutine resolves the run's workspace github connector binding
     and, when present, CLONES the target repo into ``workspace_dir`` on a new
-    ``bsvibe/run-<short id>`` branch — so the agent's file_write/file_edit
-    operate on a REAL checkout a PR diff can be built from. No github binding →
-    a no-op (the empty scratch dir is used exactly as the non-github path; the
-    Direct-path tests, which inject no provisioner at all, are unaffected).
+    ``bsvibe/run-<short id>`` branch — so the agent's file_write/file_edit operate
+    on a REAL checkout a PR diff can be built from. No github binding → a no-op.
 
-    ``cipher`` may be a :class:`CredentialCipher` or a zero-arg factory returning
-    one — called LAZILY only when a github binding is present, so a run with no
-    github target never forces the KMS key. The clone is token-authed with the
-    decrypted github secret (never logged). ``remote_url_for`` overrides the
-    clone URL (tests point it at a LOCAL bare repo); defaults to github.com HTTPS.
+    ``cipher`` may be a :class:`CredentialCipher` or a zero-arg factory called
+    LAZILY only when a github binding is present (a non-github run never forces the
+    KMS key). ``remote_url_for`` overrides the clone URL (tests → LOCAL bare repo).
     """
     ops = git_ops or GitOps()
     url_for = remote_url_for or github_remote_url
@@ -119,12 +116,10 @@ def build_github_workspace_provisioner(
         binding = await resolve_github_binding(session, workspace_id=run.workspace_id)
         if binding is None:
             return
-        # Idempotency under drive_once re-entry: a resumed run (RUNNING → OPEN
-        # after a resolved Decision) re-enters here with the SAME workspace_dir,
-        # already holding the prior drive's checkout. git clone refuses a
-        # non-empty dir, so re-cloning would raise → tick rollback → run stalled
-        # OPEN forever. REUSE it — also semantically correct: a fresh clone would
-        # discard the agent's pre-pause work and drop the run branch.
+        # Idempotency under drive_once re-entry: a resumed run re-enters with the
+        # SAME workspace_dir already holding the prior drive's checkout. git clone
+        # refuses a non-empty dir → re-cloning would stall the run OPEN. REUSE it
+        # (also correct: a fresh clone would discard pre-pause work + the branch).
         if (workspace_dir / ".git").exists():  # noqa: ASYNC240
             logger.info(
                 "github_run_workspace_reused",
@@ -132,14 +127,13 @@ def build_github_workspace_provisioner(
                 run_id=str(run.id),
             )
             return
-        # OAuth token (Connect with GitHub) takes precedence over the legacy
-        # signing secret — clone, push, and PR creation share the SAME credential.
+        # OAuth token over legacy secret — clone/push/PR share the SAME credential.
         creds = await resolve_connector_credentials(
             session, account=binding.account, cipher=_resolve_cipher()
         )
         token = creds["token"]
-        # git clone refuses a non-empty target, so remove the freshly-created
-        # empty workspace_dir and let clone create it. (Local FS — not hot path.)
+        # git clone refuses a non-empty target — remove the empty dir, let clone
+        # recreate it. (Local FS — not hot path.)
         if workspace_dir.exists() and not any(workspace_dir.iterdir()):  # noqa: ASYNC240
             workspace_dir.rmdir()  # noqa: ASYNC240
         await ops.clone(url_for(binding.repo), workspace_dir, token=token, depth=1)
@@ -173,6 +167,9 @@ class GithubDeliveryDeps:
     # Opens a fresh session to resolve the github API credential at delivery
     # time — the binding was resolved in an already-closed session.
     session_factory: async_sessionmaker[AsyncSession]
+    # PR4 — when ``github_auto_merge_enabled`` is on, a successfully opened PR is
+    # enqueued for CI-green auto-merge; ``None``/off inserts no watch row.
+    settings: Settings | None = None
 
 
 async def deliver_github(
@@ -186,12 +183,11 @@ async def deliver_github(
 ) -> list[ActionResult]:
     """Commit the run's checkout → push the branch → open a PR.
 
-    The run already WORKED inside a clone of the target repo (the provisioner
-    cloned it onto a ``bsvibe/run-<id>`` branch); here we ``commit_all`` the
-    agent's edits, ``push`` that branch, then call the github plugin's
-    ``open_pr`` action. **No changes → no PR, clean no-op success.** A missing
-    ``workspace_root`` / checkout dir / run id soft-fails into a failed action
-    (the queue never wedges), mirroring the builder ValueError path.
+    The run already WORKED inside a clone of the target repo (provisioner cloned
+    it onto a ``bsvibe/run-<id>`` branch); here we ``commit_all`` the agent's
+    edits, ``push`` that branch, then call the github ``open_pr`` action. **No
+    changes → no PR, clean no-op success.** A missing ``workspace_root`` /
+    checkout / run id soft-fails into a failed action (the queue never wedges).
     """
     action_prefix = "github:outbound:pr"
     if deps.workspace_root is None or run_id is None:
@@ -227,10 +223,8 @@ async def deliver_github(
     summary = str(content.get("summary") or "")
     title, body = _split_summary(summary)
 
-    # 1. Commit the agent's file edits. No new working-tree changes is OK — the
-    # verifier's W2 ``commit_worktree`` step may have already committed them.
-    # Lift E41 — only a clean no-op when ``commit_all`` made no new commit AND
-    # the branch is NOT ahead of base; otherwise push + open the PR.
+    # 1. Commit the agent's edits (Lift E41 — clean no-op only when nothing was
+    # committed AND the branch is NOT ahead of base; else push + open the PR).
     committed = await deps.git_ops.commit_all(checkout, title)
     if not committed:
         ahead = await deps.git_ops.is_ahead_of_base(checkout, binding.base_branch)
@@ -255,25 +249,22 @@ async def deliver_github(
             run_id=str(run_id),
         )
 
-    # 2. Resolve the github API credential — OAuth token (Connect with GitHub)
-    #    takes precedence over the legacy signing secret. Resolved AFTER the
-    #    no-op check so a no-change run never opens a DB session. A fresh
-    #    session is needed because the binding came from an already-closed one.
+    # 2. Resolve the github API credential (OAuth token over legacy secret) in a
+    #    FRESH session (the binding came from a closed one), AFTER the no-op check
+    #    so a no-change run never opens a DB session.
     async with deps.session_factory() as session:
         creds = await resolve_connector_credentials(
             session, account=binding.account, cipher=deps.cipher
         )
         # Persist any token refresh resolve performed under the hood.
         await session.commit()
-        # The issue/PR that triggered this run (if any) — so we can close the
-        # loop back to it. Resolved in the same session; soft (a github-sourced
-        # run with no traceable issue just delivers the PR without the ref).
+        # The issue/PR that triggered this run (if any) — to close the loop back.
+        # Soft: a github-sourced run with no traceable issue delivers without it.
         source_issue = await _source_github_issue_number(session, run_id)
     token = creds["token"]
 
-    # Link the PR to the originating issue: ``Closes #N`` cross-links it on the
-    # issue timeline AND auto-closes the issue when the PR merges. Skipped for
-    # non-issue-sourced runs (Direct chat), so they deliver exactly as before.
+    # Link the PR to the originating issue: ``Closes #N`` cross-links + auto-closes
+    # it on merge. Skipped for non-issue-sourced runs (Direct chat) — unchanged.
     if source_issue is not None:
         body = f"{body}\n\nCloses #{source_issue}".strip()
 
@@ -281,9 +272,8 @@ async def deliver_github(
     remote_url = deps.remote_url_for(binding.repo)
     await deps.git_ops.push(checkout, branch, token=token)
 
-    # 4. Open the PR via the github plugin's open_pr action. Routing
-    #    (repo/base) is the stable founder-set config; head is the run
-    #    branch; title/body come from the deliverable summary (content).
+    # 4. Open the PR via the github plugin's open_pr action. Routing (repo/base) is
+    #    the founder-set config; head is the run branch; title/body from content.
     plugin = deps.plugins_by_name.get("github")
     if plugin is None:
         return [
@@ -320,10 +310,21 @@ async def deliver_github(
         return [ActionResult(action=action_prefix, succeeded=False, error=str(exc))]
 
     output = dict(result) if isinstance(result, dict) else {"result": result}
-    # #362 — persist the PR URL onto the Deliverable so the PWA / Brief can
-    # surface the PR link (open_pr returns ``url`` = the PR html_url). Soft:
-    # a write hiccup never fails an already-opened PR.
+    # #362 — persist the PR URL onto the Deliverable (PWA/Brief link). Soft.
     await _persist_pr_url(deps.session_factory, deliverable_id, output.get("url"))
+
+    # PR4 — enqueue the opened PR for CI-green auto-merge (gated; see _merge_watch).
+    pr_number = output.get("pr_number")
+    if isinstance(pr_number, int):
+        await enqueue_merge_watch(
+            deps,
+            binding=binding,
+            workspace_id=workspace_id,
+            run_id=run_id,
+            deliverable_id=deliverable_id,
+            branch=branch,
+            pr_number=pr_number,
+        )
 
     # Close the loop back to the originating issue: comment with the PR link so
     # whoever filed it is notified (the PR body's ``Closes #N`` cross-links, but
@@ -370,9 +371,8 @@ async def _persist_pr_url(
 ) -> None:
     """Write the opened PR's URL onto ``Deliverable.diff_url`` (#362).
 
-    No-op when ``pr_url`` is falsy / not a string, or when the deliverable is
-    gone. Soft — never raises into the delivery path (the PR is already open;
-    a missed diff_url is cosmetic)."""
+    No-op when ``pr_url`` is falsy / not a string, or the deliverable is gone.
+    Soft — never raises into the delivery path (a missed diff_url is cosmetic)."""
     if not isinstance(pr_url, str) or not pr_url:
         return
     from backend.workflow.infrastructure.db import Deliverable  # noqa: PLC0415 — lazy

@@ -33,6 +33,7 @@ import respx
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from backend.config import get_settings
 from backend.connectors.db import ConnectorAccountRow
 from backend.extensions.plugin.loader import PluginLoader
 from backend.extensions.skill.loader import SkillLoader
@@ -47,6 +48,7 @@ from backend.workflow.application.delivery.connector_dispatch._github import (
 )
 from backend.workflow.infrastructure.db import Deliverable, ExecutionRun, RunStatus
 from backend.workflow.infrastructure.delivery.db import DeliveryEventRow
+from backend.workflow.infrastructure.github.db import GithubMergeWatchRow, MergeWatchStatus
 from backend.workflow.infrastructure.intake.db import RequestRow, TriggerEventRow, TriggerKind
 from backend.workflow.infrastructure.sandbox import NoopSandboxManager
 from backend.workflow.infrastructure.workers.agent_worker import AgentExecutionDeps, AgentWorker
@@ -324,6 +326,107 @@ async def test_verified_run_delivers_as_github_pr(
     async with sf() as s:
         assert (await s.execute(select(DeliveryEventRow))).first() is None
         assert await s.get(Deliverable, deliverable_id) is not None
+
+
+@respx.mock
+async def test_auto_merge_flag_on_enqueues_merge_watch_row(
+    sf: async_sessionmaker[AsyncSession], cipher: CredentialCipher, tmp_path: Path
+) -> None:
+    """PR4 — with ``github_auto_merge_enabled`` ON, a successfully opened PR is
+    registered in ``github_merge_watch`` (status pending_ci) with the right
+    repo/pr_number/branch. Proves the enqueue seam is wired into deliver_github."""
+    workspace_id = uuid.uuid4()
+    bare = await _make_bare_remote(tmp_path)
+    workspace_root = tmp_path / "runs"
+
+    respx.post(f"{GITHUB_API}/repos/owner/name/pulls").mock(
+        return_value=httpx.Response(
+            201, json={"number": 7, "html_url": "https://github.com/owner/name/pull/7"}
+        )
+    )
+
+    async with sf() as s:
+        await _seed_github_connector(s, cipher, workspace_id)
+        run_id = await _seed_open_run(s, workspace_id)
+
+    deps = _execution_deps(sf, workspace_root, cipher, bare, _scripted_writes_file())
+    agent = AgentWorker(session_factory=sf, execution=deps)
+    assert await agent.drive_once() == 1
+
+    registry = await _plugins()
+    adapter = build_connector_delivery_adapter(
+        session_factory=sf,
+        plugins=list(registry.values()),
+        cipher=cipher,
+        workspace_root=workspace_root,
+        remote_url_for=lambda _repo: bare.as_uri(),
+        # PR4 — turn the auto-merge flag ON for this adapter.
+        settings=get_settings().model_copy(update={"github_auto_merge_enabled": True}),
+    )
+    worker = DeliveryWorker(
+        session_factory=sf,
+        dispatcher=adapter,
+        config=DeliveryWorkerConfig(batch_size=10, poll_interval_s=0.01),
+    )
+    assert await worker.drain_once() == 1
+
+    branch = f"bsvibe/run-{run_id.hex[:8]}"
+    async with sf() as s:
+        rows = (await s.execute(select(GithubMergeWatchRow))).scalars().all()
+    assert len(rows) == 1
+    watch = rows[0]
+    assert watch.status is MergeWatchStatus.PENDING_CI
+    assert watch.repo == "owner/name"
+    assert watch.pr_number == 7
+    assert watch.branch == branch
+    assert watch.base_branch == "main"
+    assert watch.workspace_id == workspace_id
+    assert watch.run_id == run_id
+
+
+@respx.mock
+async def test_auto_merge_flag_off_enqueues_nothing(
+    sf: async_sessionmaker[AsyncSession], cipher: CredentialCipher, tmp_path: Path
+) -> None:
+    """The default (flag OFF) opens the PR exactly as before and inserts NO
+    merge-watch row — the existing github-delivery behavior is unchanged."""
+    workspace_id = uuid.uuid4()
+    bare = await _make_bare_remote(tmp_path)
+    workspace_root = tmp_path / "runs"
+
+    respx.post(f"{GITHUB_API}/repos/owner/name/pulls").mock(
+        return_value=httpx.Response(
+            201, json={"number": 9, "html_url": "https://github.com/owner/name/pull/9"}
+        )
+    )
+
+    async with sf() as s:
+        await _seed_github_connector(s, cipher, workspace_id)
+        await _seed_open_run(s, workspace_id)
+
+    deps = _execution_deps(sf, workspace_root, cipher, bare, _scripted_writes_file())
+    agent = AgentWorker(session_factory=sf, execution=deps)
+    assert await agent.drive_once() == 1
+
+    registry = await _plugins()
+    adapter = build_connector_delivery_adapter(
+        session_factory=sf,
+        plugins=list(registry.values()),
+        cipher=cipher,
+        workspace_root=workspace_root,
+        remote_url_for=lambda _repo: bare.as_uri(),
+        # No settings threaded → flag off (default).
+    )
+    worker = DeliveryWorker(
+        session_factory=sf,
+        dispatcher=adapter,
+        config=DeliveryWorkerConfig(batch_size=10, poll_interval_s=0.01),
+    )
+    assert await worker.drain_once() == 1
+
+    async with sf() as s:
+        rows = (await s.execute(select(GithubMergeWatchRow))).scalars().all()
+    assert rows == []
 
 
 @respx.mock

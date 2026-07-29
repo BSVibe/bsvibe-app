@@ -127,6 +127,9 @@ async def build_delivery_adapter(
         plugins=list(registry.values()),
         cipher=CredentialCipher(_key_from_settings()),
         workspace_root=Path(get_settings().run_workspace_root),
+        # PR4 — thread settings so a successfully opened PR is enqueued for
+        # CI-green auto-merge when ``github_auto_merge_enabled`` is on.
+        settings=get_settings(),
     )
 
 
