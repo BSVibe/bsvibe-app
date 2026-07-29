@@ -67,6 +67,7 @@ from typing import Any
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from backend.config import Settings
 from backend.extensions.plugin.base import PluginMeta
 from backend.extensions.plugin.runner import PluginRunner
 from backend.router.accounts.crypto import CredentialCipher
@@ -141,6 +142,10 @@ class ConnectorDeliveryAdapter:
     #: their outbound through ``self.dispatcher``; the github special case calls
     #: an *action* directly, so it needs its own runner).
     runner: PluginRunner = field(default_factory=PluginRunner)
+    #: PR4 — threaded into the github handler so a successfully opened PR is
+    #: enqueued for CI-green auto-merge when ``github_auto_merge_enabled``. ``None``
+    #: (the default) keeps the flag-off behavior (no watch row).
+    settings: Settings | None = None
 
     async def dispatch(
         self,
@@ -175,6 +180,7 @@ class ConnectorDeliveryAdapter:
                         remote_url_for=self.remote_url_for,
                         runner=self.runner,
                         session_factory=self.session_factory,
+                        settings=self.settings,
                     ),
                     binding=github_binding,
                     workspace_id=workspace_id,
@@ -259,6 +265,7 @@ def build_connector_delivery_adapter(
     workspace_root: Path | None = None,
     git_ops: GitOps | None = None,
     remote_url_for: Callable[[str], str] | None = None,
+    settings: Settings | None = None,
 ) -> ConnectorDeliveryAdapter:
     """Wrap loaded plugins + a cipher into a worker-facing delivery adapter.
 
@@ -266,6 +273,8 @@ def build_connector_delivery_adapter(
     checkout under ``workspace_root/<run_id>`` + open a PR). ``remote_url_for``
     overrides the clone/push URL (tests point it at a LOCAL bare repo); it
     defaults to github.com HTTPS. The other connectors need none of these.
+    ``settings`` enables PR4 CI-green auto-merge enqueue on a successfully opened
+    PR (gated on ``github_auto_merge_enabled``); ``None`` keeps the flag off.
     """
     return ConnectorDeliveryAdapter(
         session_factory=session_factory,
@@ -276,6 +285,7 @@ def build_connector_delivery_adapter(
         git_ops=git_ops or GitOps(),
         remote_url_for=remote_url_for or github_remote_url,
         runner=PluginRunner(),
+        settings=settings,
     )
 
 

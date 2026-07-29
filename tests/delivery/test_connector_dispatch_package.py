@@ -60,6 +60,7 @@ def test_each_extracted_helper_module_is_importable() -> None:
         "backend.workflow.application.delivery.connector_dispatch._builders",
         "backend.workflow.application.delivery.connector_dispatch._resolver",
         "backend.workflow.application.delivery.connector_dispatch._github",
+        "backend.workflow.application.delivery.connector_dispatch._merge_watch",
         "backend.workflow.application.delivery.connector_dispatch._context",
     ):
         importlib.import_module(mod)
@@ -72,6 +73,7 @@ def test_each_extracted_helper_module_is_importable() -> None:
         "_builders.py",
         "_resolver.py",
         "_github.py",
+        "_merge_watch.py",
         "_context.py",
     ],
 )
