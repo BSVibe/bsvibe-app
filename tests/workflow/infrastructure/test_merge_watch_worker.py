@@ -469,6 +469,23 @@ class _RecordingRedispatch:
         self.calls.append((run_id, conflict_paths, base_branch, pr_number))
 
 
+class _RecordingEscalate:
+    """Records each conflict escalation call (asserts it fires exactly once)."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[uuid.UUID, list[str], str, int]] = []
+
+    async def __call__(
+        self,
+        run_id: uuid.UUID,
+        *,
+        conflict_paths: list[str],
+        base_branch: str,
+        pr_number: int,
+    ) -> None:
+        self.calls.append((run_id, conflict_paths, base_branch, pr_number))
+
+
 def _freshness_for(target: FreshnessTarget | None):  # noqa: ANN202
     async def _resolve(_session: AsyncSession, _workspace_id: uuid.UUID) -> FreshnessTarget | None:
         return target
@@ -484,6 +501,8 @@ def _freshness_worker(
     redispatch: Any,
     run_root: Path,
     git_ops: GitOps | None = None,
+    escalate: Any = None,
+    config: MergeWatchWorkerConfig | None = None,
     now: datetime = _FIXED_NOW,
 ) -> MergeWatchWorker:
     return MergeWatchWorker(
@@ -491,9 +510,10 @@ def _freshness_worker(
         client_resolver=_resolver_for(client),
         freshness_resolver=_freshness_for(target),
         redispatch_conflict=redispatch,
+        escalate_conflict=escalate,
         git_ops=git_ops or GitOps(),
         run_workspace_root=run_root,
-        config=MergeWatchWorkerConfig(poll_interval_s=30.0),
+        config=config or MergeWatchWorkerConfig(poll_interval_s=30.0),
         now=lambda: now,
     )
 
@@ -832,6 +852,10 @@ async def test_needs_resolution_changed_head_still_conflict_redispatches_once(
         assert fetched.conflict_dispatched is True
         assert fetched.conflict_head_sha == "newhead"  # pinned to the new head
         assert fetched.last_error == "merge_conflict"
+        # A NEW conflict on an advanced head resets the retry clock: attempts
+        # back to 1 (dispatch #1 for this head) + freshly stamped.
+        assert fetched.conflict_attempts == 1
+        assert fetched.conflict_dispatched_at == _FIXED_NOW
         # Re-dispatched exactly once more for the NEW conflicting state.
         assert len(redispatch.calls) == 1
         assert redispatch.calls[0][0] == row.run_id
@@ -869,6 +893,206 @@ async def test_cancelled_run_closes_orphaned_pr_and_abandons() -> None:
         assert fetched.last_error == "run_cancelled"
         assert client.close_calls == [("acme", "discarded", 21)]
         assert client.merge_calls == []  # a cancelled run's PR is never merged
+
+
+# ---------------------------------------------------------------------------
+# Conflict-robustness — retry-then-escalate so a stalled re-drive never wedges
+# the row in ``needs_resolution`` forever (the live-soak bug).
+# ---------------------------------------------------------------------------
+
+
+async def test_conflict_within_deadline_keeps_waiting_no_recovery(tmp_path: Path) -> None:
+    """Head UNCHANGED (agent hasn't re-pushed) but the resolution deadline has
+    NOT elapsed → keep parking, give the agent time. No retry, no escalation."""
+    async with db_engine(Base) as (engine, _pg):
+        sf = async_sessionmaker(engine, expire_on_commit=False)
+        run_root = tmp_path / "runs"
+        row = _row(repo="acme/within-deadline", status=MergeWatchStatus.NEEDS_RESOLUTION)
+        row.conflict_dispatched = True
+        row.conflict_head_sha = "samehead"
+        row.conflict_attempts = 1
+        row.conflict_dispatched_at = _FIXED_NOW - timedelta(seconds=60)  # < 900s deadline
+        await _seed(sf, row)
+
+        client = _FakeClient(
+            pr={
+                "state": "open",
+                "merged": False,
+                "mergeable_state": "dirty",
+                "head": {"sha": "samehead"},
+            }
+        )
+        redispatch = _RecordingRedispatch()
+        escalate = _RecordingEscalate()
+        worker = _freshness_worker(
+            sf, client, target=None, redispatch=redispatch, run_root=run_root, escalate=escalate
+        )
+        assert await worker.drain_once() == 1
+
+        fetched = await _fetch(sf, row.id)
+        assert fetched.status is MergeWatchStatus.NEEDS_RESOLUTION
+        assert fetched.last_error == "awaiting_conflict_resolution"
+        assert fetched.conflict_attempts == 1  # unchanged
+        assert redispatch.calls == []  # no retry
+        assert escalate.calls == []  # no escalation
+
+
+async def test_conflict_deadline_exceeded_attempts_remain_redispatches_retry(
+    tmp_path: Path,
+) -> None:
+    """Head UNCHANGED past the deadline (re-drive stalled/failed) with attempts
+    remaining → RE-DISPATCH again: the callback fires, ``conflict_attempts`` is
+    bumped, ``conflict_dispatched_at`` re-stamped, still ``needs_resolution``."""
+    async with db_engine(Base) as (engine, _pg):
+        sf = async_sessionmaker(engine, expire_on_commit=False)
+        run_root = tmp_path / "runs"
+        row = _row(repo="acme/retry", pr_number=17, status=MergeWatchStatus.NEEDS_RESOLUTION)
+        row.conflict_dispatched = True
+        row.conflict_head_sha = "samehead"
+        row.conflict_attempts = 1  # < max (2)
+        row.conflict_dispatched_at = _FIXED_NOW - timedelta(seconds=1000)  # > 900s deadline
+        await _seed(sf, row)
+
+        client = _FakeClient(
+            pr={
+                "state": "open",
+                "merged": False,
+                "mergeable_state": "dirty",
+                "head": {"sha": "samehead"},
+            }
+        )
+        redispatch = _RecordingRedispatch()
+        escalate = _RecordingEscalate()
+        worker = _freshness_worker(
+            sf, client, target=None, redispatch=redispatch, run_root=run_root, escalate=escalate
+        )
+        assert await worker.drain_once() == 1
+
+        fetched = await _fetch(sf, row.id)
+        assert fetched.status is MergeWatchStatus.NEEDS_RESOLUTION
+        assert fetched.last_error == "conflict_redispatch_retry"
+        assert fetched.conflict_attempts == 2  # incremented
+        assert fetched.conflict_dispatched_at == _FIXED_NOW  # re-stamped to now
+        assert len(redispatch.calls) == 1  # re-dispatched again
+        assert redispatch.calls[0][0] == row.run_id
+        assert redispatch.calls[0][3] == 17
+        assert escalate.calls == []  # not yet exhausted
+
+
+async def test_conflict_deadline_exceeded_attempts_exhausted_escalates(tmp_path: Path) -> None:
+    """Head UNCHANGED past the deadline with attempts EXHAUSTED → escalate to a
+    founder Decision exactly once, mark the row FAILED so it stops polling."""
+    async with db_engine(Base) as (engine, _pg):
+        sf = async_sessionmaker(engine, expire_on_commit=False)
+        run_root = tmp_path / "runs"
+        row = _row(repo="acme/escalate", pr_number=23, status=MergeWatchStatus.NEEDS_RESOLUTION)
+        row.conflict_dispatched = True
+        row.conflict_head_sha = "samehead"
+        row.conflict_attempts = 2  # == max (2)
+        row.conflict_dispatched_at = _FIXED_NOW - timedelta(seconds=1000)  # > 900s deadline
+        row.base_branch = "develop"
+        await _seed(sf, row)
+
+        client = _FakeClient(
+            pr={
+                "state": "open",
+                "merged": False,
+                "mergeable_state": "dirty",
+                "head": {"sha": "samehead"},
+            }
+        )
+        redispatch = _RecordingRedispatch()
+        escalate = _RecordingEscalate()
+        worker = _freshness_worker(
+            sf, client, target=None, redispatch=redispatch, run_root=run_root, escalate=escalate
+        )
+        assert await worker.drain_once() == 1
+
+        fetched = await _fetch(sf, row.id)
+        assert fetched.status is MergeWatchStatus.FAILED  # terminal — stops polling
+        assert fetched.last_error == "conflict_unresolved_escalated"
+        assert redispatch.calls == []  # no further re-dispatch
+        assert len(escalate.calls) == 1  # escalated exactly once
+        run_id, _paths, base, pr = escalate.calls[0]
+        assert run_id == row.run_id
+        assert base == "develop"  # base branch threaded to the founder Decision
+        assert pr == 23
+
+        # A FAILED row is not claimable → a second poll does nothing (no more
+        # escalation, no re-dispatch): the loop has terminated, not wedged.
+        assert await worker.drain_once() == 0
+        assert len(escalate.calls) == 1
+        assert redispatch.calls == []
+
+
+async def test_conflict_dispatched_at_none_keeps_waiting(tmp_path: Path) -> None:
+    """A legacy dispatched row with NO ``conflict_dispatched_at`` (pre-migration)
+    can't measure elapsed time → treat as within deadline (keep waiting) rather
+    than mis-escalate. The next fresh dispatch stamps it and the clock starts."""
+    async with db_engine(Base) as (engine, _pg):
+        sf = async_sessionmaker(engine, expire_on_commit=False)
+        run_root = tmp_path / "runs"
+        row = _row(repo="acme/legacy", status=MergeWatchStatus.NEEDS_RESOLUTION)
+        row.conflict_dispatched = True
+        row.conflict_head_sha = "samehead"
+        row.conflict_attempts = 2  # even at max — but no timestamp → can't escalate
+        row.conflict_dispatched_at = None
+        await _seed(sf, row)
+
+        client = _FakeClient(
+            pr={
+                "state": "open",
+                "merged": False,
+                "mergeable_state": "dirty",
+                "head": {"sha": "samehead"},
+            }
+        )
+        redispatch = _RecordingRedispatch()
+        escalate = _RecordingEscalate()
+        worker = _freshness_worker(
+            sf, client, target=None, redispatch=redispatch, run_root=run_root, escalate=escalate
+        )
+        assert await worker.drain_once() == 1
+
+        fetched = await _fetch(sf, row.id)
+        assert fetched.status is MergeWatchStatus.NEEDS_RESOLUTION
+        assert fetched.last_error == "awaiting_conflict_resolution"
+        assert redispatch.calls == []
+        assert escalate.calls == []
+
+
+async def test_fresh_conflict_stamps_attempts_and_dispatched_at(tmp_path: Path) -> None:
+    """A FIRST-time conflict dispatch stamps ``conflict_attempts=1`` +
+    ``conflict_dispatched_at=now`` so the deadline clock starts for real."""
+    async with db_engine(Base) as (engine, _pg):
+        sf = async_sessionmaker(engine, expire_on_commit=False)
+        run_root = tmp_path / "runs"
+        row = _row(repo="acme/fresh-stamp", pr_number=31)
+        await _seed(sf, row)
+
+        bare = await _seed_bare(tmp_path, "freshstamp")
+        clone = run_root / str(row.run_id)
+        await _push_run_branch(bare, clone, row.branch, overlap=True)
+        await _advance_main(tmp_path, bare, overlap=True)  # same-file → conflict
+
+        client = _FakeClient(pr={"state": "open", "merged": False, "mergeable_state": "dirty"})
+        redispatch = _RecordingRedispatch()
+        escalate = _RecordingEscalate()
+        target = FreshnessTarget(
+            repo=row.repo, base_branch="main", token=None, remote_url=bare.as_uri()
+        )
+        worker = _freshness_worker(
+            sf, client, target=target, redispatch=redispatch, run_root=run_root, escalate=escalate
+        )
+        assert await worker.drain_once() == 1
+
+        fetched = await _fetch(sf, row.id)
+        assert fetched.status is MergeWatchStatus.NEEDS_RESOLUTION
+        assert fetched.conflict_dispatched is True
+        assert fetched.conflict_attempts == 1  # first dispatch for this head
+        assert fetched.conflict_dispatched_at == _FIXED_NOW  # clock started
+        assert len(redispatch.calls) == 1
+        assert escalate.calls == []
 
 
 async def test_enqueue_is_noop_when_settings_absent() -> None:

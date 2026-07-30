@@ -16,19 +16,26 @@ from __future__ import annotations
 import uuid
 
 import pytest
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from backend.data import Base
 from backend.workflow.application.runtime.merge_watch_runtime import (
+    build_merge_watch_conflict_escalate,
     build_merge_watch_conflict_redispatch,
 )
-from backend.workflow.infrastructure.db import ExecutionRun, RunStatus
+from backend.workflow.infrastructure.db import Decision, DecisionStatus, ExecutionRun, RunStatus
 from tests._support import db_engine
 
 pytestmark = pytest.mark.asyncio
 
 
-async def _seed_run(sf: async_sessionmaker, *, status: RunStatus) -> uuid.UUID:  # noqa: ANN001
+async def _seed_run(
+    sf: async_sessionmaker,  # noqa: ANN001
+    *,
+    status: RunStatus,
+    payload: dict | None = None,
+) -> uuid.UUID:
     run_id = uuid.uuid4()
     async with sf() as session:
         session.add(
@@ -36,7 +43,7 @@ async def _seed_run(sf: async_sessionmaker, *, status: RunStatus) -> uuid.UUID: 
                 id=run_id,
                 workspace_id=uuid.uuid4(),
                 status=status,
-                payload={"intent_text": "x"},
+                payload=payload or {"intent_text": "x"},
             )
         )
         await session.commit()
@@ -72,3 +79,73 @@ async def test_conflict_redispatch_missing_run_is_a_noop() -> None:
         redispatch = build_merge_watch_conflict_redispatch(session_factory=sf)
         # No such run — must not raise (idempotent / at-least-once contract).
         await redispatch(uuid.uuid4(), conflict_paths=["x"], base_branch="main", pr_number=1)
+
+
+async def test_conflict_redispatch_clears_stale_resolving_marker() -> None:
+    """Conflict-robustness — a re-dispatch after a FAILED prior turn must deliver
+    the conflict context afresh: it re-writes ``merge_conflict`` AND clears the
+    stale ``merge_conflict_resolving`` marker the failed turn left behind, so the
+    drive loop re-injects the directive and re-sets the marker cleanly."""
+    async with db_engine(Base) as (engine, _pg):
+        sf = async_sessionmaker(engine, expire_on_commit=False)
+        run_id = await _seed_run(
+            sf,
+            status=RunStatus.RUNNING,
+            # A prior turn consumed the one-shot directive (merge_conflict gone)
+            # but then FAILED — leaving the resolving marker set + no directive.
+            payload={"intent_text": "x", "merge_conflict_resolving": True},
+        )
+
+        redispatch = build_merge_watch_conflict_redispatch(session_factory=sf)
+        await redispatch(run_id, conflict_paths=["shared.txt"], base_branch="main", pr_number=9)
+
+        async with sf() as session:
+            run = await session.get(ExecutionRun, run_id)
+            assert run is not None
+            # The conflict directive is present again ...
+            assert run.payload["merge_conflict"]["conflict_paths"] == ["shared.txt"]
+            # ... and the stale resolving marker is cleared (retry starts clean).
+            assert "merge_conflict_resolving" not in run.payload
+            assert run.status is RunStatus.OPEN
+
+
+async def test_conflict_escalate_raises_review_decision_and_pauses_run() -> None:
+    """Conflict-robustness — escalation raises a founder-actionable
+    ``merge_conflict_review`` Decision, pauses the run (RUNNING → not re-picked),
+    and clears the stale one-shot conflict markers so a guided retry is clean."""
+    async with db_engine(Base) as (engine, _pg):
+        sf = async_sessionmaker(engine, expire_on_commit=False)
+        run_id = await _seed_run(
+            sf,
+            status=RunStatus.OPEN,  # a wedged re-drive left it OPEN
+            payload={"intent_text": "x", "merge_conflict_resolving": True},
+        )
+
+        escalate = build_merge_watch_conflict_escalate(session_factory=sf)
+        await escalate(run_id, conflict_paths=["shared.txt"], base_branch="develop", pr_number=42)
+
+        async with sf() as session:
+            run = await session.get(ExecutionRun, run_id)
+            assert run is not None
+            # Paused ON the Decision (RUNNING convention — not re-picked by drive_once).
+            assert run.status is RunStatus.RUNNING
+            # Stale one-shot markers cleared for a clean founder-guided retry.
+            assert "merge_conflict_resolving" not in run.payload
+            assert "merge_conflict" not in run.payload
+
+            decision = (
+                await session.execute(select(Decision).where(Decision.run_id == run_id))
+            ).scalar_one()
+            assert decision.decision == "merge_conflict_review"
+            assert decision.status is DecisionStatus.PENDING
+            assert decision.payload["reason"] == "conflict_unresolved_escalated"
+            assert decision.payload["pr_number"] == 42
+            assert decision.payload["base_branch"] == "develop"
+
+
+async def test_conflict_escalate_missing_run_is_a_noop() -> None:
+    async with db_engine(Base) as (engine, _pg):
+        sf = async_sessionmaker(engine, expire_on_commit=False)
+        escalate = build_merge_watch_conflict_escalate(session_factory=sf)
+        # No such run — must not raise (idempotent / at-least-once contract).
+        await escalate(uuid.uuid4(), conflict_paths=["x"], base_branch="main", pr_number=1)

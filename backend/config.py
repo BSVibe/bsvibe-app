@@ -256,6 +256,17 @@ class Settings(BaseSettings):
     github_auto_merge_ci_deadline_s: float = 3600.0
     github_auto_merge_poll_interval_s: float = 30.0
 
+    # Conflict-robustness (MergeWatchWorker conflict recovery). When an auto-merge
+    # hits a genuine conflict the run is re-dispatched to the agent to resolve it.
+    # ``resolution_deadline_s`` bounds how long the row waits on an UNCHANGED PR
+    # head (agent hasn't re-pushed) before the re-drive is presumed stalled/failed
+    # (default 15min); ``max_redispatch`` caps how many times a single conflict
+    # head is re-dispatched before the worker escalates to a founder
+    # ``merge_conflict_review`` Decision instead of parking forever. Together they
+    # guarantee conflict recovery terminates (retry → escalate), never wedges.
+    github_conflict_resolution_deadline_s: float = 900.0
+    github_conflict_max_redispatch: int = 2
+
     # Audit relay sink (backend.workers.relays) — the RelayWorker drains
     # ``audit_outbox`` into this HTTP endpoint when set. Empty (the default)
     # selects the no-sink ``LoggingRelay`` (drain + ack, no remote delivery).

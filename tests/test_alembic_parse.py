@@ -115,8 +115,10 @@ def test_alembic_head_is_connector_last_import():
     # Keep the test name (function name is a historical revision id, kept for
     # git-blame stability) and assert the current tip.
     # github_merge_watch -> merge_watch_conflict_head_sha (PR7 — nullable
-    # conflict_head_sha column for the merge-watch conflict loop guard).
-    assert "merge_watch_conflict_head_sha" in result.stdout
+    # conflict_head_sha column for the merge-watch conflict loop guard) ->
+    # merge_watch_conflict_retry (conflict-robustness — conflict_attempts +
+    # conflict_dispatched_at for the retry-then-escalate recovery loop).
+    assert "merge_watch_conflict_retry" in result.stdout
 
 
 def test_target_metadata_covers_all_bases():
