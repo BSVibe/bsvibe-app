@@ -140,6 +140,28 @@ class ConflictRedispatch(Protocol):
     ) -> None: ...
 
 
+class ConflictEscalate(Protocol):
+    """Escalate an UNRESOLVED merge conflict to a founder Decision.
+
+    Called when the bounded re-dispatch retries are exhausted (the agent never
+    re-pushed a resolution — its re-drive stalled/failed). Implemented in the
+    APPLICATION layer (``merge_watch_runtime``): it raises a
+    ``merge_conflict_review`` Decision on the run (so the founder is told + can
+    retry/discard from the checkpoint surface, incl. telegram) and pauses the
+    run on it — both application concerns. Injected as a callable so the
+    infrastructure worker never imports ``create_decision`` / the AgentRunner.
+    """
+
+    async def __call__(
+        self,
+        run_id: uuid.UUID,
+        *,
+        conflict_paths: list[str],
+        base_branch: str,
+        pr_number: int,
+    ) -> None: ...
+
+
 #: A clock — injected so tests pin ``now`` (deadline / backoff are time-driven).
 Clock = Callable[[], datetime]
 
@@ -198,6 +220,8 @@ class _WatchSnapshot:
     deadline_at: datetime
     conflict_dispatched: bool
     conflict_head_sha: str | None
+    conflict_attempts: int
+    conflict_dispatched_at: datetime | None
 
     @classmethod
     def of(cls, row: GithubMergeWatchRow) -> _WatchSnapshot:
@@ -214,6 +238,8 @@ class _WatchSnapshot:
             deadline_at=row.deadline_at,
             conflict_dispatched=row.conflict_dispatched,
             conflict_head_sha=row.conflict_head_sha,
+            conflict_attempts=row.conflict_attempts,
+            conflict_dispatched_at=row.conflict_dispatched_at,
         )
 
 
@@ -225,6 +251,13 @@ class MergeWatchWorkerConfig:
     #: Per-row poll backoff: ``min(base * 2**attempts, cap)``.
     backoff_base_s: float = 30.0
     backoff_cap_s: float = 300.0
+    #: Conflict-robustness — how long a re-dispatched conflict may sit on an
+    #: UNCHANGED head (agent hasn't re-pushed) before the re-drive is presumed
+    #: stalled/failed and the conflict is retried/escalated. Default 15min.
+    conflict_resolution_deadline_s: float = 900.0
+    #: Conflict-robustness — how many times a single conflict head may be
+    #: re-dispatched before the worker escalates to a founder Decision. Default 2.
+    conflict_max_redispatch: int = 2
 
 
 class MergeWatchWorker(BaseWorker):
@@ -237,6 +270,7 @@ class MergeWatchWorker(BaseWorker):
         client_resolver: MergeClientResolver,
         freshness_resolver: FreshnessResolver | None = None,
         redispatch_conflict: ConflictRedispatch | None = None,
+        escalate_conflict: ConflictEscalate | None = None,
         git_ops: GitOps | None = None,
         run_workspace_root: Path | None = None,
         config: MergeWatchWorkerConfig | None = None,
@@ -252,6 +286,7 @@ class MergeWatchWorker(BaseWorker):
         # behavior rather than attempting a merge it cannot complete.
         self._resolve_freshness = freshness_resolver
         self._redispatch_conflict = redispatch_conflict
+        self._escalate_conflict = escalate_conflict
         self._git = git_ops or GitOps()
         self._run_workspace_root = run_workspace_root
         self._now = now or _utcnow
@@ -505,17 +540,13 @@ class MergeWatchWorker(BaseWorker):
             )
             return
 
-        # Loop guard (PR7) — a conflict was already handed to the agent. Only
-        # re-attempt when the agent has re-pushed (head SHA advanced since the
-        # dispatch); otherwise wait (backoff), at most one dispatch per head.
+        # Loop guard (PR7) — a conflict was already handed to the agent and it
+        # has NOT re-pushed (head unchanged since the dispatch). Conflict-
+        # robustness closes the "parked forever" wedge here: give the agent a
+        # bounded window, then RETRY the re-dispatch (a bounded number of times),
+        # then ESCALATE to a founder Decision — never wait indefinitely.
         if snap.conflict_dispatched and not _head_advanced(head_sha, snap.conflict_head_sha):
-            await repo.mark_status(
-                snap.id,
-                MergeWatchStatus.NEEDS_RESOLUTION,
-                next_poll_at=self._backoff(snap.attempts, now),
-                last_error="awaiting_conflict_resolution",
-                increment_attempt=True,
-            )
+            await self._await_or_recover_conflict(repo, snap, now)
             return
 
         # narrow Optionals for mypy (guarded by ``_freshness_wired`` above).
@@ -625,7 +656,109 @@ class MergeWatchWorker(BaseWorker):
                 # PR7 — pin the head this conflict was dispatched on so a later
                 # re-poll only re-acts once the agent has re-pushed (head moves).
                 conflict_head_sha=head_sha or "unknown",
+                # Conflict-robustness — a FRESH conflict (first dispatch, or a new
+                # conflict on an advanced head): this is dispatch #1 for this head,
+                # stamped now so the deadline clock starts fresh.
+                conflict_attempts=1,
+                conflict_dispatched_at=now,
             )
+
+    def _conflict_deadline_exceeded(self, snap: _WatchSnapshot, now: datetime) -> bool:
+        """Has the current conflict sat un-repushed past the resolution deadline?
+
+        ``conflict_dispatched_at is None`` (a legacy row dispatched before this
+        column existed, or one never stamped) → ``False``: we can't measure how
+        long, so keep waiting — the next fresh dispatch stamps it and the clock
+        starts for real. Otherwise a plain ``now - dispatched_at >= deadline``."""
+        dispatched_at = snap.conflict_dispatched_at
+        if dispatched_at is None:
+            return False
+        elapsed = (now - dispatched_at).total_seconds()
+        return elapsed >= self._cfg.conflict_resolution_deadline_s
+
+    async def _await_or_recover_conflict(
+        self, repo: GithubMergeWatchRepository, snap: _WatchSnapshot, now: datetime
+    ) -> None:
+        """The agent hasn't re-pushed a resolution for the dispatched conflict.
+
+        Bounds the wait so a stalled/failed re-drive can never wedge the row:
+
+        * within the resolution deadline (or escalation un-wired — PR4/PR6-era
+          construction) → keep parking ``needs_resolution`` with backoff (give
+          the agent time). Unchanged behavior.
+        * deadline exceeded + attempts remain → RE-DISPATCH the conflict again
+          (the injected redispatch re-writes ``run.payload["merge_conflict"]``
+          fresh + re-opens the run), bump ``conflict_attempts``, re-stamp
+          ``conflict_dispatched_at``. Un-wedges a run whose prior re-drive died.
+        * deadline exceeded + attempts exhausted → ESCALATE to a founder
+          ``merge_conflict_review`` Decision and mark the row FAILED so it stops
+          polling. The loop terminates (retry → escalate) instead of parking.
+        """
+        # Escalation un-wired (PR4/PR6-era construction) or still within the
+        # deadline: keep waiting, exactly as before (the agent may still be at it).
+        if self._escalate_conflict is None or not self._conflict_deadline_exceeded(snap, now):
+            await repo.mark_status(
+                snap.id,
+                MergeWatchStatus.NEEDS_RESOLUTION,
+                next_poll_at=self._backoff(snap.attempts, now),
+                last_error="awaiting_conflict_resolution",
+                increment_attempt=True,
+            )
+            return
+
+        # Deadline exceeded — the re-drive is presumed stalled/failed.
+        if snap.conflict_attempts >= self._cfg.conflict_max_redispatch:
+            # Retries exhausted → hand it to the founder, then stop polling.
+            await self._escalate_conflict(
+                snap.run_id,
+                conflict_paths=[],
+                base_branch=snap.base_branch,
+                pr_number=snap.pr_number,
+            )
+            await repo.mark_status(
+                snap.id,
+                MergeWatchStatus.FAILED,
+                last_error="conflict_unresolved_escalated",
+            )
+            logger.warning(
+                "merge_watch_conflict_escalated",
+                repo=snap.repo,
+                pr_number=snap.pr_number,
+                run_id=str(snap.run_id),
+                conflict_attempts=snap.conflict_attempts,
+            )
+            return
+
+        # Attempts remain → re-dispatch the conflict afresh (un-wedge a dead
+        # re-drive). The redispatch callback re-writes the conflict payload +
+        # clears any stale ``merge_conflict_resolving`` marker, so the retried
+        # re-drive delivers the conflict context to the agent again. ``_freshness
+        # _wired`` (checked at the top of ``_freshness_step``) guarantees the
+        # callback is present; narrow the Optional for mypy.
+        assert self._redispatch_conflict is not None  # noqa: S101
+        next_attempt = snap.conflict_attempts + 1
+        await self._redispatch_conflict(
+            snap.run_id,
+            conflict_paths=[],
+            base_branch=snap.base_branch,
+            pr_number=snap.pr_number,
+        )
+        await repo.mark_status(
+            snap.id,
+            MergeWatchStatus.NEEDS_RESOLUTION,
+            next_poll_at=self._backoff(snap.attempts, now),
+            last_error="conflict_redispatch_retry",
+            increment_attempt=True,
+            conflict_attempts=next_attempt,
+            conflict_dispatched_at=now,
+        )
+        logger.info(
+            "merge_watch_conflict_redispatch_retry",
+            repo=snap.repo,
+            pr_number=snap.pr_number,
+            run_id=str(snap.run_id),
+            conflict_attempt=next_attempt,
+        )
 
     async def _run_cancelled(self, session: AsyncSession, run_id: uuid.UUID) -> bool:
         """PR7 — is the PR's originating run terminally CANCELLED (founder discard)?
@@ -692,6 +825,7 @@ class MergeWatchWorker(BaseWorker):
 
 __all__ = [
     "Clock",
+    "ConflictEscalate",
     "ConflictRedispatch",
     "FreshnessResolver",
     "FreshnessTarget",

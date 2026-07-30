@@ -36,6 +36,7 @@ from backend.workflow.application.delivery.connector_dispatch._resolver import (
 from backend.workflow.infrastructure.db import ExecutionRun, RunStatus
 from backend.workflow.infrastructure.delivery.git_ops import GitOps
 from backend.workflow.infrastructure.workers.merge_watch_worker import (
+    ConflictEscalate,
     ConflictRedispatch,
     FreshnessResolver,
     FreshnessTarget,
@@ -141,6 +142,13 @@ def build_merge_watch_conflict_redispatch(
                 "base_branch": base_branch,
                 "pr_number": pr_number,
             }
+            # Conflict-robustness — EVERY re-dispatch delivers the conflict
+            # context to the agent afresh: writing ``merge_conflict`` restores the
+            # one-shot directive (the drive loop re-injects + re-consumes it), and
+            # clearing a stale ``merge_conflict_resolving`` marker (left by a
+            # PRIOR turn that consumed the directive but then failed) keeps the
+            # retried re-drive clean — the drive loop re-sets the marker itself.
+            payload.pop("merge_conflict_resolving", None)
             run.payload = payload
             runner = AgentRunner(session)
             await runner.transition(
@@ -157,6 +165,84 @@ def build_merge_watch_conflict_redispatch(
         )
 
     return _redispatch
+
+
+def build_merge_watch_conflict_escalate(
+    *, session_factory: async_sessionmaker[AsyncSession]
+) -> ConflictEscalate:
+    """Build the conflict-robustness escalation callback for the MergeWatchWorker.
+
+    When the bounded re-dispatch retries are exhausted (the agent never re-pushed
+    a resolution — its re-drive stalled/failed, e.g. an autodeploy killed the
+    claude subprocess mid-run), the conflict must reach the FOUNDER rather than
+    park forever. Raising a ``merge_conflict_review`` Decision (the founder is
+    notified + gets the retry/discard one-click actions) and pausing the run on
+    it are APPLICATION concerns, so they live here and are injected into the
+    infrastructure worker as an opaque callable.
+
+    Pauses the run by transitioning it to RUNNING — the "paused on a Decision"
+    convention (``AgentWorker.drive_once`` scans OPEN, so a RUNNING run is NOT
+    re-picked, and the founder's ``retry`` resumes it RUNNING → OPEN). Clears the
+    stale one-shot conflict markers so a founder-guided retry starts clean. Opens
+    its own short transaction (the worker's session holds the per-repo lock) and
+    is idempotent — a missing run id is a no-op.
+    """
+
+    async def _escalate(
+        run_id: uuid.UUID,
+        *,
+        conflict_paths: list[str],
+        base_branch: str,
+        pr_number: int,
+    ) -> None:
+        from backend.workflow.application.agent_runner import AgentRunner  # noqa: PLC0415
+        from backend.workflow.application.run_persistence import create_decision  # noqa: PLC0415
+
+        async with session_factory() as session:
+            run = await session.get(ExecutionRun, run_id)
+            if run is None:
+                logger.warning("merge_watch_escalate_run_missing", run_id=str(run_id))
+                return
+            # Clear the stale one-shot conflict markers (a failed re-drive may
+            # have consumed the directive but left ``merge_conflict_resolving``);
+            # a founder-guided retry re-enters cleanly.
+            payload = dict(run.payload or {})
+            payload.pop("merge_conflict", None)
+            payload.pop("merge_conflict_resolving", None)
+            run.payload = payload
+            # Pause the run ON the Decision (RUNNING → not re-picked by
+            # drive_once). A no-op when the run is already RUNNING; a wedged
+            # OPEN/other-state run is pulled out of the drive loop here.
+            runner = AgentRunner(session)
+            await runner.transition(
+                run_id=run_id,
+                to_status=RunStatus.RUNNING,
+                reason=(
+                    f"merge conflict on PR #{pr_number} unresolved after "
+                    "automatic re-dispatch retries — escalated to founder"
+                ),
+            )
+            await create_decision(
+                session,
+                run,
+                None,  # work_step is unused by the Decision row
+                kind="merge_conflict_review",
+                payload={
+                    "reason": "conflict_unresolved_escalated",
+                    "conflict_paths": list(conflict_paths),
+                    "base_branch": base_branch,
+                    "pr_number": pr_number,
+                },
+                rationale="merge conflict unresolved after automatic re-dispatch retries",
+            )
+            await session.commit()
+        logger.info(
+            "merge_watch_conflict_escalated",
+            run_id=str(run_id),
+            pr_number=pr_number,
+        )
+
+    return _escalate
 
 
 def build_merge_watch_workers(
@@ -180,10 +266,13 @@ def build_merge_watch_workers(
             redispatch_conflict=build_merge_watch_conflict_redispatch(
                 session_factory=session_factory
             ),
+            escalate_conflict=build_merge_watch_conflict_escalate(session_factory=session_factory),
             git_ops=GitOps(),
             run_workspace_root=Path(settings.run_workspace_root),
             config=MergeWatchWorkerConfig(
-                poll_interval_s=settings.github_auto_merge_poll_interval_s
+                poll_interval_s=settings.github_auto_merge_poll_interval_s,
+                conflict_resolution_deadline_s=settings.github_conflict_resolution_deadline_s,
+                conflict_max_redispatch=settings.github_conflict_max_redispatch,
             ),
         )
     ]
@@ -191,6 +280,7 @@ def build_merge_watch_workers(
 
 __all__ = [
     "build_merge_watch_client_resolver",
+    "build_merge_watch_conflict_escalate",
     "build_merge_watch_conflict_redispatch",
     "build_merge_watch_freshness_resolver",
     "build_merge_watch_workers",

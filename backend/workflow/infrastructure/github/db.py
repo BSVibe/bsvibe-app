@@ -93,6 +93,23 @@ class GithubMergeWatchRow(GithubMergeWatchBase):
     next_poll_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     deadline_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     conflict_dispatched: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    #: Conflict-robustness — how many times THIS conflict head has been
+    #: re-dispatched to the agent. Reset to 1 on a fresh conflict (a first
+    #: dispatch, or a new conflict on an advanced head); incremented on each
+    #: deadline-driven retry. Bounds the retries: once it reaches
+    #: ``github_conflict_max_redispatch`` an unresolved conflict escalates to a
+    #: founder ``merge_conflict_review`` Decision instead of parking forever.
+    conflict_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    #: Conflict-robustness — when the CURRENT conflict was last (re-)dispatched.
+    #: A ``needs_resolution`` re-poll on an UNCHANGED head computes ``now -
+    #: conflict_dispatched_at`` against ``github_conflict_resolution_deadline_s``:
+    #: within the deadline it keeps waiting (the agent may still be working);
+    #: past it the re-drive is presumed stalled/failed, so the conflict is
+    #: retried (bounded by ``conflict_attempts``) or escalated. Nullable — only
+    #: set once a conflict has been dispatched.
+    conflict_dispatched_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, default=None
+    )
     #: PR7 — the PR head SHA captured when a conflict was last re-dispatched to
     #: the agent. On a ``needs_resolution`` re-poll the worker compares it to the
     #: live head: an UNCHANGED head means the agent hasn't re-pushed yet (keep

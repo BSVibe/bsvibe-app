@@ -76,12 +76,19 @@ class GithubMergeWatchRepository:
         increment_attempt: bool = False,
         conflict_dispatched: bool | None = None,
         conflict_head_sha: str | None = None,
+        conflict_attempts: int | None = None,
+        conflict_dispatched_at: datetime | None = None,
     ) -> None:
         """Transition one row's status (+ optional backoff / attempt / flags).
 
         ``conflict_head_sha`` (PR7) records the PR head SHA a conflict was
         re-dispatched on — passed only when (re-)dispatching so a later re-poll
         can detect whether the agent has since re-pushed.
+
+        ``conflict_attempts`` / ``conflict_dispatched_at`` (conflict-robustness)
+        are the retry-then-escalate bookkeeping: the attempt COUNT for the
+        current conflict head and WHEN it was last (re-)dispatched. Passed only
+        when (re-)dispatching a conflict (``None`` leaves each column untouched).
         """
         values: dict[str, Any] = {"status": status}
         if next_poll_at is not None:
@@ -92,6 +99,10 @@ class GithubMergeWatchRepository:
             values["conflict_dispatched"] = conflict_dispatched
         if conflict_head_sha is not None:
             values["conflict_head_sha"] = conflict_head_sha
+        if conflict_attempts is not None:
+            values["conflict_attempts"] = conflict_attempts
+        if conflict_dispatched_at is not None:
+            values["conflict_dispatched_at"] = conflict_dispatched_at
         if increment_attempt:
             values["attempts"] = GithubMergeWatchRow.attempts + 1
         stmt = update(GithubMergeWatchRow).where(GithubMergeWatchRow.id == row_id).values(**values)
