@@ -498,6 +498,7 @@ async def _h_runs_cancel(args: RunsCancelInput, ctx: ToolContext) -> Any:
         run_id=args.run_id,
         workspace_id=ctx.principal.workspace_id,
         reason=args.reason or "cancelled via MCP",
+        actor_id=ctx.principal.user_id,
     )
     if not outcome.found:
         raise ToolError(f"run not found: {args.run_id}")
