@@ -1,4 +1,4 @@
-"""Cross-context wire-contract vocabulary — run/schedule ``kind`` literals.
+"""Cross-context wire-contract vocabulary — run/schedule ``kind`` literals (neutral shared-kernel leaf).
 
 A ``kind`` string is a *wire contract* carried on schedule rows and on the
 run payloads they seed. It is produced in one bounded context (Schedule)
