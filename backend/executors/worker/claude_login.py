@@ -20,15 +20,18 @@ existing keepalive (#641) self-refreshes it; no re-seeding, no shared rotation.
 Two flows, both with every side-effect injectable (no network / stdin / files
 in tests):
 
-* :func:`perform_claude_login` — loopback: bind ``127.0.0.1:<port>``, open the
+* :func:`perform_claude_login` — loopback: bind ``localhost:<port>``, open the
   browser, capture ``?code=&state=`` from the one-shot callback.
 * :func:`perform_claude_login_manual` — remote/headless: print the authorize URL,
-  read a pasted ``<code>#<state>`` (Claude's ``code=true`` page shows exactly
-  that) or full redirect URL. No loopback server — the redirect_uri is the
-  platform's out-of-band callback and must match at token exchange.
+  read a pasted full redirect URL (``http://localhost:<port>/callback?code=&state=``)
+  or a bare code. No loopback server binds; the redirect_uri must still match at
+  token exchange.
 
-The full CLI scope (``user:sessions:claude_code`` &c.) is what mints a
-*refreshing* token; ``setup-token``'s ``user:inference`` alone does not.
+Scopes/format were MEASURED live (2026-07-31): the authorize endpoint rejects the
+CLI's full 6-scope set for a raw URL ("Invalid request format"), so this uses
+``user:inference`` alone — which DOES return a refreshing grant (access +
+refresh_token). The token endpoint requires the ``state`` field in the
+authorization_code body (unlike refresh_token). See the constants below.
 """
 
 from __future__ import annotations
@@ -64,22 +67,33 @@ from backend.executors.worker.login import make_pkce_pair
 logger = structlog.get_logger(__name__)
 
 _AUTHORIZE_URL = "https://claude.com/cai/oauth/authorize"
-# Out-of-band redirect for the manual/remote paste-back flow — Claude renders the
-# code (``code=true``) on this page instead of auto-navigating to a loopback URI.
-_MANUAL_REDIRECT_URI = "https://platform.claude.com/oauth/code/callback"
-# The interactive ``claude`` login's exact scope set (captured non-destructively).
-_CLAUDE_SCOPE = (
-    "org:create_api_key user:profile user:inference "
-    "user:sessions:claude_code user:mcp_servers user:file_upload"
-)
+# MEASURED 2026-07-31: the claude.ai authorize endpoint rejects the CLI's full
+# 6-scope set (org:create_api_key user:profile user:inference
+# user:sessions:claude_code user:mcp_servers user:file_upload) for a raw,
+# non-CLI authorize request with "Invalid request format" (the real CLI likely
+# pushes the request server-side first, which we can't replicate from a bare
+# URL). ``user:inference`` ALONE is accepted AND returns a refreshing grant
+# (access_token + refresh_token + refresh_token_expires_in) — which is exactly
+# what the worker needs: an inference bearer that self-refreshes. MCP tools
+# authenticate via the worker token, NOT this OAuth scope, so the narrow scope
+# does not lose MCP (verified live: executor tasks completed success=True).
+_CLAUDE_SCOPE = "user:inference"
 # Mimic the CLI so Cloudflare's bot filter (error 1010) lets the POST through —
 # identical to claude_auth._http_refresh.
 _USER_AGENT = "claude-cli/2.1.172 (external, cli)"
-_LOOPBACK_HOST = "127.0.0.1"
+# Loopback host for the redirect_uri. MEASURED: ``localhost`` is accepted by the
+# authorize endpoint; the redirect_uri only has to round-trip identically to the
+# token exchange (RFC 8252 loopback — any port).
+_LOOPBACK_HOST = "localhost"
 _DEFAULT_LOGIN_TIMEOUT_S = 300.0
 
-#: ``(code, code_verifier, redirect_uri) -> token payload`` — the token-endpoint
-#: POST, injectable so tests never touch the network.
+
+def _loopback_redirect(port: int) -> str:
+    return f"http://{_LOOPBACK_HOST}:{port}/callback"
+
+
+#: ``(code, code_verifier, redirect_uri, state) -> token payload`` — the
+#: token-endpoint POST, injectable so tests never touch the network.
 CodeExchanger = Callable[..., dict[str, Any]]
 
 
@@ -97,7 +111,7 @@ class ClaudeLoginResult:
 
 
 def make_claude_authorize_url(*, redirect_uri: str, challenge: str, state: str) -> str:
-    """Build the Claude authorize URL (S256 PKCE, full CLI scope, ``code=true``)."""
+    """Build the Claude authorize URL (S256 PKCE, ``user:inference`` scope, ``code=true``)."""
     params = {
         "code": "true",
         "client_id": _CLIENT_ID,
@@ -147,15 +161,21 @@ def parse_claude_callback_input(text: str) -> dict[str, str | None]:
     return {"code": stripped, "state": None}
 
 
-def _http_exchange_code(*, code: str, code_verifier: str, redirect_uri: str) -> dict[str, Any]:
+def _http_exchange_code(
+    *, code: str, code_verifier: str, redirect_uri: str, state: str
+) -> dict[str, Any]:
     """Default exchanger — POST the token endpoint with ``authorization_code``.
 
     JSON body + CLI User-Agent, mirroring ``claude_auth._http_refresh`` (the
-    proven Cloudflare-passing request shape)."""
+    proven Cloudflare-passing request shape). MEASURED 2026-07-31: the claude
+    token endpoint requires the ``state`` field in the authorization_code body —
+    omitting it returns 400 "Invalid request format" (unlike refresh_token,
+    which needs no state)."""
     body = json.dumps(
         {
             "grant_type": "authorization_code",
             "code": code,
+            "state": state,
             "redirect_uri": redirect_uri,
             "client_id": _CLIENT_ID,
             "code_verifier": code_verifier,
@@ -260,9 +280,10 @@ def _manual_instructions(authorize_url: str) -> str:
         "\n"
         f"   {authorize_url}\n"
         "\n"
-        "2. Claude will show an authorization code (shape `code#state`), OR try to\n"
-        "   open a http://127.0.0.1/... address that fails to load — that is fine.\n"
-        "3. Paste the code (`code#state`) or the full redirect URL below, then Enter:\n"
+        "2. The browser then tries to open a http://localhost:<port>/callback?code=...\n"
+        "   address that FAILS to load — that is expected (nothing listens there).\n"
+        "3. Copy the FULL address from the browser's URL bar (or just the `code`)\n"
+        "   and paste it below, then press Enter:\n"
     )
 
 
@@ -285,7 +306,7 @@ def perform_claude_login(
     now = (now_ms or (lambda: int(time.time() * 1000)))()
 
     verifier, challenge = make_pkce_pair()
-    redirect_uri = f"http://{_LOOPBACK_HOST}:{port}/callback"
+    redirect_uri = _loopback_redirect(port)
     authorize_url = make_claude_authorize_url(
         redirect_uri=redirect_uri, challenge=challenge, state=state
     )
@@ -294,7 +315,9 @@ def perform_claude_login(
     captured = wait_fn(port, timeout_s)
     if captured.get("state") != state:
         raise ClaudeLoginError("state mismatch — possible CSRF; aborting")
-    payload = exchange_fn(code=captured["code"], code_verifier=verifier, redirect_uri=redirect_uri)
+    payload = exchange_fn(
+        code=captured["code"], code_verifier=verifier, redirect_uri=redirect_uri, state=state
+    )
     return _result_from_payload(payload, now_ms=now)
 
 
@@ -303,17 +326,27 @@ def perform_claude_login_manual(
     read_input: Callable[[], str] = input,
     emit: Callable[[str], None] = _default_emit,
     exchanger: CodeExchanger | None = None,
+    pick_port: Callable[[], int] | None = None,
     state_factory: Callable[[], str] | None = None,
     now_ms: Callable[[], int] | None = None,
 ) -> ClaudeLoginResult:
-    """Remote/headless PKCE flow — emit the URL, read a pasted ``code#state``."""
+    """Remote/headless PKCE flow — emit the URL, read a pasted redirect URL / code.
+
+    Uses a loopback ``redirect_uri`` (MEASURED to be accepted; the platform
+    out-of-band redirect is not) but binds NO server — the operator pastes the
+    failed ``http://localhost:<port>/callback?...`` address back. The exchange is
+    done with the ``state`` we generated (the token endpoint validates it), so a
+    mangled pasted ``state`` is a warning, not a hard failure — the pasted value
+    is only a best-effort client-side CSRF pre-check."""
     exchange_fn = exchanger or _http_exchange_code
+    port = (pick_port or _pick_loopback_port)()
     state = (state_factory or (lambda: secrets.token_urlsafe(16)))()
     now = (now_ms or (lambda: int(time.time() * 1000)))()
 
     verifier, challenge = make_pkce_pair()
+    redirect_uri = _loopback_redirect(port)
     authorize_url = make_claude_authorize_url(
-        redirect_uri=_MANUAL_REDIRECT_URI, challenge=challenge, state=state
+        redirect_uri=redirect_uri, challenge=challenge, state=state
     )
     emit(_manual_instructions(authorize_url))
     parsed = parse_claude_callback_input(read_input())
@@ -321,8 +354,8 @@ def perform_claude_login_manual(
     if code is None:  # pragma: no cover — parse_claude_callback_input guarantees a code
         raise ClaudeLoginError("no `code` in pasted callback input")
     if parsed["state"] is not None and parsed["state"] != state:
-        raise ClaudeLoginError("state mismatch — possible CSRF; aborting")
-    payload = exchange_fn(code=code, code_verifier=verifier, redirect_uri=_MANUAL_REDIRECT_URI)
+        logger.warning("claude_login_pasted_state_mismatch")
+    payload = exchange_fn(code=code, code_verifier=verifier, redirect_uri=redirect_uri, state=state)
     return _result_from_payload(payload, now_ms=now)
 
 
