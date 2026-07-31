@@ -30,6 +30,10 @@ from backend.workflow.infrastructure.db import (
     ExecutionRun,
     RunStatus,
 )
+from backend.workflow.infrastructure.delivery.db import (
+    SafeModeQueueItemRow,
+    SafeModeStatus,
+)
 
 from ..._support import db_engine
 
@@ -110,7 +114,83 @@ async def _seed_decision(
     return d.id
 
 
+async def _seed_safe_mode_item(
+    session: AsyncSession,
+    workspace_id: uuid.UUID,
+    run_id: uuid.UUID,
+    *,
+    status: SafeModeStatus = SafeModeStatus.PENDING,
+) -> uuid.UUID:
+    item = SafeModeQueueItemRow(
+        id=uuid.uuid4(),
+        workspace_id=workspace_id,
+        run_id=run_id,
+        deliverable_id=uuid.uuid4(),
+        status=status,
+        expires_at=datetime.now(tz=UTC),
+        created_at=datetime.now(tz=UTC),
+    )
+    session.add(item)
+    await session.flush()
+    return item.id
+
+
 # --- cancel_run (OPEN/RUNNING only, mirrors REST /cancel) ------------------
+
+
+async def test_cancel_run_denies_pending_safe_mode_items(sf, workspace_id) -> None:
+    """Cancel must also deny the run's PENDING safe-mode approval items — a
+    cancelled run's deliverables never deliver, so their approval cards must drop
+    off the queue (orphaned-half, parallel to pending decisions)."""
+    async with sf() as s:
+        run_id = await _seed_run(s, workspace_id, status=RunStatus.RUNNING)
+        item_id = await _seed_safe_mode_item(s, workspace_id, run_id)
+        outcome = await cancel_run(s, run_id=run_id, workspace_id=workspace_id, reason="mcp")
+        await s.commit()
+    assert outcome.cancelled is True
+    assert str(item_id) in outcome.safe_mode_items_resolved
+    async with sf() as s:
+        item = await s.get(SafeModeQueueItemRow, item_id)
+        assert item is not None and item.status is SafeModeStatus.DENIED
+        assert item.decided_at is not None
+
+
+async def test_cancel_run_not_cancellable_leaves_item_pending(sf, workspace_id) -> None:
+    async with sf() as s:
+        run_id = await _seed_run(s, workspace_id, status=RunStatus.REVIEW_READY)
+        item_id = await _seed_safe_mode_item(s, workspace_id, run_id)
+        outcome = await cancel_run(s, run_id=run_id, workspace_id=workspace_id, reason="mcp")
+        await s.commit()
+    assert outcome.cancelled is False
+    assert outcome.safe_mode_items_resolved == []
+    async with sf() as s:
+        assert (await s.get(SafeModeQueueItemRow, item_id)).status is SafeModeStatus.PENDING
+
+
+async def test_discard_denies_pending_safe_mode_items(sf, workspace_id) -> None:
+    async with sf() as s:
+        run_id = await _seed_run(s, workspace_id, status=RunStatus.REVIEW_READY)
+        item_id = await _seed_safe_mode_item(s, workspace_id, run_id)
+        outcome = await discard_run(s, run_id=run_id, workspace_id=workspace_id, reason="mcp")
+        await s.commit()
+    assert str(item_id) in outcome.safe_mode_items_resolved
+    async with sf() as s:
+        assert (await s.get(SafeModeQueueItemRow, item_id)).status is SafeModeStatus.DENIED
+
+
+async def test_cancel_product_runs_denies_pending_safe_mode_items(sf, workspace_id) -> None:
+    product_id = uuid.uuid4()
+    async with sf() as s:
+        run_id = await _seed_run(
+            s, workspace_id, status=RunStatus.REVIEW_READY, product_id=product_id
+        )
+        item_id = await _seed_safe_mode_item(s, workspace_id, run_id)
+        await cancel_product_runs(
+            s, product_id=product_id, workspace_id=workspace_id, reason="product deleted"
+        )
+        await s.commit()
+    async with sf() as s:
+        assert (await s.get(SafeModeQueueItemRow, item_id)).status is SafeModeStatus.DENIED
 
 
 @pytest.mark.parametrize("status", [RunStatus.OPEN, RunStatus.RUNNING])
