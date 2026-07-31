@@ -27,7 +27,12 @@ from backend.api.deps import (
 )
 from backend.api.main import create_app
 from backend.workflow.application.agent_runner import AgentRunner
-from backend.workflow.infrastructure.db import ExecutionRun, RunStatus
+from backend.workflow.infrastructure.db import (
+    Decision,
+    DecisionStatus,
+    ExecutionRun,
+    RunStatus,
+)
 
 from .._support import db_engine, fake_current_user
 
@@ -96,6 +101,32 @@ async def test_cancel_inflight_run(client, sf, workspace_id, status) -> None:
     async with sf() as s:
         run = await s.get(ExecutionRun, run_id)
         assert run is not None and run.status is RunStatus.CANCELLED
+
+
+async def test_cancel_resolves_pending_decision(client, sf, workspace_id) -> None:
+    """The founder's PWA "stop" (REST cancel) must also resolve the run's PENDING
+    decision — else the Summary "확인 필요" card lingers after cancel (orphaned-half)."""
+    run_id = await _seed(sf, workspace_id, RunStatus.RUNNING)
+    dec_id = uuid.uuid4()
+    async with sf() as s:
+        s.add(
+            Decision(
+                id=dec_id,
+                run_id=run_id,
+                workspace_id=workspace_id,
+                decision="human_review_required",
+                status=DecisionStatus.PENDING,
+                payload={},
+                created_at=datetime.now(tz=UTC),
+            )
+        )
+        await s.commit()
+
+    resp = await client.post(f"/api/v1/runs/{run_id}/cancel")
+    assert resp.status_code == 200, resp.text
+    async with sf() as s:
+        dec = await s.get(Decision, dec_id)
+        assert dec is not None and dec.status is DecisionStatus.RESOLVED
 
 
 @pytest.mark.parametrize("status", [RunStatus.SHIPPED, RunStatus.FAILED, RunStatus.CANCELLED])

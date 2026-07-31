@@ -128,6 +128,7 @@ class CancelOutcome:
     found: bool
     cancelled: bool
     status: str | None  # final run status value, or None when not found
+    decisions_resolved: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -148,12 +149,17 @@ async def cancel_run(
     run_id: uuid.UUID,
     workspace_id: uuid.UUID,
     reason: str,
+    actor_id: uuid.UUID | None = None,
 ) -> CancelOutcome:
     """Cancel an OPEN / RUNNING run (mirrors ``POST /runs/{id}/cancel``).
 
     ``found=False`` for an unknown / cross-workspace id; ``cancelled=False`` with
     the current status for a run that is not in-flight (terminal or review_ready
     — use :func:`discard_run` for the latter).
+
+    Also resolves the run's PENDING decisions (like :func:`discard_run` and
+    :func:`cancel_product_runs`) — cancelling the run alone leaves its Summary
+    "확인 필요" card up forever (orphaned-half).
     """
     runs = SqlAlchemyRunRepository(session)
     run = await runs.get(run_id)
@@ -162,12 +168,18 @@ async def cancel_run(
     if run.status not in _CANCELLABLE:
         return CancelOutcome(found=True, cancelled=False, status=run.status.value)
     await _cancel(session, run, reason=reason)
+    resolved = await _resolve_pending_decisions(session, run, reason=reason, actor_id=actor_id)
     # Cancel leaves the run's worktree on disk (unlike discard, which removes it
     # entirely). If the run was cancelled while a verify-time ``merge main`` was
     # mid-flight, the worktree carries ``<<<<<<<`` markers + MERGE_HEAD — abort
     # so nothing committable lingers. Best-effort no-op when no merge is running.
     await _abort_merge_best_effort(run)
-    return CancelOutcome(found=True, cancelled=True, status=RunStatus.CANCELLED.value)
+    return CancelOutcome(
+        found=True,
+        cancelled=True,
+        status=RunStatus.CANCELLED.value,
+        decisions_resolved=resolved,
+    )
 
 
 async def discard_run(

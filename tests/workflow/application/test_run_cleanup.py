@@ -140,6 +140,42 @@ async def test_cancel_run_cross_workspace_not_found(sf, workspace_id) -> None:
     assert outcome.found is False
 
 
+async def test_cancel_run_resolves_pending_decisions(sf, workspace_id) -> None:
+    """Cancel must resolve the run's PENDING decisions too — else the Summary
+    "확인 필요" card lingers forever after the run is cancelled (orphaned-half).
+    Mirrors discard_run; previously only discard/cancel_product_runs did this."""
+    actor = uuid.uuid4()
+    async with sf() as s:
+        run_id = await _seed_run(s, workspace_id, status=RunStatus.RUNNING)
+        dec_id = await _seed_decision(s, workspace_id, run_id)
+        outcome = await cancel_run(
+            s, run_id=run_id, workspace_id=workspace_id, reason="mcp", actor_id=actor
+        )
+        await s.commit()
+
+    assert outcome.cancelled is True
+    assert str(dec_id) in outcome.decisions_resolved
+    async with sf() as s:
+        dec = await s.get(Decision, dec_id)
+        assert dec.status is DecisionStatus.RESOLVED
+        assert dec.resolved_at is not None
+        assert dec.resolved_by == actor
+
+
+async def test_cancel_run_not_cancellable_leaves_decision_pending(sf, workspace_id) -> None:
+    """A non-in-flight run (review_ready) is not cancelled by cancel_run, so its
+    pending decision must be left untouched (no false resolution)."""
+    async with sf() as s:
+        run_id = await _seed_run(s, workspace_id, status=RunStatus.REVIEW_READY)
+        dec_id = await _seed_decision(s, workspace_id, run_id)
+        outcome = await cancel_run(s, run_id=run_id, workspace_id=workspace_id, reason="mcp")
+        await s.commit()
+    assert outcome.cancelled is False
+    assert outcome.decisions_resolved == []
+    async with sf() as s:
+        assert (await s.get(Decision, dec_id)).status is DecisionStatus.PENDING
+
+
 # --- discard_run (any non-terminal → cancelled + best-effort tombstone) ----
 
 
