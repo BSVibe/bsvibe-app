@@ -45,10 +45,12 @@ from backend.workflow.infrastructure.db import (
     ExecutionRunHistory,
     RunStatus,
 )
+from backend.workflow.infrastructure.delivery.db import SafeModeStatus
 from backend.workflow.infrastructure.repositories import (
     SqlAlchemyDecisionRepository,
     SqlAlchemyDeliverableRepository,
     SqlAlchemyRunRepository,
+    SqlAlchemySafeModeQueueRepository,
 )
 
 logger = structlog.get_logger(__name__)
@@ -121,6 +123,26 @@ async def _resolve_pending_decisions(
     return resolved
 
 
+async def _resolve_pending_safe_mode_items(session: AsyncSession, run: ExecutionRun) -> list[str]:
+    """Deny a run's PENDING safe-mode approval items.
+
+    A cancelled run's deliverables will never be delivered, so their approval
+    cards must drop off the Decisions queue — the same orphaned-half fix as
+    :func:`_resolve_pending_decisions`, for the ``safe_mode_queue_items`` surface
+    (``GET /api/v1/checkpoints`` → ``list_pending_by_workspace``). Terminal deny,
+    no downstream dispatch (an un-delivered pending item has nothing to undo)."""
+    queue = SqlAlchemySafeModeQueueRepository(session)
+    now = datetime.now(tz=UTC)
+    resolved: list[str] = []
+    for item in await queue.list_pending_for_run(workspace_id=run.workspace_id, run_id=run.id):
+        item.status = SafeModeStatus.DENIED
+        item.decided_at = now
+        resolved.append(str(item.id))
+    if resolved:
+        await session.flush()
+    return resolved
+
+
 @dataclass
 class CancelOutcome:
     """Result of :func:`cancel_run`."""
@@ -129,6 +151,7 @@ class CancelOutcome:
     cancelled: bool
     status: str | None  # final run status value, or None when not found
     decisions_resolved: list[str] = field(default_factory=list)
+    safe_mode_items_resolved: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -141,6 +164,7 @@ class DiscardOutcome:
     deliverables_retracted: list[str] = field(default_factory=list)
     deliverables_need_compensation: list[str] = field(default_factory=list)
     decisions_resolved: list[str] = field(default_factory=list)
+    safe_mode_items_resolved: list[str] = field(default_factory=list)
 
 
 async def cancel_run(
@@ -169,6 +193,7 @@ async def cancel_run(
         return CancelOutcome(found=True, cancelled=False, status=run.status.value)
     await _cancel(session, run, reason=reason)
     resolved = await _resolve_pending_decisions(session, run, reason=reason, actor_id=actor_id)
+    sm_resolved = await _resolve_pending_safe_mode_items(session, run)
     # Cancel leaves the run's worktree on disk (unlike discard, which removes it
     # entirely). If the run was cancelled while a verify-time ``merge main`` was
     # mid-flight, the worktree carries ``<<<<<<<`` markers + MERGE_HEAD — abort
@@ -179,6 +204,7 @@ async def cancel_run(
         cancelled=True,
         status=RunStatus.CANCELLED.value,
         decisions_resolved=resolved,
+        safe_mode_items_resolved=sm_resolved,
     )
 
 
@@ -207,6 +233,7 @@ async def discard_run(
     decisions_resolved = await _resolve_pending_decisions(
         session, run, reason=reason, actor_id=actor_id
     )
+    safe_mode_resolved = await _resolve_pending_safe_mode_items(session, run)
 
     deliverables = SqlAlchemyDeliverableRepository(session)
     now = datetime.now(tz=UTC)
@@ -233,6 +260,7 @@ async def discard_run(
         deliverables_retracted=len(retracted),
         deliverables_need_compensation=len(need_compensation),
         decisions_resolved=len(decisions_resolved),
+        safe_mode_items_resolved=len(safe_mode_resolved),
     )
     return DiscardOutcome(
         run_id=run.id,
@@ -241,6 +269,7 @@ async def discard_run(
         deliverables_retracted=retracted,
         deliverables_need_compensation=need_compensation,
         decisions_resolved=decisions_resolved,
+        safe_mode_items_resolved=safe_mode_resolved,
     )
 
 
@@ -268,6 +297,7 @@ async def cancel_product_runs(
         if await _cancel(session, run, reason=reason):
             cancelled += 1
         await _resolve_pending_decisions(session, run, reason=reason, actor_id=actor_id)
+        await _resolve_pending_safe_mode_items(session, run)
     return cancelled
 
 
