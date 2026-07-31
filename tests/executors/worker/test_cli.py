@@ -31,8 +31,57 @@ def test_build_bsvibe_parser_lists_subcommands() -> None:
 def test_build_bsvibe_worker_parser_lists_subcommands() -> None:
     parser = cli_mod.build_bsvibe_worker_parser()
     help_text = parser.format_help()
-    for cmd in ("register", "run", "logout"):
+    for cmd in ("register", "run", "logout", "claude-login"):
         assert cmd in help_text
+
+
+def test_claude_login_cmd_routes_manual(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: dict[str, Any] = {}
+
+    def _fake_run_claude_login(*, manual: bool) -> Any:
+        calls["manual"] = manual
+
+        class _R:
+            access_token = "sk-ant-oat01-X"
+            expires_at_ms = 123
+
+        return _R()
+
+    monkeypatch.setattr(cli_mod, "run_claude_login", _fake_run_claude_login)
+
+    rc = cli_mod.run_bsvibe_worker_cli(["claude-login", "--manual"])
+    assert rc == 0
+    assert calls["manual"] is True
+
+
+def test_claude_login_cmd_default_loopback(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: dict[str, Any] = {}
+
+    def _fake_run_claude_login(*, manual: bool) -> Any:
+        calls["manual"] = manual
+
+        class _R:
+            access_token = "sk-ant-oat01-X"
+            expires_at_ms = 123
+
+        return _R()
+
+    monkeypatch.setattr(cli_mod, "run_claude_login", _fake_run_claude_login)
+
+    rc = cli_mod.run_bsvibe_worker_cli(["claude-login"])
+    assert rc == 0
+    assert calls["manual"] is False
+
+
+def test_claude_login_cmd_nonzero_on_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    from backend.executors.worker.claude_login import ClaudeLoginError
+
+    def _fail(*, manual: bool) -> Any:  # noqa: ARG001
+        raise ClaudeLoginError("boom")
+
+    monkeypatch.setattr(cli_mod, "run_claude_login", _fail)
+    rc = cli_mod.run_bsvibe_worker_cli(["claude-login"])
+    assert rc == 1
 
 
 def test_login_writes_credentials(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

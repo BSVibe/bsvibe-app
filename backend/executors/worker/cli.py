@@ -33,6 +33,8 @@ from datetime import UTC, datetime
 import httpx
 import structlog
 
+from backend.executors.worker.claude_auth import default_oauth_path as default_claude_oauth_path
+from backend.executors.worker.claude_login import ClaudeLoginError, run_claude_login
 from backend.executors.worker.config import get_worker_settings
 from backend.executors.worker.credentials import (
     CredentialsNotFound,
@@ -212,6 +214,32 @@ def _cmd_run(args: argparse.Namespace) -> int:  # noqa: ARG001
     return 0
 
 
+def _cmd_claude_login(args: argparse.Namespace) -> int:
+    """Mint the worker its OWN Claude OAuth token (independent refresh family).
+
+    Runs an authorize-code PKCE flow against the Claude Code OAuth app and
+    persists the token pair into ``~/.bsvibe/claude_oauth.json``. Because it is a
+    fresh grant (not a copy of the CLI's creds) the worker no longer shares a
+    refresh family with the interactive login — eliminating the mutual-burn.
+    """
+    manual = bool(getattr(args, "manual", False))
+    try:
+        if manual:
+            print("Manual (out-of-band) Claude sign-in — follow the printed URL.", file=sys.stderr)
+        else:
+            print("Opening browser for Claude sign-in …", file=sys.stderr)
+        result = run_claude_login(manual=manual)
+    except ClaudeLoginError as exc:
+        print(f"claude-login failed: {exc}", file=sys.stderr)
+        return 1
+    print(
+        f"Claude token saved to {default_claude_oauth_path()} "
+        f"(expires_at={result.expires_at_ms}). Restart the worker to pick it up.",
+        file=sys.stderr,
+    )
+    return 0
+
+
 def _cmd_worker_status(args: argparse.Namespace) -> int:  # noqa: ARG001
     """Print the persisted worker config + token presence — Lift E12.
 
@@ -282,6 +310,20 @@ def build_bsvibe_worker_parser() -> argparse.ArgumentParser:
 
     p_logout = sub.add_parser("logout", help="Clear the local worker token.")
     p_logout.set_defaults(func=_cmd_logout)
+
+    p_claude = sub.add_parser(
+        "claude-login",
+        help="Mint the worker's OWN Claude OAuth token (independent refresh family).",
+    )
+    p_claude.add_argument(
+        "--manual",
+        action="store_true",
+        help=(
+            "Remote/headless: print the authorize URL and paste back the "
+            "`code#state` (or redirect URL) — no loopback server."
+        ),
+    )
+    p_claude.set_defaults(func=_cmd_claude_login)
 
     return parser
 
