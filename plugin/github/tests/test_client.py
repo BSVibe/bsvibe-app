@@ -34,11 +34,46 @@ class TestOpenPr:
 
     @respx.mock
     async def test_open_pr_raises_on_error(self, client):
+        # A 422 with no existing PR for the head is a genuine validation error —
+        # after the idempotency lookup finds nothing, open_pr still raises.
         respx.post(f"{API}/repos/o/r/pulls").mock(
             return_value=httpx.Response(422, json={"message": "bad"})
         )
+        respx.get(url__startswith=f"{API}/repos/o/r/pulls").mock(
+            return_value=httpx.Response(200, json=[])
+        )
         with pytest.raises(httpx.HTTPStatusError):
             await client.open_pr("o", "r", head="feat", base="main", title="T", body="B")
+
+    @respx.mock
+    async def test_open_pr_reuses_existing_pr_on_422(self, client):
+        # Re-deliver (conflict-resolution re-push) to a branch that already has a
+        # PR → 422; open_pr must return the existing OPEN PR, not raise.
+        post = respx.post(f"{API}/repos/o/r/pulls").mock(
+            return_value=httpx.Response(
+                422,
+                json={"errors": [{"message": "A pull request already exists for o:feat."}]},
+            )
+        )
+        get = respx.get(url__startswith=f"{API}/repos/o/r/pulls").mock(
+            return_value=httpx.Response(200, json=[{"number": 2, "state": "open"}])
+        )
+        data = await client.open_pr("o", "r", head="feat", base="main", title="T", body="B")
+        assert data["number"] == 2
+        assert post.called and get.called
+
+    @respx.mock
+    async def test_open_pr_head_filter_is_owner_qualified(self, client):
+        respx.post(f"{API}/repos/o/r/pulls").mock(
+            return_value=httpx.Response(422, json={"errors": [{"message": "already exists"}]})
+        )
+        get = respx.get(url__startswith=f"{API}/repos/o/r/pulls").mock(
+            return_value=httpx.Response(200, json=[{"number": 9}])
+        )
+        # A slash-bearing branch is still filtered as owner:branch.
+        await client.open_pr("o", "r", head="bsvibe/run-abc", base="main", title="T")
+        assert get.calls.last.request.url.params.get("head") == "o:bsvibe/run-abc"
+        assert get.calls.last.request.url.params.get("state") == "open"
 
 
 class TestUpdateAndGetPr:

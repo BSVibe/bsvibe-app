@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any, Literal
+from urllib.parse import quote
 
 import httpx
 
@@ -83,12 +84,45 @@ class GithubClient:
     async def open_pr(
         self, owner: str, repo: str, *, head: str, base: str, title: str, body: str = ""
     ) -> dict[str, Any]:
+        """Open a PR — idempotent on the head branch.
+
+        A re-delivery (e.g. after a merge-conflict re-drive pushes the resolution
+        to the SAME branch) calls this again for a head that already has an open
+        PR; GitHub answers ``POST /pulls`` with 422 "A pull request already
+        exists". The push already landed, so on that 422 we look up the existing
+        open PR for the head and return it instead of raising. A 422 with no
+        existing PR (a genuine validation error) still raises via ``_json``.
+        """
         resp = await self._request(
             "POST",
             f"/repos/{owner}/{repo}/pulls",
             json_body={"head": head, "base": base, "title": title, "body": body},
         )
+        if resp.status_code == 422:
+            existing = await self._find_open_pr_for_head(owner, repo, head)
+            if existing is not None:
+                return existing
         return self._json(resp)
+
+    async def _find_open_pr_for_head(
+        self, owner: str, repo: str, head: str
+    ) -> dict[str, Any] | None:
+        """Return the first OPEN PR whose head is ``head`` (``None`` if none).
+
+        The list-pulls ``head`` filter expects ``owner:branch`` — qualify a bare
+        branch name with the repo owner."""
+        head_q = head if ":" in head else f"{owner}:{head}"
+        resp = await self._request(
+            "GET",
+            f"/repos/{owner}/{repo}/pulls?head={quote(head_q, safe='')}&state=open",
+        )
+        if resp.status_code != 200:
+            return None
+        prs = resp.json()
+        if isinstance(prs, list) and prs:
+            first: dict[str, Any] = prs[0]
+            return first
+        return None
 
     async def update_pr(self, owner: str, repo: str, number: int, **fields: Any) -> dict[str, Any]:
         payload = {k: v for k, v in fields.items() if v is not None}
