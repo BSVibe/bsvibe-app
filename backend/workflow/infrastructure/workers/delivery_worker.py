@@ -267,6 +267,13 @@ async def persist_compensation_handles(
     return len(entries)
 
 
+def _delivery_succeeded(result: DeliveryResult) -> bool:
+    """True when the dispatch actually DELIVERED — no top-level error and at
+    least one outbound action succeeded. A wholly-failed dispatch (nothing
+    shipped) must NOT auto-resolve+ship the run."""
+    return result.error is None and any(action.succeeded for action in result.actions)
+
+
 async def dispatch_delivery(
     dispatcher: PluginDispatchAdapter,
     *,
@@ -274,6 +281,7 @@ async def dispatch_delivery(
     deliverable_id: uuid.UUID,
     artifact_type: str,
     session_factory: async_sessionmaker[AsyncSession] | None = None,
+    session: AsyncSession | None = None,
 ) -> DeliveryResult:
     """The single outbound-dispatch code path shared by the worker + approve.
 
@@ -288,6 +296,18 @@ async def dispatch_delivery(
     should omit the factory and call :func:`persist_compensation_handles`
     directly on that session — keeps the persist step inside the caller's
     transaction.
+
+    Run auto-resolve seam: on delivery SUCCESS this also resolves the
+    originating run's pending review Decision (``human_review_required`` /
+    ``verification_failed``) and ships the run — see
+    :func:`~backend.workflow.application.run_delivery_resolution.auto_resolve_run_on_delivery`
+    for why. This is the SINGLE seam every delivery-success path funnels
+    through (the DeliveryWorker direct path via ``session_factory``; the
+    REST / MCP / Telegram Safe-Mode approve handlers via ``session``), so the
+    two founder-gates can no longer decouple into a run stuck ``RUNNING`` while
+    its work already shipped. It is a guarded no-op when there is no such
+    pending Decision, so the normal verified path is untouched; and idempotent
+    (a repeat delivery of an already-shipped run does nothing).
     """
     result = await dispatcher.dispatch(
         workspace_id=workspace_id,
@@ -300,13 +320,37 @@ async def dispatch_delivery(
         workspace_id=str(workspace_id),
         actions=len(result.actions),
     )
+    if not _delivery_succeeded(result):
+        # Nothing shipped — never ship the run off a failed dispatch. (The
+        # compensation-handle capture below is likewise a no-op on failure.)
+        if session_factory is not None:
+            async with session_factory() as owned:
+                await persist_compensation_handles(
+                    owned, deliverable_id=deliverable_id, result=result
+                )
+        return result
+
+    # Lazy import keeps the heavy AgentRunner graph (reached transitively by the
+    # auto-resolve helper) off this worker module's import time.
+    from backend.workflow.application.run_delivery_resolution import (  # noqa: PLC0415
+        auto_resolve_run_on_delivery,
+    )
+
     if session_factory is not None:
-        async with session_factory() as session:
+        async with session_factory() as owned:
             await persist_compensation_handles(
-                session,
+                owned,
                 deliverable_id=deliverable_id,
                 result=result,
             )
+            if await auto_resolve_run_on_delivery(owned, deliverable_id=deliverable_id):
+                await owned.commit()
+    elif session is not None:
+        # Caller-owned session (REST / MCP / Telegram approve): resolve within
+        # their transaction and commit our writes (these handlers already
+        # multi-commit per request — approve, then dispatch, then persist).
+        if await auto_resolve_run_on_delivery(session, deliverable_id=deliverable_id):
+            await session.commit()
     return result
 
 
