@@ -164,6 +164,146 @@ async def test_create_requires_write_scope(db, workspace_id, user_id, registry, 
             )
 
 
+# ---------------------------------------------------------------------------
+# bsvibe_connectors_set_delivery_config — PWA/REST parity (PATCH /connectors/{id})
+# ---------------------------------------------------------------------------
+async def _create_github(
+    db, registry, *, workspace_id, user_id, delivery_config: dict[str, Any]
+) -> str:
+    async with db() as s:
+        ctx = ToolContext(
+            principal=_principal(
+                workspace_id=workspace_id, user_id=user_id, scopes=("mcp:read", "mcp:write")
+            ),
+            session=s,
+        )
+        created = await registry.call_tool(
+            "bsvibe_connectors_create",
+            {
+                "connector": "github",
+                "signing_secret": "shh",
+                "external_ref": "BSVibe/bsvibe-app",
+                "delivery_config": delivery_config,
+            },
+            ctx,
+        )
+    return str(created["id"])
+
+
+async def test_set_delivery_config_shallow_merges_and_persists(
+    db, workspace_id, user_id, registry, seeded
+) -> None:
+    """Sets delivery_config.repo (the auto-merge target) while preserving other
+    stored keys — mirrors the REST PATCH shallow-merge."""
+    cid = await _create_github(
+        db,
+        registry,
+        workspace_id=workspace_id,
+        user_id=user_id,
+        delivery_config={"base_branch": "dev"},
+    )
+    async with db() as s:
+        ctx = ToolContext(
+            principal=_principal(
+                workspace_id=workspace_id, user_id=user_id, scopes=("mcp:read", "mcp:write")
+            ),
+            session=s,
+        )
+        out = await registry.call_tool(
+            "bsvibe_connectors_set_delivery_config",
+            {"connector_id": cid, "delivery_config": {"repo": "BSVibe/bsvibe-app"}},
+            ctx,
+        )
+    # repo added, base_branch preserved (shallow merge, not replace).
+    assert out["delivery_config"]["repo"] == "BSVibe/bsvibe-app"
+    assert out["delivery_config"]["base_branch"] == "dev"
+    # Persisted.
+    async with db() as s:
+        row = await s.get(ConnectorAccountRow, uuid.UUID(cid))
+        assert row.delivery_config["repo"] == "BSVibe/bsvibe-app"
+        assert row.delivery_config["base_branch"] == "dev"
+
+
+async def test_set_delivery_config_redacts_secret_keys(
+    db, workspace_id, user_id, registry, seeded
+) -> None:
+    """The response drops secret-bearing keys (webhook_secret &c.) but the STORED
+    row keeps them (the ingress still needs them) — parity with REST redaction."""
+    cid = await _create_github(
+        db,
+        registry,
+        workspace_id=workspace_id,
+        user_id=user_id,
+        delivery_config={"webhook_secret": "s3cr3t"},
+    )
+    async with db() as s:
+        ctx = ToolContext(
+            principal=_principal(
+                workspace_id=workspace_id, user_id=user_id, scopes=("mcp:read", "mcp:write")
+            ),
+            session=s,
+        )
+        out = await registry.call_tool(
+            "bsvibe_connectors_set_delivery_config",
+            {"connector_id": cid, "delivery_config": {"repo": "o/n"}},
+            ctx,
+        )
+    assert "webhook_secret" not in out["delivery_config"]
+    assert out["delivery_config"]["repo"] == "o/n"
+    async with db() as s:
+        row = await s.get(ConnectorAccountRow, uuid.UUID(cid))
+        assert row.delivery_config["webhook_secret"] == "s3cr3t"  # stored, not lost
+
+
+async def test_set_delivery_config_cross_workspace_404(
+    db, workspace_id, user_id, registry, seeded
+) -> None:
+    cid = await _create_github(
+        db,
+        registry,
+        workspace_id=workspace_id,
+        user_id=user_id,
+        delivery_config={},
+    )
+    other_ws = uuid.uuid4()
+    async with db() as s:
+        ctx = ToolContext(
+            principal=_principal(
+                workspace_id=other_ws, user_id=user_id, scopes=("mcp:read", "mcp:write")
+            ),
+            session=s,
+        )
+        with pytest.raises(ToolError, match="connector not found"):
+            await registry.call_tool(
+                "bsvibe_connectors_set_delivery_config",
+                {"connector_id": cid, "delivery_config": {"repo": "o/n"}},
+                ctx,
+            )
+
+
+async def test_set_delivery_config_requires_write_scope(
+    db, workspace_id, user_id, registry, seeded
+) -> None:
+    cid = await _create_github(
+        db,
+        registry,
+        workspace_id=workspace_id,
+        user_id=user_id,
+        delivery_config={},
+    )
+    async with db() as s:
+        ctx = ToolContext(
+            principal=_principal(workspace_id=workspace_id, user_id=user_id, scopes=("mcp:read",)),
+            session=s,
+        )
+        with pytest.raises(Exception, match="requires scope"):
+            await registry.call_tool(
+                "bsvibe_connectors_set_delivery_config",
+                {"connector_id": cid, "delivery_config": {"repo": "o/n"}},
+                ctx,
+            )
+
+
 async def test_create_rejects_unknown_connector(
     db, workspace_id, user_id, registry, seeded
 ) -> None:
