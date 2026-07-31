@@ -46,6 +46,16 @@ _IMPORTED_COUNT_KEYS = (
     "pages_count",
     "imported_count",
 )
+# Secret-bearing delivery_config keys — redacted response-side only (the stored
+# row keeps them so the ingress can still verify signatures). Mirrors the REST
+# ``_SECRET_DELIVERY_KEYS`` in ``backend/api/v1/connectors.py`` so MCP + PWA are
+# consistent (previously the MCP serializer echoed these unredacted).
+_SECRET_DELIVERY_KEYS = frozenset({"webhook_secret", "signing_secret", "client_secret"})
+
+
+def _public_delivery_config(cfg: dict[str, Any]) -> dict[str, Any]:
+    """A copy of ``cfg`` with secret-bearing keys dropped (response-side only)."""
+    return {k: v for k, v in cfg.items() if k not in _SECRET_DELIVERY_KEYS}
 
 
 class _Envelope(RootModel[Any]):
@@ -68,7 +78,7 @@ def _row_to_dict(row: ConnectorAccountRow) -> dict[str, Any]:
         "connector": row.connector,
         "external_ref": row.external_ref,
         "is_active": row.is_active,
-        "delivery_config": row.delivery_config,
+        "delivery_config": _public_delivery_config(row.delivery_config or {}),
         "token_hint": _token_hint(row.webhook_token),
         "outbound": bool(info and info.outbound),
         "importable": bool(info and info.importable),
@@ -251,6 +261,32 @@ async def _h_delete(args: ConnectorsDeleteInput, ctx: ToolContext) -> Any:
     row.is_active = False
     await ctx.session.commit()
     return ConnectorsDeleteOutput(revoked=True, connector_id=str(args.connector_id))
+
+
+# ---------------------------------------------------------------------------
+# bsvibe_connectors_set_delivery_config — mirrors PATCH /connectors/{id}
+# ---------------------------------------------------------------------------
+class ConnectorsSetDeliveryConfigInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    connector_id: uuid.UUID
+    delivery_config: dict[str, Any] = Field(
+        default_factory=dict,
+        description=(
+            "Partial delivery_config to shallow-merge into the connector's stored "
+            "config (unspecified keys are preserved). For GitHub PR delivery + "
+            'auto-merge, set {"repo": "owner/name"} (and optionally '
+            '"base_branch"). Secret keys are redacted in the response.'
+        ),
+    )
+
+
+async def _h_set_delivery_config(args: ConnectorsSetDeliveryConfigInput, ctx: ToolContext) -> Any:
+    row = await _resolve_connector(ctx, args.connector_id)
+    # Shallow-merge, reassigning a fresh dict so the SQLAlchemy JSON column
+    # detects the change (mirrors the REST PATCH handler exactly).
+    row.delivery_config = {**(row.delivery_config or {}), **args.delivery_config}
+    await ctx.session.commit()
+    return _row_to_dict(row)
 
 
 # ---------------------------------------------------------------------------
@@ -542,6 +578,23 @@ def register_connectors_tools(registry: ToolRegistry) -> None:
             handler=_h_delete,
             required_scopes=("mcp:write",),
             audit_event="bsvibe.mcp.connectors_delete.invoked",
+        )
+    )
+    registry.register(
+        Tool(
+            name="bsvibe_connectors_set_delivery_config",
+            description=(
+                "Set a connector's delivery_config (partial shallow-merge) — the "
+                "MCP equivalent of the PWA's connector delivery settings / REST "
+                "PATCH /connectors/{id}. Use it to point GitHub PR delivery + "
+                'auto-merge at a repo: {"connector_id": "...", "delivery_config": '
+                '{"repo": "owner/name"}}. Secret keys are redacted in the response.'
+            ),
+            input_schema=ConnectorsSetDeliveryConfigInput,
+            output_schema=_Envelope,
+            handler=_h_set_delivery_config,
+            required_scopes=("mcp:write",),
+            audit_event="bsvibe.mcp.connectors_set_delivery_config.invoked",
         )
     )
     registry.register(
