@@ -44,9 +44,9 @@ def test_make_pkce_pair_url_safe_base64() -> None:
     assert all(c.isalnum() or c in "-_" for c in challenge)
 
 
-def test_authorize_url_has_full_cli_scope_and_pkce() -> None:
+def test_authorize_url_scope_and_pkce() -> None:
     url = make_claude_authorize_url(
-        redirect_uri="https://platform.claude.com/oauth/code/callback",
+        redirect_uri="http://localhost:60400/callback",
         challenge="CHALLENGE123",
         state="STATE456",
     )
@@ -55,24 +55,15 @@ def test_authorize_url_has_full_cli_scope_and_pkce() -> None:
     # Static Claude Code OAuth client id — same one the CLI + refresh flow use.
     assert q["client_id"] == ["9d1c250a-e61b-44d9-88ed-5944d1962f5e"]
     assert q["response_type"] == ["code"]
-    assert q["code"] == ["true"]  # display-code mode for remote paste-back
+    assert q["code"] == ["true"]
     assert q["code_challenge"] == ["CHALLENGE123"]
     assert q["code_challenge_method"] == ["S256"]
     assert q["state"] == ["STATE456"]
-    assert q["redirect_uri"] == ["https://platform.claude.com/oauth/code/callback"]
-    # The full CLI scope is what mints a REFRESHING token (setup-token's
-    # user:inference alone is not enough).
-    scope = q["scope"][0]
-    for needed in (
-        "org:create_api_key",
-        "user:profile",
-        "user:inference",
-        "user:sessions:claude_code",
-        "user:mcp_servers",
-        "user:file_upload",
-    ):
-        assert needed in scope, f"scope missing {needed!r}: {scope!r}"
-    assert scope == _CLAUDE_SCOPE
+    assert q["redirect_uri"] == ["http://localhost:60400/callback"]
+    # MEASURED: the authorize endpoint rejects the full CLI scope set for a raw
+    # URL; user:inference alone is accepted AND yields a refreshing token.
+    assert q["scope"] == ["user:inference"]
+    assert _CLAUDE_SCOPE == "user:inference"
 
 
 # --------------------------------------------------------------------------- #
@@ -118,10 +109,13 @@ def test_parse_callback_hash_empty_code_raises() -> None:
 # Manual (remote paste-back) flow
 # --------------------------------------------------------------------------- #
 def _fake_exchanger(recorder: dict[str, object]):
-    def _exchange(*, code: str, code_verifier: str, redirect_uri: str) -> dict[str, object]:
+    def _exchange(
+        *, code: str, code_verifier: str, redirect_uri: str, state: str
+    ) -> dict[str, object]:
         recorder["code"] = code
         recorder["code_verifier"] = code_verifier
         recorder["redirect_uri"] = redirect_uri
+        recorder["state"] = state
         return {
             "access_token": "sk-ant-oat01-NEWACCESS",
             "refresh_token": "sk-ant-ort01-NEWREFRESH",
@@ -147,23 +141,33 @@ def test_perform_manual_happy_path_returns_token() -> None:
     assert result.access_token == "sk-ant-oat01-NEWACCESS"
     assert result.refresh_token == "sk-ant-ort01-NEWREFRESH"
     assert result.expires_at_ms == 1_000_000 + 3600 * 1000
-    # The exchange used the pasted code, our verifier, and the manual redirect.
+    # The exchange used the pasted code, our verifier, a loopback redirect, and
+    # the GENERATED state (which the token endpoint validates).
     assert rec["code"] == "PASTEDCODE"
-    assert rec["redirect_uri"] == "https://platform.claude.com/oauth/code/callback"
+    assert str(rec["redirect_uri"]).startswith("http://localhost:")  # type: ignore[arg-type]
+    assert str(rec["redirect_uri"]).endswith("/callback")  # type: ignore[arg-type]
+    assert rec["state"] == "FIXEDSTATE"
     assert isinstance(rec["code_verifier"], str) and len(rec["code_verifier"]) >= 43  # type: ignore[arg-type]
-    # The authorize URL (with full, URL-encoded scope) was surfaced to the operator.
+    # The authorize URL was surfaced to the operator with the measured scope.
     assert any("claude.com/cai/oauth/authorize" in m for m in emitted)
-    assert any("sessions%3Aclaude_code" in m for m in emitted)
+    assert any("scope=user%3Ainference" in m for m in emitted)
 
 
-def test_perform_manual_state_mismatch_raises() -> None:
-    with pytest.raises(ClaudeLoginError, match="state"):
-        perform_claude_login_manual(
-            read_input=lambda: "CODE#WRONGSTATE",
-            emit=lambda _m: None,
-            exchanger=_fake_exchanger({}),
-            state_factory=lambda: "EXPECTEDSTATE",
-        )
+def test_perform_manual_mangled_pasted_state_still_succeeds() -> None:
+    # MEASURED: a pasted redirect URL can carry a mangled `state` (copy artifact).
+    # The exchange uses the GENERATED state (server-validated), so a pasted-state
+    # mismatch is a warning, not a hard failure.
+    rec: dict[str, object] = {}
+    result = perform_claude_login_manual(
+        read_input=lambda: "CODE#EXPECTEDSTATEclient_id%3D9d1c",
+        emit=lambda _m: None,
+        exchanger=_fake_exchanger(rec),
+        state_factory=lambda: "EXPECTEDSTATE",
+        now_ms=lambda: 0,
+    )
+    assert result.access_token == "sk-ant-oat01-NEWACCESS"
+    assert rec["code"] == "CODE"
+    assert rec["state"] == "EXPECTEDSTATE"  # generated state, not the pasted one
 
 
 def test_perform_manual_bare_code_skips_state_check() -> None:
@@ -181,7 +185,9 @@ def test_perform_manual_bare_code_skips_state_check() -> None:
 
 
 def test_perform_manual_missing_refresh_token_raises() -> None:
-    def _no_refresh(*, code: str, code_verifier: str, redirect_uri: str) -> dict[str, object]:  # noqa: ARG001
+    def _no_refresh(
+        *, code: str, code_verifier: str, redirect_uri: str, state: str
+    ) -> dict[str, object]:  # noqa: ARG001
         return {"access_token": "A", "expires_in": 3600}  # no refresh_token
 
     with pytest.raises(ClaudeLoginError, match="refresh_token"):
@@ -216,8 +222,9 @@ def test_perform_loopback_happy_path() -> None:
     )
     assert result.access_token == "sk-ant-oat01-NEWACCESS"
     assert rec["code"] == "LOOPCODE"
+    assert rec["state"] == captured_state["state"]
     # Loopback redirect must be the exact localhost:port the callback listened on.
-    assert rec["redirect_uri"] == "http://127.0.0.1:60400/callback"
+    assert rec["redirect_uri"] == "http://localhost:60400/callback"
 
 
 def test_perform_loopback_state_mismatch_raises() -> None:
@@ -319,7 +326,7 @@ def test_http_exchange_code_posts_authorization_code(monkeypatch: pytest.MonkeyP
     monkeypatch.setattr(_ur, "urlopen", _fake_urlopen)
 
     payload = mod._http_exchange_code(
-        code="CODE", code_verifier="VER", redirect_uri="https://rd/cb"
+        code="CODE", code_verifier="VER", redirect_uri="https://rd/cb", state="ST8"
     )
     assert payload["access_token"] == "A"
     assert seen["url"] == "https://platform.claude.com/v1/oauth/token"
@@ -327,6 +334,8 @@ def test_http_exchange_code_posts_authorization_code(monkeypatch: pytest.MonkeyP
     assert body["grant_type"] == "authorization_code"  # type: ignore[index]
     assert body["code"] == "CODE"  # type: ignore[index]
     assert body["code_verifier"] == "VER"  # type: ignore[index]
+    # MEASURED: the token endpoint requires `state` in the authorization_code body.
+    assert body["state"] == "ST8"  # type: ignore[index]
     assert "claude-cli" in str(seen["ua"])  # Cloudflare-passing UA
 
 
@@ -340,7 +349,7 @@ def test_http_exchange_code_network_error_raises(monkeypatch: pytest.MonkeyPatch
 
     monkeypatch.setattr(_ur, "urlopen", _boom)
     with pytest.raises(ClaudeLoginError, match="token exchange failed"):
-        mod._http_exchange_code(code="C", code_verifier="V", redirect_uri="r")
+        mod._http_exchange_code(code="C", code_verifier="V", redirect_uri="r", state="s")
 
 
 def test_pick_loopback_port_returns_free_port() -> None:

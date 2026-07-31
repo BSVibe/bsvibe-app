@@ -5,13 +5,17 @@ into `~/.bsvibe/claude_oauth.json`, so it no longer shares a refresh family with
 the interactive `claude` CLI login — eliminating the mutual-burn (shared family →
 CLI's single-use rotation invalidates the worker's copy).
 
-Measured facts this builds on (2026-07-31):
+Measured facts this builds on (2026-07-31, live):
 - Minting an independent token via a fresh authorize flow did NOT burn the CLI
   login (CLI creds byte-identical + `claude auth status` intact afterward) →
   independent token grants coexist on one account.
-- The interactive CLI login's scope (`org:create_api_key user:profile
-  user:inference user:sessions:claude_code user:mcp_servers user:file_upload`) is
-  what yields a REFRESHING token; `setup-token`'s `user:inference` alone does not.
+- The authorize endpoint REJECTS the CLI's full 6-scope set for a raw (non-CLI)
+  URL with "Invalid request format"; **`user:inference` alone is accepted AND
+  returns a refreshing grant** (access + refresh_token + refresh_token_expires_in).
+  That is all the worker needs. MCP tools authenticate via the worker token, not
+  this OAuth scope — verified live (executor tasks completed `success=True`).
+- The token endpoint requires the `state` field in the authorization_code body
+  (unlike refresh_token); omitting it returns 400 "Invalid request format".
 
 ## Preconditions
 - [ ] Host has the worker installed (editable venv at `~/Works/bsvibe-app/main/.venv`).
@@ -19,10 +23,13 @@ Measured facts this builds on (2026-07-31):
       `python3 -c "import json;d=json.load(open('~/.claude/.credentials.json'.replace('~',__import__('os').path.expanduser('~')))['claudeAiOauth'];print(d['refreshToken'][:24])"`
 
 ## Manual (remote/headless) flow — the founder's common path
-- [ ] Run `bsvibe-worker claude-login --manual`. It prints an authorize URL.
-- [ ] Open the URL in a browser, approve. Claude shows `code#state` (or a failing
-      `127.0.0.1/...` redirect whose URL bar carries `?code=&state=`).
-- [ ] Paste the `code#state` (or full redirect URL) back at the prompt.
+- [ ] Run `bsvibe-worker claude-login --manual`. It prints an authorize URL
+      (scope `user:inference`, loopback `redirect_uri`).
+- [ ] Open the URL in a browser, approve. The browser then tries to open a
+      `http://localhost:<port>/callback?code=&state=` address that FAILS to load
+      (expected — nothing listens there).
+- [ ] Copy the FULL failed address from the URL bar (or the bare `code`) and
+      paste it back at the prompt.
 - [ ] Command prints `Claude token saved to ~/.bsvibe/claude_oauth.json (expires_at=…)`.
 
 ## Verify the minted token
