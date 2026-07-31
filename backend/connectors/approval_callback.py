@@ -259,6 +259,9 @@ async def _approve(
             workspace_id=account.workspace_id,
             deliverable_id=deliverable_id,
             artifact_type=artifact_type,
+            # Run auto-resolve seam: on delivery success, resolve this run's
+            # pending review Decision + ship the run within this session.
+            session=session,
         )
         await persist_compensation_handles(session, deliverable_id=deliverable_id, result=result)
     except Exception:  # noqa: BLE001 — irreversible approve; never revert on a dispatch hiccup

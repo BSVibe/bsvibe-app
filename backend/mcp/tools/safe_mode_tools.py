@@ -133,6 +133,9 @@ async def _h_approve(args: SafeModeApproveInput, ctx: ToolContext) -> Any:
                 workspace_id=ctx.principal.workspace_id,
                 deliverable_id=deliverable_id,
                 artifact_type=artifact_type,
+                # Run auto-resolve seam: on delivery success, resolve this run's
+                # pending review Decision + ship the run within this session.
+                session=ctx.session,
             )
             dispatched = True
         except Exception:  # noqa: BLE001 — approval already committed; dispatch is best-effort

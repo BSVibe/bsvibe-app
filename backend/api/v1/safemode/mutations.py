@@ -87,6 +87,9 @@ async def approve_run(
                 workspace_id=workspace_id,
                 deliverable_id=deliverable_id,
                 artifact_type=artifact_type,
+                # Run auto-resolve seam: on delivery success, resolve this run's
+                # pending review Decision + ship the run within the request txn.
+                session=session,
             )
             # B12b — capture compensation_handle onto the Deliverable so the
             # retract endpoint can later revert through @p.compensate. Uses the
@@ -154,6 +157,9 @@ async def approve_item(
         workspace_id=workspace_id,
         deliverable_id=deliverable_id,
         artifact_type=artifact_type,
+        # Run auto-resolve seam: on delivery success, resolve this run's pending
+        # review Decision + ship the run within the request transaction.
+        session=session,
     )
     # B12b — capture compensation_handle onto the Deliverable so the retract
     # endpoint can later revert through @p.compensate. Uses the request-scoped
