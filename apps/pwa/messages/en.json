@@ -110,7 +110,8 @@
     "sent": "Sent. Working on it.",
     "errorSend": "Couldn’t send that. Please try again.",
     "errorNetwork": "Network hiccup. Please try again.",
-    "answerLabel": "Answer"
+    "answerLabel": "Answer",
+    "errorNoProduct": "Create a product first, then send your request."
   },
   "products": {
     "back": "‹ Brief",
@@ -386,7 +387,20 @@
     "timeJustNow": "just now",
     "timeMinutes": "{n}m ago",
     "timeHours": "{n}h ago",
-    "timeDays": "{n}d ago"
+    "timeDays": "{n}d ago",
+    "statusWaitingWorker": "Waiting for a worker",
+    "waitingWorkerHint": "no worker connected",
+    "onboarding": {
+      "title": "Get started",
+      "lead": "Three steps to your first shipped result.",
+      "step1Title": "Create your first product",
+      "step1Body": "A product is a repo or project BSVibe works on. Add one from the Products panel.",
+      "step2Title": "Connect a worker",
+      "step2Body": "BSVibe runs the work on your own machine, where your coding-agent CLI is signed in.",
+      "step2Link": "Set up a worker",
+      "step3Title": "Send your first request",
+      "step3Body": "Use the + button to tell BSVibe what to build."
+    }
   },
   "settings": {
     "heading": "Settings",

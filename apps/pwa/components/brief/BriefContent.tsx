@@ -4,6 +4,7 @@ import type { BriefView } from "@/lib/api/types";
 import { useTranslations } from "next-intl";
 import { useMemo, useState } from "react";
 import NeedsYou from "./NeedsYou";
+import OnboardingChecklist from "./OnboardingChecklist";
 import ShippedSection from "./ShippedSection";
 import WorkingNow from "./WorkingNow";
 
@@ -46,6 +47,16 @@ export default function BriefContent({
   const shipped = useMemo(() => view.stream.filter((s) => s.status === "shipped"), [view.stream]);
   const needsCount = view.needsYou.length;
 
+  // First-run = a brand-new workspace with nothing yet: guide the founder to
+  // first value (create a product → connect a worker → send a request) instead
+  // of an all-empty page. `placeholder` (a read error) is NOT onboarding.
+  const firstRun =
+    !view.placeholder &&
+    !view.hasProducts &&
+    view.working.length === 0 &&
+    view.stream.length === 0 &&
+    view.needsYou.length === 0;
+
   const chips: { id: Filter; label: string; count?: number; amber?: boolean }[] = [
     { id: "all", label: t("filterAll") },
     { id: "needs-you", label: t("filterNeedsYou"), count: needsCount, amber: needsCount > 0 },
@@ -82,8 +93,11 @@ export default function BriefContent({
         </div>
       </header>
 
+      {firstRun && filter === "all" && (
+        <OnboardingChecklist hasProducts={view.hasProducts} hasLiveWorker={view.hasLiveWorker} />
+      )}
       {showNeedsYou && <NeedsYou items={view.needsYou} onResolved={onNeedsYouResolved} />}
-      {showWorking && <WorkingNow items={view.working} />}
+      {showWorking && <WorkingNow items={view.working} hasLiveWorker={view.hasLiveWorker} />}
       {showShipped && <ShippedSection items={shipped} forceExpanded={filter === "shipped"} />}
     </div>
   );

@@ -114,6 +114,8 @@ const VIEW: BriefView = {
     },
   ],
   placeholder: false,
+  hasLiveWorker: true,
+  hasProducts: true,
 };
 
 describe("Brief (unified Work-Home + Decisions) surface", () => {

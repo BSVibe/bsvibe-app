@@ -151,7 +151,15 @@ export function DirectOverlay({ open, onClose }: { open: boolean; onClose: () =>
       window.dispatchEvent(new CustomEvent(DIRECT_SUBMITTED_EVENT));
     } catch (err) {
       setState("error");
-      setError(err instanceof ApiError ? t("errorSend") : t("errorNetwork"));
+      if (err instanceof ApiError) {
+        // A 400 on a zero-product workspace means "create a product first" — show
+        // that actionable (localized) hint instead of the generic send error, so
+        // the FAB doesn't dead-end a new founder. (Localized, not the raw backend
+        // detail string, to keep an English message off a KO surface.)
+        setError(err.status === 400 ? t("errorNoProduct") : t("errorSend"));
+      } else {
+        setError(t("errorNetwork"));
+      }
     }
   }
 

@@ -48,7 +48,9 @@ import type {
   Product,
   Run,
   WorkStreamItem,
+  Worker,
 } from "./types";
+import { listWorkers } from "./workers";
 
 const _RUN_WINDOW = 50;
 
@@ -140,11 +142,13 @@ export async function getBrief(): Promise<BriefView> {
     // deliverables surface degrades to empty on its own ApiError so it failing
     // never blanks the whole surface. The needsYou aggregation already swallows
     // each pending queue's per-surface failure, so it degrades to [] on a blip.
-    const [products, runs, deliverables, pending] = await Promise.all([
+    const [products, runs, deliverables, pending, workers] = await Promise.all([
       listProducts(),
       listRuns(_RUN_WINDOW),
       listDeliverables(_RUN_WINDOW).catch(emptyOnApiError<Deliverable>),
       listPendingDecisions().catch(emptyOnApiError<PendingDecision>),
+      // Onboarding signal — degrades to [] on its own blip (never blanks the Brief).
+      listWorkers().catch(emptyOnApiError<Worker>),
     ]);
 
     return {
@@ -152,13 +156,23 @@ export async function getBrief(): Promise<BriefView> {
       working: activeWorkFrom(runs, products),
       stream: workStreamFrom(runs, deliverables, products),
       placeholder: false,
+      // `heartbeat_fresh` is the authoritative "can take work now" signal (status can lie).
+      hasLiveWorker: workers.some((w) => w.heartbeat_fresh),
+      hasProducts: products.length > 0,
     };
   } catch (error) {
     // A 401 is auth-expired — propagate so the global handler + gate redirect to
     // /login fire, rather than masking it behind calm empty states.
     if (error instanceof ApiError && error.status === 401) throw error;
     if (!(error instanceof ApiError) && !(error instanceof TypeError)) throw error;
-    return { needsYou: [], working: [], stream: [], placeholder: true };
+    return {
+      needsYou: [],
+      working: [],
+      stream: [],
+      placeholder: true,
+      hasLiveWorker: false,
+      hasProducts: false,
+    };
   }
 }
 
