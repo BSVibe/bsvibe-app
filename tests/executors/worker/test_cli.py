@@ -31,8 +31,43 @@ def test_build_bsvibe_parser_lists_subcommands() -> None:
 def test_build_bsvibe_worker_parser_lists_subcommands() -> None:
     parser = cli_mod.build_bsvibe_worker_parser()
     help_text = parser.format_help()
-    for cmd in ("register", "run", "logout", "claude-login"):
+    for cmd in ("register", "run", "logout", "claude-login", "service"):
         assert cmd in help_text
+
+
+def test_service_install_requires_registered_config(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(cli_mod, "load_worker_config", lambda: None)
+    rc = cli_mod.run_bsvibe_worker_cli(["service", "install"])
+    assert rc == 1
+
+
+def test_service_install_builds_and_installs(monkeypatch: pytest.MonkeyPatch) -> None:
+    from backend.executors.worker.credentials import WorkerConfig
+
+    cfg = WorkerConfig(
+        name="mac-mini",
+        capabilities=["claude_code"],
+        labels=[],
+        server_url="https://api.bsvibe.dev",
+        saved_at=0,
+    )
+    monkeypatch.setattr(cli_mod, "load_worker_config", lambda: cfg)
+    monkeypatch.setattr(
+        cli_mod, "platform", type("P", (), {"system": staticmethod(lambda: "Darwin")})
+    )
+    monkeypatch.setattr(cli_mod, "_resolve_worker_exec", lambda: "/repo/.venv/bin/bsvibe-worker")
+    installed: dict[str, Any] = {}
+
+    def _fake_install(plan: Any, *, run: Any) -> None:
+        installed["label"] = plan.unit_path.name
+        installed["content"] = plan.unit_content
+
+    monkeypatch.setattr(cli_mod, "install_service", _fake_install)
+    rc = cli_mod.run_bsvibe_worker_cli(["service", "install", "--repo", "/repo"])
+    assert rc == 0
+    assert installed["label"] == "com.bsvibe.worker.plist"
+    assert "KeepAlive" in installed["content"]
+    assert "BSVIBE_WORKER_TOKEN" not in installed["content"]
 
 
 def test_claude_login_cmd_routes_manual(monkeypatch: pytest.MonkeyPatch) -> None:

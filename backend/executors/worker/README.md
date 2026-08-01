@@ -118,6 +118,23 @@ dev but disappears the moment that terminal closes. For the founder's Mac Mini
 (or any always-on host) install the worker as an OS-managed service so it
 auto-starts at login and auto-restarts on crash — with visible logs.
 
+### Recommended — `bsvibe-worker service` (GitHub-runner style)
+
+After `bsvibe-worker register`, one command generates + installs the right OS
+service (launchd on macOS, systemd on Linux) from your saved config, with
+auto-restart. No placeholders to edit; **no token in the unit file** (the worker
+reads `~/.bsvibe/worker.token` itself), and the unit is written mode `0600`.
+
+```bash
+cd <your bsvibe checkout>
+bsvibe-worker service install     # render + load, auto-restart on crash/reboot
+bsvibe-worker service status
+bsvibe-worker service uninstall
+```
+
+The `{PLACEHOLDER}` example templates below remain as a manual reference / for
+customised setups.
+
 ### macOS (Mac Mini) — launchd
 
 Template: [`launchd/com.bsvibe.worker.plist.example`](launchd/com.bsvibe.worker.plist.example).

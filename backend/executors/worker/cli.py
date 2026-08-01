@@ -25,10 +25,15 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import os
+import platform
+import shutil
+import subprocess
 import sys
 import time
 from collections.abc import Sequence
 from datetime import UTC, datetime
+from pathlib import Path
 
 import httpx
 import structlog
@@ -54,6 +59,13 @@ from backend.executors.worker.credentials import (
 from backend.executors.worker.executors import detect_capabilities
 from backend.executors.worker.login import LoginError, run_login, run_login_manual
 from backend.executors.worker.main import _amain, register
+from backend.executors.worker.service import (
+    ServiceError,
+    build_plan,
+    install_service,
+    service_status,
+    uninstall_service,
+)
 
 logger = structlog.get_logger(__name__)
 
@@ -240,6 +252,64 @@ def _cmd_claude_login(args: argparse.Namespace) -> int:
     return 0
 
 
+def _resolve_worker_exec() -> str:
+    """Absolute path to the ``bsvibe-worker`` entry point to run under the service."""
+    found = shutil.which("bsvibe-worker")
+    if found:
+        return found
+    return str(Path(sys.executable).parent / "bsvibe-worker")
+
+
+def _service_runner(cmd: list[str]) -> None:
+    print("  $ " + " ".join(cmd), file=sys.stderr)
+    subprocess.run(cmd, check=True)  # noqa: S603 — fixed launchctl/systemctl argv
+
+
+def _cmd_service(args: argparse.Namespace) -> int:
+    """Install/uninstall/status the worker as an auto-restart OS service.
+
+    GitHub-Actions-runner style: renders the launchd/systemd unit from the saved
+    register config so the self-hosted worker survives crashes + reboots. The
+    unit carries NO token — ``bsvibe-worker run`` reads ``~/.bsvibe/worker.token``.
+    """
+    config = load_worker_config()
+    if config is None:
+        print(
+            "no worker config — run `bsvibe-worker register --name <name>` first.",
+            file=sys.stderr,
+        )
+        return 1
+    try:
+        plan = build_plan(
+            config,
+            platform=platform.system().lower(),
+            home=Path.home(),
+            exec_path=_resolve_worker_exec(),
+            repo=args.repo or os.getcwd(),
+        )
+    except ServiceError as exc:
+        print(f"service: {exc}", file=sys.stderr)
+        return 1
+
+    action = args.service_action
+    try:
+        if action == "install":
+            install_service(plan, run=_service_runner)
+            print(
+                f"Installed {plan.unit_path} — worker now runs durably with auto-restart.",
+                file=sys.stderr,
+            )
+        elif action == "uninstall":
+            uninstall_service(plan, run=_service_runner)
+            print(f"Uninstalled {plan.unit_path}.", file=sys.stderr)
+        else:  # status
+            service_status(plan, run=_service_runner)
+    except subprocess.CalledProcessError as exc:
+        print(f"service {action} failed: {exc}", file=sys.stderr)
+        return 1
+    return 0
+
+
 def _cmd_worker_status(args: argparse.Namespace) -> int:  # noqa: ARG001
     """Print the persisted worker config + token presence — Lift E12.
 
@@ -324,6 +394,24 @@ def build_bsvibe_worker_parser() -> argparse.ArgumentParser:
         ),
     )
     p_claude.set_defaults(func=_cmd_claude_login)
+
+    p_service = sub.add_parser(
+        "service",
+        help="Install/uninstall the worker as an auto-restart OS service (launchd/systemd).",
+    )
+    svc_sub = p_service.add_subparsers(dest="service_action", required=True)
+    for _act, _help in (
+        ("install", "Render + install the service (durable, auto-restart)."),
+        ("uninstall", "Stop + remove the service."),
+        ("status", "Show the service status."),
+    ):
+        _sp = svc_sub.add_parser(_act, help=_help)
+        _sp.add_argument(
+            "--repo",
+            default=None,
+            help="BSVibe checkout dir the worker runs from (default: current dir).",
+        )
+        _sp.set_defaults(func=_cmd_service)
 
     return parser
 
