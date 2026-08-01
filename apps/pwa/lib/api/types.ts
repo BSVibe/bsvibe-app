@@ -1306,6 +1306,14 @@ export interface BriefView {
   working: ActiveWork[];
   stream: WorkStreamItem[];
   placeholder: boolean;
+  /** Whether the workspace has ≥1 live executor worker (a worker with a fresh
+   *  heartbeat — the authoritative "can take work right now" signal). When
+   *  false, active runs have nothing to pick them up, so the Brief shows an
+   *  honest "waiting for a worker" state instead of an ever-climbing timer. */
+  hasLiveWorker: boolean;
+  /** Whether the workspace has ≥1 product. When false (a brand-new workspace)
+   *  the Brief surfaces the first-run onboarding checklist. */
+  hasProducts: boolean;
 }
 
 // ── Notifications (REAL endpoint /api/v1/notifications/prefs) ──────────────

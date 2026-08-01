@@ -1109,6 +1109,88 @@ main.login {
   color: var(--green-ink);
 }
 
+/* Waiting-for-a-worker: a calm, un-pulsing muted pill (no live worker to pick
+   the run up), distinct from the amber "actively working" tone. */
+.working__pill--neutral {
+  color: var(--ink-3);
+}
+
+/* First-run onboarding checklist — the three steps to first value. */
+.onboarding {
+  margin: 0 0 22px;
+  padding: 18px 20px;
+  border: 1px solid var(--hair);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.onboarding__lead {
+  margin: 2px 0 14px;
+  color: var(--ink-2);
+  font-size: 0.9rem;
+}
+
+.onboarding__steps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.onboarding__step {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.onboarding__marker {
+  flex: none;
+  width: 24px;
+  height: 24px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.8rem;
+  font-weight: 650;
+  color: var(--ink-2);
+  background: var(--accent-bg);
+  border: 1px solid var(--hair);
+}
+
+.onboarding__step--done .onboarding__marker {
+  color: var(--green-ink);
+  background: var(--green-pill-bg);
+}
+
+.onboarding__body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.onboarding__step-title {
+  font-weight: 620;
+  color: var(--ink);
+}
+
+.onboarding__step--done .onboarding__step-title {
+  color: var(--ink-2);
+}
+
+.onboarding__step-desc {
+  font-size: 0.85rem;
+  color: var(--ink-2);
+  line-height: 1.45;
+}
+
+.onboarding__link {
+  color: var(--accent);
+  font-weight: 600;
+}
+
 .working__pulse {
   width: 7px;
   height: 7px;

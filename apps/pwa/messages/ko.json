@@ -110,7 +110,8 @@
     "sent": "전송됨. 작업하고 있어요.",
     "errorSend": "전송하지 못했어요. 다시 시도해 주세요.",
     "errorNetwork": "네트워크 오류. 다시 시도해 주세요.",
-    "answerLabel": "답변"
+    "answerLabel": "답변",
+    "errorNoProduct": "먼저 제품을 만든 뒤 요청을 보내주세요."
   },
   "products": {
     "back": "‹ 요약",
@@ -386,7 +387,20 @@
     "timeJustNow": "방금",
     "timeMinutes": "{n}분 전",
     "timeHours": "{n}시간 전",
-    "timeDays": "{n}일 전"
+    "timeDays": "{n}일 전",
+    "statusWaitingWorker": "워커 대기 중",
+    "waitingWorkerHint": "연결된 워커 없음",
+    "onboarding": {
+      "title": "시작하기",
+      "lead": "첫 결과물까지 3단계예요.",
+      "step1Title": "첫 제품 만들기",
+      "step1Body": "제품은 BSVibe가 작업할 저장소나 프로젝트예요. 제품 패널에서 추가하세요.",
+      "step2Title": "워커 연결하기",
+      "step2Body": "작업은 직접 연결한 컴퓨터에서 실행돼요. 코딩 에이전트 CLI가 로그인된 곳에 워커를 설치하세요.",
+      "step2Link": "워커 설정",
+      "step3Title": "첫 요청 보내기",
+      "step3Body": "+ 버튼으로 무엇을 만들지 알려주세요."
+    }
   },
   "settings": {
     "heading": "설정",

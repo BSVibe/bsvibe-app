@@ -23,7 +23,15 @@ function elapsed(iso: string, t: ReturnType<typeof useTranslations>): string {
   return t("elapsedHours", { n: hours });
 }
 
-export default function WorkingNow({ items }: { items: ActiveWork[] }) {
+export default function WorkingNow({
+  items,
+  hasLiveWorker = true,
+}: {
+  items: ActiveWork[];
+  /** When false, no worker can pick up an active run — show an honest "waiting
+   *  for a worker" state instead of the ever-climbing "Working" timer. */
+  hasLiveWorker?: boolean;
+}) {
   const t = useTranslations("brief");
 
   return (
@@ -34,18 +42,24 @@ export default function WorkingNow({ items }: { items: ActiveWork[] }) {
       ) : (
         <ul className="working__list">
           {items.map((w) => {
-            const tone = STATUS_TONE[w.status];
+            // No live worker → the run is queued, not being worked. Present it
+            // honestly (calm "waiting for a worker" pill + a one-line reason)
+            // rather than a pulsing "Working" that climbs forever.
+            const waiting = !hasLiveWorker;
+            const tone = waiting ? "neutral" : STATUS_TONE[w.status];
             return (
               <li key={w.runId} className="working__card">
                 <Link href={`/runs/${w.runId}`} className="working__card-link">
                   <span className={`working__pill working__pill--${tone}`}>
-                    <span className="working__pulse" aria-hidden="true" />
-                    {t(STATUS_LABEL_KEY[w.status])}
+                    {!waiting && <span className="working__pulse" aria-hidden="true" />}
+                    {waiting ? t("statusWaitingWorker") : t(STATUS_LABEL_KEY[w.status])}
                   </span>
                   <span className="working__title">{w.title ?? t("workingUntitled")}</span>
                   <span className="working__meta">
                     <span className="working__product">{w.productSlug}</span>
-                    <span className="working__elapsed">{elapsed(w.startedAt, t)}</span>
+                    <span className="working__elapsed">
+                      {waiting ? t("waitingWorkerHint") : elapsed(w.startedAt, t)}
+                    </span>
                   </span>
                 </Link>
               </li>

@@ -363,4 +363,26 @@ describe("Direct compose", () => {
       expect(screen.getByText("Couldn’t send that. Please try again.")).toBeInTheDocument();
     });
   });
+
+  it("surfaces an actionable 'create a product first' hint on a 400 (zero-product workspace)", async () => {
+    // The backend 400s a zero-product workspace with a create-a-product detail;
+    // the FAB must not dead-end with the generic send error.
+    global.fetch = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ detail: "workspace has no products" }), {
+          status: 400,
+          headers: { "Content-Type": "application/json" },
+        }),
+    ) as unknown as typeof fetch;
+
+    render(<DirectOverlay open onClose={() => {}} />);
+    await userEvent.type(screen.getByRole("textbox"), "do the thing");
+    fireEvent.click(screen.getByRole("button", { name: "Request" }));
+
+    await waitFor(() => {
+      expect(
+        screen.getByText("Create a product first, then send your request."),
+      ).toBeInTheDocument();
+    });
+  });
 });
