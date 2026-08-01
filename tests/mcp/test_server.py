@@ -127,3 +127,94 @@ async def test_server_call_tool_returns_text_content_with_json_body(
     body = json.loads(text)
     assert isinstance(body, list)
     assert any(p["slug"] == "alpha" for p in body)
+
+
+# --------------------------------------------------------------------------- #
+# Tenant-isolation backstop: MCP must engage the same contextvar + RLS GUC as
+# REST, so per-handler scoping is defense-in-depth rather than the only line.
+# --------------------------------------------------------------------------- #
+from typing import Any  # noqa: E402
+
+from pydantic import BaseModel, RootModel  # noqa: E402
+
+from backend.data.scoping import current_workspace_id  # noqa: E402
+from backend.mcp.api import Tool, ToolContext, ToolRegistry  # noqa: E402
+
+
+class _ProbeIn(BaseModel):
+    model_config = {"extra": "forbid"}
+
+
+class _ProbeEnv(RootModel[Any]):
+    pass
+
+
+def _probe_registry(seen: dict) -> ToolRegistry:
+    async def _probe(_args: _ProbeIn, ctx: ToolContext) -> Any:
+        # Capture the isolation contextvar AS SEEN inside a tool handler.
+        seen["ws"] = current_workspace_id.get()
+        return _ProbeEnv(str(seen["ws"]))
+
+    reg = ToolRegistry()
+    reg.register(
+        Tool(
+            name="_probe_ws",
+            description="probe",
+            input_schema=_ProbeIn,
+            output_schema=_ProbeEnv,
+            handler=_probe,
+            required_scopes=("mcp:read",),
+        )
+    )
+    return reg
+
+
+async def test_call_tool_engages_workspace_contextvar_backstop(
+    db, workspace_id, user_id, seeded
+) -> None:
+    """The ORM auto-filter reads current_workspace_id — MCP must set it during a
+    tool call (it did NOT, leaving all 86 agent tools on single-layer scoping)."""
+    seen: dict = {}
+    server = build_server(session_factory=db, registry=_probe_registry(seen))
+    handler = server.request_handlers[CallToolRequest]
+    principal = _principal(workspace_id=workspace_id, user_id=user_id, scopes=("mcp:read",))
+    token = set_request_principal(principal)
+    try:
+        await handler(
+            CallToolRequest(
+                method="tools/call",
+                params=CallToolRequestParams(name="_probe_ws", arguments={}),
+            )
+        )
+    finally:
+        reset_request_principal(token)
+    assert seen["ws"] == workspace_id
+    # And it must NOT leak past the call (contextvar reset).
+    assert current_workspace_id.get() is None
+
+
+async def test_call_tool_sets_workspace_guc(db, workspace_id, user_id, seeded, monkeypatch) -> None:
+    """MCP must also publish the workspace into the Postgres GUC (RLS layer 3),
+    mirroring REST get_workspace_id — else RLS is fail-open (NULL → all rows)."""
+    import backend.mcp.server as srv
+
+    calls: list = []
+
+    async def _spy_guc(conn: Any, ws: uuid.UUID) -> None:
+        calls.append(ws)
+
+    monkeypatch.setattr(srv, "set_workspace_guc", _spy_guc, raising=False)
+    server = build_server(session_factory=db, registry=_probe_registry({}))
+    handler = server.request_handlers[CallToolRequest]
+    principal = _principal(workspace_id=workspace_id, user_id=user_id, scopes=("mcp:read",))
+    token = set_request_principal(principal)
+    try:
+        await handler(
+            CallToolRequest(
+                method="tools/call",
+                params=CallToolRequestParams(name="_probe_ws", arguments={}),
+            )
+        )
+    finally:
+        reset_request_principal(token)
+    assert calls == [workspace_id]
