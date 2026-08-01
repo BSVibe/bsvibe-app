@@ -18,6 +18,8 @@ from mcp.types import TextContent
 from mcp.types import Tool as McpTool
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
+from backend.data.rls import set_workspace_guc
+from backend.data.scoping import reset_current_workspace_id, set_current_workspace_id
 from backend.mcp.api import McpPrincipal, ToolContext, ToolError, ToolRegistry, ToolScopeDenied
 from backend.mcp.principal import get_request_principal
 from backend.mcp.tools import register_all_tools
@@ -95,6 +97,15 @@ def build_server(
                 f"{name} is not a work tool: a run-scoped task token may act only on its run"
             )
         async with session_factory() as session:
+            # Tenant-isolation defense-in-depth — mirror REST get_workspace_id so
+            # the agent surface is NOT on single-layer per-handler scoping:
+            #   layer 2 — the ORM auto-filter contextvar (backend.data.scoping)
+            #   layer 3 — the Postgres RLS GUC (fail-open when unset → all rows)
+            # Without this a future MCP tool that forgets its workspace filter is a
+            # silent cross-tenant read/write with no net.
+            ws_token = set_current_workspace_id(principal.workspace_id)
+            conn = await session.connection()
+            await set_workspace_guc(conn, principal.workspace_id)
             extras: dict[str, Any] = {}
             if delivery_dispatcher is not None:
                 extras["delivery_dispatcher"] = delivery_dispatcher
@@ -106,10 +117,8 @@ def build_server(
             )
             try:
                 result = await reg.call_tool(name, arguments or {}, ctx)
-            except ToolScopeDenied:
-                raise
-            except ToolError:
-                raise
+            finally:
+                reset_current_workspace_id(ws_token)
         return [TextContent(type="text", text=json.dumps(result, default=str))]
 
     return server
