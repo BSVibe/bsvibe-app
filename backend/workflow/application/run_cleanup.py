@@ -184,6 +184,72 @@ async def reap_terminal_run_workspaces(
     return reaped
 
 
+async def reap_orphan_product_workspaces(
+    session: AsyncSession,
+    *,
+    remover: Callable[[uuid.UUID], Awaitable[None]] | None = None,
+    products_root: Path | None = None,
+    grace_s: float = _ORPHAN_GRACE_S,
+) -> list[uuid.UUID]:
+    """Reclaim ``var/products/<product_id>`` for every product whose row is GONE
+    — the sweep that bounds ``var/products`` to the set of live products.
+
+    The delete handler removes the repo inline, so this is the backstop for the
+    products deleted before that existed (18 orphans holding 300MB — 90% of
+    ``var/products`` — were found in production) and for any inline failure.
+
+    Mirrors :func:`reap_terminal_run_workspaces`: a dir must be older than
+    ``grace_s`` to be reaped. The repo is provisioned right after the row
+    commits, so the race is already tiny, but the grace window removes it
+    entirely at no cost. A non-UUID dir is never touched.
+    """
+    from backend.config import get_settings  # noqa: PLC0415 — avoid import cycle
+    from backend.identity.workspaces_db import ProductRow  # noqa: PLC0415
+
+    root = products_root or Path(get_settings().product_workspace_root)
+    if not root.is_dir():
+        return []
+
+    now = datetime.now(tz=UTC).timestamp()
+    on_disk = _scan_run_workspace_dirs(root)  # same shape: <uuid> dirs + mtimes
+    if not on_disk:
+        return []
+
+    live = {
+        row[0]
+        for row in (
+            await session.execute(select(ProductRow.id).where(ProductRow.id.in_(on_disk)))
+        ).all()
+    }
+    targets = [
+        pid for pid, mtime in on_disk.items() if pid not in live and (now - mtime) >= grace_s
+    ]
+    if not targets:
+        return []
+
+    if remover is None:
+        from backend.storage.product_workspace import (  # noqa: PLC0415
+            remove_product_workspace,
+        )
+
+        remover = remove_product_workspace
+
+    reaped: list[uuid.UUID] = []
+    for product_id in targets:
+        try:
+            await remover(product_id)
+            reaped.append(product_id)
+        except Exception:  # noqa: BLE001 — one bad dir must not abort the sweep
+            logger.warning(
+                "reap_orphan_product_workspace_failed",
+                product_id=str(product_id),
+                exc_info=True,
+            )
+    if reaped:
+        logger.info("reaped_orphan_product_workspaces", count=len(reaped))
+    return reaped
+
+
 async def _cancel(session: AsyncSession, run: ExecutionRun, *, reason: str) -> bool:
     """Flip a run to CANCELLED + append the audit-history row. Returns ``False``
     if the run is already terminal (no-op), mirroring ``AgentRunner.transition``."""

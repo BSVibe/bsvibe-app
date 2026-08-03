@@ -344,24 +344,28 @@ class AgentWorker(BaseWorker):
         return len(reaped)
 
     async def _reap_terminal_run_workspaces(self) -> int:
-        """Reclaim the on-disk workspace of terminal runs so ``var/runs`` stays
-        bounded to the live-run set (the FAILED path + github clones + crashes
-        otherwise leak — 19GB / 161 dirs were found in prod). Throttled to at
-        most every ``_WORKSPACE_REAP_INTERVAL_S``; runs in its own short txn."""
+        """Reclaim finished workspaces so the disk stays bounded to what is live:
+        ``var/runs`` to the live-run set (the FAILED path + github clones +
+        crashes otherwise leak — 19GB / 161 dirs were found in prod) and
+        ``var/products`` to the live-product set (a deleted product's repo used
+        to survive forever — 18 orphans / 300MB). Throttled to at most every
+        ``_WORKSPACE_REAP_INTERVAL_S``; runs in its own short txn."""
         now = time.monotonic()
         if now - self._last_workspace_reap_monotonic < _WORKSPACE_REAP_INTERVAL_S:
             return 0
         self._last_workspace_reap_monotonic = now
         from backend.workflow.application.run_cleanup import (  # noqa: PLC0415
+            reap_orphan_product_workspaces,
             reap_terminal_run_workspaces,
         )
 
         async with self._session_factory() as session:
             reaped = await reap_terminal_run_workspaces(session)
-            # remover is filesystem-only (no DB writes), but commit to release the
-            # short read txn promptly (parity with _reap_stale_claims).
+            reaped_products = await reap_orphan_product_workspaces(session)
+            # removers are filesystem-only (no DB writes), but commit to release
+            # the short read txn promptly (parity with _reap_stale_claims).
             await session.commit()
-        return len(reaped)
+        return len(reaped) + len(reaped_products)
 
     async def _claim_runs_for_drive(self) -> list[uuid.UUID]:
         """Atomically claim a batch of OPEN runs → RUNNING + stamp the claim.

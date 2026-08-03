@@ -229,6 +229,34 @@ async def init_product_workspace(product_id: uuid.UUID) -> None:
     logger.info("product_workspace_initialised", product_id=str(product_id), path=str(path))
 
 
+async def remove_product_workspace(product_id: uuid.UUID) -> None:
+    """Reclaim ``var/products/<product_id>`` — the product's whole git repo.
+
+    Idempotent and best-effort: a missing repo is a no-op, and a failure is
+    logged rather than raised (the caller is a delete handler whose DB work has
+    already committed, or a periodic reaper that retries next pass).
+
+    Deleting a product used to leave its repo on disk forever — 18 such orphans
+    holding 300MB (90% of ``var/products``) were found in production. Any live
+    run worktrees are cascade-cancelled by ``cancel_product_runs`` before this
+    runs, and their dirs are reclaimed by the run-workspace reaper.
+    """
+    path = product_workspace_path(product_id)
+    if not path.exists():
+        return
+    try:
+        shutil.rmtree(path)
+    except OSError:
+        logger.warning(
+            "product_workspace_remove_failed",
+            product_id=str(product_id),
+            path=str(path),
+            exc_info=True,
+        )
+        return
+    logger.info("product_workspace_removed", product_id=str(product_id), path=str(path))
+
+
 async def _configure_repo_identity(repo: Path) -> None:
     """Set ``user.name`` / ``user.email`` at the repo level so commits
     don't fall back to a (possibly missing) global config and produce
@@ -729,6 +757,7 @@ __all__ = [
     "merge_to_main",
     "product_workspace_lock",
     "product_workspace_path",
+    "remove_product_workspace",
     "remove_run_worktree",
     "run_branch_name",
     "run_worktree_path",
