@@ -65,27 +65,59 @@ _TERMINAL: frozenset[RunStatus] = frozenset(
 _CANCELLABLE: frozenset[RunStatus] = frozenset({RunStatus.OPEN, RunStatus.RUNNING})
 
 
+#: How old an *orphan* dir (no run row at all) must be before it is reclaimed.
+#: A run whose row is not yet visible to this sweep is seconds-to-minutes old at
+#: most (it is committed RUNNING before its workspace is provisioned), so a full
+#: day is an enormous safety margin over the only false-positive that matters.
+_ORPHAN_GRACE_S = 24 * 3600
+
+
+def _scan_run_workspace_dirs(root: Path) -> dict[uuid.UUID, float]:
+    """``{run_id: dir mtime}`` for every per-run workspace under ``root``.
+
+    A non-directory, a non-UUID name (never a run workspace) and a dir that
+    vanishes mid-scan are all skipped rather than raising."""
+    found: dict[uuid.UUID, float] = {}
+    for child in root.iterdir():
+        if not child.is_dir():
+            continue
+        try:
+            run_id = uuid.UUID(child.name)
+        except ValueError:
+            continue
+        try:
+            found[run_id] = child.stat().st_mtime
+        except OSError:
+            continue
+    return found
+
+
 async def reap_terminal_run_workspaces(
     session: AsyncSession,
     *,
     remover: Callable[[uuid.UUID | None, uuid.UUID], Awaitable[None]] | None = None,
     runs_root: Path | None = None,
+    orphan_grace_s: float = _ORPHAN_GRACE_S,
 ) -> list[uuid.UUID]:
-    """Reclaim the on-disk workspace (``var/runs/<run_id>``) of every run that
-    has reached a terminal state — the periodic sweep that BOUNDS ``var/runs``
-    to the set of live runs.
+    """Reclaim the on-disk workspace (``var/runs/<run_id>``) of every run that is
+    finished — the periodic sweep that BOUNDS ``var/runs`` to the live-run set.
 
-    The inline ship/discard/cancel hooks are not enough on their own: the FAILED
-    transition has NO cleanup hook at all, and a crash between the terminal DB
-    flip and any inline cleanup leaves the dir behind. This sweep is the single
-    robust backstop across every terminal path (a leak of 19GB / 161 dirs was
-    found in production before it existed).
+    Two classes are reclaimed:
 
-    Only a dir whose name parses to a run UUID that is *currently terminal* is
-    removed. A dir for a non-terminal run (its workspace is in use), a dir with
-    no run row (a brand-new run mid-clone), and a non-UUID dir are all LEFT
-    ALONE — the sweep must never race a run that is still setting up. The remover
-    is best-effort per dir: one failure is logged and the sweep continues.
+    * **terminal runs** — the run row exists and is shipped / failed / cancelled.
+      The inline ship/discard/cancel hooks are not enough on their own: the FAILED
+      transition has NO cleanup hook at all, and a crash between the terminal DB
+      flip and any inline cleanup leaves the dir behind (a leak of 19GB / 161 dirs
+      was found in production before this sweep existed).
+    * **aged orphans** — the run row is GONE (hard-deleted with its product, or
+      purged), so the terminal query can never match the dir. 49 such orphans
+      (760MB) sat in production indefinitely. They are only reclaimed once older
+      than ``orphan_grace_s``, because a brand-new run mid-provision is also
+      row-less to this sweep — and it is seconds old, never a day.
+
+    A dir for a NON-terminal run (its workspace is in use) and a non-UUID dir are
+    always left alone. The remover is best-effort per dir: one failure is logged
+    and the sweep continues.
     """
     from backend.config import get_settings  # noqa: PLC0415 — avoid import cycle
 
@@ -93,26 +125,40 @@ async def reap_terminal_run_workspaces(
     if not root.is_dir():
         return []
 
-    on_disk: set[uuid.UUID] = set()
-    for child in root.iterdir():
-        if not child.is_dir():
-            continue
-        try:
-            on_disk.add(uuid.UUID(child.name))
-        except ValueError:
-            continue  # not a run workspace (never a per-run dir)
+    now = datetime.now(tz=UTC).timestamp()
+    on_disk = _scan_run_workspace_dirs(root)
     if not on_disk:
         return []
 
-    rows = (
-        await session.execute(
-            select(ExecutionRun.id, ExecutionRun.product_id).where(
-                ExecutionRun.id.in_(on_disk),
-                ExecutionRun.status.in_(tuple(_TERMINAL)),
+    known = {
+        row[0]: row[1]
+        for row in (
+            await session.execute(
+                select(ExecutionRun.id, ExecutionRun.product_id).where(ExecutionRun.id.in_(on_disk))
             )
-        )
-    ).all()
-    if not rows:
+        ).all()
+    }
+    terminal = {
+        row[0]
+        for row in (
+            await session.execute(
+                select(ExecutionRun.id).where(
+                    ExecutionRun.id.in_(on_disk),
+                    ExecutionRun.status.in_(tuple(_TERMINAL)),
+                )
+            )
+        ).all()
+    }
+
+    #: (run_id, product_id) pairs to reclaim — terminal runs, plus orphans (no
+    #: row) that have aged past the grace window. Everything else stays.
+    targets: list[tuple[uuid.UUID, uuid.UUID | None]] = []
+    for run_id, mtime in on_disk.items():
+        if run_id in terminal:
+            targets.append((run_id, known.get(run_id)))
+        elif run_id not in known and (now - mtime) >= orphan_grace_s:
+            targets.append((run_id, None))
+    if not targets:
         return []
 
     if remover is None:
@@ -123,7 +169,7 @@ async def reap_terminal_run_workspaces(
         remover = remove_run_worktree
 
     reaped: list[uuid.UUID] = []
-    for run_id, product_id in rows:
+    for run_id, product_id in targets:
         try:
             await remover(product_id, run_id)
             reaped.append(run_id)

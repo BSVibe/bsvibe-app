@@ -9,6 +9,7 @@ the canonical primitives the MCP tools + product-delete cascade both call.
 from __future__ import annotations
 
 import asyncio
+import os
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
@@ -546,3 +547,63 @@ async def test_reap_terminal_run_workspaces_continues_on_remover_error(sf, works
 
 async def _unreachable_remover(pid, rid):  # pragma: no cover
     raise AssertionError("remover must not be called when there is nothing to reap")
+
+
+async def test_reap_removes_orphan_dirs_older_than_grace(sf, workspace_id, tmp_path):
+    """A dir whose run row NO LONGER EXISTS (the run was hard-deleted with its
+    product, or purged) is never matched by the terminal query — 49 such orphans
+    (760MB) sat in production forever. They ARE reclaimable, but only past a
+    grace period: a brand-new run mid-clone also has no committed row yet, and
+    reaping that would destroy live work. Old orphan → reaped; fresh orphan →
+    kept."""
+    runs_root = tmp_path / "runs"
+    runs_root.mkdir()
+
+    async with sf() as s:
+        live = await _seed_run(s, workspace_id, status=RunStatus.RUNNING)
+        await s.commit()
+
+    old_orphan = uuid.uuid4()
+    fresh_orphan = uuid.uuid4()
+    for rid in (old_orphan, fresh_orphan, live):
+        (runs_root / str(rid)).mkdir()
+    # Age the orphan past the grace window (mtime 48h ago).
+    old_ts = datetime.now(tz=UTC).timestamp() - 48 * 3600
+    os.utime(runs_root / str(old_orphan), (old_ts, old_ts))
+
+    removed: list[uuid.UUID] = []
+
+    async def fake_remover(pid, rid):
+        removed.append(rid)
+
+    async with sf() as s:
+        reaped = await reap_terminal_run_workspaces(
+            s, remover=fake_remover, runs_root=runs_root, orphan_grace_s=24 * 3600
+        )
+
+    assert old_orphan in reaped, "an aged orphan must be reclaimed"
+    assert fresh_orphan not in reaped, "a fresh dir may be a run mid-clone — keep"
+    assert live not in reaped, "a live run's workspace must never be touched"
+    assert removed == [old_orphan]
+
+
+async def test_reap_orphan_passes_none_product_id(sf, tmp_path):
+    """An orphan has no run row, so there is no product_id to thread — the
+    remover must be called with None (its rmtree path)."""
+    runs_root = tmp_path / "runs"
+    runs_root.mkdir()
+    orphan = uuid.uuid4()
+    (runs_root / str(orphan)).mkdir()
+    old_ts = datetime.now(tz=UTC).timestamp() - 48 * 3600
+    os.utime(runs_root / str(orphan), (old_ts, old_ts))
+
+    seen: list[tuple] = []
+
+    async def fake_remover(pid, rid):
+        seen.append((pid, rid))
+
+    async with sf() as s:
+        await reap_terminal_run_workspaces(
+            s, remover=fake_remover, runs_root=runs_root, orphan_grace_s=24 * 3600
+        )
+    assert seen == [(None, orphan)]
