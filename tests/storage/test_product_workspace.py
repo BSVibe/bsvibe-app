@@ -15,6 +15,7 @@ rest of BSVibe relies on it:
 from __future__ import annotations
 
 import asyncio
+import shutil
 import uuid
 
 import pytest
@@ -483,3 +484,128 @@ async def test_push_product_bundle_missing_repo_is_noop(tmp_path) -> None:
     product_id = uuid.uuid4()
     await push_product_bundle(product_id, store=store)  # must not raise
     assert await store.exists(product_id) is False
+
+
+# ---------------------------------------------------------------------------
+# ensure_product_workspace — restore the repo from its durable home on demand
+# ---------------------------------------------------------------------------
+
+
+async def test_ensure_materialises_repo_from_bundle_when_absent(tmp_path) -> None:
+    """The disk holds only what is being worked on; the bundle is the record.
+    When the repo is absent, it is restored from the bundle — with its history
+    and branches — so everything downstream (merge, conflict detection, file
+    browsing) behaves exactly as if it had never left."""
+    from backend.storage.product_bundle_store import LocalFilesystemBundleStore
+    from backend.storage.product_workspace import (
+        ensure_product_workspace,
+        push_product_bundle,
+    )
+
+    product_id = uuid.uuid4()
+    await init_product_workspace(product_id)
+    repo = product_workspace_path(product_id)
+    (repo / "app.py").write_text("print('shipped')\n")
+    await _git("add", "-A", cwd=repo)
+    await _git("commit", "-m", "feat: app", cwd=repo)
+    head = await _git("rev-parse", "HEAD", cwd=repo)
+
+    store = LocalFilesystemBundleStore(tmp_path / "bundles")
+    await push_product_bundle(product_id, store=store)
+
+    # The repo leaves the disk entirely (what PR 7/8 will do after every run).
+    shutil.rmtree(repo)
+    assert not repo.exists()
+
+    assert await ensure_product_workspace(product_id, store=store) is True
+
+    assert (repo / ".git").exists()
+    assert (repo / "app.py").read_text() == "print('shipped')\n"
+    assert await _git("rev-parse", "HEAD", cwd=repo) == head
+
+
+async def test_ensure_is_a_noop_when_repo_is_present(tmp_path) -> None:
+    """A present repo is the working copy of record — never clobber it with an
+    older bundle, or a run's in-progress commits would vanish."""
+    from backend.storage.product_bundle_store import LocalFilesystemBundleStore
+    from backend.storage.product_workspace import (
+        ensure_product_workspace,
+        push_product_bundle,
+    )
+
+    product_id = uuid.uuid4()
+    await init_product_workspace(product_id)
+    repo = product_workspace_path(product_id)
+    store = LocalFilesystemBundleStore(tmp_path / "bundles")
+    await push_product_bundle(product_id, store=store)  # bundle == empty product
+
+    # Local work lands AFTER the bundle was published.
+    (repo / "newer.py").write_text("local work\n")
+    await _git("add", "-A", cwd=repo)
+    await _git("commit", "-m", "newer", cwd=repo)
+
+    assert await ensure_product_workspace(product_id, store=store) is True
+
+    assert (repo / "newer.py").exists(), "a present repo must not be overwritten"
+
+
+async def test_ensure_returns_false_when_no_bundle_exists(tmp_path) -> None:
+    """A product that never shipped has no bundle. That is not an error — the
+    caller decides (provision an empty repo, or surface an empty file tree)."""
+    from backend.storage.product_bundle_store import LocalFilesystemBundleStore
+    from backend.storage.product_workspace import ensure_product_workspace
+
+    store = LocalFilesystemBundleStore(tmp_path / "bundles")
+    assert await ensure_product_workspace(uuid.uuid4(), store=store) is False
+
+
+async def test_ensure_preserves_run_branches_through_the_round_trip(tmp_path) -> None:
+    """An in-flight run's branch must survive repo → bundle → repo, or resuming
+    that run after a materialise would silently lose its commits."""
+    from backend.storage.product_bundle_store import LocalFilesystemBundleStore
+    from backend.storage.product_workspace import (
+        ensure_product_workspace,
+        push_product_bundle,
+    )
+
+    product_id = uuid.uuid4()
+    run_id = uuid.uuid4()
+    await init_product_workspace(product_id)
+    worktree = await add_run_worktree(product_id, run_id)
+    (worktree / "wip.txt").write_text("in progress\n")
+    await _git("add", "-A", cwd=worktree)
+    await _git("commit", "-m", "wip", cwd=worktree)
+
+    store = LocalFilesystemBundleStore(tmp_path / "bundles")
+    await push_product_bundle(product_id, store=store)
+
+    shutil.rmtree(product_workspace_path(product_id))
+    shutil.rmtree(worktree, ignore_errors=True)
+    assert await ensure_product_workspace(product_id, store=store) is True
+
+    branches = await _git("branch", "-a", cwd=product_workspace_path(product_id))
+    assert run_branch_name(run_id) in branches
+
+
+async def test_list_product_tree_materialises_instead_of_failing_open(tmp_path) -> None:
+    """``list_product_tree`` used to return ``[]`` for a missing repo, so the
+    PWA showed an EMPTY product with no error. Once the repo lives off-box that
+    silent lie would be the normal case — restore it instead."""
+    from backend.storage.product_bundle_store import LocalFilesystemBundleStore
+    from backend.storage.product_workspace import push_product_bundle
+
+    product_id = uuid.uuid4()
+    await init_product_workspace(product_id)
+    repo = product_workspace_path(product_id)
+    (repo / "README.md").write_text("# hi\n")
+    await _git("add", "-A", cwd=repo)
+    await _git("commit", "-m", "docs", cwd=repo)
+
+    store = LocalFilesystemBundleStore(tmp_path / "bundles")
+    await push_product_bundle(product_id, store=store)
+    shutil.rmtree(repo)
+
+    entries = await list_product_tree(product_id, store=store)
+
+    names = {e.name for e in entries}
+    assert "README.md" in names, f"expected the restored tree, got {names}"

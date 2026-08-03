@@ -300,6 +300,107 @@ async def push_product_bundle(
     return True
 
 
+async def ensure_or_init_product_workspace(
+    product_id: uuid.UUID,
+    *,
+    store: ProductBundleStore | None = None,
+) -> None:
+    """Guarantee a usable product repo for a run: restore it from the durable
+    bundle, or initialise an empty one when there is genuinely nothing to
+    restore.
+
+    Order matters and is the whole reason this is one function rather than two
+    calls at every call site: initialising first (or unconditionally) hands the
+    run a BLANK repo whenever a materialise was needed, and the agent
+    "rebuilds" a product that already exists.
+    """
+    if not await ensure_product_workspace(product_id, store=store):
+        await init_product_workspace(product_id)
+
+
+async def read_product_file(
+    product_id: uuid.UUID,
+    ref: str,
+    *,
+    store: ProductBundleStore | None = None,
+) -> bytes:
+    """Read one file from the product's ``main`` checkout.
+
+    The single owner of "read a file out of a product". Both API surfaces that
+    need this (the product file browser and the deliverable-artifact fallback)
+    used to construct a :class:`LocalFilesystemArtifactStore` rooted at
+    ``product_workspace_root`` and key it by ``product_id`` — repurposing a
+    per-RUN store for a per-PRODUCT concern, in two places, each of which would
+    have had to learn about materialising on its own.
+
+    The repo is materialised from its durable bundle first, so this works
+    whether or not the product is currently on disk. Raises
+    :class:`FileNotFoundError` when the product has no repo and no bundle, or
+    the file is genuinely absent; :class:`ValueError` for a traversal / absolute
+    ref (the guard stays loud — a malicious ref must never read as "missing").
+    """
+    from backend.storage.artifact_store import (  # noqa: PLC0415 — avoid cycle
+        LocalFilesystemArtifactStore,
+    )
+
+    # Materialise best-effort, then let the READ decide whether the file
+    # exists. Gating the read on materialise succeeding would refuse a product
+    # dir that is present but not a git repo (a legacy / half-provisioned
+    # state) — the file is right there, and refusing it would be a regression
+    # dressed up as strictness.
+    await ensure_product_workspace(product_id, store=store)
+    root = Path(get_settings().product_workspace_root)
+    return LocalFilesystemArtifactStore(root).read_bytes(product_id, ref)
+
+
+async def ensure_product_workspace(
+    product_id: uuid.UUID,
+    *,
+    store: ProductBundleStore | None = None,
+) -> bool:
+    """Guarantee the product's repo is on disk, restoring it from its durable
+    bundle if it is not. Returns ``True`` when a repo is present afterwards.
+
+    This is the single entry point every surface that touches a product repo
+    goes through, so "the repo may not be on disk right now" is handled in ONE
+    place instead of each caller inventing a fallback.
+
+    A **present repo always wins** — it is the working copy of record and may
+    carry commits newer than the last published bundle (an in-flight run's
+    branch, or a ship whose push failed). Clobbering it with an older bundle
+    would silently destroy that work, so a present repo short-circuits before
+    the store is even consulted.
+
+    ``False`` means the product has no repo AND no bundle — it has never
+    shipped. That is an ordinary state, not an error: the run provisioner
+    responds by initialising an empty repo, a read surface by reporting empty.
+    """
+    repo = product_workspace_path(product_id)
+    if (repo / ".git").exists():
+        return True
+    if store is None:
+        from backend.storage.product_bundle_store import (  # noqa: PLC0415
+            build_bundle_store,
+        )
+
+        store = build_bundle_store()
+
+    with tempfile.TemporaryDirectory(prefix="bsvibe-restore-") as tmp:
+        bundle = Path(tmp) / f"{product_id}.bundle"
+        if not await store.get(product_id, bundle):
+            return False
+        # Clone into a staging dir, then move into place: a half-cloned repo at
+        # the canonical path would look "present" to every other caller (and to
+        # this function's own short-circuit) and poison them.
+        staging = Path(tmp) / "repo"
+        await _git("clone", str(bundle), str(staging))
+        await _configure_repo_identity(staging)
+        repo.parent.mkdir(parents=True, exist_ok=True)
+        await asyncio.to_thread(shutil.move, str(staging), str(repo))
+    logger.info("product_workspace_materialised", product_id=str(product_id))
+    return True
+
+
 async def _configure_repo_identity(repo: Path) -> None:
     """Set ``user.name`` / ``user.email`` at the repo level so commits
     don't fall back to a (possibly missing) global config and produce
@@ -737,19 +838,31 @@ def _is_safe_subdir(subdir: str) -> bool:
     return all(part not in ("", "..") for part in subdir.split("/"))
 
 
-async def list_product_tree(product_id: uuid.UUID, subdir: str = "") -> list[TreeEntry]:
+async def list_product_tree(
+    product_id: uuid.UUID,
+    subdir: str = "",
+    *,
+    store: ProductBundleStore | None = None,
+) -> list[TreeEntry]:
     """List the IMMEDIATE children of ``subdir`` in the product's ``main`` tree.
 
     One level only (lazy) — a tree browser fetches each directory on demand
     rather than walking a whole (potentially huge) repo up front. Directories
     sort before files, then by name. An unsafe ``subdir`` (absolute / ``..``)
     or a path that isn't a directory in ``main`` returns ``[]`` (never raises
-    into the read path). An uninitialised product also returns ``[]``."""
+    into the read path).
+
+    A repo that is not on disk is MATERIALISED from its durable bundle rather
+    than reported as empty. This used to ``return []``, which rendered a
+    populated product as an empty file tree with no error — a silent lie that
+    would become the normal case once the repo's home moves off-box. ``[]`` now
+    means only "genuinely nothing to show" (never shipped, or an unsafe path).
+    """
     subdir = subdir.strip("/")
     if not _is_safe_subdir(subdir):
         return []
     repo = product_workspace_path(product_id)
-    if not (repo / ".git").exists():
+    if not await ensure_product_workspace(product_id, store=store):
         return []
     # ``git ls-tree main -- <subdir>/`` lists one level. The trailing slash
     # scopes to the directory's children; an empty subdir lists the root.
@@ -800,7 +913,10 @@ __all__ = [
     "merge_to_main",
     "product_workspace_lock",
     "product_workspace_path",
+    "ensure_or_init_product_workspace",
+    "ensure_product_workspace",
     "push_product_bundle",
+    "read_product_file",
     "remove_product_workspace",
     "remove_run_worktree",
     "run_branch_name",

@@ -90,19 +90,18 @@ async def _product_workspace_provisioner(
     run: ExecutionRun,
     workspace_dir: Path,
 ) -> bool:
-    """W1: provision the run's workspace_dir as a git worktree of the
-    product's main branch. Lazily initialises the product workspace if
-    missing.
-    """
+    """W1: provision the run's workspace_dir as a git worktree of the product's
+    main branch, restoring the product repo from its durable bundle if it is not
+    on disk."""
     if run.product_id is None:
         return False
 
     from backend.storage.product_workspace import (  # noqa: PLC0415 — lazy
         add_run_worktree,
-        init_product_workspace,
+        ensure_or_init_product_workspace,
     )
 
-    await init_product_workspace(run.product_id)
+    await ensure_or_init_product_workspace(run.product_id)
     if workspace_dir.exists() and not any(workspace_dir.iterdir()):  # noqa: ASYNC240
         workspace_dir.rmdir()  # noqa: ASYNC240
     await add_run_worktree(run.product_id, run.id)

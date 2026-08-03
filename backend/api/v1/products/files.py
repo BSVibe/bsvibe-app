@@ -9,15 +9,12 @@ browse, and content is read from the product main checkout (the shipped state).
 from __future__ import annotations
 
 import uuid
-from pathlib import Path
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.api.deps import get_db_session, get_workspace_id
-from backend.config import get_settings
-from backend.storage.artifact_store import LocalFilesystemArtifactStore
 from backend.storage.product_workspace import list_product_tree
 
 from ._helpers import _MAX_FILE_BYTES, _looks_binary, _resolve_product_in_workspace
@@ -57,9 +54,10 @@ async def get_product_file_content(
     never a leak, never a 500. Binary files yield a short note; text is capped
     at 256 KiB with ``truncated: true`` past the cap."""
     await _resolve_product_in_workspace(session, product_id, workspace_id)
-    store = LocalFilesystemArtifactStore(Path(get_settings().product_workspace_root))
+    from backend.storage.product_workspace import read_product_file  # noqa: PLC0415
+
     try:
-        raw = store.read_bytes(product_id, path)
+        raw = await read_product_file(product_id, path)
     except (ValueError, FileNotFoundError, IsADirectoryError) as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="file not found") from exc
     if _looks_binary(raw):
