@@ -453,30 +453,79 @@ class AgentRunner:
             # again and either succeed or surface a conflict.
 
     async def _push_bundle_best_effort(self, product_id: uuid.UUID, run: ExecutionRun) -> None:
-        """Publish the product's bundle without ever failing the ship.
+        """Publish the product to its durable home without ever failing the ship.
 
-        The merge into ``main`` has already succeeded and the work is safe on
-        local disk, so a transient object-store outage must NOT strand the run
-        at REVIEW_READY — it would re-run the whole verify→ship cycle for a
-        problem that has nothing to do with the run. The failure is logged LOUD
-        because it means the product is not durable yet, and the next ship
-        republishes the full history anyway (the bundle is a whole-repo
-        snapshot, not a delta, so a missed push self-heals).
+        The publish MERGES onto whatever the store currently holds rather than
+        overwriting it, so work published by anyone else between this box
+        materialising its copy and now survives.
 
-        The step that DELETES the local repo must gate on a successful push —
+        Two non-clean paths, both of which leave the local repo authoritative:
+
+        * **transient failure** (object-store outage) — logged loud, ship
+          proceeds. The merge into ``main`` already succeeded and the work is
+          safe on disk, so stranding the run at REVIEW_READY would re-run the
+          whole verify→ship cycle for a problem unrelated to the run. A bundle
+          is a whole-repo snapshot, not a delta, so the next ship self-heals.
+        * **merge conflict** — nothing is published (a half-merged bundle is
+          worse than a stale one) and a ``merge_conflict_review`` Decision is
+          raised so the divergence is visible instead of silently growing.
+
+        The step that DELETES the local repo must gate on a successful publish —
         that is what makes this best-effort safe rather than lossy.
         """
         from backend.storage.product_workspace import (  # noqa: PLC0415 — lazy
-            push_product_bundle,
+            publish_product_bundle,
         )
 
         try:
-            await push_product_bundle(product_id)
+            outcome = await publish_product_bundle(product_id)
         except Exception:  # noqa: BLE001 — durability must not fail the ship
             logger.warning(
                 "auto_ship_bundle_push_failed",
                 run_id=str(run.id),
                 product_id=str(product_id),
+                exc_info=True,
+            )
+            return
+        if outcome.status == "conflict":
+            await self._raise_bundle_conflict_decision(run, outcome.conflict_paths)
+
+    async def _raise_bundle_conflict_decision(
+        self, run: ExecutionRun, conflict_paths: list[str]
+    ) -> None:
+        """Surface an unpublishable divergence as a founder Decision.
+
+        Mirrors the github side's ``merge_conflict_review`` escalation: the
+        conflict is between this product's local history and what its durable
+        home already holds, and only a human can say which side wins. Raising it
+        keeps the product visible instead of quietly diverging until someone
+        notices the bundle is months stale.
+        """
+        from backend.workflow.application.run_persistence import (  # noqa: PLC0415
+            create_decision,
+        )
+
+        try:
+            await create_decision(
+                self._session,
+                run,
+                None,
+                kind="merge_conflict_review",
+                payload={
+                    "reason": "product_bundle_publish_conflict",
+                    "conflict_paths": list(conflict_paths),
+                    "product_id": str(run.product_id),
+                },
+                rationale=(
+                    "the product's durable copy has diverged from this box's copy "
+                    "and the two cannot be merged automatically"
+                ),
+            )
+            await self._session.flush()
+        except Exception:  # noqa: BLE001 — the ship itself already succeeded
+            logger.warning(
+                "bundle_conflict_decision_failed",
+                run_id=str(run.id),
                 exc_info=True,
             )
 

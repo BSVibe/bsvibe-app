@@ -609,3 +609,143 @@ async def test_list_product_tree_materialises_instead_of_failing_open(tmp_path) 
 
     names = {e.name for e in entries}
     assert "README.md" in names, f"expected the restored tree, got {names}"
+
+
+# ---------------------------------------------------------------------------
+# publish_product_bundle — merge onto the latest, never blob-overwrite
+# ---------------------------------------------------------------------------
+
+
+async def _bundle_of(repo, dest) -> None:
+    await _git("bundle", "create", str(dest), "--all", cwd=repo)
+
+
+async def test_publish_merges_concurrent_work_instead_of_losing_it(tmp_path) -> None:
+    """THE data-loss case a plain overwrite cannot survive.
+
+    Someone else published work (rev B) after this box materialised its copy
+    (rev A). A blob-level ``put`` would overwrite B with A+local and B's commit
+    would be gone forever. Publishing must MERGE onto whatever is currently in
+    the store, so both survive."""
+    from backend.storage.product_bundle_store import LocalFilesystemBundleStore
+    from backend.storage.product_workspace import publish_product_bundle
+
+    product_id = uuid.uuid4()
+    store = LocalFilesystemBundleStore(tmp_path / "bundles")
+
+    # rev A — the common ancestor, published.
+    await init_product_workspace(product_id)
+    repo = product_workspace_path(product_id)
+    (repo / "base.txt").write_text("base\n")
+    await _git("add", "-A", cwd=repo)
+    await _git("commit", "-m", "base", cwd=repo)
+    a_bundle = tmp_path / "a.bundle"
+    await _bundle_of(repo, a_bundle)
+    await store.put(product_id, a_bundle)
+
+    # Someone else clones rev A elsewhere, adds THEIR file, publishes rev B.
+    other = tmp_path / "other"
+    await _git("clone", str(a_bundle), str(other), cwd=tmp_path)
+    await _git("config", "user.email", "o@e.dev", cwd=other)
+    await _git("config", "user.name", "Other", cwd=other)
+    (other / "theirs.txt").write_text("their work\n")
+    await _git("add", "-A", cwd=other)
+    await _git("commit", "-m", "theirs", cwd=other)
+    b_bundle = tmp_path / "b.bundle"
+    await _bundle_of(other, b_bundle)
+    await store.put(product_id, b_bundle)
+
+    # Meanwhile THIS box (still on rev A) does its own work and publishes.
+    (repo / "ours.txt").write_text("our work\n")
+    await _git("add", "-A", cwd=repo)
+    await _git("commit", "-m", "ours", cwd=repo)
+
+    outcome = await publish_product_bundle(product_id, store=store)
+    assert outcome.status == "clean"
+
+    # Both survive in the published bundle.
+    final = tmp_path / "final.bundle"
+    assert await store.get(product_id, final) is True
+    check = tmp_path / "check"
+    await _git("clone", str(final), str(check), cwd=tmp_path)
+    assert (check / "ours.txt").exists(), "our work must be published"
+    assert (check / "theirs.txt").exists(), "concurrent work must NOT be lost"
+
+
+async def test_publish_reports_conflict_and_leaves_the_store_untouched(tmp_path) -> None:
+    """When the two sides edited the same lines, the merge cannot be decided
+    here. Report the conflict and publish NOTHING — a half-merged or
+    arbitrarily-resolved bundle would be worse than a stale one, and the local
+    repo stays authoritative until a human decides."""
+    from backend.storage.product_bundle_store import LocalFilesystemBundleStore
+    from backend.storage.product_workspace import publish_product_bundle
+
+    product_id = uuid.uuid4()
+    store = LocalFilesystemBundleStore(tmp_path / "bundles")
+
+    await init_product_workspace(product_id)
+    repo = product_workspace_path(product_id)
+    (repo / "shared.txt").write_text("original\n")
+    await _git("add", "-A", cwd=repo)
+    await _git("commit", "-m", "base", cwd=repo)
+    a_bundle = tmp_path / "a.bundle"
+    await _bundle_of(repo, a_bundle)
+    await store.put(product_id, a_bundle)
+
+    other = tmp_path / "other"
+    await _git("clone", str(a_bundle), str(other), cwd=tmp_path)
+    await _git("config", "user.email", "o@e.dev", cwd=other)
+    await _git("config", "user.name", "Other", cwd=other)
+    (other / "shared.txt").write_text("THEIR version\n")
+    await _git("add", "-A", cwd=other)
+    await _git("commit", "-m", "theirs", cwd=other)
+    b_bundle = tmp_path / "b.bundle"
+    await _bundle_of(other, b_bundle)
+    await store.put(product_id, b_bundle)
+    b_bytes = b_bundle.read_bytes()
+
+    (repo / "shared.txt").write_text("OUR version\n")
+    await _git("add", "-A", cwd=repo)
+    await _git("commit", "-m", "ours", cwd=repo)
+
+    outcome = await publish_product_bundle(product_id, store=store)
+
+    assert outcome.status == "conflict"
+    assert "shared.txt" in outcome.conflict_paths
+    # The store still holds rev B, untouched.
+    kept = tmp_path / "kept.bundle"
+    await store.get(product_id, kept)
+    assert kept.read_bytes() == b_bytes, "a conflicted publish must not overwrite"
+    # And the local repo is left clean (no half-merge stranded on disk).
+    status = await _git("status", "--porcelain", cwd=repo)
+    assert "UU" not in status, f"merge must be aborted, got: {status}"
+
+
+async def test_publish_first_time_just_uploads(tmp_path) -> None:
+    """No bundle in the store yet (the product's first ship) — nothing to merge
+    onto, so publish straight."""
+    from backend.storage.product_bundle_store import LocalFilesystemBundleStore
+    from backend.storage.product_workspace import publish_product_bundle
+
+    product_id = uuid.uuid4()
+    store = LocalFilesystemBundleStore(tmp_path / "bundles")
+    await init_product_workspace(product_id)
+    repo = product_workspace_path(product_id)
+    (repo / "first.txt").write_text("first\n")
+    await _git("add", "-A", cwd=repo)
+    await _git("commit", "-m", "first", cwd=repo)
+
+    outcome = await publish_product_bundle(product_id, store=store)
+
+    assert outcome.status == "clean"
+    assert await store.exists(product_id) is True
+
+
+async def test_publish_no_repo_is_a_noop(tmp_path) -> None:
+    from backend.storage.product_bundle_store import LocalFilesystemBundleStore
+    from backend.storage.product_workspace import publish_product_bundle
+
+    store = LocalFilesystemBundleStore(tmp_path / "bundles")
+    outcome = await publish_product_bundle(uuid.uuid4(), store=store)
+    assert outcome.status == "clean"
+    assert outcome.published is False

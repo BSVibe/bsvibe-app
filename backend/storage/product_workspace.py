@@ -353,6 +353,120 @@ async def read_product_file(
     return LocalFilesystemArtifactStore(root).read_bytes(product_id, ref)
 
 
+@dataclass(frozen=True)
+class PublishOutcome:
+    """Result of publishing a product's bundle to its durable home.
+
+    ``published`` is ``False`` with ``status="clean"`` for the ordinary no-op
+    (no repo on disk); a ``"conflict"`` NEVER publishes.
+    """
+
+    status: Literal["clean", "conflict"]
+    published: bool = False
+    conflict_paths: list[str] = field(default_factory=list)
+
+
+#: The temporary remote name used to fetch the store's current bundle. Scoped to
+#: one publish and removed afterwards so a crashed publish can't leave a stale
+#: remote pointing at a deleted temp file.
+_PUBLISH_REMOTE = "bsvibe-bundle-origin"
+
+
+async def publish_product_bundle(
+    product_id: uuid.UUID,
+    *,
+    store: ProductBundleStore | None = None,
+) -> PublishOutcome:
+    """Publish the product's repo by MERGING ONTO whatever the store currently
+    holds — never by overwriting it.
+
+    :func:`push_product_bundle` replaces the stored object with a snapshot of
+    the local repo. That is last-write-wins at the blob level: if anything
+    published between this box materialising its copy and this call, that work
+    is destroyed with no trace. Since the whole point of moving a product's home
+    off-box is that the box's copy is a *cache*, the publish has to reconcile.
+
+    So: fetch the store's bundle, ``git fetch`` it as a temporary remote, and
+    merge its ``main`` into the local ``main``.
+
+    * already up to date / store is behind → publish the local tree
+    * clean merge → publish the MERGED tree (both sides survive)
+    * conflict → publish NOTHING, abort the merge, and report the paths. A
+      half-merged or arbitrarily-resolved bundle is worse than a stale one; the
+      local repo stays authoritative until the conflict is resolved, and the
+      caller surfaces it rather than silently diverging.
+
+    Callers MUST hold :func:`product_workspace_lock` so two ships on this
+    deployment cannot interleave their fetch/merge/publish sequences.
+    """
+    repo = product_workspace_path(product_id)
+    if not (repo / ".git").exists():
+        return PublishOutcome(status="clean", published=False)
+    if store is None:
+        from backend.storage.product_bundle_store import (  # noqa: PLC0415
+            build_bundle_store,
+        )
+
+        store = build_bundle_store()
+
+    with tempfile.TemporaryDirectory(prefix="bsvibe-publish-") as tmp:
+        remote_bundle = Path(tmp) / "remote.bundle"
+        if await store.get(product_id, remote_bundle):
+            outcome = await _merge_remote_bundle_into_main(repo, remote_bundle)
+            if outcome.status == "conflict":
+                logger.warning(
+                    "product_bundle_publish_conflict",
+                    product_id=str(product_id),
+                    conflict_paths=outcome.conflict_paths,
+                )
+                return PublishOutcome(
+                    status="conflict",
+                    published=False,
+                    conflict_paths=outcome.conflict_paths,
+                )
+
+        merged = Path(tmp) / f"{product_id}.bundle"
+        await _git("bundle", "create", str(merged), "--all", cwd=repo)
+        await store.put(product_id, merged)
+    logger.info("product_bundle_published", product_id=str(product_id))
+    return PublishOutcome(status="clean", published=True)
+
+
+async def _merge_remote_bundle_into_main(repo: Path, bundle: Path) -> MergeOutcome:
+    """``git fetch <bundle> && git merge FETCH_HEAD`` on the repo's ``main``.
+
+    A bundle is a valid git remote, so this is an ordinary merge — which is
+    exactly the point: git decides what reconciles and what conflicts, rather
+    than this module inventing a resolution policy over opaque blobs.
+    """
+    await _git("remote", "remove", _PUBLISH_REMOTE, cwd=repo, check=False)
+    await _git("remote", "add", _PUBLISH_REMOTE, str(bundle), cwd=repo)
+    try:
+        fetched = await _git("fetch", _PUBLISH_REMOTE, "main", cwd=repo, check=False)
+        if fetched.returncode != 0:
+            # A bundle with no ``main`` (or an unreadable one) is not something
+            # to merge onto — treat the local tree as authoritative and publish.
+            logger.warning("product_bundle_fetch_failed", stderr=fetched.stderr)
+            return MergeOutcome(status="clean")
+        result = await _git(
+            "merge",
+            "--no-edit",
+            "FETCH_HEAD",
+            cwd=repo,
+            check=False,
+        )
+        if result.returncode == 0:
+            return MergeOutcome(status="clean")
+        conflicts = await _git("diff", "--name-only", "--diff-filter=U", cwd=repo, check=False)
+        paths = [line for line in conflicts.stdout.splitlines() if line.strip()]
+        # Leave no half-merge on disk: the next run would inherit conflict
+        # markers it never created.
+        await _git("merge", "--abort", cwd=repo, check=False)
+        return MergeOutcome(status="conflict", conflict_paths=paths)
+    finally:
+        await _git("remote", "remove", _PUBLISH_REMOTE, cwd=repo, check=False)
+
+
 async def ensure_product_workspace(
     product_id: uuid.UUID,
     *,
@@ -915,6 +1029,8 @@ __all__ = [
     "product_workspace_path",
     "ensure_or_init_product_workspace",
     "ensure_product_workspace",
+    "PublishOutcome",
+    "publish_product_bundle",
     "push_product_bundle",
     "read_product_file",
     "remove_product_workspace",
