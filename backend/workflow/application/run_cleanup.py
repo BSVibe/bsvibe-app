@@ -32,8 +32,10 @@ abandoned / never-shipped run) has nothing to revert, so it is tombstoned.
 from __future__ import annotations
 
 import uuid
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from pathlib import Path
 
 import structlog
 from sqlalchemy import select
@@ -61,6 +63,79 @@ _TERMINAL: frozenset[RunStatus] = frozenset(
 )
 #: Only an in-flight run can be *cancelled* (mirrors the REST /cancel guard).
 _CANCELLABLE: frozenset[RunStatus] = frozenset({RunStatus.OPEN, RunStatus.RUNNING})
+
+
+async def reap_terminal_run_workspaces(
+    session: AsyncSession,
+    *,
+    remover: Callable[[uuid.UUID | None, uuid.UUID], Awaitable[None]] | None = None,
+    runs_root: Path | None = None,
+) -> list[uuid.UUID]:
+    """Reclaim the on-disk workspace (``var/runs/<run_id>``) of every run that
+    has reached a terminal state — the periodic sweep that BOUNDS ``var/runs``
+    to the set of live runs.
+
+    The inline ship/discard/cancel hooks are not enough on their own: the FAILED
+    transition has NO cleanup hook at all, and a crash between the terminal DB
+    flip and any inline cleanup leaves the dir behind. This sweep is the single
+    robust backstop across every terminal path (a leak of 19GB / 161 dirs was
+    found in production before it existed).
+
+    Only a dir whose name parses to a run UUID that is *currently terminal* is
+    removed. A dir for a non-terminal run (its workspace is in use), a dir with
+    no run row (a brand-new run mid-clone), and a non-UUID dir are all LEFT
+    ALONE — the sweep must never race a run that is still setting up. The remover
+    is best-effort per dir: one failure is logged and the sweep continues.
+    """
+    from backend.config import get_settings  # noqa: PLC0415 — avoid import cycle
+
+    root = runs_root or Path(get_settings().run_workspace_root)
+    if not root.is_dir():
+        return []
+
+    on_disk: set[uuid.UUID] = set()
+    for child in root.iterdir():
+        if not child.is_dir():
+            continue
+        try:
+            on_disk.add(uuid.UUID(child.name))
+        except ValueError:
+            continue  # not a run workspace (never a per-run dir)
+    if not on_disk:
+        return []
+
+    rows = (
+        await session.execute(
+            select(ExecutionRun.id, ExecutionRun.product_id).where(
+                ExecutionRun.id.in_(on_disk),
+                ExecutionRun.status.in_(tuple(_TERMINAL)),
+            )
+        )
+    ).all()
+    if not rows:
+        return []
+
+    if remover is None:
+        from backend.storage.product_workspace import (  # noqa: PLC0415
+            remove_run_worktree,
+        )
+
+        remover = remove_run_worktree
+
+    reaped: list[uuid.UUID] = []
+    for run_id, product_id in rows:
+        try:
+            await remover(product_id, run_id)
+            reaped.append(run_id)
+        except Exception:  # noqa: BLE001 — one bad dir must not abort the sweep
+            logger.warning(
+                "reap_terminal_workspace_failed",
+                run_id=str(run_id),
+                exc_info=True,
+            )
+    if reaped:
+        logger.info("reaped_terminal_run_workspaces", count=len(reaped))
+    return reaped
 
 
 async def _cancel(session: AsyncSession, run: ExecutionRun, *, reason: str) -> bool:

@@ -34,6 +34,7 @@ this module accepts them verbatim and trusts the type.
 from __future__ import annotations
 
 import asyncio
+import shutil
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -296,70 +297,88 @@ async def add_run_worktree(product_id: uuid.UUID, run_id: uuid.UUID) -> Path:
 
 
 async def remove_run_worktree(
-    product_id: uuid.UUID,
+    product_id: uuid.UUID | None,
     run_id: uuid.UUID,
     *,
     delete_branch: bool = True,
 ) -> None:
-    """``git worktree remove`` + optionally ``git branch -D``.
+    """Reclaim a run's per-run workspace (``var/runs/<run_id>``) — whatever
+    shape it took — idempotently and best-effort (a failure is logged, never
+    raised; the worker's reap tick retries on the next pass).
 
-    Idempotent: a missing worktree / branch is a no-op, not an error.
-    This matters for the cleanup hook that fires on both ship AND
-    discard — the same hook may run after a partial-cleanup retry.
+    Two shapes exist on disk and BOTH must be reclaimed or the dir leaks (the
+    historical leak was 137 github clones + 17 worktrees under ``var/runs``):
 
-    ``delete_branch=False`` lets the caller keep the branch around
-    (e.g. for inspection after a ship_anyway forced merge); the default
-    is to delete because a shipped/discarded run's branch is no longer
-    referenced — git fast-forward already moved ``main``.
+    * **local-product worktree** — a ``git worktree`` linked to
+      ``var/products/<product_id>``. ``git worktree remove --force`` drops the
+      dir + its registration; ``git branch -D`` drops the run branch.
+    * **github full clone** — its OWN ``.git`` directory, with no local product
+      repo to run ``git worktree remove`` against (github keeps no
+      ``var/products/<id>``). The git ops are skipped and the dir is reclaimed
+      with ``rmtree``. ``product_id is None`` (a run reaped with a NULL product
+      ref) is treated the same way.
+
+    ``delete_branch=False`` keeps the branch alive (e.g. a github push step that
+    still needs it) — only meaningful for the local-worktree case.
     """
-    product_path = product_workspace_path(product_id)
     worktree_path = run_worktree_path(run_id)
-    branch = run_branch_name(run_id)
+    product_path = product_workspace_path(product_id) if product_id is not None else None
+    has_product_repo = product_path is not None and product_path.exists()
 
+    if has_product_repo:
+        assert product_path is not None  # narrowed by has_product_repo
+        if worktree_path.exists():
+            # ``--force`` skips the "uncommitted changes" check; on a clean
+            # ship the worktree was just committed, but on a discard it may
+            # carry uncommitted edits the founder explicitly threw away.
+            result = await _git(
+                "worktree",
+                "remove",
+                "--force",
+                str(worktree_path),
+                cwd=product_path,
+                check=False,
+            )
+            if result.returncode != 0:
+                logger.warning(
+                    "run_worktree_remove_failed",
+                    product_id=str(product_id),
+                    run_id=str(run_id),
+                    stderr=result.stderr,
+                )
+                # Don't raise — the rmtree backstop below still reclaims the dir.
+
+        if delete_branch:
+            # ``-D`` (force) — the branch may have un-merged commits if the run
+            # was discarded mid-flight; we explicitly want to drop them.
+            result = await _git(
+                "branch",
+                "-D",
+                run_branch_name(run_id),
+                cwd=product_path,
+                check=False,
+            )
+            if result.returncode != 0 and "not found" not in result.stderr.lower():
+                logger.warning(
+                    "run_branch_delete_failed",
+                    product_id=str(product_id),
+                    run_id=str(run_id),
+                    stderr=result.stderr,
+                )
+
+    # Universal backstop: reclaim the dir if anything is left — a github clone
+    # (no product repo, git never touched it) OR a local worktree git could not
+    # remove (locked / not registered). A follow-up ``worktree prune`` clears any
+    # now-dangling worktree registration left by the rmtree.
     if worktree_path.exists():
-        # ``--force`` skips the "uncommitted changes" check; on a clean
-        # ship the worktree was just committed, but on a discard it may
-        # carry uncommitted edits the founder explicitly threw away.
-        result = await _git(
-            "worktree",
-            "remove",
-            "--force",
-            str(worktree_path),
-            cwd=product_path,
-            check=False,
-        )
-        if result.returncode != 0:
-            logger.warning(
-                "run_worktree_remove_failed",
-                product_id=str(product_id),
-                run_id=str(run_id),
-                stderr=result.stderr,
-            )
-            # Don't raise — best-effort cleanup. The worker tick will
-            # retry on the next pass. Branch deletion still attempted
-            # below so a half-cleaned state can finish next time.
-
-    if delete_branch:
-        # ``-D`` (force) — the branch may have un-merged commits if the
-        # run was discarded mid-flight; we explicitly want to drop them.
-        result = await _git(
-            "branch",
-            "-D",
-            branch,
-            cwd=product_path,
-            check=False,
-        )
-        if result.returncode != 0 and "not found" not in result.stderr.lower():
-            logger.warning(
-                "run_branch_delete_failed",
-                product_id=str(product_id),
-                run_id=str(run_id),
-                stderr=result.stderr,
-            )
+        shutil.rmtree(worktree_path, ignore_errors=True)
+        if has_product_repo:
+            assert product_path is not None
+            await _git("worktree", "prune", cwd=product_path, check=False)
 
     logger.info(
         "run_worktree_removed",
-        product_id=str(product_id),
+        product_id=str(product_id) if product_id is not None else None,
         run_id=str(run_id),
     )
 
