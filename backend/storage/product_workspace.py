@@ -35,12 +35,13 @@ from __future__ import annotations
 
 import asyncio
 import shutil
+import tempfile
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -50,6 +51,9 @@ from backend.workflow.infrastructure.advisory_lock import (
     release_run_dispatch_lock,
     try_run_dispatch_lock,
 )
+
+if TYPE_CHECKING:
+    from backend.storage.product_bundle_store import ProductBundleStore
 
 logger = structlog.get_logger(__name__)
 
@@ -255,6 +259,45 @@ async def remove_product_workspace(product_id: uuid.UUID) -> None:
         )
         return
     logger.info("product_workspace_removed", product_id=str(product_id), path=str(path))
+
+
+async def push_product_bundle(
+    product_id: uuid.UUID,
+    *,
+    store: ProductBundleStore | None = None,
+) -> bool:
+    """Persist the product's repo to its durable off-box home as a git bundle.
+
+    ``git bundle create --all`` packs objects AND refs, so the stored object
+    restores a COMPLETE repo — history, ``main``, and any in-flight
+    ``bsvibe/run/<id>`` branches. ``--all`` matters: a bundle of ``main`` alone
+    would silently drop an in-flight run's commits the next time the repo is
+    materialised from the bundle.
+
+    Returns ``True`` when a bundle was pushed, ``False`` when the product has no
+    repo on disk (never provisioned, or already reclaimed) — an ordinary state,
+    not an error, since the caller is a ship path whose merge already succeeded.
+
+    Callers MUST hold :func:`product_workspace_lock` across ``merge_to_main`` +
+    this push, so two concurrent ships can't publish out of order and leave the
+    older tree as the product's record.
+    """
+    repo = product_workspace_path(product_id)
+    if not (repo / ".git").exists():
+        return False
+    if store is None:
+        from backend.storage.product_bundle_store import (  # noqa: PLC0415
+            build_bundle_store,
+        )
+
+        store = build_bundle_store()
+
+    with tempfile.TemporaryDirectory(prefix="bsvibe-bundle-") as tmp:
+        bundle = Path(tmp) / f"{product_id}.bundle"
+        await _git("bundle", "create", str(bundle), "--all", cwd=repo)
+        await store.put(product_id, bundle)
+    logger.info("product_bundle_persisted", product_id=str(product_id))
+    return True
 
 
 async def _configure_repo_identity(repo: Path) -> None:
@@ -757,6 +800,7 @@ __all__ = [
     "merge_to_main",
     "product_workspace_lock",
     "product_workspace_path",
+    "push_product_bundle",
     "remove_product_workspace",
     "remove_run_worktree",
     "run_branch_name",

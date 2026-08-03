@@ -263,6 +263,14 @@ async def delete_product(
     from backend.storage.product_workspace import remove_product_workspace  # noqa: PLC0415
 
     await remove_product_workspace(product_id)
+    # ...and its durable off-box bundle, or the product lives on in the object
+    # store forever (the same orphan class this handler just closed on disk).
+    try:
+        from backend.storage.product_bundle_store import build_bundle_store  # noqa: PLC0415
+
+        await build_bundle_store().delete(product_id)
+    except Exception:  # noqa: BLE001 — the DB delete already committed
+        logger.warning("product_bundle_delete_failed", product_id=str(product_id), exc_info=True)
     logger.info("product_deleted", product_id=str(product_id), runs_cancelled=cancelled)
 
 

@@ -412,3 +412,74 @@ async def test_remove_product_workspace_is_idempotent() -> None:
     await init_product_workspace(product_id)
     await remove_product_workspace(product_id)
     await remove_product_workspace(product_id)  # must not raise
+
+
+# ---------------------------------------------------------------------------
+# push_product_bundle — the product's state, made durable off-box
+# ---------------------------------------------------------------------------
+
+
+async def test_push_product_bundle_round_trips_the_whole_repo(tmp_path) -> None:
+    """The pushed bundle must restore a COMPLETE repo — same HEAD, same
+    history, branches intact. That property is what keeps git's merge/conflict
+    machinery alive across a materialise → work → persist cycle; a working-tree
+    snapshot would force last-write-wins and lose concurrent work."""
+    from backend.storage.product_bundle_store import LocalFilesystemBundleStore
+    from backend.storage.product_workspace import push_product_bundle
+
+    product_id = uuid.uuid4()
+    await init_product_workspace(product_id)
+    repo = product_workspace_path(product_id)
+    (repo / "app.py").write_text("print('v1')\n")
+    await _git("add", "-A", cwd=repo)
+    await _git("commit", "-m", "feat: app", cwd=repo)
+    head = await _git("rev-parse", "HEAD", cwd=repo)
+
+    store = LocalFilesystemBundleStore(tmp_path / "bundles")
+    await push_product_bundle(product_id, store=store)
+
+    assert await store.exists(product_id) is True
+    fetched = tmp_path / "fetched.bundle"
+    assert await store.get(product_id, fetched) is True
+
+    restored = tmp_path / "restored"
+    await _git("clone", str(fetched), str(restored), cwd=tmp_path)
+    assert await _git("rev-parse", "HEAD", cwd=restored) == head
+    assert (restored / "app.py").read_text() == "print('v1')\n"
+
+
+async def test_push_product_bundle_includes_run_branches(tmp_path) -> None:
+    """``--all``, not just ``main``: an in-flight run's branch must survive the
+    round-trip or resuming that run after a materialise would lose its work."""
+    from backend.storage.product_bundle_store import LocalFilesystemBundleStore
+    from backend.storage.product_workspace import push_product_bundle
+
+    product_id = uuid.uuid4()
+    run_id = uuid.uuid4()
+    await init_product_workspace(product_id)
+    worktree = await add_run_worktree(product_id, run_id)
+    (worktree / "wip.txt").write_text("in progress\n")
+    await _git("add", "-A", cwd=worktree)
+    await _git("commit", "-m", "wip", cwd=worktree)
+
+    store = LocalFilesystemBundleStore(tmp_path / "bundles")
+    await push_product_bundle(product_id, store=store)
+
+    fetched = tmp_path / "f.bundle"
+    await store.get(product_id, fetched)
+    restored = tmp_path / "restored"
+    await _git("clone", str(fetched), str(restored), cwd=tmp_path)
+    branches = await _git("branch", "-a", cwd=restored)
+    assert run_branch_name(run_id) in branches
+
+
+async def test_push_product_bundle_missing_repo_is_noop(tmp_path) -> None:
+    """A product whose repo is absent (never provisioned / already reclaimed)
+    must not raise — the caller is a ship path that already succeeded."""
+    from backend.storage.product_bundle_store import LocalFilesystemBundleStore
+    from backend.storage.product_workspace import push_product_bundle
+
+    store = LocalFilesystemBundleStore(tmp_path / "bundles")
+    product_id = uuid.uuid4()
+    await push_product_bundle(product_id, store=store)  # must not raise
+    assert await store.exists(product_id) is False
