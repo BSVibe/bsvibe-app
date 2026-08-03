@@ -428,7 +428,7 @@ async def _ship_decision_run(
             commit_worktree,
             force_merge_theirs,
             product_workspace_lock,
-            push_product_bundle,
+            publish_product_bundle,
             remove_run_worktree,
         )
 
@@ -448,7 +448,7 @@ async def _ship_decision_run(
                 # still moves ``main``, so the durable off-box record must
                 # follow it or the product's remote copy silently goes stale.
                 try:
-                    await push_product_bundle(run.product_id)
+                    await publish_product_bundle(run.product_id)
                 except Exception:  # noqa: BLE001 — durability must not fail the ship
                     logger.warning(
                         "ship_anyway_bundle_push_failed",
