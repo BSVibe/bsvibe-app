@@ -749,3 +749,90 @@ async def test_publish_no_repo_is_a_noop(tmp_path) -> None:
     outcome = await publish_product_bundle(uuid.uuid4(), store=store)
     assert outcome.status == "clean"
     assert outcome.published is False
+
+
+# ---------------------------------------------------------------------------
+# Shallow repos must never be published — their bundle cannot be restored
+# ---------------------------------------------------------------------------
+
+
+async def test_publish_refuses_a_shallow_repo(tmp_path) -> None:
+    """A repo cloned with ``--depth=1`` (what product bootstrap does for a
+    repo_url) bundles WITHOUT the parents its own commits reference. The bundle
+    is created happily, ``git bundle verify`` even calls it "a complete
+    history", and the failure only appears on restore:
+
+        fatal: remote did not send all necessary objects
+
+    Found in production: a product was published, its repo reclaimed on the
+    strength of that publish, and the bundle turned out to be unrestorable.
+    Refusing to publish keeps the reclaim gate shut, so the repo stays."""
+    from backend.storage.product_bundle_store import LocalFilesystemBundleStore
+    from backend.storage.product_workspace import publish_product_bundle
+
+    # Build an upstream with history, then a SHALLOW clone of it (the bootstrap
+    # shape). ``product_workspace_path`` is where the shallow clone must land.
+    upstream = tmp_path / "upstream"
+    upstream.mkdir()
+    await _git("init", "--initial-branch=main", cwd=upstream)
+    await _git("config", "user.email", "u@e.dev", cwd=upstream)
+    await _git("config", "user.name", "U", cwd=upstream)
+    for i in range(3):
+        (upstream / f"f{i}.txt").write_text(f"{i}\n")
+        await _git("add", "-A", cwd=upstream)
+        await _git("commit", "-m", f"c{i}", cwd=upstream)
+
+    product_id = uuid.uuid4()
+    repo = product_workspace_path(product_id)
+    repo.parent.mkdir(parents=True, exist_ok=True)
+    await _git("clone", "--depth", "1", f"file://{upstream}", str(repo), cwd=tmp_path)
+    assert (await _git("rev-parse", "--is-shallow-repository", cwd=repo)) == "true", (
+        "fixture must actually be shallow"
+    )
+    # ...and UNREPAIRABLE: the upstream is unreachable, so ``fetch --unshallow``
+    # cannot fill in the missing history. (When the upstream IS reachable the
+    # publish repairs the repo and proceeds — the next test covers that.)
+    await _git("remote", "remove", "origin", cwd=repo)
+
+    store = LocalFilesystemBundleStore(tmp_path / "bundles")
+    outcome = await publish_product_bundle(product_id, store=store)
+
+    assert outcome.published is False, "a shallow repo must not be published"
+    assert await store.exists(product_id) is False, (
+        "no unrestorable bundle may be left in the store"
+    )
+
+
+async def test_publish_accepts_a_repo_unshallowed_first(tmp_path) -> None:
+    """The same shallow repo, when its upstream IS reachable, is REPAIRED by the
+    publish (fetch --unshallow) and then publishes normally — the guard is about
+    restorability, not about where the repo came from."""
+    from backend.storage.product_bundle_store import LocalFilesystemBundleStore
+    from backend.storage.product_workspace import publish_product_bundle
+
+    upstream = tmp_path / "upstream"
+    upstream.mkdir()
+    await _git("init", "--initial-branch=main", cwd=upstream)
+    await _git("config", "user.email", "u@e.dev", cwd=upstream)
+    await _git("config", "user.name", "U", cwd=upstream)
+    for i in range(3):
+        (upstream / f"f{i}.txt").write_text(f"{i}\n")
+        await _git("add", "-A", cwd=upstream)
+        await _git("commit", "-m", f"c{i}", cwd=upstream)
+
+    product_id = uuid.uuid4()
+    repo = product_workspace_path(product_id)
+    repo.parent.mkdir(parents=True, exist_ok=True)
+    await _git("clone", "--depth", "1", f"file://{upstream}", str(repo), cwd=tmp_path)
+    # NOTE: no manual unshallow — the publish is expected to repair it.
+
+    store = LocalFilesystemBundleStore(tmp_path / "bundles")
+    outcome = await publish_product_bundle(product_id, store=store)
+
+    assert outcome.published is True
+    # And the bundle genuinely restores.
+    fetched = tmp_path / "f.bundle"
+    assert await store.get(product_id, fetched) is True
+    restored = tmp_path / "restored"
+    await _git("clone", str(fetched), str(restored), cwd=tmp_path)
+    assert (restored / "f2.txt").exists()

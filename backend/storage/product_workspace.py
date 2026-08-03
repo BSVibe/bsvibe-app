@@ -292,6 +292,10 @@ async def push_product_bundle(
 
         store = build_bundle_store()
 
+    if await _is_shallow(repo) and not await _try_unshallow(repo):
+        logger.warning("product_bundle_push_skipped_shallow", product_id=str(product_id))
+        return False
+
     with tempfile.TemporaryDirectory(prefix="bsvibe-bundle-") as tmp:
         bundle = Path(tmp) / f"{product_id}.bundle"
         await _git("bundle", "create", str(bundle), "--all", cwd=repo)
@@ -372,6 +376,28 @@ class PublishOutcome:
 _PUBLISH_REMOTE = "bsvibe-bundle-origin"
 
 
+async def _is_shallow(repo: Path) -> bool:
+    """``True`` when the repo has grafted (incomplete) history.
+
+    A ``--depth=1`` clone — what product bootstrap does for a ``repo_url`` —
+    bundles WITHOUT the parent commits its own tips reference. Git creates that
+    bundle happily and ``git bundle verify`` even calls it "a complete history";
+    the failure only surfaces on restore, as ``fatal: remote did not send all
+    necessary objects``. So this is checked directly rather than trusting a
+    post-hoc verification of the bundle.
+    """
+    result = await _git("rev-parse", "--is-shallow-repository", cwd=repo, check=False)
+    return result.stdout.strip() == "true"
+
+
+async def _try_unshallow(repo: Path) -> bool:
+    """Best-effort ``git fetch --unshallow``; ``True`` if the repo now has full
+    history. Fails harmlessly when there is no reachable remote (offline, or a
+    product whose upstream is gone) — the caller then refuses to publish."""
+    await _git("fetch", "--unshallow", cwd=repo, check=False)
+    return not await _is_shallow(repo)
+
+
 async def publish_product_bundle(
     product_id: uuid.UUID,
     *,
@@ -408,6 +434,20 @@ async def publish_product_bundle(
         )
 
         store = build_bundle_store()
+
+    # A shallow repo cannot produce a restorable bundle. Try to repair it, and
+    # refuse to publish if that fails — publishing would put an unrestorable
+    # object in the store AND (because the reclaim gates on a successful
+    # publish) authorise deleting the only good copy. Found the hard way in
+    # production: a product was reclaimed on the strength of exactly such a
+    # publish. Refusing keeps the reclaim gate shut, so the repo stays.
+    if await _is_shallow(repo) and not await _try_unshallow(repo):
+        logger.warning(
+            "product_bundle_publish_skipped_shallow",
+            product_id=str(product_id),
+            reason="shallow repo cannot produce a restorable bundle",
+        )
+        return PublishOutcome(status="clean", published=False)
 
     with tempfile.TemporaryDirectory(prefix="bsvibe-publish-") as tmp:
         remote_bundle = Path(tmp) / "remote.bundle"
