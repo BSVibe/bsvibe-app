@@ -589,3 +589,44 @@ async def test_await_completion_poll_is_connection_free(monkeypatch) -> None:
         # A short session per read — opened repeatedly, never held across a poll.
         assert spy.opens >= 2, f"expected multiple short-session reads, got {spy.opens}"
         assert spy.max_concurrent == 1, "a session was held open across a poll sleep"
+
+
+# --------------------------------------------------------------------------
+# (d) Terminal-workspace reaper — bounds var/runs to the live-run set.
+# --------------------------------------------------------------------------
+
+
+async def test_worker_reaps_terminal_workspace_and_throttles(sf, monkeypatch, tmp_path) -> None:
+    """The worker's terminal-workspace reap removes a SHIPPED run's on-disk
+    workspace, and is THROTTLED: a second immediate call is a no-op (a new
+    terminal dir seeded in between survives until the interval elapses)."""
+    runs_root = tmp_path / "runs"
+    runs_root.mkdir()
+    monkeypatch.setattr(get_settings(), "run_workspace_root", str(runs_root), raising=False)
+
+    ws_id = uuid.uuid4()
+    shipped = await _seed_run(sf, ws_id=ws_id, status=RunStatus.SHIPPED)
+    # A github-clone-shaped dir: its own .git DIR, no product repo → rmtree path.
+    d1 = runs_root / str(shipped)
+    (d1 / ".git").mkdir(parents=True)
+
+    worker = AgentWorker(session_factory=sf)
+
+    n = await worker._reap_terminal_run_workspaces()
+    assert n == 1
+    assert not d1.exists(), "shipped run workspace must be reclaimed"
+
+    # A second terminal run appears immediately — the throttle skips this pass.
+    shipped2 = await _seed_run(sf, ws_id=ws_id, status=RunStatus.SHIPPED)
+    d2 = runs_root / str(shipped2)
+    (d2 / ".git").mkdir(parents=True)
+
+    n2 = await worker._reap_terminal_run_workspaces()
+    assert n2 == 0, "second call within the interval must be throttled"
+    assert d2.exists(), "throttled pass must not touch the new dir"
+
+    # Force the interval to elapse → it reaps the queued dir.
+    worker._last_workspace_reap_monotonic = float("-inf")
+    n3 = await worker._reap_terminal_run_workspaces()
+    assert n3 == 1
+    assert not d2.exists()

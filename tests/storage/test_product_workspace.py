@@ -243,6 +243,40 @@ async def test_remove_run_worktree_is_idempotent_when_missing() -> None:
     await remove_run_worktree(product_id, run_id)  # must not raise
 
 
+async def test_remove_run_worktree_reclaims_github_clone_dir() -> None:
+    """A github run's workspace is a FULL CLONE (its own ``.git`` dir), NOT a
+    linked worktree of a product repo — ``git worktree remove`` cannot recognise
+    it, so the historical leak was 137 such clone dirs. The removal must fall
+    back to a plain ``rmtree`` and reclaim the dir even when there is no product
+    workspace at all (github products keep no local ``var/products/<id>`` repo)."""
+    product_id = uuid.uuid4()  # never init_product_workspace'd → no product repo
+    run_id = uuid.uuid4()
+
+    # Simulate the per-run github clone landing directly in var/runs/<id>.
+    clone = run_worktree_path(run_id)
+    clone.mkdir(parents=True)
+    (clone / ".git").mkdir()  # a real clone → its own .git DIRECTORY
+    (clone / "README.md").write_text("cloned repo")
+    assert clone.exists()
+
+    await remove_run_worktree(product_id, run_id)  # must not raise
+
+    assert not clone.exists(), "github clone dir must be reclaimed via rmtree"
+
+
+async def test_remove_run_worktree_reclaims_dir_with_no_product_id() -> None:
+    """The reaper may reap a run whose ``product_id`` is NULL; removal must
+    still reclaim the on-disk dir without a product repo to consult."""
+    run_id = uuid.uuid4()
+    clone = run_worktree_path(run_id)
+    clone.mkdir(parents=True)
+    (clone / "work.txt").write_text("scratch")
+
+    await remove_run_worktree(None, run_id)  # must not raise
+
+    assert not clone.exists()
+
+
 async def test_remove_run_worktree_keeps_branch_when_delete_branch_false() -> None:
     """``delete_branch=False`` lets the caller hand a branch off to e.g.
     a github push step that needs the branch alive."""

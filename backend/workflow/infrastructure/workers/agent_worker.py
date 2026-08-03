@@ -44,6 +44,7 @@ status-map). No split needed.
 from __future__ import annotations
 
 import inspect
+import time
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
@@ -89,6 +90,12 @@ from backend.workflow.infrastructure.intake.db import RequestRow, RequestStatus
 from backend.workflow.infrastructure.repositories import SqlAlchemyRequestRepository
 
 logger = structlog.get_logger(__name__)
+
+#: Minimum wall-clock between terminal-workspace reaps (see
+#: :meth:`AgentWorker._reap_terminal_run_workspaces`). 5 min keeps ``var/runs``
+#: bounded to at most ~5 min of terminal accumulation without re-listing the dir
+#: on every sub-second tick.
+_WORKSPACE_REAP_INTERVAL_S = 300.0
 
 
 @dataclass(slots=True)
@@ -208,6 +215,11 @@ class AgentWorker(BaseWorker):
         # AgentWorker instances never share it, so a stale-claim reaper / audit
         # can attribute a claim to the worker that made it.
         self._worker_id = uuid.uuid4()
+        # Throttle the terminal-workspace reap so it runs at most every
+        # ``_WORKSPACE_REAP_INTERVAL_S`` rather than on every (sub-second) tick —
+        # a listdir + one query + a few rmtrees is cheap, but there's no reason to
+        # do it hundreds of times a minute. ``-inf`` forces the first tick to run.
+        self._last_workspace_reap_monotonic = float("-inf")
 
     @property
     def _stale_claim_lease_s(self) -> float:
@@ -271,6 +283,7 @@ class AgentWorker(BaseWorker):
         if execution is None:
             return 0
         await self._reap_stale_claims()
+        await self._reap_terminal_run_workspaces()
         claimed_ids = await self._claim_runs_for_drive()
         count = 0
         for run_id in claimed_ids:
@@ -328,6 +341,26 @@ class AgentWorker(BaseWorker):
             await session.commit()
         if reaped:
             logger.info("agent_worker_reaped_stale_claims", count=len(reaped))
+        return len(reaped)
+
+    async def _reap_terminal_run_workspaces(self) -> int:
+        """Reclaim the on-disk workspace of terminal runs so ``var/runs`` stays
+        bounded to the live-run set (the FAILED path + github clones + crashes
+        otherwise leak — 19GB / 161 dirs were found in prod). Throttled to at
+        most every ``_WORKSPACE_REAP_INTERVAL_S``; runs in its own short txn."""
+        now = time.monotonic()
+        if now - self._last_workspace_reap_monotonic < _WORKSPACE_REAP_INTERVAL_S:
+            return 0
+        self._last_workspace_reap_monotonic = now
+        from backend.workflow.application.run_cleanup import (  # noqa: PLC0415
+            reap_terminal_run_workspaces,
+        )
+
+        async with self._session_factory() as session:
+            reaped = await reap_terminal_run_workspaces(session)
+            # remover is filesystem-only (no DB writes), but commit to release the
+            # short read txn promptly (parity with _reap_stale_claims).
+            await session.commit()
         return len(reaped)
 
     async def _claim_runs_for_drive(self) -> list[uuid.UUID]:

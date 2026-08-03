@@ -21,6 +21,7 @@ from backend.workflow.application.run_cleanup import (
     cancel_product_runs,
     cancel_run,
     discard_run,
+    reap_terminal_run_workspaces,
 )
 from backend.workflow.infrastructure.db import (
     Decision,
@@ -462,3 +463,86 @@ async def test_cancel_product_runs_cancels_non_terminal_only(sf, workspace_id) -
         assert (await s.get(ExecutionRun, rr_id)).status is RunStatus.CANCELLED
         assert (await s.get(ExecutionRun, shipped_id)).status is RunStatus.SHIPPED
         assert (await s.get(ExecutionRun, other_id)).status is RunStatus.OPEN
+
+
+# ---------------------------------------------------------------------------
+# reap_terminal_run_workspaces — the periodic disk-bounding sweep
+# ---------------------------------------------------------------------------
+
+
+async def test_reap_terminal_run_workspaces_removes_only_terminal(sf, workspace_id, tmp_path):
+    """The sweep reclaims the on-disk workspace of every TERMINAL run
+    (shipped / failed / cancelled) and LEAVES ALONE non-terminal runs (in use),
+    dirs with no matching run row (a brand-new run mid-clone), and non-UUID
+    dirs. This is the backstop that bounds var/runs — the FAILED path has no
+    inline cleanup hook and github clones leak on every path."""
+    runs_root = tmp_path / "runs"
+    runs_root.mkdir()
+    product_id = uuid.uuid4()
+
+    async with sf() as s:
+        shipped = await _seed_run(s, workspace_id, status=RunStatus.SHIPPED, product_id=product_id)
+        failed = await _seed_run(s, workspace_id, status=RunStatus.FAILED)
+        cancelled = await _seed_run(s, workspace_id, status=RunStatus.CANCELLED)
+        running = await _seed_run(s, workspace_id, status=RunStatus.RUNNING)
+        open_ = await _seed_run(s, workspace_id, status=RunStatus.OPEN)
+        await s.commit()
+
+    unknown = uuid.uuid4()  # a dir with no run row (e.g. mid-clone brand-new run)
+    for rid in (shipped, failed, cancelled, running, open_, unknown):
+        (runs_root / str(rid)).mkdir()
+    (runs_root / "not-a-uuid").mkdir()  # never a run workspace
+
+    removed: list[tuple] = []
+
+    async def fake_remover(pid, rid):
+        removed.append((pid, rid))
+
+    async with sf() as s:
+        reaped = await reap_terminal_run_workspaces(s, remover=fake_remover, runs_root=runs_root)
+
+    assert set(reaped) == {shipped, failed, cancelled}
+    assert {rid for _pid, rid in removed} == {shipped, failed, cancelled}
+    # product_id is threaded through for the git-worktree prune on local products.
+    assert (product_id, shipped) in removed
+    # Non-terminal + unknown + non-uuid are never handed to the remover.
+    assert running not in {rid for _pid, rid in removed}
+    assert open_ not in {rid for _pid, rid in removed}
+    assert unknown not in {rid for _pid, rid in removed}
+
+
+async def test_reap_terminal_run_workspaces_no_runs_dir_is_noop(sf, tmp_path):
+    """A missing runs root (fresh box / not-yet-created) is a no-op, not an
+    error."""
+    async with sf() as s:
+        reaped = await reap_terminal_run_workspaces(
+            s, remover=_unreachable_remover, runs_root=tmp_path / "does-not-exist"
+        )
+    assert reaped == []
+
+
+async def test_reap_terminal_run_workspaces_continues_on_remover_error(sf, workspace_id, tmp_path):
+    """One workspace failing to remove must not abort the sweep — the rest are
+    still reclaimed and the worker retries the failed one next pass."""
+    runs_root = tmp_path / "runs"
+    runs_root.mkdir()
+
+    async with sf() as s:
+        bad = await _seed_run(s, workspace_id, status=RunStatus.SHIPPED)
+        good = await _seed_run(s, workspace_id, status=RunStatus.FAILED)
+        await s.commit()
+    for rid in (bad, good):
+        (runs_root / str(rid)).mkdir()
+
+    async def flaky_remover(pid, rid):
+        if rid == bad:
+            raise OSError("device busy")
+
+    async with sf() as s:
+        reaped = await reap_terminal_run_workspaces(s, remover=flaky_remover, runs_root=runs_root)
+
+    assert reaped == [good]  # the failed one is not reported reaped, no raise
+
+
+async def _unreachable_remover(pid, rid):  # pragma: no cover
+    raise AssertionError("remover must not be called when there is nothing to reap")
