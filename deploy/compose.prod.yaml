@@ -94,6 +94,17 @@ services:
       BSVIBE_KNOWLEDGE_EMBEDDING_API_BASE: ${BSVIBE_KNOWLEDGE_EMBEDDING_API_BASE:-}
       BSVIBE_SKILLS_ROOT: ${BSVIBE_SKILLS_ROOT:-/app/var/skills}
       BSVIBE_RUN_WORKSPACE_ROOT: ${BSVIBE_RUN_WORKSPACE_ROOT:-/app/var/runs}
+      # Product bundle store — a product's durable home OFF this box. Defaults
+      # to `local`, which keeps bundles on the SAME disk the design exists to
+      # get them off; set BSVIBE_PRODUCT_BUNDLE_BACKEND=s3 with the R2 vars in
+      # .env to actually go off-box.
+      BSVIBE_PRODUCT_BUNDLE_BACKEND: ${BSVIBE_PRODUCT_BUNDLE_BACKEND:-local}
+      BSVIBE_PRODUCT_BUNDLE_LOCAL_ROOT: ${BSVIBE_PRODUCT_BUNDLE_LOCAL_ROOT:-/app/var/bundles}
+      BSVIBE_PRODUCT_BUNDLE_S3_ENDPOINT: ${BSVIBE_PRODUCT_BUNDLE_S3_ENDPOINT:-}
+      BSVIBE_PRODUCT_BUNDLE_S3_BUCKET: ${BSVIBE_PRODUCT_BUNDLE_S3_BUCKET:-}
+      BSVIBE_PRODUCT_BUNDLE_S3_ACCESS_KEY: ${BSVIBE_PRODUCT_BUNDLE_S3_ACCESS_KEY:-}
+      BSVIBE_PRODUCT_BUNDLE_S3_SECRET_KEY: ${BSVIBE_PRODUCT_BUNDLE_S3_SECRET_KEY:-}
+      BSVIBE_PRODUCT_REPO_IDLE_GRACE_S: ${BSVIBE_PRODUCT_REPO_IDLE_GRACE_S:-86400}
       BSVIBE_AUDIT_RELAY_URL: ${BSVIBE_AUDIT_RELAY_URL:-}
       BSVIBE_OAUTH_ISSUER: ${BSVIBE_OAUTH_ISSUER:-https://api.bsvibe.dev}
       # T2b-1 — the OAuth signing key. It MUST be the same value in every container: the
@@ -152,6 +163,17 @@ services:
       BSVIBE_KNOWLEDGE_EMBEDDING_API_BASE: ${BSVIBE_KNOWLEDGE_EMBEDDING_API_BASE:-}
       BSVIBE_SKILLS_ROOT: ${BSVIBE_SKILLS_ROOT:-/app/var/skills}
       BSVIBE_RUN_WORKSPACE_ROOT: ${BSVIBE_RUN_WORKSPACE_ROOT:-/app/var/runs}
+      # Product bundle store — a product's durable home OFF this box. Defaults
+      # to `local`, which keeps bundles on the SAME disk the design exists to
+      # get them off; set BSVIBE_PRODUCT_BUNDLE_BACKEND=s3 with the R2 vars in
+      # .env to actually go off-box.
+      BSVIBE_PRODUCT_BUNDLE_BACKEND: ${BSVIBE_PRODUCT_BUNDLE_BACKEND:-local}
+      BSVIBE_PRODUCT_BUNDLE_LOCAL_ROOT: ${BSVIBE_PRODUCT_BUNDLE_LOCAL_ROOT:-/app/var/bundles}
+      BSVIBE_PRODUCT_BUNDLE_S3_ENDPOINT: ${BSVIBE_PRODUCT_BUNDLE_S3_ENDPOINT:-}
+      BSVIBE_PRODUCT_BUNDLE_S3_BUCKET: ${BSVIBE_PRODUCT_BUNDLE_S3_BUCKET:-}
+      BSVIBE_PRODUCT_BUNDLE_S3_ACCESS_KEY: ${BSVIBE_PRODUCT_BUNDLE_S3_ACCESS_KEY:-}
+      BSVIBE_PRODUCT_BUNDLE_S3_SECRET_KEY: ${BSVIBE_PRODUCT_BUNDLE_S3_SECRET_KEY:-}
+      BSVIBE_PRODUCT_REPO_IDLE_GRACE_S: ${BSVIBE_PRODUCT_REPO_IDLE_GRACE_S:-86400}
       BSVIBE_AUDIT_RELAY_URL: ${BSVIBE_AUDIT_RELAY_URL:-}
       # The worker builds notification CTAs (보고서 보기 → <pwa_url>/…) so it needs
       # the PUBLIC PWA origin, not the localhost default. Mirrors backend.
