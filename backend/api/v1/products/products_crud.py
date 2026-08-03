@@ -254,6 +254,15 @@ async def delete_product(
     )
     await session.delete(row)
     await session.commit()
+    # Reclaim the product's git repo AFTER the row is committed away — a deleted
+    # product's repo is dead weight (18 orphans holding 300MB, 90% of
+    # var/products, were found live), and leaving it behind would also strand its
+    # remote bundle once products move to R2. Best-effort by design: the DB
+    # delete is the source of truth, and the periodic reaper sweeps up anything a
+    # failure here leaves behind.
+    from backend.storage.product_workspace import remove_product_workspace  # noqa: PLC0415
+
+    await remove_product_workspace(product_id)
     logger.info("product_deleted", product_id=str(product_id), runs_cancelled=cancelled)
 
 

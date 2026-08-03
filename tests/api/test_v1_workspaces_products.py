@@ -398,3 +398,24 @@ async def test_product_patch_rejects_unknown_top_level_field(client_with_ws) -> 
     pid = r.json()["id"]
     r = await c.patch(f"/api/v1/products/{pid}", json={"bogus": 1})
     assert r.status_code == 422
+
+
+async def test_delete_product_reclaims_git_workspace(client_with_ws) -> None:
+    """Deleting a product must reclaim ``var/products/<id>``. Production kept
+    every deleted product's repo forever — 18 orphan dirs (300MB) were found
+    live, and after the R2 migration the same leak would strand bundle objects."""
+    import uuid as _uuid  # noqa: PLC0415 — local-only
+
+    from backend.storage.product_workspace import product_workspace_path  # noqa: PLC0415
+
+    c, _ = client_with_ws
+    r = await c.post("/api/v1/products", json={"name": "Doomed", "slug": "doomed"})
+    assert r.status_code == 201, r.text
+    product_id = _uuid.UUID(r.json()["id"])
+    path = product_workspace_path(product_id)
+    assert path.is_dir()
+
+    r = await c.delete(f"/api/v1/products/{product_id}")
+    assert r.status_code == 204, r.text
+
+    assert not path.exists(), "product repo must be reclaimed on delete"

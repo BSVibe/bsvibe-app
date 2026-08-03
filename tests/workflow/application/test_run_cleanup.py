@@ -18,10 +18,12 @@ import pytest
 import pytest_asyncio
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from backend.identity.workspaces_db import ProductRow, WorkspaceRow
 from backend.workflow.application.run_cleanup import (
     cancel_product_runs,
     cancel_run,
     discard_run,
+    reap_orphan_product_workspaces,
     reap_terminal_run_workspaces,
 )
 from backend.workflow.infrastructure.db import (
@@ -607,3 +609,71 @@ async def test_reap_orphan_passes_none_product_id(sf, tmp_path):
             s, remover=fake_remover, runs_root=runs_root, orphan_grace_s=24 * 3600
         )
     assert seen == [(None, orphan)]
+
+
+# ---------------------------------------------------------------------------
+# reap_orphan_product_workspaces — bound var/products to live products
+# ---------------------------------------------------------------------------
+
+
+async def test_reap_orphan_product_workspaces(sf, tmp_path):
+    """A product repo whose ProductRow is gone is dead weight forever — 18 such
+    dirs (300MB, 90% of var/products) were found in production. Reap them past a
+    grace window; keep live products and freshly-created dirs (the repo is
+    provisioned right after the row commits, but a grace window costs nothing
+    and removes the race entirely)."""
+    products_root = tmp_path / "products"
+    products_root.mkdir()
+
+    live = uuid.uuid4()
+    ws_id = uuid.uuid4()
+    async with sf() as s:
+        # PG enforces the products.workspace_id FK — seed the parent first.
+        s.add(
+            WorkspaceRow(
+                id=ws_id,
+                name="test-ws",
+                safe_mode=False,
+                created_at=datetime.now(tz=UTC),
+                updated_at=datetime.now(tz=UTC),
+            )
+        )
+        await s.flush()
+        s.add(
+            ProductRow(
+                id=live,
+                workspace_id=ws_id,
+                name="Live",
+                slug="live",
+                created_at=datetime.now(tz=UTC),
+                updated_at=datetime.now(tz=UTC),
+            )
+        )
+        await s.commit()
+
+    old_orphan = uuid.uuid4()
+    fresh_orphan = uuid.uuid4()
+    for pid in (live, old_orphan, fresh_orphan):
+        (products_root / str(pid)).mkdir()
+    old_ts = datetime.now(tz=UTC).timestamp() - 48 * 3600
+    os.utime(products_root / str(old_orphan), (old_ts, old_ts))
+
+    removed: list[uuid.UUID] = []
+
+    async def fake_remover(pid):
+        removed.append(pid)
+
+    async with sf() as s:
+        reaped = await reap_orphan_product_workspaces(
+            s, remover=fake_remover, products_root=products_root, grace_s=24 * 3600
+        )
+
+    assert reaped == [old_orphan]
+    assert removed == [old_orphan]
+    assert live not in reaped, "a live product's repo must never be reaped"
+    assert fresh_orphan not in reaped, "a fresh dir may be mid-provision — keep"
+
+
+async def test_reap_orphan_product_workspaces_no_root_is_noop(sf, tmp_path):
+    async with sf() as s:
+        assert (await reap_orphan_product_workspaces(s, products_root=tmp_path / "nope")) == []

@@ -26,6 +26,7 @@ from backend.storage.product_workspace import (
     init_product_workspace,
     list_product_tree,
     product_workspace_path,
+    remove_product_workspace,
     remove_run_worktree,
     run_branch_name,
     run_worktree_path,
@@ -383,3 +384,31 @@ async def test_list_product_tree_rejects_traversal() -> None:
     await init_product_workspace(product_id)
     assert await list_product_tree(product_id, "../..") == []
     assert await list_product_tree(product_id, "/etc") == []
+
+
+# ---------------------------------------------------------------------------
+# remove_product_workspace — the product repo is reclaimable
+# ---------------------------------------------------------------------------
+
+
+async def test_remove_product_workspace_reclaims_repo() -> None:
+    """Deleting a product must reclaim its on-disk repo. Production kept every
+    deleted product's repo forever — 18 such dirs (300MB) were found live."""
+    product_id = uuid.uuid4()
+    await init_product_workspace(product_id)
+    path = product_workspace_path(product_id)
+    assert path.is_dir()
+
+    await remove_product_workspace(product_id)
+
+    assert not path.exists()
+
+
+async def test_remove_product_workspace_is_idempotent() -> None:
+    """A second remove (crash-then-retry, or a product that never had a repo)
+    is a no-op, not an error."""
+    product_id = uuid.uuid4()
+    await remove_product_workspace(product_id)  # never existed
+    await init_product_workspace(product_id)
+    await remove_product_workspace(product_id)
+    await remove_product_workspace(product_id)  # must not raise
