@@ -250,6 +250,13 @@ class Settings(BaseSettings):
     # ``s3`` targets Cloudflare R2 or any S3-compatible endpoint. A misconfigured
     # ``s3`` fails LOUD at construction rather than silently falling back to
     # local disk — see ``backend.storage.product_bundle_store.build_bundle_store``.
+    # How long a product must go untouched before its on-disk repo is reclaimed
+    # (the bundle in the store is the record; the repo is a cache). The dial
+    # between disk footprint and R2 churn — ``0`` reclaims as soon as a
+    # product's last run goes terminal, i.e. full symmetry with the github path
+    # at the cost of re-fetching on every run.
+    product_repo_idle_grace_s: float = 24 * 3600
+
     product_bundle_backend: str = "local"
     product_bundle_local_root: str = "var/bundles"
     product_bundle_s3_endpoint: str = ""

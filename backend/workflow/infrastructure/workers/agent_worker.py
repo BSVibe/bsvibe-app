@@ -355,6 +355,7 @@ class AgentWorker(BaseWorker):
             return 0
         self._last_workspace_reap_monotonic = now
         from backend.workflow.application.run_cleanup import (  # noqa: PLC0415
+            reap_idle_product_workspaces,
             reap_orphan_product_workspaces,
             reap_terminal_run_workspaces,
         )
@@ -362,6 +363,7 @@ class AgentWorker(BaseWorker):
         async with self._session_factory() as session:
             reaped = await reap_terminal_run_workspaces(session)
             reaped_products = await reap_orphan_product_workspaces(session)
+            reaped_products += await reap_idle_product_workspaces(session)
             # removers are filesystem-only (no DB writes), but commit to release
             # the short read txn promptly (parity with _reap_stale_claims).
             await session.commit()
