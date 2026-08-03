@@ -242,6 +242,21 @@ class Settings(BaseSettings):
     # Per-run worktrees branch from this and merge back on ship.
     product_workspace_root: str = "var/products"
 
+    # Product bundle store — a product's DURABLE home, OFF this box. The repo on
+    # local disk is a working copy; the git bundle in this store is the record.
+    # A local-only product's source is otherwise unbacked-up (github-bound ones
+    # are safe on GitHub) and the disk grows without bound as products pile up.
+    # ``local`` keeps bundles on disk (dev/test, or a second disk / NAS mount);
+    # ``s3`` targets Cloudflare R2 or any S3-compatible endpoint. A misconfigured
+    # ``s3`` fails LOUD at construction rather than silently falling back to
+    # local disk — see ``backend.storage.product_bundle_store.build_bundle_store``.
+    product_bundle_backend: str = "local"
+    product_bundle_local_root: str = "var/bundles"
+    product_bundle_s3_endpoint: str = ""
+    product_bundle_s3_bucket: str = ""
+    product_bundle_s3_access_key: str = ""
+    product_bundle_s3_secret_key: str = ""
+
     # GitHub CI-green auto-merge (backend.workflow ... MergeWatchWorker). When on,
     # a PR opened by github delivery is watched and squash-merged once its CI is
     # green + mergeable, with per-repo serialization + conflict recovery. OFF keeps
