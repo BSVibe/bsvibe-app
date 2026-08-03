@@ -300,6 +300,24 @@ async def push_product_bundle(
     return True
 
 
+async def ensure_or_init_product_workspace(
+    product_id: uuid.UUID,
+    *,
+    store: ProductBundleStore | None = None,
+) -> None:
+    """Guarantee a usable product repo for a run: restore it from the durable
+    bundle, or initialise an empty one when there is genuinely nothing to
+    restore.
+
+    Order matters and is the whole reason this is one function rather than two
+    calls at every call site: initialising first (or unconditionally) hands the
+    run a BLANK repo whenever a materialise was needed, and the agent
+    "rebuilds" a product that already exists.
+    """
+    if not await ensure_product_workspace(product_id, store=store):
+        await init_product_workspace(product_id)
+
+
 async def read_product_file(
     product_id: uuid.UUID,
     ref: str,
@@ -895,6 +913,7 @@ __all__ = [
     "merge_to_main",
     "product_workspace_lock",
     "product_workspace_path",
+    "ensure_or_init_product_workspace",
     "ensure_product_workspace",
     "push_product_bundle",
     "read_product_file",
