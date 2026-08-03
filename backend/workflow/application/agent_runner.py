@@ -90,19 +90,39 @@ def _with_credits_hint(reason: str) -> str:
     return reason + _CREDITS_HINT
 
 
-def _is_linked_worktree(worktree: Path) -> bool:
-    """True iff ``worktree`` is a LINKED git worktree — i.e. ``.git`` is the
-    gitdir-pointer FILE that shares the product repo's ref store.
+async def delivers_via_local_product_repo(
+    session: AsyncSession, run: ExecutionRun
+) -> bool:
+    """True iff this run's work ships by fast-forwarding the LOCAL product repo.
 
-    Only a linked worktree's run branch is visible to the product repo, so only
-    it can be auto-shipped via the local ``merge_to_main`` fast-forward. A
-    github-binding-provisioned run is a STANDALONE CLONE (``.git`` is a
-    DIRECTORY with its own ref store + ``origin`` remote); its branch is
-    invisible to the product repo and ``merge_to_main`` can only fail there —
-    those runs deliver via the push+PR path instead (issue #362). A run with no
-    ``.git`` at all (glue tests bypassing the provisioner) is also not linked.
+    Ownership is decided by the SAME source the workspace provisioner branches
+    on — the workspace's github delivery binding. A github-bound run was
+    provisioned as a clone of the github repo and delivers via the push+PR path;
+    the local ``merge_to_main`` fast-forward can only fail there (issue #362), so
+    the gate must skip it.
+
+    This deliberately does NOT infer ownership from the workspace's filesystem
+    shape (``.git`` being a gitdir-pointer FILE vs a DIRECTORY), which is what it
+    used to do. That shape is an accident of today's provisioning: local products
+    get a linked worktree only because their repo happens to live on the same
+    disk. The moment they are materialised as full clones from a remote bundle,
+    a shape check would silently stop auto-shipping EVERY local product. The
+    filesystem is still consulted for one honest question — was a workspace
+    provisioned at all — so glue tests that bypass the provisioner keep their
+    pre-W2 behaviour of staying at REVIEW_READY.
     """
-    return (worktree / ".git").is_file()
+    if run.product_id is None:
+        return False
+    from backend.storage.product_workspace import run_worktree_path  # noqa: PLC0415
+
+    if not (run_worktree_path(run.id) / ".git").exists():
+        return False
+    from backend.workflow.application.delivery.connector_dispatch import (  # noqa: PLC0415
+        resolve_github_binding,
+    )
+
+    binding = await resolve_github_binding(session, workspace_id=run.workspace_id)
+    return binding is None
 
 
 class AgentRunner:
@@ -310,13 +330,10 @@ class AgentRunner:
         # actually have a git worktree on disk. Glue tests that bypass
         # the workspace provisioner (no worktree) skip auto-ship and
         # leave the run at REVIEW_READY — exactly the pre-W2 invariant.
-        if to_status is RunStatus.REVIEW_READY and run.product_id is not None:
-            from backend.storage.product_workspace import (  # noqa: PLC0415
-                run_worktree_path,
-            )
-
-            if _is_linked_worktree(run_worktree_path(run.id)):
-                await self._auto_ship_product_run(run)
+        if to_status is RunStatus.REVIEW_READY and await delivers_via_local_product_repo(
+            self._session, run
+        ):
+            await self._auto_ship_product_run(run)
 
         # P1-L2 — design→impl handoff. When a DESIGN-stage run in a
         # ``design_then_impl`` pipeline reaches its verified terminal, spawn the
