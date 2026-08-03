@@ -428,6 +428,7 @@ async def _ship_decision_run(
             commit_worktree,
             force_merge_theirs,
             product_workspace_lock,
+            push_product_bundle,
             remove_run_worktree,
         )
 
@@ -443,6 +444,18 @@ async def _ship_decision_run(
             )
             async with product_workspace_lock(session, run.product_id):
                 await force_merge_theirs(run.product_id, run.id)
+                # Publish inside the lock, same as auto-ship: a forced ship
+                # still moves ``main``, so the durable off-box record must
+                # follow it or the product's remote copy silently goes stale.
+                try:
+                    await push_product_bundle(run.product_id)
+                except Exception:  # noqa: BLE001 — durability must not fail the ship
+                    logger.warning(
+                        "ship_anyway_bundle_push_failed",
+                        run_id=str(run.id),
+                        product_id=str(run.product_id),
+                        exc_info=True,
+                    )
             try:
                 await remove_run_worktree(run.product_id, run.id)
             except ProductWorkspaceError:

@@ -72,6 +72,11 @@ def _isolate_workspace_roots(tmp_path, monkeypatch):
         get_settings(), "product_workspace_root", str(tmp_path / "products"), raising=False
     )
     monkeypatch.setattr(get_settings(), "run_workspace_root", str(tmp_path / "runs"), raising=False)
+    # Ship publishes the product's bundle — point the store at tmp_path too.
+    monkeypatch.setattr(get_settings(), "product_bundle_backend", "local", raising=False)
+    monkeypatch.setattr(
+        get_settings(), "product_bundle_local_root", str(tmp_path / "bundles"), raising=False
+    )
 
 
 async def _git(*args: str, cwd) -> str:
@@ -211,6 +216,20 @@ async def test_verified_run_auto_ships_to_main(sf: async_sessionmaker[AsyncSessi
     assert (product_path / "hello.py").read_text() == "def add(a, b):\n    return a + b\n"
     # Worktree is gone (auto-ship cleanup ran).
     assert not run_worktree_path(run_id).exists()
+
+    # The ship also PUBLISHED the product to its durable off-box home, and that
+    # bundle restores the shipped tree — this is what makes a local product
+    # survive the loss of this disk.
+    from backend.storage.product_bundle_store import build_bundle_store
+
+    store = build_bundle_store()
+    assert await store.exists(product_id) is True, "ship must publish the bundle"
+
+    fetched = product_path.parent.parent / "shipped.bundle"
+    assert await store.get(product_id, fetched) is True
+    restored = product_path.parent.parent / "restored"
+    await _git("clone", str(fetched), str(restored), cwd=fetched.parent)
+    assert (restored / "hello.py").read_text() == "def add(a, b):\n    return a + b\n"
 
 
 # ---------------------------------------------------------------------------

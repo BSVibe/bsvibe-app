@@ -405,6 +405,10 @@ class AgentRunner:
                     product_id=str(product_id),
                     main_sha=sha,
                 )
+                # Publish the merged tree to the product's durable off-box home,
+                # INSIDE the lock: two concurrent ships must not publish out of
+                # order and leave the older tree as the product's record.
+                await self._push_bundle_best_effort(product_id, run)
             # Transition past REVIEW_READY → SHIPPED. The history row
             # is recorded directly here rather than re-calling
             # ``transition`` (which would recurse).
@@ -447,6 +451,34 @@ class AgentRunner:
             )
             # Leave at REVIEW_READY; next verify round will pull main
             # again and either succeed or surface a conflict.
+
+    async def _push_bundle_best_effort(self, product_id: uuid.UUID, run: ExecutionRun) -> None:
+        """Publish the product's bundle without ever failing the ship.
+
+        The merge into ``main`` has already succeeded and the work is safe on
+        local disk, so a transient object-store outage must NOT strand the run
+        at REVIEW_READY — it would re-run the whole verify→ship cycle for a
+        problem that has nothing to do with the run. The failure is logged LOUD
+        because it means the product is not durable yet, and the next ship
+        republishes the full history anyway (the bundle is a whole-repo
+        snapshot, not a delta, so a missed push self-heals).
+
+        The step that DELETES the local repo must gate on a successful push —
+        that is what makes this best-effort safe rather than lossy.
+        """
+        from backend.storage.product_workspace import (  # noqa: PLC0415 — lazy
+            push_product_bundle,
+        )
+
+        try:
+            await push_product_bundle(product_id)
+        except Exception:  # noqa: BLE001 — durability must not fail the ship
+            logger.warning(
+                "auto_ship_bundle_push_failed",
+                run_id=str(run.id),
+                product_id=str(product_id),
+                exc_info=True,
+            )
 
     async def _maybe_spawn_impl_run(self, design_run: ExecutionRun) -> None:
         """P1-L2: chain an IMPLEMENTATION run after a verified DESIGN run.
