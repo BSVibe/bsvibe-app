@@ -11,7 +11,7 @@ from __future__ import annotations
 import asyncio
 import os
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -23,6 +23,7 @@ from backend.workflow.application.run_cleanup import (
     cancel_product_runs,
     cancel_run,
     discard_run,
+    reap_idle_product_workspaces,
     reap_orphan_product_workspaces,
     reap_terminal_run_workspaces,
 )
@@ -677,3 +678,142 @@ async def test_reap_orphan_product_workspaces(sf, tmp_path):
 async def test_reap_orphan_product_workspaces_no_root_is_noop(sf, tmp_path):
     async with sf() as s:
         assert (await reap_orphan_product_workspaces(s, products_root=tmp_path / "nope")) == []
+
+
+# ---------------------------------------------------------------------------
+# reap_idle_product_workspaces — the disk holds only what is being worked on
+# ---------------------------------------------------------------------------
+
+
+async def _seed_product(sf, *, product_id, ws_id, updated_at):
+    async with sf() as s:
+        if not await s.get(WorkspaceRow, ws_id):
+            s.add(
+                WorkspaceRow(
+                    id=ws_id,
+                    name="ws",
+                    safe_mode=False,
+                    created_at=datetime.now(tz=UTC),
+                    updated_at=datetime.now(tz=UTC),
+                )
+            )
+            await s.flush()
+        s.add(
+            ProductRow(
+                id=product_id,
+                workspace_id=ws_id,
+                name=str(product_id)[:8],
+                slug=str(product_id)[:8],
+                created_at=updated_at,
+                updated_at=updated_at,
+            )
+        )
+        await s.commit()
+
+
+async def test_reap_idle_reclaims_only_after_a_clean_publish(sf, tmp_path):
+    """The repo on disk is a CACHE; the bundle is the record. Reclaiming a repo
+    whose newest state is not in the store destroys work, so the reclaim
+    publishes first and only deletes when that publish came back clean."""
+    products_root = tmp_path / "products"
+    products_root.mkdir()
+    ws_id = uuid.uuid4()
+    idle, unpublishable = uuid.uuid4(), uuid.uuid4()
+    old = datetime.now(tz=UTC) - timedelta(hours=48)
+    for pid in (idle, unpublishable):
+        await _seed_product(sf, product_id=pid, ws_id=ws_id, updated_at=old)
+        (products_root / str(pid)).mkdir()
+
+    published: list[uuid.UUID] = []
+    removed: list[uuid.UUID] = []
+
+    async def publisher(pid):
+        published.append(pid)
+        return pid != unpublishable  # the conflicted product cannot publish
+
+    async def remover(pid):
+        removed.append(pid)
+
+    async with sf() as s:
+        reaped = await reap_idle_product_workspaces(
+            s,
+            publisher=publisher,
+            remover=remover,
+            products_root=products_root,
+            idle_grace_s=3600,
+        )
+
+    assert set(published) == {idle, unpublishable}, "both are candidates"
+    assert reaped == [idle]
+    assert removed == [idle], "a product that could not publish must KEEP its repo"
+
+
+async def test_reap_idle_keeps_products_with_a_live_run(sf, workspace_id, tmp_path):
+    """A non-terminal run's worktree is linked to the product repo — deleting it
+    mid-run would break the run outright."""
+    products_root = tmp_path / "products"
+    products_root.mkdir()
+    busy = uuid.uuid4()
+    old = datetime.now(tz=UTC) - timedelta(hours=48)
+    await _seed_product(sf, product_id=busy, ws_id=workspace_id, updated_at=old)
+    (products_root / str(busy)).mkdir()
+    async with sf() as s:
+        await _seed_run(s, workspace_id, status=RunStatus.RUNNING, product_id=busy)
+        await s.commit()
+
+    async def publisher(pid):  # pragma: no cover — must not be reached
+        raise AssertionError("a busy product must not even be published")
+
+    async with sf() as s:
+        reaped = await reap_idle_product_workspaces(
+            s,
+            publisher=publisher,
+            remover=publisher,
+            products_root=products_root,
+            idle_grace_s=3600,
+        )
+    assert reaped == []
+
+
+async def test_reap_idle_keeps_recently_active_products(sf, workspace_id, tmp_path):
+    """Reclaiming a product that was just worked on only buys a re-download on
+    the next run. The grace window is the dial between disk and churn."""
+    products_root = tmp_path / "products"
+    products_root.mkdir()
+    fresh = uuid.uuid4()
+    await _seed_product(sf, product_id=fresh, ws_id=workspace_id, updated_at=datetime.now(tz=UTC))
+    (products_root / str(fresh)).mkdir()
+
+    async def publisher(pid):  # pragma: no cover
+        raise AssertionError("a recently-active product must not be reclaimed")
+
+    async with sf() as s:
+        reaped = await reap_idle_product_workspaces(
+            s,
+            publisher=publisher,
+            remover=publisher,
+            products_root=products_root,
+            idle_grace_s=3600,
+        )
+    assert reaped == []
+
+
+async def test_reap_idle_ignores_dirs_without_a_product_row(sf, tmp_path):
+    """Those belong to the orphan reaper, which has its own (longer) grace and
+    does not try to publish a deleted product."""
+    products_root = tmp_path / "products"
+    products_root.mkdir()
+    (products_root / str(uuid.uuid4())).mkdir()
+
+    async def publisher(pid):  # pragma: no cover
+        raise AssertionError("an orphan dir is not this reaper's business")
+
+    async with sf() as s:
+        reaped = await reap_idle_product_workspaces(
+            s,
+            publisher=publisher,
+            remover=publisher,
+            products_root=products_root,
+            idle_grace_s=0,
+        )
+    assert reaped == []

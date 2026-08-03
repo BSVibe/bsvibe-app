@@ -34,7 +34,7 @@ from __future__ import annotations
 import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import structlog
@@ -248,6 +248,154 @@ async def reap_orphan_product_workspaces(
     if reaped:
         logger.info("reaped_orphan_product_workspaces", count=len(reaped))
     return reaped
+
+
+#: How long a product must go untouched before its on-disk repo is reclaimed.
+#: The dial between disk footprint and R2 churn: reclaiming a product that was
+#: just worked on only buys a re-download on the next run. ``0`` makes the
+#: reclaim fire as soon as a product's last run goes terminal — full symmetry
+#: with the github path, at the cost of re-fetching on every run.
+_PRODUCT_IDLE_GRACE_S = 24 * 3600
+
+
+async def reap_idle_product_workspaces(
+    session: AsyncSession,
+    *,
+    publisher: Callable[[uuid.UUID], Awaitable[bool]] | None = None,
+    remover: Callable[[uuid.UUID], Awaitable[None]] | None = None,
+    products_root: Path | None = None,
+    idle_grace_s: float | None = None,
+) -> list[uuid.UUID]:
+    """Reclaim the on-disk repo of products nobody is working on, so the disk
+    holds only active work rather than every product that ever existed.
+
+    The repo on disk is a CACHE; the bundle in the store is the record. Three
+    gates, each closing a way this could destroy work:
+
+    1. **A live run keeps its product.** A non-terminal run's worktree is linked
+       to the product repo — deleting it mid-run breaks the run outright.
+    2. **Recently-active products stay.** Reclaiming a product that was just
+       worked on only buys a re-download on the next run.
+    3. **Publish first, and only reclaim on a CLEAN publish.** This is what
+       makes the best-effort publishes on the ship paths safe: if the newest
+       state never reached the store — an outage, or an unresolved merge
+       conflict with the store's copy — the repo STAYS and the product simply
+       keeps costing disk until someone resolves it. Nothing is ever deleted on
+       the strength of an assumption that it was published.
+
+    Dirs with no product row are left to :func:`reap_orphan_product_workspaces`,
+    which has its own longer grace and does not try to publish a dead product.
+    """
+    from backend.config import get_settings  # noqa: PLC0415 — avoid import cycle
+    from backend.identity.workspaces_db import ProductRow  # noqa: PLC0415
+
+    settings = get_settings()
+    root = products_root or Path(settings.product_workspace_root)
+    if not root.is_dir():
+        return []
+    on_disk = set(_scan_run_workspace_dirs(root))
+    if not on_disk:
+        return []
+
+    if idle_grace_s is None:
+        idle_grace_s = getattr(settings, "product_repo_idle_grace_s", _PRODUCT_IDLE_GRACE_S)
+    cutoff = datetime.now(tz=UTC) - timedelta(seconds=idle_grace_s)
+    busy = {
+        row[0]
+        for row in (
+            await session.execute(
+                select(ExecutionRun.product_id).where(
+                    ExecutionRun.product_id.in_(on_disk),
+                    ExecutionRun.status.not_in(tuple(_TERMINAL)),
+                )
+            )
+        ).all()
+    }
+    # Activity = the product row's own updated_at OR any run's, whichever is
+    # newer: a product created moments ago has no runs yet but is very much live.
+    recent = {
+        row[0]
+        for row in (
+            await session.execute(
+                select(ExecutionRun.product_id).where(
+                    ExecutionRun.product_id.in_(on_disk),
+                    ExecutionRun.updated_at >= cutoff,
+                )
+            )
+        ).all()
+    }
+    candidates = [
+        row[0]
+        for row in (
+            await session.execute(
+                select(ProductRow.id).where(
+                    ProductRow.id.in_(on_disk),
+                    ProductRow.updated_at < cutoff,
+                )
+            )
+        ).all()
+        if row[0] not in busy and row[0] not in recent
+    ]
+    if not candidates:
+        return []
+
+    if publisher is None:
+        publisher = _bundle_publisher_for(session)
+    if remover is None:
+        from backend.storage.product_workspace import (  # noqa: PLC0415
+            remove_product_workspace,
+        )
+
+        remover = remove_product_workspace
+
+    reaped: list[uuid.UUID] = []
+    for product_id in candidates:
+        try:
+            if not await publisher(product_id):
+                logger.info(
+                    "product_repo_kept_unpublished",
+                    product_id=str(product_id),
+                )
+                continue
+            await remover(product_id)
+            reaped.append(product_id)
+        except Exception:  # noqa: BLE001 — one product must not abort the sweep
+            logger.warning(
+                "reap_idle_product_workspace_failed",
+                product_id=str(product_id),
+                exc_info=True,
+            )
+    if reaped:
+        logger.info("reaped_idle_product_workspaces", count=len(reaped))
+    return reaped
+
+
+def _bundle_publisher_for(
+    session: AsyncSession,
+) -> Callable[[uuid.UUID], Awaitable[bool]]:
+    """The default publisher: publish under the product lock and report whether
+    the store now holds the product's newest state — the ONLY condition under
+    which the local repo may be deleted.
+
+    The lock is taken with the reaper's own session, so a ship in flight for
+    this product makes the reclaim back off rather than race its merge.
+    """
+
+    async def _publish(product_id: uuid.UUID) -> bool:
+        from backend.storage.product_workspace import (  # noqa: PLC0415
+            ProductWorkspaceBusy,
+            product_workspace_lock,
+            publish_product_bundle,
+        )
+
+        try:
+            async with product_workspace_lock(session, product_id):
+                outcome = await publish_product_bundle(product_id)
+        except ProductWorkspaceBusy:
+            return False
+        return outcome.published and outcome.status == "clean"
+
+    return _publish
 
 
 async def _cancel(session: AsyncSession, run: ExecutionRun, *, reason: str) -> bool:
