@@ -105,6 +105,10 @@ services:
       BSVIBE_PRODUCT_BUNDLE_S3_ACCESS_KEY: ${BSVIBE_PRODUCT_BUNDLE_S3_ACCESS_KEY:-}
       BSVIBE_PRODUCT_BUNDLE_S3_SECRET_KEY: ${BSVIBE_PRODUCT_BUNDLE_S3_SECRET_KEY:-}
       BSVIBE_PRODUCT_REPO_IDLE_GRACE_S: ${BSVIBE_PRODUCT_REPO_IDLE_GRACE_S:-86400}
+      # GitHub CI-green auto-merge (MergeWatchWorker). Production runs with this
+      # ON; without the passthrough the container falls back to the `false`
+      # default and the whole auto-merge + conflict-recovery path silently stops.
+      BSVIBE_GITHUB_AUTO_MERGE_ENABLED: ${BSVIBE_GITHUB_AUTO_MERGE_ENABLED:-false}
       BSVIBE_AUDIT_RELAY_URL: ${BSVIBE_AUDIT_RELAY_URL:-}
       BSVIBE_OAUTH_ISSUER: ${BSVIBE_OAUTH_ISSUER:-https://api.bsvibe.dev}
       # T2b-1 — the OAuth signing key. It MUST be the same value in every container: the
@@ -174,6 +178,10 @@ services:
       BSVIBE_PRODUCT_BUNDLE_S3_ACCESS_KEY: ${BSVIBE_PRODUCT_BUNDLE_S3_ACCESS_KEY:-}
       BSVIBE_PRODUCT_BUNDLE_S3_SECRET_KEY: ${BSVIBE_PRODUCT_BUNDLE_S3_SECRET_KEY:-}
       BSVIBE_PRODUCT_REPO_IDLE_GRACE_S: ${BSVIBE_PRODUCT_REPO_IDLE_GRACE_S:-86400}
+      # GitHub CI-green auto-merge (MergeWatchWorker). Production runs with this
+      # ON; without the passthrough the container falls back to the `false`
+      # default and the whole auto-merge + conflict-recovery path silently stops.
+      BSVIBE_GITHUB_AUTO_MERGE_ENABLED: ${BSVIBE_GITHUB_AUTO_MERGE_ENABLED:-false}
       BSVIBE_AUDIT_RELAY_URL: ${BSVIBE_AUDIT_RELAY_URL:-}
       # The worker builds notification CTAs (보고서 보기 → <pwa_url>/…) so it needs
       # the PUBLIC PWA origin, not the localhost default. Mirrors backend.
