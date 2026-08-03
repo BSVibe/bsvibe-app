@@ -42,9 +42,7 @@ async def sf():
 
 @pytest.fixture(autouse=True)
 def _isolate_run_root(tmp_path, monkeypatch):
-    monkeypatch.setattr(
-        get_settings(), "run_workspace_root", str(tmp_path / "runs"), raising=False
-    )
+    monkeypatch.setattr(get_settings(), "run_workspace_root", str(tmp_path / "runs"), raising=False)
 
 
 def _run(*, workspace_id: uuid.UUID, product_id: uuid.UUID | None) -> ExecutionRun:

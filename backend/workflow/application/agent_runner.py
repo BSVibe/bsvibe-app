@@ -90,9 +90,7 @@ def _with_credits_hint(reason: str) -> str:
     return reason + _CREDITS_HINT
 
 
-async def delivers_via_local_product_repo(
-    session: AsyncSession, run: ExecutionRun
-) -> bool:
+async def delivers_via_local_product_repo(session: AsyncSession, run: ExecutionRun) -> bool:
     """True iff this run's work ships by fast-forwarding the LOCAL product repo.
 
     Ownership is decided by the SAME source the workspace provisioner branches
