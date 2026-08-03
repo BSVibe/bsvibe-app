@@ -91,14 +91,10 @@ async def _product_workspace_provisioner(
     workspace_dir: Path,
 ) -> bool:
     """W1: provision the run's workspace_dir as a git worktree of the
-    product's main branch.
-
-    The product repo is RESTORED from its durable bundle when it is not on disk
-    (the normal case once the repo's home is off-box), and only initialised
-    empty when the product has genuinely never shipped. Order matters: an
-    unconditional ``init_product_workspace`` would hand the run a BLANK repo
-    whenever a materialise was needed, and the agent would "rebuild" a product
-    that already exists.
+    product's main branch. Restores the repo from its durable bundle first and
+    inits an empty one ONLY when nothing is there to restore — an unconditional
+    init would hand the run a BLANK repo whenever a materialise was needed, and
+    the agent would "rebuild" a product that already exists.
     """
     if run.product_id is None:
         return False
