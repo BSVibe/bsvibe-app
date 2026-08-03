@@ -91,18 +91,26 @@ async def _product_workspace_provisioner(
     workspace_dir: Path,
 ) -> bool:
     """W1: provision the run's workspace_dir as a git worktree of the
-    product's main branch. Lazily initialises the product workspace if
-    missing.
+    product's main branch.
+
+    The product repo is RESTORED from its durable bundle when it is not on disk
+    (the normal case once the repo's home is off-box), and only initialised
+    empty when the product has genuinely never shipped. Order matters: an
+    unconditional ``init_product_workspace`` would hand the run a BLANK repo
+    whenever a materialise was needed, and the agent would "rebuild" a product
+    that already exists.
     """
     if run.product_id is None:
         return False
 
     from backend.storage.product_workspace import (  # noqa: PLC0415 — lazy
         add_run_worktree,
+        ensure_product_workspace,
         init_product_workspace,
     )
 
-    await init_product_workspace(run.product_id)
+    if not await ensure_product_workspace(run.product_id):
+        await init_product_workspace(run.product_id)
     if workspace_dir.exists() and not any(workspace_dir.iterdir()):  # noqa: ASYNC240
         workspace_dir.rmdir()  # noqa: ASYNC240
     await add_run_worktree(run.product_id, run.id)

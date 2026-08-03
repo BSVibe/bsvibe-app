@@ -18,7 +18,6 @@ The captured-diff read (``GET /{id}/diff``) lives in the sibling
 from __future__ import annotations
 
 import uuid
-from pathlib import Path
 from typing import Annotated
 
 import structlog
@@ -28,8 +27,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.api.deps import get_artifact_store, get_db_session, get_workspace_id
 from backend.api.v1._workflow_deps import get_deliverable_repository
-from backend.config import get_settings
-from backend.storage.artifact_store import ArtifactStore, LocalFilesystemArtifactStore
+from backend.storage.artifact_store import ArtifactStore
 from backend.workflow.domain.repositories import DeliverableRepository
 from backend.workflow.infrastructure.db import (
     ExecutionRun,
@@ -155,9 +153,10 @@ async def _read_from_product_main(
     run = await session.get(ExecutionRun, run_id)
     if run is None or run.product_id is None:
         return None
-    product_store = LocalFilesystemArtifactStore(Path(get_settings().product_workspace_root))
+    from backend.storage.product_workspace import read_product_file  # noqa: PLC0415
+
     try:
-        return product_store.read_bytes(run.product_id, ref)
+        return await read_product_file(run.product_id, ref)
     except (ValueError, FileNotFoundError, IsADirectoryError):
         return None
 
