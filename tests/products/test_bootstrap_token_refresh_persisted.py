@@ -125,6 +125,9 @@ async def test_bootstrap_persists_a_rotated_github_token(session_factory, tmp_pa
                 is_active=True,
             )
         )
+        # PG enforces the token→account FK that SQLite ignores: the account row
+        # must land before the token that references it.
+        await s.flush()
         s.add(
             ConnectorOAuthTokenRow(
                 connector_account_id=account_id,
