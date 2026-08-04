@@ -126,4 +126,43 @@ async def resolve_connector_credentials(
     return {"token": cipher.decrypt(account.signing_secret_ciphertext)}
 
 
-__all__ = ["ConnectorReauthRequired", "resolve_connector_credentials"]
+async def resolve_github_token(
+    session: AsyncSession,
+    *,
+    workspace_id: uuid.UUID,
+    cipher: CredentialCipher,
+) -> str | None:
+    """The workspace's github git credential, or ``None`` when unconnected.
+
+    Repo-AGNOSTIC on purpose. ``resolve_github_binding`` (delivery) additionally
+    requires ``delivery_config['repo']`` because it pushes to that one target;
+    a clone of an ARBITRARY repo (product bootstrap) must not inherit that
+    constraint — the credential is account-scoped, not repo-scoped.
+
+    Returns ``None`` rather than raising when no active github connector exists,
+    so callers can fall back to an anonymous clone (public repos keep working).
+    """
+    account = (
+        (
+            await session.execute(
+                select(ConnectorAccountRow).where(
+                    ConnectorAccountRow.workspace_id == workspace_id,
+                    ConnectorAccountRow.connector == "github",
+                    ConnectorAccountRow.is_active.is_(True),
+                )
+            )
+        )
+        .scalars()
+        .first()
+    )
+    if account is None:
+        return None
+    creds = await resolve_connector_credentials(session, account=account, cipher=cipher)
+    return creds.get("token") or None
+
+
+__all__ = [
+    "ConnectorReauthRequired",
+    "resolve_connector_credentials",
+    "resolve_github_token",
+]

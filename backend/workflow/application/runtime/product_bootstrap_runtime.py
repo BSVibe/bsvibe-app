@@ -37,6 +37,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from backend.config import Settings, get_settings
+from backend.connectors.auth.resolve import resolve_github_token
 from backend.dispatch.caller_registry import CALLER_KNOWLEDGE_INGEST
 from backend.identity.workspaces_db import ProductRow, WorkspaceRow
 from backend.knowledge.facade import (
@@ -52,6 +53,7 @@ from backend.products.application.bootstrap import (
     register_bootstrap_anchors,
     run_repo_bootstrap,
 )
+from backend.router.accounts.crypto import CredentialCipher, _key_from_settings
 from backend.shared.core.http import redact_url_password
 from backend.storage.product_workspace import (
     ProductWorkspaceError,
@@ -63,6 +65,13 @@ from backend.workflow.domain.gate_scaffold import scaffold_gate
 from backend.workflow.infrastructure.delivery.git_ops import GitError, GitOps
 
 logger = structlog.get_logger(__name__)
+
+#: Appended to a credential-less clone failure so ``failed:clone`` distinguishes
+#: "private repo, nothing to authenticate with" from "bad URL".
+_NO_GITHUB_CREDENTIAL_HINT = (
+    "(no active github connector in this workspace — a private repo needs one; "
+    "connect github in Settings, then retry bootstrap)"
+)
 
 
 #: Audit event names. ``audit.product.bootstrap_*`` namespacing matches
@@ -680,12 +689,20 @@ async def run_product_bootstrap_job(  # noqa: PLR0915 — linear clone→scaffol
     # so the dir + ``.git`` exist. For the clone path we wipe + clone
     # fresh — the marker commit is irrelevant once a real repo lands.
     await repo.mark_status(product_id, status=STATUS_CLONING, run_id=run_id)
+    # A private ``repo_url`` needs the workspace's github credential — the same
+    # one the delivery path clones/pushes with. ``None`` (no connector) keeps
+    # the anonymous clone public repos rely on.
+    clone_token = await _resolve_clone_token(session_factory, workspace_id=workspace_id)
     try:
         if repo_path.exists():
             await _remove_dir(repo_path)
-        await git_ops.clone(repo_url, repo_path, token=None, depth=1)
+        await git_ops.clone(repo_url, repo_path, token=clone_token, depth=1)
     except (GitError, ProductWorkspaceError, OSError) as exc:
         msg = _short_error(exc)
+        if clone_token is None:
+            # Without this the founder cannot tell "private repo, no connector"
+            # from "typo in the URL" — git's stderr looks the same for both.
+            msg = f"{msg} {_NO_GITHUB_CREDENTIAL_HINT}"[:512]
         await repo.mark_status(
             product_id,
             status=STATUS_FAILED_CLONE,
@@ -1019,6 +1036,31 @@ async def _remove_dir(path: Path) -> None:
             shutil.rmtree(path)
 
     await asyncio.to_thread(_do)
+
+
+async def _resolve_clone_token(
+    session_factory: async_sessionmaker[AsyncSession],
+    *,
+    workspace_id: uuid.UUID,
+) -> str | None:
+    """The workspace's github credential for the bootstrap clone, or ``None``.
+
+    Best-effort by design: a credential lookup that itself fails (missing KMS
+    key, expired OAuth that cannot refresh) must not turn a *public* repo's
+    bootstrap into a hard failure — the caller falls back to an anonymous clone
+    and, if that fails too, reports the missing credential in the status row.
+    """
+    try:
+        cipher = CredentialCipher(_key_from_settings())
+        async with session_factory() as session:
+            return await resolve_github_token(session, workspace_id=workspace_id, cipher=cipher)
+    except Exception as exc:  # noqa: BLE001 — never block bootstrap on credential lookup
+        logger.warning(
+            "bootstrap_clone_credential_unavailable",
+            workspace_id=str(workspace_id),
+            error=_short_error(exc),
+        )
+        return None
 
 
 def _short_error(exc: BaseException) -> str:
