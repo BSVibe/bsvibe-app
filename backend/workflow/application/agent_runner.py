@@ -119,7 +119,14 @@ async def delivers_via_local_product_repo(session: AsyncSession, run: ExecutionR
         resolve_github_binding,
     )
 
-    binding = await resolve_github_binding(session, workspace_id=run.workspace_id)
+    # Product-scoped (#681) — the ownership question is "was THIS run's product
+    # provisioned as a github clone", and the provisioner resolves the binding
+    # with the same ``product_id``. Asking workspace-wide would call a run
+    # github-bound because a SIBLING product has a github connector, and skip
+    # the local merge_to_main that run actually needs.
+    binding = await resolve_github_binding(
+        session, workspace_id=run.workspace_id, product_id=run.product_id
+    )
     return binding is None
 
 

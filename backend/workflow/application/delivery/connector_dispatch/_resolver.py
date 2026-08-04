@@ -12,9 +12,10 @@ Two resolvers:
   telegram *notification* connector received a raw duplicate of every
   deliverable — implicit routing, which the product forbids).
 * :func:`resolve_github_binding` — the github special case (NOT a simple event
-  builder — it needs git-ops, not just an event dict). Used by both the
-  delivery adapter AND the run-setup workspace provisioner that clones the
-  github target.
+  builder — it needs git-ops, not just an event dict). Used by the delivery
+  adapter, the run-setup workspace provisioner that clones the github target,
+  and the merge-watch poller — so it answers per the run's PRODUCT (#681), not
+  per workspace: they must all agree on WHICH repo a run owns.
 """
 
 from __future__ import annotations
@@ -28,7 +29,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.connectors.db import ConnectorAccountRow
 from backend.extensions.plugin.base import PluginMeta
-from backend.identity.workspaces_db import ResourceBindingRow
+from backend.identity.workspaces_db import ProductRow, ResourceBindingRow
 
 from ._builders import OUTBOUND_EVENT_BUILDERS, OutboundEventBuilder
 
@@ -133,36 +134,120 @@ class GithubBinding:
     base_branch: str
 
 
+def normalize_repo_slug(repo: str) -> str:
+    """Normalize a repo URL or ``owner/name`` to a lowercase ``owner/name``.
+
+    A product's ``repo_url`` is whatever the founder typed (a browser URL, one
+    with a ``.git`` suffix, an ``ssh`` remote) while a connector's
+    ``delivery_config['repo']`` is conventionally the bare ``owner/name`` —
+    comparing the raw strings would call the SAME repo two different repos and
+    silently fall back to "no binding matched". Both sides go through here so
+    the comparison is about identity, not spelling.
+
+    Deliberately duplicated from ``backend.api.webhooks._repo_slug`` (the
+    inbound side, which binds a github issue to its product the same way): the
+    R2c import-linter contract keeps the engine inbound layer out of this
+    package, so it cannot import from here. The two are pinned against each
+    other in ``tests/workflow/test_product_aware_github_binding.py`` so they
+    cannot drift.
+    """
+    s = repo.strip().lower().removesuffix(".git")
+    parts = [
+        p
+        for p in s.replace("https://", "")
+        .replace("http://", "")
+        .replace("git@", "")
+        .replace(":", "/")
+        .split("/")
+        if p
+    ]
+    return "/".join(parts[-2:]) if len(parts) >= 2 else s
+
+
+async def _product_repo_slug(session: AsyncSession, product_id: uuid.UUID | None) -> str | None:
+    """The normalized ``owner/name`` the product OWNS, or ``None``.
+
+    ``None`` covers three cases that all mean "this call has no repo of its
+    own, use the workspace target": no ``product_id`` was passed (a
+    workspace-only caller), the product row is gone, or the product is
+    substrate-only (blank ``repo_url``).
+    """
+    if product_id is None:
+        return None
+    repo_url = await session.scalar(select(ProductRow.repo_url).where(ProductRow.id == product_id))
+    if not repo_url or not repo_url.strip():
+        return None
+    return normalize_repo_slug(repo_url) or None
+
+
 async def resolve_github_binding(
-    session: AsyncSession, *, workspace_id: uuid.UUID
+    session: AsyncSession,
+    *,
+    workspace_id: uuid.UUID,
+    product_id: uuid.UUID | None = None,
 ) -> GithubBinding | None:
-    """The workspace's active github delivery target, or ``None``.
+    """The github delivery target for ``product_id`` in ``workspace_id``, or ``None``.
 
     Mirrors :func:`_resolve_bindings` but for the github special case (github is
     NOT a simple event builder — it needs git-ops, not just an event dict). A
     row qualifies when it is ``is_active``, its ``connector`` is ``github``, and
-    its ``delivery_config`` carries a non-empty ``repo``. The first such row
-    wins (a workspace has one github delivery target in v1).
+    its ``delivery_config`` carries a non-empty ``repo``.
+
+    **Product-scoped when the product owns a repo (#681).** This used to be
+    purely workspace-scoped, so in a workspace holding two products EVERY run
+    resolved the same first-row binding: a BStockReport run was provisioned as a
+    ``BSVibe/bsvibe-app`` clone and would have pushed a branch + opened a PR
+    there. So when the run's product carries a ``repo_url``, ONLY a binding
+    whose ``repo`` normalizes to the same ``owner/name`` qualifies — and when
+    none does the answer is ``None``, NOT the workspace default. ``None`` is the
+    deliberate safe outcome: the caller falls back to the product-workspace
+    provisioner and skips github delivery, which beats writing to a repo the
+    product does not own.
+
+    A product with no ``repo_url`` (substrate-only) and a call with no
+    ``product_id`` keep the previous workspace-scoped behaviour — single-product
+    and workspace-only callers are unaffected.
+
+    Ordering is explicit (``created_at``, then ``id`` as the tie-break) rather
+    than whatever the DB returns: with several qualifying accounts the old
+    ``first()`` let the bootstrap path and the delivery path pick DIFFERENT
+    accounts for the same workspace.
     """
     rows = (
         (
             await session.execute(
-                select(ConnectorAccountRow).where(
+                select(ConnectorAccountRow)
+                .where(
                     ConnectorAccountRow.workspace_id == workspace_id,
                     ConnectorAccountRow.connector == "github",
                     ConnectorAccountRow.is_active.is_(True),
                 )
+                .order_by(ConnectorAccountRow.created_at, ConnectorAccountRow.id)
             )
         )
         .scalars()
         .all()
     )
+    wanted = await _product_repo_slug(session, product_id)
     for row in rows:
         repo = (row.delivery_config or {}).get("repo")
         if not repo:
             continue
+        if wanted is not None and normalize_repo_slug(str(repo)) != wanted:
+            continue
         base_branch = str((row.delivery_config or {}).get("base_branch") or "main")
         return GithubBinding(account=row, repo=str(repo), base_branch=base_branch)
+    if wanted is not None:
+        # Not an error: the product simply has no github connector for ITS repo.
+        # Logged because the founder's mental model ("my workspace has github")
+        # says delivery should have happened — this line names the gap.
+        logger.info(
+            "github_binding_no_match_for_product_repo",
+            workspace_id=str(workspace_id),
+            product_id=str(product_id),
+            product_repo=wanted,
+            candidates=len(rows),
+        )
     return None
 
 
@@ -170,5 +255,6 @@ __all__ = [
     "GithubBinding",
     "_Binding",
     "_resolve_bindings",
+    "normalize_repo_slug",
     "resolve_github_binding",
 ]

@@ -89,11 +89,17 @@ class MergeWatchClient(Protocol):
     async def close_pr(self, owner: str, repo: str, number: int) -> dict[str, Any]: ...
 
 
-#: Resolve a per-row GitHub client (token + base_url from the workspace's github
-#: binding). Returns ``None`` when the workspace has no resolvable github
-#: delivery target (the connector was removed / deactivated). Injected so the
-#: worker (infrastructure) never imports the application-layer binding resolver.
-MergeClientResolver = Callable[[AsyncSession, uuid.UUID], Awaitable[MergeWatchClient | None]]
+#: Resolve a per-row GitHub client (token + base_url from the github binding of
+#: the watched row's ``(workspace_id, run_id)``). Returns ``None`` when there is
+#: no resolvable github delivery target (the connector was removed /
+#: deactivated, or — since #681 — none of them is bound to the run's product
+#: repo). Injected so the worker (infrastructure) never imports the
+#: application-layer binding resolver. The ``run_id`` is what lets the
+#: application side scope the binding to the run's PRODUCT; the worker itself
+#: stays free of any product notion.
+MergeClientResolver = Callable[
+    [AsyncSession, uuid.UUID, uuid.UUID], Awaitable[MergeWatchClient | None]
+]
 
 
 @dataclass(slots=True, frozen=True)
@@ -114,10 +120,15 @@ class FreshnessTarget:
     remote_url: str
 
 
-#: Resolve the git-side freshness target for a workspace (binding + decrypted
-#: token + clone URL). ``None`` when the workspace has no resolvable github
-#: delivery target. Injected — the worker never decrypts a credential itself.
-FreshnessResolver = Callable[[AsyncSession, uuid.UUID], Awaitable["FreshnessTarget | None"]]
+#: Resolve the git-side freshness target for a watched row's ``(workspace_id,
+#: run_id)`` (binding + decrypted token + clone URL). ``None`` when there is no
+#: resolvable github delivery target. Injected — the worker never decrypts a
+#: credential itself. Takes the ``run_id`` for the same reason
+#: :data:`MergeClientResolver` does: a re-clone must land the run's OWN product
+#: repo, never a sibling product's.
+FreshnessResolver = Callable[
+    [AsyncSession, uuid.UUID, uuid.UUID], Awaitable["FreshnessTarget | None"]
+]
 
 
 class ConflictRedispatch(Protocol):
@@ -353,7 +364,7 @@ class MergeWatchWorker(BaseWorker):
         owner, name = _split_repo(snap.repo)
         async with self._session_factory() as session:
             repo = GithubMergeWatchRepository(session)
-            client = await self._resolve_client(session, snap.workspace_id)
+            client = await self._resolve_client(session, snap.workspace_id, snap.run_id)
             if client is None:
                 # No resolvable github target (connector removed / deactivated) —
                 # we can never make progress, so stop watching.
@@ -555,7 +566,7 @@ class MergeWatchWorker(BaseWorker):
         assert self._run_workspace_root is not None  # noqa: S101
 
         async with github_repo_lock(session, snap.repo):
-            target = await self._resolve_freshness(session, snap.workspace_id)
+            target = await self._resolve_freshness(session, snap.workspace_id, snap.run_id)
             if target is None:
                 # No resolvable github target (connector removed) — can't freshen.
                 await repo.mark_status(

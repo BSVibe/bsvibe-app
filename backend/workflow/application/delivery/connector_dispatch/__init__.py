@@ -65,6 +65,7 @@ from pathlib import Path
 from typing import Any
 
 import structlog
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from backend.config import Settings
@@ -73,7 +74,7 @@ from backend.extensions.plugin.runner import PluginRunner
 from backend.router.accounts.crypto import CredentialCipher
 from backend.workflow.application.delivery.dispatcher import DeliveryDispatcher
 from backend.workflow.domain.delivery import ActionResult, DeliveryResult
-from backend.workflow.infrastructure.db import Deliverable
+from backend.workflow.infrastructure.db import Deliverable, ExecutionRun
 from backend.workflow.infrastructure.delivery.git_ops import GitOps
 
 from ._builders import (
@@ -166,7 +167,21 @@ class ConnectorDeliveryAdapter:
                 workspace_id=workspace_id,
                 plugins_by_name=self.plugins_by_name,
             )
-            github_binding = await resolve_github_binding(session, workspace_id=workspace_id)
+            # The deliverable's run names the product, and the product decides
+            # WHICH github repo this delivery may push to (#681). Resolving
+            # workspace-wide let a multi-product workspace open the PR on a
+            # sibling product's repo — the same binding the run was (wrongly)
+            # provisioned from.
+            product_id = (
+                await session.scalar(
+                    select(ExecutionRun.product_id).where(ExecutionRun.id == run_id)
+                )
+                if run_id is not None
+                else None
+            )
+            github_binding = await resolve_github_binding(
+                session, workspace_id=workspace_id, product_id=product_id
+            )
 
         actions: list[ActionResult] = []
         if github_binding is not None:
