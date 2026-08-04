@@ -51,6 +51,7 @@ from backend.workflow.infrastructure.db import (
     RunStatus,
 )
 from backend.workflow.infrastructure.sandbox import NoopSandboxManager
+from backend.workflow.infrastructure.sandbox.noop_manager import NoopSandboxSession
 from backend.workflow.infrastructure.workers.agent_worker import (
     AgentExecutionDeps,
     AgentWorker,
@@ -304,6 +305,118 @@ async def test_no_connection_held_during_verify(tmp_path: Path) -> None:
 
             got = await asyncio.wait_for(_heartbeat(), timeout=5)
             assert got >= 1, "concurrent DB query returned while the drive was parked in verify"
+        finally:
+            release.set()
+            with contextlib.suppress(Exception):
+                await asyncio.wait_for(drive_task, timeout=30)
+    finally:
+        await engine.dispose()
+
+
+async def test_no_connection_held_inside_verify_long_steps(tmp_path: Path) -> None:
+    """The SAME proof one level deeper: INSIDE ``VerificationService.verify``.
+
+    #686 follow-up — the call-site commit in ``_drive_loop`` is NOT enough. The
+    very next thing after it, ``assemble_contract``, runs the workspace's
+    semantic retriever, whose ``PgNoteVectorBackend`` issues a pgvector SELECT
+    on the SAME orchestrator session. That read re-autobegins a transaction, and
+    ``verify`` then holds it across every long step it owns (the W2 git merge,
+    the contract's sandbox commands, the outcome-demonstration probes, the scope
+    check, the judge, the derived gate) — minutes. Postgres'
+    ``idle_in_transaction_session_timeout`` (120s) kills the connection and the
+    verify-activity INSERT at the END of ``verify`` dies with
+    PendingRollbackError: the run did all its work and recorded nothing.
+
+    This drives the REAL ``VerificationService`` (no ``_verify`` override) with a
+    retriever that reads the DB exactly as the production one does, then parks
+    inside a sandbox command against a pool of exactly ONE connection: a
+    concurrent independent query must still succeed."""
+    if not use_real_pg():
+        pytest.skip("real Postgres required — SQLite has no QueuePool to exhaust")
+
+    engine = create_async_engine(pg_url(), future=True, pool_size=1, max_overflow=0, pool_timeout=3)
+    sf = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+
+        ws_id = uuid.uuid4()
+        await _seed_workspace(sf, ws_id)
+        run_id = await _seed_run(sf, ws_id=ws_id, payload={"frame": {"skill_match": None}})
+        async with sf() as s:
+            await s.execute(
+                update(ExecutionRun).where(ExecutionRun.id == run_id).values(request_id=None)
+            )
+            await s.commit()
+
+        parked = asyncio.Event()
+        release = asyncio.Event()
+
+        class _ParkingSandboxSession(NoopSandboxSession):
+            """Parks on the first sandbox command — standing in for the minutes
+            a real verify command / probe / gate takes."""
+
+            async def exec(self, command: str, *, timeout_s: float, shell: bool = False):  # noqa: ANN001, ANN201
+                if not parked.is_set():
+                    parked.set()
+                    await release.wait()
+                return await super().exec(command, timeout_s=timeout_s, shell=shell)
+
+        class _ParkingSandboxManager(NoopSandboxManager):
+            async def acquire(self, project_id: uuid.UUID, workspace_path: str):  # noqa: ANN201
+                return _ParkingSandboxSession(workspace_path)
+
+        # The scripted work turns, then an inert reply for every verify-time LLM
+        # call (demonstration plan / judge) so the loop never runs dry.
+        class _WorkThenInertLlm:
+            def __init__(self) -> None:
+                self._turns = _verified_turns()
+
+            async def complete(
+                self, *, messages: list[dict[str, Any]], tools: list[dict[str, Any]] | None
+            ) -> LoopTurn:
+                if self._turns:
+                    return self._turns.pop(0)
+                return LoopTurn(content="{}", tool_calls=())
+
+        class _DbReadingRetriever:
+            """Stands in for the production canon retriever. ``build_canon_retriever``
+            folds in ``SemanticNoteRetriever(PgNoteVectorBackend(session, ...))``,
+            which SELECTs on the orchestrator's session during
+            ``assemble_contract`` — the read that re-opens the transaction this
+            test is about. Returns nothing, so no judge criteria are added and
+            the contract stays the agent's own command check."""
+
+            def __init__(self, session) -> None:  # noqa: ANN001
+                self._session = session
+
+            async def retrieve_for_signals(self, signals: str) -> list[str]:
+                return []
+
+            async def retrieve_structured(self, signals: str) -> list[Any]:
+                await self._session.execute(select(ExecutionRun.id).limit(1))
+                return []
+
+        def _factory(session, run):
+            return RunOrchestrator(
+                session=session,
+                llm=_WorkThenInertLlm(),
+                sandbox_manager=_ParkingSandboxManager(),
+                retriever=_DbReadingRetriever(session),
+            )
+
+        worker = AgentWorker(session_factory=sf, execution=_deps(tmp_path, _factory))
+        drive_task = asyncio.create_task(worker.drive_once())
+        try:
+            await asyncio.wait_for(parked.wait(), timeout=20)
+
+            async def _heartbeat() -> int:
+                async with sf() as s:
+                    rows = (await s.execute(select(ExecutionRun.id))).all()
+                    return len(rows)
+
+            got = await asyncio.wait_for(_heartbeat(), timeout=5)
+            assert got >= 1, "concurrent DB query returned while verify was parked mid-step"
         finally:
             release.set()
             with contextlib.suppress(Exception):

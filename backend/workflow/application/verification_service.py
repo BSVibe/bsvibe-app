@@ -28,6 +28,7 @@ import asyncio
 import json
 import uuid
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Any, Protocol, runtime_checkable
 
 import structlog
@@ -375,6 +376,39 @@ class VerificationService:
         self._llm = llm
         self._retriever = retriever
 
+    async def _release_connection(self, run: ExecutionRun) -> None:
+        """End any open transaction so NO pooled DB connection is held across the
+        long external step that follows.
+
+        #686 follow-up. The call-site commit in ``_drive_loop`` (right before the
+        verify boundary) is not enough, because the transaction is RE-OPENED
+        before ``verify``'s first long step: ``assemble_contract`` runs the
+        workspace's canon retriever, whose ``SemanticNoteRetriever`` /
+        ``PgNoteVectorBackend`` issues a pgvector SELECT on THIS session. That
+        read autobegins a transaction which then sits idle for the minutes
+        ``verify`` spends outside the DB (the W2 git merge, the contract's
+        sandbox commands, the demonstration probes, the scope check, the judge,
+        the derived gate). Postgres' per-connection
+        ``idle_in_transaction_session_timeout`` guard (120s, #633) kills the
+        connection, and the verify-activity INSERT at the END of ``verify`` dies
+        with ``PendingRollbackError`` — the run did all its work and recorded
+        nothing (live: BStockReport M1, three times).
+
+        Committing here (rather than flushing) ends the transaction and returns
+        the connection to the pool. ``expire_on_commit=False`` (see
+        ``runtime/lifecycle.py``) keeps every loaded ORM attribute usable, so the
+        steps below still read ``run.product_id`` / ``run.payload``, and the
+        final persist autobegins a fresh short transaction.
+
+        ``claimed_at`` is refreshed as a heartbeat for the same reason the
+        executor turn boundary refreshes it: a legitimately long verify must
+        never be mistaken for a stale claim and reaped by ``AgentWorker``. It is
+        also what makes calling this before EVERY long step worthwhile rather
+        than once — the lease is renewed as verification progresses.
+        """
+        run.claimed_at = datetime.now(UTC)
+        await self._session.commit()
+
     async def assemble_contract(
         self,
         *,
@@ -459,6 +493,10 @@ class VerificationService:
         # adds it; glue tests that bypass the provisioner have a plain
         # empty dir and should skip the merge step entirely).
         merge_conflict_paths: list[str] = []
+        # Every step from here to the final persist is external work (git,
+        # sandbox, LLM) that touches no DB — so hold no connection across it.
+        # See :meth:`_release_connection` for the failure this prevents (#686).
+        await self._release_connection(run)
         if run.product_id is not None and self._is_real_worktree(run):
             from backend.storage.product_workspace import (  # noqa: PLC0415 — lazy
                 abort_merge,
@@ -521,6 +559,11 @@ class VerificationService:
             await self._session.flush()
             return vr
 
+        # Each long step is preceded by its own release. The steps happen not to
+        # touch the DB between them today, but the outage this closes came from
+        # exactly that assumption holding one call site earlier and not here — so
+        # the invariant is asserted at every boundary, not inferred once.
+        await self._release_connection(run)
         command_results = await self._run_command_checks(contract, box)
         all_cmd_pass = all(r["passed"] for r in command_results)
 
@@ -533,6 +576,7 @@ class VerificationService:
         # garbage passing "verified" (Q-2). A deliverable that can't be exercised
         # (no probes / all unavailable) is NOT failed — best-effort downgrade
         # (founder decision #1); it just doesn't earn the strong grade.
+        await self._release_connection(run)
         demonstration = await self._run_outcome_demonstration(run, written_paths, box)
         demo_pass = demonstration is None or demonstration["verdict"] != "failed"
 
@@ -544,6 +588,7 @@ class VerificationService:
         # founder decision #3 is "no-implicit → surface" (flag it, never silently
         # fix or block), so it does NOT enter the pass computation below — the
         # honesty grade + proof surface carry it to the founder (L-I3b).
+        await self._release_connection(run)
         scope = await self._run_scope_check(run, written_paths)
 
         judge_blob: dict[str, Any] | None = None
@@ -571,6 +616,7 @@ class VerificationService:
             # criteria are NEVER merged into a real judge (they would false-fail
             # an otherwise-good agent judge; dogfood dd2bd3a3). They still surface
             # as Delivery-Report references via the persisted contract.
+            await self._release_connection(run)
             judge_blob = await self._run_judge(gating_criteria, written_paths, final_text, box)
             judge_pass = bool(judge_blob.get("passed"))
         elif retrieved_criteria:
@@ -582,6 +628,7 @@ class VerificationService:
             if command_results and all_cmd_pass:
                 judge_blob = {"advisory": True, "skipped": "advisory_retrieval_only"}
             else:
+                await self._release_connection(run)
                 judge_blob = await self._run_judge(
                     retrieved_criteria, written_paths, final_text, box
                 )
@@ -603,6 +650,7 @@ class VerificationService:
         #                              so fall back to the agent's attestation.
         #   • DerivedGateFailed      — the deriver could NOT run. On a repo that HAS
         #                              a toolchain manifest this fails CLOSED.
+        await self._release_connection(run)
         gate_outcome = await self._run_derived_gate(run, box, written_paths)
         derived_gate = gate_outcome.blob if isinstance(gate_outcome, DerivedGateOk) else None
         deriver_failed = isinstance(gate_outcome, DerivedGateFailed)
