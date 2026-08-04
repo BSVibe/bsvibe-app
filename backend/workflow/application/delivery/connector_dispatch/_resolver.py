@@ -164,8 +164,33 @@ def normalize_repo_slug(repo: str) -> str:
     return "/".join(parts[-2:]) if len(parts) >= 2 else s
 
 
-async def _product_repo_slug(session: AsyncSession, product_id: uuid.UUID | None) -> str | None:
-    """The normalized ``owner/name`` the product OWNS, or ``None``.
+def display_repo_slug(repo: str) -> str:
+    """``owner/name`` as the founder spelled it — the same parse, casing kept.
+
+    :func:`normalize_repo_slug` lowercases for COMPARISON; this is what we hand
+    to git as the remote, so ``blas1n/BStockReport`` must not come back
+    ``blas1n/bstockreport``. (github resolves either, but the founder should
+    recognise their own repo in a PR body and a log line.)
+    """
+    s = repo.strip()
+    if s.lower().endswith(".git"):
+        s = s[: -len(".git")]
+    parts = [
+        p
+        for p in s.replace("https://", "")
+        .replace("http://", "")
+        .replace("git@", "")
+        .replace(":", "/")
+        .split("/")
+        if p
+    ]
+    return "/".join(parts[-2:]) if len(parts) >= 2 else s
+
+
+async def _product_repo(
+    session: AsyncSession, product_id: uuid.UUID | None
+) -> tuple[str, str] | None:
+    """The repo the product OWNS as ``(display, normalized)``, or ``None``.
 
     ``None`` covers three cases that all mean "this call has no repo of its
     own, use the workspace target": no ``product_id`` was passed (a
@@ -177,7 +202,10 @@ async def _product_repo_slug(session: AsyncSession, product_id: uuid.UUID | None
     repo_url = await session.scalar(select(ProductRow.repo_url).where(ProductRow.id == product_id))
     if not repo_url or not repo_url.strip():
         return None
-    return normalize_repo_slug(repo_url) or None
+    normalized = normalize_repo_slug(repo_url)
+    if not normalized:
+        return None
+    return display_repo_slug(repo_url), normalized
 
 
 async def resolve_github_binding(
@@ -197,16 +225,28 @@ async def resolve_github_binding(
     purely workspace-scoped, so in a workspace holding two products EVERY run
     resolved the same first-row binding: a BStockReport run was provisioned as a
     ``BSVibe/bsvibe-app`` clone and would have pushed a branch + opened a PR
-    there. So when the run's product carries a ``repo_url``, ONLY a binding
-    whose ``repo`` normalizes to the same ``owner/name`` qualifies — and when
-    none does the answer is ``None``, NOT the workspace default. ``None`` is the
-    deliberate safe outcome: the caller falls back to the product-workspace
-    provisioner and skips github delivery, which beats writing to a repo the
-    product does not own.
+    there. So when the run's product carries a ``repo_url``, a binding whose
+    ``repo`` names that same ``owner/name`` wins — and a binding naming a
+    DIFFERENT repo is never used for it.
+
+    **The connector is the CREDENTIAL; the product names the repo (#684).**
+    A github App is installed account-wide, so pinning one repo per connector
+    row forced a duplicate connector per product — and a fresh "Connect with
+    GitHub" writes an EMPTY ``delivery_config``, which under #681 alone left
+    every product in the workspace silently unbound (connected, credential
+    valid, nothing delivered). So when the product owns a repo and no binding
+    pins it, any active github connector serves as the credential and the
+    PRODUCT's repo is the target. An explicit pin still wins when present —
+    that is where a non-default ``base_branch`` lives.
+
+    Only when there is no active github connector at all does a repo-owning
+    product resolve ``None``. ``None`` is the deliberate safe outcome: the
+    caller falls back to the product-workspace provisioner and skips github
+    delivery, which beats writing to a repo the product does not own.
 
     A product with no ``repo_url`` (substrate-only) and a call with no
-    ``product_id`` keep the previous workspace-scoped behaviour — single-product
-    and workspace-only callers are unaffected.
+    ``product_id`` keep the previous workspace-scoped behaviour — they have no
+    repo to infer, so only an explicitly pinned binding can answer them.
 
     Ordering is explicit (``created_at``, then ``id`` as the tie-break) rather
     than whatever the DB returns: with several qualifying accounts the old
@@ -228,24 +268,37 @@ async def resolve_github_binding(
         .scalars()
         .all()
     )
-    wanted = await _product_repo_slug(session, product_id)
+    owned = await _product_repo(session, product_id)
+    # First active connector regardless of what it pins — the credential #684
+    # falls back to. Ordering above makes "first" deterministic.
+    credential: ConnectorAccountRow | None = None
     for row in rows:
         repo = (row.delivery_config or {}).get("repo")
-        if not repo:
-            continue
-        if wanted is not None and normalize_repo_slug(str(repo)) != wanted:
-            continue
-        base_branch = str((row.delivery_config or {}).get("base_branch") or "main")
-        return GithubBinding(account=row, repo=str(repo), base_branch=base_branch)
-    if wanted is not None:
-        # Not an error: the product simply has no github connector for ITS repo.
+        if owned is None:
+            # No repo to infer: only an explicit pin can answer.
+            if not repo:
+                continue
+            base_branch = str((row.delivery_config or {}).get("base_branch") or "main")
+            return GithubBinding(account=row, repo=str(repo), base_branch=base_branch)
+        if credential is None:
+            credential = row
+        if repo and normalize_repo_slug(str(repo)) == owned[1]:
+            base_branch = str((row.delivery_config or {}).get("base_branch") or "main")
+            return GithubBinding(account=row, repo=str(repo), base_branch=base_branch)
+    if owned is not None and credential is not None:
+        # #684 — nothing pins this repo, but the workspace HAS a github
+        # credential. The product's own repo is the target; the connector just
+        # authenticates. base_branch has no pin to read, so it is the default.
+        return GithubBinding(account=credential, repo=owned[0], base_branch="main")
+    if owned is not None:
+        # Not an error: the workspace has no active github connector at all.
         # Logged because the founder's mental model ("my workspace has github")
         # says delivery should have happened — this line names the gap.
         logger.info(
-            "github_binding_no_match_for_product_repo",
+            "github_binding_no_credential_for_product_repo",
             workspace_id=str(workspace_id),
             product_id=str(product_id),
-            product_repo=wanted,
+            product_repo=owned[1],
             candidates=len(rows),
         )
     return None
