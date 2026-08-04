@@ -86,7 +86,9 @@ class _FakeClient:
 
 
 def _resolver_for(client: Any):  # noqa: ANN202
-    async def _resolve(_session: AsyncSession, _workspace_id: uuid.UUID) -> Any:
+    # Takes the watched row's run id too (#681): the application-side resolver
+    # scopes the binding to that run's product.
+    async def _resolve(_session: AsyncSession, _workspace_id: uuid.UUID, _run_id: uuid.UUID) -> Any:
         return client
 
     return _resolve
@@ -487,7 +489,9 @@ class _RecordingEscalate:
 
 
 def _freshness_for(target: FreshnessTarget | None):  # noqa: ANN202
-    async def _resolve(_session: AsyncSession, _workspace_id: uuid.UUID) -> FreshnessTarget | None:
+    async def _resolve(
+        _session: AsyncSession, _workspace_id: uuid.UUID, _run_id: uuid.UUID
+    ) -> FreshnessTarget | None:
         return target
 
     return _resolve

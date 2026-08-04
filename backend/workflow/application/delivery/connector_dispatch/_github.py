@@ -3,9 +3,8 @@
 github is the one delivery target that needs a real DIFF, so it is NOT a simple
 event builder. Two pieces live here:
 
-1. :func:`build_github_workspace_provisioner` — run-setup hook that clones the
-   workspace's github target into the run's workspace dir on a fresh
-   ``bsvibe/run-<id>`` branch, so the agent's edits build a PR diff.
+1. :func:`build_github_workspace_provisioner` — run-setup hook that clones the run's
+   PRODUCT github target into the workspace dir on a ``bsvibe/run-<id>`` branch.
 2. :func:`deliver_github` — the per-deliverable handler: commit_all → push →
    open the github plugin's ``open_pr`` action.
 """
@@ -97,10 +96,10 @@ def build_github_workspace_provisioner(
 ) -> Callable[[AsyncSession, Any, Path], Any]:
     """A :attr:`AgentExecutionDeps.workspace_provisioner` for the github path.
 
-    The returned coroutine resolves the run's workspace github connector binding
-    and, when present, CLONES the target repo into ``workspace_dir`` on a new
-    ``bsvibe/run-<short id>`` branch — so the agent's file_write/file_edit operate
-    on a REAL checkout a PR diff can be built from. No github binding → a no-op.
+    The returned coroutine resolves the github binding of the run's PRODUCT — NOT the
+    workspace's first one, which cloned a SIBLING product's repo (#681) — and, when
+    present, CLONES it into ``workspace_dir`` on a new ``bsvibe/run-<short id>`` branch,
+    so the agent's edits build a PR diff. No binding for the product's repo → a no-op.
 
     ``cipher`` may be a :class:`CredentialCipher` or a zero-arg factory called
     LAZILY only when a github binding is present (a non-github run never forces the
@@ -113,7 +112,8 @@ def build_github_workspace_provisioner(
         return cipher() if callable(cipher) else cipher
 
     async def _provision(session: AsyncSession, run: Any, workspace_dir: Path) -> None:
-        binding = await resolve_github_binding(session, workspace_id=run.workspace_id)
+        ws, product_id = run.workspace_id, getattr(run, "product_id", None)
+        binding = await resolve_github_binding(session, workspace_id=ws, product_id=product_id)
         if binding is None:
             return
         # Idempotency under drive_once re-entry: a resumed run re-enters with the

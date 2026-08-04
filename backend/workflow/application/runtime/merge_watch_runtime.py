@@ -24,6 +24,7 @@ import uuid
 from pathlib import Path
 
 import structlog
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from backend.config import Settings
@@ -50,18 +51,36 @@ from plugin.github.client import DEFAULT_BASE_URL, GithubClient
 logger = structlog.get_logger(__name__)
 
 
+async def _product_id_for_run(session: AsyncSession, run_id: uuid.UUID) -> uuid.UUID | None:
+    """The product a watched run belongs to, or ``None`` for a product-less run.
+
+    Both resolvers below need it so the binding they hand the worker is the
+    run's OWN product repo (#681) — merging or re-cloning against a sibling
+    product's repo is the same corruption the provisioner used to cause, just
+    later in the pipeline.
+    """
+    return await session.scalar(select(ExecutionRun.product_id).where(ExecutionRun.id == run_id))
+
+
 def build_merge_watch_client_resolver(*, cipher: CredentialCipher) -> MergeClientResolver:
     """Build the production per-row GitHub client resolver for the MergeWatchWorker.
 
-    Resolves a workspace's github delivery binding + decrypts its API token the
-    SAME way :func:`deliver_github` does (``resolve_github_binding`` +
-    ``resolve_connector_credentials``), honoring a per-connector ``github_api_url``
-    override (default github.com). Returns ``None`` when the workspace has no
-    resolvable github delivery target (the connector was removed / deactivated),
-    which the worker maps to a terminal ``failed`` row."""
+    Resolves the github delivery binding of the watched run's PRODUCT + decrypts
+    its API token the SAME way :func:`deliver_github` does
+    (``resolve_github_binding`` + ``resolve_connector_credentials``), honoring a
+    per-connector ``github_api_url`` override (default github.com). Returns
+    ``None`` when there is no resolvable github delivery target (the connector was
+    removed / deactivated, or none carries the product's repo — #681), which the
+    worker maps to a terminal ``failed`` row."""
 
-    async def _resolve(session: AsyncSession, workspace_id: uuid.UUID) -> MergeWatchClient | None:
-        binding = await resolve_github_binding(session, workspace_id=workspace_id)
+    async def _resolve(
+        session: AsyncSession, workspace_id: uuid.UUID, run_id: uuid.UUID
+    ) -> MergeWatchClient | None:
+        binding = await resolve_github_binding(
+            session,
+            workspace_id=workspace_id,
+            product_id=await _product_id_for_run(session, run_id),
+        )
         if binding is None:
             return None
         creds = await resolve_connector_credentials(session, account=binding.account, cipher=cipher)
@@ -79,17 +98,26 @@ def build_merge_watch_client_resolver(*, cipher: CredentialCipher) -> MergeClien
 def build_merge_watch_freshness_resolver(*, cipher: CredentialCipher) -> FreshnessResolver:
     """Build the PR6 per-row freshness target resolver for the MergeWatchWorker.
 
-    Resolves a workspace's github delivery binding + decrypts its token the SAME
-    way :func:`build_merge_watch_client_resolver` does, but returns the git-side
+    Resolves the run's product github binding + decrypts its token the SAME way
+    :func:`build_merge_watch_client_resolver` does, but returns the git-side
     facts the LOCAL freshness merge needs — ``repo`` / ``base_branch`` / decrypted
     ``token`` / the ``remote_url`` used to re-clone a reaped run workspace — NOT an
     API client. Factoring the binding+token resolution here keeps the
     infrastructure worker free of the application binding resolver + cipher.
-    Returns ``None`` when the workspace has no resolvable github delivery target.
+    Returns ``None`` when there is no resolvable github delivery target — which
+    now includes "no binding carries the run's product repo" (#681): re-cloning a
+    reaped workspace from a SIBLING product's repo would silently swap the
+    checkout the agent then resolves the conflict in.
     """
 
-    async def _resolve(session: AsyncSession, workspace_id: uuid.UUID) -> FreshnessTarget | None:
-        binding = await resolve_github_binding(session, workspace_id=workspace_id)
+    async def _resolve(
+        session: AsyncSession, workspace_id: uuid.UUID, run_id: uuid.UUID
+    ) -> FreshnessTarget | None:
+        binding = await resolve_github_binding(
+            session,
+            workspace_id=workspace_id,
+            product_id=await _product_id_for_run(session, run_id),
+        )
         if binding is None:
             return None
         creds = await resolve_connector_credentials(session, account=binding.account, cipher=cipher)
