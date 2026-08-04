@@ -1053,7 +1053,16 @@ async def _resolve_clone_token(
     try:
         cipher = CredentialCipher(_key_from_settings())
         async with session_factory() as session:
-            return await resolve_github_token(session, workspace_id=workspace_id, cipher=cipher)
+            token = await resolve_github_token(session, workspace_id=workspace_id, cipher=cipher)
+            # Persist any token refresh resolve performed under the hood — the
+            # same commit the delivery path does. github ROTATES the refresh
+            # token on refresh, so dropping this write leaves the DB holding a
+            # credential github has already invalidated: the next resolve fails
+            # with ``bad_refresh_token`` and the connector flips to
+            # ``needs_reauth``. The clone still succeeds, so the breakage is
+            # silent until some later run needs the connector.
+            await session.commit()
+            return token
     except Exception as exc:  # noqa: BLE001 — never block bootstrap on credential lookup
         logger.warning(
             "bootstrap_clone_credential_unavailable",
