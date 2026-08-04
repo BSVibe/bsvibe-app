@@ -424,7 +424,21 @@ async def drive_loop(  # noqa: PLR0911, PLR0912, PLR0915 — preserved cycle bod
             continue
 
         attempt.phase = RunAttemptPhase.VERIFYING
-        await orch._session.flush()
+        # Verify-session-release (#686) — the SAME treatment the executor turn
+        # boundary gets above, for the same reason. What follows is minutes of
+        # external work: ``_assemble_contract`` calls the LLM and ``_verify``
+        # runs the contract's commands + probes in the sandbox. A ``flush`` here
+        # would leave that write's transaction OPEN across all of it, and the
+        # per-connection ``idle_in_transaction_session_timeout`` guard (120s,
+        # #633) then kills the connection — so the run does all its work and
+        # dies on the post-verify ``record_activity`` write with
+        # PendingRollbackError, recording nothing. Committing ends the
+        # transaction and returns the connection to the pool;
+        # ``expire_on_commit=False`` keeps the loaded ORM attributes usable and
+        # later writes autobegin a fresh short transaction. ``claimed_at`` is
+        # refreshed as a heartbeat so a long verify is never reaped as stale.
+        run.claimed_at = datetime.now(UTC)
+        await orch._session.commit()
         contract = await orch._assemble_contract(registry, written_paths, final_text)
         if contract is None:
             # No usable check → never a silent pass (contract.py philosophy).

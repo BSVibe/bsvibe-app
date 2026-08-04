@@ -21,6 +21,7 @@ neither; the rest run on SQLite or PG.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import uuid
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -229,6 +230,84 @@ async def test_no_connection_held_during_executor_await(tmp_path: Path) -> None:
         finally:
             release.set()
             await asyncio.wait_for(drive_task, timeout=30)
+    finally:
+        await engine.dispose()
+
+
+async def test_no_connection_held_during_verify(tmp_path: Path) -> None:
+    """Same proof as the executor-turn case, for the VERIFY boundary (#686).
+
+    ``_drive_loop`` sets ``attempt.phase = VERIFYING``, ``flush()``es, then runs
+    ``assemble_contract`` (an LLM call) and ``verify`` (sandbox commands) — minutes
+    of work with that flush's transaction still open. Postgres' per-connection
+    ``idle_in_transaction_session_timeout`` guard (120s) then kills the connection
+    and the post-verify ``record_activity`` write dies with PendingRollbackError,
+    so a run that did all its work still ends with nothing recorded.
+
+    Pre-fix this parks holding the pool's only connection and the concurrent query
+    deadlocks; post-fix the verify-boundary commit releases it."""
+    if not use_real_pg():
+        pytest.skip("real Postgres required — SQLite has no QueuePool to exhaust")
+
+    engine = create_async_engine(pg_url(), future=True, pool_size=1, max_overflow=0, pool_timeout=3)
+    sf = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+
+        ws_id = uuid.uuid4()
+        await _seed_workspace(sf, ws_id)
+        run_id = await _seed_run(sf, ws_id=ws_id, payload={"frame": {"skill_match": None}})
+        async with sf() as s:
+            await s.execute(
+                update(ExecutionRun).where(ExecutionRun.id == run_id).values(request_id=None)
+            )
+            await s.commit()
+
+        parked = asyncio.Event()
+        release = asyncio.Event()
+
+        class _StopVerify(Exception):
+            """Unwinds the drive once the property under test is proven."""
+
+        class _VerifyParkingOrchestrator(RunOrchestrator):
+            async def _assemble_contract(self, registry, written_paths, final_text):  # noqa: ANN001
+                # A non-None sentinel: the loop only checks ``is None`` before
+                # handing it to ``_verify``, which this subclass overrides.
+                return object()
+
+            async def _verify(self, **kwargs):  # noqa: ANN003
+                parked.set()
+                await release.wait()
+                raise _StopVerify
+
+        class _QuietLlm:
+            async def complete(
+                self, *, messages: list[dict[str, Any]], tools: list[dict[str, Any]] | None
+            ) -> LoopTurn:
+                return LoopTurn(content="done", tool_calls=())
+
+        def _factory(session, run):
+            return _VerifyParkingOrchestrator(
+                session=session, llm=_QuietLlm(), sandbox_manager=NoopSandboxManager()
+            )
+
+        worker = AgentWorker(session_factory=sf, execution=_deps(tmp_path, _factory))
+        drive_task = asyncio.create_task(worker.drive_once())
+        try:
+            await asyncio.wait_for(parked.wait(), timeout=15)
+
+            async def _heartbeat() -> int:
+                async with sf() as s:
+                    rows = (await s.execute(select(ExecutionRun.id))).all()
+                    return len(rows)
+
+            got = await asyncio.wait_for(_heartbeat(), timeout=5)
+            assert got >= 1, "concurrent DB query returned while the drive was parked in verify"
+        finally:
+            release.set()
+            with contextlib.suppress(Exception):
+                await asyncio.wait_for(drive_task, timeout=30)
     finally:
         await engine.dispose()
 
