@@ -686,7 +686,14 @@ class ExecutorAdapter:
         # endpoint, a token scoped to THIS run, and the exact tool names it may use. The CLI's
         # own tools are taken away, so there is no local temp dir to invent code in and nothing
         # for the worker to scrape back.
-        mcp = await self._work_tool_surface(session, agentic=agentic)
+        # #692 — EXCEPT client_attach: the whole point is the CLI's NATIVE tools
+        # acting on the user's own directory in place. Withhold the MCP work-tool
+        # surface so the worker (seeing no mcp_config) runs the CLI natively.
+        mcp = (
+            None
+            if self.execution_target == "client_attach"
+            else await self._work_tool_surface(session, agentic=agentic)
+        )
         await dispatch.dispatch_task(
             self.redis, session=session, task=task, worker_id=worker.id, mcp=mcp
         )

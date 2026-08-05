@@ -618,7 +618,14 @@ class TestExecutorAdapterChat:
                 assert execute_entry["execution_target"] == "client_attach"
                 assert execute_entry["workspace_dir"] == "/home/u/proj"
 
-    async def _dispatch_and_read_entry(self, *, tools: Any, messages: Any = None) -> dict[str, Any]:
+    async def _dispatch_and_read_entry(
+        self,
+        *,
+        tools: Any,
+        messages: Any = None,
+        execution_target: str = "server_sandbox",
+        client_workspace_dir: str | None = None,
+    ) -> dict[str, Any]:
         """Fire one executor chat and return its ``execute`` stream entry."""
         redis = await _make_redis()
         workspace_id = uuid.uuid4()
@@ -660,6 +667,8 @@ class TestExecutorAdapterChat:
                     settings=get_settings().model_copy(update={"executor_task_timeout_s": 5.0}),
                     redis=redis,
                     run_id=run_id,
+                    execution_target=execution_target,
+                    client_workspace_dir=client_workspace_dir,
                 )
                 # No worker answers → await_completion times out. The XADD we
                 # inspect already happened.
@@ -691,6 +700,24 @@ class TestExecutorAdapterChat:
             tools=[{"type": "function", "function": {"name": "write_file"}}]
         )
         assert entry["agentic"] == "1"
+        # server_sandbox agentic run hands the worker BSVibe's MCP tool surface.
+        assert entry.get("mcp_config")
+
+    async def test_client_attach_agent_run_withholds_mcp_for_native_tools(self) -> None:
+        """#692 — a ``client_attach`` agentic run does NOT get the MCP work-tool
+        surface: the CLI must use its OWN native tools on the user's directory.
+        The worker, seeing no ``mcp_config``, runs natively (per its line 221)."""
+        tools = [{"type": "function", "function": {"name": "write_file"}}]
+        entry = await self._dispatch_and_read_entry(
+            tools=tools,
+            execution_target="client_attach",
+            client_workspace_dir="/home/u/proj",
+        )
+        assert entry["agentic"] == "1"
+        assert entry["execution_target"] == "client_attach"
+        assert entry["workspace_dir"] == "/home/u/proj"
+        # No MCP work-tool surface → native CLI tools act on the local dir.
+        assert not entry.get("mcp_config")
 
     async def test_extra_system_messages_reach_the_model(self) -> None:
         """Grounding rides in system-role MESSAGES, and it must survive the executor

@@ -96,8 +96,14 @@ _HTTP_TIMEOUT_S = 30.0
 _RUNNING_TASKS: dict[str, asyncio.Task[None]] = {}
 
 
-async def _finalize_task(stream: Any, local_workspace: str, *, task_id: Any) -> None:
+async def _finalize_task(
+    stream: Any, local_workspace: str, *, task_id: Any, cleanup_workspace: bool = True
+) -> None:
     """Close the executor stream, then remove the work dir.
+
+    ``cleanup_workspace`` is False for a ``client_attach`` run (#692): the cwd is
+    the USER's own directory, so the worker must NEVER delete it — it only closes
+    the stream. For server_sandbox the throwaway temp dir is removed as before.
 
     T3 — there is nothing left to capture. The agent no longer writes into this directory:
     it acts through BSVibe's tools over MCP, which write to the run's SERVER-SIDE worktree.
@@ -116,7 +122,8 @@ async def _finalize_task(stream: Any, local_workspace: str, *, task_id: Any) -> 
             await aclose()
         except Exception:  # noqa: BLE001, S110 — cleanup best-effort
             pass
-    shutil.rmtree(local_workspace, ignore_errors=True)
+    if cleanup_workspace:
+        shutil.rmtree(local_workspace, ignore_errors=True)
 
 
 class _RedisPublisher(Protocol):
@@ -199,14 +206,47 @@ async def handle_task(
         executor = select_executor(executor_type)
         executors[executor_type] = executor
 
-    # T3 — no clone. The repo the agent works on is the run's SERVER-SIDE worktree, reached
-    # through the MCP work tools; cloning it again here (E32) gave the agent a second, private
-    # copy that nothing read and the worker then scraped back over the real one. The CLI still
-    # needs a cwd, so an empty temp dir it is.
-    local_workspace = tempfile.mkdtemp(prefix="bsvibe-task-", dir=workspace_root or None)
+    # #692 — WHERE this task runs, decided by the product-derived
+    # ``execution_target`` (the worker holds no such state).
+    #   server_sandbox (default): a throwaway local temp dir. T3 — no clone; the
+    #     agent acts through MCP work tools into the run's SERVER-SIDE worktree,
+    #     so the CLI just needs *a* cwd. (Cloning here — E32 — gave the agent a
+    #     private copy nothing read that the worker then scraped back.)
+    #   client_attach: the user's OWN directory on THIS host, run in place with
+    #     the CLI's native tools (env/toolchain/git are already there). Never
+    #     cloned, never deleted.
+    execution_target = task.get("execution_target") or "server_sandbox"
+    if execution_target == "client_attach":
+        user_dir = str(task.get("workspace_dir") or "").strip()
+        # A single quick stat — consistent with the worker's other blocking FS
+        # calls (mkdtemp / rmtree); not worth a thread hop.
+        if not user_dir or not os.path.isdir(user_dir):  # noqa: ASYNC240
+            # Fail LOUDLY — a missing client_attach dir must never fall back to a
+            # temp dir (that would run the user's intent against an empty
+            # throwaway and report success — the footgun).
+            msg = f"client_attach workspace does not exist on this worker: {user_dir!r}"
+            logger.warning(
+                "client_attach_workspace_missing", task_id=task_id, workspace_dir=user_dir
+            )
+            await client.post(
+                "/api/v1/workers/result",
+                headers=headers,
+                json={"task_id": task_id, "success": False, "output": "", "error_message": msg},
+            )
+            if redis is not None:
+                await _publish(
+                    redis, done_chan, {"task_id": task_id, "success": False, "error_message": msg}
+                )
+            return
+        local_workspace = user_dir
+        cleanup_workspace = False
+    else:
+        local_workspace = tempfile.mkdtemp(prefix="bsvibe-task-", dir=workspace_root or None)
+        cleanup_workspace = True
     context: dict[str, Any] = {
         "task_id": task_id,
-        # ALWAYS the worker-local dir — never the backend's foreign run path.
+        # server_sandbox → the worker-local temp dir; client_attach → the user's
+        # own directory. Never the backend's foreign server-run path.
         "workspace_dir": local_workspace,
         "system": task.get("system") or "",
         # ``model`` is not part of the current dispatch payload; forwarded when
@@ -242,6 +282,7 @@ async def handle_task(
             redis=redis,
             task_id=task_id,
             local_workspace=local_workspace,
+            cleanup_workspace=cleanup_workspace,
         )
         await client.post(
             "/api/v1/workers/result",
@@ -292,6 +333,7 @@ async def _stream_and_collect(
     redis: _RedisPublisher | None,
     task_id: str,
     local_workspace: str,
+    cleanup_workspace: bool = True,
 ) -> _StreamOutcome:
     """Drain the executor's chunk stream, then finalize.
 
@@ -333,7 +375,9 @@ async def _stream_and_collect(
         if redis is not None:
             await _publish(redis, stream_chan, {"delta": "", "done": True, "error": error})
     finally:
-        await _finalize_task(stream, local_workspace, task_id=task_id)
+        await _finalize_task(
+            stream, local_workspace, task_id=task_id, cleanup_workspace=cleanup_workspace
+        )
     return _StreamOutcome(success=success, parts=parts, error=error)
 
 
