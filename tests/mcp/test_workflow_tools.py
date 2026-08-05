@@ -425,6 +425,51 @@ async def test_products_set_metadata_replaces_and_show_reflects(
     assert out["metadata"] == {"owner": "founder"}
 
 
+async def test_products_show_resolves_execution_target(
+    db, workspace_id, user_id, registry, seeded
+) -> None:
+    """#692 — ``bsvibe_products_show`` surfaces the resolved ``execution_target``.
+
+    A product that says nothing shows the safe default (``server_sandbox``);
+    setting ``metadata.execution_target = client_attach`` flips the resolved
+    field. Declared via the existing free-form metadata surface (no new column)."""
+    pid = uuid.uuid4()
+    async with db() as s:
+        s.add(ProductRow(id=pid, workspace_id=workspace_id, name="A", slug="a"))
+        await s.commit()
+
+    # Default: unset metadata → server_sandbox.
+    async with db() as s:
+        ctx = ToolContext(
+            principal=_principal(workspace_id=workspace_id, user_id=user_id, scopes=("mcp:read",)),
+            session=s,
+        )
+        shown = await registry.call_tool("bsvibe_products_show", {"slug_or_id": "a"}, ctx)
+    assert shown["execution_target"] == "server_sandbox"
+
+    # Opt in to client_attach via the free-form metadata surface.
+    async with db() as s:
+        ctx = ToolContext(
+            principal=_principal(
+                workspace_id=workspace_id, user_id=user_id, scopes=("mcp:read", "mcp:write")
+            ),
+            session=s,
+        )
+        await registry.call_tool(
+            "bsvibe_products_set_metadata",
+            {"slug_or_id": "a", "metadata": {"execution_target": "client_attach"}},
+            ctx,
+        )
+
+    async with db() as s:
+        ctx = ToolContext(
+            principal=_principal(workspace_id=workspace_id, user_id=user_id, scopes=("mcp:read",)),
+            session=s,
+        )
+        shown = await registry.call_tool("bsvibe_products_show", {"slug_or_id": "a"}, ctx)
+    assert shown["execution_target"] == "client_attach"
+
+
 async def test_products_set_metadata_requires_write_scope(
     db, workspace_id, user_id, registry, seeded
 ) -> None:

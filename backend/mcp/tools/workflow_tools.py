@@ -19,6 +19,7 @@ from sqlalchemy.exc import IntegrityError
 
 from backend.identity.workspaces_db import ProductRow
 from backend.mcp.api import Tool, ToolContext, ToolError, ToolRegistry
+from backend.workflow.domain.execution_target import read_execution_target
 from backend.workflow.infrastructure.repositories import (
     SqlAlchemyDeliverableRepository,
     SqlAlchemyRunRepository,
@@ -53,6 +54,10 @@ def _product_to_dict(row: ProductRow) -> dict[str, Any]:
         # never null. ORM attr is ``product_metadata`` (``metadata`` is
         # reserved by SQLAlchemy); the wire field is ``metadata``.
         "metadata": row.product_metadata,
+        # #692 — WHERE this product's runs execute, resolved from metadata with
+        # the safe default applied (so callers see it even when unset). Set it
+        # via ``metadata.execution_target`` (server_sandbox | client_attach).
+        "execution_target": read_execution_target(row.product_metadata),
         "created_at": row.created_at.isoformat() if row.created_at else None,
         "updated_at": row.updated_at.isoformat() if row.updated_at else None,
     }
