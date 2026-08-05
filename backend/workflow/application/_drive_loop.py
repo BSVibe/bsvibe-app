@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING, Any
 
 from backend.workflow.application._loop_context import (
     _SYSTEM_PROMPT,
-    _intent_title,
+    _intent_directive,
     _resumption_messages,
 )
 from backend.workflow.application.audit_events import (
@@ -168,6 +168,15 @@ def _consume_merge_conflict(run: ExecutionRun) -> None:
     run.payload = payload
 
 
+def _initial_user_message(run: ExecutionRun) -> dict[str, Any]:
+    """#690 — the coding agent's first user turn: the WHOLE founder directive.
+
+    Uses :func:`_intent_directive` (uncapped), NOT ``_intent_title`` (512-char
+    label). Slicing here silently dropped requirements past 512 chars, so the
+    agent built only the truncated half while verification passed on it."""
+    return {"role": "user", "content": _intent_directive(run)}
+
+
 async def drive_loop(  # noqa: PLR0911, PLR0912, PLR0915 — preserved cycle body
     orch: RunOrchestrator,
     *,
@@ -211,7 +220,7 @@ async def drive_loop(  # noqa: PLR0911, PLR0912, PLR0915 — preserved cycle bod
     ]
     messages: list[dict[str, Any]] = [
         {"role": "system", "content": _SYSTEM_PROMPT},
-        {"role": "user", "content": _intent_title(run)},
+        _initial_user_message(run),
     ]
     # B6 — seed canon relevant to the run intent.
     seed = await orch._knowledge_seed_message(run)

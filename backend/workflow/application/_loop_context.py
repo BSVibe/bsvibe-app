@@ -96,10 +96,37 @@ def _is_design_stage(run: ExecutionRun) -> bool:
     return payload.get("stage") != "impl"
 
 
-def _intent_title(run: ExecutionRun) -> str:
+def _intent_text(run: ExecutionRun) -> str:
+    """The founder's stored directive for ``run`` — full, never truncated.
+
+    Prefers ``intent_text`` (the request's stable intent), falling back to a
+    raw ``text`` payload and finally a placeholder. Shared source for both the
+    short label (:func:`_intent_title`) and the full prompt directive
+    (:func:`_intent_directive`)."""
     payload = run.payload or {}
-    text = payload.get("intent_text") or payload.get("text") or "Untitled run"
-    return str(text)[:512]
+    return str(payload.get("intent_text") or payload.get("text") or "Untitled run")
+
+
+def _intent_directive(run: ExecutionRun) -> str:
+    """#690 — the WHOLE founder directive, for the coding agent's first user
+    message.
+
+    Must NOT be truncated: this is the agent's actual instruction, and slicing
+    it (the old ``_intent_title`` 512 cap) silently dropped requirements past
+    that point — the agent built only the half it received while lint/test
+    passed on that half. The directive is already bounded upstream by the
+    ``bsvibe_direct`` input limit (20000 chars), so no cap is applied here."""
+    return _intent_text(run)
+
+
+def _intent_title(run: ExecutionRun) -> str:
+    """A SHORT label derived from the directive — WorkStep title, audit
+    ``intent`` field, and knowledge-retrieval signal.
+
+    Capped at 512 chars on purpose: these are labels/signals, not the prompt.
+    The coding agent's instruction uses :func:`_intent_directive` (uncapped)
+    so requirements are never lost — see #690."""
+    return _intent_text(run)[:512]
 
 
 def _resumption_messages(run: ExecutionRun) -> list[dict[str, Any]]:
@@ -285,6 +312,7 @@ __all__ = [
     "_DESIGN_SPEC_DIRECTIVE",
     "_RetrieverSearcher",
     "_SYSTEM_PROMPT",
+    "_intent_directive",
     "_intent_title",
     "_is_design_stage",
     "_resumption_messages",
