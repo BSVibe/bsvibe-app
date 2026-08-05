@@ -210,6 +210,51 @@ async def test_handle_task_runs_in_local_temp_dir_not_foreign_path() -> None:
     assert state["results"][0]["success"] is True
 
 
+async def test_handle_task_client_attach_runs_in_user_dir_and_preserves_it(tmp_path: Any) -> None:
+    """#692 — a ``client_attach`` task runs natively in the USER's OWN directory
+    (the run continues the user's work in place), NOT a throwaway temp dir, and
+    the worker MUST NOT delete it afterwards (it is the user's workspace)."""
+    user_dir = str(tmp_path)  # a real existing dir standing in for the user's workspace
+    executor = _WorkspaceCapturingExecutor()
+    state: dict[str, Any] = {}
+    async with _client(state) as client:
+        await worker_main.handle_task(
+            _task(workspace_dir=user_dir, execution_target="client_attach"),
+            executors={"claude_code": executor},
+            client=client,
+            headers={"X-Worker-Token": "WORKER-TOKEN"},
+            redis=None,
+        )
+    # Ran IN the user's directory (in place) — not a worker-local temp dir.
+    assert executor.seen_workspace == user_dir
+    assert executor.workspace_existed is True
+    # The user's directory is PRESERVED (never rmtree'd).
+    assert os.path.isdir(user_dir)
+    assert state["results"][0]["success"] is True
+
+
+async def test_handle_task_client_attach_missing_dir_fails_not_falls_back(tmp_path: Any) -> None:
+    """#692 — a ``client_attach`` task whose directory does not exist must FAIL
+    loudly, never silently fall back to a temp dir (that would run the user's
+    intent against an empty throwaway and report success — the footgun)."""
+    missing = str(tmp_path / "does-not-exist")
+    assert not os.path.isdir(missing)
+    executor = _WorkspaceCapturingExecutor()
+    state: dict[str, Any] = {}
+    async with _client(state) as client:
+        await worker_main.handle_task(
+            _task(workspace_dir=missing, execution_target="client_attach"),
+            executors={"claude_code": executor},
+            client=client,
+            headers={"X-Worker-Token": "WORKER-TOKEN"},
+            redis=None,
+        )
+    # Never ran the executor; reported failure with a clear reason.
+    assert executor.seen_workspace is None
+    assert state["results"][0]["success"] is False
+    assert "client_attach" in (state["results"][0]["error_message"] or "")
+
+
 async def test_handle_task_cleans_up_local_temp_dir_after_success() -> None:
     executor = _WorkspaceCapturingExecutor()
     state: dict[str, Any] = {}
