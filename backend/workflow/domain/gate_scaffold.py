@@ -29,6 +29,7 @@ from __future__ import annotations
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from backend.workflow.domain.gate_discovery import discover_gate
 
@@ -124,7 +125,7 @@ _TEMPLATES: dict[str, str] = {
 }
 
 
-def _declared_dependencies(project: dict, groups: dict) -> list[str]:
+def _declared_dependencies(project: dict[str, Any], groups: dict[str, Any]) -> list[str]:
     """Flatten every dependency string the pyproject declares — base deps,
     every optional-dependencies extra, and every PEP 735 dependency-group."""
     declared: list[str] = []
@@ -153,7 +154,7 @@ def _python_ci(repo_root: Path) -> str:
       rather than manufacture an impossible check.
     """
     raw = ""
-    data: dict = {}
+    data: dict[str, Any] = {}
     try:
         raw = (repo_root / "pyproject.toml").read_text(encoding="utf-8")
         data = tomllib.loads(raw)
