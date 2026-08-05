@@ -26,8 +26,10 @@ for it (it keeps its own gate). In practice the gap this fills is **Python**
 
 from __future__ import annotations
 
+import tomllib
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from backend.workflow.domain.gate_discovery import discover_gate
 
@@ -51,26 +53,12 @@ _MANIFESTS: tuple[tuple[str, str], ...] = (
 # runners). Keep the ``run:`` steps as bare tool invocations so the sandbox
 # resolves them against its own toolchain when the project has no venv.
 
-_PYTHON_CI = """\
-name: CI
-on: [push, pull_request]
-jobs:
-  ci:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-      - name: Install
-        run: pip install -e . ruff
-      - name: Lint
-        run: ruff check .
-      - name: Format
-        run: ruff format --check .
-      - name: Test
-        run: pytest
-"""
+# Python is generated per-repo (see ``_python_ci``): a Python project declares
+# its test tooling (pytest/ruff) in a dev/test extra or a uv dependency-group,
+# NOT in the base install (#689). A static ``pip install -e . ruff`` + bare
+# ``pytest`` yields a gate NO correct code can pass — the tools are never
+# installed. The generated CI reflects what the repo actually declares.
+_DEV_EXTRA_NAMES = frozenset({"dev", "test", "tests", "testing"})
 
 _NODE_CI = """\
 name: CI
@@ -128,12 +116,95 @@ jobs:
         run: cargo test
 """
 
+#: Static templates for stacks whose gate does not depend on per-repo dependency
+#: declarations. Python is generated dynamically (see :func:`_python_ci`).
 _TEMPLATES: dict[str, str] = {
-    "python": _PYTHON_CI,
     "node": _NODE_CI,
     "go": _GO_CI,
     "rust": _RUST_CI,
 }
+
+
+def _declared_dependencies(project: dict[str, Any], groups: dict[str, Any]) -> list[str]:
+    """Flatten every dependency string the pyproject declares — base deps,
+    every optional-dependencies extra, and every PEP 735 dependency-group."""
+    declared: list[str] = []
+    base = project.get("dependencies")
+    if isinstance(base, list):
+        declared += [str(d) for d in base]
+    for table in (project.get("optional-dependencies"), groups):
+        if isinstance(table, dict):
+            for vals in table.values():
+                if isinstance(vals, list):
+                    declared += [str(d) for d in vals if isinstance(d, str)]
+    return declared
+
+
+def _python_ci(repo_root: Path) -> str:
+    """Generate a Python CI workflow that installs the repo's OWN test deps.
+
+    Grounds every step in what ``pyproject.toml`` declares (#689):
+
+    * ``uv.lock`` present → sync + run the tools through uv (``uv sync`` pulls
+      the extras + dev groups, so pytest/ruff are actually installed);
+    * else a dev/test extra declared → ``pip install -e ".[<extra>]"`` so the
+      Test step's ``pytest`` exists;
+    * a Test step is emitted ONLY when the repo declares a test runner — a
+      ``pytest`` step in a project with no tests is unpassable, so we drop it
+      rather than manufacture an impossible check.
+    """
+    raw = ""
+    data: dict[str, Any] = {}
+    try:
+        raw = (repo_root / "pyproject.toml").read_text(encoding="utf-8")
+        data = tomllib.loads(raw)
+    except (OSError, tomllib.TOMLDecodeError):
+        data = {}
+    project = data.get("project") if isinstance(data, dict) else None
+    project = project if isinstance(project, dict) else {}
+    groups = data.get("dependency-groups") if isinstance(data, dict) else None
+    groups = groups if isinstance(groups, dict) else {}
+
+    declared = _declared_dependencies(project, groups)
+    has_pytest = (
+        any("pytest" in d for d in declared)
+        or "[tool.pytest" in raw
+        or (repo_root / "tests").is_dir()
+    )
+    optional = project.get("optional-dependencies")
+    dev_extra: str | None = None
+    if isinstance(optional, dict):
+        dev_extra = next((str(k) for k in optional if str(k).lower() in _DEV_EXTRA_NAMES), None)
+
+    steps = ["      - uses: actions/checkout@v4"]
+    if (repo_root / "uv.lock").is_file():
+        steps.append("      - uses: astral-sh/setup-uv@v5")
+        steps.append("      - name: Install\n        run: uv sync --all-extras")
+        steps.append("      - name: Lint\n        run: uv run ruff check .")
+        steps.append("      - name: Format\n        run: uv run ruff format --check .")
+        if has_pytest:
+            steps.append("      - name: Test\n        run: uv run pytest")
+    else:
+        steps.append(
+            '      - uses: actions/setup-python@v5\n        with:\n          python-version: "3.11"'
+        )
+        install = f'pip install -e ".[{dev_extra}]" ruff' if dev_extra else "pip install -e . ruff"
+        steps.append(f"      - name: Install\n        run: {install}")
+        steps.append("      - name: Lint\n        run: ruff check .")
+        steps.append("      - name: Format\n        run: ruff format --check .")
+        if has_pytest:
+            steps.append("      - name: Test\n        run: pytest")
+
+    body = "\n".join(steps)
+    return (
+        "name: CI\n"
+        "on: [push, pull_request]\n"
+        "jobs:\n"
+        "  ci:\n"
+        "    runs-on: ubuntu-latest\n"
+        "    steps:\n"
+        f"{body}\n"
+    )
 
 
 @dataclass(frozen=True)
@@ -169,7 +240,9 @@ def scaffold_gate(repo_root: Path) -> ScaffoldedGate | None:
     stack = detect_stack(repo_root)
     if stack is None:
         return None
-    content = _TEMPLATES.get(stack)
+    # Python's gate is generated from the repo's own dependency declarations
+    # (#689); the rest use a static per-stack template.
+    content = _python_ci(repo_root) if stack == "python" else _TEMPLATES.get(stack)
     if content is None:
         return None
     return ScaffoldedGate(path=SCAFFOLD_REL_PATH, content=content, stack=stack)
