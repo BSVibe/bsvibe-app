@@ -129,6 +129,8 @@ class ModelAccountResolver:
         session_factory: async_sessionmaker[AsyncSession] | None = None,
         run_id: uuid.UUID | None = None,
         repo_url: str | None = None,
+        execution_target: str = "server_sandbox",
+        client_workspace_dir: str | None = None,
         intent_classifier: IntentClassifier | None = None,
         intent_classifier_builder: Callable[[], Awaitable[IntentClassifier | None]] | None = None,
     ) -> None:
@@ -167,6 +169,11 @@ class ModelAccountResolver:
         # back tells the worker to clone the repo into the per-task
         # workspace before invoking the executor.
         self._repo_url = repo_url
+        # #692 — the run's product execution model + (client_attach) local dir,
+        # threaded onto the ExecutorAdapter so the dispatched task tells the pure
+        # worker WHERE/HOW to run.
+        self._execution_target = execution_target
+        self._client_workspace_dir = client_workspace_dir
         # Lift N1 — optional semantic intent classifier. When set AND an active
         # rule conditions on ``classified_intent``, the resolver classifies the
         # run's intent_text so category rules ("마케팅 작업 → X") can match.
@@ -274,6 +281,9 @@ class ModelAccountResolver:
             # the ExecutorAdapter dispatches it so the worker clones the
             # repo into the per-task workspace before calling the executor.
             repo_url=self._repo_url,
+            # #692 — the product's execution model + (client_attach) local dir.
+            execution_target=self._execution_target,
+            client_workspace_dir=self._client_workspace_dir,
         )
 
         # Defensive validation — rule creation is supposed to catch this

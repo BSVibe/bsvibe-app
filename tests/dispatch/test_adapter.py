@@ -563,6 +563,61 @@ class TestExecutorAdapterChat:
                 )
                 assert execute_entry["model"] == "opencode-go/qwen3.6-plus"
 
+    async def test_chat_passes_client_attach_target_and_dir_into_dispatch(self) -> None:
+        """#692 — a ``client_attach`` adapter dispatches ``execution_target`` +
+        the user's own ``workspace_dir`` so the pure worker runs in place. The
+        product-derived values ride the same path as ``repo_url`` (E32)."""
+        redis = await _make_redis()
+        workspace_id = uuid.uuid4()
+        async with shared_file_sessionmaker() as sf:
+            async with sf() as setup:
+                worker = await _seed_worker(
+                    setup, workspace_id=workspace_id, capabilities=["claude_code"]
+                )
+                account = ModelAccount(
+                    id=uuid.uuid4(),
+                    workspace_id=workspace_id,
+                    account_id=uuid.uuid4(),
+                    provider="executor",
+                    label="mac-mini",
+                    litellm_model="sonnet",
+                    api_base=None,
+                    api_key_encrypted=None,
+                    data_jurisdiction="unknown",
+                    is_active=True,
+                    extra_params={
+                        "worker_id": str(worker.id),
+                        "executor_type": "claude_code",
+                    },
+                )
+                setup.add(account)
+                await setup.commit()
+
+            async with sf() as adapter_session:
+                adapter = ExecutorAdapter(
+                    account=account,
+                    workspace_id=workspace_id,
+                    account_id=account.account_id,
+                    model_account_id=account.id,
+                    session=adapter_session,
+                    settings=get_settings().model_copy(update={"executor_task_timeout_s": 5.0}),
+                    redis=redis,
+                    execution_target="client_attach",
+                    client_workspace_dir="/home/u/proj",
+                )
+                with pytest.raises(ExecutorAdapterUnavailable):
+                    await adapter.chat(
+                        system="",
+                        messages=[{"role": "user", "content": "hi"}],
+                    )
+
+                entries = await redis.xrange(dispatch.worker_stream(worker.id))
+                execute_entry = next(
+                    fields for _id, fields in entries if fields.get("action") == "execute"
+                )
+                assert execute_entry["execution_target"] == "client_attach"
+                assert execute_entry["workspace_dir"] == "/home/u/proj"
+
     async def _dispatch_and_read_entry(self, *, tools: Any, messages: Any = None) -> dict[str, Any]:
         """Fire one executor chat and return its ``execute`` stream entry."""
         redis = await _make_redis()

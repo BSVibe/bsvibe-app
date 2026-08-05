@@ -72,6 +72,8 @@ async def resolve_via_caller(
     session_factory: async_sessionmaker[AsyncSession] | None = None,
     run_id: uuid.UUID | None = None,
     repo_url: str | None = None,
+    execution_target: str = "server_sandbox",
+    client_workspace_dir: str | None = None,
 ) -> ResolvedAccount | None:
     """Resolve ``(caller_id, workspace_id)`` via the resolver.
 
@@ -116,6 +118,8 @@ async def resolve_via_caller(
         session_factory=session_factory,
         run_id=run_id,
         repo_url=repo_url,
+        execution_target=execution_target,
+        client_workspace_dir=client_workspace_dir,
         intent_classifier_builder=_build_intent_classifier,
     )
     try:
@@ -231,10 +235,44 @@ async def resolve_judge_llm(
     return ResolverLoopLlm(adapter=resolved.adapter)
 
 
+async def product_dispatch_config(
+    session: AsyncSession, product_id: uuid.UUID
+) -> tuple[str | None, str, str | None]:
+    """Return the product's dispatch config: ``(repo_url, execution_target,
+    client_workspace_dir)`` in one row read.
+
+    ``repo_url`` (Lift E32) tells the worker to clone the repo; ``execution_target``
+    / ``client_workspace_dir`` (#692) tell it WHERE/HOW to run (server sandbox vs
+    the user's own directory) — all threaded through :func:`resolve_via_caller`
+    onto the ExecutorAdapter. Config lives on the PRODUCT (the pure worker holds
+    none). Soft-fails to ``(None, "server_sandbox", None)`` on a missing product
+    so a substrate-only run still resolves an adapter."""
+    from sqlalchemy import select  # noqa: PLC0415 — keep imports terse at module load
+
+    from backend.identity.workspaces_db import ProductRow  # noqa: PLC0415
+    from backend.workflow.domain.execution_target import (  # noqa: PLC0415
+        read_client_workspace_dir,
+        read_execution_target,
+    )
+
+    row = (
+        await session.execute(
+            select(ProductRow.repo_url, ProductRow.product_metadata).where(
+                ProductRow.id == product_id
+            )
+        )
+    ).first()
+    if row is None:
+        return None, "server_sandbox", None
+    repo_url, metadata = row
+    return repo_url or None, read_execution_target(metadata), read_client_workspace_dir(metadata)
+
+
 __all__ = [
     "DECISION_AMBIGUOUS_MODEL_ACCOUNT",
     "DECISION_NO_MODEL_ACCOUNT",
     "list_active_workspace_accounts",
+    "product_dispatch_config",
     "resolve_judge_llm",
     "resolve_via_caller",
     "resolve_workspace_model_account",

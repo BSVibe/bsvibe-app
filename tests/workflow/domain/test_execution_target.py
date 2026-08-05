@@ -15,6 +15,7 @@ from backend.workflow.domain.execution_target import (
     DEFAULT_EXECUTION_TARGET,
     SERVER_SANDBOX,
     is_client_attach,
+    read_client_workspace_dir,
     read_execution_target,
 )
 
@@ -52,3 +53,35 @@ def test_is_client_attach_helper() -> None:
     assert is_client_attach({"execution_target": "client_attach"}) is True
     assert is_client_attach({}) is False
     assert is_client_attach({"execution_target": "client-attach"}) is False
+
+
+def test_client_workspace_dir_only_for_client_attach() -> None:
+    # The path is honoured ONLY when the product is client_attach — a stray path
+    # under the (default) server model must never leak into the sandbox cwd.
+    assert (
+        read_client_workspace_dir(
+            {"execution_target": "client_attach", "client_workspace_path": "/home/u/proj"}
+        )
+        == "/home/u/proj"
+    )
+    assert (
+        read_client_workspace_dir(
+            {"execution_target": "server_sandbox", "client_workspace_path": "/home/u/proj"}
+        )
+        is None
+    )
+
+
+def test_client_workspace_dir_none_when_unset_or_blank() -> None:
+    assert read_client_workspace_dir({"execution_target": "client_attach"}) is None
+    assert (
+        read_client_workspace_dir(
+            {"execution_target": "client_attach", "client_workspace_path": "   "}
+        )
+        is None
+    )
+    assert (
+        read_client_workspace_dir({"execution_target": "client_attach", "client_workspace_path": 5})
+        is None
+    )
+    assert read_client_workspace_dir(None) is None
