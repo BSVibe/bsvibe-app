@@ -23,6 +23,10 @@ from typing import Any
 #: The metadata key a product uses to declare its execution target.
 EXECUTION_TARGET_KEY = "execution_target"
 
+#: The metadata key holding the absolute path, on the client worker's host, of
+#: the user's own working directory a ``client_attach`` product runs in.
+CLIENT_WORKSPACE_PATH_KEY = "client_workspace_path"
+
 SERVER_SANDBOX = "server_sandbox"
 CLIENT_ATTACH = "client_attach"
 
@@ -54,12 +58,31 @@ def is_client_attach(product_metadata: Any) -> bool:
     return read_execution_target(product_metadata) == CLIENT_ATTACH
 
 
+def read_client_workspace_dir(product_metadata: Any) -> str | None:
+    """The user's working directory (worker-host path) for a ``client_attach``
+    product, or ``None``.
+
+    Returns the path ONLY when the product is validly ``client_attach`` AND a
+    non-blank string path is declared. A path set under the (default)
+    ``server_sandbox`` model is ignored — a stray local path must never leak
+    into the server sandbox's cwd. Never raises."""
+    if not is_client_attach(product_metadata):
+        return None
+    # is_client_attach already proved metadata is a dict.
+    value = product_metadata.get(CLIENT_WORKSPACE_PATH_KEY)
+    if isinstance(value, str) and value.strip():
+        return value
+    return None
+
+
 __all__ = [
     "CLIENT_ATTACH",
+    "CLIENT_WORKSPACE_PATH_KEY",
     "DEFAULT_EXECUTION_TARGET",
     "EXECUTION_TARGET_KEY",
     "SERVER_SANDBOX",
     "VALID_EXECUTION_TARGETS",
     "is_client_attach",
+    "read_client_workspace_dir",
     "read_execution_target",
 ]

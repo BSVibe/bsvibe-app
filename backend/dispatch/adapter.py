@@ -430,6 +430,14 @@ class ExecutorAdapter:
     # an empty ``tempfile.mkdtemp()`` and the agent has nothing to read or
     # edit (the E31 dogfood symptom). Chat-shaped callers leave NULL.
     repo_url: str | None = None
+    # #692 — WHERE/HOW the (pure) worker runs the dispatched task, derived from
+    # the product. ``server_sandbox`` (default) is today's MCP-work-tool model;
+    # ``client_attach`` runs natively in the user's own directory below.
+    execution_target: str = "server_sandbox"
+    # #692 — for ``client_attach``, the user's own working directory on the
+    # worker host (the run continues the user's work in place). ``None`` under
+    # the server model → the worker's throwaway per-task dir (``"."``).
+    client_workspace_dir: str | None = None
     supported_methods: frozenset[str] = field(default_factory=lambda: frozenset({"chat"}))
 
     async def chat(
@@ -660,10 +668,13 @@ class ExecutorAdapter:
             executor_type=executor_type,
             prompt=prompt,
             system=system,
-            workspace_dir=".",
+            # #692 — for ``client_attach`` the cwd IS the user's own working
+            # directory; otherwise ``"."`` (the worker's throwaway per-task dir).
+            workspace_dir=self.client_workspace_dir or ".",
             run_id=self.run_id,
             model=model,
             repo_url=self.repo_url,
+            execution_target=self.execution_target,
             # Parity with LiteLLM (BSVibe's first principle): ``tools`` is what
             # tells a model it may act. No tools → a plain completion, so the
             # executor CLI must run WITHOUT its own tools too. Left agentic, it
@@ -801,6 +812,8 @@ def adapter_for(
     session_factory: async_sessionmaker[AsyncSession] | None = None,
     run_id: uuid.UUID | None = None,
     repo_url: str | None = None,
+    execution_target: str = "server_sandbox",
+    client_workspace_dir: str | None = None,
 ) -> ModelAccountAdapter:
     """Pick the right :class:`ModelAccountAdapter` for an account.
 
@@ -863,6 +876,9 @@ def adapter_for(
             # Lift E32 — agent_loop callers thread the product's repo URL
             # so the worker clones it into the per-task workspace.
             repo_url=repo_url,
+            # #692 — the product's execution model + (client_attach) local dir.
+            execution_target=execution_target,
+            client_workspace_dir=client_workspace_dir,
         )
     return LiteLLMAdapter(
         account=account,

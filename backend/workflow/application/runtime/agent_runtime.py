@@ -50,6 +50,7 @@ from backend.workflow.application.delivery.connector_dispatch import (
 from backend.workflow.application.knowledge_orchestrator import KnowledgeAnswerOrchestrator
 from backend.workflow.application.loop_llm import ResolverLoopLlm
 from backend.workflow.application.runtime.account_resolution import (
+    product_dispatch_config,
     resolve_via_caller,
 )
 from backend.workflow.application.runtime.dispatcher import _ResolverFrameLlm
@@ -64,25 +65,6 @@ from backend.workflow.infrastructure.sandbox import (
 from backend.workflow.infrastructure.workers.agent_worker import AgentExecutionDeps
 
 logger = structlog.get_logger(__name__)
-
-
-async def _product_repo_url(session: AsyncSession, product_id: uuid.UUID) -> str | None:
-    """Lift E32 — return the product's git URL for worker-side cloning.
-
-    The agent_loop passes this through ``resolve_via_caller`` so the
-    ExecutorAdapter the resolver hands back tells the worker to clone
-    the repo into the per-task workspace. Soft-fails (returns ``None``)
-    on a missing product or an empty ``repo_url`` so a substrate-only
-    run still resolves an adapter for its non-code chat callers.
-    """
-    from sqlalchemy import select  # noqa: PLC0415 — keep imports terse at module load
-
-    from backend.identity.workspaces_db import ProductRow  # noqa: PLC0415
-
-    repo_url = (
-        await session.execute(select(ProductRow.repo_url).where(ProductRow.id == product_id))
-    ).scalar_one_or_none()
-    return repo_url or None
 
 
 async def _product_workspace_provisioner(
@@ -282,7 +264,14 @@ def build_agent_execution_deps(
         # Without it the coding agent gets an empty tempdir and the E31 dogfood
         # symptom returns: 0 file edits, NULL artifact_refs. ``None`` keeps the
         # pre-E32 empty-tempdir path for runs without a product.
-        repo_url = await _product_repo_url(session, run.product_id) if run.product_id else None
+        # E32 (repo_url) + #692 (execution model + client_attach dir): all from
+        # the PRODUCT (config lives on the product; the worker holds none).
+        # Defaults for a run with no product keep today's behaviour.
+        repo_url, execution_target, client_workspace_dir = (
+            await product_dispatch_config(session, run.product_id)
+            if run.product_id
+            else (None, "server_sandbox", None)
+        )
 
         # L10 (#5) — Knowledge-only short-circuit (B9b): a frame-classified
         # ``knowledge_only`` ask is a CHAT answer, no engineering work. It MUST
@@ -331,6 +320,10 @@ def build_agent_execution_deps(
             # Lift E32 — thread the product's repo URL so the worker
             # clones it into the per-task workspace.
             repo_url=repo_url,
+            # #692 — thread the product's execution model + local dir so the
+            # dispatched task tells the pure worker WHERE/HOW to run.
+            execution_target=execution_target,
+            client_workspace_dir=client_workspace_dir,
         )
         if resolved is None:
             # Fallthrough writes a Decision when there's truly no LLM
