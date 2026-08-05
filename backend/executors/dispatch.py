@@ -301,6 +301,7 @@ async def create_task(
     model: str | None = None,
     repo_url: str | None = None,
     agentic: bool = True,
+    execution_target: str = "server_sandbox",
 ) -> ExecutorTaskRow:
     """Create a ``pending`` :class:`ExecutorTaskRow` and flush it (no commit).
 
@@ -316,6 +317,10 @@ async def create_task(
     this git URL into the per-task workspace BEFORE invoking the executor so
     the coding agent has real files to read + edit. NULL keeps the pre-E32
     empty-tempdir behaviour for chat-shaped callers.
+
+    ``execution_target`` (#692) — WHERE/HOW the pure worker runs this task,
+    derived from the product. ``server_sandbox`` (default) is today's model;
+    ``client_attach`` runs natively in the user's own ``workspace_dir``.
     """
     task = ExecutorTaskRow(
         workspace_id=workspace_id,
@@ -327,6 +332,7 @@ async def create_task(
         model=model,
         repo_url=repo_url,
         agentic=agentic,
+        execution_target=execution_target,
         status="pending",
     )
     session.add(task)
@@ -380,6 +386,9 @@ async def dispatch_task(
     # emitted — the worker defaults a MISSING key to the agent run, so silence
     # would quietly restore the pre-fix behaviour for chat turns.
     payload["agentic"] = "1" if task.agentic else "0"
+    # #692 — WHERE/HOW the pure worker executes (server sandbox vs the user's own
+    # machine). Always emitted; the worker treats a missing key as server_sandbox.
+    payload["execution_target"] = task.execution_target
     # T2b-4 — BSVibe's tools for an agentic turn: the MCP endpoint + a token scoped to THIS
     # run, and the exact tool names the CLI may expose. Not persisted on the row: the token is
     # ephemeral and belongs to this dispatch only.
