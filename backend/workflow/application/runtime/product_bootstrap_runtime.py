@@ -454,20 +454,35 @@ def _build_bootstrap_knowledge_inner(
         # Without it, ExecutorAdapter.chat raises ExecutorAdapterUnavailable
         # on the first chunk and the IngestCompiler silently drops every
         # chunk into the chunk_failures counter.
-        resolved = await resolve_via_caller(
-            session,
-            caller_id=CALLER_KNOWLEDGE_INGEST,
-            workspace_id=workspace_id,
-            settings=settings,
-            redis=redis_client,
-            # Lift E19 — each parallel chunk of IngestCompiler.compile_batch
-            # (Lift E18 asyncio.gather fan-out) needs its OWN AsyncSession
-            # for the dispatch lifecycle, or two concurrent
-            # ``dispatch.create_task`` / ``dispatch.dispatch_task`` calls
-            # race on ``session.flush()`` and raise
-            # ``InvalidRequestError: Session is already flushing``.
-            session_factory=session_factory,
-        )
+        async def _resolve(sess: AsyncSession) -> Any:
+            return await resolve_via_caller(
+                sess,
+                caller_id=CALLER_KNOWLEDGE_INGEST,
+                workspace_id=workspace_id,
+                settings=settings,
+                redis=redis_client,
+                # Lift E19 — each parallel chunk of IngestCompiler.compile_batch
+                # (Lift E18 asyncio.gather fan-out) needs its OWN AsyncSession
+                # for the dispatch lifecycle, or two concurrent
+                # ``dispatch.create_task`` / ``dispatch.dispatch_task`` calls
+                # race on ``session.flush()`` and raise
+                # ``InvalidRequestError: Session is already flushing``.
+                session_factory=session_factory,
+            )
+
+        # #680 — run this bounded read on a SHORT-LIVED session, never the
+        # long-lived one captured at construction. The bootstrap's outer session
+        # used to wrap the multi-minute ``compile_batch`` below; resolving on it
+        # left an open transaction that idled across the whole ingest, got reaped
+        # (``idle_in_transaction_session_timeout``, #633), and its dead-connection
+        # rollback then discarded a SUCCESSFUL bootstrap's completion flip. A
+        # fresh session is closed the instant the read returns; the adapter it
+        # yields opens its own per-chunk sessions via ``session_factory`` (E19).
+        if session_factory is not None:
+            async with session_factory() as resolver_session:
+                resolved = await _resolve(resolver_session)
+        else:
+            resolved = await _resolve(session)
         if resolved is None:
             logger.info(
                 "bootstrap_ingest_account_unresolved",
@@ -749,78 +764,87 @@ async def run_product_bootstrap_job(  # noqa: PLR0915 — linear clone→scaffol
             # chunk of compile_batch (E18 fan-out) gets its own session.
             session_factory=session_factory,
         )
-        if knowledge is None:
-            await repo.mark_status(
-                product_id,
-                status=STATUS_FAILED_INGEST,
-                run_id=run_id,
-                error="no active LLM account",
-            )
-            logger.warning(
-                _AUDIT_FAILED,
-                product_id=str(product_id),
-                workspace_id=str(workspace_id),
-                reason="no_llm",
-            )
-            return
+    # #680 — the construction session is released HERE, BEFORE the multi-minute
+    # ingest. ``build_bootstrap_knowledge`` only defines closures (it never
+    # queries the session), and ``_ingest_callable`` now opens its own short
+    # session for the resolver read, so nothing needs a long-lived session across
+    # ``compile_batch``. Previously this block wrapped the whole ingest: the
+    # session idled in an open transaction, got reaped
+    # (``idle_in_transaction_session_timeout``, #633), and its dead-connection
+    # rollback on block exit discarded the completion flip below — the product
+    # stayed ``ingesting`` forever despite a fully successful ingest.
+    if knowledge is None:
+        await repo.mark_status(
+            product_id,
+            status=STATUS_FAILED_INGEST,
+            run_id=run_id,
+            error="no active LLM account",
+        )
+        logger.warning(
+            _AUDIT_FAILED,
+            product_id=str(product_id),
+            workspace_id=str(workspace_id),
+            reason="no_llm",
+        )
+        return
 
-        try:
-            await repo.mark_status(product_id, status=STATUS_INGESTING)
-            outcome = await run_repo_bootstrap(
-                repo_root=repo_path,
-                workspace_id=workspace_id,
-                region=region,
-                knowledge=knowledge,
-                # Lift E20 — the orchestrator persists the code graph
-                # to ``<vault_root>/code_graph/graph.json`` so the MCP
-                # graph query surface can serve it later.
-                vault_root=Path(settings.knowledge_vault_root) / region / str(workspace_id),
-            )
-            # Lift A-fix — promote LLM-classified seedling tags into
-            # ``concepts/active/<id>.md`` canonical anchors so the PWA
-            # Knowledge graph view (which reads ``list_active_concepts``)
-            # has nodes to render. Failure here is a soft warning: the
-            # seedlings + entity stubs are already on disk and the next
-            # bootstrap/settle pass (or the founder's manual promotion)
-            # will fill the anchors in.
-            await _register_anchors_soft(
-                workspace_id=workspace_id,
-                region=region,
-                settings=settings,
-            )
-        except BootstrapTooLargeError as exc:
-            await repo.mark_status(
-                product_id,
-                status=STATUS_FAILED_TOO_LARGE,
-                run_id=run_id,
-                error=str(exc),
-            )
-            logger.warning(
-                _AUDIT_FAILED,
-                product_id=str(product_id),
-                workspace_id=str(workspace_id),
-                reason="too_large",
-                metric=exc.metric,
-                value=exc.value,
-                limit=exc.limit,
-            )
-            return
-        except Exception as exc:  # noqa: BLE001
-            await repo.mark_status(
-                product_id,
-                status=STATUS_FAILED_INGEST,
-                run_id=run_id,
-                error=_short_error(exc),
-            )
-            logger.warning(
-                _AUDIT_FAILED,
-                product_id=str(product_id),
-                workspace_id=str(workspace_id),
-                reason="ingest",
-                error=_short_error(exc),
-                exc_info=True,
-            )
-            return
+    try:
+        await repo.mark_status(product_id, status=STATUS_INGESTING)
+        outcome = await run_repo_bootstrap(
+            repo_root=repo_path,
+            workspace_id=workspace_id,
+            region=region,
+            knowledge=knowledge,
+            # Lift E20 — the orchestrator persists the code graph
+            # to ``<vault_root>/code_graph/graph.json`` so the MCP
+            # graph query surface can serve it later.
+            vault_root=Path(settings.knowledge_vault_root) / region / str(workspace_id),
+        )
+        # Lift A-fix — promote LLM-classified seedling tags into
+        # ``concepts/active/<id>.md`` canonical anchors so the PWA
+        # Knowledge graph view (which reads ``list_active_concepts``)
+        # has nodes to render. Failure here is a soft warning: the
+        # seedlings + entity stubs are already on disk and the next
+        # bootstrap/settle pass (or the founder's manual promotion)
+        # will fill the anchors in.
+        await _register_anchors_soft(
+            workspace_id=workspace_id,
+            region=region,
+            settings=settings,
+        )
+    except BootstrapTooLargeError as exc:
+        await repo.mark_status(
+            product_id,
+            status=STATUS_FAILED_TOO_LARGE,
+            run_id=run_id,
+            error=str(exc),
+        )
+        logger.warning(
+            _AUDIT_FAILED,
+            product_id=str(product_id),
+            workspace_id=str(workspace_id),
+            reason="too_large",
+            metric=exc.metric,
+            value=exc.value,
+            limit=exc.limit,
+        )
+        return
+    except Exception as exc:  # noqa: BLE001
+        await repo.mark_status(
+            product_id,
+            status=STATUS_FAILED_INGEST,
+            run_id=run_id,
+            error=_short_error(exc),
+        )
+        logger.warning(
+            _AUDIT_FAILED,
+            product_id=str(product_id),
+            workspace_id=str(workspace_id),
+            reason="ingest",
+            error=_short_error(exc),
+            exc_info=True,
+        )
+        return
 
     # Lift E8 Bug 2 — decide ``failed:ingest`` vs ``complete`` based on
     # whether ingest actually produced ANY notes. Before this lift the
