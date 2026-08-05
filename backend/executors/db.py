@@ -131,6 +131,15 @@ class ExecutorTaskRow(Base):
     agentic: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=True, server_default=true()
     )
+    # #692 — WHERE/HOW the pure worker executes this task, derived from the
+    # PRODUCT (the worker holds no such state; config lives on the product).
+    # ``server_sandbox`` (default) routes file/shell through the MCP work tools
+    # into the server-side sandbox; ``client_attach`` runs natively in the user's
+    # own working directory (``workspace_dir``). A plain String, NOT a PG enum —
+    # the vocabulary lives in ``backend.workflow.domain.execution_target``.
+    execution_target: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="server_sandbox", server_default="server_sandbox"
+    )
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending", index=True)
     output: Mapped[str] = mapped_column(Text, nullable=False, default="")
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)

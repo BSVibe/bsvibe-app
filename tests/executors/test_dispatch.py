@@ -187,6 +187,65 @@ async def test_create_task_model_defaults_to_none() -> None:
         assert task.model is None
 
 
+async def test_create_task_carries_execution_target() -> None:
+    """#692 — ``create_task`` threads ``execution_target`` onto the task row so
+    the (pure) worker learns HOW to execute (server sandbox vs the user's own
+    machine). The value is product-derived; the worker holds no such state."""
+    workspace_id = uuid.uuid4()
+    async with memory_session() as s:
+        task = await dispatch.create_task(
+            s,
+            workspace_id=workspace_id,
+            executor_type="claude_code",
+            prompt="p",
+            execution_target="client_attach",
+        )
+        await s.commit()
+        assert task.execution_target == "client_attach"
+
+
+async def test_create_task_execution_target_defaults_to_server_sandbox() -> None:
+    """#692 — the default is the isolated server model; a caller that says
+    nothing keeps today's behaviour."""
+    workspace_id = uuid.uuid4()
+    async with memory_session() as s:
+        task = await dispatch.create_task(
+            s,
+            workspace_id=workspace_id,
+            executor_type="claude_code",
+            prompt="p",
+        )
+        await s.commit()
+        assert task.execution_target == "server_sandbox"
+
+
+async def test_dispatch_task_xadds_execution_target() -> None:
+    """#692 — ``dispatch_task`` ships ``execution_target`` in the XADD payload so
+    the pure worker can act on it. Always emitted (flat string)."""
+    workspace_id = uuid.uuid4()
+    redis = await _make_redis()
+    async with memory_session() as s:
+        worker = await _seed_worker(
+            s, workspace_id=workspace_id, capabilities=["claude_code"], heartbeat_age_s=5
+        )
+        task = await dispatch.create_task(
+            s,
+            workspace_id=workspace_id,
+            executor_type="claude_code",
+            prompt="hello",
+            execution_target="client_attach",
+        )
+        await s.commit()
+        await dispatch.dispatch_task(redis, session=s, task=task, worker_id=worker.id)
+        await s.commit()
+
+        entries = await redis.xrange(dispatch.worker_stream(worker.id))
+        _entry_id, fields = entries[0]
+        assert fields["execution_target"] == "client_attach"
+        assert all(isinstance(v, str) for v in fields.values())
+    await redis.aclose()
+
+
 async def test_dispatch_task_xadds_model_when_set() -> None:
     """E21 — when the task has a ``model`` set, ``dispatch_task`` includes it
     in the XADD payload so the worker can forward it to the executor."""

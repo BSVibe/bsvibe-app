@@ -117,8 +117,10 @@ def test_alembic_head_is_connector_last_import():
     # github_merge_watch -> merge_watch_conflict_head_sha (PR7 — nullable
     # conflict_head_sha column for the merge-watch conflict loop guard) ->
     # merge_watch_conflict_retry (conflict-robustness — conflict_attempts +
-    # conflict_dispatched_at for the retry-then-escalate recovery loop).
-    assert "merge_watch_conflict_retry" in result.stdout
+    # conflict_dispatched_at for the retry-then-escalate recovery loop) ->
+    # executor_task_execution_target (#692 — ``executor_tasks.execution_target``
+    # String column so the pure worker learns server_sandbox vs client_attach).
+    assert "executor_task_execution_target" in result.stdout
 
 
 def test_target_metadata_covers_all_bases():
