@@ -171,6 +171,116 @@ async def register(
 # ── Single-task handling ───────────────────────────────────────────────────────
 
 
+#: Ceiling for one in-place gate command (#692). The backend also bounds the
+#: wait (``verify_gate_command_timeout_s``); this is the worker-side stop so a
+#: hung command can never pin the founder's machine forever.
+_EXEC_TIMEOUT_S = 900.0
+
+#: Cap on the output shipped back for one exec — enough for a failing test's
+#: tail, small enough that a runaway log cannot flood the result POST.
+_EXEC_OUTPUT_MAX = 20_000
+
+
+async def _handle_exec_task(
+    *,
+    task_id: str,
+    command: str,
+    workspace_dir: str,
+    client: httpx.AsyncClient,
+    headers: dict[str, str],
+    redis: _RedisPublisher | None,
+    done_chan: str,
+) -> None:
+    """#692 — run ONE shell command in ``workspace_dir`` and report its exit code.
+
+    The in-place verification channel: the backend's derived gate needs commands
+    that RUN on the founder's machine (that is where a client_attach product's
+    source and toolchain live) with the exit status as the verdict. No coding
+    CLI, no agent — just the command.
+
+    ``success`` is ``exit == 0``; the combined stdout/stderr tail rides back as
+    ``output`` so a failing gate is diagnosable. A missing/!dir workspace or a
+    timeout is reported as a failure, never as a silent pass.
+    """
+    logger.info("exec_task_received", task_id=task_id, workspace_dir=workspace_dir)
+    if not workspace_dir or not os.path.isdir(workspace_dir):  # noqa: ASYNC240
+        await _post_exec_result(
+            client,
+            headers,
+            redis,
+            task_id=task_id,
+            done_chan=done_chan,
+            success=False,
+            output="",
+            error=f"exec workspace does not exist on this worker: {workspace_dir!r}",
+        )
+        return
+
+    proc = await asyncio.create_subprocess_shell(
+        command,
+        cwd=workspace_dir,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.STDOUT,
+    )
+    try:
+        out, _ = await asyncio.wait_for(proc.communicate(), timeout=_EXEC_TIMEOUT_S)
+    except TimeoutError:
+        proc.kill()
+        await _post_exec_result(
+            client,
+            headers,
+            redis,
+            task_id=task_id,
+            done_chan=done_chan,
+            success=False,
+            output="",
+            error=f"exec timed out after {_EXEC_TIMEOUT_S:.0f}s: {command}",
+        )
+        return
+
+    text = out.decode("utf-8", errors="replace")[-_EXEC_OUTPUT_MAX:]
+    exit_code = proc.returncode or 0
+    logger.info("exec_task_completed", task_id=task_id, exit_code=exit_code)
+    await _post_exec_result(
+        client,
+        headers,
+        redis,
+        task_id=task_id,
+        done_chan=done_chan,
+        success=exit_code == 0,
+        output=text,
+        error=None if exit_code == 0 else f"exit {exit_code}",
+    )
+
+
+async def _post_exec_result(
+    client: httpx.AsyncClient,
+    headers: dict[str, str],
+    redis: _RedisPublisher | None,
+    *,
+    task_id: str,
+    done_chan: str,
+    success: bool,
+    output: str,
+    error: str | None,
+) -> None:
+    """Report one exec result on the SAME surfaces an agent turn uses."""
+    await client.post(
+        "/api/v1/workers/result",
+        headers=headers,
+        json={
+            "task_id": task_id,
+            "success": success,
+            "output": output,
+            "error_message": error,
+        },
+    )
+    if redis is not None:
+        await _publish(
+            redis, done_chan, {"task_id": task_id, "success": success, "error_message": error}
+        )
+
+
 async def handle_task(
     task: dict[str, Any],
     *,
@@ -198,6 +308,23 @@ async def handle_task(
     executor_type = task.get("executor_type") or "claude_code"
     stream_chan = task.get("stream_channel") or f"task:{task_id}:stream"
     done_chan = task.get("done_channel") or f"task:{task_id}:done"
+
+    # #692 in-place verify — an ``exec`` task is NOT a coding-agent turn: it runs
+    # ONE shell command in the workspace and reports its exit code. That is the
+    # deterministic channel the derived gate needs (the verdict is the exit
+    # status, never a model's opinion), and it rides this same dispatch/result
+    # path rather than opening a second channel to the worker.
+    if (task.get("action") or "execute") == "exec":
+        await _handle_exec_task(
+            task_id=task_id,
+            command=prompt,
+            workspace_dir=str(task.get("workspace_dir") or "").strip(),
+            client=client,
+            headers=headers,
+            redis=redis,
+            done_chan=done_chan,
+        )
+        return
 
     logger.info("task_received", task_id=task_id, executor=executor_type)
 
