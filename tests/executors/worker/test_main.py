@@ -210,6 +210,51 @@ async def test_handle_task_runs_in_local_temp_dir_not_foreign_path() -> None:
     assert state["results"][0]["success"] is True
 
 
+async def test_handle_exec_task_runs_command_in_workspace_and_reports_exit_code(
+    tmp_path: Any,
+) -> None:
+    """#692 in-place verify — an ``exec`` task runs a SHELL COMMAND in the
+    workspace and reports its exit code.
+
+    This is the deterministic channel the derived gate needs: the verdict is the
+    command's exit status, never a model's opinion. No coding CLI is involved."""
+    (tmp_path / "marker.txt").write_text("hi")
+    state: dict[str, Any] = {}
+    async with _client(state) as client:
+        await worker_main.handle_task(
+            _task(action="exec", prompt="test -f marker.txt", workspace_dir=str(tmp_path)),
+            executors={},
+            client=client,
+            headers={"X-Worker-Token": "WORKER-TOKEN"},
+            redis=None,
+        )
+    result = state["results"][0]
+    assert result["success"] is True, result
+    # The user's directory is untouched by the exec itself.
+    assert (tmp_path / "marker.txt").exists()
+
+
+async def test_handle_exec_task_failing_command_reports_failure(tmp_path: Any) -> None:
+    """A non-zero exit is a REAL gate failure — reported as success=False with
+    the command's output, not swallowed."""
+    state: dict[str, Any] = {}
+    async with _client(state) as client:
+        await worker_main.handle_task(
+            _task(
+                action="exec",
+                prompt="echo boom >&2; exit 3",
+                workspace_dir=str(tmp_path),
+            ),
+            executors={},
+            client=client,
+            headers={"X-Worker-Token": "WORKER-TOKEN"},
+            redis=None,
+        )
+    result = state["results"][0]
+    assert result["success"] is False
+    assert "boom" in (result["output"] or "") + (result["error_message"] or "")
+
+
 async def test_handle_task_client_attach_runs_in_user_dir_and_preserves_it(tmp_path: Any) -> None:
     """#692 — a ``client_attach`` task runs natively in the USER's OWN directory
     (the run continues the user's work in place), NOT a throwaway temp dir, and
