@@ -113,9 +113,7 @@ export default function BootstrapStatusPanel({
 
 function isTerminal(status: string): boolean {
   return (
-    status === "complete" ||
-    status === "skipped:client_attach" ||
-    status.startsWith("failed:")
+    status === "complete" || status === "skipped:client_attach" || status.startsWith("failed:")
   );
 }
 
