@@ -51,6 +51,7 @@ from backend.workflow.application.knowledge_orchestrator import KnowledgeAnswerO
 from backend.workflow.application.loop_llm import ResolverLoopLlm
 from backend.workflow.application.runtime.account_resolution import (
     product_dispatch_config,
+    product_is_client_attach,
     resolve_via_caller,
 )
 from backend.workflow.application.runtime.dispatcher import _ResolverFrameLlm
@@ -95,9 +96,14 @@ def _build_composite_workspace_provisioner(
     github: Callable[[AsyncSession, ExecutionRun, Path], Awaitable[None]],
     product: Callable[[AsyncSession, ExecutionRun, Path], Awaitable[bool]],
 ) -> Callable[[AsyncSession, ExecutionRun, Path], Awaitable[None]]:
-    """Compose the two W1 provisioners in priority order."""
+    """Compose the two W1 provisioners in priority order. #692 — SKIPPED for a
+    ``client_attach`` product: both put its source into a server-side worktree,
+    and local execution means it stays on the user's machine."""
 
     async def _composed(session: AsyncSession, run: ExecutionRun, workspace_dir: Path) -> None:
+        if run.product_id is not None and await product_is_client_attach(session, run.product_id):
+            logger.info("client_attach_server_workspace_skipped", run_id=str(run.id))
+            return
         await github(session, run, workspace_dir)
         if not workspace_dir.exists() or any(workspace_dir.iterdir()):  # noqa: ASYNC240
             return

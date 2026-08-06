@@ -40,6 +40,7 @@ from backend.dispatch.resolver import (
 )
 from backend.router.accounts.models import ModelAccount
 from backend.workflow.application.loop_llm import ResolverLoopLlm
+from backend.workflow.domain.execution_target import CLIENT_ATTACH
 from backend.workflow.infrastructure.db import Decision, ExecutionRun
 
 logger = structlog.get_logger(__name__)
@@ -268,11 +269,32 @@ async def product_dispatch_config(
     return repo_url or None, read_execution_target(metadata), read_client_workspace_dir(metadata)
 
 
+async def product_is_client_attach(session: AsyncSession, product_id: uuid.UUID) -> bool:
+    """#692 — True when the product runs on the user's own machine.
+
+    Callers use it to withhold server-side source handling (run worktree clone,
+    verify/merge): choosing client_attach is the founder saying their source
+    must not leave their machine.
+
+    Never raises: an unreadable product answers ``False``, i.e. the caller keeps
+    its pre-#692 behaviour rather than breaking every server_sandbox run on a
+    lookup hiccup."""
+    try:
+        _repo_url, execution_target, _client_dir = await product_dispatch_config(
+            session, product_id
+        )
+    except Exception:  # noqa: BLE001 — an unreadable product must not break the caller
+        logger.warning("client_attach_lookup_failed", product_id=str(product_id), exc_info=True)
+        return False
+    return execution_target == CLIENT_ATTACH
+
+
 __all__ = [
     "DECISION_AMBIGUOUS_MODEL_ACCOUNT",
     "DECISION_NO_MODEL_ACCOUNT",
     "list_active_workspace_accounts",
     "product_dispatch_config",
+    "product_is_client_attach",
     "resolve_judge_llm",
     "resolve_via_caller",
     "resolve_workspace_model_account",
