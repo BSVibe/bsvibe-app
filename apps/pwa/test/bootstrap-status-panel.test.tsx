@@ -51,6 +51,18 @@ describe("BootstrapStatusPanel", () => {
     expect(container.querySelector(".bootstrap-status")).toBeNull();
   });
 
+  it("renders nothing when status is skipped:client_attach", async () => {
+    // #692 — a client_attach product's source stays on the founder's machine,
+    // so there is no server-side bootstrap to report: nothing ran, nothing
+    // failed. The panel must not sit there implying work is in progress.
+    const getBootstrap = vi.fn().mockResolvedValue(snapshot({ status: "skipped:client_attach" }));
+    const { container } = render(
+      <BootstrapStatusPanel productId="p1" getBootstrap={getBootstrap} />,
+    );
+    await waitFor(() => expect(getBootstrap).toHaveBeenCalled());
+    expect(container.querySelector(".bootstrap-status")).toBeNull();
+  });
+
   it("renders nothing when status is complete", async () => {
     const getBootstrap = vi.fn().mockResolvedValue(snapshot({ status: "complete" }));
     const { container } = render(

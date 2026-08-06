@@ -56,6 +56,9 @@ export default function BootstrapStatusPanel({
 
   if (!progress || !progress.status) return null;
   if (progress.status === "complete") return null;
+  // #692 — a client_attach product's source stays on the founder's machine, so
+  // there is no server-side bootstrap to report. Nothing ran, nothing failed.
+  if (progress.status === "skipped:client_attach") return null;
 
   const isFailed = progress.status.startsWith("failed:");
   const message = messageFor(progress.status, t);
@@ -109,7 +112,11 @@ export default function BootstrapStatusPanel({
 }
 
 function isTerminal(status: string): boolean {
-  return status === "complete" || status.startsWith("failed:");
+  return (
+    status === "complete" ||
+    status === "skipped:client_attach" ||
+    status.startsWith("failed:")
+  );
 }
 
 function messageFor(status: string, t: (key: string) => string): string {

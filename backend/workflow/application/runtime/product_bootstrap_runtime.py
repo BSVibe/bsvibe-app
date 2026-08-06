@@ -91,6 +91,10 @@ STATUS_CLONING = "cloning"
 STATUS_ANALYZING = "analyzing"
 STATUS_INGESTING = "ingesting"
 STATUS_COMPLETE = "complete"
+#: #692 — the product runs on the founder's OWN machine, so BSVibe must not
+#: clone or ingest its source server-side. Neither ``complete`` (nothing was
+#: ingested) nor ``failed`` (nothing went wrong): an honest third terminal.
+STATUS_SKIPPED_CLIENT_ATTACH = "skipped:client_attach"
 STATUS_FAILED_CLONE = "failed:clone"
 STATUS_FAILED_TOO_LARGE = "failed:too_large"
 STATUS_FAILED_INGEST = "failed:ingest"
@@ -644,7 +648,23 @@ async def _scaffold_gate_if_missing(repo_path: Path, git_ops: GitOps) -> None:
         logger.warning("gate_scaffold_failed", repo=str(repo_path), error=str(exc))
 
 
-async def run_product_bootstrap_job(  # noqa: PLR0915 — linear clone→scaffold→ingest job
+async def _product_is_client_attach(
+    session_factory: async_sessionmaker[AsyncSession], product_id: uuid.UUID
+) -> bool:
+    """#692 — True when this product runs on the founder's own machine.
+
+    Short-lived session of its own (#680: never hold one across the job). A
+    lookup failure answers ``False`` — the pre-#692 behaviour — rather than
+    silently skipping a legitimate server-side bootstrap."""
+    from backend.workflow.application.runtime.account_resolution import (  # noqa: PLC0415
+        product_is_client_attach,
+    )
+
+    async with session_factory() as session:
+        return await product_is_client_attach(session, product_id)
+
+
+async def run_product_bootstrap_job(  # noqa: PLR0911, PLR0915 — linear guarded-exit job
     *,
     product_id: uuid.UUID,
     workspace_id: uuid.UUID,
@@ -697,6 +717,19 @@ async def run_product_bootstrap_job(  # noqa: PLR0915 — linear clone→scaffol
             )
             return
         region = ws.region
+
+    # #692 — a client_attach product runs on the founder's OWN machine, and
+    # bootstrap is precisely the step that would put its source on the server
+    # (clone → walk → ingest into the knowledge vault). Stop BEFORE the clone.
+    if await _product_is_client_attach(session_factory, product_id):
+        await repo.mark_status(product_id, status=STATUS_SKIPPED_CLIENT_ATTACH, run_id=run_id)
+        logger.info(
+            "bootstrap_skipped_client_attach",
+            product_id=str(product_id),
+            workspace_id=str(workspace_id),
+            run_id=str(run_id),
+        )
+        return
 
     repo_path = product_workspace_path(product_id)
 
