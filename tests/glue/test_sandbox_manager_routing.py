@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import pytest
 
-from backend.workflow.application.runtime.agent_runtime import _resolve_sandbox_manager
+from backend.workflow.application.runtime.sandbox_selection import resolve_sandbox_manager
 from backend.workflow.infrastructure.sandbox import (
     DockerSandboxManager,
     NoopSandboxManager,
@@ -33,7 +33,7 @@ class _Settings:
 
 def test_explicit_manager_is_used_as_is() -> None:
     injected = NoopSandboxManager()
-    resolved = _resolve_sandbox_manager(injected, _Settings(sandbox_enabled=True))
+    resolved = resolve_sandbox_manager(injected, _Settings(sandbox_enabled=True))
     assert resolved is injected
 
 
@@ -45,15 +45,15 @@ def test_enabled_builds_docker_manager_not_noop(monkeypatch) -> None:
         max_concurrent=1,
     )
     monkeypatch.setattr(
-        "backend.workflow.application.runtime.agent_runtime.get_sandbox_manager",
+        "backend.workflow.application.runtime.sandbox_selection.get_sandbox_manager",
         lambda: captured,
     )
-    resolved = _resolve_sandbox_manager(None, _Settings(sandbox_enabled=True))
+    resolved = resolve_sandbox_manager(None, _Settings(sandbox_enabled=True))
     assert resolved is captured
 
 
 def test_disabled_uses_noop_explicitly() -> None:
-    resolved = _resolve_sandbox_manager(None, _Settings(sandbox_enabled=False))
+    resolved = resolve_sandbox_manager(None, _Settings(sandbox_enabled=False))
     assert isinstance(resolved, NoopSandboxManager)
 
 
@@ -61,8 +61,8 @@ def test_enabled_but_unbuildable_raises_not_silent_host_fallback(monkeypatch) ->
     """The anti-regression: enabled + build returns None must NOT degrade to a
     NoopSandboxManager (host execution) — it raises so the failure is loud."""
     monkeypatch.setattr(
-        "backend.workflow.application.runtime.agent_runtime.get_sandbox_manager",
+        "backend.workflow.application.runtime.sandbox_selection.get_sandbox_manager",
         lambda: None,
     )
     with pytest.raises(RuntimeError, match="sandbox_enabled"):
-        _resolve_sandbox_manager(None, _Settings(sandbox_enabled=True))
+        resolve_sandbox_manager(None, _Settings(sandbox_enabled=True))

@@ -70,6 +70,13 @@ def _map_result(row: Any) -> SandboxResult:
 class ClientWorkerSandboxSession:
     """A ``SandboxSession`` rooted at the founder's own workspace on the worker."""
 
+    #: This box runs in the FOUNDER's own working directory, so the server does
+    #: NOT materialise a venv there — ``uv sync`` would be an unasked-for
+    #: mutation of their tree, and their toolchain is already set up (they work
+    #: there). ``ensure_sandbox_ready`` honours this and skips without
+    #: dispatching anything; gate commands then run bare in their environment.
+    provisions_venv = False
+
     def __init__(
         self,
         *,

@@ -76,7 +76,19 @@ async def ensure_sandbox_ready(box: SandboxSession) -> bool:
 
     Every outcome is logged so a ``False`` (or a degraded DB setup) is always
     diagnosable — which step failed, its exit code, and a scrubbed stderr tail.
+
+    #692 — a session may declare ``provisions_venv = False``: a client_attach box
+    runs commands in the FOUNDER's own working directory, where ``uv sync`` is an
+    unasked-for mutation of their tree and unnecessary anyway (their toolchain is
+    already set up — they work there). Such a box is skipped without dispatching
+    ANYTHING, and readiness is honestly ``False`` so no caller prepends a
+    ``.venv/bin`` that this function did not create. Verify's
+    ``_ensure_project_venv`` calls this same function, so the skip covers the
+    gate path too: its commands run bare in the founder's own environment.
     """
+    if not getattr(box, "provisions_venv", True):
+        logger.info("sandbox_venv_provisioning_skipped", reason="session_does_not_provision")
+        return False
     try:
         lock = await box.read_file("uv.lock", 64)
     except SandboxError:
