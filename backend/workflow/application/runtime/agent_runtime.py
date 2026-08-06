@@ -55,14 +55,14 @@ from backend.workflow.application.runtime.account_resolution import (
     resolve_via_caller,
 )
 from backend.workflow.application.runtime.dispatcher import _ResolverFrameLlm
+from backend.workflow.application.runtime.sandbox_selection import (
+    resolve_sandbox_manager,
+    sandbox_manager_for_run,
+)
 from backend.workflow.application.stages.frame import FrameLlm
 from backend.workflow.infrastructure.connector_actions import ConnectorActionResolver
 from backend.workflow.infrastructure.db import ExecutionRun
-from backend.workflow.infrastructure.sandbox import (
-    NoopSandboxManager,
-    SandboxManager,
-    get_sandbox_manager,
-)
+from backend.workflow.infrastructure.sandbox import SandboxManager
 from backend.workflow.infrastructure.workers.agent_worker import AgentExecutionDeps
 
 logger = structlog.get_logger(__name__)
@@ -135,32 +135,6 @@ def _frame_skill_hint(
     return skill_match, description
 
 
-def _resolve_sandbox_manager(
-    sandbox_manager: SandboxManager | None, settings: Settings
-) -> SandboxManager:
-    """Pick the sandbox backend EXPLICITLY — never a silent host fallback.
-
-    [[bsvibe-no-implicit-routing]]: an injected manager (tests) wins; otherwise
-    when ``sandbox_enabled`` the Docker (DinD) manager MUST build — an
-    enabled-but-unbuildable sandbox raises rather than degrading to host
-    execution (the old ``… or NoopSandboxManager()`` tail silently ran the
-    verifier's ``command`` checks as worker-container subprocesses, where the
-    project toolchain is absent). Only when the sandbox is *explicitly* disabled
-    do we use the host :class:`NoopSandboxManager`.
-    """
-    if sandbox_manager is not None:
-        return sandbox_manager
-    if settings.sandbox_enabled:
-        built = get_sandbox_manager()
-        if built is None:
-            raise RuntimeError(
-                "sandbox_enabled is true but no sandbox manager could be built — "
-                "refusing to silently fall back to host execution"
-            )
-        return built
-    return NoopSandboxManager()
-
-
 def build_agent_execution_deps(
     *,
     settings: Settings | None = None,
@@ -180,7 +154,7 @@ def build_agent_execution_deps(
     * ``session_factory`` → the act ExecutorAdapter's own connection-free session.
     """
     settings = settings or get_settings()
-    box: SandboxManager = _resolve_sandbox_manager(sandbox_manager, settings)
+    box: SandboxManager = resolve_sandbox_manager(sandbox_manager, settings)
     skills_root = Path(settings.skills_root)
 
     def _skill_loader_for(workspace_id: uuid.UUID) -> SkillLoader:
@@ -358,10 +332,23 @@ def build_agent_execution_deps(
             if connector_plugins
             else None
         )
+        # #692 in-place verify — a client_attach run's source is ONLY on the
+        # founder's machine, so its gate commands must run there. Picked per run;
+        # every other run keeps the process-wide ``box``.
+        run_box = sandbox_manager_for_run(
+            default=box,
+            execution_target=execution_target,
+            client_workspace_dir=client_workspace_dir,
+            account=resolved.account,
+            redis_client=redis_client,
+            session_factory=session_factory,
+            workspace_id=run.workspace_id,
+            timeout_s=settings.verify_gate_command_timeout_s,
+        )
         return RunOrchestrator(
             session=session,
             llm=llm,
-            sandbox_manager=box,
+            sandbox_manager=run_box,
             retriever=retriever,
             skill_loader=skill_loader,
             connector_actions=connector_actions,
