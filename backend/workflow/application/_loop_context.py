@@ -13,7 +13,8 @@ isolated from the conductor file so neither breaches the 600 LOC ceiling.
 
 from __future__ import annotations
 
-from typing import Any
+from datetime import UTC, datetime
+from typing import TYPE_CHECKING, Any
 
 import structlog
 
@@ -32,6 +33,9 @@ from backend.workflow.infrastructure.tools import ToolRegistry
 # ``tool_registry`` module so the worker's existing callers keep importing it from here while the
 # MCP transport — forbidden from importing this ``backend.extensions``-tainted module — registers
 # the same handler through the shared factory.
+
+if TYPE_CHECKING:
+    from backend.workflow.application.agent_loop import LoopResult
 
 logger = structlog.get_logger(__name__)
 
@@ -308,10 +312,117 @@ def register_invoke_skill_tool(
     return [INVOKE_SKILL_NAME]
 
 
+def _merge_conflict_directive(run: ExecutionRun) -> dict[str, Any] | None:
+    """PR7 — the conflict-resolution instruction for a RE-DISPATCHED conflict.
+
+    When the ``github_merge_watch`` worker's authoritative freshness merge finds
+    the run's PR branch genuinely conflicts with the base, it writes
+    ``run.payload["merge_conflict"] = {conflict_paths, base_branch, pr_number}``
+    and re-opens the run (RUNNING → OPEN). This turns that payload into a clear
+    turn-context message telling the agent to resolve the conflict — and to
+    raise the founder Decision (``ask_user_question``) ONLY when the merge is
+    genuinely AMBIGUOUS, not for a mechanical resolution. ``None`` when the run
+    carries no re-dispatched conflict (the loop is unchanged)."""
+    payload = run.payload if isinstance(run.payload, dict) else {}
+    conflict = payload.get("merge_conflict")
+    if not isinstance(conflict, dict):
+        return None
+    raw_paths = conflict.get("conflict_paths")
+    paths = [str(p) for p in raw_paths] if isinstance(raw_paths, list) else []
+    base = str(conflict.get("base_branch") or "the base branch")
+    paths_str = ", ".join(paths) if paths else "(the conflicting files)"
+    return {
+        "role": "user",
+        "content": (
+            f"A concurrent change merged to `{base}` and your branch now conflicts "
+            f"in: {paths_str}. Pull the latest base, RESOLVE the conflicts, and "
+            "commit. If the correct resolution is MECHANICAL/clear (imports, "
+            "adjacent non-overlapping edits, formatting), just resolve it and "
+            "re-trigger verification. If it is AMBIGUOUS — two changes touched the "
+            "SAME logic and picking the right merge needs a human judgment call — "
+            "do NOT guess: call ask_user_question to raise the decision for the "
+            "founder. Never paste raw conflict markers to the founder."
+        ),
+    }
+
+
+def _consume_merge_conflict(run: ExecutionRun) -> None:
+    """Clear the one-shot ``merge_conflict`` payload key after injecting it once.
+
+    Removes the key so a later resume (RUNNING → OPEN → drive_loop again) does
+    NOT re-inject the stale instruction, and leaves a persistent
+    ``merge_conflict_resolving`` marker so the ask path (``mcp_work_effects.
+    record_question``) classifies a question raised in this window as the
+    founder-actionable ``merge_conflict_review`` Decision kind, not a vanilla
+    ask. Re-assigns ``payload`` (not in-place mutate) so SQLAlchemy detects the
+    change on the JSON column."""
+    payload = dict(run.payload or {})
+    if "merge_conflict" not in payload:
+        return
+    payload.pop("merge_conflict", None)
+    payload["merge_conflict_resolving"] = True
+    run.payload = payload
+
+
+def _initial_user_message(run: ExecutionRun) -> dict[str, Any]:
+    """#690 — the coding agent's first user turn: the WHOLE founder directive.
+
+    Uses :func:`_intent_directive` (uncapped), NOT ``_intent_title`` (512-char
+    label). Slicing here silently dropped requirements past 512 chars, so the
+    agent built only the truncated half while verification passed on it."""
+    return {"role": "user", "content": _intent_directive(run)}
+
+
+async def is_client_attach_run(session: Any, run: ExecutionRun) -> bool:
+    """#692 — True when this run executes natively on the user's own machine.
+
+    Lazy import: the resolver lives under ``runtime/``, which imports this
+    ``application/`` layer, so a module-level import would cycle. False for a run
+    with no product, and never raises into the loop."""
+    if run.product_id is None:
+        return False
+    from backend.workflow.application.runtime.account_resolution import (  # noqa: PLC0415
+        product_is_client_attach,
+    )
+
+    try:
+        return await product_is_client_attach(session, run.product_id)
+    except Exception:  # noqa: BLE001 — an unreadable product must not break the loop
+        logger.warning("client_attach_lookup_failed", run_id=str(run.id), exc_info=True)
+        return False
+
+
+def client_attach_terminal(run: ExecutionRun, work_step: Any, attempt: Any) -> LoopResult:
+    """#692 — the terminal for a client_attach run: done, pending founder review.
+
+    The work happened on the user's machine through the CLI's native tools, so
+    the server has nothing to verify and holds no copy of the source. Mark the
+    step complete and return the ``verified`` outcome (→ ``review_ready``), but
+    leave ``proof_state`` UNTESTED: the server proved nothing, and claiming
+    otherwise would be false."""
+    from backend.workflow.application.agent_loop import LoopResult as _LoopResult  # noqa: PLC0415
+    from backend.workflow.infrastructure.db import (  # noqa: PLC0415
+        RunAttemptPhase,
+        WorkStepStatus,
+    )
+
+    work_step.status = WorkStepStatus.VERIFIED
+    attempt.phase = RunAttemptPhase.COMPLETED
+    attempt.finished_at = datetime.now(UTC)
+    return _LoopResult(
+        outcome="verified",
+        run_id=run.id,
+        work_step_id=work_step.id,
+        run_attempt_id=attempt.id,
+        summary="",
+    )
+
+
 __all__ = [
     "_DESIGN_SPEC_DIRECTIVE",
     "_RetrieverSearcher",
     "_SYSTEM_PROMPT",
+    "_initial_user_message",
     "_intent_directive",
     "_intent_title",
     "_is_design_stage",
@@ -321,5 +432,9 @@ __all__ = [
     "knowledge_seed_message",
     "make_knowledge_search_handler",
     "register_invoke_skill_tool",
+    "_consume_merge_conflict",
+    "_merge_conflict_directive",
+    "client_attach_terminal",
+    "is_client_attach_run",
     "suggested_skill_message",
 ]

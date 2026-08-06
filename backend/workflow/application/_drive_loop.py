@@ -19,8 +19,12 @@ from typing import TYPE_CHECKING, Any
 
 from backend.workflow.application._loop_context import (
     _SYSTEM_PROMPT,
-    _intent_directive,
+    _consume_merge_conflict,
+    _initial_user_message,
+    _merge_conflict_directive,
     _resumption_messages,
+    client_attach_terminal,
+    is_client_attach_run,
 )
 from backend.workflow.application.audit_events import (
     DecisionPending,
@@ -116,67 +120,6 @@ async def _sync_remote_tool_state(
             written_paths.append(path)
 
 
-def _merge_conflict_directive(run: ExecutionRun) -> dict[str, Any] | None:
-    """PR7 — the conflict-resolution instruction for a RE-DISPATCHED conflict.
-
-    When the ``github_merge_watch`` worker's authoritative freshness merge finds
-    the run's PR branch genuinely conflicts with the base, it writes
-    ``run.payload["merge_conflict"] = {conflict_paths, base_branch, pr_number}``
-    and re-opens the run (RUNNING → OPEN). This turns that payload into a clear
-    turn-context message telling the agent to resolve the conflict — and to
-    raise the founder Decision (``ask_user_question``) ONLY when the merge is
-    genuinely AMBIGUOUS, not for a mechanical resolution. ``None`` when the run
-    carries no re-dispatched conflict (the loop is unchanged)."""
-    payload = run.payload if isinstance(run.payload, dict) else {}
-    conflict = payload.get("merge_conflict")
-    if not isinstance(conflict, dict):
-        return None
-    raw_paths = conflict.get("conflict_paths")
-    paths = [str(p) for p in raw_paths] if isinstance(raw_paths, list) else []
-    base = str(conflict.get("base_branch") or "the base branch")
-    paths_str = ", ".join(paths) if paths else "(the conflicting files)"
-    return {
-        "role": "user",
-        "content": (
-            f"A concurrent change merged to `{base}` and your branch now conflicts "
-            f"in: {paths_str}. Pull the latest base, RESOLVE the conflicts, and "
-            "commit. If the correct resolution is MECHANICAL/clear (imports, "
-            "adjacent non-overlapping edits, formatting), just resolve it and "
-            "re-trigger verification. If it is AMBIGUOUS — two changes touched the "
-            "SAME logic and picking the right merge needs a human judgment call — "
-            "do NOT guess: call ask_user_question to raise the decision for the "
-            "founder. Never paste raw conflict markers to the founder."
-        ),
-    }
-
-
-def _consume_merge_conflict(run: ExecutionRun) -> None:
-    """Clear the one-shot ``merge_conflict`` payload key after injecting it once.
-
-    Removes the key so a later resume (RUNNING → OPEN → drive_loop again) does
-    NOT re-inject the stale instruction, and leaves a persistent
-    ``merge_conflict_resolving`` marker so the ask path (``mcp_work_effects.
-    record_question``) classifies a question raised in this window as the
-    founder-actionable ``merge_conflict_review`` Decision kind, not a vanilla
-    ask. Re-assigns ``payload`` (not in-place mutate) so SQLAlchemy detects the
-    change on the JSON column."""
-    payload = dict(run.payload or {})
-    if "merge_conflict" not in payload:
-        return
-    payload.pop("merge_conflict", None)
-    payload["merge_conflict_resolving"] = True
-    run.payload = payload
-
-
-def _initial_user_message(run: ExecutionRun) -> dict[str, Any]:
-    """#690 — the coding agent's first user turn: the WHOLE founder directive.
-
-    Uses :func:`_intent_directive` (uncapped), NOT ``_intent_title`` (512-char
-    label). Slicing here silently dropped requirements past 512 chars, so the
-    agent built only the truncated half while verification passed on it."""
-    return {"role": "user", "content": _intent_directive(run)}
-
-
 async def drive_loop(  # noqa: PLR0911, PLR0912, PLR0915 — preserved cycle body
     orch: RunOrchestrator,
     *,
@@ -254,6 +197,10 @@ async def drive_loop(  # noqa: PLR0911, PLR0912, PLR0915 — preserved cycle bod
     written_paths: list[str] = []
     final_text = ""
     no_work_nudges = 0
+    # #692 — a client_attach run executes NATIVELY in the user's own directory on
+    # the worker, so the server never sees written_paths and holds no copy of the
+    # source. Resolved once here; consumed at the "model is done" branch below.
+    client_attach = await is_client_attach_run(orch._session, run)
 
     for _cycle in range(orch._max_cycles):
         # Cooperative cancel — stop at the turn boundary if the run was cancelled
@@ -413,6 +360,19 @@ async def drive_loop(  # noqa: PLR0911, PLR0912, PLR0915 — preserved cycle bod
 
         # No tool calls (or the single-shot executor just declared): the model
         # believes the step is done.
+        if client_attach:
+            # #692 — the agent acted with the CLI's OWN tools on the user's
+            # machine: no server-visible written_paths to nudge about and no
+            # server-side source to verify or merge. Finish at review_ready; the
+            # founder reviews the changes in their own workspace. (Without this
+            # the loop nudges "you have not changed any file" and never settles
+            # — live E2E 2026-08-05: 3 hours re-acting on the user's clone.)
+            result = client_attach_terminal(run, work_step, attempt)
+            await orch._session.flush()
+            await orch._audit(
+                run, attempt, LoopTerminal, {"outcome": "verified", "mode": "client_attach"}
+            )
+            return result
         if (
             not written_paths
             and registry.declared_contract is None
