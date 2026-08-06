@@ -22,6 +22,11 @@ ops bundle that wires DinD into the compose stack).
 
 from __future__ import annotations
 
+# NOTE: ``ClientWorkerSandboxManager`` (#692 in-place verify) is deliberately NOT
+# re-exported here. It bridges to ``backend.executors.dispatch``, and this package
+# __init__ is imported by low-level consumers (e.g. ``backend.mcp``) whose layering
+# contract forbids reaching the executors context. Import it directly from
+# ``...sandbox.client_worker_manager`` at the (workflow-layer) call site instead.
 from backend.workflow.infrastructure.sandbox.docker_manager import (
     DockerSandboxManager,
     DockerSandboxSession,

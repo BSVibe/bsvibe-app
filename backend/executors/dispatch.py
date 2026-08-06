@@ -353,12 +353,20 @@ async def dispatch_task(
     task: ExecutorTaskRow,
     worker_id: uuid.UUID,
     mcp: dict[str, Any] | None = None,
+    action: str = "execute",
 ) -> str:
     """XADD ``task`` onto the worker's stream + mark it ``dispatched``.
 
     The payload is flat strings only (the Redis Streams constraint). The DB row
     is flipped to ``status="dispatched"`` with ``worker_id`` set in the SAME
     session (the caller commits). Returns the stream entry id.
+
+    ``action`` (#692 in-place verify) — ``"execute"`` (default) is a coding-agent
+    turn; ``"exec"`` tells the worker to run ``task.prompt`` as ONE shell command
+    in ``task.workspace_dir`` and report its exit code (the deterministic gate
+    channel the derived verifier needs — see
+    ``backend/executors/worker/main.py::_handle_exec_task``). Every other caller
+    keeps the agent-run default untouched.
     """
     payload: dict[str, Any] = {
         "task_id": str(task.id),
@@ -368,7 +376,7 @@ async def dispatch_task(
         "workspace_dir": task.workspace_dir,
         "stream_channel": stream_channel(task.id),
         "done_channel": done_channel(task.id),
-        "action": "execute",
+        "action": action,
         "dispatched_at": datetime.now(UTC).isoformat(),
     }
     # Lift E21 — forward the underlying model id only when set. Redis Streams

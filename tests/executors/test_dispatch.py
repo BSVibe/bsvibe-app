@@ -246,6 +246,41 @@ async def test_dispatch_task_xadds_execution_target() -> None:
     await redis.aclose()
 
 
+async def test_dispatch_task_action_override_ships_exec() -> None:
+    """#692 in-place verify — ``dispatch_task(action="exec")`` XADDs
+    ``action=exec`` so the worker runs the ``prompt`` as ONE shell command in
+    ``workspace_dir`` (the deterministic gate channel) instead of an agent turn.
+    The default stays ``execute`` (an agent run), untouched for every legacy
+    caller."""
+    workspace_id = uuid.uuid4()
+    redis = await _make_redis()
+    async with memory_session() as s:
+        worker = await _seed_worker(
+            s, workspace_id=workspace_id, capabilities=["claude_code"], heartbeat_age_s=5
+        )
+        task = await dispatch.create_task(
+            s,
+            workspace_id=workspace_id,
+            executor_type="claude_code",
+            prompt="pytest -q",
+            workspace_dir="/Users/founder/proj",
+            execution_target="client_attach",
+        )
+        await s.commit()
+        await dispatch.dispatch_task(
+            redis, session=s, task=task, worker_id=worker.id, action="exec"
+        )
+        await s.commit()
+
+        entries = await redis.xrange(dispatch.worker_stream(worker.id))
+        _entry_id, fields = entries[0]
+        assert fields["action"] == "exec"
+        assert fields["prompt"] == "pytest -q"
+        assert fields["workspace_dir"] == "/Users/founder/proj"
+        assert all(isinstance(v, str) for v in fields.values())
+    await redis.aclose()
+
+
 async def test_dispatch_task_xadds_model_when_set() -> None:
     """E21 — when the task has a ``model`` set, ``dispatch_task`` includes it
     in the XADD payload so the worker can forward it to the executor."""
