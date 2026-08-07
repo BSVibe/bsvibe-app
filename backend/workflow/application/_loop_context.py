@@ -392,20 +392,32 @@ async def is_client_attach_run(session: Any, run: ExecutionRun) -> bool:
         return False
 
 
-def client_attach_terminal(run: ExecutionRun, work_step: Any, attempt: Any) -> LoopResult:
+def client_attach_terminal(
+    run: ExecutionRun, work_step: Any, attempt: Any, *, gate: dict[str, Any] | None = None
+) -> LoopResult:
     """#692 — the terminal for a client_attach run: done, pending founder review.
 
     The work happened on the user's machine through the CLI's native tools, so
-    the server has nothing to verify and holds no copy of the source. Mark the
-    step complete and return the ``verified`` outcome (→ ``review_ready``), but
-    leave ``proof_state`` UNTESTED: the server proved nothing, and claiming
-    otherwise would be false."""
+    the server holds no copy of the source. The step completes and returns the
+    ``verified`` outcome (→ ``review_ready``); the founder reviews the changes in
+    their own workspace.
+
+    ``gate`` (in-place verify) is the blob from
+    :func:`~backend.workflow.application.inplace_gate.run_inplace_gate`. Only a
+    gate that actually RAN a command on that machine and passed it lifts
+    ``proof_state`` to ``PROVED`` — that proof is the command's exit code, the
+    same evidence a server-sandbox verify rests on. Every other case (no gate
+    could be derived, nothing runnable was found, the tools were missing) leaves
+    UNTESTED: the server proved nothing, and claiming otherwise would be false."""
     from backend.workflow.application.agent_loop import LoopResult as _LoopResult  # noqa: PLC0415
     from backend.workflow.infrastructure.db import (  # noqa: PLC0415
+        ProofState,
         RunAttemptPhase,
         WorkStepStatus,
     )
 
+    if gate is not None and gate.get("proved"):
+        work_step.proof_state = ProofState.PROVED
     work_step.status = WorkStepStatus.VERIFIED
     attempt.phase = RunAttemptPhase.COMPLETED
     attempt.finished_at = datetime.now(UTC)

@@ -159,6 +159,12 @@ ignore = [
     # sibling verify path carries the same ignore.
     "S604",
 ]
+"backend/workflow/application/inplace_gate.py" = [
+    # #692 — the derived gate's commands are SHELL strings by definition (the
+    # repo's own ``uv run pytest`` / ``npm test``), run through the same
+    # ``box.exec`` seam the sandbox verify path uses. Same ignore as its sibling.
+    "S604",
+]
 "backend/workflow/application/loop_llm.py" = [
     "F821",
     "PLC0415",

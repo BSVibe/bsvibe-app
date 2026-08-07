@@ -70,6 +70,12 @@ def _map_result(row: Any) -> SandboxResult:
 class ClientWorkerSandboxSession:
     """A ``SandboxSession`` rooted at the founder's own workspace on the worker."""
 
+    #: #692 — this box executes on the FOUNDER's machine, where the product's
+    #: source and toolchain actually are. The drive loop reads this to decide it
+    #: can run the repo's own derived gate IN PLACE (and take its exit codes as a
+    #: real proof) instead of settling UNTESTED for want of a server-side copy.
+    runs_in_place = True
+
     #: This box runs in the FOUNDER's own working directory, so the server does
     #: NOT materialise a venv there — ``uv sync`` would be an unasked-for
     #: mutation of their tree, and their toolchain is already set up (they work
