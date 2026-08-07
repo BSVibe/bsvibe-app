@@ -5,6 +5,7 @@ from __future__ import annotations
 import time
 import uuid
 
+import jwt
 import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec
@@ -139,6 +140,54 @@ def test_verify_rejects_expired_token(stable_key: tuple[str, object]) -> None:
     jwks = {"keys": [sk.public_jwk]}
     with pytest.raises(InvalidTokenError):
         verify_access_token(token, issuer="http://test/issuer", jwks=jwks)
+
+
+def test_issue_without_expiry_omits_exp_claim(stable_key: tuple[str, object]) -> None:
+    """A PAT has no lifetime on the wire — the DB row is the sole authority.
+
+    Stamping a sentinel far-future ``exp`` would make the token claim an
+    expiry the database does not agree with; we omit the claim instead.
+    """
+    pem, _ = stable_key
+    sk = build_signing_key(pem)
+    now = int(time.time())
+    token = issue_access_token(
+        user_id=uuid.uuid4(),
+        workspace_id=uuid.uuid4(),
+        client_id="dcr-test",
+        scope=["mcp:read"],
+        jti=uuid.uuid4(),
+        issued_at=now,
+        expires_at=None,
+        issuer="http://test/issuer",
+        signing_key=sk,
+    )
+    claims = jwt.decode(token, options={"verify_signature": False})
+    assert "exp" not in claims
+    assert claims["iat"] == now
+
+
+def test_verify_accepts_token_without_exp(stable_key: tuple[str, object]) -> None:
+    """``exp`` is no longer a required claim — an absent one means "never"."""
+    pem, _ = stable_key
+    sk = build_signing_key(pem)
+    now = int(time.time())
+    jti = uuid.uuid4()
+    token = issue_access_token(
+        user_id=uuid.uuid4(),
+        workspace_id=uuid.uuid4(),
+        client_id="dcr-test",
+        scope=["mcp:read"],
+        jti=jti,
+        issued_at=now,
+        expires_at=None,
+        issuer="http://test/issuer",
+        signing_key=sk,
+    )
+    claims = verify_access_token(token, issuer="http://test/issuer", jwks={"keys": [sk.public_jwk]})
+    assert claims["jti"] == str(jti)
+    assert claims["aud"] == ACCESS_TOKEN_AUDIENCE
+    assert "exp" not in claims
 
 
 def test_jwks_payload_round_trip() -> None:

@@ -125,8 +125,8 @@ def test_fresh_pg_upgrade_round_trip():
     # Phase 1 — fresh upgrade.
     _alembic(["upgrade", "head"], env_extra=env_extra)
     stamped = asyncio.run(_stamped_head(url))
-    assert stamped == "executor_task_execution_target", (
-        f"expected head executor_task_execution_target, got {stamped}"
+    assert stamped == "oauth_token_nullable_expiry", (
+        f"expected head oauth_token_nullable_expiry, got {stamped}"
     )
 
     # Phase 2 — full downgrade. Verifies every revision's downgrade path.
@@ -135,7 +135,7 @@ def test_fresh_pg_upgrade_round_trip():
     # Phase 3 — re-upgrade. Verifies the chain is idempotent.
     _alembic(["upgrade", "head"], env_extra=env_extra)
     stamped = asyncio.run(_stamped_head(url))
-    assert stamped == "executor_task_execution_target"
+    assert stamped == "oauth_token_nullable_expiry"
 
 
 def test_notification_channel_keys_renames_email_to_email_sender():
@@ -606,3 +606,42 @@ def test_run_claim_columns_round_trip():
     # Re-upgrade restores them.
     _alembic(["upgrade", "head"], env_extra=env_extra)
     assert {"claimed_at", "claimed_by"} <= asyncio.run(_columns())
+
+
+def test_oauth_access_token_expires_at_is_nullable_after_upgrade():
+    """PAT groundwork — ``oauth_access_tokens.expires_at`` drops NOT NULL.
+
+    A NULL there means "never expires". The reverse migration re-imposes the
+    constraint, which is only safe while no such row exists — this test runs
+    it against a fresh DB where none do.
+    """
+    url = _skip_if_no_pg()
+    env_extra = {"BSVIBE_MIGRATION_DATABASE_URL": url}
+
+    asyncio.run(_drop_everything(url))
+    _alembic(["upgrade", "head"], env_extra=env_extra)
+
+    async def _is_nullable() -> str:
+        engine = create_async_engine(url, future=True)
+        try:
+            async with engine.begin() as conn:
+                return (
+                    await conn.execute(
+                        text(
+                            "SELECT is_nullable FROM information_schema.columns "
+                            "WHERE table_name='oauth_access_tokens' "
+                            "AND column_name='expires_at'"
+                        )
+                    )
+                ).scalar_one()
+        finally:
+            await engine.dispose()
+
+    assert asyncio.run(_is_nullable()) == "YES", "expires_at is still NOT NULL after upgrade"
+
+    # Downgrade restores NOT NULL (no NULL rows exist on a fresh DB).
+    _alembic(["downgrade", "executor_task_execution_target"], env_extra=env_extra)
+    assert asyncio.run(_is_nullable()) == "NO", "downgrade did not restore NOT NULL"
+
+    _alembic(["upgrade", "head"], env_extra=env_extra)
+    assert asyncio.run(_is_nullable()) == "YES"
