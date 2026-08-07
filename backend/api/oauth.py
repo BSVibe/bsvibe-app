@@ -61,18 +61,22 @@ from backend.identity.oauth_clients_service import (
     register_client,
     revoke_client,
 )
-from backend.identity.oauth_db import OAuthClientRow
+from backend.identity.oauth_db import OAuthAccessTokenRow, OAuthClientRow
 from backend.identity.oauth_jwt import ACCESS_TOKEN_AUDIENCE
 from backend.identity.oauth_keys import jwks_payload
 from backend.identity.oauth_pkce import match_redirect_uri
 from backend.identity.oauth_service import (
+    PAT_LABEL_PREFIX,
     CodeClaimOutcome,
     RefreshRotateOutcome,
     RevokeKind,
     claim_authorization_code,
     introspect_token,
     issue_authorization_code,
+    issue_pat,
     issue_token_pair,
+    list_pats,
+    revoke_pat,
     revoke_token,
     rotate_refresh_token,
 )
@@ -198,6 +202,33 @@ class ClientResponse(BaseModel):
     allowed_scopes: list[str]
     created_at: datetime
     revoked_at: datetime | None
+
+
+class PatCreateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1, max_length=100)
+    scope: list[str] | None = None
+    #: Omitted (the default) mints a PAT that never expires.
+    expires_in_days: int | None = Field(default=None, ge=1, le=3650)
+
+
+class PatResponse(BaseModel):
+    """A PAT as listed. Deliberately carries no token value."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: uuid.UUID
+    name: str
+    scope: list[str]
+    issued_at: datetime
+    expires_at: datetime | None
+
+
+class PatCreatedResponse(PatResponse):
+    """The create response — the ONLY place the raw token is ever returned."""
+
+    token: str
 
 
 class AnonymousClientCreateRequest(BaseModel):
@@ -942,6 +973,98 @@ async def delete_client(
     if row is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="not found")
     await session.commit()
+
+
+# ---------------------------------------------------------------------------
+# Personal access tokens (authenticated)
+# ---------------------------------------------------------------------------
+
+
+def _pat_to_response(row: OAuthAccessTokenRow) -> PatResponse:
+    return PatResponse(
+        id=row.id,
+        name=(row.label or "").removeprefix(PAT_LABEL_PREFIX),
+        scope=list(row.scope),
+        issued_at=row.issued_at,
+        expires_at=row.expires_at,
+    )
+
+
+@v1_router.post("/pats", response_model=PatCreatedResponse, status_code=status.HTTP_201_CREATED)
+async def create_pat(
+    payload: PatCreateRequest,
+    user_row: Annotated[UserRow, Depends(get_current_user_row)],
+    workspace_id: Annotated[uuid.UUID, Depends(get_workspace_id)],
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+) -> PatCreatedResponse:
+    """Mint a Personal Access Token — the browserless path onto ``/mcp``.
+
+    The OAuth loopback flow needs a browser on the same machine as the MCP
+    client. Over a remote tunnel, an SSH session, or a launchd/cron job there
+    is none, and a PAT is the escape hatch every comparable remote MCP server
+    offers. Paste it into a client as::
+
+        claude mcp add --transport http bsvibe <issuer>/mcp \\
+          --header "Authorization: Bearer <token>"
+
+    The raw token is in THIS response only; it is never recoverable
+    afterwards, because only the signed JWT ever held it — the row keeps just
+    the id, scopes and label.
+    """
+    scopes = payload.scope or [DEFAULT_SCOPE]
+    for s in scopes:
+        if s not in ALLOWED_SCOPES:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"unknown scope: {s}",
+            )
+    issued = await issue_pat(
+        session,
+        user_id=user_row.id,
+        workspace_id=workspace_id,
+        name=payload.name,
+        scope=scopes,
+        issuer=get_settings().oauth_issuer,
+        expires_in_days=payload.expires_in_days,
+    )
+    await session.commit()
+    logger.info(
+        "pat_issued",
+        pat_id=str(issued.id),
+        workspace_id=str(workspace_id),
+        scope=issued.scope,
+        never_expires=issued.expires_at is None,
+    )
+    return PatCreatedResponse(
+        id=issued.id,
+        name=issued.name,
+        scope=issued.scope,
+        issued_at=issued.issued_at,
+        expires_at=issued.expires_at,
+        token=issued.token,
+    )
+
+
+@v1_router.get("/pats", response_model=list[PatResponse])
+async def list_pats_route(
+    workspace_id: Annotated[uuid.UUID, Depends(get_workspace_id)],
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+) -> list[PatResponse]:
+    rows = await list_pats(session, workspace_id=workspace_id)
+    return [_pat_to_response(r) for r in rows]
+
+
+@v1_router.delete("/pats/{pat_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_pat(
+    pat_id: uuid.UUID,
+    workspace_id: Annotated[uuid.UUID, Depends(get_workspace_id)],
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+) -> None:
+    row = await revoke_pat(session, pat_id=pat_id, workspace_id=workspace_id)
+    if row is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="not found")
+    await session.commit()
+    logger.info("pat_revoked", pat_id=str(pat_id), workspace_id=str(workspace_id))
 
 
 # ---------------------------------------------------------------------------
