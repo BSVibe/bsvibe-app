@@ -119,8 +119,11 @@ def test_alembic_head_is_connector_last_import():
     # merge_watch_conflict_retry (conflict-robustness — conflict_attempts +
     # conflict_dispatched_at for the retry-then-escalate recovery loop) ->
     # executor_task_execution_target (#692 — ``executor_tasks.execution_target``
-    # String column so the pure worker learns server_sandbox vs client_attach).
-    assert "executor_task_execution_target" in result.stdout
+    # String column so the pure worker learns server_sandbox vs client_attach) ->
+    # oauth_token_nullable_expiry (PAT groundwork — ``oauth_access_tokens``
+    # ``expires_at`` drops NOT NULL so a never-expiring token can exist).
+    # NOTE revision ids are capped at 32 chars by ``alembic_version.version_num``.
+    assert "oauth_token_nullable_expiry" in result.stdout
 
 
 def test_target_metadata_covers_all_bases():
