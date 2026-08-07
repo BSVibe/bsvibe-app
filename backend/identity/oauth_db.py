@@ -49,6 +49,11 @@ def _utcnow() -> datetime:
     return datetime.now(UTC)
 
 
+def aware_utc(dt: datetime) -> datetime:
+    """SQLite drops tz-info on a round-trip; restore UTC for comparisons."""
+    return dt if dt.tzinfo is not None else dt.replace(tzinfo=UTC)
+
+
 class OAuthClientRow(Base):
     """An OAuth 2.0 client registered with this authorization server.
 
@@ -154,7 +159,11 @@ class OAuthAccessTokenRow(Base):
     issued_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=_utcnow
     )
-    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    # NULL = never expires. Only a PAT is issued that way; every grant-issued
+    # token carries a concrete expiry. This column — not the JWT's ``exp`` —
+    # is the authority a resource server enforces, so shortening a live
+    # token's lifetime here takes effect on the next request.
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     # Optional human label: ``client:<client_name>`` for /token issuance,
     # ``pat:<user-chosen-name>`` for founder-created PATs.
@@ -194,4 +203,5 @@ __all__ = [
     "OAuthClientRow",
     "OAuthCodeRow",
     "OAuthRefreshTokenRow",
+    "aware_utc",
 ]

@@ -34,6 +34,9 @@ from backend.identity.oauth_db import (
     OAuthCodeRow,
     OAuthRefreshTokenRow,
 )
+from backend.identity.oauth_db import (
+    aware_utc as _aware,
+)
 from backend.identity.oauth_jwt import (
     ACCESS_TOKEN_AUDIENCE,
     issue_access_token,
@@ -55,11 +58,6 @@ REFRESH_TOKEN_TTL = timedelta(days=30)
 
 def _utcnow() -> datetime:
     return datetime.now(UTC)
-
-
-def _aware(dt: datetime) -> datetime:
-    """SQLite drops tz-info on a round-trip; restore UTC for comparisons."""
-    return dt if dt.tzinfo is not None else dt.replace(tzinfo=UTC)
 
 
 def _gen_code() -> str:
@@ -450,10 +448,12 @@ async def introspect_token(
             claims = verify_access_token(token, issuer=issuer, jwks=jwks_payload())
             jti = uuid.UUID(claims["jti"])
             access_row = await session.get(OAuthAccessTokenRow, jti)
+            # A NULL expiry means never expires (a PAT) — active, and RFC 7662
+            # ``exp`` is simply omitted rather than fabricated.
             if (
                 access_row is not None
                 and access_row.revoked_at is None
-                and _aware(access_row.expires_at) > n
+                and (access_row.expires_at is None or _aware(access_row.expires_at) > n)
             ):
                 return IntrospectionResult(
                     active=True,
@@ -461,7 +461,11 @@ async def introspect_token(
                     workspace_id=str(access_row.workspace_id),
                     client_id=access_row.client_id,
                     scope=" ".join(access_row.scope),
-                    exp=int(_aware(access_row.expires_at).timestamp()),
+                    exp=(
+                        int(_aware(access_row.expires_at).timestamp())
+                        if access_row.expires_at is not None
+                        else None
+                    ),
                     iat=int(_aware(access_row.issued_at).timestamp()),
                     token_type="access_token",  # noqa: S106 — RFC 7662 label
                     aud=ACCESS_TOKEN_AUDIENCE,

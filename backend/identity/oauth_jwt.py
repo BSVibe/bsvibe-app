@@ -44,7 +44,7 @@ def issue_access_token(
     scope: list[str],
     jti: uuid.UUID,
     issued_at: int,
-    expires_at: int,
+    expires_at: int | None,
     issuer: str,
     signing_key: SigningKey | None = None,
     run_id: uuid.UUID | None = None,
@@ -53,6 +53,13 @@ def issue_access_token(
 
     ``signing_key`` defaults to the process singleton; tests pass an
     explicit key to assert on deterministic kids.
+
+    ``expires_at=None`` omits the ``exp`` claim entirely — the shape a PAT
+    takes. We deliberately do NOT stamp a far-future sentinel: the row in
+    ``oauth_access_tokens`` is the authority on a token's lifetime, and a
+    wire claim that disagrees with it would be a second, lying source of
+    truth. Resource servers enforce expiry from the row (see
+    :func:`backend.mcp.auth.resolve_principal_from_bearer`).
 
     ``run_id`` (T2) narrows the token to ONE ExecutionRun. It is set only on the short-lived
     token a dispatched executor task carries, so the agent's remote tools
@@ -70,8 +77,9 @@ def issue_access_token(
         "client_id": client_id,
         "jti": str(jti),
         "iat": issued_at,
-        "exp": expires_at,
     }
+    if expires_at is not None:
+        payload["exp"] = expires_at
     if run_id is not None:
         payload["run_id"] = str(run_id)
     return jwt.encode(
@@ -94,6 +102,12 @@ def verify_access_token(
     to this process's own JWKS — useful for in-process tests and the
     /introspect endpoint). Raises :class:`InvalidTokenError` on any
     verification failure.
+
+    ``exp`` is NOT in the required-claims set: a PAT carries no expiry on
+    the wire. When the claim IS present PyJWT still enforces it. Absence
+    means "no wire-level expiry", never "unchecked" — the caller resolves
+    the token's row and enforces ``expires_at`` from there, so an
+    expiry-less claim set is only ever as durable as its database row.
     """
     headers = jwt.get_unverified_header(token)
     kid = headers.get("kid")
@@ -116,7 +130,7 @@ def verify_access_token(
         algorithms=["ES256"],
         audience=ACCESS_TOKEN_AUDIENCE,
         issuer=issuer,
-        options={"require": ["iss", "sub", "aud", "exp", "iat", "jti"]},
+        options={"require": ["iss", "sub", "aud", "iat", "jti"]},
     )
 
 

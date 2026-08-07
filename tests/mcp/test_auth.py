@@ -51,7 +51,18 @@ async def session(monkeypatch) -> AsyncIterator:
     reset_signing_key_for_tests()
 
 
-def _issue(*, jti: uuid.UUID, user_id: uuid.UUID, workspace_id: uuid.UUID, scope: list[str]) -> str:
+_DEFAULT_TTL = timedelta(hours=1)
+
+
+def _issue(
+    *,
+    jti: uuid.UUID,
+    user_id: uuid.UUID,
+    workspace_id: uuid.UUID,
+    scope: list[str],
+    ttl_seconds: int | None = 3600,
+) -> str:
+    """Mint a token. ``ttl_seconds=None`` omits ``exp`` entirely (the PAT shape)."""
     now = int(time.time())
     return issue_access_token(
         user_id=user_id,
@@ -60,13 +71,23 @@ def _issue(*, jti: uuid.UUID, user_id: uuid.UUID, workspace_id: uuid.UUID, scope
         scope=scope,
         jti=jti,
         issued_at=now,
-        expires_at=now + 3600,
+        expires_at=(now + ttl_seconds) if ttl_seconds is not None else None,
         issuer="http://test",
         signing_key=get_signing_key(),
     )
 
 
-async def _seed_row(session, *, jti, user_id, workspace_id, scope, revoked: bool = False):
+async def _seed_row(
+    session,
+    *,
+    jti,
+    user_id,
+    workspace_id,
+    scope,
+    revoked: bool = False,
+    expires_in: timedelta | None = _DEFAULT_TTL,
+):
+    """Seed the token row. ``expires_in=None`` stores a NULL expiry (never expires)."""
     from backend.identity.db import UserRow
     from backend.identity.workspaces_db import WorkspaceRow
 
@@ -81,7 +102,7 @@ async def _seed_row(session, *, jti, user_id, workspace_id, scope, revoked: bool
         client_id="dcr-test",
         scope=scope,
         issued_at=now,
-        expires_at=now + timedelta(hours=1),
+        expires_at=(now + expires_in) if expires_in is not None else None,
         revoked_at=(now if revoked else None),
     )
     session.add(row)
@@ -135,6 +156,57 @@ async def test_resolve_unknown_jti_rejected(session) -> None:
     # No row seeded -> introspection lookup returns None.
     with pytest.raises(McpAuthError):
         await resolve_principal_from_bearer(token=token, issuer="http://test", session=session)
+
+
+async def test_resolve_rejects_db_expired_row(session) -> None:
+    """The DB row is the authority on expiry, not the JWT's ``exp``.
+
+    The wire token here is perfectly valid — a future ``exp``, a good
+    signature, a known jti. Only ``oauth_access_tokens.expires_at`` says it
+    is dead. Without this check a shortened expiry never takes effect.
+    """
+    jti = uuid.uuid4()
+    user_id = uuid.uuid4()
+    workspace_id = uuid.uuid4()
+    await _seed_row(
+        session,
+        jti=jti,
+        user_id=user_id,
+        workspace_id=workspace_id,
+        scope=["mcp:read"],
+        expires_in=timedelta(hours=-1),
+    )
+    token = _issue(jti=jti, user_id=user_id, workspace_id=workspace_id, scope=["mcp:read"])
+
+    with pytest.raises(McpAuthError):
+        await resolve_principal_from_bearer(token=token, issuer="http://test", session=session)
+
+
+async def test_resolve_accepts_never_expiring_pat(session) -> None:
+    """A PAT: no ``exp`` on the wire, NULL ``expires_at`` in the row."""
+    jti = uuid.uuid4()
+    user_id = uuid.uuid4()
+    workspace_id = uuid.uuid4()
+    scope = ["mcp:read", "mcp:write"]
+    await _seed_row(
+        session,
+        jti=jti,
+        user_id=user_id,
+        workspace_id=workspace_id,
+        scope=scope,
+        expires_in=None,
+    )
+    token = _issue(
+        jti=jti, user_id=user_id, workspace_id=workspace_id, scope=scope, ttl_seconds=None
+    )
+
+    principal = await resolve_principal_from_bearer(
+        token=token, issuer="http://test", session=session
+    )
+    assert principal.user_id == user_id
+    assert principal.workspace_id == workspace_id
+    assert principal.jti == jti
+    assert principal.has_scope("mcp:write")
 
 
 async def test_resolve_malformed_token_rejected(session) -> None:

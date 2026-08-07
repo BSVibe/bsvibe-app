@@ -11,7 +11,11 @@ Verification chain:
 2. Database lookup of the ``jti`` claim against
    :class:`OAuthAccessTokenRow` — proves the token has not been revoked
    (``revoked_at IS NULL``) AND has not expired beyond its DB-recorded
-   ``expires_at``.
+   ``expires_at`` (``NULL`` there means never expires — the PAT shape).
+
+Step 2's expiry check is not redundant with the JWT's ``exp``. The row is
+the authority: a PAT carries no ``exp`` at all, and shortening any token's
+lifetime in the database has to take effect without reissuing the JWT.
 
 A failure at either step raises :class:`McpAuthError`; the transport
 maps it to a 401 with the RFC 6750 + RFC 9728 ``WWW-Authenticate``
@@ -22,12 +26,13 @@ authorization server via the resource-metadata document.
 from __future__ import annotations
 
 import uuid
+from datetime import UTC, datetime
 
 import structlog
 from jwt.exceptions import InvalidTokenError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.identity.oauth_db import OAuthAccessTokenRow
+from backend.identity.oauth_db import OAuthAccessTokenRow, aware_utc
 from backend.identity.oauth_jwt import verify_access_token
 from backend.mcp.api import McpPrincipal
 
@@ -76,6 +81,9 @@ async def resolve_principal_from_bearer(
         raise McpAuthError("invalid_token")
     if row.revoked_at is not None:
         logger.info("mcp_auth_token_revoked", jti=str(jti))
+        raise McpAuthError("invalid_token")
+    if row.expires_at is not None and aware_utc(row.expires_at) <= datetime.now(UTC):
+        logger.info("mcp_auth_token_expired", jti=str(jti))
         raise McpAuthError("invalid_token")
 
     scopes_raw = claims.get("scope") or ""
