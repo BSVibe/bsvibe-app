@@ -181,6 +181,17 @@ def _utcnow() -> datetime:
     return datetime.now(tz=UTC)
 
 
+def _aware(dt: datetime) -> datetime:
+    """Restore UTC on a datetime a backend handed back without tz-info.
+
+    Postgres ``TIMESTAMPTZ`` round-trips aware, SQLite does not. Every
+    deadline here is ``now - stored``, and mixing the two raises
+    ``TypeError`` — so normalise once, at the row → snapshot boundary,
+    rather than at each comparison.
+    """
+    return dt if dt.tzinfo is not None else dt.replace(tzinfo=UTC)
+
+
 def _split_repo(repo: str) -> tuple[str, str]:
     """``"owner/name"`` → ``("owner", "name")`` (first slash wins)."""
     owner, _, name = repo.partition("/")
@@ -246,11 +257,15 @@ class _WatchSnapshot:
             branch=row.branch,
             base_branch=row.base_branch,
             attempts=row.attempts,
-            deadline_at=row.deadline_at,
+            deadline_at=_aware(row.deadline_at),
             conflict_dispatched=row.conflict_dispatched,
             conflict_head_sha=row.conflict_head_sha,
             conflict_attempts=row.conflict_attempts,
-            conflict_dispatched_at=row.conflict_dispatched_at,
+            conflict_dispatched_at=(
+                _aware(row.conflict_dispatched_at)
+                if row.conflict_dispatched_at is not None
+                else None
+            ),
         )
 
 

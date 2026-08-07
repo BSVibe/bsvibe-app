@@ -138,6 +138,16 @@ async def _seed(sf: async_sessionmaker[AsyncSession], row: GithubMergeWatchRow) 
         await session.commit()
 
 
+def _at(dt: datetime) -> datetime:
+    """Compare row timestamps as instants, not as tz representations.
+
+    A ``TIMESTAMPTZ`` read back from Postgres carries UTC; the same column on
+    SQLite comes back naive. Assertions here are about *when*, so normalise
+    before comparing rather than pinning the suite to one backend.
+    """
+    return dt if dt.tzinfo is not None else dt.replace(tzinfo=UTC)
+
+
 async def _fetch(sf: async_sessionmaker[AsyncSession], row_id: uuid.UUID) -> GithubMergeWatchRow:
     async with sf() as session:
         fetched = await session.get(GithubMergeWatchRow, row_id)
@@ -172,7 +182,7 @@ async def test_blocked_pr_waits_pending_ci_with_backoff() -> None:
         fetched = await _fetch(sf, row.id)
         assert fetched.status is MergeWatchStatus.PENDING_CI
         assert fetched.attempts == 1
-        assert fetched.next_poll_at > _FIXED_NOW  # advanced by backoff
+        assert _at(fetched.next_poll_at) > _FIXED_NOW  # advanced by backoff
         assert client.merge_calls == []  # never merged
 
 
@@ -726,7 +736,7 @@ async def test_freshness_git_failure_backs_off_to_pending_ci(tmp_path: Path) -> 
         fetched = await _fetch(sf, row.id)
         assert fetched.status is MergeWatchStatus.PENDING_CI
         assert fetched.last_error == "freshen_failed"
-        assert fetched.next_poll_at > _FIXED_NOW  # backed off
+        assert _at(fetched.next_poll_at) > _FIXED_NOW  # backed off
         assert redispatch.calls == []
 
 
@@ -859,7 +869,7 @@ async def test_needs_resolution_changed_head_still_conflict_redispatches_once(
         # A NEW conflict on an advanced head resets the retry clock: attempts
         # back to 1 (dispatch #1 for this head) + freshly stamped.
         assert fetched.conflict_attempts == 1
-        assert fetched.conflict_dispatched_at == _FIXED_NOW
+        assert _at(fetched.conflict_dispatched_at) == _FIXED_NOW
         # Re-dispatched exactly once more for the NEW conflicting state.
         assert len(redispatch.calls) == 1
         assert redispatch.calls[0][0] == row.run_id
@@ -976,7 +986,7 @@ async def test_conflict_deadline_exceeded_attempts_remain_redispatches_retry(
         assert fetched.status is MergeWatchStatus.NEEDS_RESOLUTION
         assert fetched.last_error == "conflict_redispatch_retry"
         assert fetched.conflict_attempts == 2  # incremented
-        assert fetched.conflict_dispatched_at == _FIXED_NOW  # re-stamped to now
+        assert _at(fetched.conflict_dispatched_at) == _FIXED_NOW  # re-stamped to now
         assert len(redispatch.calls) == 1  # re-dispatched again
         assert redispatch.calls[0][0] == row.run_id
         assert redispatch.calls[0][3] == 17
@@ -1094,7 +1104,7 @@ async def test_fresh_conflict_stamps_attempts_and_dispatched_at(tmp_path: Path) 
         assert fetched.status is MergeWatchStatus.NEEDS_RESOLUTION
         assert fetched.conflict_dispatched is True
         assert fetched.conflict_attempts == 1  # first dispatch for this head
-        assert fetched.conflict_dispatched_at == _FIXED_NOW  # clock started
+        assert _at(fetched.conflict_dispatched_at) == _FIXED_NOW  # clock started
         assert len(redispatch.calls) == 1
         assert escalate.calls == []
 
