@@ -300,6 +300,142 @@ async def issue_token_pair(
     )
 
 
+# ---------------------------------------------------------------------------
+# Personal access tokens
+# ---------------------------------------------------------------------------
+
+#: Labels a row as founder-created rather than grant-issued. The label is the
+#: ONLY thing distinguishing a PAT — everything else (verification, revocation,
+#: introspection, scopes) is the shared access-token machinery.
+PAT_LABEL_PREFIX = "pat:"
+#: ``client_id`` stamped on a PAT. There is no OAuth client behind one, but the
+#: column is NOT NULL and the value shows up in audit logs, so name it honestly.
+PAT_CLIENT_ID = "bsvibe-pat"
+
+
+@dataclass(frozen=True)
+class IssuedPat:
+    """A freshly minted PAT. ``token`` is returned exactly once, never re-derivable."""
+
+    token: str
+    id: uuid.UUID
+    name: str
+    scope: list[str]
+    issued_at: datetime
+    expires_at: datetime | None
+
+
+async def issue_pat(
+    session: AsyncSession,
+    *,
+    user_id: uuid.UUID,
+    workspace_id: uuid.UUID,
+    name: str,
+    scope: list[str],
+    issuer: str,
+    expires_in_days: int | None = None,
+    now: datetime | None = None,
+) -> IssuedPat:
+    """Mint a Personal Access Token for browserless clients.
+
+    The OAuth loopback flow needs a browser on the same machine as the MCP
+    client; over a remote tunnel, SSH, or a cron job there is none. A PAT is
+    the static-bearer escape hatch, and it is deliberately the SAME artefact as
+    every other access token so ``/revoke``, ``/introspect`` and the ``mcp:*``
+    scopes keep working without a parallel code path.
+
+    ``expires_in_days=None`` (the default) leaves ``expires_at`` NULL — never
+    expires. No refresh token is minted: a credential able to re-mint its own
+    access is a durable foothold, not a machine credential (the same reasoning
+    :func:`issue_run_task_token` documents).
+
+    The caller owns the transaction; this only flushes.
+    """
+    n = now or _utcnow()
+    expires_at = n + timedelta(days=expires_in_days) if expires_in_days is not None else None
+    access_id = uuid.uuid4()
+    session.add(
+        OAuthAccessTokenRow(
+            id=access_id,
+            workspace_id=workspace_id,
+            user_id=user_id,
+            client_id=PAT_CLIENT_ID,
+            scope=list(scope),
+            issued_at=n,
+            expires_at=expires_at,
+            label=f"{PAT_LABEL_PREFIX}{name}",
+        )
+    )
+    await session.flush()
+    token = issue_access_token(
+        user_id=user_id,
+        workspace_id=workspace_id,
+        client_id=PAT_CLIENT_ID,
+        scope=list(scope),
+        jti=access_id,
+        issued_at=int(n.timestamp()),
+        expires_at=int(expires_at.timestamp()) if expires_at is not None else None,
+        issuer=issuer,
+    )
+    return IssuedPat(
+        token=token,
+        id=access_id,
+        name=name,
+        scope=list(scope),
+        issued_at=n,
+        expires_at=expires_at,
+    )
+
+
+async def list_pats(
+    session: AsyncSession,
+    *,
+    workspace_id: uuid.UUID,
+) -> list[OAuthAccessTokenRow]:
+    """Live PATs for a workspace, newest first.
+
+    Revoked rows are dropped and grant-issued tokens never appear — the
+    founder's list is of credentials they created, not of every session.
+    Expired-but-unrevoked rows still show so they can be seen and cleaned up.
+    """
+    stmt = (
+        select(OAuthAccessTokenRow)
+        .where(
+            OAuthAccessTokenRow.workspace_id == workspace_id,
+            OAuthAccessTokenRow.label.startswith(PAT_LABEL_PREFIX),
+            OAuthAccessTokenRow.revoked_at.is_(None),
+        )
+        .order_by(OAuthAccessTokenRow.issued_at.desc())
+    )
+    return list((await session.execute(stmt)).scalars().all())
+
+
+async def revoke_pat(
+    session: AsyncSession,
+    *,
+    pat_id: uuid.UUID,
+    workspace_id: uuid.UUID,
+    now: datetime | None = None,
+) -> OAuthAccessTokenRow | None:
+    """Revoke one PAT. ``None`` when it does not exist in ``workspace_id``.
+
+    The workspace predicate is load-bearing: a bare id must not be enough to
+    kill another tenant's credential.
+    """
+    n = now or _utcnow()
+    row = await session.get(OAuthAccessTokenRow, pat_id)
+    if (
+        row is None
+        or row.workspace_id != workspace_id
+        or not (row.label or "").startswith(PAT_LABEL_PREFIX)
+    ):
+        return None
+    if row.revoked_at is None:
+        row.revoked_at = n
+        await session.flush()
+    return row
+
+
 class RefreshRotateOutcome(StrEnum):
     """Outcome of a refresh-token grant attempt."""
 
@@ -501,17 +637,23 @@ async def introspect_token(
 __all__ = [
     "ACCESS_TOKEN_TTL",
     "CODE_TTL",
+    "PAT_CLIENT_ID",
+    "PAT_LABEL_PREFIX",
     "REFRESH_TOKEN_TTL",
     "ClaimedCode",
     "CodeClaimOutcome",
     "IntrospectionResult",
+    "IssuedPat",
     "IssuedTokenPair",
     "RefreshRotateOutcome",
     "RevokeKind",
     "claim_authorization_code",
     "introspect_token",
     "issue_authorization_code",
+    "issue_pat",
     "issue_token_pair",
+    "list_pats",
+    "revoke_pat",
     "revoke_token",
     "rotate_refresh_token",
 ]

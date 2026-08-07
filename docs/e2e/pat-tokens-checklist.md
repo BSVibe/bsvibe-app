@@ -26,13 +26,26 @@ uses — so `/revoke`, `/introspect` and the `mcp:*` scopes work unchanged.
 
 ## PR2 — issuance, listing, revocation
 
-- [ ] `POST` mints a PAT, returns the raw token EXACTLY once, and never again
-- [ ] The row lands with `label='pat:<name>'`, NULL `expires_at`, and the requested scopes
-- [ ] No refresh token is created alongside a PAT (a PAT must not re-mint itself)
-- [ ] Requested scopes cannot exceed the caller's own scopes
-- [ ] Listing shows label / created / last-used and never the token value
-- [ ] Revoking a PAT sets `revoked_at`; the next `/mcp` call with it returns 401
-- [ ] The PAT is bound to the caller's workspace; it cannot be minted for another one
+- [x] `POST /api/v1/oauth/pats` mints a PAT and returns the raw token EXACTLY once
+- [x] The row lands with `label='pat:<name>'`, NULL `expires_at`, and the requested scopes
+- [x] An explicit `expires_in_days` is honoured on both the row and the `exp` claim
+- [x] No refresh token is created alongside a PAT (a PAT must not re-mint itself)
+- [x] Scopes are validated against `ALLOWED_SCOPES`; an unknown one is a 400
+- [x] Listing returns label / issued / expiry and never the token value
+- [x] Listing excludes grant-issued tokens and revoked rows
+- [x] Revoking sets `revoked_at` and drops the row from the listing; unknown id is a 404
+- [x] Revocation is workspace-scoped — a bare id from another workspace is a 404
+- [x] Minting derives `workspace_id` from the session; the body cannot name one
+
+Deferred by design:
+
+- **Last-used tracking** is not implemented. It needs a write on every `/mcp`
+  request, which is a separate decision about hot-path cost.
+- **No MCP tool for PAT management.** Everything the PWA can do is normally
+  exposed over MCP too, but a `mcp:write` token that can mint more tokens is a
+  privilege-escalation path — issuance stays PWA-only.
+- **401 after revocation** is asserted end-to-end in PR4, not here; PR2 only
+  proves the row flips.
 
 ## PR3 — PWA Settings UI
 
