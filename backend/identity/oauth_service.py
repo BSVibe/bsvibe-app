@@ -32,6 +32,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.identity.oauth_db import (
     OAuthAccessTokenRow,
     OAuthCodeRow,
+    OAuthDeviceCodeRow,
     OAuthRefreshTokenRow,
 )
 from backend.identity.oauth_db import (
@@ -436,6 +437,206 @@ async def revoke_pat(
     return row
 
 
+# ---------------------------------------------------------------------------
+# Device authorization grant (RFC 8628)
+# ---------------------------------------------------------------------------
+# For the host that has no browser AND no way to paste a callback back — a
+# remote tunnel, a chat-driven session, a headless box. The device polls; the
+# human approves somewhere else entirely; the credential arrives without ever
+# passing through a channel a person reads.
+
+#: How long a pending device authorization lives. Long enough to walk to
+#: another device and type a code; short enough that an abandoned one dies.
+DEVICE_CODE_TTL = timedelta(minutes=10)
+#: RFC 8628 §3.2 ``interval`` — the minimum seconds between polls.
+DEVICE_POLL_INTERVAL_S = 5
+#: Ambiguous glyphs (0/O, 1/I) are excluded: a human retypes this from a screen.
+_USER_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+_USER_CODE_GROUP = 4
+
+
+class DeviceExchangeOutcome(StrEnum):
+    """Result of polling ``/token`` with a device code (RFC 8628 §3.5)."""
+
+    APPROVED = "approved"
+    AUTHORIZATION_PENDING = "authorization_pending"
+    SLOW_DOWN = "slow_down"
+    ACCESS_DENIED = "access_denied"
+    EXPIRED_TOKEN = "expired_token"  # noqa: S105 — RFC 8628 §3.5 error code, not a secret
+    INVALID_GRANT = "invalid_grant"
+
+
+@dataclass(frozen=True)
+class StartedDeviceAuthorization:
+    """RFC 8628 §3.2 device-authorization response."""
+
+    device_code: str
+    user_code: str
+    expires_in: int
+    interval: int
+
+
+def _gen_user_code() -> str:
+    """``XXXX-XXXX`` from an unambiguous alphabet — typed by a human."""
+    raw = "".join(secrets.choice(_USER_CODE_ALPHABET) for _ in range(_USER_CODE_GROUP * 2))
+    return f"{raw[:_USER_CODE_GROUP]}-{raw[_USER_CODE_GROUP:]}"
+
+
+def normalize_user_code(raw: str) -> str:
+    """Fold what a human plausibly types back to the stored form.
+
+    They will lowercase it, drop the dash, or paste it with a space. None of
+    those should be a failed sign-in.
+    """
+    kept = [c for c in raw.upper() if c in _USER_CODE_ALPHABET]
+    joined = "".join(kept)
+    if len(joined) != _USER_CODE_GROUP * 2:
+        return joined
+    return f"{joined[:_USER_CODE_GROUP]}-{joined[_USER_CODE_GROUP:]}"
+
+
+async def start_device_authorization(
+    session: AsyncSession,
+    *,
+    client_id: str,
+    scope: list[str],
+    now: datetime | None = None,
+) -> StartedDeviceAuthorization:
+    """Open a pending device authorization and return both codes."""
+    n = now or _utcnow()
+    device_code = secrets.token_urlsafe(32)
+    # Collisions are vanishingly unlikely but the column is unique, so retry
+    # rather than surfacing an IntegrityError to a polling client.
+    for _ in range(10):
+        user_code = _gen_user_code()
+        existing = await session.execute(
+            select(OAuthDeviceCodeRow.id).where(OAuthDeviceCodeRow.user_code == user_code)
+        )
+        if existing.scalar_one_or_none() is None:
+            break
+    else:  # pragma: no cover — 32^8 space; ten collisions means something is wrong
+        raise RuntimeError("could not allocate a unique user_code")
+
+    session.add(
+        OAuthDeviceCodeRow(
+            client_id=client_id,
+            device_code_hash=_sha256(device_code),
+            user_code=user_code,
+            scope=list(scope),
+            issued_at=n,
+            expires_at=n + DEVICE_CODE_TTL,
+        )
+    )
+    await session.flush()
+    return StartedDeviceAuthorization(
+        device_code=device_code,
+        user_code=user_code,
+        expires_in=int(DEVICE_CODE_TTL.total_seconds()),
+        interval=DEVICE_POLL_INTERVAL_S,
+    )
+
+
+async def lookup_device_code_by_user_code(
+    session: AsyncSession, *, user_code: str
+) -> OAuthDeviceCodeRow | None:
+    """Find a pending request by the code a human typed."""
+    stmt = select(OAuthDeviceCodeRow).where(
+        OAuthDeviceCodeRow.user_code == normalize_user_code(user_code)
+    )
+    return (await session.execute(stmt)).scalar_one_or_none()
+
+
+async def approve_device_code(
+    session: AsyncSession,
+    *,
+    user_code: str,
+    user_id: uuid.UUID,
+    workspace_id: uuid.UUID,
+    now: datetime | None = None,
+) -> OAuthDeviceCodeRow | None:
+    """Bind the approving human to a pending request. ``None`` if unusable.
+
+    The workspace is the APPROVER's. The device asserted nothing about identity
+    and must not be able to.
+    """
+    n = now or _utcnow()
+    row = await lookup_device_code_by_user_code(session, user_code=user_code)
+    if row is None or _aware(row.expires_at) <= n:
+        return None
+    if row.approved_at is not None or row.denied_at is not None or row.consumed_at is not None:
+        return None
+    row.approved_at = n
+    row.user_id = user_id
+    row.workspace_id = workspace_id
+    await session.flush()
+    return row
+
+
+async def deny_device_code(
+    session: AsyncSession, *, user_code: str, now: datetime | None = None
+) -> OAuthDeviceCodeRow | None:
+    """Refuse a pending request so the device stops polling with a real answer."""
+    n = now or _utcnow()
+    row = await lookup_device_code_by_user_code(session, user_code=user_code)
+    if row is None or _aware(row.expires_at) <= n:
+        return None
+    if row.approved_at is not None or row.denied_at is not None:
+        return None
+    row.denied_at = n
+    await session.flush()
+    return row
+
+
+async def exchange_device_code(  # noqa: PLR0911 — RFC 8628 §3.5 answer table
+    session: AsyncSession,
+    *,
+    device_code: str,
+    client_id: str,
+    issuer: str,
+    now: datetime | None = None,
+) -> tuple[DeviceExchangeOutcome, IssuedTokenPair | None]:
+    """Poll a device code. Returns the RFC 8628 outcome and, once, the tokens."""
+    n = now or _utcnow()
+    stmt = select(OAuthDeviceCodeRow).where(
+        OAuthDeviceCodeRow.device_code_hash == _sha256(device_code)
+    )
+    row = (await session.execute(stmt)).scalar_one_or_none()
+    # An unknown code and a wrong client are the same answer on the wire: never
+    # confirm that a code exists to a client that does not own it.
+    if row is None or row.client_id != client_id or row.consumed_at is not None:
+        return DeviceExchangeOutcome.INVALID_GRANT, None
+    if _aware(row.expires_at) <= n:
+        return DeviceExchangeOutcome.EXPIRED_TOKEN, None
+
+    # Rate limit BEFORE reading the decision, so an impatient device cannot
+    # poll its way around the interval.
+    last = row.last_polled_at
+    too_soon = last is not None and (n - _aware(last)).total_seconds() < DEVICE_POLL_INTERVAL_S
+    row.last_polled_at = n
+    await session.flush()
+    if too_soon:
+        return DeviceExchangeOutcome.SLOW_DOWN, None
+
+    if row.denied_at is not None:
+        return DeviceExchangeOutcome.ACCESS_DENIED, None
+    if row.approved_at is None or row.user_id is None or row.workspace_id is None:
+        return DeviceExchangeOutcome.AUTHORIZATION_PENDING, None
+
+    row.consumed_at = n
+    await session.flush()
+    pair = await issue_token_pair(
+        session,
+        user_id=row.user_id,
+        workspace_id=row.workspace_id,
+        client_id=client_id,
+        scope=list(row.scope),
+        issuer=issuer,
+        label=f"device:{client_id}",
+        now=n,
+    )
+    return DeviceExchangeOutcome.APPROVED, pair
+
+
 class RefreshRotateOutcome(StrEnum):
     """Outcome of a refresh-token grant attempt."""
 
@@ -637,23 +838,33 @@ async def introspect_token(
 __all__ = [
     "ACCESS_TOKEN_TTL",
     "CODE_TTL",
+    "DEVICE_CODE_TTL",
+    "DEVICE_POLL_INTERVAL_S",
     "PAT_CLIENT_ID",
     "PAT_LABEL_PREFIX",
     "REFRESH_TOKEN_TTL",
     "ClaimedCode",
     "CodeClaimOutcome",
+    "DeviceExchangeOutcome",
     "IntrospectionResult",
     "IssuedPat",
     "IssuedTokenPair",
+    "StartedDeviceAuthorization",
     "RefreshRotateOutcome",
     "RevokeKind",
+    "approve_device_code",
     "claim_authorization_code",
+    "deny_device_code",
+    "exchange_device_code",
     "introspect_token",
     "issue_authorization_code",
     "issue_pat",
     "issue_token_pair",
     "list_pats",
+    "lookup_device_code_by_user_code",
+    "normalize_user_code",
     "revoke_pat",
     "revoke_token",
     "rotate_refresh_token",
+    "start_device_authorization",
 ]
