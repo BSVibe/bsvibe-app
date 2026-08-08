@@ -62,6 +62,8 @@ WORKSPACELESS_ALLOWLIST: dict[str, str] = {
     "GET /api/oauth/clients/by-client-id/{client_id}": "public DCR client lookup; global registration metadata",
     "POST /api/oauth/introspect": "OAuth AS token introspection; global",
     "POST /api/oauth/register": "anonymous Dynamic Client Registration; global",
+    "POST /api/oauth/device_authorization": "RFC 8628 §3.1 device authorization request; the device has no credential or workspace yet — that is the grant's premise. The row gets its workspace at approval time, from the approving human's session",
+    "GET /api/v1/oauth/device": "device consent lookup by user_code; the pending row is workspace-less until approved, so there is no workspace to scope by. Session-gated by the v1 router, returns only client_id/scope/status (never the device_code), and the ~1.1e12 user_code space expires in 10 minutes",
     "POST /api/oauth/revoke": "OAuth AS token revoke; scoped by token, global endpoint",
     "POST /api/oauth/token": "OAuth AS token exchange; global",
     # --- Connector OAuth: 3rd-party callbacks + deployment-global operator config
