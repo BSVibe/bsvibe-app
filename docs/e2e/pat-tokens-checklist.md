@@ -73,8 +73,18 @@ The half-wired failure mode this catches: issuance, schema and unit tests all
 pass while nothing actually honours the token on the request path. Mocked tests
 cannot see it.
 
-- [ ] Mint a PAT through the real API against a real database
-- [ ] Call `/mcp` with `Authorization: Bearer <pat>` — no `dependency_overrides`, no pre-seeded rows
-- [ ] The MCP tool list comes back populated (not an empty list, not a 401)
-- [ ] Revoke the PAT, repeat the call, and confirm 401 with the RFC 9728 `WWW-Authenticate` header
-- [ ] From a machine with no browser: `claude mcp add --transport http bsvibe https://api.bsvibe.dev/mcp --header "Authorization: Bearer <pat>"` connects
+`tests/mcp/test_pat_real_request_e2e.py` runs the `/mcp` half against a **real**
+`StreamableHTTPSessionManager` — the SDK task group entered exactly as
+`mcp_lifespan` does — with **zero `dependency_overrides`**. The only input is
+the bearer token.
+
+- [x] Mint a PAT through the real API route against a real database
+- [x] Call `/mcp` with `Authorization: Bearer <pat>` — no overrides on that path
+- [x] The MCP tool list comes back **populated**: 86 real tools, asserted by floor (≥20) and by name, so a collapsed registry can't pass
+- [x] Revoke, repeat the identical call, and get 401 — with a 200 asserted *before* the revoke so the 401 is a differential, not a constant
+- [x] The 401 carries the RFC 9728 `WWW-Authenticate` header
+- [x] An unknown bearer is rejected — the transport isn't accepting anything token-shaped
+
+Still manual, needs a real deployment:
+
+- [ ] From a machine with no browser: `claude mcp add --transport http bsvibe https://api.bsvibe.dev/mcp --header "Authorization: Bearer <pat>"` connects and lists tools
