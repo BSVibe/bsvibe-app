@@ -10,10 +10,9 @@ So the `/mcp` half runs with **zero `dependency_overrides`** and a **real**
 `mcp_lifespan` does it). The only thing handed in is the bearer token, and what
 comes back is the genuine tool list produced by the genuine registry.
 
-The mint half does use the API's auth overrides — the same ones
-`tests/api/test_oauth_api.py` uses — because forging a Supabase session JWT
-would test the fixture, not the product. That half is already covered there;
-what is new here is that the resulting token is then honoured for real.
+The mint half sends a real HS256 session JWT too — the PAT routes authenticate
+themselves (`resolve_pat_principal`) rather than riding the v1 router's gate, so
+there is nothing left worth overriding except the database handle.
 """
 
 from __future__ import annotations
@@ -35,25 +34,22 @@ import backend.identity.db  # noqa: F401
 import backend.identity.oauth_db  # noqa: F401
 import backend.identity.workspaces_db  # noqa: F401
 import backend.router.accounts.account_models  # noqa: F401
-from backend.api.deps import (
-    get_current_user,
-    get_current_user_row,
-    get_db_session,
-    get_workspace_id,
-)
+from backend.api.deps import get_db_session
 from backend.api.main import create_app
 from backend.config import get_settings
-from backend.identity.db import UserRow
+from backend.identity.db import MembershipRow, UserRow
 from backend.identity.oauth_keys import reset_signing_key_for_tests
 from backend.identity.workspaces_db import WorkspaceRow
 from backend.mcp.server import build_registry, build_server
 from backend.mcp.streamable_http import build_streamable_http_app
+from backend.shared.authz.settings import get_settings as get_authz_settings
 
-from .._support import db_engine, fake_current_user
+from .._support import db_engine
 
 pytestmark = pytest.mark.asyncio
 
 ISSUER = "http://test"
+SESSION_SECRET = "e2e-session-secret"
 MCP_HEADERS = {
     "Content-Type": "application/json",
     "Accept": "application/json, text/event-stream",
@@ -68,11 +64,18 @@ async def db(tmp_path, monkeypatch) -> AsyncIterator[Any]:
     )
     monkeypatch.setenv("BSVIBE_OAUTH_ISSUER", ISSUER)
     monkeypatch.setenv("BSVIBE_KNOWLEDGE_VAULT_ROOT", str(tmp_path / "vault"))
+    monkeypatch.setenv("USER_JWT_SECRET", SESSION_SECRET)
+    monkeypatch.setenv("USER_JWT_ALGORITHM", "HS256")
+    monkeypatch.delenv("USER_JWT_JWKS_URL", raising=False)
     get_settings.cache_clear()
+    # authz Settings is @lru_cache(maxsize=1): whichever module touches it
+    # first would otherwise pin its USER_JWT_SECRET for the whole process.
+    get_authz_settings.cache_clear()
     reset_signing_key_for_tests()
     async with db_engine() as (engine, _is_pg):
         yield async_sessionmaker(engine, expire_on_commit=False)
     get_settings.cache_clear()
+    get_authz_settings.cache_clear()
     reset_signing_key_for_tests()
 
 
@@ -87,6 +90,8 @@ async def seeded_user(db, workspace_id) -> AsyncIterator[UserRow]:
         s.add(WorkspaceRow(id=workspace_id, name="t-ws", region="us-1"))
         user = UserRow(supabase_user_id="test-user", email="t@example.com")
         s.add(user)
+        await s.flush()
+        s.add(MembershipRow(user_id=user.id, workspace_id=workspace_id, role="owner"))
         await s.commit()
         yield user
 
@@ -100,14 +105,35 @@ async def api(db, workspace_id, seeded_user) -> AsyncIterator[httpx.AsyncClient]
         async with db() as s:
             yield s
 
-    app.dependency_overrides[get_current_user] = fake_current_user()
-    app.dependency_overrides[get_workspace_id] = lambda: workspace_id
+    # Only the database handle is redirected; the PAT routes authenticate the
+    # bearer themselves.
     app.dependency_overrides[get_db_session] = _session
-    app.dependency_overrides[get_current_user_row] = lambda: seeded_user
 
     transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
+    async with httpx.AsyncClient(
+        transport=transport,
+        base_url="http://test",
+        headers={"Authorization": f"Bearer {_session_jwt(seeded_user)}"},
+    ) as c:
         yield c
+
+
+def _session_jwt(user: UserRow) -> str:
+    import time
+
+    import jwt
+
+    now = int(time.time())
+    return jwt.encode(
+        {
+            "sub": user.supabase_user_id,
+            "aud": "bsvibe",
+            "iat": now,
+            "exp": now + 3600,
+        },
+        SESSION_SECRET,
+        algorithm="HS256",
+    )
 
 
 @contextlib.asynccontextmanager

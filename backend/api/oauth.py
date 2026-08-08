@@ -53,6 +53,7 @@ from backend.api.deps import (
     get_db_session,
     get_workspace_id,
 )
+from backend.api.pat_auth import PatPrincipal, resolve_pat_principal
 from backend.config import get_settings
 from backend.identity.db import UserRow
 from backend.identity.oauth_clients_service import (
@@ -87,6 +88,12 @@ logger = structlog.get_logger(__name__)
 public_router = APIRouter(prefix="/oauth", tags=["oauth"])
 # Authenticated founder management — mounted at /api/v1/oauth.
 v1_router = APIRouter(prefix="/oauth", tags=["oauth"])
+# Personal access tokens — also served under /api/v1/oauth, but mounted
+# SEPARATELY because the v1 router carries a blanket ``Depends(get_current_user)``
+# that only accepts a Supabase session JWT. A PAT has to be mintable from a
+# browserless host holding an ES256 access token, so these routes do their own
+# auth via ``resolve_pat_principal``. Same pattern as ``workers_public_router``.
+pats_router = APIRouter(prefix="/oauth", tags=["oauth"])
 # RFC 8414 / RFC 9728 well-known metadata + JWKS — mounted at /api.
 metadata_router = APIRouter(tags=["oauth-metadata"])
 
@@ -990,11 +997,10 @@ def _pat_to_response(row: OAuthAccessTokenRow) -> PatResponse:
     )
 
 
-@v1_router.post("/pats", response_model=PatCreatedResponse, status_code=status.HTTP_201_CREATED)
+@pats_router.post("/pats", response_model=PatCreatedResponse, status_code=status.HTTP_201_CREATED)
 async def create_pat(
     payload: PatCreateRequest,
-    user_row: Annotated[UserRow, Depends(get_current_user_row)],
-    workspace_id: Annotated[uuid.UUID, Depends(get_workspace_id)],
+    principal: Annotated[PatPrincipal, Depends(resolve_pat_principal)],
     session: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> PatCreatedResponse:
     """Mint a Personal Access Token — the browserless path onto ``/mcp``.
@@ -1020,8 +1026,8 @@ async def create_pat(
             )
     issued = await issue_pat(
         session,
-        user_id=user_row.id,
-        workspace_id=workspace_id,
+        user_id=principal.user_id,
+        workspace_id=principal.workspace_id,
         name=payload.name,
         scope=scopes,
         issuer=get_settings().oauth_issuer,
@@ -1031,9 +1037,10 @@ async def create_pat(
     logger.info(
         "pat_issued",
         pat_id=str(issued.id),
-        workspace_id=str(workspace_id),
+        workspace_id=str(principal.workspace_id),
         scope=issued.scope,
         never_expires=issued.expires_at is None,
+        auth_kind=principal.auth_kind,
     )
     return PatCreatedResponse(
         id=issued.id,
@@ -1045,26 +1052,31 @@ async def create_pat(
     )
 
 
-@v1_router.get("/pats", response_model=list[PatResponse])
+@pats_router.get("/pats", response_model=list[PatResponse])
 async def list_pats_route(
-    workspace_id: Annotated[uuid.UUID, Depends(get_workspace_id)],
+    principal: Annotated[PatPrincipal, Depends(resolve_pat_principal)],
     session: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> list[PatResponse]:
-    rows = await list_pats(session, workspace_id=workspace_id)
+    rows = await list_pats(session, workspace_id=principal.workspace_id)
     return [_pat_to_response(r) for r in rows]
 
 
-@v1_router.delete("/pats/{pat_id}", status_code=status.HTTP_204_NO_CONTENT)
+@pats_router.delete("/pats/{pat_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_pat(
     pat_id: uuid.UUID,
-    workspace_id: Annotated[uuid.UUID, Depends(get_workspace_id)],
+    principal: Annotated[PatPrincipal, Depends(resolve_pat_principal)],
     session: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> None:
-    row = await revoke_pat(session, pat_id=pat_id, workspace_id=workspace_id)
+    row = await revoke_pat(session, pat_id=pat_id, workspace_id=principal.workspace_id)
     if row is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="not found")
     await session.commit()
-    logger.info("pat_revoked", pat_id=str(pat_id), workspace_id=str(workspace_id))
+    logger.info(
+        "pat_revoked",
+        pat_id=str(pat_id),
+        workspace_id=str(principal.workspace_id),
+        auth_kind=principal.auth_kind,
+    )
 
 
 # ---------------------------------------------------------------------------

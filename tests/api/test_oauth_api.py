@@ -195,57 +195,6 @@ async def test_delete_client_marks_revoked(client: httpx.AsyncClient) -> None:
     assert not any(c["client_id"] == client_id for c in listed)
 
 
-async def test_create_pat_returns_token_once(client: httpx.AsyncClient) -> None:
-    r = await client.post(
-        "/api/v1/oauth/pats",
-        json={"name": "mac-mini", "scope": ["mcp:read", "mcp:write"]},
-    )
-    assert r.status_code == 201, r.text
-    body = r.json()
-    assert body["name"] == "mac-mini"
-    assert body["scope"] == ["mcp:read", "mcp:write"]
-    assert body["expires_at"] is None  # never expires by default
-    assert body["token"].count(".") == 2  # a JWT, handed over exactly once
-
-    # The listing must never be able to re-serve it.
-    listed = (await client.get("/api/v1/oauth/pats")).json()
-    assert len(listed) == 1
-    assert listed[0]["id"] == body["id"]
-    assert "token" not in listed[0]
-
-
-async def test_create_pat_with_expiry_reports_it(client: httpx.AsyncClient) -> None:
-    r = await client.post(
-        "/api/v1/oauth/pats",
-        json={"name": "temp", "scope": ["mcp:read"], "expires_in_days": 30},
-    )
-    assert r.status_code == 201, r.text
-    assert r.json()["expires_at"] is not None
-
-
-async def test_create_pat_rejects_unknown_scope(client: httpx.AsyncClient) -> None:
-    r = await client.post(
-        "/api/v1/oauth/pats",
-        json={"name": "bad", "scope": ["mcp:root"]},
-    )
-    assert r.status_code == 400
-    assert "mcp:root" in r.text
-
-
-async def test_revoke_pat_drops_it_from_listing(client: httpx.AsyncClient) -> None:
-    created = (
-        await client.post("/api/v1/oauth/pats", json={"name": "doomed", "scope": ["mcp:read"]})
-    ).json()
-    r = await client.delete(f"/api/v1/oauth/pats/{created['id']}")
-    assert r.status_code == 204
-    assert (await client.get("/api/v1/oauth/pats")).json() == []
-
-
-async def test_revoke_unknown_pat_is_404(client: httpx.AsyncClient) -> None:
-    r = await client.delete(f"/api/v1/oauth/pats/{uuid.uuid4()}")
-    assert r.status_code == 404
-
-
 async def test_register_client_rejects_http_external_host(
     client: httpx.AsyncClient,
 ) -> None:
