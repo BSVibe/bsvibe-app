@@ -34,6 +34,7 @@ import time
 from collections.abc import Sequence
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 import httpx
 import structlog
@@ -43,6 +44,7 @@ from backend.executors.worker.claude_login import ClaudeLoginError, run_claude_l
 from backend.executors.worker.config import get_worker_settings
 from backend.executors.worker.credentials import (
     CredentialsNotFound,
+    HostCredentials,
     WorkerConfig,
     clear_host_credentials,
     clear_worker_config,
@@ -126,6 +128,163 @@ def _cmd_status(args: argparse.Namespace) -> int:  # noqa: ARG001
     return 0
 
 
+# ---------------------------------------------------------------------------
+# ``bsvibe pat`` — personal access tokens for browserless clients
+# ---------------------------------------------------------------------------
+# The loop this closes: ``bsvibe login --manual`` already signs in from a
+# remote/headless host (print the authorize URL, paste the redirect back), but a
+# session credential is short-lived and is not what an MCP client can hold. A
+# PAT is. With these commands the whole path stays on this terminal::
+#
+#     $ bsvibe login --manual
+#     $ TOKEN=$(bsvibe pat create --name mac-mini --quiet)
+#     $ claude mcp add --transport http bsvibe https://api.bsvibe.dev/mcp \
+#         --header "Authorization: Bearer $TOKEN"
+#
+# Minting requires the ``mcp:admin`` scope, which ``bsvibe login`` requests and a
+# dispatched executor task's token deliberately lacks.
+
+_PAT_PATH = "/api/v1/oauth/pats"
+
+
+def _pat_transport() -> httpx.BaseTransport | None:
+    """Seam so tests can serve these calls without a network. ``None`` = real."""
+    return None
+
+
+def _pat_client(creds: HostCredentials) -> httpx.Client:
+    base = (creds.issuer or _DEFAULT_ISSUER).rstrip("/")
+    return httpx.Client(
+        base_url=base,
+        timeout=30.0,
+        transport=_pat_transport(),
+        headers={"Authorization": f"Bearer {creds.access_token}"},
+    )
+
+
+def _pat_credentials() -> HostCredentials | None:
+    try:
+        return load_host_credentials()
+    except CredentialsNotFound as exc:
+        print(
+            f"not signed in: {exc}\n"
+            "Hint: run `bsvibe login` first — or `bsvibe login --manual` when this "
+            "host has no browser (it prints a URL to open anywhere and takes the "
+            "redirect pasted back).",
+            file=sys.stderr,
+        )
+        return None
+
+
+def _pat_http_failed(exc: httpx.HTTPStatusError) -> int:
+    """Report the server's own words — a swallowed reason wastes the next hour."""
+    print(f"request failed: HTTP {exc.response.status_code} {exc.response.text}", file=sys.stderr)
+    return 1
+
+
+def _cmd_pat_create(args: argparse.Namespace) -> int:
+    creds = _pat_credentials()
+    if creds is None:
+        return 1
+    payload: dict[str, object] = {"name": args.name}
+    if args.scope:
+        payload["scope"] = [s.strip() for s in args.scope.split(",") if s.strip()]
+    # Omitted, NOT null — the server's default is "never expires".
+    if args.expires_in_days is not None:
+        payload["expires_in_days"] = args.expires_in_days
+
+    with _pat_client(creds) as client:
+        try:
+            resp = client.post(_PAT_PATH, json=payload)
+            resp.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            return _pat_http_failed(exc)
+    body = resp.json()
+
+    if args.quiet:
+        # Nothing but the token, so `TOKEN=$(… --quiet)` is safe.
+        print(body["token"])
+        return 0
+    print(body["token"])
+    print(
+        f"\nToken '{body['name']}' created — this is the only time it is shown.\n"
+        f"  id      {body['id']}\n"
+        f"  scopes  {', '.join(body['scope'])}\n"
+        f"  expires {body['expires_at'] or 'never'}\n\n"
+        "Add it to an MCP client with:\n"
+        f"  claude mcp add --transport http bsvibe {(creds.issuer or _DEFAULT_ISSUER).rstrip('/')}/mcp \\\n"
+        '    --header "Authorization: Bearer <token>"',
+        file=sys.stderr,
+    )
+    return 0
+
+
+def _cmd_pat_list(args: argparse.Namespace) -> int:
+    creds = _pat_credentials()
+    if creds is None:
+        return 1
+    with _pat_client(creds) as client:
+        try:
+            resp = client.get(_PAT_PATH)
+            resp.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            return _pat_http_failed(exc)
+    rows = resp.json()
+    if not rows:
+        print("No personal access tokens yet. Create one with `bsvibe pat create --name <name>`.")
+        return 0
+    for row in rows:
+        expires = row["expires_at"] or "never"
+        print(f"{row['id']}  {row['name']}  scopes={','.join(row['scope'])}  expires={expires}")
+    return 0
+
+
+def _cmd_pat_revoke(args: argparse.Namespace) -> int:
+    creds = _pat_credentials()
+    if creds is None:
+        return 1
+    with _pat_client(creds) as client:
+        try:
+            resp = client.delete(f"{_PAT_PATH}/{args.pat_id}")
+            resp.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            return _pat_http_failed(exc)
+    print(f"revoked {args.pat_id}", file=sys.stderr)
+    return 0
+
+
+def _add_pat_parser(sub: Any) -> None:
+    p_pat = sub.add_parser("pat", help="Manage personal access tokens.")
+    pat_sub = p_pat.add_subparsers(dest="pat_cmd", required=True)
+
+    p_create = pat_sub.add_parser("create", help="Mint a token (shown once).")
+    p_create.add_argument("--name", required=True, help="Human label, e.g. mac-mini.")
+    p_create.add_argument(
+        "--scope",
+        default=None,
+        help="Comma-separated scopes (default: server default, mcp:read).",
+    )
+    p_create.add_argument(
+        "--expires-in-days",
+        type=int,
+        default=None,
+        help="Lifetime in days. Omit for a token that never expires.",
+    )
+    p_create.add_argument(
+        "--quiet",
+        action="store_true",
+        help="Print ONLY the token, for TOKEN=$(bsvibe pat create … --quiet).",
+    )
+    p_create.set_defaults(func=_cmd_pat_create)
+
+    p_list = pat_sub.add_parser("list", help="List live tokens (never their values).")
+    p_list.set_defaults(func=_cmd_pat_list)
+
+    p_revoke = pat_sub.add_parser("revoke", help="Revoke a token by id.")
+    p_revoke.add_argument("pat_id", help="The token id from `bsvibe pat list`.")
+    p_revoke.set_defaults(func=_cmd_pat_revoke)
+
+
 def build_bsvibe_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="bsvibe", description="BSVibe CLI.")
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -151,6 +310,8 @@ def build_bsvibe_parser() -> argparse.ArgumentParser:
 
     p_status = sub.add_parser("status", help="Show sign-in status.")
     p_status.set_defaults(func=_cmd_status)
+
+    _add_pat_parser(sub)
 
     return parser
 

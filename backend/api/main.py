@@ -23,6 +23,7 @@ from backend.api.deps import _get_session_factory
 from backend.api.health import router as health_router
 from backend.api.middleware import WorkspaceContextMiddleware
 from backend.api.oauth import metadata_router as oauth_metadata_router
+from backend.api.oauth import pats_router as oauth_pats_router
 from backend.api.oauth import public_router as oauth_public_router
 from backend.api.redis_client import set_api_redis
 from backend.api.v1 import router as v1_router
@@ -192,6 +193,12 @@ def create_app() -> FastAPI:
     # no bsvibe session), mounted outside the auth-gated v1 router like the
     # other public callbacks.
     app.include_router(connector_oauth_public_router, prefix="/api/v1")
+    # Personal access tokens — /api/v1/oauth/pats. Mounted outside the auth-gated
+    # v1 router because that gate accepts only a Supabase session JWT, and a PAT
+    # must also be mintable from a browserless host holding an ES256 access token
+    # (``bsvibe login --manual`` → ``bsvibe pat create``). The routes are NOT
+    # public: each authenticates via ``resolve_pat_principal``.
+    app.include_router(oauth_pats_router, prefix="/api/v1")
     app.include_router(v1_router, prefix="/api")
 
     # Embedded MCP server (Lift D2) — mounted at /mcp (NOT under /api — MCP

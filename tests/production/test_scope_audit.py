@@ -30,13 +30,22 @@ from backend.api.deps import (
     get_db_session_factory,
     get_workspace_id,
 )
+from backend.api.pat_auth import resolve_pat_principal
 
 # Dependencies that make a route "touch the request DB session".
 _DB_DEPS = frozenset({get_db_session, get_db_session_factory})
 # Dependencies that set the Postgres RLS GUC + the ORM auto-filter contextvar.
 # ``require_role`` / ``require_account_id`` / ``get_output_language`` all depend
 # transitively on one of these, so a flattened dependency walk catches them.
-_SCOPE_DEPS = frozenset({get_workspace_id, get_current_membership})
+#
+# ``resolve_pat_principal`` is here rather than in the allow-list: the PAT routes
+# ARE workspace-scoped, they just cannot reach the workspace through
+# ``get_workspace_id``. That dependency reads a Supabase session JWT, and a PAT
+# must also be mintable from a browserless host holding an ES256 access token —
+# so the resolver derives the workspace from whichever credential was sent and
+# then performs the SAME publication (contextvar + GUC). Allow-listing them
+# would assert they are legitimately global, which is false.
+_SCOPE_DEPS = frozenset({get_workspace_id, get_current_membership, resolve_pat_principal})
 
 
 # ---------------------------------------------------------------------------
