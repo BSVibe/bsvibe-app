@@ -125,9 +125,7 @@ def test_fresh_pg_upgrade_round_trip():
     # Phase 1 — fresh upgrade.
     _alembic(["upgrade", "head"], env_extra=env_extra)
     stamped = asyncio.run(_stamped_head(url))
-    assert stamped == "oauth_token_nullable_expiry", (
-        f"expected head oauth_token_nullable_expiry, got {stamped}"
-    )
+    assert stamped == "oauth_device_codes", f"expected head oauth_device_codes, got {stamped}"
 
     # Phase 2 — full downgrade. Verifies every revision's downgrade path.
     _alembic(["downgrade", "base"], env_extra=env_extra)
@@ -135,7 +133,7 @@ def test_fresh_pg_upgrade_round_trip():
     # Phase 3 — re-upgrade. Verifies the chain is idempotent.
     _alembic(["upgrade", "head"], env_extra=env_extra)
     stamped = asyncio.run(_stamped_head(url))
-    assert stamped == "oauth_token_nullable_expiry"
+    assert stamped == "oauth_device_codes"
 
 
 def test_notification_channel_keys_renames_email_to_email_sender():
@@ -645,3 +643,37 @@ def test_oauth_access_token_expires_at_is_nullable_after_upgrade():
 
     _alembic(["upgrade", "head"], env_extra=env_extra)
     assert asyncio.run(_is_nullable()) == "YES"
+
+
+def test_oauth_device_codes_table_round_trips():
+    """RFC 8628 — the device-authorization table adds + drops cleanly on PG."""
+    url = _skip_if_no_pg()
+    env_extra = {"BSVIBE_MIGRATION_DATABASE_URL": url}
+
+    asyncio.run(_drop_everything(url))
+    _alembic(["upgrade", "head"], env_extra=env_extra)
+
+    async def _columns() -> set[str]:
+        engine = create_async_engine(url, future=True)
+        try:
+            async with engine.begin() as conn:
+                rows = (
+                    await conn.execute(
+                        text(
+                            "SELECT column_name FROM information_schema.columns "
+                            "WHERE table_name='oauth_device_codes'"
+                        )
+                    )
+                ).all()
+                return {r[0] for r in rows}
+        finally:
+            await engine.dispose()
+
+    cols = asyncio.run(_columns())
+    assert {"device_code_hash", "user_code", "approved_at", "consumed_at"} <= cols, cols
+
+    _alembic(["downgrade", "oauth_token_nullable_expiry"], env_extra=env_extra)
+    assert asyncio.run(_columns()) == set(), "table survived downgrade"
+
+    _alembic(["upgrade", "head"], env_extra=env_extra)
+    assert {"device_code_hash", "user_code"} <= asyncio.run(_columns())

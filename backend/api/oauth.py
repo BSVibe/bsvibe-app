@@ -69,17 +69,23 @@ from backend.identity.oauth_pkce import match_redirect_uri
 from backend.identity.oauth_service import (
     PAT_LABEL_PREFIX,
     CodeClaimOutcome,
+    DeviceExchangeOutcome,
     RefreshRotateOutcome,
     RevokeKind,
+    approve_device_code,
     claim_authorization_code,
+    deny_device_code,
+    exchange_device_code,
     introspect_token,
     issue_authorization_code,
     issue_pat,
     issue_token_pair,
     list_pats,
+    lookup_device_code_by_user_code,
     revoke_pat,
     revoke_token,
     rotate_refresh_token,
+    start_device_authorization,
 )
 
 logger = structlog.get_logger(__name__)
@@ -103,6 +109,9 @@ metadata_router = APIRouter(tags=["oauth-metadata"])
 # set is additive — never remove.
 ALLOWED_SCOPES = ("mcp:read", "mcp:write", "mcp:admin")
 DEFAULT_SCOPE = "mcp:read"
+
+# RFC 8628 §3.4 grant type URN.
+DEVICE_GRANT_TYPE = "urn:ietf:params:oauth:grant-type:device_code"  # noqa: S105 — grant name
 
 
 # RFC 8252 loopback redirect URI — native clients (Claude Code,
@@ -662,11 +671,32 @@ async def token(  # noqa: PLR0911 — OAuth state machine
     redirect_uri: Annotated[str | None, Form()] = None,
     code_verifier: Annotated[str | None, Form()] = None,
     refresh_token: Annotated[str | None, Form()] = None,
+    device_code: Annotated[str | None, Form()] = None,
 ) -> Any:
-    """RFC 6749 §4.1 + §6 — authorization_code + refresh_token grants."""
+    """RFC 6749 §4.1 + §6 + RFC 8628 §3.4 — code / refresh / device grants."""
     del request
     settings = get_settings()
     issuer = settings.oauth_issuer
+    if grant_type == DEVICE_GRANT_TYPE:
+        if not device_code:
+            return _OAuthError(400, "invalid_request", "device_code is required")
+        device_outcome, device_pair = await exchange_device_code(
+            session, device_code=device_code, client_id=client_id, issuer=issuer
+        )
+        # Commit regardless of outcome: the poll timestamp (and, on success, the
+        # consumed marker + minted rows) must survive, or `slow_down` and
+        # single-use both stop working.
+        await session.commit()
+        if device_outcome is DeviceExchangeOutcome.APPROVED and device_pair is not None:
+            return TokenResponse(
+                access_token=device_pair.access_token,
+                expires_in=device_pair.expires_in,
+                refresh_token=device_pair.refresh_token,
+                scope=" ".join(device_pair.scope),
+            )
+        # RFC 8628 §3.5 — every non-success is a 400 whose `error` the device
+        # branches on: pending/slow_down mean keep going, the rest mean stop.
+        return _OAuthError(400, device_outcome.value)
     if grant_type == "authorization_code":
         if not code:
             return _OAuthError(400, "invalid_request", "code is required")
@@ -900,6 +930,143 @@ async def register_client_anonymous(  # noqa: PLR0912 — RFC 7591 §2 capabilit
 
 
 # ---------------------------------------------------------------------------
+# RFC 8628 device authorization grant
+# ---------------------------------------------------------------------------
+# For a host that has neither a reachable loopback listener NOR a way to paste
+# a callback back — a remote tunnel, a chat-driven session, a headless box. The
+# device polls ``/token``; the human approves in a browser somewhere else; no
+# secret ever crosses a channel a person reads.
+
+
+@public_router.post("/device_authorization")
+async def device_authorization(
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    client_id: Annotated[str, Form()],
+    scope: Annotated[str | None, Form()] = None,
+) -> Any:
+    """RFC 8628 §3.1 — open a device authorization request.
+
+    Unauthenticated by definition: the device has no credential yet, which is
+    the entire reason this grant exists.
+    """
+    requested = [s for s in (scope or DEFAULT_SCOPE).split() if s]
+    for s in requested:
+        if s not in ALLOWED_SCOPES:
+            return _OAuthError(400, "invalid_scope", f"unknown scope: {s}")
+
+    started = await start_device_authorization(session, client_id=client_id, scope=requested)
+    await session.commit()
+
+    # The human opens the PWA, not the API host — the approval needs their
+    # browser session, which only the app origin has.
+    pwa = get_settings().pwa_url.rstrip("/")
+    verification_uri = f"{pwa}/device"
+    logger.info("device_authorization_started", client_id=client_id, scope=requested)
+    return {
+        "device_code": started.device_code,
+        "user_code": started.user_code,
+        "verification_uri": verification_uri,
+        "verification_uri_complete": f"{verification_uri}?user_code={started.user_code}",
+        "expires_in": started.expires_in,
+        "interval": started.interval,
+    }
+
+
+class DeviceApproveRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    user_code: str = Field(min_length=1, max_length=32)
+    #: ``False`` denies, so the device stops polling with a real answer rather
+    #: than timing out and leaving the operator guessing.
+    approve: bool = True
+
+
+class DeviceLookupResponse(BaseModel):
+    """What the consent screen needs to name what it is granting.
+
+    Deliberately carries no ``device_code``: the browser half of this flow must
+    never be able to complete the device half.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    client_id: str
+    scope: list[str]
+    status: str
+    expires_at: datetime
+
+
+@v1_router.get("/device", response_model=DeviceLookupResponse)
+async def device_lookup(
+    user_code: str,
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+) -> DeviceLookupResponse:
+    """Resolve a typed user code so the consent screen can describe the request."""
+    row = await lookup_device_code_by_user_code(session, user_code=user_code)
+    if row is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="unknown code")
+    if row.consumed_at is not None:
+        state = "consumed"
+    elif row.denied_at is not None:
+        state = "denied"
+    elif row.approved_at is not None:
+        state = "approved"
+    elif row.expires_at.replace(tzinfo=row.expires_at.tzinfo or UTC) <= datetime.now(UTC):
+        state = "expired"
+    else:
+        state = "pending"
+    return DeviceLookupResponse(
+        client_id=row.client_id,
+        scope=list(row.scope),
+        status=state,
+        expires_at=row.expires_at,
+    )
+
+
+@v1_router.post("/device/approve")
+async def device_approve(
+    payload: DeviceApproveRequest,
+    user_row: Annotated[UserRow, Depends(get_current_user_row)],
+    workspace_id: Annotated[uuid.UUID, Depends(get_workspace_id)],
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+) -> dict[str, Any]:
+    """Approve (or deny) a device request from the browser.
+
+    The workspace bound here is the APPROVER's, resolved from their session —
+    the device asserted no identity and must not be able to.
+    """
+    if not payload.approve:
+        denied = await deny_device_code(session, user_code=payload.user_code)
+        if denied is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="unknown or already-decided code"
+            )
+        await session.commit()
+        logger.info("device_authorization_denied", client_id=denied.client_id)
+        return {"status": "denied", "client_id": denied.client_id, "scope": list(denied.scope)}
+
+    row = await approve_device_code(
+        session,
+        user_code=payload.user_code,
+        user_id=user_row.id,
+        workspace_id=workspace_id,
+    )
+    if row is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="unknown, expired, or already-decided code",
+        )
+    await session.commit()
+    logger.info(
+        "device_authorization_approved",
+        client_id=row.client_id,
+        workspace_id=str(workspace_id),
+        scope=list(row.scope),
+    )
+    return {"status": "approved", "client_id": row.client_id, "scope": list(row.scope)}
+
+
+# ---------------------------------------------------------------------------
 # Founder-managed clients (authenticated)
 # ---------------------------------------------------------------------------
 
@@ -1093,6 +1260,7 @@ async def oauth_authorization_server_metadata() -> dict[str, Any]:
         "issuer": issuer,
         "authorization_endpoint": f"{issuer}/api/oauth/authorize",
         "token_endpoint": f"{issuer}/api/oauth/token",
+        "device_authorization_endpoint": f"{issuer}/api/oauth/device_authorization",
         "introspection_endpoint": f"{issuer}/api/oauth/introspect",
         "revocation_endpoint": f"{issuer}/api/oauth/revoke",
         # RFC 8414 — registration_endpoint advertises the OPEN
@@ -1103,7 +1271,11 @@ async def oauth_authorization_server_metadata() -> dict[str, Any]:
         "registration_endpoint": f"{issuer}/api/oauth/register",
         "jwks_uri": f"{issuer}/.well-known/jwks.json",
         "response_types_supported": ["code"],
-        "grant_types_supported": ["authorization_code", "refresh_token"],
+        "grant_types_supported": [
+            "authorization_code",
+            "refresh_token",
+            DEVICE_GRANT_TYPE,
+        ],
         "code_challenge_methods_supported": ["S256"],
         "token_endpoint_auth_methods_supported": ["none"],
         "scopes_supported": list(ALLOWED_SCOPES),

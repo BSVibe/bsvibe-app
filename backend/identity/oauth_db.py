@@ -198,10 +198,56 @@ class OAuthRefreshTokenRow(Base):
     used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
+class OAuthDeviceCodeRow(Base):
+    """A pending RFC 8628 device authorization.
+
+    Two codes, two audiences. ``device_code`` is what the CLI polls with — high
+    entropy, and stored ONLY as a sha256 hash so a database leak yields nothing
+    exchangeable (same reasoning as ``oauth_refresh_tokens``). ``user_code`` is
+    what a human retypes in a browser, so it is short and stored in the clear:
+    it is useless on its own, since approving it requires that human's own
+    authenticated session.
+
+    NOT workspace-scoped by the auto-filter — the row is created before any
+    session exists, and the workspace is stamped at approval time from the
+    approver, never from anything the device claimed.
+    """
+
+    __tablename__ = "oauth_device_codes"
+    __exclude_workspace_filter__ = True
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    client_id: Mapped[str] = mapped_column(String(80), nullable=False, index=True)
+    device_code_hash: Mapped[bytes] = mapped_column(
+        LargeBinary(32), nullable=False, unique=True, index=True
+    )
+    user_code: Mapped[str] = mapped_column(String(16), nullable=False, unique=True, index=True)
+    scope: Mapped[list[str]] = mapped_column(JSON, nullable=False)
+    issued_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_utcnow
+    )
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    #: Rate-limit anchor. RFC 8628 §3.5 — a device polling faster than the
+    #: advertised interval gets ``slow_down`` rather than a free attempt.
+    last_polled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    #: Set by the human's browser session; the workspace comes from THEM.
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    denied_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    user_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=True
+    )
+    workspace_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("workspaces.id", ondelete="CASCADE"), nullable=True
+    )
+    #: Single-use: flipped when the pair is minted, so a replay is invalid_grant.
+    consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
 __all__ = [
     "OAuthAccessTokenRow",
     "OAuthClientRow",
     "OAuthCodeRow",
+    "OAuthDeviceCodeRow",
     "OAuthRefreshTokenRow",
     "aware_utc",
 ]
