@@ -858,7 +858,7 @@
         "copy": "Copy",
         "copied": "Copied",
         "configLabel": "Claude Code config snippet",
-        "configHint": "Add this entry to `~/.config/claude-code/mcp.json` (or run `claude mcp add bsvibe <url>`). The CLI handles the OAuth dance via the WWW-Authenticate header — no token in this file.",
+        "configHint": "Add this entry to `~/.config/claude-code/mcp.json` (or run `claude mcp add bsvibe [url]`). The CLI handles the OAuth dance via the WWW-Authenticate header — no token in this file.",
         "scopesLabel": "OAuth scopes",
         "scopeRead": "mcp:read — list products, runs, deliverables, Safe Mode queue; search and read vault notes.",
         "scopeWrite": "mcp:write — create products, send requests, approve/deny Safe Mode items, write vault seeds.",
