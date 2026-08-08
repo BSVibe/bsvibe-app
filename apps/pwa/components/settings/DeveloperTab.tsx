@@ -6,8 +6,10 @@ import {
   deleteOAuthClient,
   listOAuthClients,
 } from "@/lib/api/oauth-clients";
+import { type Pat, type PatCreated, createPat, deletePat, listPats } from "@/lib/api/pats";
 import { useTranslations } from "next-intl";
 import { useCallback, useEffect, useState } from "react";
+import CopyField from "./CopyField";
 
 /**
  * Settings → Developer. OAuth client management for the embedded
@@ -89,7 +91,266 @@ export default function DeveloperTab() {
       </section>
 
       <McpEndpointSection />
+
+      <PersonalAccessTokens />
     </div>
+  );
+}
+
+/**
+ * Settings → Developer → personal access tokens.
+ *
+ * The OAuth flow above lands its callback on `http://localhost:<random-port>`,
+ * which only resolves when the browser and the MCP client sit on the same
+ * machine. Over a remote tunnel, an SSH session, a headless server, or a
+ * launchd/cron job there is no listener to reach and the sign-in cannot
+ * complete. A PAT is the static-bearer escape hatch for exactly those clients.
+ *
+ * The raw token is rendered once, right after creation, and never again — the
+ * server keeps the row's id, scopes and label, not the value.
+ */
+function PersonalAccessTokens() {
+  const t = useTranslations("settings.developer.pats");
+  const [pats, setPats] = useState<Pat[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [showForm, setShowForm] = useState(false);
+
+  const refresh = useCallback(async () => {
+    setError(null);
+    try {
+      setPats(await listPats());
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  }, []);
+
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
+
+  return (
+    <section className="account-section" aria-label={t("title")}>
+      <header className="developer-tab__header">
+        <h2 className="section-label">{t("title")}</h2>
+        <button type="button" className="developer-tab__add" onClick={() => setShowForm((v) => !v)}>
+          {showForm ? t("cancel") : t("add")}
+        </button>
+      </header>
+      <p className="developer-tab__hint">{t("lede")}</p>
+
+      {showForm && (
+        <CreatePatForm
+          onDone={async () => {
+            setShowForm(false);
+            await refresh();
+          }}
+        />
+      )}
+
+      {error && <p className="developer-tab__error">{error}</p>}
+
+      {pats === null ? (
+        <p className="developer-tab__hint">{t("loading")}</p>
+      ) : pats.length === 0 ? (
+        <p className="developer-tab__hint">{t("empty")}</p>
+      ) : (
+        <ul className="developer-tab__list">
+          {pats.map((p) => (
+            <PatRow key={p.id} pat={p} onRevoked={refresh} />
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+}
+
+/** Expiry choices. `null` — the default — means the token never expires. */
+const EXPIRY_CHOICES: readonly (number | null)[] = [null, 30, 90, 365];
+
+function CreatePatForm({ onDone }: { onDone: () => void | Promise<void> }) {
+  const t = useTranslations("settings.developer.pats");
+  const [name, setName] = useState("");
+  const [scopes, setScopes] = useState<Set<string>>(new Set(DEFAULT_SCOPES));
+  const [expiryDays, setExpiryDays] = useState<number | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [created, setCreated] = useState<PatCreated | null>(null);
+
+  function toggleScope(s: string) {
+    setScopes((prev) => {
+      const next = new Set(prev);
+      if (next.has(s)) {
+        next.delete(s);
+      } else {
+        next.add(s);
+      }
+      return next;
+    });
+  }
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    setBusy(true);
+    setError(null);
+    try {
+      setCreated(
+        await createPat({
+          name: name.trim(),
+          scope: Array.from(scopes),
+          ...(expiryDays === null ? {} : { expires_in_days: expiryDays }),
+        }),
+      );
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (created) {
+    return (
+      <div className="developer-tab__created">
+        <p className="developer-tab__created-title">{t("created")}</p>
+        {/* Loud on purpose: this panel is the token's only appearance. */}
+        <p className="developer-tab__created-hint" role="alert">
+          {t("createdWarning")}
+        </p>
+        <CopyField label={t("snippetLabel")} value={created.token} secret />
+        <button
+          type="button"
+          className="developer-tab__add"
+          onClick={() => {
+            setCreated(null);
+            void onDone();
+          }}
+        >
+          {t("done")}
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <form className="developer-tab__form" onSubmit={handleSubmit}>
+      <label className="developer-tab__label">
+        <span>{t("nameLabel")}</span>
+        <input
+          type="text"
+          required
+          maxLength={100}
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          placeholder={t("namePlaceholder")}
+        />
+      </label>
+      <fieldset className="developer-tab__scopes">
+        <legend>{t("scopesLabel")}</legend>
+        {ALL_SCOPES.map((s) => (
+          <label key={s} className="developer-tab__scope">
+            <input type="checkbox" checked={scopes.has(s)} onChange={() => toggleScope(s)} />
+            <code>{s}</code>
+          </label>
+        ))}
+      </fieldset>
+      <label className="developer-tab__label">
+        <span>{t("expiryLabel")}</span>
+        <select
+          value={expiryDays === null ? "never" : String(expiryDays)}
+          onChange={(e) =>
+            setExpiryDays(e.target.value === "never" ? null : Number(e.target.value))
+          }
+        >
+          {EXPIRY_CHOICES.map((d) => (
+            <option key={d ?? "never"} value={d === null ? "never" : String(d)}>
+              {d === null ? t("expiryNever") : t("expiryDays", { days: d })}
+            </option>
+          ))}
+        </select>
+      </label>
+      {error && <p className="developer-tab__error">{error}</p>}
+      <button
+        type="submit"
+        className="developer-tab__submit"
+        disabled={busy || name.trim().length === 0}
+      >
+        {busy ? t("submitting") : t("submit")}
+      </button>
+    </form>
+  );
+}
+
+function PatRow({ pat, onRevoked }: { pat: Pat; onRevoked: () => void | Promise<void> }) {
+  const t = useTranslations("settings.developer.pats");
+  const [confirming, setConfirming] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [failed, setFailed] = useState(false);
+
+  async function handleRevoke() {
+    setBusy(true);
+    setFailed(false);
+    try {
+      await deletePat(pat.id);
+      setConfirming(false);
+      await onRevoked();
+    } catch {
+      // A silently-failed revoke reads as "done" and the founder walks away
+      // believing a live credential is dead when it is still accepted.
+      setFailed(true);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <li className="developer-tab__row">
+      <div className="developer-tab__row-main">
+        <span className="developer-tab__row-name">{pat.name}</span>
+      </div>
+      <div className="developer-tab__row-meta">
+        <span>
+          {t("scopes")}: {pat.scope.join(", ")}
+        </span>
+        <span>{t("issuedOn", { date: new Date(pat.issued_at).toLocaleDateString() })}</span>
+        <span>
+          {pat.expires_at === null
+            ? t("neverExpires")
+            : t("expiresOn", { date: new Date(pat.expires_at).toLocaleDateString() })}
+        </span>
+      </div>
+      {confirming ? (
+        <div className="developer-tab__confirm">
+          <span role="alert">{t("revokeConfirm")}</span>
+          <button
+            type="button"
+            className="developer-tab__revoke"
+            onClick={handleRevoke}
+            disabled={busy}
+          >
+            {busy ? t("revoking") : t("revokeConfirmYes")}
+          </button>
+          <button
+            type="button"
+            className="developer-tab__add"
+            onClick={() => {
+              setConfirming(false);
+              setFailed(false);
+            }}
+            disabled={busy}
+          >
+            {t("revokeConfirmNo")}
+          </button>
+        </div>
+      ) : (
+        <button type="button" className="developer-tab__revoke" onClick={() => setConfirming(true)}>
+          {t("revoke")}
+        </button>
+      )}
+      {failed && (
+        <span className="developer-tab__error" role="alert" aria-live="polite">
+          {t("revokeError")}
+        </span>
+      )}
+    </li>
   );
 }
 

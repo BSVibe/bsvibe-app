@@ -49,10 +49,23 @@ Deferred by design:
 
 ## PR3 — PWA Settings UI
 
-- [ ] Settings shows a PAT section: create, list, revoke
-- [ ] The raw token is shown once with a copy affordance and an explicit "you will not see this again" warning
-- [ ] Korean copy follows the 해요체 house style
-- [ ] Revoke asks for confirmation and the row disappears on success
+Settings → Developer, below the MCP endpoint section — the founder reads "here
+is the endpoint" and then "here is how to authenticate without a browser".
+
+- [x] A PAT section with create / list / revoke
+- [x] The raw token is shown once via `CopyField`, with a `role="alert"` warning that it is the only time
+- [x] Dismissing the one-time panel returns to the list, which never carries the token
+- [x] Listing shows name, scopes, created date, and never-expires vs expiry date
+- [x] Revoke is two-step — the first click only asks, and states that clients stop working immediately
+- [x] A failed revoke surfaces an inline error instead of looking like it worked
+- [x] Empty state invites the first token for "a machine that can't open a browser"
+- [x] Korean copy in 해요체; both `en.json` and `ko.json` carry every key
+- [x] `biome check`, `tsc --noEmit`, and the PWA suite (716 tests) pass
+
+Not covered by these tests — needs a browser:
+
+- [ ] Clipboard copy actually writes (jsdom has no Clipboard API; `CopyField` soft-fails by design)
+- [ ] Screenshots for `docs/settings/`
 
 ## PR4 — real-request E2E (no dependency overrides)
 
