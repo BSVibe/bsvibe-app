@@ -415,13 +415,165 @@ def run_login_manual(*, issuer: str) -> LoginResult:
     return result
 
 
+# ---------------------------------------------------------------------------
+# RFC 8628 device authorization grant
+# ---------------------------------------------------------------------------
+# The sign-in for a host that can reach neither a loopback listener nor a
+# paste-back prompt — a remote tunnel, a chat-driven session, a headless box.
+# The human approves a short code somewhere else entirely; this process polls
+# and picks the credential up on its own. Nothing is ever pasted back, so no
+# secret crosses a channel a person reads.
+
+#: Client identifier the CLI presents. The device grant is a PUBLIC-client flow
+#: with no secret, and its security rests on the human approving a short code —
+#: not on client identity — so no dynamic registration step is needed here.
+DEVICE_CLIENT_ID = "bsvibe-cli"
+DEVICE_SCOPES = "mcp:read mcp:write mcp:admin"
+#: Added to the poll interval each time the server answers ``slow_down``.
+DEVICE_SLOW_DOWN_STEP_S = 5
+
+
+def _device_sleep(seconds: float) -> None:
+    """Seam so tests assert the interval instead of waiting it out."""
+    time.sleep(seconds)
+
+
+def _device_transport() -> httpx.BaseTransport | None:
+    """Seam so tests serve the flow without a network. ``None`` = real."""
+    return None
+
+
+def start_device_authorization(
+    *, issuer: str, client: httpx.Client, scope: str = DEVICE_SCOPES
+) -> dict[str, Any]:
+    """RFC 8628 §3.1 — ask for a device code + the code the human will type."""
+    resp = client.post(
+        f"{issuer.rstrip('/')}/api/oauth/device_authorization",
+        data={"client_id": DEVICE_CLIENT_ID, "scope": scope},
+    )
+    resp.raise_for_status()
+    return dict(resp.json())
+
+
+def poll_device_token(
+    *,
+    issuer: str,
+    device_code: str,
+    client: httpx.Client,
+    interval: int,
+    expires_in: int,
+    emit: Callable[[str], None] = _default_emit,
+) -> LoginResult:
+    """Poll ``/token`` until the human decides. Raises :class:`LoginError` on any
+    terminal answer.
+
+    The three answers that are NOT failures — success, ``authorization_pending``
+    and ``slow_down`` — are the only ones that continue. Everything else stops
+    with the server's own reason, because a login that spins silently until the
+    operator gives up is worse than one that says why it failed.
+    """
+    deadline = time.time() + max(expires_in, 1)
+    wait = max(interval, 1)
+    while True:
+        if time.time() >= deadline:
+            raise LoginError("device code expired before it was approved — run the command again")
+        # Ask first, sleep only between attempts: someone who opened
+        # `verification_uri_complete` may have approved before we even started.
+        resp = client.post(
+            f"{issuer.rstrip('/')}/api/oauth/token",
+            data={
+                "grant_type": "urn:ietf:params:oauth:grant-type:device_code",
+                "device_code": device_code,
+                "client_id": DEVICE_CLIENT_ID,
+            },
+        )
+        if resp.status_code == 200:
+            return _result_from_payload(resp.json(), issuer=issuer)
+
+        try:
+            error = str(resp.json().get("error") or "")
+        except ValueError:
+            error = ""
+        if error == "authorization_pending":
+            _device_sleep(wait)
+            continue
+        if error == "slow_down":
+            wait += DEVICE_SLOW_DOWN_STEP_S
+            emit(f"Server asked us to slow down; polling every {wait}s.")
+            _device_sleep(wait)
+            continue
+        if error == "access_denied":
+            raise LoginError("the request was denied in the browser")
+        if error == "expired_token":
+            raise LoginError("device code expired before it was approved — run the command again")
+        raise LoginError(f"token endpoint returned {error or resp.status_code}")
+
+
+def _device_instructions(payload: dict[str, Any]) -> str:
+    complete = payload.get("verification_uri_complete")
+    lines = [
+        "Device sign-in — nothing is pasted back here.",
+        "",
+        "1. Open this URL on ANY device with a browser:",
+        "",
+        f"   {payload['verification_uri']}",
+        "",
+        f"2. Enter this code:   {payload['user_code']}",
+    ]
+    if complete:
+        lines += ["", f"   (or open {complete} to skip typing it)"]
+    lines += ["", "3. Approve. This terminal picks the credential up on its own."]
+    return "\n".join(lines)
+
+
+def perform_login_device(
+    *,
+    issuer: str,
+    httpx_client: httpx.Client | None = None,
+    emit: Callable[[str], None] = _default_emit,
+) -> LoginResult:
+    """Run the full device flow and return the credentials."""
+    own = httpx_client is None
+    client = (
+        httpx_client
+        if httpx_client is not None
+        else httpx.Client(transport=_device_transport(), timeout=30.0)
+    )
+    try:
+        started = start_device_authorization(issuer=issuer, client=client)
+        emit(_device_instructions(started))
+        return poll_device_token(
+            issuer=issuer,
+            device_code=started["device_code"],
+            client=client,
+            interval=int(started.get("interval") or 5),
+            expires_in=int(started.get("expires_in") or 600),
+            emit=emit,
+        )
+    finally:
+        if own:
+            client.close()
+
+
+def run_login_device(*, issuer: str) -> LoginResult:
+    """Top-level entry point for device login + persist credentials."""
+    result = perform_login_device(issuer=issuer)
+    save_host_credentials(result.credentials)
+    return result
+
+
 __all__ = [
+    "DEVICE_CLIENT_ID",
     "LoginError",
     "LoginResult",
     "make_pkce_pair",
     "parse_callback_input",
     "perform_login",
+    "perform_login_device",
     "perform_login_manual",
+    "poll_device_token",
     "run_login",
+    "run_login_device",
     "run_login_manual",
+    "start_device_authorization",
 ]
