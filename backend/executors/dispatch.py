@@ -403,6 +403,9 @@ async def dispatch_task(
     if mcp:
         payload["mcp_config"] = str(mcp.get("mcp_config") or "")
         payload["allowed_tools"] = " ".join(mcp.get("allowed_tools") or ())
+        # #692 parity — may the CLI KEEP its own tools alongside BSVibe's? Streams
+        # carry flat strings, so this crosses as "1"/"0" and the worker re-types it.
+        payload["native_tools"] = "1" if mcp.get("native_tools") else "0"
     msg_id = await redis.xadd(worker_stream(worker_id), payload)
 
     task.worker_id = worker_id

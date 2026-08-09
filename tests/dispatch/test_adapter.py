@@ -703,10 +703,15 @@ class TestExecutorAdapterChat:
         # server_sandbox agentic run hands the worker BSVibe's MCP tool surface.
         assert entry.get("mcp_config")
 
-    async def test_client_attach_agent_run_withholds_mcp_for_native_tools(self) -> None:
-        """#692 — a ``client_attach`` agentic run does NOT get the MCP work-tool
-        surface: the CLI must use its OWN native tools on the user's directory.
-        The worker, seeing no ``mcp_config``, runs natively (per its line 221)."""
+    async def test_client_attach_agent_run_gets_native_tools_and_the_platform_axis(self) -> None:
+        """#692 parity — a ``client_attach`` run keeps the CLI's OWN tools for the
+        WORKSPACE half (that is the model), and still receives BSVibe's PLATFORM
+        half over MCP.
+
+        Withholding MCP entirely also withheld ``emit_deliverable``, so such a run
+        could not produce a Deliverable — and ``connector_dispatch`` loads by
+        deliverable id, so NOTHING was ever delivered out (measured 2026-08-09,
+        BStockReport M5 structurally impossible in this mode)."""
         tools = [{"type": "function", "function": {"name": "write_file"}}]
         entry = await self._dispatch_and_read_entry(
             tools=tools,
@@ -716,8 +721,28 @@ class TestExecutorAdapterChat:
         assert entry["agentic"] == "1"
         assert entry["execution_target"] == "client_attach"
         assert entry["workspace_dir"] == "/home/u/proj"
-        # No MCP work-tool surface → native CLI tools act on the local dir.
-        assert not entry.get("mcp_config")
+        # The CLI keeps its own hands — the worker's third execution shape.
+        assert entry["native_tools"] == "1"
+        # ...and BSVibe still serves the platform axis over MCP.
+        assert entry.get("mcp_config")
+        allowed = entry["allowed_tools"].split()
+        assert allowed == [
+            "mcp__bsvibe__bsvibe_work_knowledge_search",
+            "mcp__bsvibe__bsvibe_work_ask_user_question",
+            "mcp__bsvibe__bsvibe_work_emit_deliverable",
+        ]
+        # The workspace axis is NOT offered: those are the CLI's to supply here.
+        assert not [t for t in allowed if "file_" in t or "shell_exec" in t]
+
+    async def test_server_sandbox_run_is_exclusive_as_before(self) -> None:
+        """The other model is untouched: whole surface, and the CLI's own tools taken away."""
+        entry = await self._dispatch_and_read_entry(
+            tools=[{"type": "function", "function": {"name": "write_file"}}]
+        )
+        assert entry["native_tools"] == "0"
+        allowed = entry["allowed_tools"].split()
+        assert "mcp__bsvibe__bsvibe_work_file_write" in allowed
+        assert "mcp__bsvibe__bsvibe_work_emit_deliverable" in allowed
 
     async def test_extra_system_messages_reach_the_model(self) -> None:
         """Grounding rides in system-role MESSAGES, and it must survive the executor
