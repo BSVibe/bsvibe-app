@@ -1088,5 +1088,37 @@
       "contractAmber": "검증 주의 — {reason}",
       "contractAmberFallback": "교차 검증이 트리거됨"
     }
+  },
+  "deviceConsent": {
+    "title": "기기 로그인",
+    "enterHint": "로그인하려는 기기에 표시된 코드를 입력하세요.",
+    "codeLabel": "기기 코드",
+    "continue": "계속",
+    "loading": "코드를 확인하고 있어요…",
+    "confirmTitle": "{clientId} 의 로그인을 허용할까요?",
+    "confirmBody": "기기가 이 결정을 기다리고 있어요. 이 화면으로 되돌려 보내는 값은 없고, 기기가 알아서 결과를 가져가요.",
+    "scopesLabel": "요청한 권한",
+    "scopesHeading": "허용되는 범위",
+    "scopeReadDesc": "지식·제품·실행 기록을 읽어요",
+    "scopeWriteDesc": "작업을 만들고 변경해요",
+    "scopeAdminDesc": "설정·커넥터·액세스 토큰을 관리해요",
+    "scopeUnknownDesc": "추가 권한",
+    "allow": "허용",
+    "allowing": "허용하는 중…",
+    "deny": "거절",
+    "denying": "거절하는 중…",
+    "approvedTitle": "기기가 로그인됐어요",
+    "approvedBody": "이 페이지는 닫으셔도 돼요. 기기가 필요한 걸 받아갔어요.",
+    "deniedTitle": "요청을 거절했어요",
+    "deniedBody": "기기에 거절이 전달돼 대기를 멈췄어요. 이 페이지는 닫으셔도 돼요.",
+    "status_approved": "이미 승인된 코드예요. 기기가 아직 기다리고 있다면 기기에서 로그인을 새로 시작하세요.",
+    "status_denied": "이미 거절된 코드예요. 다시 하려면 기기에서 로그인을 새로 시작하세요.",
+    "status_expired": "만료된 코드예요. 코드는 약 10분간 유효하니 기기에서 로그인을 새로 시작하세요.",
+    "status_consumed": "이미 사용된 코드예요. 필요하면 기기에서 로그인을 새로 시작하세요.",
+    "errorTitle": "잘 안 됐어요",
+    "errorUnknownCode": "대기 중인 요청과 맞는 코드가 없어요. 오타가 없는지 확인하거나 기기에서 로그인을 새로 시작하세요.",
+    "errorLoadFailed": "지금은 코드를 확인하지 못했어요. 다시 시도해 주세요.",
+    "errorSubmit": "결정을 기록하지 못했어요. 다시 시도해 주세요.",
+    "tryAnotherCode": "다른 코드 입력하기"
   }
 }

@@ -79,3 +79,39 @@ export async function postOAuthAuthorize(
     body: body.toString(),
   });
 }
+
+// ---------------------------------------------------------------------------
+// RFC 8628 device authorization — the browser half
+// ---------------------------------------------------------------------------
+// The device has no browser and cannot receive a redirect, so consent happens
+// here instead: the human types the short `user_code` shown on the device, sees
+// what is being granted, and approves. The device is polling `/token` and picks
+// the credential up on its own — nothing is ever pasted back.
+
+/** What the consent screen needs to describe the request.
+ *
+ *  Deliberately carries NO `device_code`: the browser half of this flow must
+ *  never be able to complete the device half. */
+export interface DeviceRequest {
+  client_id: string;
+  scope: string[];
+  status: "pending" | "approved" | "denied" | "expired" | "consumed";
+  expires_at: string;
+}
+
+export interface DeviceDecision {
+  status: "approved" | "denied";
+  client_id: string;
+  scope: string[];
+}
+
+export function getDeviceRequest(userCode: string): Promise<DeviceRequest> {
+  return apiFetch<DeviceRequest>(`/api/v1/oauth/device?user_code=${encodeURIComponent(userCode)}`);
+}
+
+export function decideDeviceRequest(userCode: string, approve: boolean): Promise<DeviceDecision> {
+  return apiFetch<DeviceDecision>("/api/v1/oauth/device/approve", {
+    method: "POST",
+    body: JSON.stringify({ user_code: userCode, approve }),
+  });
+}
