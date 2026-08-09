@@ -59,7 +59,12 @@ from backend.executors.worker.credentials import (
     save_worker_token,
 )
 from backend.executors.worker.executors import detect_capabilities
-from backend.executors.worker.login import LoginError, run_login, run_login_manual
+from backend.executors.worker.login import (
+    LoginError,
+    run_login,
+    run_login_device,
+    run_login_manual,
+)
 from backend.executors.worker.main import _amain, register
 from backend.executors.worker.service import (
     ServiceError,
@@ -80,8 +85,17 @@ _DEFAULT_ISSUER = "https://api.bsvibe.dev"
 def _cmd_login(args: argparse.Namespace) -> int:
     issuer = args.issuer or _DEFAULT_ISSUER
     manual = bool(getattr(args, "manual", False))
+    device = bool(getattr(args, "device", False))
+    if manual and device:
+        print("choose one of --manual or --device, not both", file=sys.stderr)
+        return 1
     try:
-        if manual:
+        if device:
+            # No loopback listener AND no way to paste a callback back: the
+            # human approves a short code elsewhere and this process polls.
+            print(f"Device sign-in at {issuer} …", file=sys.stderr)
+            result = run_login_device(issuer=issuer)
+        elif manual:
             # Remote/headless host: no loopback server. The authorize URL +
             # paste-back instructions are emitted to stderr by the flow itself.
             print(f"Manual (out-of-band) sign-in at {issuer} …", file=sys.stderr)
@@ -301,6 +315,15 @@ def build_bsvibe_parser() -> argparse.ArgumentParser:
         help=(
             "Out-of-band sign-in for remote/headless hosts: print the authorize "
             "URL and paste the redirect URL (or code) back — no loopback server."
+        ),
+    )
+    p_login.add_argument(
+        "--device",
+        action="store_true",
+        help=(
+            "RFC 8628 device sign-in for a host with no browser AND no way to "
+            "paste a callback back: shows a short code to enter elsewhere, then "
+            "polls until you approve. Nothing is pasted back."
         ),
     )
     p_login.set_defaults(func=_cmd_login)
