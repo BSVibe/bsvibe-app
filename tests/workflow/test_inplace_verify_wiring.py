@@ -167,8 +167,25 @@ async def test_client_manager_is_pinned_to_the_founders_worker() -> None:
             account=_Account({"executor_type": "claude_code", "worker_id": str(worker_id)})
         )
     )
-    box = await mgr.acquire(uuid.uuid4(), "/Users/founder/proj")
+    # Pass what the REAL caller passes (agent_loop hands in the run's server-side
+    # dir), never the answer we want back — otherwise this assertion passes on a
+    # manager that simply echoes its argument.
+    box = await mgr.acquire(uuid.uuid4(), f"/app/var/runs/{uuid.uuid4()}")
     assert box.workspace_mount == "/Users/founder/proj"
     assert mgr._pinned_worker_id == worker_id
     # The client-attach box must NOT provision the founder's tree.
     assert getattr(box, "provisions_venv", True) is False
+
+
+async def test_gate_box_ignores_the_runs_server_side_workspace() -> None:
+    """The selected manager roots the gate at the founder's dir, not the run's.
+
+    Live E2E 2026-08-09 (run ``27e462d5``): the manager honoured the caller's
+    ``workspace_dir``, which is the run's SERVER-side ``/app/var/runs/<run_id>``.
+    That path does not exist on the founder's machine, so every manifest probe
+    came back ``client_attach_workspace_missing``, the gate saw zero manifests,
+    and the run settled UNTESTED as if the repo were gateless — a wiring break
+    wearing the costume of an honest "no gate here"."""
+    mgr = _select(**_base_kwargs(client_workspace_dir="/Users/founder/proj"))
+    box = await mgr.acquire(uuid.uuid4(), "/app/var/runs/27e462d5-8ec7-4680-b274-c6480416ddc8")
+    assert box.workspace_mount == "/Users/founder/proj"

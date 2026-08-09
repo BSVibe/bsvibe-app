@@ -84,6 +84,9 @@ def sandbox_manager_for_run(
         executor_type=executor_type,
         pinned_worker_id=pinned_worker_id,
         default_timeout_s=timeout_s,
+        # The founder's own tree — the ONLY path that exists on that machine. The
+        # ``acquire`` caller passes the run's server-side dir, which does not.
+        client_workspace_dir=client_workspace_dir,
     )
 
 

@@ -254,10 +254,18 @@ async def test_workspace_mount_is_the_user_dir(tmp_path: Path) -> None:
     await redis.aclose()
 
 
-async def test_manager_acquire_binds_workspace_path(tmp_path: Path) -> None:
-    """The manager carries the dispatch context; ``acquire`` binds the founder's
-    workspace path (so agent_loop's ``acquire(project_id, workspace_dir)`` call is
-    unchanged when the manager is swapped in for a client_attach run)."""
+async def test_manager_acquire_uses_founder_dir_not_callers_server_path(tmp_path: Path) -> None:
+    """``acquire`` roots the box at the FOUNDER's dir, ignoring the caller's path.
+
+    Live E2E 2026-08-09 (run ``27e462d5``): the real caller is
+    ``agent_loop.acquire(project_id, str(workspace_dir))``, and that
+    ``workspace_dir`` is the run's SERVER-side directory
+    (``/app/var/runs/<run_id>``) — a path that does not exist on the founder's
+    machine. Binding it made every gate command target a nonexistent dir, the
+    worker fail-loud'ed ``client_attach_workspace_missing``, no manifest could be
+    read, and the run settled UNTESTED as if the repo were gateless. The founder's
+    dir is dispatch context (it comes from the PRODUCT), so the MANAGER owns it;
+    the caller's per-run path is meaningless here and must not win."""
     from backend.workflow.infrastructure.sandbox.client_worker_manager import (
         ClientWorkerSandboxManager,
     )
@@ -272,8 +280,9 @@ async def test_manager_acquire_binds_workspace_path(tmp_path: Path) -> None:
             executor_type="claude_code",
             pinned_worker_id=None,
             default_timeout_s=30.0,
+            client_workspace_dir=str(tmp_path),
         )
-        box = await mgr.acquire(uuid.uuid4(), str(tmp_path))
+        box = await mgr.acquire(uuid.uuid4(), "/app/var/runs/1a2b3c4d-server-side")
         assert box.workspace_mount == str(tmp_path)
         assert await mgr.health() is True
         await mgr.release(uuid.uuid4())
