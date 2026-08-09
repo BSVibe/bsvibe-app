@@ -388,6 +388,10 @@ async def handle_task(
         # agentic shape (the CLI's own local tools).
         "mcp_config": task.get("mcp_config") or "",
         "allowed_tools": [t for t in str(task.get("allowed_tools") or "").split() if t],
+        # #692 parity — keep the CLI's OWN tools alongside BSVibe's platform tools.
+        # Absent → False: an older backend's task never silently gains the founder's
+        # filesystem. Streams carry strings, so re-type it here like ``agentic``.
+        "native_tools": task.get("native_tools") == "1",
     }
 
     # Lift E14 — register the asyncio Task this handler runs in so the
