@@ -23,8 +23,8 @@ from backend.workflow.application._loop_context import (
     _initial_user_message,
     _merge_conflict_directive,
     _resumption_messages,
-    client_attach_terminal,
     is_client_attach_run,
+    settle_client_attach,
 )
 from backend.workflow.application.audit_events import (
     DecisionPending,
@@ -33,7 +33,7 @@ from backend.workflow.application.audit_events import (
     ToolCall,
     VerifyRun,
 )
-from backend.workflow.application.inplace_gate import capture_inplace_baseline, run_inplace_gate
+from backend.workflow.application.inplace_gate import capture_inplace_baseline
 from backend.workflow.application.tool_registry import (
     ASK_USER_QUESTION_TOOL,
     MAX_NO_WORK_NUDGES,
@@ -368,50 +368,22 @@ async def drive_loop(  # noqa: PLR0911, PLR0912, PLR0915 — preserved cycle bod
         # No tool calls (or the single-shot executor just declared): the model
         # believes the step is done.
         if client_attach:
-            # #692 — the agent acted with the CLI's OWN tools on the user's
-            # machine: no server-visible written_paths to nudge about and no
-            # server-side source to merge. (Without this the loop nudges "you
-            # have not changed any file" and never settles — live E2E
-            # 2026-08-05: 3 hours re-acting on the user's clone.)
-            #
-            # In-place verify: the repo's OWN derived gate can still run — on
-            # that machine, where its source and toolchain are. The exit code is
-            # the verdict exactly as in the sandbox, so a pass is a real proof.
-            # ``None`` = the repo declares no toolchain: legitimately gateless.
-            gate = (
-                await run_inplace_gate(
-                    orch._verifier(), run=run, box=box, baseline=inplace_baseline
-                )
-                if getattr(box, "runs_in_place", False)
-                else None
+            # #692 — a client_attach run settles on its own terms: the in-place
+            # gate decides, and only a failure the agent can actually fix sends
+            # the cycle round again. ``None`` = keep going.
+            settled = await settle_client_attach(
+                orch,
+                run=run,
+                work_step=work_step,
+                attempt=attempt,
+                box=box,
+                messages=messages,
+                baseline=inplace_baseline,
+                cycle=_cycle,
             )
-            if gate is not None and not gate["passed"] and _cycle + 1 < orch._max_cycles:
-                # A real failure on the founder's machine — feed it back and let
-                # the agent fix it, exactly as a failed sandbox verdict does.
-                messages.append(
-                    {
-                        "role": "user",
-                        "content": (
-                            "Your repository's own verification gate FAILED on this machine:\n"
-                            f"{json.dumps(gate['commands'])[:1500]}\n"
-                            "Fix the problem and try again, then send your summary."
-                        ),
-                    }
-                )
+            if settled is None:
                 continue
-            result = client_attach_terminal(run, work_step, attempt, gate=gate)
-            await orch._session.flush()
-            await orch._audit(
-                run,
-                attempt,
-                LoopTerminal,
-                {
-                    "outcome": "verified",
-                    "mode": "client_attach",
-                    "gate_proved": bool(gate and gate.get("proved")),
-                },
-            )
-            return result
+            return settled
         if (
             not written_paths
             and registry.declared_contract is None
