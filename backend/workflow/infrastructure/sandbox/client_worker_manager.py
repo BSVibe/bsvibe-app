@@ -209,10 +209,9 @@ class ClientWorkerSandboxManager:
     """Per-run manager that hands back a :class:`ClientWorkerSandboxSession`.
 
     Constructed with the run's dispatch context (redis + session factory +
-    workspace + executor type + the pinned founder worker). ``acquire`` binds the
-    founder's workspace path — so the ``acquire(project_id, workspace_dir)`` call
-    in the agent loop is unchanged when this manager is swapped in for a
-    ``client_attach`` run.
+    workspace + executor type + the pinned founder worker) AND the founder's own
+    workspace directory, which comes from the product's ``client_workspace_path``
+    — the only path that exists on that machine.
     """
 
     def __init__(
@@ -224,6 +223,7 @@ class ClientWorkerSandboxManager:
         executor_type: str,
         pinned_worker_id: uuid.UUID | None,
         default_timeout_s: float,
+        client_workspace_dir: str,
     ) -> None:
         self._redis = redis
         self._session_factory = session_factory
@@ -231,16 +231,29 @@ class ClientWorkerSandboxManager:
         self._executor_type = executor_type
         self._pinned_worker_id = pinned_worker_id
         self._default_timeout_s = default_timeout_s
+        self._client_workspace_dir = client_workspace_dir
 
     async def acquire(
         self, project_id: uuid.UUID, workspace_path: str
     ) -> ClientWorkerSandboxSession:
+        """Root the box at the FOUNDER's directory, ignoring ``workspace_path``.
+
+        The ``SandboxManager`` Protocol hands in the run's own workspace, and for
+        every server-side backend that is the right answer. For client_attach it
+        is not: that argument is the run's SERVER-side dir
+        (``/app/var/runs/<run_id>``, see ``agent_loop``), which does not exist on
+        the founder's machine. Honouring it made every gate command fail with
+        ``client_attach_workspace_missing``, so no manifest could be read and the
+        run settled UNTESTED as though the repo had no gate at all (live E2E
+        2026-08-09, run ``27e462d5``). WHERE this run executes is dispatch
+        context, decided by the product — so it is the manager's to supply.
+        """
         return ClientWorkerSandboxSession(
             redis=self._redis,
             session_factory=self._session_factory,
             workspace_id=self._workspace_id,
             executor_type=self._executor_type,
-            workspace_path=workspace_path,
+            workspace_path=self._client_workspace_dir,
             default_timeout_s=self._default_timeout_s,
             pinned_worker_id=self._pinned_worker_id,
         )
