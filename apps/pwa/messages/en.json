@@ -1088,5 +1088,37 @@
       "contractAmber": "Contract amber — {reason}",
       "contractAmberFallback": "cross-check triggered"
     }
+  },
+  "deviceConsent": {
+    "title": "Sign in a device",
+    "enterHint": "Enter the code shown on the device you are signing in.",
+    "codeLabel": "Device code",
+    "continue": "Continue",
+    "loading": "Checking that code…",
+    "confirmTitle": "Allow {clientId} to sign in?",
+    "confirmBody": "The device is waiting for this decision. Nothing is sent back through this page — it picks the result up on its own.",
+    "scopesLabel": "Requested permissions",
+    "scopesHeading": "This will grant",
+    "scopeReadDesc": "Read your knowledge, products, and runs",
+    "scopeWriteDesc": "Create and change your work",
+    "scopeAdminDesc": "Manage settings, connectors, and access tokens",
+    "scopeUnknownDesc": "An additional permission",
+    "allow": "Allow",
+    "allowing": "Allowing…",
+    "deny": "Deny",
+    "denying": "Denying…",
+    "approvedTitle": "Device signed in",
+    "approvedBody": "You can close this page — the device has what it needs.",
+    "deniedTitle": "Request denied",
+    "deniedBody": "The device was told no and has stopped waiting. You can close this page.",
+    "status_approved": "That code was already approved. If the device is still waiting, start a new sign-in on it.",
+    "status_denied": "That code was already denied. Start a new sign-in on the device to try again.",
+    "status_expired": "That code has expired. Codes last about 10 minutes — start a new sign-in on the device.",
+    "status_consumed": "That code has already been used. Start a new sign-in on the device if you need another.",
+    "errorTitle": "That didn't work",
+    "errorUnknownCode": "That code didn't match a pending request. Check for a typo, or start a new sign-in on the device.",
+    "errorLoadFailed": "Couldn't check that code just now. Please try again.",
+    "errorSubmit": "Couldn't record your decision. Please try again.",
+    "tryAnotherCode": "Enter a different code"
   }
 }
