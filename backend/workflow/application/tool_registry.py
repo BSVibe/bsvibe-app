@@ -62,21 +62,47 @@ _KNOWLEDGE_SEED_MAX_CHARS_PER_STATEMENT = 500
 MAX_NO_WORK_NUDGES = 2
 
 
-#: (MCP tool name, inner registry tool name) for the run-scoped tools that FORWARD to the inner
-#: ``ToolRegistry``. This is the SINGLE source of truth tying the surface the MCP server exposes
-#: to the tools the shared factory registers to the allowlist the dispatch adapter advertises to
-#: the CLI. It lives HERE — the clean loop-side module — precisely so the MCP transport
-#: (``work_tools``) and the dispatch adapter can both read it WITHOUT importing each other
-#: (importing ``backend.mcp`` from the adapter is a circular import through the whole API graph).
-#: INV-7 #2: advertised ≡ registered because both are derived from this one tuple.
-RUN_TOOL_FORWARDING: tuple[tuple[str, str], ...] = (
+#: WORKSPACE axis — how the agent touches the WORKING TREE. The execution model
+#: decides who supplies these: ``server_sandbox`` gets them over MCP (acting on
+#: the server-side worktree), ``client_attach`` uses the CLI's OWN native tools
+#: on the founder's directory, which is the entire point of that model.
+#:
+#: ``declare_verification`` belongs here: declaring a contract presumes a
+#: server-side worktree to run it against. client_attach has a STRONGER
+#: replacement — the in-place derived gate (#692/#705), whose verdict is a real
+#: exit code produced on the founder's machine.
+WORKSPACE_TOOL_FORWARDING: tuple[tuple[str, str], ...] = (
     ("bsvibe_work_file_read", "file_read"),
     ("bsvibe_work_file_list", "file_list"),
     ("bsvibe_work_file_write", "file_write"),
     ("bsvibe_work_file_edit", "file_edit"),
     ("bsvibe_work_shell_exec", "shell_exec"),
     ("bsvibe_work_declare_verification", "declare_verification"),
+)
+
+#: PLATFORM axis — what BSVIBE ITSELF offers, independent of where the source
+#: lives. Knowledge, asking the founder, emitting a deliverable: the server
+#: serves all of these either way, so EVERY execution model gets the whole axis.
+#:
+#: This split exists because one switch used to answer two questions at once
+#: (#692): choosing native workspace tools for client_attach also withheld the
+#: platform half. Measured consequence — a client_attach run could not call
+#: ``emit_deliverable``, so no Deliverable row existed, so ``connector_dispatch``
+#: had nothing to load and NOTHING was ever delivered out.
+PLATFORM_TOOL_FORWARDING: tuple[tuple[str, str], ...] = (
     ("bsvibe_work_knowledge_search", KNOWLEDGE_SEARCH_NAME),
+)
+
+#: (MCP tool name, inner registry tool name) for the run-scoped tools that FORWARD to the inner
+#: ``ToolRegistry`` — the two axes composed. This is the SINGLE source of truth tying the surface
+#: the MCP server exposes to the tools the shared factory registers to the allowlist the dispatch
+#: adapter advertises to the CLI. It lives HERE — the clean loop-side module — precisely so the MCP
+#: transport (``work_tools``) and the dispatch adapter can both read it WITHOUT importing each
+#: other (importing ``backend.mcp`` from the adapter is a circular import through the whole API
+#: graph). INV-7 #2: advertised ≡ registered because both are derived from this one tuple.
+RUN_TOOL_FORWARDING: tuple[tuple[str, str], ...] = (
+    *WORKSPACE_TOOL_FORWARDING,
+    *PLATFORM_TOOL_FORWARDING,
 )
 
 #: The two LOOP-owned pseudo-tools — the MCP transport handles them directly (create a Decision /
@@ -93,6 +119,28 @@ WORK_TOOL_MCP_NAMES: tuple[str, ...] = (
     *(name for name, _ in RUN_TOOL_FORWARDING),
     *RUN_TOOL_LOOP_OWNED,
 )
+
+#: The two axes as MCP names — DERIVED, so a tool added to either tuple above
+#: lands in the right per-model surface with nothing to hand-maintain.
+WORKSPACE_TOOL_MCP_NAMES: tuple[str, ...] = tuple(name for name, _ in WORKSPACE_TOOL_FORWARDING)
+PLATFORM_TOOL_MCP_NAMES: tuple[str, ...] = (
+    *(name for name, _ in PLATFORM_TOOL_FORWARDING),
+    *RUN_TOOL_LOOP_OWNED,
+)
+
+
+def mcp_tool_names_for(execution_target: str) -> tuple[str, ...]:
+    """The MCP tools a task in this execution model may see.
+
+    ``client_attach`` acts on the founder's own tree with the CLI's native
+    tools, so BSVibe supplies only the PLATFORM axis. Every other model — and an
+    absent/unknown value, which must never silently downgrade a run — gets the
+    whole surface, exactly as before.
+    """
+    if execution_target == "client_attach":
+        return PLATFORM_TOOL_MCP_NAMES
+    return WORK_TOOL_MCP_NAMES
+
 
 #: The inner-registry tools BOTH transports invoke — the forwarding targets. INV-7 #1: this is
 #: what the shared factory (:func:`assemble_run_tool_registry`) must register, so the MCP
@@ -295,9 +343,13 @@ __all__ = [
     "ASK_USER_QUESTION_TOOL",
     "KNOWLEDGE_SEARCH_NAME",
     "MAX_NO_WORK_NUDGES",
+    "PLATFORM_TOOL_FORWARDING",
+    "PLATFORM_TOOL_MCP_NAMES",
     "RUN_TOOL_FORWARDING",
     "RUN_TOOL_INNER_NAMES",
     "RUN_TOOL_LOOP_OWNED",
+    "WORKSPACE_TOOL_FORWARDING",
+    "WORKSPACE_TOOL_MCP_NAMES",
     "WORK_TOOLS",
     "WORK_TOOL_MCP_NAMES",
     "_KNOWLEDGE_SEARCH_MAX_RESULTS",
@@ -308,5 +360,6 @@ __all__ = [
     "_sanitize_ask_user_question_options",
     "assemble_run_tool_registry",
     "make_knowledge_search_handler",
+    "mcp_tool_names_for",
     "register_knowledge_search",
 ]
