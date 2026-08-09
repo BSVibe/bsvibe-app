@@ -79,6 +79,32 @@ def _porcelain_paths(stdout: str) -> set[str]:
     return paths
 
 
+async def _workspace_probe_failure(box: SandboxSession) -> str | None:
+    """``None`` when the workspace can be read; the reason when it cannot.
+
+    A single cheap listing. It exists so the ladder's "no manifest → gateless"
+    rung can only be reached from a workspace we demonstrably COULD have read a
+    manifest from — otherwise an infrastructure fault (dead worker, wrong path)
+    silently becomes a statement about the repo.
+    """
+    try:
+        await box.list_dir(".")
+    except Exception as exc:  # noqa: BLE001 — any failure to read = cannot conclude absence
+        return f"{type(exc).__name__}: {exc}"
+    return None
+
+
+def gate_failure_is_actionable(gate: dict[str, Any]) -> bool:
+    """Is this gate failure something the AGENT can fix by working again?
+
+    Only a command that actually RAN and failed is. A deriver fault, an
+    unreachable machine, or a tool missing from that machine (exit 127) are
+    infrastructure facts: re-prompting the agent to "fix the problem" asks it to
+    repair something outside its reach and burns the run's remaining cycles.
+    """
+    return any(c.get("status") == "failed" for c in gate.get("commands") or ())
+
+
 async def _changed_paths(box: SandboxSession, baseline: str | None) -> list[str]:
     """What THIS run changed in the founder's tree, as git sees it.
 
@@ -139,6 +165,28 @@ async def run_inplace_gate(
     # the transaction first — ``expire_on_commit=False`` keeps ORM state usable.
     await service._release_connection(run)
 
+    # Make ABSENCE prove itself before believing it. ``_read_repo_manifests``
+    # skips any file it cannot read, so an unreachable machine and a repo with no
+    # build config both arrive here as zero manifests — and only one of them is
+    # the honest "gateless" verdict below. In the 2026-08-09 E2E the gate box was
+    # pointed at a path that did not exist on the founder's machine, and the
+    # wiring break drained into that verdict wearing its legitimacy: the run
+    # reported "this repo has no gate" and raised no alarm. One probe separates
+    # them.
+    probe = await _workspace_probe_failure(box)
+    if probe is not None:
+        blob: dict[str, Any] = {
+            "origin": "derived_in_place",
+            "applicable": True,
+            "commands": [],
+            "passed": False,
+            "proved": False,
+            "workspace_probe_failed": probe,
+        }
+        await _persist(service, run=run, blob=blob, outcome=VerificationOutcome.FAILED)
+        logger.warning("inplace_gate_workspace_unreachable", run_id=str(run.id), error=probe)
+        return blob
+
     manifests = await service._read_repo_manifests(box)
     if not manifests:
         logger.info("inplace_gate_no_manifest", run_id=str(run.id))
@@ -152,7 +200,7 @@ async def run_inplace_gate(
     if isinstance(gate, DerivedGateFailed):
         # A manifest EXISTS, so a gate was expected here and we could not produce
         # one. Fail closed: not passed, and certainly not proved.
-        blob: dict[str, Any] = {
+        blob = {
             "origin": "derived_in_place",
             "applicable": True,
             "commands": [],
@@ -268,4 +316,4 @@ async def _persist(
     )
 
 
-__all__ = ["capture_inplace_baseline", "run_inplace_gate"]
+__all__ = ["capture_inplace_baseline", "gate_failure_is_actionable", "run_inplace_gate"]

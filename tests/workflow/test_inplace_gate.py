@@ -331,3 +331,87 @@ async def test_a_run_that_changed_nothing_still_reports_nothing() -> None:
     await run_inplace_gate(_service(llm), run=_Run(), box=box, baseline="abc123def")
 
     assert "(no files changed)" in llm.prompt
+
+
+# ---------------------------------------------------------------------------
+# Absence must prove itself
+# ---------------------------------------------------------------------------
+# Live E2E 2026-08-09 (run ``27e462d5``): the gate box pointed at a directory
+# that did not exist on the founder's machine. Every manifest probe came back
+# SandboxError, ``_read_repo_manifests`` skipped them all, and zero manifests
+# read as "this repo declares no toolchain" — the ladder's ONE rung where
+# nothing-found is not a failure. So a wiring break wore the costume of an
+# honest verdict and raised no alarm. An unreachable workspace and a repo with
+# no build config are not the same fact; make absence prove it could have seen.
+
+
+class _UnreachableBox(_Box):
+    """The founder's machine (or that path on it) cannot be reached at all."""
+
+    async def list_dir(self, rel_path: str) -> list[str]:
+        from backend.workflow.infrastructure.sandbox import SandboxError
+
+        raise SandboxError("no live client worker for this workspace")
+
+
+async def test_unreachable_workspace_fails_closed_instead_of_looking_gateless() -> None:
+    from backend.workflow.application.inplace_gate import run_inplace_gate
+
+    llm = _Llm(_GATE_JSON)
+    blob = await run_inplace_gate(_service(llm), run=_Run(), box=_UnreachableBox(manifests={}))
+
+    assert blob is not None, "an unreachable machine is NOT a gateless repo"
+    assert blob["passed"] is False, "fail CLOSED — we proved nothing and know it"
+    assert blob["proved"] is False
+    assert blob.get("workspace_probe_failed"), blob
+    assert llm.calls == 0, "no point deriving a gate for a workspace we cannot read"
+
+
+async def test_reachable_workspace_with_no_manifest_is_still_gateless() -> None:
+    """The probe only separates the two cases — it must not turn a genuinely
+    gateless repo into a failure."""
+    from backend.workflow.application.inplace_gate import run_inplace_gate
+
+    blob = await run_inplace_gate(_service(_Llm(_GATE_JSON)), run=_Run(), box=_Box(manifests={}))
+
+    assert blob is None
+
+
+# ---------------------------------------------------------------------------
+# Only a command the agent can actually fix goes back to the agent
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("gate", "actionable", "why"),
+    [
+        (
+            {"passed": False, "commands": [{"status": "failed", "command": "pytest"}]},
+            True,
+            "a command RAN and failed — the agent's to fix",
+        ),
+        (
+            {"passed": False, "commands": [], "gate_deriver_failed": "deriver_error"},
+            False,
+            "the deriver timed out; no amount of agent work changes that",
+        ),
+        (
+            {"passed": False, "commands": [], "workspace_probe_failed": "unreachable"},
+            False,
+            "the machine is unreachable; not a defect in the agent's work",
+        ),
+        (
+            {"passed": True, "commands": [{"status": "unavailable", "command": "mypy"}]},
+            False,
+            "the tool is missing from that machine, not broken by the change",
+        ),
+    ],
+)
+async def test_only_a_real_command_failure_is_fed_back_to_the_agent(
+    gate: dict[str, Any], actionable: bool, why: str
+) -> None:
+    """Feeding an infra fault back tells the agent to fix something it cannot,
+    and burns the remaining cycles doing it."""
+    from backend.workflow.application.inplace_gate import gate_failure_is_actionable
+
+    assert gate_failure_is_actionable(gate) is actionable, why
