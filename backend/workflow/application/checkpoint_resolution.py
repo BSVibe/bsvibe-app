@@ -85,7 +85,7 @@ NEGATIVE_PATTERN_SETTLE_KIND = "negative_pattern"
 
 #: Cap on the settle-activity ``summary`` text — keeps the absorbed garden
 #: note's body proportionate to the question + answer (mirrors
-#: :data:`~backend.workflow.domain.verified_deliverable._SETTLE_SUMMARY_CAP`).
+#: :data:`~backend.workflow.domain.verified_deliverable.SETTLE_SUMMARY_CAP`).
 _SUMMARY_CAP = 500
 
 logger = structlog.get_logger(__name__)

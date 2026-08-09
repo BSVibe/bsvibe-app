@@ -21,7 +21,10 @@ from backend.storage.product_workspace import (
     init_product_workspace,
     merge_main_into_worktree,
 )
-from backend.workflow.domain.verified_deliverable import write_verified_deliverable
+from backend.workflow.domain.verified_deliverable import (
+    SETTLE_SUMMARY_CAP,
+    write_verified_deliverable,
+)
 from backend.workflow.infrastructure.db import (
     DeliverableType,
     ExecutionRun,
@@ -127,10 +130,15 @@ async def test_write_verified_deliverable_threads_agent_knowledge() -> None:
         }
 
 
-async def test_write_verified_deliverable_truncates_summary_in_event() -> None:
+async def test_write_verified_deliverable_bounds_summary_and_says_so() -> None:
+    """A real artifact survives; a runaway one is cut but ANNOUNCES the cut.
+
+    The old bound was 500 and silent, which cut the M5 weekly report mid-number
+    (``현금 $922,010`` → ``현금 $922,0``) — a manufactured wrong figure rather than
+    a missing one (live 2026-08-10)."""
     async with memory_session() as s:
         run = await _seed_run(s, intent="x")
-        long_summary = "z" * 900
+        long_summary = "z" * (SETTLE_SUMMARY_CAP + 400)
         await write_verified_deliverable(
             s,
             run,
@@ -139,7 +147,8 @@ async def test_write_verified_deliverable_truncates_summary_in_event() -> None:
             summary=long_summary,
         )
         event = (await s.execute(select(DeliveryEventRow))).scalar_one()
-        assert len(event.payload["summary"]) == 500
+        assert event.payload["summary"].startswith("z" * 100)
+        assert "truncated" in event.payload["summary"], "a silent cut is the bug"
         settle = (
             (
                 await s.execute(
@@ -151,7 +160,7 @@ async def test_write_verified_deliverable_truncates_summary_in_event() -> None:
             .scalars()
             .one()
         )
-        assert len(settle.payload["summary"]) == 500
+        assert "truncated" in settle.payload["summary"]
 
 
 @pytest.fixture

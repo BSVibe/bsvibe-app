@@ -40,7 +40,41 @@ from backend.workflow.infrastructure.db import (
 
 logger = structlog.get_logger(__name__)
 
-_SETTLE_SUMMARY_CAP = 500
+#: How much of a deliverable summary is kept. The cap exists to bound row size,
+#: but it must clear a REAL artifact: at 500 the M5 weekly report was cut mid
+#: number — ``현금 $922,010`` became ``현금 $922,0`` — manufacturing a plausible
+#: wrong figure and silently dropping the anomaly warning that followed it
+#: (live 2026-08-10). A financial report is ~700 chars of numbers before any
+#: commentary; outbound delivery chunks long bodies on its own, so a generous
+#: bound costs nothing downstream.
+SETTLE_SUMMARY_CAP = 16_000
+
+#: The truncation notice, per ``workspaces.language`` — a SHORT fixed string in a
+#: static catalog, the same path ``product_tick`` / notification copy use (not the
+#: LLM ``language_directive``). It lands in the founder's telegram, so English
+#: prose leaking into a Korean workspace is a real defect (PR #610). Keep EN + KO
+#: in lockstep; an unknown tag falls back to English.
+_TRUNCATION_NOTICE: dict[str, str] = {
+    "en": "\n\n— [truncated: showing the first {kept} of {total} characters]",
+    "ko": "\n\n— [잘렸어요: 전체 {total}자 중 앞 {kept}자만 표시했어요]",
+}
+
+_TRUNCATION_DEFAULT_LANGUAGE = "en"
+
+
+def capped_summary(summary: str, language: str | None = None) -> str:
+    """``summary`` bounded by :data:`SETTLE_SUMMARY_CAP`, ANNOUNCING any cut.
+
+    A silent cut is the bug: the reader cannot tell a truncated number from a
+    real one. When the text fits (the normal case) it is returned untouched.
+    """
+    if len(summary) <= SETTLE_SUMMARY_CAP:
+        return summary
+    from backend.identity.output_language import current_output_language  # noqa: PLC0415
+
+    tag = (language or current_output_language() or _TRUNCATION_DEFAULT_LANGUAGE).strip()
+    notice = _TRUNCATION_NOTICE.get(tag, _TRUNCATION_NOTICE[_TRUNCATION_DEFAULT_LANGUAGE])
+    return summary[:SETTLE_SUMMARY_CAP] + notice.format(kept=SETTLE_SUMMARY_CAP, total=len(summary))
 
 
 #: Prefixes that mark the deterministic verification line in a composed summary
@@ -140,7 +174,7 @@ async def write_verified_deliverable(
     3. a ``settle`` :class:`ExecutionRunActivity` carrying the run's stable
        clustering context (intent/product) + ``verified: True``.
 
-    The summary is truncated to :data:`_SETTLE_SUMMARY_CAP` chars in the deliver
+    The summary is bounded by :data:`SETTLE_SUMMARY_CAP` (announcing any cut) in the deliver
     event + settle payloads (matching the native path); the Deliverable itself
     keeps the full summary.
     """
@@ -185,7 +219,7 @@ async def write_verified_deliverable(
             run_id=run.id,
             deliverable_id=deliverable.id,
             artifact_type=DeliverableType.CODE.value,
-            payload={"artifact_refs": artifact_refs, "summary": summary[:_SETTLE_SUMMARY_CAP]},
+            payload={"artifact_refs": artifact_refs, "summary": capped_summary(summary)},
         ),
         producer_id="workflow:verified_deliverable",
     )
@@ -195,7 +229,7 @@ async def write_verified_deliverable(
         "attempt_id": str(attempt_id),
         "verified": True,
         "artifact_refs": artifact_refs,
-        "summary": summary[:_SETTLE_SUMMARY_CAP],
+        "summary": capped_summary(summary),
         **await settle_run_context(session, run),
     }
     # v2 — the knowledge the WORKING agent declared (retrospective-style). Rides
@@ -328,7 +362,7 @@ async def write_partial_deliverable(
     payload: dict[str, Any] = {
         "kind": PARTIAL_DELIVERABLE_KIND,
         "artifact_type": artifact_type,
-        "summary": summary[:_SETTLE_SUMMARY_CAP],
+        "summary": capped_summary(summary),
     }
     if external_ref:
         payload["external_ref"] = external_ref
@@ -441,7 +475,7 @@ async def write_answer_deliverable(
             artifact_type=DeliverableType.DIRECT_OUTPUT.value,
             payload={
                 "kind": ANSWER_DELIVERABLE_KIND,
-                "answer": answer[:_SETTLE_SUMMARY_CAP],
+                "answer": capped_summary(answer),
             },
         ),
         producer_id="workflow:answer_deliverable",
@@ -453,7 +487,7 @@ async def write_answer_deliverable(
         # founder-facing output (B4 trust integrity).
         "verified": False,
         "kind": ANSWER_DELIVERABLE_KIND,
-        "answer": answer[:_SETTLE_SUMMARY_CAP],
+        "answer": capped_summary(answer),
         **await settle_run_context(session, run),
     }
     session.add(
