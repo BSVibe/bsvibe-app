@@ -40,9 +40,16 @@ class _Box:
     runs_in_place = True
     provisions_venv = False
 
-    def __init__(self, *, manifests: dict[str, str], exits: dict[str, int] | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        manifests: dict[str, str],
+        exits: dict[str, int] | None = None,
+        outputs: dict[str, str] | None = None,
+    ) -> None:
         self._manifests = manifests
         self._exits = exits or {}
+        self._outputs = outputs or {}
         self.execs: list[str] = []
 
     @property
@@ -52,7 +59,8 @@ class _Box:
     async def exec(self, command: str, *, timeout_s: float, shell: bool = False) -> SandboxResult:
         self.execs.append(command)
         code = next((c for k, c in self._exits.items() if k in command), 0)
-        return SandboxResult(exit_code=code, stdout="out", stderr="", timed_out=False)
+        out = next((o for k, o in self._outputs.items() if k in command), "out")
+        return SandboxResult(exit_code=code, stdout=out, stderr="", timed_out=False)
 
     async def read_file(self, rel_path: str, max_bytes: int) -> bytes:
         from backend.workflow.infrastructure.sandbox import SandboxError
@@ -74,10 +82,17 @@ class _Llm:
     def __init__(self, content: str) -> None:
         self._content = content
         self.calls = 0
+        self.messages: list[dict[str, str]] = []
 
     async def complete(self, *, messages: Any, tools: Any = None) -> Any:
         self.calls += 1
+        self.messages = list(messages)
         return type("_Turn", (), {"content": self._content})()
+
+    @property
+    def prompt(self) -> str:
+        """The user message the deriver was grounded in."""
+        return "\n".join(str(m.get("content", "")) for m in self.messages)
 
 
 _GATE_JSON = (
@@ -179,7 +194,9 @@ async def test_deriver_failure_never_becomes_a_silent_proof() -> None:
     assert blob is not None
     assert blob["proved"] is False
     assert blob["passed"] is False, "a manifest exists but no gate ran → fail CLOSED"
-    assert box.execs == [], "nothing should have been dispatched"
+    # Read-only git queries ground the deriver; no GATE COMMAND may run once it
+    # has failed — that is what would turn a deriver fault into a verdict.
+    assert all(c.startswith("git ") for c in box.execs), box.execs
 
 
 async def test_gate_result_is_persisted_so_proved_has_visible_evidence() -> None:
@@ -233,3 +250,84 @@ async def test_terminal_proof_state_follows_the_gate(
         assert step.proof_state is ProofState.PROVED
     else:
         assert step.proof_state is not ProofState.PROVED
+
+
+# ---------------------------------------------------------------------------
+# The change set the deriver is grounded in
+# ---------------------------------------------------------------------------
+# Live E2E 2026-08-09 (run ``3fb8873c``): the gate ran on the founder's machine
+# and still proved nothing. It had told the deriver "(no files changed)" —
+# because ``written_paths`` is ALWAYS empty for client_attach (the agent used
+# the CLI's native tools, so the server saw no writes). The deriver honoured
+# that and answered ``applicable=false``: nothing to verify. But "the server
+# cannot SEE what changed" is not "nothing changed", and asserting the latter is
+# a falsehood the gate then reasons from. The founder's tree knows the truth —
+# ask git, on that machine, through the same box the gate already uses.
+
+
+async def test_baseline_is_the_head_before_the_agent_acts() -> None:
+    from backend.workflow.application.inplace_gate import capture_inplace_baseline
+
+    box = _Box(manifests={}, outputs={"git rev-parse HEAD": "abc123def\n"})
+    assert await capture_inplace_baseline(box) == "abc123def"
+
+
+async def test_baseline_is_none_when_the_tree_is_not_a_git_repo() -> None:
+    """No baseline is honest — never a fabricated one."""
+    from backend.workflow.application.inplace_gate import capture_inplace_baseline
+
+    box = _Box(manifests={}, exits={"git rev-parse": 128})
+    assert await capture_inplace_baseline(box) is None
+
+
+async def test_deriver_is_grounded_in_what_git_says_changed() -> None:
+    """Committed-since-baseline AND still-uncommitted paths both reach the deriver."""
+    from backend.workflow.application.inplace_gate import run_inplace_gate
+
+    box = _Box(
+        manifests={"pyproject.toml": "[project]\nname='x'\n"},
+        outputs={
+            "git diff --name-only": "src/pkg/delivery.py\ntests/test_delivery.py\n",
+            "git status --porcelain": " M src/pkg/report.py\n?? tests/test_new.py\n",
+        },
+    )
+    llm = _Llm(_GATE_JSON)
+    await run_inplace_gate(_service(llm), run=_Run(), box=box, baseline="abc123def")
+
+    for path in (
+        "src/pkg/delivery.py",
+        "tests/test_delivery.py",
+        "src/pkg/report.py",
+        "tests/test_new.py",
+    ):
+        assert path in llm.prompt, f"{path} missing from the deriver's grounding"
+    assert "(no files changed)" not in llm.prompt
+
+
+async def test_renamed_path_is_reported_at_its_new_name() -> None:
+    from backend.workflow.application.inplace_gate import run_inplace_gate
+
+    box = _Box(
+        manifests={"pyproject.toml": "[project]\nname='x'\n"},
+        outputs={"git status --porcelain": "R  src/old.py -> src/new.py\n"},
+    )
+    llm = _Llm(_GATE_JSON)
+    await run_inplace_gate(_service(llm), run=_Run(), box=box, baseline=None)
+
+    assert "src/new.py" in llm.prompt
+    assert "src/old.py" not in llm.prompt
+
+
+async def test_a_run_that_changed_nothing_still_reports_nothing() -> None:
+    """The honesty runs BOTH ways: a no-op run must not acquire a change set it
+    does not have (that would let an idle run collect a PROVED)."""
+    from backend.workflow.application.inplace_gate import run_inplace_gate
+
+    box = _Box(
+        manifests={"pyproject.toml": "[project]\nname='x'\n"},
+        outputs={"git diff --name-only": "\n", "git status --porcelain": "\n"},
+    )
+    llm = _Llm(_GATE_JSON)
+    await run_inplace_gate(_service(llm), run=_Run(), box=box, baseline="abc123def")
+
+    assert "(no files changed)" in llm.prompt

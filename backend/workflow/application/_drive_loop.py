@@ -33,7 +33,7 @@ from backend.workflow.application.audit_events import (
     ToolCall,
     VerifyRun,
 )
-from backend.workflow.application.inplace_gate import run_inplace_gate
+from backend.workflow.application.inplace_gate import capture_inplace_baseline, run_inplace_gate
 from backend.workflow.application.tool_registry import (
     ASK_USER_QUESTION_TOOL,
     MAX_NO_WORK_NUDGES,
@@ -202,6 +202,12 @@ async def drive_loop(  # noqa: PLR0911, PLR0912, PLR0915 — preserved cycle bod
     # the worker, so the server never sees written_paths and holds no copy of the
     # source. Resolved once here; consumed at the "model is done" branch below.
     client_attach = await is_client_attach_run(orch._session, run)
+    # Where the founder's tree stood BEFORE the agent touched it — the only
+    # moment this is knowable, since the agent's own commits then move HEAD. The
+    # in-place gate diffs against it to tell the deriver what actually changed.
+    inplace_baseline = (
+        await capture_inplace_baseline(box) if getattr(box, "runs_in_place", False) else None
+    )
 
     for _cycle in range(orch._max_cycles):
         # Cooperative cancel — stop at the turn boundary if the run was cancelled
@@ -373,7 +379,9 @@ async def drive_loop(  # noqa: PLR0911, PLR0912, PLR0915 — preserved cycle bod
             # the verdict exactly as in the sandbox, so a pass is a real proof.
             # ``None`` = the repo declares no toolchain: legitimately gateless.
             gate = (
-                await run_inplace_gate(orch._verifier(), run=run, box=box)
+                await run_inplace_gate(
+                    orch._verifier(), run=run, box=box, baseline=inplace_baseline
+                )
                 if getattr(box, "runs_in_place", False)
                 else None
             )

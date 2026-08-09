@@ -29,6 +29,7 @@ The ladder, fail-CLOSED at every rung:
 
 from __future__ import annotations
 
+import shlex
 from typing import Any
 
 import structlog
@@ -43,12 +44,83 @@ from backend.workflow.infrastructure.sandbox import SandboxSession
 
 logger = structlog.get_logger(__name__)
 
+#: A git query on the founder's machine — a round trip, not a build.
+_GIT_TIMEOUT_S = 30.0
+
+
+async def capture_inplace_baseline(box: SandboxSession) -> str | None:
+    """The founder tree's ``HEAD`` BEFORE the agent acts, or ``None``.
+
+    Read once at the top of the run: afterwards the agent's own commits have
+    moved ``HEAD``, so there is no way to recover where this run started. A tree
+    that is not a git repo (or a machine that will not answer) yields ``None``,
+    which is the honest reading — never a fabricated baseline.
+    """
+    try:
+        res = await box.exec("git rev-parse HEAD", timeout_s=_GIT_TIMEOUT_S, shell=True)
+    except Exception:  # noqa: BLE001 — an unreachable machine simply has no baseline
+        return None
+    if res.timed_out or res.exit_code != 0:
+        return None
+    head = res.stdout.strip().splitlines()
+    return head[0].strip() if head and head[0].strip() else None
+
+
+def _porcelain_paths(stdout: str) -> set[str]:
+    """Paths out of ``git status --porcelain`` (renames at their NEW name)."""
+    paths: set[str] = set()
+    for line in stdout.splitlines():
+        entry = line[3:].strip() if len(line) > 3 else ""  # noqa: PLR2004 — "XY " status prefix
+        if not entry:
+            continue
+        # "R  old -> new": the new name is the one a gate can check.
+        _, arrow, new = entry.partition(" -> ")
+        paths.add((new if arrow else entry).strip().strip('"'))
+    return paths
+
+
+async def _changed_paths(box: SandboxSession, baseline: str | None) -> list[str]:
+    """What THIS run changed in the founder's tree, as git sees it.
+
+    ``written_paths`` is always empty for a client_attach run — the agent used
+    the CLI's native tools, so the server observed no writes. Passing that empty
+    list to the deriver asserts "nothing changed", which is false: the truth is
+    that the SERVER cannot see. The founder's tree can, so ask it there — commits
+    made since ``baseline`` plus whatever is still uncommitted. Only names cross
+    the wire, never contents, so the privacy contract holds.
+
+    An unanswerable query contributes nothing rather than guessing. That keeps a
+    run which genuinely changed nothing reporting nothing — a no-op must not
+    collect a proof.
+    """
+    paths: set[str] = set()
+    queries = ["git status --porcelain"]
+    if baseline:
+        queries.append(f"git diff --name-only {shlex.quote(baseline)}..HEAD")
+    for query in queries:
+        try:
+            res = await box.exec(query, timeout_s=_GIT_TIMEOUT_S, shell=True)
+        except Exception as exc:  # noqa: BLE001 — a failed probe adds nothing, never a guess
+            # Logged, never silent: an unseen probe failure reads downstream as
+            # "this run changed nothing", which is the same costume a wiring
+            # break wore in the 2026-08-09 E2E.
+            logger.info("inplace_changed_paths_probe_failed", query=query, error=str(exc))
+            continue
+        if res.timed_out or res.exit_code != 0:
+            continue
+        if query.startswith("git status"):
+            paths |= _porcelain_paths(res.stdout)
+        else:
+            paths |= {line.strip() for line in res.stdout.splitlines() if line.strip()}
+    return sorted(paths)
+
 
 async def run_inplace_gate(
     service: VerificationService,
     *,
     run: Any,
     box: SandboxSession,
+    baseline: str | None = None,
 ) -> dict[str, Any] | None:
     """Derive and run this repo's verification gate on the founder's machine.
 
@@ -74,7 +146,8 @@ async def run_inplace_gate(
 
     payload = run.payload or {}
     intent = str(payload.get("intent_text") or payload.get("text") or "").strip()
-    gate = await service._author_derived_gate(intent, manifests, [])
+    changed = await _changed_paths(box, baseline)
+    gate = await service._author_derived_gate(intent, manifests, changed)
 
     if isinstance(gate, DerivedGateFailed):
         # A manifest EXISTS, so a gate was expected here and we could not produce
@@ -195,4 +268,4 @@ async def _persist(
     )
 
 
-__all__ = ["run_inplace_gate"]
+__all__ = ["capture_inplace_baseline", "run_inplace_gate"]
