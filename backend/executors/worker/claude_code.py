@@ -160,7 +160,11 @@ _NATIVE_TOOLS: str = " ".join(
 
 
 def _unsanctioned_abort(
-    event: dict[str, Any], mcp_config: str, allowed_tools: list[str] | None
+    event: dict[str, Any],
+    mcp_config: str,
+    allowed_tools: list[str] | None,
+    *,
+    native_tools: bool = False,
 ) -> ExecutionChunk | None:
     """Terminal chunk when the CLI's exposed tool set is not EXACTLY the one we sanctioned.
 
@@ -173,10 +177,15 @@ def _unsanctioned_abort(
       raced its own MCP connect, the model got zero tools, invented `<invoke name="glob">` in
       prose, and answered "The directory appears to be empty" — reported as success. A loud
       abort beats a confident lie.
+
+    ``native_tools`` (#692 parity) relaxes ONLY the excess half: this run acts on the founder's
+    own tree with the CLI's own hands, so those hands are expected rather than leaked. The
+    absence half is never relaxed — it is the half that catches the confident lie, and it
+    applies to whatever platform tools BSVibe did sanction.
     """
     if not mcp_config:
         return None
-    problem = _exposed_tools_are_ours(event, allowed_tools or [])
+    problem = _exposed_tools_are_ours(event, allowed_tools or [], native_tools=native_tools)
     if not problem:
         return None
     logger.error("claude_code_unsanctioned_tools", problem=problem)
@@ -189,8 +198,17 @@ def _unsanctioned_abort(
     )
 
 
-def _exposed_tools_are_ours(event: dict[str, Any], allowed: list[str]) -> str | None:
-    """The CLI's ``system/init`` announces the tools it exposed. It must be EXACTLY our set.
+def _exposed_tools_are_ours(
+    event: dict[str, Any], allowed: list[str], *, native_tools: bool = False
+) -> str | None:
+    """The CLI's ``system/init`` announces the tools it exposed. Check it against the contract.
+
+    Two contracts, one per execution shape:
+
+    * exclusive (default) — exposed must be EXACTLY our set. The agent reaches run state only
+      through BSVibe's tools; anything else is hands we did not sanction.
+    * additive (``native_tools``) — our sanctioned tools must all be PRESENT; the CLI's own
+      tools alongside them are the point, not a leak.
 
     Returns a description of the mismatch, or ``None`` when the exposure is clean.
     """
@@ -198,7 +216,7 @@ def _exposed_tools_are_ours(event: dict[str, Any], allowed: list[str]) -> str | 
         return None
     exposed = {str(t) for t in (event.get("tools") or [])}
     sanctioned = set(allowed)
-    leaked = sorted(exposed - sanctioned)
+    leaked = [] if native_tools else sorted(exposed - sanctioned)
     missing = sorted(sanctioned - exposed)
     problems: list[str] = []
     if leaked:
@@ -260,6 +278,12 @@ class ClaudeCodeExecutor:
         # names we sanction. Absent → the pre-redesign agentic shape.
         mcp_config = str(context.get("mcp_config") or "")
         allowed_tools = [str(t) for t in (context.get("allowed_tools") or [])]
+        # #692 parity — may the CLI KEEP its own tools alongside BSVibe's? An
+        # execution instruction, not product state: the server decides where this
+        # run acts, the worker only obeys. Absent → False = today's exclusive
+        # shape, so an older backend's task never silently gains the founder's
+        # filesystem.
+        native_tools = context.get("native_tools", False) is True
         attempts_remaining = self._rate_limit_retries
         deadline = asyncio.get_event_loop().time() + self._total_timeout
         while True:
@@ -277,6 +301,7 @@ class ClaudeCodeExecutor:
                     agentic,
                     mcp_config,
                     allowed_tools,
+                    native_tools,
                 ):
                     if chunk.delta:
                         had_delta = True
@@ -321,6 +346,7 @@ class ClaudeCodeExecutor:
         agentic: bool = True,
         mcp_config: str = "",
         allowed_tools: list[str] | None = None,
+        native_tools: bool = False,
     ) -> list[str]:
         # An AGENT RUN inherits the host operator's harness (CLAUDE.md / skills /
         # memory) by design — but the agent's native file writes must stay inside
@@ -342,7 +368,28 @@ class ClaudeCodeExecutor:
             "stream-json",
             "--verbose",
         ]
-        if agentic and mcp_config:
+        if agentic and mcp_config and native_tools:
+            # #692 parity — the WORKSPACE half stays with the CLI's own hands (this run acts
+            # in place, on the founder's tree), while BSVibe still serves the PLATFORM half
+            # over MCP: knowledge, asking the founder, emitting a deliverable. Those are the
+            # server's to offer wherever the source lives, and withholding them is what left
+            # such a run unable to deliver anything at all.
+            #
+            # ``--strict-mcp-config`` still applies: only OUR server, never the host
+            # operator's. No ``--disallowedTools`` — taking the natives away here would
+            # remove the very hands this run works with.
+            cmd_args += [
+                "--strict-mcp-config",
+                "--mcp-config",
+                mcp_config,
+                "--allowedTools",
+                " ".join(allowed_tools or ()),
+                "--permission-mode",
+                "acceptEdits",
+                "--settings",
+                _CONFINED_SETTINGS,
+            ]
+        elif agentic and mcp_config:
             # T2b-4 — the agent acts ONLY through BSVibe's tools: the run's server-side
             # worktree and sandbox, reached over MCP with a run-scoped token. Its own local
             # tools are taken away, so there is no temp dir to invent code in, nothing for the
@@ -390,8 +437,9 @@ class ClaudeCodeExecutor:
         agentic: bool = True,
         mcp_config: str = "",
         allowed_tools: list[str] | None = None,
+        native_tools: bool = False,
     ) -> AsyncIterator[ExecutionChunk]:
-        cmd_args = self._build_cmd(system, model, agentic, mcp_config, allowed_tools)
+        cmd_args = self._build_cmd(system, model, agentic, mcp_config, allowed_tools, native_tools)
         # Inject a worker-managed OAuth bearer so a launchd-spawned claude (which
         # can't read the Keychain) authenticates instead of falling back to a
         # stale on-disk token → 401. Soft-fail + off the event loop (the helper
@@ -433,7 +481,9 @@ class ClaudeCodeExecutor:
                     # exposed. A tool we did not sanction means the agent has hands we never
                     # gave it (a new built-in in a CLI upgrade, say) and could reach the
                     # user's filesystem. Stop it, do not merely report it.
-                    abort = _unsanctioned_abort(parsed, mcp_config, allowed_tools)
+                    abort = _unsanctioned_abort(
+                        parsed, mcp_config, allowed_tools, native_tools=native_tools
+                    )
                     if abort is not None:
                         _kill_process_group(process)
                         yield abort
