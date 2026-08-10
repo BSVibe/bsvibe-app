@@ -131,6 +131,12 @@ services:
       BSVIBE_SANDBOX_USER: ${BSVIBE_SANDBOX_USER:-}
       BSVIBE_SANDBOX_TEST_DB_ENABLED: ${BSVIBE_SANDBOX_TEST_DB_ENABLED:-false}
       BSVIBE_SANDBOX_TEST_DB_SETUP_CMD: ${BSVIBE_SANDBOX_TEST_DB_SETUP_CMD:-}
+      # Which docker daemon the DISPOSABLE verification environment targets.
+      # Unpinned, it is stood up on whichever daemon the host's global context
+      # points at and torn down against whichever it points at later — the
+      # container leaks and "reclaiming the slot reclaims the stack" stops
+      # holding. Empty is legitimate only on a single-daemon host.
+      BSVIBE_VERIFY_DOCKER_CONTEXT: ${BSVIBE_VERIFY_DOCKER_CONTEXT:-}
     volumes:
       - appdata:/app/var
 
@@ -192,6 +198,12 @@ services:
       BSVIBE_SANDBOX_USER: ${BSVIBE_SANDBOX_USER:-}
       BSVIBE_SANDBOX_TEST_DB_ENABLED: ${BSVIBE_SANDBOX_TEST_DB_ENABLED:-false}
       BSVIBE_SANDBOX_TEST_DB_SETUP_CMD: ${BSVIBE_SANDBOX_TEST_DB_SETUP_CMD:-}
+      # Which docker daemon the DISPOSABLE verification environment targets.
+      # Unpinned, it is stood up on whichever daemon the host's global context
+      # points at and torn down against whichever it points at later — the
+      # container leaks and "reclaiming the slot reclaims the stack" stops
+      # holding. Empty is legitimate only on a single-daemon host.
+      BSVIBE_VERIFY_DOCKER_CONTEXT: ${BSVIBE_VERIFY_DOCKER_CONTEXT:-}
     volumes:
       - appdata:/app/var
 
