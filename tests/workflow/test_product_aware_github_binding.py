@@ -77,6 +77,7 @@ async def _seed_product(
     workspace_id: uuid.UUID,
     repo_url: str | None,
     slug: str = "p",
+    metadata: dict[str, object] | None = None,
 ) -> uuid.UUID:
     await _seed_workspace(session, workspace_id)
     product_id = uuid.uuid4()
@@ -87,6 +88,7 @@ async def _seed_product(
             name=slug,
             slug=slug,
             repo_url=repo_url,
+            product_metadata=metadata or {},
         )
     )
     await session.commit()
@@ -631,3 +633,54 @@ class TestConnectorIsCredentialNotRepo:
             await _seed_binding(s, workspace_id=ws, repo=None)
             binding = await resolve_github_binding(s, workspace_id=ws)
         assert binding is None
+
+
+# ── client_attach has no server-side worktree to deliver FROM ───────────────
+# Live 2026-08-10: approving a client_attach run's deliverable resolved a github
+# binding (the product owns a repo and the workspace has a credential, #684) and
+# ``deliver_github`` tried to commit the run's checkout — which does not exist,
+# because that model never clones to the server. It died with
+#     GitError: git add -A failed: fatal: not a git repository
+# and, since the github call sits OUTSIDE the per-binding try, the exception took
+# the whole dispatch down with it: the telegram binding was never even reached.
+
+
+async def test_client_attach_product_resolves_no_github_target(sf) -> None:
+    """The source lives ONLY on the founder's machine (§3.5 privacy contract), so
+    there is nothing server-side to commit and push. ``None`` is the honest
+    answer — the same safe outcome as "no credential"."""
+    async with sf() as session:
+        workspace_id = uuid.uuid4()
+        product_id = await _seed_product(
+            session,
+            workspace_id=workspace_id,
+            repo_url="https://github.com/blas1n/BStockReport",
+            metadata={"execution_target": "client_attach"},
+        )
+        await _seed_binding(session, workspace_id=workspace_id, repo=None)
+
+        got = await resolve_github_binding(
+            session, workspace_id=workspace_id, product_id=product_id
+        )
+
+        assert got is None
+
+
+async def test_server_sandbox_product_still_resolves_its_repo(sf) -> None:
+    """The default model is untouched — it DOES have a checkout to deliver from."""
+    async with sf() as session:
+        workspace_id = uuid.uuid4()
+        product_id = await _seed_product(
+            session,
+            workspace_id=workspace_id,
+            repo_url="https://github.com/blas1n/BStockReport",
+            metadata={"execution_target": "server_sandbox"},
+        )
+        await _seed_binding(session, workspace_id=workspace_id, repo=None)
+
+        got = await resolve_github_binding(
+            session, workspace_id=workspace_id, product_id=product_id
+        )
+
+        assert got is not None
+        assert got.repo == "blas1n/BStockReport"
