@@ -728,6 +728,10 @@ class TestExecutorAdapterChat:
         allowed = entry["allowed_tools"].split()
         assert allowed == [
             "mcp__bsvibe__bsvibe_work_knowledge_search",
+            # Declaring a verification contract is a statement to BSVibe, not a
+            # mutation of the working tree — the two execution models must not
+            # differ on what verification MEANS, only on where commands run.
+            "mcp__bsvibe__bsvibe_work_declare_verification",
             "mcp__bsvibe__bsvibe_work_ask_user_question",
             "mcp__bsvibe__bsvibe_work_emit_deliverable",
         ]

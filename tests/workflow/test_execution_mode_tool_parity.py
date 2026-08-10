@@ -38,16 +38,18 @@ def test_platform_axis_is_what_the_server_offers_regardless_of_where_source_live
 
     assert set(PLATFORM_TOOL_MCP_NAMES) == {
         "bsvibe_work_knowledge_search",
+        "bsvibe_work_declare_verification",
         "bsvibe_work_ask_user_question",
         "bsvibe_work_emit_deliverable",
     }
 
 
 def test_workspace_axis_is_what_touching_the_working_tree_needs() -> None:
-    """``declare_verification`` sits here on purpose: declaring a contract
-    presumes a server-side worktree to run it against. client_attach has a
-    STRONGER replacement — the in-place derived gate (#705), whose verdict is a
-    real exit code on the founder's machine."""
+    """Only the tools that MUTATE / READ the working tree. ``declare_verification``
+    was here once, on the premise that a declared contract needs a server-side
+    worktree — false, since the in-place gate runs the repo's own commands on the
+    founder's machine through the same abstraction. It is a declaration to
+    BSVibe, so it belongs to the platform axis."""
     from backend.workflow.application.tool_registry import WORKSPACE_TOOL_MCP_NAMES
 
     assert set(WORKSPACE_TOOL_MCP_NAMES) == {
@@ -56,7 +58,6 @@ def test_workspace_axis_is_what_touching_the_working_tree_needs() -> None:
         "bsvibe_work_file_write",
         "bsvibe_work_file_edit",
         "bsvibe_work_shell_exec",
-        "bsvibe_work_declare_verification",
     }
 
 
