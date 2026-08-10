@@ -130,6 +130,17 @@ class WorkspaceRow(WorkspacesBase):
     timezone: Mapped[str] = mapped_column(
         String(64), nullable=False, default="UTC", server_default="UTC"
     )
+    # How many disposable full-surface verification stacks this workspace may
+    # run at once. A stack is the product's WHOLE deployment stood up on the
+    # founder's machine, so the bound is a disk-safety limit — but it lives
+    # here, per workspace, rather than as a server constant because it is a
+    # PLAN TIER ("N concurrent verifications"), not an implementation detail.
+    # Default 1: one stack at a time is the safe answer on a single machine.
+    # Held via a session-scoped advisory lock, so a dead holder frees its slot
+    # (see ``backend.workflow.infrastructure.verify_slots``).
+    verify_stack_slots: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default="1"
+    )
     # Lift E1 — workspace-default ModelAccount fallback for the new
     # :class:`backend.dispatch.resolver.ModelAccountResolver`. The founder
     # picks this through Settings → Models or the MCP tool

@@ -124,8 +124,11 @@ def test_alembic_head_is_connector_last_import():
     # ``expires_at`` drops NOT NULL so a never-expiring token can exist).
     # oauth_token_nullable_expiry -> oauth_device_codes (RFC 8628 device grant —
     # pending device authorizations; additive table).
+    # oauth_device_codes -> workspace_verify_slots (``workspaces.verify_stack_slots``
+    # — how many disposable verification stacks a workspace may run at once; a
+    # plan tier, not a server constant).
     # NOTE revision ids are capped at 32 chars by ``alembic_version.version_num``.
-    assert "oauth_device_codes" in result.stdout
+    assert "workspace_verify_slots" in result.stdout
 
 
 def test_target_metadata_covers_all_bases():
