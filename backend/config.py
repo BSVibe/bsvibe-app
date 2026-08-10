@@ -150,6 +150,13 @@ class Settings(BaseSettings):
     # suite runs to completion instead of a false timeout-fail.
     verify_command_timeout_s: float = 300.0
     verify_gate_command_timeout_s: float = 900.0
+    # Standing a DISPOSABLE verification stack up is not a gate command: a cold
+    # image build is minutes, and charging it to the per-command budget above
+    # would turn a slow build into a false verification FAILURE. Its own budget,
+    # and exceeding it is recorded as an infrastructure failure (fail-closed) —
+    # "could not stand the stack up" and "stood it up and the probe failed" are
+    # different facts.
+    verify_stack_boot_timeout_s: float = 1800.0
 
     # Sandbox settings (backend.workflow.infrastructure.sandbox)
     sandbox_enabled: bool = False
