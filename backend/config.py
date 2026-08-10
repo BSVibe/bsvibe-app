@@ -157,6 +157,13 @@ class Settings(BaseSettings):
     # "could not stand the stack up" and "stood it up and the probe failed" are
     # different facts.
     verify_stack_boot_timeout_s: float = 1800.0
+    # Which docker daemon the verification stack targets. ``docker``'s target is
+    # GLOBAL MUTABLE state — starting another colima profile flips the current
+    # context and every unpinned call afterwards talks to the wrong VM. Left
+    # empty on a single-daemon host; set to the context name (e.g. "colima")
+    # wherever more than one daemon exists, which is the case on the founder's
+    # machine today.
+    verify_docker_context: str = ""
 
     # Sandbox settings (backend.workflow.infrastructure.sandbox)
     sandbox_enabled: bool = False
