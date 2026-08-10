@@ -415,3 +415,127 @@ async def test_only_a_real_command_failure_is_fed_back_to_the_agent(
     from backend.workflow.application.inplace_gate import gate_failure_is_actionable
 
     assert gate_failure_is_actionable(gate) is actionable, why
+
+
+# ── #730 follow-on: the checks run INSIDE the disposable environment ─────────
+
+
+class _Env:
+    """A stand-in :class:`CheckEnvironment` — either a way in, or a reason."""
+
+    def __init__(self, *, box: Any, kind: str, unavailable: str | None = None) -> None:
+        self.box = box
+        self.kind = kind
+        self.unavailable = unavailable
+
+    def describe(self) -> dict[str, Any]:
+        return {"kind": self.kind}
+
+
+class _WrappedBox(_Box):
+    """The environment's box: marks whatever it was asked to run."""
+
+    async def exec(self, command: str, *, timeout_s: float, shell: bool = False) -> SandboxResult:
+        return await super().exec(f"IN-ENV {command}", timeout_s=timeout_s, shell=shell)
+
+
+async def test_checks_run_in_the_environment_and_git_stays_on_the_founders_machine() -> None:
+    """Only the CHECKS need isolating. The git queries that ground the deriver
+    are about the source under test and must keep answering from the founder's
+    tree — a container built from a declared toolchain has no reason to carry
+    git, and a silent 127 there would tell the deriver "nothing changed"."""
+    from backend.workflow.application.inplace_gate import run_inplace_gate
+
+    box = _Box(manifests={"pyproject.toml": "x"})
+    env_box = _WrappedBox(manifests={"pyproject.toml": "x"})
+    blob = await run_inplace_gate(
+        _service(_Llm(_GATE_JSON)),
+        run=_Run(),
+        box=box,
+        environment=_Env(box=env_box, kind="container"),
+    )
+
+    assert blob is not None
+    assert blob["proved"] is True
+    assert any("IN-ENV" in c and "pytest" in c for c in env_box.execs), env_box.execs
+    assert all(c.startswith("git ") for c in box.execs), (
+        f"only read-only git queries may touch the founder's machine: {box.execs}"
+    )
+
+
+async def test_the_blob_records_which_environment_ran_the_checks() -> None:
+    """The environment is a FIELD of the check, not a separate proof state
+    (design §3.1). Without it, two results that mean different things read
+    identically on the proof surface."""
+    from backend.workflow.application.inplace_gate import run_inplace_gate
+
+    env_box = _WrappedBox(manifests={"pyproject.toml": "x"})
+    blob = await run_inplace_gate(
+        _service(_Llm(_GATE_JSON)),
+        run=_Run(),
+        box=_Box(manifests={"pyproject.toml": "x"}),
+        environment=_Env(box=env_box, kind="container"),
+    )
+
+    assert blob is not None
+    assert blob["environment"] == {"kind": "container"}
+
+
+async def test_an_unavailable_environment_fails_closed_and_runs_nothing() -> None:
+    """ "Could not stand the environment up" and "stood it up and the check
+    failed" are different facts. Running the checks on the host instead would
+    answer a different question than the report claims was answered — and it is
+    not the agent's to fix, so it must not be fed back as if it were."""
+    from backend.workflow.application.inplace_gate import (
+        gate_failure_is_actionable,
+        run_inplace_gate,
+    )
+
+    box = _Box(manifests={"pyproject.toml": "x"})
+    llm = _Llm(_GATE_JSON)
+    blob = await run_inplace_gate(
+        _service(llm),
+        run=_Run(),
+        box=box,
+        environment=_Env(box=None, kind="unavailable", unavailable="no slot free"),
+    )
+
+    assert blob is not None
+    assert blob["passed"] is False
+    assert blob["proved"] is False
+    assert "no slot free" in blob["environment_unavailable"]
+    assert box.execs == [], "no command may run when there is nowhere honest to run it"
+    assert llm.calls == 0, "deriving a gate nobody can run only burns a model call"
+    assert gate_failure_is_actionable(blob) is False, "infrastructure is not the agent's to fix"
+
+
+class _ProvisioningBox(_WrappedBox):
+    """A disposable container: nothing installed yet, and it says so."""
+
+    provisions_venv = True
+
+    @property
+    def workspace_mount(self) -> str:
+        return "/work"
+
+
+async def test_a_fresh_environment_gets_the_projects_toolchain_on_path() -> None:
+    """A container starts with nothing installed. Without provisioning, every
+    derived command that is not ``uv run …`` exits 127 → recorded "unavailable"
+    → nothing proven: the isolation would have quietly cost us the proof it was
+    supposed to make trustworthy. The RECORDED command stays the clean one."""
+    from backend.workflow.application.inplace_gate import run_inplace_gate
+
+    env_box = _ProvisioningBox(manifests={"pyproject.toml": "x", "uv.lock": "lock"})
+    blob = await run_inplace_gate(
+        _service(_Llm(_GATE_JSON)),
+        run=_Run(),
+        box=_Box(manifests={"pyproject.toml": "x"}),
+        environment=_Env(box=env_box, kind="container"),
+    )
+
+    assert blob is not None
+    assert any("uv sync" in c for c in env_box.execs), env_box.execs
+    ran = next(c for c in env_box.execs if "pytest" in c)
+    assert "/work/.venv/bin:$PATH" in ran, ran
+    assert blob["commands"][0]["command"] == "uv run pytest -q", "the record stays the declaration"

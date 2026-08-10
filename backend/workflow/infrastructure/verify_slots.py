@@ -164,6 +164,39 @@ async def acquire_verify_slot(
         logger.debug("verify_slot_released", slot=held)
 
 
+@asynccontextmanager
+async def open_slot_session() -> AsyncIterator[AsyncSession]:
+    """A session whose CONNECTION exists only to hold a slot lock.
+
+    Three properties, none optional:
+
+    * **Its own connection.** ``pg_advisory_lock`` is session-scoped — scoped to
+      the postgres backend, i.e. the connection. The run's own session commits
+      repeatedly through verification (deliberately: #632/#686 — nothing may be
+      held across the long external steps), and each commit returns its
+      connection to the pool. A lock taken there would drift onto a connection
+      someone else may be using, and the unlock would land somewhere else again.
+    * **AUTOCOMMIT.** No transaction ever opens, so postgres'
+      ``idle_in_transaction_session_timeout`` (120s) has nothing to kill while
+      the stack takes its minutes. Being killed there would release the slot
+      MID-verification and let the next acquirer tear the live stack down.
+    * **Disposed on exit.** Closing the connection frees the lock even if the
+      unlock statement never runs — which is the property the whole design rests
+      on: a dead run's slot comes back without a reaper.
+    """
+    from backend.config import get_settings  # noqa: PLC0415
+    from backend.data.engine import create_app_engine  # noqa: PLC0415
+
+    engine = create_app_engine(get_settings().database_url)
+    try:
+        async with engine.connect() as conn:
+            await conn.execution_options(isolation_level="AUTOCOMMIT")
+            async with AsyncSession(bind=conn) as session:
+                yield session
+    finally:
+        await engine.dispose()
+
+
 async def load_workspace_verify_slots(session: AsyncSession, workspace_id: uuid.UUID) -> int:
     """The workspace's concurrent-verification budget (``workspaces.verify_stack_slots``).
 
@@ -190,6 +223,7 @@ __all__ = [
     "VerifySlot",
     "acquire_verify_slot",
     "load_workspace_verify_slots",
+    "open_slot_session",
     "verify_project_name",
     "verify_slot_key",
 ]
