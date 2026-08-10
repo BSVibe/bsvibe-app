@@ -1,0 +1,55 @@
+# Disposable FULL-SURFACE verification stack — isolation overlay.
+#
+# A run's changes are verified by standing the whole product up and driving its
+# real user surfaces, BEFORE the change merges. (Verifying after merge+deploy is
+# too late: prod is already contaminated, and there is nothing left for the
+# founder to approve. See ~/Docs/BSVibe_Production_Verification_Design.md §3.3.)
+#
+# That stack comes up on the SAME machine that runs production, so isolation is
+# not a nicety — an un-neutralised collision takes prod down. This overlay
+# neutralises all three collision vectors in `compose.yaml`:
+#
+#   1. published host ports  → `!reset []`. The verify stack publishes NOTHING.
+#      Probes reach it over the compose network (the project's own bridge), so
+#      there is no host binding to fight prod's 5442/6387/8700/3700 over.
+#   2. `container_name`      → `!reset`. `-p <project>` does NOT scope a pinned
+#      container name; a second stack collides with the container prod is
+#      running right now. (This exact collision has already taken the stack
+#      down once.)
+#   3. shared image tag      → a distinct tag. `bsvibe-sandbox-dind:latest` is
+#      global to the daemon: building it from a feature branch silently
+#      repoints what prod recreates from. Contamination through the image
+#      store rather than the network.
+#
+# Usage — always with a per-run project name, and always tear down:
+#
+#   P=verify-$RUN_ID
+#   docker compose -p "$P" -f deploy/compose.yaml -f deploy/compose.verify.yaml up -d
+#   ...run the surface probes against the stack, on the compose network...
+#   docker compose -p "$P" -f deploy/compose.yaml -f deploy/compose.verify.yaml down -v
+#
+# `down -v` is mandatory and belongs in a `finally`: named volumes are
+# project-scoped (so they do not collide) but they DO accumulate, and a full
+# disk on this Mac Mini is an unrecoverable brick.
+#
+# `!reset` requires Compose v2.24+ — already relied on by `compose.prod.yaml`.
+
+services:
+  postgres:
+    ports: !reset []
+
+  redis:
+    ports: !reset []
+
+  backend:
+    ports: !reset []
+
+  pwa:
+    ports: !reset []
+
+  sandbox-dind:
+    # `-p` cannot scope this; without the reset the verify stack fights prod's
+    # running `bsvibe-sandbox-dind` for the name.
+    container_name: !reset null
+    # Never build over the tag prod recreates from.
+    image: bsvibe-sandbox-dind:verify
