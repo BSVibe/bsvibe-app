@@ -80,13 +80,35 @@ _TOOLCHAIN_IMAGES: tuple[tuple[tuple[str, ...], str], ...] = (
     (("Cargo.toml",), "rust:1-bookworm"),
 )
 
-#: Never copied into the container. These hold HOST-platform binaries: a macOS
-#: ``.venv`` or ``node_modules`` inside a Linux container is an environment that
-#: looks provisioned and is broken — the exact class of confusing result the
-#: container exists to remove. Nested copies (monorepo ``apps/*/node_modules``)
-#: are excluded too, so the glob form is required and must stay QUOTED: the copy
-#: runs with the workspace as its cwd, where an unquoted ``*/`` would expand.
-_UNCOPYABLE = ("./.venv", "*/.venv", "./node_modules", "*/node_modules")
+#: Never copied into the container — the two kinds of AMBIENT HOST STATE that
+#: decide a check's outcome for reasons having nothing to do with the change.
+#:
+#: * ``.venv`` / ``node_modules`` hold HOST-platform binaries: a macOS venv
+#:   inside a Linux container is an environment that looks provisioned and is
+#:   broken.
+#: * ``.env`` is the founder's real configuration, and it is auto-loaded by the
+#:   conventional toolchains (python-dotenv, pydantic-settings, node). Measured
+#:   2026-08-10: BStockReport's suite FAILS on the founder's machine and inside
+#:   a container that carries their ``.env`` (a config test reads a real Alpaca
+#:   key where it expects a default), and passes 148/148 without it. It is also
+#:   the credential surface — a check that reaches a real key can send a real
+#:   order or a real message. A product whose checks genuinely need host
+#:   configuration declares that (``verify_stack: null``); it must not arrive by
+#:   accident. Only the dotenv DEFAULT is filtered — a repo that loads
+#:   ``.env.prod`` by name is declaring something else, and ``.env.example`` is
+#:   meant to travel.
+#:
+#: Nested copies (monorepo ``apps/*/node_modules``) are excluded too, so the
+#: glob form is required and must stay QUOTED: the copy runs with the workspace
+#: as its cwd, where an unquoted ``*/`` would expand.
+_UNCOPYABLE = (
+    "./.venv",
+    "*/.venv",
+    "./node_modules",
+    "*/node_modules",
+    "./.env",
+    "*/.env",
+)
 
 #: A command template's remaining placeholder after the project is bound.
 _COMMAND_SLOT = "{command}"
@@ -116,6 +138,11 @@ class StackPlan:
     #: to bind. Empty means "where the box already runs it" — true for compose,
     #: whose services ARE the environment and offer no idle box to exec into.
     exec_template: str = ""
+    #: Where the source sits INSIDE this environment. Empty when commands run
+    #: where the box already runs them. Callers that build absolute paths (the
+    #: venv ``PATH`` prefix) need this: a path from the founder's machine means
+    #: nothing inside a container, and silently resolves to nothing.
+    workdir: str = ""
 
     def wrap(self, command: str) -> str:
         """``command``, rewritten to run inside this environment.
@@ -155,6 +182,7 @@ def _from_metadata(raw: Any, project: str, workspace_path: str) -> StackPlan | N
         source="metadata",
         image=image or None,
         exec_template=exec_template,
+        workdir=str(raw.get("workdir") or "").strip(),
     )
 
 
@@ -196,6 +224,7 @@ def _container_plan(*, image: str, project: str, workspace_path: str) -> StackPl
         source="container",
         image=image,
         exec_template=f"docker exec -w {_CONTAINER_WORKDIR} {name} sh -lc {_COMMAND_SLOT}",
+        workdir=_CONTAINER_WORKDIR,
     )
 
 

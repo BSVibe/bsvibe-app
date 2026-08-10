@@ -150,12 +150,27 @@ async def run_inplace_gate(
     run: Any,
     box: SandboxSession,
     baseline: str | None = None,
+    environment: Any = None,
 ) -> dict[str, Any] | None:
     """Derive and run this repo's verification gate on the founder's machine.
 
     Returns the gate blob (``passed`` / ``proved`` / per-command records), or
     ``None`` when the repo declares no toolchain at all — the one case where
     "no gate ran" is not a failure but simply the truth about the repo.
+
+    ``environment`` (a
+    :class:`~backend.workflow.application.verify_environment.CheckEnvironment`)
+    is WHERE the check commands run. Two boxes, deliberately:
+
+    * the CHECKS go through ``environment.box`` — a disposable container, so a
+      pass or a failure is attributable to the change and not to whatever that
+      machine's ``.venv`` drifted into;
+    * the manifest reads and git queries stay on ``box``, the founder's tree.
+      They are about the source under test, and a container built from a
+      declared toolchain has no reason to carry git — a silent ``127`` there
+      would tell the deriver "nothing changed".
+
+    ``None`` keeps the pre-#730 behaviour (everything on ``box``).
 
     The blob is persisted as a :class:`VerificationResult` so a ``PROVED`` run
     has inspectable evidence (what ran, with which exit codes) on the proof
@@ -176,15 +191,42 @@ async def run_inplace_gate(
     # wiring break drained into that verdict wearing its legitimacy: the run
     # reported "this repo has no gate" and raised no alarm. One probe separates
     # them.
-    probe = await _workspace_probe_failure(box)
-    if probe is not None:
+    # Nowhere honest to run the checks. Recorded fail-CLOSED and stopped here:
+    # not the deriver (a gate nobody can run only burns a model call), and
+    # certainly not a quiet fall back to the host, which would answer a
+    # different question than the one this result will be read as answering.
+    if environment is not None and environment.box is None:
         blob: dict[str, Any] = {
             "origin": "derived_in_place",
             "applicable": True,
             "commands": [],
             "passed": False,
             "proved": False,
+            "environment": environment.describe(),
+            "environment_unavailable": str(environment.unavailable),
+        }
+        await _persist(service, run=run, blob=blob, outcome=VerificationOutcome.FAILED)
+        logger.warning(
+            "inplace_gate_environment_unavailable",
+            run_id=str(run.id),
+            reason=str(environment.unavailable),
+        )
+        return blob
+
+    #: Where the CHECKS run. Reads and git queries keep using ``box`` below.
+    check_box: SandboxSession = environment.box if environment is not None else box
+    described = environment.describe() if environment is not None else None
+
+    probe = await _workspace_probe_failure(box)
+    if probe is not None:
+        blob = {
+            "origin": "derived_in_place",
+            "applicable": True,
+            "commands": [],
+            "passed": False,
+            "proved": False,
             "workspace_probe_failed": probe,
+            **({"environment": described} if described is not None else {}),
         }
         await _persist(service, run=run, blob=blob, outcome=VerificationOutcome.FAILED)
         logger.warning("inplace_gate_workspace_unreachable", run_id=str(run.id), error=probe)
@@ -204,7 +246,7 @@ async def run_inplace_gate(
     # was withheld while ``declare_verification`` sat on the workspace axis, on
     # the false premise that a declared contract needs a server-side worktree.
     # It does not: these commands run through the same box the derived gate uses.)
-    declared = await _declared_checks(service, run, box)
+    declared = await _declared_checks(service, run, check_box)
 
     gate = await service._author_derived_gate(intent, manifests, changed)
 
@@ -218,6 +260,7 @@ async def run_inplace_gate(
             "passed": False,
             "proved": False,
             "gate_deriver_failed": gate.reason,
+            **({"environment": described} if described is not None else {}),
         }
         await _persist(service, run=run, blob=blob, outcome=VerificationOutcome.FAILED)
         logger.info("inplace_gate_deriver_failed", run_id=str(run.id), reason=gate.reason)
@@ -233,6 +276,7 @@ async def run_inplace_gate(
             "commands": declared,
             "passed": passed,
             "proved": passed and any(r["status"] == "passed" for r in declared),
+            **({"environment": described} if described is not None else {}),
         }
         await _persist(
             service,
@@ -242,7 +286,7 @@ async def run_inplace_gate(
         )
         return blob
 
-    results = [*declared, *await _run_commands(service, gate=gate, box=box)]
+    results = [*declared, *await _run_commands(service, gate=gate, box=check_box)]
     passed = not any(r["status"] == "failed" for r in results)
     # PROVED needs something to have ACTUALLY run and passed. A gate whose every
     # command was missing from that machine (exit 127) is not a proof.
@@ -253,6 +297,7 @@ async def run_inplace_gate(
         "commands": results,
         "passed": passed,
         "proved": proved,
+        **({"environment": described} if described is not None else {}),
     }
     await _persist(
         service,
@@ -311,18 +356,27 @@ async def _declared_checks(
 async def _run_commands(
     service: VerificationService, *, gate: Any, box: SandboxSession
 ) -> list[dict[str, Any]]:
-    """Run each derived command on the founder's machine; exit code is the verdict.
+    """Run each derived command in the check environment; exit code is the verdict.
 
-    No PATH is prepended: this box does not provision a venv (the founder's own
-    toolchain is already set up — see ``ensure_sandbox_ready``), so the commands
-    run in their own environment, which is the one they are meant to run in.
+    PATH is prepended only when this box PROVISIONS a venv — i.e. a disposable
+    container, which starts with nothing installed. Without it every derived
+    command that is not ``uv run …`` would exit 127 and be recorded
+    "unavailable": the isolation would have quietly cost us the very proof it
+    was meant to make trustworthy. The founder's own box provisions nothing (a
+    ``uv sync`` in their tree is an unasked-for mutation and their toolchain is
+    already set up), so there the commands run bare exactly as before.
     """
     from backend.config import get_settings  # noqa: PLC0415
 
     timeout_s = get_settings().verify_gate_command_timeout_s
+    venv_ready = await service._ensure_project_venv(box)
+    venv_bin = f"{box.workspace_mount}/.venv/bin"
     results: list[dict[str, Any]] = []
     for c in gate.commands:
-        res = await box.exec(c.command, timeout_s=timeout_s, shell=True)
+        # The RECORDED command stays the clean derived one — the PATH prefix is
+        # an execution detail, not part of what was verified.
+        command = f'export PATH="{venv_bin}:$PATH"; {c.command}' if venv_ready else c.command
+        res = await box.exec(command, timeout_s=timeout_s, shell=True)
         if res.exit_code == 0 and not res.timed_out:
             status = "passed"
         elif res.exit_code == 127:

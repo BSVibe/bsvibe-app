@@ -10,9 +10,11 @@ Four properties, none of which a string comparison can reach:
 
 1. the stand-up runs and the source ARRIVES inside the container;
 2. commands wrapped by the plan execute IN THERE (not on the host);
-3. the platform-poisoned dirs (``.venv`` / ``node_modules``) do NOT arrive — a
-   macOS venv inside a Linux container is an environment that looks provisioned
-   and is broken;
+3. the ambient host state (``.venv`` / ``node_modules`` / the founder's real
+   ``.env``) does NOT arrive, while ``.env.example`` — which is meant to travel
+   — does. The exclusion patterns are matched by tar, not by us, so whether
+   ``./.env`` also swallows ``.env.example`` is a question only a real tar can
+   answer;
 4. writing inside the container does NOT touch the founder's tree. Verification
    must not mutate the directory the agent works in.
 
@@ -71,6 +73,8 @@ def _run(command: str) -> subprocess.CompletedProcess[str]:
 def workspace(tmp_path: Path) -> Path:
     """A repo-shaped tree: real source, plus the dirs that must not be copied."""
     (tmp_path / "hello.txt").write_text("from-the-founders-tree\n")
+    (tmp_path / ".env").write_text("ALPACA_API_KEY=PK-real-secret\n")
+    (tmp_path / ".env.example").write_text("ALPACA_API_KEY=\n")
     (tmp_path / "pyproject.toml").write_text("[project]\nname='x'\n")
     (tmp_path / ".venv" / "bin").mkdir(parents=True)
     (tmp_path / ".venv" / "bin" / "python").write_text("#!mach-o-binary\n")
@@ -104,6 +108,17 @@ def test_the_derived_container_really_stands_up_and_runs_the_checks(workspace: P
         assert poisoned.returncode != 0, (
             "host-platform dirs were copied in — a venv of macOS binaries inside "
             f"a Linux container LOOKS provisioned and is broken: {poisoned.stdout}"
+        )
+
+        secrets = _run(plan.wrap("cat .env"))
+        assert secrets.returncode != 0, (
+            "the founder's real .env travelled — it decides check outcomes as "
+            "ambient host state, and it is the credential surface: a check that "
+            "reads that key can place a real order"
+        )
+        template = _run(plan.wrap("cat .env.example"))
+        assert template.returncode == 0, (
+            "excluding ./.env must not swallow .env.example, which is committed and meant to travel"
         )
 
         _run(plan.wrap("touch verification-litter.txt"))

@@ -79,6 +79,22 @@ def test_the_source_is_copied_in_without_the_platform_poisoned_dirs() -> None:
     assert "--exclude=./node_modules" in plan.up
 
 
+def test_the_founders_real_env_file_does_not_travel() -> None:
+    """``.env`` is ambient HOST state and the credential surface at once.
+
+    Measured on BStockReport (2026-08-10): its suite fails on the founder's
+    machine and inside a container carrying their ``.env`` — a config test reads
+    a real Alpaca key where it expects a default — and passes 148/148 without
+    it. The same key would let a check place a real order. A product whose
+    checks genuinely need host configuration DECLARES that; it must not arrive
+    by accident."""
+    plan = derive_stack_plan(repo_files=_CLI_REPO, project="p", workspace_path="/ws")
+
+    assert plan is not None
+    assert "--exclude=./.env" in plan.up
+    assert "'--exclude=*/.env'" in plan.up
+
+
 def test_a_repo_declaring_no_toolchain_has_no_environment() -> None:
     """Nothing declared means nothing to reproduce. ``None`` here is the honest
     answer — not a container built on a guess."""

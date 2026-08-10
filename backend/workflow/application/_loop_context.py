@@ -485,12 +485,25 @@ async def settle_client_attach(
         gate_failure_is_actionable,
         run_inplace_gate,
     )
-
-    gate = (
-        await run_inplace_gate(orch._verifier(), run=run, box=box, baseline=baseline)
-        if getattr(box, "runs_in_place", False)
-        else None
+    from backend.workflow.application.verify_environment import (  # noqa: PLC0415
+        open_run_check_environment,
     )
+
+    gate = None
+    if getattr(box, "runs_in_place", False):
+        # The disposable environment is opened HERE and not inside the gate: it
+        # is scoped to the verification, and holding it around the gate call is
+        # what guarantees it is torn down whichever way that call returns.
+        async with open_run_check_environment(
+            session=orch._session, run=run, box=box
+        ) as environment:
+            gate = await run_inplace_gate(
+                orch._verifier(),
+                run=run,
+                box=box,
+                baseline=baseline,
+                environment=environment,
+            )
     if gate is not None and gate_failure_is_actionable(gate) and cycle + 1 < orch._max_cycles:
         # A real failure on the founder's machine — feed it back and let the
         # agent fix it, exactly as a failed sandbox verdict does. Only a command
