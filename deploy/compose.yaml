@@ -166,3 +166,10 @@ volumes:
   pgdata:
   redisdata:
   dind-storage:
+  # Shared /app/var between worker and sandbox-dind. Declared HERE, not only in
+  # the prod overlay: `compose.yaml` alone with `--profile sandbox` referenced it
+  # (line ~153) without declaring it, so the profile was an invalid project for
+  # anyone not layering compose.prod.yaml — including the local stack the README
+  # documents and the disposable verification stack. `compose.prod.yaml` still
+  # declares it too; an option-free duplicate merges cleanly.
+  appdata:
