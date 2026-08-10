@@ -71,6 +71,12 @@ async def _seed_worker(
     return wid
 
 
+#: Wall-clock budget for the simulated worker to see a dispatched task. Generous
+#: on purpose: it bounds a HANG, it is not a performance assertion, and a tight
+#: bound here only ever produces false failures.
+_FAKE_WORKER_BUDGET_S = 60.0
+
+
 async def _run_one_exec_task(redis: Any, factory: Any, worker_id: uuid.UUID) -> None:
     """Simulate A/2's worker for exactly one ``exec`` task on ``worker_id``'s stream.
 
@@ -80,7 +86,15 @@ async def _run_one_exec_task(redis: Any, factory: Any, worker_id: uuid.UUID) -> 
     """
     stream = dispatch.worker_stream(worker_id)
     last_id = "0"
-    for _ in range(200):  # ~10s ceiling — the command itself is trivial
+    # Poll to a WALL-CLOCK deadline, not a fixed iteration count. 200 iterations
+    # of ``block=50`` is only ~10s if every read returns on time — on a loaded
+    # CI runner they do not, so the fake worker gave up before the task even
+    # arrived and the exec side then sat out its own (much longer) timeout. The
+    # failure looked like a product timeout and was really a harness with no
+    # margin (CI flake, 2026-08-10). The dispatch it waits for is a DB commit +
+    # XADD, so the budget must cover a slow runner, not a fast laptop.
+    deadline = asyncio.get_running_loop().time() + _FAKE_WORKER_BUDGET_S
+    while asyncio.get_running_loop().time() < deadline:
         entries = await redis.xread({stream: last_id}, count=10, block=50)
         if not entries:
             continue
