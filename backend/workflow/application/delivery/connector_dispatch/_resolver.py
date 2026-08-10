@@ -187,6 +187,22 @@ def display_repo_slug(repo: str) -> str:
     return "/".join(parts[-2:]) if len(parts) >= 2 else s
 
 
+async def _runs_in_place(session: AsyncSession, product_id: uuid.UUID | None) -> bool:
+    """Does this product execute on the founder's own machine (``client_attach``)?
+
+    Such a product has no server-side worktree, so no git-ops delivery can apply
+    to it. A missing product / missing metadata reads as the default model.
+    """
+    if product_id is None:
+        return False
+    from backend.workflow.domain.execution_target import read_execution_target  # noqa: PLC0415
+
+    metadata = await session.scalar(
+        select(ProductRow.product_metadata).where(ProductRow.id == product_id)
+    )
+    return read_execution_target(metadata or {}) == "client_attach"
+
+
 async def _product_repo(
     session: AsyncSession, product_id: uuid.UUID | None
 ) -> tuple[str, str] | None:
@@ -268,6 +284,22 @@ async def resolve_github_binding(
         .scalars()
         .all()
     )
+    if await _runs_in_place(session, product_id):
+        # #692 — a client_attach product's source lives ONLY on the founder's
+        # machine (§3.5 privacy contract): the server never clones it, so there
+        # is no checkout here to commit and push FROM. Resolving a target anyway
+        # made ``deliver_github`` run ``git add -A`` against a directory that
+        # does not exist — ``fatal: not a git repository`` — and since the github
+        # call sits outside the per-binding try, that exception took the WHOLE
+        # dispatch down, so the telegram binding was never even reached (live
+        # 2026-08-10, BStockReport M5 approval). ``None`` is the same deliberate
+        # safe outcome as "no credential": not pushing beats pushing wrongly.
+        logger.info(
+            "github_binding_skipped_client_attach",
+            workspace_id=str(workspace_id),
+            product_id=str(product_id),
+        )
+        return None
     owned = await _product_repo(session, product_id)
     # First active connector regardless of what it pins — the credential #684
     # falls back to. Ordering above makes "first" deterministic.

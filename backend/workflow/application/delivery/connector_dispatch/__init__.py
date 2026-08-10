@@ -110,6 +110,46 @@ from ._resolver import (
 logger = structlog.get_logger(__name__)
 
 
+async def _github_actions(
+    *,
+    deps: Any,
+    binding: Any,
+    workspace_id: uuid.UUID,
+    deliverable_id: uuid.UUID,
+    run_id: uuid.UUID | None,
+    content: dict[str, Any],
+) -> list[ActionResult]:
+    """``deliver_github`` with the SAME soft-fail contract every other target has.
+
+    The per-binding loop below already records a raising target as a failed
+    action so "a single bad target does not wedge the queue". github was the one
+    call outside that guarantee: when it raised, the exception escaped
+    ``dispatch()`` and every target after it was skipped — the founder got
+    nothing rather than everything-but-github (live 2026-08-10, a client_attach
+    approval where git-ops had no checkout to work in). Recorded, never silent.
+    """
+    try:
+        return list(
+            await deliver_github(
+                deps=deps,
+                binding=binding,
+                workspace_id=workspace_id,
+                deliverable_id=deliverable_id,
+                run_id=run_id,
+                content=content,
+            )
+        )
+    except Exception as exc:  # noqa: BLE001 — one target's fault, not the fan-out's
+        logger.warning(
+            "connector_dispatch_github_failed",
+            workspace_id=str(workspace_id),
+            deliverable_id=str(deliverable_id),
+            error=str(exc),
+            exc_info=True,
+        )
+        return [ActionResult(action="github:outbound", succeeded=False, error=str(exc))]
+
+
 @dataclass(slots=True)
 class ConnectorDeliveryAdapter:
     """Resolve the connector binding(s), shape the event, dispatch the outbound.
@@ -186,7 +226,7 @@ class ConnectorDeliveryAdapter:
         actions: list[ActionResult] = []
         if github_binding is not None:
             actions.extend(
-                await deliver_github(
+                await _github_actions(
                     deps=GithubDeliveryDeps(
                         cipher=self.cipher,
                         plugins_by_name=self.plugins_by_name,
