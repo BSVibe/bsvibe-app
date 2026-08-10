@@ -123,8 +123,8 @@ async def test_the_task_carries_an_mcp_config_and_a_run_token() -> None:
         "mcp__bsvibe__bsvibe_work_file_write",
         "mcp__bsvibe__bsvibe_work_file_edit",
         "mcp__bsvibe__bsvibe_work_shell_exec",
-        "mcp__bsvibe__bsvibe_work_declare_verification",
         "mcp__bsvibe__bsvibe_work_knowledge_search",
+        "mcp__bsvibe__bsvibe_work_declare_verification",
         "mcp__bsvibe__bsvibe_work_ask_user_question",
         "mcp__bsvibe__bsvibe_work_emit_deliverable",
     ]

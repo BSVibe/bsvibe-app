@@ -67,17 +67,18 @@ MAX_NO_WORK_NUDGES = 2
 #: the server-side worktree), ``client_attach`` uses the CLI's OWN native tools
 #: on the founder's directory, which is the entire point of that model.
 #:
-#: ``declare_verification`` belongs here: declaring a contract presumes a
-#: server-side worktree to run it against. client_attach has a STRONGER
-#: replacement — the in-place derived gate (#692/#705), whose verdict is a real
-#: exit code produced on the founder's machine.
+#: (``declare_verification`` used to sit here on the premise that "declaring a
+#: contract presumes a server-side worktree to run it against". That premise was
+#: FALSE — the in-place gate is its own counter-example, running the repo's own
+#: commands on the founder's machine through this very abstraction. Declaring is
+#: a statement recorded on the RUN; WHERE its commands execute is a separate
+#: question that ``SandboxSession`` already answers. Moved to the platform axis.)
 WORKSPACE_TOOL_FORWARDING: tuple[tuple[str, str], ...] = (
     ("bsvibe_work_file_read", "file_read"),
     ("bsvibe_work_file_list", "file_list"),
     ("bsvibe_work_file_write", "file_write"),
     ("bsvibe_work_file_edit", "file_edit"),
     ("bsvibe_work_shell_exec", "shell_exec"),
-    ("bsvibe_work_declare_verification", "declare_verification"),
 )
 
 #: PLATFORM axis — what BSVIBE ITSELF offers, independent of where the source
@@ -91,6 +92,10 @@ WORKSPACE_TOOL_FORWARDING: tuple[tuple[str, str], ...] = (
 #: had nothing to load and NOTHING was ever delivered out.
 PLATFORM_TOOL_FORWARDING: tuple[tuple[str, str], ...] = (
     ("bsvibe_work_knowledge_search", KNOWLEDGE_SEARCH_NAME),
+    # A contract DECLARED to BSVibe, recorded on the run. Independent of where
+    # the source lives — the two execution models must not differ on what
+    # verification MEANS, only on where its commands run.
+    ("bsvibe_work_declare_verification", "declare_verification"),
 )
 
 #: (MCP tool name, inner registry tool name) for the run-scoped tools that FORWARD to the inner

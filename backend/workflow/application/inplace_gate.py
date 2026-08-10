@@ -47,6 +47,9 @@ logger = structlog.get_logger(__name__)
 #: A git query on the founder's machine — a round trip, not a build.
 _GIT_TIMEOUT_S = 30.0
 
+#: exit 127 = command not found on that machine.
+_MISSING_TOOL_EXIT = 127
+
 
 async def capture_inplace_baseline(box: SandboxSession) -> str | None:
     """The founder tree's ``HEAD`` BEFORE the agent acts, or ``None``.
@@ -195,6 +198,14 @@ async def run_inplace_gate(
     payload = run.payload or {}
     intent = str(payload.get("intent_text") or payload.get("text") or "").strip()
     changed = await _changed_paths(box, baseline)
+
+    # The agent's DECLARED contract runs here too. The two execution models must
+    # differ only in WHERE commands run — not in what verification means. (This
+    # was withheld while ``declare_verification`` sat on the workspace axis, on
+    # the false premise that a declared contract needs a server-side worktree.
+    # It does not: these commands run through the same box the derived gate uses.)
+    declared = await _declared_checks(service, run, box)
+
     gate = await service._author_derived_gate(intent, manifests, changed)
 
     if isinstance(gate, DerivedGateFailed):
@@ -214,17 +225,24 @@ async def run_inplace_gate(
 
     if not gate.applicable or gate.is_empty:
         # The deriver ran and found nothing to run. Honest, but it proves nothing.
+        # Nothing DERIVABLE to run — but a declared contract may still have run.
+        passed = not any(r["status"] == "failed" for r in declared)
         blob = {
             "origin": "derived_in_place",
             "applicable": gate.applicable,
-            "commands": [],
-            "passed": True,
-            "proved": False,
+            "commands": declared,
+            "passed": passed,
+            "proved": passed and any(r["status"] == "passed" for r in declared),
         }
-        await _persist(service, run=run, blob=blob, outcome=VerificationOutcome.PASSED)
+        await _persist(
+            service,
+            run=run,
+            blob=blob,
+            outcome=VerificationOutcome.PASSED if passed else VerificationOutcome.FAILED,
+        )
         return blob
 
-    results = await _run_commands(service, gate=gate, box=box)
+    results = [*declared, *await _run_commands(service, gate=gate, box=box)]
     passed = not any(r["status"] == "failed" for r in results)
     # PROVED needs something to have ACTUALLY run and passed. A gate whose every
     # command was missing from that machine (exit 127) is not a proof.
@@ -250,6 +268,44 @@ async def run_inplace_gate(
         proved=proved,
     )
     return blob
+
+
+async def _declared_checks(
+    service: VerificationService, run: Any, box: SandboxSession
+) -> list[dict[str, Any]]:
+    """The agent's DECLARED contract, run in place — mapped to the gate's shape.
+
+    Reuses the service's own command-check runner, so a declared check means the
+    same thing in both execution models and there is no second implementation to
+    drift. ``[]`` when nothing was declared (the derived gate is then the whole
+    verification, exactly as before).
+    """
+    declared_raw = getattr(run, "declared_contract", None)
+    if declared_raw is None:
+        return []
+    contract = await service.assemble_contract(
+        declared_contract=declared_raw, written_paths=[], final_text=""
+    )
+    if contract is None:
+        return []
+    ran = await service._run_command_checks(contract, box)
+    return [
+        {
+            "command": r.get("command", ""),
+            "kind": "declared",
+            # Same ladder as the derived commands: 127 means the tool is not on
+            # that machine — recorded, never a false-fail.
+            "status": (
+                "passed"
+                if r.get("passed")
+                else ("unavailable" if r.get("exit_code") == _MISSING_TOOL_EXIT else "failed")
+            ),
+            "exit_code": r.get("exit_code"),
+            "timed_out": r.get("timed_out", False),
+            "output": r.get("output", ""),
+        }
+        for r in ran
+    ]
 
 
 async def _run_commands(
