@@ -5,7 +5,8 @@ This composes the pieces built for full-surface verification:
 * the concurrency **slot** (:mod:`...infrastructure.verify_slots`) names the
   compose project, so reclaiming a slot reclaims a dead holder's stack;
 * the derived **plan** (:mod:`...domain.verify_stack`) says how this particular
-  product boots — or that it has no stack at all;
+  product boots — a compose stack, or a container built from its declared
+  toolchain;
 * the worker's **exec** channel runs the commands on the founder's machine,
   which is OUTSIDE the stack under verification: a broken stack then yields an
   error rather than the silence an in-stack prober would produce.
@@ -14,14 +15,16 @@ Three outcomes, fail-CLOSED — the same shape the derived gate already uses,
 because the distinctions matter for honesty:
 
 ``StackNotApplicable``
-    This product has no stack. A CLI's repo IS its environment. Not a failure.
+    Nothing to stand up: the product declared that its checks need the host, or
+    its repo declares no toolchain to reproduce. Not a failure.
 ``StackUnavailable``
     No slot free, the plan is unusable, or the boot failed. **Not a
     verification failure** — "could not stand it up" and "stood it up and the
     probe failed" are different facts, and conflating them either invents a
     defect or hides one.
 ``StackReady``
-    Up. Probes may run against it.
+    Up. Checks and probes run INSIDE it — via :meth:`StackReady.wrap`, which is
+    what makes the isolation real rather than merely stood up next to.
 
 Teardown is in ``finally`` so a raising probe cannot leak a stack — but the
 design does NOT rely on that: a killed process never reaches ``finally``, and
@@ -38,7 +41,7 @@ from typing import Any
 
 import structlog
 
-from backend.workflow.domain.verify_stack import StackPlanError, derive_stack_plan
+from backend.workflow.domain.verify_stack import StackPlan, StackPlanError, derive_stack_plan
 
 logger = structlog.get_logger(__name__)
 
@@ -49,7 +52,12 @@ _TEARDOWN_TIMEOUT_S = 300.0
 
 @dataclass(frozen=True)
 class StackNotApplicable:
-    """This product declares no verification stack — its repo is the environment."""
+    """No environment to stand up — the checks run where the box already runs them.
+
+    Either the product DECLARED that (``verify_stack: null``, because some checks
+    genuinely need host resources) or its repo declares no toolchain to
+    reproduce. Not a failure either way.
+    """
 
 
 @dataclass(frozen=True)
@@ -61,9 +69,28 @@ class StackUnavailable:
 
 @dataclass(frozen=True)
 class StackReady:
-    """The stack is up under ``project``; probes may run against it."""
+    """The environment is up under ``project``; checks and probes run inside it."""
 
     project: str
+    #: How this environment was derived — carried so a caller can record WHERE a
+    #: check ran, which is half of what a check's evidence means.
+    plan: StackPlan
+    _docker_context: str = ""
+
+    def wrap(self, command: str) -> str:
+        """``command``, rewritten to run inside this environment — and pinned.
+
+        Both halves matter and neither is optional, which is why this is a
+        method here rather than a step every caller has to remember: running the
+        checks on the host after standing a container up isolates nothing, and
+        an unpinned ``docker exec`` talks to whichever VM the host's global
+        context happens to point at.
+        """
+        wrapped = self.plan.wrap(command)
+        if wrapped == command:
+            # Nothing to reach into, so nothing docker-shaped to pin.
+            return command
+        return _pinned(wrapped, self._docker_context)
 
 
 StackOutcome = StackNotApplicable | StackUnavailable | StackReady
@@ -81,13 +108,18 @@ def _pinned(command: str, docker_context: str) -> str:
 
     ``DOCKER_HOST`` OUTRANKS ``DOCKER_CONTEXT``, so a stray host var would make
     the pin a no-op — drop it rather than trust the caller's environment.
+
+    Pinned as a shell EXPORT, not an ``env VAR=… cmd`` prefix: a stand-up is a
+    pipeline (``docker run … | docker exec …``) and such a prefix binds only the
+    first process, leaving the rest to follow the host's global context. Half
+    pinned is unpinned, silently.
     """
     if not docker_context:
         # Not fail-closed: a single-daemon host is a legitimate deployment. But
         # it is named, because the failure it invites is silent.
         logger.warning("verify_stack_docker_context_unpinned")
         return command
-    return f"env -u DOCKER_HOST DOCKER_CONTEXT={shlex.quote(docker_context)} {command}"
+    return f"unset DOCKER_HOST; export DOCKER_CONTEXT={shlex.quote(docker_context)}; {command}"
 
 
 @asynccontextmanager
@@ -106,7 +138,15 @@ async def open_verification_stack(
     caller must already own it, since the name is what ties a stack to a slot.
     """
     try:
-        plan = derive_stack_plan(repo_files=repo_files, project=slot_project, metadata=metadata)
+        plan = derive_stack_plan(
+            repo_files=repo_files,
+            project=slot_project,
+            # The box is the authority on where the source is: the stand-up
+            # commands run through that same box, so any other path would be a
+            # guess about a machine we are not on.
+            workspace_path=box.workspace_mount,
+            metadata=metadata,
+        )
     except StackPlanError as exc:
         # Refusing to boot (e.g. no isolation overlay) is a safety decision, not
         # a verdict about the change.
@@ -138,8 +178,10 @@ async def open_verification_stack(
             logger.warning("verify_stack_boot_failed", project=slot_project, reason=reason)
             yield StackUnavailable(reason=f"stack boot failed ({reason}): {detail}")
             return
-        logger.info("verify_stack_ready", project=slot_project, source=plan.source)
-        yield StackReady(project=slot_project)
+        logger.info(
+            "verify_stack_ready", project=slot_project, source=plan.source, image=plan.image
+        )
+        yield StackReady(project=slot_project, plan=plan, _docker_context=docker_context)
     finally:
         # Best-effort: the slot lease is the real guarantee (a killed process
         # never reaches here), so a failed teardown is logged, never raised over
