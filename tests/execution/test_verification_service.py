@@ -1432,6 +1432,36 @@ class TestDerivedGate:
             assert blob["commands"][0]["status"] == "passed"
             assert "uv run ruff check money.py" in box.exec_calls
 
+    async def test_records_whether_a_user_surface_was_exercised(self, tmp_path, monkeypatch):
+        """Both execution models record the same thing. The models differ in
+        WHERE a command runs, never in what verification MEANS — a property that
+        only holds while both blobs are built to the same shape."""
+        async with memory_session() as session:
+            llm = StubLlm(
+                [
+                    self._gate_turn(
+                        [
+                            {"command": "uv run pytest -q", "kind": "test"},
+                            {"command": "make e2e", "kind": "surface"},
+                        ]
+                    )
+                ]
+            )
+            svc = VerificationService(session=session, llm=llm)
+            run = await self._seed(session, tmp_path, monkeypatch)
+            result = await svc._run_derived_gate(run, FakeBox(), ["money.py"])
+            assert isinstance(result, DerivedGateOk)
+            assert result.blob["surface_exercised"] is True
+
+    async def test_unit_checks_alone_do_not_claim_a_surface(self, tmp_path, monkeypatch):
+        async with memory_session() as session:
+            llm = StubLlm([self._gate_turn([{"command": "uv run pytest -q", "kind": "test"}])])
+            svc = VerificationService(session=session, llm=llm)
+            run = await self._seed(session, tmp_path, monkeypatch)
+            result = await svc._run_derived_gate(run, FakeBox(), ["money.py"])
+            assert isinstance(result, DerivedGateOk)
+            assert result.blob["surface_exercised"] is False
+
     async def test_unavailable_command_is_not_a_failure(self, tmp_path, monkeypatch):
         async with memory_session() as session:
             llm = StubLlm([self._gate_turn([{"command": "cargo clippy"}])])

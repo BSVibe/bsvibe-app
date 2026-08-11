@@ -124,3 +124,64 @@ class TestDerivationPlannerMessages:
         assert "test" in sys
         assert "compile" in sys or "syntax" in sys
         assert "weak" in sys or "trivial" in sys
+
+
+class TestSurfaceChecks:
+    """A repo's own USER-SURFACE checks are a third kind, and they must survive
+    the scoping rule that keeps quality checks off untouched files.
+
+    The gate's claim has been "this repo passed its own checks". The claim we
+    need is "this change works where the user receives it". Some repos already
+    declare checks of that second kind — BStockReport declares a marked suite
+    that drives its report through a stubbed delivery API and asserts the text
+    that ARRIVES. Those are exactly the checks that would have caught the two
+    live defects unit tests slept through (a silent truncation fabricating
+    `$922,010` → `$922,0`, and a dispatch that delivered nothing at all).
+    """
+
+    def test_a_declared_surface_check_keeps_its_kind(self) -> None:
+        gate = parse_derived_gate(
+            {
+                "commands": [
+                    {
+                        "command": "make e2e",
+                        "kind": "surface",
+                        "rationale": "the repo declares an end-to-end target",
+                    }
+                ]
+            }
+        )
+        assert gate.commands == (
+            DerivedCommand(
+                command="make e2e",
+                kind="surface",
+                rationale="the repo declares an end-to-end target",
+            ),
+        )
+
+    def test_the_prompt_asks_for_checks_that_exercise_the_delivered_behaviour(self) -> None:
+        sys = derivation_planner_messages(manifests={}, changed_files=[], intent="x")[0][
+            "content"
+        ].lower()
+        assert "surface" in sys, "the deriver cannot emit a kind it was never told about"
+        assert "end-to-end" in sys or "delivered" in sys
+
+    def test_the_prompt_forbids_inventing_a_surface_suite(self) -> None:
+        """Without a harness the LLM invents one — the failure mode the whole
+        derivation design exists to prevent. A surface check is emitted only
+        when the repo DECLARES it."""
+        sys = derivation_planner_messages(manifests={}, changed_files=[], intent="x")[0]["content"]
+        assert "declare" in sys.lower()
+
+    def test_the_changed_file_scoping_rule_exempts_surface_checks(self) -> None:
+        """The live suppressor. "Scope checks to the CHANGED files" is right for
+        lint, and it silently guarantees a declared surface suite is NEVER run —
+        the change is in ``src/``, the surface check is in its own directory."""
+        sys = derivation_planner_messages(manifests={}, changed_files=[], intent="x")[0][
+            "content"
+        ].lower()
+        scope_line = next(line for line in sys.splitlines() if "changed files" in line)
+        assert "surface" in scope_line, (
+            "the scoping instruction must say it does not apply to surface checks: "
+            f"{scope_line!r}"
+        )

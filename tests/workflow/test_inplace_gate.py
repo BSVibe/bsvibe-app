@@ -539,3 +539,49 @@ async def test_a_fresh_environment_gets_the_projects_toolchain_on_path() -> None
     ran = next(c for c in env_box.execs if "pytest" in c)
     assert "/work/.venv/bin:$PATH" in ran, ran
     assert blob["commands"][0]["command"] == "uv run pytest -q", "the record stays the declaration"
+
+
+_SURFACE_GATE_JSON = (
+    '{"applicable": true, "commands": ['
+    '{"kind": "test", "command": "uv run pytest -q", "rationale": "unit"},'
+    '{"kind": "surface", "command": "uv run pytest -m surface", "rationale": "declared suite"}]}'
+)
+
+
+async def test_the_blob_says_whether_a_user_surface_was_actually_exercised() -> None:
+    """The gate's claim has been "this repo passed its own checks" — which is
+    what CI already gives. Whether a check drove the DELIVERED behaviour is a
+    different claim, and the record has to carry it or the two are unreadable
+    apart on the proof surface."""
+    from backend.workflow.application.inplace_gate import run_inplace_gate
+
+    blob = await run_inplace_gate(
+        _service(_Llm(_SURFACE_GATE_JSON)), run=_Run(), box=_Box(manifests={"pyproject.toml": "x"})
+    )
+
+    assert blob is not None
+    assert blob["surface_exercised"] is True
+    assert [c["kind"] for c in blob["commands"]] == ["test", "surface"]
+
+
+async def test_a_repo_with_only_unit_checks_does_not_claim_a_surface() -> None:
+    from backend.workflow.application.inplace_gate import run_inplace_gate
+
+    blob = await run_inplace_gate(
+        _service(_Llm(_GATE_JSON)), run=_Run(), box=_Box(manifests={"pyproject.toml": "x"})
+    )
+
+    assert blob is not None
+    assert blob["surface_exercised"] is False
+
+
+async def test_a_surface_check_whose_tool_is_missing_is_not_an_exercise() -> None:
+    """exit 127 means the command never ran. Counting it would put the strongest
+    claim in the record on the weakest evidence there is — none."""
+    from backend.workflow.application.inplace_gate import run_inplace_gate
+
+    box = _Box(manifests={"pyproject.toml": "x"}, exits={"-m surface": 127})
+    blob = await run_inplace_gate(_service(_Llm(_SURFACE_GATE_JSON)), run=_Run(), box=box)
+
+    assert blob is not None
+    assert blob["surface_exercised"] is False

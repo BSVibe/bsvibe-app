@@ -41,6 +41,7 @@ from backend.workflow.domain.gate_derivation import (
     DerivedGate,
     derivation_planner_messages,
     parse_derived_gate,
+    surface_exercised,
 )
 from backend.workflow.domain.honesty import compute_honesty_grade
 from backend.workflow.domain.outcome_demonstration import (
@@ -983,6 +984,9 @@ class VerificationService:
                 "applicable": gate.applicable,
                 "commands": results,
                 "passed": passed,
+                # Both execution models record the SAME shape: they differ in
+                # where a command runs, never in what verification means.
+                "surface_exercised": surface_exercised(results),
             }
         )
 

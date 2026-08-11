@@ -38,6 +38,7 @@ from backend.workflow.application.verification_service import (
     DerivedGateFailed,
     VerificationService,
 )
+from backend.workflow.domain.gate_derivation import surface_exercised
 from backend.workflow.domain.verifier_contract import VerificationContract
 from backend.workflow.infrastructure.db import VerificationOutcome, VerificationResult
 from backend.workflow.infrastructure.sandbox import SandboxSession
@@ -276,6 +277,7 @@ async def run_inplace_gate(
             "commands": declared,
             "passed": passed,
             "proved": passed and any(r["status"] == "passed" for r in declared),
+            "surface_exercised": surface_exercised(declared),
             **({"environment": described} if described is not None else {}),
         }
         await _persist(
@@ -297,6 +299,7 @@ async def run_inplace_gate(
         "commands": results,
         "passed": passed,
         "proved": proved,
+        "surface_exercised": surface_exercised(results),
         **({"environment": described} if described is not None else {}),
     }
     await _persist(
@@ -426,4 +429,8 @@ async def _persist(
     )
 
 
-__all__ = ["capture_inplace_baseline", "gate_failure_is_actionable", "run_inplace_gate"]
+__all__ = [
+    "capture_inplace_baseline",
+    "gate_failure_is_actionable",
+    "run_inplace_gate",
+]
