@@ -17,6 +17,52 @@ def client() -> GithubClient:
     return GithubClient("tok-123", base_url=API)
 
 
+class TestCompareBranch:
+    """The remote's answer to "is there anything to open a PR from".
+
+    A ``client_attach`` run pushes its own branch from the founder's machine
+    (#735), so the server has no checkout to measure. Asking github is not a
+    convenience — it is the only authority, and a local belief about the push
+    can be wrong in both directions.
+    """
+
+    @respx.mock
+    async def test_reports_how_far_ahead_the_branch_is(self, client):
+        respx.get(f"{API}/repos/o/r/compare/main...run%2Fabc12345").mock(
+            return_value=httpx.Response(200, json={"ahead_by": 3, "behind_by": 1})
+        )
+        got = await client.compare_branch("o", "r", base="main", head="run/abc12345")
+        assert got == {"exists": True, "ahead_by": 3}
+
+    @respx.mock
+    async def test_an_unknown_branch_is_absent_not_an_error(self, client):
+        """A run that committed nothing never pushed, so the branch is simply not
+        there. Raising would turn "nothing to deliver" into a delivery failure."""
+        respx.get(url__startswith=f"{API}/repos/o/r/compare/").mock(
+            return_value=httpx.Response(404, json={"message": "Not Found"})
+        )
+        got = await client.compare_branch("o", "r", base="main", head="run/nope")
+        assert got == {"exists": False, "ahead_by": 0}
+
+    @respx.mock
+    async def test_a_branch_level_with_base_is_ahead_by_zero(self, client):
+        respx.get(url__startswith=f"{API}/repos/o/r/compare/").mock(
+            return_value=httpx.Response(200, json={"ahead_by": 0})
+        )
+        got = await client.compare_branch("o", "r", base="main", head="run/same")
+        assert got["ahead_by"] == 0
+
+    @respx.mock
+    async def test_a_real_failure_still_raises(self, client):
+        """403 (rate limit, revoked token) is not "no branch" — swallowing it
+        would report every run as having changed nothing."""
+        respx.get(url__startswith=f"{API}/repos/o/r/compare/").mock(
+            return_value=httpx.Response(403, json={"message": "rate limited"})
+        )
+        with pytest.raises(httpx.HTTPStatusError):
+            await client.compare_branch("o", "r", base="main", head="run/x")
+
+
 class TestOpenPr:
     @respx.mock
     async def test_open_pr_posts_and_returns_json(self, client):

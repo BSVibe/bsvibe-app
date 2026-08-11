@@ -187,11 +187,24 @@ def display_repo_slug(repo: str) -> str:
     return "/".join(parts[-2:]) if len(parts) >= 2 else s
 
 
-async def _runs_in_place(session: AsyncSession, product_id: uuid.UUID | None) -> bool:
+async def product_runs_in_place(session: AsyncSession, product_id: uuid.UUID | None) -> bool:
     """Does this product execute on the founder's own machine (``client_attach``)?
 
-    Such a product has no server-side worktree, so no git-ops delivery can apply
-    to it. A missing product / missing metadata reads as the default model.
+    Deliberately duplicated from
+    ``backend.workflow.application.runtime.account_resolution.product_is_client_attach``
+    — the same trade this package already makes for :func:`normalize_repo_slug`.
+    The R2c import-linter contract keeps the engine inbound layer free of plugin
+    imports, and that module reaches ``plugin.audit`` transitively, so importing
+    it from here (even lazily — import-linter reads function-level imports too)
+    puts ``backend.api.webhooks`` one hop from a plugin.
+
+    Callers use it to withhold SERVER-SIDE SOURCE HANDLING: the clone at run
+    setup, the re-clone behind the freshness merge. Never to withhold delivery
+    itself — that conflation (#723) cost this execution model every PR it should
+    have had.
+
+    A missing product / unreadable metadata reads as the default model, matching
+    the helper it mirrors.
     """
     if product_id is None:
         return False
@@ -260,6 +273,16 @@ async def resolve_github_binding(
     caller falls back to the product-workspace provisioner and skips github
     delivery, which beats writing to a repo the product does not own.
 
+    **A binding is a credential and a repo — not a claim that a checkout exists
+    here.** #723 made ``client_attach`` resolve ``None`` after a delivery crash
+    (``git add -A`` against a directory the server never clones). That stopped
+    the crash and took the whole delivery surface with it: no binding means no
+    PR for any such run, ever. The thing that must never happen is the SERVER
+    OBTAINING THE SOURCE, and the two callers that would — the run-setup
+    provisioner and the merge-watch freshness merge — refuse it themselves now.
+    Opening a PR needs no checkout at all, and since #735 the run has already
+    pushed its branch from the founder's machine.
+
     A product with no ``repo_url`` (substrate-only) and a call with no
     ``product_id`` keep the previous workspace-scoped behaviour — they have no
     repo to infer, so only an explicitly pinned binding can answer them.
@@ -284,22 +307,6 @@ async def resolve_github_binding(
         .scalars()
         .all()
     )
-    if await _runs_in_place(session, product_id):
-        # #692 — a client_attach product's source lives ONLY on the founder's
-        # machine (§3.5 privacy contract): the server never clones it, so there
-        # is no checkout here to commit and push FROM. Resolving a target anyway
-        # made ``deliver_github`` run ``git add -A`` against a directory that
-        # does not exist — ``fatal: not a git repository`` — and since the github
-        # call sits outside the per-binding try, that exception took the WHOLE
-        # dispatch down, so the telegram binding was never even reached (live
-        # 2026-08-10, BStockReport M5 approval). ``None`` is the same deliberate
-        # safe outcome as "no credential": not pushing beats pushing wrongly.
-        logger.info(
-            "github_binding_skipped_client_attach",
-            workspace_id=str(workspace_id),
-            product_id=str(product_id),
-        )
-        return None
     owned = await _product_repo(session, product_id)
     # First active connector regardless of what it pins — the credential #684
     # falls back to. Ordering above makes "first" deterministic.
@@ -337,6 +344,7 @@ async def resolve_github_binding(
 
 
 __all__ = [
+    "product_runs_in_place",
     "GithubBinding",
     "_Binding",
     "_resolve_bindings",

@@ -233,6 +233,30 @@ async def open_pr(
 
 
 @p.action(
+    name="compare_branch",
+    # Internal plumbing for delivery, not a founder-facing capability: it
+    # answers "is there anything to open a PR from", which the founder asks by
+    # looking at the PR.
+    mcp_exposed=False,
+    input_schema={
+        "type": "object",
+        "required": ["repo", "head"],
+        "properties": {
+            "repo": {"type": "string", "description": "owner/repo"},
+            "head": {"type": "string", "description": "branch to measure"},
+            "base": {"type": "string", "description": "branch to measure against"},
+        },
+        "additionalProperties": False,
+    },
+)
+async def compare_branch(
+    context: SkillContext, repo: str, head: str, base: str = "main"
+) -> dict[str, Any]:
+    owner, name = _split_repo(repo)
+    return await _client(context).compare_branch(owner, name, base=base, head=head)
+
+
+@p.action(
     name="comment",
     mcp_exposed=True,
     input_schema={

@@ -32,6 +32,7 @@ from backend.connectors.auth.resolve import resolve_connector_credentials
 from backend.router.accounts.crypto import CredentialCipher, _key_from_settings
 from backend.workflow.application.delivery.connector_dispatch._github import github_remote_url
 from backend.workflow.application.delivery.connector_dispatch._resolver import (
+    product_runs_in_place,
     resolve_github_binding,
 )
 from backend.workflow.infrastructure.db import ExecutionRun, RunStatus
@@ -113,10 +114,27 @@ def build_merge_watch_freshness_resolver(*, cipher: CredentialCipher) -> Freshne
     async def _resolve(
         session: AsyncSession, workspace_id: uuid.UUID, run_id: uuid.UUID
     ) -> FreshnessTarget | None:
+        product_id = await _product_id_for_run(session, run_id)
+        if await product_runs_in_place(session, product_id):
+            # §3.5 privacy contract. What this target FEEDS is a server-side
+            # re-clone of the run's workspace so base can be merged into the run
+            # branch locally — for a client_attach product that would bring the
+            # source here, which choosing this model is the founder saying must
+            # not happen. Auto-MERGING such a PR is untouched: that is an API
+            # call about a PR and needs no checkout at all.
+            #
+            # Not a hypothetical: auto-merge is ON in production, so a stale
+            # client_attach PR reaches this resolver as soon as one exists.
+            # ``None`` terminates the row before any git runs; freshening it has
+            # to happen on the founder's machine, which is a later lift.
+            logger.info(
+                "merge_watch_freshness_skipped_client_attach",
+                workspace_id=str(workspace_id),
+                run_id=str(run_id),
+            )
+            return None
         binding = await resolve_github_binding(
-            session,
-            workspace_id=workspace_id,
-            product_id=await _product_id_for_run(session, run_id),
+            session, workspace_id=workspace_id, product_id=product_id
         )
         if binding is None:
             return None
