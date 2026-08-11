@@ -17,13 +17,19 @@ prompt-shape independently testable.
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Literal
 
-#: A derived command's role: a static QUALITY check (lint/format/type) or a
-#: behavioural TEST run. Advisory only — both RUN the same way; the split lets
-#: the proof surface group them and the honesty grade weight "tests ran".
-CommandKind = Literal["quality", "test"]
+#: A derived command's role: a static QUALITY check (lint/format/type), a
+#: behavioural TEST run, or a SURFACE check that drives the delivered behaviour
+#: the way a user receives it. All three RUN the same way — the split is what
+#: lets the proof surface say WHICH claim was earned, and those are different
+#: claims: "this repo passed its own checks" is what CI already gives, while
+#: "this change works where the user receives it" is the one that matters and
+#: the one two live defects slipped past (a silent truncation that fabricated a
+#: number; a dispatch that delivered nothing).
+CommandKind = Literal["quality", "test", "surface"]
 
 
 @dataclass(frozen=True)
@@ -65,7 +71,12 @@ class DerivedGate:
 
 
 def _coerce_kind(raw: Any) -> CommandKind:
-    return "test" if str(raw).strip().lower() == "test" else "quality"
+    kind = str(raw).strip().lower()
+    if kind == "test":
+        return "test"
+    if kind == "surface":
+        return "surface"
+    return "quality"
 
 
 def parse_derived_gate(raw: Any) -> DerivedGate:
@@ -105,6 +116,20 @@ def parse_derived_gate(raw: Any) -> DerivedGate:
     )
 
 
+def surface_exercised(commands: Sequence[Mapping[str, Any]]) -> bool:
+    """Did a check actually drive the DELIVERED behaviour, and pass?
+
+    Over the RECORDED command results (not the derived plan), because the plan
+    says what was meant to run and only the record says what did.
+
+    Both halves are load-bearing. A surface check that was not runnable on that
+    machine (exit 127 → ``unavailable``) puts the strongest claim in the record
+    on the weakest evidence there is — none — and one that RAN and failed is not
+    an exercise either; it is a defect.
+    """
+    return any(c.get("kind") == "surface" and c.get("status") == "passed" for c in commands)
+
+
 _DERIVATION_SYSTEM_PROMPT = (
     "You are an INDEPENDENT verification-gate deriver. Given a repository's OWN "
     "declarations and the files a work step changed, output the exact shell "
@@ -128,12 +153,20 @@ _DERIVATION_SYSTEM_PROMPT = (
     "supports a real check. Emit a `kind:test` command whenever the change ships "
     "tests the repo can run.\n"
     "SCOPE quality checks to the CHANGED files, not the whole repo, so pre-existing "
-    "debt in untouched files does not fail the change.\n"
+    "debt in untouched files does not fail the change — this scoping does NOT apply "
+    "to surface checks, which are about the delivered behaviour and are declared "
+    "somewhere other than the changed files by their nature.\n"
+    "SURFACE checks: if the repo DECLARES checks that drive its delivered behaviour "
+    "end-to-end — the way a user receives it, rather than a unit of code — emit them "
+    "with `kind:surface`. A declaration is a marked/named suite, a build target, or a "
+    "script the repo itself defines for that purpose; its name or description usually "
+    "says so. NEVER invent one: if the repo declares no such check, emit none, because "
+    "a fabricated end-to-end command proves nothing and fails for the wrong reason.\n"
     "If the change is not something a command can verify (pure prose / design / a "
     'doc), set "applicable" to false and return no commands — that is a valid, '
     "honest answer; the judge and demonstration paths cover it.\n"
     'Output ONLY a JSON object: {"applicable": bool, "commands": [ {"command": '
-    'str, "kind": "quality"|"test", "rationale": str} ]}. No prose.'
+    'str, "kind": "quality"|"test"|"surface", "rationale": str} ]}. No prose.'
 )
 
 
@@ -171,4 +204,5 @@ __all__ = [
     "DerivedGate",
     "derivation_planner_messages",
     "parse_derived_gate",
+    "surface_exercised",
 ]
