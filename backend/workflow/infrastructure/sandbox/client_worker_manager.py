@@ -297,7 +297,109 @@ class ClientWorkerSandboxManager:
         if result.timed_out or result.exit_code != 0:
             detail = "\n".join(o for o in (result.stdout, result.stderr) if o)[-500:]
             raise SandboxError(f"could not provision this run's worktree: {detail}")
+        # Whoever takes the resource next clears what the last holder left —
+        # the same instinct as the verification slot lease (#725), and the
+        # reason no reaper worker is needed. Best-effort: this run's own
+        # worktree is ready, and housekeeping must not cost it its start.
+        await self._sweep_orphan_worktrees(repo_box, self._run_id)
         return self._session_for(client_run_worktree(self._client_workspace_dir, self._run_id))
+
+    async def _sweep_orphan_worktrees(self, repo_box: Any, run_id: uuid.UUID) -> None:
+        """Give back the worktrees of runs that never reached ``release``.
+
+        #736 reclaims a run's worktree when its loop finishes. A run whose
+        process was KILLED — worker restart, reboot, ``kill -9`` — never gets
+        there, and its checkout of the whole repo stays on the founder's disk
+        with nobody left to name it. A full disk on this machine is not a
+        degradation but an unrecoverable brick.
+
+        **The decision is the server's, the listing is the machine's.** The
+        founder's machine cannot tell an abandoned worktree from a live run's:
+        a run that has only READ so far has a clean, young directory that looks
+        identical to one left by a run that died an hour ago. Which runs are
+        still going is knowledge only this side has. So the machine says what
+        exists and the server says what may go — and everything it says may go
+        still has to get past git's own refusal, which is what protects work
+        that exists nowhere else.
+        """
+        from backend.workflow.domain.client_worktree import (  # noqa: PLC0415
+            parse_worktree_shorts,
+            run_short,
+            worktree_list_command,
+        )
+
+        try:
+            listed = await repo_box.exec(
+                worktree_list_command(self._client_workspace_dir),
+                timeout_s=_WORKTREE_TIMEOUT_S,
+                shell=True,
+            )
+            if listed.timed_out or listed.exit_code != 0:
+                return
+            shorts = parse_worktree_shorts(listed.stdout, self._client_workspace_dir)
+            if not shorts:
+                return
+            # This run's own is excluded by name, not by status: it was
+            # provisioned two lines ago and the box is about to be rooted in it,
+            # while a resumed or re-driven run can be in any status at all.
+            keep = await self._live_run_shorts() | {run_short(run_id)}
+            for short in shorts:
+                if short in keep:
+                    continue
+                await self._reclaim_orphan(repo_box, short)
+        except Exception:  # noqa: BLE001 — housekeeping never fails a run's start
+            logger.warning("client_attach_worktree_sweep_failed", run_id=str(run_id), exc_info=True)
+
+    async def _reclaim_orphan(self, repo_box: Any, short: str) -> None:
+        from backend.workflow.domain.client_worktree import (  # noqa: PLC0415
+            orphan_reclaim_command,
+            worktree_path_for_short,
+        )
+
+        path = worktree_path_for_short(self._client_workspace_dir, short)
+        result = await repo_box.exec(
+            orphan_reclaim_command(self._client_workspace_dir, path),
+            timeout_s=_WORKTREE_TIMEOUT_S,
+            shell=True,
+        )
+        if result.timed_out or result.exit_code != 0:
+            # Held (it still has uncommitted work) or unreadable. Named, not
+            # retried: a tree the sweep cannot take is one the founder may want.
+            logger.info(
+                "client_attach_orphan_worktree_kept",
+                run_id=str(self._run_id),
+                orphan=short,
+                exit_code=result.exit_code,
+            )
+            return
+        logger.info(
+            "client_attach_orphan_worktree_reclaimed", run_id=str(self._run_id), orphan=short
+        )
+
+    async def _live_run_shorts(self) -> set[str]:
+        """Short ids of runs that could still be executing in this workspace.
+
+        ``OPEN`` counts: it is both "waiting to be picked up" and the state a
+        paused run is resumed from. Everything else — ``REVIEW_READY`` included
+        — means the loop is over, and #736 already reclaimed that worktree on
+        the way out; seeing one still there is precisely the evidence that this
+        run never reached ``release``.
+
+        Workspace-scoped rather than product-scoped, deliberately: a superset
+        keeps MORE worktrees, and erring toward keeping is the cheap mistake.
+        """
+        from sqlalchemy import select  # noqa: PLC0415
+
+        from backend.workflow.infrastructure.db import ExecutionRun, RunStatus  # noqa: PLC0415
+
+        async with self._session_factory() as session:
+            rows = await session.execute(
+                select(ExecutionRun.id).where(
+                    ExecutionRun.workspace_id == self._workspace_id,
+                    ExecutionRun.status.in_((RunStatus.OPEN, RunStatus.RUNNING)),
+                )
+            )
+        return {str(run_id)[:8] for run_id in rows.scalars()}
 
     async def release(self, project_id: uuid.UUID) -> None:
         """Give this run's worktree back to the founder's disk.

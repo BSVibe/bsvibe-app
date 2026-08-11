@@ -150,8 +150,23 @@ def worktree_reclaim_command(client_workspace_dir: str, run_id: uuid.UUID) -> st
     Idempotent, because runs resume, retry and crash: nothing to reclaim is
     reported as success, not as an alarm.
     """
+    return _reclaim_command(client_workspace_dir, client_run_worktree(client_workspace_dir, run_id))
+
+
+def orphan_reclaim_command(client_workspace_dir: str, worktree_path: str) -> str:
+    """Reclaim a worktree the sweep found, addressed by PATH rather than by run.
+
+    Deliberately the same removal as :func:`worktree_reclaim_command`, not a
+    laxer one. The sweep touches trees nobody is watching any more, so if
+    anything it needs git's refusal MORE: the run that would have spoken for
+    this directory is gone, and whatever it left uncommitted exists only here.
+    """
+    return _reclaim_command(client_workspace_dir, worktree_path)
+
+
+def _reclaim_command(client_workspace_dir: str, worktree_path: str) -> str:
     repo = shlex.quote(client_workspace_dir.rstrip("/"))
-    path = shlex.quote(client_run_worktree(client_workspace_dir, run_id))
+    path = shlex.quote(worktree_path)
     return (
         # A directory removed by hand leaves a stale registration that later
         # makes `worktree add` refuse a path it believes is taken.
@@ -168,11 +183,62 @@ def worktree_reclaim_command(client_workspace_dir: str, run_id: uuid.UUID) -> st
     )
 
 
+def worktree_list_command(client_workspace_dir: str) -> str:
+    """List the repo's worktrees in git's machine format.
+
+    ``--porcelain`` because the human format is not a parsing contract; git
+    documents the stable one and says so.
+    """
+    return f"git -C {shlex.quote(client_workspace_dir.rstrip('/'))} worktree list --porcelain"
+
+
+def parse_worktree_shorts(porcelain: str, client_workspace_dir: str) -> list[str]:
+    """The run short-ids of OUR worktrees in that listing.
+
+    Scoped to ``<repo>/wt/`` on purpose. A founder's repo holds worktrees of
+    their own — that is why #734 adopted the idiom in the first place — and the
+    main checkout is in this listing too. Sweeping either would delete the
+    branch they are working in.
+    """
+    prefix = f"{client_workspace_dir.rstrip('/')}/{_WORKTREE_DIR}/"
+    shorts: list[str] = []
+    for line in porcelain.splitlines():
+        if not line.startswith("worktree "):
+            continue
+        path = line[len("worktree ") :].strip()
+        if not path.startswith(prefix):
+            continue
+        short = path[len(prefix) :].strip("/")
+        # One path segment: a nested directory under a worktree is not one.
+        if short and "/" not in short:
+            shorts.append(short)
+    return shorts
+
+
+def worktree_path_for_short(client_workspace_dir: str, short: str) -> str:
+    """The worktree path for a short id read back out of a listing.
+
+    The inverse of :func:`parse_worktree_shorts`, so the sweep never rebuilds
+    that path by hand — one place decides where these live.
+    """
+    return f"{client_workspace_dir.rstrip('/')}/{_WORKTREE_DIR}/{short}"
+
+
+def run_short(run_id: uuid.UUID) -> str:
+    """The id fragment a worktree is named for — the sweep's join key."""
+    return _short(run_id)
+
+
 __all__ = [
     "RECLAIM_FAILED",
     "RECLAIM_HELD",
     "client_run_worktree",
+    "orphan_reclaim_command",
+    "parse_worktree_shorts",
+    "run_short",
     "worktree_branch",
+    "worktree_list_command",
+    "worktree_path_for_short",
     "worktree_provision_command",
     "worktree_reclaim_command",
 ]
