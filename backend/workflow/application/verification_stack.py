@@ -131,11 +131,19 @@ async def open_verification_stack(
     metadata: Mapping[str, Any] | None,
     docker_context: str,
     boot_timeout_s: float,
+    secrets: Mapping[str, str] | None = None,
 ) -> AsyncIterator[StackOutcome]:
     """Bring one disposable instance up for the duration of the block.
 
     ``slot_project`` is the compose project name taken from the HELD slot — the
     caller must already own it, since the name is what ties a stack to a slot.
+
+    ``secrets`` are the product's own declared values, and they are handed ONLY
+    to the boot command — that is where ``docker run -e NAME`` needs them in the
+    invoking process's environment. Every later command runs INSIDE the
+    container, which already carries them, so re-sending would widen the
+    exposure for nothing. They never enter a command string (see
+    :mod:`backend.workflow.domain.verify_secrets`).
     """
     try:
         plan = derive_stack_plan(
@@ -167,7 +175,12 @@ async def open_verification_stack(
     await box.exec(down, timeout_s=_TEARDOWN_TIMEOUT_S, shell=True)
 
     try:
-        booted = await box.exec(up, timeout_s=boot_timeout_s, shell=True)
+        # Passed only when there is something to pass: a product that declares
+        # no secrets takes the identical path it always did, and a backend that
+        # cannot carry extra environment fails LOUDLY for the one that does
+        # rather than quietly booting without the credential its checks need.
+        extra: dict[str, Any] = {"env": dict(secrets)} if secrets else {}
+        booted = await box.exec(up, timeout_s=boot_timeout_s, shell=True, **extra)
         if booted.timed_out or booted.exit_code != 0:
             detail = "\n".join(o for o in (booted.stdout, booted.stderr) if o)[-2000:]
             reason = (
@@ -179,7 +192,12 @@ async def open_verification_stack(
             yield StackUnavailable(reason=f"stack boot failed ({reason}): {detail}")
             return
         logger.info(
-            "verify_stack_ready", project=slot_project, source=plan.source, image=plan.image
+            "verify_stack_ready",
+            project=slot_project,
+            source=plan.source,
+            image=plan.image,
+            # NAMES only. A secret in a log line is a secret in the aggregator.
+            secret_names=sorted(secrets or {}),
         )
         yield StackReady(project=slot_project, plan=plan, _docker_context=docker_context)
     finally:

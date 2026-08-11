@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import shlex
 import uuid
+from collections.abc import Mapping
 from pathlib import Path
 
 from backend.workflow.infrastructure.sandbox.errors import SandboxError
@@ -33,7 +34,14 @@ class NoopSandboxSession:
             raise SandboxError(f"path {rel_path!r} escapes the workspace") from exc
         return candidate
 
-    async def exec(self, command: str, *, timeout_s: float, shell: bool = False) -> SandboxResult:
+    async def exec(
+        self,
+        command: str,
+        *,
+        timeout_s: float,
+        shell: bool = False,
+        env: Mapping[str, str] | None = None,
+    ) -> SandboxResult:
         if shell:
             process = await asyncio.create_subprocess_shell(
                 command,

@@ -19,7 +19,9 @@ from sqlalchemy.exc import IntegrityError
 
 from backend.identity.workspaces_db import ProductRow
 from backend.mcp.api import Tool, ToolContext, ToolError, ToolRegistry
+from backend.workflow.application.product_secrets import sealed_product_metadata
 from backend.workflow.domain.execution_target import read_execution_target
+from backend.workflow.domain.verify_secrets import redact_secrets
 from backend.workflow.infrastructure.repositories import (
     SqlAlchemyDeliverableRepository,
     SqlAlchemyRunRepository,
@@ -53,7 +55,10 @@ def _product_to_dict(row: ProductRow) -> dict[str, Any]:
         # Free-form product metadata (no lifecycle enum). Always an object,
         # never null. ORM attr is ``product_metadata`` (``metadata`` is
         # reserved by SQLAlchemy); the wire field is ``metadata``.
-        "metadata": row.product_metadata,
+        # Secrets shown as a mask, never as ciphertext: this object goes to
+        # every reader of the product, and the mask is also the token a writer
+        # sends back to keep the value unchanged.
+        "metadata": redact_secrets(row.product_metadata or {}),
         # #692 — WHERE this product's runs execute, resolved from metadata with
         # the safe default applied (so callers see it even when unset). Set it
         # via ``metadata.execution_target`` (server_sandbox | client_attach).
@@ -446,7 +451,7 @@ class ProductsSetMetadataInput(BaseModel):
 
 async def _h_products_set_metadata(args: ProductsSetMetadataInput, ctx: ToolContext) -> Any:
     row = await _resolve_product(ctx, args.slug_or_id)
-    row.product_metadata = args.metadata
+    row.product_metadata = sealed_product_metadata(args.metadata, row.product_metadata)
     await ctx.session.commit()
     await ctx.session.refresh(row)
     return _Envelope(_product_to_dict(row))

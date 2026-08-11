@@ -14,6 +14,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from backend.workflow.domain.verify_secrets import redact_secrets
+
 _SLUG_RE = re.compile(r"^[a-z][a-z0-9-]*$")
 # A resource URL, when present, must look like a real http(s) (or mailto) link —
 # enough to reject "not a url" without smuggling a strict URL parser in. Empty
@@ -77,6 +79,20 @@ class ProductResponse(BaseModel):
     # ``metadata`` attribute name is reserved by SQLAlchemy's declarative base)
     # and surfaced on the wire as ``metadata``.
     metadata: dict[str, Any] = Field(default_factory=dict, validation_alias="product_metadata")
+
+    @field_validator("metadata", mode="after")
+    @classmethod
+    def _mask_secrets(cls, value: dict[str, Any]) -> dict[str, Any]:
+        """A product's declared verification secrets never leave as ciphertext.
+
+        On the response model rather than at each read site: this object is the
+        one shape every reader of a product receives, so masking here is the
+        only version that cannot be forgotten by a new endpoint. The mask is
+        also what a writer sends back to keep the value (see
+        ``verify_secrets.seal_secrets``), so read and write stay one round-trip.
+        """
+        return redact_secrets(value)
+
     created_at: datetime
     updated_at: datetime
 

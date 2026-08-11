@@ -276,6 +276,14 @@ ignore_imports = [
     # layer; ignoring this one edge cuts the whole connectors.auth subtree (and
     # its transitive router.accounts.crypto reach) from MCP's graph.
     "backend.mcp.tools.connectors_tools -> backend.connectors.auth.service",
+    # A product's declared verification secrets are sealed by ONE helper
+    # (``workflow.application.product_secrets``) that both write seams call —
+    # the REST product update and the MCP ``set_metadata`` tool. That helper
+    # reaches the credential cipher, which is the same "no second copy of the
+    # encryption logic" trade the exemptions below already make: two sealing
+    # chains would mean a secret encrypted on one path and stored in the clear
+    # on the other. Scoped to that one edge; the rest of the contract stands.
+    "backend.workflow.application.product_secrets -> backend.router.accounts.crypto",
     # Lift D3a — UI-parity setup tools (model accounts / connectors /
     # notifications). Each new tool module calls the SAME service /
     # row / kind primitives the REST surface uses so the MCP and PWA

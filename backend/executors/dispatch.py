@@ -29,6 +29,7 @@ from __future__ import annotations
 import asyncio
 import json
 import uuid
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from typing import Any, Protocol
 
@@ -354,12 +355,22 @@ async def dispatch_task(
     worker_id: uuid.UUID,
     mcp: dict[str, Any] | None = None,
     action: str = "execute",
+    env: Mapping[str, str] | None = None,
 ) -> str:
     """XADD ``task`` onto the worker's stream + mark it ``dispatched``.
 
     The payload is flat strings only (the Redis Streams constraint). The DB row
     is flipped to ``status="dispatched"`` with ``worker_id`` set in the SAME
     session (the caller commits). Returns the stream entry id.
+
+    ``env`` — environment for an ``exec`` command, carried BESIDE the command
+    rather than inside it. A product's declared verification secrets travel this
+    way because the command string is persisted verbatim on
+    ``executor_tasks.prompt`` and published on a stream nobody trims: a value
+    interpolated into it (``-e PASSWORD=hunter2``) is a value written to the
+    database and kept in Redis for good. Named-only in the command
+    (``-e NAME``), valued only here. Same reasoning as ``mcp`` below, and
+    likewise NOT persisted on the row.
 
     ``action`` (#692 in-place verify) — ``"execute"`` (default) is a coding-agent
     turn; ``"exec"`` tells the worker to run ``task.prompt`` as ONE shell command
@@ -406,6 +417,11 @@ async def dispatch_task(
         # #692 parity — may the CLI KEEP its own tools alongside BSVibe's? Streams
         # carry flat strings, so this crosses as "1"/"0" and the worker re-types it.
         payload["native_tools"] = "1" if mcp.get("native_tools") else "0"
+    # The exec command's environment. Streams take flat strings, so it crosses
+    # as JSON — and it is added LAST so that nothing above can be shadowed by a
+    # crafted variable name.
+    if env:
+        payload["exec_env"] = json.dumps(dict(env))
     msg_id = await redis.xadd(worker_stream(worker_id), payload)
 
     task.worker_id = worker_id
