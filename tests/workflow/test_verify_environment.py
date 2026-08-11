@@ -321,3 +321,56 @@ async def test_the_run_level_entry_takes_a_real_slot_and_stands_the_environment_
 
     assert any("docker run" in c for c in box.commands), box.commands
     assert "docker rm -f" in box.commands[-1], "the environment must be torn down"
+
+
+async def test_the_settled_run_commits_its_work_before_it_terminates(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The wiring. Committing is the RUN's own act — a client_attach run may
+    never emit a deliverable, so hanging it off delivery would leave exactly the
+    runs whose work most needs attributing with nothing committed."""
+    from contextlib import asynccontextmanager
+
+    from backend.workflow.application import (
+        _loop_context,
+        client_attach_delivery,
+        inplace_gate,
+        verify_environment,
+    )
+
+    seen: dict[str, Any] = {}
+
+    @asynccontextmanager
+    async def _fake_open(**kwargs: Any) -> Any:
+        yield CheckEnvironmentStub()
+
+    async def _fake_gate(_service: Any, **kwargs: Any) -> dict[str, Any]:
+        seen["gate_ran"] = True
+        return {"commands": [], "passed": True, "proved": True}
+
+    async def _fake_commit(*, box: Any, run: Any) -> Any:
+        seen["committed_after_gate"] = seen.get("gate_ran", False)
+        return client_attach_delivery.GitDeliveryOutcome(
+            branch="run/x", committed=True, pushed=True
+        )
+
+    monkeypatch.setattr(verify_environment, "open_run_check_environment", _fake_open)
+    monkeypatch.setattr(inplace_gate, "run_inplace_gate", _fake_gate)
+    monkeypatch.setattr(client_attach_delivery, "commit_and_push_run_work", _fake_commit)
+
+    result = await _loop_context.settle_client_attach(
+        _Orch(),
+        run=_Run(),
+        work_step=_Step(),
+        attempt=_Attempt(),
+        box=_Box(),
+        messages=[],
+        baseline=None,
+        cycle=0,
+    )
+
+    assert result is not None
+    assert seen.get("committed_after_gate") is True, (
+        "the commit must come AFTER the gate — the agent's fixes for a gate "
+        "failure are part of the work being committed"
+    )
