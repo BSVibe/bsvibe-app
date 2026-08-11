@@ -481,6 +481,9 @@ async def settle_client_attach(
     import json  # noqa: PLC0415
 
     from backend.workflow.application.audit_events import LoopTerminal  # noqa: PLC0415
+    from backend.workflow.application.client_attach_delivery import (  # noqa: PLC0415
+        commit_and_push_run_work,
+    )
     from backend.workflow.application.inplace_gate import (  # noqa: PLC0415
         gate_failure_is_actionable,
         run_inplace_gate,
@@ -521,6 +524,16 @@ async def settle_client_attach(
             }
         )
         return None
+    # The run COMMITS its own work before settling — after the gate, so the
+    # agent's fixes for a gate failure are part of what lands. #723 turned this
+    # off for client_attach ("the server has no checkout to commit from"), and
+    # the consequence was every such run leaving its work uncommitted in the
+    # founder's tree: unattributable, mixed between runs, and read by a later
+    # session as "that run produced nothing" when it had produced everything.
+    # The checkout is on their machine, this box reaches it, and since #734 the
+    # run has a worktree of its own there.
+    delivery = await commit_and_push_run_work(box=box, run=run)
+
     result = client_attach_terminal(run, work_step, attempt, gate=gate)
     await orch._session.flush()
     await orch._audit(
@@ -531,6 +544,7 @@ async def settle_client_attach(
             "outcome": "verified",
             "mode": "client_attach",
             "gate_proved": bool(gate and gate.get("proved")),
+            "git": delivery.as_record(),
         },
     )
     return result
