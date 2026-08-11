@@ -1,0 +1,90 @@
+"""A client_attach run works in its OWN worktree, not in the founder's checkout.
+
+Until now such a run edited the founder's working directory directly. Three
+things follow from that, and all three were observed:
+
+* **The tree accumulates uncommitted work.** Files from a run cancelled hours
+  earlier were still sitting there, and a later session read the clean-looking
+  history as "that run produced nothing" — it had produced everything.
+* **Two runs cannot proceed at once.** They edit the same files with no
+  boundary between them.
+* **The founder's own work-in-progress is in the blast radius.** A commit step
+  cannot tell their changes from the run's.
+
+A git worktree fixes all three at once and is already this founder's idiom
+(``bsvibe-app/wt/<branch>``): the run gets a real checkout of its own branch, on
+the same disk, sharing one object store.
+"""
+
+from __future__ import annotations
+
+import uuid
+
+from backend.workflow.domain.client_worktree import (
+    client_run_worktree,
+    worktree_branch,
+    worktree_provision_command,
+)
+
+_REPO = "/Users/founder/Works/BStockReport-client"
+_RUN = uuid.UUID("a2c2894a-f0be-491c-a585-7b69eaa972b0")
+
+
+class TestPath:
+    def test_the_path_is_derived_from_the_run_not_invented(self) -> None:
+        """Two callers derive it independently — the agent's dispatch and the
+        verification box — and they MUST land on the same directory. A path
+        passed from one to the other would be a wiring dependency; a derivation
+        cannot drift."""
+        assert client_run_worktree(_REPO, _RUN) == client_run_worktree(_REPO, _RUN)
+        assert client_run_worktree(_REPO, _RUN).startswith(f"{_REPO}/")
+
+    def test_the_path_names_the_run(self) -> None:
+        """A directory nobody can attribute is debris. The run id in the name is
+        what lets a founder — or a reaper — say what this is and whether it is
+        still wanted."""
+        assert "a2c2894a" in client_run_worktree(_REPO, _RUN)
+
+    def test_distinct_runs_get_distinct_worktrees(self) -> None:
+        other = uuid.UUID("b09f0920-05d1-41aa-987b-7b745aa4e4d4")
+        assert client_run_worktree(_REPO, _RUN) != client_run_worktree(_REPO, other)
+
+    def test_a_trailing_slash_does_not_double_up(self) -> None:
+        assert client_run_worktree(f"{_REPO}/", _RUN) == client_run_worktree(_REPO, _RUN)
+
+    def test_the_branch_names_the_run_too(self) -> None:
+        assert worktree_branch(_RUN) == "run/a2c2894a"
+
+
+class TestProvisionCommand:
+    def test_it_creates_the_worktree_on_its_own_branch(self) -> None:
+        cmd = worktree_provision_command(_REPO, _RUN)
+        assert "git -C" in cmd and _REPO in cmd
+        assert "worktree add" in cmd
+        assert "run/a2c2894a" in cmd
+
+    def test_it_is_idempotent_because_runs_resume(self) -> None:
+        """A resumed or retried run re-enters this step. ``worktree add`` on an
+        existing path is a hard error, and a run that dies there never reaches
+        the work it was retrying — the reentrancy trap this codebase has already
+        paid for once with a stalled clone."""
+        cmd = worktree_provision_command(_REPO, _RUN)
+        assert "[ -d" in cmd or "test -d" in cmd, (
+            f"provisioning must check for an existing worktree first: {cmd!r}"
+        )
+
+    def test_it_keeps_the_founders_checkout_clean(self) -> None:
+        """The worktree lives inside the repo, so without this it shows up as an
+        untracked directory in the founder's ``git status`` forever — which is
+        the very mess this change exists to end. ``.git/info/exclude`` is the
+        right place: it is LOCAL, so BSVibe never edits a tracked file to make
+        room for itself."""
+        cmd = worktree_provision_command(_REPO, _RUN)
+        assert ".git/info/exclude" in cmd
+
+    def test_the_founders_own_checkout_is_never_switched(self) -> None:
+        """The point of a worktree is that their branch and their
+        work-in-progress are untouched. A checkout/switch here would defeat it."""
+        cmd = worktree_provision_command(_REPO, _RUN)
+        for forbidden in ("git checkout", "git switch", "git stash", "git reset"):
+            assert forbidden not in cmd, f"must not disturb the founder's checkout: {forbidden}"

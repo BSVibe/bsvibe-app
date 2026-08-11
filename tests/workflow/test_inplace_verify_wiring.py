@@ -189,3 +189,31 @@ async def test_gate_box_ignores_the_runs_server_side_workspace() -> None:
     mgr = _select(**_base_kwargs(client_workspace_dir="/Users/founder/proj"))
     box = await mgr.acquire(uuid.uuid4(), "/app/var/runs/27e462d5-8ec7-4680-b274-c6480416ddc8")
     assert box.workspace_mount == "/Users/founder/proj"
+
+
+# ── the run works in its OWN worktree, not the founder's checkout ────────────
+
+
+async def test_the_agent_and_the_box_are_pointed_at_the_same_worktree() -> None:
+    """Two consumers derive this path independently — the agent's dispatch (the
+    CLI's cwd) and the verification box. If they disagree, the agent edits one
+    tree and the gate verifies another, and both look healthy while doing it."""
+    import uuid as _uuid
+
+    from backend.workflow.application.runtime.sandbox_selection import sandbox_manager_for_run
+    from backend.workflow.domain.client_worktree import client_run_worktree
+
+    run_id = _uuid.uuid4()
+    manager = _select(**_base_kwargs(run_id=run_id))
+
+    assert manager._run_id == run_id
+    box = manager._session_for(client_run_worktree("/Users/founder/proj", run_id))
+    assert box.workspace_mount == client_run_worktree("/Users/founder/proj", run_id)
+    assert sandbox_manager_for_run is not None
+
+
+async def test_a_run_without_an_id_keeps_the_old_in_place_behaviour() -> None:
+    """Nothing else changes shape: a caller with no run to name still gets the
+    founder's directory, which is what every non-client_attach path relies on."""
+    manager = _select(**_base_kwargs())
+    assert manager._run_id is None

@@ -60,6 +60,7 @@ from backend.workflow.application.runtime.sandbox_selection import (
     sandbox_manager_for_run,
 )
 from backend.workflow.application.stages.frame import FrameLlm
+from backend.workflow.domain.client_worktree import client_run_worktree
 from backend.workflow.infrastructure.connector_actions import ConnectorActionResolver
 from backend.workflow.infrastructure.db import ExecutionRun
 from backend.workflow.infrastructure.sandbox import SandboxManager
@@ -252,6 +253,14 @@ def build_agent_execution_deps(
             if run.product_id
             else (None, "server_sandbox", None)
         )
+        # A client_attach run works in a git worktree of its own under that
+        # directory. The directory itself is provisioned at sandbox acquire,
+        # which already precedes the first agent turn.
+        agent_workspace_dir = (
+            client_run_worktree(client_workspace_dir, run.id)
+            if execution_target == "client_attach" and client_workspace_dir
+            else client_workspace_dir
+        )
 
         # L10 (#5) — Knowledge-only short-circuit (B9b): a frame-classified
         # ``knowledge_only`` ask is a CHAT answer, no engineering work. It MUST
@@ -303,7 +312,10 @@ def build_agent_execution_deps(
             # #692 — thread the product's execution model + local dir so the
             # dispatched task tells the pure worker WHERE/HOW to run.
             execution_target=execution_target,
-            client_workspace_dir=client_workspace_dir,
+            # The run's OWN worktree, not the founder's checkout — the CLI runs
+            # with this as its cwd. Derived (not threaded) so this and the
+            # verification box cannot drift onto different trees.
+            client_workspace_dir=agent_workspace_dir,
         )
         if resolved is None:
             # Fallthrough writes a Decision when there's truly no LLM
@@ -336,6 +348,7 @@ def build_agent_execution_deps(
         # founder's machine, so its gate commands must run there. Picked per run;
         # every other run keeps the process-wide ``box``.
         run_box = sandbox_manager_for_run(
+            run_id=run.id,
             default=box,
             execution_target=execution_target,
             client_workspace_dir=client_workspace_dir,
