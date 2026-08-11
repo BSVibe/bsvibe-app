@@ -34,6 +34,7 @@ def sandbox_manager_for_run(
     session_factory: async_sessionmaker[AsyncSession] | None,
     workspace_id: uuid.UUID,
     timeout_s: float,
+    run_id: uuid.UUID | None = None,
 ) -> SandboxManager:
     """#692 in-place verify — pick the sandbox backend for THIS run.
 
@@ -87,6 +88,11 @@ def sandbox_manager_for_run(
         # The founder's own tree — the ONLY path that exists on that machine. The
         # ``acquire`` caller passes the run's server-side dir, which does not.
         client_workspace_dir=client_workspace_dir,
+        # ...and inside it, this run's OWN worktree. Editing the founder's
+        # checkout directly left uncommitted work piling up unattributably,
+        # blocked concurrent runs on one product, and put their own
+        # work-in-progress in the blast radius of anything that commits.
+        run_id=run_id,
     )
 
 

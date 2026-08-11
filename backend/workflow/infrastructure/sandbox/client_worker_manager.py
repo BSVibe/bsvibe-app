@@ -44,6 +44,10 @@ _AWAIT_SLACK_S = 60.0
 #: Bound for the tiny ``head``/``ls`` file-op commands (they never run user code).
 _FILE_OP_TIMEOUT_S = 30.0
 
+#: Provisioning is a `git worktree add` — a local checkout, not a build. Its own
+#: budget so a wedged git cannot eat the run's whole clock.
+_WORKTREE_TIMEOUT_S = 120.0
+
 _EXIT_RE = re.compile(r"exit (\d+)")
 
 
@@ -212,6 +216,13 @@ class ClientWorkerSandboxManager:
     workspace + executor type + the pinned founder worker) AND the founder's own
     workspace directory, which comes from the product's ``client_workspace_path``
     — the only path that exists on that machine.
+
+    ``run_id`` gives this run its OWN git worktree under that directory rather
+    than letting it edit the founder's checkout. Editing in place left three
+    marks, all observed: uncommitted work piling up unattributably, two runs
+    unable to proceed at once, and the founder's own work-in-progress inside the
+    blast radius of anything that commits. ``None`` keeps the old in-place
+    behaviour for a caller that has no run to name.
     """
 
     def __init__(
@@ -224,6 +235,7 @@ class ClientWorkerSandboxManager:
         pinned_worker_id: uuid.UUID | None,
         default_timeout_s: float,
         client_workspace_dir: str,
+        run_id: uuid.UUID | None = None,
     ) -> None:
         self._redis = redis
         self._session_factory = session_factory
@@ -232,6 +244,18 @@ class ClientWorkerSandboxManager:
         self._pinned_worker_id = pinned_worker_id
         self._default_timeout_s = default_timeout_s
         self._client_workspace_dir = client_workspace_dir
+        self._run_id = run_id
+
+    def _session_for(self, workspace_path: str) -> ClientWorkerSandboxSession:
+        return ClientWorkerSandboxSession(
+            redis=self._redis,
+            session_factory=self._session_factory,
+            workspace_id=self._workspace_id,
+            executor_type=self._executor_type,
+            workspace_path=workspace_path,
+            default_timeout_s=self._default_timeout_s,
+            pinned_worker_id=self._pinned_worker_id,
+        )
 
     async def acquire(
         self, project_id: uuid.UUID, workspace_path: str
@@ -247,16 +271,33 @@ class ClientWorkerSandboxManager:
         run settled UNTESTED as though the repo had no gate at all (live E2E
         2026-08-09, run ``27e462d5``). WHERE this run executes is dispatch
         context, decided by the product — so it is the manager's to supply.
+
+        With a ``run_id``, the box is rooted in this run's OWN worktree instead,
+        provisioned here. Here specifically because ``acquire`` already runs
+        BEFORE the drive loop dispatches the first agent turn, and that turn's
+        CLI needs the directory to exist — the agent's dispatch derives the same
+        path independently rather than being handed it.
+
+        Provisioning failure raises: a run that silently fell back to the
+        founder's checkout would be editing their tree while every record says
+        otherwise, which is worse than not running.
         """
-        return ClientWorkerSandboxSession(
-            redis=self._redis,
-            session_factory=self._session_factory,
-            workspace_id=self._workspace_id,
-            executor_type=self._executor_type,
-            workspace_path=self._client_workspace_dir,
-            default_timeout_s=self._default_timeout_s,
-            pinned_worker_id=self._pinned_worker_id,
+        if self._run_id is None:
+            return self._session_for(self._client_workspace_dir)
+
+        from backend.workflow.domain.client_worktree import (  # noqa: PLC0415
+            client_run_worktree,
+            worktree_provision_command,
         )
+
+        # Provisioning runs in the REPO: the worktree does not exist yet.
+        repo_box = self._session_for(self._client_workspace_dir)
+        command = worktree_provision_command(self._client_workspace_dir, self._run_id)
+        result = await repo_box.exec(command, timeout_s=_WORKTREE_TIMEOUT_S, shell=True)
+        if result.timed_out or result.exit_code != 0:
+            detail = "\n".join(o for o in (result.stdout, result.stderr) if o)[-500:]
+            raise SandboxError(f"could not provision this run's worktree: {detail}")
+        return self._session_for(client_run_worktree(self._client_workspace_dir, self._run_id))
 
     async def release(self, project_id: uuid.UUID) -> None:
         return None
