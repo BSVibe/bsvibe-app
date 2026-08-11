@@ -38,6 +38,18 @@ _WORKTREE_DIR = "wt"
 #: at 8 hex digits, and the run id is recoverable from the branch either way.
 _SHORT = 8
 
+#: Exit code of :func:`worktree_reclaim_command` when the worktree was KEPT
+#: because it still holds work that exists nowhere else. A distinct code because
+#: this is not a failure — it is the reaper's safety mechanism doing its job —
+#: and the caller must be able to say so rather than logging "reclaim failed"
+#: over the one outcome the founder needs to hear about.
+RECLAIM_HELD = 2
+
+#: Exit code when reclaiming did not happen and we cannot say the tree is held:
+#: an unregistered path, a locked worktree, a git that could not run. "Nothing
+#: was reclaimed" and "we could not observe why" are different facts.
+RECLAIM_FAILED = 3
+
 
 def _short(run_id: uuid.UUID) -> str:
     return str(run_id)[:_SHORT]
@@ -102,4 +114,65 @@ def worktree_provision_command(client_workspace_dir: str, run_id: uuid.UUID) -> 
     )
 
 
-__all__ = ["client_run_worktree", "worktree_branch", "worktree_provision_command"]
+def worktree_reclaim_command(client_workspace_dir: str, run_id: uuid.UUID) -> str:
+    """One shell command that gives this run's worktree back, or refuses to.
+
+    Every client_attach run gets a whole checkout of the repo and, until now,
+    kept it forever. On this founder's machine a full disk is not a degradation
+    but an unrecoverable brick, and the previous leak of exactly this shape
+    (#665/#666) survived for months because ``git worktree remove`` had quietly
+    no-opped while everyone read exit 0 as "reclaimed". So this command ends by
+    asserting the directory is actually GONE: its exit 0 is an observation.
+
+    **Never ``--force``.** Measured against real git (2.52), ``remove`` refuses
+    a tree containing modified or untracked files and does not refuse one whose
+    only extra content is ignored (``.venv``, ``node_modules``):
+
+    ========================  =========================
+    tree state                ``git worktree remove``
+    ========================  =========================
+    clean                     removes it
+    untracked file present    **refuses**, tree kept
+    tracked file modified     **refuses**, tree kept
+    ignored files only        removes it
+    directory already gone    succeeds (deregisters)
+    ========================  =========================
+
+    That refusal IS the safety mechanism, so the reaper inherits it instead of
+    reimplementing the check: the tree holding work that exists nowhere else is
+    precisely the tree git will not let us delete. A run cancelled mid-flight
+    keeps its hours of work — the loss #734/#735 exist to end.
+
+    Reclaiming a committed tree is safe for the mirror-image reason: removal
+    touches neither the branch nor the object store, so a run whose PUSH failed
+    still has its work on ``run/<id>`` in the founder's own repo afterwards.
+
+    Idempotent, because runs resume, retry and crash: nothing to reclaim is
+    reported as success, not as an alarm.
+    """
+    repo = shlex.quote(client_workspace_dir.rstrip("/"))
+    path = shlex.quote(client_run_worktree(client_workspace_dir, run_id))
+    return (
+        # A directory removed by hand leaves a stale registration that later
+        # makes `worktree add` refuse a path it believes is taken.
+        f"git -C {repo} worktree prune; "
+        f"if [ ! -d {path} ]; then exit 0; fi; "
+        # `[ ! -d ]` is the #665 lesson: exit 0 must MEAN the disk is free again.
+        f"if git -C {repo} worktree remove {path}; then "
+        f"[ ! -d {path} ] || exit {RECLAIM_FAILED}; exit 0; fi; "
+        # git refused. Asking why in git's own terms rather than matching its
+        # message text — which differs by version and locale.
+        f'if [ -n "$(git -C {path} status --porcelain 2>/dev/null)" ]; then '
+        f"exit {RECLAIM_HELD}; fi; "
+        f"exit {RECLAIM_FAILED}"
+    )
+
+
+__all__ = [
+    "RECLAIM_FAILED",
+    "RECLAIM_HELD",
+    "client_run_worktree",
+    "worktree_branch",
+    "worktree_provision_command",
+    "worktree_reclaim_command",
+]

@@ -300,6 +300,72 @@ class ClientWorkerSandboxManager:
         return self._session_for(client_run_worktree(self._client_workspace_dir, self._run_id))
 
     async def release(self, project_id: uuid.UUID) -> None:
+        """Give this run's worktree back to the founder's disk.
+
+        Here and not at the verified settle, because ``agent_loop`` calls this
+        in a ``finally``: it is the one seam EVERY terminal path crosses —
+        proved, refuted, cancelled, crashed. Hanging the reaper off the happy
+        path would reclaim nothing from the runs that end badly, which are
+        exactly the ones that leave debris (#734 makes a full checkout per run
+        and, until now, nothing ever removed one).
+
+        Never forces, so a tree still holding uncommitted work is KEPT — see
+        :func:`worktree_reclaim_command`. That outcome is reported as itself,
+        not as a failure: it is the founder's work sitting there, and they need
+        to be able to find it.
+
+        Nothing here raises. This runs inside that ``finally``, where an
+        exception would replace whatever the run was about to report — turning
+        a proved run into a crash over a directory. Reclaiming disk is never
+        worth that, so every failure is recorded and swallowed.
+        """
+        if self._run_id is None:
+            # The box was rooted at the founder's OWN checkout. There is no
+            # worktree of ours here, and reclaiming would mean their directory.
+            return None
+
+        from backend.workflow.domain.client_worktree import (  # noqa: PLC0415
+            RECLAIM_HELD,
+            client_run_worktree,
+            worktree_reclaim_command,
+        )
+
+        path = client_run_worktree(self._client_workspace_dir, self._run_id)
+        # In the REPO: you cannot stand in the directory you are removing.
+        repo_box = self._session_for(self._client_workspace_dir)
+        command = worktree_reclaim_command(self._client_workspace_dir, self._run_id)
+        try:
+            result = await repo_box.exec(command, timeout_s=_WORKTREE_TIMEOUT_S, shell=True)
+        except Exception as exc:  # noqa: BLE001 — an unreachable machine must not fail the run
+            logger.warning(
+                "client_attach_worktree_reclaim_unreachable",
+                run_id=str(self._run_id),
+                path=path,
+                error=f"{type(exc).__name__}: {exc}",
+            )
+            return None
+
+        if result.timed_out or result.exit_code == RECLAIM_HELD:
+            # Not a fault: the tree holds work that exists nowhere else, so it
+            # stays. Logged at warning because it is disk the founder now owns
+            # deliberately, and work they may be looking for.
+            logger.warning(
+                "client_attach_worktree_held",
+                run_id=str(self._run_id),
+                path=path,
+                reason="timeout" if result.timed_out else "uncommitted_work",
+            )
+        elif result.exit_code != 0:
+            detail = "\n".join(o for o in (result.stdout, result.stderr) if o)[-500:]
+            logger.warning(
+                "client_attach_worktree_reclaim_failed",
+                run_id=str(self._run_id),
+                path=path,
+                exit_code=result.exit_code,
+                detail=detail,
+            )
+        else:
+            logger.info("client_attach_worktree_reclaimed", run_id=str(self._run_id), path=path)
         return None
 
     async def reap_idle(self) -> None:
