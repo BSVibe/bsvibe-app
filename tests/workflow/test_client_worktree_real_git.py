@@ -382,3 +382,55 @@ def _Session_at(path: str, log: list[tuple[str, str]]) -> object:  # noqa: N802
             return SandboxResult(exit_code=0, stdout="", stderr="", timed_out=False)
 
     return _S()
+
+
+# ── the sweep, against real git ─────────────────────────────────────────────
+
+
+def test_the_listing_finds_our_worktrees_and_not_the_founders(repo: Path) -> None:
+    """Parsed from git's own output rather than from our belief about it — and
+    the founder's OWN worktrees, the idiom #734 borrowed, must not appear."""
+    from backend.workflow.domain.client_worktree import (
+        parse_worktree_shorts,
+        worktree_list_command,
+    )
+
+    other = uuid.UUID("b09f0920-05d1-41aa-987b-7b745aa4e4d4")
+    _sh(worktree_provision_command(str(repo), _RUN))
+    _sh(worktree_provision_command(str(repo), other))
+    # The founder's own, beside the repo and on their own branch.
+    _sh(f"git -C {repo} worktree add {repo.parent}/their-feature -b their/feature")
+
+    listed = _sh(worktree_list_command(str(repo)), cwd=repo)
+    assert listed.returncode == 0, listed.stderr
+    shorts = parse_worktree_shorts(listed.stdout, str(repo))
+
+    assert sorted(shorts) == sorted(["a2c2894a", "b09f0920"])
+    assert (repo.parent / "their-feature").is_dir(), "the founder's worktree must be untouched"
+
+
+def test_an_orphan_is_reclaimed_and_one_holding_work_is_not(repo: Path) -> None:
+    """The sweep's two outcomes, decided by git and not by us."""
+    from backend.workflow.domain.client_worktree import (
+        RECLAIM_HELD,
+        orphan_reclaim_command,
+        worktree_path_for_short,
+    )
+
+    other = uuid.UUID("b09f0920-05d1-41aa-987b-7b745aa4e4d4")
+    _sh(worktree_provision_command(str(repo), _RUN))
+    _sh(worktree_provision_command(str(repo), other))
+    # The abandoned run had committed its work before its process was killed.
+    _commit_in(Path(client_run_worktree(str(repo), _RUN)), "work")
+    # The other died mid-edit — that file exists in exactly one place.
+    (Path(client_run_worktree(str(repo), other)) / "half-done.txt").write_text("hours\n")
+
+    clean = _sh(orphan_reclaim_command(str(repo), worktree_path_for_short(str(repo), "a2c2894a")))
+    held = _sh(orphan_reclaim_command(str(repo), worktree_path_for_short(str(repo), "b09f0920")))
+
+    assert clean.returncode == 0
+    assert not Path(client_run_worktree(str(repo), _RUN)).exists()
+    assert held.returncode == RECLAIM_HELD
+    assert (Path(client_run_worktree(str(repo), other)) / "half-done.txt").exists(), (
+        "a killed run's uncommitted work is the thing the sweep must never take"
+    )

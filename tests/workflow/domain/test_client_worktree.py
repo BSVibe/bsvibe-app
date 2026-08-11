@@ -22,7 +22,10 @@ import uuid
 
 from backend.workflow.domain.client_worktree import (
     client_run_worktree,
+    orphan_reclaim_command,
+    parse_worktree_shorts,
     worktree_branch,
+    worktree_list_command,
     worktree_provision_command,
     worktree_reclaim_command,
 )
@@ -140,3 +143,44 @@ class TestReclaimCommand:
         cmd = worktree_reclaim_command(_REPO, _RUN)
         for forbidden in ("git checkout", "git switch", "git stash", "rm -rf"):
             assert forbidden not in cmd, f"must not disturb the founder's checkout: {forbidden}"
+
+
+class TestOrphanSweep:
+    """#736 reclaims at ``release``. A run whose process was KILLED never gets
+    there, and its checkout stays on the founder's disk with nobody to name it.
+
+    The founder's machine cannot tell those apart on its own: a run that has
+    only read so far has a clean, young worktree that looks exactly like an
+    abandoned one. Which runs are still going is the SERVER's knowledge, so the
+    machine lists what is there and the server decides what may go.
+    """
+
+    def test_it_lists_worktrees_from_the_repo(self) -> None:
+        cmd = worktree_list_command(_REPO)
+        assert f"git -C {_REPO}" in cmd
+        assert "worktree list" in cmd
+        assert "--porcelain" in cmd, "the human format is not a parsing contract"
+
+    def test_it_reads_only_our_own_worktrees(self) -> None:
+        """The founder's repo has worktrees of their own — this is their idiom,
+        which is exactly why #734 adopted it. Sweeping one of those would delete
+        the branch they are working in."""
+        listing = (
+            f"worktree {_REPO}\nHEAD abc\nbranch refs/heads/main\n\n"
+            f"worktree {_REPO}/wt/a2c2894a\nHEAD def\nbranch refs/heads/run/a2c2894a\n\n"
+            f"worktree {_REPO}/../their-own-checkout\nHEAD 999\n\n"
+            f"worktree {_REPO}/wt/b09f0920\nHEAD 111\n\n"
+        )
+        assert parse_worktree_shorts(listing, _REPO) == ["a2c2894a", "b09f0920"]
+
+    def test_an_empty_listing_sweeps_nothing(self) -> None:
+        assert parse_worktree_shorts("", _REPO) == []
+
+    def test_reclaiming_an_orphan_is_the_same_careful_removal(self) -> None:
+        """No second, laxer path. The sweep touches trees nobody is watching, so
+        if anything it needs git's refusal MORE than the run's own reclaim does.
+        """
+        cmd = orphan_reclaim_command(_REPO, f"{_REPO}/wt/a2c2894a")
+        assert "--force" not in cmd
+        assert "! -d" in cmd
+        assert "worktree remove" in cmd
