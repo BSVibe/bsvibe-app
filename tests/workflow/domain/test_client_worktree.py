@@ -24,6 +24,7 @@ from backend.workflow.domain.client_worktree import (
     client_run_worktree,
     worktree_branch,
     worktree_provision_command,
+    worktree_reclaim_command,
 )
 
 _REPO = "/Users/founder/Works/BStockReport-client"
@@ -87,4 +88,55 @@ class TestProvisionCommand:
         work-in-progress are untouched. A checkout/switch here would defeat it."""
         cmd = worktree_provision_command(_REPO, _RUN)
         for forbidden in ("git checkout", "git switch", "git stash", "git reset"):
+            assert forbidden not in cmd, f"must not disturb the founder's checkout: {forbidden}"
+
+
+class TestReclaimCommand:
+    """#734 makes a worktree per run and nothing gives one back.
+
+    Every client_attach run leaves a checkout of the whole repo on the founder's
+    machine, forever. This machine's disk filling up is not a degradation, it is
+    an unrecoverable brick — and the previous leak of exactly this shape
+    (#665/#666) ran for months because ``git worktree remove`` had quietly
+    no-opped and everyone read exit 0 as "reclaimed".
+    """
+
+    def test_it_never_forces(self) -> None:
+        """The one line that must never change.
+
+        Measured against real git (2.52): without ``--force``, ``remove``
+        REFUSES a tree holding modified or untracked files — the tree whose
+        contents exist nowhere else. That refusal is the entire safety
+        mechanism, so the reaper does not reimplement the check, it inherits it.
+        With ``--force`` this function deletes the founder's only copy of work a
+        cancelled run produced, which is the exact loss #734/#735 exist to end.
+        """
+        cmd = worktree_reclaim_command(_REPO, _RUN)
+        assert "--force" not in cmd and " -f " not in cmd, (
+            f"reclaim must never force — git's refusal IS the safety net: {cmd!r}"
+        )
+
+    def test_it_reclaims_this_runs_worktree(self) -> None:
+        cmd = worktree_reclaim_command(_REPO, _RUN)
+        assert "worktree remove" in cmd
+        assert client_run_worktree(_REPO, _RUN) in cmd
+
+    def test_it_proves_the_directory_is_gone(self) -> None:
+        """#665/#666: ``git worktree remove`` returned 0 while removing nothing,
+        so the leak reported success for months. Exit 0 here has to MEAN the
+        directory is gone, not that a command declined to complain."""
+        cmd = worktree_reclaim_command(_REPO, _RUN)
+        assert "! -d" in cmd, f"success must be observed, not assumed: {cmd!r}"
+
+    def test_it_keeps_the_branch(self) -> None:
+        """Removal touches neither the branch nor the objects, so the run's
+        commits stay reachable even when the push failed. Deleting the branch
+        would turn a reaper into the data loss it exists to prevent."""
+        cmd = worktree_reclaim_command(_REPO, _RUN)
+        for forbidden in ("branch -D", "branch -d", "push --delete", "git reset"):
+            assert forbidden not in cmd, f"the run's commits must survive: {forbidden}"
+
+    def test_it_does_not_touch_the_founders_checkout(self) -> None:
+        cmd = worktree_reclaim_command(_REPO, _RUN)
+        for forbidden in ("git checkout", "git switch", "git stash", "rm -rf"):
             assert forbidden not in cmd, f"must not disturb the founder's checkout: {forbidden}"
