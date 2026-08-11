@@ -104,6 +104,25 @@ class GithubClient:
                 return existing
         return self._json(resp)
 
+    async def compare_branch(
+        self, owner: str, repo: str, *, base: str, head: str
+    ) -> dict[str, Any]:
+        """How far ``head`` is ahead of ``base`` — ``{exists, ahead_by}``.
+
+        The remote's answer to "is there anything here to open a PR from". A
+        caller that pushed the branch itself may believe it is there when the
+        push failed, or that it is absent when an earlier attempt landed it; the
+        repo is the only authority. ``exists=False`` for an unknown head (404)
+        rather than raising, because "no branch" is a legitimate outcome, not a
+        fault.
+        """
+        ref = f"{quote(base, safe='')}...{quote(head, safe='')}"
+        resp = await self._request("GET", f"/repos/{owner}/{repo}/compare/{ref}")
+        if resp.status_code == 404:
+            return {"exists": False, "ahead_by": 0}
+        data = self._json(resp)
+        return {"exists": True, "ahead_by": int(data.get("ahead_by") or 0)}
+
     async def _find_open_pr_for_head(
         self, owner: str, repo: str, head: str
     ) -> dict[str, Any] | None:

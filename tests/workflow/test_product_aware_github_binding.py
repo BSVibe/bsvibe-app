@@ -635,7 +635,7 @@ class TestConnectorIsCredentialNotRepo:
         assert binding is None
 
 
-# ── client_attach has no server-side worktree to deliver FROM ───────────────
+# ── client_attach: the server may TALK to github, never hold the source ─────
 # Live 2026-08-10: approving a client_attach run's deliverable resolved a github
 # binding (the product owns a repo and the workspace has a credential, #684) and
 # ``deliver_github`` tried to commit the run's checkout — which does not exist,
@@ -643,12 +643,21 @@ class TestConnectorIsCredentialNotRepo:
 #     GitError: git add -A failed: fatal: not a git repository
 # and, since the github call sits OUTSIDE the per-binding try, the exception took
 # the whole dispatch down with it: the telegram binding was never even reached.
+#
+# #723's fix was to resolve ``None`` here. It stopped the crash and cost the rest:
+# NO client_attach run could ever get a PR, because a binding is how delivery
+# finds github at all. The guard was in the wrong place — the thing that must
+# never happen is the SERVER OBTAINING THE SOURCE, and that is the provisioner's
+# and the freshness merge's business, both of which now refuse it themselves.
+# Opening a PR needs no checkout, and since #735 the branch is already pushed.
 
 
-async def test_client_attach_product_resolves_no_github_target(sf) -> None:
-    """The source lives ONLY on the founder's machine (§3.5 privacy contract), so
-    there is nothing server-side to commit and push. ``None`` is the honest
-    answer — the same safe outcome as "no credential"."""
+async def test_client_attach_product_resolves_its_github_target(sf) -> None:
+    """A binding is the credential + the repo, not a claim about a checkout.
+
+    Guarding here removed the whole delivery surface for this execution model;
+    the danger (a server-side clone) is refused where it would actually happen.
+    """
     async with sf() as session:
         workspace_id = uuid.uuid4()
         product_id = await _seed_product(
@@ -663,7 +672,11 @@ async def test_client_attach_product_resolves_no_github_target(sf) -> None:
             session, workspace_id=workspace_id, product_id=product_id
         )
 
-        assert got is None
+        assert got is not None, (
+            "no binding means no PR for every client_attach run — the guard belongs "
+            "at the clone, not at the credential"
+        )
+        assert got.repo == "blas1n/BStockReport"
 
 
 async def test_server_sandbox_product_still_resolves_its_repo(sf) -> None:

@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import uuid
 
-from backend.workflow.application.delivery.connector_dispatch._github import _persist_pr_url
+from backend.workflow.application.delivery.connector_dispatch._github_pr import _persist_pr_url
 from backend.workflow.infrastructure.db import Deliverable, DeliverableType
 from tests._support import shared_file_sessionmaker
 

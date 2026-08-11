@@ -5,8 +5,12 @@ event builder. Two pieces live here:
 
 1. :func:`build_github_workspace_provisioner` — run-setup hook that clones the run's
    PRODUCT github target into the workspace dir on a ``bsvibe/run-<id>`` branch.
-2. :func:`deliver_github` — the per-deliverable handler: commit_all → push →
-   open the github plugin's ``open_pr`` action.
+   Refuses outright for a ``client_attach`` product: that source never comes here.
+2. :func:`deliver_github` — the per-deliverable handler. Two shapes, one ending:
+   a server-side run is committed and pushed from its checkout HERE, while a
+   ``client_attach`` run already committed and pushed itself on the founder's
+   machine (#734/#735) and only needs the PR opened. Both meet in
+   :func:`_open_pr_and_settle`, so neither model can quietly lose a feature.
 """
 
 from __future__ import annotations
@@ -26,51 +30,14 @@ from backend.extensions.plugin.base import PluginMeta
 from backend.extensions.plugin.runner import PluginRunner
 from backend.router.accounts.crypto import CredentialCipher
 from backend.workflow.domain.delivery import ActionResult
-from backend.workflow.infrastructure.db import ExecutionRun
 from backend.workflow.infrastructure.delivery.git_ops import GitOps
-from backend.workflow.infrastructure.intake.db import RequestRow, TriggerEventRow
 
 from ._builders import _split_summary
-from ._context import _build_context
-from ._merge_watch import enqueue_merge_watch
-from ._resolver import GithubBinding, resolve_github_binding
+from ._github_in_place import _deliver_client_attach_pr, _run_is_client_attach
+from ._github_pr import _open_pr_and_settle, _source_github_issue_number
+from ._resolver import GithubBinding, product_runs_in_place, resolve_github_binding
 
 logger = structlog.get_logger(__name__)
-
-# github webhook event kinds that carry a numbered issue / PR the delivery can
-# reply to (the framer's ``github_event`` tag on the TriggerEvent payload).
-_GITHUB_ISSUE_EVENTS = frozenset({"issues", "pull_request", "issue_comment"})
-
-
-async def _source_github_issue_number(
-    session: AsyncSession, run_id: uuid.UUID | None
-) -> int | None:
-    """The github issue / PR number that triggered this run, so the delivery can
-    close the loop back to it — a ``Closes #N`` ref in the PR body plus a comment
-    carrying the PR link. Traces run → request → trigger_event (the run payload
-    only keeps ``intent_text``; the issue number lives on the trigger envelope).
-
-    ``None`` when the run was not github-issue sourced (a Direct chat run, a
-    non-issue webhook, or any missing link) — so non-github runs are untouched.
-    """
-    if run_id is None:
-        return None
-    run = await session.get(ExecutionRun, run_id)
-    if run is None or run.request_id is None:
-        return None
-    request = await session.get(RequestRow, run.request_id)
-    if request is None:
-        return None
-    trigger = await session.get(TriggerEventRow, request.trigger_event_id)
-    if trigger is None:
-        return None
-    payload = trigger.payload or {}
-    if payload.get("github_event") not in _GITHUB_ISSUE_EVENTS:
-        return None
-    body = payload.get("body") or {}
-    target = body.get("issue") or body.get("pull_request") or {}
-    number = target.get("number")
-    return int(number) if isinstance(number, int) else None
 
 
 def github_remote_url(repo: str) -> str:
@@ -113,6 +80,20 @@ def build_github_workspace_provisioner(
 
     async def _provision(session: AsyncSession, run: Any, workspace_dir: Path) -> None:
         ws, product_id = run.workspace_id, getattr(run, "product_id", None)
+        if await product_runs_in_place(session, product_id):
+            # §3.5 privacy contract: this product's source stays on the founder's
+            # machine. The guard lives HERE, at the clone, and not at the binding
+            # resolver where #723 put it — there it also removed the parts of
+            # delivery that need no source at all (opening a PR for the branch
+            # the run itself pushed). The composite provisioner above also skips
+            # such a run; a dangerous operation should refuse on its own account
+            # rather than trust every future caller to have checked.
+            logger.info(
+                "github_workspace_skipped_client_attach",
+                workspace_id=str(ws),
+                run_id=str(run.id),
+            )
+            return
         binding = await resolve_github_binding(session, workspace_id=ws, product_id=product_id)
         if binding is None:
             return
@@ -190,6 +171,17 @@ async def deliver_github(
     checkout / run id soft-fails into a failed action (the queue never wedges).
     """
     action_prefix = "github:outbound:pr"
+    in_place = run_id is not None and await _run_is_client_attach(deps.session_factory, run_id)
+    if in_place:
+        assert run_id is not None  # noqa: S101 — narrowed by ``in_place`` itself
+        return await _deliver_client_attach_pr(
+            deps=deps,
+            binding=binding,
+            workspace_id=workspace_id,
+            deliverable_id=deliverable_id,
+            run_id=run_id,
+            content=content,
+        )
     if deps.workspace_root is None or run_id is None:
         logger.warning(
             "github_delivery_no_workspace_root",
@@ -268,127 +260,25 @@ async def deliver_github(
     if source_issue is not None:
         body = f"{body}\n\nCloses #{source_issue}".strip()
 
-    # 3. Push the branch to the (real-or-test) remote.
-    remote_url = deps.remote_url_for(binding.repo)
+    # 3. Push the branch to the (real-or-test) remote. The server's own
+    #    credential, because the server holds this checkout — the mirror image
+    #    of client_attach, where the founder's machine pushes with theirs.
     await deps.git_ops.push(checkout, branch, token=token)
 
-    # 4. Open the PR via the github plugin's open_pr action. Routing (repo/base) is
-    #    the founder-set config; head is the run branch; title/body from content.
-    plugin = deps.plugins_by_name.get("github")
-    if plugin is None:
-        return [
-            ActionResult(
-                action=action_prefix,
-                succeeded=False,
-                error="github plugin not loaded",
-            )
-        ]
-    ctx = _build_context(
-        credentials={"token": token},
-        config=dict(binding.account.delivery_config),
-    )
-    try:
-        result = await deps.runner.dispatch_action(
-            plugin,
-            action_name="open_pr",
-            context=ctx,
-            kwargs={
-                "repo": binding.repo,
-                "head": branch,
-                "base": binding.base_branch,
-                "title": title,
-                "body": body,
-            },
-        )
-    except Exception as exc:  # noqa: BLE001 — soft-fail like a plugin failure
-        logger.warning(
-            "github_delivery_open_pr_failed",
-            workspace_id=str(workspace_id),
-            deliverable_id=str(deliverable_id),
-            error=str(exc),
-        )
-        return [ActionResult(action=action_prefix, succeeded=False, error=str(exc))]
-
-    output = dict(result) if isinstance(result, dict) else {"result": result}
-    # #362 — persist the PR URL onto the Deliverable (PWA/Brief link). Soft.
-    await _persist_pr_url(deps.session_factory, deliverable_id, output.get("url"))
-
-    # PR4 — enqueue the opened PR for CI-green auto-merge (gated; see _merge_watch).
-    pr_number = output.get("pr_number")
-    if isinstance(pr_number, int):
-        await enqueue_merge_watch(
-            deps,
-            binding=binding,
-            workspace_id=workspace_id,
-            run_id=run_id,
-            deliverable_id=deliverable_id,
-            branch=branch,
-            pr_number=pr_number,
-        )
-
-    # Close the loop back to the originating issue: comment with the PR link so
-    # whoever filed it is notified (the PR body's ``Closes #N`` cross-links, but
-    # a comment is the visible signal on the issue itself). Soft — the PR is
-    # already open, so a comment hiccup must never fail the delivery.
-    pr_url = output.get("url")
-    if source_issue is not None and isinstance(pr_url, str) and pr_url:
-        try:
-            await deps.runner.dispatch_action(
-                plugin,
-                action_name="comment",
-                context=ctx,
-                kwargs={
-                    "repo": binding.repo,
-                    "issue_number": source_issue,
-                    "body": f"🤖 Opened a pull request to resolve this: {pr_url}",
-                },
-            )
-        except Exception as exc:  # noqa: BLE001 — soft-fail like the PR-url writeback
-            logger.warning(
-                "github_delivery_issue_comment_failed",
-                workspace_id=str(workspace_id),
-                run_id=str(run_id),
-                issue_number=source_issue,
-                error=str(exc),
-            )
-
-    logger.info(
-        "github_delivery_pr_opened",
-        workspace_id=str(workspace_id),
-        deliverable_id=str(deliverable_id),
-        run_id=str(run_id),
+    return await _open_pr_and_settle(
+        deps=deps,
+        binding=binding,
+        workspace_id=workspace_id,
+        deliverable_id=deliverable_id,
+        run_id=run_id,
         branch=branch,
-        repo=binding.repo,
-        remote=remote_url,
+        title=title,
+        body=body,
+        token=token,
+        source_issue=source_issue,
+        action_prefix=action_prefix,
+        pushed_by="server",
     )
-    return [ActionResult(action=action_prefix, succeeded=True, output=output)]
-
-
-async def _persist_pr_url(
-    session_factory: async_sessionmaker[AsyncSession],
-    deliverable_id: uuid.UUID,
-    pr_url: object,
-) -> None:
-    """Write the opened PR's URL onto ``Deliverable.diff_url`` (#362).
-
-    No-op when ``pr_url`` is falsy / not a string, or the deliverable is gone.
-    Soft — never raises into the delivery path (a missed diff_url is cosmetic)."""
-    if not isinstance(pr_url, str) or not pr_url:
-        return
-    from backend.workflow.infrastructure.db import Deliverable  # noqa: PLC0415 — lazy
-
-    try:
-        async with session_factory() as session:
-            deliverable = await session.get(Deliverable, deliverable_id)
-            if deliverable is not None:
-                deliverable.diff_url = pr_url
-                await session.commit()
-    except Exception:  # noqa: BLE001 — diff_url write must never fail a delivered PR
-        logger.warning(
-            "github_delivery_diff_url_write_failed",
-            deliverable_id=str(deliverable_id),
-            exc_info=True,
-        )
 
 
 __all__ = [
