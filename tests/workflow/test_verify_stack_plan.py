@@ -142,15 +142,110 @@ def test_compose_plus_overlay_derives_up_and_down() -> None:
     assert "-v" in plan.down, "volumes must go too — the disk is the bound"
 
 
-def test_compose_checks_keep_running_where_they_run_today() -> None:
-    """A compose stack's services ARE the environment; there is no idle box to
-    ``docker exec`` into. So the plan wraps nothing and the repo's own commands
-    run exactly as before — surface probes reach the services over the compose
-    network, which is a later lift, not a silent change here."""
-    plan = derive_stack_plan(repo_files=_COMPOSE, project="p", workspace_path="/ws")
+class TestComposeProber:
+    """A compose stack has services but no way IN, and that is the whole problem.
 
-    assert plan is not None
-    assert plan.wrap("uv run pytest") == "uv run pytest"
+    The isolation overlay publishes NO host ports on purpose — that is what keeps
+    the disposable stack from fighting production for 5442/6387/8700/3700. The
+    consequence is that a command running on the founder's machine cannot reach
+    the stack it just stood up: ``localhost:8700`` is prod's, or nothing's.
+
+    So the stack gets a PROBER — a container holding the run's source, attached
+    to the stack's own network, where the services answer to their compose
+    service names (``backend:8000``, ``postgres:5432``). Same shape the CLI
+    products already use; the network is the only thing added.
+    """
+
+    def test_a_compose_stack_gets_a_prober_on_its_own_network(self) -> None:
+        plan = derive_stack_plan(repo_files=_COMPOSE, project="verify-slot-0", workspace_path="/ws")
+
+        assert plan is not None
+        assert plan.source == "compose"
+        assert "--network verify-slot-0_default" in plan.up, (
+            "without joining the stack's network the prober is just another host process"
+        )
+
+    def test_the_checks_run_inside_the_prober(self) -> None:
+        """``wrap`` being identity was the bug: it meant "stood a stack up and
+        then ran the checks somewhere that cannot see it"."""
+        plan = derive_stack_plan(repo_files=_COMPOSE, project="p", workspace_path="/ws")
+
+        assert plan is not None
+        wrapped = plan.wrap("uv run pytest tests/surface")
+        assert wrapped != "uv run pytest tests/surface"
+        assert "docker exec" in wrapped and "p-probe" in wrapped
+
+    def test_the_prober_is_named_after_the_slot(self) -> None:
+        """Slot-scoped, like the stack itself: reclaiming a slot has to reclaim a
+        dead holder's prober too, and it can only do that if it can name it."""
+        plan = derive_stack_plan(repo_files=_COMPOSE, project="verify-slot-3", workspace_path="/ws")
+
+        assert plan is not None
+        assert "verify-slot-3-probe" in plan.up
+        assert "verify-slot-3-probe" in plan.down
+
+    def test_the_prober_goes_before_the_stack_does(self) -> None:
+        """MEASURED, and it exits 0 either way: ``docker compose down -v`` cannot
+        remove a network that still has an endpoint attached — it prints
+        "Resource is still in use" and returns SUCCESS, leaking one network per
+        run. Removing the prober first is the whole fix, so the order is the
+        assertion."""
+        plan = derive_stack_plan(repo_files=_COMPOSE, project="p", workspace_path="/ws")
+
+        assert plan is not None
+        assert plan.down.index("p-probe") < plan.down.index("compose"), (
+            f"the stack is torn down before its prober leaves the network: {plan.down!r}"
+        )
+
+    def test_the_source_reaches_the_prober(self) -> None:
+        """A probe suite is code in the repo; a prober without the source can run
+        nothing. Same tar copy as the CLI container — never a bind mount, so
+        verification does not write into the tree the agent works in."""
+        plan = derive_stack_plan(repo_files=_COMPOSE, project="p", workspace_path="/founder/ws")
+
+        assert plan is not None
+        assert "tar -cf - -C /founder/ws" in plan.up
+        assert plan.workdir, "callers building absolute paths need to know where the source landed"
+
+    def test_the_founders_env_still_does_not_travel(self) -> None:
+        """The prober is a new door into the verification environment; it must
+        not become the one that lets ambient host state back in."""
+        plan = derive_stack_plan(repo_files=_COMPOSE, project="p", workspace_path="/ws")
+
+        assert plan is not None
+        assert "--exclude=./.env" in plan.up
+
+    def test_a_compose_repo_declaring_no_toolchain_has_no_way_in(self) -> None:
+        """An honest limit rather than an invented image: nothing declared means
+        nothing to reproduce, so the stack stands up and the checks stay where
+        they were. No product hits this today (a compose repo without any
+        manifest), and guessing an image would be the fabrication the derived
+        gate refuses to make."""
+        plan = derive_stack_plan(
+            repo_files=["deploy/compose.yaml", "deploy/compose.verify.yaml"],
+            project="p",
+            workspace_path="/ws",
+        )
+
+        assert plan is not None
+        assert plan.source == "compose"
+        assert plan.wrap("echo hi") == "echo hi"
+
+    def test_an_image_override_picks_the_prober_not_a_bare_container(self) -> None:
+        """``image`` overrides the IMAGE, not the kind of environment. Dropping
+        the compose stack because someone pinned an interpreter would silently
+        verify a stackless product."""
+        plan = derive_stack_plan(
+            repo_files=_COMPOSE,
+            project="verify-slot-0",
+            workspace_path="/ws",
+            metadata={"verify_stack": {"image": "python:3.13-slim"}},
+        )
+
+        assert plan is not None
+        assert plan.source == "compose", "the repo still declares a stack"
+        assert "docker compose" in plan.up
+        assert "python:3.13-slim" in plan.up
 
 
 def test_compose_without_the_isolation_overlay_is_refused() -> None:

@@ -168,9 +168,12 @@ async def open_check_environment(
         plan = outcome.plan
         detail = {"source": plan.source, "image": plan.image, "project": outcome.project}
         if not plan.exec_template:
-            # An environment is up, but it offers no way in (a compose stack's
-            # services ARE the environment). The checks run where they already
-            # ran; the surfaces reachable through that stack are a later lift.
+            # An environment is up but offers no way in. Since the compose
+            # prober landed this is a narrow case — a compose repo declaring no
+            # toolchain at all, where inventing an image would be a fabrication.
+            # The checks then run where they already ran, and the stack's
+            # services are simply not reachable from there.
+            logger.info("verify_stack_has_no_way_in", project=outcome.project, source=plan.source)
             yield CheckEnvironment(box=box, kind=plan.source, detail=detail)
             return
         yield CheckEnvironment(box=_StackBox(box, outcome), kind=plan.source, detail=detail)
