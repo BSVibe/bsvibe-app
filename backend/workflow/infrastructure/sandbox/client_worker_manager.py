@@ -26,6 +26,7 @@ from __future__ import annotations
 import re
 import shlex
 import uuid
+from collections.abc import Mapping
 from typing import Any
 
 import structlog
@@ -110,7 +111,14 @@ class ClientWorkerSandboxSession:
     def workspace_mount(self) -> str:
         return self._workspace_path
 
-    async def exec(self, command: str, *, timeout_s: float, shell: bool = False) -> SandboxResult:
+    async def exec(
+        self,
+        command: str,
+        *,
+        timeout_s: float,
+        shell: bool = False,
+        env: Mapping[str, str] | None = None,
+    ) -> SandboxResult:
         """Run ONE command on the founder's machine and map its exit code.
 
         ``shell`` is accepted for Protocol parity but has no effect here — the
@@ -144,7 +152,12 @@ class ClientWorkerSandboxSession:
             )
             task_id = task.id
             await dispatch.dispatch_task(
-                self._redis, session=session, task=task, worker_id=worker_id, action="exec"
+                self._redis,
+                session=session,
+                task=task,
+                worker_id=worker_id,
+                action="exec",
+                env=env,
             )
             # Commit before awaiting — the worker reports on a SEPARATE session
             # over HTTP; under PG READ COMMITTED an uncommitted row is invisible

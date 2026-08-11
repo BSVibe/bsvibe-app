@@ -181,6 +181,26 @@ _EXEC_TIMEOUT_S = 900.0
 _EXEC_OUTPUT_MAX = 20_000
 
 
+def _exec_env(task: dict[str, Any]) -> dict[str, str]:
+    """The exec command's environment, as dispatched.
+
+    Absent, empty or malformed all mean the same thing — no extra environment —
+    because a command that runs without a secret fails on its own terms, while a
+    worker that crashes on a bad payload stops running anything at all.
+    """
+    raw = task.get("exec_env")
+    if not raw:
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except (TypeError, ValueError):
+        logger.warning("exec_env_unparsable", task_id=str(task.get("task_id")))
+        return {}
+    if not isinstance(parsed, dict):
+        return {}
+    return {str(k): str(v) for k, v in parsed.items()}
+
+
 async def _handle_exec_task(
     *,
     task_id: str,
@@ -190,6 +210,7 @@ async def _handle_exec_task(
     headers: dict[str, str],
     redis: _RedisPublisher | None,
     done_chan: str,
+    env: dict[str, str] | None = None,
 ) -> None:
     """#692 — run ONE shell command in ``workspace_dir`` and report its exit code.
 
@@ -201,8 +222,19 @@ async def _handle_exec_task(
     ``success`` is ``exit == 0``; the combined stdout/stderr tail rides back as
     ``output`` so a failing gate is diagnosable. A missing/!dir workspace or a
     timeout is reported as a failure, never as a silent pass.
+
+    ``env`` holds a product's declared verification secrets. They arrive beside
+    the command, never inside it, because the command string is persisted and
+    streamed; here they become process environment, which is what lets the
+    command say ``docker run -e NAME`` and have docker fill the value in. Only
+    the NAMES are ever logged.
     """
-    logger.info("exec_task_received", task_id=task_id, workspace_dir=workspace_dir)
+    logger.info(
+        "exec_task_received",
+        task_id=task_id,
+        workspace_dir=workspace_dir,
+        env_names=sorted(env or {}),
+    )
     if not workspace_dir or not os.path.isdir(workspace_dir):  # noqa: ASYNC240
         await _post_exec_result(
             client,
@@ -221,6 +253,10 @@ async def _handle_exec_task(
         cwd=workspace_dir,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.STDOUT,
+        # Layered ON the worker's environment, not replacing it: the command
+        # runs `docker`, `git` and the repo's own toolchain, all of which need
+        # PATH and HOME to exist.
+        env={**os.environ, **(env or {})} if env else None,
     )
     try:
         out, _ = await asyncio.wait_for(proc.communicate(), timeout=_EXEC_TIMEOUT_S)
@@ -319,6 +355,7 @@ async def handle_task(
             task_id=task_id,
             command=prompt,
             workspace_dir=str(task.get("workspace_dir") or "").strip(),
+            env=_exec_env(task),
             client=client,
             headers=headers,
             redis=redis,

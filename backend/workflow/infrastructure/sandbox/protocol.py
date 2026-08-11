@@ -12,6 +12,7 @@ host-side fallback.
 from __future__ import annotations
 
 import uuid
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
@@ -38,8 +39,23 @@ class SandboxSession(Protocol):
     def workspace_mount(self) -> str: ...
 
     async def exec(
-        self, command: str, *, timeout_s: float, shell: bool = False
-    ) -> SandboxResult: ...
+        self,
+        command: str,
+        *,
+        timeout_s: float,
+        shell: bool = False,
+        env: Mapping[str, str] | None = None,
+    ) -> SandboxResult:
+        """Run one command. ``env`` is EXTRA environment for it.
+
+        Carried beside the command rather than inside it: a command string is
+        persisted (``executor_tasks.prompt``) and streamed, so a product's
+        declared verification secret interpolated into one would be a credential
+        written to the database. Backends that cannot offer extra environment
+        ignore it — the check then fails on its own terms, which is a verdict,
+        rather than the value leaking to buy a pass.
+        """
+        ...
 
     async def read_file(self, rel_path: str, max_bytes: int) -> bytes: ...
 

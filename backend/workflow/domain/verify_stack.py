@@ -58,6 +58,8 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
+from backend.workflow.domain.verify_secrets import declared_secret_names
+
 #: The repo-relative compose files that make a stand-up both possible and SAFE.
 #: Both must be present — see the module docstring.
 _COMPOSE_BASE = "deploy/compose.yaml"
@@ -179,7 +181,11 @@ class StackPlan:
 
 
 def _from_metadata(
-    raw: Any, project: str, workspace_path: str, files: set[str]
+    raw: Any,
+    project: str,
+    workspace_path: str,
+    files: set[str],
+    secret_names: Sequence[str] = (),
 ) -> StackPlan | None:
     if not isinstance(raw, Mapping):
         raise StackPlanError(
@@ -192,7 +198,11 @@ def _from_metadata(
         # dropping a declared compose stack because someone pinned an
         # interpreter would silently verify a stackless version of the product.
         return _derived_plan(
-            files=files, project=project, workspace_path=workspace_path, image=image
+            files=files,
+            project=project,
+            workspace_path=workspace_path,
+            image=image,
+            secret_names=secret_names,
         )
     up = str(raw.get("up") or "").strip()
     down = str(raw.get("down") or "").strip()
@@ -213,7 +223,14 @@ def _from_metadata(
     )
 
 
-def _source_container_up(*, name: str, image: str, workspace_path: str, network: str = "") -> str:
+def _source_container_up(
+    *,
+    name: str,
+    image: str,
+    workspace_path: str,
+    network: str = "",
+    secret_names: Sequence[str] = (),
+) -> str:
     """Stand one idle container up holding a clean copy of the source.
 
     The copy is a tar stream rather than a bind mount so the founder's tree is
@@ -227,10 +244,20 @@ def _source_container_up(*, name: str, image: str, workspace_path: str, network:
     ``network`` puts it on an existing bridge. That is the ONLY difference
     between the CLI product's environment and a compose product's prober, and it
     is what turns "a stack is up somewhere" into "a check can talk to it".
+
+    ``secret_names`` become ``-e NAME`` — the NAME with no value, which docker
+    fills from the environment of the process that runs this command. The values
+    travel on the dispatch channel instead (see
+    :mod:`backend.workflow.domain.verify_secrets`), because this string is
+    persisted on ``executor_tasks.prompt`` and streamed to Redis: a value written
+    here would be a credential in the database. What lands in the evidence trail
+    is the list of names, which is what a reader actually wants to know.
     """
     quoted = shlex.quote(name)
     excludes = " ".join(shlex.quote(f"--exclude={pattern}") for pattern in _UNCOPYABLE)
     joins = f"--network {shlex.quote(network)} " if network else ""
+    # Sorted by the caller; a command that differs run to run cannot be compared.
+    envs = "".join(f"-e {name} " for name in secret_names)
     # ⚠️ The copy is a PIPELINE, and a pipeline's exit status is its LAST stage:
     # a failing ``tar -cf`` (missing path, unreadable tree) still leaves the
     # receiving ``tar -xf`` exiting 0. That would boot a container with an EMPTY
@@ -246,7 +273,7 @@ def _source_container_up(*, name: str, image: str, workspace_path: str, network:
     # ``sleep infinity`` because the container is a place to exec into, not a
     # service; it holds still until teardown.
     return (
-        f"docker run -d --name {quoted} {joins}-w {_CONTAINER_WORKDIR} "
+        f"docker run -d --name {quoted} {joins}{envs}-w {_CONTAINER_WORKDIR} "
         f"{shlex.quote(image)} sleep infinity && {copy_in} && {copied}"
     )
 
@@ -255,10 +282,14 @@ def _exec_into(name: str) -> str:
     return f"docker exec -w {_CONTAINER_WORKDIR} {shlex.quote(name)} sh -lc {_COMMAND_SLOT}"
 
 
-def _container_plan(*, image: str, project: str, workspace_path: str) -> StackPlan:
+def _container_plan(
+    *, image: str, project: str, workspace_path: str, secret_names: Sequence[str] = ()
+) -> StackPlan:
     """A CLI product's whole environment: one container holding its source."""
     return StackPlan(
-        up=_source_container_up(name=project, image=image, workspace_path=workspace_path),
+        up=_source_container_up(
+            name=project, image=image, workspace_path=workspace_path, secret_names=secret_names
+        ),
         # ``rm -f`` is idempotent (exit 0 when there is nothing there), which is
         # what lets the next slot holder clear a dead holder's leftovers.
         down=f"docker rm -f {shlex.quote(project)}",
@@ -269,7 +300,13 @@ def _container_plan(*, image: str, project: str, workspace_path: str) -> StackPl
     )
 
 
-def _compose_plan(*, project: str, workspace_path: str, image: str | None) -> StackPlan:
+def _compose_plan(
+    *,
+    project: str,
+    workspace_path: str,
+    image: str | None,
+    secret_names: Sequence[str] = (),
+) -> StackPlan:
     """A compose product: the stack, plus a PROBER that can actually reach it.
 
     The overlay publishes no host ports — deliberately, because that is what
@@ -310,6 +347,7 @@ def _compose_plan(*, project: str, workspace_path: str, image: str | None) -> St
                 image=image,
                 workspace_path=workspace_path,
                 network=f"{project}{_COMPOSE_NETWORK_SUFFIX}",
+                secret_names=secret_names,
             )
         ),
         # ``;`` not ``&&``: both halves are idempotent and each must run even if
@@ -330,7 +368,12 @@ def _derive_image(files: set[str]) -> str | None:
 
 
 def _derived_plan(
-    *, files: set[str], project: str, workspace_path: str, image: str | None = None
+    *,
+    files: set[str],
+    project: str,
+    workspace_path: str,
+    image: str | None = None,
+    secret_names: Sequence[str] = (),
 ) -> StackPlan | None:
     """What this repo declares, boiled down to one plan.
 
@@ -350,6 +393,7 @@ def _derived_plan(
             project=project,
             workspace_path=workspace_path,
             image=image or _derive_image(files),
+            secret_names=secret_names,
         )
 
     chosen = image or _derive_image(files)
@@ -357,7 +401,12 @@ def _derived_plan(
         # Nothing declared means nothing to reproduce. A container built on a
         # guess would be a fabricated environment, which is worse than none.
         return None
-    return _container_plan(image=chosen, project=project, workspace_path=workspace_path)
+    return _container_plan(
+        image=chosen,
+        project=project,
+        workspace_path=workspace_path,
+        secret_names=secret_names,
+    )
 
 
 def derive_stack_plan(
@@ -383,12 +432,20 @@ def derive_stack_plan(
     the copy runs through the same box as the stand-up.
     """
     files = set(repo_files)
+    # The product's declared secrets, by NAME only. The values are never read
+    # here — that separation is what keeps them out of every command string.
+    secret_names = declared_secret_names(metadata)
     if metadata is not None and _METADATA_KEY in metadata:
         raw = metadata[_METADATA_KEY]
         if raw is None:
             return None
-        return _from_metadata(raw, project, workspace_path, files)
-    return _derived_plan(files=files, project=project, workspace_path=workspace_path)
+        return _from_metadata(raw, project, workspace_path, files, secret_names)
+    return _derived_plan(
+        files=files,
+        project=project,
+        workspace_path=workspace_path,
+        secret_names=secret_names,
+    )
 
 
 __all__ = ["StackPlan", "StackPlanError", "derive_stack_plan"]

@@ -103,7 +103,14 @@ class _StackBox:
         """
         return self._ready.plan.workdir or self._inner.workspace_mount
 
-    async def exec(self, command: str, *, timeout_s: float, shell: bool = False) -> SandboxResult:
+    async def exec(
+        self,
+        command: str,
+        *,
+        timeout_s: float,
+        shell: bool = False,
+        env: Mapping[str, str] | None = None,
+    ) -> SandboxResult:
         # ``shell=True`` regardless of the caller's flag: the wrapped form is a
         # shell string by construction. (S604: this is the sandbox Protocol's
         # own flag, not a subprocess call — the command is the repo's declared
@@ -157,6 +164,11 @@ async def open_check_environment(
         metadata=metadata,
         docker_context=docker_context,
         boot_timeout_s=boot_timeout_s,
+        # Unsealed at the LAST possible moment and never stored: from here the
+        # values go straight onto the dispatch channel that carries them to the
+        # founder's machine. A failure to decrypt drops the secret rather than
+        # the run — the check that needed it then fails honestly.
+        secrets=_unseal(metadata),
     ) as outcome:
         if isinstance(outcome, StackUnavailable):
             yield CheckEnvironment(box=None, kind="unavailable", unavailable=outcome.reason)
@@ -177,6 +189,33 @@ async def open_check_environment(
             yield CheckEnvironment(box=box, kind=plan.source, detail=detail)
             return
         yield CheckEnvironment(box=_StackBox(box, outcome), kind=plan.source, detail=detail)
+
+
+def _unseal(metadata: Mapping[str, Any] | None) -> dict[str, str]:
+    """The product's declared verification secrets, in the clear.
+
+    The cipher is built here rather than injected because this is the only place
+    that needs it, and a KMS key that cannot be built is not a reason to fail a
+    run — a product declaring no secrets must not start caring about the key.
+    """
+    from backend.workflow.domain.verify_secrets import (  # noqa: PLC0415
+        declared_secret_names,
+        unseal_secrets,
+    )
+
+    if not declared_secret_names(metadata):
+        return {}
+    try:
+        from backend.router.accounts.crypto import (  # noqa: PLC0415
+            CredentialCipher,
+            _key_from_settings,
+        )
+
+        cipher = CredentialCipher(_key_from_settings())
+    except Exception:  # noqa: BLE001 — an unavailable key is not a verdict
+        logger.warning("verify_secrets_cipher_unavailable")
+        return {}
+    return unseal_secrets(metadata, decrypt=cipher.decrypt)
 
 
 async def list_repo_files(box: SandboxSession) -> list[str]:

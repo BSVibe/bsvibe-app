@@ -13,6 +13,7 @@ import posixpath
 import shlex
 import time
 import uuid
+from collections.abc import Mapping
 from dataclasses import dataclass
 
 import structlog
@@ -75,7 +76,14 @@ class DockerSandboxSession:
     def workspace_mount(self) -> str:
         return _WORK_MOUNT
 
-    async def exec(self, command: str, *, timeout_s: float, shell: bool = False) -> SandboxResult:
+    async def exec(
+        self,
+        command: str,
+        *,
+        timeout_s: float,
+        shell: bool = False,
+        env: Mapping[str, str] | None = None,
+    ) -> SandboxResult:
         if shell:
             inner = ["sh", "-c", command]
         else:

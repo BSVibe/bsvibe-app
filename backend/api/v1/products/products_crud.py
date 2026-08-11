@@ -25,6 +25,7 @@ from backend.api.deps import (
     require_role,
 )
 from backend.identity.workspaces_db import ProductRow
+from backend.workflow.application.product_secrets import sealed_product_metadata
 
 from ._schemas import (
     ProductBootstrapResponse,
@@ -223,7 +224,7 @@ async def update_product(
     # ORM attribute is ``product_metadata`` (``metadata`` is reserved by
     # SQLAlchemy's declarative base); the wire field is ``metadata``.
     if payload.metadata is not None:
-        row.product_metadata = payload.metadata
+        row.product_metadata = sealed_product_metadata(payload.metadata, row.product_metadata)
     await session.commit()
     return ProductResponse.model_validate(row)
 
