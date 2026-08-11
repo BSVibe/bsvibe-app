@@ -182,6 +182,5 @@ class TestSurfaceChecks:
         ].lower()
         scope_line = next(line for line in sys.splitlines() if "changed files" in line)
         assert "surface" in scope_line, (
-            "the scoping instruction must say it does not apply to surface checks: "
-            f"{scope_line!r}"
+            f"the scoping instruction must say it does not apply to surface checks: {scope_line!r}"
         )
