@@ -133,9 +133,13 @@ async def test_build_litter_is_not_committed() -> None:
 
     await commit_and_push_run_work(box=box, run=_Run())
 
-    stage = next(c for c in box.commands if c.startswith("git add"))
+    staging = " ".join(c for c in box.commands if c.startswith(("git add", "git reset")))
     for litter in (".venv", "node_modules", "__pycache__"):
-        assert f"(exclude){litter}" in stage, stage
+        assert litter in staging, staging
+    assert "(exclude)" not in staging, (
+        "an `add` pathspec that NAMES an ignored path makes git refuse the whole "
+        f"staging step (exit 1) — measured on git 2.52: {staging!r}"
+    )
 
 
 # ── against real git: the ladder has to actually produce a commit ────────────
@@ -164,13 +168,29 @@ async def test_the_commands_really_commit_in_a_real_worktree(tmp_path: object) -
 
     sh("git init -q -b main && git config user.email t@t && git config user.name t", root)
     (root / "README.md").write_text("hello\n")
+    # ⚠️ THE CONDITION THAT WAS MISSING. Real repos ignore their own build
+    # litter, and naming an ignored path in an `add` pathspec is what git
+    # refuses ("The following paths are ignored by one of your .gitignore
+    # files", exit 1). Without this file the fixture created a `.venv` that was
+    # merely untracked, the exclusion pathspecs matched nothing ignored, and the
+    # staging step passed here while failing in production — live run
+    # `2abd398e` on BStockReport, whose `.gitignore` has all three.
+    (root / ".gitignore").write_text(".venv/\n.pytest_cache/\n.ruff_cache/\n")
     sh("git add -A && git commit -qm init", root)
     sh(worktree_provision_command(str(root), run.id), root)
 
     worktree = Path(client_run_worktree(str(root), run.id))
     (worktree / "new_file.py").write_text("x = 1\n")
-    (worktree / ".venv").mkdir()
-    (worktree / ".venv" / "junk").write_text("binary\n")
+    # Ignored litter — what a native `uv run` leaves behind in the tree the
+    # agent works in, and the shape that broke staging.
+    for name in (".venv", ".pytest_cache", ".ruff_cache"):
+        (worktree / name).mkdir()
+        (worktree / name / "junk").write_text("binary\n")
+    # NOT ignored by this repo: the exclusion has to keep earning its place, or
+    # the fix would be "drop the exclusions and let .gitignore do it" — which
+    # ships node_modules for every repo that forgot to ignore it.
+    (worktree / "node_modules").mkdir()
+    (worktree / "node_modules" / "left-pad.js").write_text("//\n")
 
     class _RealBox:
         @property
@@ -192,4 +212,8 @@ async def test_the_commands_really_commit_in_a_real_worktree(tmp_path: object) -
     files = sh("git show --name-only --format= HEAD", worktree).stdout
     assert "new_file.py" in files
     assert ".venv" not in files, f"build litter was committed: {files!r}"
+    assert "node_modules" not in files, (
+        f"litter this repo does NOT ignore was committed — .gitignore alone is "
+        f"not enough: {files!r}"
+    )
     assert sh("git status --porcelain", root).stdout == "", "the founder's checkout must be clean"

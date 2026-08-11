@@ -104,9 +104,25 @@ async def commit_and_push_run_work(*, box: Any, run: Any) -> GitDeliveryOutcome:
     not another run's.
     """
     branch = worktree_branch(run.id)
-    excludes = " ".join(shlex.quote(f":(exclude){p}") for p in _UNCOMMITTABLE)
+    litter = " ".join(shlex.quote(p) for p in _UNCOMMITTABLE)
 
-    ok, out = await _run(box, f"git add -A -- . {excludes}", timeout_s=_GIT_TIMEOUT_S)
+    # Stage everything, THEN take the litter back out. The obvious one-liner —
+    # `git add -A -- . :(exclude).venv …` — refuses outright the moment any of
+    # those paths exists AND the repo ignores it: naming an ignored path in a
+    # pathspec is what triggers "The following paths are ignored by one of your
+    # .gitignore files", exit 1, nothing staged. Both conditions hold in any
+    # real repo the moment the agent runs its own toolchain natively in the
+    # worktree, which is what client_attach IS (live run `2abd398e`,
+    # BStockReport). Measured on git 2.52; `--ignore-errors` does not help.
+    #
+    # `git add -A` with no pathspec never has that problem — .gitignore does its
+    # work silently. The unstage then still earns its place: it catches litter
+    # the repo does NOT ignore, which is the case the exclusions existed for.
+    # `git reset` on paths that are absent, or were never staged, is a no-op
+    # exit 0, and it leaves the files themselves alone.
+    ok, out = await _run(box, "git add -A", timeout_s=_GIT_TIMEOUT_S)
+    if ok:
+        ok, out = await _run(box, f"git reset -q -- {litter}", timeout_s=_GIT_TIMEOUT_S)
     if not ok:
         logger.warning("client_attach_commit_stage_failed", run_id=str(run.id), error=out)
         return GitDeliveryOutcome(branch=branch, committed=False, pushed=False, error=out)
