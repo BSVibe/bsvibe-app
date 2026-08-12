@@ -23,6 +23,7 @@ Two things the landing must NOT do, both of which would be worse than the hole:
 from __future__ import annotations
 
 import uuid
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -146,7 +147,7 @@ def _stub_settle_dependencies(
     async def _fake_gate(_service: Any, **kwargs: Any) -> dict[str, Any] | None:
         return gate
 
-    async def _fake_commit(*, box: Any, run: Any) -> Any:
+    async def _fake_commit(*, box: Any, run: Any, baseline: str | None = None) -> Any:
         return client_attach_delivery.GitDeliveryOutcome(
             branch=f"run/{str(run.id)[:8]}", committed=True, pushed=True
         )
@@ -370,3 +371,74 @@ async def test_both_execution_models_land_through_the_same_helper() -> None:
     assert "land_verified_artifacts" in inspect.getsource(
         client_attach_delivery.land_client_attach_deliverable
     )
+
+
+class _GitBox:
+    """The founder's machine, scripting the git ladder's decision points."""
+
+    def __init__(self, *, staged: bool, ahead: int) -> None:
+        self.commands: list[str] = []
+        self._staged = staged
+        self._ahead = ahead
+
+    async def exec(self, command: str, *, timeout_s: float, shell: bool = False) -> Any:
+        from backend.workflow.infrastructure.sandbox import SandboxResult
+
+        self.commands.append(command)
+        if command.startswith("git diff --cached --quiet"):
+            # exit 0 = NOTHING staged.
+            return SandboxResult(
+                exit_code=1 if self._staged else 0, stdout="", stderr="", timed_out=False
+            )
+        if command.startswith("git rev-list --count"):
+            return SandboxResult(exit_code=0, stdout=f"{self._ahead}\n", stderr="", timed_out=False)
+        return SandboxResult(exit_code=0, stdout="", stderr="", timed_out=False)
+
+
+async def test_commits_the_agent_made_itself_are_still_pushed() -> None:
+    """ "Nothing to commit" is not "nothing to push".
+
+    The merge-conflict directive tells the agent to COMMIT the resolution
+    itself, so on that path this step finds an empty index — and #735 returned
+    right there, before the push. Live run ``0ef554ca``: the agent resolved the
+    conflict and made a real merge commit; the branch sat three commits ahead on
+    the founder's machine, github never saw it, the PR stayed unmergeable, and
+    the same conflict was re-dispatched until it escalated.
+    """
+    from backend.workflow.application.client_attach_delivery import commit_and_push_run_work
+
+    box = _GitBox(staged=False, ahead=3)
+    run = SimpleNamespace(id=uuid.uuid4(), payload={"intent_text": "x"})
+
+    outcome = await commit_and_push_run_work(box=box, run=run, baseline="abc1234")
+
+    assert outcome.pushed is True
+    assert outcome.committed is False, "this step made no commit — the agent did"
+    assert any(c.startswith("git push") for c in box.commands)
+
+
+async def test_a_run_that_produced_no_commit_at_all_still_pushes_nothing() -> None:
+    """#735's rule survives: a branch with no commits of its own is not pushed.
+    Otherwise every no-op run leaves a remote branch claiming work happened."""
+    from backend.workflow.application.client_attach_delivery import commit_and_push_run_work
+
+    box = _GitBox(staged=False, ahead=0)
+    run = SimpleNamespace(id=uuid.uuid4(), payload={"intent_text": "x"})
+
+    outcome = await commit_and_push_run_work(box=box, run=run, baseline="abc1234")
+
+    assert outcome.pushed is False
+    assert not any(c.startswith("git push") for c in box.commands)
+
+
+async def test_without_a_baseline_an_empty_index_is_still_not_a_push() -> None:
+    """No baseline means no way to ask "did this run produce commits", and a
+    guess either way is worse than the honest answer. Fail closed, as #735 did."""
+    from backend.workflow.application.client_attach_delivery import commit_and_push_run_work
+
+    box = _GitBox(staged=False, ahead=3)
+    run = SimpleNamespace(id=uuid.uuid4(), payload={"intent_text": "x"})
+
+    outcome = await commit_and_push_run_work(box=box, run=run, baseline=None)
+
+    assert outcome.pushed is False

@@ -562,7 +562,7 @@ async def settle_client_attach(
     # speak — and a tree with no baseline (not a git repo) would then report
     # nothing changed for a run that changed everything.
     changed = await changed_paths(box, baseline)
-    delivery = await commit_and_push_run_work(box=box, run=run)
+    delivery = await commit_and_push_run_work(box=box, run=run, baseline=baseline)
 
     result = client_attach_terminal(run, work_step, attempt, gate=gate, final_text=final_text)
     # The founder's half: a Deliverable to approve, a telegram, a PR (#738).

@@ -354,7 +354,7 @@ async def test_the_settled_run_commits_its_work_before_it_terminates(
         seen["gate_ran"] = True
         return {"commands": [], "passed": True, "proved": True}
 
-    async def _fake_commit(*, box: Any, run: Any) -> Any:
+    async def _fake_commit(*, box: Any, run: Any, baseline: str | None = None) -> Any:
         seen["committed_after_gate"] = seen.get("gate_ran", False)
         return client_attach_delivery.GitDeliveryOutcome(
             branch="run/x", committed=True, pushed=True
