@@ -393,7 +393,12 @@ async def is_client_attach_run(session: Any, run: ExecutionRun) -> bool:
 
 
 def client_attach_terminal(
-    run: ExecutionRun, work_step: Any, attempt: Any, *, gate: dict[str, Any] | None = None
+    run: ExecutionRun,
+    work_step: Any,
+    attempt: Any,
+    *,
+    gate: dict[str, Any] | None = None,
+    final_text: str = "",
 ) -> LoopResult:
     """#692 — the terminal for a client_attach run: done, pending founder review.
 
@@ -426,7 +431,10 @@ def client_attach_terminal(
         run_id=run.id,
         work_step_id=work_step.id,
         run_attempt_id=attempt.id,
-        summary="",
+        # The agent's own closing words. Discarded as ``""`` until now, which
+        # made every client_attach run report nothing back to its caller — and
+        # left the fallback deliverable body empty for a run with no file list.
+        summary=final_text,
     )
 
 
@@ -462,6 +470,7 @@ async def settle_client_attach(
     messages: list[dict[str, Any]],
     baseline: str | None,
     cycle: int,
+    final_text: str = "",
 ) -> LoopResult | None:
     """#692 — settle a client_attach run once the model believes it is done.
 
@@ -483,8 +492,10 @@ async def settle_client_attach(
     from backend.workflow.application.audit_events import LoopTerminal  # noqa: PLC0415
     from backend.workflow.application.client_attach_delivery import (  # noqa: PLC0415
         commit_and_push_run_work,
+        land_client_attach_deliverable,
     )
     from backend.workflow.application.inplace_gate import (  # noqa: PLC0415
+        changed_paths,
         gate_failure_is_actionable,
         run_inplace_gate,
     )
@@ -532,9 +543,28 @@ async def settle_client_attach(
     # session as "that run produced nothing" when it had produced everything.
     # The checkout is on their machine, this box reaches it, and since #734 the
     # run has a worktree of its own there.
+    #
+    # Asked BEFORE the commit, while both git answers are still available: after
+    # it, ``git status`` is clean by construction and only the baseline diff can
+    # speak — and a tree with no baseline (not a git repo) would then report
+    # nothing changed for a run that changed everything.
+    changed = await changed_paths(box, baseline)
     delivery = await commit_and_push_run_work(box=box, run=run)
 
-    result = client_attach_terminal(run, work_step, attempt, gate=gate)
+    result = client_attach_terminal(run, work_step, attempt, gate=gate, final_text=final_text)
+    # The founder's half: a Deliverable to approve, a telegram, a PR (#738).
+    # After the terminal transitions so a landing failure cannot leave the run
+    # neither settled nor visible, and BEFORE the flush that persists them.
+    await land_client_attach_deliverable(
+        orch._session,
+        run=run,
+        attempt_id=attempt.id,
+        changed_paths=changed,
+        final_text=final_text,
+        gate=gate,
+        redis_client=orch._redis_client,
+        settings=orch._settings,
+    )
     await orch._session.flush()
     await orch._audit(
         run,

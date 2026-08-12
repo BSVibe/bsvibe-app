@@ -417,21 +417,19 @@ async def test_compose_verified_summary_weaves_verification_result() -> None:
     from backend.workflow.application.run_persistence import _compose_verified_summary
 
     run = SimpleNamespace(payload={"intent_text": "Add a TTL cache utility."})
-    verdict = SimpleNamespace(
-        result={
-            "command_results": [
-                {"command": "uv run ruff check backend/", "passed": True},
-                {"command": "uv run ruff format --check backend/", "passed": True},
-                {"command": "uv run pytest -q", "passed": True},
-            ],
-            "judge": {"passed": True, "reasoning": "meets the intent"},
-        },
-    )
+    verdict_result = {
+        "command_results": [
+            {"command": "uv run ruff check backend/", "passed": True},
+            {"command": "uv run ruff format --check backend/", "passed": True},
+            {"command": "uv run pytest -q", "passed": True},
+        ],
+        "judge": {"passed": True, "reasoning": "meets the intent"},
+    }
     summary = _compose_verified_summary(
         run,
         "raw narration",
         ["backend/cache.py", "tests/test_cache.py"],
-        verdict,  # type: ignore[arg-type]
+        verdict_result,
     )
 
     # Intent still titles it; the changed files still list.
@@ -469,20 +467,18 @@ async def test_compose_verified_summary_localizes_chrome_for_ko() -> None:
     from backend.workflow.application.run_persistence import _compose_verified_summary
 
     run = SimpleNamespace(payload={"frame": {"summary_title": "문자열 유틸 추가"}})
-    verdict = SimpleNamespace(
-        result={
-            "command_results": [
-                {"command": "uv run pytest -q", "passed": True},
-                {"command": "uv run ruff check backend/", "passed": True},
-            ],
-            "judge": {},
-        },
-    )
+    verdict_result = {
+        "command_results": [
+            {"command": "uv run pytest -q", "passed": True},
+            {"command": "uv run ruff check backend/", "passed": True},
+        ],
+        "judge": {},
+    }
     summary = _compose_verified_summary(
         run,
         "raw narration",
         ["src/strx.py", "tests/test_strx.py"],
-        verdict,  # type: ignore[arg-type]
+        verdict_result,
         language="ko",
     )
     assert "바뀐 파일 2개:" in summary
@@ -501,13 +497,12 @@ async def test_compose_verified_summary_ko_acceptance_case() -> None:
     from backend.workflow.application.run_persistence import _compose_verified_summary
 
     run = SimpleNamespace(payload={"frame": {"summary_title": "리팩터"}})
-    verdict = SimpleNamespace(result={"command_results": [], "judge": {"passed": True}})
     summary = _compose_verified_summary(
         run,
         "n",
         ["a.py"],
-        verdict,
-        language="ko",  # type: ignore[arg-type]
+        {"command_results": [], "judge": {"passed": True}},
+        language="ko",
     )
     assert "검증 통과" in summary
     assert "Acceptance check passed" not in summary
@@ -520,15 +515,12 @@ async def test_compose_verified_summary_en_parity_unchanged() -> None:
     from backend.workflow.application.run_persistence import _compose_verified_summary
 
     run = SimpleNamespace(payload={"intent_text": "Add a cache."})
-    verdict = SimpleNamespace(
-        result={"command_results": [{"command": "pytest", "passed": True}], "judge": {}},
-    )
     summary = _compose_verified_summary(
         run,
         "n",
         ["a.py"],
-        verdict,
-        language="en",  # type: ignore[arg-type]
+        {"command_results": [{"command": "pytest", "passed": True}], "judge": {}},
+        language="en",
     )
     assert "Changed files:" in summary
     assert "Verified: 1 check passed" in summary

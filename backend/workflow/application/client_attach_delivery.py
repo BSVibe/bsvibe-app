@@ -32,6 +32,7 @@ from typing import Any
 import structlog
 
 from backend.workflow.domain.client_worktree import worktree_branch
+from backend.workflow.infrastructure.db import Deliverable
 
 logger = structlog.get_logger(__name__)
 
@@ -155,4 +156,72 @@ async def commit_and_push_run_work(*, box: Any, run: Any) -> GitDeliveryOutcome:
     return GitDeliveryOutcome(branch=branch, committed=True, pushed=True)
 
 
-__all__ = ["GitDeliveryOutcome", "commit_and_push_run_work", "commit_subject"]
+async def land_client_attach_deliverable(
+    session: Any,
+    *,
+    run: Any,
+    attempt_id: Any,
+    changed_paths: list[str],
+    final_text: str,
+    gate: dict[str, Any] | None,
+    redis_client: Any,
+    settings: Any,
+) -> Deliverable | None:
+    """Make this run's finished work REACH the founder — or honestly, nothing.
+
+    #692 withheld the verified-terminal artifacts from this execution model on
+    the premise that "the server holds no source, so there is nothing to
+    deliver". Two lifts overturned it: since #735 the work is pushed to a branch
+    the server can point at, and #738 opens the PR from it. What was left was a
+    run that finished, committed, pushed — and reached nobody: no deliverable,
+    no Safe Mode item, no telegram, nothing in the Brief. The founder found out
+    by running ``git log``.
+
+    ``changed_paths`` comes from the founder's own git (``_changed_paths``),
+    never from server-side ``written_paths`` — which is always empty here
+    because the agent used the CLI's native tools.
+
+    **Empty means silence.** A deliverable is a claim that work happened, the
+    same claim #735 refuses to make with an empty commit. A run whose tree git
+    reports unchanged gets no approval item: manufacturing one trains the
+    founder to approve without looking.
+
+    Returns the Deliverable, or ``None`` when there was nothing to show.
+    """
+    if not changed_paths:
+        logger.info("client_attach_no_deliverable_nothing_changed", run_id=str(run.id))
+        return None
+
+    from backend.workflow.application.run_persistence import (  # noqa: PLC0415 — cycle break
+        land_verified_artifacts,
+    )
+
+    deliverable = await land_verified_artifacts(
+        session,
+        run=run,
+        attempt_id=attempt_id,
+        written_paths=changed_paths,
+        final_text=final_text,
+        # The in-place gate's own record, in the shape the summary composer
+        # reads. ``None`` when the repo declared no toolchain — legitimately
+        # gateless, so the summary says nothing about a proof rather than
+        # implying one.
+        verdict_result={"derived_gate": gate} if gate is not None else None,
+        redis_client=redis_client,
+        settings=settings,
+    )
+    logger.info(
+        "client_attach_deliverable_landed",
+        run_id=str(run.id),
+        deliverable_id=str(deliverable.id),
+        changed=len(changed_paths),
+    )
+    return deliverable
+
+
+__all__ = [
+    "GitDeliveryOutcome",
+    "commit_and_push_run_work",
+    "commit_subject",
+    "land_client_attach_deliverable",
+]
