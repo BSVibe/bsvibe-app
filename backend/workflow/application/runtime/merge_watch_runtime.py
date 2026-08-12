@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import uuid
 from pathlib import Path
+from typing import Any
 
 import structlog
 from sqlalchemy import select
@@ -30,18 +31,14 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from backend.config import Settings
 from backend.connectors.auth.resolve import resolve_connector_credentials
 from backend.router.accounts.crypto import CredentialCipher, _key_from_settings
-from backend.workflow.application.delivery.connector_dispatch._github import github_remote_url
 from backend.workflow.application.delivery.connector_dispatch._resolver import (
-    product_runs_in_place,
     resolve_github_binding,
 )
+from backend.workflow.application.runtime.merge_watch_freshen import build_branch_freshener
 from backend.workflow.infrastructure.db import ExecutionRun, RunStatus
-from backend.workflow.infrastructure.delivery.git_ops import GitOps
 from backend.workflow.infrastructure.workers.merge_watch_worker import (
     ConflictEscalate,
     ConflictRedispatch,
-    FreshnessResolver,
-    FreshnessTarget,
     MergeClientResolver,
     MergeWatchClient,
     MergeWatchWorker,
@@ -92,61 +89,6 @@ def build_merge_watch_client_resolver(*, cipher: CredentialCipher) -> MergeClien
             (binding.account.delivery_config or {}).get("github_api_url") or DEFAULT_BASE_URL
         )
         return GithubClient(token, base_url=base_url)
-
-    return _resolve
-
-
-def build_merge_watch_freshness_resolver(*, cipher: CredentialCipher) -> FreshnessResolver:
-    """Build the PR6 per-row freshness target resolver for the MergeWatchWorker.
-
-    Resolves the run's product github binding + decrypts its token the SAME way
-    :func:`build_merge_watch_client_resolver` does, but returns the git-side
-    facts the LOCAL freshness merge needs — ``repo`` / ``base_branch`` / decrypted
-    ``token`` / the ``remote_url`` used to re-clone a reaped run workspace — NOT an
-    API client. Factoring the binding+token resolution here keeps the
-    infrastructure worker free of the application binding resolver + cipher.
-    Returns ``None`` when there is no resolvable github delivery target — which
-    now includes "no binding carries the run's product repo" (#681): re-cloning a
-    reaped workspace from a SIBLING product's repo would silently swap the
-    checkout the agent then resolves the conflict in.
-    """
-
-    async def _resolve(
-        session: AsyncSession, workspace_id: uuid.UUID, run_id: uuid.UUID
-    ) -> FreshnessTarget | None:
-        product_id = await _product_id_for_run(session, run_id)
-        if await product_runs_in_place(session, product_id):
-            # §3.5 privacy contract. What this target FEEDS is a server-side
-            # re-clone of the run's workspace so base can be merged into the run
-            # branch locally — for a client_attach product that would bring the
-            # source here, which choosing this model is the founder saying must
-            # not happen. Auto-MERGING such a PR is untouched: that is an API
-            # call about a PR and needs no checkout at all.
-            #
-            # Not a hypothetical: auto-merge is ON in production, so a stale
-            # client_attach PR reaches this resolver as soon as one exists.
-            # ``None`` terminates the row before any git runs; freshening it has
-            # to happen on the founder's machine, which is a later lift.
-            logger.info(
-                "merge_watch_freshness_skipped_client_attach",
-                workspace_id=str(workspace_id),
-                run_id=str(run_id),
-            )
-            return None
-        binding = await resolve_github_binding(
-            session, workspace_id=workspace_id, product_id=product_id
-        )
-        if binding is None:
-            return None
-        creds = await resolve_connector_credentials(session, account=binding.account, cipher=cipher)
-        # Persist any token refresh resolve performed under the hood.
-        await session.commit()
-        return FreshnessTarget(
-            repo=binding.repo,
-            base_branch=binding.base_branch,
-            token=creds["token"],
-            remote_url=github_remote_url(binding.repo),
-        )
 
     return _resolve
 
@@ -292,15 +234,22 @@ def build_merge_watch_conflict_escalate(
 
 
 def build_merge_watch_workers(
-    *,
     session_factory: async_sessionmaker[AsyncSession],
     settings: Settings,
+    *,
+    redis_client: Any = None,
 ) -> list[MergeWatchWorker]:
     """PR4 — the CI-green auto-merge poller, gated on ``github_auto_merge_enabled``.
 
     Returns ``[MergeWatchWorker]`` when the founder opted in, else ``[]`` — so
     with the flag off the worker is NOT in the runtime's worker set at all and
-    ``github_merge_watch`` is never polled."""
+    ``github_merge_watch`` is never polled.
+
+    ``redis_client`` is what lets a client_attach product's stale PR be freshened
+    at all: that git has to run on the founder's machine, and the exec channel to
+    it is a Redis dispatch. Without one, such a row reports "could not freshen"
+    rather than quietly freshening it HERE — which would clone their source onto
+    this machine to fix a mergeability problem (§3.5)."""
     if not settings.github_auto_merge_enabled:
         return []
     cipher = CredentialCipher(_key_from_settings())
@@ -308,13 +257,16 @@ def build_merge_watch_workers(
         MergeWatchWorker(
             session_factory=session_factory,
             client_resolver=build_merge_watch_client_resolver(cipher=cipher),
-            freshness_resolver=build_merge_watch_freshness_resolver(cipher=cipher),
+            branch_freshener=build_branch_freshener(
+                cipher=cipher,
+                session_factory=session_factory,
+                redis_client=redis_client,
+                run_workspace_root=Path(settings.run_workspace_root),
+            ),
             redispatch_conflict=build_merge_watch_conflict_redispatch(
                 session_factory=session_factory
             ),
             escalate_conflict=build_merge_watch_conflict_escalate(session_factory=session_factory),
-            git_ops=GitOps(),
-            run_workspace_root=Path(settings.run_workspace_root),
             config=MergeWatchWorkerConfig(
                 poll_interval_s=settings.github_auto_merge_poll_interval_s,
                 conflict_resolution_deadline_s=settings.github_conflict_resolution_deadline_s,
@@ -325,9 +277,9 @@ def build_merge_watch_workers(
 
 
 __all__ = [
+    "build_branch_freshener",
     "build_merge_watch_client_resolver",
     "build_merge_watch_conflict_escalate",
     "build_merge_watch_conflict_redispatch",
-    "build_merge_watch_freshness_resolver",
     "build_merge_watch_workers",
 ]

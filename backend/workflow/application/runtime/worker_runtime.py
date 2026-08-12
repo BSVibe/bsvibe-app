@@ -259,9 +259,9 @@ def build_worker_runtime(
             name="audit_retention_sweep_worker",
             config=ScheduleWorkerConfig(poll_interval_s=86400.0),
         ),
-        # PR4 — CI-green auto-merge poller, gated on github_auto_merge_enabled
-        # (delivery_runtime.build_merge_watch_workers; flag off ⇒ empty ⇒ absent).
-        *build_merge_watch_workers(session_factory=session_factory, settings=settings),
+        # PR4 — CI-green auto-merge poller, gated on github_auto_merge_enabled (off ⇒
+        # absent). ``redis_client`` lets a stale client_attach PR freshen where its checkout is.
+        *build_merge_watch_workers(session_factory, settings, redis_client=redis_client),
     ]
     return WorkerRuntime(workers=workers, _stop=asyncio.Event())
 

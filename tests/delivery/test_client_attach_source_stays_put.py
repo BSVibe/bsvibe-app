@@ -27,9 +27,7 @@ from backend.identity.workspaces_db import ProductRow
 from backend.workflow.application.delivery.connector_dispatch._github import (
     build_github_workspace_provisioner,
 )
-from backend.workflow.application.runtime.merge_watch_runtime import (
-    build_merge_watch_freshness_resolver,
-)
+from backend.workflow.application.runtime.merge_watch_freshen import build_branch_freshener
 from backend.workflow.infrastructure.db import ExecutionRun, RunStatus
 from tests._support import shared_file_sessionmaker
 
@@ -112,30 +110,66 @@ async def test_the_provisioner_never_clones_a_client_attach_product(tmp_path: Pa
         assert not any(workspace_dir.iterdir()), "the run's server-side workspace must stay empty"
 
 
-async def test_the_freshness_resolver_refuses_a_client_attach_run() -> None:
-    """``None`` terminates the behind/dirty path before any git runs.
+async def test_the_freshen_never_takes_a_client_attach_run_down_the_server_git() -> None:
+    """The freshen happens where the checkout is (#742 follow-up).
 
-    The founder's machine holds the checkout, so freshening a stale PR has to
-    happen there — a later lift. Until then this is an honest stop rather than a
-    silent re-clone: the PR stays open and waits for a human.
+    Freshening a stale PR means merging base into the run branch and pushing —
+    which the server can only do by holding the source. For a client_attach
+    product that is the one thing this contract forbids, so the picker routes it
+    to the founder's machine instead. Here no machine is reachable (no redis),
+    which must come back as "could not freshen" and NOT as a server-side clone.
     """
     cipher = _RoundtripCipher()
     async with shared_file_sessionmaker() as sf:
         ws, _product_id, run_id = await _seed(sf, cipher, execution_target="client_attach")
-        resolve = build_merge_watch_freshness_resolver(cipher=cipher)  # type: ignore[arg-type]
+        freshen = build_branch_freshener(
+            cipher=cipher,
+            session_factory=sf,
+            redis_client=None,
+            run_workspace_root=Path("/nonexistent"),
+            git_ops=_ForbiddenGitOps(),
+        )
         async with sf() as s:
-            target = await resolve(s, ws, run_id)
+            outcome = await freshen(s, ws, run_id, "run/abc")
 
-    assert target is None
+    assert outcome.status == "failed"
 
 
-async def test_the_freshness_resolver_still_serves_a_server_sandbox_run() -> None:
+async def test_the_freshen_still_serves_a_server_sandbox_run() -> None:
+    """The other model is untouched: it resolves its binding and uses the
+    server-side git exactly as before."""
     cipher = _RoundtripCipher()
+    seen: dict[str, object] = {}
+
+    class _Git(_ForbiddenGitOps):
+        async def clone(
+            self, repo_url: str, dest: Path, *, token: str | None, depth: int = 1
+        ) -> None:
+            seen["cloned"] = repo_url
+
+        async def checkout(self, dest: Path, branch: str) -> None:
+            return None
+
+        async def fetch(self, *args: object, **kwargs: object) -> None:
+            return None
+
+        async def merge_ref(self, *args: object, **kwargs: object) -> object:
+            return SimpleNamespace(status="clean", conflict_paths=[])
+
+        async def push(self, *args: object, **kwargs: object) -> None:
+            seen["pushed"] = True
+
     async with shared_file_sessionmaker() as sf:
         ws, _product_id, run_id = await _seed(sf, cipher, execution_target="server_sandbox")
-        resolve = build_merge_watch_freshness_resolver(cipher=cipher)  # type: ignore[arg-type]
+        freshen = build_branch_freshener(
+            cipher=cipher,
+            session_factory=sf,
+            redis_client=None,
+            run_workspace_root=Path("/tmp/merge-watch-freshen-test"),  # noqa: S108 — never written
+            git_ops=_Git(),
+        )
         async with sf() as s:
-            target = await resolve(s, ws, run_id)
+            outcome = await freshen(s, ws, run_id, "run/abc")
 
-    assert target is not None
-    assert target.repo == "owner/name"
+    assert outcome.status == "clean"
+    assert seen.get("pushed") is True
