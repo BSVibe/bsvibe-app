@@ -96,13 +96,26 @@ async def _run(box: Any, command: str, *, timeout_s: float) -> tuple[bool, str]:
     return res.exit_code == 0, output
 
 
-async def commit_and_push_run_work(*, box: Any, run: Any) -> GitDeliveryOutcome:
+async def commit_and_push_run_work(
+    *, box: Any, run: Any, baseline: str | None = None
+) -> GitDeliveryOutcome:
     """Commit this run's work on its own branch and push it.
 
     ``box`` is rooted in the run's worktree (#734), which is why ``git add -A``
     is the right scope here and would not have been before: that tree contains
     this run's changes and nothing else — not the founder's work-in-progress,
     not another run's.
+
+    ``baseline`` is where this run's branch started (the HEAD read before the
+    agent acted). It answers the question an empty index cannot: **did this run
+    produce commits?** The agent sometimes commits on its OWN — the merge-conflict
+    directive explicitly instructs it to, because only a commit made from inside
+    the merge records the base branch as an ancestor. On that path this function
+    finds nothing staged and used to return right there, before the push. Live
+    run ``0ef554ca``: the agent resolved the conflict into a real merge commit,
+    the branch sat three commits ahead on the founder's machine, github never saw
+    it, and the PR stayed unmergeable until the conflict escalated. Nothing to
+    COMMIT was never the same question as nothing to PUSH.
     """
     branch = worktree_branch(run.id)
     litter = " ".join(shlex.quote(p) for p in _UNCOMMITTABLE)
@@ -133,7 +146,11 @@ async def commit_and_push_run_work(*, box: Any, run: Any) -> GitDeliveryOutcome:
     nothing, _ = await _run(box, "git diff --cached --quiet", timeout_s=_GIT_TIMEOUT_S)
     if nothing:
         logger.info("client_attach_nothing_to_commit", run_id=str(run.id))
-        return GitDeliveryOutcome(branch=branch, committed=False, pushed=False)
+        if not await _has_own_commits(box, run=run, baseline=baseline):
+            return GitDeliveryOutcome(branch=branch, committed=False, pushed=False)
+        # The agent committed for itself. Push what it made — the work is real,
+        # it is just not this function's commit. ``committed=False`` stays honest.
+        return await _push(box, run=run, branch=branch, committed=False)
 
     subject = shlex.quote(commit_subject(run))
     ok, out = await _run(box, f"git commit -m {subject}", timeout_s=_GIT_TIMEOUT_S)
@@ -141,8 +158,33 @@ async def commit_and_push_run_work(*, box: Any, run: Any) -> GitDeliveryOutcome:
         logger.warning("client_attach_commit_failed", run_id=str(run.id), error=out)
         return GitDeliveryOutcome(branch=branch, committed=False, pushed=False, error=out)
 
-    # The founder's OWN git credentials (their decision): the source is theirs,
-    # the push is theirs, and no token travels from the server to their machine.
+    return await _push(box, run=run, branch=branch, committed=True)
+
+
+async def _has_own_commits(box: Any, *, run: Any, baseline: str | None) -> bool:
+    """Did this run's branch gain any commit since it started?
+
+    ``None`` baseline (the tree was not a git repo when the run began, or the
+    probe went unanswered) → ``False``. Fail closed, the same way #735 refuses an
+    empty commit: pushing on a guess would put a branch on github claiming work
+    that may not exist.
+    """
+    if not baseline:
+        return False
+    ok, out = await _run(
+        box, f"git rev-list --count {shlex.quote(baseline)}..HEAD", timeout_s=_GIT_TIMEOUT_S
+    )
+    if not ok:
+        logger.info("client_attach_ahead_probe_failed", run_id=str(run.id), error=out)
+        return False
+    first = out.strip().splitlines()[0].strip() if out.strip() else "0"
+    return first.isdigit() and int(first) > 0
+
+
+async def _push(box: Any, *, run: Any, branch: str, committed: bool) -> GitDeliveryOutcome:
+    """Push the run's branch with the FOUNDER's own git credentials (their
+    decision): the source is theirs, the push is theirs, and no token travels
+    from the server to their machine."""
     ok, out = await _run(
         box, f"git push -u origin {shlex.quote(branch)}", timeout_s=_PUSH_TIMEOUT_S
     )
@@ -150,10 +192,10 @@ async def commit_and_push_run_work(*, box: Any, run: Any) -> GitDeliveryOutcome:
         # The work is committed and safe on a named branch — losing the push is
         # recoverable, so it is recorded and the run still settles.
         logger.warning("client_attach_push_failed", run_id=str(run.id), error=out)
-        return GitDeliveryOutcome(branch=branch, committed=True, pushed=False, error=out)
+        return GitDeliveryOutcome(branch=branch, committed=committed, pushed=False, error=out)
 
     logger.info("client_attach_work_pushed", run_id=str(run.id), branch=branch)
-    return GitDeliveryOutcome(branch=branch, committed=True, pushed=True)
+    return GitDeliveryOutcome(branch=branch, committed=committed, pushed=True)
 
 
 async def land_client_attach_deliverable(
