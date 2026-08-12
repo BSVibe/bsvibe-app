@@ -81,10 +81,23 @@ async def freshen_on_client_machine(*, box: Any, branch: str, base_branch: str) 
     someone else's disk).
 
     A conflict names its files from git's OWN unmerged listing rather than by
-    parsing merge chatter, then **aborts** — the worktree is a reclaimable
-    resource on someone else's machine (#736), and a tree left mid-merge is one
-    the reaper will correctly refuse forever. The agent re-does the merge itself
-    when it is re-dispatched, so nothing is lost by aborting.
+    parsing merge chatter, and is then **LEFT IN PLACE** for the agent that the
+    worker is about to re-dispatch. That conflicted merge IS the handoff: the
+    server-side model works the same way because there the freshen merges in the
+    very clone the agent then works in.
+
+    #743 aborted it here, reasoning about the worktree reaper and never asking
+    what the agent needs to see. Live run ``7442c185``: the agent arrived to a
+    clean tree, reported "no conflict markers, already resolved", hand-edited the
+    file instead, and produced a LINEAR commit. The content was reconciled but
+    git never recorded base as an ancestor — so the PR stayed ``dirty`` forever
+    and every poll re-dispatched the same conflict until escalation. Resolving
+    INSIDE the merge is what yields a commit with base as a parent, and that is
+    the only thing that makes the PR mergeable.
+
+    The reaper concern was backwards: a tree mid-merge HAS unresolved work, so
+    refusing it is the safety mechanism doing its job (#736). It becomes
+    reclaimable the moment the agent commits the resolution.
     """
     ok, out = await _run(
         box, f"git fetch origin {shlex.quote(base_branch)}", timeout_s=_NETWORK_TIMEOUT_S
@@ -104,8 +117,12 @@ async def freshen_on_client_machine(*, box: Any, branch: str, base_branch: str) 
             box, "git diff --name-only --diff-filter=U", timeout_s=_GIT_TIMEOUT_S
         )
         paths = tuple(p.strip() for p in listing.splitlines() if p.strip())
-        await _run(box, "git merge --abort", timeout_s=_GIT_TIMEOUT_S)
         if not paths:
+            # No unmerged paths — the merge failed for some OTHER reason (a bad
+            # ref, a dirty tree, a broken index). There is no conflict to hand
+            # to an agent, so the half-state is cleaned up: leaving it would
+            # make the reaper refuse this worktree for a reason nobody can act on.
+            await _run(box, "git merge --abort", timeout_s=_GIT_TIMEOUT_S)
             logger.warning("freshen_in_place_merge_failed", branch=branch, error=out)
             return FreshenOutcome(status="failed", base_branch=base_branch)
         logger.info("freshen_in_place_conflict", branch=branch, conflict_paths=list(paths))
