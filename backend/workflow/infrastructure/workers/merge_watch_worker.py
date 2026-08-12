@@ -54,7 +54,6 @@ import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
 from typing import Any, Protocol
 
 import structlog
@@ -64,7 +63,6 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from backend.storage.github_repo_lock import GithubRepoBusy, github_repo_lock
 from backend.workers.base import BaseWorker
 from backend.workflow.infrastructure.db import ExecutionRun, RunStatus
-from backend.workflow.infrastructure.delivery.git_ops import GitError, GitOps
 from backend.workflow.infrastructure.github.db import GithubMergeWatchRow, MergeWatchStatus
 from backend.workflow.infrastructure.github.repository import GithubMergeWatchRepository
 from plugin.github.client import MergeResult
@@ -103,32 +101,33 @@ MergeClientResolver = Callable[
 
 
 @dataclass(slots=True, frozen=True)
-class FreshnessTarget:
-    """The git-side facts the freshness merge needs, resolved from the
-    workspace's github binding: the ``repo`` (``owner/name``), its ``base_branch``,
-    the decrypted push/fetch ``token`` (``None`` for a local ``file://`` remote in
-    tests), and the ``remote_url`` used to RE-CLONE a reaped run workspace.
+class FreshenOutcome:
+    """What happened when the base branch was merged into the run branch.
 
-    Resolved in the APPLICATION layer (binding + token decryption is an
-    application concern) and injected, so the infrastructure worker never imports
-    the binding resolver / cipher.
+    ``clean`` — merged and PUSHED (CI re-runs on the new head; a later clean poll
+    merges the PR). ``conflict`` — git says the branches genuinely conflict, and
+    ``conflict_paths`` are its own unmerged files, for the agent to resolve.
+    ``failed`` — the attempt could not complete (network, a machine that would
+    not answer, a rejected push); retried with backoff. ``unavailable`` — there
+    is no resolvable target at all, so no retry will ever help.
+
+    ``base_branch`` rides back because the freshener is what resolves it (from
+    the run's product binding) and the worker needs it to tell the agent which
+    base it is being asked to reconcile with.
     """
 
-    repo: str
+    status: str
     base_branch: str
-    token: str | None
-    remote_url: str
+    conflict_paths: tuple[str, ...] = ()
 
 
-#: Resolve the git-side freshness target for a watched row's ``(workspace_id,
-#: run_id)`` (binding + decrypted token + clone URL). ``None`` when there is no
-#: resolvable github delivery target. Injected — the worker never decrypts a
-#: credential itself. Takes the ``run_id`` for the same reason
-#: :data:`MergeClientResolver` does: a re-clone must land the run's OWN product
-#: repo, never a sibling product's.
-FreshnessResolver = Callable[
-    [AsyncSession, uuid.UUID, uuid.UUID], Awaitable["FreshnessTarget | None"]
-]
+#: Merge the base branch into a watched PR's ``branch`` and push if clean —
+#: injected, because WHERE that git runs depends on which machine holds the
+#: run's checkout. A server_sandbox run has one here; a client_attach run's
+#: lives only on the founder's machine (§3.5), and the same four git commands
+#: give the same answer there. The worker owns every decision that FOLLOWS the
+#: answer; it does not own the git.
+BranchFreshener = Callable[[AsyncSession, uuid.UUID, uuid.UUID, str], Awaitable["FreshenOutcome"]]
 
 
 class ConflictRedispatch(Protocol):
@@ -294,11 +293,9 @@ class MergeWatchWorker(BaseWorker):
         *,
         session_factory: async_sessionmaker[AsyncSession],
         client_resolver: MergeClientResolver,
-        freshness_resolver: FreshnessResolver | None = None,
+        branch_freshener: BranchFreshener | None = None,
         redispatch_conflict: ConflictRedispatch | None = None,
         escalate_conflict: ConflictEscalate | None = None,
-        git_ops: GitOps | None = None,
-        run_workspace_root: Path | None = None,
         config: MergeWatchWorkerConfig | None = None,
         now: Clock | None = None,
     ) -> None:
@@ -306,24 +303,18 @@ class MergeWatchWorker(BaseWorker):
         super().__init__(name="merge_watch_worker", poll_interval_s=self._cfg.poll_interval_s)
         self._session_factory = session_factory
         self._resolve_client = client_resolver
-        # PR6 — the behind/dirty freshness merge deps. All three are wired
-        # together by the runtime; when any is absent (e.g. a PR4-era worker
-        # construction) the behind/dirty branch falls back to the old "wait"
-        # behavior rather than attempting a merge it cannot complete.
-        self._resolve_freshness = freshness_resolver
+        # PR6 — the behind/dirty freshness deps, wired together by the runtime.
+        # When either is absent (e.g. a PR4-era worker construction) the
+        # behind/dirty branch falls back to the old "wait" behavior rather than
+        # attempting a merge it cannot complete.
+        self._freshen = branch_freshener
         self._redispatch_conflict = redispatch_conflict
         self._escalate_conflict = escalate_conflict
-        self._git = git_ops or GitOps()
-        self._run_workspace_root = run_workspace_root
         self._now = now or _utcnow
 
     @property
     def _freshness_wired(self) -> bool:
-        return (
-            self._resolve_freshness is not None
-            and self._redispatch_conflict is not None
-            and self._run_workspace_root is not None
-        )
+        return self._freshen is not None and self._redispatch_conflict is not None
 
     async def _tick(self) -> int:
         return await self.drain_once()
@@ -576,14 +567,15 @@ class MergeWatchWorker(BaseWorker):
             return
 
         # narrow Optionals for mypy (guarded by ``_freshness_wired`` above).
-        assert self._resolve_freshness is not None  # noqa: S101
+        assert self._freshen is not None  # noqa: S101
         assert self._redispatch_conflict is not None  # noqa: S101
-        assert self._run_workspace_root is not None  # noqa: S101
 
         async with github_repo_lock(session, snap.repo):
-            target = await self._resolve_freshness(session, snap.workspace_id, snap.run_id)
-            if target is None:
-                # No resolvable github target (connector removed) — can't freshen.
+            outcome = await self._freshen(session, snap.workspace_id, snap.run_id, snap.branch)
+
+            if outcome.status == "unavailable":
+                # No resolvable target at all (connector removed) — no retry
+                # will ever help, so stop watching.
                 await repo.mark_status(
                     snap.id,
                     MergeWatchStatus.FAILED,
@@ -597,20 +589,14 @@ class MergeWatchWorker(BaseWorker):
                 )
                 return
 
-            clone = self._run_workspace_root / str(snap.run_id)
-            try:
-                await self._ensure_clone(clone, snap, target)
-                await self._git.fetch(
-                    clone, "origin", target.base_branch, token=target.token, unshallow=True
-                )
-                result = await self._git.merge_ref(clone, f"origin/{target.base_branch}")
-            except GitError:
+            if outcome.status == "failed":
+                # The attempt could not complete (network, an unreachable
+                # machine, a rejected push). Retryable — back off and re-poll.
                 logger.warning(
                     "merge_watch_freshen_failed",
                     repo=snap.repo,
                     pr_number=snap.pr_number,
                     run_id=str(snap.run_id),
-                    exc_info=True,
                 )
                 await repo.mark_status(
                     snap.id,
@@ -621,25 +607,7 @@ class MergeWatchWorker(BaseWorker):
                 )
                 return
 
-            if result.status == "clean":
-                try:
-                    await self._git.push(clone, snap.branch, token=target.token)
-                except GitError:
-                    logger.warning(
-                        "merge_watch_freshen_failed",
-                        repo=snap.repo,
-                        pr_number=snap.pr_number,
-                        run_id=str(snap.run_id),
-                        exc_info=True,
-                    )
-                    await repo.mark_status(
-                        snap.id,
-                        MergeWatchStatus.PENDING_CI,
-                        next_poll_at=self._backoff(snap.attempts, now),
-                        last_error="freshen_failed",
-                        increment_attempt=True,
-                    )
-                    return
+            if outcome.status == "clean":
                 await repo.mark_status(
                     snap.id,
                     MergeWatchStatus.PENDING_CI,
@@ -661,8 +629,8 @@ class MergeWatchWorker(BaseWorker):
             # the row in ``needs_resolution`` awaiting the agent's re-push.
             await self._redispatch_conflict(
                 snap.run_id,
-                conflict_paths=list(result.conflict_paths),
-                base_branch=target.base_branch,
+                conflict_paths=list(outcome.conflict_paths),
+                base_branch=outcome.base_branch,
                 pr_number=snap.pr_number,
             )
             logger.info(
@@ -670,7 +638,7 @@ class MergeWatchWorker(BaseWorker):
                 repo=snap.repo,
                 pr_number=snap.pr_number,
                 run_id=str(snap.run_id),
-                conflict_paths=result.conflict_paths,
+                conflict_paths=list(outcome.conflict_paths),
             )
             await repo.mark_status(
                 snap.id,
@@ -823,38 +791,13 @@ class MergeWatchWorker(BaseWorker):
                 exc_info=True,
             )
 
-    async def _ensure_clone(
-        self, clone: Path, snap: _WatchSnapshot, target: FreshnessTarget
-    ) -> None:
-        """Ensure the run's clone exists at ``clone`` on the PR branch.
-
-        Present (``.git`` dir) → reuse it (a shallow clone is fine — the caller
-        unshallows in the fetch step). MISSING (run cleanup reaped the workspace
-        after the PR opened) → RE-CLONE fresh at FULL depth (so a merge base with
-        ``base_branch`` exists) and check out the PR branch tracking
-        ``origin/<branch>``.
-        """
-        if (clone / ".git").exists():
-            return
-        logger.info(
-            "merge_watch_reclone",
-            repo=snap.repo,
-            pr_number=snap.pr_number,
-            run_id=str(snap.run_id),
-            branch=snap.branch,
-        )
-        clone.parent.mkdir(parents=True, exist_ok=True)
-        # depth=0 → a FULL clone: a shallow re-clone would lack the merge base.
-        await self._git.clone(target.remote_url, clone, token=target.token, depth=0)
-        await self._git.checkout(clone, snap.branch)
-
 
 __all__ = [
+    "BranchFreshener",
     "Clock",
     "ConflictEscalate",
     "ConflictRedispatch",
-    "FreshnessResolver",
-    "FreshnessTarget",
+    "FreshenOutcome",
     "MergeClientResolver",
     "MergeWatchClient",
     "MergeWatchWorker",

@@ -33,11 +33,15 @@ from backend.workflow.application.delivery.connector_dispatch._merge_watch impor
     enqueue_merge_watch,
 )
 from backend.workflow.application.delivery.connector_dispatch._resolver import GithubBinding
+from backend.workflow.application.runtime.merge_watch_server_freshen import (
+    FreshnessTarget,
+    freshen_in_clone,
+)
 from backend.workflow.infrastructure.db import ExecutionRun, RunStatus
 from backend.workflow.infrastructure.delivery.git_ops import GitError, GitOps
 from backend.workflow.infrastructure.github.db import GithubMergeWatchRow, MergeWatchStatus
 from backend.workflow.infrastructure.workers.merge_watch_worker import (
-    FreshnessTarget,
+    FreshenOutcome,
     MergeWatchWorker,
     MergeWatchWorkerConfig,
 )
@@ -498,13 +502,24 @@ class _RecordingEscalate:
         self.calls.append((run_id, conflict_paths, base_branch, pr_number))
 
 
-def _freshness_for(target: FreshnessTarget | None):  # noqa: ANN202
-    async def _resolve(
-        _session: AsyncSession, _workspace_id: uuid.UUID, _run_id: uuid.UUID
-    ) -> FreshnessTarget | None:
-        return target
+def _freshness_for(target: FreshnessTarget | None, run_root: Path, git: GitOps):  # noqa: ANN202
+    """The SERVER-side freshener with its binding resolution stubbed out.
 
-    return _resolve
+    The git itself is the real implementation (``freshen_in_clone``) against real
+    repositories — that is what these tests are for. Only the step that decrypts
+    a token out of the database is replaced by the injected ``target``.
+    """
+
+    async def _freshen(
+        _session: AsyncSession, _workspace_id: uuid.UUID, run_id: uuid.UUID, branch: str
+    ) -> FreshenOutcome:
+        if target is None:
+            return FreshenOutcome(status="unavailable", base_branch="")
+        return await freshen_in_clone(
+            git=git, clone=run_root / str(run_id), branch=branch, target=target
+        )
+
+    return _freshen
 
 
 def _freshness_worker(
@@ -522,11 +537,9 @@ def _freshness_worker(
     return MergeWatchWorker(
         session_factory=sf,
         client_resolver=_resolver_for(client),
-        freshness_resolver=_freshness_for(target),
+        branch_freshener=_freshness_for(target, run_root, git_ops or GitOps()),
         redispatch_conflict=redispatch,
         escalate_conflict=escalate,
-        git_ops=git_ops or GitOps(),
-        run_workspace_root=run_root,
         config=config or MergeWatchWorkerConfig(poll_interval_s=30.0),
         now=lambda: now,
     )
