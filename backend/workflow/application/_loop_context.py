@@ -322,7 +322,16 @@ def _merge_conflict_directive(run: ExecutionRun) -> dict[str, Any] | None:
     turn-context message telling the agent to resolve the conflict — and to
     raise the founder Decision (``ask_user_question``) ONLY when the merge is
     genuinely AMBIGUOUS, not for a mechanical resolution. ``None`` when the run
-    carries no re-dispatched conflict (the loop is unchanged)."""
+    carries no re-dispatched conflict (the loop is unchanged).
+
+    The message describes the tree the agent will ACTUALLY find: the freshen
+    already started the merge and left it stopped on the conflicts, in both
+    execution models. It used to say "pull the latest base", which git refuses
+    mid-merge — and the obvious escape from that refusal is ``merge --abort``,
+    which destroys the one thing that makes the PR mergeable. Live run
+    ``7442c185`` lost it by the neighbouring route: given a clean tree, the agent
+    hand-edited the files into a LINEAR commit, reconciling the content while
+    leaving base un-merged, so every later poll re-dispatched the same conflict."""
     payload = run.payload if isinstance(run.payload, dict) else {}
     conflict = payload.get("merge_conflict")
     if not isinstance(conflict, dict):
@@ -334,9 +343,13 @@ def _merge_conflict_directive(run: ExecutionRun) -> dict[str, Any] | None:
     return {
         "role": "user",
         "content": (
-            f"A concurrent change merged to `{base}` and your branch now conflicts "
-            f"in: {paths_str}. Pull the latest base, RESOLVE the conflicts, and "
-            "commit. If the correct resolution is MECHANICAL/clear (imports, "
+            f"A merge of `{base}` into your branch is ALREADY IN PROGRESS in your "
+            f"working tree and stopped on conflicts in: {paths_str}. Resolve them "
+            "and COMMIT the merge. Do NOT abort it and do NOT hand-edit the files "
+            "into a fresh commit instead: only a commit made from inside this "
+            f"merge records `{base}` as an ancestor, and without that the pull "
+            "request stays unmergeable no matter how correct the content is. "
+            "If the correct resolution is MECHANICAL/clear (imports, "
             "adjacent non-overlapping edits, formatting), just resolve it and "
             "re-trigger verification. If it is AMBIGUOUS — two changes touched the "
             "SAME logic and picking the right merge needs a human judgment call — "
