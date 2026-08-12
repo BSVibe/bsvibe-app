@@ -32,6 +32,7 @@ from typing import Any
 import structlog
 
 from backend.workflow.domain.client_worktree import worktree_branch
+from backend.workflow.infrastructure.db import Deliverable
 
 logger = structlog.get_logger(__name__)
 
@@ -165,7 +166,7 @@ async def land_client_attach_deliverable(
     gate: dict[str, Any] | None,
     redis_client: Any,
     settings: Any,
-) -> Any | None:
+) -> Deliverable | None:
     """Make this run's finished work REACH the founder — or honestly, nothing.
 
     #692 withheld the verified-terminal artifacts from this execution model on

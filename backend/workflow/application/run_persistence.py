@@ -39,6 +39,7 @@ from backend.workflow.application.audit_events import LoopTerminal
 from backend.workflow.domain.verified_deliverable import write_verified_deliverable
 from backend.workflow.infrastructure.db import (
     Decision,
+    Deliverable,
     ExecutionRun,
     ExecutionRunActivity,
     ProofState,
@@ -339,7 +340,7 @@ async def land_verified_artifacts(
     redis_client: Any,
     settings: Settings,
     knowledge: RememberableKnowledge | None = None,
-) -> Any:
+) -> Deliverable:
     """Land the run's finished work where the FOUNDER can reach it.
 
     Deliverable + DeliveryEventRow + settle activity + the Redis wake-up — the
