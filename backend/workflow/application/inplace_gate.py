@@ -109,8 +109,14 @@ def gate_failure_is_actionable(gate: dict[str, Any]) -> bool:
     return any(c.get("status") == "failed" for c in gate.get("commands") or ())
 
 
-async def _changed_paths(box: SandboxSession, baseline: str | None) -> list[str]:
+async def changed_paths(box: SandboxSession, baseline: str | None) -> list[str]:
     """What THIS run changed in the founder's tree, as git sees it.
+
+    Public because the settle path asks the same question for a different
+    reason: the gate needs it to derive commands, and the deliverable landing
+    needs it as the run's ``artifact_refs`` — and as the answer to "did this run
+    change anything at all", which decides whether the founder gets an approval
+    item.
 
     ``written_paths`` is always empty for a client_attach run — the agent used
     the CLI's native tools, so the server observed no writes. Passing that empty
@@ -240,7 +246,7 @@ async def run_inplace_gate(
 
     payload = run.payload or {}
     intent = str(payload.get("intent_text") or payload.get("text") or "").strip()
-    changed = await _changed_paths(box, baseline)
+    changed = await changed_paths(box, baseline)
 
     # The agent's DECLARED contract runs here too. The two execution models must
     # differ only in WHERE commands run — not in what verification means. (This
@@ -431,6 +437,7 @@ async def _persist(
 
 __all__ = [
     "capture_inplace_baseline",
+    "changed_paths",
     "gate_failure_is_actionable",
     "run_inplace_gate",
 ]

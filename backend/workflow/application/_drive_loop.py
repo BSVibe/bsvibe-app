@@ -380,6 +380,7 @@ async def drive_loop(  # noqa: PLR0911, PLR0912, PLR0915 — preserved cycle bod
                 messages=messages,
                 baseline=inplace_baseline,
                 cycle=_cycle,
+                final_text=final_text,
             )
             if settled is None:
                 continue

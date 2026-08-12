@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import re
 import uuid
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any
 
 import structlog
@@ -80,20 +80,41 @@ _CHECK_CATEGORY_LABELS: tuple[tuple[str, str], ...] = (
 )
 
 
-def _verification_sentence(verdict: VerificationResult | None, language: str = "en") -> str:
+def _gate_command_results(result: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """The in-place gate's commands, in ``command_results`` shape.
+
+    A client_attach run is verified by the DERIVED gate (``derived_gate`` —
+    per-command ``status``), the sandbox path by a declared contract
+    (``command_results`` — per-command ``passed``). Same evidence, two record
+    shapes, so map one onto the other rather than writing a second sentence
+    builder: what the founder reads about a proof must not depend on WHERE the
+    command ran. ``unavailable`` (exit 127) is not a pass — a tool missing from
+    that machine proved nothing.
+    """
+    gate = result.get("derived_gate")
+    if not isinstance(gate, Mapping):
+        return []
+    return [
+        {"command": c.get("command"), "passed": c.get("status") == "passed"}
+        for c in gate.get("commands") or ()
+        if isinstance(c, Mapping)
+    ]
+
+
+def _verification_sentence(result: Mapping[str, Any] | None, language: str = "en") -> str:
     """A deterministic, LLM-free sentence describing what the verifier proved.
 
     Reads the ``VerificationResult.result`` blob the verifier already persisted
-    (``command_results`` + ``judge``) and renders e.g. "Verified: 3 checks
-    passed (tests, lint, format). Acceptance check passed." (EN) or "검증: 3개 확인
-    통과. 검증 통과." (KO). Returns "" when no verdict / nothing to report, so the
-    caller adds no empty line. Localized so a KO founder never sees the English
-    honesty chrome in the delivered summary.
+    (``command_results`` + ``judge``, or the in-place ``derived_gate``) and
+    renders e.g. "Verified: 3 checks passed (tests, lint, format). Acceptance
+    check passed." (EN) or "검증: 3개 확인 통과. 검증 통과." (KO). Returns "" when
+    there is no verdict / nothing to report, so the caller adds no empty line.
+    Localized so a KO founder never sees the English honesty chrome in the
+    delivered summary.
     """
-    if verdict is None:
+    if result is None:
         return ""
-    result = getattr(verdict, "result", None) or {}
-    commands = result.get("command_results") or []
+    commands = result.get("command_results") or _gate_command_results(result)
     passed = [c for c in commands if c.get("passed")]
     ko = language == "ko"
 
@@ -123,7 +144,7 @@ def _compose_verified_summary(
     run: ExecutionRun,
     final_text: str,
     written_paths: Sequence[str] | None = None,
-    verdict: VerificationResult | None = None,
+    verdict_result: Mapping[str, Any] | None = None,
     language: str = "en",
 ) -> str:
     """Build the verified deliverable's summary — titled by the founder INTENT,
@@ -141,9 +162,12 @@ def _compose_verified_summary(
     whitespace-repaired) when no changed-file list is available — e.g. a
     non-file deliverable. Falls back to a stable title when there is no intent.
 
-    R1: when a passing ``verdict`` is supplied, a deterministic verification
+    R1: when a passing verdict blob is supplied, a deterministic verification
     sentence (which checks passed, by category) is appended so the report says
     not just *what* changed but *that it was proven* — no LLM, no raw commands.
+    Takes the ``VerificationResult.result`` MAPPING rather than the row: the
+    in-place gate's proof (#692) is real evidence but is not the row the sandbox
+    path holds, and only the blob was ever read here.
     """
     payload = run.payload or {}
     # Title in a formal, declarative register — a REPORT, not the founder's raw
@@ -169,7 +193,7 @@ def _compose_verified_summary(
         if cleaned:
             sections.append(cleaned)
 
-    verification = _verification_sentence(verdict, language)
+    verification = _verification_sentence(verdict_result, language)
     if verification:
         sections.append(verification)
 
@@ -304,44 +328,37 @@ def decision_result(
     )
 
 
-# Invariant: this helper MUST only be called from a code path that has
-# already observed ``VerificationOutcome.PASSED`` on the verifier verdict
-# (see :mod:`backend.workflow.application._drive_loop`). The helper itself
-# does NOT re-check; the gate is at the call site. The structural anti-
-# regression in :mod:`tests.execution.test_proved_invariant` grep-pins the
-# ``VerificationOutcome.PASSED`` reference in this same file so any future
-# wrap-call here remains paired with the gate identifier.
-async def finish_verified(
+async def land_verified_artifacts(
     session: AsyncSession,
     *,
     run: ExecutionRun,
-    work_step: WorkStep,
-    attempt: RunAttempt,
+    attempt_id: uuid.UUID,
     written_paths: list[str],
     final_text: str,
-    verdict: VerificationResult,
+    verdict_result: Mapping[str, Any] | None,
     redis_client: Any,
     settings: Settings,
     knowledge: RememberableKnowledge | None = None,
-) -> LoopResult:
-    """Land the verified terminal — Deliverable type CODE + Redis wake-up.
+) -> Any:
+    """Land the run's finished work where the FOUNDER can reach it.
 
-    The verified-terminal artifact contract (Deliverable + DeliveryEventRow +
-    settle activity) is the SAME regardless of compute backend, so it lives in
-    ONE shared helper (Lift 5b). The settle payload carries the run's STABLE
-    context (product binding + founder intent_text) so the SettleWorker can
-    cluster garden observations by product + intent — deterministic inputs,
-    never the work LLM's free output.
+    Deliverable + DeliveryEventRow + settle activity + the Redis wake-up — the
+    artifact contract that puts an item in the Safe Mode queue, sends the
+    telegram, opens the PR (#738) and feeds the Brief. :func:`finish_verified`
+    already declared this contract "the SAME regardless of compute backend";
+    this is that sentence made true, because client_attach was NOT going through
+    it and so a finished run on the founder's own machine reached nobody.
+
+    Deliberately NOT included, and left to each caller: the WorkStep /
+    RunAttempt transitions, and above all ``proof_state``. The sandbox terminal
+    sets ``PROVED`` because its call site has already observed a PASSED verdict;
+    a client_attach run only earns that when its gate actually RAN and passed.
+    Sharing the landing must never import the proof claim (honesty ratchet).
+
+    The settle payload carries the run's STABLE context (product binding +
+    founder intent_text) so the SettleWorker can cluster garden observations by
+    product + intent — deterministic inputs, never the work LLM's free output.
     """
-    from backend.workflow.application.agent_loop import (  # noqa: PLC0415 — cycle break
-        LoopResult,
-    )
-
-    work_step.status = WorkStepStatus.VERIFIED
-    work_step.proof_state = ProofState.PROVED
-    attempt.phase = RunAttemptPhase.COMPLETED
-    attempt.finished_at = utcnow()
-
     # The deliverable summary's fixed chrome (changed-file header, verification
     # sentence) is localized to the workspace language so a KO founder's delivered
     # summary / Telegram body reads in Korean, not English.
@@ -349,12 +366,12 @@ async def finish_verified(
     deliverable = await write_verified_deliverable(
         session,
         run,
-        attempt_id=attempt.id,
+        attempt_id=attempt_id,
         artifact_refs=written_paths,
         # Title the summary by the founder intent + body by the changed files,
         # not the work LLM's raw narration — the first line becomes the PR
         # title + settle note title. R1: weave in what the verifier proved.
-        summary=_compose_verified_summary(run, final_text, written_paths, verdict, language),
+        summary=_compose_verified_summary(run, final_text, written_paths, verdict_result, language),
         # v2 — the agent's own retrospective knowledge declaration (or None).
         knowledge=knowledge,
     )
@@ -385,6 +402,58 @@ async def finish_verified(
         settings=settings,
         stream=STREAM_SETTLE,
         fields={"workspace_id": str(run.workspace_id), "run_id": str(run.id)},
+    )
+    return deliverable
+
+
+# Invariant: this helper MUST only be called from a code path that has
+# already observed ``VerificationOutcome.PASSED`` on the verifier verdict
+# (see :mod:`backend.workflow.application._drive_loop`). The helper itself
+# does NOT re-check; the gate is at the call site. The structural anti-
+# regression in :mod:`tests.execution.test_proved_invariant` grep-pins the
+# ``VerificationOutcome.PASSED`` reference in this same file so any future
+# wrap-call here remains paired with the gate identifier.
+async def finish_verified(
+    session: AsyncSession,
+    *,
+    run: ExecutionRun,
+    work_step: WorkStep,
+    attempt: RunAttempt,
+    written_paths: list[str],
+    final_text: str,
+    verdict: VerificationResult,
+    redis_client: Any,
+    settings: Settings,
+    knowledge: RememberableKnowledge | None = None,
+) -> LoopResult:
+    """Land the verified terminal — the sandbox path's PROVED terminal.
+
+    Owns what is specific to a run the SERVER verified: the WorkStep /
+    RunAttempt transitions and the ``PROVED`` proof_state (justified by the
+    PASSED verdict this function's call site has already observed). The artifact
+    contract itself — Deliverable + DeliveryEventRow + settle activity + Redis
+    wake-up — is the SAME regardless of compute backend and lives in
+    :func:`land_verified_artifacts`, which client_attach lands through too.
+    """
+    from backend.workflow.application.agent_loop import (  # noqa: PLC0415 — cycle break
+        LoopResult,
+    )
+
+    work_step.status = WorkStepStatus.VERIFIED
+    work_step.proof_state = ProofState.PROVED
+    attempt.phase = RunAttemptPhase.COMPLETED
+    attempt.finished_at = utcnow()
+
+    await land_verified_artifacts(
+        session,
+        run=run,
+        attempt_id=attempt.id,
+        written_paths=written_paths,
+        final_text=final_text,
+        verdict_result=verdict.result if isinstance(verdict.result, Mapping) else None,
+        redis_client=redis_client,
+        settings=settings,
+        knowledge=knowledge,
     )
 
     logger.info(
@@ -445,6 +514,7 @@ __all__ = [
     "create_decision",
     "decision_result",
     "finish_verified",
+    "land_verified_artifacts",
     "record_activity",
     "utcnow",
 ]

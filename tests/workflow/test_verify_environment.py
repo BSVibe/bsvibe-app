@@ -242,6 +242,12 @@ class _Orch:
 
     def __init__(self) -> None:
         self._session = _NullSession()
+        # The settle path lands the run's deliverable through the same helper
+        # the sandbox terminal uses, so it needs the same two collaborators.
+        self._redis_client = None
+        from backend.config import get_settings
+
+        self._settings = get_settings()
 
     def _verifier(self) -> Any:
         return None
