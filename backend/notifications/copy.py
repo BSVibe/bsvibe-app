@@ -86,6 +86,19 @@ _NEEDS_YOU_REASON_BODY: dict[str, dict[str, str]] = {
         "en": "The work is done, but the evidence is weak — please review.",
         "ko": "작업을 마쳤지만 검증 근거가 약해요. 확인해주세요.",
     },
+    # The merge watch gave up on an OPEN pull request. Both reasons end the same
+    # way — a PR nobody will merge — but call for different things, so they get
+    # their own bodies rather than one catch-all. Kept in step with
+    # ``_EXECUTOR_DECISION_REASON_QUESTIONS`` (the Brief side): the phone and the
+    # Brief must say the same thing about the same Decision.
+    "github_binding_unavailable": {
+        "en": "BSVibe lost access to the repo, so its open pull request can't be merged.",
+        "ko": "저장소 접근이 끊겨서 올려둔 PR을 병합할 수 없어요.",
+    },
+    "ci_deadline_exceeded": {
+        "en": "The checks on BSVibe's pull request never went green in time.",
+        "ko": "올려둔 PR의 검사가 제한 시간 안에 통과하지 못했어요.",
+    },
 }
 
 #: Localized CTA framing for the trailing deep-link line of a push. ``needs_you``

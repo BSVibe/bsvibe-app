@@ -23,6 +23,8 @@ from backend.data import Base
 from backend.workflow.application.runtime.merge_watch_runtime import (
     build_merge_watch_conflict_escalate,
     build_merge_watch_conflict_redispatch,
+    build_merge_watch_stall_escalate,
+    build_merge_watch_workers,
 )
 from backend.workflow.infrastructure.db import Decision, DecisionStatus, ExecutionRun, RunStatus
 from tests._support import db_engine
@@ -149,3 +151,61 @@ async def test_conflict_escalate_missing_run_is_a_noop() -> None:
         escalate = build_merge_watch_conflict_escalate(session_factory=sf)
         # No such run — must not raise (idempotent / at-least-once contract).
         await escalate(uuid.uuid4(), conflict_paths=["x"], base_branch="main", pr_number=1)
+
+
+async def test_stall_escalate_raises_stalled_decision_without_reviving_the_run() -> None:
+    """머지워치가 포기했을 때의 application 시임.
+
+    conflict escalation 과 다른 점: 이 런은 **이미 끝났다**(딜리버러블 착지 →
+    승인 → shipped). 그래서 런을 RUNNING 으로 파킹하지 않는다 — 남은 것은 머지되지
+    않은 PR 하나이고, 그 사실을 형님이 알아야 할 뿐이다."""
+    async with db_engine(Base) as (engine, _pg):
+        sf = async_sessionmaker(engine, expire_on_commit=False)
+        run_id = await _seed_run(sf, status=RunStatus.SHIPPED)
+
+        escalate = build_merge_watch_stall_escalate(session_factory=sf)
+        await escalate(run_id, reason="ci_deadline_exceeded", repo="acme/x", pr_number=23)
+
+        async with sf() as session:
+            run = await session.get(ExecutionRun, run_id)
+            assert run is not None
+            assert run.status is RunStatus.SHIPPED  # 되살리지 않는다
+
+            decision = (
+                await session.execute(select(Decision).where(Decision.run_id == run_id))
+            ).scalar_one()
+            assert decision.decision == "merge_watch_stalled"
+            assert decision.status is DecisionStatus.PENDING
+            assert decision.payload["reason"] == "ci_deadline_exceeded"
+            assert decision.payload["repo"] == "acme/x"
+            assert decision.payload["pr_number"] == 23
+
+
+async def test_stall_escalate_missing_run_is_a_noop() -> None:
+    async with db_engine(Base) as (engine, _pg):
+        sf = async_sessionmaker(engine, expire_on_commit=False)
+        escalate = build_merge_watch_stall_escalate(session_factory=sf)
+        # 없는 런 — at-least-once 계약상 raise 하면 안 된다(폴 전체를 죽인다).
+        await escalate(uuid.uuid4(), reason="github_binding_unavailable", repo="a/b", pr_number=1)
+
+
+async def test_stall_escalation_is_wired_into_the_worker_construction(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """빌더가 있어도 워커에 안 꽂히면 프로덕션에서는 여전히 조용하다
+    (half-wired-subsystem: 보이는 절반만 만들어지는 그 결함)."""
+    from backend.config import get_settings
+    from backend.workflow.application.runtime import merge_watch_runtime
+
+    # 크리덴셜 키는 이 테스트의 대상이 아니다 — 워커 구성만 보면 된다.
+    monkeypatch.setattr(merge_watch_runtime, "_key_from_settings", lambda: b"\x00" * 32)
+
+    async with db_engine(Base) as (engine, _pg):
+        sf = async_sessionmaker(engine, expire_on_commit=False)
+        settings = get_settings().model_copy(update={"github_auto_merge_enabled": True})
+        workers = build_merge_watch_workers(sf, settings)
+        assert len(workers) == 1
+        assert workers[0]._escalate_stall is not None
+        # 함께 온 나머지 시임도 그대로 꽂혀 있다(회귀 방지).
+        assert workers[0]._escalate_conflict is not None
+        assert workers[0]._redispatch_conflict is not None

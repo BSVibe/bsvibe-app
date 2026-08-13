@@ -31,6 +31,7 @@ import structlog
 from sqlalchemy import select
 
 from backend.workflow.application._checkpoint_shared import (
+    ACTION_ACKNOWLEDGE,
     ACTION_DISCARD,
     ACTION_SHIP,
     _decision_actions,
@@ -87,6 +88,17 @@ NEGATIVE_PATTERN_SETTLE_KIND = "negative_pattern"
 #: note's body proportionate to the question + answer (mirrors
 #: :data:`~backend.workflow.domain.verified_deliverable.SETTLE_SUMMARY_CAP`).
 _SUMMARY_CAP = 500
+
+#: Run states with nowhere left to resume TO. The free-text resolve path exists
+#: to un-pause a run that stopped ON its Decision; a run that already shipped,
+#: failed or was cancelled is finished, and re-opening it would put completed
+#: work back through the drive loop. Reached by the informational Decisions
+#: raised ABOUT a finished run (``merge_watch_stalled``), which the PWA still
+#: renders a free-text box beside. Same set as
+#: :data:`~backend.workflow.application.run_delivery_resolution._TERMINAL_RUN_STATUSES`,
+#: kept local because the reason differs (there: an auto-resolution that has
+#: nothing to close; here: a resume that has nowhere to go).
+_TERMINAL_RUN_STATUSES = frozenset({RunStatus.SHIPPED, RunStatus.FAILED, RunStatus.CANCELLED})
 
 logger = structlog.get_logger(__name__)
 
@@ -302,6 +314,21 @@ async def resolve_checkpoint(
         )
     elif action_key == ACTION_DISCARD:
         await _discard_decision_run(runner, run=run, decision=decision)
+    elif action_key == ACTION_ACKNOWLEDGE:
+        # A report, not a fork in the work (``merge_watch_stalled``): the founder
+        # has seen it. The Decision is RESOLVED above; the run is deliberately
+        # untouched.
+        pass
+    elif run.status in _TERMINAL_RUN_STATUSES:
+        # A free-text reply on a run that already ENDED. The resume below would
+        # re-open finished work — re-running its approval + delivery — so record
+        # the answer and stop. Only a live run has somewhere to resume to.
+        logger.info(
+            "checkpoint_resolved_on_terminal_run",
+            run_id=str(run.id),
+            decision_id=str(decision.id),
+            run_status=run.status.value,
+        )
     else:
         # Resume: RUNNING → OPEN so AgentWorker.drive_once (scans OPEN runs)
         # re-picks it. AgentRunner.transition no-ops if the run is not RUNNING

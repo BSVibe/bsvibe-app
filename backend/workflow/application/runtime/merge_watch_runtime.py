@@ -43,6 +43,7 @@ from backend.workflow.infrastructure.workers.merge_watch_worker import (
     MergeWatchClient,
     MergeWatchWorker,
     MergeWatchWorkerConfig,
+    StallEscalate,
 )
 from plugin.github.client import DEFAULT_BASE_URL, GithubClient
 
@@ -233,6 +234,60 @@ def build_merge_watch_conflict_escalate(
     return _escalate
 
 
+def build_merge_watch_stall_escalate(
+    *, session_factory: async_sessionmaker[AsyncSession]
+) -> StallEscalate:
+    """Build the give-up escalation callback for the MergeWatchWorker.
+
+    The watch has terminals it cannot come back from that NO human asked for —
+    the github target went away, or CI never went green before the deadline. Each
+    leaves a pull request open with nobody left to merge it. Raising a
+    ``merge_watch_stalled`` Decision (which is also what emits the founder
+    notification) is an APPLICATION concern, so it lives here and is injected
+    into the infrastructure worker as an opaque callable.
+
+    Deliberately does NOT touch the run's status. By the time a PR is under
+    watch, its run has shipped — the deliverable landed and the founder approved
+    it. Pausing it (the conflict escalation's move) would re-open finished work,
+    and cancelling it would deny a delivery that genuinely happened. What is left
+    is a report, so this only reports. Opens its own short transaction (the
+    worker's session may hold the per-repo lock) and a missing run is a no-op.
+    """
+
+    async def _escalate(
+        run_id: uuid.UUID,
+        *,
+        reason: str,
+        repo: str,
+        pr_number: int,
+    ) -> None:
+        from backend.workflow.application.run_persistence import create_decision  # noqa: PLC0415
+
+        async with session_factory() as session:
+            run = await session.get(ExecutionRun, run_id)
+            if run is None:
+                logger.warning("merge_watch_stall_run_missing", run_id=str(run_id))
+                return
+            await create_decision(
+                session,
+                run,
+                None,  # work_step is unused by the Decision row
+                kind="merge_watch_stalled",
+                payload={"reason": reason, "repo": repo, "pr_number": pr_number},
+                rationale=f"merge watch gave up on {repo}#{pr_number}: {reason}",
+            )
+            await session.commit()
+        logger.info(
+            "merge_watch_stall_escalated",
+            run_id=str(run_id),
+            repo=repo,
+            pr_number=pr_number,
+            reason=reason,
+        )
+
+    return _escalate
+
+
 def build_merge_watch_workers(
     session_factory: async_sessionmaker[AsyncSession],
     settings: Settings,
@@ -267,6 +322,7 @@ def build_merge_watch_workers(
                 session_factory=session_factory
             ),
             escalate_conflict=build_merge_watch_conflict_escalate(session_factory=session_factory),
+            escalate_stall=build_merge_watch_stall_escalate(session_factory=session_factory),
             config=MergeWatchWorkerConfig(
                 poll_interval_s=settings.github_auto_merge_poll_interval_s,
                 conflict_resolution_deadline_s=settings.github_conflict_resolution_deadline_s,
@@ -281,5 +337,6 @@ __all__ = [
     "build_merge_watch_client_resolver",
     "build_merge_watch_conflict_escalate",
     "build_merge_watch_conflict_redispatch",
+    "build_merge_watch_stall_escalate",
     "build_merge_watch_workers",
 ]

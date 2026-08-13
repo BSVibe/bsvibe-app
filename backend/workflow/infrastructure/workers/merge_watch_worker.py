@@ -42,10 +42,15 @@ Deferred to later PRs
   Phase 2 (PR6 — freshness / conflict recovery). PR4 does NOT merge them: the
   row simply waits (``pending_ci`` + backoff, ``last_error="awaiting_freshness
   (pr6)"``).
-* The CI-deadline founder Decision (``human_review_required``) is deferred to
-  PR7: on deadline the row is FAILED + a prominent ``merge_watch_ci_deadline``
-  warning is logged, but the worker does not reach across into the application
-  ``create_decision`` seam from the infrastructure layer.
+
+Giving up is not the same as going quiet
+----------------------------------------
+
+Every terminal that leaves a pull request OPEN with nobody left to merge it goes
+through an injected escalation — :class:`ConflictEscalate` for the unresolved
+conflict, :class:`StallEscalate` for the rest (no resolvable github target, CI
+past its deadline). The two terminals a HUMAN caused (they closed the PR; they
+discarded the run) stay quiet, because they already know.
 """
 
 from __future__ import annotations
@@ -168,6 +173,37 @@ class ConflictEscalate(Protocol):
         *,
         conflict_paths: list[str],
         base_branch: str,
+        pr_number: int,
+    ) -> None: ...
+
+
+class StallEscalate(Protocol):
+    """Tell the founder the watch GAVE UP on a pull request that is still open.
+
+    The state machine has four terminals nobody can undo, and for a long time
+    only ONE of them (the unresolved conflict, via :class:`ConflictEscalate`)
+    said anything to a human — the other three marked the row ``failed``, wrote a
+    log line, and abandoned an open PR in silence. That is the same shape of hole
+    as a run finishing ``verified`` without its result reaching anyone: the
+    subsystem is satisfied, and the founder is not told.
+
+    Implemented in the APPLICATION layer (``merge_watch_runtime``): it raises a
+    ``merge_watch_stalled`` Decision on the run — which is also what emits the
+    founder notification — so the infrastructure worker never imports
+    ``create_decision``. ``reason`` is the SAME string written to the row's
+    ``last_error``, so the Decision and the row read as one story.
+
+    Unlike :class:`ConflictEscalate` this does NOT pause or re-drive the run: by
+    the time a PR is under watch its run has already shipped. There is nothing
+    left to drive — only something to report.
+    """
+
+    async def __call__(
+        self,
+        run_id: uuid.UUID,
+        *,
+        reason: str,
+        repo: str,
         pr_number: int,
     ) -> None: ...
 
@@ -296,6 +332,7 @@ class MergeWatchWorker(BaseWorker):
         branch_freshener: BranchFreshener | None = None,
         redispatch_conflict: ConflictRedispatch | None = None,
         escalate_conflict: ConflictEscalate | None = None,
+        escalate_stall: StallEscalate | None = None,
         config: MergeWatchWorkerConfig | None = None,
         now: Clock | None = None,
     ) -> None:
@@ -310,6 +347,9 @@ class MergeWatchWorker(BaseWorker):
         self._freshen = branch_freshener
         self._redispatch_conflict = redispatch_conflict
         self._escalate_conflict = escalate_conflict
+        # When absent (a PR4/PR6-era construction) a give-up terminal keeps its
+        # old log-only behavior rather than half-reporting.
+        self._escalate_stall = escalate_stall
         self._now = now or _utcnow
 
     @property
@@ -318,6 +358,21 @@ class MergeWatchWorker(BaseWorker):
 
     async def _tick(self) -> int:
         return await self.drain_once()
+
+    async def _gave_up(self, snap: _WatchSnapshot, reason: str) -> None:
+        """Tell the founder this watch is over and the PR is still open.
+
+        Called BEFORE the row is marked terminal + committed, so an escalation
+        that fails leaves the row un-terminal: the exception propagates to
+        :meth:`drain_once`, the reservation stands, and the next tick tries to
+        reach the founder again. The bias is deliberate — a duplicate telling is
+        cheap, a swallowed one is exactly the failure this closes.
+        """
+        if self._escalate_stall is None:
+            return
+        await self._escalate_stall(
+            snap.run_id, reason=reason, repo=snap.repo, pr_number=snap.pr_number
+        )
 
     def _backoff(self, attempts: int, now: datetime) -> datetime:
         delay = min(self._cfg.backoff_base_s * (2**attempts), self._cfg.backoff_cap_s)
@@ -373,7 +428,9 @@ class MergeWatchWorker(BaseWorker):
             client = await self._resolve_client(session, snap.workspace_id, snap.run_id)
             if client is None:
                 # No resolvable github target (connector removed / deactivated) —
-                # we can never make progress, so stop watching.
+                # we can never make progress, so stop watching. The PR stays OPEN
+                # on github with nobody left to merge it, so say so.
+                await self._gave_up(snap, "github_binding_unavailable")
                 await repo.mark_status(
                     snap.id,
                     MergeWatchStatus.FAILED,
@@ -437,6 +494,7 @@ class MergeWatchWorker(BaseWorker):
 
             # 3. CI still pending (blocked / unstable / unknown / anything else).
             if now > snap.deadline_at:
+                await self._gave_up(snap, "ci_deadline_exceeded")
                 await repo.mark_status(
                     snap.id, MergeWatchStatus.FAILED, last_error="ci_deadline_exceeded"
                 )
@@ -448,11 +506,6 @@ class MergeWatchWorker(BaseWorker):
                     run_id=str(snap.run_id),
                     deliverable_id=str(snap.deliverable_id),
                 )
-                # TODO(PR7): raise a ``human_review_required`` Decision on the run
-                # so the founder is told the PR's CI never went green. Deferred to
-                # keep the worker in the infrastructure layer — routing a Decision
-                # (which also emits the founder notification) belongs to the
-                # application ``create_decision`` seam, not a cross-layer call here.
                 return
 
             await repo.mark_status(
@@ -575,7 +628,9 @@ class MergeWatchWorker(BaseWorker):
 
             if outcome.status == "unavailable":
                 # No resolvable target at all (connector removed) — no retry
-                # will ever help, so stop watching.
+                # will ever help, so stop watching (and say so: same terminal,
+                # same open PR, reached one poll later than the branch above).
+                await self._gave_up(snap, "github_binding_unavailable")
                 await repo.mark_status(
                     snap.id,
                     MergeWatchStatus.FAILED,
@@ -802,4 +857,5 @@ __all__ = [
     "MergeWatchClient",
     "MergeWatchWorker",
     "MergeWatchWorkerConfig",
+    "StallEscalate",
 ]

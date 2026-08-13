@@ -531,6 +531,7 @@ def _freshness_worker(
     run_root: Path,
     git_ops: GitOps | None = None,
     escalate: Any = None,
+    stall: Any = None,
     config: MergeWatchWorkerConfig | None = None,
     now: datetime = _FIXED_NOW,
 ) -> MergeWatchWorker:
@@ -540,6 +541,7 @@ def _freshness_worker(
         branch_freshener=_freshness_for(target, run_root, git_ops or GitOps()),
         redispatch_conflict=redispatch,
         escalate_conflict=escalate,
+        escalate_stall=stall,
         config=config or MergeWatchWorkerConfig(poll_interval_s=30.0),
         now=lambda: now,
     )
@@ -1141,3 +1143,138 @@ async def test_enqueue_is_noop_when_settings_absent() -> None:
 
             rows = (await session.execute(select(GithubMergeWatchRow))).scalars().all()
         assert rows == []
+
+
+# ---------------------------------------------------------------------------
+# 조용히 포기하지 않는다 — 종료 4곳이 전부 사람에게 말을 건다.
+#
+# ``conflict_unresolved_escalated`` 만 Decision 을 올리고, 나머지 셋
+# (``github_binding_unavailable`` 2곳 · ``ci_deadline_exceeded``) 은 로그만 남기고
+# 열린 PR 을 버렸다. 여기서 그 셋도 escalation 시임을 타는지 단언한다.
+# ---------------------------------------------------------------------------
+
+
+class _RecordingStall:
+    """머지워치가 포기했다고 형님을 부른 호출을 기록한다."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[uuid.UUID, str, str, int]] = []
+
+    async def __call__(self, run_id: uuid.UUID, *, reason: str, repo: str, pr_number: int) -> None:
+        self.calls.append((run_id, reason, repo, pr_number))
+
+
+async def test_no_resolvable_github_client_tells_the_founder() -> None:
+    """커넥터가 사라져 클라이언트를 못 만들면 PR 은 영원히 열린 채 남는다 —
+    row 를 FAILED 로 접기만 하고 아무 말도 안 하면 그 PR 은 유실된다."""
+    async with db_engine(Base) as (engine, _pg):
+        sf = async_sessionmaker(engine, expire_on_commit=False)
+        row = _row(repo="acme/no-client", pr_number=31)
+        await _seed(sf, row)
+        stall = _RecordingStall()
+        worker = MergeWatchWorker(
+            session_factory=sf,
+            client_resolver=_resolver_for(None),  # 해석 불가 — 커넥터가 없다
+            escalate_stall=stall,
+            config=MergeWatchWorkerConfig(poll_interval_s=30.0),
+            now=lambda: _FIXED_NOW,
+        )
+        assert await worker.drain_once() == 1
+
+        fetched = await _fetch(sf, row.id)
+        assert fetched.status is MergeWatchStatus.FAILED
+        assert fetched.last_error == "github_binding_unavailable"
+        # row.last_error ≡ decision reason (디버깅이 한 줄로 이어진다)
+        assert stall.calls == [(row.run_id, "github_binding_unavailable", "acme/no-client", 31)]
+
+        # FAILED row 는 다시 claim 되지 않는다 → 형님을 두 번 부르지 않는다.
+        assert await worker.drain_once() == 0
+        assert len(stall.calls) == 1
+
+
+async def test_freshness_no_target_tells_the_founder(tmp_path: Path) -> None:
+    """최신화 시점에 타깃이 없어도 마찬가지 — 재시도가 도울 수 없는 종료다."""
+    async with db_engine(Base) as (engine, _pg):
+        sf = async_sessionmaker(engine, expire_on_commit=False)
+        row = _row(repo="acme/fresh-silent", pr_number=44)
+        await _seed(sf, row)
+        client = _FakeClient(pr={"state": "open", "merged": False, "mergeable_state": "behind"})
+        stall = _RecordingStall()
+        worker = _freshness_worker(
+            sf,
+            client,
+            target=None,
+            redispatch=_RecordingRedispatch(),
+            run_root=tmp_path / "runs",
+            stall=stall,
+        )
+        assert await worker.drain_once() == 1
+
+        fetched = await _fetch(sf, row.id)
+        assert fetched.status is MergeWatchStatus.FAILED
+        assert stall.calls == [(row.run_id, "github_binding_unavailable", "acme/fresh-silent", 44)]
+
+
+async def test_ci_deadline_tells_the_founder() -> None:
+    """CI 가 끝내 green 이 안 됐다 — 코드에 ``TODO(PR7)`` 로 **명시**돼 있던 구멍."""
+    async with db_engine(Base) as (engine, _pg):
+        sf = async_sessionmaker(engine, expire_on_commit=False)
+        row = _row(
+            repo="acme/ci-timeout", pr_number=52, deadline_at=_FIXED_NOW - timedelta(minutes=1)
+        )
+        await _seed(sf, row)
+        client = _FakeClient(pr={"state": "open", "merged": False, "mergeable_state": "blocked"})
+        stall = _RecordingStall()
+        worker = MergeWatchWorker(
+            session_factory=sf,
+            client_resolver=_resolver_for(client),
+            escalate_stall=stall,
+            config=MergeWatchWorkerConfig(poll_interval_s=30.0),
+            now=lambda: _FIXED_NOW,
+        )
+        assert await worker.drain_once() == 1
+
+        fetched = await _fetch(sf, row.id)
+        assert fetched.status is MergeWatchStatus.FAILED
+        assert fetched.last_error == "ci_deadline_exceeded"
+        assert stall.calls == [(row.run_id, "ci_deadline_exceeded", "acme/ci-timeout", 52)]
+        assert client.merge_calls == []
+
+
+@pytest.mark.parametrize("mergeable_state", ["blocked", "behind"])
+async def test_founder_initiated_terminals_do_not_call_the_founder(mergeable_state: str) -> None:
+    """사람이 직접 닫은 PR 은 알릴 일이 아니다 — 형님이 이미 아는 사실이다."""
+    async with db_engine(Base) as (engine, _pg):
+        sf = async_sessionmaker(engine, expire_on_commit=False)
+        row = _row()
+        await _seed(sf, row)
+        client = _FakeClient(
+            pr={"state": "closed", "merged": False, "mergeable_state": mergeable_state}
+        )
+        stall = _RecordingStall()
+        worker = MergeWatchWorker(
+            session_factory=sf,
+            client_resolver=_resolver_for(client),
+            escalate_stall=stall,
+            config=MergeWatchWorkerConfig(poll_interval_s=30.0),
+            now=lambda: _FIXED_NOW,
+        )
+        await worker.drain_once()
+
+        fetched = await _fetch(sf, row.id)
+        assert fetched.status is MergeWatchStatus.ABANDONED
+        assert stall.calls == []
+
+
+async def test_stall_escalation_unwired_keeps_the_old_terminal() -> None:
+    """escalation 을 안 꽂은 (PR4/PR6 기) 구성은 종전대로 종료한다 — 새 의존성이
+    없다고 상태 기계가 달라지면 안 된다."""
+    async with db_engine(Base) as (engine, _pg):
+        sf = async_sessionmaker(engine, expire_on_commit=False)
+        row = _row(deadline_at=_FIXED_NOW - timedelta(minutes=1))
+        await _seed(sf, row)
+        client = _FakeClient(pr={"state": "open", "merged": False, "mergeable_state": "blocked"})
+        assert await _worker(sf, client).drain_once() == 1
+        fetched = await _fetch(sf, row.id)
+        assert fetched.status is MergeWatchStatus.FAILED
+        assert fetched.last_error == "ci_deadline_exceeded"

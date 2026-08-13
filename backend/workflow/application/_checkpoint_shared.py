@@ -60,6 +60,30 @@ _EXECUTOR_DECISION_QUESTIONS: dict[str, dict[str, str]] = {
         "en": "Two changes touched the same logic and BSVibe can't safely merge them — how should it resolve?",
         "ko": "두 변경이 같은 로직을 건드려 BSVibe가 안전하게 병합할 수 없어요 — 어떻게 처리할까요?",
     },
+    # The merge watch gave up on an OPEN pull request. The generic line; the
+    # per-reason lines below say WHICH way it gave up.
+    "merge_watch_stalled": {
+        "en": "BSVibe opened a pull request but couldn't finish merging it — it needs you.",
+        "ko": "BSVibe가 올린 PR을 끝까지 병합하지 못했어요 — 확인이 필요해요.",
+    },
+}
+
+
+# A stalled merge watch has more than one way to give up, and they call for
+# different things from the founder (reconnect the repo vs. look at CI). So the
+# needs-you line is keyed by the Decision ``payload["reason"]`` FIRST, exactly as
+# the notification body is (:data:`~backend.notifications.copy._NEEDS_YOU_REASON_BODY`)
+# — the phone and the Brief must say the same thing. An unlisted reason falls
+# back to the kind line above, so a new reason is never a blank item.
+_EXECUTOR_DECISION_REASON_QUESTIONS: dict[str, dict[str, str]] = {
+    "github_binding_unavailable": {
+        "en": "BSVibe lost access to this product's repo, so its open pull request can't be merged — reconnect GitHub, or merge it yourself.",
+        "ko": "이 제품의 저장소 접근이 끊겨서 올려둔 PR을 병합할 수 없어요 — GitHub를 다시 연결하거나 직접 병합해주세요.",
+    },
+    "ci_deadline_exceeded": {
+        "en": "The checks on BSVibe's pull request never went green in time — take a look at it.",
+        "ko": "BSVibe가 올린 PR의 검사가 제한 시간 안에 통과하지 못했어요 — 한번 봐주세요.",
+    },
 }
 
 
@@ -78,6 +102,12 @@ ACTION_DISCARD = "discard"
 # (RUNNING → OPEN), so ``AgentWorker.drive_once`` re-picks the run and drives a
 # fresh attempt. A failed run is recoverable, not a dead-end.
 ACTION_RETRY = "retry"
+# A pure "I've seen this" — records the founder's acknowledgment and touches the
+# run not at all. It exists for the INFORMATIONAL Decision: one raised about a
+# run that already finished, where ship (nothing left to ship), retry (nothing
+# left to drive) and discard (the work DID ship — cancelling it would be a lie)
+# are all wrong answers. Handled in ``resolve_checkpoint`` by doing nothing.
+ACTION_ACKNOWLEDGE = "acknowledge"
 
 _EXECUTOR_DECISION_ACTIONS: dict[str, list[DecisionAction]] = {
     "verification_failed": [
@@ -100,6 +130,14 @@ _EXECUTOR_DECISION_ACTIONS: dict[str, list[DecisionAction]] = {
         DecisionAction(key=ACTION_RETRY, label_en="Guide & retry", label_ko="지침 주고 다시 시도"),
         DecisionAction(key=ACTION_DISCARD, label_en="Discard", label_ko="폐기"),
     ],
+    # The merge watch gave up on an open PR. Its run already SHIPPED (the
+    # deliverable landed and the founder approved it) — so this Decision is a
+    # report, not a fork in the work: there is nothing to ship past, nothing to
+    # re-drive, and discarding would cancel a run that genuinely shipped. The
+    # remedy lives on GitHub; the one honest in-app action is to fold it away.
+    "merge_watch_stalled": [
+        DecisionAction(key=ACTION_ACKNOWLEDGE, label_en="Got it", label_ko="확인했어요"),
+    ],
     # W1: the ship_or_discard kind from L-P2 is retired. Verified runs no
     # longer need a founder-approval gate; W2 wires the actual auto-merge.
 }
@@ -121,11 +159,18 @@ def _question_text(decision: Decision, language: str = "en") -> str:
     kind-derived line in ``language`` so the needs-you item is never blank. A
     wholly unrecognised reason-only Decision degrades to an empty string."""
     payload = decision.payload or {}
+    reason = ""
     if isinstance(payload, dict):
         value = payload.get("question")
         if isinstance(value, str) and value.strip():
             return value
-    variants = _EXECUTOR_DECISION_QUESTIONS.get(decision.decision)
+        reason = str(payload.get("reason") or "")
+    # A reason-specific line wins over the kind's generic one, for a kind with
+    # several distinct ways to arrive (``merge_watch_stalled``): the founder
+    # reads what actually happened instead of a catch-all.
+    variants = _EXECUTOR_DECISION_REASON_QUESTIONS.get(reason) or _EXECUTOR_DECISION_QUESTIONS.get(
+        decision.decision
+    )
     if variants is None:
         return ""
     return variants.get(language) or variants.get("en") or ""
@@ -149,6 +194,7 @@ def _decision_options(decision: Decision) -> list[str] | None:
 
 
 __all__ = [
+    "ACTION_ACKNOWLEDGE",
     "ACTION_DISCARD",
     "ACTION_RETRY",
     "ACTION_SHIP",
