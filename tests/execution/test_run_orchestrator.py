@@ -712,6 +712,14 @@ async def test_settle_payload_degrades_without_product(tmp_path: Path) -> None:
         assert payload["intent_text"] == "harden the cache"
 
 
+def _no_artifact_probes() -> LoopTurn:
+    """The blind artifact planner's empty plan (C1). A run that writes a
+    non-code file now reaches the I2 artifact planner before the judge, so a
+    scripted loop must supply its turn; an empty plan leaves the verdict exactly
+    as it was."""
+    return LoopTurn(content='{"probes": []}', tool_calls=())
+
+
 async def test_verified_run_no_extra_llm_calls(tmp_path: Path) -> None:
     """A command-only contract needs no judge call — the loop must not
     make an unscripted LLM round."""
@@ -725,6 +733,9 @@ async def test_verified_run_no_extra_llm_calls(tmp_path: Path) -> None:
                 ),
             ),
             LoopTurn(content="done", tool_calls=()),
+            # `marker` is not code, so I2 probes it as an ARTIFACT (C1) — one
+            # planner round. Still ZERO judge calls, which is what this pins.
+            _no_artifact_probes(),
         ]
     )
     async with memory_session() as session:
@@ -732,7 +743,7 @@ async def test_verified_run_no_extra_llm_calls(tmp_path: Path) -> None:
         orch = RunOrchestrator(session=session, llm=llm, sandbox_manager=NoopSandboxManager())
         result = await orch.run(run=run, workspace_dir=tmp_path)
     assert result.outcome == "verified"
-    assert len(llm.calls) == 2  # two plan turns, zero judge calls
+    assert len(llm.calls) == 3  # two plan turns + the artifact planner, zero judge calls
 
 
 # --------------------------------------------------------------------------
@@ -751,6 +762,7 @@ async def test_verified_via_judge_check(tmp_path: Path) -> None:
                 ),
             ),
             LoopTurn(content="written the greeting", tool_calls=()),
+            _no_artifact_probes(),
             # judge call (tools=None) returns a pass verdict as JSON
             LoopTurn(content='{"passed": true, "reasoning": "greets the world"}', tool_calls=()),
         ]
@@ -777,6 +789,7 @@ async def test_judge_fail_then_decision_at_cap(tmp_path: Path) -> None:
                 ),
             ),
             LoopTurn(content="attempted", tool_calls=()),
+            _no_artifact_probes(),
             LoopTurn(content='{"passed": false, "reasoning": "no proof present"}', tool_calls=()),
         ]
     )
@@ -807,10 +820,12 @@ async def test_failed_verify_then_replan_then_verified(tmp_path: Path) -> None:
                 ),
             ),
             LoopTurn(content="first pass", tool_calls=()),  # → verify FAIL
+            _no_artifact_probes(),  # result.txt is an artifact — I2 plans per verify
             LoopTurn(
                 content="fixing", tool_calls=(_tc("file_write", path="result.txt", content="DONE"),)
             ),
             LoopTurn(content="second pass", tool_calls=()),  # → verify PASS
+            _no_artifact_probes(),
         ]
     )
     async with memory_session() as session:
@@ -1099,6 +1114,7 @@ async def test_knowledge_seeded_into_initial_context_on_turn_1(tmp_path: Path) -
                 ),
             ),
             LoopTurn(content="declared deps", tool_calls=()),
+            _no_artifact_probes(),
             # judge call (tools=None) for the declared + folded criteria
             LoopTurn(content='{"passed": true}', tool_calls=()),
         ]

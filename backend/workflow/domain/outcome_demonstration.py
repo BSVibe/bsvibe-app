@@ -19,10 +19,20 @@ plan, judge one probe against one observation, and summarize a plan's probe
 results into a single demonstration verdict. It is pure and offline — the LLM
 call and the sandbox execution live in the verification service.
 
-Best-effort (founder decision #1): a deliverable that cannot be exercised (pure
-prose / half-built code) yields NO probes → verdict ``undemonstrable`` → the
-honesty grade downgrades, it does NOT fail. Only a probe that RAN and
-*contradicted* its declared expectation fails verification.
+Best-effort (founder decision #1): a deliverable that cannot be exercised yields
+NO probes → verdict ``undemonstrable`` → the honesty grade downgrades, it does
+NOT fail. Only a probe that RAN and *contradicted* its declared expectation
+fails verification.
+
+**Two surfaces, two groundings** (design SoT §8). A CODE deliverable is probed
+by CALLING it, so its planner reads the source (it needs the API, and the
+machine's answer is what decides — reading cannot fake that). A produced
+ARTIFACT — a report, a dataset, a document — is probed by INSPECTING it, and
+whoever holds the text can always write a grep that finds it. So the artifact
+planner is grounded in the TASK and the file PATHS only
+(:func:`artifact_planner_messages`), and because it declares expectations about
+wording it never saw, its fold is ADVISORY: it can EARN the demonstrated leg,
+never manufacture a failure (``summarize(..., contradiction_fails=False)``).
 """
 
 from __future__ import annotations
@@ -250,19 +260,88 @@ def judge_probe(probe: Probe, obs: Observation) -> ProbeStatus:
     return "matched" if (exit_ok and stdout_ok) else "contradicted"
 
 
-def summarize(results: list[ProbeResult] | tuple[ProbeResult, ...]) -> DemonstrationVerdict:
+def summarize(
+    results: list[ProbeResult] | tuple[ProbeResult, ...],
+    *,
+    contradiction_fails: bool = True,
+) -> DemonstrationVerdict:
     """Fold probe results into one demonstration verdict.
 
     ANY contradiction ⇒ ``failed`` (the deliverable was exercised and did not
     produce the intended result). Otherwise, at least one ``matched`` ⇒
     ``demonstrated``. No matches (empty plan or all unavailable) ⇒
-    ``undemonstrable`` (best-effort: downgrade, do not fail)."""
+    ``undemonstrable`` (best-effort: downgrade, do not fail).
+
+    ``contradiction_fails=False`` — the ADVISORY fold, for a surface where the
+    planner declared its expectations WITHOUT seeing what it grades (the
+    artifact surface, :func:`artifact_planner_messages`). There a miss means the
+    planner guessed at wording the author was free to choose, not that the work
+    is wrong, so it downgrades to ``undemonstrable`` instead. Such a surface can
+    only EARN evidence, never manufacture a failure."""
     statuses = [r.status for r in results]
-    if "contradicted" in statuses:
+    if contradiction_fails and "contradicted" in statuses:
         return "failed"
     if "matched" in statuses:
         return "demonstrated"
     return "undemonstrable"
+
+
+# ── Grounding for the ARTIFACT surface (prose / data deliverables) ────────────
+
+
+#: Deliberately BLIND to the deliverable's text — see the function docstring.
+_ARTIFACT_SYSTEM_PROMPT = (
+    "You are an INDEPENDENT outcome-demonstration verifier. The deliverable under "
+    "test is NOT code you can call — it is a produced ARTIFACT (a document, a "
+    "report, a dataset, a config). You design executable PROBES that INSPECT the "
+    "produced files and OBSERVE whether what the TASK required is actually there.\n"
+    "You have NOT been shown the artifact's contents, and that is deliberate: an "
+    "expectation copied out of the text you are grading is satisfied by any text "
+    "at all and proves nothing. Derive EVERY expectation from the TASK alone.\n"
+    "For each probe output:\n"
+    '  - "name": what outcome it demonstrates\n'
+    '  - "command": ONE line of shell that inspects a produced file and prints an '
+    "observable result (grep for a required element, count rows, parse the file "
+    "and print a field). For Python use `python -c` with statements joined by ';' "
+    "(NOT literal \\n — inside `python -c` a backslash-n is not a newline and "
+    "raises SyntaxError).\n"
+    '  - "expect_stdout_contains": the exact substring(s) that MUST appear if the '
+    "TASK was carried out\n"
+    '  - "expect_exit_zero": true if the command must succeed, false if it must fail\n'
+    "RULES:\n"
+    "- Assert only what the TASK UNAMBIGUOUSLY requires — a named figure, a "
+    "required section, a row count, a declared format. NEVER assert particular "
+    "PHRASING or wording the author was free to choose; you never saw the text, "
+    "and a guess that misses wrongly withholds credit from good work.\n"
+    "- Prefer a requirement that is checkable against something OUTSIDE the "
+    "artifact (a source file, a tool that regenerates the value) over anything "
+    "the artifact alone asserts about itself.\n"
+    "- Every probe runs from the REPO ROOT (the deliverable's checkout is your "
+    "current working directory). Use ONLY paths RELATIVE to it. NEVER `cd` and "
+    "NEVER use an absolute filesystem path — that location will NOT exist when "
+    "the probe runs.\n"
+    "- If the TASK states no requirement an executable probe can observe, return "
+    "an empty probes list — that is a valid, honest answer.\n"
+    '- Output ONLY a JSON object: {"setup": [...], "probes": [ {...} ]}. No prose.'
+)
+
+
+def artifact_planner_messages(*, intent: str, artifact_paths: list[str]) -> list[dict[str, str]]:
+    """Ground the planner in the TASK and the artifact's PATHS — never its text.
+
+    The code path (``_demonstration_planner_messages`` in the verification
+    service) shows the planner the source, because writing a probe that CALLS
+    the deliverable takes knowing its API, and the machine's answer is what
+    decides — reading the source cannot fake that. Inspecting a document is the
+    opposite: whoever holds the text can always write a grep that finds it. So
+    the artifact surface withholds the text and keeps the task (design SoT §8.3
+    / §4 rule 1)."""
+    listing = "\n".join(f"- {p}" for p in artifact_paths)
+    user = f"TASK (the intended result):\n{intent}\n\nPRODUCED artifact files:\n{listing}"
+    return [
+        {"role": "system", "content": _ARTIFACT_SYSTEM_PROMPT},
+        {"role": "user", "content": user},
+    ]
 
 
 __all__ = [
@@ -275,6 +354,7 @@ __all__ = [
     "Probe",
     "ProbeResult",
     "ProbeStatus",
+    "artifact_planner_messages",
     "judge_probe",
     "parse_demonstration_plan",
     "summarize",

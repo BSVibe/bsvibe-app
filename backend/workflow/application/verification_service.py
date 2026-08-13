@@ -49,6 +49,7 @@ from backend.workflow.domain.outcome_demonstration import (
     DemonstrationPlan,
     Observation,
     ProbeResult,
+    artifact_planner_messages,
     judge_probe,
     parse_demonstration_plan,
     summarize,
@@ -137,13 +138,15 @@ _MANIFEST_FILES: tuple[str, ...] = (
     "pom.xml",
     "build.gradle",
 )
-#: Extensions the demonstration planner can meaningfully exercise as CODE. A
-#: prose/data deliverable (``.md`` / ``.txt`` / ``.json``) yields no sources →
-#: no plan → ``undemonstrable`` (honest downgrade, not a fail). This is the
-#: sandbox-shaped starting set (python-centric env); broadening to more stacks
-#: is a later strategy-dispatch lift. NOTE this is only a gate on WHICH files
-#: inform the planner — the plan's probes are stack-agnostic (the verifier picks
-#: how to exercise the code).
+#: Extensions the demonstration planner can meaningfully exercise as CODE — i.e.
+#: which files it is shown the CONTENTS of, because writing a probe that CALLS
+#: the deliverable takes knowing its API. A prose/data deliverable (``.md`` /
+#: ``.txt`` / ``.json``) yields no sources and takes the ARTIFACT surface
+#: instead: probed by inspection, planned WITHOUT its text in hand, advisory
+#: (SoT §8.3). This is the sandbox-shaped starting set (python-centric env);
+#: broadening to more stacks is a later strategy-dispatch lift. NOTE this is
+#: only a gate on WHICH files inform the planner — the plan's probes are
+#: stack-agnostic (the verifier picks how to exercise the deliverable).
 _CODE_EXTS: frozenset[str] = frozenset(
     {
         ".py",
@@ -1034,10 +1037,36 @@ class VerificationService:
             except SandboxError:
                 continue
             sources.append((path, data.decode("utf-8", errors="replace")))
-        if not sources:
-            return None
 
-        plan = await self._author_demonstration_plan(intent, sources)
+        # No exercisable CODE — but a produced ARTIFACT is a deliverable too, and
+        # the gate deriver hands prose/data changes here BY DESIGN ("the judge and
+        # demonstration paths cover it"). Refusing them is what left every non-dev
+        # deliverable on grade D, calling the founder every time (SoT §8.1). The
+        # probes are stack-agnostic; only this entrance was code-shaped.
+        #
+        # Code paths are EXCLUDED from this fallback even when unreadable. A
+        # source we could not read is an infra failure, and blind-probing it
+        # would turn that failure into evidence ("grep found the function name")
+        # for a change nothing exercised — absence must prove itself (§4 rule 3),
+        # so it stays undemonstrable.
+        artifact_paths: list[str] = []
+        if not sources:
+            artifact_paths = [
+                p
+                for p in written_paths
+                if not _is_code_path(p) and not _is_test_path(p) and not _is_scope_exempt(p)
+            ]
+        if not sources and not artifact_paths:
+            return None
+        # The artifact planner is BLIND to the text it grades and its verdict is
+        # ADVISORY (earn-only) — both for the same reason (§8.3, §4 rule 1).
+        strict = bool(sources)
+
+        plan = (
+            await self._author_demonstration_plan(intent, sources)
+            if strict
+            else await self._author_artifact_plan(intent, artifact_paths)
+        )
         if plan is None or plan.is_empty:
             # Honest downgrade: the deliverable could not be reduced to an
             # executable demonstration. Not a fail — recorded so the grade /
@@ -1081,28 +1110,45 @@ class VerificationService:
                 ProbeResult(probe=probe, observation=obs, status=judge_probe(probe, obs))
             )
 
-        outcome = DemonstrationOutcome(verdict=summarize(results), results=tuple(results))
+        outcome = DemonstrationOutcome(
+            verdict=summarize(results, contradiction_fails=strict), results=tuple(results)
+        )
         logger.info(
             "outcome_demonstration",
             run_id=str(run.id),
             verdict=outcome.verdict,
             probes=len(results),
+            surface="code" if strict else "artifact",
         )
         blob = outcome.to_dict()
         blob["plan"] = plan.to_dict()
+        blob["surface"] = "code" if strict else "artifact"
         return blob
+
+    async def _author_artifact_plan(
+        self, intent: str, artifact_paths: list[str]
+    ) -> DemonstrationPlan | None:
+        """The artifact surface's planner — same bounded call, different
+        grounding: the TASK plus the produced PATHS, never their contents
+        (:func:`artifact_planner_messages`)."""
+        return await self._author_plan(
+            artifact_planner_messages(intent=intent, artifact_paths=artifact_paths)
+        )
 
     async def _author_demonstration_plan(
         self, intent: str, sources: list[tuple[str, str]]
     ) -> DemonstrationPlan | None:
-        """Ask the independent verifier for a demonstration plan (bounded — a
-        hung executor CLI must never stall the run; a hiccup → ``None`` →
-        undemonstrable, never a false-fail)."""
+        """Ask the independent verifier for a demonstration plan, grounded in the
+        deliverable's SOURCE (writing a probe that CALLS the code takes knowing
+        its API)."""
+        return await self._author_plan(_demonstration_planner_messages(intent, sources))
+
+    async def _author_plan(self, messages: list[dict[str, str]]) -> DemonstrationPlan | None:
+        """One bounded planner call — a hung executor CLI must never stall the
+        run; a hiccup → ``None`` → undemonstrable, never a false-fail."""
         try:
             turn = await asyncio.wait_for(
-                self._llm.complete(
-                    messages=_demonstration_planner_messages(intent, sources), tools=None
-                ),
+                self._llm.complete(messages=list(messages), tools=None),
                 timeout=_VERIFY_LLM_TIMEOUT_S,
             )
         except Exception:  # noqa: BLE001 — planner hiccup must never break the run

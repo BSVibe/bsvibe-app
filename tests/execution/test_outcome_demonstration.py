@@ -15,6 +15,7 @@ from backend.workflow.domain.outcome_demonstration import (
     Observation,
     Probe,
     ProbeResult,
+    artifact_planner_messages,
     judge_probe,
     parse_demonstration_plan,
     summarize,
@@ -198,3 +199,50 @@ def test_summarize_no_matches_is_undemonstrable() -> None:
 def test_empty_plan_is_empty() -> None:
     assert DemonstrationPlan().is_empty
     assert not DemonstrationPlan(probes=(Probe(name="p", command="c"),)).is_empty
+
+
+# ── advisory fold — the ARTIFACT surface can only EARN evidence ───────────────
+#
+# A prose/data deliverable is demonstrated by probing the produced artifact, and
+# the planner that writes those probes has NOT seen the artifact's text (§8.3 —
+# it must not copy the answer out of what it is grading). That blindness is what
+# keeps the evidence honest, and it is also why a contradiction there is WEAK:
+# the planner is guessing at WORDING it never saw ("bloasis" vs "블로아시스"),
+# so a miss means "not shown", never "the work is wrong". Code probes keep the
+# strict fold — they call the deliverable and the machine answers.
+
+
+def test_advisory_fold_never_fails_on_a_contradiction() -> None:
+    assert summarize([_result("contradicted")], contradiction_fails=False) == "undemonstrable"
+    assert (
+        summarize([_result("matched"), _result("contradicted")], contradiction_fails=False)
+        == "demonstrated"
+    )
+
+
+def test_advisory_fold_still_earns_demonstrated_on_a_match() -> None:
+    assert summarize([_result("matched")], contradiction_fails=False) == "demonstrated"
+    assert summarize([_result("unavailable")], contradiction_fails=False) == "undemonstrable"
+
+
+def test_strict_fold_is_the_default_so_code_probes_are_unchanged() -> None:
+    assert summarize([_result("contradicted")]) == "failed"
+
+
+# ── the artifact planner is grounded in the TASK, never in the artifact ───────
+
+
+def test_artifact_planner_names_the_files_but_carries_no_produced_text() -> None:
+    messages = artifact_planner_messages(
+        intent="write the weekly report covering both accounts",
+        artifact_paths=["reports/weekly.md", "reports/data.csv"],
+    )
+    system = next(m["content"] for m in messages if m["role"] == "system")
+    user = next(m["content"] for m in messages if m["role"] == "user")
+    # It can NAME the artifact (a probe has to grep something) …
+    assert "reports/weekly.md" in user
+    assert "reports/data.csv" in user
+    # … and it is told, in the open, that it has not been shown the contents and
+    # must derive every expectation from the TASK.
+    assert "have NOT been shown" in system
+    assert "TASK" in system
