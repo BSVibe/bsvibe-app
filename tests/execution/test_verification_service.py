@@ -50,6 +50,7 @@ from backend.workflow.infrastructure.db import (
     WorkStep,
     WorkStepStatus,
 )
+from backend.workflow.infrastructure.sandbox.errors import SandboxError
 from backend.workflow.infrastructure.sandbox.protocol import SandboxResult
 from tests._support import memory_session
 
@@ -533,7 +534,9 @@ async def test_verify_judge_pass_reads_files_and_grades() -> None:
             checks=(VerificationCheck(kind="judge", criteria=("greets the world",)),)
         )
         box = FakeBox(files={"hello.txt": b"Hello, world"})
-        llm = StubLlm([LoopTurn(content='{"passed": true, "reasoning": "ok"}')])
+        llm = StubLlm(
+            [_no_artifact_probes(), LoopTurn(content='{"passed": true, "reasoning": "ok"}')]
+        )
         svc = VerificationService(session=session, llm=llm)
         vr = await svc.verify(
             run=run,
@@ -828,6 +831,15 @@ async def test_command_checks_no_prefix_when_uv_sync_fails() -> None:
 _PROBE_CMD = "python -c 'from backend.common.x import x; print(x())'"
 
 
+def _no_artifact_probes() -> LoopTurn:
+    """The blind artifact planner finding nothing checkable in the TASK — an
+    empty plan, which is its honest answer and leaves the grade untouched.
+    Scripted first in tests whose subject is NOT the demonstration: since C1 a
+    prose deliverable reaches the planner, so the stub must have a turn for it.
+    """
+    return LoopTurn(content='{"probes": []}')
+
+
 def _plan_turn(command: str, contains: list[str]) -> LoopTurn:
     """A demonstration-plan reply (the planner emits JSON, not code)."""
     probe = {"name": "exercise x", "command": command, "expect_stdout_contains": contains}
@@ -984,13 +996,197 @@ async def test_demonstration_no_probes_is_undemonstrable_not_fail() -> None:
         assert vr.result["outcome_demonstration"]["verdict"] == "undemonstrable"
 
 
-async def test_demonstration_skipped_for_prose_only_change() -> None:
-    """A prose/data change (no exercisable CODE file) yields no demonstration —
-    the planner is never even called, and the verdict blob is absent."""
+# --------------------------------------------------------------------------
+# I2 over the ARTIFACT surface — a prose/data deliverable is evidence too
+#
+# The gate deriver hands prose deliverables to "the judge and demonstration
+# paths" by design (gate_derivation, `applicable: false`) — but the
+# demonstration path used to refuse anything that was not a CODE file, so
+# nothing covered them and every non-dev deliverable landed on grade D and
+# called the founder (design SoT §8.1). The probes are stack-agnostic already;
+# only the entrance was code-shaped.
+# --------------------------------------------------------------------------
+
+_REPORT = "reports/weekly.md"
+_GREP_CMD = f'grep -c "bloasis" {_REPORT}'
+
+
+def _artifact_plan_turn(command: str, contains: list[str]) -> LoopTurn:
+    probe = {"name": "the report covers both accounts", "command": command}
+    if contains:
+        probe["expect_stdout_contains"] = contains
+    return LoopTurn(content=json.dumps({"probes": [probe]}))
+
+
+async def test_prose_deliverable_is_demonstrated_through_its_artifact() -> None:
+    """A report is a deliverable. Probing the produced artifact for what the TASK
+    demanded is a real, deterministic observation — so it EARNS the demonstrated
+    leg (grade B) instead of falling to D and nagging the founder."""
     async with memory_session() as session:
         run = await _make_run(session)
         work_step, attempt = await _make_step_and_attempt(session, run)
-        llm = StubLlm([])  # would raise if the planner were called
+        llm = StubLlm([_artifact_plan_turn(_GREP_CMD, ["1"])])
+        svc = VerificationService(session=session, llm=llm)
+        box = FakeBox(
+            exec_map={
+                "true": SandboxResult(exit_code=0, stdout="", stderr="", timed_out=False),
+                _GREP_CMD: SandboxResult(exit_code=0, stdout="1\n", stderr="", timed_out=False),
+            }
+        )
+        contract = VerificationContract(checks=(VerificationCheck(kind="command", command="true"),))
+        vr = await svc.verify(
+            run=run,
+            work_step=work_step,
+            attempt=attempt,
+            contract=contract,
+            box=box,
+            written_paths=[_REPORT],
+            final_text="",
+        )
+        assert vr.outcome is VerificationOutcome.PASSED
+        assert vr.result["outcome_demonstration"]["verdict"] == "demonstrated"
+        assert _GREP_CMD in box.exec_calls, "the artifact probe must actually RUN"
+
+
+async def test_artifact_planner_never_sees_the_text_it_is_grading() -> None:
+    """§8.3 — the rule-1 guard, structural. Shown the produced prose, a planner
+    writes ``grep <a phrase I just read there>``: a probe that supplies its own
+    answer and passes for ANY prose, manufacturing evidence. So for the artifact
+    surface the planner is BLIND — it declares what the TASK requires without
+    the text in hand. What the consumer (the planner LLM) sees is the assertion.
+    """
+    async with memory_session() as session:
+        run = await _make_run(session)
+        work_step, attempt = await _make_step_and_attempt(session, run)
+        llm = StubLlm([_artifact_plan_turn(_GREP_CMD, ["1"])])
+        svc = VerificationService(session=session, llm=llm)
+        secret = "TOTALLY-DISTINCTIVE-PHRASE-FROM-THE-REPORT"
+        box = FakeBox(
+            files={_REPORT: f"# Weekly\n{secret}\n".encode()},
+            exec_map={
+                "true": SandboxResult(exit_code=0, stdout="", stderr="", timed_out=False),
+                _GREP_CMD: SandboxResult(exit_code=0, stdout="1\n", stderr="", timed_out=False),
+            },
+        )
+        contract = VerificationContract(checks=(VerificationCheck(kind="command", command="true"),))
+        await svc.verify(
+            run=run,
+            work_step=work_step,
+            attempt=attempt,
+            contract=contract,
+            box=box,
+            written_paths=[_REPORT],
+            final_text="",
+        )
+        planner_calls = [c for c in llm.calls if c["tools"] is None]
+        assert planner_calls, "the artifact planner must be called"
+        for call in planner_calls:
+            blob = "\n".join(str(m.get("content", "")) for m in call["messages"])
+            assert secret not in blob, "the planner was shown the prose it is grading"
+        assert _REPORT not in box.read_calls, "the artifact's text must not even be read"
+
+
+async def test_artifact_contradiction_downgrades_but_never_fails() -> None:
+    """The blind planner is guessing at WORDING it never saw, so a miss means
+    "not shown", not "the work is wrong" — it drops to undemonstrable (today's
+    outcome) and never invents a new way for good prose to fail. This surface
+    can only EARN evidence."""
+    async with memory_session() as session:
+        run = await _make_run(session)
+        work_step, attempt = await _make_step_and_attempt(session, run)
+        llm = StubLlm([_artifact_plan_turn(_GREP_CMD, ["1"])])
+        svc = VerificationService(session=session, llm=llm)
+        box = FakeBox(
+            exec_map={
+                "true": SandboxResult(exit_code=0, stdout="", stderr="", timed_out=False),
+                # grep found nothing → exit 1, "0" — a contradiction, not a defect.
+                _GREP_CMD: SandboxResult(exit_code=1, stdout="0\n", stderr="", timed_out=False),
+            }
+        )
+        contract = VerificationContract(checks=(VerificationCheck(kind="command", command="true"),))
+        vr = await svc.verify(
+            run=run,
+            work_step=work_step,
+            attempt=attempt,
+            contract=contract,
+            box=box,
+            written_paths=[_REPORT],
+            final_text="",
+        )
+        assert vr.outcome is VerificationOutcome.PASSED
+        assert vr.result["outcome_demonstration"]["verdict"] == "undemonstrable"
+
+
+async def test_code_deliverable_still_grounds_the_planner_in_the_source() -> None:
+    """No regression on the strong path: a code probe must call the deliverable,
+    which takes knowing its API — so the code planner still READS the source,
+    and a contradiction there still fails (the machine answered, not a guess)."""
+    async with memory_session() as session:
+        run = await _make_run(session)
+        work_step, attempt = await _make_step_and_attempt(session, run)
+        llm = StubLlm([_plan_turn(_PROBE_CMD, ["42"])])
+        svc = VerificationService(session=session, llm=llm)
+        box = FakeBox(
+            files={"backend/common/x.py": b"def x() -> int:\n    return 42\n"},
+            exec_map={
+                "true": SandboxResult(exit_code=0, stdout="", stderr="", timed_out=False),
+                _PROBE_CMD: SandboxResult(exit_code=0, stdout="1\n", stderr="", timed_out=False),
+            },
+        )
+        contract = VerificationContract(checks=(VerificationCheck(kind="command", command="true"),))
+        vr = await svc.verify(
+            run=run,
+            work_step=work_step,
+            attempt=attempt,
+            contract=contract,
+            box=box,
+            written_paths=["backend/common/x.py", _REPORT],
+            final_text="",
+        )
+        assert "backend/common/x.py" in box.read_calls
+        assert vr.result["outcome_demonstration"]["verdict"] == "failed"
+
+
+async def test_unreadable_source_does_not_fall_through_to_blind_probing() -> None:
+    """A code file we could not READ is an infra failure. Blind-probing it would
+    launder that failure into evidence ("grep found the function name") for a
+    change nothing exercised — so code paths are excluded from the artifact
+    fallback and it stays honestly undemonstrable (§4 rule 3)."""
+    async with memory_session() as session:
+        run = await _make_run(session)
+        work_step, attempt = await _make_step_and_attempt(session, run)
+        llm = StubLlm([])  # would raise if a planner were called
+        svc = VerificationService(session=session, llm=llm)
+
+        class _UnreadableBox(FakeBox):
+            async def read_file(self, rel_path: str, max_bytes: int) -> bytes:
+                self.read_calls.append(rel_path)
+                raise SandboxError("gone")
+
+        box = _UnreadableBox(
+            exec_map={"true": SandboxResult(exit_code=0, stdout="", stderr="", timed_out=False)}
+        )
+        contract = VerificationContract(checks=(VerificationCheck(kind="command", command="true"),))
+        vr = await svc.verify(
+            run=run,
+            work_step=work_step,
+            attempt=attempt,
+            contract=contract,
+            box=box,
+            written_paths=["backend/common/x.py"],
+            final_text="",
+        )
+        assert vr.result["outcome_demonstration"] is None
+        assert llm.calls == []
+
+
+async def test_no_written_paths_still_yields_no_demonstration() -> None:
+    """A run that produced no artifact at all has nothing to probe — unchanged,
+    and deliberately so: "there is no evidence" must not become "we looked"."""
+    async with memory_session() as session:
+        run = await _make_run(session)
+        work_step, attempt = await _make_step_and_attempt(session, run)
+        llm = StubLlm([])  # would raise if a planner were called
         svc = VerificationService(session=session, llm=llm)
         box = FakeBox(
             exec_map={"true": SandboxResult(exit_code=0, stdout="", stderr="", timed_out=False)}
@@ -1002,7 +1198,7 @@ async def test_demonstration_skipped_for_prose_only_change() -> None:
             attempt=attempt,
             contract=contract,
             box=box,
-            written_paths=["README.md", "docs/x.md"],
+            written_paths=[],
             final_text="",
         )
         assert vr.outcome is VerificationOutcome.PASSED
@@ -1141,7 +1337,10 @@ class TestScopeCheck:
             # README task, but an unrelated doc got touched → flagged. Prose-only
             # paths → no demonstration; no CI in the worktree → no project gate.
             llm = StubLlm(
-                [LoopTurn(content='{"flagged": ["docs/unrelated.md"], "reasoning": "x"}')]
+                [
+                    _no_artifact_probes(),
+                    LoopTurn(content='{"flagged": ["docs/unrelated.md"], "reasoning": "x"}'),
+                ]
             )
             svc = VerificationService(session=session, llm=llm)
             contract = VerificationContract(
@@ -1201,6 +1400,7 @@ class TestHonestyGrade:
             # scope, then the deriver: no toolchain here → not-applicable.
             llm = StubLlm(
                 [
+                    _no_artifact_probes(),
                     LoopTurn(content='{"flagged": []}'),
                     LoopTurn(content='{"applicable": false, "commands": []}'),
                 ]
@@ -1234,6 +1434,7 @@ class TestHonestyGrade:
             # command → a gate was EXPECTED yet none ran → grade D, gate_expected.
             llm = StubLlm(
                 [
+                    _no_artifact_probes(),
                     LoopTurn(content='{"flagged": []}'),
                     LoopTurn(content='{"applicable": true, "commands": []}'),
                 ]
@@ -1266,6 +1467,7 @@ class TestHonestyGrade:
             # scope, then the deriver returns a runnable command → FakeBox exit 0.
             llm = StubLlm(
                 [
+                    _no_artifact_probes(),
                     LoopTurn(content='{"flagged": []}'),
                     LoopTurn(
                         content='{"applicable": true, "commands": [{"command": "ruff check ."}]}'
@@ -1358,6 +1560,7 @@ class TestHonestyGrade:
             work_step, attempt = await _make_step_and_attempt(session, run)
             llm = StubLlm(
                 [
+                    _no_artifact_probes(),
                     LoopTurn(content='{"flagged": []}'),
                     LoopTurn(
                         content=(
@@ -1773,6 +1976,7 @@ class TestGateFailClosed:
             # scope clean, then the deriver self-declares NOT applicable.
             llm = StubLlm(
                 [
+                    _no_artifact_probes(),
                     LoopTurn(content='{"flagged": []}'),
                     LoopTurn(content='{"applicable": false, "commands": []}'),
                 ]

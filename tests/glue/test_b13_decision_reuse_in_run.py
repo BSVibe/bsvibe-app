@@ -244,6 +244,10 @@ async def test_resolved_decision_seeds_b6_and_folds_into_b3_on_next_run(
                 ),
             ),
             LoopTurn(content="implemented + Postgres wired", tool_calls=()),
+            # `db.txt` is not code, so I2 probes it as an ARTIFACT (C1) and its
+            # blind planner is asked first. An empty plan leaves this test's
+            # subject — the folded judge criteria — exactly as it was.
+            LoopTurn(content='{"probes": []}', tool_calls=()),
             # The judge LLM call (tools=None) for declared + folded criteria.
             LoopTurn(
                 content='{"passed": true, "reasoning": "follows Postgres pattern"}',
