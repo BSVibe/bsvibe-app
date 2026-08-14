@@ -1147,6 +1147,118 @@ async def test_code_deliverable_still_grounds_the_planner_in_the_source() -> Non
         assert vr.result["outcome_demonstration"]["verdict"] == "failed"
 
 
+async def test_an_artifact_probe_that_asserts_nothing_never_runs() -> None:
+    """Live run e72689e8 (2026-08-14): two of six probes were
+    ``python -c "…; print('found' if ex else 'missing')"`` with no declared
+    substring. Python exits 0 either way, so they scored `matched` whatever the
+    artifact said — the probe computed the answer and threw it away. An
+    unfalsifiable probe is not evidence, so it is dropped BEFORE the sandbox
+    round-trip, and a plan made only of those is honestly undemonstrable."""
+    async with memory_session() as session:
+        run = await _make_run(session)
+        work_step, attempt = await _make_step_and_attempt(session, run)
+        vacuous = "python -c \"print('found' if 1 else 'missing')\""
+        llm = StubLlm([_artifact_plan_turn(vacuous, [])])
+        svc = VerificationService(session=session, llm=llm)
+        box = FakeBox(
+            exec_map={"true": SandboxResult(exit_code=0, stdout="", stderr="", timed_out=False)}
+        )
+        contract = VerificationContract(checks=(VerificationCheck(kind="command", command="true"),))
+        vr = await svc.verify(
+            run=run,
+            work_step=work_step,
+            attempt=attempt,
+            contract=contract,
+            box=box,
+            written_paths=[_REPORT],
+            final_text="",
+        )
+        assert vr.result["outcome_demonstration"]["verdict"] == "undemonstrable"
+        assert not any(vacuous in c for c in box.exec_calls), "it must not even run"
+        # "we found nothing" still says WHERE it looked (§4 rule 3).
+        assert vr.result["outcome_demonstration"]["surface"] == "artifact"
+
+
+async def test_the_asserting_probes_of_a_mixed_plan_still_earn() -> None:
+    """Dropping is per-probe, not per-plan: one unfalsifiable probe must not
+    cost the deliverable the evidence its real probes produced."""
+    async with memory_session() as session:
+        run = await _make_run(session)
+        work_step, attempt = await _make_step_and_attempt(session, run)
+        vacuous = "python -c \"print('x')\""
+        llm = StubLlm(
+            [
+                LoopTurn(
+                    content=json.dumps(
+                        {
+                            "probes": [
+                                {"name": "vacuous", "command": vacuous},
+                                {
+                                    "name": "real",
+                                    "command": _GREP_CMD,
+                                    "expect_stdout_contains": ["1"],
+                                },
+                            ]
+                        }
+                    )
+                )
+            ]
+        )
+        svc = VerificationService(session=session, llm=llm)
+        box = FakeBox(
+            exec_map={
+                "true": SandboxResult(exit_code=0, stdout="", stderr="", timed_out=False),
+                _GREP_CMD: SandboxResult(exit_code=0, stdout="1\n", stderr="", timed_out=False),
+            }
+        )
+        contract = VerificationContract(checks=(VerificationCheck(kind="command", command="true"),))
+        vr = await svc.verify(
+            run=run,
+            work_step=work_step,
+            attempt=attempt,
+            contract=contract,
+            box=box,
+            written_paths=[_REPORT],
+            final_text="",
+        )
+        assert vr.result["outcome_demonstration"]["verdict"] == "demonstrated"
+        probes = vr.result["outcome_demonstration"]["probes"]
+        assert [p["name"] for p in probes] == ["real"]
+        assert not any(vacuous in c for c in box.exec_calls)
+
+
+async def test_the_code_surface_keeps_its_unasserted_probes_for_now() -> None:
+    """A deliberate scope limit, pinned so it is a DECISION and not a leak. The
+    same vacuity exists on the code surface, but there a demonstration is
+    GATING: dropping probes there turns passes into founder reviews — more
+    nagging, which is the opposite of what this track is fixing. Tightening it
+    is a separate call."""
+    async with memory_session() as session:
+        run = await _make_run(session)
+        work_step, attempt = await _make_step_and_attempt(session, run)
+        llm = StubLlm([_plan_turn(_PROBE_CMD, [])])  # no declared substring
+        svc = VerificationService(session=session, llm=llm)
+        box = FakeBox(
+            files={"backend/common/x.py": b"def x() -> int:\n    return 42\n"},
+            exec_map={
+                "true": SandboxResult(exit_code=0, stdout="", stderr="", timed_out=False),
+                _PROBE_CMD: SandboxResult(exit_code=0, stdout="42\n", stderr="", timed_out=False),
+            },
+        )
+        contract = VerificationContract(checks=(VerificationCheck(kind="command", command="true"),))
+        vr = await svc.verify(
+            run=run,
+            work_step=work_step,
+            attempt=attempt,
+            contract=contract,
+            box=box,
+            written_paths=["backend/common/x.py"],
+            final_text="",
+        )
+        assert _PROBE_CMD in box.exec_calls
+        assert vr.result["outcome_demonstration"]["surface"] == "code"
+
+
 async def test_unreadable_source_does_not_fall_through_to_blind_probing() -> None:
     """A code file we could not READ is an infra failure. Blind-probing it would
     launder that failure into evidence ("grep found the function name") for a
