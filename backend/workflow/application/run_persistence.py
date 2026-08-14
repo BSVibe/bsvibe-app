@@ -135,10 +135,16 @@ def _verification_sentence(result: Mapping[str, Any] | None, language: str = "en
             if labels:
                 sentence += f" ({', '.join(labels)})"
             pieces.append(sentence + ".")
-    judge = result.get("judge") or {}
-    if judge.get("passed"):
-        pieces.append("검증 통과." if ko else "Acceptance check passed.")
     weak = _weak_evidence_sentence(result, ko)
+    judge = result.get("judge") or {}
+    if judge.get("passed") and not weak:
+        # SUPPRESSED under a weak grade, deliberately. Live run 6565db96 put
+        # "검증 통과. 검증: 돌릴 검사가 없어 내용만 확인했어요 (증거 약함)." on the
+        # founder's phone: both halves true, the pair reading as a claim and its
+        # own retraction — with the strong half first, which is the half a glance
+        # picks up. The judge passing IS "내용만 확인했어요", so the weak sentence
+        # already says it, accurately and once.
+        pieces.append("검증 통과." if ko else "Acceptance check passed.")
     if weak:
         pieces.append(weak)
     return " ".join(pieces)
