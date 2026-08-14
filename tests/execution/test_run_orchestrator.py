@@ -426,7 +426,7 @@ async def test_compose_verified_summary_weaves_verification_result() -> None:
         "judge": {"passed": True, "reasoning": "meets the intent"},
     }
     summary = _compose_verified_summary(
-        run,
+        run,  # type: ignore[arg-type]
         "raw narration",
         ["backend/cache.py", "tests/test_cache.py"],
         verdict_result,
@@ -475,7 +475,7 @@ async def test_compose_verified_summary_localizes_chrome_for_ko() -> None:
         "judge": {},
     }
     summary = _compose_verified_summary(
-        run,
+        run,  # type: ignore[arg-type]
         "raw narration",
         ["src/strx.py", "tests/test_strx.py"],
         verdict_result,
@@ -498,7 +498,7 @@ async def test_compose_verified_summary_ko_acceptance_case() -> None:
 
     run = SimpleNamespace(payload={"frame": {"summary_title": "리팩터"}})
     summary = _compose_verified_summary(
-        run,
+        run,  # type: ignore[arg-type]
         "n",
         ["a.py"],
         {"command_results": [], "judge": {"passed": True}},
@@ -516,7 +516,7 @@ async def test_compose_verified_summary_en_parity_unchanged() -> None:
 
     run = SimpleNamespace(payload={"intent_text": "Add a cache."})
     summary = _compose_verified_summary(
-        run,
+        run,  # type: ignore[arg-type]
         "n",
         ["a.py"],
         {"command_results": [{"command": "pytest", "passed": True}], "judge": {}},
@@ -560,7 +560,7 @@ async def test_executor_work_reaches_the_deliverable_via_the_runs_tool_state(
         }
         await session.commit()
 
-        orch = RunOrchestrator(session=session, llm=llm, sandbox_manager=PassingSandboxManager())
+        orch = RunOrchestrator(session=session, llm=llm, sandbox_manager=PassingSandboxManager())  # type: ignore[arg-type]
         result = await orch.run(run=run, workspace_dir=tmp_path)
 
         assert result.outcome == "verified"
@@ -637,9 +637,9 @@ async def test_write_before_declare_is_refused_then_declare_then_verified(
         assert refusal_msgs, "the premature write must be refused with an actionable error"
 
 
-def _settle_payload(activities) -> dict:
+def _settle_payload(activities: Any) -> dict[str, Any]:
     settle = next(a for a in activities if a.activity_type == "settle")
-    return settle.payload
+    return settle.payload  # type: ignore[no-any-return]
 
 
 async def test_settle_payload_carries_product_and_intent(tmp_path: Path) -> None:
@@ -1035,7 +1035,7 @@ async def test_sandbox_failure_yields_system_error(tmp_path: Path) -> None:
     llm = ScriptedLlm([LoopTurn(content="never reached", tool_calls=())])
     async with memory_session() as session:
         run = await _make_run(session)
-        orch = RunOrchestrator(session=session, llm=llm, sandbox_manager=FailingSandboxManager())
+        orch = RunOrchestrator(session=session, llm=llm, sandbox_manager=FailingSandboxManager())  # type: ignore[arg-type]
         result = await orch.run(run=run, workspace_dir=tmp_path)
 
         assert result.outcome == "system_error"
@@ -1155,7 +1155,7 @@ async def test_no_seed_message_for_empty_or_absent_knowledge(tmp_path: Path) -> 
                 retriever=retriever,
             )
             await orch.run(run=run, workspace_dir=tmp_path)
-        return llm.calls[0]["messages"]
+        return llm.calls[0]["messages"]  # type: ignore[no-any-return]
 
     no_retriever = await _first_messages(None)
     empty_retriever = await _first_messages(StubRetriever([]))
@@ -1580,7 +1580,7 @@ class FakeConnectorActionProvider:
         # Run the plugin fn so the real arg-passing + credential injection is
         # exercised end-to-end (the fn records the context it saw).
         return await tool.action.fn(
-            SkillContext(llm=_RaisingLlm(), config={}, logger=None, credentials=credentials),
+            SkillContext(llm=_RaisingLlm(), config={}, logger=None, credentials=credentials),  # type: ignore[arg-type]
             **kwargs,
         )
 
@@ -2127,7 +2127,7 @@ def test_verification_sentence_prefers_derived_gate_over_command_results() -> No
         },
         "judge": {},
     }
-    summary = _compose_verified_summary(run, "narration", ["backend/dedup.py"], verdict_result)
+    summary = _compose_verified_summary(run, "narration", ["backend/dedup.py"], verdict_result)  # type: ignore[arg-type]
     # Should count the 3 gate commands, NOT the 1 agent-declared command.
     assert "Verified: 3 checks passed" in summary
     assert "1 check" not in summary
@@ -2158,7 +2158,7 @@ def test_verification_sentence_counts_matched_probes_en() -> None:
             ],
         },
     }
-    summary = _compose_verified_summary(run, "narration", ["backend/math.py"], verdict_result)
+    summary = _compose_verified_summary(run, "narration", ["backend/math.py"], verdict_result)  # type: ignore[arg-type]
     assert "Outcome demonstrated (2 probes)." in summary
     # Unavailable probe must NOT be counted.
     assert "3 probe" not in summary
@@ -2182,7 +2182,7 @@ def test_verification_sentence_counts_matched_probes_ko() -> None:
         },
     }
     summary = _compose_verified_summary(
-        run, "narration", ["backend/math.py"], verdict_result, language="ko"
+        run, "narration", ["backend/math.py"], verdict_result, language="ko"  # type: ignore[arg-type]
     )
     assert "결과 시연됨 (1개 프로브)." in summary
     assert "Outcome" not in summary
@@ -2197,7 +2197,7 @@ def test_verification_sentence_gate_plus_probes_combined() -> None:
 
     from backend.workflow.application.run_persistence import _compose_verified_summary
     from backend.workflow.domain.verified_deliverable import (
-        _shipped_detail,  # type: ignore[attr-defined]
+        _shipped_detail,
     )
 
     run = SimpleNamespace(payload={"frame": {"summary_title": "결과 추가"}})
@@ -2221,7 +2221,7 @@ def test_verification_sentence_gate_plus_probes_combined() -> None:
         },
     }
     summary = _compose_verified_summary(
-        run, "narration", ["backend/result.py"], verdict_result, language="ko"
+        run, "narration", ["backend/result.py"], verdict_result, language="ko"  # type: ignore[arg-type]
     )
     detail = _shipped_detail(summary)
     # The phone notification must mention both gate checks and probes.

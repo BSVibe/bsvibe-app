@@ -119,6 +119,16 @@ def _gate_command_sentence(passed: list[Any], commands: list[Any], ko: bool) -> 
     return sentence + "."
 
 
+def _probe_sentence(matched_probes: list[Any], ko: bool) -> str:
+    """Sentence fragment for matched outcome-demonstration probes."""
+    if not matched_probes:
+        return ""
+    if ko:
+        return f"결과 시연됨 ({len(matched_probes)}개 프로브)."
+    probe_noun = "probe" if len(matched_probes) == 1 else "probes"
+    return f"Outcome demonstrated ({len(matched_probes)} {probe_noun})."
+
+
 def _verification_sentence(result: Mapping[str, Any] | None, language: str = "en") -> str:
     """A deterministic, LLM-free sentence describing what the verifier proved.
 
@@ -151,12 +161,9 @@ def _verification_sentence(result: Mapping[str, Any] | None, language: str = "en
         for p in (demonstration.get("probes") or [])
         if isinstance(p, dict) and p.get("status") == "matched"
     ]
-    if matched_probes:
-        if ko:
-            pieces.append(f"결과 시연됨 ({len(matched_probes)}개 프로브).")
-        else:
-            probe_noun = "probe" if len(matched_probes) == 1 else "probes"
-            pieces.append(f"Outcome demonstrated ({len(matched_probes)} {probe_noun}).")
+    probe_s = _probe_sentence(matched_probes, ko)
+    if probe_s:
+        pieces.append(probe_s)
 
     weak = _weak_evidence_sentence(result, ko)
     judge = result.get("judge") or {}
