@@ -95,6 +95,7 @@ def create_app() -> FastAPI:
         # the MCP context from importing. Wiring them keeps backend.mcp a transport.
         from backend.workflow.application.mcp_work_effects import (  # noqa: PLC0415
             record_deliverable,
+            record_progress,
             record_question,
         )
 
@@ -104,6 +105,7 @@ def create_app() -> FastAPI:
             delivery_dispatcher=delivery_dispatcher,
             record_question=record_question,
             record_deliverable=record_deliverable,
+            record_progress=record_progress,
         ):
             # Lift 1.5 — load connector OAuth App credentials minted via the
             # GitHub App Manifest flow from the DB; these override any env-set

@@ -18,7 +18,7 @@ from typing import Any
 
 from backend.mcp.api import ToolContext
 from backend.mcp.tools.work_registry import load_run
-from backend.workflow.application.run_persistence import create_decision
+from backend.workflow.application.run_persistence import create_decision, record_activity
 from backend.workflow.domain.emit_deliverable import handle_emit_deliverable
 
 
@@ -66,4 +66,23 @@ async def record_deliverable(run_id: uuid.UUID, ctx: ToolContext, arguments: dic
     return result
 
 
-__all__ = ["_ask_decision_kind", "record_deliverable", "record_question"]
+async def record_progress(run_id: uuid.UUID, ctx: ToolContext, payload: dict[str, Any]) -> None:
+    """Record ONE work-tool call as run activity — the executor's half of the trail.
+
+    The in-process loop writes a ``tool_call`` activity per call; an executor reaches the
+    same registry through MCP, and that path wrote nothing. The consequence was not a
+    missing nicety: for a whole 28-minute turn the founder's timeline was blank and a
+    working run was indistinguishable from a wedged one (fix backlog #1).
+
+    Same ``activity_type`` and same payload keys as the loop, so the founder-facing
+    timeline (``_tool_call_label`` → "Delivered X") needs no second code path.
+
+    ``attempt`` is ``None``: this transport acts OUTSIDE any loop WorkStep, exactly as
+    ``record_question`` passes ``None`` for its work step.
+    """
+    run = await load_run(run_id, ctx)
+    await record_activity(ctx.session, run, None, "tool_call", payload)
+    await ctx.session.commit()
+
+
+__all__ = ["_ask_decision_kind", "record_deliverable", "record_progress", "record_question"]

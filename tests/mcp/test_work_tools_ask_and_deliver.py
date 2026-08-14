@@ -78,6 +78,7 @@ def registry() -> ToolRegistry:
         record_question=_ask,
         record_deliverable=_deliver,
         persist_state=_noop_persist,
+        record_progress=_noop_persist,
     )
     reg.asked = asked  # type: ignore[attr-defined]
     reg.delivered = delivered  # type: ignore[attr-defined]

@@ -25,6 +25,7 @@ from backend.mcp.tools.skills_tools import register_skills_tools
 from backend.mcp.tools.work_registry import build_run_tool_registry, persist_tool_state
 from backend.mcp.tools.work_tools import (
     RecordDeliverable,
+    RecordProgress,
     RecordQuestion,
     register_work_tools,
 )
@@ -38,6 +39,7 @@ def register_all_tools(
     *,
     record_question: RecordQuestion | None = None,
     record_deliverable: RecordDeliverable | None = None,
+    record_progress: RecordProgress | None = None,
 ) -> None:
     """Register every MCP tool onto ``registry``.
 
@@ -56,7 +58,11 @@ def register_all_tools(
     # T1 — the agent's REMOTE hands on a run (file/shell/declare/knowledge), bound to the
     # run's server-side worktree + sandbox. Only reachable with a run-scoped token (the one a
     # dispatched executor task carries), never with the founder's workspace token.
-    if record_question is not None and record_deliverable is not None:
+    if (
+        record_question is not None
+        and record_deliverable is not None
+        and record_progress is not None
+    ):
         # The two loop-owned effects are injected from the composition root: they live in the
         # workflow layer, and the deliverable one reaches ``backend.api.v1.live_events``, which
         # the MCP import contract forbids this context from importing. Absent them (a caller
@@ -68,6 +74,7 @@ def register_all_tools(
             record_question=record_question,
             record_deliverable=record_deliverable,
             persist_state=persist_tool_state,
+            record_progress=record_progress,
         )
     register_workflow_tools(registry)
     register_safe_mode_tools(registry)

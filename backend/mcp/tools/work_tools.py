@@ -233,6 +233,12 @@ _STOP_AFTER_ASKING = (
 RecordQuestion = Callable[[Any, Any, dict[str, Any]], Awaitable[str]]
 RecordDeliverable = Callable[[Any, Any, dict[str, Any]], Awaitable[str]]
 
+#: The run's progress trail. The in-process loop records an activity per tool call; an
+#: executor acts through THIS transport, so without it the founder's timeline is blank for
+#: the whole turn and a working run looks exactly like a wedged one (fix backlog #1).
+#: Injected for the same reason as the two above — ``record_activity`` is workflow-layer.
+RecordProgress = Callable[[Any, Any, dict[str, Any]], Awaitable[None]]
+
 
 #: The per-``inner`` presentation of a forwarding tool: its pydantic input schema (the schema is
 #: DERIVED from — i.e. mirrors — the inner registry's argument contract; that is the whole point
@@ -296,8 +302,25 @@ def register_work_tools(
     record_question: RecordQuestion,
     record_deliverable: RecordDeliverable,
     persist_state: PersistState,
+    record_progress: RecordProgress,
 ) -> None:
     """Expose the run's ToolRegistry over MCP."""
+
+    async def _record_progress_softly(
+        run_id: uuid.UUID, ctx: ToolContext, inner: str, *, ok: bool, writes: list[str]
+    ) -> None:
+        """Leave the trail — but never at the cost of the agent's actual work.
+
+        This is observability. A run whose activity write fails should still write its
+        file; the alternative is an outage caused by the thing meant to reveal outages.
+        The failure is logged loudly rather than swallowed, and the composition-root
+        wiring is pinned by a test so "silent because unwired" cannot masquerade as
+        "silent because nothing happened".
+        """
+        try:
+            await record_progress(run_id, ctx, {"tool": inner, "ok": ok, "writes": writes})
+        except Exception:  # noqa: BLE001 — progress must never break the work
+            logger.warning("mcp_work_progress_record_failed", tool=inner, run_id=str(run_id))
 
     def _tool(
         *,
@@ -319,7 +342,17 @@ def register_work_tools(
                 )
             arguments = args.model_dump(exclude_none=False)
             logger.info("mcp_work_tool", tool=inner, run_id=str(run_id))
-            result = await work.invoke(inner, arguments)
+            # The written-path latch ACCUMULATES over the run, so the delta — not the
+            # latch — is what THIS call did. Reporting the latch would re-announce every
+            # earlier file on every later call.
+            before = list(getattr(work, "written_paths", []) or [])
+            try:
+                result = await work.invoke(inner, arguments)
+            except Exception:
+                await _record_progress_softly(run_id, ctx, inner, ok=False, writes=[])
+                raise
+            after = list(getattr(work, "written_paths", []) or [])
+            await _record_progress_softly(run_id, ctx, inner, ok=True, writes=after[len(before) :])
             # The call may have moved the registry's per-run latches (a declared contract, a
             # newly grounded path). They live on the RUN — this transport's registry dies with
             # the request.
