@@ -23,7 +23,7 @@ from backend.workflow.domain.verification_feedback import (
 )
 from backend.workflow.infrastructure.sandbox import NoopSandboxManager
 from tests._support import memory_session
-from tests.execution.test_run_orchestrator import ScriptedLlm, _declare_command, _make_run, _tc
+from tests.execution.test_run_orchestrator import ScriptedLlm, _make_run, _tc
 
 _PYTEST_NOISE = "\n".join(f"tests/test_x.py::test_{i} PASSED  [{i}%]" for i in range(200))
 
