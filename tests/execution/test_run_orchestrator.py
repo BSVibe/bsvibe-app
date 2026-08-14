@@ -2018,7 +2018,7 @@ def _summary_for(grade: str | None, language: str = "ko") -> str:
         run,  # type: ignore[arg-type]
         "",
         ["docs/weekly.md"],
-        {"honesty_grade": grade, "command_results": [], "judge": {}},
+        {"honesty_grade": grade, "command_results": [], "judge": {"passed": True}},
         language,
     )
 
@@ -2060,3 +2060,35 @@ def test_english_workspaces_get_it_too() -> None:
 
     detail = _shipped_detail(_summary_for("D", language="en"))
     assert "runnable" in detail.lower(), detail
+
+
+def test_a_weak_finish_does_not_also_claim_a_plain_pass() -> None:
+    """Live run 6565db96 (2026-08-14) put this on the founder's phone:
+
+        검증 통과. 검증: 돌릴 검사가 없어 내용만 확인했어요 (증거 약함).
+
+    Both halves were true and the pair reads as a claim followed by its own
+    retraction — and the strong half comes FIRST, which is the half a glance
+    picks up. The judge passing IS "내용만 확인했어요"; saying it twice, once
+    unqualified, is the composition lying where neither sentence does.
+    """
+    summary = _summary_for("D")
+    verify_lines = [ln for ln in summary.splitlines() if ln.startswith("검증")]
+    assert len(verify_lines) == 1, verify_lines
+    assert "검증 통과." not in summary
+
+
+def test_a_strong_finish_still_reports_the_acceptance_pass() -> None:
+    from types import SimpleNamespace
+
+    from backend.workflow.application.run_persistence import _compose_verified_summary
+
+    run = SimpleNamespace(payload={"intent_text": "x"})
+    summary = _compose_verified_summary(
+        run,  # type: ignore[arg-type]
+        "",
+        ["backend/x.py"],
+        {"honesty_grade": "B", "command_results": [], "judge": {"passed": True}},
+        "ko",
+    )
+    assert "검증 통과." in summary
