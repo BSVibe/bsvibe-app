@@ -2092,3 +2092,136 @@ def test_a_strong_finish_still_reports_the_acceptance_pass() -> None:
         "ko",
     )
     assert "검증 통과." in summary
+
+
+# ---------------------------------------------------------------------------
+# derived_gate priority + outcome_demonstration probe counting
+# ---------------------------------------------------------------------------
+
+
+def test_verification_sentence_prefers_derived_gate_over_command_results() -> None:
+    """When derived_gate AND command_results are both present, count the gate
+    commands — they are the authoritative verdict, not the agent's declaration.
+
+    A sandbox run typically produces 1 agent-declared check but 3 derived gate
+    commands (pytest + ruff check + mypy). The old `or` picked command_results
+    first, reporting "1 check passed" instead of "3 checks passed".
+    """
+    from types import SimpleNamespace
+
+    from backend.workflow.application.run_persistence import _compose_verified_summary
+
+    run = SimpleNamespace(payload={"intent_text": "Add dedup utility."})
+    verdict_result = {
+        "command_results": [
+            {"command": "uv run pytest tests/test_dedup.py", "passed": True},
+        ],
+        "derived_gate": {
+            "applicable": True,
+            "passed": True,
+            "commands": [
+                {"command": "uv run pytest tests/", "status": "passed"},
+                {"command": "uv run ruff check backend/", "status": "passed"},
+                {"command": "uv run mypy backend/", "status": "passed"},
+            ],
+        },
+        "judge": {},
+    }
+    summary = _compose_verified_summary(run, "narration", ["backend/dedup.py"], verdict_result)
+    # Should count the 3 gate commands, NOT the 1 agent-declared command.
+    assert "Verified: 3 checks passed" in summary
+    assert "1 check" not in summary
+    assert "tests" in summary
+    assert "lint" in summary
+    assert "types" in summary
+
+
+def test_verification_sentence_counts_matched_probes_en() -> None:
+    """Matched outcome_demonstration probes are counted separately and appear in
+    the sentence — they are independent behavioral checks that ran in the sandbox.
+    Unavailable probes are not counted (they didn't exercise the deliverable).
+    """
+    from types import SimpleNamespace
+
+    from backend.workflow.application.run_persistence import _compose_verified_summary
+
+    run = SimpleNamespace(payload={"intent_text": "Add factorial."})
+    verdict_result = {
+        "command_results": [{"command": "uv run pytest", "passed": True}],
+        "judge": {},
+        "outcome_demonstration": {
+            "verdict": "demonstrated",
+            "probes": [
+                {"status": "matched", "name": "factorial_5", "command": "python -c '...'"},
+                {"status": "matched", "name": "factorial_0", "command": "python -c '...'"},
+                {"status": "unavailable", "name": "import_check", "command": "python -c '...'"},
+            ],
+        },
+    }
+    summary = _compose_verified_summary(run, "narration", ["backend/math.py"], verdict_result)
+    assert "Outcome demonstrated (2 probes)." in summary
+    # Unavailable probe must NOT be counted.
+    assert "3 probe" not in summary
+
+
+def test_verification_sentence_counts_matched_probes_ko() -> None:
+    """KO localization: matched probes appear as '결과 시연됨 (N개 프로브).'"""
+    from types import SimpleNamespace
+
+    from backend.workflow.application.run_persistence import _compose_verified_summary
+
+    run = SimpleNamespace(payload={"frame": {"summary_title": "팩토리얼 추가"}})
+    verdict_result = {
+        "command_results": [{"command": "uv run pytest", "passed": True}],
+        "judge": {},
+        "outcome_demonstration": {
+            "verdict": "demonstrated",
+            "probes": [
+                {"status": "matched", "name": "probe_1", "command": "python -c '...'"},
+            ],
+        },
+    }
+    summary = _compose_verified_summary(
+        run, "narration", ["backend/math.py"], verdict_result, language="ko"
+    )
+    assert "결과 시연됨 (1개 프로브)." in summary
+    assert "Outcome" not in summary
+
+
+def test_verification_sentence_gate_plus_probes_combined() -> None:
+    """Gate commands + matched probes both appear in the sentence on the same line
+    (joined with space) so _shipped_detail can lift the whole thing by the
+    '검증' prefix for the compact phone notification.
+    """
+    from types import SimpleNamespace
+
+    from backend.workflow.application.run_persistence import _compose_verified_summary
+    from backend.workflow.domain.verified_deliverable import _shipped_detail  # type: ignore[attr-defined]
+
+    run = SimpleNamespace(payload={"frame": {"summary_title": "결과 추가"}})
+    verdict_result = {
+        "command_results": [],
+        "derived_gate": {
+            "applicable": True,
+            "passed": True,
+            "commands": [
+                {"command": "uv run pytest", "status": "passed"},
+                {"command": "uv run ruff check", "status": "passed"},
+            ],
+        },
+        "judge": {},
+        "outcome_demonstration": {
+            "verdict": "demonstrated",
+            "probes": [
+                {"status": "matched", "name": "p1", "command": "python -c '...'"},
+                {"status": "matched", "name": "p2", "command": "python -c '...'"},
+            ],
+        },
+    }
+    summary = _compose_verified_summary(
+        run, "narration", ["backend/result.py"], verdict_result, language="ko"
+    )
+    detail = _shipped_detail(summary)
+    # The phone notification must mention both gate checks and probes.
+    assert "2개 확인 통과" in detail
+    assert "2개 프로브" in detail

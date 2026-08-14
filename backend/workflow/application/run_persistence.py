@@ -115,7 +115,10 @@ def _verification_sentence(result: Mapping[str, Any] | None, language: str = "en
     """
     if result is None:
         return ""
-    commands = result.get("command_results") or _gate_command_results(result)
+    # derived_gate is authoritative when present (repo manifests drove it);
+    # command_results is advisory once a gate ran. Prefer gate commands so the
+    # count reflects what actually decided the verdict, not what the agent declared.
+    commands = _gate_command_results(result) or result.get("command_results") or []
     passed = [c for c in commands if c.get("passed")]
     ko = language == "ko"
 
@@ -135,6 +138,22 @@ def _verification_sentence(result: Mapping[str, Any] | None, language: str = "en
             if labels:
                 sentence += f" ({', '.join(labels)})"
             pieces.append(sentence + ".")
+
+    # Count matched demonstration probes: they are independent behavioral checks
+    # that actually ran in the sandbox and are not covered by the gate count above.
+    demonstration = result.get("outcome_demonstration") or {}
+    matched_probes = [
+        p
+        for p in (demonstration.get("probes") or [])
+        if isinstance(p, dict) and p.get("status") == "matched"
+    ]
+    if matched_probes:
+        if ko:
+            pieces.append(f"결과 시연됨 ({len(matched_probes)}개 프로브).")
+        else:
+            probe_noun = "probe" if len(matched_probes) == 1 else "probes"
+            pieces.append(f"Outcome demonstrated ({len(matched_probes)} {probe_noun}).")
+
     weak = _weak_evidence_sentence(result, ko)
     judge = result.get("judge") or {}
     if judge.get("passed") and not weak:
