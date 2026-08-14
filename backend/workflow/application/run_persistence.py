@@ -138,7 +138,42 @@ def _verification_sentence(result: Mapping[str, Any] | None, language: str = "en
     judge = result.get("judge") or {}
     if judge.get("passed"):
         pieces.append("검증 통과." if ko else "Acceptance check passed.")
+    weak = _weak_evidence_sentence(result, ko)
+    if weak:
+        pieces.append(weak)
     return " ".join(pieces)
+
+
+def _weak_evidence_sentence(result: Mapping[str, Any], ko: bool) -> str:
+    """Say it out loud when a run auto-proceeded on the ladder's weak rungs.
+
+    Grade D used to BLOCK, so the founder always learned about weak evidence —
+    by being interrupted. Now that a deliverable no command could verify stops
+    blocking (``work_is_gateable``), the only place still saying "this rests on
+    nothing runnable" would be the Delivery Report, which has to be opened. The
+    push they actually receive is built from THIS line (``_shipped_detail``
+    lifts it by prefix), so a weak finish that never reaches it is a weak finish
+    the founder never hears about — lesson #742: a run reaching ``verified`` is
+    not the same as the result reaching the founder.
+
+    D and C are different facts and must not share a sentence: D is "there was
+    nothing runnable here", C is "there WAS a gate and it could not run". Both
+    must keep the ``검증``/``Verified`` prefix or the lifter drops them.
+    """
+    grade = result.get("honesty_grade")
+    if grade == "D":
+        return (
+            "검증: 돌릴 검사가 없어 내용만 확인했어요 (증거 약함)."
+            if ko
+            else "Verified: by content only — no runnable check existed (weak evidence)."
+        )
+    if grade == "C":
+        return (
+            "검증: 검사를 찾았지만 여기서 돌릴 수 없었어요 (증거 약함)."
+            if ko
+            else "Verified: a gate was found but could not run here (weak evidence)."
+        )
+    return ""
 
 
 def _compose_verified_summary(

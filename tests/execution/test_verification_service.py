@@ -1259,6 +1259,49 @@ async def test_the_code_surface_keeps_its_unasserted_probes_for_now() -> None:
         assert vr.result["outcome_demonstration"]["surface"] == "code"
 
 
+async def test_the_verification_row_explains_why_nobody_was_called() -> None:
+    """C4 — reading a row must answer "so why did this not go to review?".
+    ``gate_expected`` alone no longer decides it, so a row carrying only that
+    would look like an unexplained skip to whoever debugs it next."""
+    async with memory_session() as session:
+        run = await _make_run(session)
+        work_step, attempt = await _make_step_and_attempt(session, run)
+        llm = StubLlm([_artifact_plan_turn(_GREP_CMD, ["1"])])
+        svc = VerificationService(session=session, llm=llm)
+        box = FakeBox(
+            exec_map={
+                "true": SandboxResult(exit_code=0, stdout="", stderr="", timed_out=False),
+                _GREP_CMD: SandboxResult(exit_code=0, stdout="1\n", stderr="", timed_out=False),
+            }
+        )
+        contract = VerificationContract(checks=(VerificationCheck(kind="command", command="true"),))
+        vr = await svc.verify(
+            run=run,
+            work_step=work_step,
+            attempt=attempt,
+            contract=contract,
+            box=box,
+            written_paths=[_REPORT],
+            final_text="",
+        )
+        assert vr.result["work_gateable"] is False
+        vr2 = await svc.verify(
+            run=run,
+            work_step=work_step,
+            attempt=attempt,
+            contract=contract,
+            box=FakeBox(
+                files={"backend/x.py": b"x = 1\n"},
+                exec_map={
+                    "true": SandboxResult(exit_code=0, stdout="", stderr="", timed_out=False)
+                },
+            ),
+            written_paths=["backend/x.py"],
+            final_text="",
+        )
+        assert vr2.result["work_gateable"] is True
+
+
 async def test_unreadable_source_does_not_fall_through_to_blind_probing() -> None:
     """A code file we could not READ is an infra failure. Blind-probing it would
     launder that failure into evidence ("grep found the function name") for a

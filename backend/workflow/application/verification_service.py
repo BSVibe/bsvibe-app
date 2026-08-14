@@ -43,7 +43,7 @@ from backend.workflow.domain.gate_derivation import (
     parse_derived_gate,
     surface_exercised,
 )
-from backend.workflow.domain.honesty import compute_honesty_grade
+from backend.workflow.domain.honesty import compute_honesty_grade, work_is_gateable
 from backend.workflow.domain.outcome_demonstration import (
     DemonstrationOutcome,
     DemonstrationPlan,
@@ -731,6 +731,12 @@ class VerificationService:
                 "scope": scope,
                 "honesty_grade": honesty_grade,
                 "gate_expected": gate_expected,
+                # C4 — the OTHER half of the review question, recorded so a row
+                # answers "why did this not go to review?" on its own. False =
+                # the work produced nothing a command could have gated (a report,
+                # a plan), which is legitimately gateless however well-equipped
+                # the repo is. ``gate_expected`` alone stopped deciding it.
+                "work_gateable": work_is_gateable(written_paths),
                 # Fail-closed telemetry (INV-2): the deriver could not run. Present
                 # only when it happened, so the proof surface can explain a FAILED
                 # (or reviewed) run whose ``derived_gate`` is therefore ``None``.

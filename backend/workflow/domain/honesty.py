@@ -58,7 +58,38 @@ def compute_honesty_grade(
     return "D"
 
 
-def needs_founder_review(grade: str | None, *, gate_expected: bool) -> bool:
+#: File shapes no command can meaningfully gate — the deliverable IS the prose.
+#: Deliberately a small, closed list: anything not named here counts as gateable
+#: (fail-CLOSED), because a config, a schema, a Dockerfile can all be checked by
+#: some command and only a shape we KNOW is prose should buy the exemption.
+_PROSE_EXTS: frozenset[str] = frozenset({".md", ".txt", ".rst", ".adoc", ".markdown"})
+
+
+def work_is_gateable(written_paths: list[str]) -> bool:
+    """Could a command have verified what THIS work produced?
+
+    The grade is a judgement about a piece of work, so the question that decides
+    whether a weak grade is worth the founder's eyes has to be about the work —
+    not about the repo it landed in. ``gate_expected`` answers "is this a real
+    project that should declare a definition of done", which is the right
+    question for the fail-CLOSED gate path and the WRONG one here: it made the
+    same report call the founder or not depending on whether the repo happened
+    to carry a ``pyproject.toml``.
+
+    A run that produced NOTHING is gateable by this definition — deliberately.
+    "Wrote no files" must never read as "legitimately gateless": that is the
+    prose-answer-instead-of-work case, and it keeps its review."""
+    return not written_paths or any(not _is_prose(p) for p in written_paths)
+
+
+def _is_prose(path: str) -> bool:
+    dot = path.rfind(".")
+    return dot != -1 and path[dot:].lower() in _PROSE_EXTS
+
+
+def needs_founder_review(
+    grade: str | None, *, gate_expected: bool, work_gateable: bool = True
+) -> bool:
     """True when a PASSING verdict must route to founder review instead of
     auto-accumulating trust (PROVED).
 
@@ -72,12 +103,20 @@ def needs_founder_review(grade: str | None, *, gate_expected: bool) -> bool:
     "legitimately skipped for a valid reason". Its weak grade is still surfaced,
     but it auto-proceeds rather than nagging review on every early deliverable.
 
+    ``work_gateable`` (:func:`work_is_gateable`) applies that SAME distinction to
+    the work instead of the repo. A report, a plan, a piece of research is
+    legitimately gateless no matter how well-equipped its repo is: there is no
+    command to run, so "couldn't verify" is not a weakness of the work. Without
+    this, every non-dev deliverable in a real project called the founder — the
+    complaint that opened this track.
+
     ``None`` (ladder N/A — non-product / Direct run) never needs review here."""
-    return grade == "D" and gate_expected
+    return grade == "D" and gate_expected and work_gateable
 
 
 __all__ = [
     "HonestyGrade",
     "compute_honesty_grade",
     "needs_founder_review",
+    "work_is_gateable",
 ]
