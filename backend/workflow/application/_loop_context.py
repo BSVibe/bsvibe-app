@@ -21,6 +21,10 @@ import structlog
 from backend.config import Settings
 from backend.extensions.skill.loader import SkillLoader
 from backend.extensions.skill.tool_binding import INVOKE_SKILL_NAME, register_invoke_skill
+from backend.workflow.application.agent_briefing import (
+    _DESIGN_SPEC_DIRECTIVE,
+    _SYSTEM_PROMPT,
+)
 from backend.workflow.application.tool_registry import (
     _KNOWLEDGE_SEED_MAX_CHARS_PER_STATEMENT,
     _KNOWLEDGE_SEED_MAX_RESULTS,
@@ -39,48 +43,6 @@ if TYPE_CHECKING:
     from backend.workflow.application.agent_loop import LoopResult
 
 logger = structlog.get_logger(__name__)
-
-_SYSTEM_PROMPT = (
-    "You are an autonomous engineer working inside a sandboxed workspace. "
-    "Use the tools to inspect and change files. You MUST call "
-    "declare_verification BEFORE any file_write or file_edit — those tools are "
-    "REFUSED until you do — to commit to how the work will be checked (prefer a "
-    "command check that runs the real test/lint, scoped to the files you "
-    "changed). Reading files (file_read, file_list) is allowed first. When the "
-    "step is complete, stop calling tools and reply with a short plain-text "
-    "summary — that triggers verification. If you are blocked on a decision "
-    "only the founder can make, call ask_user_question. "
-    "W2 — your work is committed to a per-run git branch and merged into the "
-    "product's main on verify. If verify reports a merge conflict, the "
-    "conflicting files in your workspace will contain '<<<<<<<', '=======', "
-    "and '>>>>>>>' markers. Resolve them with file_read/file_edit (you can "
-    "also `shell_exec git log/diff/show` to inspect main's intent) and "
-    "re-trigger verification by re-replying. If the conflict is semantically "
-    "ambiguous — i.e. you can't tell which intent to honor — call "
-    "ask_user_question with a clear semantic question (e.g., 'main added X "
-    "while this branch added Y at the same spot — should X replace Y, or "
-    "should both coexist?'). Never paste raw conflict markers to the founder."
-)
-
-# D1b — when a run is the DESIGN stage of a ``design_then_impl`` pipeline, it
-# must produce a SPECIFICATION (a concise markdown spec the impl stage
-# implements), NOT finished code. Before D1b the design run got only the generic
-# work prompt, so it built working code the impl stage regenerated — a no-op
-# merge (2026-05-28 dogfood). This directive, seeded into the loop's initial
-# context for a design-stage run, redirects it to spec. One concise instruction
-# block (respect the local-model generation budget). The ``single`` + ``impl``
-# runs never get it (impl IMPLEMENTS the spec). Kept byte-identical to the
-# executor path's directive so both prompt-assembly sites tell the design run
-# the same thing.
-_DESIGN_SPEC_DIRECTIVE = (
-    "THIS IS THE DESIGN STAGE. Write ONE concise markdown specification — do NOT "
-    "implement it and do NOT write working code; a later implementation stage "
-    "will. The spec MUST cover: Goal (what to build and why), "
-    "Interface/Contract (the public API, signatures, inputs/outputs), File "
-    "layout (the files to create and what each holds), and Acceptance criteria "
-    "(observable conditions that prove the implementation is correct). Keep it "
-    "tight and implementable; output only the spec."
-)
 
 
 def _is_design_stage(run: ExecutionRun) -> bool:
