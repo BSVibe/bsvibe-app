@@ -34,6 +34,7 @@ def build_registry(
     *,
     record_question: Any | None = None,
     record_deliverable: Any | None = None,
+    record_progress: Any | None = None,
 ) -> ToolRegistry:
     """Build a fresh :class:`ToolRegistry` with every D2 tool registered.
 
@@ -42,7 +43,10 @@ def build_registry(
     :func:`backend.mcp.tools.register_all_tools`."""
     registry = ToolRegistry()
     register_all_tools(
-        registry, record_question=record_question, record_deliverable=record_deliverable
+        registry,
+        record_question=record_question,
+        record_deliverable=record_deliverable,
+        record_progress=record_progress,
     )
     return registry
 

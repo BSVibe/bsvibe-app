@@ -64,8 +64,13 @@ async def _unused_effect(*a, **k):  # pragma: no cover — the work tools are ne
 
 def _server(db):
     """The production shape: the work tools are registered only when the composition root
-    injects the two loop-owned effects."""
-    registry = build_registry(record_question=_unused_effect, record_deliverable=_unused_effect)
+    injects every loop-owned effect — including the progress recorder, without which an
+    executor turn would leave no trail at all."""
+    registry = build_registry(
+        record_question=_unused_effect,
+        record_deliverable=_unused_effect,
+        record_progress=_unused_effect,
+    )
     return build_server(session_factory=db, registry=registry)
 
 

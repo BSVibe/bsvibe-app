@@ -252,7 +252,11 @@ def utcnow() -> Any:
 async def record_activity(
     session: AsyncSession,
     run: ExecutionRun,
-    attempt: RunAttempt,
+    # ``None`` is what the MCP transport passes: an executor's work-tool call happens
+    # OUTSIDE any loop attempt (the same reason ``create_decision`` takes an optional
+    # work step). The run timeline queries by run, not by attempt, so the id is
+    # informational and its absence costs nothing.
+    attempt: RunAttempt | None,
     activity_type: str,
     payload: dict[str, Any],
 ) -> None:
@@ -262,7 +266,7 @@ async def record_activity(
             run_id=run.id,
             workspace_id=run.workspace_id,
             activity_type=activity_type,
-            payload={"attempt_id": str(attempt.id), **payload},
+            payload={"attempt_id": str(attempt.id) if attempt is not None else None, **payload},
         )
     )
 
