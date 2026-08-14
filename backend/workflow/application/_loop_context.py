@@ -26,6 +26,7 @@ from backend.workflow.application.tool_registry import (
     _KNOWLEDGE_SEED_MAX_RESULTS,
     make_knowledge_search_handler,
 )
+from backend.workflow.domain.verification_feedback import render_failed_commands
 from backend.workflow.infrastructure.db import ExecutionRun
 from backend.workflow.infrastructure.tools import ToolRegistry
 
@@ -500,8 +501,6 @@ async def settle_client_attach(
     in the sandbox, so a pass is a real proof. A ``None`` gate means the repo
     declares no toolchain: legitimately gateless.
     """
-    import json  # noqa: PLC0415
-
     from backend.workflow.application.audit_events import LoopTerminal  # noqa: PLC0415
     from backend.workflow.application.client_attach_delivery import (  # noqa: PLC0415
         commit_and_push_run_work,
@@ -537,12 +536,15 @@ async def settle_client_attach(
         # that RAN and failed qualifies: a deriver fault or an unreachable
         # machine is not the agent's to repair, and asking it to try burns every
         # remaining cycle.
+        # Same contract as the sandbox verdict: the failing command leads. A
+        # prefix of the command list spends the budget in declaration order, so
+        # a gate whose first checks pass can report its failure to nobody.
         messages.append(
             {
                 "role": "user",
                 "content": (
                     "Your repository's own verification gate FAILED on this machine:\n"
-                    f"{json.dumps(gate['commands'])[:1500]}\n"
+                    f"{render_failed_commands(gate['commands'])}\n"
                     "Fix the problem and try again, then send your summary."
                 ),
             }

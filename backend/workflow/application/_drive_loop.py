@@ -12,7 +12,6 @@ audit delegations exactly as before.
 
 from __future__ import annotations
 
-import json
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -51,6 +50,7 @@ from backend.workflow.domain.emit_deliverable import (
     handle_emit_deliverable,
 )
 from backend.workflow.domain.honesty import needs_founder_review, work_is_gateable
+from backend.workflow.domain.verification_feedback import render_verification_failure
 from backend.workflow.infrastructure.db import (
     Decision,
     DecisionStatus,
@@ -539,12 +539,18 @@ async def drive_loop(  # noqa: PLR0911, PLR0912, PLR0915 — preserved cycle bod
             )
             return result
         # Failed: feed the verifier output back and re-plan on the next cycle.
+        # Built from the FAILURES, never a prefix of the whole result — this was
+        # ``json.dumps(verdict.result)[:1500]``, and since ``command_results``
+        # (advisory) serialises before ``derived_gate`` (authoritative), the
+        # 1500 characters an agent received could be — and in run 010bbdd8 were —
+        # entirely its own passing commands. It read "FAILED: [everything
+        # passed]" and repeated the identical failure 16 times.
         messages.append(
             {
                 "role": "user",
                 "content": (
                     "Verification FAILED. Details:\n"
-                    f"{json.dumps(verdict.result)[:1500]}\n"
+                    f"{render_verification_failure(vresult)}\n"
                     "Fix the problem and try again, then send your summary."
                 ),
             }
