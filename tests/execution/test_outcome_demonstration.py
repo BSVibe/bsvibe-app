@@ -16,6 +16,7 @@ from backend.workflow.domain.outcome_demonstration import (
     Probe,
     ProbeResult,
     artifact_planner_messages,
+    drop_unasserted,
     judge_probe,
     parse_demonstration_plan,
     summarize,
@@ -246,3 +247,46 @@ def test_artifact_planner_names_the_files_but_carries_no_produced_text() -> None
     # must derive every expectation from the TASK.
     assert "have NOT been shown" in system
     assert "TASK" in system
+
+
+# ── a probe that declares nothing cannot fail, so it is not evidence ──────────
+#
+# Live run e72689e8 (2026-08-14): the blind planner wrote six probes and TWO of
+# them were `python -c "...; print('found' if ex else 'missing')"` with no
+# declared substring. Python exits 0 either way, so they scored `matched` no
+# matter what the artifact contained — the probe COMPUTED the answer and then
+# threw it away. Six probes, two of them unfalsifiable, and the grade could not
+# tell the difference.
+
+
+def test_a_probe_with_no_declared_observation_is_dropped() -> None:
+    asserted = Probe(name="a", command="grep -q x f.md", expect_stdout_contains=("x",))
+    unasserted = Probe(name="b", command="python -c \"print('found')\"")
+    plan = DemonstrationPlan(probes=(asserted, unasserted), setup=("prep",))
+    kept = drop_unasserted(plan)
+    assert kept.probes == (asserted,)
+    assert kept.setup == ("prep",), "setup is preparation, not evidence — untouched"
+
+
+def test_dropping_every_probe_leaves_an_empty_plan_not_a_pass() -> None:
+    plan = DemonstrationPlan(probes=(Probe(name="b", command="true"),))
+    assert drop_unasserted(plan).is_empty
+
+
+def test_a_probe_expecting_failure_is_kept_even_without_a_substring() -> None:
+    # `expect_exit_zero=False` IS a declared observation: the command must fail.
+    # That probe can be contradicted (by succeeding), so it is real evidence.
+    probe = Probe(name="rejects bad input", command="tool --bad", expect_exit_zero=False)
+    assert drop_unasserted(DemonstrationPlan(probes=(probe,))).probes == (probe,)
+
+
+def test_the_artifact_prompt_demands_a_declared_observation() -> None:
+    system = next(
+        m["content"]
+        for m in artifact_planner_messages(intent="i", artifact_paths=["a.md"])
+        if m["role"] == "system"
+    )
+    # It must say the expectation is REQUIRED, and say WHY — the trap is that a
+    # command which prints its answer still exits 0.
+    assert "REQUIRED" in system
+    assert "exits 0" in system

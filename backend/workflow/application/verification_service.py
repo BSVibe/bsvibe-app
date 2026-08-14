@@ -50,6 +50,7 @@ from backend.workflow.domain.outcome_demonstration import (
     Observation,
     ProbeResult,
     artifact_planner_messages,
+    drop_unasserted,
     judge_probe,
     parse_demonstration_plan,
     summarize,
@@ -1062,18 +1063,31 @@ class VerificationService:
         # ADVISORY (earn-only) — both for the same reason (§8.3, §4 rule 1).
         strict = bool(sources)
 
+        surface = "code" if strict else "artifact"
+
         plan = (
             await self._author_demonstration_plan(intent, sources)
             if strict
             else await self._author_artifact_plan(intent, artifact_paths)
         )
+        if plan is not None and not strict:
+            # A probe that declared no observation cannot be contradicted, so it
+            # is not evidence — and the blind planner writes them (live run
+            # e72689e8: two of six probes PRINTED the answer and asserted
+            # nothing, so python exited 0 either way and they scored `matched`
+            # unconditionally). Dropped BEFORE running: an unfalsifiable probe
+            # is not worth a sandbox round-trip either.
+            plan = drop_unasserted(plan)
         if plan is None or plan.is_empty:
             # Honest downgrade: the deliverable could not be reduced to an
             # executable demonstration. Not a fail — recorded so the grade /
-            # proof surface (L-honesty) reflects the weaker evidence.
+            # proof surface (L-honesty) reflects the weaker evidence. The surface
+            # is recorded even here: "we found nothing" must still say WHERE it
+            # looked (§4 rule 3).
             outcome = DemonstrationOutcome(verdict="undemonstrable")
             blob = outcome.to_dict()
             blob["plan"] = plan.to_dict() if plan is not None else None
+            blob["surface"] = surface
             return blob
 
         # Materialize the project venv so python probes resolve the deps, then
@@ -1118,11 +1132,11 @@ class VerificationService:
             run_id=str(run.id),
             verdict=outcome.verdict,
             probes=len(results),
-            surface="code" if strict else "artifact",
+            surface=surface,
         )
         blob = outcome.to_dict()
         blob["plan"] = plan.to_dict()
-        blob["surface"] = "code" if strict else "artifact"
+        blob["surface"] = surface
         return blob
 
     async def _author_artifact_plan(

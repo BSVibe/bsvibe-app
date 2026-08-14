@@ -286,6 +286,28 @@ def summarize(
     return "undemonstrable"
 
 
+def drop_unasserted(plan: DemonstrationPlan) -> DemonstrationPlan:
+    """Keep only probes that DECLARED an observation — the rest are not evidence.
+
+    A probe whose only expectation is "exit 0" is evidence *if the command can
+    fail*. Nothing checks that, and the blind artifact planner reliably writes
+    commands that cannot: live run e72689e8 (2026-08-14) produced
+    ``python -c "…; print('found' if ex else 'missing')"`` — it COMPUTED the
+    answer, printed it, and declared nothing, so Python exited 0 either way and
+    the probe scored ``matched`` no matter what the artifact said. Two of that
+    run's six probes were unfalsifiable and the grade could not tell.
+
+    So a declared expectation is required: either a substring that must appear,
+    or ``expect_exit_zero=False`` (a command that must FAIL is falsifiable — it
+    is contradicted by succeeding). ``setup`` is untouched: it is preparation,
+    never asserted.
+
+    Dropping can only WEAKEN a verdict (fewer probes → at most ``undemonstrable``),
+    so it cannot open a hole; it closes one."""
+    kept = tuple(p for p in plan.probes if p.expect_stdout_contains or not p.expect_exit_zero)
+    return DemonstrationPlan(probes=kept, setup=plan.setup)
+
+
 # ── Grounding for the ARTIFACT surface (prose / data deliverables) ────────────
 
 
@@ -305,8 +327,13 @@ _ARTIFACT_SYSTEM_PROMPT = (
     "and print a field). For Python use `python -c` with statements joined by ';' "
     "(NOT literal \\n — inside `python -c` a backslash-n is not a newline and "
     "raises SyntaxError).\n"
-    '  - "expect_stdout_contains": the exact substring(s) that MUST appear if the '
-    "TASK was carried out\n"
+    '  - "expect_stdout_contains": REQUIRED — the exact substring(s) that MUST '
+    "appear if the TASK was carried out. A probe that declares nothing cannot "
+    "fail and is discarded: a command that computes the answer and PRINTS it "
+    "still exits 0 when the answer is bad (`python -c \"print('found' if x else "
+    "'missing')\"` exits 0 either way), so exit status alone proves nothing "
+    "there. Print the finding AND declare the substring that must be in it. The "
+    "only exception is a probe that must FAIL, which declares that instead.\n"
     '  - "expect_exit_zero": true if the command must succeed, false if it must fail\n'
     "RULES:\n"
     "- Assert only what the TASK UNAMBIGUOUSLY requires — a named figure, a "
@@ -355,6 +382,7 @@ __all__ = [
     "ProbeResult",
     "ProbeStatus",
     "artifact_planner_messages",
+    "drop_unasserted",
     "judge_probe",
     "parse_demonstration_plan",
     "summarize",
