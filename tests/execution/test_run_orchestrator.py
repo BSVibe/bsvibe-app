@@ -2196,7 +2196,9 @@ def test_verification_sentence_gate_plus_probes_combined() -> None:
     from types import SimpleNamespace
 
     from backend.workflow.application.run_persistence import _compose_verified_summary
-    from backend.workflow.domain.verified_deliverable import _shipped_detail  # type: ignore[attr-defined]
+    from backend.workflow.domain.verified_deliverable import (
+        _shipped_detail,  # type: ignore[attr-defined]
+    )
 
     run = SimpleNamespace(payload={"frame": {"summary_title": "결과 추가"}})
     verdict_result = {
