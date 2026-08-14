@@ -386,7 +386,11 @@ def _graded_verify(session, run, grade, *, gate_expected=False):
     return fake_verify
 
 
-def _declare_and_write_llm() -> _ScriptedLlm:
+def _declare_and_write_llm(path: str = "a.py") -> _ScriptedLlm:
+    """A run that declares a contract and writes ONE file. The path matters to
+    the ratchet since C4: a ``.md``/``.txt`` deliverable is work no command
+    could have gated, so it is exempt from grade-D review — the default here is
+    CODE so the ladder tests keep exercising the reviewed path."""
     return _ScriptedLlm(
         [
             LoopTurn(
@@ -396,7 +400,7 @@ def _declare_and_write_llm() -> _ScriptedLlm:
                         "declare_verification",
                         checks=[{"kind": "command", "command": "true"}],
                     ),
-                    _tool("file_write", path="a.txt", content="x\n"),
+                    _tool("file_write", path=path, content="x\n"),
                 ),
             ),
             LoopTurn(content="done", tool_calls=()),
@@ -438,6 +442,41 @@ async def test_native_grade_d_with_expected_gate_routes_to_review(
             for d in decisions
         )
         await _assert_proved_invariant(session)  # holds vacuously (no Deliverable)
+
+
+async def test_native_grade_d_prose_only_work_auto_verifies(tmp_path: Path, monkeypatch) -> None:
+    """C4 — the ratchet asks about the WORK, not the repo.
+
+    A report / plan / piece of research is legitimately gateless however
+    well-equipped its repo is: there is no command to run, so "couldn't verify"
+    is not a weakness of the work. Before this, EVERY non-dev deliverable in a
+    real project interrupted the founder — the complaint that opened this track.
+    """
+    from backend.workflow.infrastructure.db import Decision, ExecutionRun, RunStatus
+
+    async with memory_session() as session:
+        run = ExecutionRun(
+            id=uuid.uuid4(),
+            workspace_id=uuid.uuid4(),
+            status=RunStatus.RUNNING,
+            payload={"intent_text": "write the weekly report"},
+        )
+        session.add(run)
+        await session.flush()
+        orch = RunOrchestrator(
+            session=session,
+            llm=_declare_and_write_llm("docs/weekly.md"),
+            sandbox_manager=NoopSandboxManager(),
+        )
+        # Same weak grade, same manifest-bearing repo as the reviewed case above.
+        monkeypatch.setattr(orch, "_verify", _graded_verify(session, run, "D", gate_expected=True))
+        result = await orch.run(run=run, workspace_dir=tmp_path)
+
+        assert result.outcome == "verified"
+        decisions = (await session.execute(select(Decision))).scalars().all()
+        assert not [d for d in decisions if d.payload.get("reason") == "weak_evidence_no_gate"], (
+            "prose work must not interrupt the founder"
+        )
 
 
 async def test_native_grade_d_greenfield_no_gate_expected_auto_verifies(

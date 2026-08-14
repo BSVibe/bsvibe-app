@@ -50,7 +50,7 @@ from backend.workflow.domain.emit_deliverable import (
     _safe_args,
     handle_emit_deliverable,
 )
-from backend.workflow.domain.honesty import needs_founder_review
+from backend.workflow.domain.honesty import needs_founder_review, work_is_gateable
 from backend.workflow.infrastructure.db import (
     Decision,
     DecisionStatus,
@@ -473,13 +473,21 @@ async def drive_loop(  # noqa: PLR0911, PLR0912, PLR0915 — preserved cycle bod
         grade = vresult.get("honesty_grade")
         gate_expected = bool(vresult.get("gate_expected"))
         if verdict.outcome is VerificationOutcome.PASSED and needs_founder_review(
-            grade, gate_expected=gate_expected
+            grade, gate_expected=gate_expected, work_gateable=work_is_gateable(written_paths)
         ):
             # Honesty ladder ratchet (redesign §4). A grade-D pass whose repo has a
             # detectable stack — a real project that SHOULD declare a gate but
             # doesn't — rests on nothing runnable, so it does NOT auto-accumulate
             # trust (PROVED); route to founder review. A/B/C, and an early/
             # greenfield repo with no stack yet (legitimately gateless), auto-verify.
+            #
+            # C4 — and neither does work no command could have gated. The grade is
+            # a judgement about THIS work, so what decides whether its weakness is
+            # worth the founder's eyes has to be about the work too: a report in a
+            # repo that happens to carry a pyproject.toml is not a project failing
+            # to declare a gate. It auto-proceeds, and the summary + push SAY the
+            # evidence was weak (``_weak_evidence_sentence``) so proceeding is
+            # never proceeding quietly.
             decision = await orch._create_decision(
                 run,
                 work_step,

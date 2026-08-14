@@ -1994,3 +1994,69 @@ async def test_real_github_list_issues_dispatches_through_real_pluginrunner(
         assert '"count": 1' in body, f"PR should have been filtered out; got {body}"
         assert "Bug" in body
         assert "PR" not in body or '"number": 2' not in body
+
+
+# --------------------------------------------------------------------------
+# Auto-proceeding must never mean proceeding QUIETLY
+#
+# Grade D used to BLOCK the run, so the founder always heard about weak
+# evidence — by being interrupted. Once a non-dev deliverable stops blocking
+# (work_is_gateable), the only thing left saying "this rests on nothing
+# runnable" is the Delivery Report, which the founder has to open. The push
+# they actually receive said "작업 완료" and nothing else. Lesson #742: a run
+# reaching `verified` is not the same as the result reaching the founder.
+# --------------------------------------------------------------------------
+
+
+def _summary_for(grade: str | None, language: str = "ko") -> str:
+    from types import SimpleNamespace
+
+    from backend.workflow.application.run_persistence import _compose_verified_summary
+
+    run = SimpleNamespace(payload={"intent_text": "주간 리포트를 써줘"})
+    return _compose_verified_summary(
+        run,  # type: ignore[arg-type]
+        "",
+        ["docs/weekly.md"],
+        {"honesty_grade": grade, "command_results": [], "judge": {}},
+        language,
+    )
+
+
+def test_a_weak_finish_says_so_in_the_summary() -> None:
+    summary = _summary_for("D")
+    line = next((ln for ln in summary.splitlines() if ln.startswith("검증")), "")
+    assert line, "a grade-D finish must still carry a verification line"
+    assert "돌릴" in line, f"it must say WHY the evidence is weak, got: {line}"
+
+
+def test_that_line_is_what_the_founder_receives_on_their_phone() -> None:
+    """The load-bearing half: the compact push body is built by lifting the
+    verify line out of the summary, and it only lifts lines whose prefix it
+    recognises. A weak-evidence sentence that the lifter drops is a sentence
+    the founder never sees."""
+    from backend.workflow.domain.verified_deliverable import _shipped_detail
+
+    detail = _shipped_detail(_summary_for("D"))
+    assert "돌릴" in detail, f"the weak-evidence line never reached the push: {detail!r}"
+
+
+def test_a_discovered_but_unrunnable_gate_is_reported_as_its_own_thing() -> None:
+    # Grade C is a different fact from D — a gate EXISTS and could not run here.
+    # Saying "no runnable check" there would be false.
+    line = next((ln for ln in _summary_for("C").splitlines() if ln.startswith("검증")), "")
+    assert line
+    assert "돌릴 수 없" in line, line
+
+
+def test_a_strong_grade_adds_no_weak_evidence_line() -> None:
+    for grade in ("A", "B"):
+        summary = _summary_for(grade)
+        assert "돌릴" not in summary, f"grade {grade} must not claim weak evidence"
+
+
+def test_english_workspaces_get_it_too() -> None:
+    from backend.workflow.domain.verified_deliverable import _shipped_detail
+
+    detail = _shipped_detail(_summary_for("D", language="en"))
+    assert "runnable" in detail.lower(), detail
