@@ -70,6 +70,11 @@ class GithubMergeWatchRow(GithubMergeWatchBase):
         Index("ix_github_merge_watch_status_next_poll", "status", "next_poll_at"),
         Index("ix_github_merge_watch_repo", "repo"),
         Index("ix_github_merge_watch_run", "run_id"),
+        # One pull request, one watch row. ``(repo, pr_number)`` identifies a PR
+        # permanently — GitHub never reuses a number within a repo — so a second
+        # row is always a duplicate. A run that delivers twice finds the SAME
+        # open PR, and two rows double the polling AND the founder's notices.
+        Index("uq_github_merge_watch_repo_pr", "repo", "pr_number", unique=True),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)

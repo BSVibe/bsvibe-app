@@ -63,8 +63,14 @@ async def enqueue_merge_watch(
     )
     try:
         async with deps.session_factory() as session:
-            await GithubMergeWatchRepository(session).add(row)
+            added = await GithubMergeWatchRepository(session).add(row)
             await session.commit()
+        if added is None:
+            # Already under watch — one PR, one row. A run that delivers twice
+            # (a re-dispatched run lands a second deliverable) finds the SAME
+            # open PR, and doubling the watch doubles the polling AND the
+            # founder's notifications.
+            return
         logger.info(
             "github_merge_watch_enqueued",
             workspace_id=str(workspace_id),
