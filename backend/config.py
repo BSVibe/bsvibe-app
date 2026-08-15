@@ -338,6 +338,16 @@ class Settings(BaseSettings):
     # lengthens the act turn cap and widens the reaper lease with it.
     executor_task_timeout_s: float = 3600.0
 
+    # How many CONSECUTIVE times a run's drive may crash before the founder is
+    # told and the run stops being re-driven. ``drive_once`` catches only the
+    # capacity yield-back; anything else (a timed-out turn, a dead worker, a bug
+    # in a stage) used to leave the run RUNNING with its claim held, get reaped
+    # back to OPEN two hours later, and fail again — with no counter anywhere
+    # and nothing said. The only thing that ever ended one was the founder
+    # cancelling it by hand. Small on purpose: a drive that has failed three
+    # times in a row is not going to fix itself on the fourth.
+    agent_max_drive_failures: int = 3
+
     # Capacity-aware dispatch (Lift E16). Backend must NOT dispatch onto a
     # worker stream when the worker is already at its in-flight cap — the
     # worker's poll loop skips polling while ``len(in_flight) >=

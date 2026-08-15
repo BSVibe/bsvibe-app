@@ -66,6 +66,12 @@ _EXECUTOR_DECISION_QUESTIONS: dict[str, dict[str, str]] = {
         "en": "BSVibe opened a pull request but couldn't finish merging it — it needs you.",
         "ko": "BSVibe가 올린 PR을 끝까지 병합하지 못했어요 — 확인이 필요해요.",
     },
+    # The drive itself kept crashing (a timed-out turn, a worker that died).
+    # Nothing was produced, so this asks whether to try again or let it go.
+    "run_drive_failed": {
+        "en": "This task kept failing to start, so BSVibe stopped retrying — try again, or let it go?",
+        "ko": "이 작업이 계속 시작되지 못해서 재시도를 멈췄어요 — 다시 해볼까요, 접을까요?",
+    },
 }
 
 
@@ -110,6 +116,12 @@ ACTION_RETRY = "retry"
 ACTION_ACKNOWLEDGE = "acknowledge"
 
 _EXECUTOR_DECISION_ACTIONS: dict[str, list[DecisionAction]] = {
+    # A crashed drive produced nothing, so ``ship`` has no meaning here — the
+    # only honest answers are another attempt or letting the run go.
+    "run_drive_failed": [
+        DecisionAction(key=ACTION_RETRY, label_en="Try again", label_ko="다시 시도"),
+        DecisionAction(key=ACTION_DISCARD, label_en="Discard", label_ko="폐기"),
+    ],
     "verification_failed": [
         DecisionAction(key=ACTION_SHIP, label_en="Approve & ship", label_ko="승인하고 출시"),
         DecisionAction(key=ACTION_RETRY, label_en="Retry", label_ko="다시 시도"),

@@ -99,6 +99,13 @@ _NEEDS_YOU_REASON_BODY: dict[str, dict[str, str]] = {
         "en": "The checks on BSVibe's pull request never went green in time.",
         "ko": "올려둔 PR의 검사가 제한 시간 안에 통과하지 못했어요.",
     },
+    # The run could not be DRIVEN — it crashed before producing anything, more
+    # than once in a row. Deliberately not phrased as a work failure: nothing
+    # was attempted and found wanting, the attempt itself never got going.
+    "drive_failed_repeatedly": {
+        "en": "A task kept failing to start, so BSVibe stopped retrying it.",
+        "ko": "작업이 계속 시작되지 못해서 재시도를 멈췄어요.",
+    },
 }
 
 #: Localized CTA framing for the trailing deep-link line of a push. ``needs_you``
