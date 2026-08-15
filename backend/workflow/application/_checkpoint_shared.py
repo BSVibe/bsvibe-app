@@ -90,6 +90,10 @@ _EXECUTOR_DECISION_REASON_QUESTIONS: dict[str, dict[str, str]] = {
         "en": "The checks on BSVibe's pull request never went green in time — take a look at it.",
         "ko": "BSVibe가 올린 PR의 검사가 제한 시간 안에 통과하지 못했어요 — 한번 봐주세요.",
     },
+    "ci_failed": {
+        "en": "The checks on BSVibe's pull request failed — the failing one says why.",
+        "ko": "BSVibe가 올린 PR의 검사가 실패했어요 — 실패한 검사에 이유가 있어요.",
+    },
 }
 
 
