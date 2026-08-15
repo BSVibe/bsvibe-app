@@ -74,6 +74,11 @@ from plugin.github.client import MergeResult
 
 logger = structlog.get_logger(__name__)
 
+#: Check-run conclusions that mean this head will not go green by waiting.
+#: ``neutral`` / ``skipped`` / ``success`` are not failures; ``cancelled`` is,
+#: because a cancelled required check never completes on its own either.
+_FAILING_CONCLUSIONS = frozenset({"failure", "timed_out", "action_required", "cancelled"})
+
 
 class MergeWatchClient(Protocol):
     """The narrow GitHub surface the state machine consumes.
@@ -90,6 +95,8 @@ class MergeWatchClient(Protocol):
     ) -> MergeResult: ...
 
     async def close_pr(self, owner: str, repo: str, number: int) -> dict[str, Any]: ...
+
+    async def get_check_runs(self, owner: str, repo: str, ref: str) -> list[dict[str, Any]]: ...
 
 
 #: Resolve a per-row GitHub client (token + base_url from the github binding of
@@ -492,6 +499,28 @@ class MergeWatchWorker(BaseWorker):
                 await session.commit()
                 return
 
+            # 3a. The checks came back RED. ``mergeable_state`` cannot tell us
+            # this on its own — ``blocked`` covers a failing required check, an
+            # unmet review, and checks still running alike — so ask the head
+            # commit's check-runs, which carry per-check conclusions.
+            #
+            # Waiting out the deadline on a DECIDED failure is what this fixes:
+            # live PR #754 had ``lint-and-test`` red 29 seconds in and the
+            # founder heard "the checks never went green in time" 63 minutes
+            # later. Late, and about the wrong thing — a red test and a hung CI
+            # ask different things of the person reading it.
+            if head_sha and await self._checks_failed(client, owner, name, head_sha):
+                await self._gave_up(snap, "ci_failed")
+                await repo.mark_status(snap.id, MergeWatchStatus.FAILED, last_error="ci_failed")
+                await session.commit()
+                logger.warning(
+                    "merge_watch_ci_failed",
+                    repo=snap.repo,
+                    pr_number=snap.pr_number,
+                    run_id=str(snap.run_id),
+                )
+                return
+
             # 3. CI still pending (blocked / unstable / unknown / anything else).
             if now > snap.deadline_at:
                 await self._gave_up(snap, "ci_deadline_exceeded")
@@ -516,6 +545,30 @@ class MergeWatchWorker(BaseWorker):
                 increment_attempt=True,
             )
             await session.commit()
+
+    async def _checks_failed(
+        self, client: MergeWatchClient, owner: str, name: str, head_sha: str
+    ) -> bool:
+        """Has a check on ``head_sha`` COMPLETED with a failing conclusion?
+
+        Only ``completed`` runs count: one still going is exactly the pending
+        case the deadline exists for. ``cancelled`` is deliberately included —
+        a cancelled required check will not go green on its own either.
+
+        Fail-SOFT: an unreadable check-runs API answers ``False``, i.e. today's
+        behaviour (keep polling until the deadline). Turning an API hiccup into
+        "your CI failed" would be a worse lie than the one this fixes.
+        """
+        try:
+            runs = await client.get_check_runs(owner, name, head_sha)
+        except Exception:  # noqa: BLE001 — an unreadable API is not a verdict
+            logger.info("merge_watch_check_runs_unreadable", repo=f"{owner}/{name}", exc_info=True)
+            return False
+        return any(
+            run.get("status") == "completed" and run.get("conclusion") in _FAILING_CONCLUSIONS
+            for run in runs
+            if isinstance(run, dict)
+        )
 
     async def _merge_step(
         self,

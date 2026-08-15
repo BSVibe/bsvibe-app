@@ -99,6 +99,12 @@ _NEEDS_YOU_REASON_BODY: dict[str, dict[str, str]] = {
         "en": "The checks on BSVibe's pull request never went green in time.",
         "ko": "올려둔 PR의 검사가 제한 시간 안에 통과하지 못했어요.",
     },
+    # DECIDED red, as opposed to never-finished above. Different action: read
+    # the failing check, not "is CI stuck?".
+    "ci_failed": {
+        "en": "The checks on BSVibe's pull request failed.",
+        "ko": "올려둔 PR의 검사가 실패했어요.",
+    },
     # The run could not be DRIVEN — it crashed before producing anything, more
     # than once in a row. Deliberately not phrased as a work failure: nothing
     # was attempted and found wanting, the attempt itself never got going.
