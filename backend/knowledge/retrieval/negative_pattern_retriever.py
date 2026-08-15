@@ -23,6 +23,8 @@ import structlog
 from backend.knowledge.graph.markdown_utils import extract_frontmatter
 from backend.knowledge.graph.storage import StorageBackend
 from backend.knowledge.retrieval.knowledge_item import RetrievedKnowledge
+from backend.knowledge.retrieval.signal_tokens import overlaps_tokens
+from backend.knowledge.retrieval.signal_tokens import tokenize as _tokenize
 
 logger = structlog.get_logger(__name__)
 
@@ -47,7 +49,7 @@ _TOKEN_RE = re.compile(r"[a-z0-9]+")
 
 def _tokens(text: str) -> set[str]:
     """Lowercase salient tokens from ``text`` (length-filtered, deduped)."""
-    return {t for t in _TOKEN_RE.findall(text.casefold()) if len(t) >= _MIN_TOKEN_LEN}
+    return _tokenize(text, min_len=_MIN_TOKEN_LEN)
 
 
 class NegativePatternRetriever:
@@ -108,7 +110,7 @@ class NegativePatternRetriever:
             question = str(fm.get("question") or "").strip()
             intent = str(fm.get("intent_text") or "").strip()
             pattern_tokens = _tokens(f"{reason}\n{question}\n{intent}")
-            if not (signal_tokens & pattern_tokens):
+            if not overlaps_tokens(signal_tokens, pattern_tokens):
                 continue
             statement = f"Avoid (prior rejection) — {reason}"
             if statement in seen:

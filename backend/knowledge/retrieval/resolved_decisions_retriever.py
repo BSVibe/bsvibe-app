@@ -39,6 +39,8 @@ import structlog
 from backend.knowledge.graph.markdown_utils import extract_frontmatter
 from backend.knowledge.graph.storage import StorageBackend
 from backend.knowledge.retrieval.knowledge_item import RetrievedKnowledge
+from backend.knowledge.retrieval.signal_tokens import overlaps_tokens
+from backend.knowledge.retrieval.signal_tokens import tokenize as _tokenize
 
 logger = structlog.get_logger(__name__)
 
@@ -156,11 +158,7 @@ def _tokens(text: str) -> set[str]:
     """Lowercase salient tokens from ``text`` (length-filtered, deduped,
     stopword-stripped). Stopwords are removed from BOTH query and decision
     token sets so the intersection never matches on a generic function word."""
-    return {
-        t
-        for t in _TOKEN_RE.findall(text.casefold())
-        if len(t) >= _MIN_TOKEN_LEN and t not in _STOPWORDS
-    }
+    return _tokenize(text, min_len=_MIN_TOKEN_LEN, stopwords=_STOPWORDS)
 
 
 class ResolvedDecisionsRetriever:
@@ -233,7 +231,7 @@ class ResolvedDecisionsRetriever:
             # decision would surface on every signal — a token dump.
             intent = str(fm.get("intent_text") or "").strip()
             decision_tokens = _tokens(f"{question}\n{answer}\n{intent}")
-            if not (signal_tokens & decision_tokens):
+            if not overlaps_tokens(signal_tokens, decision_tokens):
                 continue
             statement = f"Prior decision — Q: {question} A: {answer}"
             if statement in seen:
