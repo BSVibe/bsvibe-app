@@ -91,6 +91,11 @@ from backend.workflow.infrastructure.repositories import SqlAlchemyRequestReposi
 
 logger = structlog.get_logger(__name__)
 
+#: The Decision kind a run gets when its drive keeps crashing. Distinct from
+#: ``verification_failed`` (the work ran and did not hold up) — here the work
+#: never got a chance to run at all.
+DRIVE_FAILED_KIND = "run_drive_failed"
+
 #: Minimum wall-clock between terminal-workspace reaps (see
 #: :meth:`AgentWorker._reap_terminal_run_workspaces`). 5 min keeps ``var/runs``
 #: bounded to at most ~5 min of terminal accumulation without re-listing the dir
@@ -220,6 +225,11 @@ class AgentWorker(BaseWorker):
         # a listdir + one query + a few rmtrees is cheap, but there's no reason to
         # do it hundreds of times a minute. ``-inf`` forces the first tick to run.
         self._last_workspace_reap_monotonic = float("-inf")
+        # CONSECUTIVE crashed drives per run — the bound that turns an endless
+        # silent retry into one founder Decision. In-process on purpose: it is a
+        # property of THIS worker's attempts, and a restart legitimately starts
+        # the count over (a fresh process may well succeed where the last died).
+        self._drive_failures: dict[uuid.UUID, int] = {}
 
     @property
     def _stale_claim_lease_s(self) -> float:
@@ -301,13 +311,104 @@ class AgentWorker(BaseWorker):
                 await self._release_claim_to_open(run_id)
                 logger.info("agent_worker_yielded_on_capacity", run_id=str(run_id))
                 continue
+            except Exception as exc:  # noqa: BLE001 — one run's crash is not the batch's
+                # Everything that is NOT the capacity yield-back: a timed-out
+                # executor turn, a worker that died mid-drive, a bug in a stage.
+                # This used to leave through the top of the loop, which killed
+                # the whole batch AND left this run RUNNING holding a claim it
+                # was no longer using — invisible until the stale lease (2× the
+                # executor timeout) expired, then re-driven into the same
+                # failure, forever, with nothing said to anyone.
+                await self._on_drive_failed(run_id, exc)
+                continue
             # A genuinely-driven run — terminal, or paused on a Decision. Either
             # way the drive is done: clear the claim (a paused run keeps
             # ``claimed_at`` NULL + a pending Decision, so the reaper never
             # touches it and the OPEN scan never re-picks it).
+            self._drive_failures.pop(run_id, None)
             await self._clear_claim(run_id)
             count += 1
         return count
+
+    async def _on_drive_failed(self, run_id: uuid.UUID, exc: BaseException) -> None:
+        """Contain one run's crashed drive: count it, give the claim back, and
+        past the bound hand it to the founder instead of re-driving forever.
+
+        The count is CONSECUTIVE — a drive that works clears it — so a run that
+        recovers does not carry unrelated hiccups toward an escalation.
+        """
+        failures = self._drive_failures.get(run_id, 0) + 1
+        self._drive_failures[run_id] = failures
+        logger.warning(
+            "agent_worker_drive_failed",
+            run_id=str(run_id),
+            failures=failures,
+            error=f"{type(exc).__name__}: {exc}",
+            exc_info=True,
+        )
+        if failures >= self._settings.agent_max_drive_failures:
+            # Escalate BEFORE releasing: the escalation pauses the run on a
+            # Decision (RUNNING + claimed_at NULL + pending Decision), which is
+            # the one state both the OPEN scan and the stale reaper skip. Giving
+            # the claim back first would let the next tick re-pick it.
+            await self._escalate_drive_failure(
+                run_id, failures=failures, error=f"{type(exc).__name__}: {exc}"
+            )
+            self._drive_failures.pop(run_id, None)
+            return
+        await self._release_claim_to_open(run_id)
+
+    async def _escalate_drive_failure(
+        self, run_id: uuid.UUID, *, failures: int, error: str
+    ) -> None:
+        """Tell the founder this run cannot be driven, and stop re-driving it.
+
+        Pausing means RUNNING with ``claimed_at`` NULL and a pending Decision —
+        the one state BOTH the OPEN scan and the stale-claim reaper skip, which
+        is what actually stops the retry. (It is also why the caller escalates
+        BEFORE releasing the claim: giving it back first would let the next tick
+        re-pick the run.)
+
+        A run that reached a terminal state between the crash and this call is
+        left alone: reporting a drive failure on finished work would be a second
+        untruth on top of the first.
+        """
+        from backend.workflow.application.run_persistence import (  # noqa: PLC0415 — cycle break
+            create_decision,
+        )
+
+        async with self._session_factory() as session:
+            run = await session.get(ExecutionRun, run_id)
+            if run is None:
+                logger.warning("agent_drive_escalate_run_missing", run_id=str(run_id))
+                return
+            if run.status not in (RunStatus.RUNNING, RunStatus.OPEN):
+                logger.info(
+                    "agent_drive_escalate_run_already_terminal",
+                    run_id=str(run_id),
+                    status=str(run.status),
+                )
+                return
+            run.status = RunStatus.RUNNING
+            run.claimed_at = None
+            run.claimed_by = None
+            await create_decision(
+                session,
+                run,
+                None,  # work_step is unused by the Decision row
+                kind=DRIVE_FAILED_KIND,
+                payload={
+                    "reason": "drive_failed_repeatedly",
+                    "failures": failures,
+                    "error": error[:500],
+                },
+                rationale=(
+                    f"the run could not be driven {failures} times in a row and was "
+                    f"stopped rather than retried silently: {error[:200]}"
+                ),
+            )
+            await session.commit()
+        logger.warning("agent_drive_escalated", run_id=str(run_id), failures=failures, error=error)
 
     async def _reap_stale_claims(self) -> int:
         """Reset RUNNING runs whose claim went stale (past the lease with no
