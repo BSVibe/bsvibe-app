@@ -17,8 +17,9 @@ E39(#347)가 검색 결과를 판사에게 보내는 것을 advisory 로 내린 
 (run `df66a253`: 잘린 시야 + 단어 쪼가리 기준으로 exit-0 작업을 죽였다). 그러니
 패턴은 **판사가 아니라 에이전트**에게, 그것도 계약을 짜는 그 순간에 가야 한다.
 
-**이 lift 는 관측 모드다.** seam 만 만들고 **응답은 바꾸지 않는다** — 실제 런에서
-무엇이 얼마나 뜨는지 먼저 재고(A-2b 에서) 주입을 켠다. 설계 SoT 가 정한 순서이고,
+**이 lift 는 관측 모드로 나갔다.** seam 만 만들고 응답은 안 바꿨다 — 실제 런에서
+무엇이 얼마나 뜨는지 먼저 재기 위해서다. 그 측정이 A-2b(#763)의 필터 규칙을 정했다
+(가르침 채널 오탐 0 / 개념·라벨 채널은 무관해도 상시 발생). 설계 SoT 가 정한 순서이고,
 오늘 이 순서가 작업 하나를 취소시켰다(백로그 2번).
 """
 
@@ -96,9 +97,15 @@ async def test_what_would_be_injected_is_recorded(tmp_path: Path) -> None:
     ]
 
 
-async def test_the_response_is_unchanged_in_observation_mode(tmp_path: Path) -> None:
-    """⚠️ 이 lift 는 에이전트가 보는 것을 바꾸지 않는다. 바꾸는 것은 A-2b 다."""
-    r = _Retriever(["Avoid (prior rejection) — 뭔가"])
+async def test_only_founder_teachings_reach_the_response(tmp_path: Path) -> None:
+    """A-2a 는 관측 모드라 응답을 안 바꿨다. **A-2b(#763)가 주입을 켰다** —
+    다만 형님이 직접 쓴 것만이다.
+
+    개념/라벨 채널은 prod 실측에서 무관한 신호에도 2~3건씩 상시 떴고, 라벨뿐인
+    진술은 `df66a253` 를 죽인 그 모양이라 에이전트에게 주지 않는다.
+    (필터 계약 전체는 ``test_the_agent_hears_the_founder.py``.)
+    """
+    r = _Retriever(["Avoid (prior rejection) — 뭔가", "Backend — 개념 노트 본문"])
     reg = assemble_run_tool_registry(
         workspace_dir=tmp_path, sandbox=None, retriever=r, intent_text="의도"
     )
@@ -106,8 +113,10 @@ async def test_the_response_is_unchanged_in_observation_mode(tmp_path: Path) -> 
     out = await reg.invoke("declare_verification", _checks())
 
     assert "verification contract recorded" in out
-    assert "Avoid" not in out
-    assert "prior" not in out.lower()
+    assert "Avoid (prior rejection) — 뭔가" in out
+    assert "개념 노트 본문" not in out
+    # 관측은 여전히 전부 남는다 — 정밀도를 계속 재야 하므로.
+    assert len(reg.declaration_patterns) == 2
 
 
 async def test_no_retriever_changes_nothing(tmp_path: Path) -> None:

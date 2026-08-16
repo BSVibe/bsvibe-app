@@ -725,10 +725,37 @@ class ToolRegistry:
         await self._consult_declaration_patterns()
         n_cmd = len(contract.command_checks)
         n_judge = len(contract.judge_checks)
-        return (
+        recorded = (
             f"verification contract recorded: {n_cmd} command check(s), "
             f"{n_judge} judge check(s). Now write the tests, then implement."
         )
+        # A-2b — redesign §5: 검색이 가져온 패턴이 "work LLM 이 선언한 것과 함께"
+        # 계약에 합류한다. 판사에게 보내지 않는다(E39): 계약의 주인은 에이전트이고
+        # 이것은 참고다. 게이팅이 아니므로 §11 "별도 집행 메커니즘 아님" 과도 맞다.
+        # 가르침이 없으면 응답은 예전과 byte-identical 이다.
+        teachings = self._founder_teachings()
+        if not teachings:
+            return recorded
+        lines = "\n".join(f"- {t}" for t in teachings)
+        return (
+            f"{recorded}\n\n"
+            "이 워크스페이스에서 형님이 전에 이렇게 가르쳤다 "
+            "(해당되면 계약을 다듬어 다시 선언해라 / refine and re-declare if they apply):\n"
+            f"{lines}"
+        )
+
+    #: 형님이 **직접 쓴** 진술의 접두. 검색기가 이 모양으로 내보낸다
+    #: (``ResolvedDecisionsRetriever`` / ``NegativePatternRetriever``).
+    #: 개념 앵커는 여기 없다 — 실측(2026-08-16)에서 개념/라벨 채널은 무관한 신호에도
+    #: 2~3건씩 상시 떴고, 라벨뿐인 진술(``Verification``)은 `df66a253` 를 죽인 바로
+    #: 그 모양이다. ratchet 이 나르려는 것은 개념이 아니라 **형님의 교정**이다.
+    _FOUNDER_TAUGHT_PREFIXES = ("Prior decision", "Avoid (prior rejection)")
+
+    def _founder_teachings(self) -> list[str]:
+        """조회된 것 중 **형님이 직접 쓴 것**만. 관측(``declaration_patterns``)은
+        전부 남기되 에이전트에게는 이것만 준다 — 정밀도를 계속 재려면 잡음도 보여야
+        하지만, 에이전트의 주의는 잡음에 쓰면 안 된다."""
+        return [s for s in self.declaration_patterns if s.startswith(self._FOUNDER_TAUGHT_PREFIXES)]
 
     async def _consult_declaration_patterns(self) -> None:
         """A-2a — 선언 시점에 이 워크스페이스가 축적한 패턴을 조회한다 (관측 모드).
