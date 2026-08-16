@@ -127,8 +127,11 @@ def test_alembic_head_is_connector_last_import():
     # oauth_device_codes -> workspace_verify_slots (``workspaces.verify_stack_slots``
     # — how many disposable verification stacks a workspace may run at once; a
     # plan tier, not a server constant).
+    # workspace_verify_slots -> safe_mode_decision_reason (``deny_reason`` +
+    # ``decided_by`` — the founder's rejection reason was ``del``-ed at the door
+    # against an audit table with 0 rows; 91 denials lost their reasons).
     # NOTE revision ids are capped at 32 chars by ``alembic_version.version_num``.
-    assert "workspace_verify_slots" in result.stdout
+    assert "safe_mode_decision_reason" in result.stdout
 
 
 def test_target_metadata_covers_all_bases():
