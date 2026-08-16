@@ -234,6 +234,11 @@ class ToolRegistry:
             "declared_knowledge": (
                 {"topic": knowledge.topic, "insight": knowledge.insight} if knowledge else None
             ),
+            # A-2a 관측 모드 — 선언 시점에 **주입될 뻔한** 패턴. MCP 트랜스포트는
+            # 요청마다 레지스트리를 새로 만들므로, 여기 실리지 않으면 응답이 끝나며
+            # 사라지고 **prod 에서 잰다는 전제가 성립하지 않는다.** 관측할 수 없는
+            # 관측 모드는 관측 모드가 아니다.
+            "declaration_patterns": list(self.declaration_patterns),
         }
 
     def restore_state(self, state: dict[str, Any] | None) -> None:
@@ -247,6 +252,9 @@ class ToolRegistry:
         self._grounded_paths |= {str(p) for p in (state.get("grounded_paths") or [])}
         for path in state.get("written_paths") or []:
             self._record_write(str(path))
+        patterns = state.get("declaration_patterns")
+        if patterns:
+            self.declaration_patterns = [str(p) for p in patterns]
         knowledge = state.get("declared_knowledge")
         if knowledge and self.declared_knowledge is None:
             from backend.knowledge.extraction.worth_remembering import (  # noqa: PLC0415
@@ -756,6 +764,11 @@ class ToolRegistry:
             logger.warning("declaration_pattern_consult_failed", exc_info=True)
             return
         self.declaration_patterns = [s for s in statements if isinstance(s, str) and s.strip()]
+        logger.info(
+            "declaration_patterns_consulted",
+            found=len(self.declaration_patterns),
+            signal_chars=len(signals),
+        )
 
     @staticmethod
     def _resolve_shell_timeout(requested: Any) -> float:

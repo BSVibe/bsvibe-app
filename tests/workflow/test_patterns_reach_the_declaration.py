@@ -171,3 +171,31 @@ async def test_both_transports_derive_the_same_intent_signal() -> None:
     ):
         run = SimpleNamespace(id=uuid.uuid4(), payload=payload)
         assert _intent_of(run) == _intent_title(run)  # type: ignore[arg-type]
+
+
+# ── 관측 모드가 실제로 관측 가능해야 한다 ──────────────────────────────────
+
+
+async def test_the_observation_survives_the_transport(tmp_path: Path) -> None:
+    """⚠️ 이것이 없으면 관측 모드는 관측할 수 없다.
+
+    MCP 트랜스포트는 요청마다 레지스트리를 새로 만든다. 메모리에만 있는 값은
+    응답이 끝나면 사라지고 — prod 에서 **잰다는 전제 자체가 성립하지 않는다.**
+    (내가 한 시간 전에 거절한 그 결함과 같은 형태: 만들고 기록해놓고 읽는 쪽이 없음.)
+
+    ``export_state`` 는 run 의 ``work_tool_state`` 로 저장되므로 이 값이 거기 실리면
+    prod DB 로 셀 수 있다.
+    """
+    r = _Retriever(["Avoid (prior rejection) — 읽는 쪽까지 배선해라"])
+    reg = assemble_run_tool_registry(
+        workspace_dir=tmp_path, sandbox=None, retriever=r, intent_text="의도"
+    )
+    await reg.invoke("declare_verification", _checks())
+
+    state = reg.export_state()
+    assert state["declaration_patterns"] == ["Avoid (prior rejection) — 읽는 쪽까지 배선해라"]
+
+    # 그리고 다음 요청의 레지스트리가 그것을 이어받는다.
+    fresh = assemble_run_tool_registry(workspace_dir=tmp_path, sandbox=None)
+    fresh.restore_state(state)
+    assert fresh.declaration_patterns == ["Avoid (prior rejection) — 읽는 쪽까지 배선해라"]
