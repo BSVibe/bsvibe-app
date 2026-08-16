@@ -290,3 +290,85 @@ def test_the_artifact_prompt_demands_a_declared_observation() -> None:
     # command which prints its answer still exits 0.
     assert "REQUIRED" in system
     assert "exits 0" in system
+
+
+# ── source_truncated / not_seen (planner blind-spot downgrade) ────────────────
+#
+# Root failure mode: the code planner reads only the first 8 KB of each source
+# file. A function added at line 500 of a 1 000-line file is INVISIBLE to the
+# planner, which may plan probes with wrong expectations. Those probes contradict
+# the actual deliverable — but the PLANNER is at fault, not the deliverable.
+#
+# Fix: when the planner was given truncated source (Probe.source_truncated=True),
+# judge_probe returns "not_seen" instead of "contradicted". summarize() treats
+# "not_seen" the same as "unavailable" (downgrade to undemonstrable, not fail).
+
+
+def _obs(exit_code: int, stdout: str = "") -> Observation:
+    return Observation(exit_code=exit_code, stdout=stdout, timed_out=False)
+
+
+def test_judge_probe_returns_not_seen_for_truncated_source_contradiction() -> None:
+    probe = Probe(
+        name="check result",
+        command='python -c "from m import f; print(f())"',
+        expect_stdout_contains=("42",),
+        source_truncated=True,
+    )
+    obs = _obs(exit_code=0, stdout="99")  # contradicts: "42" not in "99"
+    assert judge_probe(probe, obs) == "not_seen"
+
+
+def test_judge_probe_returns_matched_for_truncated_source_when_probe_passes() -> None:
+    probe = Probe(
+        name="check result",
+        command='python -c "from m import f; print(f())"',
+        expect_stdout_contains=("42",),
+        source_truncated=True,
+    )
+    obs = _obs(exit_code=0, stdout="result: 42")
+    assert judge_probe(probe, obs) == "matched"
+
+
+def test_judge_probe_returns_contradicted_when_source_not_truncated() -> None:
+    probe = Probe(
+        name="check result",
+        command='python -c "from m import f; print(f())"',
+        expect_stdout_contains=("42",),
+        source_truncated=False,
+    )
+    obs = _obs(exit_code=0, stdout="99")
+    assert judge_probe(probe, obs) == "contradicted"
+
+
+def test_not_seen_does_not_fail_summarize() -> None:
+    not_seen_result = ProbeResult(
+        probe=Probe(name="x", command="c", source_truncated=True),
+        observation=_obs(exit_code=0, stdout="wrong"),
+        status="not_seen",
+    )
+    assert summarize([not_seen_result]) == "undemonstrable"
+
+
+def test_not_seen_alongside_matched_gives_demonstrated() -> None:
+    matched = ProbeResult(
+        probe=Probe(name="a", command="c", expect_stdout_contains=("ok",)),
+        observation=_obs(exit_code=0, stdout="ok"),
+        status="matched",
+    )
+    not_seen = ProbeResult(
+        probe=Probe(name="b", command="d", source_truncated=True),
+        observation=_obs(exit_code=0, stdout="wrong"),
+        status="not_seen",
+    )
+    assert summarize([matched, not_seen]) == "demonstrated"
+
+
+def test_probe_to_dict_includes_source_truncated_when_true() -> None:
+    probe = Probe(name="x", command="c", source_truncated=True)
+    assert probe.to_dict().get("source_truncated") is True
+
+
+def test_probe_to_dict_omits_source_truncated_when_false() -> None:
+    probe = Probe(name="x", command="c", source_truncated=False)
+    assert "source_truncated" not in probe.to_dict()

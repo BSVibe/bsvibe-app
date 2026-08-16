@@ -48,6 +48,7 @@ from backend.workflow.domain.outcome_demonstration import (
     DemonstrationOutcome,
     DemonstrationPlan,
     Observation,
+    Probe,
     ProbeResult,
     artifact_planner_messages,
     drop_unasserted,
@@ -247,10 +248,26 @@ def _extract_json_object(text: str) -> Any:
         return None
 
 
+_PLANNER_TRUNCATION_MARKER = (
+    "\n[... TRUNCATED — source cut here. If the task requires code in the "
+    "hidden portion, return empty probes rather than guessing.]"
+)
+
+
 def _demonstration_planner_messages(
     intent: str, sources: list[tuple[str, str]]
 ) -> list[dict[str, str]]:
-    blob = "\n\n".join(f"# {p}\n{src}" for p, src in sources)[:12000]
+    parts = []
+    for path, src in sources:
+        # len(src) may undercount UTF-8 bytes slightly, but anything close to
+        # the read cap was probably clipped — the marker helps the planner
+        # notice and return empty probes instead of guessing.
+        if len(src.encode("utf-8", errors="replace")) >= _SOURCE_CTX_BYTES:
+            src = src + _PLANNER_TRUNCATION_MARKER
+        parts.append(f"# {path}\n{src}")
+    blob = "\n\n".join(parts)
+    if len(blob) > 12000:
+        blob = blob[:12000] + _PLANNER_TRUNCATION_MARKER
     py_imports = [p for p, _ in sources if p.endswith(".py")]
     hints = (
         "\nFor a Python module, import it by its dotted path, e.g.:\n"
@@ -1042,6 +1059,7 @@ class VerificationService:
         if not intent:
             return None
         sources: list[tuple[str, str]] = []
+        any_source_truncated = False
         for path in written_paths:
             if not _is_code_path(path) or _is_test_path(path):
                 continue
@@ -1049,6 +1067,8 @@ class VerificationService:
                 data = await box.read_file(path, _SOURCE_CTX_BYTES)
             except SandboxError:
                 continue
+            if len(data) >= _SOURCE_CTX_BYTES:
+                any_source_truncated = True
             sources.append((path, data.decode("utf-8", errors="replace")))
 
         # No exercisable CODE — but a produced ARTIFACT is a deliverable too, and
@@ -1082,6 +1102,25 @@ class VerificationService:
             if strict
             else await self._author_artifact_plan(intent, artifact_paths)
         )
+        # When the planner saw truncated source, its expectations may be based
+        # on incomplete code. Mark every probe so judge_probe returns "not_seen"
+        # on a contradiction instead of "contradicted" — a planner blind spot
+        # must never false-fail good work (same principle as the judge's
+        # cannot_determine path, but for deterministic probe verdicts).
+        if plan is not None and strict and any_source_truncated:
+            plan = DemonstrationPlan(
+                probes=tuple(
+                    Probe(
+                        name=p.name,
+                        command=p.command,
+                        expect_exit_zero=p.expect_exit_zero,
+                        expect_stdout_contains=p.expect_stdout_contains,
+                        source_truncated=True,
+                    )
+                    for p in plan.probes
+                ),
+                setup=plan.setup,
+            )
         if plan is not None and not strict:
             # A probe that declared no observation cannot be contradicted, so it
             # is not evidence — and the blind planner writes them (live run

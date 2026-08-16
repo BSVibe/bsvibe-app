@@ -44,7 +44,7 @@ from typing import Any, Literal
 MAX_PROBES = 6
 MAX_SETUP = 4
 
-ProbeStatus = Literal["matched", "contradicted", "unavailable"]
+ProbeStatus = Literal["matched", "contradicted", "unavailable", "not_seen"]
 DemonstrationVerdict = Literal["demonstrated", "failed", "undemonstrable"]
 
 #: Substrings in a probe's combined output that mark it as UNABLE to exercise
@@ -106,14 +106,21 @@ class Probe:
     command: str
     expect_exit_zero: bool = True
     expect_stdout_contains: tuple[str, ...] = ()
+    #: True when the planner was given truncated source for this file — the
+    #: planner's expectations may be wrong, so a contradiction is ``not_seen``
+    #: (planner's blind spot) rather than a genuine deliverable defect.
+    source_truncated: bool = False
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        d: dict[str, Any] = {
             "name": self.name,
             "command": self.command,
             "expect_exit_zero": self.expect_exit_zero,
             "expect_stdout_contains": list(self.expect_stdout_contains),
         }
+        if self.source_truncated:
+            d["source_truncated"] = True
+        return d
 
 
 @dataclass(frozen=True)
@@ -257,7 +264,12 @@ def judge_probe(probe: Probe, obs: Observation) -> ProbeStatus:
         return "unavailable"
     exit_ok = (obs.exit_code == 0) == probe.expect_exit_zero
     stdout_ok = all(s in combined for s in probe.expect_stdout_contains)
-    return "matched" if (exit_ok and stdout_ok) else "contradicted"
+    if exit_ok and stdout_ok:
+        return "matched"
+    # The planner wrote this probe from truncated source — its expectations may
+    # be wrong (it couldn't see the full implementation). A mismatch here means
+    # "the planner couldn't verify" (not_seen), not "the deliverable is broken".
+    return "not_seen" if probe.source_truncated else "contradicted"
 
 
 def summarize(
