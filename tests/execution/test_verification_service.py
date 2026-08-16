@@ -1439,6 +1439,65 @@ async def test_verify_judge_cannot_determine_does_not_fail_run() -> None:
         assert vr.result["judge"]["cannot_determine"] is True
 
 
+async def test_verify_judge_false_with_truncated_context_does_not_fail_run() -> None:
+    """When the file context is truncated and the judge returns 'passed: false',
+    the run must NOT fail. The judge couldn't see the full file — its negative
+    verdict is unreliable. Root failure mode: a function modified at line 500 of
+    a 1000-line file is invisible to the 8 KB window; the judge says 'no such
+    function' → 'passed: false' → run dies despite command exit-0 proving the
+    change works.
+
+    The fix: _run_judge detects the [... TRUNCATED ...] sentinel in the context
+    it built (programmatic, not LLM output) and promotes 'passed: false' to
+    cannot_determine — same non-blocking treatment as when the judge itself
+    says cannot_determine.
+    """
+    import backend.workflow.application.verification_service as _svc_mod
+
+    # A file large enough to hit the per-file byte cap → truncation marker added.
+    big_content = b"def placeholder(): pass\n" + b"x" * _svc_mod._JUDGE_FILE_CONTEXT_BYTES
+    box = FakeBox(files={"src.py": big_content})
+
+    async with memory_session() as session:
+        run = await _make_run(session)
+        work_step, attempt = await _make_step_and_attempt(session, run)
+        contract = VerificationContract(
+            checks=(
+                VerificationCheck(kind="command", command="true"),
+                VerificationCheck(
+                    kind="judge", criteria=("function must accept *args",), rationale=""
+                ),
+            )
+        )
+        # Judge says 'passed: false' — it couldn't see the relevant function
+        # past the truncation cutoff (line 500 in a 1000-line file, for instance).
+        # The demonstration planner is called first (code surface); an empty plan
+        # makes the demo undemonstrable (not a fail).
+        llm = StubLlm(
+            [
+                LoopTurn(content='{"setup": [], "probes": []}'),  # demonstration planner
+                LoopTurn(content='{"passed": false, "reasoning": "function not visible"}'),
+            ]
+        )
+        svc = VerificationService(session=session, llm=llm)
+        vr = await svc.verify(
+            run=run,
+            work_step=work_step,
+            attempt=attempt,
+            contract=contract,
+            box=box,
+            written_paths=["src.py"],
+            final_text="added *args support",
+        )
+        # Run PASSES — truncated context → judge verdict unreliable → cannot_determine.
+        assert vr.outcome is VerificationOutcome.PASSED
+        # The result records the promotion honestly (context_truncated flag).
+        judge = vr.result["judge"]
+        assert judge is not None
+        assert judge.get("cannot_determine") is True
+        assert judge.get("context_truncated") is True
+
+
 async def test_verify_judge_indeterminate_recorded_in_result() -> None:
     """cannot_determine is reflected in the verification result blob and, for
     applicable product runs, drops honesty_grade from A to B. This IS
@@ -1581,8 +1640,7 @@ async def test_judge_file_context_truncation_marker_on_large_diff() -> None:
     import backend.workflow.application.verification_service as _svc_mod
 
     big_diff = (
-        "diff --git a/big.py b/big.py\n"
-        "@@ -1,1 +1,2 @@\n" + ("+" + "x" * 100 + "\n") * 100
+        "diff --git a/big.py b/big.py\n@@ -1,1 +1,2 @@\n" + ("+" + "x" * 100 + "\n") * 100
         # content large enough to exceed the per-file byte cap
     )
     assert len(big_diff) > _svc_mod._JUDGE_FILE_CONTEXT_BYTES

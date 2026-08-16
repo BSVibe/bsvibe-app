@@ -1325,7 +1325,26 @@ class VerificationService:
             )
         except (TimeoutError, asyncio.TimeoutError):
             return {"passed": False, "reasoning": "judge LLM timed out", "raw": ""}
-        return parse_judge_verdict(turn.content)
+        verdict = parse_judge_verdict(turn.content)
+        # When the context fed to the judge was truncated (the [... TRUNCATED ...]
+        # sentinel is set programmatically by _judge_file_context — not LLM output),
+        # a "passed: false" verdict is unreliable: the judge may have missed the
+        # relevant code past the cutoff. Promote it to cannot_determine so a command
+        # that proved the change via exit-0 is not overridden by a judge that never
+        # saw what it is judging. This closes the failure mode where a function
+        # modified at line 500 of a large file is invisible to the 8 KB window and
+        # the judge says "no such function" → run dies despite command exit-0.
+        if (
+            "[... TRUNCATED" in work_block
+            and not verdict.get("cannot_determine")
+            and not verdict.get("passed", True)
+        ):
+            return {
+                "cannot_determine": True,
+                "reasoning": f"context truncated — {verdict.get('reasoning', '')}",
+                "context_truncated": True,
+            }
+        return verdict
 
     async def _judge_file_context(self, written_paths: list[str], box: SandboxSession) -> str:
         """Build file context for the judge.
