@@ -1687,6 +1687,63 @@ def test_judge_prompt_instructs_cannot_determine_for_truncation_marker() -> None
     assert "cannot_determine" in system
 
 
+async def test_judge_false_when_file_content_unreadable_does_not_fail_run() -> None:
+    """When written_paths are declared but all file reads fail (SandboxError),
+    the judge gets no context and its 'false' verdict must NOT block the run.
+    Same principle as truncation-promote: judge couldn't see the code, so a
+    negative verdict is unreliable."""
+
+    class ErrorBox(FakeBox):
+        async def read_file(self, rel_path: str, max_bytes: int) -> bytes:
+            from backend.workflow.infrastructure.sandbox import SandboxError
+
+            raise SandboxError("file not found in sandbox")
+
+        async def exec(self, command: str, *, timeout_s: float, shell: bool = False) -> Any:
+            from backend.workflow.infrastructure.sandbox.protocol import SandboxResult
+
+            self.exec_calls.append(command)
+            # git diff fails (not a git repo) — forces the blob fallback path.
+            if command.startswith("git"):
+                return SandboxResult(
+                    exit_code=128, stdout="", stderr="not a git repo", timed_out=False
+                )
+            # All other commands (including the "true" command check) succeed.
+            return SandboxResult(exit_code=0, stdout="", stderr="", timed_out=False)
+
+    async with memory_session() as session:
+        run = await _make_run(session)
+        work_step, attempt = await _make_step_and_attempt(session, run)
+        contract = VerificationContract(
+            checks=(
+                VerificationCheck(kind="command", command="true"),
+                VerificationCheck(kind="judge", criteria=("function must exist",), rationale=""),
+            )
+        )
+        # Planner first (src.py is a code path), then the judge.
+        llm = StubLlm(
+            [
+                LoopTurn(content='{"setup": [], "probes": []}'),
+                LoopTurn(content='{"passed": false, "reasoning": "nothing visible"}'),
+            ]
+        )
+        svc = VerificationService(session=session, llm=llm)
+        vr = await svc.verify(
+            run=run,
+            work_step=work_step,
+            attempt=attempt,
+            contract=contract,
+            box=ErrorBox(),
+            written_paths=["src.py"],
+            final_text="added function",
+        )
+        assert vr.outcome is VerificationOutcome.PASSED
+        judge = vr.result["judge"]
+        assert judge is not None
+        assert judge.get("cannot_determine") is True
+        assert judge.get("context_truncated") is True
+
+
 # --------------------------------------------------------------------------
 # I3 — scope discipline (flag changed files unrelated to the intent; SURFACE,
 # never block). Gated to a product run with a real worktree (the durable diff).

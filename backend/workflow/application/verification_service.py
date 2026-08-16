@@ -1407,7 +1407,16 @@ class VerificationService:
         joined = "\n\n".join(file_blobs)
         if len(joined) > 12000:
             joined = joined[:12000] + _TRUNCATION_MARKER
-        return joined or "(no file content captured)"
+        if joined:
+            return joined
+        # Files were declared but neither diff nor blob reads succeeded — the
+        # judge has no basis for a definitive verdict. Return a truncation-like
+        # sentinel so the auto-promotion in _run_judge fires for a false verdict,
+        # consistent with the truncation-promote logic (same principle: judge
+        # couldn't see the code, so a negative verdict is unreliable).
+        if written_paths:
+            return "[... TRUNCATED — file content unreadable in this sandbox]"
+        return "(no file content captured)"
 
 
 def parse_judge_verdict(raw: str) -> dict[str, Any]:
