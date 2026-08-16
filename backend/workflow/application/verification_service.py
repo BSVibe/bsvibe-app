@@ -1389,6 +1389,17 @@ class VerificationService:
 
         if diff_parts:
             joined = "\n".join(diff_parts)
+            # Files beyond the first 5 were never attempted — the judge cannot
+            # see them at all. Append a TRUNCATED note so the auto-promotion in
+            # _run_judge fires (false verdict → cannot_determine) when the
+            # relevant code lives in one of the skipped files.
+            if len(written_paths) > 5:
+                skipped = written_paths[5:]
+                names = ", ".join(skipped[:3]) + (", …" if len(skipped) > 3 else "")
+                joined += (
+                    f"\n[... TRUNCATED — {len(skipped)} more file(s) not shown ({names})."
+                    " If the criterion requires code in these files, respond with cannot_determine.]"
+                )
             if len(joined) > 12000:
                 joined = joined[:12000] + _TRUNCATION_MARKER
             return joined
@@ -1405,6 +1416,14 @@ class VerificationService:
                 text += _TRUNCATION_MARKER
             file_blobs.append(f"--- {path} ---\n{text}")
         joined = "\n\n".join(file_blobs)
+        # Same skipped-files note for the blob path.
+        if file_blobs and len(written_paths) > 5:
+            skipped = written_paths[5:]
+            names = ", ".join(skipped[:3]) + (", …" if len(skipped) > 3 else "")
+            joined += (
+                f"\n\n[... TRUNCATED — {len(skipped)} more file(s) not shown ({names})."
+                " If the criterion requires code in these files, respond with cannot_determine.]"
+            )
         if len(joined) > 12000:
             joined = joined[:12000] + _TRUNCATION_MARKER
         if joined:

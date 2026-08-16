@@ -1744,6 +1744,56 @@ async def test_judge_false_when_file_content_unreadable_does_not_fail_run() -> N
         assert judge.get("context_truncated") is True
 
 
+async def test_judge_false_with_many_files_does_not_fail_run() -> None:
+    """When written_paths has more than 5 files, files beyond the 5th are
+    omitted from the judge context entirely (the per-call limit). If the
+    relevant code is in one of the skipped files, the judge may say 'passed:
+    false' without ever seeing it. _judge_file_context now appends a TRUNCATED
+    note for the skipped files so the auto-promotion in _run_judge fires and
+    the run is not wrongly failed."""
+    # 6 small files — all fit within the per-file blob cap, so the only
+    # truncation is the skipped-files note for file6.py.
+    files = {f"file{i}.py": b"def f(): pass\n" for i in range(6)}
+    box = FakeBox(files=files)
+
+    async with memory_session() as session:
+        run = await _make_run(session)
+        work_step, attempt = await _make_step_and_attempt(session, run)
+        contract = VerificationContract(
+            checks=(
+                VerificationCheck(kind="command", command="true"),
+                VerificationCheck(
+                    kind="judge",
+                    criteria=("function must accept *args",),
+                    rationale="",
+                ),
+            )
+        )
+        # Demonstration planner runs first (code surface), then the judge.
+        llm = StubLlm(
+            [
+                LoopTurn(content='{"setup": [], "probes": []}'),  # planner
+                LoopTurn(content='{"passed": false, "reasoning": "function not visible"}'),  # judge
+            ]
+        )
+        svc = VerificationService(session=session, llm=llm)
+        vr = await svc.verify(
+            run=run,
+            work_step=work_step,
+            attempt=attempt,
+            contract=contract,
+            box=box,
+            written_paths=list(files.keys()),
+            final_text="added *args support",
+        )
+        # Run PASSES — the judge only saw 5 of 6 files; the skipped-files
+        # TRUNCATED note triggered promotion of false → cannot_determine.
+        assert vr.outcome is VerificationOutcome.PASSED
+        judge = vr.result["judge"]
+        assert judge is not None
+        assert judge.get("cannot_determine") is True
+
+
 # --------------------------------------------------------------------------
 # I3 — scope discipline (flag changed files unrelated to the intent; SURFACE,
 # never block). Gated to a product run with a real worktree (the durable diff).
