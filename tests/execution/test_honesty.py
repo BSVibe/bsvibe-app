@@ -38,7 +38,6 @@ def test_grade_d_no_gate_declared() -> None:
     assert _grade() == "D"
 
 
-
 def test_grade_none_when_not_applicable() -> None:
     # Non-product / Direct run — the repo-gate ladder does not apply.
     assert _grade(applicable=False, gate_passed=True, demonstrated=True) is None
