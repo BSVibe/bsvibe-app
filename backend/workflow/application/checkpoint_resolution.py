@@ -30,6 +30,10 @@ from typing import TYPE_CHECKING, Any
 import structlog
 from sqlalchemy import select
 
+from backend.common.settle_kinds import (
+    DECISION_RESOLUTION_SETTLE_KIND,
+    NEGATIVE_PATTERN_SETTLE_KIND,
+)
 from backend.workflow.application._checkpoint_shared import (
     ACTION_ACKNOWLEDGE,
     ACTION_DISCARD,
@@ -72,7 +76,6 @@ if TYPE_CHECKING:
 #: reusable knowledge so a future run with similar signals doesn't re-ask the
 #: same question. The kind is stable wire shape; downstream consumers
 #: (retriever, audit) key off it.
-DECISION_RESOLUTION_SETTLE_KIND = "decision_resolution"
 
 #: Payload ``kind`` on the *negative-pattern* settle activity the resolve
 #: endpoint emits when the founder DISCARDS a deliverable with a reason (G1).
@@ -82,7 +85,7 @@ DECISION_RESOLUTION_SETTLE_KIND = "decision_resolution"
 #: surfaces it as "avoid this" guidance for a future run with similar signals —
 #: so a rejected approach is not silently repeated. Additive to (never replaces)
 #: the ``decision_resolution`` row.
-NEGATIVE_PATTERN_SETTLE_KIND = "negative_pattern"
+
 
 #: Cap on the settle-activity ``summary`` text — keeps the absorbed garden
 #: note's body proportionate to the question + answer (mirrors

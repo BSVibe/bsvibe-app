@@ -206,7 +206,11 @@ async def handle_approval_callback(  # noqa: PLR0911 — each return is one secu
             workspace_id=account.workspace_id,
             item_id=item_id,
             actor_id=actor_id,
-            reason=f"declined via {adapter.connector}",
+            # 폰의 거절 버튼은 사유를 받지 않는다. 출처를 사유인 척 넘기면
+            # 그것이 negative pattern 으로 승격돼 모든 신호에 "avoid: declined
+            # via telegram" 이 딸려온다. 사유가 없으면 없는 것이다 — 출처는
+            # ``decided_by`` 가 이미 남긴다.
+            reason="",
         )
         await session.commit()
         await _ack(runner, plugin, adapter, context, parsed, _t("declined_answer", language))
