@@ -209,6 +209,15 @@ def _merge_work_tool_state(*, current: dict[str, Any], incoming: dict[str, Any])
             set(_union(current.get("grounded_paths"), incoming.get("grounded_paths")))
         ),
         "written_paths": _union(current.get("written_paths"), incoming.get("written_paths")),
+        # A-2a 관측치 — 선언 시점에 조회된 패턴. UNION 이 아니라 **교체**다:
+        # 재선언은 그 시점의 패턴이 맞고 오래된 것을 끌고 다니면 안 된다
+        # (레지스트리의 재선언 동작과 같은 규칙). 아무것도 모르는 콜은
+        # 기존 값을 지우지 않는다.
+        "declaration_patterns": (
+            incoming.get("declaration_patterns")
+            if incoming.get("declaration_patterns")
+            else current.get("declaration_patterns")
+        ),
     }
 
 
