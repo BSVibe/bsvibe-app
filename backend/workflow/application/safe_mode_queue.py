@@ -120,12 +120,12 @@ class SafeModeQueue:
         :class:`backend.workflow.application.delivery.dispatcher.DeliveryDispatcher` AFTER the
         commit succeeds.
         """
-        del actor_id  # surface for audit hook (Bundle G integration)
         return await self._transition(
             workspace_id=workspace_id,
             item_id=item_id,
             from_status=SafeModeStatus.PENDING,
             to_status=SafeModeStatus.APPROVED,
+            actor_id=actor_id,
         )
 
     async def deny(
@@ -144,12 +144,15 @@ class SafeModeQueue:
         actually shipped — :class:`backend.delivery.compensation.CompensationHandler` —
         was never carried by a real workflow other than this one fan-out.)
         """
-        del actor_id, reason  # surface for audit hook
         return await self._transition(
             workspace_id=workspace_id,
             item_id=item_id,
             from_status=SafeModeStatus.PENDING,
             to_status=SafeModeStatus.DENIED,
+            actor_id=actor_id,
+            # A blank reason teaches nothing — store NULL rather than "" so a
+            # later reader cannot mistake emptiness for a recorded judgment.
+            reason=reason.strip() or None,
         )
 
     async def mark_delivered(
@@ -302,6 +305,8 @@ class SafeModeQueue:
         from_status: SafeModeStatus,
         to_status: SafeModeStatus,
         stamp_decided: bool = True,
+        actor_id: uuid.UUID | None = None,
+        reason: str | None = None,
     ) -> bool:
         row = await self._repo.get(item_id)
         if row is None or row.workspace_id != workspace_id:
@@ -314,6 +319,9 @@ class SafeModeQueue:
         # that original timestamp rather than overwrite it.
         if stamp_decided:
             row.decided_at = datetime.now(tz=UTC)
+            row.decided_by = actor_id
+        if reason is not None:
+            row.deny_reason = reason
         await self._session.flush()
         return True
 

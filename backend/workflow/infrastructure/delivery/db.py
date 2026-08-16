@@ -12,7 +12,7 @@ from datetime import datetime
 from enum import StrEnum
 from typing import Any
 
-from sqlalchemy import JSON, DateTime, Index, String
+from sqlalchemy import JSON, DateTime, Index, String, Text
 from sqlalchemy import Enum as SAEnum
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -116,6 +116,18 @@ class SafeModeQueueItemRow(DeliveryBase):
         DateTime(timezone=True), nullable=False, default=lambda: datetime.now()
     )
     decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    #: WHO settled it. The row carried ``decided_at`` but never the actor, so a
+    #: founder judgment and a system sweep were indistinguishable after the fact
+    #: — and the decay metric (A-1c) has to tell them apart.
+    decided_by: Mapped[uuid.UUID | None] = mapped_column(nullable=True)
+    #: WHY the founder said no. Previously ``del``-ed at the door
+    #: (``safe_mode_queue.py``: ``del actor_id, reason  # surface for audit hook``)
+    #: against an audit table that has 0 rows in prod — so 91 denials lost their
+    #: reasons. A rejection is the highest-value correction there is (§6: the
+    #: standard the agent violated); it must survive to be knowledge-ized (A-1b).
+    #: ``None`` for an approval and for a reasonless denial — a blank reason
+    #: teaches nothing and must not read as one.
+    deny_reason: Mapped[str | None] = mapped_column(Text(), nullable=True)
 
 
 __all__ = [
