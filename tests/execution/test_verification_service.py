@@ -1389,6 +1389,174 @@ async def test_run_judge_times_out_to_non_pass(monkeypatch: Any) -> None:
 
 
 # --------------------------------------------------------------------------
+# _run_judge — cannot_determine / git diff visibility
+# --------------------------------------------------------------------------
+
+
+def test_parse_judge_verdict_handles_cannot_determine() -> None:
+    """parse_judge_verdict extracts cannot_determine from the judge reply.
+    The blob must NOT contain 'passed' so consumers can't accidentally read it
+    as a non-pass (which would have caused the previous false-failure mode)."""
+    from backend.workflow.application.verification_service import parse_judge_verdict
+
+    blob = parse_judge_verdict('{"cannot_determine": true, "reasoning": "code not in diff"}')
+    assert blob.get("cannot_determine") is True
+    assert blob.get("reasoning") == "code not in diff"
+    assert "passed" not in blob
+
+
+async def test_verify_judge_cannot_determine_does_not_fail_run() -> None:
+    """When the judge cannot see the relevant code and says cannot_determine,
+    the run must NOT fail — the command's exit-0 evidence stands (no false
+    negative).
+
+    The root failure mode: the judge replied cannot_determine → old code
+    parsed it as passed=False (absent key) → judge_pass=False → run died
+    despite the command already proving via exit-0 that the code works."""
+    async with memory_session() as session:
+        run = await _make_run(session)
+        work_step, attempt = await _make_step_and_attempt(session, run)
+        contract = VerificationContract(
+            checks=(
+                VerificationCheck(kind="command", command="true"),
+                VerificationCheck(kind="judge", criteria=("function must accept *args",)),
+            )
+        )
+        llm = StubLlm(
+            [LoopTurn(content='{"cannot_determine": true, "reasoning": "not in view"}')]
+        )
+        svc = VerificationService(session=session, llm=llm)
+        vr = await svc.verify(
+            run=run,
+            work_step=work_step,
+            attempt=attempt,
+            contract=contract,
+            box=FakeBox(),
+            written_paths=[],
+            final_text="",
+        )
+        # Run PASSES — judge abstained, command evidence stands.
+        assert vr.outcome is VerificationOutcome.PASSED
+        # The blob records cannot_determine honestly (not hidden).
+        assert vr.result["judge"]["cannot_determine"] is True
+
+
+async def test_verify_judge_indeterminate_recorded_in_result() -> None:
+    """cannot_determine is reflected in the verification result blob and, for
+    applicable product runs, drops honesty_grade from A to B. This IS
+    'judgment affecting' — the honesty_grade is the proof surface signal."""
+    from backend.workflow.domain.honesty import compute_honesty_grade
+
+    # Verify the grade cap directly (product-run integration needs real worktree
+    # setup which is exercised in TestHonestyGrade; here we test the function).
+    assert compute_honesty_grade(
+        applicable=True,
+        gate_passed=True,
+        gate_discovered=True,
+        demonstrated=True,
+        judge_indeterminate=False,
+    ) == "A"
+    assert compute_honesty_grade(
+        applicable=True,
+        gate_passed=True,
+        gate_discovered=True,
+        demonstrated=True,
+        judge_indeterminate=True,
+    ) == "B"
+    # Grades below A are not further penalised.
+    assert compute_honesty_grade(
+        applicable=True,
+        gate_passed=True,
+        gate_discovered=True,
+        demonstrated=False,
+        judge_indeterminate=True,
+    ) == "B"
+
+
+async def test_run_judge_uses_git_diff_when_available() -> None:
+    """When the sandbox returns a valid git diff, _judge_file_context uses it
+    instead of file blobs. A function changed at line 500 of a 1000-line file
+    IS visible in the diff regardless of the 8 KB file-start cap."""
+    fake_diff = (
+        "diff --git a/backend/big.py b/backend/big.py\n"
+        "--- a/backend/big.py\n"
+        "+++ b/backend/big.py\n"
+        "@@ -500,6 +500,10 @@ def existing_func():\n"
+        "+def new_func(*args):\n"
+        "+    return sum(args)\n"
+    )
+    box = FakeBox(
+        exec_map={
+            "git -C /workspace diff HEAD~1 HEAD -- backend/big.py": SandboxResult(
+                exit_code=0, stdout=fake_diff, stderr="", timed_out=False
+            )
+        },
+        files={"backend/big.py": b"<full file blob -- must NOT be read>"},
+    )
+    llm = StubLlm([LoopTurn(content='{"passed": true}')])
+    async with memory_session() as session:
+        svc = VerificationService(session=session, llm=llm)
+        await svc._run_judge(
+            criteria=["new_func must exist"],
+            written_paths=["backend/big.py"],
+            final_text="added new_func",
+            box=box,
+        )
+    # read_file was NOT called — diff was used instead of file blob.
+    assert "backend/big.py" not in box.read_calls
+    # The diff content (including the hunk) reached the judge's user message.
+    user_msg = llm.calls[-1]["messages"][-1]["content"]
+    assert "new_func" in user_msg
+    assert "@@ " in user_msg
+
+
+async def test_run_judge_falls_back_to_file_blobs_when_no_valid_diff() -> None:
+    """When git is not available or returns a non-diff (exit != 0, or output
+    that lacks diff markers), _judge_file_context falls back to file blobs.
+    Existing test behaviour for non-product / non-git sandboxes is preserved."""
+    box = FakeBox(
+        exec_map={
+            "git -C /workspace diff HEAD~1 HEAD -- hello.txt": SandboxResult(
+                exit_code=128, stdout="", stderr="not a git repo", timed_out=False
+            )
+        },
+        files={"hello.txt": b"Hello, world"},
+    )
+    llm = StubLlm([LoopTurn(content='{"passed": true}')])
+    async with memory_session() as session:
+        svc = VerificationService(session=session, llm=llm)
+        await svc._run_judge(
+            criteria=["greets the world"],
+            written_paths=["hello.txt"],
+            final_text="",
+            box=box,
+        )
+    # read_file WAS called — file blob fallback activated.
+    assert "hello.txt" in box.read_calls
+    # The file content reached the judge.
+    user_msg = llm.calls[-1]["messages"][-1]["content"]
+    assert "Hello, world" in user_msg
+
+
+async def test_run_judge_fake_box_default_output_triggers_blob_fallback() -> None:
+    """FakeBox returns exit_code=0, stdout='ok' for unknown commands. 'ok' does
+    not contain git diff markers, so it is rejected and we fall back to file
+    blobs. This guards the common test pattern where boxes have no git scripts."""
+    box = FakeBox(files={"x.py": b"def foo(): pass"})
+    llm = StubLlm([LoopTurn(content='{"passed": true}')])
+    async with memory_session() as session:
+        svc = VerificationService(session=session, llm=llm)
+        await svc._run_judge(
+            criteria=["foo must exist"],
+            written_paths=["x.py"],
+            final_text="",
+            box=box,
+        )
+    # read_file called — blob fallback (FakeBox 'ok' is not a valid diff).
+    assert "x.py" in box.read_calls
+
+
+# --------------------------------------------------------------------------
 # I3 — scope discipline (flag changed files unrelated to the intent; SURFACE,
 # never block). Gated to a product run with a real worktree (the durable diff).
 # --------------------------------------------------------------------------

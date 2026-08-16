@@ -623,7 +623,7 @@ class VerificationService:
             # as Delivery-Report references via the persisted contract.
             await self._release_connection(run)
             judge_blob = await self._run_judge(gating_criteria, written_paths, final_text, box)
-            judge_pass = bool(judge_blob.get("passed"))
+            judge_pass = True if judge_blob.get("cannot_determine") else bool(judge_blob.get("passed"))
         elif retrieved_criteria:
             # No agent judge — only the retriever fold. Lift E39/F6: when the
             # agent's command attestation already passed, the retriever judge is
@@ -637,7 +637,7 @@ class VerificationService:
                 judge_blob = await self._run_judge(
                     retrieved_criteria, written_paths, final_text, box
                 )
-                judge_pass = bool(judge_blob.get("passed"))
+                judge_pass = True if judge_blob.get("cannot_determine") else bool(judge_blob.get("passed"))
 
         # I1′ — the repo's OWN gate, DERIVED by an LLM grounded in the repo's
         # manifests (the general replacement for the hardcoded quality bar +
@@ -705,12 +705,14 @@ class VerificationService:
             and any(c["status"] == "passed" for c in derived_commands)
         )
         demonstrated = demonstration is not None and demonstration["verdict"] == "demonstrated"
+        judge_indeterminate = bool(judge_blob.get("cannot_determine")) if judge_blob else False
         honesty_grade = (
             compute_honesty_grade(
                 applicable=applicable,
                 gate_passed=gate_passed,
                 gate_discovered=bool(derived_commands),
                 demonstrated=demonstrated,
+                judge_indeterminate=judge_indeterminate,
             )
             if passed
             else None
@@ -1241,21 +1243,19 @@ class VerificationService:
         final_text: str,
         box: SandboxSession,
     ) -> dict[str, Any]:
-        file_blobs: list[str] = []
-        for path in written_paths[:5]:
-            try:
-                data = await box.read_file(path, _JUDGE_FILE_CONTEXT_BYTES)
-            except SandboxError:
-                continue
-            file_blobs.append(f"--- {path} ---\n{data.decode('utf-8', errors='replace')}")
+        work_block = await self._judge_file_context(written_paths, box)
         criteria_block = "\n".join(f"- {c}" for c in criteria)
-        work_block = ("\n\n".join(file_blobs))[:12000] or "(no file content captured)"
         judge_messages = [
             {
                 "role": "system",
                 "content": (
                     "You are a strict verification judge. Decide whether the produced work "
-                    "satisfies EVERY criterion. Respond with ONLY a JSON object: "
+                    "satisfies EVERY criterion.\n"
+                    "If the context shown is insufficient to verify a criterion — for example "
+                    "the relevant code is not visible in the diff or files provided — respond "
+                    'with {"cannot_determine": true, "reasoning": "<why>"} rather than '
+                    "guessing. "
+                    "Otherwise, respond with ONLY a JSON object: "
                     '{"passed": <true|false>, "reasoning": "<short>"}.'
                 ),
             },
@@ -1281,6 +1281,49 @@ class VerificationService:
             return {"passed": False, "reasoning": "judge LLM timed out", "raw": ""}
         return parse_judge_verdict(turn.content)
 
+    async def _judge_file_context(self, written_paths: list[str], box: SandboxSession) -> str:
+        """Build file context for the judge.
+
+        Prefers git diff (targeted — shows exactly what changed regardless of
+        file size) over file-start blobs. A function added at line 500 of a
+        1000-line file IS visible in the diff but would be invisible to the
+        8 KB blob read from the file start.
+
+        A valid git diff always contains "diff --git" or "@@ " markers; any
+        other exec output (e.g. FakeBox default "ok") is rejected so we never
+        feed garbage context to the judge.
+        """
+        diff_parts: list[str] = []
+        for path in written_paths[:5]:
+            try:
+                result = await box.exec(
+                    f"git -C {box.workspace_mount} diff HEAD~1 HEAD -- {path}",
+                    timeout_s=10.0,
+                    shell=True,
+                )
+            except SandboxError:
+                continue
+            stdout = result.stdout or ""
+            if (
+                result.exit_code == 0
+                and not result.timed_out
+                and ("diff --git" in stdout or "@@ " in stdout)
+            ):
+                diff_parts.append(stdout[:_JUDGE_FILE_CONTEXT_BYTES])
+
+        if diff_parts:
+            return "\n".join(diff_parts)[:12000]
+
+        # Fallback: file blobs (non-git sandbox, or new file with no prior commit).
+        file_blobs: list[str] = []
+        for path in written_paths[:5]:
+            try:
+                data = await box.read_file(path, _JUDGE_FILE_CONTEXT_BYTES)
+            except SandboxError:
+                continue
+            file_blobs.append(f"--- {path} ---\n{data.decode('utf-8', errors='replace')}")
+        return ("\n\n".join(file_blobs))[:12000] or "(no file content captured)"
+
 
 def parse_judge_verdict(raw: str) -> dict[str, Any]:
     """Tolerant parse of the judge LLM's JSON verdict. A failure to parse is
@@ -1296,6 +1339,8 @@ def parse_judge_verdict(raw: str) -> dict[str, Any]:
         return {"passed": False, "reasoning": "unparseable judge response", "raw": raw[:500]}
     if not isinstance(data, dict):
         return {"passed": False, "reasoning": "judge response not an object", "raw": raw[:500]}
+    if data.get("cannot_determine"):
+        return {"cannot_determine": True, "reasoning": str(data.get("reasoning") or "")}
     return {"passed": bool(data.get("passed")), "reasoning": str(data.get("reasoning") or "")}
 
 

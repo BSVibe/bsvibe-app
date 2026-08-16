@@ -38,6 +38,21 @@ def test_grade_d_no_gate_declared() -> None:
     assert _grade() == "D"
 
 
+def test_judge_indeterminate_caps_grade_a_to_b() -> None:
+    # When the judge couldn't see the relevant code and said cannot_determine,
+    # grade A (gate + demo) is capped to B — the evidence is weaker, but the
+    # run is NOT failed (command evidence stands from the gate leg).
+    assert _grade(gate_passed=True, gate_discovered=True, demonstrated=True, judge_indeterminate=True) == "B"
+
+
+def test_judge_indeterminate_does_not_change_b_c_d() -> None:
+    # Only A→B; grades already at B, C, D are not further penalised by an
+    # indeterminate judge — there is no lower grade the judge can push them to.
+    assert _grade(gate_passed=True, demonstrated=False, judge_indeterminate=True) == "B"
+    assert _grade(gate_discovered=True, judge_indeterminate=True) == "C"
+    assert _grade(judge_indeterminate=True) == "D"
+
+
 def test_grade_none_when_not_applicable() -> None:
     # Non-product / Direct run — the repo-gate ladder does not apply.
     assert _grade(applicable=False, gate_passed=True, demonstrated=True) is None

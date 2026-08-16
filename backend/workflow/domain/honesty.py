@@ -39,6 +39,7 @@ def compute_honesty_grade(
     gate_passed: bool,
     gate_discovered: bool,
     demonstrated: bool,
+    judge_indeterminate: bool = False,
 ) -> HonestyGrade | None:
     """Grade a PASSING verdict A–D by evidence strength (see module docstring).
 
@@ -46,16 +47,24 @@ def compute_honesty_grade(
     repo diff the ladder is about); ``False`` → ``None`` (ladder N/A).
     ``gate_passed`` — the target's own gate RAN and passed (I1). ``gate_discovered``
     — a gate was found even if it could not run here. ``demonstrated`` — the
-    outcome demonstration observed the intended result (I2)."""
+    outcome demonstration observed the intended result (I2).
+    judge_indeterminate — the LLM judge declared it could not see the relevant
+    code (cannot_determine); the run still passes (command evidence stands) but
+    the maximum attainable grade is B, never A, since the judge verification was
+    incomplete."""
     if not applicable:
         return None
     if gate_passed and demonstrated:
-        return "A"
-    if gate_passed or demonstrated:
-        return "B"
-    if gate_discovered:
-        return "C"
-    return "D"
+        grade: HonestyGrade = "A"
+    elif gate_passed or demonstrated:
+        grade = "B"
+    elif gate_discovered:
+        grade = "C"
+    else:
+        grade = "D"
+    if judge_indeterminate and grade == "A":
+        grade = "B"
+    return grade
 
 
 #: File shapes no command can meaningfully gate — the deliverable IS the prose.
