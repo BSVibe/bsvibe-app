@@ -223,7 +223,11 @@ def register_knowledge_search(registry: ToolRegistry, retriever: Any) -> None:
 
 
 def assemble_run_tool_registry(
-    *, workspace_dir: Path, sandbox: SandboxSession | None, retriever: Any = None
+    *,
+    workspace_dir: Path,
+    sandbox: SandboxSession | None,
+    retriever: Any = None,
+    intent_text: str | None = None,
 ) -> ToolRegistry:
     """The ONE builder of a run's inner ``ToolRegistry`` (INV-7 #1).
 
@@ -233,7 +237,12 @@ def assemble_run_tool_registry(
     itself) plus the ``knowledge_search`` consult, all against the run's SERVER-SIDE worktree +
     sandbox. Worker-only additions (``invoke_skill``, connector actions) are layered on by the
     caller AFTER this returns — see ``RUN_TOOL_INNER_NAMES``."""
-    registry = ToolRegistry(workspace_dir=workspace_dir, sandbox=sandbox)
+    registry = ToolRegistry(
+        workspace_dir=workspace_dir,
+        sandbox=sandbox,
+        retriever=retriever,
+        intent_text=intent_text,
+    )
     register_knowledge_search(registry, retriever)
     return registry
 

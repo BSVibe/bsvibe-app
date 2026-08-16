@@ -109,6 +109,19 @@ async def _retriever_for(run: ExecutionRun, ctx: ToolContext) -> Any:
         return None
 
 
+def _intent_of(run: ExecutionRun) -> str:
+    """The founder's Direction for this run — the stable half of the A-2 signal.
+
+    Mirrors the loop's ``_intent_title`` (payload ``intent_text`` → ``text`` → placeholder,
+    capped): a signal, not the prompt. Duplicated rather than imported because
+    ``_loop_context`` is ``backend.extensions``-tainted and the MCP import contract
+    forbids this context from reaching it — the same reason the work tools inject their
+    loop-owned effects instead of importing them.
+    """
+    payload = run.payload if isinstance(run.payload, dict) else {}
+    return str(payload.get("intent_text") or payload.get("text") or "")[:512]
+
+
 async def build_run_tool_registry(run_id: uuid.UUID, ctx: ToolContext) -> ToolRegistry:
     """Bind the workflow ToolRegistry to ``run_id``'s server-side worktree + sandbox.
 
@@ -124,6 +137,8 @@ async def build_run_tool_registry(run_id: uuid.UUID, ctx: ToolContext) -> ToolRe
         workspace_dir=workspace_dir,
         sandbox=sandbox,
         retriever=await _retriever_for(run, ctx),
+        # A-2 — 두 트랜스포트가 같은 신호를 쓰도록. executor 가 프로덕션 경로다.
+        intent_text=_intent_of(run),
     )
     # The registry's latches (the declared verification contract; the paths the agent grounded
     # itself in) belong to the RUN, not to this per-request object. The in-process loop keeps
