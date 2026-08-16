@@ -20,6 +20,7 @@ from backend.workflow.application._loop_context import (
     _SYSTEM_PROMPT,
     _consume_merge_conflict,
     _initial_user_message,
+    _intent_title,
     _merge_conflict_directive,
     _resumption_messages,
     is_client_attach_run,
@@ -149,7 +150,11 @@ async def drive_loop(  # noqa: PLR0911, PLR0912, PLR0915 — preserved cycle bod
     # their registration code lives in backend.extensions / backend.connectors, which the MCP
     # context is forbidden to import, so they ride the worker path only (see RUN_TOOL_INNER_NAMES).
     registry = assemble_run_tool_registry(
-        workspace_dir=workspace_dir, sandbox=box, retriever=orch._retriever
+        workspace_dir=workspace_dir,
+        sandbox=box,
+        retriever=orch._retriever,
+        # A-2 — 선언 시점 패턴 조회의 신호 절반. 나머지 절반(만진 파일)은 레지스트리가 안다.
+        intent_text=_intent_title(run),
     )
     extra_tool_names = orch._register_invoke_skill_tool(registry)
     connector_tool_names = await orch._register_connector_action_tools(

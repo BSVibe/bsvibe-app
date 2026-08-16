@@ -146,8 +146,23 @@ class ToolRegistry:
     holds the workspace root and stateful denylist enforcement.
     """
 
-    def __init__(self, *, workspace_dir: Path, sandbox: SandboxSession | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        workspace_dir: Path,
+        sandbox: SandboxSession | None = None,
+        retriever: Any = None,
+        intent_text: str | None = None,
+    ) -> None:
         self._root = workspace_dir.resolve()
+        # A-2 — 선언 시점에 워크스페이스의 축적된 패턴을 조회하기 위한 것.
+        # duck-typed (``retrieve_for_signals``) 라 이 모듈은 knowledge 를 import 하지 않는다.
+        self._retriever = retriever
+        # 형님의 Direction. 선언 시점 신호의 절반이다 — 나머지 절반은 지금까지 만진 파일.
+        self._intent_text = intent_text
+        #: 관측 모드(A-2a) — **주입될 뻔한** 패턴. A-2b 가 이것을 응답에 싣는다.
+        #: 지금은 기록만 하며 에이전트가 보는 것은 바뀌지 않는다.
+        self.declaration_patterns: list[str] = []
         # Part B — when a sandbox session is supplied, shell_exec and the
         # file tools run via ``docker exec`` inside the project sandbox
         # instead of host subprocesses. ``None`` keeps the host path.
@@ -699,12 +714,48 @@ class ToolRegistry:
         declared = parse_declared_knowledge(args)
         if declared is not None:
             self.declared_knowledge = declared
+        await self._consult_declaration_patterns()
         n_cmd = len(contract.command_checks)
         n_judge = len(contract.judge_checks)
         return (
             f"verification contract recorded: {n_cmd} command check(s), "
             f"{n_judge} judge check(s). Now write the tests, then implement."
         )
+
+    async def _consult_declaration_patterns(self) -> None:
+        """A-2a — 선언 시점에 이 워크스페이스가 축적한 패턴을 조회한다 (관측 모드).
+
+        redesign §5: *"verify 선언 시점에 BSage retrieval 이 관련된 캡처 패턴을 가져오고,
+        work LLM 이 선언한 것과 함께 verification contract 에 자연스럽게 합류한다."*
+        지금까지 그 지점은 비어 있었다 — B6 는 너무 이르고(의도만), B3 는 너무 늦으며
+        받는 쪽이 **판사**였다(E39 가 옳게 advisory 로 내린 그것).
+
+        신호는 **형님의 Direction + 지금까지 만진 파일**이다. B6 의 의도-only 보다 넓고
+        B3 의 사후 결과물보다 이르다.
+
+        ⚠️ **관측 모드**: 결과를 기록만 하고 응답은 바꾸지 않는다. 실제 런에서 무엇이
+        얼마나 뜨는지 재고 나서 A-2b 가 주입을 켠다.
+
+        검색 실패는 조용히 삼킨다 — 참고 자료가 계약 선언을 막으면 verify-first 게이트가
+        쓰기를 거부해 런 전체가 선다. 본말전도다.
+        """
+        self.declaration_patterns = []
+        if self._retriever is None:
+            return
+        signal_parts = [
+            self._intent_text or "",
+            *sorted(self._grounded_paths),
+            *self._written_paths,
+        ]
+        signals = "\n".join(p for p in signal_parts if p)
+        if not signals.strip():
+            return
+        try:
+            statements = await self._retriever.retrieve_for_signals(signals)
+        except Exception:  # noqa: BLE001 — 참고 자료가 선언을 막으면 안 된다
+            logger.warning("declaration_pattern_consult_failed", exc_info=True)
+            return
+        self.declaration_patterns = [s for s in statements if isinstance(s, str) and s.strip()]
 
     @staticmethod
     def _resolve_shell_timeout(requested: Any) -> float:
