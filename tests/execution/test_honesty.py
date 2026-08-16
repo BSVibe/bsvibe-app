@@ -42,7 +42,10 @@ def test_judge_indeterminate_caps_grade_a_to_b() -> None:
     # When the judge couldn't see the relevant code and said cannot_determine,
     # grade A (gate + demo) is capped to B — the evidence is weaker, but the
     # run is NOT failed (command evidence stands from the gate leg).
-    assert _grade(gate_passed=True, gate_discovered=True, demonstrated=True, judge_indeterminate=True) == "B"
+    assert (
+        _grade(gate_passed=True, gate_discovered=True, demonstrated=True, judge_indeterminate=True)
+        == "B"
+    )
 
 
 def test_judge_indeterminate_does_not_change_b_c_d() -> None:
