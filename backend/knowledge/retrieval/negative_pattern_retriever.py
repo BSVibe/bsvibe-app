@@ -33,7 +33,8 @@ logger = structlog.get_logger(__name__)
 _MAX_PATTERNS = 5
 
 #: Frontmatter ``kind`` marking a garden note as a discard-with-reason rejection.
-_NEGATIVE_KIND = "negative_pattern"
+#: 쓰는 쪽과 공유하는 단일 출처 — 한쪽만 바뀌면 조용히 안 맞는 값이었다.
+from backend.common.settle_kinds import NEGATIVE_PATTERN_SETTLE_KIND as _NEGATIVE_KIND
 
 #: Garden subdir the settle sink writes seedling-maturity notes into. Worst case
 #: after a later promotion is a miss (graceful-empty), never a crash.

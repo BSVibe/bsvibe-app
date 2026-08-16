@@ -209,6 +209,13 @@ async def test_reject_denies_and_never_dispatches() -> None:
         )
         assert handled is True
         assert await _status(session, item_id) is SafeModeStatus.DENIED
+        # 폰의 거절 버튼은 사유를 받지 않는다. 예전에는 출처를 사유인 척
+        # (``declined via telegram``) 넘겼고, A-1b 가 그 문자열을 지식으로
+        # 승격시키면 모든 신호에 "avoid: declined via telegram" 이 딸려온다.
+        # 사유가 없으면 없는 것이다 — 출처는 ``decided_by`` 가 남긴다.
+        row = await session.get(SafeModeQueueItemRow, item_id)
+        assert row is not None
+        assert row.deny_reason is None
     assert dispatcher.calls == []
     assert [a[0] for a in runner.actions] == ["ack", "update"]
 

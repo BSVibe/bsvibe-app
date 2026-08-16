@@ -52,7 +52,8 @@ _MAX_DECISIONS = 5
 #: Frontmatter ``kind`` that marks a garden note as a decision-resolution
 #: settlement (written by the SettleWorker for a ``decision_resolution`` settle
 #: activity from the resolve endpoint).
-_DECISION_KIND = "decision_resolution"
+#: 쓰는 쪽과 공유하는 단일 출처 — 한쪽만 바뀌면 조용히 안 맞는 값이었다.
+from backend.common.settle_kinds import DECISION_RESOLUTION_SETTLE_KIND as _DECISION_KIND
 
 #: Garden subdir the settle sink writes seedling-maturity notes into. The
 #: retriever scans only this subdir — decision-resolution notes start at

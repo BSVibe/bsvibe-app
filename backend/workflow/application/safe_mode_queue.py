@@ -20,6 +20,7 @@ from datetime import UTC, datetime, timedelta
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.common.settle_kinds import NEGATIVE_PATTERN_SETTLE_KIND
 from backend.workflow.domain.repositories import SafeModeQueueRepository
 from backend.workflow.infrastructure.delivery.db import SafeModeQueueItemRow, SafeModeStatus
 from backend.workflow.infrastructure.repositories import SqlAlchemySafeModeQueueRepository
@@ -144,7 +145,8 @@ class SafeModeQueue:
         actually shipped — :class:`backend.delivery.compensation.CompensationHandler` —
         was never carried by a real workflow other than this one fan-out.)
         """
-        return await self._transition(
+        reason_text = reason.strip() or None
+        flipped = await self._transition(
             workspace_id=workspace_id,
             item_id=item_id,
             from_status=SafeModeStatus.PENDING,
@@ -152,8 +154,74 @@ class SafeModeQueue:
             actor_id=actor_id,
             # A blank reason teaches nothing — store NULL rather than "" so a
             # later reader cannot mistake emptiness for a recorded judgment.
-            reason=reason.strip() or None,
+            reason=reason_text,
         )
+        if flipped and reason_text:
+            await self._record_rejection_knowledge(
+                workspace_id=workspace_id, item_id=item_id, actor_id=actor_id, reason=reason_text
+            )
+        return flipped
+
+    async def _record_rejection_knowledge(
+        self,
+        *,
+        workspace_id: uuid.UUID,
+        item_id: uuid.UUID,
+        actor_id: uuid.UUID,
+        reason: str,
+    ) -> None:
+        """A-1b — 거절을 재사용 가능한 negative knowledge 로 남긴다.
+
+        ``checkpoint_resolution`` 의 discard 분기가 이미 쓰는 seam 을 그대로 재사용한다
+        (``settle`` 활동 → SettleWorker → vault → ``NegativePatternRetriever``). 새
+        파이프라인이 아니라 **끊긴 링크 하나**다: 그 분기는 checkpoint 경로에만 있었고
+        실제 거절은 Safe Mode 로 일어난다 (prod 실측 2026-08-16: 거절 91건, 서로 다른
+        런 67개, negative-pattern 행 0개).
+
+        매칭 근거는 형님이 직접 쓴 텍스트뿐이다 — ``reason`` + 런의 ``intent_text``.
+        딜리버러블 요약은 LLM 생성물이라 쓰지 않는다 (``NegativePatternRetriever`` 의
+        *"never an LLM-generated body"* 규율).
+
+        ``run_id`` 없는 항목은 클러스터링 컨텍스트가 없어 조용히 건너뛴다 — 거절 자체는
+        이미 성공했고, 지식화 실패가 형님의 판단을 막아선 안 된다.
+        """
+        import uuid as _uuid  # noqa: PLC0415
+
+        from backend.workflow.domain.verified_deliverable import (  # noqa: PLC0415
+            settle_run_context,
+        )
+        from backend.workflow.infrastructure.db import (  # noqa: PLC0415
+            ExecutionRun,
+            ExecutionRunActivity,
+        )
+
+        row = await self._repo.get(item_id)
+        if row is None or row.run_id is None:
+            return
+        run = await self._session.get(ExecutionRun, row.run_id)
+        if run is None:
+            return
+        self._session.add(
+            ExecutionRunActivity(
+                id=_uuid.uuid4(),
+                run_id=run.id,
+                workspace_id=workspace_id,
+                activity_type="settle",
+                payload={
+                    "kind": NEGATIVE_PATTERN_SETTLE_KIND,
+                    "safe_mode_item_id": str(item_id),
+                    "deliverable_id": str(row.deliverable_id),
+                    "reason": reason,
+                    "resolved_by": str(actor_id),
+                    "resolved_at": datetime.now(tz=UTC).isoformat(),
+                    # 거절은 정직한 형님 신호이지 검증된 코드가 아니다.
+                    "verified": False,
+                    "summary": f"Rejected approach — {reason}"[:2000],
+                    **await settle_run_context(self._session, run),
+                },
+            )
+        )
+        await self._session.flush()
 
     async def mark_delivered(
         self,
