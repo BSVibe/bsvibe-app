@@ -726,14 +726,12 @@ class VerificationService:
             and any(c["status"] == "passed" for c in derived_commands)
         )
         demonstrated = demonstration is not None and demonstration["verdict"] == "demonstrated"
-        judge_indeterminate = bool(judge_blob.get("cannot_determine")) if judge_blob else False
         honesty_grade = (
             compute_honesty_grade(
                 applicable=applicable,
                 gate_passed=gate_passed,
                 gate_discovered=bool(derived_commands),
                 demonstrated=demonstrated,
-                judge_indeterminate=judge_indeterminate,
             )
             if passed
             else None

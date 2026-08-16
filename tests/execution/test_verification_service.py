@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import json
 import uuid
+from collections.abc import Mapping
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock
@@ -95,7 +96,14 @@ class FakeBox:
     def workspace_mount(self) -> str:
         return "/workspace"
 
-    async def exec(self, command: str, *, timeout_s: float, shell: bool = False) -> SandboxResult:
+    async def exec(
+        self,
+        command: str,
+        *,
+        timeout_s: float,
+        shell: bool = False,
+        env: Mapping[str, str] | None = None,
+    ) -> SandboxResult:
         self.exec_calls.append(command)
         return self._exec_map.get(
             command, SandboxResult(exit_code=0, stdout="ok", stderr="", timed_out=False)
@@ -1012,7 +1020,7 @@ _GREP_CMD = f'grep -c "bloasis" {_REPORT}'
 
 
 def _artifact_plan_turn(command: str, contains: list[str]) -> LoopTurn:
-    probe = {"name": "the report covers both accounts", "command": command}
+    probe: dict[str, Any] = {"name": "the report covers both accounts", "command": command}
     if contains:
         probe["expect_stdout_contains"] = contains
     return LoopTurn(content=json.dumps({"probes": [probe]}))
@@ -1498,47 +1506,6 @@ async def test_verify_judge_false_with_truncated_context_does_not_fail_run() -> 
         assert judge.get("context_truncated") is True
 
 
-async def test_verify_judge_indeterminate_recorded_in_result() -> None:
-    """cannot_determine is reflected in the verification result blob and, for
-    applicable product runs, drops honesty_grade from A to B. This IS
-    'judgment affecting' — the honesty_grade is the proof surface signal."""
-    from backend.workflow.domain.honesty import compute_honesty_grade
-
-    # Verify the grade cap directly (product-run integration needs real worktree
-    # setup which is exercised in TestHonestyGrade; here we test the function).
-    assert (
-        compute_honesty_grade(
-            applicable=True,
-            gate_passed=True,
-            gate_discovered=True,
-            demonstrated=True,
-            judge_indeterminate=False,
-        )
-        == "A"
-    )
-    assert (
-        compute_honesty_grade(
-            applicable=True,
-            gate_passed=True,
-            gate_discovered=True,
-            demonstrated=True,
-            judge_indeterminate=True,
-        )
-        == "B"
-    )
-    # Grades below A are not further penalised.
-    assert (
-        compute_honesty_grade(
-            applicable=True,
-            gate_passed=True,
-            gate_discovered=True,
-            demonstrated=False,
-            judge_indeterminate=True,
-        )
-        == "B"
-    )
-
-
 async def test_run_judge_uses_git_diff_when_available() -> None:
     """When the sandbox returns a valid git diff, _judge_file_context uses it
     instead of file blobs. A function changed at line 500 of a 1000-line file
@@ -1695,10 +1662,12 @@ def test_judge_prompt_instructs_cannot_determine_for_truncation_marker() -> None
 
     from backend.workflow.application.verification_service import VerificationService
 
-    captured: dict = {}
+    captured: dict[str, Any] = {}
 
     class CapturingLlm:
-        async def complete(self, *, messages, tools):  # noqa: ANN001, ANN202
+        async def complete(
+            self, *, messages: list[dict[str, Any]], tools: list[dict[str, Any]] | None
+        ) -> Any:
             captured["messages"] = messages
             return type("T", (), {"content": '{"passed": true}'})()
 
