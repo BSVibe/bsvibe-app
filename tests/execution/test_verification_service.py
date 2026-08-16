@@ -1422,9 +1422,7 @@ async def test_verify_judge_cannot_determine_does_not_fail_run() -> None:
                 VerificationCheck(kind="judge", criteria=("function must accept *args",)),
             )
         )
-        llm = StubLlm(
-            [LoopTurn(content='{"cannot_determine": true, "reasoning": "not in view"}')]
-        )
+        llm = StubLlm([LoopTurn(content='{"cannot_determine": true, "reasoning": "not in view"}')])
         svc = VerificationService(session=session, llm=llm)
         vr = await svc.verify(
             run=run,
@@ -1449,28 +1447,37 @@ async def test_verify_judge_indeterminate_recorded_in_result() -> None:
 
     # Verify the grade cap directly (product-run integration needs real worktree
     # setup which is exercised in TestHonestyGrade; here we test the function).
-    assert compute_honesty_grade(
-        applicable=True,
-        gate_passed=True,
-        gate_discovered=True,
-        demonstrated=True,
-        judge_indeterminate=False,
-    ) == "A"
-    assert compute_honesty_grade(
-        applicable=True,
-        gate_passed=True,
-        gate_discovered=True,
-        demonstrated=True,
-        judge_indeterminate=True,
-    ) == "B"
+    assert (
+        compute_honesty_grade(
+            applicable=True,
+            gate_passed=True,
+            gate_discovered=True,
+            demonstrated=True,
+            judge_indeterminate=False,
+        )
+        == "A"
+    )
+    assert (
+        compute_honesty_grade(
+            applicable=True,
+            gate_passed=True,
+            gate_discovered=True,
+            demonstrated=True,
+            judge_indeterminate=True,
+        )
+        == "B"
+    )
     # Grades below A are not further penalised.
-    assert compute_honesty_grade(
-        applicable=True,
-        gate_passed=True,
-        gate_discovered=True,
-        demonstrated=False,
-        judge_indeterminate=True,
-    ) == "B"
+    assert (
+        compute_honesty_grade(
+            applicable=True,
+            gate_passed=True,
+            gate_discovered=True,
+            demonstrated=False,
+            judge_indeterminate=True,
+        )
+        == "B"
+    )
 
 
 async def test_run_judge_uses_git_diff_when_available() -> None:
@@ -1554,6 +1561,103 @@ async def test_run_judge_fake_box_default_output_triggers_blob_fallback() -> Non
         )
     # read_file called — blob fallback (FakeBox 'ok' is not a valid diff).
     assert "x.py" in box.read_calls
+
+
+# --------------------------------------------------------------------------
+# _judge_file_context — truncation markers
+#
+# Root failure mode (2026-08-17): the diff/blob was silently clipped at 8 KB.
+# The judge saw truncated content but had no way to know it was incomplete, so
+# it said {"passed": false} ("I don't see that function") even though the
+# function existed below the cut point — and the run died despite commands
+# passing with exit 0. The fix: append [... TRUNCATED ...] sentinels whenever
+# content is clipped, so the judge answers cannot_determine instead of false.
+# --------------------------------------------------------------------------
+
+
+async def test_judge_file_context_truncation_marker_on_large_diff() -> None:
+    """When a diff is larger than _JUDGE_FILE_CONTEXT_BYTES, the clipped text
+    includes [... TRUNCATED ...] so the judge knows the context was cut."""
+    import backend.workflow.application.verification_service as _svc_mod
+
+    big_diff = (
+        "diff --git a/big.py b/big.py\n"
+        "@@ -1,1 +1,2 @@\n" + ("+" + "x" * 100 + "\n") * 100
+        # content large enough to exceed the per-file byte cap
+    )
+    assert len(big_diff) > _svc_mod._JUDGE_FILE_CONTEXT_BYTES
+
+    box = FakeBox(
+        exec_map={
+            "git -C /workspace diff HEAD~1 HEAD -- big.py": SandboxResult(
+                exit_code=0, stdout=big_diff, stderr="", timed_out=False
+            )
+        },
+    )
+    llm = StubLlm([LoopTurn(content='{"passed": true}')])
+    async with memory_session() as session:
+        svc = VerificationService(session=session, llm=llm)
+        await svc._run_judge(
+            criteria=["big.py must exist"],
+            written_paths=["big.py"],
+            final_text="",
+            box=box,
+        )
+    user_msg = llm.calls[-1]["messages"][-1]["content"]
+    assert "TRUNCATED" in user_msg
+
+
+async def test_judge_file_context_truncation_marker_on_large_file_blob() -> None:
+    """When a file blob is read at exactly the byte cap (indicating the file is
+    at least that large), [... TRUNCATED ...] is appended so the judge knows
+    content may be missing below the cut point."""
+    import backend.workflow.application.verification_service as _svc_mod
+
+    # A file whose content is exactly at the cap — read_file returns max_bytes.
+    big_content = b"x" * _svc_mod._JUDGE_FILE_CONTEXT_BYTES
+    box = FakeBox(files={"src.py": big_content})
+    llm = StubLlm([LoopTurn(content='{"passed": true}')])
+    async with memory_session() as session:
+        svc = VerificationService(session=session, llm=llm)
+        await svc._run_judge(
+            criteria=["src.py must define foo"],
+            written_paths=["src.py"],
+            final_text="",
+            box=box,
+        )
+    user_msg = llm.calls[-1]["messages"][-1]["content"]
+    assert "TRUNCATED" in user_msg
+
+
+def test_judge_prompt_instructs_cannot_determine_for_truncation_marker() -> None:
+    """The judge system prompt must explicitly call out [... TRUNCATED ...] and
+    instruct the judge to respond cannot_determine when the criterion may be in
+    the hidden portion — not to guess false."""
+    import asyncio
+
+    from backend.workflow.application.verification_service import VerificationService
+
+    captured: dict = {}
+
+    class CapturingLlm:
+        async def complete(self, *, messages, tools):  # noqa: ANN001, ANN202
+            captured["messages"] = messages
+            return type("T", (), {"content": '{"passed": true}'})()
+
+    async def _run() -> None:
+        async with memory_session() as session:
+            svc = VerificationService(session=session, llm=CapturingLlm())
+            await svc._run_judge(
+                criteria=["must define foo"],
+                written_paths=[],
+                final_text="",
+                box=FakeBox(),
+            )
+
+    asyncio.get_event_loop().run_until_complete(_run())
+    system = next(m["content"] for m in captured["messages"] if m["role"] == "system")
+    assert "TRUNCATED" in system
+    assert "cannot_determine" in system
 
 
 # --------------------------------------------------------------------------

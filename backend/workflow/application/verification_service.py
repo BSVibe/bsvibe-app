@@ -623,7 +623,9 @@ class VerificationService:
             # as Delivery-Report references via the persisted contract.
             await self._release_connection(run)
             judge_blob = await self._run_judge(gating_criteria, written_paths, final_text, box)
-            judge_pass = True if judge_blob.get("cannot_determine") else bool(judge_blob.get("passed"))
+            judge_pass = (
+                True if judge_blob.get("cannot_determine") else bool(judge_blob.get("passed"))
+            )
         elif retrieved_criteria:
             # No agent judge — only the retriever fold. Lift E39/F6: when the
             # agent's command attestation already passed, the retriever judge is
@@ -637,7 +639,9 @@ class VerificationService:
                 judge_blob = await self._run_judge(
                     retrieved_criteria, written_paths, final_text, box
                 )
-                judge_pass = True if judge_blob.get("cannot_determine") else bool(judge_blob.get("passed"))
+                judge_pass = (
+                    True if judge_blob.get("cannot_determine") else bool(judge_blob.get("passed"))
+                )
 
         # I1′ — the repo's OWN gate, DERIVED by an LLM grounded in the repo's
         # manifests (the general replacement for the hardcoded quality bar +
@@ -1255,6 +1259,9 @@ class VerificationService:
                     "the relevant code is not visible in the diff or files provided — respond "
                     'with {"cannot_determine": true, "reasoning": "<why>"} rather than '
                     "guessing. "
+                    "If you see [... TRUNCATED ...] markers, the file content was cut and "
+                    "some code is hidden. If the criterion requires code that may be in the "
+                    "hidden portion, respond with cannot_determine instead of false. "
                     "Otherwise, respond with ONLY a JSON object: "
                     '{"passed": <true|false>, "reasoning": "<short>"}.'
                 ),
@@ -1292,7 +1299,17 @@ class VerificationService:
         A valid git diff always contains "diff --git" or "@@ " markers; any
         other exec output (e.g. FakeBox default "ok") is rejected so we never
         feed garbage context to the judge.
+
+        Truncation markers — whenever content is clipped (per-file byte cap or
+        the total 12 KB budget), a [... TRUNCATED ...] sentinel is appended so
+        the judge knows the context was cut and can respond cannot_determine
+        instead of making a definitive false judgment about hidden code.
         """
+        _TRUNCATION_MARKER = (
+            "\n[... TRUNCATED — content cut here. If the criterion requires "
+            "code in the hidden portion, respond with cannot_determine.]"
+        )
+
         diff_parts: list[str] = []
         for path in written_paths[:5]:
             try:
@@ -1309,10 +1326,16 @@ class VerificationService:
                 and not result.timed_out
                 and ("diff --git" in stdout or "@@ " in stdout)
             ):
-                diff_parts.append(stdout[:_JUDGE_FILE_CONTEXT_BYTES])
+                clipped = stdout[:_JUDGE_FILE_CONTEXT_BYTES]
+                if len(stdout) > _JUDGE_FILE_CONTEXT_BYTES:
+                    clipped += _TRUNCATION_MARKER
+                diff_parts.append(clipped)
 
         if diff_parts:
-            return "\n".join(diff_parts)[:12000]
+            joined = "\n".join(diff_parts)
+            if len(joined) > 12000:
+                joined = joined[:12000] + _TRUNCATION_MARKER
+            return joined
 
         # Fallback: file blobs (non-git sandbox, or new file with no prior commit).
         file_blobs: list[str] = []
@@ -1321,8 +1344,14 @@ class VerificationService:
                 data = await box.read_file(path, _JUDGE_FILE_CONTEXT_BYTES)
             except SandboxError:
                 continue
-            file_blobs.append(f"--- {path} ---\n{data.decode('utf-8', errors='replace')}")
-        return ("\n\n".join(file_blobs))[:12000] or "(no file content captured)"
+            text = data.decode("utf-8", errors="replace")
+            if len(data) >= _JUDGE_FILE_CONTEXT_BYTES:
+                text += _TRUNCATION_MARKER
+            file_blobs.append(f"--- {path} ---\n{text}")
+        joined = "\n\n".join(file_blobs)
+        if len(joined) > 12000:
+            joined = joined[:12000] + _TRUNCATION_MARKER
+        return joined or "(no file content captured)"
 
 
 def parse_judge_verdict(raw: str) -> dict[str, Any]:
