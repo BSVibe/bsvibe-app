@@ -13,6 +13,7 @@ import uuid
 from datetime import datetime
 from typing import Any
 
+import structlog
 from sqlalchemy import Select, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -20,6 +21,8 @@ from backend.workflow.infrastructure.github.db import (
     GithubMergeWatchRow,
     MergeWatchStatus,
 )
+
+logger = structlog.get_logger(__name__)
 
 # The statuses a poll pass may claim: a PR still waiting on CI, or one flagged
 # for conflict resolution (re-claimed so the poller can re-dispatch the run).
@@ -55,10 +58,41 @@ class GithubMergeWatchRepository:
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
 
-    async def add(self, row: GithubMergeWatchRow) -> None:
-        """Enqueue one PR under auto-merge watch."""
+    async def add(self, row: GithubMergeWatchRow) -> GithubMergeWatchRow | None:
+        """Enqueue one PR under auto-merge watch, or ``None`` if already watched.
+
+        ``(repo, pr_number)`` identifies a pull request for good — GitHub never
+        reuses a number within a repo — so a second row for the same PR is
+        always a duplicate, never a legitimate re-registration.
+
+        One run can deliver more than once (a re-dispatched run lands a second
+        deliverable), and each delivery finds the SAME open pull request. Live:
+        run ``e53e9b5c`` produced two rows for PR #754 six seconds apart, which
+        doubled the polling, put two racers on the same per-repo merge lock, and
+        — once #746 taught the watch to speak when it gives up — told the founder
+        the same thing twice.
+
+        The unique index is the real guarantee; this read is what turns the
+        violation into a calm skip instead of an IntegrityError the caller has
+        to swallow.
+        """
+        existing = await self._session.scalar(
+            select(GithubMergeWatchRow.id).where(
+                GithubMergeWatchRow.repo == row.repo,
+                GithubMergeWatchRow.pr_number == row.pr_number,
+            )
+        )
+        if existing is not None:
+            logger.info(
+                "github_merge_watch_already_watched",
+                repo=row.repo,
+                pr_number=row.pr_number,
+                existing_row_id=str(existing),
+            )
+            return None
         self._session.add(row)
         await self._session.flush()
+        return row
 
     async def claim_due(self, *, now: datetime, batch_size: int) -> list[GithubMergeWatchRow]:
         """Claim up to ``batch_size`` due, claimable rows (``FOR UPDATE SKIP LOCKED``)."""

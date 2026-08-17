@@ -130,8 +130,11 @@ def test_alembic_head_is_connector_last_import():
     # workspace_verify_slots -> safe_mode_decision_reason (``deny_reason`` +
     # ``decided_by`` — the founder's rejection reason was ``del``-ed at the door
     # against an audit table with 0 rows; 91 denials lost their reasons).
+    # safe_mode_decision_reason -> one_pr_one_watch (unique ``(repo, pr_number)``
+    # on ``github_merge_watch`` — a run that delivers twice found the same open
+    # PR and doubled both the polling and the founder's notifications).
     # NOTE revision ids are capped at 32 chars by ``alembic_version.version_num``.
-    assert "safe_mode_decision_reason" in result.stdout
+    assert "one_pr_one_watch" in result.stdout
 
 
 def test_target_metadata_covers_all_bases():
