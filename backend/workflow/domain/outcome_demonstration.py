@@ -286,6 +286,9 @@ def judge_probe(probe: Probe, obs: Observation) -> ProbeStatus:
     missing command/interpreter, or a wrong import path). Not a code defect →
     never a false-fail. ``matched`` — the declared observation was seen.
     ``contradicted`` — the probe ran and the intended result was NOT observed.
+    ``not_seen`` — the probe was planned from truncated source; a mismatch may
+    be the planner’s blind spot, not a deliverable defect. Treated as
+    ``unavailable`` by ``summarize`` (downgrade, never fail).
     """
     if obs.timed_out or obs.exit_code is None:
         return "unavailable"

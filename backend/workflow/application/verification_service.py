@@ -249,7 +249,7 @@ def _extract_json_object(text: str) -> Any:
 
 
 _PLANNER_TRUNCATION_MARKER = (
-    "\n[... TRUNCATED — source cut here. If the task requires code in the "
+    "\n[... TRUNCATED ...] — source cut here. If the task requires code in the "
     "hidden portion, return empty probes rather than guessing.]"
 )
 
@@ -1362,7 +1362,7 @@ class VerificationService:
         instead of making a definitive false judgment about hidden code.
         """
         _TRUNCATION_MARKER = (
-            "\n[... TRUNCATED — content cut here. If the criterion requires "
+            "\n[... TRUNCATED ...] — content cut here. If the criterion requires "
             "code in the hidden portion, respond with cannot_determine.]"
         )
 
@@ -1397,7 +1397,7 @@ class VerificationService:
                 skipped = written_paths[5:]
                 names = ", ".join(skipped[:3]) + (", …" if len(skipped) > 3 else "")
                 joined += (
-                    f"\n[... TRUNCATED — {len(skipped)} more file(s) not shown ({names})."
+                    f"\n[... TRUNCATED ...] — {len(skipped)} more file(s) not shown ({names})."
                     " If the criterion requires code in these files, respond with cannot_determine.]"
                 )
             if len(joined) > 12000:
@@ -1421,7 +1421,7 @@ class VerificationService:
             skipped = written_paths[5:]
             names = ", ".join(skipped[:3]) + (", …" if len(skipped) > 3 else "")
             joined += (
-                f"\n\n[... TRUNCATED — {len(skipped)} more file(s) not shown ({names})."
+                f"\n\n[... TRUNCATED ...] — {len(skipped)} more file(s) not shown ({names})."
                 " If the criterion requires code in these files, respond with cannot_determine.]"
             )
         if len(joined) > 12000:
@@ -1434,7 +1434,7 @@ class VerificationService:
         # consistent with the truncation-promote logic (same principle: judge
         # couldn't see the code, so a negative verdict is unreliable).
         if written_paths:
-            return "[... TRUNCATED — file content unreadable in this sandbox]"
+            return "[... TRUNCATED ...] — file content unreadable in this sandbox"
         return "(no file content captured)"
 
 

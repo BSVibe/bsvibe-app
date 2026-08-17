@@ -302,6 +302,8 @@ def test_the_artifact_prompt_demands_a_declared_observation() -> None:
 # Fix: when the planner was given truncated source (Probe.source_truncated=True),
 # judge_probe returns "not_seen" instead of "contradicted". summarize() treats
 # "not_seen" the same as "unavailable" (downgrade to undemonstrable, not fail).
+# The verification service sets source_truncated=True on every probe when
+# any_source_truncated is detected in _run_outcome_demonstration.
 
 
 def _obs(exit_code: int, stdout: str = "") -> Observation:

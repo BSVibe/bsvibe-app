@@ -1397,7 +1397,7 @@ async def test_run_judge_times_out_to_non_pass(monkeypatch: Any) -> None:
 
 
 # --------------------------------------------------------------------------
-# _run_judge — cannot_determine / git diff visibility
+# _run_judge — cannot_determine / git diff visibility / TRUNCATED auto-promotion
 # --------------------------------------------------------------------------
 
 
