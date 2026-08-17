@@ -79,6 +79,10 @@ logger = structlog.get_logger(__name__)
 # old hardcoded 60s truncated a real test-suite check. Kept for importers.
 VERIFY_TIMEOUT_S = 300.0
 _JUDGE_FILE_CONTEXT_BYTES = 8 * 1024
+# Prefix that _judge_file_context stamps on truncated output. _run_judge
+# detects this prefix to promote a false verdict to cannot_determine — never
+# a literal judgement against code the judge literally could not see.
+_TRUNCATION_SENTINEL = "[... TRUNCATED"
 
 # Hard ceiling on a verify-phase LLM call (the L2 acceptance author + the
 # acceptance judge). ``self._llm`` can be an EXECUTOR account — a chat-shaped
@@ -1326,14 +1330,14 @@ class VerificationService:
         except (TimeoutError, asyncio.TimeoutError):
             return {"passed": False, "reasoning": "judge LLM timed out", "raw": ""}
         verdict = parse_judge_verdict(turn.content)
-        # Truncation promotion: the "[... TRUNCATED" sentinel is set
+        # Truncation promotion: the _TRUNCATION_SENTINEL is set
         # programmatically by _judge_file_context (never by the LLM). When
         # it is present and the verdict is false, the judge may have missed
         # the relevant code past the cutoff. Promote to cannot_determine so
         # a command that proved the change via exit-0 is not overridden by
         # a judge that literally could not see what it was grading.
         if (
-            "[... TRUNCATED" in work_block
+            _TRUNCATION_SENTINEL in work_block
             and not verdict.get("cannot_determine")
             and not verdict.get("passed", True)
         ):

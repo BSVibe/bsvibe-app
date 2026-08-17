@@ -1618,7 +1618,9 @@ async def test_judge_file_context_truncation_marker_on_large_diff() -> None:
             box=box,
         )
     user_msg = llm.calls[-1]["messages"][-1]["content"]
-    assert "TRUNCATED" in user_msg
+    import backend.workflow.application.verification_service as _svc_mod
+
+    assert _svc_mod._TRUNCATION_SENTINEL in user_msg
 
 
 async def test_judge_file_context_truncation_marker_on_large_file_blob() -> None:
@@ -1639,8 +1641,10 @@ async def test_judge_file_context_truncation_marker_on_large_file_blob() -> None
             final_text="",
             box=box,
         )
+    import backend.workflow.application.verification_service as _svc_mod
+
     user_msg = llm.calls[-1]["messages"][-1]["content"]
-    assert "TRUNCATED" in user_msg
+    assert _svc_mod._TRUNCATION_SENTINEL in user_msg
 
 
 def test_judge_prompt_instructs_cannot_determine_for_truncation_marker() -> None:
