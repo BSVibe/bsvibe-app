@@ -275,6 +275,7 @@ def build_agent_execution_deps(
                 workspace_id=run.workspace_id,
                 settings=settings,
                 redis=redis_client,
+                run_id=run.id,  # §C — a question routed to chat is worth seeing
             )
             if chat is None:
                 # A question with no chat model does NOT become work. Falling

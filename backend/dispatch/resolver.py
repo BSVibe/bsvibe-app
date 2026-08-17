@@ -301,6 +301,12 @@ class ModelAccountResolver:
             litellm_model=account.litellm_model,
             timeout_s=spec.default_timeout_s,
         )
+        await self._record_routing_decision(
+            workspace_id=workspace_id,
+            caller_id=caller_id,
+            source=source,
+            account=account,
+        )
         return ResolvedAccount(
             account=account,
             adapter=adapter,
@@ -309,6 +315,80 @@ class ModelAccountResolver:
         )
 
     # ----- internals -----
+
+    async def _record_routing_decision(
+        self,
+        *,
+        workspace_id: uuid.UUID,
+        caller_id: str,
+        source: str,
+        account: ModelAccount,
+    ) -> None:
+        """Leave the route on the run's timeline — drift audit §C.
+
+        The OLD engine wrote this ``activity_type="routing_decision"`` row
+        *"so routing stays glass-box"*; the row never moved here when dispatch
+        took over, so prod has **0** of them while 18% of runs route to a
+        non-default model. structlog is not a founder surface.
+
+        Recorded ONCE per distinct ``(caller_id, source, target)`` per run.
+        ``resolve_for`` runs per LLM call (no cache — a fresh resolver per
+        call), and prod runs reach 24 turns, so an unconditional insert would
+        bury the run's STORY under identical lines. The old path recorded once
+        per run and never faced this. Deduping on the triple keeps the founder's
+        design→opus / impl→sonnet split visible — those are genuinely different
+        answers to "why this model".
+
+        Soft-fail: routing must never break because bookkeeping did.
+        """
+        if self._run_id is None:
+            # chat / rules-compile resolve outside any run. There is no timeline
+            # to write to, and borrowing a run id would corrupt another story.
+            return
+
+        from sqlalchemy import select  # noqa: PLC0415
+
+        from backend.workflow.infrastructure.db import ExecutionRunActivity  # noqa: PLC0415
+
+        try:
+            key = (caller_id, source, account.litellm_model)
+            seen = await self._session.execute(
+                select(ExecutionRunActivity.payload).where(
+                    ExecutionRunActivity.run_id == self._run_id,
+                    ExecutionRunActivity.activity_type == "routing_decision",
+                )
+            )
+            for payload in seen.scalars():
+                if not isinstance(payload, dict):
+                    continue
+                if (
+                    payload.get("caller_id"),
+                    payload.get("source"),
+                    payload.get("target"),
+                ) == key:
+                    return
+
+            self._session.add(
+                ExecutionRunActivity(
+                    id=uuid.uuid4(),
+                    run_id=self._run_id,
+                    workspace_id=workspace_id,
+                    activity_type="routing_decision",
+                    payload={
+                        "caller_id": caller_id,
+                        "source": source,
+                        "target": account.litellm_model,
+                        "provider": account.provider,
+                    },
+                )
+            )
+            await self._session.flush()
+        except Exception:  # noqa: BLE001
+            logger.warning(
+                "routing_decision_activity_failed",
+                run_id=str(self._run_id),
+                exc_info=True,
+            )
 
     async def _resolve_intent_classifier(self) -> IntentClassifier | None:
         """Lazily build the classifier (once), or return the injected one. Only
