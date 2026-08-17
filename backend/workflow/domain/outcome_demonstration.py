@@ -165,7 +165,7 @@ class ProbeResult:
     ``timed_out`` directly as top-level fields.  Used by probe tests and new
     internal code::
 
-        ProbeResult(probe=p, status="matched", stdout="42\n", exit_code=0)
+        ProbeResult(probe=p, status="matched", stdout="42\\n", exit_code=0)
 
     **Nested (legacy)** — callers pass an ``Observation`` object.  All existing
     code that already does ``ProbeResult(probe=p, observation=obs, status=s)``
@@ -289,7 +289,7 @@ def judge_probe(probe: Probe, obs: Observation) -> ProbeStatus:
     never a false-fail. ``matched`` — the declared observation was seen.
     ``contradicted`` — the probe ran and the intended result was NOT observed.
     ``not_seen`` — the probe was planned from truncated source; a mismatch may
-    be the planner’s blind spot, not a deliverable defect. Treated as
+    be the planner's blind spot, not a deliverable defect. Treated as
     ``unavailable`` by ``summarize`` (downgrade, never fail).
     """
     if obs.timed_out or obs.exit_code is None:
@@ -362,8 +362,8 @@ def drop_unasserted(plan: DemonstrationPlan) -> DemonstrationPlan:
     run's six probes were unfalsifiable and the grade could not tell.
 
     So a declared expectation is required: either a substring that must appear,
-    or ``expect_exit_zero=False`` (a command that must FAIL is falsifiable — it
-    is contradicted by succeeding). ``setup`` is untouched: it is preparation,
+    or ``expect_exit_zero=False`` (a command that must FAIL is falsifiable —
+    it is contradicted by succeeding). ``setup`` is untouched: it is preparation,
     never asserted.
 
     Dropping can only WEAKEN a verdict (fewer probes → at most ``undemonstrable``),

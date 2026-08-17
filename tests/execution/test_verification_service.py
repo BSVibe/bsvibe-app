@@ -1414,8 +1414,9 @@ def test_parse_judge_verdict_handles_cannot_determine() -> None:
 
 
 async def test_verify_judge_cannot_determine_does_not_fail_run() -> None:
-    """When the judge says cannot_determine (couldn't see the code), the run
-    must NOT fail — the command's exit-0 evidence stands.
+    """When the judge says cannot_determine (couldn't see the code, e.g.
+    truncated context), the run must NOT fail — the command's exit-0
+    evidence stands.
 
     Root failure mode (now fixed): judge replied cannot_determine → old code
     read it as passed=False (absent key) → judge_pass=False → run died even

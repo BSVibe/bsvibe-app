@@ -641,8 +641,9 @@ class VerificationService:
             await self._release_connection(run)
             judge_blob = await self._run_judge(gating_criteria, written_paths, final_text, box)
             # cannot_determine → pass: the judge abstained (couldn't see the
-            # code). The command check already proved the change works; the
-            # judge's uncertainty must not override that evidence.
+            # relevant code — truncated context or missing file). Command
+            # evidence already proved the change works; judge uncertainty
+            # must not override that.
             judge_pass = (
                 True if judge_blob.get("cannot_determine") else bool(judge_blob.get("passed"))
             )
@@ -659,7 +660,9 @@ class VerificationService:
                 judge_blob = await self._run_judge(
                     retrieved_criteria, written_paths, final_text, box
                 )
-                # cannot_determine → pass: same rule as the gating path above.
+                # cannot_determine → pass: same rule as the gating path.
+                # Blind judge (truncated context) must never override
+                # command evidence.
                 judge_pass = (
                     True if judge_blob.get("cannot_determine") else bool(judge_blob.get("passed"))
                 )
@@ -1336,12 +1339,12 @@ class VerificationService:
         # saw what it is judging. This closes the failure mode where a function
         # modified at line 500 of a large file is invisible to the 8 KB window and
         # the judge says "no such function" → run dies despite command exit-0.
-        # Truncation promotion: when the context we built contains a
-        # "[... TRUNCATED" sentinel (set here, not by the LLM), the judge may
-        # have missed the relevant code past the cutoff. A "passed: false"
-        # verdict in that state is unreliable — promote it to cannot_determine
-        # so a command that proved the change via exit-0 is not overridden by a
-        # judge that never saw what it is judging.
+        # Truncation promotion: the "[... TRUNCATED" sentinel is set
+        # programmatically by _judge_file_context (never by the LLM). When
+        # it is present and the verdict is false, the judge may have missed
+        # the relevant code past the cutoff. Promote to cannot_determine so
+        # a command that proved the change via exit-0 is not overridden by
+        # a judge that literally could not see what it was grading.
         if (
             "[... TRUNCATED" in work_block
             and not verdict.get("cannot_determine")
@@ -1357,19 +1360,21 @@ class VerificationService:
     async def _judge_file_context(self, written_paths: list[str], box: SandboxSession) -> str:
         """Build file context for the judge.
 
-        Prefers git diff (targeted — shows exactly what changed regardless of
-        file size) over file-start blobs. A function added at line 500 of a
-        1000-line file IS visible in the diff but would be invisible to the
-        8 KB blob read from the file start.
+        Strategy — git diff first, blob fallback:
 
-        A valid git diff always contains "diff --git" or "@@ " markers; any
-        other exec output (e.g. FakeBox default "ok") is rejected so we never
-        feed garbage context to the judge.
+        1. **git diff** (preferred): shows exactly what changed regardless of
+           file size. A function modified at line 500 of a 1000-line file IS
+           visible in the diff but invisible to an 8 KB blob read from the
+           file start. A valid diff always contains "diff --git" or "@@ ".
+        2. **blob fallback**: used when git diff is unavailable (non-git
+           sandbox, new file with no prior commit). Reads from the file start
+           up to ``_JUDGE_FILE_CONTEXT_BYTES``.
 
         Truncation markers — whenever content is clipped (per-file byte cap or
-        the total 12 KB budget), a [... TRUNCATED ...] sentinel is appended so
-        the judge knows the context was cut and can respond cannot_determine
-        instead of making a definitive false judgment about hidden code.
+        the total 12 KB budget), a ``[... TRUNCATED ...]`` sentinel is appended
+        so the judge knows the context was cut and can respond
+        ``cannot_determine`` instead of making a definitive false judgment about
+        hidden code (the root failure this closes).
         """
         _TRUNCATION_MARKER = (
             "\n[... TRUNCATED ...] — content cut here. If the criterion requires "
