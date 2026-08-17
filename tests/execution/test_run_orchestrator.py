@@ -2182,7 +2182,11 @@ def test_verification_sentence_counts_matched_probes_ko() -> None:
         },
     }
     summary = _compose_verified_summary(
-        run, "narration", ["backend/math.py"], verdict_result, language="ko"  # type: ignore[arg-type]
+        run,
+        "narration",
+        ["backend/math.py"],
+        verdict_result,
+        language="ko",  # type: ignore[arg-type]
     )
     assert "결과 시연됨 (1개 프로브)." in summary
     assert "Outcome" not in summary
@@ -2221,7 +2225,11 @@ def test_verification_sentence_gate_plus_probes_combined() -> None:
         },
     }
     summary = _compose_verified_summary(
-        run, "narration", ["backend/result.py"], verdict_result, language="ko"  # type: ignore[arg-type]
+        run,
+        "narration",
+        ["backend/result.py"],
+        verdict_result,
+        language="ko",  # type: ignore[arg-type]
     )
     detail = _shipped_detail(summary)
     # The phone notification must mention both gate checks and probes.
