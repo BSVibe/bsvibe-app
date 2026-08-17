@@ -63,7 +63,7 @@ const LEGACY_STAGE_RULE = {
   id: "33333333-3333-3333-3333-333333333333",
   name: "design → opus",
   source_text: null,
-  caller_id: "workflow.agent_loop.plan",
+  caller_id: "workflow.agent_loop.act",
   conditions: [],
 };
 
@@ -170,8 +170,8 @@ describe("Run-routing surface (Lift N5 — 2-column NL condition + model)", () =
     render(<RunRoutingRules />);
     const list = await screen.findByRole("list", { name: /Routing rules/i });
     // caller_id-based legacy rule → the localized stage label, never blank / raw id.
-    await waitFor(() => expect(within(list).getByText("Design & planning")).toBeInTheDocument());
-    expect(within(list).queryByText("workflow.agent_loop.plan")).not.toBeInTheDocument();
+    await waitFor(() => expect(within(list).getByText("Implementation")).toBeInTheDocument());
+    expect(within(list).queryByText("workflow.agent_loop.act")).not.toBeInTheDocument();
   });
 
   it("hides is_default rules (the default is the picker above)", async () => {
@@ -296,13 +296,13 @@ describe("Run-routing surface (Lift N5 — 2-column NL condition + model)", () =
     global.fetch = routedFetch([LEGACY_STAGE_RULE]) as unknown as typeof fetch;
     render(<RunRoutingRules />);
     const list = await screen.findByRole("list");
-    await waitFor(() => expect(within(list).getByText("Design & planning")).toBeInTheDocument());
+    await waitFor(() => expect(within(list).getByText("Implementation")).toBeInTheDocument());
 
     await userEvent.click(within(list).getByRole("button", { name: /^Edit$/i }));
 
     const input = screen.getByLabelText(/^Condition$/i) as HTMLInputElement;
     expect(input.value).not.toBe("");
-    expect(input.value).toBe("Design & planning");
+    expect(input.value).toBe("Implementation");
   });
 
   it("deletes a rule after confirm → DELETE", async () => {

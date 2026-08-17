@@ -1,7 +1,7 @@
 """Caller registry — the single source of truth for ``caller_id`` (Lift E1).
 
 A *caller* is any code site that invokes an LLM through the dispatch
-mechanism: knowledge ingest's compile pass, an agent-loop plan/act turn,
+mechanism: knowledge ingest's compile pass, an agent-loop act turn,
 the frame stage, a judge, the canonicalization extractor, etc. Each one
 declares an opaque, stable ``caller_id`` plus the adapter methods it
 requires. The resolver matches the ``caller_id`` against the user's
@@ -31,7 +31,6 @@ from dataclasses import dataclass, field
 
 __all__ = [
     "CALLER_AGENT_LOOP_ACT",
-    "CALLER_AGENT_LOOP_PLAN",
     "CALLER_CHAT_COMPLETIONS",
     "CALLER_FRAME",
     "CALLER_JUDGE",
@@ -108,8 +107,6 @@ CALLER_KNOWLEDGE_QUERY = "knowledge.query"
 CALLER_KNOWLEDGE_CANONICALIZATION = "knowledge.canonicalization"
 #: Frame stage — cheap completion that classifies the run + matches a skill.
 CALLER_FRAME = "workflow.frame"
-#: Agent loop plan turn (heavy reasoning step).
-CALLER_AGENT_LOOP_PLAN = "workflow.agent_loop.plan"
 #: Agent loop act turn (tool-emitting step).
 CALLER_AGENT_LOOP_ACT = "workflow.agent_loop.act"
 #: Judge / verifier turn for executor verification path.
@@ -183,19 +180,6 @@ KNOWN_CALLERS: dict[str, CallerSpec] = {
         # Run-drive caller — the AgentWorker re-polls this run, so on
         # saturation the adapter yields back (raises immediately) instead of
         # blocking the shared worker for up to 30 min.
-        yield_on_saturation=True,
-    ),
-    CALLER_AGENT_LOOP_PLAN: CallerSpec(
-        caller_id=CALLER_AGENT_LOOP_PLAN,
-        required_methods=frozenset({"chat"}),
-        description=(
-            "Agent loop plan turn — heavy reasoning step that decides the next "
-            "action without emitting tool calls."
-        ),
-        # 10 min (Lift E14) — planning over a big repo pulls lots of
-        # context. The 5 min ceiling (E9) was tight for non-trivial repos.
-        default_timeout_s=600.0,
-        # Run-drive caller — yields back on saturation (see CALLER_FRAME).
         yield_on_saturation=True,
     ),
     CALLER_AGENT_LOOP_ACT: CallerSpec(

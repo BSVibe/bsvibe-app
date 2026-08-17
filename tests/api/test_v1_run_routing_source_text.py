@@ -221,14 +221,14 @@ async def test_create_from_complexity_source_text(
 # Stage source_text → caller_id rule
 # ---------------------------------------------------------------------------
 async def test_create_from_stage_source_text(client, seeded, monkeypatch) -> None:
-    _stub_compile(monkeypatch, CompiledCondition(caller_id="workflow.agent_loop.plan"))
+    _stub_compile(monkeypatch, CompiledCondition(caller_id="workflow.settle.extract"))
     r = await client.post(
         "/api/v1/run-routing",
         json={"name": "design → opus", "source_text": "설계 단계", "target": "opus"},
     )
     assert r.status_code == 201, r.text
     body = r.json()
-    assert body["caller_id"] == "workflow.agent_loop.plan"
+    assert body["caller_id"] == "workflow.settle.extract"
     assert body["conditions"] == []
     assert body["source_text"] == "설계 단계"
 
@@ -425,7 +425,7 @@ async def test_patch_caller_still_works_and_keeps_source_text_null(client, seede
     created = (
         await client.post(
             "/api/v1/run-routing",
-            json={"name": "s", "caller_id": "workflow.agent_loop.plan", "target": "opus"},
+            json={"name": "s", "caller_id": "workflow.settle.extract", "target": "opus"},
         )
     ).json()
     r = await client.patch(

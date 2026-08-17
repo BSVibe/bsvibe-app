@@ -217,7 +217,7 @@ async def test_apply_default_sets_workspace_default(
 
 async def test_apply_caller_creates_rule(maker, workspace_id, account_id, seeded) -> None:
     proposal = ApplyProposal(
-        name="design → opus", target="opus", caller_id="workflow.agent_loop.plan"
+        name="design → opus", target="opus", caller_id="workflow.settle.extract"
     )
     async with maker() as s:
         await apply_proposals(
@@ -234,7 +234,7 @@ async def test_apply_caller_creates_rule(maker, workspace_id, account_id, seeded
             .all()
         )
         assert len(rules) == 1
-        assert rules[0].caller_id == "workflow.agent_loop.plan"
+        assert rules[0].caller_id == "workflow.settle.extract"
         assert rules[0].conditions == []
 
 

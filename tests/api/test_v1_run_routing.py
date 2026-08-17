@@ -55,7 +55,7 @@ async def test_compile_returns_proposals(client, monkeypatch) -> None:
         return [
             {
                 "name": "design → opus",
-                "caller_id": "workflow.agent_loop.plan",
+                "caller_id": "workflow.settle.extract",
                 "target": "opus",
                 "priority": 10,
                 "is_default": False,
@@ -69,7 +69,7 @@ async def test_compile_returns_proposals(client, monkeypatch) -> None:
     )
     assert r.status_code == 200, r.text
     body = r.json()
-    assert body["proposals"][0]["caller_id"] == "workflow.agent_loop.plan"
+    assert body["proposals"][0]["caller_id"] == "workflow.settle.extract"
     assert body["proposals"][0]["target"] == "opus"
 
     # Dry-run — nothing was created.
@@ -115,7 +115,7 @@ async def test_list_callers_returns_known_callers(client) -> None:
     assert r.status_code == 200
     body = r.json()
     ids = {c["caller_id"] for c in body}
-    assert "workflow.agent_loop.plan" in ids
+    assert "workflow.settle.extract" in ids
     assert "chat.completions" in ids
     assert all(c["description"] for c in body)
 
@@ -235,7 +235,7 @@ async def test_update_rule_changes_caller_and_target(client) -> None:
     """PATCH edits an existing rule's caller/target (Lift 6 — edit feature)."""
     body = {
         "name": "r",
-        "caller_id": "workflow.agent_loop.plan",
+        "caller_id": "workflow.settle.extract",
         "target": "opus",
     }
     created = (await client.post("/api/v1/run-routing", json=body)).json()

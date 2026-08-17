@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 
 describe("routing caller labels", () => {
   it("maps known callers to a label key", () => {
-    expect(callerLabelKey("workflow.agent_loop.plan")).toBe("plan");
+    expect(callerLabelKey("workflow.agent_loop.act")).toBe("act");
     expect(callerLabelKey("knowledge.ingest")).toBe("ingest");
     expect(callerLabelKey("chat.completions")).toBe("chat");
     expect(callerLabelKey("nope")).toBeNull();
@@ -18,8 +18,8 @@ describe("routing caller labels", () => {
   });
 
   it("callerDisplay localizes known callers via the translator", () => {
-    const t = (key: string) => (key === "callerLabels.plan" ? "설계·계획" : key);
-    expect(callerDisplay("workflow.agent_loop.plan", t)).toBe("설계·계획");
+    const t = (key: string) => (key === "callerLabels.act" ? "구현" : key);
+    expect(callerDisplay("workflow.agent_loop.act", t)).toBe("구현");
   });
 
   it("callerDisplay falls back to the skill name then the raw id", () => {
