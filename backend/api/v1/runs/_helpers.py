@@ -8,6 +8,7 @@ endpoint uses every helper here; the list / single-row reads use ``_intent_of``.
 from __future__ import annotations
 
 import uuid
+from collections.abc import Callable
 from datetime import datetime
 from typing import Any
 
@@ -115,6 +116,55 @@ def _tool_call_label(payload: dict[str, Any]) -> str | None:
     return f"Delivered {shown}"
 
 
+_ROUTING_SOURCE_REASONS = {
+    "explicit_rule": "your routing rule",
+    "workspace_default": "workspace default",
+}
+
+
+def _routing_decision_label(payload: dict[str, Any]) -> str | None:
+    """ "Which model ran this step, and why" — the glass-box line.
+
+    ``None`` for a payload we cannot state honestly (missing model, or a
+    ``source`` we have no words for). A half-sentence explains nothing, and
+    inventing a reason would be worse than staying silent.
+    """
+    target = payload.get("target")
+    source = payload.get("source")
+    if not isinstance(target, str) or not target:
+        return None
+    reason = _ROUTING_SOURCE_REASONS.get(source) if isinstance(source, str) else None
+    if reason is None:
+        return None
+    caller = payload.get("caller_id")
+    if isinstance(caller, str) and caller:
+        return f"Routed {caller} to {target} ({reason})"
+    return f"Routed to {target} ({reason})"
+
+
+def _verify_label(payload: dict[str, Any]) -> str | None:
+    """The verifier's verdict in one calm phrase."""
+    outcome = payload.get("outcome")
+    if isinstance(outcome, str):
+        return _VERIFY_LABELS.get(outcome, "Ran verification")
+    return "Ran verification"
+
+
+# Types whose label needs the payload, and types whose label is a constant.
+# A dict rather than an if-chain so adding the next activity type is one line
+# and never re-trips the return-count lint.
+_LABEL_BUILDERS: dict[str, Callable[[dict[str, Any]], str | None]] = {
+    "tool_call": _tool_call_label,
+    "verify": _verify_label,
+    "routing_decision": _routing_decision_label,
+}
+
+_STATIC_LABELS = {
+    "settle": "Settled into knowledge",
+    "error": "Hit a problem",
+}
+
+
 def _activity_label(activity_type: str, payload: dict[str, Any]) -> str | None:
     """A short human label for one ExecutionRunActivity, or ``None`` when the
     event is low-signal noise the founder timeline should skip.
@@ -126,19 +176,11 @@ def _activity_label(activity_type: str, payload: dict[str, Any]) -> str | None:
     reads are defensive so a malformed row degrades to a calm label / drop rather
     than 500ing the response model.
     """
-    if activity_type == "tool_call":
-        return _tool_call_label(payload)
-    if activity_type == "verify":
-        outcome = payload.get("outcome")
-        if isinstance(outcome, str):
-            return _VERIFY_LABELS.get(outcome, "Ran verification")
-        return "Ran verification"
-    if activity_type == "settle":
-        return "Settled into knowledge"
-    if activity_type == "error":
-        return "Hit a problem"
+    builder = _LABEL_BUILDERS.get(activity_type)
+    if builder is not None:
+        return builder(payload)
     # llm_turn and any unknown / low-signal type are skipped.
-    return None
+    return _STATIC_LABELS.get(activity_type)
 
 
 def _partial_deliverable(row: Deliverable) -> RunPartialDeliverable:

@@ -275,6 +275,10 @@ def build_agent_execution_deps(
                 workspace_id=run.workspace_id,
                 settings=settings,
                 redis=redis_client,
+                # Drift audit §C — this IS a routing decision worth seeing: the
+                # question went to a chat model instead of the coding executor.
+                # The run is right here, so the timeline can say so.
+                run_id=run.id,
             )
             if chat is None:
                 # A question with no chat model does NOT become work. Falling
