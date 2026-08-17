@@ -102,6 +102,33 @@ def _gate_command_results(result: Mapping[str, Any]) -> list[dict[str, Any]]:
     ]
 
 
+def _gate_command_sentence(passed: list[Any], commands: list[Any], ko: bool) -> str:
+    """Single sentence summarising how many gate/declared commands passed."""
+    if ko:
+        return f"검증: {len(passed)}개 확인 통과."
+    labels: list[str] = []
+    for cmd in commands:
+        text = str(cmd.get("command") or "").lower()
+        for needle, label in _CHECK_CATEGORY_LABELS:
+            if needle in text and label not in labels:
+                labels.append(label)
+    noun = "check" if len(passed) == 1 else "checks"
+    sentence = f"Verified: {len(passed)} {noun} passed"
+    if labels:
+        sentence += f" ({', '.join(labels)})"
+    return sentence + "."
+
+
+def _probe_sentence(matched_probes: list[Any], ko: bool) -> str:
+    """Sentence fragment for matched outcome-demonstration probes."""
+    if not matched_probes:
+        return ""
+    if ko:
+        return f"결과 시연됨 ({len(matched_probes)}개 프로브)."
+    probe_noun = "probe" if len(matched_probes) == 1 else "probes"
+    return f"Outcome demonstrated ({len(matched_probes)} {probe_noun})."
+
+
 def _verification_sentence(result: Mapping[str, Any] | None, language: str = "en") -> str:
     """A deterministic, LLM-free sentence describing what the verifier proved.
 
@@ -115,26 +142,29 @@ def _verification_sentence(result: Mapping[str, Any] | None, language: str = "en
     """
     if result is None:
         return ""
-    commands = result.get("command_results") or _gate_command_results(result)
+    # derived_gate is authoritative when present (repo manifests drove it);
+    # command_results is advisory once a gate ran. Prefer gate commands so the
+    # count reflects what actually decided the verdict, not what the agent declared.
+    commands = _gate_command_results(result) or result.get("command_results") or []
     passed = [c for c in commands if c.get("passed")]
     ko = language == "ko"
 
     pieces: list[str] = []
     if passed:
-        if ko:
-            pieces.append(f"검증: {len(passed)}개 확인 통과.")
-        else:
-            labels: list[str] = []
-            for cmd in commands:
-                text = str(cmd.get("command") or "").lower()
-                for needle, label in _CHECK_CATEGORY_LABELS:
-                    if needle in text and label not in labels:
-                        labels.append(label)
-            noun = "check" if len(passed) == 1 else "checks"
-            sentence = f"Verified: {len(passed)} {noun} passed"
-            if labels:
-                sentence += f" ({', '.join(labels)})"
-            pieces.append(sentence + ".")
+        pieces.append(_gate_command_sentence(passed, commands, ko))
+
+    # Count matched demonstration probes: they are independent behavioral checks
+    # that actually ran in the sandbox and are not covered by the gate count above.
+    demonstration = result.get("outcome_demonstration") or {}
+    matched_probes = [
+        p
+        for p in (demonstration.get("probes") or [])
+        if isinstance(p, dict) and p.get("status") == "matched"
+    ]
+    probe_s = _probe_sentence(matched_probes, ko)
+    if probe_s:
+        pieces.append(probe_s)
+
     weak = _weak_evidence_sentence(result, ko)
     judge = result.get("judge") or {}
     if judge.get("passed") and not weak:
