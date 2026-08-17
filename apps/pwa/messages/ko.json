@@ -522,7 +522,6 @@
         "save": "저장",
         "saving": "저장 중…",
         "callerLabels": {
-          "plan": "설계·계획",
           "act": "구현",
           "frame": "요청 분류",
           "judge": "검증",

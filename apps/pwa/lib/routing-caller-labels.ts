@@ -1,13 +1,12 @@
 /** Human, localizable labels for dispatch caller_ids.
  *
  * The routing form/list should never show a raw technical id like
- * `workflow.agent_loop.plan` to the founder. Each known caller maps to a short
+ * `workflow.agent_loop.act` to the founder. Each known caller maps to a short
  * label key under `settings.models.routing.callerLabels` (translated per locale);
  * skill callers show their bare name; anything unknown falls back to the raw id.
  */
 
 const KEY_BY_CALLER: Record<string, string> = {
-  "workflow.agent_loop.plan": "plan",
   "workflow.agent_loop.act": "act",
   "workflow.frame": "frame",
   "workflow.judge": "judge",

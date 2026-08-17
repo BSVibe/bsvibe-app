@@ -6,7 +6,6 @@ import pytest
 
 from backend.dispatch.caller_registry import (
     CALLER_AGENT_LOOP_ACT,
-    CALLER_AGENT_LOOP_PLAN,
     CALLER_FRAME,
     CALLER_JUDGE,
     CALLER_KNOWLEDGE_CANONICALIZATION,
@@ -24,7 +23,6 @@ from backend.dispatch.caller_registry import (
 class TestStaticRegistry:
     def test_known_callers_include_core_sites(self) -> None:
         assert CALLER_KNOWLEDGE_INGEST in KNOWN_CALLERS
-        assert CALLER_AGENT_LOOP_PLAN in KNOWN_CALLERS
         assert CALLER_FRAME in KNOWN_CALLERS
 
     def test_every_spec_requires_chat(self) -> None:
@@ -115,11 +113,6 @@ class TestPerCallerTimeout:
         spec = KNOWN_CALLERS[CALLER_KNOWLEDGE_QUERY]
         assert spec.default_timeout_s == 90.0
 
-    def test_agent_loop_plan_ten_minutes(self) -> None:
-        """Plan turn over a big repo can pull lots of context."""
-        spec = KNOWN_CALLERS[CALLER_AGENT_LOOP_PLAN]
-        assert spec.default_timeout_s == 600.0
-
     def test_agent_loop_act_uses_settings_default(self) -> None:
         """Tool-emitting agent turn genuinely runs `claude --print` — leaves the
         override None so it inherits ``settings.executor_task_timeout_s`` (raised
@@ -152,9 +145,6 @@ class TestYieldOnSaturation:
     def test_frame_yields_on_saturation(self) -> None:
         assert KNOWN_CALLERS[CALLER_FRAME].yield_on_saturation is True
 
-    def test_agent_loop_plan_yields_on_saturation(self) -> None:
-        assert KNOWN_CALLERS[CALLER_AGENT_LOOP_PLAN].yield_on_saturation is True
-
     def test_agent_loop_act_yields_on_saturation(self) -> None:
         assert KNOWN_CALLERS[CALLER_AGENT_LOOP_ACT].yield_on_saturation is True
 
@@ -166,9 +156,9 @@ class TestYieldOnSaturation:
         assert KNOWN_CALLERS[CALLER_KNOWLEDGE_CANONICALIZATION].yield_on_saturation is False
 
     def test_only_run_drive_callers_yield(self) -> None:
-        """Exactly the three run-drive callers carry the flag; nothing else."""
+        """Exactly the run-drive callers carry the flag; nothing else."""
         yielders = {spec.caller_id for spec in KNOWN_CALLERS.values() if spec.yield_on_saturation}
-        assert yielders == {CALLER_FRAME, CALLER_AGENT_LOOP_PLAN, CALLER_AGENT_LOOP_ACT}
+        assert yielders == {CALLER_FRAME, CALLER_AGENT_LOOP_ACT}
 
 
 class TestListAllCallers:

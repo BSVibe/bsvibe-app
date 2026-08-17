@@ -93,7 +93,7 @@ async def test_compile_returns_proposals(
         return [
             {
                 "name": "design → opus",
-                "caller_id": "workflow.agent_loop.plan",
+                "caller_id": "workflow.settle.extract",
                 "target": "opus",
                 "priority": 10,
                 "is_default": False,
@@ -112,7 +112,7 @@ async def test_compile_returns_proposals(
         out = await registry.call_tool(
             "bsvibe_run_routing_rules_compile", {"text": "설계는 opus"}, ctx
         )
-    assert out["proposals"][0]["caller_id"] == "workflow.agent_loop.plan"
+    assert out["proposals"][0]["caller_id"] == "workflow.settle.extract"
     assert out["proposals"][0]["target"] == "opus"
 
 
@@ -128,7 +128,7 @@ async def test_update_rule_changes_caller_and_target(
         )
         created = await registry.call_tool(
             "bsvibe_run_routing_rules_create",
-            {"name": "r", "caller_id": "workflow.agent_loop.plan", "target": "opus"},
+            {"name": "r", "caller_id": "workflow.settle.extract", "target": "opus"},
             ctx,
         )
         updated = await registry.call_tool(
@@ -155,7 +155,7 @@ async def test_create_lists_delete_round_trip(db, workspace_id, user_id, registr
             "bsvibe_run_routing_rules_create",
             {
                 "name": "design-to-codex",
-                "caller_id": "workflow.agent_loop.plan",
+                "caller_id": "workflow.settle.extract",
                 "priority": 10,
                 "is_default": False,
                 "target": "executor/codex",
@@ -163,7 +163,7 @@ async def test_create_lists_delete_round_trip(db, workspace_id, user_id, registr
             ctx,
         )
     assert created["name"] == "design-to-codex"
-    assert created["caller_id"] == "workflow.agent_loop.plan"
+    assert created["caller_id"] == "workflow.settle.extract"
     assert created["target"] == "executor/codex"
     assert created["is_default"] is False
     assert created["is_active"] is True
@@ -346,7 +346,7 @@ async def test_create_rejects_unknown_field_in_conditions(
                 "bsvibe_run_routing_rules_create",
                 {
                     "name": "bad-field",
-                    "caller_id": "workflow.agent_loop.plan",
+                    "caller_id": "workflow.settle.extract",
                     "priority": 1,
                     "is_default": False,
                     "target": "executor/codex",
@@ -375,7 +375,7 @@ async def test_create_accepts_absorbed_content_signal_field(
             "bsvibe_run_routing_rules_create",
             {
                 "name": "big-context-to-opus",
-                "caller_id": "workflow.agent_loop.plan",
+                "caller_id": "workflow.settle.extract",
                 "priority": 1,
                 "is_default": False,
                 "target": "executor/codex",
@@ -400,7 +400,7 @@ async def test_create_rejects_duplicate_name(db, workspace_id, user_id, registry
             "bsvibe_run_routing_rules_create",
             {
                 "name": "dup",
-                "caller_id": "workflow.agent_loop.plan",
+                "caller_id": "workflow.settle.extract",
                 "priority": 1,
                 "target": "executor/codex",
             },
@@ -439,7 +439,7 @@ async def test_create_requires_write_scope(db, workspace_id, user_id, registry, 
                 "bsvibe_run_routing_rules_create",
                 {
                     "name": "x",
-                    "caller_id": "workflow.agent_loop.plan",
+                    "caller_id": "workflow.settle.extract",
                     "priority": 1,
                     "target": "executor/codex",
                 },
@@ -468,7 +468,7 @@ async def test_list_workspace_scoped(db, workspace_id, user_id, registry, seeded
             "bsvibe_run_routing_rules_create",
             {
                 "name": "mine",
-                "caller_id": "workflow.agent_loop.plan",
+                "caller_id": "workflow.settle.extract",
                 "priority": 1,
                 "target": "executor/codex",
             },
@@ -518,7 +518,7 @@ async def test_list_returns_priority_ascending(db, workspace_id, user_id, regist
             session=s,
         )
         for name, caller, prio in (
-            ("rule-high-prio", "workflow.agent_loop.plan", 50),
+            ("rule-high-prio", "workflow.settle.extract", 50),
             ("rule-low-prio", "workflow.agent_loop.act", 5),
             ("rule-mid-prio", "skill.review", 25),
         ):

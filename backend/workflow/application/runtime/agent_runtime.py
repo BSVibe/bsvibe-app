@@ -34,6 +34,7 @@ from backend.config import Settings, get_settings
 from backend.dispatch.caller_registry import (
     CALLER_AGENT_LOOP_ACT,
     CALLER_FRAME,
+    CALLER_KNOWLEDGE_QUERY,
 )
 from backend.extensions.plugin.base import PluginMeta
 from backend.extensions.skill.loader import SkillLoader
@@ -262,16 +263,15 @@ def build_agent_execution_deps(
             else client_workspace_dir
         )
 
-        # L10 (#5) — Knowledge-only short-circuit (B9b): a frame-classified
-        # ``knowledge_only`` ask is a CHAT answer, no engineering work. It MUST
-        # use a chat model (``CALLER_FRAME``), NOT the act-stage executor — a
-        # coding-agent CLI fails a chat prompt ("executor chat task … exit 1",
-        # [[bsvibe-executor-subprocess-too-heavy]]). Resolve chat BEFORE act so a
-        # question never touches the executor.
+        # L10 (#5) — Knowledge-only short-circuit (B9b): a ``knowledge_only`` ask
+        # is a CHAT answer, not engineering work — it MUST use a chat model, never
+        # the act-stage executor ([[bsvibe-executor-subprocess-too-heavy]]), and is
+        # resolved BEFORE act. CALLER_KNOWLEDGE_QUERY is the spec written FOR this
+        # site (90 s, the founder waits); it stood unwired behind FRAME's 300 s.
         if _is_knowledge_only(run):
             chat = await resolve_via_caller(
                 session,
-                caller_id=CALLER_FRAME,
+                caller_id=CALLER_KNOWLEDGE_QUERY,
                 workspace_id=run.workspace_id,
                 settings=settings,
                 redis=redis_client,

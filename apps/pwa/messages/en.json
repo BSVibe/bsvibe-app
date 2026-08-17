@@ -522,7 +522,6 @@
         "save": "Save",
         "saving": "Saving…",
         "callerLabels": {
-          "plan": "Design & planning",
           "act": "Implementation",
           "frame": "Request triage",
           "judge": "Verification",
