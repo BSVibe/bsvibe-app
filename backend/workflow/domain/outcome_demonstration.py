@@ -155,22 +155,52 @@ class Observation:
 
 @dataclass(frozen=True)
 class ProbeResult:
-    """A probe judged against its observation."""
+    """A probe judged against its observation.
+
+    Accepts two construction styles for backward compatibility:
+
+    **Flat (new)** — callers pass ``stdout``, ``stderr``, ``exit_code`` and
+    ``timed_out`` directly as top-level fields.  Used by probe tests and new
+    internal code::
+
+        ProbeResult(probe=p, status="matched", stdout="42\n", exit_code=0)
+
+    **Nested (legacy)** — callers pass an ``Observation`` object.  All existing
+    code that already does ``ProbeResult(probe=p, observation=obs, status=s)``
+    continues to work unchanged because ``observation`` accepts a keyword arg::
+
+        ProbeResult(probe=probe, observation=obs, status=judge_probe(probe, obs))
+    """
 
     probe: Probe
-    observation: Observation
     status: ProbeStatus
+    # Legacy nested struct — kept so existing callers compile without change.
+    # ``to_dict`` prefers flat fields when ``observation`` is absent.
+    observation: Observation | None = None
+    stdout: str = ""
+    stderr: str = ""
+    exit_code: int | None = None
+    timed_out: bool = False
 
     def to_dict(self) -> dict[str, Any]:
-        obs = self.observation
-        tail = "\n".join(o for o in (obs.stdout, obs.stderr) if o)[-2000:]
+        if self.observation is not None:
+            stdout = self.observation.stdout
+            stderr = self.observation.stderr
+            exit_code = self.observation.exit_code
+            timed_out = self.observation.timed_out
+        else:
+            stdout = self.stdout
+            stderr = self.stderr
+            exit_code = self.exit_code
+            timed_out = self.timed_out
+        tail = "\n".join(o for o in (stdout, stderr) if o)[-2000:]
         return {
             "name": self.probe.name,
             "command": self.probe.command,
             "expect_exit_zero": self.probe.expect_exit_zero,
             "expect_stdout_contains": list(self.probe.expect_stdout_contains),
-            "exit_code": obs.exit_code,
-            "timed_out": obs.timed_out,
+            "exit_code": exit_code,
+            "timed_out": timed_out,
             "status": self.status,
             "output": tail,
         }
@@ -273,24 +303,39 @@ def judge_probe(probe: Probe, obs: Observation) -> ProbeStatus:
 
 
 def summarize(
-    results: list[ProbeResult] | tuple[ProbeResult, ...],
+    plan_or_results: Any,
+    results: Any = None,
     *,
     contradiction_fails: bool = True,
 ) -> DemonstrationVerdict:
     """Fold probe results into one demonstration verdict.
 
-    ANY contradiction ⇒ ``failed`` (the deliverable was exercised and did not
-    produce the intended result). Otherwise, at least one ``matched`` ⇒
-    ``demonstrated``. No matches (empty plan or all unavailable) ⇒
-    ``undemonstrable`` (best-effort: downgrade, do not fail).
+    Accepts two calling styles:
 
-    ``contradiction_fails=False`` — the ADVISORY fold, for a surface where the
-    planner declared its expectations WITHOUT seeing what it grades (the
-    artifact surface, :func:`artifact_planner_messages`). There a miss means the
-    planner guessed at wording the author was free to choose, not that the work
-    is wrong, so it downgrades to ``undemonstrable`` instead. Such a surface can
-    only EARN evidence, never manufacture a failure."""
-    statuses = [r.status for r in results]
+    **Classic** (``results`` only)::
+
+        summarize([r1, r2])
+        summarize(results, contradiction_fails=False)
+
+    **Plan-first** (for probe tests that need the plan context)::
+
+        summarize(plan, [r1, r2])
+
+    The plan is accepted but currently ignored in the verdict; the verdict is
+    determined solely by the statuses in ``results``.
+
+    ANY ``contradicted`` ⇒ ``failed``.  At least one ``matched`` ⇒
+    ``demonstrated``.  All others (``unavailable``, ``not_seen``, empty) ⇒
+    ``undemonstrable`` (best-effort downgrade, never a fail).
+
+    ``contradiction_fails=False`` — the ADVISORY fold used for the artifact
+    surface, where the planner guessed at wording it never saw. A miss there
+    downgrades to ``undemonstrable`` instead of failing."""
+    if isinstance(plan_or_results, DemonstrationPlan):
+        actual: list[ProbeResult] = list(results) if results is not None else []
+    else:
+        actual = list(plan_or_results)
+    statuses = [r.status for r in actual]
     if contradiction_fails and "contradicted" in statuses:
         return "failed"
     if "matched" in statuses:
