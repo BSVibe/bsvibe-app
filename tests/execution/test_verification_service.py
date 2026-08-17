@@ -1414,13 +1414,15 @@ def test_parse_judge_verdict_handles_cannot_determine() -> None:
 
 
 async def test_verify_judge_cannot_determine_does_not_fail_run() -> None:
-    """When the judge cannot see the relevant code and says cannot_determine,
-    the run must NOT fail — the command's exit-0 evidence stands (no false
-    negative).
+    """When the judge says cannot_determine (couldn't see the code), the run
+    must NOT fail — the command's exit-0 evidence stands.
 
-    The root failure mode: the judge replied cannot_determine → old code
-    parsed it as passed=False (absent key) → judge_pass=False → run died
-    despite the command already proving via exit-0 that the code works."""
+    Root failure mode (now fixed): judge replied cannot_determine → old code
+    read it as passed=False (absent key) → judge_pass=False → run died even
+    though the command proved via exit-0 that the change works.
+
+    Fix: _run_judge's gating path wires cannot_determine → judge_pass = True.
+    The retrieved path has the same wiring (both paths must honour it)."""
     async with memory_session() as session:
         run = await _make_run(session)
         work_step, attempt = await _make_step_and_attempt(session, run)
@@ -1448,17 +1450,18 @@ async def test_verify_judge_cannot_determine_does_not_fail_run() -> None:
 
 
 async def test_verify_judge_false_with_truncated_context_does_not_fail_run() -> None:
-    """When the file context is truncated and the judge returns 'passed: false',
-    the run must NOT fail. The judge couldn't see the full file — its negative
-    verdict is unreliable. Root failure mode: a function modified at line 500 of
-    a 1000-line file is invisible to the 8 KB window; the judge says 'no such
-    function' → 'passed: false' → run dies despite command exit-0 proving the
-    change works.
+    """When the judge says 'passed: false' but context was truncated, the run
+    must NOT fail. The judge couldn't see the full file so its verdict is
+    unreliable.
 
-    The fix: _run_judge detects the [... TRUNCATED ...] sentinel in the context
-    it built (programmatic, not LLM output) and promotes 'passed: false' to
-    cannot_determine — same non-blocking treatment as when the judge itself
-    says cannot_determine.
+    Root failure mode: a function at line 500 of a 1000-line file is invisible
+    to the 8 KB blob read; judge says 'no such function' → run dies even though
+    command exit-0 proved the change works.
+
+    Fix: _run_judge detects the [... TRUNCATED ...] sentinel it programmatically
+    inserted into the context and promotes 'passed: false' to cannot_determine.
+    Same non-blocking treatment as when the judge explicitly says
+    cannot_determine. The result records context_truncated=True for auditability.
     """
     import backend.workflow.application.verification_service as _svc_mod
 

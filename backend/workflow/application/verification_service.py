@@ -640,6 +640,9 @@ class VerificationService:
             # as Delivery-Report references via the persisted contract.
             await self._release_connection(run)
             judge_blob = await self._run_judge(gating_criteria, written_paths, final_text, box)
+            # cannot_determine → pass: the judge abstained (couldn't see the
+            # code). The command check already proved the change works; the
+            # judge's uncertainty must not override that evidence.
             judge_pass = (
                 True if judge_blob.get("cannot_determine") else bool(judge_blob.get("passed"))
             )
@@ -656,6 +659,7 @@ class VerificationService:
                 judge_blob = await self._run_judge(
                     retrieved_criteria, written_paths, final_text, box
                 )
+                # cannot_determine → pass: same rule as the gating path above.
                 judge_pass = (
                     True if judge_blob.get("cannot_determine") else bool(judge_blob.get("passed"))
                 )
@@ -1332,6 +1336,12 @@ class VerificationService:
         # saw what it is judging. This closes the failure mode where a function
         # modified at line 500 of a large file is invisible to the 8 KB window and
         # the judge says "no such function" → run dies despite command exit-0.
+        # Truncation promotion: when the context we built contains a
+        # "[... TRUNCATED" sentinel (set here, not by the LLM), the judge may
+        # have missed the relevant code past the cutoff. A "passed: false"
+        # verdict in that state is unreliable — promote it to cannot_determine
+        # so a command that proved the change via exit-0 is not overridden by a
+        # judge that never saw what it is judging.
         if (
             "[... TRUNCATED" in work_block
             and not verdict.get("cannot_determine")
