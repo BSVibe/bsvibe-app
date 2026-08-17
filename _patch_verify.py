@@ -1,2 +1,8 @@
-# placeholder — 이전 런에서 남겨진 중간 아티팩트.
-# 실제 구현은 backend/workflow/application/verification_service.py 에 있음.
+"""_judge_file_context: git diff priority, blob fallback, TRUNCATED markers.
+
+Changes in verification_service._judge_file_context:
+- tries git diff HEAD~1 HEAD first (shows only the changed lines)
+- falls back to file blobs when diff is empty or fails
+- appends "[... TRUNCATED ...]" sentinel when content exceeds the byte cap
+- returns sentinel string when all reads fail so auto-promotion fires
+"""

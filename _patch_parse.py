@@ -1,2 +1,6 @@
-# placeholder — 이전 런에서 남겨진 중간 아티팩트.
-# 실제 구현은 backend/workflow/domain/outcome_demonstration.py 에 있음.
+"""Probe schema fix: source_truncated field and not_seen status.
+
+Changes in outcome_demonstration.Probe:
+- source_truncated: bool = False — marks probes planned from truncated source
+- judge_probe returns "not_seen" instead of "contradicted" when source_truncated=True
+"""

@@ -106,11 +106,7 @@ class Probe:
     command: str
     expect_exit_zero: bool = True
     expect_stdout_contains: tuple[str, ...] = ()
-    #: True when the planner was given truncated source for this file.
-    #: A contradiction from a truncated-source probe is ``not_seen`` (the
-    #: planner's blind spot) rather than a genuine deliverable defect —
-    #: ``judge_probe`` returns ``"not_seen"`` instead of ``"contradicted"``
-    #: so ``summarize`` downgrades to ``undemonstrable`` rather than failing.
+    #: True when the planner's source was truncated; contradiction → ``not_seen`` not ``contradicted``.
     source_truncated: bool = False
 
     def to_dict(self) -> dict[str, Any]:
@@ -301,11 +297,6 @@ def judge_probe(probe: Probe, obs: Observation) -> ProbeStatus:
     stdout_ok = all(s in combined for s in probe.expect_stdout_contains)
     if exit_ok and stdout_ok:
         return "matched"
-    # source_truncated=True: the planner authored this probe from incomplete
-    # source (file was cut at the read cap). Its expectations may target code
-    # it never saw, so a mismatch means "planner couldn't verify" (not_seen),
-    # NOT "deliverable is broken" (contradicted). summarize treats not_seen
-    # the same as unavailable — downgrade to undemonstrable, never fail.
     return "not_seen" if probe.source_truncated else "contradicted"
 
 

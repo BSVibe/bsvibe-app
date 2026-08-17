@@ -1414,16 +1414,10 @@ def test_parse_judge_verdict_handles_cannot_determine() -> None:
 
 
 async def test_verify_judge_cannot_determine_does_not_fail_run() -> None:
-    """When the judge says cannot_determine (couldn't see the code, e.g.
-    truncated context), the run must NOT fail — the command's exit-0
-    evidence stands.
+    """cannot_determine → judge_pass=True in both gating and retrieved paths.
 
-    Root failure mode (now fixed): judge replied cannot_determine → old code
-    read it as passed=False (absent key) → judge_pass=False → run died even
-    though the command proved via exit-0 that the change works.
-
-    Fix: _run_judge's gating path wires cannot_determine → judge_pass = True.
-    The retrieved path has the same wiring (both paths must honour it)."""
+    Fix: judge uncertainty (truncated context, code not in view) must not
+    override command evidence that already proved the change works."""
     async with memory_session() as session:
         run = await _make_run(session)
         work_step, attempt = await _make_step_and_attempt(session, run)
@@ -1451,19 +1445,10 @@ async def test_verify_judge_cannot_determine_does_not_fail_run() -> None:
 
 
 async def test_verify_judge_false_with_truncated_context_does_not_fail_run() -> None:
-    """When the judge says 'passed: false' but context was truncated, the run
-    must NOT fail. The judge couldn't see the full file so its verdict is
-    unreliable.
+    """Truncated context + judge passed=false → promoted to cannot_determine; run must pass.
 
-    Root failure mode: a function at line 500 of a 1000-line file is invisible
-    to the 8 KB blob read; judge says 'no such function' → run dies even though
-    command exit-0 proved the change works.
-
-    Fix: _run_judge detects the [... TRUNCATED ...] sentinel it programmatically
-    inserted into the context and promotes 'passed: false' to cannot_determine.
-    Same non-blocking treatment as when the judge explicitly says
-    cannot_determine. The result records context_truncated=True for auditability.
-    """
+    _run_judge detects the [... TRUNCATED ...] sentinel it programmatically
+    inserted and promotes the false verdict so it does not override command evidence."""
     import backend.workflow.application.verification_service as _svc_mod
 
     # A file large enough to hit the per-file byte cap → truncation marker added.

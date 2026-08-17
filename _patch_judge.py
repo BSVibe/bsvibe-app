@@ -1,2 +1,7 @@
-# placeholder — 이전 런에서 남겨진 중간 아티팩트.
-# 실제 구현은 backend/workflow/application/verification_service.py 에 있음.
+"""Judge-visibility fix: cannot_determine wiring and TRUNCATED promotion.
+
+Changes in verification_service._run_judge:
+- gating path: judge_pass = (True if judge_blob.get("cannot_determine") else ...)
+- retrieved path: same cannot_determine → True wiring
+- TRUNCATED promotion: "[... TRUNCATED" in work_block + passed=false → cannot_determine
+"""

@@ -640,10 +640,7 @@ class VerificationService:
             # as Delivery-Report references via the persisted contract.
             await self._release_connection(run)
             judge_blob = await self._run_judge(gating_criteria, written_paths, final_text, box)
-            # cannot_determine → pass: the judge abstained (couldn't see the
-            # relevant code — truncated context or missing file). Command
-            # evidence already proved the change works; judge uncertainty
-            # must not override that.
+            # cannot_determine → pass: judge uncertainty must not override command evidence.
             judge_pass = (
                 True if judge_blob.get("cannot_determine") else bool(judge_blob.get("passed"))
             )
@@ -660,9 +657,7 @@ class VerificationService:
                 judge_blob = await self._run_judge(
                     retrieved_criteria, written_paths, final_text, box
                 )
-                # cannot_determine → pass: same rule as the gating path.
-                # Blind judge (truncated context) must never override
-                # command evidence.
+                # cannot_determine → pass (same as gating path).
                 judge_pass = (
                     True if judge_blob.get("cannot_determine") else bool(judge_blob.get("passed"))
                 )
@@ -1331,14 +1326,6 @@ class VerificationService:
         except (TimeoutError, asyncio.TimeoutError):
             return {"passed": False, "reasoning": "judge LLM timed out", "raw": ""}
         verdict = parse_judge_verdict(turn.content)
-        # When the context fed to the judge was truncated (the [... TRUNCATED ...]
-        # sentinel is set programmatically by _judge_file_context — not LLM output),
-        # a "passed: false" verdict is unreliable: the judge may have missed the
-        # relevant code past the cutoff. Promote it to cannot_determine so a command
-        # that proved the change via exit-0 is not overridden by a judge that never
-        # saw what it is judging. This closes the failure mode where a function
-        # modified at line 500 of a large file is invisible to the 8 KB window and
-        # the judge says "no such function" → run dies despite command exit-0.
         # Truncation promotion: the "[... TRUNCATED" sentinel is set
         # programmatically by _judge_file_context (never by the LLM). When
         # it is present and the verdict is false, the judge may have missed
