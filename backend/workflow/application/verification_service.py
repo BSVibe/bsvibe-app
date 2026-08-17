@@ -48,6 +48,7 @@ from backend.workflow.domain.outcome_demonstration import (
     DemonstrationOutcome,
     DemonstrationPlan,
     Observation,
+    Probe,
     ProbeResult,
     artifact_planner_messages,
     drop_unasserted,
@@ -78,6 +79,10 @@ logger = structlog.get_logger(__name__)
 # old hardcoded 60s truncated a real test-suite check. Kept for importers.
 VERIFY_TIMEOUT_S = 300.0
 _JUDGE_FILE_CONTEXT_BYTES = 8 * 1024
+# Prefix that _judge_file_context stamps on truncated output. _run_judge
+# detects this prefix to promote a false verdict to cannot_determine — never
+# a literal judgement against code the judge literally could not see.
+_TRUNCATION_SENTINEL = "[... TRUNCATED"
 
 # Hard ceiling on a verify-phase LLM call (the L2 acceptance author + the
 # acceptance judge). ``self._llm`` can be an EXECUTOR account — a chat-shaped
@@ -247,10 +252,26 @@ def _extract_json_object(text: str) -> Any:
         return None
 
 
+_PLANNER_TRUNCATION_MARKER = (
+    "\n[... TRUNCATED ...] — source cut here. If the task requires code in the "
+    "hidden portion, return empty probes rather than guessing.]"
+)
+
+
 def _demonstration_planner_messages(
     intent: str, sources: list[tuple[str, str]]
 ) -> list[dict[str, str]]:
-    blob = "\n\n".join(f"# {p}\n{src}" for p, src in sources)[:12000]
+    parts = []
+    for path, src in sources:
+        # len(src) may undercount UTF-8 bytes slightly, but anything close to
+        # the read cap was probably clipped — the marker helps the planner
+        # notice and return empty probes instead of guessing.
+        if len(src.encode("utf-8", errors="replace")) >= _SOURCE_CTX_BYTES:
+            src = src + _PLANNER_TRUNCATION_MARKER
+        parts.append(f"# {path}\n{src}")
+    blob = "\n\n".join(parts)
+    if len(blob) > 12000:
+        blob = blob[:12000] + _PLANNER_TRUNCATION_MARKER
     py_imports = [p for p, _ in sources if p.endswith(".py")]
     hints = (
         "\nFor a Python module, import it by its dotted path, e.g.:\n"
@@ -623,7 +644,10 @@ class VerificationService:
             # as Delivery-Report references via the persisted contract.
             await self._release_connection(run)
             judge_blob = await self._run_judge(gating_criteria, written_paths, final_text, box)
-            judge_pass = bool(judge_blob.get("passed"))
+            # cannot_determine → pass: judge uncertainty must not override command evidence.
+            judge_pass = (
+                True if judge_blob.get("cannot_determine") else bool(judge_blob.get("passed"))
+            )
         elif retrieved_criteria:
             # No agent judge — only the retriever fold. Lift E39/F6: when the
             # agent's command attestation already passed, the retriever judge is
@@ -637,7 +661,10 @@ class VerificationService:
                 judge_blob = await self._run_judge(
                     retrieved_criteria, written_paths, final_text, box
                 )
-                judge_pass = bool(judge_blob.get("passed"))
+                # cannot_determine → pass (same as gating path).
+                judge_pass = (
+                    True if judge_blob.get("cannot_determine") else bool(judge_blob.get("passed"))
+                )
 
         # I1′ — the repo's OWN gate, DERIVED by an LLM grounded in the repo's
         # manifests (the general replacement for the hardcoded quality bar +
@@ -1036,6 +1063,7 @@ class VerificationService:
         if not intent:
             return None
         sources: list[tuple[str, str]] = []
+        any_source_truncated = False
         for path in written_paths:
             if not _is_code_path(path) or _is_test_path(path):
                 continue
@@ -1043,6 +1071,8 @@ class VerificationService:
                 data = await box.read_file(path, _SOURCE_CTX_BYTES)
             except SandboxError:
                 continue
+            if len(data) >= _SOURCE_CTX_BYTES:
+                any_source_truncated = True
             sources.append((path, data.decode("utf-8", errors="replace")))
 
         # No exercisable CODE — but a produced ARTIFACT is a deliverable too, and
@@ -1076,6 +1106,25 @@ class VerificationService:
             if strict
             else await self._author_artifact_plan(intent, artifact_paths)
         )
+        # When the planner saw truncated source, its expectations may be based
+        # on incomplete code. Mark every probe so judge_probe returns "not_seen"
+        # on a contradiction instead of "contradicted" — a planner blind spot
+        # must never false-fail good work (same principle as the judge's
+        # cannot_determine path, but for deterministic probe verdicts).
+        if plan is not None and strict and any_source_truncated:
+            plan = DemonstrationPlan(
+                probes=tuple(
+                    Probe(
+                        name=p.name,
+                        command=p.command,
+                        expect_exit_zero=p.expect_exit_zero,
+                        expect_stdout_contains=p.expect_stdout_contains,
+                        source_truncated=True,
+                    )
+                    for p in plan.probes
+                ),
+                setup=plan.setup,
+            )
         if plan is not None and not strict:
             # A probe that declared no observation cannot be contradicted, so it
             # is not evidence — and the blind planner writes them (live run
@@ -1241,21 +1290,22 @@ class VerificationService:
         final_text: str,
         box: SandboxSession,
     ) -> dict[str, Any]:
-        file_blobs: list[str] = []
-        for path in written_paths[:5]:
-            try:
-                data = await box.read_file(path, _JUDGE_FILE_CONTEXT_BYTES)
-            except SandboxError:
-                continue
-            file_blobs.append(f"--- {path} ---\n{data.decode('utf-8', errors='replace')}")
+        work_block = await self._judge_file_context(written_paths, box)
         criteria_block = "\n".join(f"- {c}" for c in criteria)
-        work_block = ("\n\n".join(file_blobs))[:12000] or "(no file content captured)"
         judge_messages = [
             {
                 "role": "system",
                 "content": (
                     "You are a strict verification judge. Decide whether the produced work "
-                    "satisfies EVERY criterion. Respond with ONLY a JSON object: "
+                    "satisfies EVERY criterion.\n"
+                    "If the context shown is insufficient to verify a criterion — for example "
+                    "the relevant code is not visible in the diff or files provided — respond "
+                    'with {"cannot_determine": true, "reasoning": "<why>"} rather than '
+                    "guessing. "
+                    "If you see [... TRUNCATED ...] markers, the file content was cut and "
+                    "some code is hidden. If the criterion requires code that may be in the "
+                    "hidden portion, respond with cannot_determine instead of false. "
+                    "Otherwise, respond with ONLY a JSON object: "
                     '{"passed": <true|false>, "reasoning": "<short>"}.'
                 ),
             },
@@ -1279,7 +1329,119 @@ class VerificationService:
             )
         except (TimeoutError, asyncio.TimeoutError):
             return {"passed": False, "reasoning": "judge LLM timed out", "raw": ""}
-        return parse_judge_verdict(turn.content)
+        verdict = parse_judge_verdict(turn.content)
+        # Truncation promotion: the _TRUNCATION_SENTINEL is set
+        # programmatically by _judge_file_context (never by the LLM). When
+        # it is present and the verdict is false, the judge may have missed
+        # the relevant code past the cutoff. Promote to cannot_determine so
+        # a command that proved the change via exit-0 is not overridden by
+        # a judge that literally could not see what it was grading.
+        if (
+            _TRUNCATION_SENTINEL in work_block
+            and not verdict.get("cannot_determine")
+            and not verdict.get("passed", True)
+        ):
+            return {
+                "cannot_determine": True,
+                "reasoning": f"context truncated — {verdict.get('reasoning', '')}",
+                "context_truncated": True,
+            }
+        return verdict
+
+    async def _judge_file_context(self, written_paths: list[str], box: SandboxSession) -> str:
+        """Build file context for the judge.
+
+        Strategy — git diff first, blob fallback:
+
+        1. **git diff** (preferred): shows exactly what changed regardless of
+           file size. A function modified at line 500 of a 1000-line file IS
+           visible in the diff but invisible to an 8 KB blob read from the
+           file start. A valid diff always contains "diff --git" or "@@ ".
+        2. **blob fallback**: used when git diff is unavailable (non-git
+           sandbox, new file with no prior commit). Reads from the file start
+           up to ``_JUDGE_FILE_CONTEXT_BYTES``.
+
+        Truncation markers — whenever content is clipped (per-file byte cap or
+        the total 12 KB budget), a ``[... TRUNCATED ...]`` sentinel is appended
+        so the judge knows the context was cut and can respond
+        ``cannot_determine`` instead of making a definitive false judgment about
+        hidden code (the root failure this closes).
+        """
+        _TRUNCATION_MARKER = (
+            "\n[... TRUNCATED ...] — content cut here. If the criterion requires "
+            "code in the hidden portion, respond with cannot_determine.]"
+        )
+
+        diff_parts: list[str] = []
+        for path in written_paths[:5]:
+            try:
+                result = await box.exec(
+                    f"git -C {box.workspace_mount} diff HEAD~1 HEAD -- {path}",
+                    timeout_s=10.0,
+                    shell=True,
+                )
+            except SandboxError:
+                continue
+            stdout = result.stdout or ""
+            if (
+                result.exit_code == 0
+                and not result.timed_out
+                and ("diff --git" in stdout or "@@ " in stdout)
+            ):
+                clipped = stdout[:_JUDGE_FILE_CONTEXT_BYTES]
+                if len(stdout) > _JUDGE_FILE_CONTEXT_BYTES:
+                    clipped += _TRUNCATION_MARKER
+                diff_parts.append(clipped)
+
+        if diff_parts:
+            joined = "\n".join(diff_parts)
+            # Files beyond the first 5 were never attempted — the judge cannot
+            # see them at all. Append a TRUNCATED note so the auto-promotion in
+            # _run_judge fires (false verdict → cannot_determine) when the
+            # relevant code lives in one of the skipped files.
+            if len(written_paths) > 5:
+                skipped = written_paths[5:]
+                names = ", ".join(skipped[:3]) + (", …" if len(skipped) > 3 else "")
+                joined += (
+                    f"\n[... TRUNCATED ...] — {len(skipped)} more file(s) not shown ({names})."
+                    " If the criterion requires code in these files, respond with cannot_determine.]"
+                )
+            if len(joined) > 12000:
+                joined = joined[:12000] + _TRUNCATION_MARKER
+            return joined
+
+        # Fallback: file blobs (non-git sandbox, or new file with no prior commit).
+        file_blobs: list[str] = []
+        for path in written_paths[:5]:
+            try:
+                data = await box.read_file(path, _JUDGE_FILE_CONTEXT_BYTES)
+            except SandboxError:
+                continue
+            text = data.decode("utf-8", errors="replace")
+            if len(data) >= _JUDGE_FILE_CONTEXT_BYTES:
+                text += _TRUNCATION_MARKER
+            file_blobs.append(f"--- {path} ---\n{text}")
+        joined = "\n\n".join(file_blobs)
+        # Same skipped-files note for the blob path.
+        if file_blobs and len(written_paths) > 5:
+            skipped = written_paths[5:]
+            names = ", ".join(skipped[:3]) + (", …" if len(skipped) > 3 else "")
+            joined += (
+                f"\n\n[... TRUNCATED ...] — {len(skipped)} more file(s) not shown ({names})."
+                " If the criterion requires code in these files, respond with cannot_determine.]"
+            )
+        if len(joined) > 12000:
+            joined = joined[:12000] + _TRUNCATION_MARKER
+        if joined:
+            return joined
+        # Files were declared but neither diff nor blob reads succeeded — the
+        # judge has no basis for a definitive verdict. Return a truncation-like
+        # sentinel so the auto-promotion in _run_judge fires for a false verdict,
+        # consistent with the truncation-promote logic (same principle: judge
+        # couldn't see the code, so a negative verdict is unreliable).
+        if written_paths:
+            return "[... TRUNCATED ...] — file content unreadable in this sandbox"
+        return "(no file content captured)"
 
 
 def parse_judge_verdict(raw: str) -> dict[str, Any]:
@@ -1296,6 +1458,8 @@ def parse_judge_verdict(raw: str) -> dict[str, Any]:
         return {"passed": False, "reasoning": "unparseable judge response", "raw": raw[:500]}
     if not isinstance(data, dict):
         return {"passed": False, "reasoning": "judge response not an object", "raw": raw[:500]}
+    if data.get("cannot_determine"):
+        return {"cannot_determine": True, "reasoning": str(data.get("reasoning") or "")}
     return {"passed": bool(data.get("passed")), "reasoning": str(data.get("reasoning") or "")}
 
 

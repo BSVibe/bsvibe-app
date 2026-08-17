@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import json
 import uuid
+from collections.abc import Mapping
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock
@@ -95,7 +96,14 @@ class FakeBox:
     def workspace_mount(self) -> str:
         return "/workspace"
 
-    async def exec(self, command: str, *, timeout_s: float, shell: bool = False) -> SandboxResult:
+    async def exec(
+        self,
+        command: str,
+        *,
+        timeout_s: float,
+        shell: bool = False,
+        env: Mapping[str, str] | None = None,
+    ) -> SandboxResult:
         self.exec_calls.append(command)
         return self._exec_map.get(
             command, SandboxResult(exit_code=0, stdout="ok", stderr="", timed_out=False)
@@ -1012,7 +1020,7 @@ _GREP_CMD = f'grep -c "bloasis" {_REPORT}'
 
 
 def _artifact_plan_turn(command: str, contains: list[str]) -> LoopTurn:
-    probe = {"name": "the report covers both accounts", "command": command}
+    probe: dict[str, Any] = {"name": "the report covers both accounts", "command": command}
     if contains:
         probe["expect_stdout_contains"] = contains
     return LoopTurn(content=json.dumps({"probes": [probe]}))
@@ -1386,6 +1394,397 @@ async def test_run_judge_times_out_to_non_pass(monkeypatch: Any) -> None:
         )
     assert verdict["passed"] is False
     assert "timed out" in verdict["reasoning"].lower()
+
+
+# --------------------------------------------------------------------------
+# _run_judge — cannot_determine / git diff visibility / TRUNCATED auto-promotion
+# --------------------------------------------------------------------------
+
+
+def test_parse_judge_verdict_handles_cannot_determine() -> None:
+    """parse_judge_verdict extracts cannot_determine from the judge reply.
+    The blob must NOT contain 'passed' so consumers can't accidentally read it
+    as a non-pass (which would have caused the previous false-failure mode)."""
+    from backend.workflow.application.verification_service import parse_judge_verdict
+
+    blob = parse_judge_verdict('{"cannot_determine": true, "reasoning": "code not in diff"}')
+    assert blob.get("cannot_determine") is True
+    assert blob.get("reasoning") == "code not in diff"
+    assert "passed" not in blob
+
+
+async def test_verify_judge_cannot_determine_does_not_fail_run() -> None:
+    """cannot_determine → judge_pass=True in both gating and retrieved paths.
+
+    Fix: judge uncertainty (truncated context, code not in view) must not
+    override command evidence that already proved the change works."""
+    async with memory_session() as session:
+        run = await _make_run(session)
+        work_step, attempt = await _make_step_and_attempt(session, run)
+        contract = VerificationContract(
+            checks=(
+                VerificationCheck(kind="command", command="true"),
+                VerificationCheck(kind="judge", criteria=("function must accept *args",)),
+            )
+        )
+        llm = StubLlm([LoopTurn(content='{"cannot_determine": true, "reasoning": "not in view"}')])
+        svc = VerificationService(session=session, llm=llm)
+        vr = await svc.verify(
+            run=run,
+            work_step=work_step,
+            attempt=attempt,
+            contract=contract,
+            box=FakeBox(),
+            written_paths=[],
+            final_text="",
+        )
+        # Run PASSES — judge abstained, command evidence stands.
+        assert vr.outcome is VerificationOutcome.PASSED
+        # The blob records cannot_determine honestly (not hidden).
+        assert vr.result["judge"]["cannot_determine"] is True
+
+
+async def test_verify_judge_false_with_truncated_context_does_not_fail_run() -> None:
+    """Truncated context + judge passed=false → promoted to cannot_determine; run must pass.
+
+    _run_judge detects the [... TRUNCATED ...] sentinel it programmatically
+    inserted and promotes the false verdict so it does not override command evidence."""
+    import backend.workflow.application.verification_service as _svc_mod
+
+    # A file large enough to hit the per-file byte cap → truncation marker added.
+    big_content = b"def placeholder(): pass\n" + b"x" * _svc_mod._JUDGE_FILE_CONTEXT_BYTES
+    box = FakeBox(files={"src.py": big_content})
+
+    async with memory_session() as session:
+        run = await _make_run(session)
+        work_step, attempt = await _make_step_and_attempt(session, run)
+        contract = VerificationContract(
+            checks=(
+                VerificationCheck(kind="command", command="true"),
+                VerificationCheck(
+                    kind="judge", criteria=("function must accept *args",), rationale=""
+                ),
+            )
+        )
+        # Judge says 'passed: false' — it couldn't see the relevant function
+        # past the truncation cutoff (line 500 in a 1000-line file, for instance).
+        # The demonstration planner is called first (code surface); an empty plan
+        # makes the demo undemonstrable (not a fail).
+        llm = StubLlm(
+            [
+                LoopTurn(content='{"setup": [], "probes": []}'),  # demonstration planner
+                LoopTurn(content='{"passed": false, "reasoning": "function not visible"}'),
+            ]
+        )
+        svc = VerificationService(session=session, llm=llm)
+        vr = await svc.verify(
+            run=run,
+            work_step=work_step,
+            attempt=attempt,
+            contract=contract,
+            box=box,
+            written_paths=["src.py"],
+            final_text="added *args support",
+        )
+        # Run PASSES — truncated context → judge verdict unreliable → cannot_determine.
+        assert vr.outcome is VerificationOutcome.PASSED
+        # The result records the promotion honestly (context_truncated flag).
+        judge = vr.result["judge"]
+        assert judge is not None
+        assert judge.get("cannot_determine") is True
+        assert judge.get("context_truncated") is True
+
+
+async def test_run_judge_uses_git_diff_when_available() -> None:
+    """When the sandbox returns a valid git diff, _judge_file_context uses it
+    instead of file blobs. A function changed at line 500 of a 1000-line file
+    IS visible in the diff regardless of the 8 KB file-start cap."""
+    fake_diff = (
+        "diff --git a/backend/big.py b/backend/big.py\n"
+        "--- a/backend/big.py\n"
+        "+++ b/backend/big.py\n"
+        "@@ -500,6 +500,10 @@ def existing_func():\n"
+        "+def new_func(*args):\n"
+        "+    return sum(args)\n"
+    )
+    box = FakeBox(
+        exec_map={
+            "git -C /workspace diff HEAD~1 HEAD -- backend/big.py": SandboxResult(
+                exit_code=0, stdout=fake_diff, stderr="", timed_out=False
+            )
+        },
+        files={"backend/big.py": b"<full file blob -- must NOT be read>"},
+    )
+    llm = StubLlm([LoopTurn(content='{"passed": true}')])
+    async with memory_session() as session:
+        svc = VerificationService(session=session, llm=llm)
+        await svc._run_judge(
+            criteria=["new_func must exist"],
+            written_paths=["backend/big.py"],
+            final_text="added new_func",
+            box=box,
+        )
+    # read_file was NOT called — diff was used instead of file blob.
+    assert "backend/big.py" not in box.read_calls
+    # The diff content (including the hunk) reached the judge's user message.
+    user_msg = llm.calls[-1]["messages"][-1]["content"]
+    assert "new_func" in user_msg
+    assert "@@ " in user_msg
+
+
+async def test_run_judge_falls_back_to_file_blobs_when_no_valid_diff() -> None:
+    """When git is not available or returns a non-diff (exit != 0, or output
+    that lacks diff markers), _judge_file_context falls back to file blobs.
+    Existing test behaviour for non-product / non-git sandboxes is preserved."""
+    box = FakeBox(
+        exec_map={
+            "git -C /workspace diff HEAD~1 HEAD -- hello.txt": SandboxResult(
+                exit_code=128, stdout="", stderr="not a git repo", timed_out=False
+            )
+        },
+        files={"hello.txt": b"Hello, world"},
+    )
+    llm = StubLlm([LoopTurn(content='{"passed": true}')])
+    async with memory_session() as session:
+        svc = VerificationService(session=session, llm=llm)
+        await svc._run_judge(
+            criteria=["greets the world"],
+            written_paths=["hello.txt"],
+            final_text="",
+            box=box,
+        )
+    # read_file WAS called — file blob fallback activated.
+    assert "hello.txt" in box.read_calls
+    # The file content reached the judge.
+    user_msg = llm.calls[-1]["messages"][-1]["content"]
+    assert "Hello, world" in user_msg
+
+
+async def test_run_judge_fake_box_default_output_triggers_blob_fallback() -> None:
+    """FakeBox returns exit_code=0, stdout='ok' for unknown commands. 'ok' does
+    not contain git diff markers, so it is rejected and we fall back to file
+    blobs. This guards the common test pattern where boxes have no git scripts."""
+    box = FakeBox(files={"x.py": b"def foo(): pass"})
+    llm = StubLlm([LoopTurn(content='{"passed": true}')])
+    async with memory_session() as session:
+        svc = VerificationService(session=session, llm=llm)
+        await svc._run_judge(
+            criteria=["foo must exist"],
+            written_paths=["x.py"],
+            final_text="",
+            box=box,
+        )
+    # read_file called — blob fallback (FakeBox 'ok' is not a valid diff).
+    assert "x.py" in box.read_calls
+
+
+# --------------------------------------------------------------------------
+# _judge_file_context — truncation markers
+#
+# Root failure mode (2026-08-17): the diff/blob was silently clipped at 8 KB.
+# The judge saw truncated content but had no way to know it was incomplete, so
+# it said {"passed": false} ("I don't see that function") even though the
+# function existed below the cut point — and the run died despite commands
+# passing with exit 0. The fix: append [... TRUNCATED ...] sentinels whenever
+# content is clipped, so the judge answers cannot_determine instead of false.
+# --------------------------------------------------------------------------
+
+
+async def test_judge_file_context_truncation_marker_on_large_diff() -> None:
+    """When a diff is larger than _JUDGE_FILE_CONTEXT_BYTES, the clipped text
+    includes [... TRUNCATED ...] so the judge knows the context was cut."""
+    import backend.workflow.application.verification_service as _svc_mod
+
+    big_diff = (
+        "diff --git a/big.py b/big.py\n@@ -1,1 +1,2 @@\n" + ("+" + "x" * 100 + "\n") * 100
+        # content large enough to exceed the per-file byte cap
+    )
+    assert len(big_diff) > _svc_mod._JUDGE_FILE_CONTEXT_BYTES
+
+    box = FakeBox(
+        exec_map={
+            "git -C /workspace diff HEAD~1 HEAD -- big.py": SandboxResult(
+                exit_code=0, stdout=big_diff, stderr="", timed_out=False
+            )
+        },
+    )
+    llm = StubLlm([LoopTurn(content='{"passed": true}')])
+    async with memory_session() as session:
+        svc = VerificationService(session=session, llm=llm)
+        await svc._run_judge(
+            criteria=["big.py must exist"],
+            written_paths=["big.py"],
+            final_text="",
+            box=box,
+        )
+    user_msg = llm.calls[-1]["messages"][-1]["content"]
+    import backend.workflow.application.verification_service as _svc_mod
+
+    assert _svc_mod._TRUNCATION_SENTINEL in user_msg
+
+
+async def test_judge_file_context_truncation_marker_on_large_file_blob() -> None:
+    """When a file blob is read at exactly the byte cap (indicating the file is
+    at least that large), [... TRUNCATED ...] is appended so the judge knows
+    content may be missing below the cut point."""
+    import backend.workflow.application.verification_service as _svc_mod
+
+    # A file whose content is exactly at the cap — read_file returns max_bytes.
+    big_content = b"x" * _svc_mod._JUDGE_FILE_CONTEXT_BYTES
+    box = FakeBox(files={"src.py": big_content})
+    llm = StubLlm([LoopTurn(content='{"passed": true}')])
+    async with memory_session() as session:
+        svc = VerificationService(session=session, llm=llm)
+        await svc._run_judge(
+            criteria=["src.py must define foo"],
+            written_paths=["src.py"],
+            final_text="",
+            box=box,
+        )
+    import backend.workflow.application.verification_service as _svc_mod
+
+    user_msg = llm.calls[-1]["messages"][-1]["content"]
+    assert _svc_mod._TRUNCATION_SENTINEL in user_msg
+
+
+def test_judge_prompt_instructs_cannot_determine_for_truncation_marker() -> None:
+    """The judge system prompt must explicitly call out [... TRUNCATED ...] and
+    instruct the judge to respond cannot_determine when the criterion may be in
+    the hidden portion — not to guess false."""
+    import asyncio
+
+    from backend.workflow.application.verification_service import VerificationService
+
+    captured: dict[str, Any] = {}
+
+    class CapturingLlm:
+        async def complete(
+            self, *, messages: list[dict[str, Any]], tools: list[dict[str, Any]] | None
+        ) -> Any:
+            captured["messages"] = messages
+            return type("T", (), {"content": '{"passed": true}'})()
+
+    async def _run() -> None:
+        async with memory_session() as session:
+            svc = VerificationService(session=session, llm=CapturingLlm())
+            await svc._run_judge(
+                criteria=["must define foo"],
+                written_paths=[],
+                final_text="",
+                box=FakeBox(),
+            )
+
+    asyncio.get_event_loop().run_until_complete(_run())
+    system = next(m["content"] for m in captured["messages"] if m["role"] == "system")
+    assert "TRUNCATED" in system
+    assert "cannot_determine" in system
+
+
+async def test_judge_false_when_file_content_unreadable_does_not_fail_run() -> None:
+    """When written_paths are declared but all file reads fail (SandboxError),
+    the judge gets no context and its 'false' verdict must NOT block the run.
+    Same principle as truncation-promote: judge couldn't see the code, so a
+    negative verdict is unreliable."""
+
+    class ErrorBox(FakeBox):
+        async def read_file(self, rel_path: str, max_bytes: int) -> bytes:
+            from backend.workflow.infrastructure.sandbox import SandboxError
+
+            raise SandboxError("file not found in sandbox")
+
+        async def exec(self, command: str, *, timeout_s: float, shell: bool = False) -> Any:
+            from backend.workflow.infrastructure.sandbox.protocol import SandboxResult
+
+            self.exec_calls.append(command)
+            # git diff fails (not a git repo) — forces the blob fallback path.
+            if command.startswith("git"):
+                return SandboxResult(
+                    exit_code=128, stdout="", stderr="not a git repo", timed_out=False
+                )
+            # All other commands (including the "true" command check) succeed.
+            return SandboxResult(exit_code=0, stdout="", stderr="", timed_out=False)
+
+    async with memory_session() as session:
+        run = await _make_run(session)
+        work_step, attempt = await _make_step_and_attempt(session, run)
+        contract = VerificationContract(
+            checks=(
+                VerificationCheck(kind="command", command="true"),
+                VerificationCheck(kind="judge", criteria=("function must exist",), rationale=""),
+            )
+        )
+        # Planner first (src.py is a code path), then the judge.
+        llm = StubLlm(
+            [
+                LoopTurn(content='{"setup": [], "probes": []}'),
+                LoopTurn(content='{"passed": false, "reasoning": "nothing visible"}'),
+            ]
+        )
+        svc = VerificationService(session=session, llm=llm)
+        vr = await svc.verify(
+            run=run,
+            work_step=work_step,
+            attempt=attempt,
+            contract=contract,
+            box=ErrorBox(),
+            written_paths=["src.py"],
+            final_text="added function",
+        )
+        assert vr.outcome is VerificationOutcome.PASSED
+        judge = vr.result["judge"]
+        assert judge is not None
+        assert judge.get("cannot_determine") is True
+        assert judge.get("context_truncated") is True
+
+
+async def test_judge_false_with_many_files_does_not_fail_run() -> None:
+    """When written_paths has more than 5 files, files beyond the 5th are
+    omitted from the judge context entirely (the per-call limit). If the
+    relevant code is in one of the skipped files, the judge may say 'passed:
+    false' without ever seeing it. _judge_file_context now appends a TRUNCATED
+    note for the skipped files so the auto-promotion in _run_judge fires and
+    the run is not wrongly failed."""
+    # 6 small files — all fit within the per-file blob cap, so the only
+    # truncation is the skipped-files note for file6.py.
+    files = {f"file{i}.py": b"def f(): pass\n" for i in range(6)}
+    box = FakeBox(files=files)
+
+    async with memory_session() as session:
+        run = await _make_run(session)
+        work_step, attempt = await _make_step_and_attempt(session, run)
+        contract = VerificationContract(
+            checks=(
+                VerificationCheck(kind="command", command="true"),
+                VerificationCheck(
+                    kind="judge",
+                    criteria=("function must accept *args",),
+                    rationale="",
+                ),
+            )
+        )
+        # Demonstration planner runs first (code surface), then the judge.
+        llm = StubLlm(
+            [
+                LoopTurn(content='{"setup": [], "probes": []}'),  # planner
+                LoopTurn(content='{"passed": false, "reasoning": "function not visible"}'),  # judge
+            ]
+        )
+        svc = VerificationService(session=session, llm=llm)
+        vr = await svc.verify(
+            run=run,
+            work_step=work_step,
+            attempt=attempt,
+            contract=contract,
+            box=box,
+            written_paths=list(files.keys()),
+            final_text="added *args support",
+        )
+        # Run PASSES — the judge only saw 5 of 6 files; the skipped-files
+        # TRUNCATED note triggered promotion of false → cannot_determine.
+        assert vr.outcome is VerificationOutcome.PASSED
+        judge = vr.result["judge"]
+        assert judge is not None
+        assert judge.get("cannot_determine") is True
 
 
 # --------------------------------------------------------------------------
