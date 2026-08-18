@@ -16,10 +16,8 @@ from backend.workflow.application.runtime.account_resolution import (
     resolve_workspace_model_account,
 )
 from backend.workflow.application.runtime.agent_runtime import (
-    _build_composite_workspace_provisioner,
     _frame_skill_hint,
     _is_knowledge_only,
-    _product_workspace_provisioner,
     build_agent_execution_deps,
 )
 from backend.workflow.application.runtime.delivery_runtime import (
@@ -49,6 +47,10 @@ from backend.workflow.application.runtime.worker_runtime import (
     build_worker_runtime,
     check_executor_dispatch_health,
     run_stream_consumers,
+)
+from backend.workflow.application.runtime.workspace_provisioning import (
+    _build_composite_workspace_provisioner,
+    _product_workspace_provisioner,
 )
 from plugin.audit.models import AuditOutboxRecord
 

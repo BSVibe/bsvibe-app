@@ -28,7 +28,7 @@ from typing import Any
 
 import pytest
 
-from backend.workflow.application.runtime.agent_runtime import (
+from backend.workflow.application.runtime.workspace_provisioning import (
     _build_composite_workspace_provisioner,
 )
 
@@ -49,7 +49,7 @@ async def test_composite_provisioner_skips_server_worktree_for_client_attach(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A client_attach run gets NO server-side clone — neither provisioner runs."""
-    import backend.workflow.application.runtime.agent_runtime as rt
+    import backend.workflow.application.runtime.workspace_provisioning as rt
 
     calls: list[str] = []
 
@@ -77,7 +77,7 @@ async def test_composite_provisioner_still_runs_for_server_sandbox(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The default (server_sandbox) path is unchanged — github first, then product."""
-    import backend.workflow.application.runtime.agent_runtime as rt
+    import backend.workflow.application.runtime.workspace_provisioning as rt
 
     calls: list[str] = []
 
@@ -103,7 +103,7 @@ async def test_composite_provisioner_runs_for_run_without_product(
 ) -> None:
     """A run with no product cannot be client_attach — unchanged behaviour, and
     no product lookup is attempted."""
-    import backend.workflow.application.runtime.agent_runtime as rt
+    import backend.workflow.application.runtime.workspace_provisioning as rt
 
     calls: list[str] = []
 
